@@ -10649,9 +10649,10 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         return nullptr;
     case GGML_OP_COL2IM_1D:
         switch (src0->type) {
+            case GGML_TYPE_F32:  return ctx->device->pipeline_col2im_1d_f32;
             case GGML_TYPE_F16:  return ctx->device->pipeline_col2im_1d_f16;
             case GGML_TYPE_BF16: return ctx->device->pipeline_col2im_1d_bf16;
-            default:             return ctx->device->pipeline_col2im_1d_f32;
+            default:             return nullptr;
         }
     case GGML_OP_POOL_2D:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
@@ -17977,7 +17978,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             const int32_t p0 = tensor->op_params[1];
             const int32_t d0 = tensor->op_params[2];
             tensor_clone = ggml_conv_transpose_1d(ggml_ctx, src_clone[0], src_clone[1], s0, p0, d0);
-        } else if (tensor->op == GGML_OP_COL2IM_1D){
+        } else if (tensor->op == GGML_OP_COL2IM_1D) {
             const int32_t stride = tensor->op_params[0];
             const int32_t oc     = tensor->op_params[1];
             const int32_t p0     = tensor->op_params[2];
