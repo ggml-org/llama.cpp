@@ -2,6 +2,9 @@
 #!/usr/bin/env pwsh
 
 # Basedir on device
+#!/usr/bin/env pwsh
+
+# Basedir on device
 $basedir=".\pkg-snapdragon"
 
 $cli_opts=$args
@@ -40,9 +43,39 @@ if ($null -ne $env:HB) {
     $env:GGML_HEXAGON_HOSTBUF=$env:HB
 }
 
+# --- ADDED FROM DIFF (Variables) ---
+$binary    = "$basedir\bin\llama-bench.exe"
+$modelPath = "$basedir\..\..\gguf\$model"
+$libPath   = "$basedir\lib"
+
+# --- ADDED FROM DIFF (Path Verification) ---
+if (-not (Test-Path $basedir)) {
+    Write-Error "Base directory not found: $basedir"
+    exit 1
+}
+if (-not (Test-Path $binary)) {
+    Write-Error "Binary not found: $binary"
+    exit 1
+}
+if (-not (Test-Path $modelPath)) {
+    Write-Error "Model file not found: $modelPath"
+    exit 1
+}
+if (-not (Test-Path $libPath)) {
+    Write-Error "Lib directory not found: $libPath"
+    exit 1
+}
+
 $env:ADSP_LIBRARY_PATH="$basedir\lib"
 
 & "$basedir\bin\llama-bench.exe" `
     --mmap 0 -m $basedir\..\..\gguf\$model `
     --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 `
+    --batch-size 128 `
     --ubatch-size 1024 -ngl 99 --device $device $cli_opts
+
+# --- ADDED FROM DIFF (Exit Code Check) ---
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "llama-bench.exe failed with exit code $LASTEXITCODE"
+    exit $LASTEXITCODE
+}
