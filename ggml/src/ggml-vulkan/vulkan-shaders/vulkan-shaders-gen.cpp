@@ -428,7 +428,7 @@ void string_to_spv(std::string name, const std::string& source, const std::map<s
     generate_dep_file = false;
 
     // Clean up completed futures - don't accumulate virtual memory for completed threads' stacks.
-    while (compiles.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    while (!compiles.empty() && compiles.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         compiles.pop_front();
     }
 }
