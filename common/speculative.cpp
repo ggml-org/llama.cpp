@@ -2109,7 +2109,7 @@ void common_speculative_print_stats(const common_speculative * spec) {
 
         std::string str_stats;
         if (impl->n_draft_verif_steps > 0) {
-            const double mean_acceptance_length =
+            const double mean =
                 1.0 + (double) impl->n_acc_tokens / (double) impl->n_draft_verif_steps;
             std::ostringstream acceptance_rates_per_pos;
             acceptance_rates_per_pos << std::fixed << std::setprecision(3);
