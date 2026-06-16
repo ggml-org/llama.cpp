@@ -5724,6 +5724,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         const float priorities[] = { 1.0f, 1.0f };
         device->single_queue = compute_queue_family_index == transfer_queue_family_index && queue_family_props[compute_queue_family_index].queueCount == 1;
 
+        // Prefer a dedicated transfer queue on AMD dGPUs (non-GCN) when graphics queue use is disabled.
         const bool prefers_transfer_queue =
             device->vendor_id == VK_VENDOR_ID_AMD &&
             device->architecture != AMD_GCN &&
