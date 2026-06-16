@@ -40,7 +40,7 @@ static inline HVX_Vector hvx_vec_mul_f16_f16_to_f32_lower32(HVX_Vector v1, HVX_V
 #define MM_SPAD_SRC0_NROWS 16
 #define MM_SPAD_SRC1_NROWS 16
 #define MM_SPAD_DST_NROWS  2
-#define DMA_DEPTH          4
+#define DMA_DEPTH          2
 
 struct htp_matmul_context {
     const char * type;
@@ -667,7 +667,7 @@ static inline HVX_VectorPair unpack_and_interleave_4bit_x2(HVX_Vector v_src, HVX
 }
 
 static inline HVX_Vector accum_4bit_32x1(
-    const HVX_UVector * restrict vptr,
+    const HVX_Vector * restrict vptr,
     const HVX_Vector * restrict v_act,
     HVX_Vector i8
 ) {
@@ -688,7 +688,7 @@ static inline HVX_Vector accum_4bit_32x1(
 }
 
 static inline HVX_Vector accum_4bit_32x1_lut(
-    const HVX_UVector * restrict vptr,
+    const HVX_Vector * restrict vptr,
     const HVX_Vector * restrict v_act,
     HVX_Vector mask_h4,
     HVX_Vector lut
@@ -709,7 +709,7 @@ static inline HVX_Vector accum_4bit_32x1_lut(
 }
 
 static inline HVX_VectorPair accum_4bit_32x2(
-    const HVX_UVector * restrict vptr,
+    const HVX_Vector * restrict vptr,
     const HVX_Vector * restrict v_act0,
     const HVX_Vector * restrict v_act1,
     HVX_Vector i8
@@ -735,7 +735,7 @@ static inline HVX_VectorPair accum_4bit_32x2(
 }
 
 static inline HVX_VectorPair accum_4bit_32x2_lut(
-    const HVX_UVector * restrict vptr,
+    const HVX_Vector * restrict vptr,
     const HVX_Vector * restrict v_act0,
     const HVX_Vector * restrict v_act1,
     HVX_Vector mask_h4,
@@ -761,7 +761,7 @@ static inline HVX_VectorPair accum_4bit_32x2_lut(
 }
 
 static inline HVX_Vector accum_q8_0_32x1(
-    const HVX_UVector * restrict vptr,
+    const HVX_Vector * restrict vptr,
     const HVX_Vector * restrict v_act
 ) {
     HVX_Vector v_sum = Q6_V_vzero();
@@ -775,7 +775,7 @@ static inline HVX_Vector accum_q8_0_32x1(
 }
 
 static inline HVX_VectorPair accum_q8_0_32x2(
-    const HVX_UVector * restrict vptr,
+    const HVX_Vector * restrict vptr,
     const HVX_Vector * restrict v_act0,
     const HVX_Vector * restrict v_act1
 ) {
@@ -791,7 +791,6 @@ static inline HVX_VectorPair accum_q8_0_32x2(
     return Q6_W_vcombine_VV(v_sum1, v_sum0);
 }
 
-
 static void tiled_vec_dot_q4_0_32x1(const int n, float * restrict s, const void * restrict vx, const void * restrict vy, int valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
@@ -801,7 +800,7 @@ static void tiled_vec_dot_q4_0_32x1(const int n, float * restrict s, const void 
 
     uint32_t n_k_tiles = n / 32;
     for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
-        const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 576);
+        const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * 640);
         const HVX_Vector * restrict v_act = (const HVX_Vector *) (y_q + kt * 1152);
 
         HVX_Vector v_sum = accum_4bit_32x1(vptr, v_act, i8);
@@ -830,7 +829,7 @@ static void tiled_vec_dot_q4_0_32x2(const int n, float * restrict s0, float * re
 
     uint32_t n_k_tiles = n / 32;
     for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
-        const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 576);
+        const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * 640);
         const HVX_Vector * restrict v_act0 = (const HVX_Vector *) (y0_q + kt * 1152);
         const HVX_Vector * restrict v_act1 = (const HVX_Vector *) (y1_q + kt * 1152);
 
@@ -882,7 +881,7 @@ static void tiled_vec_dot_q4_1_32x1(const int n, float * restrict s, const void 
 
     uint32_t n_k_tiles = n / 32;
     for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
-        const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 640);
+        const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * 640);
         const HVX_Vector * restrict v_act = (const HVX_Vector *) (y_q + kt * 1280);
 
         HVX_Vector v_sum = accum_4bit_32x1(vptr, v_act, Q6_V_vzero());
@@ -919,7 +918,7 @@ static void tiled_vec_dot_q4_1_32x2(const int n, float * restrict s0, float * re
 
     uint32_t n_k_tiles = n / 32;
     for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
-        const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 640);
+        const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * 640);
         const HVX_Vector * restrict v_act0 = (const HVX_Vector *) (y0_q + kt * 1280);
         const HVX_Vector * restrict v_act1 = (const HVX_Vector *) (y1_q + kt * 1280);
 
@@ -985,7 +984,7 @@ static void tiled_vec_dot_q8_0_32x1(const int n, float * restrict s, const void 
 
     uint32_t n_k_tiles = n / 32;
     for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
-        const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 1088);
+        const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * 1152);
         const HVX_Vector * restrict v_act = (const HVX_Vector *) (y_q + kt * 1152);
 
         HVX_Vector v_sum = accum_q8_0_32x1(vptr, v_act);
@@ -1013,7 +1012,7 @@ static void tiled_vec_dot_q8_0_32x2(const int n, float * restrict s0, float * re
 
     uint32_t n_k_tiles = n / 32;
     for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
-        const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 1088);
+        const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * 1152);
         const HVX_Vector * restrict v_act0 = (const HVX_Vector *) (y0_q + kt * 1152);
         const HVX_Vector * restrict v_act1 = (const HVX_Vector *) (y1_q + kt * 1152);
 
@@ -1069,7 +1068,7 @@ static void tiled_vec_dot_iq4nl_32x1(const int n, float * restrict s, const void
 
     uint32_t n_k_tiles = n / 32;
     for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
-        const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 576);
+        const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * 640);
         const HVX_Vector * restrict v_act = (const HVX_Vector *) (y_q + kt * 1152);
 
         HVX_Vector v_sum = accum_4bit_32x1_lut(vptr, v_act, mask_h4, lut);
@@ -1099,7 +1098,7 @@ static void tiled_vec_dot_iq4nl_32x2(const int n, float * restrict s0, float * r
 
     uint32_t n_k_tiles = n / 32;
     for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
-        const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 576);
+        const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * 640);
         const HVX_Vector * restrict v_act0 = (const HVX_Vector *) (y0_q + kt * 1152);
         const HVX_Vector * restrict v_act1 = (const HVX_Vector *) (y1_q + kt * 1152);
 
@@ -1157,13 +1156,13 @@ static void tiled_vec_dot_mxfp4_32x1(const int n, float * restrict s, const void
 
     uint32_t n_k_tiles = n / 32;
     for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
-        const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 544);
+        const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * 640);
         const HVX_Vector * restrict v_act = (const HVX_Vector *) (y_q + kt * 1152);
 
         HVX_Vector v_sum = accum_4bit_32x1_lut(vptr, v_act, mask_h4, lut);
         HVX_Vector v_sum_sf = Q6_Vsf_equals_Vw(v_sum);
 
-        HVX_Vector v_scale_w = * (const HVX_UVector *) (tile_ptr + kt * 544 + 512);
+        HVX_Vector v_scale_w = hvx_vmem(tile_ptr + kt * 640 + 512);
         HVX_Vector r0_d = Q6_V_vdelta_VV(v_scale_w, expand);
         r0_d = Q6_V_vand_VV(r0_d, e8m0_mask);
         HVX_Vector v_scale_w_f32 = Q6_Vw_vasl_VwR(r0_d, 23);
@@ -1197,7 +1196,7 @@ static void tiled_vec_dot_mxfp4_32x2(const int n, float * restrict s0, float * r
 
     uint32_t n_k_tiles = n / 32;
     for (uint32_t kt = 0; kt < n_k_tiles; kt++) {
-        const HVX_UVector * restrict vptr = (const HVX_UVector *) (tile_ptr + kt * 544);
+        const HVX_Vector * restrict vptr = (const HVX_Vector *) (tile_ptr + kt * 640);
         const HVX_Vector * restrict v_act0 = (const HVX_Vector *) (y0_q + kt * 1152);
         const HVX_Vector * restrict v_act1 = (const HVX_Vector *) (y1_q + kt * 1152);
 
@@ -1208,7 +1207,7 @@ static void tiled_vec_dot_mxfp4_32x2(const int n, float * restrict s0, float * r
         HVX_Vector v_sum_sf_c0 = Q6_Vsf_equals_Vw(v_sum_c0);
         HVX_Vector v_sum_sf_c1 = Q6_Vsf_equals_Vw(v_sum_c1);
 
-        HVX_Vector v_scale_w = * (const HVX_UVector *) (tile_ptr + kt * 544 + 512);
+        HVX_Vector v_scale_w = hvx_vmem(tile_ptr + kt * 640 + 512);
         HVX_Vector r0_d = Q6_V_vdelta_VV(v_scale_w, expand);
         r0_d = Q6_V_vand_VV(r0_d, e8m0_mask);
         HVX_Vector v_scale_w_f32 = Q6_Vw_vasl_VwR(r0_d, 23);
@@ -1265,25 +1264,26 @@ static void matmul_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     uint8_t * restrict spad_src0 = src0_spad->data + src0_spad->size_per_thread * ith;                                              \
     uint8_t * restrict src1_data = src1_spad->data;                                                                                 \
                                                                                                                                     \
-    volatile uint64_t t1, t2;                                                                                                       \
+    uint64_t t1, t2;                                                                                                                \
     t1 = HAP_perf_get_qtimer_count();                                                                                               \
                                                                                                                                     \
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;                                                               \
                                                                                                                                     \
     const uint32_t tile_size = TILE_SIZE;                                                                                           \
+    const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);                                                                \
                                                                                                                                     \
     uint32_t n_k_tiles_w = ne00 / 32;                                                                                               \
     uint32_t n_k_tiles_a = ne10 / 32;                                                                                               \
     uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                             \
-    uint32_t tile_row_transfer_size = n_k_tiles_a * tile_size;                                                                      \
+    uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                                      \
                                                                                                                                     \
     uint32_t ct_start = src0_start_row / 32;                                                                                        \
     uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                   \
                                                                                                                                     \
     uint32_t push_ct = ct_start;                                                                                                    \
     for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                                       \
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size, src0_row + push_ct * tile_row_stride),       \
-                       tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                  \
+        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned,                                      \
+                       src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                \
     }                                                                                                                               \
                                                                                                                                     \
     for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                               \
@@ -1317,7 +1317,7 @@ static void matmul_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                     \
         if (push_ct < ct_end) {                                                                                                     \
             dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile, src0_row + push_ct * tile_row_stride),                        \
-                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                              \
+                           aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                   \
             push_ct++;                                                                                                              \
         }                                                                                                                           \
     }                                                                                                                               \
@@ -1365,19 +1365,20 @@ static void matvec_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     float * restrict dst_col          = (float *) dst->data;                                                                        \
                                                                                                                                     \
     const uint32_t tile_size = TILE_SIZE;                                                                                           \
+    const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);                                                                \
                                                                                                                                     \
     uint32_t n_k_tiles_w = ne00 / 32;                                                                                               \
     uint32_t n_k_tiles_a = ne10 / 32;                                                                                               \
     uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                             \
-    uint32_t tile_row_transfer_size = n_k_tiles_a * tile_size;                                                                      \
+    uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                                      \
                                                                                                                                     \
     uint32_t ct_start = src0_start_row / 32;                                                                                        \
     uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                   \
                                                                                                                                     \
     uint32_t push_ct = ct_start;                                                                                                    \
     for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                                       \
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size, src0_row + push_ct * tile_row_stride),       \
-                       tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                  \
+        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned,                                      \
+                       src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                \
     }                                                                                                                               \
                                                                                                                                     \
     for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                               \
@@ -1393,7 +1394,7 @@ static void matvec_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                     \
         if (push_ct < ct_end) {                                                                                                     \
             dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile, src0_row + push_ct * tile_row_stride),                        \
-                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                              \
+                           aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                   \
             push_ct++;                                                                                                              \
         }                                                                                                                           \
     }                                                                                                                               \
@@ -1452,11 +1453,12 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     const uint8_t * restrict src3_row = (const uint8_t *) src3->data;                                                                   \
                                                                                                                                         \
     const uint32_t tile_size = TILE_SIZE;                                                                                               \
+    const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);                                                                    \
                                                                                                                                         \
     uint32_t n_k_tiles_w = ne00 / 32;                                                                                                   \
     uint32_t n_k_tiles_a = ne10 / 32;                                                                                                   \
     uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                                 \
-    uint32_t tile_row_transfer_size = n_k_tiles_a * tile_size;                                                                          \
+    uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                                          \
                                                                                                                                         \
     dma_queue * dma_queue = octx->ctx->dma[ith];                                                                                        \
                                                                                                                                         \
@@ -1474,10 +1476,10 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                                                                                                                                         \
         uint32_t push_ct = ct_start_kv;                                                                                                 \
         for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end_kv; d++, push_ct++) {                                                    \
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size, src0_row + push_ct * tile_row_stride),       \
-                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                  \
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + d * tile_row_transfer_size, src2_row + push_ct * tile_row_stride),       \
-                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                  \
+            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned,                                      \
+                           src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                \
+            dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + d * tile_row_transfer_size_aligned,                                      \
+                           src2_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                \
         }                                                                                                                               \
                                                                                                                                         \
         for (uint32_t ct = ct_start_kv; ct < ct_end_kv; ct++) {                                                                         \
@@ -1523,9 +1525,9 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                                                                                                                                         \
             if (push_ct < ct_end_kv) {                                                                                                  \
                 dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_k, src0_row + push_ct * tile_row_stride),                      \
-                               tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                              \
+                               aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                   \
                 dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_v, src2_row + push_ct * tile_row_stride),                      \
-                               tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                              \
+                               aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                   \
                 push_ct++;                                                                                                              \
             }                                                                                                                           \
         }                                                                                                                               \
@@ -1545,8 +1547,8 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                                                                                                                                         \
         uint32_t push_ct = ct_start_q;                                                                                                  \
         for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end_q; d++, push_ct++) {                                                     \
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src3 + d * tile_row_transfer_size, src3_row + push_ct * tile_row_stride),       \
-                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                  \
+            dma_queue_push(dma_queue, dma_make_ptr(spad_src3 + d * tile_row_transfer_size_aligned,                                      \
+                           src3_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                \
         }                                                                                                                               \
                                                                                                                                         \
         for (uint32_t ct = ct_start_q; ct < ct_end_q; ct++) {                                                                           \
@@ -1581,7 +1583,7 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                                                                                                                                         \
             if (push_ct < ct_end_q) {                                                                                                   \
                 dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_q, src3_row + push_ct * tile_row_stride),                      \
-                               tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                              \
+                               aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                   \
                 push_ct++;                                                                                                              \
             }                                                                                                                           \
         }                                                                                                                               \
@@ -1635,11 +1637,12 @@ static void matmul_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     const uint8_t * restrict src2_row = (const uint8_t *) src2->data;                                                                   \
                                                                                                                                         \
     const uint32_t tile_size = TILE_SIZE;                                                                                               \
+    const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);                                                                    \
                                                                                                                                         \
     uint32_t n_k_tiles_w = ne00 / 32;                                                                                                   \
     uint32_t n_k_tiles_a = ne10 / 32;                                                                                                   \
     uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                                 \
-    uint32_t tile_row_transfer_size = n_k_tiles_a * tile_size;                                                                          \
+    uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;                                                          \
     dma_queue * dma_queue = octx->ctx->dma[ith];                                                                                        \
                                                                                                                                         \
     const uint32_t src0_nrows = ne01 * src0->ne[2] * src0->ne[3];                                                                       \
@@ -1651,10 +1654,10 @@ static void matmul_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                                                                                                                                         \
     uint32_t push_ct = ct_start;                                                                                                        \
     for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                                           \
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size, src0_row + push_ct * tile_row_stride),           \
-                       tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                      \
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + d * tile_row_transfer_size, src2_row + push_ct * tile_row_stride),           \
-                       tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                      \
+        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned, src0_row + push_ct * tile_row_stride),   \
+                       aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                           \
+        dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + d * tile_row_transfer_size_aligned, src2_row + push_ct * tile_row_stride),   \
+                       aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                           \
     }                                                                                                                                   \
                                                                                                                                         \
     for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                                   \
@@ -1700,9 +1703,9 @@ static void matmul_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                                                                                                                                         \
         if (push_ct < ct_end) {                                                                                                         \
             dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_gate, src0_row + push_ct * tile_row_stride),                       \
-                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                  \
+                           aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                       \
             dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_up, src2_row + push_ct * tile_row_stride),                         \
-                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);                                  \
+                           aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                       \
             push_ct++;                                                                                                                  \
         }                                                                                                                               \
     }                                                                                                                                   \
@@ -1742,8 +1745,6 @@ MATMUL_FFN_2D_REPACKED_IMPL(q4_1,  640,  tiled_vec_dot_q4_1_32x2,  tiled_vec_dot
 MATMUL_FFN_2D_REPACKED_IMPL(q8_0,  1088, tiled_vec_dot_q8_0_32x2,  tiled_vec_dot_q8_0_32x1)
 MATMUL_FFN_2D_REPACKED_IMPL(iq4nl, 576,  tiled_vec_dot_iq4nl_32x2, tiled_vec_dot_iq4nl_32x1)
 MATMUL_FFN_2D_REPACKED_IMPL(mxfp4, 544,  tiled_vec_dot_mxfp4_32x2, tiled_vec_dot_mxfp4_32x1)
-
-
 
 // src1 tensor is already in VTCM spad
 static void matmul_2d(unsigned int nth, unsigned int ith, void * data) {
@@ -1999,18 +2000,19 @@ static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
         const uint8_t * src0_row = (const uint8_t *) src0->data + cur_a * nb02;
 
         const uint32_t tile_size = mmctx->tile_size;
+        const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);
         const uint32_t n_k_tiles_w = ne00 / 32;
         const uint32_t n_k_tiles_a = ne10 / 32;
         const uint32_t tile_row_stride = n_k_tiles_w * tile_size;
-        const uint32_t tile_row_transfer_size = n_k_tiles_a * tile_size;
+        const uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;
 
         const uint32_t ct_start = src0_start_row / 32;
         const uint32_t ct_end   = (src0_end_row + 31) / 32;
 
         uint32_t push_ct = ct_start;
         for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size, src0_row + push_ct * tile_row_stride),
-                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);
+            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned, src0_row + push_ct * tile_row_stride),
+                           aligned_tile_size, tile_size, tile_size, n_k_tiles_a);
         }
 
         for (uint32_t ct = ct_start; ct < ct_end; ct++) {
@@ -2035,7 +2037,7 @@ static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
 
             if (push_ct < ct_end) {
                 dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile, src0_row + push_ct * tile_row_stride),
-                               tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);
+                               aligned_tile_size, tile_size, tile_size, n_k_tiles_a);
                 push_ct++;
             }
         }
@@ -2094,18 +2096,19 @@ static void matvec_id(unsigned int nth, unsigned int ith, void * data) {
         float * restrict dst_row          = (float *) (dst->data + ie1 * nb1);
 
         const uint32_t tile_size = mmctx->tile_size;
+        const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);
         const uint32_t n_k_tiles_w = ne00 / 32;
         const uint32_t n_k_tiles_a = ne10 / 32;
         const uint32_t tile_row_stride = n_k_tiles_w * tile_size;
-        const uint32_t tile_row_transfer_size = n_k_tiles_a * tile_size;
+        const uint32_t tile_row_transfer_size_aligned = n_k_tiles_a * aligned_tile_size;
 
         const uint32_t ct_start = src0_start_row / 32;
         const uint32_t ct_end   = (src0_end_row + 31) / 32;
 
         uint32_t push_ct = ct_start;
         for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size, src0_row + push_ct * tile_row_stride),
-                           tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);
+            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned, src0_row + push_ct * tile_row_stride),
+                           aligned_tile_size, tile_size, tile_size, n_k_tiles_a);
         }
 
         for (uint32_t ct = ct_start; ct < ct_end; ct++) {
@@ -2120,7 +2123,7 @@ static void matvec_id(unsigned int nth, unsigned int ith, void * data) {
 
             if (push_ct < ct_end) {
                 dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile, src0_row + push_ct * tile_row_stride),
-                               tile_row_transfer_size, tile_row_transfer_size, tile_row_transfer_size, 1);
+                               aligned_tile_size, tile_size, tile_size, n_k_tiles_a);
                 push_ct++;
             }
         }
@@ -2184,17 +2187,17 @@ static inline void quantize_block_f32_q8_1_tiled(float * restrict x, uint8_t * r
     v_sums = Q6_Vw_vadd_VwVw(v_sums, Q6_V_vror_VR(v_sums, 8));
     v_sums = Q6_Vw_vadd_VwVw(v_sums, Q6_V_vror_VR(v_sums, 16));
 
-    float vmax0[32] __attribute__((aligned(128)));
-    float vmax1[32] __attribute__((aligned(128)));
-    float vmax2[32] __attribute__((aligned(128)));
-    float vmax3[32] __attribute__((aligned(128)));
+    float vmax0[32]  __attribute__((aligned(128)));
+    float vmax1[32]  __attribute__((aligned(128)));
+    float vmax2[32]  __attribute__((aligned(128)));
+    float vmax3[32]  __attribute__((aligned(128)));
     int32_t sums[32] __attribute__((aligned(128)));
 
     hvx_vec_store_u(vmax0, 128, vmax0_sf);
     hvx_vec_store_u(vmax1, 128, vmax1_sf);
     hvx_vec_store_u(vmax2, 128, vmax2_sf);
     hvx_vec_store_u(vmax3, 128, vmax3_sf);
-    hvx_vec_store_u(sums, 128, v_sums);
+    hvx_vec_store_u(sums,  128, v_sums);
 
     float d0 = vmax0[0] / 127.0f;
     float d1 = vmax1[0] / 127.0f;
@@ -2217,8 +2220,8 @@ static inline void quantize_block_f32_q8_1_tiled(float * restrict x, uint8_t * r
         HVX_Vector v_act = Q6_V_vror_VR(vx_i8, b * 32);
         
         HVX_Vector r0 = Q6_V_vdelta_VV(v_act, v_repl_ctrl);
-        HVX_Vector r1 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 4), v_repl_ctrl);
-        HVX_Vector r2 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 8), v_repl_ctrl);
+        HVX_Vector r1 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 4),  v_repl_ctrl);
+        HVX_Vector r2 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 8),  v_repl_ctrl);
         HVX_Vector r3 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 12), v_repl_ctrl);
         HVX_Vector r4 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 16), v_repl_ctrl);
         HVX_Vector r5 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 20), v_repl_ctrl);
@@ -2227,20 +2230,20 @@ static inline void quantize_block_f32_q8_1_tiled(float * restrict x, uint8_t * r
 
         __fp16 scale_h, offset_h;
         if (b == 0) {
-            scale_h = (__fp16) d0;
+            scale_h  = (__fp16) d0;
             offset_h = (__fp16) (sums[0] * d0);
         } else if (b == 1) {
-            scale_h = (__fp16) d1;
+            scale_h  = (__fp16) d1;
             offset_h = (__fp16) (sums[8] * d1);
         } else if (b == 2) {
-            scale_h = (__fp16) d2;
+            scale_h  = (__fp16) d2;
             offset_h = (__fp16) (sums[16] * d2);
         } else {
-            scale_h = (__fp16) d3;
+            scale_h  = (__fp16) d3;
             offset_h = (__fp16) (sums[24] * d3);
         }
 
-        HVX_Vector r_scale = Q6_Vh_vsplat_R(*(int16_t *)&scale_h);
+        HVX_Vector r_scale  = Q6_Vh_vsplat_R(*(int16_t *)&scale_h);
         HVX_Vector r_offset = Q6_Vh_vsplat_R(*(int16_t *)&offset_h);
 
         HVX_Vector * restrict dst = (HVX_Vector *) (y_block + b * 1280);
@@ -2304,8 +2307,8 @@ static inline void quantize_block_f32_q8_0_tiled(float * restrict x, uint8_t * r
         HVX_Vector v_act = Q6_V_vror_VR(vx_i8, b * 32);
         
         HVX_Vector r0 = Q6_V_vdelta_VV(v_act, v_repl_ctrl);
-        HVX_Vector r1 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 4), v_repl_ctrl);
-        HVX_Vector r2 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 8), v_repl_ctrl);
+        HVX_Vector r1 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 4),  v_repl_ctrl);
+        HVX_Vector r2 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 8),  v_repl_ctrl);
         HVX_Vector r3 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 12), v_repl_ctrl);
         HVX_Vector r4 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 16), v_repl_ctrl);
         HVX_Vector r5 = Q6_V_vdelta_VV(Q6_V_vror_VR(v_act, 20), v_repl_ctrl);
@@ -2490,7 +2493,7 @@ static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, vo
             hvx_copy_f32_aa(tmp_data, src_ptr, qk);
         }
 
-        quantize_block_f32_q8_0_tiled((float *) tmp_data + 0, dst_ptr + 0);
+        quantize_block_f32_q8_0_tiled((float *) tmp_data + 0,    dst_ptr + 0);
         quantize_block_f32_q8_0_tiled((float *) tmp_data + qk/2, dst_ptr + 4 * 1152);
 
         c++;
@@ -2962,8 +2965,9 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
             else if (src0->type == HTP_TYPE_Q8_0) { tile_size = 1088; }
             else if (src0->type == HTP_TYPE_MXFP4) { tile_size = 544; }
             else { tile_size = 0; }
+            uint32_t aligned_tile_size = hex_align_up(tile_size, 128);
             uint32_t n_k_tiles = ne10 / 32;
-            uint32_t tile_row_size = n_k_tiles * tile_size;
+            uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
             octx->src0_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
             octx->src0_spad.size            = octx->src0_spad.size_per_thread * octx->n_threads;
         }
@@ -3289,7 +3293,8 @@ int op_matmul_id(struct htp_ops_context * octx) {
                               src0->type == HTP_TYPE_MXFP4);
     if (is_repacked) {
         const uint32_t n_k_tiles = ne10 / 32;
-        const uint32_t tile_row_size = n_k_tiles * mmctx->tile_size;
+        const uint32_t aligned_tile_size = hex_align_up(mmctx->tile_size, 128);
+        const uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
         octx->src0_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
         octx->src0_spad.size            = octx->src0_spad.size_per_thread * octx->n_threads;
     }
@@ -3691,8 +3696,9 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
         else if (src0->type == HTP_TYPE_Q8_0) { tile_size = 1088; }
         else if (src0->type == HTP_TYPE_MXFP4) { tile_size = 544; }
         else { tile_size = 0; }
+        uint32_t aligned_tile_size = hex_align_up(tile_size, 128);
         uint32_t n_k_tiles = src1->ne[0] / 32;
-        uint32_t tile_row_size = n_k_tiles * tile_size;
+        uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
 
         octx->src0_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
         octx->src0_spad.size            = octx->src0_spad.size_per_thread * octx->n_threads;
@@ -3835,8 +3841,9 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
         else if (src0->type == HTP_TYPE_Q8_0) { tile_size = 1088; }
         else if (src0->type == HTP_TYPE_MXFP4) { tile_size = 544; }
         else { tile_size = 0; }
+        uint32_t aligned_tile_size = hex_align_up(tile_size, 128);
         uint32_t n_k_tiles = src1->ne[0] / 32;
-        uint32_t tile_row_size = n_k_tiles * tile_size;
+        uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
 
         octx->src0_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
         octx->src0_spad.size            = octx->src0_spad.size_per_thread * octx->n_threads;
