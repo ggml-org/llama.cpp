@@ -2626,13 +2626,13 @@ static std::unique_ptr<vk_queue> ggml_vk_create_queue(vk_device& device, uint32_
     return q;
 }
 
-static std::unique_ptr<vk_queue> ggml_vk_create_aliased_queue(vk_device& device, const std::unique_ptr<vk_queue>& source, vk::PipelineStageFlags stage_flags, bool transfer_only) {
+static std::unique_ptr<vk_queue> ggml_vk_create_aliased_queue(vk_device& device, const std::unique_ptr<vk_queue>& source) {
     std::lock_guard<std::recursive_mutex> guard(device->mutex);
     auto q = std::make_unique<vk_queue>();
     q->handle = source->handle;
     q->queue_family_index = source->queue_family_index;
-    q->stage_flags = stage_flags;
-    q->transfer_only = transfer_only;
+    q->stage_flags = source->stage_flags;
+    q->transfer_only = source->transfer_only;
     q->cmd_pool.init(device, q.get());
     return q;
 }
@@ -5857,7 +5857,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
             device->async_use_transfer_queue = prefers_transfer_queue || (getenv("GGML_VK_ASYNC_USE_TRANSFER_QUEUE") != nullptr);
         } else {
-            device->transfer_queue = ggml_vk_create_aliased_queue(device, device->compute_queue, { vk::PipelineStageFlagBits::eTransfer }, true);
+            device->transfer_queue = ggml_vk_create_aliased_queue(device, device->compute_queue);
 
             device->async_use_transfer_queue = false;
         }
