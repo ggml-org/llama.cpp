@@ -902,6 +902,9 @@ private:
 
     common_speculative_init_result_ptr spec_init;
 
+    llama_model_ptr model_pfx;
+    llama_context_ptr ctx_pfx;
+
     common_context_seq_rm_type ctx_tgt_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
     common_context_seq_rm_type ctx_dft_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
 
@@ -1163,6 +1166,41 @@ private:
         n_ctx = llama_n_ctx(ctx_tgt);
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
+
+        // disaggregated prefill: load a model replica on the prefill devices and build a
+        // dedicated prefill context, driven from update_slots on the main thread only
+        if (!params_base.devices_prefill.empty()) {
+            SRV_INF("%s", "loading prefill model replica for disaggregated prefill/decode\n");
+
+            // disagg re-establishes the target KV every request, the prompt cache would conflict
+            params_base.cache_ram_mib = 0;
+
+            if (params_base.n_prefill <= 0) {
+                params_base.n_prefill = 1;
+            }
+
+            auto params_pfx = params_base;
+            params_pfx.devices    = params_base.devices_prefill;
+            params_pfx.n_parallel = params_base.n_prefill; // ctx_pfx seq capacity = n_prefill, maximizes per seq context
+
+            auto mparams_pfx = common_model_params_to_llama(params_pfx);
+
+            model_pfx.reset(llama_model_load_from_file(params_pfx.model.path.c_str(), mparams_pfx));
+            if (model_pfx == nullptr) {
+                SRV_ERR("failed to load prefill model, '%s'\n", params_pfx.model.path.c_str());
+                return false;
+            }
+
+            auto cparams_pfx = common_context_params_to_llama(params_pfx);
+
+            ctx_pfx.reset(llama_init_from_model(model_pfx.get(), cparams_pfx));
+            if (ctx_pfx == nullptr) {
+                SRV_ERR("%s", "failed to create prefill context\n");
+                return false;
+            }
+
+            SRV_INF("prefill context ready on %zu device(s)\n", params_base.devices_prefill.size());
+        }
 
         if (has_spec) {
             // spec_mtp doesn't use load a model internally, so we report 0.0 and 1.0 manually
@@ -2728,6 +2766,58 @@ private:
     };
 #endif
 
+    // disaggregated prefill: process prompt[0..n-2] on ctx_pfx, transfer the sequence KV to
+    // ctx_tgt, then record the prefix as already present so the existing path processes only
+    // the last token on ctx_tgt (which produces the logits for the first sampled token)
+    void disagg_prefill(server_slot & slot) {
+        const auto & input_tokens = slot.task->tokens;
+
+        const int n     = (int) input_tokens.size();
+        const int n_pfx = n - 1; // last token runs on ctx_tgt to produce logits
+
+        const llama_seq_id seq_pfx = 0; // transient prefill sequence in ctx_pfx
+
+        // reset the slot prompt and its target KV so a reused slot starts from a clean state
+        slot.prompt_clear(true);
+
+        common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
+
+        const int n_batch = llama_n_batch(ctx_pfx.get());
+
+        llama_batch bpfx = llama_batch_init(n_batch, 0, 1);
+
+        for (int i = 0; i < n_pfx; i += n_batch) {
+            common_batch_clear(bpfx);
+            const int n_cur = std::min(n_batch, n_pfx - i);
+            for (int j = 0; j < n_cur; j++) {
+                common_batch_add(bpfx, input_tokens[i + j], i + j, { seq_pfx }, false);
+            }
+            if (llama_decode(ctx_pfx.get(), bpfx) != 0) {
+                SLT_ERR(slot, "%s", "disagg prefill: llama_decode on ctx_pfx failed\n");
+                llama_batch_free(bpfx);
+                return;
+            }
+        }
+
+        llama_batch_free(bpfx);
+
+        const size_t sz = llama_state_seq_get_size_ext(ctx_pfx.get(), seq_pfx, LLAMA_STATE_SEQ_FLAGS_NONE);
+        std::vector<uint8_t> buf(sz);
+        llama_state_seq_get_data_ext(ctx_pfx.get(), buf.data(), sz, seq_pfx, LLAMA_STATE_SEQ_FLAGS_NONE);
+
+        llama_state_seq_set_data_ext(ctx_tgt, buf.data(), sz, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+
+        common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
+
+        // record the prefilled tokens so the prompt path only processes the last token
+        for (int i = 0; i < n_pfx; i++) {
+            slot.prompt.tokens.push_back(input_tokens[i]);
+        }
+
+        SLT_INF(slot, "disagg prefill: %d tokens on ctx_pfx -> ctx_tgt seq %d (%.2f MiB)\n",
+                n_pfx, slot.id, (float) sz / 1024 / 1024);
+    }
+
     void update_slots() {
 #ifdef DEBUG_TIMINGS
         static int64_t t_prev = 0;
@@ -3088,6 +3178,14 @@ private:
                             return;
                         }
 
+                        // disaggregated prefill: offload the prompt prefix to ctx_pfx, then let the
+                        // existing path process only the last token on ctx_tgt
+                        bool disagg_done = false;
+                        if (ctx_pfx && !input_tokens.has_mtmd && slot.task->n_tokens() >= 2) {
+                            disagg_prefill(slot);
+                            disagg_done = true;
+                        }
+
                         // TODO: support memory-less logits computation
                         if (slot.task->need_logits() && !llama_get_memory(ctx_tgt)) {
                             send_error(slot, "the current context does not logits computation. skipping", ERROR_TYPE_SERVER);
@@ -3128,7 +3226,8 @@ private:
                                 return;
                             }
 
-                            if (slot.task->params.cache_prompt) {
+                            // disagg prefill already established the target KV, skip cache reuse
+                            if (slot.task->params.cache_prompt && !disagg_done) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
