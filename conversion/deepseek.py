@@ -537,7 +537,6 @@ class DeepseekV4Model(TextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
 
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
         self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
@@ -554,15 +553,14 @@ class DeepseekV4Model(TextModel):
         self.gguf_writer.add_indexer_key_length(hparams["index_head_dim"])
         self.gguf_writer.add_indexer_top_k(hparams["index_topk"])
 
-        self.gguf_writer.add_uint32(f"{arch}.attention.output_group_count", hparams["o_groups"])
-        self.gguf_writer.add_uint32(f"{arch}.attention.output_lora_rank", hparams["o_lora_rank"])
-        self.gguf_writer.add_array(f"{arch}.attention.compress_ratios", hparams["compress_ratios"])
-        self.gguf_writer.add_float32(f"{arch}.attention.compress_rope_freq_base", hparams["compress_rope_theta"])
-        self.gguf_writer.add_uint32(f"{arch}.hyper_connection.count", hparams["hc_mult"])
-        self.gguf_writer.add_uint32(f"{arch}.hyper_connection.sinkhorn_iterations", hparams["hc_sinkhorn_iters"])
-        self.gguf_writer.add_float32(f"{arch}.hyper_connection.epsilon", hparams["hc_eps"])
-        self.gguf_writer.add_uint32(f"{arch}.hash_layer_count", hparams["num_hash_layers"])
-        self.gguf_writer.add_string(f"{arch}.moe.topk_method", hparams["topk_method"])
+        self.gguf_writer.add_attention_output_group_count(hparams["o_groups"])
+        self.gguf_writer.add_attention_output_lora_rank(hparams["o_lora_rank"])
+        self.gguf_writer.add_attention_compress_ratios(hparams["compress_ratios"])
+        self.gguf_writer.add_attention_compress_rope_freq_base(hparams["compress_rope_theta"])
+        self.gguf_writer.add_hyper_connection_count(hparams["hc_mult"])
+        self.gguf_writer.add_hyper_connection_sinkhorn_iterations(hparams["hc_sinkhorn_iters"])
+        self.gguf_writer.add_hyper_connection_epsilon(hparams["hc_eps"])
+        self.gguf_writer.add_hash_layer_count(hparams["num_hash_layers"])
 
     def dequant_model(self):
         fp8_dtypes = self._float8_dtypes()

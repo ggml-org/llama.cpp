@@ -56,13 +56,6 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     if (hparams.expert_gating_func != LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
         throw std::runtime_error("DeepSeek-V4 loader currently expects sqrtsoftplus MoE scoring");
     }
-    std::string topk_method;
-    if (ml.get_key(dsv4_kv("moe.topk_method"), topk_method, false)) {
-        if (topk_method != "noaux_tc") {
-            throw std::runtime_error("DeepSeek-V4 loader currently expects noaux_tc MoE top-k");
-        }
-    }
-
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     hparams.set_swa_pattern(0);
 

@@ -145,6 +145,7 @@ class Keys:
         TOKEN_SHIFT_COUNT                 = "{arch}.token_shift_count"
         INTERLEAVE_MOE_LAYER_STEP         = "{arch}.interleave_moe_layer_step"
         FULL_ATTENTION_INTERVAL           = "{arch}.full_attention_interval"
+        HASH_LAYER_COUNT                  = "{arch}.hash_layer_count"
         ACTIVATION_SPARSITY_SCALE         = "{arch}.activation_sparsity_scale"
         ALTUP_ACTIVE_IDX                  = "{arch}.altup.active_idx"
         ALTUP_NUM_INPUTS                  = "{arch}.altup.num_inputs"
@@ -180,8 +181,12 @@ class Keys:
         REL_BUCKETS_COUNT            = "{arch}.attention.relative_buckets_count"
         SLIDING_WINDOW               = "{arch}.attention.sliding_window"
         SCALE                        = "{arch}.attention.scale"
+        OUTPUT_GROUP_COUNT           = "{arch}.attention.output_group_count"
+        OUTPUT_LORA_RANK             = "{arch}.attention.output_lora_rank"
         OUTPUT_SCALE                 = "{arch}.attention.output_scale"
         VALUE_SCALE                  = "{arch}.attention.value_scale"
+        COMPRESS_RATIOS              = "{arch}.attention.compress_ratios"
+        COMPRESS_ROPE_FREQ_BASE      = "{arch}.attention.compress_rope_freq_base"
         TEMPERATURE_LENGTH           = "{arch}.attention.temperature_length"
         KEY_LENGTH_MLA               = "{arch}.attention.key_length_mla"
         VALUE_LENGTH_MLA             = "{arch}.attention.value_length_mla"
@@ -195,6 +200,11 @@ class Keys:
             HEAD_COUNT = "{arch}.attention.indexer.head_count"
             KEY_LENGTH = "{arch}.attention.indexer.key_length"
             TOP_K      = "{arch}.attention.indexer.top_k"
+
+    class HyperConnection:
+        COUNT                = "{arch}.hyper_connection.count"
+        SINKHORN_ITERATIONS  = "{arch}.hyper_connection.sinkhorn_iterations"
+        EPSILON              = "{arch}.hyper_connection.epsilon"
 
     class Rope:
         DIMENSION_COUNT           = "{arch}.rope.dimension_count"
