@@ -979,7 +979,6 @@ int hmx_matmul_2d_f32(struct htp_context *ctx,
         for (size_t mr = 0; mr < m; mr += m_chunk_n_rows) {
             const size_t n_rows = hex_smin(m - mr, m_chunk_n_rows);
 
-            void *vtcm_qweight        = vtcm_weight;
             void *vtcm_weight_bufs[2] = { vtcm_scratch0, vtcm_scratch1 };
             void *vtcm_output_bufs[2] = { vtcm_output,   vtcm_scratch2 };
 
@@ -1002,9 +1001,9 @@ int hmx_matmul_2d_f32(struct htp_context *ctx,
                     n_cols_A0, k, row_stride, weight_type,
                     n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads);
 
-                // A1: enqueue next weight chunk (1)
-                if (n_chunk_cnt > 1) {
-                    const size_t n_cols_A1 = hex_smin(n - 1 * n_chunk_n_cols, n_chunk_n_cols);
+                // A1: issue DMA for weight chunk 1
+                const size_t n_cols_A1 = hex_smin(n - 1 * n_chunk_n_cols, n_chunk_n_cols);
+                if (1 < n_chunk_cnt) {
                     if (is_quant) {
                         dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight, weight + n_chunk_n_cols * weight_stride), aligned_tile_size, tile_size, tile_size, (n_cols_A1 / 32) * n_k_tiles);
                     } else {
@@ -1012,69 +1011,68 @@ int hmx_matmul_2d_f32(struct htp_context *ctx,
                     }
                 }
 
-                // submit C0: HMX Compute 0 (Async)
+                // submit C0 (non-blocking - HMX worker executes in parallel)
                 hmx_matmul_job_init(&job_slots[0], (__fp16 *) vtcm_output_bufs[0], (__fp16 *) vtcm_activation,
                                     (__fp16 *) vtcm_weight_bufs[0], vtcm_scales,
                                     hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
                                     hmx_ceil_div(n_cols_A0, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
                 hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job_slots[0]));
+
+                // B1: DMA pop + dequant (runs in parallel with C0 on HMX worker)
+                if (1 < n_chunk_cnt) {
+                    dma_queue_pop(ctx->dma[0]);
+                    dequantize_tiled_weight_chunk_to_fp16_tiles(
+                        ctx, vtcm_weight_bufs[1], vtcm_weight,
+                        n_cols_A1, k, row_stride, weight_type,
+                        n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads);
+                }
             }
 
-            // main loop: pipeline overlap of compute, dequant, DMA
-            for (int c = 1; c < n_chunk_cnt; c++) {
-                const size_t nc      = c * n_chunk_n_cols;
-                const size_t n_cols  = hex_smin(n - nc, n_chunk_n_cols);
-                const int    slot_id = c % 2;
-                const int    prev_id = (c - 1) % 2;
+            // main loop: wait C_i -> submit C_{i+1} -> D_i + B_{i+2} (parallel with C_{i+1})
+            for (int i = 0; i < n_chunk_cnt; ++i) {
+                const size_t nc    = i * n_chunk_n_cols;
+                const size_t nc_p1 = nc + 1 * n_chunk_n_cols;
+                const size_t nc_p2 = nc + 2 * n_chunk_n_cols;
 
-                // wait for DMA (current chunk c), dequant (current chunk c)
-                dma_queue_pop(ctx->dma[0]);
-                dequantize_tiled_weight_chunk_to_fp16_tiles(
-                    ctx, vtcm_weight_bufs[slot_id], vtcm_weight,
-                    n_cols, k, row_stride, weight_type,
-                    n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads);
+                const size_t n_cols    = hex_smin(n - nc, n_chunk_n_cols);
+                const size_t n_cols_p1 = hex_smin(n - nc_p1, n_chunk_n_cols);
+                const size_t n_cols_p2 = hex_smin(n - nc_p2, n_chunk_n_cols);
 
-                // enqueue next DMA chunk (c + 1)
-                if (c + 1 < n_chunk_cnt) {
-                    const size_t n_cols_next = hex_smin(n - (c + 1) * n_chunk_n_cols, n_chunk_n_cols);
-                    const size_t nc_next = (c + 1) * n_chunk_n_cols;
+                // issue A_{i+2}: DMA push (non-blocking)
+                if (i + 2 < n_chunk_cnt) {
                     if (is_quant) {
-                        dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight, weight + nc_next * weight_stride), aligned_tile_size, tile_size, tile_size, (n_cols_next / 32) * n_k_tiles);
+                        dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight, weight + nc_p2 * weight_stride), aligned_tile_size, tile_size, tile_size, (n_cols_p2 / 32) * n_k_tiles);
                     } else {
-                        dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight, weight + nc_next * weight_stride), row_stride, weight_stride, row_stride, n_cols_next);
+                        dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight, weight + nc_p2 * weight_stride), row_stride, weight_stride, row_stride, n_cols_p2);
                     }
                 }
 
-                // wait for HMX compute (c - 1) to finish
+                // wait C_i: block until prologue/previous C completes
                 hmx_queue_pop(ctx->hmx_queue);
 
-                // output store (c - 1)
-                float *output_chunk = dst + (mr * dst_stride + nc - n_chunk_n_cols);
-                int chunk_dst_cols = dst_cols - (int)(nc - n_chunk_n_cols);
-                if (chunk_dst_cols > 0) {
-                    transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output_bufs[prev_id], n_rows, n_chunk_n_cols, dst_stride, chunk_dst_cols, num_threads);
+                // submit C_{i+1} (non-blocking, overlaps with D_i + B_{i+2} below)
+                if (i + 1 < n_chunk_cnt) {
+                    hmx_matmul_job_init(&job_slots[(i + 1) % 2], (__fp16 *) vtcm_output_bufs[(i + 1) % 2],
+                                        (__fp16 *) vtcm_activation, (__fp16 *) vtcm_weight_bufs[(i + 1) % 2],
+                                        vtcm_scales, hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
+                                        hmx_ceil_div(n_cols_p1, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
+                    hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job_slots[(i + 1) % 2]));
                 }
 
-                // submit HMX compute (current chunk c)
-                hmx_matmul_job_init(&job_slots[slot_id], (__fp16 *) vtcm_output_bufs[slot_id], (__fp16 *) vtcm_activation,
-                                    (__fp16 *) vtcm_weight_bufs[slot_id], vtcm_scales,
-                                    hmx_ceil_div(n_rows, HMX_FP16_TILE_N_ROWS),
-                                    hmx_ceil_div(n_cols, HMX_FP16_TILE_N_COLS), k / HMX_FP16_TILE_N_ROWS);
-                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job_slots[slot_id]));
-            }
-
-            // epilogue: wait HMX compute (last chunk), output store (last chunk)
-            {
-                const int slot_id = (n_chunk_cnt - 1) % 2;
-                hmx_queue_pop(ctx->hmx_queue);
-
-                float *output_chunk = dst + (mr * dst_stride + n - n_cols_A0);
-                const size_t nc_last = (n_chunk_cnt - 1) * n_chunk_n_cols;
-                const size_t n_cols_last = hex_smin(n - nc_last, n_chunk_n_cols);
-                output_chunk = dst + (mr * dst_stride + nc_last);
-                int chunk_dst_cols = dst_cols - (int)nc_last;
+                // D_i: store output (multi-thread HVX, parallel with C_{i+1})
+                float *output_chunk = dst + (mr * dst_stride + nc);
+                int chunk_dst_cols = dst_cols - (int)nc;
                 if (chunk_dst_cols > 0) {
-                    transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output_bufs[slot_id], n_rows, n_cols_last, dst_stride, chunk_dst_cols, num_threads);
+                    transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output_bufs[i % 2], n_rows, n_cols, dst_stride, chunk_dst_cols, num_threads);
+                }
+
+                // B_{i+2}: DMA pop + dequant (multi-thread HVX, parallel with C_{i+1})
+                if (i + 2 < n_chunk_cnt) {
+                    dma_queue_pop(ctx->dma[0]);
+                    dequantize_tiled_weight_chunk_to_fp16_tiles(
+                        ctx, vtcm_weight_bufs[(i + 2) % 2], vtcm_weight,
+                        n_cols_p2, k, row_stride, weight_type,
+                        n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads);
                 }
             }
         }
