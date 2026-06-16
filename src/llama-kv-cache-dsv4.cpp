@@ -297,6 +297,7 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         const int64_t n_visible = (int64_t) (pos + 1)/ratio;
         plan.n_visible[i] = (int32_t) n_visible;
         plan.n_kv = std::max(plan.n_kv, n_visible);
+        plan.n_kv = GGML_PAD(plan.n_kv, 256u);
 
         if ((pos + 1) % ratio != 0) {
             continue;
@@ -769,7 +770,7 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
 
     kv_csa = std::make_unique<llama_kv_cache>(
             model, hparams_csa, type_k, type_v,
-            v_trans, offload, unified, dsv4_comp_size(kv_size, DSV4_CSA_RATIO), n_seq_max, n_pad,
+            v_trans, offload, unified, GGML_PAD(dsv4_comp_size(kv_size, DSV4_CSA_RATIO), 256u), n_seq_max, n_pad,
             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_csa, nullptr, nullptr);
 
     LLAMA_LOG_INFO("%s: creating DSV4 HCA compressed KV cache, size = %u cells\n",
@@ -777,7 +778,7 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
 
     kv_hca = std::make_unique<llama_kv_cache>(
             model, hparams_hca, type_k, type_v,
-            v_trans, offload, unified, dsv4_comp_size(kv_size, DSV4_HCA_RATIO), n_seq_max, n_pad,
+            v_trans, offload, unified, GGML_PAD(dsv4_comp_size(kv_size, DSV4_HCA_RATIO), 256u), n_seq_max, n_pad,
             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_hca, nullptr, nullptr);
 
     LLAMA_LOG_INFO("%s: creating DSV4 lightning-indexer KV cache, size = %u cells\n",
@@ -785,7 +786,7 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
 
     kv_lid = std::make_unique<llama_kv_cache>(
             model, hparams_lid, type_k, type_v,
-            v_trans, offload, unified, dsv4_comp_size(kv_size, DSV4_CSA_RATIO), n_seq_max, n_pad,
+            v_trans, offload, unified, GGML_PAD(dsv4_comp_size(kv_size, DSV4_CSA_RATIO), 256u), n_seq_max, n_pad,
             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_csa, nullptr, nullptr);
 
     LLAMA_LOG_INFO("%s: creating DSV4 CSA compressor state\n", __func__);
