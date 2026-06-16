@@ -17,7 +17,9 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
+#include "matmul-ops.h"
 #include "htp-ops.h"
+#include "matmul-ops.h"
 #include "hmx-ops.h"
 
 static inline HVX_Vector hvx_vec_f16_to_f32_lower32(HVX_Vector v) {
@@ -62,7 +64,6 @@ struct htp_matmul_context {
          const void * restrict vx,
          const void * restrict vy, int valid_rows);
 
-    uint32_t tile_size;
 
     // Precomputed values
     uint32_t src0_nrows_per_thread;
@@ -115,15 +116,7 @@ static const uint8_t __attribute__((aligned(VLEN))) kvalues_mxfp4_lut[] = {
     0,    0, 0,    0, 0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0,    0, 0,    0, 0,    0,
 };
 
-static inline size_t q8_0_tiled_row_size(uint32_t ne) {
-    const uint32_t nb_32 = (ne + 31) / 32;
-    return nb_32 * 1152;
-}
 
-static inline size_t q8_1_tiled_row_size(uint32_t ne) {
-    const uint32_t nb_32 = (ne + 31) / 32;
-    return nb_32 * 1280;
-}
 
 #if __HVX_ARCH__ < 79
 #define HVX_OP_ADD_F32(a, b) Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(a, b))
@@ -1978,7 +1971,7 @@ static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
     const struct mmid_row_mapping * matrix_rows       = mmctx->matrix_rows;
 
     const size_t dst_row_size  = nb1;
-    const size_t src1_row_size = q8_0_tiled_row_size(ne10);
+    const size_t src1_row_size = htp_q8_0_tiled_row_size(ne10);
 
     const size_t src1_stride = src1_spad->stride;
 
@@ -1999,8 +1992,8 @@ static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
 
         const uint8_t * src0_row = (const uint8_t *) src0->data + cur_a * nb02;
 
-        const uint32_t tile_size = mmctx->tile_size;
-        const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);
+        const uint32_t tile_size = htp_get_weight_tile_size(src0->type);
+        const uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
         const uint32_t n_k_tiles_w = ne00 / 32;
         const uint32_t n_k_tiles_a = ne10 / 32;
         const uint32_t tile_row_stride = n_k_tiles_w * tile_size;
@@ -2075,7 +2068,7 @@ static void matvec_id(unsigned int nth, unsigned int ith, void * data) {
     assert(ne13 % ne03 == 0);
 
     const size_t dst_row_size  = nb1;
-    const size_t src1_row_size = q8_0_tiled_row_size(ne10);
+    const size_t src1_row_size = htp_q8_0_tiled_row_size(ne10);
 
     const uint32_t n_aids = src2->ne[0];  // num activated experts
     const uint32_t n_ids  = ne02;         // num experts
@@ -2095,8 +2088,8 @@ static void matvec_id(unsigned int nth, unsigned int ith, void * data) {
         const uint8_t * restrict src1_col = (const uint8_t *) src1_data;
         float * restrict dst_row          = (float *) (dst->data + ie1 * nb1);
 
-        const uint32_t tile_size = mmctx->tile_size;
-        const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);
+        const uint32_t tile_size = htp_get_weight_tile_size(src0->type);
+        const uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
         const uint32_t n_k_tiles_w = ne00 / 32;
         const uint32_t n_k_tiles_a = ne10 / 32;
         const uint32_t tile_row_stride = n_k_tiles_w * tile_size;
@@ -2380,7 +2373,7 @@ static void quantize_f32_q8_0_tiled(unsigned int nth, unsigned int ith, void * d
     const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = q8_0_tiled_row_size(ne0);
+    const size_t dst_row_size = htp_q8_0_tiled_row_size(ne0);
 
     uint8_t * restrict src_data = (uint8_t *) src->data + (src_row_size * ir_first);
     uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
@@ -2430,7 +2423,7 @@ static void quantize_f32_q8_1_tiled(unsigned int nth, unsigned int ith, void * d
     const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = q8_1_tiled_row_size(ne0);
+    const size_t dst_row_size = htp_q8_1_tiled_row_size(ne0);
 
     uint8_t * restrict src_data = (uint8_t *) src->data + (src_row_size * ir_first);
     uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
@@ -2473,7 +2466,7 @@ static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, vo
     const uint32_t ib_last  = mmctx->quant_ib_last[ith];
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = q8_0_tiled_row_size(ne0);
+    const size_t dst_row_size = htp_q8_0_tiled_row_size(ne0);
     uint8_t * restrict tmp_data = (uint8_t *) spad->data + (spad->size_per_thread * ith);
 
     uint32_t r = mmctx->quant_r[ith];
@@ -2524,7 +2517,7 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
     const uint32_t ib_last  = mmctx->quant_ib_last[ith];
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = q8_1_tiled_row_size(ne0);
+    const size_t dst_row_size = htp_q8_1_tiled_row_size(ne0);
     uint8_t * restrict tmp_data = (uint8_t *) spad->data + (spad->size_per_thread * ith);
 
     uint32_t r = mmctx->quant_r[ith];
@@ -2700,27 +2693,22 @@ static int htp_mminit_vec_dot(struct htp_matmul_context * mmctx, enum htp_data_t
         case HTP_TYPE_Q4_0:
             mmctx->type         = "q4_0_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_q4_0_32x1;
-            mmctx->tile_size    = 576;
             return 0;
         case HTP_TYPE_Q4_1:
             mmctx->type         = "q4_1_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_q4_1_32x1;
-            mmctx->tile_size    = 640;
             return 0;
         case HTP_TYPE_Q8_0:
             mmctx->type         = "q8_0_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_q8_0_32x1;
-            mmctx->tile_size    = 1088;
             return 0;
         case HTP_TYPE_IQ4_NL:
             mmctx->type         = "iq4nl_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_iq4nl_32x1;
-            mmctx->tile_size    = 576;
             return 0;
         case HTP_TYPE_MXFP4:
             mmctx->type         = "mxfp4_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_mxfp4_32x1;
-            mmctx->tile_size    = 544;
             return 0;
         default:
             return -1;
@@ -2955,17 +2943,12 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
             n_quant_jobs = MIN(src1_nrows, octx->n_threads);
             quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
         }
-        src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1_tiled_row_size(ne10) : q8_0_tiled_row_size(ne10);
+        src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(ne10) : htp_q8_0_tiled_row_size(ne10);
         htp_mminit_spad(octx, dst_row_size, src0_row_size_padded, src1_row_size, src1_nrows, 0);
 
         if (is_repacked) {
-            uint32_t tile_size;
-            if (src0->type == HTP_TYPE_Q4_0 || src0->type == HTP_TYPE_IQ4_NL) { tile_size = 576; }
-            else if (src0->type == HTP_TYPE_Q4_1) { tile_size = 640; }
-            else if (src0->type == HTP_TYPE_Q8_0) { tile_size = 1088; }
-            else if (src0->type == HTP_TYPE_MXFP4) { tile_size = 544; }
-            else { tile_size = 0; }
-            uint32_t aligned_tile_size = hex_align_up(tile_size, 128);
+            uint32_t tile_size = htp_get_weight_tile_size(src0->type);
+            uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
             uint32_t n_k_tiles = ne10 / 32;
             uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
             octx->src0_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
@@ -3283,7 +3266,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
         n_quant_jobs = MIN(src1_nrows, octx->n_threads);
         quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
-    src1_row_size  = (src0->type == HTP_TYPE_Q4_1) ? q8_1_tiled_row_size(ne10) : q8_0_tiled_row_size(ne10);
+    src1_row_size  = (src0->type == HTP_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(ne10) : htp_q8_0_tiled_row_size(ne10);
 
     const size_t src2_spad_size_per_thread = 0; // We moved the mapping to DDR!
     htp_mminit_spad(octx, 0, src0_row_size_padded, src1_row_size, src1_nrows, src2_spad_size_per_thread);
@@ -3293,7 +3276,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
                               src0->type == HTP_TYPE_MXFP4);
     if (is_repacked) {
         const uint32_t n_k_tiles = ne10 / 32;
-        const uint32_t aligned_tile_size = hex_align_up(mmctx->tile_size, 128);
+        const uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
         const uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
         octx->src0_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
         octx->src0_spad.size            = octx->src0_spad.size_per_thread * octx->n_threads;
@@ -3686,17 +3669,12 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
         quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
 
-    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1_tiled_row_size(src1->ne[0]) : q8_0_tiled_row_size(src1->ne[0]);
+    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(src1->ne[0]) : htp_q8_0_tiled_row_size(src1->ne[0]);
 
     // Set up scratchpads
     if (is_repacked) {
-        uint32_t tile_size;
-        if (src0->type == HTP_TYPE_Q4_0 || src0->type == HTP_TYPE_IQ4_NL) { tile_size = 576; }
-        else if (src0->type == HTP_TYPE_Q4_1) { tile_size = 640; }
-        else if (src0->type == HTP_TYPE_Q8_0) { tile_size = 1088; }
-        else if (src0->type == HTP_TYPE_MXFP4) { tile_size = 544; }
-        else { tile_size = 0; }
-        uint32_t aligned_tile_size = hex_align_up(tile_size, 128);
+        uint32_t tile_size = htp_get_weight_tile_size(src0->type);
+        uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
         uint32_t n_k_tiles = src1->ne[0] / 32;
         uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
 
@@ -3831,17 +3809,12 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
         quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
 
-    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? q8_1_tiled_row_size(src1->ne[0]) : q8_0_tiled_row_size(src1->ne[0]);
+    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(src1->ne[0]) : htp_q8_0_tiled_row_size(src1->ne[0]);
 
     // Set up scratchpads
     if (is_repacked) {
-        uint32_t tile_size;
-        if (src0->type == HTP_TYPE_Q4_0 || src0->type == HTP_TYPE_IQ4_NL) { tile_size = 576; }
-        else if (src0->type == HTP_TYPE_Q4_1) { tile_size = 640; }
-        else if (src0->type == HTP_TYPE_Q8_0) { tile_size = 1088; }
-        else if (src0->type == HTP_TYPE_MXFP4) { tile_size = 544; }
-        else { tile_size = 0; }
-        uint32_t aligned_tile_size = hex_align_up(tile_size, 128);
+        uint32_t tile_size = htp_get_weight_tile_size(src0->type);
+        uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
         uint32_t n_k_tiles = src1->ne[0] / 32;
         uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
 

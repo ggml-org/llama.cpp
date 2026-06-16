@@ -42,6 +42,7 @@
 #include "ggml-quants.h"
 #include "htp-opnode.h"
 #include "htp-ops.h"
+#include "htp/matmul-ops.h"
 #include "htp_iface.h"
 #include "htp-drv.h"
 
@@ -622,7 +623,7 @@ static void repack_q4_0_tiled(ggml_tensor * t, const void * data, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = 576; // 512 + 64
+    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q4_0;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -673,7 +674,7 @@ static void repack_tiled_q4_0(void * data, const ggml_tensor * t, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = 576; // 512 + 64
+    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q4_0;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -726,7 +727,7 @@ static void repack_q4_1_tiled(ggml_tensor * t, const void * data, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = 640; // 512 + 128
+    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q4_1;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -783,7 +784,7 @@ static void repack_tiled_q4_1(void * data, const ggml_tensor * t, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = 640; // 512 + 128
+    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q4_1;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -837,7 +838,7 @@ static void repack_q8_0_tiled(ggml_tensor * t, const void * data, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = 1088; // 1024 + 64
+    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q8_0;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -883,7 +884,7 @@ static void repack_tiled_q8_0(void * data, const ggml_tensor * t, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = 1088; // 1024 + 64
+    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q8_0;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -933,7 +934,7 @@ static void repack_mxfp4_tiled(ggml_tensor * t, const void * data, size_t size) 
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = 544; // 512 + 32
+    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_MXFP4;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -984,7 +985,7 @@ static void repack_tiled_mxfp4(void * data, const ggml_tensor * t, size_t size) 
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = 544; // 512 + 32
+    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_MXFP4;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {

@@ -29,6 +29,7 @@
 #include "hmx-queue.h"
 
 #include "vtcm-utils.h"
+#include "matmul-ops.h"
 
 
 // MXFP4 dequantization LUT: maps 4-bit index to fp16 mantissa value
@@ -43,36 +44,7 @@ static const __fp16 iq4_nl_to_fp16_lut[64] __attribute__((aligned(VLEN))) = {
 };
 
 // Scales per tiled logical block: 8 × sizeof(__fp16) = 16 bytes
-#define HMX_TILED_SCALES_PER_BLK  8
-#define HMX_TILED_DBLK_SIZE       16  // 8 * 2 bytes (fp16 scales for Q4_0/Q8_0/IQ4_NL)
-#define HMX_TILED_MXFP4_EBLK_SIZE 8   // 8 * 1 byte  (E8M0 scales for MXFP4)
 
-// Compute the byte stride of one row in tiled format.
-// Numerically equals ggml_row_size(type, k) when k is 256-aligned, because
-// tiled packing has the same density as block_q4_0 / block_q8_0.
-// Layout per row: [quants: nb*128 (Q4) or nb*256 (Q8)][scales: nb*16 bytes]
-// Total per row = nb * (128+16) = 144*nb (Q4) or nb * (256+16) = 272*nb (Q8).
-// Callers must ensure k is a multiple of 256 (enforced by proc_hmx_matmul_req).
-static inline size_t get_tiled_row_stride(int weight_type, int k) {
-    int nb = (k + QK_Q4_0_TILED - 1) / QK_Q4_0_TILED;
-    switch (weight_type) {
-        case HTP_TYPE_Q4_0:
-        case HTP_TYPE_IQ4_NL:
-            return (size_t) nb * (QK_Q4_0_TILED / 2 + HMX_TILED_DBLK_SIZE);         // 144 * nb
-        case HTP_TYPE_Q4_1:
-            return (size_t) nb * (QK_Q4_0_TILED / 2 + 32);                          // 160 * nb
-        case HTP_TYPE_Q8_0:
-            return (size_t) nb * (QK_Q8_0_TILED + HMX_TILED_DBLK_SIZE);             // 272 * nb
-        case HTP_TYPE_MXFP4:
-            return (size_t) nb * (QK_MXFP4_TILED / 2 + HMX_TILED_MXFP4_EBLK_SIZE);  // 136 * nb
-        case HTP_TYPE_F16:
-            return (size_t) k * sizeof(__fp16);
-        case HTP_TYPE_F32:
-            return (size_t) k * sizeof(float);
-        default:
-            return 0;
-    }
-}
 
 
 // --- Overflow-safe arithmetic for VTCM budget calculation ---
@@ -1022,7 +994,7 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
         return -1;
     }
 
-    size_t row_stride = get_tiled_row_stride(weight_type, k);
+    size_t row_stride = htp_get_tiled_row_stride(weight_type, k);
     if (row_stride == 0) {
         return -1;
     }
@@ -1845,7 +1817,7 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
         return -1;
     }
 
-    size_t row_stride = get_tiled_row_stride(weight_type, k);
+    size_t row_stride = htp_get_tiled_row_stride(weight_type, k);
     if (row_stride == 0) {
         return -1;
     }
