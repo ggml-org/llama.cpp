@@ -5724,11 +5724,18 @@ static vk_device ggml_vk_get_device(size_t idx) {
         const float priorities[] = { 1.0f, 1.0f };
         device->single_queue = compute_queue_family_index == transfer_queue_family_index && queue_family_props[compute_queue_family_index].queueCount == 1;
 
+        const bool prefers_transfer_queue =
+            device->vendor_id == VK_VENDOR_ID_AMD &&
+            device->architecture != AMD_GCN &&
+            !device->uma &&
+            !allow_graphics_queue;
+        const bool use_transfer_queue = !device->single_queue && (prefers_transfer_queue || (getenv("GGML_VK_ASYNC_USE_TRANSFER_QUEUE") != nullptr));
+
         std::vector<vk::DeviceQueueCreateInfo> device_queue_create_infos;
-        if (compute_queue_family_index != transfer_queue_family_index) {
+        if (use_transfer_queue && compute_queue_family_index != transfer_queue_family_index) {
             device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), compute_queue_family_index, 1, priorities});
             device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), transfer_queue_family_index, 1, priorities + 1});
-        } else if(!device->single_queue) {
+        } else if (use_transfer_queue) {
             device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), compute_queue_family_index, 2, priorities});
         } else {
             device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), compute_queue_family_index, 1, priorities});
@@ -6241,18 +6248,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         ggml_vk_load_shaders(device);
 
-        // Prefer a dedicated transfer queue on AMD dGPUs (non-GCN) when graphics queue use is disabled.
-        const bool prefers_transfer_queue =
-            device->vendor_id == VK_VENDOR_ID_AMD &&
-            device->architecture != AMD_GCN &&
-            !device->uma &&
-            !allow_graphics_queue;
-
-        if (!device->single_queue) {
+        if (use_transfer_queue) {
             const uint32_t transfer_queue_index = compute_queue_family_index == transfer_queue_family_index ? 1 : 0;
             ggml_vk_create_queue(device, device->transfer_queue, transfer_queue_family_index, transfer_queue_index, { vk::PipelineStageFlagBits::eTransfer }, true);
-
-            device->async_use_transfer_queue = prefers_transfer_queue || (getenv("GGML_VK_ASYNC_USE_TRANSFER_QUEUE") != nullptr);
+            device->async_use_transfer_queue = true;
         } else {
             // TODO: Use pointer or reference to avoid copy
             device->transfer_queue.copyFrom(device->compute_queue);
