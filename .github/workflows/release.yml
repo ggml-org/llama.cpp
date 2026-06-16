@@ -558,7 +558,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-2022-openvino-release
+          key: release-windows-2022-openvino
           variant: ccache
           evict-old-files: 1d
 
@@ -606,6 +606,11 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
 
           cmake --build build\ReleaseOV --config Release -- /m
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-openvino
 
       - name: Determine tag name
         id: tag

@@ -91,7 +91,7 @@ jobs:
           export GGML_OPENVINO_DEVICE=GPU
           ctest --test-dir build/ReleaseOV -L main -E "test-llama-archs" --verbose --timeout 3000
 
-  windows-2022-openvino:
+  openvino-windows-2022:
     runs-on: windows-2022
 
     env:
@@ -107,7 +107,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: windows-2022-openvino
+          key: openvino-windows-2022
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
