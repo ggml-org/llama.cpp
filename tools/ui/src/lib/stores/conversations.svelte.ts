@@ -26,7 +26,7 @@ import { MigrationService } from '$lib/services/migration.service';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
-import { zipSync, strToU8 } from 'fflate';
+import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import {
 	MessageRole,
 	HtmlInputType,
@@ -965,6 +965,86 @@ class ConversationsStore {
 		});
 
 		return [sessionLine, ...messageLines].join('\n');
+	}
+
+	/**
+	 * Parses the JSONL session format produced by {@link serializeSessionToJsonl}.
+	 * A `type: 'session'` line starts a new session; following `type: 'message'`
+	 * lines are appended to it. Supports multiple sessions in a single file.
+	 * @param text - The JSONL file contents
+	 * @returns The parsed conversations with their messages
+	 */
+	parseSessionsJsonl(text: string): ExportedConversation[] {
+		const sessions: ExportedConversation[] = [];
+		let current: ExportedConversation | null = null;
+
+		for (const line of text.split('\n')) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+
+			const record = JSON.parse(trimmed);
+
+			if (record.type === 'session') {
+				// Drop the discriminator and harness marker; the rest is the conversation.
+				const conv = { ...record };
+				delete conv.type;
+				delete conv.harness;
+				current = { conv: conv as DatabaseConversation, messages: [] };
+				sessions.push(current);
+			} else if (record.type === 'message') {
+				if (!current) {
+					throw new Error('Invalid JSONL: message record before any session record');
+				}
+
+				const message = record.message as DatabaseMessage;
+				// `toolCalls` is parsed to an array on export; the DB stores it as a string.
+				if (message.toolCalls !== undefined && typeof message.toolCalls !== 'string') {
+					message.toolCalls = JSON.stringify(message.toolCalls);
+				}
+				current.messages.push(message);
+			}
+			// Ignore unknown record types for forward compatibility.
+		}
+
+		return sessions;
+	}
+
+	/**
+	 * Parses an import file into conversations, accepting the current `.jsonl` and
+	 * `.zip` formats as well as the legacy `.json` format.
+	 * @param file - The user-selected file
+	 * @returns The parsed conversations with their messages
+	 */
+	async parseImportFile(file: File): Promise<ExportedConversation[]> {
+		const name = file.name.toLowerCase();
+
+		if (name.endsWith(FileExtensionText.ZIP)) {
+			const entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
+			const sessions: ExportedConversation[] = [];
+			for (const [entryName, bytes] of Object.entries(entries)) {
+				if (!entryName.toLowerCase().endsWith(FileExtensionText.JSONL)) continue;
+				sessions.push(...this.parseSessionsJsonl(strFromU8(bytes)));
+			}
+			return sessions;
+		}
+
+		const text = await file.text();
+
+		if (name.endsWith(FileExtensionText.JSONL)) {
+			return this.parseSessionsJsonl(text);
+		}
+
+		// Legacy JSON format: an array of conversations or a single conversation object.
+		const parsed = JSON.parse(text);
+		if (Array.isArray(parsed)) {
+			return parsed;
+		}
+		if (parsed && typeof parsed === 'object' && 'conv' in parsed && 'messages' in parsed) {
+			return [parsed];
+		}
+		throw new Error(
+			'Invalid file format: expected array of conversations or single conversation object'
+		);
 	}
 
 	/**
