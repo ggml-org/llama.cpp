@@ -2376,6 +2376,171 @@ static void func_args_not_string(json & messages) {
 
 }
 
+// MiniCPM5 format:
+// - Reasoning: <think>{reasoning}</think> (optional)
+// - Tool calls: <function name="foo"><param name="bar">value</param></function>
+static common_chat_params common_chat_params_init_minicpm5(const common_chat_template &          tmpl,
+                                                           const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
+    data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking = true;
+    data.preserved_tokens  = {
+        "<function",
+        "<param",
+        "</function>",
+        "</param>",
+        "<think>",
+        "</think>",
+        "<|im_start|>",
+        "<tool_response>",
+        "</tool_response>",
+    };
+
+    const std::string GEN_PROMPT  = "<|im_start|>assistant\n";
+    const std::string THINK_START = "<think>";
+    const std::string THINK_END   = "</think>";
+    data.thinking_start_tag = THINK_START;
+    data.thinking_end_tag   = THINK_END;
+
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+
+    if (inputs.has_continuation()) {
+        const auto & msg = inputs.continue_msg;
+
+        data.generation_prompt = GEN_PROMPT + THINK_START + "\n" + msg.reasoning_content;
+        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+            data.generation_prompt += "\n" + THINK_END + "\n\n" + msg.render_content();
+        }
+
+        data.prompt += data.generation_prompt;
+    }
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto end = p.end();
+
+        static const std::string SP_SPACE = "\xC4\xA0"; // U+0120 (valid UTF-8)
+        static const std::string SP_NL    = "\xC4\x8A"; // U+010A (valid UTF-8)
+
+        auto ws = [&]() {
+            return p.choice({ p.space(), p.literal(SP_SPACE), p.literal(SP_NL) });
+        };
+
+        static const std::string IM_END = "<|im_end|>";
+        auto im_end_suffix = p.optional(p.literal(IM_END) + ws());
+
+        auto assistant_prefix = p.literal(GEN_PROMPT);
+
+        auto thinking = p.eps();
+        if (!inputs.enable_thinking) {
+            thinking = p.literal("<think>\n\n</think>\n\n");
+        } else if (extract_reasoning) {
+            thinking = p.literal(THINK_START) + p.optional(p.literal("\n")) +
+                p.reasoning(p.until(THINK_END)) + p.literal(THINK_END) + ws();
+        } else {
+            thinking = p.literal(THINK_START) + p.literal("\n");
+        }
+
+        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            return assistant_prefix + thinking + p.content(p.rest()) + im_end_suffix + end;
+        }
+
+        static const std::vector<std::string> PARAM_VALUE_STOP = {
+            "</param>",
+            "</function>",
+            "<function",
+            "<param",
+        };
+
+        // CDATA lets a value carry characters that would otherwise close the tag (e.g.
+        // </param>); capture the inner text only, excluding the CDATA markers.
+        auto string_value = p.choice({
+            p.literal("<![CDATA[") + p.tool_arg_string_value(p.until("]]>")) + p.literal("]]>"),
+            p.tool_arg_string_value(p.until_one_of(PARAM_VALUE_STOP)),
+        });
+
+        auto tool_choice = p.choice();
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto &      function = tool.at("function");
+            const std::string name     = function.at("name");
+            auto params = function.contains("parameters") ? function.at("parameters") : json::object();
+
+            auto args = p.eps();
+            if (params.contains("properties") && params.at("properties").is_object() &&
+                !params.at("properties").empty()) {
+                auto schema_info = common_schema_info();
+                schema_info.resolve_refs(params);
+
+                auto arg_choice = p.choice();
+                for (const auto & [prop_name, prop_schema] : params.at("properties").items()) {
+                    const bool is_string = schema_info.resolves_to_string(prop_schema);
+
+                    auto value_parser = is_string ?
+                        string_value :
+                        p.tool_arg_json_value(p.schema(p.json(),
+                                                       "tool-" + name + "-arg-" + prop_name + "-schema",
+                                                       prop_schema,
+                                                       false));
+
+                    auto arg_rule = p.tool_arg(
+                        p.tool_arg_open(p.literal("<param name=\"") + p.tool_arg_name(p.literal(prop_name)) +
+                                        p.literal("\">")) +
+                        value_parser +
+                        p.tool_arg_close(p.literal("</param>") + ws()));
+
+                    arg_choice |= arg_rule;
+                }
+                args = p.zero_or_more(arg_choice + ws());
+            }
+
+            auto tool_parser = p.tool(
+                p.tool_open(p.literal("<function name=\"") + p.tool_name(p.literal(name)) + p.literal("\">")) +
+                p.tool_args(args) + ws() +
+                p.tool_close(p.literal("</function>")));
+
+            tool_choice |= p.rule("tool-" + name, tool_parser);
+        });
+
+        // Do not wrap trigger_rule("tool-calls", ...) in another rule("tool-calls", ...):
+        // parallel mode already defines trigger_rule("tool-calls", ...) and a second
+        // rule with the same name resolves to itself -> peg stack overflow.
+        common_peg_parser tool_calls = p.eps();
+        if (inputs.parallel_tool_calls) {
+            tool_calls = p.trigger_rule("tool-calls", p.one_or_more(tool_choice + ws()));
+        } else {
+            tool_calls = p.trigger_rule("tool-call", tool_choice);
+        }
+
+        auto content = p.content(p.until("<function"));
+
+        return assistant_prefix + thinking + content + tool_calls + im_end_suffix + end;
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function" },
+        };
+    }
+
+    return data;
+}
+
 static json common_chat_extra_context() {
     json ctx = json::object();
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
@@ -2466,6 +2631,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
             workaround::convert_tool_responses_gemma4(params.messages);
         }
         return common_chat_params_init_gemma4(tmpl, params);
+    }
+
+    // MiniCPM5 - XML tool calls with <function name="..."><param name="...">...</param></function>
+    if (src.find("Tool usage guidelines:") != std::string::npos &&
+        src.find("<function name=\"") != std::string::npos &&
+        src.find("<param name=\"") != std::string::npos) {
+        LOG_DBG("Using specialized template: MiniCPM5\n");
+        return common_chat_params_init_minicpm5(tmpl, params);
     }
 
     return std::nullopt;

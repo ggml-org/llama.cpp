@@ -466,8 +466,7 @@ static void test_example_qwen3_coder(testing & t) {
         for (auto it = tokens.begin(); it != tokens.end(); it++) {
             std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
-            const bool is_partial = (it + 1 < tokens.end());
-            common_peg_parse_context ctx(in, is_partial ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
+            common_peg_parse_context ctx(in, (it + 1 < tokens.end()) ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
 
             auto result = parser.parse(ctx);
             if (!t.assert_equal("not fail", false, result.fail())) {
@@ -565,8 +564,7 @@ static void test_example_qwen3_non_coder(testing & t) {
         for (auto it = tokens.begin(); it != tokens.end(); it++) {
             std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
-            const bool is_partial = (it + 1 < tokens.end());
-            common_peg_parse_context ctx(in, is_partial ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
+            common_peg_parse_context ctx(in, (it + 1 < tokens.end()) ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
 
             auto result = parser.parse(ctx);
             if (!t.assert_equal("not fail", false, result.fail())) {
@@ -824,8 +822,7 @@ static void test_prefix_tool_names(testing & t) {
         for (auto it = tokens.begin(); it != tokens.end(); it++) {
             std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
-            const bool is_partial = (it + 1 < tokens.end());
-            common_peg_parse_context ctx(in, is_partial ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
+            common_peg_parse_context ctx(in, (it + 1 < tokens.end()) ? COMMON_PEG_PARSE_FLAG_LENIENT : COMMON_PEG_PARSE_FLAG_NONE);
             auto                     result = parser.parse(ctx);
 
             if (!t.assert_equal("not fail", false, result.fail())) {
@@ -984,4 +981,3 @@ static void test_tagged_peg_parser(testing & t) {
         t.assert_equal("fun_post should be '>'", ">", result.tags["fun_post"]);
     });
 }
-
