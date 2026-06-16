@@ -143,6 +143,7 @@ enum llm_arch {
     LLM_ARCH_TALKIE,
     LLM_ARCH_MELLUM,
     LLM_ARCH_EAGLE3,
+    LLM_ARCH_DFLASH,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -342,6 +343,9 @@ enum llm_kv {
     LLM_KV_TARGET_LAYERS,
     LLM_KV_TARGET_HIDDEN_SIZE,
     LLM_KV_NORM_BEFORE_RESIDUAL,
+
+    LLM_KV_DFLASH_BLOCK_SIZE,
+    LLM_KV_DFLASH_MASK_TOKEN_ID,
 
     LLM_KV_SHORTCONV_L_CACHE,
 
@@ -577,6 +581,7 @@ enum llm_tensor {
     LLM_TENSOR_MASKED_EMBD_ORDERING,
     LLM_TENSOR_FC,
     LLM_TENSOR_D2T,
+    LLM_TENSOR_DFLASH_HIDDEN_NORM,     // dflash: encoder hidden-state normalization
 };
 
 

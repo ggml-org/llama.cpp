@@ -291,6 +291,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_mistral3(params);
         case LLM_ARCH_EAGLE3:
             return new llama_model_eagle3(params);
+        case LLM_ARCH_DFLASH:
+            return new llama_model_dflash(params);
         case LLM_ARCH_MIMO2:
             return new llama_model_mimo2(params);
         case LLM_ARCH_KIMI_LINEAR:
@@ -2308,6 +2310,14 @@ int32_t llama_model_n_embd_out(const llama_model * model) {
     return model->hparams.n_embd_out();
 }
 
+int32_t llama_model_dflash_block_size(const llama_model * model) {
+    return model->hparams.dflash_block_size;
+}
+
+int32_t llama_model_dflash_mask_token_id(const llama_model * model) {
+    return model->hparams.dflash_mask_token_id;
+}
+
 int32_t llama_model_n_layer(const llama_model * model) {
     return model->hparams.n_layer();
 }
@@ -2441,6 +2451,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_DFLASH:   // Qwen3-based draft model (SpecForge/speculators use Qwen3Config)
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
         case LLM_ARCH_OLMO2:
@@ -2612,7 +2623,8 @@ bool llama_model_has_encoder(const llama_model * model) {
     switch (model->arch) {
         case LLM_ARCH_T5:
         case LLM_ARCH_T5ENCODER:
-        case LLM_ARCH_EAGLE3:    return true;
+        case LLM_ARCH_EAGLE3:
+        case LLM_ARCH_DFLASH:    return true;
         default:                 return false;
     }
 }

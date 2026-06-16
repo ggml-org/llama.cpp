@@ -47,6 +47,10 @@ struct llama_hparams {
     bool swin_norm;
     bool norm_before_residual = false;
 
+    // DFlash draft model: block-diffusion drafting parameters
+    uint32_t dflash_block_size    = 16;
+    uint32_t dflash_mask_token_id = 0;
+
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
     uint32_t n_layer_all;
