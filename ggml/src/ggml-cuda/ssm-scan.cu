@@ -14,10 +14,12 @@ using namespace cub;
 // For n_tok <= this threshold, the scan kernel is used (lower overhead for short sequences).
 #define SSM_SSD_MIN_TOKENS 128
 
-// Maximum number of tokens the SSD prepare_dt kernel can handle in one launch.
-// Bounded by DT_BLOCK (256) * DT_MAX_ITEMS (32) = 8192 items per block. Sequences
-// longer than this fall back to the scan path.
-#define SSM_SSD_MAX_TOKENS 8192
+// prepare_dt kernel dimensions: one block per (head, seq), each block handles DT_MAX_ITEMS items.
+#define SSM_SSD_DT_BLOCK     256
+#define SSM_SSD_DT_MAX_ITEMS  32
+
+// Maximum tokens the SSD path supports — derived from the prepare_dt kernel block capacity.
+#define SSM_SSD_MAX_TOKENS (SSM_SSD_DT_BLOCK * SSM_SSD_DT_MAX_ITEMS)
 
 // Chunk size for chunked SSD. Caps matmul cost at O(chunk^2) per chunk.
 #define SSM_SSD_CHUNK_SIZE 256
@@ -598,10 +600,8 @@ static void ssm_scan_ssd_f32_cuda(
 
     // Step 1: softplus(dt) and parallel prefix sum over full sequence
     {
-        constexpr int DT_BLOCK = 256;
-        constexpr int DT_MAX_ITEMS = 32;  // handles up to n_tok=8192 with BLOCK=256
         dim3 grid(n_head, n_seq);
-        ssm_ssd_prepare_dt_kernel<DT_BLOCK, DT_MAX_ITEMS><<<grid, DT_BLOCK, 0, stream>>>(
+        ssm_ssd_prepare_dt_kernel<SSM_SSD_DT_BLOCK, SSM_SSD_DT_MAX_ITEMS><<<grid, SSM_SSD_DT_BLOCK, 0, stream>>>(
             src2_d, dt_sp, cs, n_head, n_tok, dt_stride_tok, dt_stride_seq);
         CUDA_CHECK(cudaGetLastError());
     }
@@ -797,7 +797,7 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const bool is_mamba2 = (src3->nb[1] == sizeof(float));
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const bool use_ssd = is_mamba2 && n_t > SSM_SSD_MIN_TOKENS
-                      && n_t <= SSM_SSD_MAX_TOKENS  // prepare_dt block bound (DT_BLOCK * DT_MAX_ITEMS)
+                      && n_t <= SSM_SSD_MAX_TOKENS
                       && GGML_CUDA_CC_IS_NVIDIA(cc)
                       && cc >= GGML_CUDA_CC_TURING
                       && nr % 8 == 0;  // head_dim must be 8-aligned for cp.async 16-byte copies
