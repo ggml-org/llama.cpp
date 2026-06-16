@@ -3581,83 +3581,6 @@ static bool ggml_cuda_can_fuse_subgraph(const struct ggml_cgraph * cgraph,
            ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, count, out_nodes, out_count, is_topk_moe);
 }
 
-// This mirrors ggml_can_fuse_subgraph for parser-validated patterns. It avoids
-// rebuilding variable lane patterns as fixed op lists, and allows parser-approved
-// external view sources such as the NVFP4 MUL_MAT_ID scale reshape.
-static bool ggml_cuda_can_fuse_parsed_subgraph(const struct ggml_cgraph * cgraph,
-                                               int                        node_idx,
-                                               int                        count,
-                                               const int *                out_nodes,
-                                               int                        out_count,
-                                               const int *                external_view_nodes = nullptr,
-                                               int                        external_view_count = 0,
-                                               bool                       is_topk_moe = false) {
-    if (node_idx + count > cgraph->n_nodes) {
-        return false;
-    }
-
-    const auto is_output = [&](int idx) {
-        for (int j = 0; j < out_count; ++j) {
-            if (out_nodes[j] == idx) {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    const auto is_in_subgraph = [&](const ggml_tensor * tensor) {
-        for (int j = node_idx; j < node_idx + count; ++j) {
-            if (cgraph->nodes[j] == tensor) {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    const auto is_allowed_external_view = [&](int idx) {
-        for (int j = 0; j < external_view_count; ++j) {
-            if (external_view_nodes[j] == idx) {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    for (int j = node_idx; j < node_idx + count; ++j) {
-        const ggml_tensor * node = cgraph->nodes[j];
-        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
-            return false;
-        }
-        if (is_output(j)) {
-            continue;
-        }
-        if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
-            return false;
-        }
-
-        int subgraph_uses = 0;
-        for (int k = j + 1; k < node_idx + count; ++k) {
-            const ggml_tensor * other = cgraph->nodes[k];
-            for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
-                if (other->src[src_idx] == node) {
-                    subgraph_uses++;
-                }
-            }
-        }
-        if (subgraph_uses != ggml_node_get_use_count(cgraph, j)) {
-            return false;
-        }
-
-        for (const ggml_tensor * view_src = node->view_src; view_src != nullptr; view_src = view_src->view_src) {
-            if (!is_in_subgraph(view_src) && !is_allowed_external_view(j)) {
-                return false;
-            }
-        }
-    }
-
-    return ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, count, out_nodes, out_count, is_topk_moe);
-}
-
 static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
                                int                                       node_idx,
                                std::initializer_list<enum ggml_op>       ops,
@@ -3858,7 +3781,6 @@ struct ggml_cuda_mm_lane {
     ggml_tensor * out = nullptr;
     const ggml_tensor * bias = nullptr;
     const ggml_tensor * scale = nullptr;
-    int scale_view_node = -1;
     int n_nodes = 0;
 };
 
@@ -3909,7 +3831,6 @@ static bool ggml_cuda_parse_mul_mat_id_lane(const ggml_cgraph * cgraph, int i, g
             }
 
             lane.scale = scale;
-            lane.scale_view_node = i + lane.n_nodes;
             lane.out = mul;
             lane.n_nodes += 4;
         }
@@ -4003,13 +3924,6 @@ static bool ggml_cuda_parse_mm_lane(const ggml_cgraph * cgraph, int i, ggml_cuda
     return false;
 }
 
-static int ggml_cuda_add_mm_lane_external_view_node(const ggml_cuda_mm_lane & lane, int * external_view_nodes, int n_external_view_nodes) {
-    if (lane.scale_view_node != -1) {
-        external_view_nodes[n_external_view_nodes++] = lane.scale_view_node;
-    }
-    return n_external_view_nodes;
-}
-
 static bool ggml_cuda_should_fuse_mm_lanes(const ggml_cuda_mm_lane & up, const ggml_cuda_mm_lane & gate, const ggml_tensor * glu) {
     if (up.mm->op != gate.mm->op) {
         return false;
@@ -4081,11 +3995,12 @@ static int ggml_cuda_try_fuse_mm_glu(ggml_backend_cuda_context * cuda_ctx, ggml_
 
     const int out_nodes[] = { glu_idx };
     const int n_nodes = glu_idx - i + 1;
-    int external_view_nodes[2];
-    int n_external_view_nodes = 0;
-    n_external_view_nodes = ggml_cuda_add_mm_lane_external_view_node(*up, external_view_nodes, n_external_view_nodes);
-    n_external_view_nodes = ggml_cuda_add_mm_lane_external_view_node(*gate, external_view_nodes, n_external_view_nodes);
-    if (!ggml_cuda_can_fuse_parsed_subgraph(cgraph, i, n_nodes, out_nodes, 1, external_view_nodes, n_external_view_nodes)) {
+    std::vector<ggml_op> ops;
+    ops.reserve(n_nodes);
+    for (int j = 0; j < n_nodes; ++j) {
+        ops.push_back(cgraph->nodes[i + j]->op);
+    }
+    if (!ggml_cuda_can_fuse_subgraph(cgraph, i, n_nodes, ops.data(), out_nodes, 1)) {
         return 0;
     }
 
@@ -4119,9 +4034,12 @@ static int ggml_cuda_try_fuse_mm_lane(ggml_backend_cuda_context * cuda_ctx, ggml
 
     const int out_idx = i + lane.n_nodes - 1;
     const int out_nodes[] = { out_idx };
-    int external_view_nodes[1];
-    int n_external_view_nodes = ggml_cuda_add_mm_lane_external_view_node(lane, external_view_nodes, 0);
-    if (!ggml_cuda_can_fuse_parsed_subgraph(cgraph, i, lane.n_nodes, out_nodes, 1, external_view_nodes, n_external_view_nodes)) {
+    std::vector<ggml_op> ops;
+    ops.reserve(lane.n_nodes);
+    for (int j = 0; j < lane.n_nodes; ++j) {
+        ops.push_back(cgraph->nodes[i + j]->op);
+    }
+    if (!ggml_cuda_can_fuse_subgraph(cgraph, i, lane.n_nodes, ops.data(), out_nodes, 1)) {
         return 0;
     }
 
