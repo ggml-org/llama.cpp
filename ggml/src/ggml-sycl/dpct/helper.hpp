@@ -62,7 +62,7 @@
 
 #define DPCT_UNUSED(x) (void)(x)
 
-inline void _abort(char * str) {
+inline void _abort(const char * str) {
     std::cerr << str << std::endl;
     std::abort();
 }
