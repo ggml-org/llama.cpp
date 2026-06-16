@@ -1402,38 +1402,6 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
     }
 }
 
-// Stitch the tiles in raw, one newline per token-row, append the overview (raw's last chunk).
-// Example, 2x2 grid of tiles A B / C D:
-//   raw = [ A B C D <overview> ]
-//   out = A.row0 B.row0 n,  A.row1 B.row1 n,  ...,  C.row0 D.row0 n,  ...,  <overview>
-static void stitch_tile_grid(clip_ctx * ctx, const clip_image_f32_batch & batch,
-                             const std::vector<float> & raw, int n_embd, float * out) {
-    const auto &  entries = batch.entries;
-    const int     n_tiles = static_cast<int>(entries.size()) - 1; // overview is last
-    GGML_ASSERT(n_tiles == batch.grid_x * batch.grid_y);
-    const int     tile_h  = clip_n_output_tokens_x(ctx, entries[0].get());
-    const size_t  row_sz  = static_cast<size_t>(tile_h) * n_embd;
-    const size_t  tile_sz = static_cast<size_t>(tile_h) * row_sz;
-    const std::vector<float> newline = clip_get_newline_embd(ctx);
-    GGML_ASSERT(!newline.empty());
-
-    for (int r = 0; r < batch.grid_y; r++) {
-        for (int pr = 0; pr < tile_h; pr++) {
-            for (int c = 0; c < batch.grid_x; c++) {
-                const float * tile = raw.data() + static_cast<size_t>(r * batch.grid_x + c) * tile_sz;
-                memcpy(out, tile + static_cast<size_t>(pr) * row_sz, row_sz * sizeof(float));
-                out += row_sz;
-            }
-            memcpy(out, newline.data(), static_cast<size_t>(n_embd) * sizeof(float));
-            out += n_embd;
-        }
-    }
-    // overview = raw's last encoded chunk; size it from the entry, not raw.size() (raw is over-allocated)
-    const size_t global_off = static_cast<size_t>(n_tiles) * tile_sz;
-    const size_t global_sz  = static_cast<size_t>(clip_n_output_tokens(ctx, entries.back().get())) * n_embd;
-    memcpy(out, raw.data() + global_off, global_sz * sizeof(float));
-}
-
 static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * image_tokens, std::vector<float> & out_embd) {
     clip_ctx * ctx_clip = ctx->ctx_v;
     if (!ctx_clip) {
@@ -1459,10 +1427,6 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
         const auto & entries = image_tokens->batch_f32.entries;
         // entries may have different token counts
         // e.g., DeepSeek-OCR-2: 144 per tile views, 257 for the global view
-        // DeepSeek-OCR v1, when multi-view, weaves its tiles into a grid (see stitch_tile_grid)
-        const bool is_dsocr_mlt = proj_type == PROJECTOR_TYPE_DEEPSEEKOCR && entries.size() > 1;
-        std::vector<float> raw(is_dsocr_mlt ? static_cast<size_t>(n_embd_out) * n_tokens_out : 0);
-        float * dst = is_dsocr_mlt ? raw.data() : out_embd.data();
         size_t offset = 0;
         for (size_t i = 0; i < entries.size(); i++) {
             if (entries[i]->is_placeholder()) {
@@ -1481,11 +1445,8 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
                 return 1;
             }
             ok = true;
-            std::copy(tmp_embd.begin(), tmp_embd.end(), dst + offset);
+            std::copy(tmp_embd.begin(), tmp_embd.end(), out_embd.begin() + offset);
             offset += static_cast<size_t>(n_embd_out) * n_tokens_per_image;
-        }
-        if (is_dsocr_mlt) {
-            stitch_tile_grid(ctx_clip, image_tokens->batch_f32, raw, n_embd_out, out_embd.data());
         }
     } else {
         if (image_tokens->is_placeholder()) {

@@ -3191,16 +3191,6 @@ clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batc
     return batch->entries[idx].get();
 }
 
-std::vector<float> clip_get_newline_embd(const struct clip_ctx * ctx) {
-    const ggml_tensor * nl = ctx->model.image_newline;
-    if (nl == nullptr || nl->type != GGML_TYPE_F32) {
-        return {};
-    }
-    std::vector<float> out(ggml_nelements(nl));
-    ggml_backend_tensor_get(nl, out.data(), 0, ggml_nbytes(nl));
-    return out;
-}
-
 void clip_free(clip_ctx * ctx) {
     if (ctx == nullptr) {
         return;
