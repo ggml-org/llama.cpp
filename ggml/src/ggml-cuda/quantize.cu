@@ -62,9 +62,13 @@ static __device__ __forceinline__ int32_t pack_q8_1_i8x4(
 
 template<int q8_1_layout_block_size>
 static __global__ void quantize_q8_1_layout(
-        const float * __restrict__ x, void * __restrict__ vy,
+        const float * x_ptr, void * vy_ptr,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const uint32_t ne1, const uint3 ne2) {
+    ggml_cuda_pdl_lc();
+    const float * GGML_CUDA_RESTRICT x  = x_ptr;
+    void        * GGML_CUDA_RESTRICT vy = vy_ptr;
+
     static_assert(q8_1_layout_block_size % QK8_1 == 0, "q8_1 layout block size must contain whole q8_1 blocks");
 
     constexpr int lanes_per_q8_1 = QK8_1 / sizeof(int32_t);
@@ -88,6 +92,8 @@ static __global__ void quantize_q8_1_layout(
     const int64_t i0_block = layout_x * q8_1_layout_block_size + q8_1_inner * QK8_1;
     const int64_t i0 = i0_block + iqs * sizeof(int32_t);
     const int64_t base = i3*s03 + i2*s02 + i1*s01;
+
+    ggml_cuda_pdl_sync();
 
     const float x0 = i0 + 0 < ne00 ? x[base + i0 + 0] : 0.0f;
     const float x1 = i0 + 1 < ne00 ? x[base + i0 + 1] : 0.0f;
@@ -481,8 +487,9 @@ void quantize_row_q8_1_layout_cuda(
     const int64_t block_num_x = layouts_per_row / layouts_per_cuda_block;
     const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
     const dim3 block_size(threads_per_cuda_block, 1, 1);
-    quantize_q8_1_layout<q8_1_layout_block_size>
-        <<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
+    ggml_cuda_kernel_launch(quantize_q8_1_layout<q8_1_layout_block_size>, launch_params,
+            x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
     GGML_UNUSED(type_src0);
 }
 

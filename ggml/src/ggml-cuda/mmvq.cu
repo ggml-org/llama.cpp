@@ -610,14 +610,20 @@ template <ggml_type type>
 static constexpr int mmvq_packed_k_layout_block_size_for_type() {
     static_assert(type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K);
 
+    // 64 and 256 are structurally supported, but not selected until validated.
     if constexpr (mmvq_type_supports_q8_1_layout<type, MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_128>()) {
         return MMVQ_Q8_1_LAYOUT_BLOCK_SIZE_128;
     }
     return MMVQ_Q8_1_BLOCK_SIZE_STANDARD;
 }
 
-static int mmvq_select_q8_1_layout_block_size(ggml_type type, int64_t ncols_dst) {
-    if (ncols_dst != 1) {
+static int mmvq_select_q8_1_layout_block_size(
+        ggml_type type, int64_t ncols_dst, mmvq_parameter_table_id table_id,
+        bool has_ids, bool has_fusion) {
+    // Runtime enablement is intentionally narrow. The layout machinery supports
+    // 32/64/128/256 structurally, but only 128 for K-quants on RDNA3_0 without
+    // ids/fusion has coverage so far.
+    if (ncols_dst != 1 || has_ids || has_fusion || table_id != MMVQ_PARAMETERS_RDNA3_0) {
         return MMVQ_Q8_1_BLOCK_SIZE_STANDARD;
     }
 
@@ -675,6 +681,8 @@ static __global__ void mul_mat_vec_q(
     uint32_t channel_x;
     uint32_t channel_y;
     uint32_t sample_dst;
+
+    ggml_cuda_pdl_sync();
 
     channel_x  = ncols_dst == 1 && ids ? ids[channel_dst]                     : fastdiv(channel_dst, channel_ratio);
     channel_y  = ncols_dst == 1 && ids ? fastmodulo(channel_dst, nchannels_y) : channel_dst;
@@ -966,18 +974,20 @@ static void mul_mat_vec_q_switch_fusion(
     const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr;
     if constexpr (c_ncols_dst == 1) {
         if (has_fusion) {
-            mul_mat_vec_q<type, c_ncols_dst, true, small_k, q8_1_layout_block_size><<<block_nums, block_dims, nbytes_shared, stream>>>
-                (vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
-                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
+            const ggml_cuda_kernel_launch_params launch_params(block_nums, block_dims, nbytes_shared, stream);
+            ggml_cuda_kernel_launch(mul_mat_vec_q<type, c_ncols_dst, true, small_k, q8_1_layout_block_size>, launch_params,
+                vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
+                channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
             return;
         }
     }
 
     GGML_ASSERT(!has_fusion && "fusion only supported for ncols_dst=1");
 
-    mul_mat_vec_q<type, c_ncols_dst, false, small_k, q8_1_layout_block_size><<<block_nums, block_dims, nbytes_shared, stream>>>
-        (vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
+    const ggml_cuda_kernel_launch_params launch_params(block_nums, block_dims, nbytes_shared, stream);
+    ggml_cuda_kernel_launch(mul_mat_vec_q<type, c_ncols_dst, false, small_k, q8_1_layout_block_size>, launch_params,
+        vx, vy, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
         sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
 }
@@ -1036,6 +1046,11 @@ static void mul_mat_vec_q_switch_ncols_dst(
 
     const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr;
     const bool has_ids = ids != nullptr;
+
+    if constexpr (use_q8_1_layout) {
+        GGML_ASSERT(!has_ids);
+        GGML_ASSERT(!has_fusion);
+    }
 
     const auto should_use_small_k = [&](int c_ncols_dst) {
         // When K is small, increase rows_per_block to match nwarps so each warp has more work to do
@@ -1399,7 +1414,14 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t ncols_dst     = ids ? ne2  : ne1;
     const int64_t nchannels_y   = ids ? ne11 : ne12;
     const int64_t nchannels_dst = ids ? ne1  : ne2;
-    const int q8_1_layout_block_size = mmvq_select_q8_1_layout_block_size(src0->type, ncols_dst);
+    const int device = ggml_cuda_get_device();
+    const int cc     = ggml_cuda_info().devices[device].cc;
+    const mmvq_parameter_table_id table_id = get_device_table_id(cc);
+    const bool has_ids = ids != nullptr;
+    const bool has_fusion = fusion != nullptr &&
+        (fusion->gate != nullptr || fusion->x_bias != nullptr || fusion->gate_bias != nullptr);
+    const int q8_1_layout_block_size = mmvq_select_q8_1_layout_block_size(
+            src0->type, ncols_dst, table_id, has_ids, has_fusion);
     const bool use_q8_1_layout = q8_1_layout_block_size != MMVQ_Q8_1_BLOCK_SIZE_STANDARD;
     const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1;
     ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
