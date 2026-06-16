@@ -354,6 +354,23 @@ const ggml_cuda_device_info & ggml_cuda_info() {
     return info;
 }
 
+// Per-device generation counter that increments on each cudaDeviceReset call.
+// Used by CUDA function attribute caches (e.g. shared memory limits) to detect
+// CUDA context changes and re-apply the attributes in the new context.
+static std::atomic<int> device_ctx_gen[GGML_CUDA_MAX_DEVICES] = {};
+
+// Wrapper around cudaDeviceReset that bumps the context generation counter
+// before resetting, so static attribute caches know to re-apply their settings.
+// All callers that need cudaDeviceReset should use this function.
+static void ggml_cuda_device_reset(int device) {
+    device_ctx_gen[device]++;
+    CUDA_CHECK(cudaDeviceReset());
+}
+
+int ggml_cuda_ctx_generation(int device) {
+    return device_ctx_gen[device].load();
+}
+
 // #define DEBUG_CUDA_MALLOC
 
 // buffer pool for cuda (legacy)
@@ -5038,8 +5055,10 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     // If no backends or buffers are active, the cudaMemGetInfo call above lazily created a CUDA
     // context that permanently consumes VRAM. Reset the device to free it.
+    // Use ggml_cuda_device_reset() so the context generation counter is bumped, allowing
+    // CUDA function attribute caches (e.g. shared memory limits) to detect the context change.
     if (ctx->active_count == 0) {
-        CUDA_CHECK(cudaDeviceReset());
+        ggml_cuda_device_reset(ctx->device);
     }
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }

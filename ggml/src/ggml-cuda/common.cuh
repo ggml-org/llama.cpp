@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <atomic>
 
 #if defined(GGML_USE_HIP)
 #define GGML_COMMON_DECL_HIP
@@ -230,11 +231,12 @@ static const char * cu_get_error_str(CUresult err) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #    define CUDA_SET_SHARED_MEMORY_LIMIT(kernel, nbytes)                                                       \
         do {                                                                                                   \
-            static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = { false };                         \
-            const int   id                                                = ggml_cuda_get_device();            \
-            if (!shared_memory_limit_raised[id]) {                                                             \
+            static int ctx_gen_last_raised[GGML_CUDA_MAX_DEVICES] = { -1 };                                   \
+            const int id                     = ggml_cuda_get_device();                                          \
+            const int current_gen            = ggml_cuda_ctx_generation(id);                                   \
+            if (ctx_gen_last_raised[id] != current_gen) {                                                       \
                 CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes)); \
-                shared_memory_limit_raised[id] = true;                                                         \
+                ctx_gen_last_raised[id] = current_gen;                                                          \
             }                                                                                                  \
         } while (0)
 #else
@@ -1139,6 +1141,12 @@ const ggml_cuda_device_info & ggml_cuda_info();
 
 void ggml_cuda_set_device(int device);
 int ggml_cuda_get_device();
+
+// Returns the current CUDA context generation for the given device.
+// This counter is incremented whenever cudaDeviceReset is called, allowing
+// CUDA function attribute caches (e.g. shared memory limit guards) to detect
+// context changes and re-apply their attributes.
+int ggml_cuda_ctx_generation(int device);
 
 struct ggml_cuda_pool {
     virtual ~ggml_cuda_pool() = default;
