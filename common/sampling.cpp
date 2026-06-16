@@ -187,6 +187,12 @@ std::string common_params_sampling::print() const {
 struct common_sampler * common_sampler_init(const struct llama_model * model, struct common_params_sampling & params) {
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
+    if (params.penalty_last_n == -1) {
+        params.penalty_last_n = llama_model_n_ctx_train(model);
+    }
+    params.penalty_last_n = std::max(params.penalty_last_n, 0);
+    params.n_prev = std::max(params.n_prev, params.penalty_last_n);
+
     llama_sampler_chain_params lparams = llama_sampler_chain_default_params();
 
     lparams.no_perf = params.no_perf;

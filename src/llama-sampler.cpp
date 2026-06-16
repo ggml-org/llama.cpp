@@ -2619,7 +2619,7 @@ struct llama_sampler * llama_sampler_init_grammar_lazy_patterns(
 
 // penalties
 
-struct llama_sampler_penalties {
+struct llama_sampler_penalties : public llama_sampler_backend {
     const int32_t penalty_last_n;
     const float   penalty_repeat;
     const float   penalty_freq;
@@ -2629,10 +2629,35 @@ struct llama_sampler_penalties {
 
     // a frequency map to count token occurrences
     std::unordered_map<llama_token, int> token_count;
+
+    // backend graph inputs
+    ggml_tensor * inp_token_ids = nullptr;
+    ggml_tensor * inp_counts    = nullptr;
+
+    // backend helpers
+    int32_t n_vocab = 0;
+    int32_t n_max   = 0;
+
+    std::vector<int32_t> host_token_ids;
+    std::vector<int32_t> host_counts;
+
+    llama_sampler_penalties(
+            int32_t penalty_last_n,
+            float   penalty_repeat,
+            float   penalty_freq,
+            float   penalty_present)
+        : llama_sampler_backend("penalties")
+        , penalty_last_n  (penalty_last_n)
+        , penalty_repeat  (penalty_repeat)
+        , penalty_freq    (penalty_freq)
+        , penalty_present (penalty_present)
+        , prev            (penalty_last_n) {
+    }
 };
 
-static const char * llama_sampler_penalties_name(const struct llama_sampler * /*smpl*/) {
-    return "penalties";
+static const char * llama_sampler_penalties_name(const struct llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_penalties *) smpl->ctx;
+    return ctx->get_name();
 }
 
 static void llama_sampler_penalties_accept(struct llama_sampler * smpl, llama_token token) {
@@ -2717,7 +2742,8 @@ static struct llama_sampler * llama_sampler_penalties_clone(const struct llama_s
     {
         auto * result_ctx = (llama_sampler_penalties *) result->ctx;
 
-        result_ctx->prev = ctx->prev;
+        result_ctx->prev        = ctx->prev;
+        result_ctx->token_count = ctx->token_count;
     }
 
     return result;
@@ -2727,6 +2753,140 @@ static void llama_sampler_penalties_free(struct llama_sampler * smpl) {
     delete (llama_sampler_penalties *) smpl->ctx;
 }
 
+static bool llama_sampler_penalties_backend_init(
+        struct llama_sampler       * smpl,
+        ggml_backend_buffer_type_t   buft) {
+    auto * sctx = (llama_sampler_penalties *) smpl->ctx;
+
+    const bool res = llama_sampler_backend_support(smpl, buft);
+
+    sctx->init(res);
+
+    return res;
+}
+
+static void llama_sampler_penalties_backend_apply(
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
+    GGML_UNUSED(gf);
+
+    auto * sctx = (llama_sampler_penalties *) smpl->ctx;
+
+    if ((sctx->penalty_last_n == 0) ||
+        (sctx->penalty_repeat == 1.0f && sctx->penalty_freq == 0.0f && sctx->penalty_present == 0.0f)) {
+        return;
+    }
+
+    sctx->n_vocab = (int32_t) data->logits->ne[0];
+    sctx->n_max   = std::min(sctx->penalty_last_n, sctx->n_vocab);
+
+    sctx->inp_token_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, sctx->n_max);
+    ggml_set_name(sctx->inp_token_ids, "penalties_token_ids");
+    ggml_set_input(sctx->inp_token_ids);
+
+    sctx->inp_counts = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, sctx->n_max);
+    ggml_set_name(sctx->inp_counts, "penalties_counts");
+    ggml_set_input(sctx->inp_counts);
+
+    if ((int32_t) sctx->host_token_ids.size() != sctx->n_max) {
+        sctx->host_token_ids.assign(sctx->n_max, 0);
+        sctx->host_counts.assign(sctx->n_max, 0);
+    }
+
+    ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, ggml_nelements(data->logits));
+    ggml_tensor * gathered = ggml_get_rows(ctx, logits_rows, sctx->inp_token_ids);
+    gathered = ggml_reshape_1d(ctx, gathered, sctx->n_max);
+
+    ggml_tensor * counts_f32 = ggml_cast(ctx, sctx->inp_counts, GGML_TYPE_F32);
+    ggml_tensor * active_mask = ggml_step(ctx, counts_f32);
+    ggml_tensor * inactive_mask = ggml_sub(ctx, ggml_fill(ctx, active_mask, 1.0f), active_mask);
+
+    ggml_tensor * penalized = gathered;
+
+    if (sctx->penalty_repeat != 1.0f) {
+        ggml_tensor * pos_mask = ggml_step(ctx, penalized);
+        ggml_tensor * neg_mask = ggml_sub(ctx, ggml_fill(ctx, pos_mask, 1.0f), pos_mask);
+
+        ggml_tensor * pos_scaled = ggml_scale(ctx, penalized, 1.0f/sctx->penalty_repeat);
+        ggml_tensor * neg_scaled = ggml_scale(ctx, penalized, sctx->penalty_repeat);
+
+        pos_scaled = ggml_mul(ctx, pos_scaled, pos_mask);
+        neg_scaled = ggml_mul(ctx, neg_scaled, neg_mask);
+        penalized = ggml_add(ctx, pos_scaled, neg_scaled);
+    }
+
+    if (sctx->penalty_freq != 0.0f) {
+        ggml_tensor * penalty_freq = ggml_scale(ctx, counts_f32, sctx->penalty_freq);
+        penalized = ggml_sub(ctx, penalized, penalty_freq);
+    }
+
+    if (sctx->penalty_present != 0.0f) {
+        ggml_tensor * penalty_present = ggml_scale(ctx, active_mask, sctx->penalty_present);
+        penalized = ggml_sub(ctx, penalized, penalty_present);
+    }
+
+    ggml_tensor * active_values = ggml_mul(ctx, penalized, active_mask);
+    ggml_tensor * inactive_values = ggml_mul(ctx, gathered, inactive_mask);
+    ggml_tensor * scatter_values = ggml_add(ctx, active_values, inactive_values);
+
+    ggml_tensor * scatter_rows = ggml_reshape_2d(ctx, scatter_values, 1, sctx->n_max);
+    logits_rows = ggml_set_rows(ctx, logits_rows, scatter_rows, sctx->inp_token_ids);
+    data->logits = ggml_reshape_1d(ctx, logits_rows, ggml_nelements(data->logits));
+}
+
+static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_penalties *) smpl->ctx;
+
+    if (!sctx->inp_token_ids || !sctx->inp_counts || sctx->n_max <= 0 || sctx->n_vocab <= 0) {
+        return;
+    }
+
+    if ((sctx->penalty_last_n == 0) ||
+        (sctx->penalty_repeat == 1.0f && sctx->penalty_freq == 0.0f && sctx->penalty_present == 0.0f)) {
+        return;
+    }
+
+    int32_t n_active = 0;
+
+    for (const auto & it : sctx->token_count) {
+        GGML_ASSERT(n_active < sctx->n_max);
+        sctx->host_token_ids[n_active] = it.first;
+        sctx->host_counts   [n_active] = it.second;
+        ++n_active;
+    }
+
+    std::vector<std::pair<int32_t, int32_t>> entries;
+    entries.reserve(n_active);
+    for (int32_t i = 0; i < n_active; ++i) {
+        entries.emplace_back(sctx->host_token_ids[i], sctx->host_counts[i]);
+    }
+    std::sort(entries.begin(), entries.end(), [](const auto & a, const auto & b) {
+        return a.first < b.first;
+    });
+    for (int32_t i = 0; i < n_active; ++i) {
+        sctx->host_token_ids[i] = entries[i].first;
+        sctx->host_counts   [i] = entries[i].second;
+    }
+
+    int32_t filler = 0;
+    if (n_active < sctx->n_max) {
+        while (sctx->token_count.find(filler) != sctx->token_count.end()) {
+            ++filler;
+        }
+        GGML_ASSERT(filler < sctx->n_vocab);
+    }
+
+    for (int32_t i = n_active; i < sctx->n_max; ++i) {
+        sctx->host_token_ids[i] = filler;
+        sctx->host_counts   [i] = 0;
+    }
+
+    ggml_backend_tensor_set(sctx->inp_token_ids, sctx->host_token_ids.data(), 0, sctx->n_max * sizeof(int32_t));
+    ggml_backend_tensor_set(sctx->inp_counts,    sctx->host_counts.data(),    0, sctx->n_max * sizeof(int32_t));
+}
+
 static struct llama_sampler_i llama_sampler_penalties_i = {
     /* .name              = */ llama_sampler_penalties_name,
     /* .accept            = */ llama_sampler_penalties_accept,
@@ -2734,10 +2894,10 @@ static struct llama_sampler_i llama_sampler_penalties_i = {
     /* .reset             = */ llama_sampler_penalties_reset,
     /* .clone             = */ llama_sampler_penalties_clone,
     /* .free              = */ llama_sampler_penalties_free,
-    /* .backend_init      = */ nullptr,
+    /* .backend_init      = */ llama_sampler_penalties_backend_init,
     /* .backend_accept    = */ nullptr,
-    /* .backend_apply     = */ nullptr,
-    /* .backend_set_input = */ nullptr,
+    /* .backend_apply     = */ llama_sampler_penalties_backend_apply,
+    /* .backend_set_input = */ llama_sampler_penalties_backend_set_input,
 };
 
 struct llama_sampler * llama_sampler_init_penalties(
@@ -2755,14 +2915,11 @@ struct llama_sampler * llama_sampler_init_penalties(
 
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_penalties_i,
-        /* .ctx   = */ new llama_sampler_penalties {
-            /* .penalty_last_n  = */ penalty_last_n,
-            /* .penalty_repeat  = */ penalty_repeat,
-            /* .penalty_freq    = */ penalty_freq,
-            /* .penalty_present = */ penalty_present,
-            /* .prev            = */ ring_buffer<llama_token>(penalty_last_n),
-            /* .token_count     = */ {},
-        }
+        /* .ctx   = */ new llama_sampler_penalties(
+            penalty_last_n,
+            penalty_repeat,
+            penalty_freq,
+            penalty_present)
     );
 }
 
