@@ -105,6 +105,9 @@ LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int
 // Set whether the context outputs the input embeddings of a specific layer
 LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid, bool value);
 
+// Store the accumulated target context for the DFlash decoder's KV injection
+LLAMA_API void llama_set_dflash_accumulated_target_ctx(struct llama_context * ctx, const float * data, int32_t n_embd, int32_t n_tokens);
+
 // mirrors:
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);

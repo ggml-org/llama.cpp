@@ -115,6 +115,9 @@ struct llama_context {
     void set_embeddings (bool value);
     void set_embeddings_nextn(bool value, bool masked);
     void set_embeddings_layer_inp(uint32_t lid, bool enable);
+
+    // DFlash: store the accumulated target context for the decoder's KV injection
+    void set_dflash_accumulated_target_ctx(const float * data, int32_t n_embd, int32_t n_tokens);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
@@ -280,6 +283,9 @@ private:
     llama_adapter_loras_ptr loras;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
+
+    // DFlash decoder has no KV cache: run through the encode path with gtype forced to DECODER
+    bool dflash_decoder_ctx = false;
 
     llama_memory_ptr memory;
 

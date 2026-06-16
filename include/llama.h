@@ -563,6 +563,10 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_embd_inp (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_out (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_layer    (const struct llama_model * model);
+
+    // DFlash draft model: number of tokens drafted per block, and the noise-block filler token
+    LLAMA_API int32_t llama_model_dflash_block_size   (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_mask_token_id(const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);

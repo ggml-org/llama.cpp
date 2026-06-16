@@ -109,6 +109,13 @@ llama_context::llama_context(
         }
     }
 
+    // DFlash decoder is created with ctx_other (the target) for tok_embd/lm_head; the
+    // encoder is created without it, which is how the two contexts are told apart
+    if (model.arch == LLM_ARCH_DFLASH && params.ctx_other != nullptr) {
+        cparams.ctx_other = params.ctx_other;
+        dflash_decoder_ctx = true;
+    }
+
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
     // re-reserve when graph nodes change.
@@ -394,6 +401,14 @@ llama_context::llama_context(
 
         if (cparams.pipeline_parallel) {
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
+        }
+
+        // reserve the cross store at full context size so build_inp_cross_embd sizes the
+        // decoder graph for cparams.n_ctx rather than hparams.n_ctx_train
+        if (dflash_decoder_ctx) {
+            cross.n_embd = hparams.n_embd;
+            cross.n_enc  = cparams.n_ctx;
+            cross.v_embd.resize((size_t) cross.n_embd * cross.n_enc, 0.0f);
         }
 
         sched_reserve();
@@ -1156,6 +1171,15 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
     sched_need_reserve = true;
 }
 
+void llama_context::set_dflash_accumulated_target_ctx(const float * data, int32_t n_embd, int32_t n_tokens) {
+    GGML_ASSERT(data != nullptr);
+
+    cross.n_embd = n_embd;
+    cross.n_enc  = n_tokens;
+    cross.v_embd.resize((size_t) n_embd * n_tokens);
+    memcpy(cross.v_embd.data(), data, cross.v_embd.size() * sizeof(float));
+}
+
 void llama_context::set_causal_attn(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -1298,6 +1322,11 @@ bool llama_context::set_adapter_cvec(
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    // the DFlash decoder is driven through the encode path but needs the decoder graph
+    if (dflash_decoder_ctx && gtype == LLM_GRAPH_TYPE_ENCODER) {
+        gtype = LLM_GRAPH_TYPE_DECODER;
+    }
+
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1353,6 +1382,18 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
         res->set_inputs(&ubatch);
+
+        // DFlash decoder positions span [target_ctx ; noise] = arange(n_enc + n_noise)
+        if (dflash_decoder_ctx && !cross.v_embd.empty()) {
+            if (ggml_tensor * pos_full = ggml_graph_get_tensor(gf, "inp_pos_full")) {
+                const int64_t n_total = cross.n_enc + ubatch.n_tokens;
+                std::vector<int32_t> pos_data(n_total);
+                for (int64_t i = 0; i < n_total; ++i) {
+                    pos_data[i] = (int32_t) i;
+                }
+                ggml_backend_tensor_set(pos_full, pos_data.data(), 0, n_total * sizeof(int32_t));
+            }
+        }
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
@@ -3697,6 +3738,10 @@ void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
 
 void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool value) {
     ctx->set_embeddings_layer_inp(lid, value);
+}
+
+void llama_set_dflash_accumulated_target_ctx(llama_context * ctx, const float * data, int32_t n_embd, int32_t n_tokens) {
+    ctx->set_dflash_accumulated_target_ctx(data, n_embd, n_tokens);
 }
 
 llama_memory_t llama_get_memory(const struct llama_context * ctx) {
