@@ -903,6 +903,7 @@ common_download_model_result common_download_model(const common_params_model  & 
     }
 
     // MS uses Cookie auth; build download opts with MS-specific headers
+    // reuse bearer_token to pass MS Cookie token
     common_download_opts download_opts = opts;
     if (is_ms && !opts.bearer_token.empty()) {
         download_opts.headers.emplace_back("Cookie", "m_session_id=" + opts.bearer_token);

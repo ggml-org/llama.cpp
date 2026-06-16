@@ -249,7 +249,7 @@ ms_files get_repo_files(const std::string & repo_id,
 
         // write ref so get_cached_files can find the snapshot
         fs::path refs_path = get_repo_path(repo_id) / "refs";
-        safe_write_file(refs_path / "main", ref);
+        safe_write_file(refs_path / "master", ref);
 
         for (const auto & item : response["Data"]["Files"]) {
             if (!item.contains("Path") || !item["Path"].is_string()) {
@@ -323,7 +323,7 @@ static std::string get_cached_ref(const fs::path & repo_path) {
         if (!f || !std::getline(f, ref) || ref.empty()) {
             continue;
         }
-        if (entry.path().filename() == "main") {
+        if (entry.path().filename() == "master") {
             return ref;
         }
     }
