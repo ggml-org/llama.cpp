@@ -6,7 +6,6 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <cinttypes>
 #include <condition_variable>
 #include <deque>
@@ -578,13 +577,6 @@ public:
         cmd.completion = completion;
         enqueue(std::move(cmd));
         completion->wait();
-    }
-
-    // Shared time origin for consistent timestamps across threads
-    static int64_t ms_since_start() {
-        static auto epoch = std::chrono::steady_clock::now();
-        auto now = std::chrono::steady_clock::now();
-        return std::chrono::duration_cast<std::chrono::milliseconds>(now - epoch).count();
     }
 
 private:
