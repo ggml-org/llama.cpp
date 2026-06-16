@@ -323,6 +323,7 @@ struct cmd_params {
     std::vector<std::string>         hf_repo;
     std::vector<std::string>         hf_file;
     std::string                      hf_token;
+    bool                             offline;
     std::vector<int>                 n_prompt;
     std::vector<int>                 n_gen;
     std::vector<std::pair<int, int>> n_pg;
@@ -367,6 +368,7 @@ static const cmd_params cmd_params_defaults = {
     /* hf_repo              */ {},
     /* hf_file              */ {},
     /* hf_token             */ "",
+    /* offline              */ false,
     /* n_prompt             */ { 512 },
     /* n_gen                */ { 128 },
     /* n_pg                 */ {},
@@ -437,6 +439,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("                                              (default: unused)\n");
     printf("  -hft, --hf-token <token>                    Hugging Face access token\n");
     printf("                                              (default: value from HF_TOKEN environment variable)\n");
+    printf("  --offline                                   Offline mode: forces use of cache, prevents network access\n");
+    printf("                                              (default: disabled)\n");
     printf("  -p, --n-prompt <n>                          (default: %s)\n", join(cmd_params_defaults.n_prompt, ",").c_str());
     printf("  -n, --n-gen <n>                             (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
     printf("  -pg <pp,tg>                                 (default: %s)\n", join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
@@ -558,6 +562,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.hf_token = argv[i];
+            } else if (arg == "--offline") {
+                params.offline = true;
             } else if (arg == "-p" || arg == "--n-prompt") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1040,6 +1046,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
 
             common_download_opts opts;
             opts.bearer_token = params.hf_token;
+            opts.offline         = params.offline;
             auto download_result = common_download_model(model, opts);
             if (download_result.model_path.empty()) {
                 fprintf(stderr, "error: failed to download model from HuggingFace\n");
