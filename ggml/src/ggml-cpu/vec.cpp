@@ -80,7 +80,7 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
             svbool_t pg = svwhilelt_b32(np2, n);
             ax1 = svld1_f32(pg, x + np2);
             ay1 = svld1_f32(pg, y + np2);
-            sum1 = svmad_f32_m(pg, ax1, ay1, sum1);
+            sum1 = svmla_f32_m(pg, sum1, ax1, ay1);
         }
         // reduce sum1,sum2 to sum1
         GGML_F32_VEC_REDUCE(sumf, sum1, sum2, sum3, sum4, sum5, sum6, sum7, sum8);

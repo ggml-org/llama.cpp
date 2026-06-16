@@ -98,6 +98,30 @@ static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_tr
     return fabsf(result - dot_ref) / test_size;
 }
 
+static int test_vec_dot_f32() {
+    const auto * f32 = ggml_get_type_traits_cpu(GGML_TYPE_F32);
+    int failed = 0;
+    for (int n : {1, 2, 3, 5, 7, 8, 15, 16, 17, 31, 33, 63, 67, 127, 129, 193, 255, 1023}) {
+        std::vector<float> a(n);
+        std::vector<float> b(n);
+        generate_data(0.0, n, a.data());
+        generate_data(1.0, n, b.data());
+
+        float result = 0.0f;
+        f32->vec_dot(n, &result, 0, a.data(), 0, b.data(), 0, 1);
+        const float ref = dot_product(a.data(), b.data(), n);
+        const float error = fabsf(result - ref) / n;
+
+        const bool f = !(error < MAX_QUANTIZATION_REFERENCE_ERROR);
+        failed += f;
+        if (f) {
+            printf(" f32 vec_dot n=%4d:                 %s (ref=%f got=%f err=%f)\n",
+                   n, RESULT_STR[f], ref, result, error);
+        }
+    }
+    return failed;
+}
+
 int main(int argc, char * argv[]) {
     bool verbose = false;
     const size_t test_size = 32 * 128;
@@ -124,6 +148,8 @@ int main(int argc, char * argv[]) {
 
     int num_failed = 0;
     bool failed = false;
+
+    num_failed += test_vec_dot_f32();
 
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
         ggml_type type = (ggml_type) i;
