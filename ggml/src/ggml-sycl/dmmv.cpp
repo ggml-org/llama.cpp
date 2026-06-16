@@ -1022,6 +1022,120 @@ static void dequantize_mul_mat_vec_q5_k(const void *__restrict__ vx,
     }
 }
 
+static void dequantize_mul_mat_vec_q5_k_reorder(const void *__restrict__ vx,
+                                                const float *__restrict__ yy,
+                                                float *__restrict__ dst,
+                                                const int ncols, int nrows,
+                                                const sycl::nd_item<3> &item_ct1) {
+
+    const int row = item_ct1.get_group(2);
+    const int num_blocks_per_row = ncols / QK_K;
+    const int ib0 = row*num_blocks_per_row;
+
+    // SOA base pointers for the reordered layout:
+    //   [qs: nb * QK_K/2] [qh: nb * QK_K/8] [scales: nb * K_SCALE_SIZE] [dm: nb * sizeof(half2)]
+    const int nb = nrows * num_blocks_per_row;
+    const uint8_t     * qs_base     = (const uint8_t *)vx;
+    const uint8_t     * qh_base     = qs_base + (size_t)nb * (QK_K / 2);
+    const uint8_t     * scales_base = qh_base + (size_t)nb * (QK_K / 8);
+    const sycl::half2 * dm_base     = (const sycl::half2 *)(scales_base + (size_t)nb * K_SCALE_SIZE);
+
+    float tmp = 0; // partial sum for thread in warp
+
+#if QK_K == 256
+    const uint16_t kmask1 = 0x3f3f;
+    const uint16_t kmask2 = 0x0f0f;
+    const uint16_t kmask3 = 0xc0c0;
+
+    const int tid = item_ct1.get_local_id(2) / 2; // 0...15
+    const int ix = item_ct1.get_local_id(2) % 2;
+
+    const int il  = tid/4;     // 0...3
+    const int ir  = tid - 4*il;// 0...3
+    const int n   = 2;
+
+    const int im = il/2;  // 0 or 1. 0 computes 0,32 + 128,160, 1 computes 64,96 + 192,224
+    const int in = il%2;
+
+    const int l0 = n*(2*ir + in);
+    const int q_offset = 32*im + l0;
+    const int y_offset = 64*im + l0;
+
+    const uint8_t hm1  = 1 << (2*im);
+    const uint8_t hm2  = hm1 << 4;
+
+    uint16_t aux[4];
+    const uint8_t * sc = (const uint8_t *)aux;
+
+    uint16_t q16[8];
+    const uint8_t * q4 = (const uint8_t *)q16;
+
+    for (int i = ix; i < num_blocks_per_row; i += 2) {
+        const int bi = ib0 + i;
+
+        const uint8_t * ql1 = qs_base + bi * (QK_K / 2) + q_offset;
+        const uint8_t * qh  = qh_base + bi * (QK_K / 8) + l0;
+        const float   * y1  = yy + i*QK_K + y_offset;
+        const float   * y2  = y1 + 128;
+
+        const sycl::half2 dm_val = dm_base[bi];
+        const float dall = dm_val[0];
+        const float dmin = dm_val[1];
+
+        const uint16_t * a = (const uint16_t *)(scales_base + bi * K_SCALE_SIZE);
+        aux[0] = a[im+0] & kmask1;
+        aux[1] = a[im+2] & kmask1;
+        aux[2] = ((a[im+4] >> 0) & kmask2) | ((a[im+0] & kmask3) >> 2);
+        aux[3] = ((a[im+4] >> 4) & kmask2) | ((a[im+2] & kmask3) >> 2);
+
+        sycl::float4 sum = {0.f, 0.f, 0.f, 0.f};
+        float smin = 0;
+        const uint16_t * q1 = (const uint16_t *)ql1;
+        const uint16_t * q2 = q1 + 32;
+        q16[0] = q1[0] & 0x0f0f;
+        q16[1] = q1[8] & 0x0f0f;
+        q16[2] = (q1[0] >> 4) & 0x0f0f;
+        q16[3] = (q1[8] >> 4) & 0x0f0f;
+        q16[4] = q2[0] & 0x0f0f;
+        q16[5] = q2[8] & 0x0f0f;
+        q16[6] = (q2[0] >> 4) & 0x0f0f;
+        q16[7] = (q2[8] >> 4) & 0x0f0f;
+        for (int l = 0; l < n; ++l) {
+            sum.x() +=
+                y1[l + 0] * (q4[l + 0] + (qh[l + 0] & (hm1 << 0) ? 16 : 0)) +
+                y1[l + 16] * (q4[l + 2] + (qh[l + 16] & (hm1 << 0) ? 16 : 0));
+            sum.y() +=
+                y1[l + 32] * (q4[l + 4] + (qh[l + 0] & (hm1 << 1) ? 16 : 0)) +
+                y1[l + 48] * (q4[l + 6] + (qh[l + 16] & (hm1 << 1) ? 16 : 0));
+            sum.z() +=
+                y2[l + 0] * (q4[l + 8] + (qh[l + 0] & (hm2 << 0) ? 16 : 0)) +
+                y2[l + 16] * (q4[l + 10] + (qh[l + 16] & (hm2 << 0) ? 16 : 0));
+            sum.w() +=
+                y2[l + 32] * (q4[l + 12] + (qh[l + 0] & (hm2 << 1) ? 16 : 0)) +
+                y2[l + 48] * (q4[l + 14] + (qh[l + 16] & (hm2 << 1) ? 16 : 0));
+            smin += (y1[l] + y1[l+16]) * sc[2] + (y1[l+32] + y1[l+48]) * sc[3]
+                  + (y2[l] + y2[l+16]) * sc[6] + (y2[l+32] + y2[l+48]) * sc[7];
+        }
+        tmp += dall * (sum.x() * sc[0] + sum.y() * sc[1] + sum.z() * sc[4] +
+                       sum.w() * sc[5]) -
+               dmin * smin;
+    }
+#else
+    // The reordered Q5_K layout is only produced for QK_K == 256.
+#endif
+
+    // sum up partial sums and write back result
+#pragma unroll
+    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        tmp +=
+            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (item_ct1.get_local_id(2) == 0) {
+        dst[row] = tmp;
+    }
+}
+
 static void dequantize_mul_mat_vec_q6_k(const void * __restrict__ vx, const float * __restrict__ yy, float * __restrict__ dst, const int ncols, int nrows,
                                         const sycl::nd_item<3> &item_ct1) {
 
@@ -1599,6 +1713,19 @@ static void dequantize_mul_mat_vec_q4_K_sycl_reorder(const void *vx, const float
         });
 }
 
+static void dequantize_mul_mat_vec_q5_K_sycl_reorder(const void *vx, const float *y,
+                                                     float *dst, const int ncols,
+                                                     const int nrows,
+                                                     dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    const sycl::range<3> block_dims(1, 1, QK_WARP_SIZE);
+    stream->parallel_for(
+        sycl::nd_range<3>(sycl::range<3>(1, 1, nrows) * block_dims, block_dims),
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+            dequantize_mul_mat_vec_q5_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
+        });
+}
+
 static void dequantize_mul_mat_vec_q6_K_sycl_reorder(const void *vx, const float *y,
                                                      float *dst, const int ncols,
                                                      const int nrows,
@@ -1695,7 +1822,12 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             }
             break;
         case GGML_TYPE_Q5_K:
-            dequantize_mul_mat_vec_q5_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
+                ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+                dequantize_mul_mat_vec_q5_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            } else {
+                dequantize_mul_mat_vec_q5_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            }
             break;
         case GGML_TYPE_Q6_K:
             if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
