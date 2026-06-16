@@ -25,9 +25,41 @@ extern "C" {
 #define HMX_FP16_TILE_N_ELMS 1024
 #endif
 
+#ifndef MM_SPAD_SRC0_NROWS
+#define MM_SPAD_SRC0_NROWS 16
+#endif
+#ifndef MM_SPAD_SRC1_NROWS
+#define MM_SPAD_SRC1_NROWS 16
+#endif
+#ifndef MM_SPAD_DST_NROWS
+#define MM_SPAD_DST_NROWS  2
+#endif
+
+enum htp_matmul_kernel_type {
+    HTP_MATMUL_KERNEL_UNSUPPORTED = 0,
+
+    // HMX paths
+    HTP_MATMUL_KERNEL_HMX_2D,
+    HTP_MATMUL_KERNEL_HMX_F16_BATCHED,
+
+    // HVX floating-point paths
+    HTP_MATMUL_KERNEL_HVX_F16_F16_VTCM,
+    HTP_MATMUL_KERNEL_HVX_F16_F16_DDR,
+    HTP_MATMUL_KERNEL_HVX_F16_F32_DDR,
+
+    HTP_MATMUL_KERNEL_HVX_F32_F32_VTCM,
+    HTP_MATMUL_KERNEL_HVX_F32_F32_DDR,
+    HTP_MATMUL_KERNEL_HVX_F32_F16_DDR,
+
+    // HVX quantized paths
+    HTP_MATMUL_KERNEL_HVX_QUANT_ROW,   // standard row-wise parallel quantization
+    HTP_MATMUL_KERNEL_HVX_QUANT_BLOCK, // parallel block-wise quantization
+};
+
 // Op-specific struct for precomputed matmul params
 struct htp_matmul_kernel_params {
-    int32_t  use_hmx;            // 1 = use HMX, 0 = use HVX
+    int32_t  kernel_type;        // enum htp_matmul_kernel_type
+    int32_t  n_hmx;              // 1 = use HMX, 0 = use HVX
     int32_t  use_pipeline;       // 1 = pipelined execution, 0 = standard
     int32_t  m_chunk;            // Row chunk size (M chunk)
     int32_t  n_chunk;            // Col chunk size (N chunk)
@@ -36,6 +68,9 @@ struct htp_matmul_kernel_params {
     int32_t  aligned_tile_size;  // Aligned weight tile size (padded to 128)
     int32_t  src1_row_size;      // Row size for quantized activation
     int32_t  spad_size;          // Total required scratchpad size in VTCM
+    int32_t  src0_spad_size;     // src0 scratchpad size in VTCM
+    int32_t  src1_spad_size;     // src1 scratchpad size in VTCM
+    int32_t  dst_spad_size;      // dst scratchpad size in VTCM
 
     // Precomputed division values
     struct fastdiv_values div_ne12_ne1;
@@ -180,12 +215,14 @@ static inline uint32_t htp_get_weight_aligned_tile_size(int weight_type) {
 
 // --- Activation/Row Size Helpers ---
 static inline size_t htp_q8_0_tiled_row_size(uint32_t ne) {
-    const uint32_t nb_32 = (ne + 31) / 32;
+    const uint32_t ne_padded = ((ne + 127) / 128) * 128;
+    const uint32_t nb_32 = ne_padded / 32;
     return nb_32 * HTP_ACT_TILE_SIZE_Q8_0;
 }
 
 static inline size_t htp_q8_1_tiled_row_size(uint32_t ne) {
-    const uint32_t nb_32 = (ne + 31) / 32;
+    const uint32_t ne_padded = ((ne + 127) / 128) * 128;
+    const uint32_t nb_32 = ne_padded / 32;
     return nb_32 * HTP_ACT_TILE_SIZE_Q8_1;
 }
 
@@ -205,6 +242,146 @@ static inline size_t htp_get_tiled_row_stride(int weight_type, int k) {
         default:
             return 0;
     }
+}
+
+#ifndef DMA_DEPTH
+#define DMA_DEPTH 2
+#endif
+
+static inline size_t hex_round_up_matmul(size_t n, size_t m) {
+    return ((n + m - 1) / m) * m;
+}
+
+static inline size_t hex_align_up_matmul(size_t n, size_t m) {
+    return ((n + m - 1) / m) * m;
+}
+
+static inline size_t hmx_get_2d_vtcm_size(
+    int wtype, int k, size_t mc, size_t nc, bool use_pipeline, int num_threads, int aligned_tile_size
+) {
+    const int n_k_tiles = k / HMX_FP16_TILE_N_COLS;
+    const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32);
+    const size_t row_stride = htp_get_tiled_row_stride(wtype, k);
+    const size_t vec_dot_size = k * sizeof(uint16_t);
+
+    const size_t act_f32_size = hex_align_up_matmul(num_threads * 4 * k * sizeof(float), HMX_FP16_TILE_SIZE);
+    const size_t weight_area_size = is_quant
+        ? hex_align_up_matmul((nc / 32) * n_k_tiles * aligned_tile_size, HMX_FP16_TILE_SIZE)
+        : hex_align_up_matmul(nc * row_stride, HMX_FP16_TILE_SIZE);
+    const size_t act_area_size    = hex_align_up_matmul(mc * vec_dot_size, HMX_FP16_TILE_SIZE);
+    const size_t output_area_size = hex_align_up_matmul(mc * nc * sizeof(uint16_t), HMX_FP16_TILE_SIZE);
+
+    size_t scratch0_size = hex_align_up_matmul(nc * vec_dot_size, HMX_FP16_TILE_SIZE);
+    size_t scratch1_size = use_pipeline ? scratch0_size : 0;
+    size_t scratch2_size = use_pipeline ? output_area_size : 0;
+
+    return weight_area_size + act_area_size + act_f32_size + output_area_size + 
+           scratch0_size + scratch1_size + scratch2_size + 256;
+}
+
+static inline size_t hmx_get_batched_vtcm_size(
+    int wtype, int k, size_t mc, size_t nc, int group_size, bool use_dma_activation, int num_threads
+) {
+    (void)wtype;
+    const size_t vec_dot_size = k * sizeof(uint16_t);
+    const size_t f32_scratch_size = use_dma_activation
+        ? hex_align_up_matmul(num_threads * 4 * k * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
+
+    const size_t act_head_stride  = mc * k;
+    const size_t weight_area_size = hex_align_up_matmul(nc * vec_dot_size, HMX_FP16_TILE_SIZE);
+    const size_t act_area_size    = hex_align_up_matmul(group_size * act_head_stride * sizeof(uint16_t), HMX_FP16_TILE_SIZE);
+    const size_t output_area_size = hex_align_up_matmul(group_size * mc * nc * sizeof(uint16_t), HMX_FP16_TILE_SIZE);
+    const size_t scratch_area_size = hex_align_up_matmul(nc * vec_dot_size, HMX_FP16_TILE_SIZE);
+
+    return weight_area_size + act_area_size + output_area_size + 
+           2 * scratch_area_size + 256 + f32_scratch_size;
+}
+
+static inline size_t hvx_get_spad_sizes(
+    int kernel_type,
+    int wtype,
+    int ne10, // k
+    int src1_nrows, // m_total (or act_nrows)
+    int n_threads,
+    size_t dst_row_size,
+    size_t src0_row_size,
+    size_t src1_row_size,
+    size_t * src0_spad_size_out,
+    size_t * src1_spad_size_out,
+    size_t * dst_spad_size_out
+) {
+    size_t src0_spad_size = 0;
+    size_t src1_spad_size = 0;
+    size_t dst_spad_size  = 0;
+
+    const bool is_repack = (wtype == HTP_TYPE_Q4_0 || wtype == HTP_TYPE_Q4_1 ||
+                            wtype == HTP_TYPE_Q8_0 || wtype == HTP_TYPE_IQ4_NL ||
+                            wtype == HTP_TYPE_MXFP4);
+
+    const size_t src0_row_size_padded = hex_round_up_matmul(src0_row_size, 128);
+
+    switch (kernel_type) {
+        case HTP_MATMUL_KERNEL_HVX_F16_F16_VTCM: {
+            size_t f16_src1_row_size = hex_round_up_matmul(ne10 * 2, 128);
+            src1_spad_size = hex_round_up_matmul(f16_src1_row_size * src1_nrows, 256);
+            src0_spad_size = hex_round_up_matmul(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256) * n_threads;
+            dst_spad_size  = hex_round_up_matmul(MM_SPAD_DST_NROWS * dst_row_size, 256) * n_threads;
+            break;
+        }
+        case HTP_MATMUL_KERNEL_HVX_F16_F32_DDR:
+        case HTP_MATMUL_KERNEL_HVX_F16_F16_DDR:
+        case HTP_MATMUL_KERNEL_HVX_F32_F32_DDR:
+        case HTP_MATMUL_KERNEL_HVX_F32_F16_DDR: {
+            src0_spad_size = hex_round_up_matmul(MM_SPAD_SRC0_NROWS * src0_row_size, 256) * n_threads;
+            src1_spad_size = hex_round_up_matmul(MM_SPAD_SRC1_NROWS * src1_row_size, 256) * n_threads;
+            dst_spad_size  = hex_round_up_matmul(MM_SPAD_DST_NROWS * dst_row_size, 256) * n_threads;
+            break;
+        }
+        case HTP_MATMUL_KERNEL_HVX_F32_F32_VTCM: {
+            size_t f32_src1_row_size = hex_round_up_matmul(ne10 * 4, 128);
+            src1_spad_size = hex_round_up_matmul(f32_src1_row_size * src1_nrows, 256);
+            src0_spad_size = hex_round_up_matmul(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256) * n_threads;
+            dst_spad_size  = hex_round_up_matmul(MM_SPAD_DST_NROWS * dst_row_size, 256) * n_threads;
+            break;
+        }
+        case HTP_MATMUL_KERNEL_HVX_QUANT_BLOCK:
+        case HTP_MATMUL_KERNEL_HVX_QUANT_ROW: {
+            size_t q_src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(ne10) : htp_q8_0_tiled_row_size(ne10);
+            
+            dst_spad_size  = hex_round_up_matmul(MM_SPAD_DST_NROWS * dst_row_size, 256);
+            src0_spad_size = hex_round_up_matmul(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
+            src1_spad_size = hex_round_up_matmul(q_src1_row_size * src1_nrows, 256);
+
+            // src0 spad is also used in dynamic quantizer to store padded src1 rows
+            size_t src1_row_size_padded = hex_round_up_matmul(q_src1_row_size, QK_Q8_0_TILED * sizeof(float));
+            if (src0_spad_size < src1_row_size_padded) {
+                src0_spad_size = src1_row_size_padded;
+            }
+
+            src0_spad_size = src0_spad_size * n_threads;
+            dst_spad_size  = dst_spad_size * n_threads;
+
+            if (is_repack) {
+                uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(wtype);
+                uint32_t n_k_tiles = ne10 / 32;
+                uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
+                size_t repacked_spad_size = hex_round_up_matmul(DMA_DEPTH * tile_row_size, 256);
+                if (repacked_spad_size < src1_row_size_padded) {
+                    repacked_spad_size = src1_row_size_padded;
+                }
+                src0_spad_size = repacked_spad_size * n_threads;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+
+    *src0_spad_size_out = src0_spad_size;
+    *src1_spad_size_out = src1_spad_size;
+    *dst_spad_size_out  = dst_spad_size;
+
+    return src0_spad_size + src1_spad_size + dst_spad_size;
 }
 
 #ifdef __cplusplus

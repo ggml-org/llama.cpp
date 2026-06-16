@@ -39,11 +39,6 @@ static inline HVX_Vector hvx_vec_mul_f16_f16_to_f32_lower32(HVX_Vector v1, HVX_V
 #endif
 }
 
-#define MM_SPAD_SRC0_NROWS 16
-#define MM_SPAD_SRC1_NROWS 16
-#define MM_SPAD_DST_NROWS  2
-#define DMA_DEPTH          2
-
 struct htp_matmul_context {
     const char * type;
     struct htp_ops_context * octx;
@@ -2329,10 +2324,8 @@ static void quantize_row_f32_q8_0_tiled(float * restrict x, uint8_t * restrict y
     const uint32_t nb = (k + qk - 1) / qk;
 
     for (uint32_t i = 0; i < nb; i++) {
-        uint8_t * restrict y_block0 = y + i * 8 * 1152;
-        uint8_t * restrict y_block1 = y + (i * 8 + 4) * 1152;
-        quantize_block_f32_q8_0_tiled(x + (i*2 + 0) * qk/2, y_block0);
-        quantize_block_f32_q8_0_tiled(x + (i*2 + 1) * qk/2, y_block1);
+        uint8_t * restrict y_block = y + i * 4 * 1152;
+        quantize_block_f32_q8_0_tiled(x + i * qk, y_block);
     }
 }
 
@@ -2342,10 +2335,8 @@ static void quantize_row_f32_q8_1_tiled(float * restrict x, uint8_t * restrict y
     const uint32_t nb = (k + qk - 1) / qk;
 
     for (uint32_t i = 0; i < nb; i++) {
-        uint8_t * restrict y_block0 = y + i * 8 * 1280;
-        uint8_t * restrict y_block1 = y + (i * 8 + 4) * 1280;
-        quantize_block_f32_q8_1_tiled(x + (i*2 + 0) * qk/2, y_block0);
-        quantize_block_f32_q8_1_tiled(x + (i*2 + 1) * qk/2, y_block1);
+        uint8_t * restrict y_block = y + i * 4 * 1280;
+        quantize_block_f32_q8_1_tiled(x + i * qk, y_block);
     }
 }
 
@@ -2474,7 +2465,7 @@ static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, vo
 
     for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
         const uint8_t * restrict src_ptr = (const uint8_t *) src->data + r * src_row_size + c * qk * sizeof(float);
-        uint8_t * restrict dst_ptr = dst + r * dst_row_size + c * 8 * 1152;
+        uint8_t * restrict dst_ptr = dst + r * dst_row_size + c * 4 * 1152;
 
         hex_l2fetch(src_ptr, qk * sizeof(float), qk * sizeof(float), 1);
 
@@ -2486,8 +2477,7 @@ static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, vo
             hvx_copy_f32_aa(tmp_data, src_ptr, qk);
         }
 
-        quantize_block_f32_q8_0_tiled((float *) tmp_data + 0,    dst_ptr + 0);
-        quantize_block_f32_q8_0_tiled((float *) tmp_data + qk/2, dst_ptr + 4 * 1152);
+        quantize_block_f32_q8_0_tiled((float *) tmp_data, dst_ptr);
 
         c++;
         if (c == nb) {
@@ -2525,7 +2515,7 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
 
     for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
         const uint8_t * restrict src_ptr = (const uint8_t *) src->data + r * src_row_size + c * qk * sizeof(float);
-        uint8_t * restrict dst_ptr = dst + r * dst_row_size + c * 8 * 1280;
+        uint8_t * restrict dst_ptr = dst + r * dst_row_size + c * 4 * 1280;
 
         hex_l2fetch(src_ptr, qk * sizeof(float), qk * sizeof(float), 1);
 
@@ -2537,8 +2527,7 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
             hvx_copy_f32_aa(tmp_data, src_ptr, qk);
         }
 
-        quantize_block_f32_q8_1_tiled((float *) tmp_data + 0, dst_ptr + 0);
-        quantize_block_f32_q8_1_tiled((float *) tmp_data + qk/2, dst_ptr + 4 * 1280);
+        quantize_block_f32_q8_1_tiled((float *) tmp_data, dst_ptr);
 
         c++;
         if (c == nb) {
@@ -2748,6 +2737,8 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
     struct htp_matmul_context * mmctx = &mmctx_struct;
     mmctx->octx = octx;
 
+    const struct htp_matmul_kernel_params * kparams = (const struct htp_matmul_kernel_params *) octx->kernel_params;
+
     const uint32_t src0_nrows = ne01 * ne02 * ne03;
     const uint32_t src1_nrows = ne11 * ne12 * ne13;
 
@@ -2803,161 +2794,122 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
 
     bool need_quant = true;
 
-    if (src0->type == HTP_TYPE_F16) {
-        // Try optimized f16-f16 path first (src1 in VTCM)
-        const size_t f16_src1_row_size  = hex_round_up(ne10 * 2, 128);
-        const size_t f16_src1_spad_size = hex_round_up(f16_src1_row_size * src1_nrows, 256);
-        const size_t f16_src0_spad_size = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256) * octx->n_threads;
-        const size_t f16_dst_spad_size  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256) * octx->n_threads;
-
-        const size_t f16_total_size = f16_src1_spad_size + f16_src0_spad_size + f16_dst_spad_size;
-
-        // Default matmul implementation does not support multi-batch src0 (N-vs-N broadcasting).
-        // It only supports 1-vs-N broadcasting (src0 is 2D) or standard 2D matmul.
-        const bool is_batched  = (ne02 > 1) || (ne03 > 1);
-        const bool is_permuted = htp_is_permuted(octx->src[0]) || htp_is_permuted(octx->src[1]);
-
-        if (!is_batched && !is_permuted && f16_total_size <= octx->ctx->vtcm_size) {
-            // Optimized path
+    switch (kparams->kernel_type) {
+        case HTP_MATMUL_KERNEL_HVX_F16_F16_VTCM:
             quant_job_func     = (src1->type == HTP_TYPE_F32) ? quantize_f32_f16 : quantize_f16_f16;
             mmctx->type        = "f16-f16";
             mmctx->vec_dot_1x1 = vec_dot_f16_f16_aa_1x1;
             mmctx->vec_dot_2x1 = vec_dot_f16_f16_aa_2x1;
             mmctx->vec_dot_2x2 = vec_dot_f16_f16_aa_2x2;
+            src1_row_size      = hex_round_up(ne10 * 2, 128);
+            break;
 
-            src1_row_size = f16_src1_row_size;  // row size post quantization
-
-            octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-            octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
-            octx->src1_spad.size_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
-
-            octx->src1_spad.size = octx->src1_spad.size_per_thread;
-            octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-            octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-        } else {
-            // Fallback to f16/f32 (DDR) if src1 doesn't fit in VTCM or broadcasting is required
+        case HTP_MATMUL_KERNEL_HVX_F16_F32_DDR:
             quant_job_func = NULL;
-            if (src1->type == HTP_TYPE_F32) {
-                mmctx->type        = "f16-f32";
-                mmctx->vec_dot_1x1 = vec_dot_f16_f32_uu_1x1;
-                matmul_job_func    = matmul_4d;
-            } else {
-                mmctx->type        = "f16-f16";
-                mmctx->vec_dot_1x1 = vec_dot_f16_f16_uu_1x1;
-                matmul_job_func    = matmul_4d;
-            }
-
-            src1_row_size = nb11;  // original row size in DDR
-
-            octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-            octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size, 256);
-            octx->src1_spad.size_per_thread = hex_round_up(MM_SPAD_SRC1_NROWS * src1_row_size, 256);
-
-            octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-            octx->src1_spad.size = octx->src1_spad.size_per_thread * octx->n_threads;
-            octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-
-            // Init fastdiv for matmul_4d (supports broadcasting)
-            mmctx->mm_div_ne12_ne1 = init_fastdiv_values(src1->ne[2] * dst->ne[1]);
-            mmctx->mm_div_ne1      = init_fastdiv_values(dst->ne[1]);
-            mmctx->mm_div_r2       = init_fastdiv_values(src1->ne[2] / src0->ne[2]);
-            mmctx->mm_div_r3       = init_fastdiv_values(src1->ne[3] / src0->ne[3]);
-
+            mmctx->type        = "f16-f32";
+            mmctx->vec_dot_1x1 = vec_dot_f16_f32_uu_1x1;
+            matmul_job_func    = matmul_4d;
+            src1_row_size = nb11;
+            mmctx->mm_div_ne12_ne1 = kparams->div_ne12_ne1;
+            mmctx->mm_div_ne1      = kparams->div_ne1;
+            mmctx->mm_div_r2       = kparams->div_r2;
+            mmctx->mm_div_r3       = kparams->div_r3;
             need_quant = false;
-        }
-    } else if (src0->type == HTP_TYPE_F32) {
-        // Try optimized f32-f32 path first (src1 in VTCM)
-        const size_t f32_src1_row_size  = hex_round_up(ne10 * 4, 128);
-        const size_t f32_src1_spad_size = hex_round_up(f32_src1_row_size * src1_nrows, 256);
-        const size_t f32_src0_spad_size = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256) * octx->n_threads;
-        const size_t f32_dst_spad_size  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256) * octx->n_threads;
+            break;
 
-        const size_t f32_total_size = f32_src1_spad_size + f32_src0_spad_size + f32_dst_spad_size;
+        case HTP_MATMUL_KERNEL_HVX_F16_F16_DDR:
+            quant_job_func = NULL;
+            mmctx->type        = "f16-f16";
+            mmctx->vec_dot_1x1 = vec_dot_f16_f16_uu_1x1;
+            matmul_job_func    = matmul_4d;
+            src1_row_size = nb11;
+            mmctx->mm_div_ne12_ne1 = kparams->div_ne12_ne1;
+            mmctx->mm_div_ne1      = kparams->div_ne1;
+            mmctx->mm_div_r2       = kparams->div_r2;
+            mmctx->mm_div_r3       = kparams->div_r3;
+            need_quant = false;
+            break;
 
-        const bool is_batched  = (ne02 > 1) || (ne03 > 1);
-        const bool is_permuted = htp_is_permuted(octx->src[0]) || htp_is_permuted(octx->src[1]);
-
-        if (!is_batched && !is_permuted && f32_total_size <= octx->ctx->vtcm_size) {
-            // Optimized path
+        case HTP_MATMUL_KERNEL_HVX_F32_F32_VTCM:
             quant_job_func     = quantize_f32_f32;
             mmctx->type        = "f32-f32";
             mmctx->vec_dot_1x1 = vec_dot_f32_f32_aa_1x1;
             mmctx->vec_dot_2x1 = vec_dot_f32_f32_aa_2x1;
             mmctx->vec_dot_2x2 = vec_dot_f32_f32_aa_2x2;
+            src1_row_size      = hex_round_up(ne10 * 4, 128);
+            break;
 
-            src1_row_size = f32_src1_row_size;
-
-            octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-            octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
-            octx->src1_spad.size_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
-
-            octx->src1_spad.size = octx->src1_spad.size_per_thread;
-            octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-            octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-        } else {
-            // Fallback to DDR / broadcasting
+        case HTP_MATMUL_KERNEL_HVX_F32_F32_DDR:
             quant_job_func = NULL;
             mmctx->type        = "f32-f32";
             mmctx->vec_dot_1x1 = vec_dot_f32_f32_uu_1x1;
             matmul_job_func    = matmul_4d;
-
             src1_row_size = nb11;
-
-            octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-            octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size, 256);
-            octx->src1_spad.size_per_thread = hex_round_up(MM_SPAD_SRC1_NROWS * src1_row_size, 256);
-
-            octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-            octx->src1_spad.size = octx->src1_spad.size_per_thread * octx->n_threads;
-            octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-
-            // Init fastdiv for matmul_4d (supports broadcasting)
-            mmctx->mm_div_ne12_ne1 = init_fastdiv_values(src1->ne[2] * dst->ne[1]);
-            mmctx->mm_div_ne1      = init_fastdiv_values(dst->ne[1]);
-            mmctx->mm_div_r2       = init_fastdiv_values(src1->ne[2] / src0->ne[2]);
-            mmctx->mm_div_r3       = init_fastdiv_values(src1->ne[3] / src0->ne[3]);
-
+            mmctx->mm_div_ne12_ne1 = kparams->div_ne12_ne1;
+            mmctx->mm_div_ne1      = kparams->div_ne1;
+            mmctx->mm_div_r2       = kparams->div_r2;
+            mmctx->mm_div_r3       = kparams->div_r3;
             need_quant = false;
-        }
-    } else {
-        if (htp_mminit_vec_dot(mmctx, src0->type) != 0) {
-            return HTP_STATUS_NO_SUPPORT;
-        }
+            break;
 
-        const uint32_t qk = QK_Q8_0_TILED;
-        const uint32_t nb = (ne10 + qk - 1) / qk;
-        const uint32_t total_nb = src1_nrows * nb;
-
-        if (src1_nrows < octx->n_threads) {
-            n_quant_jobs = MIN(total_nb, octx->n_threads);
-            quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
-            for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
-                uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
-                uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
-                mmctx->quant_ib_first[ith] = ib_first;
-                mmctx->quant_ib_last[ith]  = ib_last;
-                mmctx->quant_r[ith]        = ib_first / nb;
-                mmctx->quant_c[ith]        = ib_first % nb;
+        case HTP_MATMUL_KERNEL_HVX_QUANT_BLOCK:
+        case HTP_MATMUL_KERNEL_HVX_QUANT_ROW:
+        default:
+            if (htp_mminit_vec_dot(mmctx, src0->type) != 0) {
+                return HTP_STATUS_NO_SUPPORT;
             }
-        } else {
-            n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-            quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
-        }
-        src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(ne10) : htp_q8_0_tiled_row_size(ne10);
-        htp_mminit_spad(octx, dst_row_size, src0_row_size_padded, src1_row_size, src1_nrows, 0);
 
-        if (is_repacked) {
-            uint32_t tile_size = htp_get_weight_tile_size(src0->type);
-            uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
-            uint32_t n_k_tiles = ne10 / 32;
-            uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
-            octx->src0_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
-            octx->src0_spad.size            = octx->src0_spad.size_per_thread * octx->n_threads;
-        }
+            const uint32_t qk = QK_Q8_0_TILED;
+            const uint32_t nb = (ne10 + qk - 1) / qk;
+            const uint32_t total_nb = src1_nrows * nb;
+
+            if (src1_nrows < octx->n_threads) {
+                n_quant_jobs = MIN(total_nb, octx->n_threads);
+                quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
+                for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
+                    uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
+                    uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
+                    mmctx->quant_ib_first[ith] = ib_first;
+                    mmctx->quant_ib_last[ith]  = ib_last;
+                    mmctx->quant_r[ith]        = ib_first / nb;
+                    mmctx->quant_c[ith]        = ib_first % nb;
+                }
+            } else {
+                n_quant_jobs = MIN(src1_nrows, octx->n_threads);
+                quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
+            }
+            src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(ne10) : htp_q8_0_tiled_row_size(ne10);
+            break;
     }
 
-    // VTCM scratchpads for all tensors
-    size_t spad_size = octx->src1_spad.size + octx->src0_spad.size + octx->dst_spad.size;
+    if (kparams->src0_spad_size > 0 || kparams->src1_spad_size > 0 || kparams->dst_spad_size > 0) {
+        octx->src0_spad.size = kparams->src0_spad_size;
+        octx->src1_spad.size = kparams->src1_spad_size;
+        octx->dst_spad.size  = kparams->dst_spad_size;
+    } else {
+        size_t src0_sz = 0, src1_sz = 0, dst_sz = 0;
+        hvx_get_spad_sizes(
+            kparams->kernel_type, src0->type, ne10, src1_nrows, octx->n_threads,
+            dst_row_size, src0_row_size, src1_row_size,
+            &src0_sz, &src1_sz, &dst_sz
+        );
+        octx->src0_spad.size = src0_sz;
+        octx->src1_spad.size = src1_sz;
+        octx->dst_spad.size  = dst_sz;
+    }
+
+    if (kparams->kernel_type == HTP_MATMUL_KERNEL_HVX_F16_F16_VTCM ||
+        kparams->kernel_type == HTP_MATMUL_KERNEL_HVX_F32_F32_VTCM ||
+        kparams->kernel_type == HTP_MATMUL_KERNEL_HVX_QUANT_ROW ||
+        kparams->kernel_type == HTP_MATMUL_KERNEL_HVX_QUANT_BLOCK) {
+        octx->src1_spad.size_per_thread = octx->src1_spad.size;
+    } else {
+        octx->src1_spad.size_per_thread = octx->src1_spad.size / octx->n_threads;
+    }
+    octx->src0_spad.size_per_thread = octx->src0_spad.size / octx->n_threads;
+    octx->dst_spad.size_per_thread  = octx->dst_spad.size / octx->n_threads;
+
+    size_t spad_size = kparams->spad_size > 0 ? (size_t)kparams->spad_size : (octx->src1_spad.size + octx->src0_spad.size + octx->dst_spad.size);
 
     FARF(HIGH, "matmul-%s : src0-spad-size %u src1-spad-size %u dst-spad-size %u (%zu)\n", mmctx->type,
          octx->src0_spad.size, octx->src1_spad.size, octx->dst_spad.size, spad_size);
@@ -2966,14 +2918,12 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
          src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0],
          dst->ne[1], dst->ne[2], dst->ne[3], src0->data, src1->data, dst->data);
 
-    // Make sure the reserved vtcm size is sufficient
     if (octx->ctx->vtcm_size < spad_size) {
         FARF(ERROR, "matmul-%s : current VTCM reservation %zu is too small, needed %zu\n", mmctx->type,
              octx->ctx->vtcm_size, spad_size);
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    // Place src1 spad first. We use it for dyn.quant and may reuse between ops
     octx->src1_spad.data = octx->ctx->vtcm_base;
     octx->src0_spad.data = octx->src1_spad.data + octx->src1_spad.size;
     octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
@@ -3005,75 +2955,25 @@ int op_matmul(struct htp_ops_context * octx) {
 #ifndef HTP_HAS_HMX
     return op_matmul_hvx(octx);
 #else
-    if (!octx->ctx->hmx_enabled) {
-        return op_matmul_hvx(octx);
-    }
+    struct htp_matmul_kernel_params * kparams = (struct htp_matmul_kernel_params *)octx->kernel_params;
 
-    // HMX weight tile requires N to be 32-aligned.
-    if (src0->ne[1] % 32 != 0) {
-        return op_matmul_hvx(octx);
-    }
+    if (kparams->n_hmx) {
+        int k = (int) src0->ne[0];
+        int n = (int) src0->ne[1];
+        const int m_total = (int) src1->ne[1];
+        const int act_stride = (int)(src1->nb[1] / sizeof(float));
+        const int wgt_stride = (int)(src0->nb[1] / sizeof(__fp16));
 
-    // HMX supports F16, F32, Q4_0, Q8_0, IQ4_NL, MXFP4 weights.
-    // Other types fall back to HVX.
-    uint32_t wtype = src0->type;
-    if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && wtype != HTP_TYPE_Q4_0 && wtype != HTP_TYPE_Q4_1 && wtype != HTP_TYPE_Q8_0 && wtype != HTP_TYPE_IQ4_NL && wtype != HTP_TYPE_MXFP4) {
-        return op_matmul_hvx(octx);
-    }
+        if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
+            return HTP_STATUS_OK;
+        }
 
-    // Quantised HMX path requires K aligned to 256 (tiled super-block).
-    // F16 and F32 HMX paths require K aligned to 32 (tile width).
-    if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && src0->ne[0] % 256 != 0) {
-        return op_matmul_hvx(octx);
-    }
+        // Force dynamic quantization cache to clear since HMX will overwrite VTCM
+        octx->src1_spad.src = NULL;
 
-    if ((wtype == HTP_TYPE_F16 || wtype == HTP_TYPE_F32) && src0->ne[0] % 32 != 0) {
-        return op_matmul_hvx(octx);
-    }
-
-    const bool is_batched = (src0->ne[2] * src0->ne[3] > 1 || src1->ne[2] * src1->ne[3] > 1);
-
-    // Quantised HMX kernels only handle flat 2D matmul (host already rejects
-    // batched quantised, but guard here too).  F16 batched matmul is handled
-    // by the dedicated wrapper in hmx-matmul-ops.c.
-    if (is_batched && src0->type != HTP_TYPE_F16) {
-        return op_matmul_hvx(octx);
-    }
-
-    // HMX assumes contiguous row-major layout.  Fall back for permuted
-    // tensors where strides are non-monotonic (e.g. transposed KV cache).
-    if (src0->nb[0] > src0->nb[1] || src1->nb[0] > src1->nb[1]) {
-        return op_matmul_hvx(octx);
-    }
-
-    // M alignment: Use HMX when M >= 32, the last partial tile (m_total % 32 rows)
-    //  is handled by HMX itself; when M < 32  fall back to HVX (except for repacked weight types).
-    const int m_total = (int) src1->ne[1];
-    const int m_hmx   = m_total & ~31;   // 0 when M < 32
-    if (m_total <= 4) {
-        return op_matmul_hvx(octx);
-    }
-
-    // Always re-quantize src1 since HMX kernel overwrites vtcm/spad,
-    // so any previously cached quantized data is invalid.
-    octx->src1_spad.src = NULL;
-
-    int k = (int) src0->ne[0];  // inner dimension
-    int n = (int) src0->ne[1];  // weight columns
-
-    int ret = -1;
-
-    // Row strides in elements. For compact tensors these equal k; for
-    // permuted attention views they can be larger, so pass the real stride.
-    const int act_stride = (int)(src1->nb[1] / sizeof(float));
-    const int wgt_stride = (int)(src0->nb[1] / sizeof(__fp16));
-
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
-        return HTP_STATUS_OK;
-    }
-
-    if (is_batched) {
-        if (src0->type == HTP_TYPE_F16) {
+        int ret = -1;
+        const int num_threads = MIN(kparams->num_threads, (int) octx->n_threads);
+        if (kparams->kernel_type == HTP_MATMUL_KERNEL_HMX_F16_BATCHED) {
             hmx_matmul_f16_f32_batched_params_t batch_params = {
                 .dst             = (float *) dst->data,
                 .activation      = (float *) src1->data,
@@ -3095,22 +2995,28 @@ int op_matmul(struct htp_ops_context * octx) {
                 .dst_nb2         = dst->nb[2],
                 .dst_nb3         = dst->nb[3],
             };
-            ret = hmx_matmul_f16_f32_batched(octx->ctx, &batch_params);
+            ret = hmx_matmul_f16_f32_batched(octx->ctx, &batch_params,
+                                             kparams->m_chunk, kparams->n_chunk,
+                                             kparams->use_pipeline, num_threads,
+                                             kparams->spad_size);
         } else {
+            ret = hmx_matmul_2d_f32(
+                octx->ctx, (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
+                m_total, k, n, act_stride, (int) src0->nb[1], (int) src0->type, (int) src1->ne[0],
+                (int)(dst->nb[1] / sizeof(float)), (int)dst->ne[0],
+                kparams->m_chunk, kparams->n_chunk, kparams->use_pipeline, num_threads,
+                kparams->tile_size, kparams->aligned_tile_size, kparams->spad_size
+            );
+        }
+
+        if (ret != 0) {
+            FARF(HIGH, "HMX matmul failed (ret=%d), falling back to HVX", ret);
             return op_matmul_hvx(octx);
         }
-    } else {
-        ret = hmx_matmul_2d_f32(octx->ctx, (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
-                    m_total, k, n, act_stride, (int) src0->nb[1], (int) src0->type, (int) src1->ne[0],
-                    (int)(dst->nb[1] / sizeof(float)), (int)dst->ne[0]);
+        return 0;
     }
 
-    if (ret != 0) {
-        FARF(HIGH, "HMX matmul failed (ret=%d), falling back to HVX", ret);
-        return op_matmul_hvx(octx);
-    }
-
-    return 0;
+    return op_matmul_hvx(octx);
 #endif // HTP_HAS_HMX
 }
 
@@ -3120,6 +3026,8 @@ int op_matmul_id(struct htp_ops_context * octx) {
     struct htp_matmul_context mmctx_struct = {0};
     struct htp_matmul_context * mmctx = &mmctx_struct;
     mmctx->octx = octx;
+
+    const struct htp_matmul_kernel_params * kparams = (const struct htp_matmul_kernel_params *) octx->kernel_params;
 
     const struct htp_tensor * restrict ids = octx->src[2];
 
@@ -3168,7 +3076,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
 
     mmctx->matrix_row_counts = matrix_row_counts;
     mmctx->matrix_rows       = matrix_rows;
-    mmctx->mm_div_ne11       = init_fastdiv_values(ne11);
+    mmctx->mm_div_ne11       = kparams->div_ne11;
 
     if (htp_mminit_vec_dot(mmctx, src0->type) != 0) {
         if (must_free_mapping) free(mapping_buf);
@@ -3202,17 +3110,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
 
     bool hmx_eligible = false;
 #ifdef HTP_HAS_HMX
-    if (octx->ctx->hmx_enabled && src1_nrows > 4) {
-        uint32_t wtype = src0->type;
-        if (ne01 % 32 == 0 && ne10 % 32 == 0 &&
-            (wtype == HTP_TYPE_F16 || wtype == HTP_TYPE_F32 || wtype == HTP_TYPE_Q4_0 || wtype == HTP_TYPE_Q4_1 || wtype == HTP_TYPE_Q8_0 || wtype == HTP_TYPE_IQ4_NL || wtype == HTP_TYPE_MXFP4)) {
-            if ((wtype == HTP_TYPE_F16 || wtype == HTP_TYPE_F32) && ne00 % 32 == 0) {
-                hmx_eligible = true;
-            } else if (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && ne00 % 256 == 0) {
-                hmx_eligible = true;
-            }
-        }
-    }
+    hmx_eligible = kparams->n_hmx;
 #endif
 
     mmctx->hmx_eligible = hmx_eligible;
@@ -3278,7 +3176,12 @@ int op_matmul_id(struct htp_ops_context * octx) {
         const uint32_t n_k_tiles = ne10 / 32;
         const uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
         const uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
-        octx->src0_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
+        size_t repacked_spad_size = hex_round_up(DMA_DEPTH * tile_row_size, 256);
+        size_t src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0_TILED * sizeof(float));
+        if (repacked_spad_size < src1_row_size_padded) {
+            repacked_spad_size = src1_row_size_padded;
+        }
+        octx->src0_spad.size_per_thread = repacked_spad_size;
         octx->src0_spad.size            = octx->src0_spad.size_per_thread * octx->n_threads;
     }
 
@@ -3674,7 +3577,13 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
         uint32_t n_k_tiles = src1->ne[0] / 32;
         uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
 
-        octx->src0_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
+        size_t repacked_spad_size = hex_round_up(DMA_DEPTH * tile_row_size, 256);
+        size_t src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0_TILED * sizeof(float));
+        if (repacked_spad_size < src1_row_size_padded) {
+            repacked_spad_size = src1_row_size_padded;
+        }
+
+        octx->src0_spad.size_per_thread = repacked_spad_size;
         octx->src0_spad.size            = octx->src0_spad.size_per_thread * octx->n_threads;
 
         octx->src2_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
@@ -3814,7 +3723,13 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
         uint32_t n_k_tiles = src1->ne[0] / 32;
         uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
 
-        octx->src0_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
+        size_t repacked_spad_size = hex_round_up(DMA_DEPTH * tile_row_size, 256);
+        size_t src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0_TILED * sizeof(float));
+        if (repacked_spad_size < src1_row_size_padded) {
+            repacked_spad_size = src1_row_size_padded;
+        }
+
+        octx->src0_spad.size_per_thread = repacked_spad_size;
         octx->src0_spad.size            = octx->src0_spad.size_per_thread * octx->n_threads;
 
         octx->src2_spad.size_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);

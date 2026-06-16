@@ -38,7 +38,7 @@ enum htp_data_type {
 
 // Constats for internal types
 #define QK_Q4_0_TILED  256  // 32x32 Q4_0 tiled layout
-#define QK_Q8_0_TILED  256  // 32x32 Q8_0 tiled layout
+#define QK_Q8_0_TILED  128  // 32x32 Q8_0 tiled layout
 #define QK_MXFP4_TILED 256  // 32x32 MXFP4 tiled layout
 
 

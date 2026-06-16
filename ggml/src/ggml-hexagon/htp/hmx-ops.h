@@ -35,35 +35,29 @@ typedef struct {
     size_t        dst_nb3;
 } hmx_matmul_f16_f32_batched_params_t;
 
-// HMX matrix multiplication — tile-permuted FP16 weights, FP32 activation/output
-// act_stride: activation row stride in elements (= k for contiguous, or
-//             nb[1]/sizeof(float) for permuted tensors like attention Q).
-// weight_stride: weight row stride in elements (= k for compact weights, or
-//                nb[1]/sizeof(__fp16) for permuted KV-cache views used by QK).
-int hmx_matmul_f16_f32(struct htp_context *ctx,
-                                float *restrict dst,
-                                const float *activation,
-                                const __fp16 *weight,
-                                int m, int k, int n,
-                                int act_stride,
-                                int weight_stride);
-
-// Batched F16 wrapper over hmx_mat_mul_f16_f32.
+// Batched F16 wrapper over hmx_matmul_2d_f32.
 // Batch semantics match ggml_mul_mat(): src0 broadcasts to src1 in dims 2/3.
-int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32_batched_params_t *params);
+int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32_batched_params_t *params,
+                               int m_chunk, int n_chunk, int use_pipeline, int num_threads, int spad_size);
 
-// HMX matrix multiplication — all supported weight types (F16/F32/Q4_0/Q4_1/Q8_0/IQ4_NL/MXFP4)
 int hmx_matmul_2d_f32(struct htp_context *ctx,
-                                      float *restrict dst,
-                                      const float *activation,
-                                      const uint8_t *weight,
-                                      int m, int k, int n,
-                                      int act_stride,
-                                      int weight_stride,
-                                      int weight_type,
-                                      int k_valid,
-                                      int dst_stride,
-                                      int dst_cols);
+                                  float *restrict dst,
+                                  const float *activation,
+                                  const uint8_t *weight,
+                                  int m, int k, int n,
+                                  int act_stride,
+                                  int weight_stride,
+                                  int weight_type,
+                                  int k_valid,
+                                  int dst_stride,
+                                  int dst_cols,
+                                  int m_chunk,
+                                  int n_chunk,
+                                  int use_pipeline,
+                                  int num_threads,
+                                  int tile_size,
+                                  int aligned_tile_size,
+                                  int spad_size);
 
 struct mmid_row_mapping;
 
