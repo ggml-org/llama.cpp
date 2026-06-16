@@ -99,117 +99,6 @@ void ggml_sycl_op_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const size_t kernel_type_size = ggml_element_size(src0);
     const int64_t tmp_elements = knl_n_total * patch_total;
 
-    ggml_sycl_pool_alloc<char> tmp_alloc(ctx.pool());
-    tmp_alloc.alloc((size_t) tmp_elements * kernel_type_size);
-
-    ggml_tensor tmp = {};
-    tmp.type = src0->type;
-    tmp.ne[0] = knl_w;
-    tmp.ne[1] = knl_h;
-    tmp.ne[2] = knl_d;
-    tmp.ne[3] = patch_total * c;
-    tmp.nb[0] = kernel_type_size;
-    tmp.nb[1] = tmp.nb[0] * tmp.ne[0];
-    tmp.nb[2] = tmp.nb[1] * tmp.ne[1];
-    tmp.nb[3] = tmp.nb[2] * tmp.ne[2];
-    tmp.data = tmp_alloc.get();
-    tmp.buffer = dst->buffer;
-    tmp.extra = dst->extra;
-    tmp.src[0] = const_cast<ggml_tensor *>(src0);
-    tmp.src[1] = const_cast<ggml_tensor *>(src1);
-    int32_t tmp_op_params[10] = { s0, s1, s2, p0, p1, p2, d0, d1, d2, c };
-    memcpy(tmp.op_params, tmp_op_params, sizeof(tmp_op_params));
-
-    // Inline im2col_3d implementation (avoid calling ggml_sycl_op_im2col_3d)
-    {
-        dpct::queue_ptr stream = ctx.stream();
-        const int64_t total_elems = tmp_elements; // knl_n_total * patch_total
-        const int64_t block_size = 256;
-        const int64_t num_work_items = ((total_elems + block_size - 1) / block_size) * block_size;
-
-        const char * src_base = (const char *) src1->data;
-        const int64_t src_nb0 = src1->nb[0];
-        const int64_t src_nb1 = src1->nb[1];
-        const int64_t src_nb2 = src1->nb[2];
-        const int64_t src_nb3 = src1->nb[3];
-
-        const int64_t KW = knl_w;
-        const int64_t KH = knl_h;
-        const int64_t KD = knl_d;
-        const int64_t KN = knl_n_total; // == c * KD*KH*KW
-        const int64_t PW = dst->ne[0];
-        const int64_t PH = dst->ne[1];
-        const int64_t PD = dst->ne[2];
-
-        stream->parallel_for(sycl::range<1>(num_work_items), [=](sycl::id<1> id) {
-            const int64_t idx = id[0];
-            if (idx >= total_elems) return;
-
-            const int64_t k_index = idx % KN;
-            const int64_t patch_idx = idx / KN;
-
-            const int64_t ic = k_index / (KD * KH * KW);
-            const int64_t rem = k_index - ic * (KD * KH * KW);
-            const int64_t kz = rem / (KH * KW);
-            const int64_t rem2 = rem - kz * (KH * KW);
-            const int64_t ky = rem2 / KW;
-            const int64_t kx = rem2 % KW;
-
-            const int64_t p_in_batch = patch_idx % (PW * PH * PD);
-            const int64_t batch_idx = patch_idx / (PW * PH * PD);
-            const int64_t dst_z = p_in_batch / (PW * PH);
-            const int64_t dst_y = (p_in_batch % (PW * PH)) / PW;
-            const int64_t dst_x = p_in_batch % PW;
-
-            const int64_t sx = dst_x * s0 + kx * d0 - p0;
-            const int64_t sy = dst_y * s1 + ky * d1 - p1;
-            const int64_t sz = dst_z * s2 + kz * d2 - p2;
-
-            float val = 0.0f;
-            if (sx >= 0 && sx < src1->ne[0] && sy >= 0 && sy < src1->ne[1] && sz >= 0 && sz < src1->ne[2]) {
-                const int64_t channel_idx = batch_idx * c + ic;
-                const char * ptr = src_base + sx * src_nb0 + sy * src_nb1 + sz * src_nb2 + channel_idx * src_nb3;
-                val = *(const float *) ptr;
-            }
-
-            if (tmp.type == GGML_TYPE_F32) {
-                float * dstf = (float *) tmp.data;
-                dstf[idx] = val;
-            } else {
-                sycl::half * dsth = (sycl::half *) tmp.data;
-                dsth[idx] = sycl::half(val);
-            }
-        });
-    }
-
-    ggml_tensor src0_mat = {};
-    src0_mat.type = src0->type;
-    src0_mat.ne[0] = knl_n_total;
-    src0_mat.ne[1] = oc;
-    src0_mat.ne[2] = 1;
-    src0_mat.ne[3] = 1;
-    src0_mat.nb[0] = kernel_type_size;
-    src0_mat.nb[1] = src0_mat.nb[0] * src0_mat.ne[0];
-    src0_mat.nb[2] = src0_mat.nb[1];
-    src0_mat.nb[3] = src0_mat.nb[2];
-    src0_mat.data = src0->data;
-    src0_mat.buffer = src0->buffer;
-    src0_mat.extra = src0->extra;
-
-    ggml_tensor src1_mat = {};
-    src1_mat.type = src0->type;
-    src1_mat.ne[0] = knl_n_total;
-    src1_mat.ne[1] = patch_total;
-    src1_mat.ne[2] = 1;
-    src1_mat.ne[3] = 1;
-    src1_mat.nb[0] = kernel_type_size;
-    src1_mat.nb[1] = src1_mat.nb[0] * src1_mat.ne[0];
-    src1_mat.nb[2] = src1_mat.nb[1];
-    src1_mat.nb[3] = src1_mat.nb[2];
-    src1_mat.data = tmp.data;
-    src1_mat.buffer = dst->buffer;
-    src1_mat.extra = dst->extra;
-
     ggml_sycl_pool_alloc<float> gemm_output(ctx.pool());
     gemm_output.alloc((size_t) patch_total * oc);
 
@@ -227,75 +116,118 @@ void ggml_sycl_op_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     dst_mat.buffer = dst->buffer;
     dst_mat.extra = dst->extra;
 
-    // Fallback: pack src1_mat and src0_mat into contiguous column-major float buffers, then call GEMM
     dpct::queue_ptr stream = ctx.stream();
-    {
 
-        const int m = (int) patch_total; // rows of C
-        const int n = (int) oc; // cols of C
-        const int k = (int) knl_n_total;
+    // allocate packed arrays: A_packed (k x m), B_packed (k x n)
+    ggml_sycl_pool_alloc<float> A_packed_alloc(ctx.pool());
+    ggml_sycl_pool_alloc<float> B_packed_alloc(ctx.pool());
+    A_packed_alloc.alloc((size_t) knl_n_total * patch_total * sizeof(float));
+    B_packed_alloc.alloc((size_t) knl_n_total * oc * sizeof(float));
 
-        // allocate packed arrays: A_packed (k x m), B_packed (k x n)
-        ggml_sycl_pool_alloc<float> A_packed_alloc(ctx.pool());
-        ggml_sycl_pool_alloc<float> B_packed_alloc(ctx.pool());
-        A_packed_alloc.alloc((size_t) k * m * sizeof(float));
-        B_packed_alloc.alloc((size_t) k * n * sizeof(float));
+    float * A_packed = A_packed_alloc.get();
+    float * B_packed = B_packed_alloc.get();
 
-        float * A_packed = A_packed_alloc.get();
-        float * B_packed = B_packed_alloc.get();
+    const int m = (int) patch_total;
+    const int n_gemm = (int) oc;
+    const int k = (int) knl_n_total;
 
-        // pack src1_mat into A_packed (k x m) in column-major: A_packed[row + col*k]
-        const int64_t src1_nb0 = src1_mat.nb[0];
-        const int64_t src1_nb1 = src1_mat.nb[1];
-        const int64_t src0_nb0 = src0_mat.nb[0];
-        const int64_t src0_nb1 = src0_mat.nb[1];
+    // Combined kernel: im2col -> pack A, and pack B simultaneously
+    const char * src1_base = (const char *) src1->data;
+    const int64_t src1_nb0 = src1->nb[0];
+    const int64_t src1_nb1 = src1->nb[1];
+    const int64_t src1_nb2 = src1->nb[2];
+    const int64_t src1_nb3 = src1->nb[3];
 
-        // pack A (src1)
-        stream->parallel_for(sycl::range<1>((size_t)k * m), [=](sycl::id<1> id) {
-            const int64_t t = id[0];
-            const int64_t row = t % k;
-            const int64_t col = t / k;
-            const char * src_ptr = (const char *) src1_mat.data + row * src1_nb0 + col * src1_nb1;
-            float v;
-            if (src1_mat.type == GGML_TYPE_F32) {
-                v = *(const float *) src_ptr;
-            } else {
-                v = sycl::vec<sycl::half, 1>(*(const sycl::half *) src_ptr).convert<float, sycl::rounding_mode::automatic>()[0];
-            }
-            A_packed[row + col * (int64_t)k] = v;
-        });
+    // Compute correct strides for src0 as (knl_n_total, oc) matrix
+    const int64_t src0_packed_nb0 = kernel_type_size;
+    const int64_t src0_packed_nb1 = kernel_type_size * knl_n_total;
 
-        // pack B (src0)
-        stream->parallel_for(sycl::range<1>((size_t)k * n), [=](sycl::id<1> id) {
-            const int64_t t = id[0];
-            const int64_t row = t % k;
-            const int64_t col = t / k;
-            const char * src_ptr = (const char *) src0_mat.data + row * src0_nb0 + col * src0_nb1;
-            float v;
-            if (src0_mat.type == GGML_TYPE_F32) {
-                v = *(const float *) src_ptr;
-            } else {
-                v = sycl::vec<sycl::half, 1>(*(const sycl::half *) src_ptr).convert<float, sycl::rounding_mode::automatic>()[0];
-            }
-            B_packed[row + col * (int64_t)k] = v;
-        });
+    const int64_t KW = knl_w;
+    const int64_t KH = knl_h;
+    const int64_t KD = knl_d;
+    const int64_t KN = knl_n_total;
+    const int64_t PW = dst->ne[0];
+    const int64_t PH = dst->ne[1];
+    const int64_t PD = dst->ne[2];
 
-        // call GEMM: dst = A^T * B  where A is (k x m), so A^T is (m x k); B is (k x n)
-        const float alpha = 1.0f;
-        const float beta  = 0.0f;
-        const int lda = k;
-        const int ldb = k;
-        const int ldc = m;
+    // Pack A (with inline im2col): for each (row, col) in k x m matrix
+    const int64_t A_total = (int64_t)k * m;
+    const int64_t A_block_size = 256;
+    const int64_t A_num_work = ((A_total + A_block_size - 1) / A_block_size) * A_block_size;
 
-        SYCL_CHECK(CHECK_TRY_ERROR(oneapi::mkl::blas::column_major::gemm(
-            *stream, oneapi::mkl::transpose::trans, oneapi::mkl::transpose::nontrans,
-            m, n, k,
-            dpct::get_value(&alpha, *stream),
-            (const float *) A_packed, lda,
-            (const float *) B_packed, ldb,
-            dpct::get_value(&beta, *stream),
-            (float *) dst_mat.data, ldc)));
-    }
+    stream->parallel_for(sycl::range<1>(A_num_work), [=](sycl::id<1> id) {
+        const int64_t t = id[0];
+        if (t >= A_total) return;
+
+        const int64_t row = t % k;
+        const int64_t col = t / k;
+
+        // Inline im2col for this element
+        const int64_t k_index = row;
+        const int64_t patch_idx = col;
+
+        const int64_t ic = k_index / (KD * KH * KW);
+        const int64_t rem = k_index - ic * (KD * KH * KW);
+        const int64_t kz = rem / (KH * KW);
+        const int64_t rem2 = rem - kz * (KH * KW);
+        const int64_t ky = rem2 / KW;
+        const int64_t kx = rem2 % KW;
+
+        const int64_t p_in_batch = patch_idx % (PW * PH * PD);
+        const int64_t batch_idx = patch_idx / (PW * PH * PD);
+        const int64_t dst_z = p_in_batch / (PW * PH);
+        const int64_t dst_y = (p_in_batch % (PW * PH)) / PW;
+        const int64_t dst_x = p_in_batch % PW;
+
+        const int64_t sx = dst_x * s0 + kx * d0 - p0;
+        const int64_t sy = dst_y * s1 + ky * d1 - p1;
+        const int64_t sz = dst_z * s2 + kz * d2 - p2;
+
+        float val = 0.0f;
+        if (sx >= 0 && sx < src1->ne[0] && sy >= 0 && sy < src1->ne[1] && sz >= 0 && sz < src1->ne[2]) {
+            const int64_t channel_idx = batch_idx * c + ic;
+            const char * ptr = src1_base + sx * src1_nb0 + sy * src1_nb1 + sz * src1_nb2 + channel_idx * src1_nb3;
+            val = *(const float *) ptr;
+        }
+        A_packed[row + col * (int64_t)k] = val;
+    });
+
+    // Pack B: for each (row, col) in k x n_gemm matrix
+    const int64_t B_total = (int64_t)k * n_gemm;
+    const int64_t B_block_size = 256;
+    const int64_t B_num_work = ((B_total + B_block_size - 1) / B_block_size) * B_block_size;
+
+    stream->parallel_for(sycl::range<1>(B_num_work), [=](sycl::id<1> id) {
+        const int64_t t = id[0];
+        if (t >= B_total) return;
+
+        const int64_t row = t % k;
+        const int64_t col = t / k;
+        const char * src_ptr = (const char *) src0->data + row * src0_packed_nb0 + col * src0_packed_nb1;
+        float v;
+        if (src0->type == GGML_TYPE_F32) {
+            v = *(const float *) src_ptr;
+        } else {
+            v = sycl::vec<sycl::half, 1>(*(const sycl::half *) src_ptr).convert<float, sycl::rounding_mode::automatic>()[0];
+        }
+        B_packed[row + col * (int64_t)k] = v;
+    });
+
+    // GEMM: C = A^T * B where A is (k x m), B is (k x n), C is (m x n)
+    const float alpha = 1.0f;
+    const float beta  = 0.0f;
+    const int lda = k;
+    const int ldb = k;
+    const int ldc = m;
+
+    SYCL_CHECK(CHECK_TRY_ERROR(oneapi::mkl::blas::column_major::gemm(
+        *stream, oneapi::mkl::transpose::trans, oneapi::mkl::transpose::nontrans,
+        m, n_gemm, k,
+        dpct::get_value(&alpha, *stream),
+        (const float *) A_packed, lda,
+        (const float *) B_packed, ldb,
+        dpct::get_value(&beta, *stream),
+        (float *) dst_mat.data, ldc)));
 
     const float * gemm_data = (const float *) dst_mat.data;
     float * dst_data = (float *) dst->data;

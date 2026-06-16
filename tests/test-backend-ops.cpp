@@ -9260,6 +9260,61 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         {1536, 3, 64,   32,  1 },
     };
 
+    // CONV_3D
+    auto calc_conv_output_size_3d = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
+        return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
+    };
+
+    for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (int N : {1, 2}) {
+            for (int IC : {1, 3}) {
+                for (int OC : {1, 4}) {
+                    for (int s0 : {1, 2}) {
+                        for (int p1 : {0, 1}) {
+                            for (int d2 : {1, 2}) {
+                                int64_t IW = 20, IH = 22, ID = 18;
+                                int64_t KW = 3,  KH = 3,  KD = 3;
+                                int s1 = s0, s2 = s0;
+                                int p0 = p1, p2 = p1;
+                                int d0 = d2, d1 = d2;
+
+                                if (calc_conv_output_size_3d(IW, KW, s0, p0, d0) <= 0 ||
+                                    calc_conv_output_size_3d(IH, KH, s1, p1, d1) <= 0 ||
+                                    calc_conv_output_size_3d(ID, KD, s2, p2, d2) <= 0) {
+                                    continue;
+                                }
+                                test_cases.emplace_back(new test_conv_3d(
+                                    N, IC, ID, IH, IW,
+                                    OC, KD, KH, KW,
+                                    s0, s1, s2, p0, p1, p2, d0, d1, d2,
+                                    kernel_type));
+
+                                // Asymmetric kernel and params
+                                int64_t asym_KW = 5, asym_KH = 1, asym_KD = 3;
+                                int asym_s0 = 2, asym_s1 = 1, asym_s2 = 1;
+                                int asym_p0 = 2, asym_p1 = 0, asym_p2 = 1;
+                                int asym_d0 = 1, asym_d1 = 1, asym_d2 = 2;
+
+                                if (calc_conv_output_size_3d(IW, asym_KW, asym_s0, asym_p0, asym_d0) <= 0 ||
+                                    calc_conv_output_size_3d(IH, asym_KH, asym_s1, asym_p1, asym_d1) <= 0 ||
+                                    calc_conv_output_size_3d(ID, asym_KD, asym_s2, asym_p2, asym_d2) <= 0) {
+                                    continue;
+                                }
+                                test_cases.emplace_back(new test_conv_3d(
+                                    N, IC, ID, IH, IW,
+                                    OC, asym_KD, asym_KH, asym_KW,
+                                    asym_s0, asym_s1, asym_s2, asym_p0, asym_p1, asym_p2, asym_d0, asym_d1, asym_d2,
+                                    kernel_type));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Case with kernel size 1
+        test_cases.emplace_back(new test_conv_3d(1, 4, 8, 8, 8, 8, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, kernel_type));
+    }
+
     for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
         for (auto act_case : cases) {
             // Direct CONV_2D
@@ -9514,6 +9569,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 512, 1));  // 4h PP-512
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 1024, 1)); // 4h PP-1024
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 64, 1, 1, false, true)); // KDA PP-64
+
+
 
     return test_cases;
 }
