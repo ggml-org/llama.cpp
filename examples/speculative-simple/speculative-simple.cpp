@@ -45,6 +45,16 @@ int main(int argc, char ** argv) {
 
     const llama_vocab * vocab = llama_model_get_vocab(model_tgt);
 
+    // DFlash needs the target context for its draft decoder (tok_embd / lm_head / KV injection)
+    // and has no standalone prompt-eval path
+    bool is_dflash = false;
+    for (const auto & t : params.speculative.types) {
+        if (t == COMMON_SPECULATIVE_TYPE_DFLASH) {
+            is_dflash = true;
+            break;
+        }
+    }
+
     // load the draft model
     llama_model_ptr model_dft;
     llama_context_ptr ctx_dft;
@@ -75,6 +85,9 @@ int main(int argc, char ** argv) {
         }
 
         auto cparams = common_context_params_to_llama(params_dft);
+        if (is_dflash) {
+            cparams.ctx_other = ctx_tgt;
+        }
         ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
         params.speculative.draft.ctx_tgt = ctx_tgt;
@@ -129,10 +142,6 @@ int main(int argc, char ** argv) {
     // target model sampling context
     common_sampler_ptr smpl(common_sampler_init(model_tgt, params.sampling));
 
-    // eval the prompt
-    llama_decode(ctx_tgt,       llama_batch_get_one(inp.data(), inp.size() - 1));
-    llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
-
     // note: keep the last token separate!
     llama_token id_last = inp.back();
 
@@ -142,12 +151,20 @@ int main(int argc, char ** argv) {
 
     int n_past = inp.size() - 1;
 
-    // init the speculator
+    // init the speculator before evaluating the prompt, so that any target-side feature
+    // extraction it enables (DFlash / EAGLE3) is active when the prompt is decoded
     const auto & params_spec = params.speculative;
 
     struct common_speculative * spec = common_speculative_init(params.speculative, 1);
 
     common_speculative_begin(spec, seq_id, prompt_tgt);
+
+    // eval the prompt
+    llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size() - 1));
+    if (!is_dflash) {
+        // DFlash's decoder is driven entirely from draft(); it has no prompt-eval pass
+        llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
+    }
 
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
 
