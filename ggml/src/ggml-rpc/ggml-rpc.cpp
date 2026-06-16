@@ -418,10 +418,8 @@ enum rpc_queue_cmd_type {
 struct rpc_queue_cmd {
     rpc_queue_cmd_type type;
 
-    // The RPC command byte to send
     rpc_cmd rpc_command = RPC_CMD_COUNT;
 
-    // Payload bytes to send (request data)
     std::vector<uint8_t> send_data;
 
     // For commands that receive a response: destination buffer and expected size
@@ -614,7 +612,6 @@ private:
         queue_cv_.notify_one();
     }
 
-    // Worker thread main loop: dequeue and execute commands sequentially.
     void worker_loop() {
         while (true) {
             rpc_queue_cmd cmd;
@@ -631,7 +628,6 @@ private:
         }
     }
 
-    // Execute a single command on the worker thread
     void execute(rpc_queue_cmd & cmd) {
         switch (cmd.type) {
             case RPC_QCMD_GRAPH_COMPUTE:
@@ -831,7 +827,6 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
             return;
         }
     }
-    // Use the command queue's async set_tensor for the actual data transfer
     ctx->cmd_queue->submit_set_tensor(rpc_tensor, data, offset, size);
 }
 
@@ -2357,11 +2352,6 @@ static void ggml_backend_rpc_device_event_free(ggml_backend_dev_t dev, ggml_back
 
 static void ggml_backend_rpc_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) {
     // No-op: TCP command ordering provides implicit synchronization.
-    // The scheduler uses event_synchronize to ensure a previous copy slot's work is done
-    // before reusing its buffers. Since our command queue processes commands in order and
-    // graph_compute is fire-and-forget, by the time the scheduler reuses a copy slot
-    // (after n_copies iterations), the previous work for that slot has long since been
-    // submitted and completed on the server.
     LOG_DBG("[%s] dev=%p, endpoint=%s (no-op, TCP ordering provides synchronization)\n",
             __func__, (void*)dev, ((ggml_backend_rpc_device_context *)dev->context)->endpoint.c_str());
     GGML_UNUSED(dev);
