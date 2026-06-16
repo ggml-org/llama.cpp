@@ -547,6 +547,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+            fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -602,7 +604,6 @@ jobs:
             -A x64 ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DGGML_OPENVINO=ON ^
-            -DLLAMA_CURL=OFF ^
             -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
 
           cmake --build build\ReleaseOV --config Release -- /m
