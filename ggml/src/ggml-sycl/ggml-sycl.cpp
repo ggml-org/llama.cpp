@@ -4231,6 +4231,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         ggml_sycl_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool(), n_routed_rows);
         SYCL_CHECK(CHECK_TRY_ERROR(
                 stream->memcpy(dev_row_mapping.get(), routed_row_src.data(), n_routed_rows*sizeof(mmid_row_mapping))));
+        // routed_row_src is a host stack vector; wait for the the above async copy
+        SYCL_CHECK(CHECK_TRY_ERROR(stream->wait()));
 
         const unsigned int max_work_group_size = ggml_sycl_info().max_work_group_sizes[ctx.device];
         assert(max_work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
