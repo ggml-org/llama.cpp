@@ -181,6 +181,7 @@ struct tool_format_analysis {
 
     bool fun_name_is_key = false;       // In JSON format function name is JSON key, i.e. { "<funname>": { ... arguments ... } }
     bool tools_array_wrapped = false;   // Tool calls wrapped in JSON array [...]
+    bool openai_wrapper_trigger = false;  // model emits the OpenAI function wrapper, trigger on it
 
     std::string              function_field = "function";
     std::string              name_field     = "name";
@@ -377,6 +378,8 @@ struct analyze_tools : analyze_base {
 
 struct autoparser {
     jinja::caps          jinja_caps;
+    std::string          user_start;
+    std::string          assistant_start;
     analyze_reasoning    reasoning;
     analyze_content      content;
     analyze_tools        tools;
@@ -386,6 +389,10 @@ struct autoparser {
     std::vector<std::string> preserved_tokens;
 
     autoparser() = default;
+
+    // Find the starting marker for the user message and assistant message
+    std::string detect_user_start_marker(const common_chat_template & tmpl);
+    std::string detect_assistant_start_marker(const common_chat_template & tmpl);
 
     // Run full differential analysis on a template
     void analyze_template(const common_chat_template & tmpl);

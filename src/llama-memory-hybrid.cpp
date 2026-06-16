@@ -33,6 +33,7 @@ llama_memory_hybrid::llama_memory_hybrid(
     hparams(model.hparams),
     mem_attn(new llama_kv_cache(
         model,
+        model.hparams,
         type_k,
         type_v,
         v_trans,
@@ -43,9 +44,11 @@ llama_memory_hybrid::llama_memory_hybrid(
         n_pad,
         n_swa,
         swa_type,
+        nullptr,
         filter_attn == nullptr ?
-            [&](int32_t il) { return !hparams.is_recurrent(il); }
+            [&](int32_t il) { return !hparams.is_recr(il); }
             : filter_attn,
+        nullptr,
         nullptr
     )),
     mem_recr(new llama_memory_recurrent(
@@ -57,7 +60,7 @@ llama_memory_hybrid::llama_memory_hybrid(
         n_seq_max,
         n_rs_seq,
         filter_recr == nullptr ?
-            [&](int32_t il) { return hparams.is_recurrent(il); }
+            [&](int32_t il) { return hparams.is_recr(il); }
             : filter_recr
     )) {}
 

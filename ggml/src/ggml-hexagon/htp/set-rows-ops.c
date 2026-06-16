@@ -65,6 +65,9 @@ static void set_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
     // parallelize by rows of src0
     const uint32_t dr  = srctx->src0_nrows_per_thread;
     const uint32_t ir0 = dr * ith;
+    if (ir0 >= nr) {
+        return;
+    }
     const uint32_t ir1 = (ir0 + dr < nr) ? (ir0 + dr) : nr;
 
     const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);
@@ -109,6 +112,9 @@ static void set_rows_thread_f16_f32(unsigned int nth, unsigned int ith, void *da
     // parallelize by rows of src0
     const uint32_t dr  = srctx->src0_nrows_per_thread;
     const uint32_t ir0 = dr * ith;
+    if (ir0 >= nr) {
+        return;
+    }
     const uint32_t ir1 = (ir0 + dr < nr) ? (ir0 + dr) : nr;
 
     const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);

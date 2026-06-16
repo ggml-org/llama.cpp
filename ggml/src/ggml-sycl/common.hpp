@@ -45,6 +45,7 @@ namespace syclexp = sycl::ext::oneapi::experimental;
 #define GGML_COMMON_IMPL_SYCL
 #define SYCL_FLASH_ATTN //remove it to disable FLASH_ATTENTION in building.
 #define SYCL_FAST_FP16  //don't change. remove it will break fattn-tile.hpp building
+#define GGML_SYCL_FA_ALL_QUANTS //define it to enable all quantization types in flash attention. undefine it to only support F16, Q4_0 and Q8_0 in flash attention.
 
 /* suppress warning spam */
 #pragma clang diagnostic push
@@ -224,6 +225,8 @@ struct sycl_device_info {
     int max_wg_per_cu; // max work groups per compute unit - refer to
                        // cudaOccupancyMaxActiveBlocksPerMultiprocessor
     bool    vmm;                // virtual memory support
+    bool    l0_discrete_gpu;    // Level Zero backend and not an integrated GPU
+    size_t  vmm_granularity;    // granularity of virtual memory
     size_t  total_vram;
     sycl_hw_info hw_info;
     optimize_feature opt_feature;
@@ -243,6 +246,8 @@ struct ggml_sycl_device_info {
 };
 
 const ggml_sycl_device_info & ggml_sycl_info();
+
+static constexpr size_t SYCL_BUFFER_ALIGNMENT = 128;
 
 struct ggml_sycl_pool {
     virtual ~ggml_sycl_pool() = default;
@@ -639,6 +644,8 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 }
 
 bool gpu_has_xmx(sycl::device &dev);
+
+int ggml_sycl_get_env(const char *env_name, int default_val);
 
 template <int N, class T> std::string debug_get_array_str(const std::string & prefix, const T array[N]) {
     if (LIKELY(!g_ggml_sycl_debug)) {
