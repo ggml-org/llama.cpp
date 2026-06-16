@@ -2127,8 +2127,9 @@ struct ggml_hexagon_opqueue {
         const size_t p_size = sizeof(htp_prof_desc) * rsp.n_ops;
 
         size_t tr_size = 0;
-        uint32_t n_traces = opt_profile == 3 ? opt_optrace : 0;
+        uint32_t n_traces = 0;
         if (opt_profile == 3) {
+            n_traces = opt_optrace;
             tr_size = (HTP_MAX_NTHREADS + 1) * n_traces * sizeof(htp_trace_desc);
         }
 
