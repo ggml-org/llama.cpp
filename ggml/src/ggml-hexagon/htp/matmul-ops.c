@@ -3323,8 +3323,6 @@ int op_matmul_id(struct htp_ops_context * octx) {
     return HTP_STATUS_OK;
 }
 
-
-
 static void matmul_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
     struct htp_matmul_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
@@ -3479,8 +3477,6 @@ static void matmul_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
         }
     }
 }
-
-
 
 static void matmul_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
     struct htp_matmul_context * mmctx = data;
@@ -3873,7 +3869,7 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
             case HTP_TYPE_Q4_0:   matmul_job_func = matmul_ffn_2d_repacked_q4_0;   break;
             case HTP_TYPE_Q4_1:   matmul_job_func = matmul_ffn_2d_repacked_q4_1;   break;
             case HTP_TYPE_Q8_0:   matmul_job_func = matmul_ffn_2d_repacked_q8_0;   break;
-            case HTP_TYPE_IQ4_NL:  matmul_job_func = matmul_ffn_2d_repacked_iq4nl;  break;
+            case HTP_TYPE_IQ4_NL: matmul_job_func = matmul_ffn_2d_repacked_iq4nl;  break;
             case HTP_TYPE_MXFP4:  matmul_job_func = matmul_ffn_2d_repacked_mxfp4;  break;
             default:              return HTP_STATUS_NO_SUPPORT;
         }

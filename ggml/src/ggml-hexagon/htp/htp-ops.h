@@ -149,6 +149,7 @@ struct htp_op_desc {
     uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
     uint16_t dst[HTP_OP_MAX_OUTPUTS];   // Output tensor indices
     uint16_t pad[2];                    // padding to align to 64 bits
+    int32_t  kernel_params[24];         // generic blob for host-precomputed parameters
 };
 
 #ifndef HTP_MAX_NTHREADS
