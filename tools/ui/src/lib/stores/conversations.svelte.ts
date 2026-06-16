@@ -26,7 +26,15 @@ import { MigrationService } from '$lib/services/migration.service';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
-import { MessageRole, HtmlInputType, FileExtensionText, ReasoningEffort } from '$lib/enums';
+import { zipSync, strToU8 } from 'fflate';
+import {
+	MessageRole,
+	HtmlInputType,
+	FileExtensionText,
+	MimeTypeText,
+	MimeTypeApplication,
+	ReasoningEffort
+} from '$lib/enums';
 import {
 	ISO_DATE_TIME_SEPARATOR,
 	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
@@ -934,41 +942,97 @@ class ConversationsStore {
 			.replace(ISO_DATE_TIME_SEPARATOR, ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
 			.replaceAll(ISO_TIME_SEPARATOR, ISO_TIME_SEPARATOR_REPLACEMENT);
 		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV_ID_TRIM_LENGTH) ?? '';
-		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}.json`;
+		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}${FileExtensionText.JSONL}`;
+	}
+
+	/**
+	 * Serializes a session (a conversation with its messages) as JSONL.
+	 * The first line is the session header (a `type: 'session'` record carrying the
+	 * conversation properties); each subsequent line is a single message.
+	 * @param data - The exported conversation payload
+	 * @returns The JSONL string (one record per line)
+	 */
+	serializeSessionToJsonl(data: ExportedConversation): string {
+		const { conv, messages } = data;
+
+		const sessionLine = JSON.stringify({ type: 'session', harness: 'llama.app', ...conv });
+		const messageLines = messages.map((message: DatabaseMessage) => {
+			// `toolCalls` is stored as a JSON string; drop it when empty, otherwise parse it.
+			const { toolCalls, ...rest } = message;
+			const normalized = toolCalls ? { ...rest, toolCalls: JSON.parse(toolCalls) } : rest;
+
+			return JSON.stringify({ type: 'message', message: normalized });
+		});
+
+		return [sessionLine, ...messageLines].join('\n');
 	}
 
 	/**
 	 * Triggers a browser download of the provided exported conversation data
-	 * @param data - The exported conversation payload (either a single conversation or array of them)
+	 * @param data - The exported conversation payload (a single conversation with its messages)
 	 * @param filename - Filename; if omitted, a deterministic name is generated
 	 */
-	downloadConversationFile(data: ExportedConversations, filename?: string): void {
-		// Choose the first conversation or message
-		const conversation =
-			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
-		const msgs =
-			'messages' in data ? data.messages : Array.isArray(data) ? data[0]?.messages : undefined;
+	downloadConversationFile(data: ExportedConversation, filename?: string): void {
+		const { conv: conversation, messages: msgs } = data;
 
 		if (!conversation) {
 			console.error('Invalid data: missing conversation');
 			return;
 		}
 
-		let downloadFilename: string;
+		const downloadFilename = filename ?? this.generateConversationFilename(conversation, msgs);
 
-		if (filename) {
-			downloadFilename = filename;
-		} else if (Array.isArray(data) && data.length > 1) {
-			downloadFilename = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations.json`;
-		} else {
-			downloadFilename = this.generateConversationFilename(conversation, msgs);
+		const jsonl = this.serializeSessionToJsonl(data);
+		const blob = new Blob([jsonl], { type: MimeTypeText.JSONL });
+		this.triggerDownload(blob, downloadFilename);
+	}
+
+	/**
+	 * Triggers a browser download of multiple conversations as a `.zip`, one
+	 * `.jsonl` file per conversation.
+	 * @param data - The conversations to export
+	 */
+	downloadConversationsArchive(data: ExportedConversation[]): void {
+		if (data.length === 0) {
+			console.error('Invalid data: no conversations to export');
+			return;
 		}
 
-		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+		const usedNames = new SvelteSet<string>();
+		const files: Record<string, Uint8Array> = {};
+
+		for (const session of data) {
+			const baseName = this.generateConversationFilename(session.conv, session.messages);
+
+			// Disambiguate any duplicate filenames within the archive.
+			let entryName = baseName;
+			let suffix = 1;
+			while (usedNames.has(entryName)) {
+				entryName = baseName.replace(
+					new RegExp(`${FileExtensionText.JSONL}$`),
+					`_${suffix++}${FileExtensionText.JSONL}`
+				);
+			}
+			usedNames.add(entryName);
+
+			files[entryName] = strToU8(this.serializeSessionToJsonl(session));
+		}
+
+		const archiveName = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
+
+		const zipped = zipSync(files);
+		const blob = new Blob([zipped], { type: MimeTypeApplication.ZIP });
+		this.triggerDownload(blob, archiveName);
+	}
+
+	/**
+	 * Triggers a browser download of a blob under the given filename.
+	 */
+	private triggerDownload(blob: Blob, filename: string): void {
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = downloadFilename;
+		a.download = filename;
 		document.body.appendChild(a);
 		a.click();
 		document.body.removeChild(a);
