@@ -60,5 +60,5 @@ static inline void htp_trace_event_start(struct htp_thread_trace * tr, uint16_t 
 static inline void htp_trace_event_stop(struct htp_thread_trace * tr, uint16_t id, uint16_t info) {
     htp_trace_event(tr, id, info, HTP_TRACE_EVT_STOP);
 }
-#endif /* HEX_PROFILE_H */
 
+#endif /* HEX_PROFILE_H */

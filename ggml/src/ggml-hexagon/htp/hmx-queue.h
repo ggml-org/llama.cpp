@@ -11,6 +11,7 @@
 #include <HAP_farf.h>
 
 #include "hex-utils.h"
+#include "hex-profile.h"
 
 #ifdef __cplusplus
 extern "C" {

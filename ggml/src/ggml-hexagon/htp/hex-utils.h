@@ -107,7 +107,4 @@ static inline void hex_pause() {
     asm volatile(" pause(#255)\n");
 }
 
-#include "htp-ops.h"
-#include "hex-profile.h"
-
 #endif /* HEX_UTILS_H */
