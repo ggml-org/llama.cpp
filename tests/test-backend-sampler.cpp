@@ -9,12 +9,15 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct test_args {
@@ -762,6 +765,197 @@ static void test_backend_logit_bias_sampling(const test_params & params) {
     printf("backend logit bias sampling test PASSED\n");
 }
 
+static void accept_prompt(llama_sampler * smpl, const llama_vocab * vocab, const std::string & prompt) {
+    const llama_token bos = llama_vocab_bos(vocab);
+    if (bos != LLAMA_TOKEN_NULL) {
+        llama_sampler_accept(smpl, bos);
+    }
+
+    std::vector<llama_token> tokens(64);
+    int32_t n_tokens = llama_tokenize(vocab, prompt.c_str(), (int32_t) prompt.size(),
+            tokens.data(), (int32_t) tokens.size(), false, false);
+    if (n_tokens < 0) {
+        tokens.resize(-n_tokens);
+        n_tokens = llama_tokenize(vocab, prompt.c_str(), (int32_t) prompt.size(),
+                tokens.data(), (int32_t) tokens.size(), false, false);
+    }
+
+    for (int32_t i = 0; i < n_tokens; ++i) {
+        llama_sampler_accept(smpl, tokens[i]);
+    }
+}
+
+static std::vector<llama_token> unique_prompt_tokens(const llama_vocab * vocab, const std::string & prompt) {
+    std::unordered_set<llama_token> seen;
+    std::vector<llama_token> unique;
+
+    const auto add = [&](llama_token token) {
+        if (seen.insert(token).second) {
+            unique.push_back(token);
+        }
+    };
+
+    const llama_token bos = llama_vocab_bos(vocab);
+    if (bos != LLAMA_TOKEN_NULL) {
+        add(bos);
+    }
+
+    std::vector<llama_token> tokens(64);
+    int32_t n_tokens = llama_tokenize(vocab, prompt.c_str(), (int32_t) prompt.size(),
+            tokens.data(), (int32_t) tokens.size(), false, false);
+    if (n_tokens < 0) {
+        tokens.resize(-n_tokens);
+        n_tokens = llama_tokenize(vocab, prompt.c_str(), (int32_t) prompt.size(),
+                tokens.data(), (int32_t) tokens.size(), false, false);
+    }
+
+    for (int32_t i = 0; i < n_tokens; ++i) {
+        add(tokens[i]);
+    }
+
+    return unique;
+}
+
+static void compare_penalties_logits(
+        const test_params & params,
+        int32_t penalty_last_n,
+        float penalty_repeat,
+        float penalty_freq,
+        float penalty_present,
+        const std::string & prompt,
+        const std::function<void(llama_sampler *)> & extra_accept = {}) {
+    const auto * model = params.model.get();
+    const auto * vocab = llama_model_get_vocab(model);
+    const int n_vocab = llama_vocab_n_tokens(vocab);
+    const int seq_id = 0;
+
+    // Decode once without a backend sampler and release the context before
+    // creating one with backend penalties (two contexts would double VRAM).
+    std::vector<float> raw_logits(n_vocab);
+    {
+        std::vector<llama_sampler_seq_config> empty_configs;
+        test_context raw_ctx(params, empty_configs);
+
+        if (!raw_ctx.decode({{ seq_id, prompt }})) {
+            GGML_ASSERT(false && "Failed to decode for raw logits");
+        }
+
+        const int32_t batch_idx = raw_ctx.idx_for_seq(seq_id);
+        float * logits = llama_get_logits_ith(raw_ctx.ctx.get(), batch_idx);
+        GGML_ASSERT(logits != nullptr);
+        std::memcpy(raw_logits.data(), logits, (size_t) n_vocab * sizeof(float));
+    }
+
+    struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
+    llama_sampler_ptr backend_chain(llama_sampler_chain_init(chain_params));
+    llama_sampler_chain_add(backend_chain.get(), llama_sampler_init_penalties(
+                penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+
+    accept_prompt(backend_chain.get(), vocab, prompt);
+    if (extra_accept) {
+        extra_accept(backend_chain.get());
+    }
+
+    llama_sampler_ptr cpu_penalties(llama_sampler_init_penalties(
+                penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+    accept_prompt(cpu_penalties.get(), vocab, prompt);
+    if (extra_accept) {
+        extra_accept(cpu_penalties.get());
+    }
+
+    std::vector<float> backend_logits(n_vocab);
+    {
+        std::vector<llama_sampler_seq_config> backend_configs = {{ seq_id, backend_chain.get() }};
+        test_context backend_ctx(params, backend_configs);
+
+        if (!backend_ctx.decode({{ seq_id, prompt }})) {
+            GGML_ASSERT(false && "Failed to decode for backend penalties");
+        }
+
+        llama_synchronize(backend_ctx.ctx.get());
+
+        const int32_t backend_idx = backend_ctx.idx_for_seq(seq_id);
+        float * logits = llama_get_sampled_logits_ith(backend_ctx.ctx.get(), backend_idx);
+        GGML_ASSERT(logits != nullptr);
+
+        const uint32_t n_backend_logits = llama_get_sampled_logits_count_ith(backend_ctx.ctx.get(), backend_idx);
+        GGML_ASSERT(n_backend_logits == (uint32_t) n_vocab);
+        std::memcpy(backend_logits.data(), logits, (size_t) n_vocab * sizeof(float));
+    }
+
+    // Compare via the CPU sampler on the penalized token ids only.
+    const std::vector<llama_token> check_tokens = unique_prompt_tokens(vocab, prompt);
+    std::vector<llama_token_data> cur;
+    cur.reserve(check_tokens.size());
+    for (const llama_token token : check_tokens) {
+        cur.push_back({ token, raw_logits[token], 0.0f });
+    }
+
+    llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+    llama_sampler_apply(cpu_penalties.get(), &cur_p);
+
+    int n_mismatch = 0;
+    float max_diff = 0.0f;
+    for (size_t i = 0; i < cur.size(); ++i) {
+        const llama_token token = cur[i].id;
+        const float diff = fabsf(cur[i].logit - backend_logits[token]);
+        max_diff = std::max(max_diff, diff);
+        if (diff > 1e-3f) {
+            if (n_mismatch < 5) {
+                printf("penalties mismatch token %d: cpu=%.6f backend=%.6f diff=%.6f\n",
+                        token, cur[i].logit, backend_logits[token], diff);
+            }
+            ++n_mismatch;
+        }
+    }
+
+    // Spot-check that non-penalized logits are unchanged.
+    for (llama_token token = 0; token < n_vocab && token < 4096; token += 257) {
+        if (std::find(check_tokens.begin(), check_tokens.end(), token) != check_tokens.end()) {
+            continue;
+        }
+
+        const float diff = fabsf(raw_logits[token] - backend_logits[token]);
+        max_diff = std::max(max_diff, diff);
+        if (diff > 1e-3f) {
+            if (n_mismatch < 5) {
+                printf("penalties unchanged mismatch token %d: raw=%.6f backend=%.6f diff=%.6f\n",
+                        token, raw_logits[token], backend_logits[token], diff);
+            }
+            ++n_mismatch;
+        }
+    }
+
+    printf("penalties logits: max_diff=%.6f n_mismatch=%d (last_n=%d repeat=%.2f freq=%.2f present=%.2f)\n",
+            max_diff, n_mismatch, penalty_last_n, penalty_repeat, penalty_freq, penalty_present);
+    GGML_ASSERT(n_mismatch == 0);
+}
+
+static void test_backend_penalties_sampling(const test_params & params) {
+    printf("Testing backend penalties (repeat + freq + presence)\n");
+    compare_penalties_logits(params, 64, 1.1f, 0.5f, 0.25f, "Hello Hello world");
+
+    printf("Testing backend penalties with penalty_last_n > 64\n");
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    std::vector<llama_token> tokens(8);
+    int32_t n_tok = llama_tokenize(vocab, "a", 1, tokens.data(), (int32_t) tokens.size(), false, false);
+    if (n_tok < 0) {
+        tokens.resize(-n_tok);
+        n_tok = llama_tokenize(vocab, "a", 1, tokens.data(), (int32_t) tokens.size(), false, false);
+    }
+    GGML_ASSERT(n_tok > 0);
+    const llama_token tok = tokens[0];
+
+    compare_penalties_logits(params, 80, 1.15f, 0.1f, 0.05f, "a", [tok](llama_sampler * smpl) {
+        // accept_prompt already accepted BOS + one 'a'; fill the ring to n=80
+        for (int i = 0; i < 78; ++i) {
+            llama_sampler_accept(smpl, tok);
+        }
+    });
+
+    printf("backend penalties sampling test PASSED\n");
+}
+
 // This test verifies that it is possible to have two different backend samplers,
 // one that uses the backend dist sampler, and another that uses CPU dist sampler.
 static void test_backend_mixed_sampling(const test_params & params) {
@@ -1015,6 +1209,7 @@ struct backend_test_case {
 static const backend_test_case BACKEND_TESTS[] = {
     { "greedy",          test_backend_greedy_sampling,         true  },
     { "logit_bias",      test_backend_logit_bias_sampling,     true  },
+    { "penalties",       test_backend_penalties_sampling,      true  },
     { "temp",            test_backend_temp_sampling,           true  },
     { "temp_ext",        test_backend_temp_ext_sampling,       true  },
     { "top_k",           test_backend_top_k_sampling,          true  },
