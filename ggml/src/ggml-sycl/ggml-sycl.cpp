@@ -4162,7 +4162,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     SYCL_CHECK(CHECK_TRY_ERROR(
         stream->memcpy(ids_host.data(), ids_dev, ggml_nbytes(ids))));
 
-    // also protects ctx.mmid_row_mapping_host from reuse
+    // also protects ctx.mmid_row_mapping_host from an overwrite
     SYCL_CHECK(CHECK_TRY_ERROR(stream->wait()));
 
     ggml_tensor src0_row = *src0;
