@@ -7,7 +7,7 @@ ARG APP_REVISION=N/A
 
 FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 
-ARG GGML_SYCL_F16=OFF
+ARG GGML_SYCL_F16=ON
 ARG LEVEL_ZERO_VERSION=1.28.2
 ARG LEVEL_ZERO_UBUNTU_VERSION=u24.04
 RUN apt-get update && \
@@ -24,7 +24,8 @@ COPY . .
 
 RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
         echo "GGML_SYCL_F16 is set" \
-        && export OPT_SYCL_F16="-DGGML_SYCL_F16=ON"; \
+        && export OPT_SYCL_F16="-DGGML_SYCL_F16=ON" \
+        && export SYCL_PROGRAM_COMPILE_OPTIONS="-cl-fp32-correctly-rounded-divide-sqrt"; \
     fi && \
     echo "Building with dynamic libs" && \
     cmake -B build -DGGML_NATIVE=OFF -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DLLAMA_BUILD_TESTS=OFF ${OPT_SYCL_F16} && \
