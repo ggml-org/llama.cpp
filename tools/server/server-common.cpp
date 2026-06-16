@@ -407,10 +407,6 @@ const llama_tokens & server_tokens::get_tokens() const {
     return tokens;
 }
 
-const llama_tokens & server_tokens::get_raw_tokens() const {
-    return tokens;
-}
-
 llama_tokens server_tokens::get_text_tokens() const {
     llama_tokens res;
     res.reserve(tokens.size());
@@ -519,6 +515,14 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     }
 
     return max_idx; // all tokens are equal
+}
+
+common_chat_msg_spans server_tokens::find_message_spans(const common_chat_msg_delimiters & delims) const {
+    std::map<size_t, size_t> skips;
+    for (const auto & it : map_idx_to_media) {
+        skips[it.first] = mtmd_input_chunk_get_n_tokens(it.second.get());
+    }
+    return delims.split(tokens, skips);
 }
 
 bool server_tokens::validate(const struct llama_context * ctx) const {

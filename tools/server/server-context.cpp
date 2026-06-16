@@ -3721,6 +3721,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
 
+        // message delimiters for checkpointing
+        auto delimiters = common_chat_msg_delimiters_parse(json_value(data, "message_delimiters", json::array()));
+        delimiters.tokenize(ctx_server.vocab);
+
         for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
@@ -3728,12 +3732,13 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
             task.tokens = std::move(inputs[i]);
             task.params = server_task::params_from_json_cmpl(
-                    task.tokens.get_raw_tokens(),
                     ctx_server.vocab,
                     params,
                     meta->slot_n_ctx,
                     meta->logit_bias_eog,
                     data);
+
+            task.params.message_spans = task.tokens.find_message_spans(delimiters);
 
             task.id_slot = json_value(data, "id_slot", -1);
 

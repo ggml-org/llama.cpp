@@ -1628,25 +1628,46 @@ static void test_msg_token_delimiters_split() {
         assert_equals<size_t>(3, spans[0].len);
     }
 
-    // LLAMA_TOKEN_NULL tokens cannot start a delimiter match but count as content
+    // Skipped regions (media chunks) are jumped over but still count as span content
     {
         const llama_tokens tokens = {
             10, 11,             // <user>
-            LLAMA_TOKEN_NULL,   // media placeholder
+            LLAMA_TOKEN_NULL,   // media chunk (3 tokens)
+            LLAMA_TOKEN_NULL,
+            LLAMA_TOKEN_NULL,
             100,                // Hi
             10, 12,             // <assistant>
         };
 
-        const auto spans = delims.split(tokens).spans;
+        const std::map<size_t, size_t> skips = { { 2, 3 } };
+
+        const auto spans = delims.split(tokens, skips).spans;
         assert_equals<size_t>(2, spans.size());
 
         assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
         assert_equals<size_t>(0, spans[0].pos);
-        assert_equals<size_t>(4, spans[0].len);
+        assert_equals<size_t>(6, spans[0].len);
 
         assert_equals(COMMON_CHAT_ROLE_ASSISTANT, spans[1].role);
-        assert_equals<size_t>(4, spans[1].pos);
+        assert_equals<size_t>(6, spans[1].pos);
         assert_equals<size_t>(2, spans[1].len);
+    }
+
+    // A delimiter sequence inside a skipped region is not matched
+    {
+        const llama_tokens tokens = {
+            10, 11,      // <user>
+            10, 12,      // skipped region that happens to contain delimiter tokens
+            100,         // Hi
+        };
+
+        const std::map<size_t, size_t> skips = { { 2, 2 } };
+
+        const auto spans = delims.split(tokens, skips).spans;
+        assert_equals<size_t>(1, spans.size());
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(5, spans[0].len);
     }
 }
 

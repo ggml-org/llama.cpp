@@ -237,7 +237,6 @@ common_chat_msg task_result_state::update_chat_msg(
 //
 
 task_params server_task::params_from_json_cmpl(
-        const llama_tokens & tokens,
         const llama_vocab * vocab,
         const common_params & params_base,
         const int n_ctx_slot,
@@ -614,11 +613,6 @@ task_params server_task::params_from_json_cmpl(
             params.sampling.samplers = defaults.sampling.samplers;
         }
     }
-
-    // message spans for checkpointing
-    auto delimiters = common_chat_msg_delimiters_parse(json_value(data, "message_delimiters", json::array()));
-    delimiters.tokenize(vocab);
-    params.message_spans = delimiters.split(tokens);
 
     if (params.n_cmpl > params_base.n_parallel) {
         throw std::runtime_error("n_cmpl cannot be greater than the number of slots, please increase -np");

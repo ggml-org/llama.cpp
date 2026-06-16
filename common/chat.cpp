@@ -147,10 +147,14 @@ void common_chat_msg_delimiters::tokenize(const llama_vocab * vocab) {
     }
 }
 
-common_chat_msg_spans common_chat_msg_delimiters::split(const llama_tokens & tokens) const {
+common_chat_msg_spans common_chat_msg_delimiters::split(const llama_tokens & tokens, const std::map<size_t, size_t> & skips) const {
     std::vector<std::pair<common_chat_role, size_t>> matches;
-    for (size_t i = 0; i < tokens.size(); i++) {
-        if (tokens[i] == LLAMA_TOKEN_NULL) {
+
+    auto skip = skips.begin();
+    for (size_t i = 0; i < tokens.size();) {
+        if (skip != skips.end() && i == skip->first) {
+            i += skip->second;
+            ++skip;
             continue;
         }
         for (const auto & d : delimiters) {
@@ -162,6 +166,7 @@ common_chat_msg_spans common_chat_msg_delimiters::split(const llama_tokens & tok
                 break;
             }
         }
+        i++;
     }
 
     matches.emplace_back(COMMON_CHAT_ROLE_UNKNOWN, tokens.size());
