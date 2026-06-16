@@ -3823,20 +3823,11 @@ struct test_ssm_scan : public test_case {
                 }
             } else if (ggml_is_view_op(t->op)) {
                 continue;
-            } else if (t->ne[0] == d_state && t->ne[1] == head_dim && t->ne[2] == n_head) {
-                // s {d_state, head_dim, n_head, n_seqs}: zero initial state.
-                // ne[2] == n_head disambiguates from B/C {d_state, n_group, n_seq_tokens, n_seqs}
-                // which otherwise collide when n_group == head_dim (e.g. Mamba-1).
-                init_tensor_uniform(t, 0.0f, 0.0f);
-            } else if (t->ne[0] == n_head && t->ne[1] == n_seq_tokens) {
-                // dt {n_head, n_seq_tokens, n_seqs}: pre-softplus values
-                init_tensor_uniform(t, -4.0f, -1.0f);
             } else if (t->ne[1] == n_head && t->ne[2] == 1) {
                 // A {1 or d_state, n_head}: negative decay (2-D tensor, ne[2]==1 distinguishes from 3-D/4-D tensors)
                 init_tensor_uniform(t, -1.0f, -0.5f);
             } else {
-                // x, B, C: [-0.5, 0.5] keeps intermediate calculations from overflowing
-                init_tensor_uniform(t, -0.5f, 0.5f);
+                init_tensor_uniform(t);
             }
         }
     }
