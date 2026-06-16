@@ -117,16 +117,13 @@ jobs:
 
       - name: Resolve HTP signing pfx
         env:
-          HEXAGON_HTP_PFX_B64: ${{ secrets.HEXAGON_HTP_PFX_B64 }}
+          QDC_HTP_PFX_B64: ${{ secrets.QDC_HTP_PFX_B64 }}
         run: |
           set -euo pipefail
-          REPO_PFX="scripts/snapdragon/qdc/windows/ggml-htp-v1.pfx"
-          if [ -n "${HEXAGON_HTP_PFX_B64:-}" ]; then
-            echo "$HEXAGON_HTP_PFX_B64" | base64 -d > "$RUNNER_TEMP/ggml-htp-v1.pfx"
+          if [ -n "${QDC_HTP_PFX_B64:-}" ]; then
+            echo "$QDC_HTP_PFX_B64" | base64 -d > "$RUNNER_TEMP/ggml-htp-v1.pfx"
             test -s "$RUNNER_TEMP/ggml-htp-v1.pfx"
             echo "pfx_path=$RUNNER_TEMP/ggml-htp-v1.pfx" >> "$GITHUB_OUTPUT"
-          elif [ -f "$REPO_PFX" ]; then
-            echo "pfx_path=$REPO_PFX" >> "$GITHUB_OUTPUT"
           else
             echo "WARNING: No HTP pfx available, skipping Windows build"
             echo "skip=true" >> "$GITHUB_OUTPUT"
