@@ -3,6 +3,15 @@ import type { Root, Element, ElementContent, Text } from 'hast';
 import { visit } from 'unist-util-visit';
 
 /**
+ * Metadata a diagram pre carries on its unist data field. The source code holds
+ * the highlighted code element captured before the pre became a render target,
+ * which the enhancer reuses to build a matching source view.
+ */
+export interface DiagramPreData {
+	sourceCode: Element;
+}
+
+/**
  * Recursively extracts all text content from a HAST node.
  * Handles nested elements (e.g., span wrappers from syntax highlighting).
  */
@@ -69,7 +78,10 @@ export function createPreTransform(
 					properties: {
 						className: [targetClass]
 					},
-					children: [{ type: 'text', value: text } as Text]
+					children: [{ type: 'text', value: text } as Text],
+					// Keep the highlighted code element so the block can offer a source
+					// view that matches the app code blocks without re highlighting.
+					data: { sourceCode: codeElement } satisfies DiagramPreData
 				};
 
 				(parent.children as ElementContent[])[index] = pre;

@@ -300,7 +300,8 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 .markdown-content :global(.copy-code-btn),
-.markdown-content :global(.preview-code-btn) {
+.markdown-content :global(.preview-code-btn),
+.markdown-content :global(.toggle-source-btn) {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -312,13 +313,20 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 .markdown-content :global(.copy-code-btn:hover),
-.markdown-content :global(.preview-code-btn:hover) {
+.markdown-content :global(.preview-code-btn:hover),
+.markdown-content :global(.toggle-source-btn:hover) {
 	transform: scale(1.05);
 }
 
 .markdown-content :global(.copy-code-btn:active),
-.markdown-content :global(.preview-code-btn:active) {
+.markdown-content :global(.preview-code-btn:active),
+.markdown-content :global(.toggle-source-btn:active) {
 	transform: scale(0.95);
+}
+
+/* Pressed state marks the source view as active */
+.markdown-content :global(.toggle-source-btn[aria-pressed='true']) {
+	color: var(--primary);
 }
 
 .markdown-content :global(.code-block-wrapper pre) {
@@ -629,8 +637,8 @@ div.markdown-user-content :global(.table-wrapper) {
 	overflow-y: auto;
 	overflow-x: auto;
 	display: flex;
-	align-items: center;
-	justify-content: center;
+	align-items: safe center;
+	justify-content: safe center;
 	padding: 3rem 1rem 1rem;
 }
 
@@ -645,7 +653,9 @@ div.markdown-user-content :global(.table-wrapper) {
 	overflow-y: visible;
 }
 
-/* Diagram block uses same header styling as code blocks */
+/* Diagram block uses same header styling as code blocks. The header floats over
+   scrollable diagram content and stays transparent, so the overflow shows up to
+   the box edge. It keeps a z-index so it stays the click target above content. */
 .markdown-content :global(.mermaid-block-wrapper .code-block-header),
 .markdown-content :global(.svg-block-wrapper .code-block-header) {
 	display: flex;
@@ -657,6 +667,7 @@ div.markdown-user-content :global(.table-wrapper) {
 	top: 0;
 	left: 0;
 	right: 0;
+	z-index: 2;
 }
 
 .markdown-content :global(.mermaid-block-wrapper .code-block-actions),
@@ -681,6 +692,31 @@ div.markdown-user-content :global(.table-wrapper) {
 	height: auto;
 	display: block;
 	padding: 3rem 1rem;
+}
+
+/* Source view stays hidden while the block renders, css swaps the two views
+   from the wrapper mode so the click handler only flips one attribute. The view
+   reuses the code block scroll container, so it matches the app code blocks. */
+.markdown-content :global(.diagram-source) {
+	display: none;
+	text-align: left;
+}
+
+.markdown-content :global(.diagram-source pre) {
+	background: transparent;
+	margin: 0;
+	border-radius: 0;
+	border: none;
+	font-size: 0.875rem;
+}
+
+.markdown-content :global([data-view-mode='source'] .mermaid-scroll-container),
+.markdown-content :global([data-view-mode='source'] .svg-scroll-container) {
+	display: none;
+}
+
+.markdown-content :global([data-view-mode='source'] .diagram-source) {
+	display: block;
 }
 
 /* Streaming mermaid block - empty preview box */

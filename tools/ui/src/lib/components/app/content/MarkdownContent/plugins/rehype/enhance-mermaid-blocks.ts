@@ -19,12 +19,17 @@ import {
 	MERMAID_BLOCK_CLASS,
 	MERMAID_LANGUAGE,
 	MERMAID_SYNTAX_ATTR,
-	MERMAID_ID_ATTR
+	MERMAID_ID_ATTR,
+	DIAGRAM_VIEW_MODE_ATTR,
+	DIAGRAM_VIEW_RENDERED
 } from '$lib/constants';
+import type { DiagramPreData } from './pre-transform';
 import {
 	createBlockHeader,
 	createCopyButton,
 	createPreviewButton,
+	createToggleSourceButton,
+	createSourceView,
 	createWrapper,
 	generateBlockId
 } from './code-block-utils';
@@ -75,16 +80,23 @@ export const rehypeEnhanceMermaidBlocks: Plugin<[], Root> = () => {
 
 			const actions = [
 				createCopyButton(mermaidId, MERMAID_ID_ATTR, 'Copy mermaid syntax'),
+				createToggleSourceButton(mermaidId, MERMAID_ID_ATTR, 'Toggle mermaid source'),
 				createPreviewButton(mermaidId, MERMAID_ID_ATTR, 'Preview diagram')
 			];
 
 			const header = createBlockHeader(MERMAID_LANGUAGE, mermaidId, MERMAID_ID_ATTR, actions);
+			const preservedCode = (node.data as DiagramPreData | undefined)?.sourceCode;
+			const sourceView = createSourceView(preservedCode, diagramText, MERMAID_LANGUAGE);
 			const wrapper = createWrapper(
 				header,
 				node,
 				MERMAID_WRAPPER_CLASS,
 				MERMAID_SCROLL_CONTAINER_CLASS,
-				{ [MERMAID_ID_ATTR]: mermaidId }
+				{
+					[MERMAID_ID_ATTR]: mermaidId,
+					[DIAGRAM_VIEW_MODE_ATTR]: DIAGRAM_VIEW_RENDERED
+				},
+				[sourceView]
 			);
 
 			// Replace pre with wrapper in parent
