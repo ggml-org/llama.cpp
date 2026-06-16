@@ -8,8 +8,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-PLATFORM = "<<PLATFORM>>"
-IS_WINDOWS = PLATFORM == "windows"
+# The Windows artifact runs natively on the Windows device; the Android
+# artifact runs on a Linux host that drives the device over adb. Detect which
+# at runtime instead of baking the platform into the file at packaging time.
+IS_WINDOWS = os.name == "nt"
 
 log = logging.getLogger(__name__)
 
@@ -182,7 +184,7 @@ def run_adb_command(cmd: str, *, check: bool = True) -> subprocess.CompletedProc
                 stdout = "\n".join(lines[:-1]) + "\n"
             except ValueError:
                 pass
-    print(stdout)
+    log.info(stdout)
     result = subprocess.CompletedProcess(raw.args, returncode, stdout=stdout)
     if check:
         assert returncode == 0, f"Command failed (exit {returncode})"
@@ -204,7 +206,7 @@ def run_script(
         text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         errors="replace",
     )
-    print(result.stdout)
+    log.info(result.stdout)
     return result
 
 

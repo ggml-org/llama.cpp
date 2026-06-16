@@ -212,9 +212,7 @@ def _build_android_artifact(
     tests_dir = stage_dir / "tests"
     tests_dir.mkdir()
 
-    (tests_dir / "utils.py").write_text(
-        _UTILS.read_text().replace("<<PLATFORM>>", "android")
-    )
+    shutil.copy(_UTILS, tests_dir / "utils.py")
     shutil.copy(_CONFTEST, tests_dir / "conftest.py")
 
     if test_mode in ("bench", "all"):
@@ -310,14 +308,11 @@ def _build_windows_artifact(
                 arc = f"llama_cpp_bundle/{src.relative_to(pkg_dir).as_posix()}"
                 zf.write(src, arc)
 
-        # tests/ — shared helpers (conftest.py, utils.py)
+        # tests/ - shared helpers (conftest.py, utils.py)
         zf.write(_CONFTEST, "tests/conftest.py")
-        zf.writestr(
-            "tests/utils.py",
-            _UTILS.read_text().replace("<<PLATFORM>>", "windows"),
-        )
+        zf.write(_UTILS, "tests/utils.py")
 
-        # tests/ — test scripts selected by test_mode
+        # tests/ - test scripts selected by test_mode
         for src_name, (dst_name, modes) in _WIN_TEST_SCRIPTS.items():
             if test_mode not in modes:
                 continue

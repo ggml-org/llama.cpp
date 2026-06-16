@@ -230,7 +230,7 @@ function Install-Wdk {
 function Install-Python {
     # cmake's find_package(Python3) needs a real interpreter (the WindowsApps
     # stub at AppData\Local\Microsoft\WindowsApps\python.exe doesn't qualify
-    # — it just opens the Store). Drop a real arm64 embedded distribution
+    # - it just opens the Store). Drop a real arm64 embedded distribution
     # under C:\Python311 and prepend it to PATH.
     $marker = 'C:\Python311\python.exe'
     if (Test-Path -LiteralPath $marker) {

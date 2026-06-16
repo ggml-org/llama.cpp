@@ -133,7 +133,7 @@ finally {
 
     Stop-Transcript | Out-Null
 
-    # QDC completion sentinel — must be created regardless of success/failure
+    # QDC completion sentinel - must be created regardless of success/failure
     # so the job transitions to a terminal state instead of timing out.
     New-Item -ItemType File -Path 'C:\Temp\QDCTestDone.txt' -Force | Out-Null
     exit $exitCode

@@ -9,7 +9,7 @@
   VCVARS_BAT, VCVARS_ARGS, LLVM_BIN). Sources vcvars into the current
   PowerShell process so cmake's child processes inherit PATH/INCLUDE/LIB.
 
-  Drives the canonical sequence from
+  Derives the canonical sequence from
   llama.cpp/docs/backend/snapdragon/windows.md:
 
     cmake --preset arm64-windows-snapdragon-release -B build-wos
