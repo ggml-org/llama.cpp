@@ -248,6 +248,85 @@ class Qwen3Model(Qwen2Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("DFlashDraftModel")
+class DFlashModel(Qwen3Model):
+    # DFlash block-diffusion draft model. The transformer body is Qwen3; the draft also has a
+    # feature-fusion `fc` and `hidden_norm`, and shares the target's tokenizer / embeddings.
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if self.target_model_dir is None:
+            raise ValueError(
+                "DFlash model requires --target-model-dir to read the target config and tokenizer"
+            )
+
+        import json
+        with open(self.dir_model / "config.json", "r", encoding="utf-8") as f:
+            self.dflash_raw_config = json.load(f)
+        with open(self.target_model_dir / "config.json", "r", encoding="utf-8") as f:
+            target_config = json.load(f)
+        if "text_config" in target_config:
+            target_config = {**target_config, **target_config["text_config"]}
+        self.target_config = target_config
+        self.dflash_cfg = self.dflash_raw_config.get("dflash_config", {}) or {}
+
+    def set_vocab(self):
+        # DFlash drafts share the target tokenizer (vocab is identical)
+        original_dir_model = self.dir_model
+        self.dir_model = self.target_model_dir
+        try:
+            super().set_vocab()
+        finally:
+            self.dir_model = original_dir_model
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        arch = self.gguf_writer.arch
+
+        target_hidden_size = self.dflash_raw_config.get("target_hidden_size") or self.target_config["hidden_size"]
+        target_layer_ids = self.dflash_cfg.get("target_layer_ids")
+        if target_layer_ids is None:
+            # fallback: evenly spaced across the target depth (SpecForge build_target_layer_ids)
+            n_target = self.target_config["num_hidden_layers"]
+            n_draft  = self.hparams["num_hidden_layers"]
+            target_layer_ids = [max(0, (i + 1) * n_target // (n_draft + 1) - 1) for i in range(n_draft)]
+        logger.info(f"DFlash: target_layers = {target_layer_ids}, target_hidden_size = {target_hidden_size}")
+
+        self.gguf_writer.add_array (f"{arch}.target_layers",      [int(i) for i in target_layer_ids])
+        self.gguf_writer.add_uint32(f"{arch}.target_hidden_size", int(target_hidden_size))
+        self.gguf_writer.add_uint32(f"{arch}.block_size",         int(self.dflash_raw_config.get("block_size", 16)))
+
+        mask_token_id = self.dflash_cfg.get("mask_token_id")
+        if mask_token_id is not None:
+            self.gguf_writer.add_uint32(f"{arch}.mask_token_id", int(mask_token_id))
+
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        # the draft weights are top-level (layers.*, norm, fc, hidden_norm); prepend "model." to
+        # the transformer tensors so the standard Qwen3 name mapping and bid extraction apply
+        tensors = super().index_tensors(remote_hf_model_id)
+        renamed: dict[str, Callable[[], Tensor]] = {}
+        for name, gen in tensors.items():
+            if name.startswith("layers.") or name == "norm.weight":
+                renamed["model." + name] = gen
+            else:
+                renamed[name] = gen
+        return renamed
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "fc.weight":
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.FC), data_torch
+            return
+        if name == "hidden_norm.weight":
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.DFLASH_HIDDEN_NORM), data_torch
+            return
+        if name in ("d2t", "t2d"):
+            # draft and target share the vocabulary - no remap tensor needed
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
