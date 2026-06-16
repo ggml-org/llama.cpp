@@ -8,7 +8,6 @@
 *.dot
 *.etag
 *.exe
-*.pfx
 *.gcda
 *.gcno
 *.gcov

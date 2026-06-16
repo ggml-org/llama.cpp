@@ -1,7 +1,3 @@
-# ---------------------------------------------------------------------
-# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
-# SPDX-License-Identifier: BSD-3-Clause
-# ---------------------------------------------------------------------
 """
 test-backend-ops runner for llama.cpp (HTP0 backend).
 
@@ -9,6 +5,10 @@ On Android: calls upstream run-tool.sh from llama.cpp/scripts/snapdragon/adb/
 on the QDC runner host (script wraps commands in ``adb shell`` internally).
 
 On Windows: runs test-backend-ops.exe directly via subprocess.
+
+Linux IoT is NOT handled here: the BASH framework runs the equivalent cases
+directly from tests/linux/run_linux.sh (run_backend_ops_case), so this pytest
+module is only bundled for the Android (Appium) and Windows (PowerShell) jobs.
 """
 
 import os
