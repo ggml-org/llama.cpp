@@ -240,9 +240,8 @@ struct ggml_backend_rpc_buffer_context {
 // RPC helper functions
 
 // Computes FNV-1a hash of the data
-static uint64_t fnv_hash(const uint8_t * data, size_t len) {
+static uint64_t fnv_hash(const uint8_t * data, size_t len, uint64_t hash = 0xcbf29ce484222325ULL) {
     const uint64_t fnv_prime = 0x100000001b3ULL;
-    uint64_t hash = 0xcbf29ce484222325ULL;
 
     for (size_t i = 0; i < len; ++i) {
         hash ^= data[i];
@@ -978,6 +977,8 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
 
         // Use FNV hash of the key struct for the cache lookup
         uint64_t cache_hash = fnv_hash((const uint8_t *)&key, sizeof(key));
+        cache_hash = fnv_hash((const uint8_t *)buft_ctx->endpoint.data(),
+                              buft_ctx->endpoint.size(), cache_hash);
 
         // Thread-safe cache: alloc sizes are immutable for a given tensor configuration
         static std::mutex cache_mutex;
