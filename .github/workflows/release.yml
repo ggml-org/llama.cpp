@@ -783,6 +783,8 @@ jobs:
           name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
 
   windows-sycl:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
 
@@ -891,6 +893,8 @@ jobs:
           name: llama-bin-win-sycl-x64.zip
 
   ubuntu-24-sycl:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     strategy:
       matrix:

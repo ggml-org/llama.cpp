@@ -316,12 +316,22 @@ value filter_expression::execute_impl(context & ctx) {
 
     JJ_DEBUG("Applying filter to %s", input->type().c_str());
 
+    auto set_filter_alias = [](auto & filter_id) {
+        if (filter_id == "count") {
+            filter_id = "length";
+        } else if (filter_id == "d") {
+            filter_id = "default";
+        } else if (filter_id == "e") {
+            filter_id = "escape";
+        } else if (filter_id == "trim") {
+            filter_id = "strip";
+        }
+    };
+
     if (is_stmt<identifier>(filter)) {
         auto filter_id = cast_stmt<identifier>(filter)->val;
 
-        if (filter_id == "trim") {
-            filter_id = "strip"; // alias
-        }
+        set_filter_alias(filter_id);
         JJ_DEBUG("Applying filter '%s' to %s", filter_id.c_str(), input->type().c_str());
         // TODO: Refactor filters so this coercion can be done automatically
         if (!input->is_undefined() && !is_val<value_string>(input) && (
@@ -345,9 +355,7 @@ value filter_expression::execute_impl(context & ctx) {
         }
         auto filter_id = cast_stmt<identifier>(call->callee)->val;
 
-        if (filter_id == "trim") {
-            filter_id = "strip"; // alias
-        }
+        set_filter_alias(filter_id);
         JJ_DEBUG("Applying filter '%s' with arguments to %s", filter_id.c_str(), input->type().c_str());
         func_args args(ctx);
         for (const auto & arg_expr : call->args) {
