@@ -126,11 +126,8 @@ struct common_log_entry {
 };
 
 struct common_log {
-    // sane limit to avoid out-of-memory under heavy profiling
-    const size_t max_capacity = 4096;
-
-    // default capacity - will be expanded if needed
-    common_log(size_t capacity = 256) {
+    // default capacity
+    common_log(size_t capacity = 512) {
         file       = nullptr;
         prefix     = false;
         timestamps = false;
@@ -180,36 +177,14 @@ private:
         return false;
     }
 
-    bool flush_queue(const std::vector<common_log_entry> & old_queue, size_t old_head, size_t old_tail) const {
+    bool flush_queue(size_t start_head, size_t end_tail, size_t & out_head) const {
         bool stop = false;
-        size_t h = old_head;
-        size_t size = old_queue.size();
-        while (h != old_tail && !stop) {
-            stop = print_entry(old_queue[h]);
-            h = (h + 1) % size;
+        size_t h = start_head;
+        while (h != end_tail && !stop) {
+            stop = print_entry(queue[h]);
+            h = (h + 1) % queue.size();
         }
-        return stop;
-    }
-
-    bool expand_and_flush(std::unique_lock<std::mutex> & lock) {
-        size_t old_head = head;
-        size_t old_tail = tail;
-        size_t old_size = queue.size();
-
-        size_t new_capacity = std::min(old_size * 2, max_capacity);
-        std::vector<common_log_entry> new_queue(new_capacity, common_log_entry(256));
-
-        queue.swap(new_queue);
-        auto & old_queue = new_queue; // alias to make it clear we are flushing the old queue
-        head = 0;
-        tail = 0;
-        cv_full.notify_all(); // wake up blocked producers
-
-        lock.unlock(); // drop the lock during flushing
-
-        bool stop = flush_queue(old_queue, old_head, old_tail);
-
-        lock.lock();
+        out_head = h;
         return stop;
     }
 
@@ -294,20 +269,17 @@ public:
                 std::unique_lock<std::mutex> lock(mtx);
                 cv_new.wait(lock, [this]() { return !is_empty(); });
 
-                bool stop = false;
+                size_t cached_head = head;
+                size_t cached_tail = tail;
 
-                if (is_full() && queue.size() < max_capacity) {
-                    stop = expand_and_flush(lock);
-                } else {
-                    auto & cur = queue[head];
+                lock.unlock(); // drop the lock during flush
 
-                    lock.unlock(); // drop the lock while printing
-                    stop = print_entry(cur);
-                    lock.lock();
+                size_t next_head;
+                bool stop = flush_queue(cached_head, cached_tail, next_head);
 
-                    head = (head + 1) % queue.size();
-                    cv_full.notify_one();
-                }
+                lock.lock();
+                head = next_head;
+                cv_full.notify_all();
 
                 if (stop) {
                     break;
