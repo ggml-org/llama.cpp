@@ -297,7 +297,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         const int64_t n_visible = (int64_t) (pos + 1)/ratio;
         plan.n_visible[i] = (int32_t) n_visible;
         plan.n_kv = std::max(plan.n_kv, n_visible);
-        plan.n_kv = GGML_PAD(plan.n_kv, 256u);
 
         if ((pos + 1) % ratio != 0) {
             continue;
@@ -378,6 +377,8 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         const int64_t bucketed_n_kv   = (bucketed_tokens + ratio - 1)/ratio;
         plan.n_kv = std::min<int64_t>(kv_size, std::max<int64_t>(plan.n_kv, bucketed_n_kv));
     }
+
+    plan.n_kv = GGML_PAD(plan.n_kv, 256u);
 
     std::sort(persist_rows.begin(), persist_rows.end(),
             [](const persist_row & a, const persist_row & b) {
