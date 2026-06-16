@@ -221,15 +221,6 @@ public:
     // make sure all text tokens are within the vocab range
     bool validate(const struct llama_context * ctx) const;
 
-    // encode and decode the image chunk
-    int32_t process_chunk(
-                llama_context * ctx,
-                mtmd_context * mctx,
-                size_t idx,
-                llama_pos pos,
-                int32_t seq_id,
-                size_t & n_tokens_out) const;
-
     server_tokens clone() const;
 };
 

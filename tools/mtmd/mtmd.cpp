@@ -96,16 +96,15 @@ struct mtmd_image_tokens {
             // [BOI] [row0 tokens + newline] ... [row(ny-1) tokens + newline] [EOI]
             return (nx + 1) * ny + 2;
         }
-        // [QWEN_VIDEO] this logic is quite ugly, it's mostly to make qwen-vl temporal merge work, can be improved in the future
-        if (batch_f32.entries.size() == 1 || n_temporal_merge == 1) {
-            return nx * ny;
-        }
         uint32_t nz = batch_f32.entries.size();
-        // TODO: simplify this by repeating the last frame until it fits the temporal merge
-        if (nz % n_temporal_merge != 0) {
-            nz = nz / n_temporal_merge + 1;
-        } else {
-            nz = nz / n_temporal_merge;
+        if (n_temporal_merge > 1) {
+            // [QWEN_VIDEO] this logic is quite ugly, it's mostly to make qwen-vl temporal merge work, can be improved in the future
+            // TODO: simplify this by repeating the last frame until it fits the temporal merge
+            if (nz % n_temporal_merge != 0) {
+                nz = nz / n_temporal_merge + 1;
+            } else {
+                nz = nz / n_temporal_merge;
+            }
         }
         return nx * ny * nz;
     }
