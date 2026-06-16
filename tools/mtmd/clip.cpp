@@ -1024,6 +1024,8 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             GGML_ABORT("missing cgraph builder");
     }
 
+    builder->img_batch = &imgs;
+
     // TODO [QWEN_VIDEO]: improve this in the future
     builder->n_batch = imgs.entries.size();
 

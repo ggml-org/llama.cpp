@@ -1165,18 +1165,11 @@ struct mtmd_tokenizer {
             } else {
 
                 size_t n_tokens = 0;
-                if (ctx->proj_type_v() == PROJECTOR_TYPE_DEEPSEEKOCR && batch_f32.entries.size() > 1) {
-                    // v1 weaves the local tiles into a grid (one image-newline per token-row), then the global view
-                    const int h = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
-                    n_tokens  = (h * batch_f32.grid_x + 1) * (h * batch_f32.grid_y);
-                    n_tokens += clip_n_output_tokens(ctx->ctx_v, batch_f32.entries.back().get());
-                } else {
-                    for (const auto & e : batch_f32.entries) {
-                        n_tokens += clip_n_output_tokens(ctx->ctx_v, e.get());
-                        if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
-                            // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
-                            break;
-                        }
+                for (const auto & e : batch_f32.entries) {
+                    n_tokens += clip_n_output_tokens(ctx->ctx_v, e.get());
+                    if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
+                        // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
+                        break;
                     }
                 }
 

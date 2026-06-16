@@ -250,6 +250,34 @@ ggml_tensor * clip_graph_deepseekocr::build_sam(ggml_tensor * inp_raw) {
 ggml_cgraph * clip_graph_deepseekocr::build() {
     // patch embedding
     ggml_tensor * inp_raw = build_inp_raw();
+
+    bool is_overview = img.add_viewsep;
+    int n_tiles_per_row = 0;
+
+    // note: we expect either a batch of rows or a batch of overviews, but not a mix of both
+
+    if (!is_overview) {
+        // handle the case where we have a batch of rows
+        // sanity check
+        for (auto & entry : img_batch->entries) {
+            if (entry->add_viewsep) {
+                throw std::runtime_error("DeepSeek-OCR: mixed overview and non-overview images in batch");
+            }
+            if (entry->nx() != img.nx() || entry->ny() != img.ny()) {
+                throw std::runtime_error("DeepSeek-OCR: mixed image sizes in batch");
+            }
+        }
+
+        GGML_ASSERT(img.ny() >= img.nx());
+        GGML_ASSERT(img.ny() % img.nx() == 0);
+        n_tiles_per_row = img.ny() / img.nx();
+
+        // input shape: [tile_size, tile_size * n_tiles_per_row, 3]
+        // we want to reshape it to [tile_size, tile_size, 3, n_tiles_per_row]
+        inp_raw = ggml_reshape_4d(ctx0, inp_raw, img.nx(), img.nx(), n_tiles_per_row, 3);
+        inp_raw = ggml_cont(ctx0, ggml_permute(ctx0, inp_raw, 0, 1, 3, 2));
+    }
+
     ggml_tensor * sam_out = build_sam(inp_raw);
 
     const int clip_n_patches = sam_out->ne[0] * sam_out->ne[1];
@@ -305,8 +333,8 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
     cur = ggml_mul_mat(ctx0, model.mm_fc_w, cur);
     cur = ggml_add(ctx0, cur, model.mm_fc_b);
 
-    // global view: weave one newline per row + trailing view separator
-    if (img.add_viewsep) {
+    if (is_overview) {
+        // global view: weave one newline per row + trailing view separator
         const auto h     = static_cast<int>(std::sqrt(static_cast<float>(cur->ne[1])));
         const auto w     = h;
         const auto n_dim = cur->ne[0];
@@ -315,6 +343,30 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
         cur = ggml_reshape_3d(ctx0, cur, n_dim, w, h);
         cur = ggml_reshape_2d(ctx0, ggml_concat(ctx0, cur, imgnl, 1), n_dim, (w + 1) * h);
         cur = ggml_concat(ctx0, cur, model.view_seperator, 1);  // (n_dim, h*(w+1) + 1)
+    } else {
+        // tiles: re-order from A.row0 A.row1 B.row0 B.row1 ...
+        //        to A.row0 B.row0 A.row1 B.row1 ...
+        //        then add nl: A.row0 B.row0 [nl] A.row1 B.row1 [nl] ...
+        const auto h     = static_cast<int>(std::sqrt(static_cast<float>(cur->ne[1])));
+        const auto w     = h;
+        const auto n_dim = cur->ne[0];
+
+        // (n_dim, w*h, n_batch) -> (n_dim, w, h, n_batch)
+        cur = ggml_reshape_4d(ctx0, cur, n_dim, w, h, n_batch);
+
+        // swap h and n_batch axes: (n_dim, w, h, n_batch) -> (n_dim, w, n_batch, h)
+        // so that within each super-row, all tiles' token-rows are contiguous
+        cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 0, 1, 3, 2));
+
+        // merge tile and column axes: (n_dim, w, n_batch, h) -> (n_dim, w*n_batch, h, 1)
+        cur = ggml_reshape_4d(ctx0, cur, n_dim, w * n_batch, h, 1);
+
+        // append one newline after each super-row: (n_dim, w*n_batch+1, h, 1)
+        ggml_tensor * imgnl = ggml_repeat_4d(ctx0, model.image_newline, n_dim, 1, h, 1);
+        cur = ggml_concat(ctx0, cur, imgnl, 1);
+
+        // flatten: (n_dim, (w*n_batch+1)*h)
+        cur = ggml_reshape_2d(ctx0, cur, n_dim, (w * n_batch + 1) * h);
     }
 
     cb(cur, "dsocr_output", -1);

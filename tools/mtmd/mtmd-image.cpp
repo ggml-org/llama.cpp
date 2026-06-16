@@ -1165,7 +1165,7 @@ clip_image_size mtmd_image_preprocessor_deepseekocr::find_closest_aspect_ratio(
 }
 
 bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
-    // output order: [local tiles..., global]
+    // output order: [tiles + nl, tiles + nl, ..., global]
 
     int        grid_w   = 1;
     int        grid_h   = 1;
@@ -1183,13 +1183,22 @@ bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, 
                          PAD_NONE);
 
         for (int row = 0; row < grid_h; row++) {
+            // concat all tiles in this row into a single image, along the H axis
+            // output image size: w = tile_size, h = tile_size * grid_w
+            // this is to ensure the whole row is always processed together
+            clip_image_u8 row_img;
+            row_img.set_size({tile_size, tile_size * grid_w}, false);
             for (int col = 0; col < grid_w; col++) {
-                clip_image_u8 tile;
-                img_tool::crop(refined, tile, col * tile_size, row * tile_size, tile_size, tile_size);
-                clip_image_f32_ptr res(clip_image_f32_init());
-                img_u8_to_f32(tile, *res, hparams.image_mean, hparams.image_std);
-                output.entries.push_back(std::move(res));
+                for (int py = 0; py < tile_size; py++) {
+                    for (int px = 0; px < tile_size; px++) {
+                        row_img.set_pixel(px, col * tile_size + py,
+                                          refined.get_pixel(col * tile_size + px, row * tile_size + py));
+                    }
+                }
             }
+            clip_image_f32_ptr res(clip_image_f32_init());
+            img_u8_to_f32(row_img, *res, hparams.image_mean, hparams.image_std);
+            output.entries.push_back(std::move(res));
         }
     }
 
