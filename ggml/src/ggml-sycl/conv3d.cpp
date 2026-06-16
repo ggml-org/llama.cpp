@@ -10,12 +10,6 @@
 //
 
 #include "conv3d.hpp"
-#include "im2col.hpp"
-#include "quantize.hpp"
-#include "convert.hpp"
-#include <cstring>
-#include "gemm.hpp"
-extern int g_ggml_sycl_disable_dnn;
 
 static inline int64_t ggml_sycl_conv3d_calc_patch_total(const ggml_tensor * dst, int32_t n) {
     return (int64_t) n * dst->ne[0] * dst->ne[1] * dst->ne[2];
@@ -97,7 +91,6 @@ void ggml_sycl_op_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t knl_n_total = ggml_sycl_conv3d_calc_knl_n_total(src0, c);
 
     const size_t kernel_type_size = ggml_element_size(src0);
-    const int64_t tmp_elements = knl_n_total * patch_total;
 
     ggml_sycl_pool_alloc<float> gemm_output(ctx.pool());
     gemm_output.alloc((size_t) patch_total * oc);
@@ -145,7 +138,6 @@ void ggml_sycl_op_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t KW = knl_w;
     const int64_t KH = knl_h;
     const int64_t KD = knl_d;
-    const int64_t KN = knl_n_total;
     const int64_t PW = dst->ne[0];
     const int64_t PH = dst->ne[1];
     const int64_t PD = dst->ne[2];
