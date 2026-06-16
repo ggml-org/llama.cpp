@@ -566,11 +566,10 @@ public:
 
     // Synchronize: blocks until all prior commands have been processed by the worker
     // and the server has confirmed completion (via SYNCHRONIZE fence).
-    // Optimization: if no async GET operations are pending, we skip the fence entirely.
-    // Fire-and-forget commands (SET_TENSOR, GRAPH_COMPUTE) are self-ordering via TCP,
-    // and their data is captured at enqueue time (memcpy into command payload), so the
-    // host-side source buffers are immediately safe to reuse without waiting.
     void synchronize() {
+        // No fence needed if no GETs are pending: subsequent writes go through
+        // the same FIFO queue/TCP stream, so the server cannot process them
+        // until prior GRAPH_COMPUTEs finish (single-threaded server loop).
         if (pending_async_gets_.load(std::memory_order_acquire) == 0) {
             return;
         }
