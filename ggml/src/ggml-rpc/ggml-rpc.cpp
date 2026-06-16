@@ -518,7 +518,7 @@ public:
 
     // Submit a generic request-response RPC command and block until the response
     // is received. Used for synchronous operations (buffer alloc, device queries, etc.).
-    bool submit_rpc_sync(rpc_cmd rpc_command, const void * input, size_t input_size,
+    void submit_rpc_sync(rpc_cmd rpc_command, const void * input, size_t input_size,
                          void * output, size_t output_size) {
         auto completion = std::make_shared<rpc_completion>();
         rpc_queue_cmd cmd;
@@ -533,7 +533,6 @@ public:
         cmd.completion = completion;
         enqueue(std::move(cmd));
         completion->wait();
-        return true;
     }
 
     // Submit an async copy-get: GET tensor from server into the pending_copy buffer.
