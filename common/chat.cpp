@@ -2082,15 +2082,15 @@ static common_chat_params common_chat_params_init_cohere2moe(const common_chat_t
         RESULT_START, RESULT_END,
     };
 
-    // Split the rendered prompt into per-role message spans. Tool results are rendered with the
+    // Declare per-role message delimiters. Tool results are rendered with the
     // system token followed by <|START_TOOL_RESULT|>, so the "tool" delimiter must be listed before
     // the plain "system" one (it is a strict superset, and the role split tries delimiters in order).
-    data.message_spans = common_chat_split_by_role(data.prompt, {
-        { "assistant", GEN_PREFIX },
-        { "user",      TURN_START + USER },
-        { "tool",      TURN_START + SYSTEM + RESULT_START },
-        { "system",    TURN_START + SYSTEM },
-    });
+    data.message_delimiters = {
+        { COMMON_CHAT_ROLE_ASSISTANT, GEN_PREFIX },
+        { COMMON_CHAT_ROLE_USER,      TURN_START + USER },
+        { COMMON_CHAT_ROLE_TOOL,      TURN_START + SYSTEM + RESULT_START },
+        { COMMON_CHAT_ROLE_SYSTEM,    TURN_START + SYSTEM },
+    };
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
