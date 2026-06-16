@@ -21,6 +21,7 @@
 #include <exception>
 #include <memory>
 #include <filesystem>
+#include <limits>
 #include <utility>
 #include <fstream>
 
@@ -2122,30 +2123,35 @@ private:
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
-            // Preserve the oldest anchor and the most recent checkpoint. Removing the checkpoint
+            // Preserve early prefix anchors and the most recent checkpoints. Removing a checkpoint
             // from the densest interior interval keeps coverage across the full prompt history.
             auto erase_it = slot.prompt.checkpoints.begin();
 
-            if (slot.prompt.checkpoints.size() > 2) {
-                auto prev_it = slot.prompt.checkpoints.begin();
+            if (slot.prompt.checkpoints.size() > 4) {
+                const size_t n_keep_front = 2;
+                const size_t n_keep_back  = 2;
+
+                auto prev_it = std::next(slot.prompt.checkpoints.begin(), n_keep_front - 1);
                 auto cur_it  = std::next(prev_it);
                 auto next_it = std::next(cur_it);
+                auto last_candidate = std::prev(slot.prompt.checkpoints.end(), n_keep_back);
 
                 erase_it = cur_it;
-                int64_t min_merged_span = next_it->n_tokens - prev_it->n_tokens;
-
-                while (std::next(next_it) != slot.prompt.checkpoints.end()) {
-                    ++prev_it;
-                    ++cur_it;
-                    ++next_it;
-
+                int64_t min_merged_span = std::numeric_limits<int64_t>::max();
+                while (cur_it != last_candidate) {
                     const int64_t merged_span = next_it->n_tokens - prev_it->n_tokens;
 
                     if (merged_span < min_merged_span) {
                         erase_it = cur_it;
                         min_merged_span = merged_span;
                     }
+
+                    ++prev_it;
+                    ++cur_it;
+                    ++next_it;
                 }
+            } else if (slot.prompt.checkpoints.size() > 2) {
+                erase_it = std::next(slot.prompt.checkpoints.begin());
             }
 
             const auto & cur = *erase_it;
@@ -2915,8 +2921,13 @@ private:
                             const bool is_recurrent_or_hybrid =
                                     llama_model_is_recurrent(model_tgt) ||
                                     llama_model_is_hybrid(model_tgt);
+                            const bool needs_context_checkpoints =
+                                    params_base.n_ctx_checkpoints > 0 &&
+                                    (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
+                                     n_swa > 0);
                             slot.n_prompt_tokens_prefix =
-                                    is_recurrent_or_hybrid && n_past > 0 ? n_past : -1;
+                                    needs_context_checkpoints && n_past > 0 ? n_past : -1;
 
                             // ref: https://github.com/ggml-org/llama.cpp/pull/24110
                             const bool has_new_tokens = (n_past < slot.task->n_tokens());
@@ -3115,6 +3126,25 @@ private:
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
                             n_swa > 0);
 
+                    // Anchor a checkpoint at the already processed common-prefix boundary. This
+                    // is done before adding more tokens because checkpoints capture the current
+                    // decoded memory state, not the batch that is about to be decoded.
+                    if (do_checkpoint &&
+                        slot.n_prompt_tokens_prefix > 0 &&
+                        slot.prompt.n_tokens() == slot.n_prompt_tokens_prefix) {
+                        const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
+                        const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
+                        const bool is_spaced =
+                                slot.prompt.checkpoints.empty() ||
+                                slot.prompt.n_tokens() > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_step;
+
+                        if (pos_min >= 0 && is_spaced) {
+                            create_checkpoint(slot, 0, pos_min, pos_max);
+                        }
+
+                        slot.n_prompt_tokens_prefix = -1;
+                    }
+
                     bool has_mtmd = false;
 
                     // check if we should process the image
@@ -3200,15 +3230,6 @@ private:
                             break;
                         }
 
-                        // Anchor a checkpoint at the common-prefix boundary. This avoids
-                        // re-processing the gap to the nearest prompt-end checkpoint on
-                        // subsequent requests that reuse the same prefix.
-                        if (do_checkpoint &&
-                            slot.n_prompt_tokens_prefix > 0 &&
-                            slot.prompt.n_tokens() == slot.n_prompt_tokens_prefix) {
-                            break;
-                        }
-
                         // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
                         // create checkpoints that many tokens before the end of the prompt:
                         //  - 4 + n_ubatch
@@ -3235,6 +3256,7 @@ private:
                     const auto n_tokens_cur = batch.n_tokens - n_tokens_prev;
 
                     const bool near_prompt_end = slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch;
+                    const int32_t n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
 
                     // entire prompt has been processed
                     if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
@@ -3258,10 +3280,6 @@ private:
 
                     const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
                     const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
-
-                    // checkpoints are created before the current batch is decoded, so
-                    // their token position is the batch start rather than the prompt end
-                    const int32_t n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
 
                     {
                         const bool is_on_user =
