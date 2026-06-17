@@ -2126,10 +2126,10 @@ int op_matmul(struct htp_ops_context * octx) {
         }
 
         if (ret != 0) {
-            FARF(HIGH, "HMX matmul failed (ret=%d), falling back to HVX", ret);
-            return op_matmul_hvx(octx);
+            FARF(ERROR, "HMX matmul failed (ret=%d)\n", ret);
+            return HTP_STATUS_INTERNAL_ERR;
         }
-        return 0;
+        return HTP_STATUS_OK;
     }
 
     return op_matmul_hvx(octx);

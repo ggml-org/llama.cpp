@@ -794,7 +794,7 @@ static void prep_tensors(struct htp_context *ctx, struct htp_buf_desc *bufs, str
     }
 }
 
-static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
+static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
     memcpy(octx->op_params, op->params, sizeof(octx->op_params));
     memcpy(octx->kernel_params, op->kernel_params, sizeof(octx->kernel_params));
     octx->flags = op->flags;
@@ -832,7 +832,7 @@ static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, 
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
     }
 
-    (void) execute_op(octx);
+    int status = execute_op(octx);
 
     octx->src0_spad.src = NULL;
     octx->src1_spad.src = NULL;
@@ -851,6 +851,8 @@ static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, 
                 dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
         }
     }
+
+    return status;
 }
 
 #define DSPQUEUE_POLL_TIMEOUT_USEC 100
@@ -942,6 +944,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
             }
         }
 
+        int op_status = HTP_STATUS_OK;
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
 
@@ -952,9 +955,13 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
             profile_start(ctx->profiler, &prof);
 
-            proc_op_req(octx, tens, i, &ops[i]);
+            op_status = proc_op_req(octx, tens, i, &ops[i]);
 
             profile_stop(ctx->profiler, &prof);
+
+            if (op_status != HTP_STATUS_OK) {
+                break;
+            }
 
             if (ctx->profiler) {
                 pds[i].opcode = ops[i].opcode;
@@ -969,7 +976,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
         struct htp_opbatch_rsp rsp;
         rsp.id        = req.id;
-        rsp.status    = HTP_STATUS_OK;
+        rsp.status    = op_status;
         rsp.n_bufs    = n_bufs;
         rsp.n_tensors = n_tens;
         rsp.n_ops     = n_ops;
