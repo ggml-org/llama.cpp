@@ -4119,6 +4119,9 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 claimed_task.parameter_count = parameter_count;
                 claimed_task.wg_denoms = wg_denoms;
                 claimed_task.specialization_constants = specialization_constants;
+                if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support) {
+                    claimed_task.specialization_constants.push_back(0u);
+                }
                 claimed_task.disable_robustness = disable_robustness;
                 claimed_task.require_full_subgroups = require_full_subgroups;
                 claimed_task.required_subgroup_size = required_subgroup_size;

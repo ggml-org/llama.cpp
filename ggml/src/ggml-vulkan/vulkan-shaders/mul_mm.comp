@@ -118,13 +118,12 @@ layout (constant_id = 3) const uint BK = 16;  // Assumed to be 32 if working wit
 #define BK_STEP 2
 #endif
 
-#if defined(COOPMAT) && defined(LOAD_A_OPT)
-#define SHMEM_STRIDE (BK / 2)
-#elif defined(COOPMAT)
-#define SHMEM_STRIDE (BK / 2 + 4)
+#ifdef COOPMAT
+layout(constant_id = 11) const uint SHMEM_STRIDE_PAD = 4;
 #else
-#define SHMEM_STRIDE (BK / 2 + 1)
+const uint SHMEM_STRIDE_PAD = 1;
 #endif
+#define SHMEM_STRIDE (BK / 2 + SHMEM_STRIDE_PAD)
 
 shared FLOAT_TYPEV2 buf_a[BM * SHMEM_STRIDE];
 shared FLOAT_TYPEV2 buf_b[BN * SHMEM_STRIDE];
