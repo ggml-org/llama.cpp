@@ -719,14 +719,8 @@ static void dequantize_tiled_weight_chunk_to_fp16_tiles(
     state.traces           = ctx->trace;
     state.ctx              = ctx;
 
-    switch (weight_type) {
-        case HTP_TYPE_Q4_0:   state.tile_size = 576;  state.aligned_tile_size = 640; break;
-        case HTP_TYPE_Q4_1:   state.tile_size = 640;  state.aligned_tile_size = 640; break;
-        case HTP_TYPE_IQ4_NL: state.tile_size = 576;  state.aligned_tile_size = 640; break;
-        case HTP_TYPE_MXFP4:  state.tile_size = 544;  state.aligned_tile_size = 640; break;
-        case HTP_TYPE_Q8_0:   state.tile_size = 1088; state.aligned_tile_size = 1152; break;
-        default:              state.tile_size = 0;    state.aligned_tile_size = 0; break;
-    }
+    state.tile_size = htp_get_weight_tile_size(weight_type);
+    state.aligned_tile_size = htp_get_weight_aligned_tile_size(weight_type);
 
     if (state.n_tasks == 1 || n_threads == 1) {
         dequant_worker_fn(1, 0, &state);
@@ -1983,16 +1977,8 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
     const size_t vtcm_budget  = ctx->vtcm_size;
     size_t vtcm_used = 0;
 
-    int tile_size = 0;
-    int aligned_tile_size = 0;
-    switch (weight_type) {
-        case HTP_TYPE_Q4_0:   tile_size = 576;  aligned_tile_size = 640; break;
-        case HTP_TYPE_Q4_1:   tile_size = 640;  aligned_tile_size = 640; break;
-        case HTP_TYPE_IQ4_NL: tile_size = 576;  aligned_tile_size = 640; break;
-        case HTP_TYPE_MXFP4:  tile_size = 544;  aligned_tile_size = 640; break;
-        case HTP_TYPE_Q8_0:   tile_size = 1088; aligned_tile_size = 1152; break;
-        default:              tile_size = 0;    aligned_tile_size = 0; break;
-    }
+    int tile_size = htp_get_weight_tile_size(weight_type);
+    int aligned_tile_size = htp_get_weight_aligned_tile_size(weight_type);
 
     const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
 

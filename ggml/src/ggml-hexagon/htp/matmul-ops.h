@@ -317,6 +317,7 @@ static inline size_t hmx_get_batched_vtcm_size(
     int wtype, int k, size_t mc, size_t nc, int group_size, bool use_dma_activation, bool use_pipeline, int act_threads
 ) {
     (void)wtype;
+    (void)use_pipeline;
     const size_t vec_dot_size = k * sizeof(uint16_t);
     const size_t f32_scratch_size = use_dma_activation
         ? hex_align_up_matmul(act_threads * 4 * k * sizeof(float), HMX_FP16_TILE_SIZE) : 0;

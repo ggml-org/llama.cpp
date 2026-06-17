@@ -2203,6 +2203,9 @@ static void ggml_hexagon_precompute_matmul_params(
                             wtype == GGML_TYPE_MXFP4);
     const int ne00_padded = is_repack ? hex_round_up(ne00, 256) : ne00;
 
+    const bool is_matmul_id = (dst->op == GGML_OP_MUL_MAT_ID);
+    const bool is_batched = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
+
     // Check HMX eligibility
     bool hmx_eligible = false;
     bool hmx_enabled = (sess->n_hmx > 0);
@@ -2226,13 +2229,13 @@ static void ggml_hexagon_precompute_matmul_params(
                 }
 
                 if (k_align) {
-                    const bool is_batched = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
-                    // Quantised HMX kernels only handle flat 2D matmul.
-                    if (!is_batched || wtype == GGML_TYPE_F16) {
+                    // Quantised HMX kernels only handle flat 2D matmul (or matmul_id wrapping flat 2D matmuls).
+                    if (is_matmul_id || !is_batched || wtype == GGML_TYPE_F16) {
                         // HMX assumes contiguous row-major layout.
                         if (src0->nb[0] <= src0->nb[1] && src1->nb[0] <= src1->nb[1]) {
                             // M alignment: Use HMX when M > 4.
-                            if (ne11 > 4) {
+                            const int m_val = is_matmul_id ? ne12 : ne11;
+                            if (m_val > 4) {
                                 hmx_eligible = true;
                             }
                         }
@@ -2245,13 +2248,11 @@ static void ggml_hexagon_precompute_matmul_params(
     const size_t vtcm_budget = sess->vtcm_size;
 
     if (hmx_eligible) {
-        const int n_k_tiles = ne00_padded / 32;
         const int aligned_tile_size = htp_get_weight_aligned_tile_size(wtype);
-        const bool is_quant = (wtype != GGML_TYPE_F16 && wtype != GGML_TYPE_F32);
-        const bool use_pipeline = hmx_use_pipeline(ne11);
-        const int num_threads = (ne11 <= 32) ? 1 : (int)sess->n_threads;
+        const bool use_pipeline = is_matmul_id ? false : hmx_use_pipeline(ne11);
+        const int num_threads = (is_matmul_id ? (ne12 <= 32) : (ne11 <= 32)) ? 1 : (int)sess->n_threads;
 
-        const bool is_batched = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
+        const bool is_batched_val = is_matmul_id ? false : is_batched;
         const int group_size = (ne02 > 0 ? ne12 / ne02 : 1);
 
         size_t m_chunk = 0;
@@ -2260,7 +2261,7 @@ static void ggml_hexagon_precompute_matmul_params(
         bool use_grouped = false;
         int act_threads_selected = 0;
 
-        if (is_batched && wtype == GGML_TYPE_F16 && group_size > 1) {
+        if (is_batched_val && wtype == GGML_TYPE_F16 && group_size > 1) {
             // Try grouped path first
             const bool use_dma_activation = (src1->nb[1]/sizeof(float) > (size_t)ne00_padded);
             size_t best_mblocks = SIZE_MAX;
@@ -2320,9 +2321,12 @@ static void ggml_hexagon_precompute_matmul_params(
             size_t best_n_chunk = 0;
             size_t best_spad_size = 0;
 
+            const int m_for_chunks = is_matmul_id ? hex_align_up(ne12, 32) : hex_align_up(ne11, 32);
+            const int m_for_cost   = is_matmul_id ? ne12 : ne11;
+
             int act_threads = num_threads;
             while (act_threads >= 1) {
-                const size_t act_f32_size = hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE);
+                const size_t act_f32_size = is_matmul_id ? 0 : hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE);
                 size_t simple_2d_overhead = 256 + act_f32_size;
                 size_t simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn;
                 hmx_get_2d_chunk_costs(wtype, ne00_padded, use_pipeline, aligned_tile_size, &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
@@ -2332,11 +2336,11 @@ static void ggml_hexagon_precompute_matmul_params(
                 size_t spad_size_candidate = 0;
 
                 if (hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn,
-                                       hex_align_up(ne11, 32), ne01,
-                                       (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk_candidate, &n_chunk_candidate, &spad_size_candidate) == 0) {
-                    size_t exact_size = hmx_get_2d_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, use_pipeline, act_threads, aligned_tile_size);
+                                       m_for_chunks, ne01,
+                                       (size_t) ne01 * 3, (size_t) m_for_cost * 2, &m_chunk_candidate, &n_chunk_candidate, &spad_size_candidate) == 0) {
+                    size_t exact_size = hmx_get_2d_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, use_pipeline, is_matmul_id ? 0 : act_threads, aligned_tile_size);
                     if (exact_size <= vtcm_budget) {
-                        size_t mblocks = ((size_t) ne11 + m_chunk_candidate - 1) / m_chunk_candidate;
+                        size_t mblocks = ((size_t) m_for_cost + m_chunk_candidate - 1) / m_chunk_candidate;
                         if (mblocks < best_mblocks || (mblocks == best_mblocks && act_threads > best_act_threads)) {
                             best_mblocks = mblocks;
                             best_act_threads = act_threads;
@@ -2377,7 +2381,7 @@ static void ggml_hexagon_precompute_matmul_params(
         kparams->src1_spad_size = 0;
         kparams->dst_spad_size = 0;
 
-        if (is_batched) {
+        if (is_batched && !is_matmul_id) {
             kparams->kernel_type = HTP_MATMUL_KERNEL_HMX_F16_BATCHED;
         } else {
             kparams->kernel_type = HTP_MATMUL_KERNEL_HMX_2D;
