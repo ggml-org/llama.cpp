@@ -148,13 +148,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     cb(noise_embd, "inp_noise_embd", -1);
     res->add_input(std::move(inp));
 
-    // P2b step A: fixed-size injected target context [n_embd, n_ctx_max] so the decoder graph
-    // shape is constant across draft steps (enables graph reuse + CUDA graphs). The active context
-    // length varies per step; padded rows are masked out by dflash_kq_mask. Filled by cb-name.
-    const int64_t n_ctx = cparams.n_ctx;
-    ggml_tensor * target_ctx = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_ctx);
-    ggml_set_input(target_ctx);
-    cb(target_ctx, "dflash_target_ctx", -1);
+    // injected target context: [n_embd, n_enc] from llama_cross::v_embd
+    ggml_tensor * target_ctx = build_inp_cross_embd();
+    const int64_t n_ctx = target_ctx->ne[1];
 
     const int64_t n_tokens_kv = n_ctx + n_tokens;
 
@@ -165,14 +161,6 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     // query positions = the noise block (last n_tokens entries)
     ggml_tensor * inp_pos_q = ggml_view_1d(ctx0, inp_pos_full, n_tokens, n_ctx * ggml_element_size(inp_pos_full));
-
-    // additive attention mask [n_kv, n_q]: 0 = attend, -INF = masked. Masks the padded context
-    // rows [n_valid, n_ctx); valid context + the noise block are visible. Filled by cb-name.
-    // flash attention requires an F16 mask; the non-flash soft-max path takes F32
-    ggml_tensor * kq_mask = ggml_new_tensor_4d(ctx0,
-            cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, n_tokens_kv, n_tokens, 1, 1);
-    ggml_set_input(kq_mask);
-    cb(kq_mask, "dflash_kq_mask", -1);
 
     const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
 
@@ -218,8 +206,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
                 ext_factor, attn_factor, beta_fast, beta_slow);
         cb(Qcur, "Qcur_rope", il);
 
-        // attention with the padded-context mask (see dflash_kq_mask above)
-        ggml_tensor * cur = build_attn_mha(Qcur, Kcur, Vcur, nullptr, kq_mask, nullptr, nullptr, kq_scale, il);
+        // single-block baseline: full attention (no causal mask). The block-diffusion mask
+        // (causal-to-anchor for context, bidirectional within block) is added with np>1.
+        ggml_tensor * cur = build_attn_mha(Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, nullptr, kq_scale, il);
         cb(cur, "kqv_out", il);
 
         cur = build_lora_mm(layer.wo, cur);

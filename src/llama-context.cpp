@@ -1383,45 +1383,15 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
         res->set_inputs(&ubatch);
 
-        // DFlash decoder: fill the fixed-size injected context, RoPE positions, and the padding
-        // mask. target_ctx is [n_embd, n_ctx_max]; only the first n_valid columns are real context,
-        // the noise block occupies the last ubatch.n_tokens key slots.
+        // DFlash decoder positions span [target_ctx ; noise] = arange(n_enc + n_noise)
         if (dflash_decoder_ctx && !cross.v_embd.empty()) {
-            const int64_t n_embd  = model.hparams.n_embd;
-            const int64_t n_ctx   = cparams.n_ctx;
-            const int64_t n_valid = std::min<int64_t>(cross.n_enc, n_ctx);
-            const int64_t n_block = ubatch.n_tokens;
-            const int64_t n_kv    = n_ctx + n_block;
-
-            if (ggml_tensor * tctx = ggml_graph_get_tensor(gf, "dflash_target_ctx")) {
-                std::vector<float> buf((size_t) n_embd * n_ctx, 0.0f);
-                std::memcpy(buf.data(), cross.v_embd.data(), (size_t) n_embd * n_valid * sizeof(float));
-                ggml_backend_tensor_set(tctx, buf.data(), 0, buf.size() * sizeof(float));
-            }
             if (ggml_tensor * pos_full = ggml_graph_get_tensor(gf, "inp_pos_full")) {
-                std::vector<int32_t> pos(n_kv, 0);
-                for (int64_t i = 0; i < n_valid; ++i) {
-                    pos[i] = (int32_t) i;
+                const int64_t n_total = cross.n_enc + ubatch.n_tokens;
+                std::vector<int32_t> pos_data(n_total);
+                for (int64_t i = 0; i < n_total; ++i) {
+                    pos_data[i] = (int32_t) i;
                 }
-                for (int64_t j = 0; j < n_block; ++j) {
-                    pos[n_ctx + j] = (int32_t) (n_valid + j);
-                }
-                ggml_backend_tensor_set(pos_full, pos.data(), 0, pos.size() * sizeof(int32_t));
-            }
-            if (ggml_tensor * mask = ggml_graph_get_tensor(gf, "dflash_kq_mask")) {
-                std::vector<float> m((size_t) n_kv * n_block, 0.0f);
-                for (int64_t q = 0; q < n_block; ++q) {
-                    for (int64_t k = n_valid; k < n_ctx; ++k) {
-                        m[(size_t) q * n_kv + k] = -INFINITY;
-                    }
-                }
-                if (mask->type == GGML_TYPE_F16) {
-                    std::vector<ggml_fp16_t> mh(m.size());
-                    ggml_fp32_to_fp16_row(m.data(), mh.data(), m.size());
-                    ggml_backend_tensor_set(mask, mh.data(), 0, mh.size() * sizeof(ggml_fp16_t));
-                } else {
-                    ggml_backend_tensor_set(mask, m.data(), 0, m.size() * sizeof(float));
-                }
+                ggml_backend_tensor_set(pos_full, pos_data.data(), 0, n_total * sizeof(int32_t));
             }
         }
 
