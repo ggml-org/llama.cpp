@@ -272,7 +272,7 @@ def print_ascii_summary(op_name, dims, types, usec, cycles, events, evt_val=None
 
     for t in sorted(thread_totals.keys()):
         thread_name = f"Thread {t} (HVX)" if t != 10 else "Thread 10 (HMX)"
-        sorted_evts = sorted(thread_totals[t].items(), key=lambda item: item[1], reverse=True)
+        sorted_evts = sorted(thread_totals[t].items(), key=lambda item: item[0])
 
         evt_strs = []
         for evt, dur in sorted_evts:
