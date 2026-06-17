@@ -64,6 +64,7 @@ struct ggml_openvino_device_config {
     bool initialized = false;
     std::optional<ov::RemoteContext> remote_context;
     ov::AnyMap compile_config;
+    std::unordered_map<std::string, std::string> environment_variables;
     cl_command_queue cl_queue = nullptr;
 
     void init();
@@ -78,6 +79,22 @@ void ggml_openvino_init_device_config();
 
 // Get the device name
 const std::string & ggml_openvino_get_device_name();
+
+// Environment variable accessors. All GGML_OPENVINO_* env vars are read once
+// during backend init and cached on the device config; consumers must go
+// through these helpers (never call ::getenv directly) so behavior stays
+// consistent and centralized.
+//
+// Use ggml_openvino_getenv_str() for string / path values
+// (e.g. GGML_OPENVINO_DEVICE, GGML_OPENVINO_CACHE_DIR). The optional
+// default_value is returned when the var is unset or empty.
+//
+// Use ggml_openvino_getenv_int() for boolean toggles and integer settings.
+// It returns std::atoi(value) when set, otherwise default_value. For
+// boolean use, `if (ggml_openvino_getenv_int(name))` is true iff the value
+// is a non-zero integer (so "0" disables, "1" enables).
+const char * ggml_openvino_getenv_str(const char * var, const char * default_value = nullptr);
+int ggml_openvino_getenv_int(const char * var, int default_value = 0);
 
 // Check if running on NPU
 bool ggml_openvino_is_npu();
@@ -115,9 +132,9 @@ struct ggml_openvino_weight_extra : public ggml_openvino_extra_base {
 
 // Extra data for quantized weight tensors - stores extracted weights/scales/zp and weight node
 struct ggml_openvino_quantized_weight_extra : public ggml_openvino_extra_base {
-    ov::Tensor weights;   // U4 or U8 extracted weights
-    ov::Tensor scales;    // F16 scales
-    ov::Tensor zp;        // U4 or U8 zero points (same type as weights)
+    ov::Tensor weights;                     // U4 or U8 extracted weights
+    ov::Tensor scales;                      // F16 scales
+    ov::Tensor zp;                          // U4 or U8 zero points (same type as weights)
     std::shared_ptr<ov::Node> weight_node;  // Pre-built OpenVINO weight subgraph
 
     ggml_openvino_quantized_weight_extra(ov::Tensor w, ov::Tensor s, ov::Tensor z, std::shared_ptr<ov::Node> n) :
@@ -132,8 +149,9 @@ struct ggml_openvino_quantized_weight_extra : public ggml_openvino_extra_base {
 struct ggml_openvino_tensor_extra : public ggml_openvino_extra_base {
     std::shared_ptr<ov::Tensor> tensor;  // For direct use with infer_request
 
-    explicit ggml_openvino_tensor_extra(std::shared_ptr<ov::Tensor> t)
-        : ggml_openvino_extra_base(Type::TENSOR), tensor(std::move(t)) {}
+    explicit ggml_openvino_tensor_extra(std::shared_ptr<ov::Tensor> t) :
+        ggml_openvino_extra_base(Type::TENSOR),
+        tensor(std::move(t)) {}
 };
 
 // =====================================================
@@ -152,17 +170,20 @@ struct ggml_openvino_extracted_layout {
     size_t zp_size = 0;         // Size of zero points in bytes (U4 or U8)
     bool is_u4;                 // true for U4 weights, false for U8
     int64_t weights_per_block;  // weights per scale/zp block
-    bool is_symmetric;        // true for symmetric quantization
+    bool is_symmetric;          // true for symmetric quantization
 
     // Requantization info
-    bool is_requant = false;                      // true if this tensor needs requantization
-    std::optional<ExtraQuantType> requant_type;   // target requant type if is_requant
+    bool is_requant = false;                     // true if this tensor needs requantization
+    std::optional<ExtraQuantType> requant_type;  // target requant type if is_requant
 };
 
 // Calculate the buffer layout for extracted quantized data
 ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor, bool use_bias = false);
 
 ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor, bool is_remote);
+
+// Check if a tensor's buffer uses remote (device) memory (e.g. GPU USM)
+bool ggml_openvino_buffer_is_remote(const ggml_tensor * tensor);
 
 // Register an extra with the tensor's OpenVINO buffer context for proper lifetime management.
 // This sets tensor->extra and tracks the extra in the buffer context for cleanup.

@@ -68,8 +68,8 @@ jobs:
 
     env:
       # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.0"
-      OPENVINO_VERSION_FULL: "2026.0.0.20965.c6d6a13a886"
+      OPENVINO_VERSION_MAJOR: "2026.2"
+      OPENVINO_VERSION_FULL: "2026.2.0.21903.52ddc073857"
 
     steps:
       - name: Clone
@@ -86,6 +86,34 @@ jobs:
       - name: Setup OpenVINO Toolkit
         if: steps.cache-openvino.outputs.cache-hit != 'true'
         uses: ./.github/actions/linux-setup-openvino
+        with:
+          path: ./openvino_toolkit
+          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+          version_full: ${{ env.OPENVINO_VERSION_FULL }}
+
+  windows-2022-openvino-cache:
+    runs-on: windows-2022
+
+    env:
+      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.2"
+      OPENVINO_VERSION_FULL: "2026.2.0.21903.52ddc073857"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Cache
+        uses: actions/cache@v5
+        id: cache-openvino
+        with:
+          path: ./openvino_toolkit
+          key: cache-gha-openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+
+      - name: Setup OpenVINO Toolkit
+        if: steps.cache-openvino.outputs.cache-hit != 'true'
+        uses: ./.github/actions/windows-setup-openvino
         with:
           path: ./openvino_toolkit
           version_major: ${{ env.OPENVINO_VERSION_MAJOR }}

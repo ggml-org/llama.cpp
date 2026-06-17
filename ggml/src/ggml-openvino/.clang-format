@@ -2,12 +2,7 @@
 # Override root .clang-format
 AlignConsecutiveAssignments: false
 AlignConsecutiveDeclarations: false
-Cpp11BracedListStyle: true
-SpacesInContainerLiterals: false
-BreakBeforeBraces: Attach
 AccessModifierOffset: -4
-IndentCaseBlocks: false
-IndentCaseLabels: false
 
 Language:        Cpp
 AlignAfterOpenBracket: Align
