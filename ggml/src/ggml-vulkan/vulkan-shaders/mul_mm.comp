@@ -264,8 +264,6 @@ void main() {
 #endif
 
 #ifdef COOPMAT
-    coopmat<FLOAT_TYPE, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[cms_per_row];
-    coopmat<FLOAT_TYPE, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b[cms_per_col];
     coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> sums[cms_per_row * cms_per_col];
 
     [[unroll]] for (uint i = 0; i < cms_per_row * cms_per_col; i++) {
@@ -313,6 +311,8 @@ void main() {
 #ifdef MUL_MAT_ID
         if (warp_c < required_warp_c) {
 #endif
+        coopmat<FLOAT_TYPE, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[cms_per_row];
+        coopmat<FLOAT_TYPE, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b[cms_per_col];
         [[unroll]] for (uint i = 0; i < BK; i += TK) {
             [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
                 // Load from shared into cache
