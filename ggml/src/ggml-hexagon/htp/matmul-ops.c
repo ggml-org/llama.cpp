@@ -21,11 +21,6 @@
 #include "vtcm-utils.h"
 #include "hmx-ops.h"
 
-static inline HVX_Vector hvx_vec_f16_to_f32_lower32(HVX_Vector v) {
-    HVX_VectorPair pair = hvx_vec_f16_to_f32_shuff(v);
-    return Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_hi_W(pair), Q6_V_lo_W(pair), -4));
-}
-
 static inline HVX_Vector hvx_vec_mul_f16_f16_to_f32_lower32(HVX_Vector v1, HVX_Vector v2) {
 #if __HVX_ARCH__ >= 79
     HVX_VectorPair p = Q6_Wsf_vmpy_VhfVhf(v1, v2);
