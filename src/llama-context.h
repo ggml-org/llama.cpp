@@ -139,6 +139,10 @@ struct llama_context {
             llama_memory_context_i * mctx,
                        ggml_status & ret);
 
+    int encode(const llama_batch_ext & batch_inp);
+    int decode(const llama_batch_ext & batch_inp);
+
+    // compat version
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
 
