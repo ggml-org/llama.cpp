@@ -2248,10 +2248,7 @@ static void ggml_hexagon_precompute_matmul_params(
         const int n_k_tiles = ne00_padded / 32;
         const int aligned_tile_size = htp_get_weight_aligned_tile_size(wtype);
         const bool is_quant = (wtype != GGML_TYPE_F16 && wtype != GGML_TYPE_F32);
-        const size_t row_stride = htp_get_tiled_row_stride(wtype, ne00_padded);
-        const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
-        const size_t vec_dot_size = ne00_padded * sizeof(uint16_t);
-        const bool use_pipeline = (ne11 > 32);
+        const bool use_pipeline = hmx_use_pipeline(ne11);
         const int num_threads = (ne11 <= 32) ? 1 : (int)sess->n_threads;
 
         const bool is_batched = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
@@ -2269,9 +2266,8 @@ static void ggml_hexagon_precompute_matmul_params(
             const size_t f32_scratch_size = use_dma_activation
                 ? hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
             size_t group_overhead = 256 + f32_scratch_size;
-            size_t group_size_per_n = 3 * vec_dot_size;
-            size_t group_size_per_m = group_size * vec_dot_size;
-            size_t group_size_per_mn = sizeof(uint16_t);
+            size_t group_size_per_n, group_size_per_m, group_size_per_mn;
+            hmx_get_batched_chunk_costs(ne00_padded, group_size, &group_size_per_n, &group_size_per_m, &group_size_per_mn);
 
             if (hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn,
                                    hex_align_up(ne11, 32), ne01,
@@ -2289,9 +2285,8 @@ static void ggml_hexagon_precompute_matmul_params(
             const int act_threads = hmx_get_act_threads(num_threads, use_pipeline);
             const size_t act_f32_size = hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE);
             size_t simple_2d_overhead = 256 + act_f32_size;
-            size_t simple_2d_size_per_n = (use_pipeline ? 2 : 1) * (is_quant ? qweight_row_stride : row_stride) + (use_pipeline ? 2 * vec_dot_size : vec_dot_size);
-            size_t simple_2d_size_per_m = vec_dot_size;
-            size_t simple_2d_size_per_mn = (use_pipeline ? 2 : 1) * sizeof(uint16_t);
+            size_t simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn;
+            hmx_get_2d_chunk_costs(wtype, ne00_padded, use_pipeline, aligned_tile_size, &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
 
             if (hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn,
                                    hex_align_up(ne11, 32), ne01,

@@ -263,6 +263,36 @@ static inline int hmx_get_act_threads(int num_threads, bool use_pipeline) {
     return num_threads;
 }
 
+static inline bool hmx_use_pipeline(int m) {
+    return m > 32;
+}
+
+static inline void hmx_get_2d_chunk_costs(
+    int wtype, int k, bool use_pipeline, int aligned_tile_size,
+    size_t * size_per_n_out, size_t * size_per_m_out, size_t * size_per_mn_out
+) {
+    const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32);
+    const size_t row_stride = htp_get_tiled_row_stride(wtype, k);
+    const size_t vec_dot_size = k * sizeof(uint16_t);
+    const int n_k_tiles = k / HMX_FP16_TILE_N_COLS;
+    const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
+
+    *size_per_n_out = (use_pipeline ? 2 : 1) * (is_quant ? qweight_row_stride : row_stride) + 
+                      (use_pipeline ? 2 * vec_dot_size : vec_dot_size);
+    *size_per_m_out = vec_dot_size;
+    *size_per_mn_out = (use_pipeline ? 2 : 1) * sizeof(uint16_t);
+}
+
+static inline void hmx_get_batched_chunk_costs(
+    int k, int group_size,
+    size_t * size_per_n_out, size_t * size_per_m_out, size_t * size_per_mn_out
+) {
+    const size_t vec_dot_size = k * sizeof(uint16_t);
+    *size_per_n_out = 3 * vec_dot_size;
+    *size_per_m_out = group_size * vec_dot_size;
+    *size_per_mn_out = sizeof(uint16_t);
+}
+
 static inline size_t hmx_get_2d_vtcm_size(
     int wtype, int k, size_t mc, size_t nc, bool use_pipeline, int num_threads, int aligned_tile_size
 ) {
