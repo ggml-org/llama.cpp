@@ -218,6 +218,7 @@ struct server_slot {
     int disagg_pos = 0;
     int disagg_n = 0;
     int disagg_seq = -1;
+    bool disagg_attempted = false;
     bool disagg_prefilled = false;
 
     server_prompt prompt;
@@ -313,6 +314,7 @@ struct server_slot {
         disagg_pos = 0;
         disagg_n = 0;
         disagg_seq = -1;
+        disagg_attempted = false;
         disagg_prefilled = false;
 
         last_nl_pos    = 0;
@@ -2807,6 +2809,7 @@ private:
 
         slot.disagg_pos = 0;
         slot.disagg_n = n - 1; // last token runs on ctx_tgt to produce logits
+        slot.disagg_attempted = true;
         slot.disagg_prefilled = false;
 
         // reset the slot prompt and the acquired prefill sequence so it starts clean
@@ -2822,7 +2825,7 @@ private:
         const llama_seq_id seq_pfx = slot.disagg_seq; // acquired prefill sequence in ctx_pfx
 
         const int n_batch = llama_n_batch(ctx_pfx.get());
-        const int n_chunk = std::min<int>(params_base.n_prefill_chunk, n_batch);
+        const int n_chunk = std::max(1, std::min<int>(params_base.n_prefill_chunk, n_batch));
 
         const int i = slot.disagg_pos;
         const int n_cur = std::min(n_chunk, slot.disagg_n - i);
@@ -2856,8 +2859,6 @@ private:
 
         const llama_seq_id seq_pfx = slot.disagg_seq; // acquired prefill sequence in ctx_pfx
 
-        slot.disagg_prefilled = true;
-
         // release the prefill sequence back to the pool
         disagg_release_seq(slot.disagg_seq);
         slot.disagg_seq = -1;
@@ -2872,11 +2873,24 @@ private:
         std::vector<uint8_t> buf(sz);
 
         const int64_t t_get0 = ggml_time_us();
-        llama_state_seq_get_data_ext(ctx_pfx.get(), buf.data(), sz, seq_pfx, LLAMA_STATE_SEQ_FLAGS_NONE);
+        const size_t n_get = llama_state_seq_get_data_ext(ctx_pfx.get(), buf.data(), sz, seq_pfx, LLAMA_STATE_SEQ_FLAGS_NONE);
         const int64_t t_get1 = ggml_time_us();
 
-        llama_state_seq_set_data_ext(ctx_tgt, buf.data(), sz, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        if (n_get != sz) {
+            SLT_ERR(slot, "disagg prefill: state get failed (%zu / %zu), falling back to local\n", n_get, sz);
+            common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
+            return;
+        }
+
+        const size_t n_set = llama_state_seq_set_data_ext(ctx_tgt, buf.data(), sz, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
         const int64_t t_set1 = ggml_time_us();
+
+        if (n_set != sz) {
+            SLT_ERR(slot, "disagg prefill: state set failed (%zu / %zu), falling back to local\n", n_set, sz);
+            common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
+            common_context_seq_rm(ctx_tgt, slot.id, -1, -1);
+            return;
+        }
 
         common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
 
@@ -2884,6 +2898,9 @@ private:
         for (int i = 0; i < slot.disagg_n; i++) {
             slot.prompt.tokens.push_back(input_tokens[i]);
         }
+
+        // the handoff succeeded, the prefix KV is valid in ctx_tgt
+        slot.disagg_prefilled = true;
 
         SLT_INF(slot, "disagg prefill: %d tokens, %.2f MiB | get(net) %.1f ms | set(local) %.1f ms\n",
                 slot.disagg_n, (float) sz / 1024 / 1024,
@@ -3273,7 +3290,7 @@ private:
                         // and the single last token on ctx_tgt run when the slot returns here
                         // skipped with speculative decoding: the draft context KV is not handed off
                         bool disagg_done = slot.disagg_prefilled;
-                        if (ctx_pfx && !ctx_dft && !input_tokens.has_mtmd && slot.task->n_tokens() >= 2 && !slot.disagg_prefilled) {
+                        if (ctx_pfx && !ctx_dft && !input_tokens.has_mtmd && slot.task->n_tokens() >= 2 && !slot.disagg_attempted) {
                             const int seq = disagg_acquire_seq();
                             if (seq >= 0) {
                                 slot.disagg_seq = seq;
@@ -3323,8 +3340,10 @@ private:
                                 return;
                             }
 
-                            // disagg prefill already established the target KV, skip cache reuse
-                            if (slot.task->params.cache_prompt && !disagg_done) {
+                            // disagg prefill handed off the prefix KV into ctx_tgt, treat it as already present
+                            if (disagg_done) {
+                                n_past = slot.disagg_n;
+                            } else if (slot.task->params.cache_prompt) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
@@ -3411,7 +3430,7 @@ private:
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, pos_next - n_swa - (has_new_tokens ? 0 : 1));
 
-                            if (n_past > 0 && n_past <= slot.prompt.n_tokens()) {
+                            if (n_past > 0 && n_past <= slot.prompt.n_tokens() && !disagg_done) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
                                 if (pos_min == -1) {
                                     SLT_ERR(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min);
