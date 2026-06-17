@@ -125,6 +125,8 @@ void ggml_cuda_mul_mat_q(
     const bool use_native_fp4 = blackwell_mma_available(cc) && (src0->type == GGML_TYPE_MXFP4 || src0->type == GGML_TYPE_NVFP4);
     const size_t y_block_size       = use_native_fp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
     const size_t y_values_per_block = use_native_fp4 ? QK_FP4_MMQ            : QK8_1_MMQ;
+    const bool repacked_x = ggml_cuda_tensor_is_repacked_nvfp4(src0);
+    const int64_t blocks_per_matrix_x = ne01 * s01;
 
     if (!ids) {
         const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * y_block_size/y_values_per_block +
@@ -165,7 +167,7 @@ void ggml_cuda_mul_mat_q(
             ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
-            ne1};
+            true, ne1, repacked_x, blocks_per_matrix_x};
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
         return;
     }
@@ -245,7 +247,7 @@ void ggml_cuda_mul_mat_q(
         ne00, ne01, ne_get_rows, s01, ne_get_rows, s1,
         ne02, ne02, s02, s12, s2,
         ne03, ne13, s03, s13, s3,
-        ne12};
+        true, ne12, repacked_x, blocks_per_matrix_x};
 
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 }

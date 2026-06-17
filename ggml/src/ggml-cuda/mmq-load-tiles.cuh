@@ -1581,8 +1581,25 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 }
 
-template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_nvfp4(
-        const char * __restrict__ x, int * __restrict__ x_tile, const int kb0, const int i_max, const int stride) {
+static __device__ __forceinline__ void ggml_cuda_mmq_nvfp4_block_ptrs(
+        const char * __restrict__ x, const int ib, const bool repacked_x, const int blocks_per_matrix_x,
+        const uint8_t *& src_qs_u8, const uint8_t *& src_d) {
+    if (repacked_x) {
+        const int matrix = ib / blocks_per_matrix_x;
+        const int ibm    = ib - matrix * blocks_per_matrix_x;
+        const uint8_t * matrix_base = (const uint8_t *) x + matrix * blocks_per_matrix_x * sizeof(block_nvfp4);
+        src_qs_u8 = matrix_base + ibm * (QK_NVFP4 / 2);
+        src_d     = matrix_base + blocks_per_matrix_x * (QK_NVFP4 / 2) + ibm * (QK_NVFP4 / QK_NVFP4_SUB);
+    } else {
+        const block_nvfp4 * bxi = (const block_nvfp4 *) x + ib;
+        src_qs_u8 = bxi->qs;
+        src_d     = bxi->d;
+    }
+}
+
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_nvfp4_impl(
+        const char * __restrict__ x, int * __restrict__ x_tile, const int kb0, const int i_max, const int stride,
+        const bool repacked_x, const int blocks_per_matrix_x) {
     constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
     constexpr int nwarps      = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
     constexpr int I           = ggml_cuda_mmq_get_I(type, J, fallback);
@@ -1610,8 +1627,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             i = min(i, i_max);
         }
 
-        const block_nvfp4 * bxi = (const block_nvfp4 *) x + kb0 + i * stride + kbx;
-        const uint32_t * __restrict__ src_qs = reinterpret_cast<const uint32_t *>(bxi->qs);
+        const int ib = kb0 + i * stride + kbx;
+        const uint8_t * src_qs_u8;
+        const uint8_t * src_d;
+        ggml_cuda_mmq_nvfp4_block_ptrs(x, ib, repacked_x, blocks_per_matrix_x, src_qs_u8, src_d);
+
+        const uint32_t * __restrict__ src_qs = reinterpret_cast<const uint32_t *>(src_qs_u8);
         const int kqs = 16 * kbx;
         const int ksc = 4 * kbx;
 
@@ -1625,20 +1646,26 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             x_qs[i*sram_stride + kqs + 4 * sub + 1] = q1.x;
             x_qs[i*sram_stride + kqs + 4 * sub + 2] = q0.y;
             x_qs[i*sram_stride + kqs + 4 * sub + 3] = q1.y;
-            x_df[i*sram_stride + ksc + sub] = ggml_cuda_ue4m3_to_fp32(bxi->d[sub]);
+            x_df[i*sram_stride + ksc + sub] = ggml_cuda_ue4m3_to_fp32(src_d[sub]);
 #else
             x_qs[i * (2 * MMQ_TILE_NE_K + 1) + kqs + 4 * sub + 0] = q0.x;
             x_qs[i * (2 * MMQ_TILE_NE_K + 1) + kqs + 4 * sub + 1] = q1.x;
             x_qs[i * (2 * MMQ_TILE_NE_K + 1) + kqs + 4 * sub + 2] = q0.y;
             x_qs[i * (2 * MMQ_TILE_NE_K + 1) + kqs + 4 * sub + 3] = q1.y;
-            x_df[i * (2 * MMQ_TILE_NE_K * 2 / QI_NVFP4) + i / (QK_NVFP4_SUB / QI_NVFP4) + ksc + sub] = ggml_cuda_ue4m3_to_fp32(bxi->d[sub]);
+            x_df[i * (2 * MMQ_TILE_NE_K * 2 / QI_NVFP4) + i / (QK_NVFP4_SUB / QI_NVFP4) + ksc + sub] = ggml_cuda_ue4m3_to_fp32(src_d[sub]);
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         }
     }
 }
 
-template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_nvfp4_nvfp4(
-        const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_nvfp4(
+        const char * __restrict__ x, int * __restrict__ x_tile, const int kb0, const int i_max, const int stride) {
+    ggml_cuda_mmq_load_tiles_nvfp4_impl<type, J, fallback>(x, x_tile, kb0, i_max, stride, false, 0);
+}
+
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_nvfp4_nvfp4_impl(
+        const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride,
+        const bool repacked_x, const int blocks_per_matrix_x) {
     constexpr int warp_size       = ggml_cuda_get_physical_warp_size();
     constexpr int nwarps          = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
     constexpr int I               = ggml_cuda_mmq_get_I(type, J, fallback);
@@ -1653,7 +1680,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int kbx = txi % threads_per_row;
     const int row_in_warp = txi / threads_per_row;
 
-    const block_nvfp4 * bxi_base = (const block_nvfp4 *) x + kbx0 + kbx;
     uint32_t * x_u32_scale = x_u32 + 64 + kbx;
 
 #pragma unroll
@@ -1664,9 +1690,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             i = min(i, i_max);
         }
 
-        const block_nvfp4 * bxi = bxi_base + i * stride;
+        const int ib = kbx0 + i * stride + kbx;
+        const uint8_t * src_qs_u8;
+        const uint8_t * src_d;
+        ggml_cuda_mmq_nvfp4_block_ptrs(x, ib, repacked_x, blocks_per_matrix_x, src_qs_u8, src_d);
 
-        const uint32_t * src_qs = reinterpret_cast<const uint32_t *>(bxi->qs);
+        const uint32_t * src_qs = reinterpret_cast<const uint32_t *>(src_qs_u8);
 
 #pragma unroll
         for (int sub = 0; sub < QK_NVFP4 / QK_NVFP4_SUB; ++sub) {
@@ -1674,6 +1703,11 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             x_u32[i*sram_stride + 8*kbx + 2 * sub + 1] = src_qs[2 * sub + 1];
         }
 
-        x_u32_scale[i*sram_stride] = get_int_b4(bxi->d, 0);
+        x_u32_scale[i*sram_stride] = get_int_b4(src_d, 0);
     }
+}
+
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_nvfp4_nvfp4(
+        const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
+    ggml_cuda_mmq_load_tiles_nvfp4_nvfp4_impl<type, J, fallback>(x, x_tile, kbx0, i_max, stride, false, 0);
 }
