@@ -926,9 +926,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         accumulated_ctx.assign(n_seq, {});
         dflash_n_past.assign(n_seq, 0);
 
-        // arm extraction of the target layers' input embeddings on the target context
+        // arm extraction of the target hidden states. The reference extracts
+        // hidden_states[layer_id + 1] (the output of layer_id == the input of the next layer),
+        // so extract the input embeddings of layer target_layer_ids[k] + 1.
         for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-            llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k], true);
+            llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) (target_layer_ids[k] + 1), true);
         }
     }
 
@@ -970,7 +972,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             //    target decode) into [n_new, n_embd_enc] and fuse them through the encoder
             features_buf.resize((size_t) n_new * n_embd_enc);
             for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-                const float * layer = llama_get_embeddings_layer_inp(params.ctx_tgt, (uint32_t) target_layer_ids[k]);
+                const float * layer = llama_get_embeddings_layer_inp(params.ctx_tgt, (uint32_t) (target_layer_ids[k] + 1));
                 GGML_ASSERT(layer && "DFlash: target layer features not extracted");
                 for (int32_t i = 0; i < n_new; ++i) {
                     std::memcpy(features_buf.data() + (size_t) i * n_embd_enc + (size_t) k * n_embd_tgt,

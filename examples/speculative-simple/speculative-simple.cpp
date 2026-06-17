@@ -217,7 +217,8 @@ int main(int argc, char ** argv) {
                 }
             }
 
-            {
+            // DFlash's decoder is stateless and managed inside draft(); skip draft-side checkpoints
+            if (!is_dflash) {
                 ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
                 llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
@@ -245,7 +246,8 @@ int main(int argc, char ** argv) {
         }
 
         // evaluate the same batch with the draft model
-        {
+        // (DFlash's decoder has no autoregressive KV to keep in sync - draft() owns it)
+        if (!is_dflash) {
             // TODO: extend to support MTP, Eagle, etc. See server code for reference
             llama_decode(ctx_dft.get(), batch_tgt);
         }
@@ -283,7 +285,7 @@ int main(int argc, char ** argv) {
                 llama_memory_seq_rm(llama_get_memory(ctx_tgt), seq_id, ckpt.pos_max + 1, -1);
             }
 
-            {
+            if (!is_dflash) {
                 ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
                 llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
