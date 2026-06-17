@@ -3271,8 +3271,9 @@ private:
 
                         // disaggregated prefill: kick off the chunked prefill on ctx_pfx, the handoff
                         // and the single last token on ctx_tgt run when the slot returns here
+                        // skipped with speculative decoding: the draft context KV is not handed off
                         bool disagg_done = slot.disagg_prefilled;
-                        if (ctx_pfx && !input_tokens.has_mtmd && slot.task->n_tokens() >= 2 && !slot.disagg_prefilled) {
+                        if (ctx_pfx && !ctx_dft && !input_tokens.has_mtmd && slot.task->n_tokens() >= 2 && !slot.disagg_prefilled) {
                             const int seq = disagg_acquire_seq();
                             if (seq >= 0) {
                                 slot.disagg_seq = seq;
