@@ -564,6 +564,9 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mat_f16_f32_1row;
     cl_kernel kernel_mul_mat_f16_f32;
     cl_kernel kernel_mul_mat_f16_f32_l4;
+    cl_kernel kernel_mul_mat_f16_f32_l4_dr;
+    cl_kernel kernel_mul_mat_f16_f32_l4_dr_ls;
+    cl_kernel kernel_mul_mat_f16_f32_l4_dr_lq;
     cl_kernel kernel_mul_mat_f16_f32_tiled;
     cl_kernel kernel_adreno_xmem_pack_src_f32;
     cl_kernel kernel_adreno_xmem_prepack_weight_f16;
@@ -1787,6 +1790,11 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4   = clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4", &err), err));
+        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4_dr = clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_dr", &err), err));
+        if (backend_ctx->gpu_family == ADRENO) {
+            CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4_dr_ls = clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_dr_ls", &err), err));
+            CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4_dr_lq = clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_dr_lq", &err), err));
+        }
         GGML_LOG_CONT(".");
     }
 
@@ -14570,11 +14578,31 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             }
 
             if (src1t == GGML_TYPE_F32) {
+                // heuristic for packing more work for Adreno
+                const bool adreno_use_lane_split =
+                    backend_ctx->gpu_family == ADRENO &&
+                    ne11 == 1 &&
+                    ne01 >= 8 &&
+                    ne00 % 4 == 0 &&
+                    r3 == 1 && r2 >= 1 && r2 <= 8 &&
+                    (ne12 % r2) == 0;
+
                 if (ne11 * ne12 < 4) {
                     kernel = backend_ctx->kernel_mul_mat_f16_f32_1row;
+                } else if (adreno_use_lane_split && ne00 >= 64 && ne00 <= 128) {
+                    kernel = backend_ctx->kernel_mul_mat_f16_f32_l4_dr_lq;
+                    nrows  = 1;
+                } else if (adreno_use_lane_split && r2 >= 2 && ne00 > 128 && ne00 <= 256) {
+                    kernel = backend_ctx->kernel_mul_mat_f16_f32_l4_dr_ls;
+                    nrows  = 1;
                 } else if (ne00 >= 128 && ne01 >= 8 && ne00%4 == 0) {
-                    kernel = backend_ctx->kernel_mul_mat_f16_f32_l4;
-                    nrows = ne11;
+                    if (ne11 == 1) {
+                        kernel = backend_ctx->kernel_mul_mat_f16_f32_l4_dr;
+                        nrows  = 1; // not used by this kernel
+                    } else {
+                        kernel = backend_ctx->kernel_mul_mat_f16_f32_l4;
+                        nrows  = ne11;
+                    }
                 } else {
                     kernel = backend_ctx->kernel_mul_mat_f16_f32;
                     nrows = 4;
@@ -15353,12 +15381,30 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     } else {
-        int64_t ny = (ne11 + nrows - 1)/nrows;
+        if (kernel == backend_ctx->kernel_mul_mat_f16_f32_l4_dr) {
+            const int NDST_DR = 4;
+            size_t global_work_size[] = {(size_t)CEIL_DIV(ne01, NDST_DR)*nth0, (size_t)nth1, (size_t)ne12*ne13};
+            size_t local_work_size[]  = {(size_t)nth0, (size_t)nth1, 1};
 
-        size_t global_work_size[] = {(size_t)ne01*nth0, (size_t)ny*nth1, (size_t)ne12*ne13};
-        size_t local_work_size[] = {(size_t)nth0, (size_t)nth1, 1};
+            backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+        } else if (kernel == backend_ctx->kernel_mul_mat_f16_f32_l4_dr_ls) {
+            size_t global_work_size[] = {(size_t)CEIL_DIV(ne01, 2)*nth0, (size_t)nth1, (size_t)ne02*ne03};
+            size_t local_work_size[]  = {(size_t)nth0, (size_t)nth1, 1};
 
-        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+            backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+        } else if (kernel == backend_ctx->kernel_mul_mat_f16_f32_l4_dr_lq) {
+            size_t global_work_size[] = {(size_t)CEIL_DIV(ne01, 4)*nth0, (size_t)nth1, (size_t)ne02*ne03};
+            size_t local_work_size[]  = {(size_t)nth0, (size_t)nth1, 1};
+
+            backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+        } else {
+            int64_t ny = (ne11 + nrows - 1)/nrows;
+
+            size_t global_work_size[] = {(size_t)ne01*nth0, (size_t)ny*nth1, (size_t)ne12*ne13};
+            size_t local_work_size[] = {(size_t)nth0, (size_t)nth1, 1};
+
+            backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+        }
     }
 }
 
