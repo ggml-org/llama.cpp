@@ -78,6 +78,7 @@ static int    opt_arch    = 0; // autodetect
 static size_t opt_ndev    = 1;
 static size_t opt_nhvx    = 0; // use all
 static int    opt_nhmx    = 1; // when set, enable HMX; when 0, use HVX only
+static int    opt_mm_select = 3; // 3 = HMX -> Tiled -> Flat -> CPU, 2 = Tiled -> Flat -> CPU, 1 = Flat -> CPU
 static size_t opt_vmem    = HTP_OP_MAX_VMEM_DEFAULT;  // max available va space for buffer mappings
 static size_t opt_mbuf    = 1ul * 1024 * 1024 * 1024; // max buffer size
 static int    opt_etm     = 0;
@@ -2236,7 +2237,7 @@ static void ggml_hexagon_precompute_matmul_params(
 
     // Check HMX eligibility
     bool hmx_eligible = false;
-    bool hmx_enabled = (sess->n_hmx > 0);
+    bool hmx_enabled = (sess->n_hmx > 0) && (opt_mm_select >= 3);
 
     if (hmx_enabled) {
         // HMX weight tile requires N to be 32-aligned.
@@ -2427,23 +2428,49 @@ fallback_hvx:
         // Quantized HVX
         kparams->tile_size = htp_mm_get_weight_tile_size(wtype);
         kparams->aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
-        kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
 
-        if (src1_nrows < (int)sess->n_threads) {
-            kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_BLOCK;
-        } else {
-            kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW;
+        bool try_tiled = (opt_mm_select >= 2);
+        if (try_tiled) {
+            kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
+            if (src1_nrows < (int)sess->n_threads) {
+                kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_BLOCK;
+            } else {
+                kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW;
+            }
+
+            size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
+            size_t total_size = hvx_get_vtcm_sizes(
+                kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
+                dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
+            );
+            if (total_size <= vtcm_budget) {
+                kparams->vtcm_size = total_size;
+                kparams->vtcm_src0_size = vtcm_src0_size;
+                kparams->vtcm_src1_size = vtcm_src1_size;
+                kparams->vtcm_dst_size = vtcm_dst_size;
+                goto done_quant;
+            }
+            GGML_LOG_DEBUG("ggml-hex: HVX Tiled path VTCM size needed (%zu) > budget (%zu), falling back to HVX Flat\n",
+                           total_size, vtcm_budget);
         }
 
-        size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
-        size_t total_size = hvx_get_vtcm_sizes(
-            kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-            dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
-        );
-        kparams->vtcm_size = total_size;
-        kparams->vtcm_src0_size = vtcm_src0_size;
-        kparams->vtcm_src1_size = vtcm_src1_size;
-        kparams->vtcm_dst_size = vtcm_dst_size;
+        // Flat HVX fallback
+        {
+            kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
+            kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
+
+            size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
+            size_t total_size = hvx_get_vtcm_sizes(
+                kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
+                dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
+            );
+            kparams->vtcm_size = total_size;
+            kparams->vtcm_src0_size = vtcm_src0_size;
+            kparams->vtcm_src1_size = vtcm_src1_size;
+            kparams->vtcm_dst_size = vtcm_dst_size;
+        }
+
+    done_quant:;
     } else if (wtype == GGML_TYPE_F16) {
         // F16 HVX
         const bool is_batched  = (ne02 > 1) || (ne03 > 1);
@@ -2567,11 +2594,25 @@ static void ggml_hexagon_precompute_fused_qkv_params(
     size_t src2_sz = src2_sz_per_thread * sess->n_threads;
     size_t src3_sz = src3_sz_per_thread * sess->n_threads;
 
-    kparams->vtcm_src0_size = src0_sz;
-    kparams->vtcm_src1_size = src1_sz;
-    kparams->vtcm_src2_size = src2_sz;
-    kparams->vtcm_src3_size = src3_sz;
-    kparams->vtcm_size      = src0_sz + src1_sz + src2_sz + src3_sz;
+    size_t tiled_vtcm_size = src0_sz + src1_sz + src2_sz + src3_sz;
+    bool try_tiled = (opt_mm_select >= 2);
+    if (try_tiled && tiled_vtcm_size <= sess->vtcm_size) {
+        kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW;
+        kparams->vtcm_src0_size = src0_sz;
+        kparams->vtcm_src1_size = src1_sz;
+        kparams->vtcm_src2_size = src2_sz;
+        kparams->vtcm_src3_size = src3_sz;
+        kparams->vtcm_size      = tiled_vtcm_size;
+    } else {
+        kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
+        size_t flat_src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
+        size_t flat_src1_sz = hex_round_up(flat_src1_row_size * src1_nrows, 256);
+        kparams->vtcm_src0_size = src0_sz;
+        kparams->vtcm_src1_size = flat_src1_sz;
+        kparams->vtcm_src2_size = src2_sz;
+        kparams->vtcm_src3_size = src3_sz;
+        kparams->vtcm_size      = src0_sz + flat_src1_sz + src2_sz + src3_sz;
+    }
 }
 
 static void ggml_hexagon_precompute_fused_ffn_params(
@@ -2620,10 +2661,23 @@ static void ggml_hexagon_precompute_fused_ffn_params(
     size_t src1_sz = src1_sz_per_thread;
     size_t src2_sz = src2_sz_per_thread * sess->n_threads;
 
-    kparams->vtcm_src0_size = src0_sz;
-    kparams->vtcm_src1_size = src1_sz;
-    kparams->vtcm_src2_size = src2_sz;
-    kparams->vtcm_size      = src0_sz + src1_sz + src2_sz;
+    size_t tiled_vtcm_size = src0_sz + src1_sz + src2_sz;
+    bool try_tiled = (opt_mm_select >= 2);
+    if (try_tiled && tiled_vtcm_size <= sess->vtcm_size) {
+        kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW;
+        kparams->vtcm_src0_size = src0_sz;
+        kparams->vtcm_src1_size = src1_sz;
+        kparams->vtcm_src2_size = src2_sz;
+        kparams->vtcm_size      = tiled_vtcm_size;
+    } else {
+        kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
+        size_t flat_src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
+        size_t flat_src1_sz = hex_round_up(flat_src1_row_size * src1_nrows, 256);
+        kparams->vtcm_src0_size = src0_sz;
+        kparams->vtcm_src1_size = flat_src1_sz;
+        kparams->vtcm_src2_size = src2_sz;
+        kparams->vtcm_size      = src0_sz + flat_src1_sz + src2_sz;
+    }
 }
 
 static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * dst) {
@@ -4119,6 +4173,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_nhvx     = getenv("GGML_HEXAGON_NHVX");
     const char * str_use_hmx  = getenv("GGML_HEXAGON_USE_HMX");
     const char * str_nhmx     = getenv("GGML_HEXAGON_NHMX");
+    const char * str_mm_select = getenv("GGML_HEXAGON_MM_SELECT");
     const char * str_ndev     = getenv("GGML_HEXAGON_NDEV");
     const char * str_arch     = getenv("GGML_HEXAGON_ARCH");
     const char * str_vmem     = getenv("GGML_HEXAGON_VMEM");
@@ -4159,6 +4214,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_etm       = str_etm      ? atoi(str_etm)                          : 0;
     opt_nhvx      = str_nhvx     ? strtoul(str_nhvx, NULL, 0)             : opt_nhvx;
     opt_nhmx      = str_nhmx     ? atoi(str_nhmx)                         : (str_use_hmx ? atoi(str_use_hmx) : opt_nhmx);
+    opt_mm_select = str_mm_select ? atoi(str_mm_select)                     : opt_mm_select;
     opt_ndev      = str_ndev     ? strtoul(str_ndev, NULL, 0)             : opt_ndev;
     opt_hostbuf   = str_hostbuf  ? atoi(str_hostbuf)                      : opt_hostbuf;
     opt_mbuf      = str_mbuf     ? strtoul(str_mbuf, NULL, 0) * MiB       : opt_mbuf;

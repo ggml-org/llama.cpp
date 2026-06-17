@@ -12,28 +12,34 @@ extern "C" {
 #endif
 
 // --- HMX Tile Constraints ---
-#ifndef HTP_MM_HMX_TILE_N_COLS
 #define HTP_MM_HMX_TILE_N_COLS 32
-#endif
-#ifndef HTP_MM_HMX_TILE_N_ROWS
 #define HTP_MM_HMX_TILE_N_ROWS 32
-#endif
-#ifndef HTP_MM_HMX_TILE_SIZE
 #define HTP_MM_HMX_TILE_SIZE   (32 * 32 * sizeof(__fp16)) // 2048 bytes
-#endif
-#ifndef HTP_MM_HMX_TILE_N_ELMS
 #define HTP_MM_HMX_TILE_N_ELMS 1024
-#endif
 
-#ifndef HTP_MM_VTCM_SRC0_NROWS
+// --- Weight Repacked Tile Sizes ---
+#define HTP_MM_WEIGHT_TILE_SIZE_Q4_0   576
+#define HTP_MM_WEIGHT_TILE_SIZE_Q4_1   640
+#define HTP_MM_WEIGHT_TILE_SIZE_Q8_0   1088
+#define HTP_MM_WEIGHT_TILE_SIZE_IQ4_NL 576
+#define HTP_MM_WEIGHT_TILE_SIZE_MXFP4  544
+
+// --- Weight Repacked Aligned Tile Sizes ---
+#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q4_0   640
+#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q4_1   640
+#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q8_0   1152
+#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_IQ4_NL 640
+#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_MXFP4  640
+
+// --- Activation Tiled Block Sizes (including padding) ---
+#define HTP_MM_ACT_TILE_SIZE_Q8_0      1152
+#define HTP_MM_ACT_TILE_SIZE_Q8_1      1280
+
 #define HTP_MM_VTCM_SRC0_NROWS 16
-#endif
-#ifndef HTP_MM_VTCM_SRC1_NROWS
 #define HTP_MM_VTCM_SRC1_NROWS 16
-#endif
-#ifndef HTP_MM_VTCM_DST_NROWS
 #define HTP_MM_VTCM_DST_NROWS  2
-#endif
+
+#define HTP_MM_DMA_DEPTH 2
 
 enum htp_mm_kernel_type {
     HTP_MM_KERNEL_UNSUPPORTED = 0,
@@ -52,8 +58,9 @@ enum htp_mm_kernel_type {
     HTP_MM_KERNEL_HVX_F32_F16_DDR,
 
     // HVX quantized paths
-    HTP_MM_KERNEL_HVX_QUANT_ROW,   // standard row-wise parallel quantization
-    HTP_MM_KERNEL_HVX_QUANT_BLOCK, // parallel block-wise quantization
+    HTP_MM_KERNEL_HVX_QUANT_ROW,      // standard row-wise parallel quantization
+    HTP_MM_KERNEL_HVX_QUANT_BLOCK,    // parallel block-wise quantization
+    HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT, // row-wise fallback flat quantization
 };
 
 // Op-specific struct for precomputed matmul params
@@ -165,24 +172,6 @@ next_nc:
     return 0;
 }
 
-// --- Weight Repacked Tile Sizes ---
-#define HTP_MM_WEIGHT_TILE_SIZE_Q4_0   576
-#define HTP_MM_WEIGHT_TILE_SIZE_Q4_1   640
-#define HTP_MM_WEIGHT_TILE_SIZE_Q8_0   1088
-#define HTP_MM_WEIGHT_TILE_SIZE_IQ4_NL 576
-#define HTP_MM_WEIGHT_TILE_SIZE_MXFP4  544
-
-// --- Weight Repacked Aligned Tile Sizes ---
-#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q4_0   640
-#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q4_1   640
-#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q8_0   1152
-#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_IQ4_NL 640
-#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_MXFP4  640
-
-// --- Activation Tiled Block Sizes (including padding) ---
-#define HTP_MM_ACT_TILE_SIZE_Q8_0      1152
-#define HTP_MM_ACT_TILE_SIZE_Q8_1      1280
-
 // --- Tile Size Helpers ---
 static inline uint32_t htp_mm_get_weight_tile_size(int weight_type) {
     switch (weight_type) {
@@ -229,6 +218,20 @@ static inline size_t htp_mm_q8_1_tiled_row_size(uint32_t ne) {
     return nb_32 * HTP_MM_ACT_TILE_SIZE_Q8_1;
 }
 
+static inline size_t htp_mm_q8_0_flat_row_size(uint32_t ne) {
+    const uint32_t quants_size = hex_align_up(ne, 128);
+    const uint32_t num_scales = (ne + 31) / 32;
+    const uint32_t scales_size = hex_align_up(num_scales * 2, 128);
+    return quants_size + scales_size;
+}
+
+static inline size_t htp_mm_q8_1_flat_row_size(uint32_t ne) {
+    const uint32_t quants_size = hex_align_up(ne, 128);
+    const uint32_t num_scales = (ne + 31) / 32;
+    const uint32_t scales_size = hex_align_up(num_scales * 4, 128);
+    return quants_size + scales_size;
+}
+
 static inline size_t htp_mm_get_tiled_row_stride(int weight_type, int k) {
     int nb = (k + QK_Q4_0_TILED - 1) / QK_Q4_0_TILED;
     switch (weight_type) {
@@ -246,10 +249,6 @@ static inline size_t htp_mm_get_tiled_row_stride(int weight_type, int k) {
             return 0;
     }
 }
-
-#ifndef HTP_MM_DMA_DEPTH
-#define HTP_MM_DMA_DEPTH 2
-#endif
 
 static inline size_t htp_mm_round_up(size_t n, size_t m) {
     return ((n + m - 1) / m) * m;
@@ -391,6 +390,33 @@ static inline size_t hvx_get_vtcm_sizes(
 
             // src0 spad is also used in dynamic quantizer to store padded src1 rows
             size_t src1_row_size_padded = htp_mm_round_up(q_src1_row_size, QK_Q8_0_TILED * sizeof(float));
+            if (vtcm_src0_size < src1_row_size_padded) {
+                vtcm_src0_size = src1_row_size_padded;
+            }
+
+            vtcm_src0_size = vtcm_src0_size * n_threads;
+            vtcm_dst_size  = vtcm_dst_size * n_threads;
+
+            if (is_repack) {
+                uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
+                uint32_t n_k_tiles = ne10 / 32;
+                uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
+                size_t repacked_vtcm_size = htp_mm_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
+                if (repacked_vtcm_size < src1_row_size_padded) {
+                    repacked_vtcm_size = src1_row_size_padded;
+                }
+                vtcm_src0_size = repacked_vtcm_size * n_threads;
+            }
+            break;
+        }
+        case HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT: {
+            size_t q_src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
+            
+            vtcm_dst_size  = htp_mm_round_up(HTP_MM_VTCM_DST_NROWS * dst_row_size, 256);
+            vtcm_src0_size = htp_mm_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
+            vtcm_src1_size = htp_mm_round_up(q_src1_row_size * src1_nrows, 256);
+
+            size_t src1_row_size_padded = htp_mm_round_up(q_src1_row_size, 256);
             if (vtcm_src0_size < src1_row_size_padded) {
                 vtcm_src0_size = src1_row_size_padded;
             }
