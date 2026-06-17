@@ -142,7 +142,7 @@ struct img_tool {
     // calculate the size of the **resized** image, while preserving the aspect ratio
     // the calculated size will have min_pixels <= W*H <= max_pixels
     // this is referred as "smart_resize" in transformers code
-    static clip_image_size calc_size_preserved_ratio(const clip_image_size & inp_size, const int align_size, const int min_pixels, const int max_pixels) {
+    static clip_image_size calc_size_preserved_ratio(const clip_image_size & inp_size, const int align_size, const int min_pixels, const int max_pixels, bool round_up = false) {
         GGML_ASSERT(align_size > 0);
         const int width  = inp_size.width;
         const int height = inp_size.height;
@@ -151,9 +151,9 @@ struct img_tool {
         auto ceil_by_factor  = [f = align_size](float x) { return static_cast<int>(std::ceil(x / static_cast<float>(f))) * f; };
         auto floor_by_factor = [f = align_size](float x) { return static_cast<int>(std::floor(x / static_cast<float>(f))) * f; };
 
-        // always align up first
-        int h_bar = std::max(align_size, round_by_factor(height));
-        int w_bar = std::max(align_size, round_by_factor(width));
+        // initial alignment: most models round to nearest; some (e.g. LocateAnything) ceil
+        int h_bar = std::max(align_size, round_up ? ceil_by_factor(height) : round_by_factor(height));
+        int w_bar = std::max(align_size, round_up ? ceil_by_factor(width)  : round_by_factor(width));
 
         if (h_bar * w_bar > max_pixels) {
             const auto beta = std::sqrt(static_cast<float>(height * width) / max_pixels);
@@ -898,7 +898,8 @@ bool mtmd_image_preprocessor_dyn_size::preprocess(const clip_image_u8 & img, cli
         original_size,
         hparams.patch_size * cur_merge,
         hparams.image_min_pixels,
-        hparams.image_max_pixels);
+        hparams.image_max_pixels,
+        hparams.image_resize_round_up);
     img_tool::resize(img, resized_image, target_size,
                         hparams.image_resize_algo,
                         hparams.image_resize_pad,

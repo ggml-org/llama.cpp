@@ -1411,9 +1411,11 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_LOCATEANYTHING:
                     {
                         // MoonViT encoder shared with Kimi-K2.5, but the HF processor resizes with
-                        // Pillow bicubic and stretches to a multiple of patch*merge (no letterbox).
+                        // Pillow bicubic and stretches to a multiple of patch*merge (no letterbox),
+                        // rounding the target size UP (ceil) rather than to the nearest multiple.
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
                         hparams.image_resize_pad  = PAD_NONE;
+                        hparams.image_resize_round_up = true;
                         hparams.rope_theta = 10000.0f;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
 
