@@ -396,6 +396,62 @@ static __device__ __forceinline__ float vec_dot_nvfp4_q8_1_repacked_full(
 
     return sum;
 }
+
+static __device__ __forceinline__ float vec_dot_nvfp4x2_f32(
+                                        const __nv_fp4x2_storage_t v,
+                                        const float2 & f) {
+    const __half2_raw hraw2 = __nv_cvt_fp4x2_to_halfraw2(v, __NV_E2M1);
+    const __half2 h2 = static_cast<__half2>(hraw2);
+    const float2 vf = __half22float2(h2);
+    return vf.x*f.x + vf.y*f.y;
+}
+
+static __device__ __forceinline__ float vec_dot_nvfp4_f32_repacked_subblock(
+                                        const void * __restrict__ vbq,
+                                        const float * __restrict__ y,
+                                        const int32_t & kbx,
+                                        const uint3 & blocks_per_matrix,
+                                        const int32_t & lane) {
+    static_assert(ggml_cuda_get_physical_warp_size() == 32, "subblock NVFP4 F32 path assumes 32 lanes");
+    static_assert(QK_NVFP4 == 64, "subblock NVFP4 F32 path assumes 64-element NVFP4 blocks");
+    static_assert(QK_NVFP4_SUB == 16, "subblock NVFP4 F32 path assumes 16-element NVFP4 sub-blocks");
+
+    const int32_t group = lane >> 2;
+    const int32_t sub   = lane & 3;
+    const int32_t kbx_g = kbx + group;
+
+    const int32_t matrix = fastdiv((uint32_t) kbx_g, blocks_per_matrix);
+    const int32_t ib     = kbx_g - matrix * blocks_per_matrix.z;
+
+    const uint8_t * matrix_base = (const uint8_t *) vbq + matrix * blocks_per_matrix.z * sizeof(block_nvfp4);
+    const uint8_t * qs_base     = matrix_base;
+    const uint8_t * d_base      = qs_base + blocks_per_matrix.z * (QK_NVFP4 / 2);
+
+    const uint8_t * qs = qs_base + ib * (QK_NVFP4 / 2) + sub * (QK_NVFP4_SUB / 2);
+    const uint8_t * d  = d_base  + ib * (QK_NVFP4 / QK_NVFP4_SUB);
+
+    uint64_t qs_u64;
+    ggml_cuda_memcpy_1<8>(&qs_u64, qs);
+
+    const float4 * yf = (const float4 *) (y + group * QK_NVFP4 + sub * QK_NVFP4_SUB);
+    const float4 y0 = yf[0];
+    const float4 y1 = yf[1];
+    const float4 y2 = yf[2];
+    const float4 y3 = yf[3];
+
+    const uint8_t * qs_bytes = (const uint8_t *) &qs_u64;
+    float sumf = 0.0f;
+    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[0]), make_float2(y0.x, y0.y));
+    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[1]), make_float2(y0.z, y0.w));
+    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[2]), make_float2(y1.x, y1.y));
+    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[3]), make_float2(y1.z, y1.w));
+    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[4]), make_float2(y2.x, y2.y));
+    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[5]), make_float2(y2.z, y2.w));
+    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[6]), make_float2(y3.x, y3.y));
+    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[7]), make_float2(y3.z, y3.w));
+
+    return ggml_cuda_ue4m3_to_fp32(d[sub]) * sumf;
+}
 #define VDR_Q2_K_Q8_1_MMVQ 1
 #define VDR_Q2_K_Q8_1_MMQ  4
 
