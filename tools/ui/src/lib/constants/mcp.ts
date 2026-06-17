@@ -84,3 +84,8 @@ export const MCP_TRANSPORT_ICONS: Record<MCPTransportType, Component> = {
 	[MCPTransportType.STREAMABLE_HTTP]: Globe,
 	[MCPTransportType.SSE]: Radio
 };
+
+/** Standard SSE endpoint path indicators */
+export const MCP_SSE_ENDPOINT = '/sse';
+export const MCP_SSE_ENDPOINT_SLASH = '/sse/';
+export const MCP_SSE_ENDPOINT_QUERY = '/sse?';
