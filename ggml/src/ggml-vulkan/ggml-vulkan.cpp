@@ -9985,7 +9985,12 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t workgroups_y = (uint32_t)neq2;
     uint32_t workgroups_z = (uint32_t)neq3;
 
-    const bool f32acc = !ctx->device->fp16 || dst->op_params[3] == GGML_PREC_F32 || k->type == GGML_TYPE_BF16;
+    // Quantized K/V (q8_0, q4_*, q5_*) needs f32 accumulation: their dequantized
+    // magnitudes overflow f16 accumulation in flash attention (head size 128 KV
+    // produced inf / -FLT_MAX with prec=def), so treat quantized KV like BF16 and
+    // force f32acc regardless of the requested precision.
+    const bool f32acc = !ctx->device->fp16 || dst->op_params[3] == GGML_PREC_F32 || k->type == GGML_TYPE_BF16 ||
+                        ggml_is_quantized(k->type) || ggml_is_quantized(v->type);
 
     // For scalar/coopmat1 FA, we can use the "large" size to accommodate qga.
     // For coopmat2 FA, we always use the small size (which is still pretty large for gqa).
