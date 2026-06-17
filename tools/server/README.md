@@ -197,6 +197,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--webui-mcp-proxy, --no-webui-mcp-proxy` | [DEPRECATED: use --ui-mcp-proxy/--no-ui-mcp-proxy] experimental: whether to enable MCP CORS proxy<br/>(env: LLAMA_ARG_WEBUI_MCP_PROXY) |
 | `--ui-mcp-proxy, --no-ui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
 | `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff, get_datetime<br/>(env: LLAMA_ARG_TOOLS) |
+| `--whitelist-shell-commands CMD1,CMD2,...` | VERY experimental: this does not currently sanitize commands in any of the ways it should!<br/>(env: LLAMA_ARG_TOOLS_WHITELIST_SHELL_COMMANDS) |
 | `--webui, --no-webui` | [DEPRECATED: use --ui/--no-ui] whether to enable the Web UI<br/>(env: LLAMA_ARG_WEBUI) |
 | `--ui, --no-ui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |

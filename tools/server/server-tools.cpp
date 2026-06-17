@@ -391,6 +391,8 @@ struct server_tool_exec_shell_command : server_tool {
         };
     }
 
+
+
     json invoke(json params) override {
         std::string command   = params.at("command").get<std::string>();
         int    timeout        = json_value(params, "timeout",         10);
@@ -401,9 +403,37 @@ struct server_tool_exec_shell_command : server_tool {
 
 #ifdef _WIN32
         std::vector<std::string> args = {"cmd", "/c", command};
+        static constexpr char *shell_command_delims = "%!|";
 #else
         std::vector<std::string> args = {"sh", "-c", command};
+        static constexpr char *shell_command_delims = ";`<>*$()&|";
 #endif
+
+        if (s_shell_command_whitelist->size()) {
+            bool whitelisted = false;
+            for (auto const & s : *s_shell_command_whitelist) {
+                if (!command.compare(0, s.length(), s)) {
+                    // Command string starts with the whitelisted string.
+                    const auto shell_delim = *std::find_if(command.begin(), command.end(), [](const char t){
+                        for (const char *ref = shell_command_delims; *ref; ref++) {
+                            if (t == *ref) return t;
+                        }
+                        return '\0';
+                    });
+                    if (shell_delim) {
+                        std::ostringstream msg;
+                        msg << "Command rejected! It contains at least one unsafe character ('" << shell_delim << "') from the unsafe list: \"" << shell_command_delims << '\"';
+                        return {{
+                            "plain_text_response",
+                            msg.str()
+                        }};
+                    }
+                    whitelisted = true;
+                    break;
+                }
+            }
+            if (!whitelisted) return {{"plain_text_response", "Command rejected! Not permitted by whitelist."}};
+        }
 
         auto res = run_process(args, max_output, timeout);
 
@@ -740,9 +770,10 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     return tools;
 }
 
-void server_tools::setup(const std::vector<std::string> & enabled_tools) {
+void server_tools::setup(const std::vector<std::string> & enabled_tools, const std::vector<std::string> & shell_command_whitelist) {
     if (!enabled_tools.empty()) {
         std::unordered_set<std::string> enabled_set(enabled_tools.begin(), enabled_tools.end());
+        s_shell_command_whitelist = &shell_command_whitelist;
         auto all_tools = build_tools();
 
         // collect all known tool names for validation

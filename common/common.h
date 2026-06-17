@@ -641,6 +641,9 @@ struct common_params {
     // enable built-in tools
     std::vector<std::string> server_tools;
 
+    // whitelist shell commands
+    std::vector<std::string> server_tools_shell_command_whitelist;
+
     // router server configs
     std::string models_dir    = ""; // directory containing models for the router server
     std::string models_preset = ""; // directory containing model presets for the router server

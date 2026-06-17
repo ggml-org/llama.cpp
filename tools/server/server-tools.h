@@ -18,9 +18,11 @@ struct server_tool {
 struct server_tools {
     std::vector<std::unique_ptr<server_tool>> tools;
 
-    void setup(const std::vector<std::string> & enabled_tools);
+    void setup(const std::vector<std::string> & enabled_tools, const std::vector<std::string> & shell_command_whitelist);
     json invoke(const std::string & name, const json & params);
 
     server_http_context::handler_t handle_get;
     server_http_context::handler_t handle_post;
 };
+
+static const std::vector<std::string> *s_shell_command_whitelist;
