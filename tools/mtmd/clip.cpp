@@ -1474,6 +1474,7 @@ struct clip_model_loader {
                         hparams.n_merge = 2; // spatial_merge_size
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        hparams.rope_theta = 10000.0f; // vision_config.rope_theta
                         // MiniMax-M3: max_pixels 451584 (=672^2) -> 576 merged tokens (image_seq_length)
                         hparams.set_limit_image_tokens(8, 576);
                         hparams.set_warmup_n_tokens(16*16);
@@ -3847,7 +3848,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                 const int n_pos    = gh * gw;
                 const int axis_dim = 26, nf = axis_dim / 2;   // 13 freqs/axis
                 const int rope_dim = 3 * axis_dim;            // 78
-                const float theta  = 10000.0f;
+                const float theta  = hparams.rope_theta;       // vision_config.rope_theta (10000)
                 std::vector<float> inv(nf);
                 for (int k = 0; k < nf; k++) {
                     inv[k] = 1.0f / std::pow(theta, (2.0f * k) / axis_dim);
@@ -4548,6 +4549,17 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
         float variance = (sum_sq / emb_data.size()) - (mean * mean);
         LOG_INF("Stats: mean=%.6f, std=%.6f, min=%.6f, max=%.6f, sum=%.6f\n",
                 mean, sqrtf(variance), min_val, max_val, sum);
+
+        // Dump raw float32 [n_tokens, n_embd] (token-major) for numerical parity checks.
+        const char * dump_path = std::getenv("MTMD_DEBUG_EMBEDDINGS_FILE");
+        if (dump_path == nullptr) dump_path = "clip_proj_out.bin";
+        FILE * df = fopen(dump_path, "wb");
+        if (df) {
+            fwrite(emb_data.data(), sizeof(float), emb_data.size(), df);
+            fclose(df);
+            LOG_INF("dumped embeddings -> %s [%lld tokens x %lld embd]\n",
+                    dump_path, (long long)n_tokens, (long long)n_embd);
+        }
         LOG_INF("=== END MTMD_DEBUG_EMBEDDINGS ===\n\n");
     }
 
