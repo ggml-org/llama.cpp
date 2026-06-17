@@ -256,6 +256,9 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
 
     // note: we expect either a batch of rows or a batch of overviews, but not a mix of both
 
+    printf("[DSOCR] inp_raw=[%lld,%lld,%lld,%lld] is_overview=%d img.nx=%d img.ny=%d\n",
+           inp_raw->ne[0], inp_raw->ne[1], inp_raw->ne[2], inp_raw->ne[3], (int)is_overview, img.nx(), img.ny());
+
     if (!is_overview) {
         // handle the case where we have a batch of rows
         // sanity check
@@ -271,24 +274,39 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
         GGML_ASSERT(img.ny() >= img.nx());
         GGML_ASSERT(img.ny() % img.nx() == 0);
         n_tiles_per_row = img.ny() / img.nx();
+        printf("[DSOCR] n_tiles_per_row=%d\n", n_tiles_per_row);
 
         // input shape: [tile_size, tile_size * n_tiles_per_row, 3]
         // we want to reshape it to [tile_size, tile_size, 3, n_tiles_per_row]
         inp_raw = ggml_reshape_4d(ctx0, inp_raw, img.nx(), img.nx(), n_tiles_per_row, 3);
+        printf("[DSOCR] inp_raw after reshape_4d=[%lld,%lld,%lld,%lld]\n", inp_raw->ne[0], inp_raw->ne[1], inp_raw->ne[2], inp_raw->ne[3]);
         inp_raw = ggml_cont(ctx0, ggml_permute(ctx0, inp_raw, 0, 1, 3, 2));
+        printf("[DSOCR] inp_raw after permute=[%lld,%lld,%lld,%lld]\n", inp_raw->ne[0], inp_raw->ne[1], inp_raw->ne[2], inp_raw->ne[3]);
     }
 
     ggml_tensor * sam_out = build_sam(inp_raw);
+    printf("[DSOCR] sam_out=[%lld,%lld,%lld,%lld]\n", sam_out->ne[0], sam_out->ne[1], sam_out->ne[2], sam_out->ne[3]);
+
+    if (!is_overview) {
+        n_batch = n_tiles_per_row;
+    }
+    printf("[DSOCR] n_batch=%d\n", n_batch);
 
     const int clip_n_patches = sam_out->ne[0] * sam_out->ne[1];
+    printf("[DSOCR] clip_n_patches=%d\n", clip_n_patches);
 
     ggml_tensor * clip_out;
     // Building DS-OCR CLIP
     {
         ggml_tensor * inp;
 
-        inp = ggml_reshape_2d(ctx0, sam_out, clip_n_patches, sam_out->ne[2]);
+        // sam_out: [patch_h, patch_w, n_embd, n_batch]
+        // -> [n_embd, clip_n_patches, n_batch]
+        printf("[DSOCR] CLIP inp: reshape_3d(%d, %lld, %lld) from sam_out\n", clip_n_patches, sam_out->ne[2], sam_out->ne[3]);
+        inp = ggml_reshape_3d(ctx0, sam_out, clip_n_patches, sam_out->ne[2], sam_out->ne[3]);
+        printf("[DSOCR] CLIP inp after reshape_3d=[%lld,%lld,%lld]\n", inp->ne[0], inp->ne[1], inp->ne[2]);
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
+        printf("[DSOCR] CLIP inp after permute=[%lld,%lld,%lld,%lld]\n", inp->ne[0], inp->ne[1], inp->ne[2], inp->ne[3]);
 
         ggml_tensor * new_pos_embd = model.position_embeddings;
 
@@ -311,8 +329,13 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
             n_pos        = tgt_size * tgt_size + 1;
         }
 
-        // add CLS token
-        inp = ggml_concat(ctx0, model.class_embedding, inp, 1);
+        // add CLS token per batch item
+        // inp: [n_embd, clip_n_patches, n_batch]
+        // class_embedding: [n_embd] -> [n_embd, 1, n_batch]
+        ggml_tensor * cls_embd = ggml_reshape_3d(ctx0, model.class_embedding, n_embd, 1, 1);
+        ggml_tensor * cls_target = ggml_new_tensor_3d(ctx0, model.class_embedding->type, n_embd, 1, n_batch);
+        cls_embd = ggml_repeat(ctx0, cls_embd, cls_target);
+        inp = ggml_concat(ctx0, cls_embd, inp, 1);
 
         // for selecting learned pos embd, used by ViT
         ggml_tensor * positions        = ggml_cast(ctx0, ggml_arange(ctx0, 0, n_pos, 1), GGML_TYPE_I32);
@@ -324,13 +347,24 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
         clip_out = cur;
     }
 
+    // sam_out: [patch_h, patch_w, n_embd, n_batch]
+    // -> [n_embd, clip_n_patches, n_batch]
+    printf("[DSOCR] sam_out before permute=[%lld,%lld,%lld,%lld]\n", sam_out->ne[0], sam_out->ne[1], sam_out->ne[2], sam_out->ne[3]);
     sam_out  = ggml_cont(ctx0, ggml_permute(ctx0, sam_out, 1, 2, 0, 3));
-    sam_out  = ggml_reshape_2d(ctx0, sam_out, sam_out->ne[0], clip_n_patches);
-    clip_out = ggml_view_2d(ctx0, clip_out, n_embd, clip_n_patches, clip_out->nb[1], clip_out->nb[1]);
+    printf("[DSOCR] sam_out after permute=[%lld,%lld,%lld,%lld]\n", sam_out->ne[0], sam_out->ne[1], sam_out->ne[2], sam_out->ne[3]);
+    printf("[DSOCR] reshape_3d(%lld, %d, %d)\n", sam_out->ne[0], clip_n_patches, n_batch);
+    sam_out  = ggml_reshape_3d(ctx0, sam_out, sam_out->ne[0], clip_n_patches, n_batch);
+
+    // clip_out: [n_embd, n_pos, n_batch] where n_pos = clip_n_patches + 1 (CLS)
+    // strip CLS token: skip first position, view only the patch tokens
+    clip_out = ggml_view_3d(ctx0, clip_out, n_embd, clip_n_patches, n_batch,
+                            clip_out->nb[1], clip_out->nb[2], clip_out->nb[1]);
 
     ggml_tensor * cur;
     cur = ggml_concat(ctx0, clip_out, sam_out, 0);
+    printf("[DSOCR] after concat: cur=[%lld,%lld,%lld,%lld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
     cur = ggml_mul_mat(ctx0, model.mm_fc_w, cur);
+    printf("[DSOCR] after mul_mat: cur=[%lld,%lld,%lld,%lld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
     cur = ggml_add(ctx0, cur, model.mm_fc_b);
 
     if (is_overview) {
@@ -344,29 +378,35 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
         cur = ggml_reshape_2d(ctx0, ggml_concat(ctx0, cur, imgnl, 1), n_dim, (w + 1) * h);
         cur = ggml_concat(ctx0, cur, model.view_seperator, 1);  // (n_dim, h*(w+1) + 1)
     } else {
+        // tile row: interleave tiles within each row, add newline per row
+        const int grid_x      = static_cast<int>(std::sqrt(static_cast<float>(clip_n_patches)));
+        const int grid_y      = grid_x;
+        const auto n_dim      = cur->ne[0];
+        printf("[DSOCR] grid_x=%d grid_y=%d n_dim=%lld n_batch=%d\n", grid_x, grid_y, n_dim, n_batch);
+
+        // (n_dim, clip_n_patches, n_batch) -> (n_dim, grid_x, grid_y, n_batch)
+        cur = ggml_reshape_4d(ctx0, cur, n_dim, grid_x, grid_y, n_batch);
+        printf("[DSOCR] after reshape_4d: cur=[%lld,%lld,%lld,%lld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+
         // tiles: re-order from A.row0 A.row1 B.row0 B.row1 ...
         //        to A.row0 B.row0 A.row1 B.row1 ...
         //        then add nl: A.row0 B.row0 [nl] A.row1 B.row1 [nl] ...
-        const auto h     = static_cast<int>(std::sqrt(static_cast<float>(cur->ne[1])));
-        const auto w     = h;
-        const auto n_dim = cur->ne[0];
-
-        // (n_dim, w*h, n_batch) -> (n_dim, w, h, n_batch)
-        cur = ggml_reshape_4d(ctx0, cur, n_dim, w, h, n_batch);
-
-        // swap h and n_batch axes: (n_dim, w, h, n_batch) -> (n_dim, w, n_batch, h)
-        // so that within each super-row, all tiles' token-rows are contiguous
+        // interleave tiles: (n_dim, grid_x, grid_y, n_batch) -> (n_dim, grid_x, n_batch, grid_y)
         cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 0, 1, 3, 2));
+        printf("[DSOCR] after permute: cur=[%lld,%lld,%lld,%lld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
 
-        // merge tile and column axes: (n_dim, w, n_batch, h) -> (n_dim, w*n_batch, h, 1)
-        cur = ggml_reshape_4d(ctx0, cur, n_dim, w * n_batch, h, 1);
+        // merge: (n_dim, grid_x, n_batch, grid_y) -> (n_dim, grid_x*n_batch, grid_y, 1)
+        cur = ggml_reshape_4d(ctx0, cur, n_dim, grid_x * n_batch, grid_y, 1);
+        printf("[DSOCR] after merge reshape: cur=[%lld,%lld,%lld,%lld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
 
-        // append one newline after each super-row: (n_dim, w*n_batch+1, h, 1)
-        ggml_tensor * imgnl = ggml_repeat_4d(ctx0, model.image_newline, n_dim, 1, h, 1);
+        // append newline per row: (n_dim, grid_x*n_batch+1, grid_y, 1)
+        ggml_tensor * imgnl = ggml_repeat_4d(ctx0, model.image_newline, n_dim, 1, grid_y, 1);
         cur = ggml_concat(ctx0, cur, imgnl, 1);
+        printf("[DSOCR] after append nl: cur=[%lld,%lld,%lld,%lld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
 
-        // flatten: (n_dim, (w*n_batch+1)*h)
-        cur = ggml_reshape_2d(ctx0, cur, n_dim, (w * n_batch + 1) * h);
+        // flatten: (n_dim, (grid_x*n_batch+1)*grid_y)
+        cur = ggml_reshape_2d(ctx0, cur, n_dim, (grid_x * n_batch + 1) * grid_y);
+        printf("[DSOCR] after flatten: cur=[%lld,%lld]\n", cur->ne[0], cur->ne[1]);
     }
 
     cb(cur, "dsocr_output", -1);

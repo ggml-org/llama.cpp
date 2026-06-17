@@ -3449,6 +3449,12 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 // global view: one image-newline per token-row + trailing view separator
                 const int h = static_cast<int>(std::sqrt(static_cast<float>(n_patches)));
                 n_patches = h * (h + 1) + 1;
+            } else if (img->ny() >= img->nx() && img->ny() % img->nx() == 0) {
+                // tile row: one image-newline per token-row
+                const int grid_w = img->ny() / img->nx();
+                const int tile_patches = img->nx() / (patch_size * 4); // patches per tile side (SAM divides by 4)
+                const int h = tile_patches;
+                n_patches = (tile_patches * grid_w + 1) * h;
             }
         } break;
         case PROJECTOR_TYPE_HUNYUANVL:
@@ -4090,7 +4096,10 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_DEEPSEEKOCR:
         case PROJECTOR_TYPE_DEEPSEEKOCR2:
             {
-                GGML_ASSERT(pos_w == pos_h);
+                GGML_ASSERT(
+                    (pos_w == pos_h) // overview image
+                    || (pos_h >= pos_w && pos_h % pos_w == 0) // tile images
+                );
 
                 const int window = hparams.attn_window_size;
                 const int pos = pos_w;
