@@ -1330,7 +1330,8 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_PARAKEET:
                     {
-                        get_u32(KEY_AUDIO_SUBSAMPLING_FACTOR, hparams.subsampling_factor, false);
+                        get_u32(KEY_AUDIO_SUBSAMPLING_FACTOR, hparams.subsampling_factor);
+                        get_u32(KEY_A_CONV_KERNEL_SIZE,       hparams.audio_conv_kernel_size);
                         hparams.audio_chunk_len    = 0;
                         hparams.audio_sample_rate  = 16000;
                         hparams.audio_n_fft        = 512;

@@ -371,10 +371,10 @@ ggml_cgraph * clip_graph_parakeet::build() {
             cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
 
             // use ggml_ssm_conv for f32 precision
-            // dw_pad = (n_conv_kernel - 1) / 2 = (9 - 1) / 2 = 4
-            cur = ggml_pad(ctx0, cur, 4, 0, 0, 0);
-            cur = ggml_roll(ctx0, cur, 4, 0, 0, 0);
-            cur = ggml_pad(ctx0, cur, 4, 0, 0, 0);
+            const int dw_pad = (hparams.audio_conv_kernel_size - 1) / 2;
+            cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
+            cur = ggml_roll(ctx0, cur, dw_pad, 0, 0, 0);
+            cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
             ggml_format_name(cur, "enc_%d_conv_dw_pad", il);
 
             cur = ggml_ssm_conv(ctx0, cur, layer.conv_dw_w);

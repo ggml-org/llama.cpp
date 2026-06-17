@@ -54,6 +54,7 @@ class NemotronNanoV2VLModel(MmprojModel):
             self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["num_mel_bins"])
             self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
             self.gguf_writer.add_audio_subsampling_factor(self.hparams_audio["subsampling_factor"])
+            self.gguf_writer.add_audio_conv_kernel_size(self.hparams_audio["conv_kernel_size"])
             self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.PARAKEET)
             self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.NEMOTRON_V2_VL)
         else:
