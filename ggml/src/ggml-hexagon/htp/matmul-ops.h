@@ -71,6 +71,8 @@ struct htp_mm_kernel_params {
     int32_t  vtcm_src0_size;     // src0 scratchpad size in VTCM
     int32_t  vtcm_src1_size;     // src1 scratchpad size in VTCM
     int32_t  vtcm_dst_size;      // dst scratchpad size in VTCM
+    int32_t  vtcm_src2_size;     // src2 scratchpad size in VTCM (fused only)
+    int32_t  vtcm_src3_size;     // src3 scratchpad size in VTCM (fused only)
     int32_t  act_threads;        // Number of threads for activation preparation
 
     // Precomputed division values
@@ -82,9 +84,9 @@ struct htp_mm_kernel_params {
 };
 
 #if defined(__cplusplus)
-static_assert(sizeof(struct htp_mm_kernel_params) <= 96, "htp_matmul_kernel_params is too large for kernel_params blob");
+static_assert(sizeof(struct htp_mm_kernel_params) <= 128, "htp_matmul_kernel_params is too large for kernel_params blob");
 #else
-_Static_assert(sizeof(struct htp_mm_kernel_params) <= 96, "htp_matmul_kernel_params is too large for kernel_params blob");
+_Static_assert(sizeof(struct htp_mm_kernel_params) <= 128, "htp_matmul_kernel_params is too large for kernel_params blob");
 #endif
 
 // Search for optimal (mc, nc) chunk sizes within VTCM budget.

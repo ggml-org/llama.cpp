@@ -3573,40 +3573,19 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
 
     size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(src1->ne[0]) : htp_mm_q8_0_tiled_row_size(src1->ne[0]);
 
-    // Set up scratchpads
-    size_t src0_sz_per_thread = 0;
-    size_t src2_sz_per_thread = 0;
-    size_t src3_sz_per_thread = 0;
+    // Set up scratchpads using precomputed sizes from the host
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
 
-    if (is_repacked) {
-        uint32_t tile_size = htp_mm_get_weight_tile_size(src0->type);
-        uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(src0->type);
-        uint32_t n_k_tiles = src1->ne[0] / 32;
-        uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
+    size_t src0_sz = kparams->vtcm_src0_size;
+    size_t src1_sz = kparams->vtcm_src1_size;
+    size_t src2_sz = kparams->vtcm_src2_size;
+    size_t src3_sz = kparams->vtcm_src3_size;
+    size_t vtcm_size = kparams->vtcm_size;
 
-        size_t repacked_vtcm_size = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
-        size_t src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0_TILED * sizeof(float));
-        if (repacked_vtcm_size < src1_row_size_padded) {
-            repacked_vtcm_size = src1_row_size_padded;
-        }
-
-        src0_sz_per_thread = repacked_vtcm_size;
-        src2_sz_per_thread = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
-        src3_sz_per_thread = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
-    } else {
-        src0_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
-        src2_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
-        src3_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
-    }
-
-    size_t src1_sz_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
-
-    size_t src0_sz = src0_sz_per_thread * octx->n_threads;
-    size_t src1_sz = src1_sz_per_thread;
-    size_t src2_sz = src2_sz_per_thread * octx->n_threads;
-    size_t src3_sz = src3_sz_per_thread * octx->n_threads;
-
-    size_t vtcm_size = src0_sz + src1_sz + src2_sz + src3_sz;
+    size_t src0_sz_per_thread = src0_sz / octx->n_threads;
+    size_t src1_sz_per_thread = src1_sz;
+    size_t src2_sz_per_thread = src2_sz / octx->n_threads;
+    size_t src3_sz_per_thread = src3_sz / octx->n_threads;
 
     if (octx->ctx->vtcm_size < vtcm_size) {
         FARF(ERROR, "matmul-qkv: current VTCM reservation %zu is too small, needed %zu\n",
@@ -3719,36 +3698,17 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
 
     size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(src1->ne[0]) : htp_mm_q8_0_tiled_row_size(src1->ne[0]);
 
-    // Set up scratchpads
-    size_t src0_sz_per_thread = 0;
-    size_t src2_sz_per_thread = 0;
+    // Set up scratchpads using precomputed sizes from the host
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
 
-    if (is_repacked) {
-        uint32_t tile_size = htp_mm_get_weight_tile_size(src0->type);
-        uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(src0->type);
-        uint32_t n_k_tiles = src1->ne[0] / 32;
-        uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
+    size_t src0_sz = kparams->vtcm_src0_size;
+    size_t src1_sz = kparams->vtcm_src1_size;
+    size_t src2_sz = kparams->vtcm_src2_size;
+    size_t vtcm_size = kparams->vtcm_size;
 
-        size_t repacked_vtcm_size = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
-        size_t src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0_TILED * sizeof(float));
-        if (repacked_vtcm_size < src1_row_size_padded) {
-            repacked_vtcm_size = src1_row_size_padded;
-        }
-
-        src0_sz_per_thread = repacked_vtcm_size;
-        src2_sz_per_thread = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
-    } else {
-        src0_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
-        src2_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
-    }
-
-    size_t src1_sz_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
-
-    size_t src0_sz = src0_sz_per_thread * octx->n_threads;
-    size_t src1_sz = src1_sz_per_thread;
-    size_t src2_sz = src2_sz_per_thread * octx->n_threads;
-
-    size_t vtcm_size = src0_sz + src1_sz + src2_sz;
+    size_t src0_sz_per_thread = src0_sz / octx->n_threads;
+    size_t src1_sz_per_thread = src1_sz;
+    size_t src2_sz_per_thread = src2_sz / octx->n_threads;
 
     if (octx->ctx->vtcm_size < vtcm_size) {
         FARF(ERROR, "matmul-ffn: current VTCM reservation %zu is too small, needed %zu\n",
