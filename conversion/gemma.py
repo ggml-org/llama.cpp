@@ -10,7 +10,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, TextModel, gguf, logger
+from .base import LazyTorchTensor, MXFP4MoEMixin, MmprojModel, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("GemmaForCausalLM")
@@ -615,7 +615,7 @@ class Gemma3NModel(Gemma3Model):
 
 
 @ModelBase.register("Gemma4ForConditionalGeneration", "Gemma4ForCausalLM")
-class Gemma4Model(Gemma3Model):
+class Gemma4Model(MXFP4MoEMixin, Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4
 
     def norm_shift(self, name: str) -> float:
@@ -739,6 +739,56 @@ class Gemma4Model(Gemma3Model):
                 s = self.model_tensors[w2]
                 self.model_tensors[w2] = lambda s=s, r=r, i=e: s() * r()[i]
         super()._generate_nvfp4_tensors()
+
+    # --- MXFP4 experts (gemma4 "vllm_fused_moe" layout) -------------------
+    # Experts ship as MXFP4 (quant_method="mxfp4", experts only) using the same
+    # per-block byte format as transformers/gpt-oss mxfp4, but with vLLM-fused
+    # tensor names: moe.experts.w13_weight=[gate|up] and moe.experts.w2_weight=down,
+    # each with a sibling _weight_scale. We repack straight to native GGUF MXFP4
+    # rather than dequantizing (the generic dequant_model path has no mxfp4 decoder).
+
+    def dequant_model(self):
+        if self._is_mxfp4:
+            self._generate_mxfp4_tensors()
+            return
+        return super().dequant_model()
+
+    def _generate_mxfp4_tensors(self):
+        # expert intermediate is padded to a kernel-aligned width in the checkpoint;
+        # trim back to expert_feed_forward_length (the value written to the GGUF).
+        n_ff = self.find_hparam(["expert_intermediate_size", "moe_intermediate_size"])
+        assert n_ff % 32 == 0, f"expert ff {n_ff} must be a multiple of the MXFP4 block size (32)"
+
+        tail = "moe.experts.w13_weight.weight"
+        layers = sorted(
+            (k[: -len("w13_weight.weight")], int(re.search(r"\.layers\.(\d+)\.", k).group(1)))
+            for k in self.model_tensors if k.endswith(tail)
+        )
+        for prefix, bid in layers:
+            w13 = LazyTorchTensor.to_eager(self.model_tensors.pop(prefix + "w13_weight.weight")())
+            s13 = LazyTorchTensor.to_eager(self.model_tensors.pop(prefix + "w13_weight_scale.weight")())
+            w2  = LazyTorchTensor.to_eager(self.model_tensors.pop(prefix + "w2_weight.weight")())
+            s2  = LazyTorchTensor.to_eager(self.model_tensors.pop(prefix + "w2_weight_scale.weight")())
+
+            n_expert = w13.shape[0]
+            phys_ff  = w13.shape[1] // 2        # padded per-projection (gate/up) width
+            n_blk_h  = w13.shape[2] // 16       # hidden-dim blocks (n_embd / 32)
+            n_blk_f  = n_ff // 32               # intermediate-dim blocks (after unpad)
+            assert phys_ff >= n_ff, f"layer {bid}: expert ff {phys_ff} < {n_ff}"
+
+            # split fused [gate|up] on the output dim and drop the intermediate padding
+            gate_w, up_w = w13[:, :n_ff, :], w13[:, phys_ff:phys_ff + n_ff, :]
+            gate_s, up_s = s13[:, :n_ff, :], s13[:, phys_ff:phys_ff + n_ff, :]
+            # down: keep all hidden rows, drop padding on the packed intermediate (input) dim
+            n_embd = w2.shape[1]
+            dn_w, dn_s = w2[:, :, :n_ff // 2], s2[:, :, :n_blk_f]
+
+            self.repack_mxfp4(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid),
+                                      gate_w.reshape(n_expert, n_ff, n_blk_h, 16), gate_s)
+            self.repack_mxfp4(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid),
+                                      up_w.reshape(n_expert, n_ff, n_blk_h, 16), up_s)
+            self.repack_mxfp4(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid),
+                                      dn_w.reshape(n_expert, n_embd, n_blk_f, 16), dn_s)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
