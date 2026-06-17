@@ -37,7 +37,6 @@ layout (binding = 2) readonly buffer V_PACKED_BF16 { u16vec4 data[]; } v_packed_
 // views, used by the MMQ K-side hot path for fast 4-uint loads.
 layout (binding = 1) readonly buffer K_PACKED_Q4_1_P32 { block_q4_1_packed32 data[]; } k_packed_q4_1_p32;
 layout (binding = 1) readonly buffer K_PACKED_Q5_1_P32 { block_q5_1_packed32 data[]; } k_packed_q5_1_p32;
-#endif  // !DATA_A_TURBO3_0
 
 // Per-quant decode bodies are expanded once for the K view set and once for
 // the V view set. The macros take the buffer name as a parameter.
@@ -132,4 +131,3 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
     }
     return FLOAT_TYPEV4(0);
 }
-#endif  // DATA_A_TURBO3_0

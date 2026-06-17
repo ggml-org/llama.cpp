@@ -466,7 +466,6 @@ void main() {
 #endif
                         {
                             kvsh[row * vsh_stride + col] = data_vv4[(v_offset + v_row * v_stride + v_col) / 4];
-#endif
                         }
                     } else {
                         kvsh[row * vsh_stride + col] = FLOAT_TYPEV4(0.0f);
@@ -488,7 +487,6 @@ void main() {
                         const uint v_tile_row = j * Bc + bc_chunk * MatBc;
                         const uint v_tile_offset = v_offset / 4 + v_tile_row * v_stride / 4 + hsv_offset / 4;
                         coopMatLoad(QMat, data_vv4, v_tile_offset, v_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
-#endif
                     } else {
                         memoryBarrierShared();
                         const uint v_tile_offset = bc_chunk * MatBr * v_cols + gl_SubgroupID * (MatBc / 4);

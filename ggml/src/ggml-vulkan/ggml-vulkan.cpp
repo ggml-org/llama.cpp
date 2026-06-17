@@ -3948,6 +3948,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         const bool bf16_kv = fa.first.k_type == GGML_TYPE_BF16;
         const bool use_mmq = ggml_vk_fa_scalar_uses_mmq(device, fa.first.k_type);
         const bool is_turbo3 = (fa.first.k_type == GGML_TYPE_TURBO3_0);
+        (void) is_turbo3; // turbo3 FA SPIR-V generation deferred; no dedicated pipeline yet
         const void * spv_data = nullptr;
         size_t spv_size = 0;
         const char *name = nullptr;
@@ -3998,6 +3999,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             const uint32_t fa_sgs = fa.first.subgroup_size;
             const bool fa_ds = fa.first.subgroup_size == 0;
             const bool is_turbo3 = (fa.first.k_type == GGML_TYPE_TURBO3_0);
+            (void) is_turbo3; // turbo3 FA SPIR-V generation deferred; no dedicated pipeline yet
 
             const bool bf16_kv = fa.first.k_type == GGML_TYPE_BF16;
 
@@ -16866,10 +16868,14 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q4_0:
                         return true;
+                    // TurboQuant K/V flash-attention is not supported on Vulkan: the
+                    // turbo FA dequant path was dropped in the upstream catch-up and the
+                    // turbo3 FA SPIR-V variant is not generated (no pipeline), so report
+                    // these as unsupported rather than dispatching to a missing kernel.
                     case GGML_TYPE_TURBO2_0:
                     case GGML_TYPE_TURBO3_0:
                     case GGML_TYPE_TURBO4_0:
-                        return true;
+                        return false;
                     case GGML_TYPE_Q1_0:
                         return coopmat2;
                     default:

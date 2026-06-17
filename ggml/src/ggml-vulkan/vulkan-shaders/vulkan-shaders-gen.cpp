@@ -682,16 +682,19 @@ void process_shaders() {
             string_to_spv("flash_attn_f32_f16", "flash_attn.comp",
                 merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"MMQ", "1"}, {"FA_MMQ_MIXED", "1"}}), fp16, false, false, f16acc, "_int8");
 #endif
-            // TurboQuant3 FA: separate SPIR-V variants with DATA_A_TURBO3_0 so the
-            // shader gets turbo3-only K/V bindings (no f16 alias) and the dequant
-            // path runs the per-element centroid lookup (graph applies WHT to Q
-            // pre-attention and inverse WHT to output post-attention).
-            string_to_spv("flash_attn_f32_f16_turbo3_0", "flash_attn.comp",
-                merge_maps(fa_base_dict, {{"DATA_A_TURBO3_0", "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, false, f16acc);
-#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
-            string_to_spv("flash_attn_f32_f16_turbo3_0", "flash_attn_cm1.comp",
-                merge_maps(fa_base_dict, {{"DATA_A_TURBO3_0", "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"COOPMAT", "1"}}), fp16, true, false, f16acc);
-#endif
+            // TurboQuant3 FA: SPIR-V generation is DISABLED pending the turbo3 FA
+            // re-port onto upstream's evolved flash-attention shader. glslc hangs
+            // (infinite optimizer loop) compiling flash_attn.comp with
+            // DATA_A_TURBO3_0 against the current FA base, which blocks the entire
+            // Vulkan build. These variants are not wired into the runtime
+            // (flash_attn_f32_f16_turbo3_0_* is referenced nowhere in
+            // ggml-vulkan.cpp), so skipping generation has no runtime effect: a
+            // turbo3 K/V flash-attention path falls back as before. Re-enable once
+            // the turbo3 FA shader is reconciled with the new base.
+            // string_to_spv("flash_attn_f32_f16_turbo3_0", "flash_attn.comp",
+            //     merge_maps(fa_base_dict, {{"DATA_A_TURBO3_0", "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, false, f16acc);
+            // string_to_spv("flash_attn_f32_f16_turbo3_0", "flash_attn_cm1.comp",
+            //     merge_maps(fa_base_dict, {{"DATA_A_TURBO3_0", "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"COOPMAT", "1"}}), fp16, true, false, f16acc);
         }
     }
 
