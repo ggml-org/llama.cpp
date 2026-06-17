@@ -1101,13 +1101,13 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
 
-    if (w_s) {
-        res = ggml_mul(ctx0, res, w_s);
-    }
-
     // W4A16 NVFP4: ask the backend to keep activations (src1) at higher precision
     if (nvfp4_w4a16_for_weight(hparams, w)) {
         ggml_mul_mat_set_hint(res, GGML_HINT_NO_QUANT_SRC1);
+    }
+
+    if (w_s) {
+        res = ggml_mul(ctx0, res, w_s);
     }
 
     for (const auto & lora : *loras) {
@@ -1138,6 +1138,10 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
 
+    if (nvfp4_w4a16_for_weight(hparams, w)) {
+        ggml_mul_mat_set_hint(res, GGML_HINT_NO_QUANT_SRC1);
+    }
+
     if (w_s) {
         const int64_t n_expert = w_s->ne[0];
         const int64_t n_tokens = cur->ne[2];
@@ -1145,10 +1149,6 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
         s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
         s = ggml_get_rows(ctx0, s, ids);
         res = ggml_mul(ctx0, res, s);
-    }
-
-    if (nvfp4_w4a16_for_weight(hparams, w)) {
-        ggml_mul_mat_set_hint(res, GGML_HINT_NO_QUANT_SRC1);
     }
 
     for (const auto & lora : *loras) {
