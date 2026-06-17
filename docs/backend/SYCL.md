@@ -253,6 +253,7 @@ When targeting an intel GPU, the user should expect one or more devices among th
 #### Intel GPU
 
 ```sh
+# Uses FP32, consider using FP16 for better performance in most cases
 ./examples/sycl/build.sh
 ```
 
@@ -262,11 +263,11 @@ or
 # Export relevant ENV variables
 source /opt/intel/oneapi/setvars.sh
 
-# Option 1: Use FP32 (recommended for better performance in most cases)
-cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
-
-# Option 2: Use FP16
+# Option 1: Use FP16 (recommended for better performance in most cases)
 cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON
+
+# Option 2: Use FP32
+cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
 
 # build all binary
 cmake --build build --config Release -j -v
@@ -469,6 +470,7 @@ Choose one of following methods to build from source code.
 ##### Option 1: Script
 
 ```sh
+# Uses FP32, consider using FP16 for better performance in most cases
 .\examples\sycl\win-build-sycl.bat
 ```
 
@@ -479,11 +481,11 @@ On the oneAPI command line window, step into the llama.cpp main directory and ru
 ```
 @call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
 
-# Option 1: Use FP32 (recommended for better performance in most cases)
-cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx  -DCMAKE_BUILD_TYPE=Release
+# Option 1: Use FP16 (recommended for better performance in most cases)
+cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx -DCMAKE_BUILD_TYPE=Release -DGGML_SYCL_F16=ON
 
-# Option 2: Or FP16
-cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx  -DCMAKE_BUILD_TYPE=Release -DGGML_SYCL_F16=ON
+# Option 2: Or FP32
+cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx -DCMAKE_BUILD_TYPE=Release
 
 cmake --build build --config Release -j
 ```
@@ -491,10 +493,10 @@ cmake --build build --config Release -j
 Or, use CMake presets to build:
 
 ```sh
-cmake --preset x64-windows-sycl-release
+cmake -DGGML_SYCL_F16=ON --preset x64-windows-sycl-release
 cmake --build build-x64-windows-sycl-release -j --target llama-completion
 
-cmake -DGGML_SYCL_F16=ON --preset x64-windows-sycl-release
+cmake --preset x64-windows-sycl-release
 cmake --build build-x64-windows-sycl-release -j --target llama-completion
 
 cmake --preset x64-windows-sycl-debug
@@ -719,6 +721,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_ENABLE_VMM | 0 or 1 (default) | Enable the virtual-memory device pool. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
+| GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
 
 ## Compile-time Flags
 

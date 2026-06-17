@@ -902,14 +902,17 @@ struct vk_device_struct {
     vk_pipeline pipeline_im2col_3d_f32, pipeline_im2col_3d_f32_f16;
     vk_pipeline pipeline_timestep_embedding_f32;
     vk_pipeline pipeline_conv_transpose_1d_f32;
+    vk_pipeline pipeline_col2im_1d_f32;
+    vk_pipeline pipeline_col2im_1d_f16;
+    vk_pipeline pipeline_col2im_1d_bf16;
     vk_pipeline pipeline_snake_f32;
     vk_pipeline pipeline_snake_f16;
     vk_pipeline pipeline_snake_bf16;
     vk_pipeline pipeline_pool2d_f32;
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
-    // [size_idx][kda] where size_idx: 0=d32, 1=d64, 2=d128
-    vk_pipeline pipeline_gated_delta_net[3][2];
+    // [size_idx][kda] where size_idx: 0=d16, 1=d32, 2=d64, 3=d128
+    vk_pipeline pipeline_gated_delta_net[4][2];
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;
     vk_pipeline pipeline_ssm_conv_f32;
@@ -1550,6 +1553,16 @@ struct vk_op_timestep_embedding_push_constants {
     uint32_t nb1;
     uint32_t dim;
     uint32_t max_period;
+};
+
+struct vk_op_col2im_1d_push_constants {
+    uint32_t T_out;
+    uint32_t OC;
+    uint32_t K_OC;
+    uint32_t T_in;
+    uint32_t K;
+    int32_t  stride;
+    int32_t  p0;
 };
 
 struct vk_op_conv_transpose_1d_push_constants {
@@ -3067,8 +3080,10 @@ static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal});
         } else if (device->uma) {
-            // Fall back to host memory type
-            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal,
+            // On UMA, prefer host-visible memory so direct tensor borrowing works.
+            // If unavailable, fall back to device-local memory.
+            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                                                       vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
         } else if (device->disable_host_visible_vidmem) {
             if (device->allow_sysmem_fallback) {
@@ -5203,6 +5218,9 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_timestep_embedding_f32, "timestep_embedding_f32", timestep_embedding_f32_len, timestep_embedding_f32_data, "main", 2, sizeof(vk_op_timestep_embedding_push_constants), {256, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_conv_transpose_1d_f32, "conv_transpose_1d_f32", conv_transpose_1d_f32_len, conv_transpose_1d_f32_data, "main", 3, sizeof(vk_op_conv_transpose_1d_push_constants), {1, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_col2im_1d_f32,  "col2im_1d_f32",  col2im_1d_f32_len,  col2im_1d_f32_data,  "main", 2, sizeof(vk_op_col2im_1d_push_constants), {256, 1, 1}, {}, 1, true);
+    ggml_vk_create_pipeline(device, device->pipeline_col2im_1d_f16,  "col2im_1d_f16",  col2im_1d_f16_len,  col2im_1d_f16_data,  "main", 2, sizeof(vk_op_col2im_1d_push_constants), {256, 1, 1}, {}, 1, true);
+    ggml_vk_create_pipeline(device, device->pipeline_col2im_1d_bf16, "col2im_1d_bf16", col2im_1d_bf16_len, col2im_1d_bf16_data, "main", 2, sizeof(vk_op_col2im_1d_push_constants), {256, 1, 1}, {}, 1, true);
 
     ggml_vk_create_pipeline(device, device->pipeline_snake_f32,  "snake_f32",  snake_f32_len,  snake_f32_data,  "main", 4, sizeof(vk_op_snake_push_constants), {256, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_snake_f16,  "snake_f16",  snake_f16_len,  snake_f16_data,  "main", 4, sizeof(vk_op_snake_push_constants), {256, 1, 1}, {}, 1);
@@ -5215,14 +5233,14 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv7_f32, "rwkv_wkv7_f32", rwkv_wkv7_f32_len, rwkv_wkv7_f32_data, "main", 8, sizeof(vk_op_rwkv_wkv7_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
 
     {
-        const uint32_t gdn_sizes[] = {32, 64, 128};
+        const uint32_t gdn_sizes[] = {16, 32, 64, 128};
         const char * gdn_names[][2] = {
+            {"gated_delta_net_f32_d16",     "gated_delta_net_f32_d16_kda"},
             {"gated_delta_net_f32_d32",     "gated_delta_net_f32_d32_kda"},
             {"gated_delta_net_f32_d64",     "gated_delta_net_f32_d64_kda"},
             {"gated_delta_net_f32_d128",    "gated_delta_net_f32_d128_kda"},
         };
-        const bool use_subgroup_reduce = device->subgroup_arithmetic;
-        for (uint32_t si = 0; si < 3; si++) {
+        for (uint32_t si = 0; si < 4; si++) {
             const uint32_t S_V = gdn_sizes[si];
             GGML_ASSERT(is_pow2(S_V));
 
@@ -5236,10 +5254,29 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 lanes_per_column = std::min(S_V, device->subgroup_size);
             }
 
-            const bool need_clustered_shader = lanes_per_column != 1 && (lanes_per_column < device->subgroup_size);
+            // gated_delta_net.comp relies on S_V % COLS_PER_WG == 0 and
+            // S_V % LANES_PER_COLUMN == 0 to avoid bounds checks.
+            while (lanes_per_column > 1u) {
+                const bool valid_lanes = (device->subgroup_size % lanes_per_column) == 0 &&
+                                         (S_V % lanes_per_column) == 0;
+                const uint32_t cols_per_wg = valid_lanes ? device->subgroup_size / lanes_per_column : 0;
+                if (valid_lanes && cols_per_wg > 0 && (S_V % cols_per_wg) == 0) {
+                    break;
+                }
+                lanes_per_column >>= 1u;
+            }
+
+            GGML_ASSERT((device->subgroup_size % lanes_per_column) == 0);
+            GGML_ASSERT((S_V % lanes_per_column) == 0);
+            GGML_ASSERT((S_V % (device->subgroup_size / lanes_per_column)) == 0);
+
+            const bool need_partial_subgroup_reduce = lanes_per_column != 1u && lanes_per_column < device->subgroup_size;
+            const bool use_clustered_reduce = device->subgroup_arithmetic && device->subgroup_clustered && need_partial_subgroup_reduce;
+            const bool use_subgroup_reduce = device->subgroup_arithmetic && !need_partial_subgroup_reduce;
+            const bool use_subgroup_ops = use_clustered_reduce || use_subgroup_reduce;
             size_t gdn_len;
             const void * gdn_data;
-            if (use_subgroup_reduce && need_clustered_shader) {
+            if (use_clustered_reduce) {
                 gdn_len = gated_delta_net_f32_len;
                 gdn_data = (const void *)gated_delta_net_f32_data;
             } else if (use_subgroup_reduce) {
@@ -5256,7 +5293,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             for (uint32_t kda = 0; kda < 2; kda++) {
                 ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net[si][kda],
                     gdn_names[si][kda], gdn_len, gdn_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants),
-                    wg_denoms, {S_V, kda, device->subgroup_size, lanes_per_column}, 1, true, use_subgroup_reduce, device->subgroup_size);
+                    wg_denoms, {S_V, kda, device->subgroup_size, lanes_per_column}, 1, true, use_subgroup_ops, device->subgroup_size);
             }
         }
     }
@@ -10702,6 +10739,13 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_conv_transpose_1d_f32;
         }
         return nullptr;
+    case GGML_OP_COL2IM_1D:
+        switch (src0->type) {
+            case GGML_TYPE_F32:  return ctx->device->pipeline_col2im_1d_f32;
+            case GGML_TYPE_F16:  return ctx->device->pipeline_col2im_1d_f16;
+            case GGML_TYPE_BF16: return ctx->device->pipeline_col2im_1d_bf16;
+            default:             return nullptr;
+        }
     case GGML_OP_POOL_2D:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_pool2d_f32;
@@ -10723,9 +10767,10 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             const uint32_t kda = (dst->src[3]->ne[0] == (int64_t)S_v) ? 1 : 0;
             uint32_t si;
             switch (S_v) {
-                case 32:  si = 0; break;
-                case 64:  si = 1; break;
-                case 128: si = 2; break;
+                case 16:  si = 0; break;
+                case 32:  si = 1; break;
+                case 64:  si = 2; break;
+                case 128: si = 3; break;
                 default: return nullptr;
             }
             return ctx->device->pipeline_gated_delta_net[si][kda];
@@ -11146,6 +11191,10 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONV_TRANSPOSE_1D:
         {
             elements = {uint32_t(src0->ne[1]), 1, 1}; // parallelize in {Cout, 1, 1}
+        } break;
+    case GGML_OP_COL2IM_1D:
+        {
+            elements = { uint32_t(dst->ne[0]), uint32_t(dst->ne[1]), 1 };
         } break;
     case GGML_OP_POOL_2D:
         {
@@ -12936,6 +12985,32 @@ static void ggml_vk_conv_transpose_1d(ggml_backend_vk_context * ctx, vk_context&
     ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_CONV_TRANSPOSE_1D, std::move(p));
 }
 
+static void ggml_vk_col2im_1d(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    // src0: [K_OC, T_in] columns from matmul
+    // dst:  [T_out, OC]
+
+    const int32_t stride = dst->op_params[0];
+    const int32_t oc     = dst->op_params[1];
+    const int32_t p0     = dst->op_params[2];
+
+    const uint32_t K_OC  = static_cast<uint32_t>(src0->ne[0]);
+    const uint32_t T_in  = static_cast<uint32_t>(src0->ne[1]);
+    const uint32_t T_out = static_cast<uint32_t>(dst->ne[0]);
+    const uint32_t OC    = static_cast<uint32_t>(oc);
+    const uint32_t K     = K_OC / OC;
+
+    vk_op_col2im_1d_push_constants p{};
+    p.T_out  = T_out;
+    p.OC     = OC;
+    p.K_OC   = K_OC;
+    p.T_in   = T_in;
+    p.K      = K;
+    p.stride = stride;
+    p.p0     = p0;
+
+    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_COL2IM_1D, std::move(p));
+}
+
 // Dispatch the fused snake activation: y = x + sin^2(a * x) * inv_b.
 // Match the naive mul -> sin -> sqr -> mul -> add chain and run the
 // dedicated kernel directly. The pattern is validated by
@@ -14422,6 +14497,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         break;
     case GGML_OP_TIMESTEP_EMBEDDING:
         ggml_vk_timestep_embedding(ctx, compute_ctx, src0, node);
+
+        break;
+    case GGML_OP_COL2IM_1D:
+        ggml_vk_col2im_1d(ctx, compute_ctx, src0, node);
 
         break;
     case GGML_OP_CONV_TRANSPOSE_1D:
@@ -17136,7 +17215,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_GATED_DELTA_NET:
             {
                 const uint32_t S_v = op->src[2]->ne[0];
-                if (S_v != 32 && S_v != 64 && S_v != 128) {
+                if (S_v != 16 && S_v != 32 && S_v != 64 && S_v != 128) {
                     return false;
                 }
                 for (int i = 0; i < 6; i++) {
@@ -17188,6 +17267,13 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_TRANSPOSE_1D:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
+        case GGML_OP_COL2IM_1D:
+            return (op->src[0]->type == GGML_TYPE_F32 ||
+                    op->src[0]->type == GGML_TYPE_F16 ||
+                    op->src[0]->type == GGML_TYPE_BF16) &&
+                   op->type == op->src[0]->type &&
+                   ggml_is_contiguous(op->src[0]) &&
+                   ggml_is_contiguous(op);
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_TRANSPOSE_2D:
             {
@@ -18019,6 +18105,11 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             const int32_t p0 = tensor->op_params[1];
             const int32_t d0 = tensor->op_params[2];
             tensor_clone = ggml_conv_transpose_1d(ggml_ctx, src_clone[0], src_clone[1], s0, p0, d0);
+        } else if (tensor->op == GGML_OP_COL2IM_1D) {
+            const int32_t stride = tensor->op_params[0];
+            const int32_t oc     = tensor->op_params[1];
+            const int32_t p0     = tensor->op_params[2];
+            tensor_clone = ggml_col2im_1d(ggml_ctx, src_clone[0], stride, oc, p0);
         } else if (tensor->op == GGML_OP_POOL_2D) {
             enum ggml_op_pool op = static_cast<ggml_op_pool>(tensor->op_params[0]);
             const int32_t k0 = tensor->op_params[1];

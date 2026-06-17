@@ -236,6 +236,7 @@ struct sycl_device_info {
     size_t  total_vram;
     sycl_hw_info hw_info;
     optimize_feature opt_feature;
+    bool    usm_system_support; // support for USM system allocations
 };
 
 
@@ -328,6 +329,11 @@ void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
+
+struct mmid_row_mapping {
+    int32_t i1;
+    int32_t i2;
+};
 
 namespace sycl_ex = sycl::ext::oneapi::experimental;
 struct ggml_backend_sycl_context {
@@ -425,6 +431,8 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<ggml_sycl_fattn_kv_buffers> fattn_bufs[GGML_SYCL_MAX_DEVICES];
 
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
+
+    std::vector<mmid_row_mapping> mmid_row_mapping_host;
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
 
