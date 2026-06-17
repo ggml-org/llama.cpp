@@ -2787,29 +2787,45 @@ private:
         common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
 
         const int n_batch = llama_n_batch(ctx_pfx.get());
+        const int n_chunk = std::min<int>(params_base.n_prefill_chunk, n_batch);
 
-        llama_batch bpfx = llama_batch_init(n_batch, 0, 1);
+        llama_batch bpfx = llama_batch_init(n_chunk, 0, 1);
 
-        for (int i = 0; i < n_pfx; i += n_batch) {
+        const int64_t t_compute0 = ggml_time_us();
+
+        for (int i = 0; i < n_pfx; i += n_chunk) {
             common_batch_clear(bpfx);
-            const int n_cur = std::min(n_batch, n_pfx - i);
+            const int n_cur = std::min(n_chunk, n_pfx - i);
             for (int j = 0; j < n_cur; j++) {
                 common_batch_add(bpfx, input_tokens[i + j], i + j, { seq_pfx }, false);
             }
+
+            const int64_t t_chunk0 = ggml_time_us();
             if (llama_decode(ctx_pfx.get(), bpfx) != 0) {
                 SLT_ERR(slot, "%s", "disagg prefill: llama_decode on ctx_pfx failed\n");
                 llama_batch_free(bpfx);
                 return;
             }
+            llama_synchronize(ctx_pfx.get());
+            const int64_t t_chunk1 = ggml_time_us();
+
+            SLT_INF(slot, "disagg prefill chunk: %d tokens at %d, compute %.1f ms\n",
+                    n_cur, i, (t_chunk1 - t_chunk0) / 1000.0);
         }
+
+        const int64_t t_compute1 = ggml_time_us();
 
         llama_batch_free(bpfx);
 
         const size_t sz = llama_state_seq_get_size_ext(ctx_pfx.get(), seq_pfx, LLAMA_STATE_SEQ_FLAGS_NONE);
         std::vector<uint8_t> buf(sz);
+
+        const int64_t t_get0 = ggml_time_us();
         llama_state_seq_get_data_ext(ctx_pfx.get(), buf.data(), sz, seq_pfx, LLAMA_STATE_SEQ_FLAGS_NONE);
+        const int64_t t_get1 = ggml_time_us();
 
         llama_state_seq_set_data_ext(ctx_tgt, buf.data(), sz, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        const int64_t t_set1 = ggml_time_us();
 
         common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
 
@@ -2818,8 +2834,11 @@ private:
             slot.prompt.tokens.push_back(input_tokens[i]);
         }
 
-        SLT_INF(slot, "disagg prefill: %d tokens on ctx_pfx -> ctx_tgt seq %d (%.2f MiB)\n",
-                n_pfx, slot.id, (float) sz / 1024 / 1024);
+        SLT_INF(slot, "disagg prefill: %d tokens, %.2f MiB | compute %.1f ms | get(net) %.1f ms | set(local) %.1f ms\n",
+                n_pfx, (float) sz / 1024 / 1024,
+                (t_compute1 - t_compute0) / 1000.0,
+                (t_get1 - t_get0) / 1000.0,
+                (t_set1 - t_get1) / 1000.0);
     }
 
     void update_slots() {
