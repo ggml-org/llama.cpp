@@ -2075,12 +2075,6 @@ struct ggml_backend_vk_context {
     int64_t last_graph_eviction_sweep = 0;
     vk_cached_graph * active_capture_graph = nullptr;
 
-    // Timing for graph compute debug logging
-    int64_t graph_compute_t_start = 0;
-    int64_t graph_compute_cpu_us = 0;
-    int n_graph_nodes = 0;
-    const char * graph_compute_phase = nullptr;
-
     static const bool disable_vk_graphs_due_to_env;
 
     vk_cached_graph * vk_graph(const void * first_node_ptr) {
@@ -2126,7 +2120,6 @@ struct ggml_backend_vk_context {
 };
 
 const bool ggml_backend_vk_context::disable_vk_graphs_due_to_env = (getenv("GGML_VK_DISABLE_GRAPHS") != nullptr);
-static const bool vk_graph_log_enabled = (getenv("GGML_VK_GRAPH_LOG") != nullptr);
 
 static void * const vk_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
 
@@ -15262,13 +15255,7 @@ static void ggml_backend_vk_synchronize(ggml_backend_t backend) {
     VK_LOG_DEBUG("ggml_backend_vk_synchronize()");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
-    const int64_t t_sync_start = vk_graph_log_enabled ? ggml_time_us() : 0;
     ggml_vk_synchronize(ctx);
-    if (vk_graph_log_enabled && ctx->graph_compute_phase) {
-        const int64_t t_sync = ggml_time_us() - t_sync_start;
-        std::cerr << "ggml_vulkan: graph (" << ctx->n_graph_nodes << " nodes) — " << ctx->graph_compute_phase << " | cpu " << ctx->graph_compute_cpu_us << " us, sync " << t_sync << " us, total " << (ggml_time_us() - ctx->graph_compute_t_start) << " us" << std::endl;
-    }
-    ctx->graph_compute_phase = nullptr;
 
     ggml_vk_graph_cleanup(ctx);
 }
@@ -15923,7 +15910,6 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     bool use_vk_graph = false;
     bool vk_graph_capture = false;
     vk_cached_graph * cached = nullptr;
-    const int64_t t_start = vk_graph_log_enabled ? ggml_time_us() : 0;
 
     if (cgraph->n_nodes > 0 && !ctx->disable_vk_graphs_due_to_env
 #ifdef GGML_VULKAN_CHECK_RESULTS
@@ -15939,20 +15925,17 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
             if (!cached->warmup_complete) {
                 if (!properties_changed) {
-                    // Properties stable for the second time — capture
                     cached->warmup_complete = true;
                     use_vk_graph = true;
                     vk_graph_capture = true;
                 } else {
-                    if (vk_graph_log_enabled) { std::cerr << "ggml_vulkan: graph " << graph_key << " (" << cgraph->n_nodes << " nodes) — warmup" << std::endl; }
+                    VK_LOG_DEBUG("ggml_vulkan: graph " << graph_key << " (" << cgraph->n_nodes << " nodes) - warmup");
                 }
             } else {
                 if (properties_changed) {
-                    // Graph changed — reset warmup
                     cached->destroy(ctx->device->device);
-                    if (vk_graph_log_enabled) { std::cerr << "ggml_vulkan: graph " << graph_key << " (" << cgraph->n_nodes << " nodes) — invalidated" << std::endl; }
+                    VK_LOG_DEBUG("ggml_vulkan: graph " << graph_key << " (" << cgraph->n_nodes << " nodes) - invalidated");
                 } else if (!cached->submissions.empty()) {
-                    // Replay cached graph
                     use_vk_graph = true;
                     vk_graph_capture = false;
                 }
@@ -15974,22 +15957,11 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ctx->do_add_rms_partials_offset_calculation = false;
 
         if (ggml_vk_graph_replay(ctx, cached)) {
-            if (vk_graph_log_enabled) {
-                ctx->graph_compute_cpu_us = ggml_time_us() - t_start;
-                ctx->graph_compute_t_start = t_start;
-                ctx->n_graph_nodes = cgraph->n_nodes;
-                ctx->graph_compute_phase = "replayed";
-            }
+            VK_LOG_DEBUG("ggml_vulkan: graph (" << cgraph->n_nodes << " nodes, " << cached->submissions.size() << " submissions) - replayed");
 
             if (!ctx->device->support_async) {
-                const int64_t t_sync_start = vk_graph_log_enabled ? ggml_time_us() : 0;
                 ggml_vk_synchronize(ctx);
                 ggml_vk_graph_cleanup(ctx);
-                if (vk_graph_log_enabled) {
-                    const int64_t t_sync = ggml_time_us() - t_sync_start;
-                    std::cerr << "ggml_vulkan: graph (" << cgraph->n_nodes << " nodes, " << cached->submissions.size() << " submissions) — replayed | cpu " << ctx->graph_compute_cpu_us << " us, sync " << t_sync << " us, total " << (ggml_time_us() - t_start) << " us" << std::endl;
-                    ctx->graph_compute_phase = nullptr;
-                }
             }
 
             if (vk_instance.debug_utils_support) {
@@ -15997,8 +15969,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             }
             return GGML_STATUS_SUCCESS;
         }
-        // Replay failed (prealloc buffer changed) — fall through to normal recording
-        if (vk_graph_log_enabled) { std::cerr << "ggml_vulkan: graph " << cgraph->nodes[0] << " (" << cgraph->n_nodes << " nodes) — replay failed (prealloc changed)" << std::endl; }
+        VK_LOG_DEBUG("ggml_vulkan: graph " << cgraph->nodes[0] << " (" << cgraph->n_nodes << " nodes) - replay failed (prealloc changed)");
         use_vk_graph = false;
     }
 
@@ -16400,33 +16371,17 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
         if (cap->disabled) {
             cap->destroy(ctx->device->device);
-            if (vk_graph_log_enabled) { std::cerr << "ggml_vulkan: graph (" << cgraph->n_nodes << " nodes) — capture disabled (staging copies)" << std::endl; }
+            VK_LOG_DEBUG("ggml_vulkan: graph (" << cgraph->n_nodes << " nodes) - capture disabled (staging copies)");
         } else {
             cap->prealloc_x_at_capture = ctx->prealloc_x;
             cap->prealloc_y_at_capture = ctx->prealloc_y;
             cap->prealloc_split_k_at_capture = ctx->prealloc_split_k;
-            if (vk_graph_log_enabled) {
-                ctx->graph_compute_cpu_us = ggml_time_us() - t_start;
-                ctx->graph_compute_t_start = t_start;
-                ctx->n_graph_nodes = cgraph->n_nodes;
-                ctx->graph_compute_phase = "captured";
-            }
+            VK_LOG_DEBUG("ggml_vulkan: graph (" << cgraph->n_nodes << " nodes) - captured");
         }
-    } else if (vk_graph_log_enabled && cgraph->n_nodes > 0) {
-        ctx->graph_compute_cpu_us = ggml_time_us() - t_start;
-        ctx->graph_compute_t_start = t_start;
-        ctx->n_graph_nodes = cgraph->n_nodes;
-        ctx->graph_compute_phase = "recorded";
     }
 
     if (!ctx->device->support_async) {
-        const int64_t t_sync_start = vk_graph_log_enabled ? ggml_time_us() : 0;
         ggml_vk_synchronize(ctx);
-        if (vk_graph_log_enabled && ctx->graph_compute_phase) {
-            const int64_t t_sync = ggml_time_us() - t_sync_start;
-            std::cerr << "ggml_vulkan: graph (" << ctx->n_graph_nodes << " nodes) — " << ctx->graph_compute_phase << " | cpu " << ctx->graph_compute_cpu_us << " us, sync " << t_sync << " us, total " << (ggml_time_us() - t_start) << " us" << std::endl;
-        }
-        ctx->graph_compute_phase = nullptr;
     }
 
     if (vk_instance.debug_utils_support) {
