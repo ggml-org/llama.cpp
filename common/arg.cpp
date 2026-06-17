@@ -2457,6 +2457,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_N_PREFILL").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--n-prefill-chunk"}, "N",
+        "prefill chunk size in tokens for the disaggregated prefill context (default: 256)",
+        [](common_params & params, int value) {
+            params.n_prefill_chunk = value;
+        }
+    ).set_env("LLAMA_ARG_N_PREFILL_CHUNK").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--list-devices"},
         "print list of available devices and exit",
         [](common_params &) {
