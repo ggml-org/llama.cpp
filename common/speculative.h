@@ -68,6 +68,10 @@ void common_speculative_draft(common_speculative * spec);
 // informs the speculative context that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t n_accepted);
 
+// eagle3: deferred-boundary g_embd stash for checkpoints (no-op for other draft types)
+bool common_speculative_get_deferred_boundary(common_speculative * spec, llama_seq_id seq_id, std::vector<float> & g_out);
+void common_speculative_set_deferred_boundary(common_speculative * spec, llama_seq_id seq_id, llama_pos boundary_pos, const std::vector<float> & g);
+
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
 

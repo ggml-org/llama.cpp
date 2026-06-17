@@ -2157,6 +2157,8 @@ private:
 
         cur.update_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
         cur.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        // stash the draft's deferred boundary with the checkpoint (only eagle3 needs it; no-op otherwise)
+        common_speculative_get_deferred_boundary(spec.get(), slot.id, cur.data_dft_boundary_g_embd);
 
         SLT_INF(slot,
                 "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
@@ -2977,21 +2979,12 @@ private:
 
                                     bool do_reset = it == slot.prompt.checkpoints.rend();
 
-                                    // eagle3 draft is one position behind the target due to deferred boundary), so it
-                                    // can't resume from a checkpoint restored on a recurrent/hybrid target; re-process fully instead.
-                                    const bool spec_eagle3 = std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
-                                                                       COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3) != params_base.speculative.types.end();
-                                    if (!do_reset && spec_eagle3 &&
-                                            (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
-                                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS)) {
-                                        SLT_WRN(slot, "%s", "eagle3 draft cannot resume from a recurrent/hybrid checkpoint, forcing full re-processing\n");
-                                        do_reset = true;
-                                    }
-
                                     if (!do_reset) {
                                         // restore the context checkpoint
                                         it->load_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         it->load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        // restore the draft's deferred boundary (only eagle3 needs it; no-op otherwise)
+                                        common_speculative_set_deferred_boundary(spec.get(), slot.id, it->pos_max, it->data_dft_boundary_g_embd);
 
                                         pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
                                         n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
