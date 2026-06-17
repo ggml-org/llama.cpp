@@ -381,8 +381,6 @@ server_task_result_ptr server_response_reader::next(const std::function<bool()> 
         if (result == nullptr) {
             // timeout, check stop condition
             if (should_stop()) {
-                SRV_WRN("%s", "stopping wait for next result due to should_stop condition (adjust the --timeout argument if needed)\n");
-                SRV_WRN("%s", "ref: https://github.com/ggml-org/llama.cpp/pull/22907\n");
                 return nullptr;
             }
         } else {

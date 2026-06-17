@@ -141,13 +141,13 @@
 		@apply bg-background text-foreground;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
+		overflow: hidden; /* Added due to Mermaid rendering somehow causing the double scrollbar */
 	}
 
 	/* Global scrollbar styling - visible only on hover */
 	* {
 		scrollbar-width: thin;
 		scrollbar-color: transparent transparent;
-		transition: scrollbar-color 0.2s ease;
 	}
 
 	*:hover {

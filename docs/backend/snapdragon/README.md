@@ -10,7 +10,7 @@ This image includes Android NDK, OpenCL SDK, Hexagon SDK, CMake, etc.
 This method works on Linux, macOS, and Windows. macOS and Windows users should install Docker Desktop.
 
 ```
-~/src/llama.cpp$ docker run -it -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-android:v0.6
+~/src/llama.cpp$ docker run -it -u $(id -u):$(id -g) --volume $(pwd):/workspace --platform linux/amd64 ghcr.io/snapdragon-toolchain/arm64-android:v0.7
 [d]/> cd /workspace
 ```
 

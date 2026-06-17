@@ -12,11 +12,13 @@ export interface UseToolsPanelReturn {
 	readonly activeGroups: ToolGroup[];
 	readonly totalToolCount: number;
 	readonly noToolsInfoMessage: string | null;
-	getGroupCheckedState(group: ToolGroup): { checked: boolean; indeterminate: boolean };
+	isGroupChecked(group: ToolGroup): boolean;
 	getEnabledToolCount(group: ToolGroup): number;
-	getFavicon(group: { source: ToolSource; label: string }): string | null;
+	getFavicon(group: ToolGroup): string | null;
 	isGroupDisabled(group: ToolGroup): boolean;
 	toggleGroupExpanded(label: string): void;
+	/** Toggle all tools in a group by label (avoids stale group object references). */
+	toggleGroupByLabel(label: string): void;
 	handleOpen(): void;
 }
 
@@ -52,27 +54,18 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		return `To enable Built-In Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
 	});
 
-	function getGroupCheckedState(group: ToolGroup): { checked: boolean; indeterminate: boolean } {
-		return {
-			checked: toolsStore.isGroupFullyEnabled(group),
-			indeterminate: toolsStore.isGroupPartiallyEnabled(group)
-		};
+	function isGroupChecked(group: ToolGroup): boolean {
+		return toolsStore.isGroupFullyEnabled(group);
 	}
 
 	function getEnabledToolCount(group: ToolGroup): number {
-		return group.tools.filter((tool) => toolsStore.isToolEnabled(tool.function.name)).length;
+		return group.tools.filter((tool) => toolsStore.isToolEnabled(tool.key)).length;
 	}
 
-	function getFavicon(group: { source: ToolSource; label: string }): string | null {
-		if (group.source !== ToolSource.MCP) return null;
+	function getFavicon(group: ToolGroup): string | null {
+		if (group.source !== ToolSource.MCP || !group.serverId) return null;
 
-		for (const server of mcpStore.getServersSorted()) {
-			if (mcpStore.getServerLabel(server) === group.label) {
-				return mcpStore.getServerFavicon(server.id);
-			}
-		}
-
-		return null;
+		return mcpStore.getServerFavicon(group.serverId);
 	}
 
 	function isGroupDisabled(group: ToolGroup): boolean {
@@ -89,6 +82,13 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		} else {
 			expandedGroups.add(label);
 		}
+	}
+
+	function toggleGroupByLabel(label: string): void {
+		// Find current group by label to get up-to-date tool references
+		const group = activeGroups.find((g) => g.label === label);
+		if (!group) return;
+		toolsStore.toggleGroup(group);
 	}
 
 	function handleOpen(): void {
@@ -112,11 +112,12 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		get noToolsInfoMessage() {
 			return noToolsInfoMessage;
 		},
-		getGroupCheckedState,
+		isGroupChecked,
 		getEnabledToolCount,
 		getFavicon,
 		isGroupDisabled,
 		toggleGroupExpanded,
+		toggleGroupByLabel,
 		handleOpen
 	};
 }

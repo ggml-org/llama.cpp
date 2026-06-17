@@ -1,4 +1,4 @@
-import { AgenticSectionType, MessageRole } from '$lib/enums';
+import { AgenticSectionType, ContinueIntentKind, MessageRole } from '$lib/enums';
 import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
@@ -18,6 +18,7 @@ export interface AgenticSection {
 	toolArgs?: string;
 	toolResult?: string;
 	toolResultExtras?: DatabaseMessageExtra[];
+	wasInterrupted?: boolean;
 }
 
 /**
@@ -51,7 +52,8 @@ function deriveSingleTurnSections(
 		const isPending = isStreaming && !hasContentAfterReasoning;
 		sections.push({
 			type: isPending ? AgenticSectionType.REASONING_PENDING : AgenticSectionType.REASONING,
-			content: message.reasoningContent
+			content: message.reasoningContent,
+			wasInterrupted: !isStreaming && !hasContentAfterReasoning
 		});
 	}
 
@@ -224,4 +226,63 @@ export function hasAgenticContent(
 	}
 
 	return toolMessages.length > 0;
+}
+
+/**
+ * Classification of how a Continue click on an assistant message should resume
+ * generation. The caller dispatches the resume path based on this value.
+ *
+ *   append_text  -> the target is a plain text turn, resume with
+ *                   continue_final_message and rehydrate the persisted
+ *                   tool_calls and attachments through the regular DB to API
+ *                   message converter.
+ *   rerun_turn   -> the target carries tool_calls that were never resolved by
+ *                   tool result messages. The agentic stream was cut mid turn,
+ *                   so we drop the target and rerun the loop from the previous
+ *                   history. truncateAfter is the last kept index, inclusive.
+ *   next_turn    -> the target's tool_calls were already resolved by trailing
+ *                   tool results. Hand the history up to and including the
+ *                   last consecutive tool result back to the agentic loop so it
+ *                   starts the next turn naturally. truncateAfter points at
+ *                   that last tool result.
+ */
+export type ContinueIntent =
+	| { kind: ContinueIntentKind.APPEND_TEXT }
+	| { kind: ContinueIntentKind.RERUN_TURN; truncateAfter: number }
+	| { kind: ContinueIntentKind.NEXT_TURN; truncateAfter: number };
+
+/**
+ * Decide how a Continue click on messages[idx] should resume generation.
+ * Pure function over the persisted history snapshot.
+ */
+export function classifyContinueIntent(messages: DatabaseMessage[], idx: number): ContinueIntent {
+	const target = messages[idx];
+
+	// Defensive default: callers already filter by role, stay deterministic.
+	if (!target || target.role !== MessageRole.ASSISTANT) {
+		return { kind: ContinueIntentKind.APPEND_TEXT };
+	}
+
+	const hasToolCalls = parseToolCalls(target.toolCalls).length > 0;
+	if (!hasToolCalls) {
+		return { kind: ContinueIntentKind.APPEND_TEXT };
+	}
+
+	// Walk consecutive trailing tool results. The agentic loop only emits tool
+	// messages directly after the assistant turn that owns them, so the first
+	// non tool message marks the boundary.
+	let lastTrailingTool = idx;
+	for (let i = idx + 1; i < messages.length; i++) {
+		if (messages[i].role === MessageRole.TOOL) {
+			lastTrailingTool = i;
+		} else {
+			break;
+		}
+	}
+
+	if (lastTrailingTool > idx) {
+		return { kind: ContinueIntentKind.NEXT_TURN, truncateAfter: lastTrailingTool };
+	}
+
+	return { kind: ContinueIntentKind.RERUN_TURN, truncateAfter: idx - 1 };
 }
