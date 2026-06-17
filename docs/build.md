@@ -275,6 +275,10 @@ Consider setting `CUDA_SCALE_LAUNCH_QUEUES=4x`, which increases the CUDA command
 Override default, speed-optimized compute types for cuBLAS matrix multiplications.
 Legal values: `auto`, `f16`, `fp16`, `bf16`, `f32`, `fp32`.
 
+#### GGML_CUDA_DISABLE_FORCE_W4A8
+
+NVFP4 models that carry W4A16 layers request higher-precision activations, so on Blackwell those layers run through the W4A8 path instead of the native W4A4 path. Set `GGML_CUDA_DISABLE_FORCE_W4A8=1` to ignore that request and keep the native W4A4 path for faster prompt processing at the cost of accuracy.
+
 ### Unified Memory
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted. In Windows this setting is available in the NVIDIA control panel as `System Memory Fallback`.
