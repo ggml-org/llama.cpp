@@ -1342,6 +1342,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"--recurrent-snapshots"}, "N",
+        string_format("number of recurrent-state rollback snapshots per sequence (default: %u, 0 = disabled)", params.n_recurrent_snapshots),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("recurrent-snapshots must be non-negative");
+            }
+            params.n_recurrent_snapshots = value;
+        }
+    ).set_env("LLAMA_ARG_RECURRENT_SNAPSHOTS").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"-kvu", "--kv-unified"},
         {"-no-kvu", "--no-kv-unified"},
         "use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)",
