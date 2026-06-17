@@ -493,19 +493,30 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
     // canvas logits then start at row 0 (cached) instead of row n_input (unified).
     const int32_t logit_off = params.kv_cache ? 0 : n_input;
     if (params.kv_cache) {
-        llama_diffusion_set_phase(model, /*PKV_PREFILL=*/1, n_input);
         llama_diffusion_set_sc(model, nullptr, 0.0f, 1.0f, false);
-        batch.n_tokens = n_input;
-        for (int32_t i = 0; i < n_input; i++) {
-            batch.token[i]     = input_tokens[i];
-            batch.pos[i]       = i;
-            batch.n_seq_id[i]  = 1;
-            batch.seq_id[i][0] = 0;
-            batch.logits[i]    = 1;  // encode() forces all rows to output anyway; set them so it stays quiet
+        // Chunked causal PREFILL: feed the prompt in ubatch-sized chunks, each writing its K/V to the store and
+        // attending causally over the prefix. Keeps n_tokens <= n_ubatch, so the buffer tracks the chunk, not the prompt.
+        const int32_t U = std::max(1, (int32_t) llama_n_ubatch(ctx));
+        bool prefill_ok = true;
+        for (int32_t s = 0; s < n_input && prefill_ok; s += U) {
+            const int32_t u = std::min(U, n_input - s);
+            llama_diffusion_set_phase(model, /*PKV_PREFILL=*/1, n_input, /*off=*/s);
+            batch.n_tokens = u;
+            for (int32_t i = 0; i < u; i++) {
+                batch.token[i]     = input_tokens[s + i];
+                batch.pos[i]       = s + i;
+                batch.n_seq_id[i]  = 1;
+                batch.seq_id[i][0] = 0;
+                // PREFILL logits are unused; flag one row per chunk so a capped n_outputs_max reserves one row.
+                batch.logits[i]    = (i == u - 1) ? 1 : 0;
+            }
+            if (llama_decode(ctx, batch) != 0) {
+                LOG_ERR("%s: PREFILL chunk [%d,%d) decode failed\n", __func__, s, s + u);
+                prefill_ok = false;
+            }
         }
-        if (llama_decode(ctx, batch) != 0) {
-            LOG_ERR("%s: PREFILL decode failed\n", __func__);
-            llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0);
+        if (!prefill_ok) {
+            llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0, 0);
             llama_batch_free(batch);
             return;
         }
@@ -522,7 +533,7 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
         const float   temp_inv = 1.0f / t;
 
         if (params.kv_cache) {
-            llama_diffusion_set_phase(model, /*PKV_DECODE=*/2, n_input);
+            llama_diffusion_set_phase(model, /*PKV_DECODE=*/2, n_input, 0);
             batch.n_tokens = C;
             for (int32_t i = 0; i < C; i++) {
                 batch.token[i]     = current_canvas[i];
@@ -662,7 +673,7 @@ void diffusion_generate_entropy_bound(llama_context *             ctx,
     }
 
     if (params.kv_cache) {
-        llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0);  // restore default for later turns / masked path
+        llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0, 0);  // restore default for later turns / masked path
     }
     if (dev_sc) {
         llama_diffusion_set_device_sc(model, false);             // restore host SC path for later turns

@@ -591,12 +591,21 @@ extern "C" {
                              float     inv_temp);
 
     // DiffusionGemma prompt KV caching: select the forward phase for the next llama_decode (P = block
-    // prompt length; no-op otherwise).  0 = UNIFIED (no-cache [prompt|canvas]),  1 = PREFILL (forward the
-    // P prompt tokens, write the K,V store),  2 = DECODE (forward the canvas, read the cached prompt K,V).
+    // prompt length, used to size the store; no-op otherwise).  0 = UNIFIED (no-cache [prompt|canvas]),
+    // 1 = PREFILL (forward the prompt chunk starting at off, writing the K,V store causally),  2 = DECODE
+    // (forward the canvas, read the cached prompt K,V).  off is the chunk's global start (PREFILL only;
+    // pass 0 for an unchunked single-shot prefill).
     LLAMA_API void llama_diffusion_set_phase(
             struct llama_model * model,
                            int   phase,
-                       int32_t   P);
+                       int32_t   P,
+                       int32_t   off);
+
+    // DiffusionGemma prompt-KV store bytes per prompt token (0 for other models). Pass use_f16 = whether
+    // flash attention is enabled (the store is F16 under FA, F32 otherwise). Sizes context against the store.
+    LLAMA_API size_t llama_diffusion_pkv_bytes_per_token(
+            const struct llama_model * model,
+                              bool      use_f16);
 
     LLAMA_API int32_t llama_model_n_ctx_train(const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd     (const struct llama_model * model);

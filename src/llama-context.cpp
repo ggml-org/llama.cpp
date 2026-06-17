@@ -1353,8 +1353,14 @@ int llama_context::encode(const llama_batch & batch_inp) {
     const int64_t n_embd  = hparams.n_embd_inp();
     const int64_t n_vocab = model.vocab.n_tokens();
 
+    // Memoryless models (e.g. canvas diffusion) route decode() here but often need logits for only a few rows
+    // (the canvas). When the caller caps n_outputs_max below the batch size, honor the per-token output flags
+    // instead of forcing every row, avoiding an [n_tokens, n_vocab] reserve (huge at a 262k vocab). The default
+    // n_outputs_max == n_batch >= n_tokens, so this is a no-op for encoder/embedding models.
+    const bool output_all = cparams.embeddings || cparams.n_outputs_max >= (uint32_t) batch_inp.n_tokens;
+
     // note: during encode, we always pass the full sequence starting from pos = 0
-    if (!balloc->init(batch_inp, model.vocab, nullptr, n_embd, cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, true)) {
+    if (!balloc->init(batch_inp, model.vocab, nullptr, n_embd, cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, output_all)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
@@ -1379,17 +1385,27 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     n_queued_tokens += n_tokens;
 
-    // reserve output buffer
-    if (output_reserve(n_tokens) < n_tokens) {
-        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %u outputs\n", __func__, n_tokens);
+    // reserve output buffer (capped: only the flagged rows when output_all is false)
+    const uint32_t n_outputs_enc = output_all ? n_tokens : balloc->get_n_outputs();
+    if (output_reserve(n_outputs_enc) < n_outputs_enc) {
+        LLAMA_LOG_ERROR("%s: could not reserve space for batch with %u outputs\n", __func__, n_outputs_enc);
         return -2;
     };
 
-    for (uint32_t i = 0; i < n_tokens; ++i) {
-        output_ids[i] = i;
+    std::fill(output_ids.begin(), output_ids.end(), -1);
+    if (output_all) {
+        for (uint32_t i = 0; i < n_tokens; ++i) {
+            output_ids[i] = i;
+        }
+    } else {
+        // map each flagged token index -> its output-buffer row (out_ids is sorted for canvas models)
+        const auto & out_ids = balloc->get_out_ids();
+        for (uint32_t i = 0; i < n_outputs_enc; ++i) {
+            output_ids[out_ids[i]] = i;
+        }
     }
 
-    n_outputs = n_tokens;
+    n_outputs = n_outputs_enc;
 
     const auto causal_attn_org = cparams.causal_attn;
 
@@ -1422,7 +1438,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
         GGML_ASSERT(backend_res != nullptr);
         GGML_ASSERT(logits.data != nullptr);
 
-        ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_tokens*n_vocab*sizeof(float));
+        ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_outputs_enc*n_vocab*sizeof(float));
     }
 
     // extract embeddings

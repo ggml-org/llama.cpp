@@ -158,12 +158,16 @@ int main(int argc, char ** argv) {
     }
     const bool one_gpu = (gpu_devs <= 1);
 
-    const bool fa_on = getenv("FA") && atoi(getenv("FA"));
+    const bool fa_on  = getenv("FA") && atoi(getenv("FA"));
+    const int  n_head = std::max(1, (int) llama_model_n_head(model));
     auto make_cparams = [&](int n) {
         llama_context_params c = llama_context_default_params();
         c.n_ctx   = (uint32_t) n;
         c.n_batch = (uint32_t) n;
-        c.n_ubatch = (uint32_t) n;   // non-causal: the whole [prompt | canvas] must fit one ubatch
+        // chunked causal prefill: keep n_head*chunk*n_kv under 2^31 (CUDA softcap is 32-bit indexed)
+        const int chunk = (int) std::clamp<int64_t>((int64_t(1) << 30) / (int64_t(n_head) * n), 256, 2048);
+        c.n_ubatch = (uint32_t) std::min(n, chunk);
+        c.n_outputs_max = (uint32_t) canvas_length;   // only the canvas rows need logits
         c.no_perf = true;
         c.flash_attn_type = fa_on ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
         return c;
@@ -171,10 +175,9 @@ int main(int argc, char ** argv) {
 
     // Resolve MAXTOK + create the context. A descending probe keeps the largest context that actually
     // allocates. The model can spill to system RAM (NGL exceeds what fits VRAM), so when the VRAM-gated
-    // pass collapses we re-probe against free RAM -- the O(N^2) non-causal scores buffer lives wherever the
+    // pass collapses we re-probe against free RAM -- the per-turn compute buffer lives wherever the
     // layers landed. llama_init_from_model returns null on OOM (graph_reserve throws), so probing is safe.
     const int n_ctx_train = (int) llama_model_n_ctx_train(model);
-    const int n_head      = std::max(1, (int) llama_model_n_head(model));
     const int floor_ctx   = std::max((int) canvas_length * 4, 2048);
     const int auto_ceil   = n_ctx_train > 0 ? std::min(n_ctx_train, 65536) : 65536;
     const int cands[] = {65536, 49152, 40960, 32768, 24576, 20480, 16384, 12288, 8192, 6144, 4096, 2048};

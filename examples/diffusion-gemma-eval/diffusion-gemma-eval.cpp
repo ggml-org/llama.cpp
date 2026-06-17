@@ -144,7 +144,7 @@ int main(int argc, char ** argv) {
 
         // PREFILL: forward the prompt only, no SC, writing each layer's K,V to the store (logits unused,
         // request just the last row so n_outputs > 0).
-        llama_diffusion_set_phase(model, /*PKV_PREFILL=*/1, P);
+        llama_diffusion_set_phase(model, /*PKV_PREFILL=*/1, P, /*off=*/0);  // single-shot: whole prompt at once
         llama_diffusion_set_sc(model, nullptr, /*use_sc=*/0.0f, /*temp_inv=*/1.0f, /*enabled=*/false);
         {
             llama_batch pre = llama_batch_init(P, 0, 1);
@@ -161,7 +161,7 @@ int main(int argc, char ** argv) {
         }
 
         // DECODE: forward the canvas only (P..P+C-1), reading the cached prompt K,V (SC enabled if given)
-        llama_diffusion_set_phase(model, /*PKV_DECODE=*/2, P);
+        llama_diffusion_set_phase(model, /*PKV_DECODE=*/2, P, 0);
         if (prev_path) {
             llama_diffusion_set_sc(model, prev_logits.data(), /*use_sc=*/1.0f, /*temp_inv=*/1.0f, /*enabled=*/true);
             fprintf(stderr, "self-conditioning ENABLED from %s\n", prev_path);
@@ -184,7 +184,7 @@ int main(int argc, char ** argv) {
             }
             llama_batch_free(dec);
         }
-        llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0);
+        llama_diffusion_set_phase(model, /*PKV_UNIFIED=*/0, 0, 0);
     }
     fclose(out);
     fprintf(stderr, "wrote %d x %d float32 logits to %s\n", C, n_vocab, out_path);

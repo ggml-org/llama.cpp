@@ -856,12 +856,14 @@ struct llama_model_diffusion_gemma : public llama_model_base {
     // prompt KV caching: the prompt's per-layer K,V are step-invariant, so compute once per block and
     // reuse across denoising steps instead of recomputing the whole [prompt|canvas] forward.
     //   PKV_UNIFIED : no-cache forward over [prompt|canvas] (default + safety fallback).
-    //   PKV_PREFILL : forward the prompt only; write per-layer K,V into the store.
+    //   PKV_PREFILL : forward a chunk of the prompt; write its per-layer K,V into the store at pkv_prefill_off.
     //   PKV_DECODE  : forward the canvas only; read the cached prompt K,V.
-    // Store is device-resident F32 (in pkv_buf/pkv_ctx), allocated lazily by llama_diffusion_set_phase().
+    // Store is device-resident (in pkv_buf/pkv_ctx), allocated lazily from the PREFILL graph; element type
+    // follows flash-attn (F16 under FA - precision-neutral since FA casts K,V to F16 anyway - else F32).
     enum pkv_phase_t { PKV_UNIFIED = 0, PKV_PREFILL = 1, PKV_DECODE = 2 };
     mutable pkv_phase_t pkv_phase = PKV_UNIFIED;
     mutable int64_t     pkv_P     = 0;   // prompt length of the current block
+    mutable int64_t     pkv_prefill_off = 0;   // PREFILL: global start position of the current prompt chunk
     mutable int64_t     pkv_cap   = 0;   // allocated capacity (max P) of the store
     mutable std::vector<ggml_tensor *> pkv_k;   // per layer [n_embd_head_k(il), n_head_kv(il), pkv_cap]
     mutable std::vector<ggml_tensor *> pkv_v;

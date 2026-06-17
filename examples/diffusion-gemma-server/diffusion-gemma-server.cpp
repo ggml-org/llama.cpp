@@ -128,7 +128,7 @@ int main(int argc, char ** argv) {
                 if (cur_prompt[i] != req[hdr + i]) new_block = true;
             }
             if (new_block) {
-                llama_diffusion_set_phase(model, /*PKV_PREFILL=*/1, P);
+                llama_diffusion_set_phase(model, /*PKV_PREFILL=*/1, P, /*off=*/0);  // single-shot prefill
                 llama_diffusion_set_sc(model, sc_cache.data(), 0.0f, 1.0f, false); // prompt has no SC
                 batch.n_tokens = P;
                 for (int i = 0; i < P; ++i) {
@@ -147,7 +147,7 @@ int main(int argc, char ** argv) {
                 cur_prompt.assign(req.begin() + hdr, req.begin() + hdr + P);
             }
             // DECODE: forward the canvas only (pos P..P+C-1), reading the cached prompt K,V.
-            llama_diffusion_set_phase(model, /*PKV_DECODE=*/2, P);
+            llama_diffusion_set_phase(model, /*PKV_DECODE=*/2, P, 0);
             llama_diffusion_set_sc(model, sc_cache.data(), use_sc ? 1.0f : 0.0f,
                                    use_sc ? 1.0f / prev_temp : 1.0f, true);
             batch.n_tokens = C;
