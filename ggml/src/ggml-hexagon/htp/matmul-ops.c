@@ -2999,6 +2999,7 @@ int op_matmul(struct htp_ops_context * octx) {
             ret = hmx_matmul_f16_f32_batched(octx->ctx, &batch_params,
                                              kparams->m_chunk, kparams->n_chunk,
                                              kparams->use_pipeline, num_threads,
+                                             kparams->act_threads,
                                              kparams->spad_size);
         } else {
             ret = hmx_matmul_2d_f32(
@@ -3006,6 +3007,7 @@ int op_matmul(struct htp_ops_context * octx) {
                 m_total, k, n, act_stride, (int) src0->nb[1], (int) src0->type, (int) src1->ne[0],
                 (int)(dst->nb[1] / sizeof(float)), (int)dst->ne[0],
                 kparams->m_chunk, kparams->n_chunk, kparams->use_pipeline, num_threads,
+                kparams->act_threads,
                 kparams->tile_size, kparams->aligned_tile_size, kparams->spad_size
             );
         }

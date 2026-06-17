@@ -2258,46 +2258,106 @@ static void ggml_hexagon_precompute_matmul_params(
         size_t n_chunk = 0;
         size_t spad_size = 0;
         bool use_grouped = false;
+        int act_threads_selected = 0;
 
         if (is_batched && wtype == GGML_TYPE_F16 && group_size > 1) {
             // Try grouped path first
             const bool use_dma_activation = (src1->nb[1]/sizeof(float) > (size_t)ne00_padded);
-            const int act_threads = hmx_get_act_threads(num_threads, use_pipeline);
-            const size_t f32_scratch_size = use_dma_activation
-                ? hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
-            size_t group_overhead = 256 + f32_scratch_size;
-            size_t group_size_per_n, group_size_per_m, group_size_per_mn;
-            hmx_get_batched_chunk_costs(ne00_padded, group_size, &group_size_per_n, &group_size_per_m, &group_size_per_mn);
+            size_t best_mblocks = SIZE_MAX;
+            int best_act_threads = 0;
+            size_t best_m_chunk = 0;
+            size_t best_n_chunk = 0;
+            size_t best_spad_size = 0;
 
-            if (hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn,
-                                   hex_align_up(ne11, 32), ne01,
-                                   (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk, &n_chunk, &spad_size) == 0) {
-                size_t exact_size = hmx_get_batched_vtcm_size(wtype, ne00_padded, m_chunk, n_chunk, group_size, use_dma_activation, use_pipeline, num_threads);
-                if (exact_size <= vtcm_budget) {
-                    spad_size = exact_size;
-                    use_grouped = true;
+            int act_threads = num_threads;
+            while (act_threads >= 1) {
+                const size_t f32_scratch_size = use_dma_activation
+                    ? hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
+                size_t group_overhead = 256 + f32_scratch_size;
+                size_t group_size_per_n, group_size_per_m, group_size_per_mn;
+                hmx_get_batched_chunk_costs(ne00_padded, group_size, &group_size_per_n, &group_size_per_m, &group_size_per_mn);
+
+                size_t m_chunk_candidate = 0;
+                size_t n_chunk_candidate = 0;
+                size_t spad_size_candidate = 0;
+
+                if (hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn,
+                                       hex_align_up(ne11, 32), ne01,
+                                       (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk_candidate, &n_chunk_candidate, &spad_size_candidate) == 0) {
+                    size_t exact_size = hmx_get_batched_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, group_size, use_dma_activation, use_pipeline, act_threads);
+                    if (exact_size <= vtcm_budget) {
+                        size_t mblocks = ((size_t) ne11 + m_chunk_candidate - 1) / m_chunk_candidate;
+                        if (mblocks < best_mblocks || (mblocks == best_mblocks && act_threads > best_act_threads)) {
+                            best_mblocks = mblocks;
+                            best_act_threads = act_threads;
+                            best_m_chunk = m_chunk_candidate;
+                            best_n_chunk = n_chunk_candidate;
+                            best_spad_size = exact_size;
+                        }
+                    }
                 }
+                if (act_threads == 1) {
+                    act_threads = 0;
+                } else {
+                    act_threads /= 2;
+                }
+            }
+
+            if (best_act_threads > 0) {
+                m_chunk = best_m_chunk;
+                n_chunk = best_n_chunk;
+                spad_size = best_spad_size;
+                act_threads_selected = best_act_threads;
+                use_grouped = true;
             }
         }
 
         if (!use_grouped) {
             // Fallback to simple 2D path (group_size = 1)
-            const int act_threads = hmx_get_act_threads(num_threads, use_pipeline);
-            const size_t act_f32_size = hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE);
-            size_t simple_2d_overhead = 256 + act_f32_size;
-            size_t simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn;
-            hmx_get_2d_chunk_costs(wtype, ne00_padded, use_pipeline, aligned_tile_size, &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
+            size_t best_mblocks = SIZE_MAX;
+            int best_act_threads = 0;
+            size_t best_m_chunk = 0;
+            size_t best_n_chunk = 0;
+            size_t best_spad_size = 0;
 
-            if (hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn,
-                                   hex_align_up(ne11, 32), ne01,
-                                   (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk, &n_chunk, &spad_size) == 0) {
-                size_t exact_size = hmx_get_2d_vtcm_size(wtype, ne00_padded, m_chunk, n_chunk, use_pipeline, num_threads, aligned_tile_size);
-                if (exact_size <= vtcm_budget) {
-                    spad_size = exact_size;
-                } else {
-                    // Exact check failed
-                    goto fallback_hvx;
+            int act_threads = num_threads;
+            while (act_threads >= 1) {
+                const size_t act_f32_size = hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE);
+                size_t simple_2d_overhead = 256 + act_f32_size;
+                size_t simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn;
+                hmx_get_2d_chunk_costs(wtype, ne00_padded, use_pipeline, aligned_tile_size, &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
+
+                size_t m_chunk_candidate = 0;
+                size_t n_chunk_candidate = 0;
+                size_t spad_size_candidate = 0;
+
+                if (hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn,
+                                       hex_align_up(ne11, 32), ne01,
+                                       (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk_candidate, &n_chunk_candidate, &spad_size_candidate) == 0) {
+                    size_t exact_size = hmx_get_2d_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, use_pipeline, act_threads, aligned_tile_size);
+                    if (exact_size <= vtcm_budget) {
+                        size_t mblocks = ((size_t) ne11 + m_chunk_candidate - 1) / m_chunk_candidate;
+                        if (mblocks < best_mblocks || (mblocks == best_mblocks && act_threads > best_act_threads)) {
+                            best_mblocks = mblocks;
+                            best_act_threads = act_threads;
+                            best_m_chunk = m_chunk_candidate;
+                            best_n_chunk = n_chunk_candidate;
+                            best_spad_size = exact_size;
+                        }
+                    }
                 }
+                if (act_threads == 1) {
+                    act_threads = 0;
+                } else {
+                    act_threads /= 2;
+                }
+            }
+
+            if (best_act_threads > 0) {
+                m_chunk = best_m_chunk;
+                n_chunk = best_n_chunk;
+                spad_size = best_spad_size;
+                act_threads_selected = best_act_threads;
             } else {
                 goto fallback_hvx;
             }
@@ -2308,6 +2368,7 @@ static void ggml_hexagon_precompute_matmul_params(
         kparams->m_chunk = m_chunk;
         kparams->n_chunk = n_chunk;
         kparams->num_threads = num_threads;
+        kparams->act_threads = act_threads_selected;
         kparams->tile_size = htp_get_weight_tile_size(wtype);
         kparams->aligned_tile_size = aligned_tile_size;
         kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(ne10) : htp_q8_0_tiled_row_size(ne10);

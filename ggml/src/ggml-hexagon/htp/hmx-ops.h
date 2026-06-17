@@ -38,7 +38,7 @@ typedef struct {
 // Batched F16 wrapper over hmx_matmul_2d_f32.
 // Batch semantics match ggml_mul_mat(): src0 broadcasts to src1 in dims 2/3.
 int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32_batched_params_t *params,
-                               int m_chunk, int n_chunk, int use_pipeline, int num_threads, int spad_size);
+                               int m_chunk, int n_chunk, int use_pipeline, int num_threads, int act_threads, int spad_size);
 
 int hmx_matmul_2d_f32(struct htp_context *ctx,
                                   float *restrict dst,
@@ -55,6 +55,7 @@ int hmx_matmul_2d_f32(struct htp_context *ctx,
                                   int n_chunk,
                                   int use_pipeline,
                                   int num_threads,
+                                  int act_threads,
                                   int tile_size,
                                   int aligned_tile_size,
                                   int spad_size);

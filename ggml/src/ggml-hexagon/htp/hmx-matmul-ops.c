@@ -1170,6 +1170,7 @@ int hmx_matmul_2d_f32(struct htp_context *ctx,
                                   int n_chunk,
                                   int use_pipeline,
                                   int num_threads,
+                                  int act_threads,
                                   int tile_size,
                                   int aligned_tile_size,
                                   int spad_size) {
@@ -1210,8 +1211,7 @@ int hmx_matmul_2d_f32(struct htp_context *ctx,
 
     const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
 
-    const int act_threads         = hmx_get_act_threads(num_threads, use_pipeline);
-    const size_t act_f32_size     = hex_align_up(act_threads * 4 * k * sizeof(float), HMX_FP16_TILE_SIZE);
+    const size_t act_f32_size     = hex_align_up((size_t)act_threads * 4 * k * sizeof(float), HMX_FP16_TILE_SIZE);
 
     const size_t weight_area_size = is_quant
         ? hex_align_up((n_chunk_n_cols / 32) * n_k_tiles * aligned_tile_size, HMX_FP16_TILE_SIZE)
@@ -1425,8 +1425,8 @@ static inline float *hmx_matmul_dst_batch_ptr(const hmx_matmul_f16_f32_batched_p
 }
 
 static int hmx_matmul_f16_f32_batched_simple(struct htp_context *ctx,
-                                                      const hmx_matmul_f16_f32_batched_params_t *params,
-                                                      int m_chunk, int n_chunk, int use_pipeline, int num_threads, int spad_size) {
+                                                       const hmx_matmul_f16_f32_batched_params_t *params,
+                                                       int m_chunk, int n_chunk, int use_pipeline, int num_threads, int act_threads, int spad_size) {
     int ret = 0;
     for (int b3 = 0; b3 < params->ne13 && ret == 0; ++b3) {
         for (int b2 = 0; b2 < params->ne12 && ret == 0; ++b2) {
@@ -1436,7 +1436,7 @@ static int hmx_matmul_f16_f32_batched_simple(struct htp_context *ctx,
                                            params->m, params->k, params->n,
                                            params->act_stride, params->weight_stride * (int)sizeof(__fp16),
                                            HTP_TYPE_F16, params->k, params->n, params->n,
-                                           m_chunk, n_chunk, use_pipeline, num_threads,
+                                           m_chunk, n_chunk, use_pipeline, num_threads, act_threads,
                                            0, 0, spad_size);
         }
     }
@@ -1444,7 +1444,7 @@ static int hmx_matmul_f16_f32_batched_simple(struct htp_context *ctx,
 }
 
 int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32_batched_params_t *params,
-                               int m_chunk, int n_chunk, int use_pipeline, int num_threads, int spad_size) {
+                               int m_chunk, int n_chunk, int use_pipeline, int num_threads, int act_threads, int spad_size) {
     if (!ctx || !params || !params->dst || !params->activation || !params->weight) { return -1; }
     if (!params->m || !params->k || !params->n) { return -1; }
     if (params->act_stride < params->k || params->weight_stride < params->k || params->dst_stride < params->n) { return -1; }
@@ -1468,7 +1468,7 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
 
     if (!run_grouped) {
         FARF(HIGH, "%s: using simple batched loop", __func__);
-        return hmx_matmul_f16_f32_batched_simple(ctx, params, m_chunk, n_chunk, use_pipeline, num_threads, spad_size);
+        return hmx_matmul_f16_f32_batched_simple(ctx, params, m_chunk, n_chunk, use_pipeline, num_threads, act_threads, spad_size);
     }
 
     const size_t vec_dot_size = params->k * sizeof(__fp16);
@@ -1478,9 +1478,8 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
     // Allocate an F32 scratch buffer in VTCM and use 2D DMA to gather
     // strided rows into a contiguous block before the F32->F16 conversion.
     const bool use_dma_activation = (params->act_stride > params->k);
-    const int act_threads = hmx_get_act_threads(num_threads, use_pipeline);
     const size_t f32_scratch_size = use_dma_activation
-        ? hex_align_up(act_threads * 4 * (size_t) params->k * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
+        ? hex_align_up((size_t)act_threads * 4 * (size_t) params->k * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
 
     size_t m_chunk_n_rows = m_chunk;
     size_t n_chunk_n_cols = n_chunk;
@@ -1503,7 +1502,7 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
 
     if ((size_t) (vtcm_ptr - (uint8_t *) ctx->vtcm_base) > vtcm_budget) {
         FARF(HIGH, "%s: grouped layout overflowed VTCM, falling back to simple batched loop", __func__);
-        return hmx_matmul_f16_f32_batched_simple(ctx, params, m_chunk, n_chunk, use_pipeline, num_threads, spad_size);
+        return hmx_matmul_f16_f32_batched_simple(ctx, params, m_chunk, n_chunk, use_pipeline, num_threads, act_threads, spad_size);
     }
 
     hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16

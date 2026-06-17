@@ -71,6 +71,7 @@ struct htp_matmul_kernel_params {
     int32_t  src0_spad_size;     // src0 scratchpad size in VTCM
     int32_t  src1_spad_size;     // src1 scratchpad size in VTCM
     int32_t  dst_spad_size;      // dst scratchpad size in VTCM
+    int32_t  act_threads;        // Number of threads for activation preparation
 
     // Precomputed division values
     struct fastdiv_values div_ne12_ne1;
@@ -256,13 +257,6 @@ static inline size_t hex_align_up_matmul(size_t n, size_t m) {
     return ((n + m - 1) / m) * m;
 }
 
-static inline int hmx_get_act_threads(int num_threads, bool use_pipeline) {
-    if (use_pipeline) {
-        return num_threads < 4 ? num_threads : 4;
-    }
-    return num_threads;
-}
-
 static inline bool hmx_use_pipeline(int m) {
     return m > 32;
 }
@@ -294,14 +288,13 @@ static inline void hmx_get_batched_chunk_costs(
 }
 
 static inline size_t hmx_get_2d_vtcm_size(
-    int wtype, int k, size_t mc, size_t nc, bool use_pipeline, int num_threads, int aligned_tile_size
+    int wtype, int k, size_t mc, size_t nc, bool use_pipeline, int act_threads, int aligned_tile_size
 ) {
     const int n_k_tiles = k / HMX_FP16_TILE_N_COLS;
     const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32);
     const size_t row_stride = htp_get_tiled_row_stride(wtype, k);
     const size_t vec_dot_size = k * sizeof(uint16_t);
 
-    const int act_threads = hmx_get_act_threads(num_threads, use_pipeline);
     const size_t act_f32_size = hex_align_up_matmul(act_threads * 4 * k * sizeof(float), HMX_FP16_TILE_SIZE);
     size_t weight_area_size = is_quant
         ? hex_align_up_matmul((nc / 32) * n_k_tiles * aligned_tile_size, HMX_FP16_TILE_SIZE)
@@ -321,11 +314,10 @@ static inline size_t hmx_get_2d_vtcm_size(
 }
 
 static inline size_t hmx_get_batched_vtcm_size(
-    int wtype, int k, size_t mc, size_t nc, int group_size, bool use_dma_activation, bool use_pipeline, int num_threads
+    int wtype, int k, size_t mc, size_t nc, int group_size, bool use_dma_activation, bool use_pipeline, int act_threads
 ) {
     (void)wtype;
     const size_t vec_dot_size = k * sizeof(uint16_t);
-    const int act_threads = hmx_get_act_threads(num_threads, use_pipeline);
     const size_t f32_scratch_size = use_dma_activation
         ? hex_align_up_matmul(act_threads * 4 * k * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
 
