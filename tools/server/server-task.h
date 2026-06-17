@@ -25,6 +25,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_SAVE,
     SERVER_TASK_TYPE_SLOT_RESTORE,
     SERVER_TASK_TYPE_SLOT_ERASE,
+    SERVER_TASK_TYPE_GET_CVEC,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
 };
@@ -567,6 +568,12 @@ struct server_task_result_control : server_task_result {
         }
         return out;
     }
+};
+
+struct server_task_result_get_cvector : server_task_result {
+    std::vector<common_control_vector_load_info> cvectors;
+
+    virtual json to_json() override;
 };
 
 struct server_task_result_get_lora : server_task_result {

@@ -2445,6 +2445,13 @@ private:
                     res->n_erased = n_erased;
                     queue_results.send(std::move(res));
                 } break;
+            case SERVER_TASK_TYPE_GET_CVEC:
+                {
+                    auto res = std::make_unique<server_task_result_get_cvector>();
+                    res->id = task.id;
+                    res->cvectors = params_base.control_vectors;
+                    queue_results.send(std::move(res));
+                } break;
             case SERVER_TASK_TYPE_GET_LORA:
                 {
                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
@@ -4737,6 +4744,34 @@ void server_routes::init_routes() {
             top_n);
 
         res->ok(root);
+        return res;
+    };
+
+    this->get_cvectors = [this](const server_http_req & req) {
+        auto res = create_response();
+
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_GET_CVEC);
+            task.id = rd.get_new_id();
+            rd.post_task(std::move(task));
+        }
+
+        // get the result
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        GGML_ASSERT(dynamic_cast<server_task_result_get_cvector*>(result.get()) != nullptr);
+        res->ok(result->to_json());
         return res;
     };
 
