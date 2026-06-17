@@ -1,14 +1,3 @@
-//
-// MIT license
-// Copyright (C) 2026 Intel Corporation
-// SPDX-License-Identifier: MIT
-//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-
 #include "conv3d.hpp"
 
 static inline int64_t ggml_sycl_conv3d_calc_patch_total(const ggml_tensor * dst, int32_t n) {
