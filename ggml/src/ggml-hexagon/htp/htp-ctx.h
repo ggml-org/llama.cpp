@@ -44,7 +44,7 @@ struct htp_ops_context {
 
     enum htp_op_code    op; // FIXME: rename to opcode
     int32_t             op_params[HTP_OP_MAX_PARAMS];
-    int32_t             kernel_params[32];
+    int32_t             kernel_params[HTP_OP_MAX_KERN_PARAMS];
 
     const struct htp_tensor * src[HTP_OP_MAX_INPUTS];
     union {

@@ -104,6 +104,7 @@ enum htp_op_code {
 #define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
 #define HTP_OP_MAX_OUTPUTS 4
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
+#define HTP_OP_MAX_KERN_PARAMS 32
 
 #define HTP_OP_MAX_BUFS    16
 #define HTP_OP_MAX_REQS    256
@@ -146,10 +147,10 @@ struct htp_op_desc {
     uint32_t opcode;                    // GGML/HTP Op
     uint32_t flags;                     // Op flags
     int32_t  params[HTP_OP_MAX_PARAMS]; // Params for the op, e.g. epsilon of RMS norm
+    int32_t  kernel_params[HTP_OP_MAX_KERN_PARAMS]; // generic blob for host-precomputed parameters
     uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
     uint16_t dst[HTP_OP_MAX_OUTPUTS];   // Output tensor indices
     uint16_t pad[2];                    // padding to align to 64 bits
-    int32_t  kernel_params[32];         // generic blob for host-precomputed parameters
 };
 
 #ifndef HTP_MAX_NTHREADS
