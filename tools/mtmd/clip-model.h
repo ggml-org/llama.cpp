@@ -111,7 +111,7 @@ struct clip_hparams {
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
     int32_t subsampling_factor = 0; // parakeet
-                                    //
+
     int32_t audio_chunk_size           = 0;
     int32_t audio_conv_kernel_size     = 0;
     int32_t audio_max_pos_emb          = 0;
