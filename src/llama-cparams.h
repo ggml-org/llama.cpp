@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <cstdint>
+#include <vector>
 
 #define LLAMA_MAX_SEQ 256
 
@@ -39,10 +40,12 @@ struct llama_cparams {
     bool fused_gdn_ch;       // use fused gated delta net (chunked)
     bool auto_fgdn;
     bool no_perf;
-    bool warmup;
+    bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;
     bool kv_unified;
     bool pipeline_parallel;
+
+    std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
 
     enum llama_context_type ctx_type;
     enum llama_pooling_type pooling_type;

@@ -15,6 +15,7 @@ if (CUDAToolkit_FOUND)
         # 80     == Ampere, asynchronous data loading, faster tensor core instructions
         # 86     == RTX 3000, needs CUDA v11.1
         # 89     == RTX 4000, needs CUDA v11.8
+        # 90     == Hopper H100/200, needs CUDA v11.8
         # 120    == Blackwell, needs CUDA v12.8, FP4 tensor cores
         #
         # XX-virtual == compile CUDA code as PTX, do JIT compilation to binary code on first run
@@ -33,7 +34,7 @@ if (CUDAToolkit_FOUND)
             list(APPEND CMAKE_CUDA_ARCHITECTURES 75-virtual 80-virtual 86-real)
 
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
-                list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real)
+                list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real 90-virtual)
             endif()
 
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")

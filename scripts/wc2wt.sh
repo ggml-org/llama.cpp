@@ -37,7 +37,7 @@ dir=$(basename $(pwd))
 # sanitize branch name for directory name (replace / with -)
 dir_suffix=$(echo "$BRANCH" | tr '/' '-')
 
-git worktree add -b "$BRANCH" "../$dir-$dir_suffix" HEAD
+git worktree add "../$dir-$dir_suffix" "$BRANCH" || git worktree add -b "$BRANCH" "../$dir-$dir_suffix" HEAD
 
 og_path=$(pwd)
 wt_path=$(cd "../$dir-$dir_suffix" && pwd)

@@ -8,10 +8,12 @@ extern "C" {
 
 #define RPC_PROTO_MAJOR_VERSION    4
 #define RPC_PROTO_MINOR_VERSION    0
-#define RPC_PROTO_PATCH_VERSION    0
+#define RPC_PROTO_PATCH_VERSION    2
 
 #ifdef  __cplusplus
-static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
+// 98 = upstream 97 + the fork's GGML_OP_TURBO_WHT. Bumped patch version because
+// adding an op shifts the GGML_OP enum used in the RPC wire protocol.
+static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
 #endif
 
 #define GGML_RPC_MAX_SERVERS       16

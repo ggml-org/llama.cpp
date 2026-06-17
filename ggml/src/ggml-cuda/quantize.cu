@@ -3,9 +3,12 @@
 
 __launch_bounds__(CUDA_QUANTIZE_BLOCK_SIZE, 1)
 static __global__ void quantize_q8_1(
-        const float * __restrict__ x, void * __restrict__ vy,
+        const float * x_ptr, void * vy_ptr,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const uint32_t ne1, const uint3 ne2) {
+    ggml_cuda_pdl_lc();
+    const float * GGML_CUDA_RESTRICT x  = x_ptr;
+    void        * GGML_CUDA_RESTRICT vy = vy_ptr;
     const int64_t i0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i0 >= ne0) {
@@ -28,6 +31,7 @@ static __global__ void quantize_q8_1(
     const int64_t ib  = i_cont / QK8_1; // block index
     const int64_t iqs = i_cont % QK8_1; // quant index
 
+    ggml_cuda_pdl_sync();
     const float xi = i0 < ne00 ? x[i03*s03 + i02*s02 + i01*s01 + i00] : 0.0f;
     float amax = fabsf(xi);
     float sum = xi;
@@ -196,6 +200,7 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
     const int64_t i2 = blockIdx.z % ne2;
     const int64_t i3 = blockIdx.z / ne2;
 
+    ggml_cuda_pdl_sync();
     const int64_t i01 = ids ? ids[i1] : i1;
     const int64_t i02 = i2;
     const int64_t i03 = i3;
@@ -288,6 +293,7 @@ static __global__ void quantize_mmq_q8_1(
     const int64_t i3 = blockIdx.z / ne2;
 
     const int64_t i00 = i0;
+    ggml_cuda_pdl_sync();
     const int64_t i01 = ids ? ids[i1] : i1;
     const int64_t i02 = i2;
     const int64_t i03 = i3;
@@ -378,7 +384,8 @@ void quantize_row_q8_1_cuda(
     const int64_t block_num_x = (ne0 + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
     const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
-    quantize_q8_1<<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
+    ggml_cuda_kernel_launch(quantize_q8_1, launch_params, x, vy, ne00, s01, s02, s03, ne0, ne1, ne2_fastdiv);
     GGML_UNUSED(type_src0);
 }
 

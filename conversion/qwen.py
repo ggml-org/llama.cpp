@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -549,6 +548,7 @@ class _Qwen35MtpMixin:
     tensor_map: gguf.TensorNameMap
     no_mtp: bool
     mtp_only: bool
+    _original_block_count: int | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -557,22 +557,44 @@ class _Qwen35MtpMixin:
             self.block_count += self.hparams.get("mtp_num_hidden_layers", 0)
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
+        key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
+        type(self)._original_block_count = hparams.get(key)
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
+
     @classmethod
     def filter_tensors(cls, item):
-        name, _ = item
+        assert cls._original_block_count is not None
+        # TODO: change TextModel to super()
+        if (titem := TextModel.filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+        if name.startswith("model.mtp."):
+            name = name.replace("model.", "", 1)
         if name.startswith("mtp."):
             if cls.no_mtp:
                 return None
-            return item
-        if cls.mtp_only:
-            canonical = name.replace("language_model.", "")
-            keep = canonical in (
+            remapper = {
+                "fc":                    "eh_proj",
+                "pre_fc_norm_embedding": "enorm",
+                "pre_fc_norm_hidden":    "hnorm",
+                "norm":                  "shared_head.norm",
+            }
+            parts = name.split(".", 3)
+            if len(parts) == 4 and parts[1] == "layers" and parts[2].isdecimal():
+                mtp_idx = int(parts[2])
+                name = f"model.layers.{cls._original_block_count + mtp_idx}.{parts[3]}"
+            elif len(parts) == 3 and parts[1] in remapper:
+                name = f"model.layers.{cls._original_block_count}.{remapper[parts[1]]}.{parts[2]}"
+        elif cls.mtp_only:
+            keep = name in (
                 "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
                 "embed_tokens.weight", "norm.weight",
             )
             if not keep:
                 return None
-        return super().filter_tensors(item)  # ty: ignore[unresolved-attribute]
+        return name, gen
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
@@ -593,28 +615,6 @@ class _Qwen35MtpMixin:
             self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
             self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
         self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("mtp."):
-            n_layer = self.hparams["num_hidden_layers"]
-            if name.find("layers.") != -1:
-                assert bid is not None
-                name = name.replace(f"mtp.layers.{bid}", f"model.layers.{bid + n_layer}")
-            else:
-                remapper = {
-                    "mtp.fc":                    "model.layers.{bid}.eh_proj",
-                    "mtp.pre_fc_norm_embedding": "model.layers.{bid}.enorm",
-                    "mtp.pre_fc_norm_hidden":    "model.layers.{bid}.hnorm",
-                    "mtp.norm":                  "model.layers.{bid}.shared_head.norm",
-                }
-                stem   = Path(name).stem
-                suffix = Path(name).suffix
-                tmpl   = remapper[stem] + suffix
-                for b in range(n_layer, self.block_count):
-                    yield from super().modify_tensors(data_torch, tmpl.format(bid=b), b)  # ty: ignore[unresolved-attribute]
-                return
-
-        yield from super().modify_tensors(data_torch, name, bid)  # ty: ignore[unresolved-attribute]
 
 
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")

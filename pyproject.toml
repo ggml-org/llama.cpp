@@ -6,13 +6,13 @@ version = "0.0.0"
 dynamic = ["classifiers"]
 readme = "README.md"
 authors = [{name = "GGML", email = "ggml@ggml.ai"}]
-requires-python = '>=3.10'
+requires-python = '>=3.10,<3.15'
 dependencies = [
-    'numpy (>=1.25.0,<2.0.0)',
+    'numpy (>=1.26.4,<3.0.0)',
     'sentencepiece (>=0.1.98,<0.3.0)',
-    'transformers (==5.5.1)',
-    'protobuf (>=4.21.0)',
-    'torch (>=2.2.0,<3.0.0)',
+    'transformers (==4.57.6)',
+    'protobuf (>=4.21.0,<5.0.0)',
+    'torch (>=2.6.0,<3.0.0)',
     'gguf @ ./gguf-py',
 ]
 classifiers = [
@@ -32,17 +32,20 @@ llama-convert-llama-ggml-to-gguf = "convert_llama_ggml_to_gguf:main"
 llama-ggml-vk-generate-shaders = "ggml_vk_generate_shaders:main"
 
 [tool.poetry]
-packages = [{ include = "*.py", from = "." }]
+packages = [
+    { include = "*.py", from = "." },
+    { include = "conversion", from = "." },
+]
 
 [tool.poetry.dependencies]
 torch = [
-    { version = "~=2.6.0", source = "pypi", markers = "sys_platform == 'darwin'" },
-    { version = "~=2.6.0+cpu", source = "pytorch", markers = "sys_platform == 'linux'" },
-    { version = "~=2.6.0", source = "pypi", markers = "sys_platform == 'win32'" }
+    { version = "==2.11.0", source = "pypi", markers = "sys_platform == 'darwin'" },
+    { version = "==2.11.0+cpu", source = "pytorch", markers = "sys_platform == 'linux'" },
+    { version = "==2.11.0", source = "pypi", markers = "sys_platform == 'win32'" },
 ]
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^5.2"
+pytest = "~=8.3.3"
 
 # Force wheel + cpu
 # For discussion and context see https://github.com/python-poetry/poetry#6409

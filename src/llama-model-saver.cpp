@@ -18,6 +18,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
         case LLM_ARCH_GEMMA3:
         case LLM_ARCH_GEMMA3N:
         case LLM_ARCH_COHERE2:
+        case LLM_ARCH_COHERE2MOE:
         case LLM_ARCH_OLMO2:
         case LLM_ARCH_BITNET:
         case LLM_ARCH_T5:
@@ -26,6 +27,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
         case LLM_ARCH_APERTUS:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_MELLUM:
             return false;
         default:
             return true;
@@ -228,6 +230,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_MOE_EVERY_N_LAYERS,                hparams.moe_every_n_layers);
     add_kv(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.n_layer_nextn);
     add_kv(LLM_KV_NUM_DEEPSTACK_LAYERS,              hparams.n_deepstack_layers);
+    add_kv(LLM_KV_DEEPSTACK_MAPPING,                 hparams.deepstack_mapping_arr);
     add_kv(LLM_KV_POOLING_TYPE,                      uint32_t(hparams.pooling_type));
     add_kv(LLM_KV_LOGIT_SCALE,                       hparams.f_logit_scale);
     add_kv(LLM_KV_DECODER_START_TOKEN_ID,            hparams.dec_start_token_id);

@@ -11,6 +11,11 @@ name: Publish Docker image
 
 on:
   workflow_dispatch: # allows manual triggering
+    inputs:
+      skip_s390x:
+        description: "Skip the s390x build target (useful for fast test runs that do not need the IBM Z runner)"
+        type: boolean
+        default: false
   schedule:
     # Rebuild daily rather than on every push because it is expensive
     - cron: '12 4 * * *'
@@ -64,6 +69,8 @@ jobs:
       - name: Generate build and merge matrices
         id: matrices
         shell: bash
+        env:
+          SKIP_S390X: ${{ inputs.skip_s390x || 'false' }}
         run: |
           set -euo pipefail
 
@@ -75,8 +82,8 @@ jobs:
             { "tag": "cpu", "dockerfile": ".devops/s390x.Dockerfile", "platforms": "linux/s390x", "full": true, "light": true, "server": true, "free_disk_space": false, "runs_on": "ubuntu-24.04-s390x" },
             { "tag": "cuda cuda12", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "12.8.1", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
             { "tag": "cuda cuda12", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "12.8.1", "platforms": "linux/arm64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04-arm" },
-            { "tag": "cuda13", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "13.1.1", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
-            { "tag": "cuda13", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "13.1.1", "platforms": "linux/arm64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04-arm" },
+            { "tag": "cuda13", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "13.3.0", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
+            { "tag": "cuda13", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "13.3.0", "platforms": "linux/arm64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04-arm" },
             { "tag": "musa", "dockerfile": ".devops/musa.Dockerfile", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
             { "tag": "intel", "dockerfile": ".devops/intel.Dockerfile", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
             { "tag": "vulkan", "dockerfile": ".devops/vulkan.Dockerfile", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": false, "runs_on": "ubuntu-24.04" },
@@ -85,6 +92,11 @@ jobs:
             { "tag": "openvino", "dockerfile": ".devops/openvino.Dockerfile", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": false, "runs_on": "ubuntu-24.04" }
           ]
           JSON
+
+          if [ "${SKIP_S390X}" = "true" ]; then
+            jq 'map(select(.platforms != "linux/s390x"))' build-matrix.json > build-matrix.json.tmp
+            mv build-matrix.json.tmp build-matrix.json
+          fi
 
           BUILD_MATRIX="$(jq -c . build-matrix.json)"
           MERGE_MATRIX="$(jq -c '
@@ -132,6 +144,7 @@ jobs:
         config: ${{ fromJSON(needs.prepare_matrices.outputs.build_matrix) }}
     steps:
       - name: Check out the repo
+        id: checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -187,6 +200,10 @@ jobs:
         env:
           GITHUB_REPOSITORY_OWNER: '${{ github.repository_owner }}'
 
+      - name: Get build date
+        id: build_date
+        run: echo "date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_OUTPUT
+
       - name: Free Disk Space (Ubuntu)
         if: ${{ matrix.config.free_disk_space == true }}
         uses: ggml-org/free-disk-space@v1.3.1
@@ -211,13 +228,26 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.config.platforms }}
-          outputs: type=image,name=${{ steps.meta.outputs.image_repo }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ steps.meta.outputs.image_repo }},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true
           file: ${{ matrix.config.dockerfile }}
           target: full
           provenance: false
           build-args: |
+            BUILD_DATE=${{ steps.build_date.outputs.date }}
+            APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            APP_REVISION=${{ steps.checkout.outputs.commit }}
+            IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
+            IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
             ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
             ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
+          annotations: |
+            manifest:org.opencontainers.image.created=${{ steps.build_date.outputs.date }}
+            manifest:org.opencontainers.image.version=${{ needs.create_tag.outputs.source_tag }}
+            manifest:org.opencontainers.image.revision=${{ steps.checkout.outputs.commit }}
+            manifest:org.opencontainers.image.title=llama.cpp
+            manifest:org.opencontainers.image.description=LLM inference in C/C++
+            manifest:org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            manifest:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           # using github experimental cache
           #cache-from: type=gha
           #cache-to: type=gha,mode=max
@@ -235,13 +265,26 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.config.platforms }}
-          outputs: type=image,name=${{ steps.meta.outputs.image_repo }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ steps.meta.outputs.image_repo }},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true
           file: ${{ matrix.config.dockerfile }}
           target: light
           provenance: false
           build-args: |
+            BUILD_DATE=${{ steps.build_date.outputs.date }}
+            APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            APP_REVISION=${{ steps.checkout.outputs.commit }}
+            IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
+            IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
             ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
             ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
+          annotations: |
+            manifest:org.opencontainers.image.created=${{ steps.build_date.outputs.date }}
+            manifest:org.opencontainers.image.version=${{ needs.create_tag.outputs.source_tag }}
+            manifest:org.opencontainers.image.revision=${{ steps.checkout.outputs.commit }}
+            manifest:org.opencontainers.image.title=llama.cpp
+            manifest:org.opencontainers.image.description=LLM inference in C/C++
+            manifest:org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            manifest:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           # using github experimental cache
           #cache-from: type=gha
           #cache-to: type=gha,mode=max
@@ -259,13 +302,26 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.config.platforms }}
-          outputs: type=image,name=${{ steps.meta.outputs.image_repo }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ steps.meta.outputs.image_repo }},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true
           file: ${{ matrix.config.dockerfile }}
           target: server
           provenance: false
           build-args: |
+            BUILD_DATE=${{ steps.build_date.outputs.date }}
+            APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            APP_REVISION=${{ steps.checkout.outputs.commit }}
+            IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
+            IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
             ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
             ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
+          annotations: |
+            manifest:org.opencontainers.image.created=${{ steps.build_date.outputs.date }}
+            manifest:org.opencontainers.image.version=${{ needs.create_tag.outputs.source_tag }}
+            manifest:org.opencontainers.image.revision=${{ steps.checkout.outputs.commit }}
+            manifest:org.opencontainers.image.title=llama.cpp
+            manifest:org.opencontainers.image.description=LLM inference in C/C++
+            manifest:org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            manifest:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           # using github experimental cache
           #cache-from: type=gha
           #cache-to: type=gha,mode=max
@@ -330,9 +386,14 @@ jobs:
 
     steps:
       - name: Check out the repo
+        id: checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Get build date
+        id: build_date
+        run: echo "date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_OUTPUT
 
       - name: Download digest metadata
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -361,6 +422,8 @@ jobs:
           IMAGE_REPO="ghcr.io/${REPO_OWNER}/${REPO_NAME}"
           PREFIX="${IMAGE_REPO}:"
           SRC_TAG="${{ needs.create_tag.outputs.source_tag }}"
+          BUILD_DATE="${{ steps.build_date.outputs.date }}"
+          COMMIT_SHA="${{ steps.checkout.outputs.commit }}"
           TAGS="${{ matrix.config.tag }}"
           ARCHES="${{ matrix.config.arches }}"
           DIGEST_GLOB="/tmp/digests/*.tsv"
@@ -412,11 +475,21 @@ jobs:
                   refs+=("${IMAGE_REPO}@${digest}")
               done
 
+              local annotations=(
+                  --annotation "index:org.opencontainers.image.created=${BUILD_DATE}"
+                  --annotation "index:org.opencontainers.image.version=${SRC_TAG}"
+                  --annotation "index:org.opencontainers.image.revision=${COMMIT_SHA}"
+                  --annotation "index:org.opencontainers.image.title=llama.cpp"
+                  --annotation "index:org.opencontainers.image.description=LLM inference in C/C++"
+                  --annotation "index:org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}"
+                  --annotation "index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}"
+              )
+
               echo "Creating ${merged_tag} from ${refs[*]}"
-              docker buildx imagetools create --tag "${merged_tag}" "${refs[@]}"
+              docker buildx imagetools create "${annotations[@]}" --tag "${merged_tag}" "${refs[@]}"
 
               echo "Creating ${merged_versioned_tag} from ${refs[*]}"
-              docker buildx imagetools create --tag "${merged_versioned_tag}" "${refs[@]}"
+              docker buildx imagetools create "${annotations[@]}" --tag "${merged_versioned_tag}" "${refs[@]}"
           }
 
           for tag in $TAGS; do

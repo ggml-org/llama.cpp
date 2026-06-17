@@ -87,6 +87,10 @@ set(GGML_OPENCL_KERNELS
     mul_mv_q4_1_f32_flat
     mul_mv_q4_k_f32
     mul_mv_q4_k_f32_flat
+    mul_mv_q5_0_f32
+    mul_mv_q5_0_f32_flat
+    mul_mv_q5_1_f32
+    mul_mv_q5_1_f32_flat
     mul_mv_q5_k_f32
     mul_mv_q5_k_f32_flat
     mul_mv_q6_k_f32
@@ -110,6 +114,12 @@ set(GGML_OPENCL_KERNELS
     gemv_moe_q5_0_f32_ns
     gemm_moe_q5_1_f32_ns
     gemv_moe_q5_1_f32_ns
+    gemm_moe_q4_k_f32_ns
+    gemv_moe_q4_k_f32_ns
+    gemm_moe_q5_k_f32_ns
+    gemv_moe_q5_k_f32_ns
+    gemm_moe_q6_k_f32_ns
+    gemv_moe_q6_k_f32_ns
     gemm_moe_mxfp4_f32
     gemv_moe_mxfp4_f32
     gemm_moe_mxfp4_f32_ns
@@ -120,6 +130,8 @@ set(GGML_OPENCL_KERNELS
     mul_mm_f16_f32_l4_lm
     mul_mm_q4_0_f32_l4_lm
     mul_mm_q4_1_f32_l4_lm
+    mul_mm_q5_0_f32_l4_lm
+    mul_mm_q5_1_f32_l4_lm
     mul_mm_q8_0_f32_l4_lm
     mul_mm_iq4_nl_f32_l4_lm
     mul_mm_q4_k_f32_l4_lm
@@ -130,6 +142,10 @@ set(GGML_OPENCL_KERNELS
     gemm_noshuffle_q4_0_f32
     gemv_noshuffle_q4_1_f32
     gemm_noshuffle_q4_1_f32
+    gemv_noshuffle_q5_0_f32
+    gemm_noshuffle_q5_0_f32
+    gemv_noshuffle_q5_1_f32
+    gemm_noshuffle_q5_1_f32
     gemv_noshuffle_iq4_nl_f32
     gemm_noshuffle_iq4_nl_f32
     gemv_noshuffle_q8_0_f32
@@ -158,6 +174,7 @@ set(GGML_OPENCL_KERNELS
     sqr
     sqrt
     ssm_conv
+    gated_delta_net
     sub
     sum_rows
     cumsum

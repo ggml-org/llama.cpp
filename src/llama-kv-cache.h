@@ -93,6 +93,9 @@ public:
 
     using slot_info_vec_t = std::vector<slot_info>;
 
+    // TODO: refactor the memory instances to not depend on `llama_model`
+    //       instead pass all necessary info (e.g. hparams, dev layers, arch, etc.) directly
+    //       likely through `struct llama_memory_params`
     llama_kv_cache(
             const llama_model & model,
           const llama_hparams & hparams,
@@ -275,7 +278,9 @@ private:
     // TODO: temporary until we refactor to be able to share the same cells between 2 kv caches [TAG_KV_CACHE_SHARE_CELLS]
     llama_kv_cache * other;
 
-    std::vector<llama_kv_cells> v_cells;
+    std::shared_ptr<llama_kv_cells_vec> v_cells_impl;
+
+    llama_kv_cells_vec & v_cells;
 
     // maps from a sequence id to a stream id
     std::vector<uint32_t> seq_to_stream;
