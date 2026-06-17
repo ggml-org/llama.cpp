@@ -1823,6 +1823,30 @@ static void test_convert_responses_to_chatcmpl() {
 
         assert_equals(false, result.contains("tools"));
     }
+
+    // Keep hosted image_generation available when tool_choice selects it.
+    {
+        json input = json::parse(R"({
+            "input": "Draw a llama",
+            "model": "test-model",
+            "tools": [
+                {
+                    "type": "image_generation"
+                }
+            ],
+            "tool_choice": {
+                "type": "image_generation"
+            }
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals(true, result.contains("tools"));
+        assert_equals(true, result.at("tools").is_array());
+        assert_equals((size_t)1, result.at("tools").size());
+        assert_equals(std::string("image_generation"), result.at("tools")[0].at("function").at("name").get<std::string>());
+        assert_equals(std::string("required"), result.at("tool_choice").get<std::string>());
+    }
 }
 
 static void test_template_output_peg_parsers(bool detailed_debug) {

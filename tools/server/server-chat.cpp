@@ -519,7 +519,8 @@ static json responses_tool_to_chatcmpl_tool(
         json & metadata,
         const json & all_tools,
         const bool expose_hosted_web_search,
-        const bool expose_hosted_file_search) {
+        const bool expose_hosted_file_search,
+        const bool expose_hosted_image_generation) {
     if (!resp_tool.is_object()) {
         SRV_WRN("skipping malformed Responses tool: %s\n", resp_tool.dump().c_str());
         return nullptr;
@@ -643,6 +644,9 @@ static json responses_tool_to_chatcmpl_tool(
                 }, json::array({"query"})));
     } else if (tool_type == "image_generation") {
         name = sanitize_tool_name(json_value(resp_tool, "name", std::string("image_generation")), "image_generation");
+        if (!expose_hosted_image_generation) {
+            return nullptr;
+        }
         fn = responses_function_tool(
                 name,
                 "Generate an image from a prompt.",
@@ -1027,13 +1031,15 @@ json server_chat_convert_responses_to_chatcmpl(
         const bool expose_web_search =
             !hosted_web_search_wrapper.empty() || responses_tool_choice_requires_tool(response_body, "web_search");
         const bool expose_file_search = !hosted_file_search_wrapper.empty();
+        const bool expose_image_generation = responses_tool_choice_requires_tool(response_body, "image_generation");
         for (const json & resp_tool : response_tools) {
             json chatcmpl_tool = responses_tool_to_chatcmpl_tool(
                     resp_tool,
                     responses_tool_metadata,
                     response_tools,
                     expose_web_search,
-                    expose_file_search);
+                    expose_file_search,
+                    expose_image_generation);
             if (!chatcmpl_tool.is_null()) {
                 chatcmpl_tools.push_back(chatcmpl_tool);
             }
