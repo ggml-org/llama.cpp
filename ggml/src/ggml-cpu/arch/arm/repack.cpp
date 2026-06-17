@@ -2333,105 +2333,167 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             // print_sve_s32("acc_2", acc_2);
                             // print_sve_s32("acc_3", acc_3);
                             
-                            // New cp loop ~ should run only 2 times
-                            for (int cp = 0; cp <col_pairs/2; cp++) {    
-                                // print_sve_s32("acc_01", acc_01);
-                                // print_sve_s32("acc_23", acc_23);
-                                svuint8_t q6_qs_cp_0_l, q6_qs_cp_1_l, q6_qs_cp_0_h, q6_qs_cp_1_h;
+                            // // New cp loop ~ should run only 2 times
+                            // for (int cp = 0; cp <col_pairs/2; cp++) {    
+                            //     // print_sve_s32("acc_01", acc_01);
+                            //     // print_sve_s32("acc_23", acc_23);
+                            //     svuint8_t q6_qs_cp_0_l, q6_qs_cp_1_l, q6_qs_cp_0_h, q6_qs_cp_1_h;
 
-                                if(cp == 0){
-                                    q6_qs_cp_0_l = q6_ql_0_01;
-                                    q6_qs_cp_1_l = q6_ql_1_01;
-                                    q6_qs_cp_0_h = q6_qh_0_01;
-                                    q6_qs_cp_1_h = q6_qh_1_01;
-                                }
-                                if(cp == 1){
-                                    q6_qs_cp_0_l = q6_ql_0_23;
-                                    q6_qs_cp_1_l = q6_ql_1_23;
-                                    q6_qs_cp_0_h = q6_qh_0_23;
-                                    q6_qs_cp_1_h = q6_qh_1_23;
-                                }
+                            //     if(cp == 0){
+                            //         q6_qs_cp_0_l = q6_ql_0_01;
+                            //         q6_qs_cp_1_l = q6_ql_1_01;
+                            //         q6_qs_cp_0_h = q6_qh_0_01;
+                            //         q6_qs_cp_1_h = q6_qh_1_01;
+                            //     }
+                            //     if(cp == 1){
+                            //         q6_qs_cp_0_l = q6_ql_0_23;
+                            //         q6_qs_cp_1_l = q6_ql_1_23;
+                            //         q6_qs_cp_0_h = q6_qh_0_23;
+                            //         q6_qs_cp_1_h = q6_qh_1_23;
+                            //     }
 
-                                // print_sve_u8("q6_qs_cp_0_l: ", q6_qs_cp_0_l);
-                                // print_sve_u8("q6_qs_cp_1_l: ", q6_qs_cp_1_l);
-                                // print_sve_u8("q6_qs_cp_0_h: ", q6_qs_cp_0_h);
-                                // print_sve_u8("q6_qs_cp_1_h: ", q6_qs_cp_1_h);
-                                // std::exit(EXIT_SUCCESS);
+                            //     print_sve_u8("q6_qs_cp_0_l: ", q6_qs_cp_0_l);
+                            //     print_sve_u8("q6_qs_cp_1_l: ", q6_qs_cp_1_l);
+                            //     print_sve_u8("q6_qs_cp_0_h: ", q6_qs_cp_0_h);
+                            //     print_sve_u8("q6_qs_cp_1_h: ", q6_qs_cp_1_h);
+                            //     // std::exit(EXIT_SUCCESS);
 
 
-                                // Extract high 2 bits for upper nibble reconstruction
-                                const svuint8_t q6_qs_cp_0_hh = svand_u8_x(svptrue_b8(), q6_qs_cp_0_h, mask_hi);
-                                const svuint8_t q6_qs_cp_1_hh = svand_u8_x(svptrue_b8(), q6_qs_cp_1_h, mask_hi);
+                            //     // Extract high 2 bits for upper nibble reconstruction
+                            //     const svuint8_t q6_qs_cp_0_hh = svand_u8_x(svptrue_b8(), q6_qs_cp_0_h, mask_hi);
+                            //     const svuint8_t q6_qs_cp_1_hh = svand_u8_x(svptrue_b8(), q6_qs_cp_1_h, mask_hi);
                                 
-                                // q6 = (low4 | high2<<4), without -32 bias (handled via bsums)
-                                svbool_t pg = svptrue_b8();
-                                const svint8_t q6_l0 = svreinterpret_s8_u8(
-                                    svorr_u8_x(pg, svand_u8_x(pg, q6_qs_cp_0_l, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qs_cp_0_h, mask_lo), 4)));
-                                const svint8_t q6_l1 = svreinterpret_s8_u8(
-                                    svorr_u8_x(pg, svand_u8_x(pg, q6_qs_cp_1_l, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qs_cp_1_h, mask_lo), 4)));
-                                const svint8_t q6_h0 =svreinterpret_s8_u8(
-                                    svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_qs_cp_0_l, 4), q6_qs_cp_0_hh));
-                                const svint8_t q6_h1 =svreinterpret_s8_u8(
-                                    svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_qs_cp_1_l, 4), q6_qs_cp_1_hh));
+                            //     // q6 = (low4 | high2<<4), without -32 bias (handled via bsums)
+                            //     svbool_t pg = svptrue_b8();
+                            //     const svint8_t q6_l0 = svreinterpret_s8_u8(
+                            //         svorr_u8_x(pg, svand_u8_x(pg, q6_qs_cp_0_l, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qs_cp_0_h, mask_lo), 4)));
+                            //     const svint8_t q6_l1 = svreinterpret_s8_u8(
+                            //         svorr_u8_x(pg, svand_u8_x(pg, q6_qs_cp_1_l, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qs_cp_1_h, mask_lo), 4)));
+                            //     const svint8_t q6_h0 =svreinterpret_s8_u8(
+                            //         svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_qs_cp_0_l, 4), q6_qs_cp_0_hh));
+                            //     const svint8_t q6_h1 =svreinterpret_s8_u8(
+                            //         svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_qs_cp_1_l, 4), q6_qs_cp_1_hh));
 
-                                svint32_t sb_acc_l = svdup_s32(0);
-                                sb_acc_l = svdot_s32(sb_acc_l, q6_l0, q8_l_0);
-                                sb_acc_l = svdot_s32(sb_acc_l, q6_l1, q8_l_1);
+                            //     svint32_t sb_acc_l = svdup_s32(0);
+                            //     sb_acc_l = svdot_s32(sb_acc_l, q6_l0, q8_l_0);
+                            //     sb_acc_l = svdot_s32(sb_acc_l, q6_l1, q8_l_1);
 
-                                svint32_t sb_acc_h = svdup_s32(0);
-                                sb_acc_h = svdot_s32(sb_acc_h, q6_h0, q8_h_0);
-                                sb_acc_h = svdot_s32(sb_acc_h, q6_h1, q8_h_1);
+                            //     svint32_t sb_acc_h = svdup_s32(0);
+                            //     sb_acc_h = svdot_s32(sb_acc_h, q6_h0, q8_h_0);
+                            //     sb_acc_h = svdot_s32(sb_acc_h, q6_h1, q8_h_1);
 
-                                // print_sve_s32("sb_acc_l: ", sb_acc_l);
-                                // print_sve_s32("sb_acc_h: ", sb_acc_h);
-                                // std::exit(EXIT_SUCCESS);
+                            //     print_sve_s32("sb_acc_l: ", sb_acc_l);
+                            //     print_sve_s32("sb_acc_h: ", sb_acc_h);
+                            //     std::exit(EXIT_SUCCESS);
 
-                                // Pairwise add to get per-column sums: [col0, col1]
-                                // svint32_t sum_l = svaddp_s32_x(svwhilelt_b32(0, 2), sb_acc_l, svext_s32(sb_acc_l, sb_acc_l, 2));
-                                // svint32_t sum_l = svaddp_s32_x(svwhilelt_b32(0, 4), sb_acc_l, sb_acc_l);
-                                // sum_l = svuzp1_s32(sum_l, sum_l);
-                                // svint32_t sum_h = svaddp_s32_x(svwhilelt_b32(0, 4), sb_acc_h, sb_acc_h);
-                                // sum_h = svuzp1_s32(sum_h, sum_h);
+                            //     // Pairwise add to get per-column sums: [col0, col1]
+                            //     // svint32_t sum_l = svaddp_s32_x(svwhilelt_b32(0, 2), sb_acc_l, svext_s32(sb_acc_l, sb_acc_l, 2));
+                            //     // svint32_t sum_l = svaddp_s32_x(svwhilelt_b32(0, 4), sb_acc_l, sb_acc_l);
+                            //     // sum_l = svuzp1_s32(sum_l, sum_l);
+                            //     // svint32_t sum_h = svaddp_s32_x(svwhilelt_b32(0, 4), sb_acc_h, sb_acc_h);
+                            //     // sum_h = svuzp1_s32(sum_h, sum_h);
 
-                                svint32_t sum_l = pairwise_add_8xi32_sve1(sb_acc_l);
-                                svint32_t sum_h = pairwise_add_8xi32_sve1(sb_acc_h);
+                            //     svint32_t sum_l = pairwise_add_8xi32_sve1(sb_acc_l);
+                            //     svint32_t sum_h = pairwise_add_8xi32_sve1(sb_acc_h);
 
-                                // print_sve_s32("sum_l: ", sum_l);
-                                // print_sve_s32("sum_h: ", sum_h);
-                                // std::exit(EXIT_SUCCESS);
+                            //     // print_sve_s32("sum_l: ", sum_l);
+                            //     // print_sve_s32("sum_h: ", sum_h);
+                            //     // std::exit(EXIT_SUCCESS);
 
-                                const int scale_idx_l = half * 8 + sb;
-                                const int scale_idx_h = half * 8 + sb + 4;
+                            //     const int scale_idx_l = half * 8 + sb;
+                            //     const int scale_idx_h = half * 8 + sb + 4;
 
-                                svint32_t scale_vec_l = svld1sh_s32(svwhilelt_b32(0, 4), &q6_scales[scale_idx_l * 8 + cp * 4]);
-                                svint32_t scale_vec_h = svld1sh_s32(svwhilelt_b32(0, 4), &q6_scales[scale_idx_h * 8 + cp * 4]);
+                            //     svint32_t scale_vec_l = svld1sh_s32(svwhilelt_b32(0, 4), &q6_scales[scale_idx_l * 8 + cp * 4]);
+                            //     svint32_t scale_vec_h = svld1sh_s32(svwhilelt_b32(0, 4), &q6_scales[scale_idx_h * 8 + cp * 4]);
 
-                                if (cp == 0){
-                                    acc_01 = svmla_s32_m(svwhilelt_b32(0, 4), acc_01, sum_l, scale_vec_l);
-                                    acc_01 = svmla_s32_m(svwhilelt_b32(0, 4), acc_01, sum_h, scale_vec_h);
-                                }
+                            //     if (cp == 0){
+                            //         acc_01 = svmla_s32_m(svwhilelt_b32(0, 4), acc_01, sum_l, scale_vec_l);
+                            //         acc_01 = svmla_s32_m(svwhilelt_b32(0, 4), acc_01, sum_h, scale_vec_h);
+                            //     }
 
-                                if (cp == 1){
-                                    acc_23 = svmla_s32_m(svwhilelt_b32(0, 4), acc_23, sum_l, scale_vec_l);
-                                    acc_23 = svmla_s32_m(svwhilelt_b32(0, 4), acc_23, sum_h, scale_vec_h);
-                                }
-                            }
+                            //     if (cp == 1){
+                            //         acc_23 = svmla_s32_m(svwhilelt_b32(0, 4), acc_23, sum_l, scale_vec_l);
+                            //         acc_23 = svmla_s32_m(svwhilelt_b32(0, 4), acc_23, sum_h, scale_vec_h);
+                            //     }
+                            // } //for cp
 
-                            // std::cout<<"CP=2 Loop: "<<std::endl;
-                            // print_sve_s32("acc_01", acc_01);
-                            // print_sve_s32("acc_23", acc_23);
+                            // Extract high 2 bits for upper nibble reconstruction - 01
+                            svuint8_t q6_qs_cp_0_hh = svand_u8_x(svptrue_b8(), q6_qh_0_01, mask_hi);
+                            svuint8_t q6_qs_cp_1_hh = svand_u8_x(svptrue_b8(), q6_qh_1_01, mask_hi);
+                            
+                            // q6 = (low4 | high2<<4), without -32 bias (handled via bsums)
+                            svbool_t pg = svptrue_b8();
+                            svint8_t q6_l0 = svreinterpret_s8_u8(
+                                svorr_u8_x(pg, svand_u8_x(pg, q6_ql_0_01, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qh_0_01, mask_lo), 4)));
+                            svint8_t q6_l1 = svreinterpret_s8_u8(
+                                svorr_u8_x(pg, svand_u8_x(pg, q6_ql_1_01, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qh_1_01, mask_lo), 4)));
+                            svint8_t q6_h0 =svreinterpret_s8_u8(
+                                svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_ql_0_01, 4), q6_qs_cp_0_hh));
+                            svint8_t q6_h1 =svreinterpret_s8_u8(
+                                svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_ql_1_01, 4), q6_qs_cp_1_hh));
+
+                            svint32_t sb_acc_l = svdup_s32(0);
+                            sb_acc_l = svdot_s32(sb_acc_l, q6_l0, q8_l_0);
+                            sb_acc_l = svdot_s32(sb_acc_l, q6_l1, q8_l_1);
+
+                            svint32_t sb_acc_h = svdup_s32(0);
+                            sb_acc_h = svdot_s32(sb_acc_h, q6_h0, q8_h_0);
+                            sb_acc_h = svdot_s32(sb_acc_h, q6_h1, q8_h_1);
+
+                            // print_sve_s32("sb_acc_l: ", sb_acc_l);
+                            // print_sve_s32("sb_acc_h: ", sb_acc_h);
                             // std::exit(EXIT_SUCCESS);
-                            // print_sve_s32("acc_0", acc_0);
-                            // print_sve_s32("acc_1", acc_1);
-                            // print_sve_s32("acc_2", acc_2);
-                            // print_sve_s32("acc_3", acc_3);
+
+                            svint32_t sum_l_01 = pairwise_add_8xi32_sve1(sb_acc_l);
+                            svint32_t sum_h_01 = pairwise_add_8xi32_sve1(sb_acc_h);
+
+                            // Extract high 2 bits for upper nibble reconstruction - 23
+                            q6_qs_cp_0_hh = svand_u8_x(svptrue_b8(), q6_qh_0_23, mask_hi);
+                            q6_qs_cp_1_hh = svand_u8_x(svptrue_b8(), q6_qh_1_23, mask_hi);
+                            
+                            q6_l0 = svreinterpret_s8_u8(
+                                svorr_u8_x(pg, svand_u8_x(pg, q6_ql_0_23, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qh_0_23, mask_lo), 4)));
+                            q6_l1 = svreinterpret_s8_u8(
+                                svorr_u8_x(pg, svand_u8_x(pg, q6_ql_1_23, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qh_1_23, mask_lo), 4)));
+                            q6_h0 =svreinterpret_s8_u8(
+                                svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_ql_0_23, 4), q6_qs_cp_0_hh));
+                            q6_h1 =svreinterpret_s8_u8(
+                                svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_ql_1_23, 4), q6_qs_cp_1_hh));
+
+                            sb_acc_l = svdup_s32(0);
+                            sb_acc_l = svdot_s32(sb_acc_l, q6_l0, q8_l_0);
+                            sb_acc_l = svdot_s32(sb_acc_l, q6_l1, q8_l_1);
+
+                            sb_acc_h = svdup_s32(0);
+                            sb_acc_h = svdot_s32(sb_acc_h, q6_h0, q8_h_0);
+                            sb_acc_h = svdot_s32(sb_acc_h, q6_h1, q8_h_1);
+
+                            // print_sve_s32("sb_acc_l: ", sb_acc_l);
+                            // print_sve_s32("sb_acc_h: ", sb_acc_h);
                             // std::exit(EXIT_SUCCESS);
+
+                            svint32_t sum_l_23 = pairwise_add_8xi32_sve1(sb_acc_l);
+                            svint32_t sum_h_23 = pairwise_add_8xi32_sve1(sb_acc_h);
+
+                            const int scale_idx_l = half * 8 + sb;
+                            const int scale_idx_h = half * 8 + sb + 4;
+
+                            svint32_t scale_vec_l = svld1sh_s32(svwhilelt_b32(0, 8), &q6_scales[scale_idx_l * 8]);
+                            svint32_t scale_vec_h = svld1sh_s32(svwhilelt_b32(0, 8), &q6_scales[scale_idx_h * 8]);
+
+                            svint32_t sum_l = svsel(svwhilelt_b32(0, 4), sum_l_01, svext_s32(sum_l_01, sum_l_23, 4));
+                            svint32_t sum_h = svsel(svwhilelt_b32(0, 4), sum_h_01, svext_s32(sum_h_01, sum_h_23, 4));
+
+                            acc_01 = svmla_s32_m(svptrue_b32(), acc_01, sum_l, scale_vec_l);
+                            acc_01 = svmla_s32_m(svptrue_b32(), acc_01, sum_h, scale_vec_h);
+                            
                         } // for sb
                     }   // for half
 
                     const svbool_t pg4 = svwhilelt_b32(0, 4);
-                    svint32_t acc_all = svadd_s32_x(svptrue_b32(), svsel_s32(pg4, acc_01, svdup_s32(0)), svext_s32(svdup_s32(0), svsel_s32(pg4, acc_23, svdup_s32(0)), 4));
+                    // svint32_t acc_all = svadd_s32_x(svptrue_b32(), svsel_s32(pg4, acc_01, svdup_s32(0)), svext_s32(svdup_s32(0), svsel_s32(pg4, acc_23, svdup_s32(0)), 4));
                     // Bias correction
+                    svint32_t acc_all = acc_01;
                     acc_all = svsub_s32_m(svwhilelt_b32(0, 8), acc_all, bias_all);
                     // acc_0 = svsub_s32_m(pg2, acc_0, bias_lo);
                     // acc_1 = svsub_s32_m(pg2, acc_1, svext_s32(bias_lo, bias_lo, 2));
@@ -2503,7 +2565,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
 
         for (int b = 0; b < nb; b++) {
             print_neon_f16("h: ", vld1_f16((const __fp16 *) q6_ptr[b].d));
-            std::exit(EXIT_SUCCESS);
             float32x4_t q6_d_0     = vcvt_f32_f16(vld1_f16((const __fp16 *) q6_ptr[b].d));      // d0 d1 d2 d3
             float32x4_t q6_d_1     = vcvt_f32_f16(vld1_f16((const __fp16 *) q6_ptr[b].d + 4));  // d4 d5 d6 d7
             float32x4_t q8_d       = vdupq_n_f32(q8_ptr[b].d);
