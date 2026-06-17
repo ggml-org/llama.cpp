@@ -59,6 +59,7 @@
 		"eslint-config-prettier": "10.1.8",
 		"eslint-plugin-storybook": "10.4.2",
 		"eslint-plugin-svelte": "3.19.0",
+		"fflate": "0.8.3",
 		"globals": "16.5.0",
 		"highlight.js": "11.11.1",
 		"http-server": "14.1.1",
