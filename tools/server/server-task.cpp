@@ -1993,6 +1993,14 @@ json server_task_result_get_lora::to_json() {
 }
 
 //
+// server_task_result_apply_cvector
+//
+
+json server_task_result_apply_cvector::to_json() {
+    return json {{ "success", true }};
+}
+
+//
 // server_task_result_apply_lora
 //
 

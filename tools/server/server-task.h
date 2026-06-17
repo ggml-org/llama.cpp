@@ -26,6 +26,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_RESTORE,
     SERVER_TASK_TYPE_SLOT_ERASE,
     SERVER_TASK_TYPE_GET_CVEC,
+    SERVER_TASK_TYPE_SET_CVEC,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
 };
@@ -169,6 +170,9 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
+
+    // used by SERVER_TASK_TYPE_SET_CVEC
+    std::map<int, float> set_cvector; // mapping control vector ID -> scale
 
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
@@ -584,6 +588,10 @@ struct server_task_result_get_lora : server_task_result {
     };
     std::vector<lora> loras;
 
+    virtual json to_json() override;
+};
+
+struct server_task_result_apply_cvector : server_task_result {
     virtual json to_json() override;
 };
 
