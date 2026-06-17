@@ -15957,6 +15957,13 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         }
     }
 
+    if (vk_instance.debug_utils_support) {
+        vk::DebugUtilsLabelEXT dul = {};
+        dul.pLabelName = "ggml_backend_vk_graph_compute";
+        dul.color = std::array<float,4>{1.0f, 1.0f, 1.0f, 1.0f};
+        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue.queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
+    }
+
     // --- REPLAY PATH ---
     if (use_vk_graph && !vk_graph_capture && cached) {
         ctx->prealloc_size_add_rms_partials_offset = 0;
@@ -15998,13 +16005,6 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         cached->cached_cmd_pool.init(ctx->device, &ctx->device->compute_queue);
         cached->uses_transfer_queue = ctx->device->async_use_transfer_queue;
         ctx->active_capture_graph = cached;
-    }
-
-    if (vk_instance.debug_utils_support) {
-        vk::DebugUtilsLabelEXT dul = {};
-        dul.pLabelName = "ggml_backend_vk_graph_compute";
-        dul.color = std::array<float,4>{1.0f, 1.0f, 1.0f, 1.0f};
-        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue.queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
     }
 
     ctx->prealloc_size_add_rms_partials_offset = 0;
@@ -16424,6 +16424,10 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             std::cerr << "ggml_vulkan: graph (" << ctx->n_graph_nodes << " nodes) — " << ctx->graph_compute_phase << " | cpu " << ctx->graph_compute_cpu_us << " us, sync " << t_sync << " us, total " << (ggml_time_us() - t_start) << " us" << std::endl;
         }
         ctx->graph_compute_phase = nullptr;
+    }
+
+    if (vk_instance.debug_utils_support) {
+        vk_instance.pfn_vkQueueEndDebugUtilsLabelEXT(ctx->device->compute_queue.queue);
     }
 
     return GGML_STATUS_SUCCESS;
