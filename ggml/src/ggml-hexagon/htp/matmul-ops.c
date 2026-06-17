@@ -38,7 +38,7 @@ static inline HVX_Vector hvx_vec_mul_f16_f16_to_f32_lower32(HVX_Vector v1, HVX_V
 #endif
 }
 
-struct htp_matmul_context {
+struct htp_mm_context {
     const char * type;
     struct htp_ops_context * octx;
 
@@ -79,7 +79,7 @@ struct htp_matmul_context {
     const uint32_t * matrix_row_counts;
     const struct mmid_row_mapping * matrix_rows;
 
-    // Dynamic VTCM spad pointers allocated sequentially
+    // Dynamic VTCM pointers allocated sequentially
     uint8_t * vtcm_src0;
     uint8_t * vtcm_src1;
     uint8_t * vtcm_src2;
@@ -87,18 +87,18 @@ struct htp_matmul_context {
     uint8_t * vtcm_dst;
 
     // Cached strides
-    uint32_t src0_spad_stride;
-    uint32_t src1_spad_stride;
-    uint32_t src2_spad_stride;
-    uint32_t src3_spad_stride;
-    uint32_t dst_spad_stride;
+    uint32_t vtcm_src0_stride;
+    uint32_t vtcm_src1_stride;
+    uint32_t vtcm_src2_stride;
+    uint32_t vtcm_src3_stride;
+    uint32_t vtcm_dst_stride;
 
     // Cached thread offsets/sizes
-    uint32_t src0_size_per_thread;
-    uint32_t src1_size_per_thread;
-    uint32_t src2_size_per_thread;
-    uint32_t src3_size_per_thread;
-    uint32_t dst_size_per_thread;
+    uint32_t vtcm_src0_size_per_thread;
+    uint32_t vtcm_src1_size_per_thread;
+    uint32_t vtcm_src2_size_per_thread;
+    uint32_t vtcm_src3_size_per_thread;
+    uint32_t vtcm_dst_size_per_thread;
 
     bool hmx_eligible;
 };
@@ -553,7 +553,7 @@ static void vec_dot_f16_f32_uu_1x1(const int n, float * restrict s, const void *
     const uint32_t nb3 = dst->nb[3];
 
 #define htp_matmul_preamble                                             \
-    struct htp_matmul_context * mmctx = data;                           \
+    struct htp_mm_context * mmctx = data;                           \
     struct htp_ops_context * octx  = mmctx->octx;                       \
     htp_matmul_tensors_preamble;                                        \
     dma_queue *dma_queue           = octx->ctx->dma[ith];               \
@@ -1263,10 +1263,10 @@ static void matmul_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                     \
     const size_t dst_row_size  = nb1;                                                                                               \
     const size_t src1_row_size = nb11;                                                                                              \
-    const size_t src1_stride = mmctx->src1_spad_stride;                                                                             \
+    const size_t src1_stride = mmctx->vtcm_src1_stride;                                                                             \
                                                                                                                                     \
-    uint8_t * restrict spad_dst  = mmctx->vtcm_dst  + mmctx->dst_size_per_thread  * ith;                                            \
-    uint8_t * restrict spad_src0 = mmctx->vtcm_src0 + mmctx->src0_size_per_thread * ith;                                            \
+    uint8_t * restrict vtcm_dst_ptr  = mmctx->vtcm_dst  + mmctx->vtcm_dst_size_per_thread  * ith;                                            \
+    uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;                                            \
     uint8_t * restrict src1_data = mmctx->vtcm_src1;                                                                                \
                                                                                                                                     \
     uint64_t t1, t2;                                                                                                                \
@@ -1286,8 +1286,8 @@ static void matmul_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                   \
                                                                                                                                     \
     uint32_t push_ct = ct_start;                                                                                                    \
-    for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                                       \
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned,                                      \
+    for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                                       \
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                                      \
                        src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                \
     }                                                                                                                               \
                                                                                                                                     \
@@ -1353,16 +1353,16 @@ static void matvec_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                     \
     const size_t dst_row_size  = nb1;                                                                                               \
     const size_t src1_row_size = nb11;                                                                                              \
-    const size_t src1_stride = mmctx->src1_spad_stride;                                                                             \
+    const size_t src1_stride = mmctx->vtcm_src1_stride;                                                                             \
                                                                                                                                     \
-    uint8_t * spad_dst  = mmctx->vtcm_dst + mmctx->dst_size_per_thread * ith;                                                       \
-    uint8_t * spad_src0 = mmctx->vtcm_src0 + mmctx->src0_size_per_thread * ith;                                                     \
+    uint8_t * vtcm_dst_ptr  = mmctx->vtcm_dst + mmctx->vtcm_dst_size_per_thread * ith;                                                       \
+    uint8_t * vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;                                                     \
     uint8_t * src1_data = mmctx->vtcm_src1;                                                                                         \
                                                                                                                                     \
     volatile uint64_t t1, t2;                                                                                                       \
     t1 = HAP_perf_get_qtimer_count();                                                                                               \
                                                                                                                                     \
-    float * tmp = (float *) spad_dst;                                                                                               \
+    float * tmp = (float *) vtcm_dst_ptr;                                                                                               \
                                                                                                                                     \
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;                                                               \
     const uint8_t * restrict src1_col = (const uint8_t *) src1_data;                                                                \
@@ -1380,8 +1380,8 @@ static void matvec_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                   \
                                                                                                                                     \
     uint32_t push_ct = ct_start;                                                                                                    \
-    for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                                       \
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned,                                      \
+    for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                                       \
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                                      \
                        src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                \
     }                                                                                                                               \
                                                                                                                                     \
@@ -1419,7 +1419,7 @@ static void matvec_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
 
 #define MATMUL_QKV_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X2, DOT_2X1)                                                                \
 static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                                          \
-    struct htp_matmul_context * mmctx = data;                                                                                           \
+    struct htp_mm_context * mmctx = data;                                                                                           \
     struct htp_ops_context * octx = mmctx->octx;                                                                                        \
                                                                                                                                         \
     const struct htp_tensor * restrict src0 = octx->src[0]; /* Wk */                                                                    \
@@ -1435,11 +1435,11 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     const uint32_t src1_nrows = src1->ne[1] * src1->ne[2] * src1->ne[3];                                                                \
                                                                                                                                         \
     const size_t dst_row_size  = dst_k->nb[1];                                                                                          \
-    const size_t src1_stride = mmctx->src1_spad_stride;                                                                                 \
+    const size_t src1_stride = mmctx->vtcm_src1_stride;                                                                                 \
                                                                                                                                         \
-    uint8_t * restrict spad_src0 = mmctx->vtcm_src0 + mmctx->src0_size_per_thread * ith;                                                \
-    uint8_t * restrict spad_src2 = mmctx->vtcm_src2 + mmctx->src2_size_per_thread * ith;                                                \
-    uint8_t * restrict spad_src3 = mmctx->vtcm_src3 + mmctx->src3_size_per_thread * ith;                                                \
+    uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;                                                \
+    uint8_t * restrict vtcm_src2_ptr = mmctx->vtcm_src2 + mmctx->vtcm_src2_size_per_thread * ith;                                                \
+    uint8_t * restrict vtcm_src3_ptr = mmctx->vtcm_src3 + mmctx->vtcm_src3_size_per_thread * ith;                                                \
     uint8_t * restrict src1_data = mmctx->vtcm_src1;                                                                                    \
                                                                                                                                         \
     volatile uint64_t t1, t2;                                                                                                           \
@@ -1474,10 +1474,10 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
         uint32_t ct_end_kv   = (end_row_kv + 31) / 32;                                                                                  \
                                                                                                                                         \
         uint32_t push_ct = ct_start_kv;                                                                                                 \
-        for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end_kv; d++, push_ct++) {                                                    \
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned,                                      \
+        for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end_kv; d++, push_ct++) {                                                    \
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                                      \
                            src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                \
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + d * tile_row_transfer_size_aligned,                                      \
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + d * tile_row_transfer_size_aligned,                                      \
                            src2_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                \
         }                                                                                                                               \
                                                                                                                                         \
@@ -1545,8 +1545,8 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
         uint32_t ct_end_q   = (end_row_q + 31) / 32;                                                                                    \
                                                                                                                                         \
         uint32_t push_ct = ct_start_q;                                                                                                  \
-        for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end_q; d++, push_ct++) {                                                     \
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src3 + d * tile_row_transfer_size_aligned,                                      \
+        for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end_q; d++, push_ct++) {                                                     \
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src3_ptr + d * tile_row_transfer_size_aligned,                                      \
                            src3_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                \
         }                                                                                                                               \
                                                                                                                                         \
@@ -1602,7 +1602,7 @@ static void matmul_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
 
 #define MATMUL_FFN_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X2, DOT_2X1)                                                                \
 static void matmul_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                                          \
-    struct htp_matmul_context * mmctx = data;                                                                                           \
+    struct htp_mm_context * mmctx = data;                                                                                           \
     struct htp_ops_context * octx = mmctx->octx;                                                                                        \
                                                                                                                                         \
     const struct htp_tensor * restrict src0 = octx->src[0]; /* Wgate */                                                                 \
@@ -1617,10 +1617,10 @@ static void matmul_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     const uint32_t src1_nrows = src1->ne[1] * src1->ne[2] * src1->ne[3];                                                                \
                                                                                                                                         \
     const size_t dst_row_size  = dst_gate->nb[1];                                                                                       \
-    const size_t src1_stride = mmctx->src1_spad_stride;                                                                                 \
+    const size_t src1_stride = mmctx->vtcm_src1_stride;                                                                                 \
                                                                                                                                         \
-    uint8_t * restrict spad_src0 = mmctx->vtcm_src0 + mmctx->src0_size_per_thread * ith;                                                \
-    uint8_t * restrict spad_src2 = mmctx->vtcm_src2 + mmctx->src2_size_per_thread * ith;                                                \
+    uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;                                                \
+    uint8_t * restrict vtcm_src2_ptr = mmctx->vtcm_src2 + mmctx->vtcm_src2_size_per_thread * ith;                                                \
     uint8_t * restrict src1_data = mmctx->vtcm_src1;                                                                                    \
                                                                                                                                         \
     volatile uint64_t t1, t2;                                                                                                           \
@@ -1648,10 +1648,10 @@ static void matmul_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                       \
                                                                                                                                         \
     uint32_t push_ct = ct_start;                                                                                                        \
-    for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                                           \
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned, src0_row + push_ct * tile_row_stride),   \
+    for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                                           \
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned, src0_row + push_ct * tile_row_stride),   \
                        aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                           \
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + d * tile_row_transfer_size_aligned, src2_row + push_ct * tile_row_stride),   \
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + d * tile_row_transfer_size_aligned, src2_row + push_ct * tile_row_stride),   \
                        aligned_tile_size, tile_size, tile_size, n_k_tiles_a);                                                           \
     }                                                                                                                                   \
                                                                                                                                         \
@@ -1741,7 +1741,7 @@ MATMUL_FFN_2D_REPACKED_IMPL(q8_0,  1088, tiled_vec_dot_q8_0_32x2,  tiled_vec_dot
 MATMUL_FFN_2D_REPACKED_IMPL(iq4nl, 576,  tiled_vec_dot_iq4nl_32x2, tiled_vec_dot_iq4nl_32x1)
 MATMUL_FFN_2D_REPACKED_IMPL(mxfp4, 544,  tiled_vec_dot_mxfp4_32x2, tiled_vec_dot_mxfp4_32x1)
 
-// src1 tensor is already in VTCM spad
+// src1 tensor is already in VTCM
 static void matmul_2d(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
 
@@ -1763,14 +1763,14 @@ static void matmul_2d(unsigned int nth, unsigned int ith, void * data) {
     const size_t src0_row_size = nb01;
     const size_t src1_row_size = nb11;
 
-    const size_t src0_stride = mmctx->src0_spad_stride;
-    const size_t src1_stride = mmctx->src1_spad_stride;
+    const size_t src0_stride = mmctx->vtcm_src0_stride;
+    const size_t src1_stride = mmctx->vtcm_src1_stride;
 
-    // Per-thread VTCM scratchpads for all tensors
+    // Per-thread VTCMs for all tensors
     // Note that the entire src1 tensor is already in VTCM
     // For other tensors we allocate N rows per thread, padded to HVX vector size
-    uint8_t * restrict spad_dst  = mmctx->vtcm_dst  + mmctx->dst_size_per_thread  * ith;
-    uint8_t * restrict spad_src0 = mmctx->vtcm_src0 + mmctx->src0_size_per_thread * ith;
+    uint8_t * restrict vtcm_dst_ptr  = mmctx->vtcm_dst  + mmctx->vtcm_dst_size_per_thread  * ith;
+    uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;
     uint8_t * restrict src1_data = mmctx->vtcm_src1;
 
     volatile uint64_t t1, t2;
@@ -1782,10 +1782,10 @@ static void matmul_2d(unsigned int nth, unsigned int ith, void * data) {
     #pragma unroll(4)
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
         const int is0 = (ir0 - src0_start_row);
-        if (is0 >= MM_SPAD_SRC0_NROWS) {
+        if (is0 >= HTP_MM_VTCM_SRC0_NROWS) {
             break;
         }
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 2);
     }
 
@@ -1812,11 +1812,11 @@ static void matmul_2d(unsigned int nth, unsigned int ith, void * data) {
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);
 
-        // Prefetch next (n + spad_nrows) row
-        const int pr0 = (ir0 + MM_SPAD_SRC0_NROWS);
-        const int is0 = (pr0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
+        // Prefetch next (n + vtcm_nrows) row
+        const int pr0 = (ir0 + HTP_MM_VTCM_SRC0_NROWS);
+        const int is0 = (pr0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
         if (pr0 < src0_end_row_x2) {
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + pr0 * src0_row_size),
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + pr0 * src0_row_size),
                            src0_stride, src0_row_size, src0_row_size, 2);
         }
     }
@@ -1824,8 +1824,8 @@ static void matmul_2d(unsigned int nth, unsigned int ith, void * data) {
     // Process the last row (if any)
     if (src0_end_row != src0_end_row_x2) {
         uint32_t  ir0 = src0_end_row_x2;
-        const int is0 = (ir0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+        const int is0 = (ir0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 1);
         const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
 
@@ -1847,7 +1847,7 @@ static void matmul_2d(unsigned int nth, unsigned int ith, void * data) {
          (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-// q8_0_tiled/q8_1_tiled src1 tensor is already in VTCM spad
+// q8_0_tiled/q8_1_tiled src1 tensor is already in VTCM
 static void matvec_2d(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
 
@@ -1867,20 +1867,20 @@ static void matvec_2d(unsigned int nth, unsigned int ith, void * data) {
     const size_t src0_row_size = nb01;
     const size_t src1_row_size = nb11;
 
-    const size_t src0_stride = mmctx->src0_spad_stride;
-    const size_t src1_stride = mmctx->src1_spad_stride;
+    const size_t src0_stride = mmctx->vtcm_src0_stride;
+    const size_t src1_stride = mmctx->vtcm_src1_stride;
 
-    // Per-thread VTCM scratchpads for all tensors
+    // Per-thread VTCMs for all tensors
     // Note that the entire src1 tensor is already in VTCM
     // For other tensors we allocate N rows per thread, padded to HVX vector size
-    uint8_t * spad_dst  = mmctx->vtcm_dst  + mmctx->dst_size_per_thread  * ith;
-    uint8_t * spad_src0 = mmctx->vtcm_src0 + mmctx->src0_size_per_thread * ith;
+    uint8_t * vtcm_dst_ptr  = mmctx->vtcm_dst  + mmctx->vtcm_dst_size_per_thread  * ith;
+    uint8_t * vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;
     uint8_t * src1_data = mmctx->vtcm_src1;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
-    float * tmp = (float *) spad_dst;
+    float * tmp = (float *) vtcm_dst_ptr;
 
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;
     const uint8_t * restrict src1_col = (const uint8_t *) src1_data;
@@ -1892,10 +1892,10 @@ static void matvec_2d(unsigned int nth, unsigned int ith, void * data) {
     #pragma unroll(2)
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
         const uint32_t is0 = (ir0 - src0_start_row);
-        if (is0 >= MM_SPAD_SRC0_NROWS) {
+        if (is0 >= HTP_MM_VTCM_SRC0_NROWS) {
             break;
         }
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 2);
     }
 
@@ -1906,11 +1906,11 @@ static void matvec_2d(unsigned int nth, unsigned int ith, void * data) {
         mmctx->vec_dot_2x1(ne00, &tmp[ir0 - src0_start_row], ss0, ss0 + src0_stride, src1_col);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);
 
-        // Prefetch next (n + spad_nrows) row
-        const uint32_t pr0 = (ir0 + MM_SPAD_SRC0_NROWS);
-        const uint32_t is0 = (pr0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
+        // Prefetch next (n + vtcm_nrows) row
+        const uint32_t pr0 = (ir0 + HTP_MM_VTCM_SRC0_NROWS);
+        const uint32_t is0 = (pr0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
         if (pr0 < src0_end_row_x2) {
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + pr0 * src0_row_size),
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + pr0 * src0_row_size),
                            src0_stride, src0_row_size, src0_row_size, 2);
         }
     }
@@ -1918,8 +1918,8 @@ static void matvec_2d(unsigned int nth, unsigned int ith, void * data) {
     // Process the last row (if any)
     if (src0_end_row != src0_end_row_x2) {
         const uint32_t ir0 = src0_end_row_x2;
-        const uint32_t is0 = (ir0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+        const uint32_t is0 = (ir0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 1);
         const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);
@@ -1944,7 +1944,7 @@ struct mmid_row_mapping {
     uint32_t i2;
 };
 
-// src1 tensor is already in VTCM spad
+// src1 tensor is already in VTCM
 static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
 
@@ -1973,12 +1973,12 @@ static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
     const struct mmid_row_mapping * matrix_rows       = mmctx->matrix_rows;
 
     const size_t dst_row_size  = nb1;
-    const size_t src1_row_size = htp_q8_0_tiled_row_size(ne10);
+    const size_t src1_row_size = htp_mm_q8_0_tiled_row_size(ne10);
 
-    const size_t src1_stride = mmctx->src1_spad_stride;
+    const size_t src1_stride = mmctx->vtcm_src1_stride;
 
-    // Per-thread VTCM scratchpads for all tensors
-    uint8_t * restrict spad_src0 = mmctx->vtcm_src0 + mmctx->src0_size_per_thread * ith;
+    // Per-thread VTCMs for all tensors
+    uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;
     uint8_t * restrict src1_data = mmctx->vtcm_src1;
 
     for (uint32_t cur_a = 0; cur_a < n_as; ++cur_a) {
@@ -1994,8 +1994,8 @@ static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
 
         const uint8_t * src0_row = (const uint8_t *) src0->data + cur_a * nb02;
 
-        const uint32_t tile_size = htp_get_weight_tile_size(src0->type);
-        const uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
+        const uint32_t tile_size = htp_mm_get_weight_tile_size(src0->type);
+        const uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(src0->type);
         const uint32_t n_k_tiles_w = ne00 / 32;
         const uint32_t n_k_tiles_a = ne10 / 32;
         const uint32_t tile_row_stride = n_k_tiles_w * tile_size;
@@ -2005,8 +2005,8 @@ static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
         const uint32_t ct_end   = (src0_end_row + 31) / 32;
 
         uint32_t push_ct = ct_start;
-        for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned, src0_row + push_ct * tile_row_stride),
+        for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned, src0_row + push_ct * tile_row_stride),
                            aligned_tile_size, tile_size, tile_size, n_k_tiles_a);
         }
 
@@ -2046,7 +2046,7 @@ static void matmul_id(unsigned int nth, unsigned int ith, void * data) {
          dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-// src1 tensor is already in VTCM spad
+// src1 tensor is already in VTCM
 static void matvec_id(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
 
@@ -2070,13 +2070,13 @@ static void matvec_id(unsigned int nth, unsigned int ith, void * data) {
     assert(ne13 % ne03 == 0);
 
     const size_t dst_row_size  = nb1;
-    const size_t src1_row_size = htp_q8_0_tiled_row_size(ne10);
+    const size_t src1_row_size = htp_mm_q8_0_tiled_row_size(ne10);
 
     const uint32_t n_aids = src2->ne[0];  // num activated experts
     const uint32_t n_ids  = ne02;         // num experts
 
-    // Per-thread VTCM scratchpads for all tensors
-    uint8_t * restrict spad_src0 = mmctx->vtcm_src0 + mmctx->src0_size_per_thread * ith;
+    // Per-thread VTCMs for all tensors
+    uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;
     uint8_t * restrict src1_data = mmctx->vtcm_src1;
 
     for (uint32_t ie1 = 0; ie1 < n_aids; ++ie1) {  // for each expert
@@ -2090,8 +2090,8 @@ static void matvec_id(unsigned int nth, unsigned int ith, void * data) {
         const uint8_t * restrict src1_col = (const uint8_t *) src1_data;
         float * restrict dst_row          = (float *) (dst->data + ie1 * nb1);
 
-        const uint32_t tile_size = htp_get_weight_tile_size(src0->type);
-        const uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
+        const uint32_t tile_size = htp_mm_get_weight_tile_size(src0->type);
+        const uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(src0->type);
         const uint32_t n_k_tiles_w = ne00 / 32;
         const uint32_t n_k_tiles_a = ne10 / 32;
         const uint32_t tile_row_stride = n_k_tiles_w * tile_size;
@@ -2101,8 +2101,8 @@ static void matvec_id(unsigned int nth, unsigned int ith, void * data) {
         const uint32_t ct_end   = (src0_end_row + 31) / 32;
 
         uint32_t push_ct = ct_start;
-        for (uint32_t d = 0; d < DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + d * tile_row_transfer_size_aligned, src0_row + push_ct * tile_row_stride),
+        for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned, src0_row + push_ct * tile_row_stride),
                            aligned_tile_size, tile_size, tile_size, n_k_tiles_a);
         }
 
@@ -2348,7 +2348,7 @@ static void quantize_row_f32_q8_1_tiled(float * restrict x, uint8_t * restrict y
 }
 
 static void quantize_f32_q8_0_tiled(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_matmul_context * mmctx = data;
+    struct htp_mm_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
@@ -2370,11 +2370,11 @@ static void quantize_f32_q8_0_tiled(unsigned int nth, unsigned int ith, void * d
     const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = htp_q8_0_tiled_row_size(ne0);
+    const size_t dst_row_size = htp_mm_q8_0_tiled_row_size(ne0);
 
     uint8_t * restrict src_data = (uint8_t *) src->data + (src_row_size * ir_first);
     uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
-    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->src0_size_per_thread * ith);
+    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
 
     const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0_TILED * sizeof(float));
     hvx_splat_f32_a(tmp_data, 0.0f, src_row_size_padded / sizeof(float));  // zero-out temp row data for padding
@@ -2397,7 +2397,7 @@ static void quantize_f32_q8_0_tiled(unsigned int nth, unsigned int ith, void * d
 
 
 static void quantize_f32_q8_1_tiled(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_matmul_context * mmctx = data;
+    struct htp_mm_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
@@ -2419,11 +2419,11 @@ static void quantize_f32_q8_1_tiled(unsigned int nth, unsigned int ith, void * d
     const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = htp_q8_1_tiled_row_size(ne0);
+    const size_t dst_row_size = htp_mm_q8_1_tiled_row_size(ne0);
 
     uint8_t * restrict src_data = (uint8_t *) src->data + (src_row_size * ir_first);
     uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
-    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->src0_size_per_thread * ith);
+    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
 
     const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0_TILED * sizeof(float));
     hvx_splat_f32_a(tmp_data, 0.0f, src_row_size_padded / sizeof(float));  // zero-out temp row data for padding
@@ -2445,7 +2445,7 @@ static void quantize_f32_q8_1_tiled(unsigned int nth, unsigned int ith, void * d
 }
 
 static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_matmul_context * mmctx = data;
+    struct htp_mm_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
@@ -2461,8 +2461,8 @@ static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, vo
     const uint32_t ib_last  = mmctx->quant_ib_last[ith];
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = htp_q8_0_tiled_row_size(ne0);
-    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->src0_size_per_thread * ith);
+    const size_t dst_row_size = htp_mm_q8_0_tiled_row_size(ne0);
+    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
 
     uint32_t r = mmctx->quant_r[ith];
     uint32_t c = mmctx->quant_c[ith];
@@ -2494,7 +2494,7 @@ static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, vo
 }
 
 static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_matmul_context * mmctx = data;
+    struct htp_mm_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
@@ -2510,8 +2510,8 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
     const uint32_t ib_last  = mmctx->quant_ib_last[ith];
 
     const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = htp_q8_1_tiled_row_size(ne0);
-    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->src0_size_per_thread * ith);
+    const size_t dst_row_size = htp_mm_q8_1_tiled_row_size(ne0);
+    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
 
     uint32_t r = mmctx->quant_r[ith];
     uint32_t c = mmctx->quant_c[ith];
@@ -2543,7 +2543,7 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
 }
 
 static void quantize_f32_f32(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_matmul_context * mmctx = data;
+    struct htp_mm_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
@@ -2551,7 +2551,7 @@ static void quantize_f32_f32(unsigned int nth, unsigned int ith, void * data) {
     const struct htp_tensor * src = octx->src[1];
     uint8_t * restrict dst = mmctx->vtcm_src1;
     uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
-    uint32_t dst_stride = mmctx->src1_spad_stride;
+    uint32_t dst_stride = mmctx->vtcm_src1_stride;
 
     uint64_t t1 = HAP_perf_get_qtimer_count();
 
@@ -2587,7 +2587,7 @@ static void quantize_f32_f32(unsigned int nth, unsigned int ith, void * data) {
 }
 
 static void quantize_f32_f16(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_matmul_context * mmctx = data;
+    struct htp_mm_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
@@ -2595,7 +2595,7 @@ static void quantize_f32_f16(unsigned int nth, unsigned int ith, void * data) {
     const struct htp_tensor * src = octx->src[1];
     uint8_t * restrict dst = mmctx->vtcm_src1;
     uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
-    uint32_t dst_stride = mmctx->src1_spad_stride;
+    uint32_t dst_stride = mmctx->vtcm_src1_stride;
 
     uint64_t t1 = HAP_perf_get_qtimer_count();
 
@@ -2632,7 +2632,7 @@ static void quantize_f32_f16(unsigned int nth, unsigned int ith, void * data) {
 
 // TODO just a plain copy that should be done via the DMA during the Op setup
 static void quantize_f16_f16(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_matmul_context * mmctx = data;
+    struct htp_mm_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
@@ -2640,7 +2640,7 @@ static void quantize_f16_f16(unsigned int nth, unsigned int ith, void * data) {
     const struct htp_tensor * src = octx->src[1];
     uint8_t * restrict dst = mmctx->vtcm_src1;
     uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
-    uint32_t dst_stride = mmctx->src1_spad_stride;
+    uint32_t dst_stride = mmctx->vtcm_src1_stride;
 
     uint64_t t1 = HAP_perf_get_qtimer_count();
 
@@ -2680,7 +2680,7 @@ static inline bool htp_is_permuted(const struct htp_tensor * t) {
     return t->nb[0] > t->nb[1] || t->nb[1] > t->nb[2] || t->nb[2] > t->nb[3];
 }
 
-static int htp_mminit_vec_dot(struct htp_matmul_context * mmctx, enum htp_data_type type) {
+static int htp_mminit_vec_dot(struct htp_mm_context * mmctx, enum htp_data_type type) {
     switch (type) {
         case HTP_TYPE_Q4_0:
             mmctx->type         = "q4_0_tiled-f32";
@@ -2712,13 +2712,13 @@ static void htp_mminit_spad(struct htp_ops_context * octx,
                                  size_t src0_row_size_padded,
                                  size_t src1_row_size,
                                  uint32_t src1_nrows,
-                                 size_t src2_spad_size_per_thread) {
-    octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-    octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
+                                 size_t src2_vtcm_size_per_thread) {
+    octx->dst_spad.size_per_thread  = hex_round_up(HTP_MM_VTCM_DST_NROWS * dst_row_size, 256);
+    octx->src0_spad.size_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
     octx->src1_spad.size_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
 
-    if (src2_spad_size_per_thread > 0) {
-        octx->src2_spad.size_per_thread = src2_spad_size_per_thread;
+    if (src2_vtcm_size_per_thread > 0) {
+        octx->src2_spad.size_per_thread = src2_vtcm_size_per_thread;
         octx->src2_spad.size            = octx->src2_spad.size_per_thread;
     }
 
@@ -2736,11 +2736,11 @@ static void htp_mminit_spad(struct htp_ops_context * octx,
 static int op_matmul_hvx(struct htp_ops_context * octx) {
     htp_matmul_tensors_preamble;
 
-    struct htp_matmul_context mmctx_struct = {0};
-    struct htp_matmul_context * mmctx = &mmctx_struct;
+    struct htp_mm_context mmctx_struct = {0};
+    struct htp_mm_context * mmctx = &mmctx_struct;
     mmctx->octx = octx;
 
-    const struct htp_matmul_kernel_params * kparams = (const struct htp_matmul_kernel_params *) octx->kernel_params;
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
 
     const uint32_t src0_nrows = ne01 * ne02 * ne03;
     const uint32_t src1_nrows = ne11 * ne12 * ne13;
@@ -2798,7 +2798,7 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
     bool need_quant = true;
 
     switch (kparams->kernel_type) {
-        case HTP_MATMUL_KERNEL_HVX_F16_F16_VTCM:
+        case HTP_MM_KERNEL_HVX_F16_F16_VTCM:
             quant_job_func     = (src1->type == HTP_TYPE_F32) ? quantize_f32_f16 : quantize_f16_f16;
             mmctx->type        = "f16-f16";
             mmctx->vec_dot_1x1 = vec_dot_f16_f16_aa_1x1;
@@ -2807,7 +2807,7 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
             src1_row_size      = hex_round_up(ne10 * 2, 128);
             break;
 
-        case HTP_MATMUL_KERNEL_HVX_F16_F32_DDR:
+        case HTP_MM_KERNEL_HVX_F16_F32_DDR:
             quant_job_func = NULL;
             mmctx->type        = "f16-f32";
             mmctx->vec_dot_1x1 = vec_dot_f16_f32_uu_1x1;
@@ -2820,7 +2820,7 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
             need_quant = false;
             break;
 
-        case HTP_MATMUL_KERNEL_HVX_F16_F16_DDR:
+        case HTP_MM_KERNEL_HVX_F16_F16_DDR:
             quant_job_func = NULL;
             mmctx->type        = "f16-f16";
             mmctx->vec_dot_1x1 = vec_dot_f16_f16_uu_1x1;
@@ -2833,7 +2833,7 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
             need_quant = false;
             break;
 
-        case HTP_MATMUL_KERNEL_HVX_F32_F32_VTCM:
+        case HTP_MM_KERNEL_HVX_F32_F32_VTCM:
             quant_job_func     = quantize_f32_f32;
             mmctx->type        = "f32-f32";
             mmctx->vec_dot_1x1 = vec_dot_f32_f32_aa_1x1;
@@ -2842,7 +2842,7 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
             src1_row_size      = hex_round_up(ne10 * 4, 128);
             break;
 
-        case HTP_MATMUL_KERNEL_HVX_F32_F32_DDR:
+        case HTP_MM_KERNEL_HVX_F32_F32_DDR:
             quant_job_func = NULL;
             mmctx->type        = "f32-f32";
             mmctx->vec_dot_1x1 = vec_dot_f32_f32_uu_1x1;
@@ -2855,8 +2855,8 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
             need_quant = false;
             break;
 
-        case HTP_MATMUL_KERNEL_HVX_QUANT_BLOCK:
-        case HTP_MATMUL_KERNEL_HVX_QUANT_ROW:
+        case HTP_MM_KERNEL_HVX_QUANT_BLOCK:
+        case HTP_MM_KERNEL_HVX_QUANT_ROW:
         default:
             if (htp_mminit_vec_dot(mmctx, src0->type) != 0) {
                 return HTP_STATUS_NO_SUPPORT;
@@ -2881,46 +2881,46 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
                 n_quant_jobs = MIN(src1_nrows, octx->n_threads);
                 quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
             }
-            src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(ne10) : htp_q8_0_tiled_row_size(ne10);
+            src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
             break;
     }
 
     size_t src0_sz = 0, src1_sz = 0, dst_sz = 0;
-    if (kparams->src0_spad_size > 0 || kparams->src1_spad_size > 0 || kparams->dst_spad_size > 0) {
-        src0_sz = kparams->src0_spad_size;
-        src1_sz = kparams->src1_spad_size;
-        dst_sz  = kparams->dst_spad_size;
+    if (kparams->vtcm_src0_size > 0 || kparams->vtcm_src1_size > 0 || kparams->vtcm_dst_size > 0) {
+        src0_sz = kparams->vtcm_src0_size;
+        src1_sz = kparams->vtcm_src1_size;
+        dst_sz  = kparams->vtcm_dst_size;
     } else {
-        hvx_get_spad_sizes(
+        hvx_get_vtcm_sizes(
             kparams->kernel_type, src0->type, ne10, src1_nrows, octx->n_threads,
             dst_row_size, src0_row_size, src1_row_size,
             &src0_sz, &src1_sz, &dst_sz
         );
     }
 
-    if (kparams->kernel_type == HTP_MATMUL_KERNEL_HVX_F16_F16_VTCM ||
-        kparams->kernel_type == HTP_MATMUL_KERNEL_HVX_F32_F32_VTCM ||
-        kparams->kernel_type == HTP_MATMUL_KERNEL_HVX_QUANT_ROW ||
-        kparams->kernel_type == HTP_MATMUL_KERNEL_HVX_QUANT_BLOCK) {
-        mmctx->src1_size_per_thread = src1_sz;
+    if (kparams->kernel_type == HTP_MM_KERNEL_HVX_F16_F16_VTCM ||
+        kparams->kernel_type == HTP_MM_KERNEL_HVX_F32_F32_VTCM ||
+        kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW ||
+        kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
+        mmctx->vtcm_src1_size_per_thread = src1_sz;
     } else {
-        mmctx->src1_size_per_thread = src1_sz / octx->n_threads;
+        mmctx->vtcm_src1_size_per_thread = src1_sz / octx->n_threads;
     }
-    mmctx->src0_size_per_thread = src0_sz / octx->n_threads;
-    mmctx->dst_size_per_thread  = dst_sz / octx->n_threads;
+    mmctx->vtcm_src0_size_per_thread = src0_sz / octx->n_threads;
+    mmctx->vtcm_dst_size_per_thread  = dst_sz / octx->n_threads;
 
-    size_t spad_size = kparams->spad_size > 0 ? (size_t)kparams->spad_size : (src1_sz + src0_sz + dst_sz);
+    size_t vtcm_size = kparams->vtcm_size > 0 ? (size_t)kparams->vtcm_size : (src1_sz + src0_sz + dst_sz);
 
     FARF(HIGH, "matmul-%s : src0-spad-size %zu src1-spad-size %zu dst-spad-size %zu (%zu)\n", mmctx->type,
-         src0_sz, src1_sz, dst_sz, spad_size);
+         src0_sz, src1_sz, dst_sz, vtcm_size);
 
     FARF(HIGH, "matmul-%s : %ux%ux%ux%u * %ux%ux%ux%u-> %ux%ux%ux%u (0x%p, 0x%p, 0x%p)\n", mmctx->type, src0->ne[0],
          src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0],
          dst->ne[1], dst->ne[2], dst->ne[3], src0->data, src1->data, dst->data);
 
-    if (octx->ctx->vtcm_size < spad_size) {
+    if (octx->ctx->vtcm_size < vtcm_size) {
         FARF(ERROR, "matmul-%s : current VTCM reservation %zu is too small, needed %zu\n", mmctx->type,
-             octx->ctx->vtcm_size, spad_size);
+             octx->ctx->vtcm_size, vtcm_size);
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
@@ -2933,8 +2933,8 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
     octx->src0_spad.src  = NULL;
     octx->dst_spad.src   = NULL;
 
-    mmctx->src0_spad_stride = src0_row_size_padded;
-    mmctx->src1_spad_stride = src1_row_size;
+    mmctx->vtcm_src0_stride = src0_row_size_padded;
+    mmctx->vtcm_src1_stride = src1_row_size;
 
     if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)
         return HTP_STATUS_OK;
@@ -2953,7 +2953,7 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
 int op_matmul(struct htp_ops_context * octx) {
     htp_matmul_tensors_preamble;
 
-    struct htp_matmul_kernel_params * kparams = (struct htp_matmul_kernel_params *)octx->kernel_params;
+    struct htp_mm_kernel_params * kparams = (struct htp_mm_kernel_params *)octx->kernel_params;
 
     if (kparams->n_hmx) {
         int k = (int) src0->ne[0];
@@ -2971,8 +2971,8 @@ int op_matmul(struct htp_ops_context * octx) {
 
         int ret = -1;
         const int num_threads = MIN(kparams->num_threads, (int) octx->n_threads);
-        if (kparams->kernel_type == HTP_MATMUL_KERNEL_HMX_F16_BATCHED) {
-            hmx_matmul_f16_f32_batched_params_t batch_params = {
+        if (kparams->kernel_type == HTP_MM_KERNEL_HMX_F16_BATCHED) {
+            htp_mm_hmx_f16_f32_batched_params_t batch_params = {
                 .dst             = (float *) dst->data,
                 .activation      = (float *) src1->data,
                 .weight          = (const __fp16 *) src0->data,
@@ -2993,19 +2993,19 @@ int op_matmul(struct htp_ops_context * octx) {
                 .dst_nb2         = dst->nb[2],
                 .dst_nb3         = dst->nb[3],
             };
-            ret = hmx_matmul_f16_f32_batched(octx->ctx, &batch_params,
+            ret = htp_mm_hmx_f16_f32_batched(octx->ctx, &batch_params,
                                              kparams->m_chunk, kparams->n_chunk,
                                              kparams->use_pipeline, num_threads,
                                              kparams->act_threads,
-                                             kparams->spad_size);
+                                             kparams->vtcm_size);
         } else {
-            ret = hmx_matmul_2d_f32(
+            ret = htp_mm_hmx_2d_f32(
                 octx->ctx, (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
                 m_total, k, n, act_stride, (int) src0->nb[1], (int) src0->type, (int) src1->ne[0],
                 (int)(dst->nb[1] / sizeof(float)), (int)dst->ne[0],
                 kparams->m_chunk, kparams->n_chunk, kparams->use_pipeline, num_threads,
                 kparams->act_threads,
-                kparams->tile_size, kparams->aligned_tile_size, kparams->spad_size
+                kparams->tile_size, kparams->aligned_tile_size, kparams->vtcm_size
             );
         }
 
@@ -3022,11 +3022,11 @@ int op_matmul(struct htp_ops_context * octx) {
 int op_matmul_id(struct htp_ops_context * octx) {
     htp_matmul_tensors_preamble;
 
-    struct htp_matmul_context mmctx_struct = {0};
-    struct htp_matmul_context * mmctx = &mmctx_struct;
+    struct htp_mm_context mmctx_struct = {0};
+    struct htp_mm_context * mmctx = &mmctx_struct;
     mmctx->octx = octx;
 
-    const struct htp_matmul_kernel_params * kparams = (const struct htp_matmul_kernel_params *) octx->kernel_params;
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
 
     const struct htp_tensor * restrict ids = octx->src[2];
 
@@ -3116,7 +3116,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
             const int32_t cne1 = matrix_row_counts[cur_a];
             if (cne1 == 0) continue;
 
-            int ret = hmx_matmul_id_2d_f32(octx->ctx, (float*) dst->data, (float*) src1->data,
+            int ret = htp_mm_hmx_id_2d_f32(octx->ctx, (float*) dst->data, (float*) src1->data,
                                            (const uint8_t *) src0->data + cur_a * nb02,
                                            cne1, ne00, ne01,
                                            ne10,
@@ -3160,10 +3160,10 @@ int op_matmul_id(struct htp_ops_context * octx) {
         n_quant_jobs = MIN(src1_nrows, octx->n_threads);
         quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
-    src1_row_size  = (src0->type == HTP_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(ne10) : htp_q8_0_tiled_row_size(ne10);
+    src1_row_size  = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
 
-    size_t dst_sz_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * 0, 256);
-    size_t src0_sz_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
+    size_t dst_sz_per_thread  = hex_round_up(HTP_MM_VTCM_DST_NROWS * 0, 256);
+    size_t src0_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
     size_t src1_sz_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
     size_t src2_sz_per_thread = 0; // We moved the mapping to DDR!
 
@@ -3178,13 +3178,13 @@ int op_matmul_id(struct htp_ops_context * octx) {
                               src0->type == HTP_TYPE_MXFP4);
     if (is_repacked) {
         const uint32_t n_k_tiles = ne10 / 32;
-        const uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
+        const uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(src0->type);
         const uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
-        size_t repacked_spad_size = hex_round_up(DMA_DEPTH * tile_row_size, 256);
-        if (repacked_spad_size < src1_row_size_padded) {
-            repacked_spad_size = src1_row_size_padded;
+        size_t repacked_vtcm_size = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
+        if (repacked_vtcm_size < src1_row_size_padded) {
+            repacked_vtcm_size = src1_row_size_padded;
         }
-        src0_sz_per_thread = repacked_spad_size;
+        src0_sz_per_thread = repacked_vtcm_size;
     }
 
     size_t src1_sz = src1_sz_per_thread;
@@ -3192,10 +3192,10 @@ int op_matmul_id(struct htp_ops_context * octx) {
     size_t src2_sz = src2_sz_per_thread * octx->n_threads;
     size_t dst_sz  = dst_sz_per_thread * octx->n_threads;
 
-    size_t spad_size = src2_sz + src1_sz + src0_sz + dst_sz;
+    size_t vtcm_size = src2_sz + src1_sz + src0_sz + dst_sz;
 
     FARF(HIGH, "matmul-id-%s : src0-spad-size %zu src1-spad-size %zu src2-spad-size %zu dst-spad-size %zu (%zu)\n", mmctx->type,
-         src0_sz, src1_sz, src2_sz, dst_sz, spad_size);
+         src0_sz, src1_sz, src2_sz, dst_sz, vtcm_size);
 
     FARF(HIGH, "matmul-id-%s : %ux%ux%ux%u * %ux%ux%ux%u (%ux%ux%ux%u) -> %ux%ux%ux%u (0x%p, 0x%p, 0x%p)\n", mmctx->type,
          src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
@@ -3203,8 +3203,8 @@ int op_matmul_id(struct htp_ops_context * octx) {
          src1->data, dst->data);
 
     // Make sure the reserved vtcm size is sufficient
-    if (octx->ctx->vtcm_size < spad_size) {
-        FARF(ERROR, "matmul-id-%s : current VTCM reservation %zu is too small, needed %zu\n", mmctx->type, octx->ctx->vtcm_size, spad_size);
+    if (octx->ctx->vtcm_size < vtcm_size) {
+        FARF(ERROR, "matmul-id-%s : current VTCM reservation %zu is too small, needed %zu\n", mmctx->type, octx->ctx->vtcm_size, vtcm_size);
         if (must_free_mapping) free(mapping_buf);
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
@@ -3220,13 +3220,13 @@ int op_matmul_id(struct htp_ops_context * octx) {
     octx->src2_spad.src  = NULL;
     octx->dst_spad.src   = NULL;
 
-    mmctx->src0_spad_stride = src0_row_size_padded;
-    mmctx->src1_spad_stride = src1_row_size;
+    mmctx->vtcm_src0_stride = src0_row_size_padded;
+    mmctx->vtcm_src1_stride = src1_row_size;
 
-    mmctx->src0_size_per_thread = src0_sz_per_thread;
-    mmctx->src1_size_per_thread = src1_sz_per_thread;
-    mmctx->src2_size_per_thread = src2_sz_per_thread;
-    mmctx->dst_size_per_thread  = dst_sz_per_thread;
+    mmctx->vtcm_src0_size_per_thread = src0_sz_per_thread;
+    mmctx->vtcm_src1_size_per_thread = src1_sz_per_thread;
+    mmctx->vtcm_src2_size_per_thread = src2_sz_per_thread;
+    mmctx->vtcm_dst_size_per_thread  = dst_sz_per_thread;
 
     mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
     worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
@@ -3239,7 +3239,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
 }
 
 static void matmul_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_matmul_context * mmctx = data;
+    struct htp_mm_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
 
     const struct htp_tensor * restrict src0 = octx->src[0]; // Wk
@@ -3276,14 +3276,14 @@ static void matmul_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
     const size_t src2_row_size = src2->nb[1];
     const size_t src3_row_size = src3->nb[1];
 
-    const size_t src0_stride = mmctx->src0_spad_stride;
-    const size_t src2_stride = mmctx->src2_spad_stride;
-    const size_t src3_stride = mmctx->src3_spad_stride;
-    const size_t src1_stride = mmctx->src1_spad_stride;
+    const size_t src0_stride = mmctx->vtcm_src0_stride;
+    const size_t src2_stride = mmctx->vtcm_src2_stride;
+    const size_t src3_stride = mmctx->vtcm_src3_stride;
+    const size_t src1_stride = mmctx->vtcm_src1_stride;
 
-    uint8_t * restrict spad_src0 = mmctx->vtcm_src0 + mmctx->src0_size_per_thread * ith;
-    uint8_t * restrict spad_src2 = mmctx->vtcm_src2 + mmctx->src2_size_per_thread * ith;
-    uint8_t * restrict spad_src3 = mmctx->vtcm_src3 + mmctx->src3_size_per_thread * ith;
+    uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;
+    uint8_t * restrict vtcm_src2_ptr = mmctx->vtcm_src2 + mmctx->vtcm_src2_size_per_thread * ith;
+    uint8_t * restrict vtcm_src3_ptr = mmctx->vtcm_src3 + mmctx->vtcm_src3_size_per_thread * ith;
     uint8_t * restrict src1_data = mmctx->vtcm_src1;
 
     dma_queue * dma_queue = octx->ctx->dma[ith];
@@ -3295,14 +3295,14 @@ static void matmul_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
     // Prefill spad with src0, src2, src3 rows
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
         const int is0 = (ir0 - src0_start_row);
-        if (is0 >= MM_SPAD_SRC0_NROWS) {
+        if (is0 >= HTP_MM_VTCM_SRC0_NROWS) {
             break;
         }
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 2);
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + is0 * src2_stride, src2_row + ir0 * src2_row_size),
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + ir0 * src2_row_size),
                        src2_stride, src2_row_size, src2_row_size, 2);
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src3 + is0 * src3_stride, src3_row + ir0 * src3_row_size),
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src3_ptr + is0 * src3_stride, src3_row + ir0 * src3_row_size),
                        src3_stride, src3_row_size, src3_row_size, 2);
     }
 
@@ -3345,15 +3345,15 @@ static void matmul_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
             mmctx->vec_dot_2x1(ne00, &dst_row_v[ir0], ss3, ss3 + src3_stride, src1_col);
         }
 
-        // Prefetch next (n + spad_nrows) rows
-        const int pr0 = (ir0 + MM_SPAD_SRC0_NROWS);
-        const int is0 = (pr0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
+        // Prefetch next (n + vtcm_nrows) rows
+        const int pr0 = (ir0 + HTP_MM_VTCM_SRC0_NROWS);
+        const int is0 = (pr0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
         if (pr0 < src0_end_row_x2) {
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + pr0 * src0_row_size),
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + pr0 * src0_row_size),
                            src0_stride, src0_row_size, src0_row_size, 2);
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + is0 * src2_stride, src2_row + pr0 * src2_row_size),
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + pr0 * src2_row_size),
                            src2_stride, src2_row_size, src2_row_size, 2);
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src3 + is0 * src3_stride, src3_row + pr0 * src3_row_size),
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src3_ptr + is0 * src3_stride, src3_row + pr0 * src3_row_size),
                            src3_stride, src3_row_size, src3_row_size, 2);
         }
     }
@@ -3361,12 +3361,12 @@ static void matmul_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
     // Process last row (if any)
     if (src0_end_row != src0_end_row_x2) {
         uint32_t  ir0 = src0_end_row_x2;
-        const int is0 = (ir0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+        const int is0 = (ir0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 1);
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + is0 * src2_stride, src2_row + ir0 * src2_row_size),
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + ir0 * src2_row_size),
                        src2_stride, src2_row_size, src2_row_size, 1);
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src3 + is0 * src3_stride, src3_row + ir0 * src3_row_size),
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src3_ptr + is0 * src3_stride, src3_row + ir0 * src3_row_size),
                        src3_stride, src3_row_size, src3_row_size, 1);
 
         const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
@@ -3389,7 +3389,7 @@ static void matmul_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
 }
 
 static void matmul_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_matmul_context * mmctx = data;
+    struct htp_mm_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
 
     const struct htp_tensor * restrict src0 = octx->src[0]; // Wgate
@@ -3423,12 +3423,12 @@ static void matmul_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
     const size_t src0_row_size = src0->nb[1];
     const size_t src2_row_size = src2->nb[1];
 
-    const size_t src0_stride = mmctx->src0_spad_stride;
-    const size_t src2_stride = mmctx->src2_spad_stride;
-    const size_t src1_stride = mmctx->src1_spad_stride;
+    const size_t src0_stride = mmctx->vtcm_src0_stride;
+    const size_t src2_stride = mmctx->vtcm_src2_stride;
+    const size_t src1_stride = mmctx->vtcm_src1_stride;
 
-    uint8_t * restrict spad_src0 = mmctx->vtcm_src0 + mmctx->src0_size_per_thread * ith;
-    uint8_t * restrict spad_src2 = mmctx->vtcm_src2 + mmctx->src2_size_per_thread * ith;
+    uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;
+    uint8_t * restrict vtcm_src2_ptr = mmctx->vtcm_src2 + mmctx->vtcm_src2_size_per_thread * ith;
     uint8_t * restrict src1_data = mmctx->vtcm_src1;
 
     dma_queue * dma_queue = octx->ctx->dma[ith];
@@ -3439,12 +3439,12 @@ static void matmul_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
     // Prefill spad with src0, src2 rows
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
         const int is0 = (ir0 - src0_start_row);
-        if (is0 >= MM_SPAD_SRC0_NROWS) {
+        if (is0 >= HTP_MM_VTCM_SRC0_NROWS) {
             break;
         }
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 2);
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + is0 * src2_stride, src2_row + ir0 * src2_row_size),
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + ir0 * src2_row_size),
                        src2_stride, src2_row_size, src2_row_size, 2);
     }
 
@@ -3480,12 +3480,12 @@ static void matmul_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
         }
 
         // Prefetch next rows
-        const int pr0 = (ir0 + MM_SPAD_SRC0_NROWS);
-        const int is0 = (pr0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
+        const int pr0 = (ir0 + HTP_MM_VTCM_SRC0_NROWS);
+        const int is0 = (pr0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
         if (pr0 < src0_end_row_x2) {
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + pr0 * src0_row_size),
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + pr0 * src0_row_size),
                            src0_stride, src0_row_size, src0_row_size, 2);
-            dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + is0 * src2_stride, src2_row + pr0 * src2_row_size),
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + pr0 * src2_row_size),
                            src2_stride, src2_row_size, src2_row_size, 2);
         }
     }
@@ -3493,10 +3493,10 @@ static void matmul_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
     // Process last row (if any)
     if (src0_end_row != src0_end_row_x2) {
         uint32_t  ir0 = src0_end_row_x2;
-        const int is0 = (ir0 - src0_start_row) % MM_SPAD_SRC0_NROWS;
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src0 + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+        const int is0 = (ir0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 1);
-        dma_queue_push(dma_queue, dma_make_ptr(spad_src2 + is0 * src2_stride, src2_row + ir0 * src2_row_size),
+        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + ir0 * src2_row_size),
                        src2_stride, src2_row_size, src2_row_size, 1);
 
         const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
@@ -3527,8 +3527,8 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
                         src0->type == HTP_TYPE_Q8_0 || src0->type == HTP_TYPE_IQ4_NL ||
                         src0->type == HTP_TYPE_MXFP4);
 
-    struct htp_matmul_context mmctx_struct = {0};
-    struct htp_matmul_context * mmctx = &mmctx_struct;
+    struct htp_mm_context mmctx_struct = {0};
+    struct htp_mm_context * mmctx = &mmctx_struct;
     mmctx->octx = octx;
 
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
@@ -3571,7 +3571,7 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
         quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
 
-    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(src1->ne[0]) : htp_q8_0_tiled_row_size(src1->ne[0]);
+    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(src1->ne[0]) : htp_mm_q8_0_tiled_row_size(src1->ne[0]);
 
     // Set up scratchpads
     size_t src0_sz_per_thread = 0;
@@ -3579,24 +3579,24 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
     size_t src3_sz_per_thread = 0;
 
     if (is_repacked) {
-        uint32_t tile_size = htp_get_weight_tile_size(src0->type);
-        uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
+        uint32_t tile_size = htp_mm_get_weight_tile_size(src0->type);
+        uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(src0->type);
         uint32_t n_k_tiles = src1->ne[0] / 32;
         uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
 
-        size_t repacked_spad_size = hex_round_up(DMA_DEPTH * tile_row_size, 256);
+        size_t repacked_vtcm_size = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
         size_t src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0_TILED * sizeof(float));
-        if (repacked_spad_size < src1_row_size_padded) {
-            repacked_spad_size = src1_row_size_padded;
+        if (repacked_vtcm_size < src1_row_size_padded) {
+            repacked_vtcm_size = src1_row_size_padded;
         }
 
-        src0_sz_per_thread = repacked_spad_size;
-        src2_sz_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
-        src3_sz_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
+        src0_sz_per_thread = repacked_vtcm_size;
+        src2_sz_per_thread = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
+        src3_sz_per_thread = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
     } else {
-        src0_sz_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
-        src2_sz_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
-        src3_sz_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
+        src0_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
+        src2_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
+        src3_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
     }
 
     size_t src1_sz_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
@@ -3606,11 +3606,11 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
     size_t src2_sz = src2_sz_per_thread * octx->n_threads;
     size_t src3_sz = src3_sz_per_thread * octx->n_threads;
 
-    size_t spad_size = src0_sz + src1_sz + src2_sz + src3_sz;
+    size_t vtcm_size = src0_sz + src1_sz + src2_sz + src3_sz;
 
-    if (octx->ctx->vtcm_size < spad_size) {
+    if (octx->ctx->vtcm_size < vtcm_size) {
         FARF(ERROR, "matmul-qkv: current VTCM reservation %zu is too small, needed %zu\n",
-             octx->ctx->vtcm_size, spad_size);
+             octx->ctx->vtcm_size, vtcm_size);
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
@@ -3625,15 +3625,15 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
     octx->src2_spad.src  = NULL;
     octx->src3_spad.src  = NULL;
 
-    mmctx->src0_spad_stride = is_repacked ? 0 : src0_row_size_padded;
-    mmctx->src2_spad_stride = is_repacked ? 0 : src0_row_size_padded;
-    mmctx->src3_spad_stride = is_repacked ? 0 : src0_row_size_padded;
-    mmctx->src1_spad_stride = src1_row_size;
+    mmctx->vtcm_src0_stride = is_repacked ? 0 : src0_row_size_padded;
+    mmctx->vtcm_src2_stride = is_repacked ? 0 : src0_row_size_padded;
+    mmctx->vtcm_src3_stride = is_repacked ? 0 : src0_row_size_padded;
+    mmctx->vtcm_src1_stride = src1_row_size;
 
-    mmctx->src0_size_per_thread = src0_sz_per_thread;
-    mmctx->src1_size_per_thread = src1_sz_per_thread;
-    mmctx->src2_size_per_thread = src2_sz_per_thread;
-    mmctx->src3_size_per_thread = src3_sz_per_thread;
+    mmctx->vtcm_src0_size_per_thread = src0_sz_per_thread;
+    mmctx->vtcm_src1_size_per_thread = src1_sz_per_thread;
+    mmctx->vtcm_src2_size_per_thread = src2_sz_per_thread;
+    mmctx->vtcm_src3_size_per_thread = src3_sz_per_thread;
 
     if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)
         return HTP_STATUS_OK;
@@ -3673,8 +3673,8 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
                         src0->type == HTP_TYPE_Q8_0 || src0->type == HTP_TYPE_IQ4_NL ||
                         src0->type == HTP_TYPE_MXFP4);
 
-    struct htp_matmul_context mmctx_struct = {0};
-    struct htp_matmul_context * mmctx = &mmctx_struct;
+    struct htp_mm_context mmctx_struct = {0};
+    struct htp_mm_context * mmctx = &mmctx_struct;
     mmctx->octx = octx;
 
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
@@ -3705,7 +3705,7 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
         n_quant_jobs = MIN(total_nb, octx->n_threads);
         quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
         for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
-            uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
+            uint32_t ib_first = (total_nb * (ith + 0)) / n_quant_jobs;
             uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
             mmctx->quant_ib_first[ith] = ib_first;
             mmctx->quant_ib_last[ith]  = ib_last;
@@ -3717,29 +3717,29 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
         quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
 
-    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(src1->ne[0]) : htp_q8_0_tiled_row_size(src1->ne[0]);
+    size_t src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(src1->ne[0]) : htp_mm_q8_0_tiled_row_size(src1->ne[0]);
 
     // Set up scratchpads
     size_t src0_sz_per_thread = 0;
     size_t src2_sz_per_thread = 0;
 
     if (is_repacked) {
-        uint32_t tile_size = htp_get_weight_tile_size(src0->type);
-        uint32_t aligned_tile_size = htp_get_weight_aligned_tile_size(src0->type);
+        uint32_t tile_size = htp_mm_get_weight_tile_size(src0->type);
+        uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(src0->type);
         uint32_t n_k_tiles = src1->ne[0] / 32;
         uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
 
-        size_t repacked_spad_size = hex_round_up(DMA_DEPTH * tile_row_size, 256);
+        size_t repacked_vtcm_size = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
         size_t src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0_TILED * sizeof(float));
-        if (repacked_spad_size < src1_row_size_padded) {
-            repacked_spad_size = src1_row_size_padded;
+        if (repacked_vtcm_size < src1_row_size_padded) {
+            repacked_vtcm_size = src1_row_size_padded;
         }
 
-        src0_sz_per_thread = repacked_spad_size;
-        src2_sz_per_thread = hex_round_up(DMA_DEPTH * tile_row_size, 256);
+        src0_sz_per_thread = repacked_vtcm_size;
+        src2_sz_per_thread = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
     } else {
-        src0_sz_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
-        src2_sz_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
+        src0_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
+        src2_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
     }
 
     size_t src1_sz_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
@@ -3748,11 +3748,11 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
     size_t src1_sz = src1_sz_per_thread;
     size_t src2_sz = src2_sz_per_thread * octx->n_threads;
 
-    size_t spad_size = src0_sz + src1_sz + src2_sz;
+    size_t vtcm_size = src0_sz + src1_sz + src2_sz;
 
-    if (octx->ctx->vtcm_size < spad_size) {
+    if (octx->ctx->vtcm_size < vtcm_size) {
         FARF(ERROR, "matmul-ffn: current VTCM reservation %zu is too small, needed %zu\n",
-             octx->ctx->vtcm_size, spad_size);
+             octx->ctx->vtcm_size, vtcm_size);
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
@@ -3765,13 +3765,13 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
     octx->src0_spad.src  = NULL;
     octx->src2_spad.src  = NULL;
 
-    mmctx->src0_spad_stride = is_repacked ? 0 : src0_row_size_padded;
-    mmctx->src2_spad_stride = is_repacked ? 0 : src0_row_size_padded;
-    mmctx->src1_spad_stride = src1_row_size;
+    mmctx->vtcm_src0_stride = is_repacked ? 0 : src0_row_size_padded;
+    mmctx->vtcm_src2_stride = is_repacked ? 0 : src0_row_size_padded;
+    mmctx->vtcm_src1_stride = src1_row_size;
 
-    mmctx->src0_size_per_thread = src0_sz_per_thread;
-    mmctx->src1_size_per_thread = src1_sz_per_thread;
-    mmctx->src2_size_per_thread = src2_sz_per_thread;
+    mmctx->vtcm_src0_size_per_thread = src0_sz_per_thread;
+    mmctx->vtcm_src1_size_per_thread = src1_sz_per_thread;
+    mmctx->vtcm_src2_size_per_thread = src2_sz_per_thread;
 
     if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)
         return HTP_STATUS_OK;
@@ -3782,7 +3782,7 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
 
     // Run fused matmul
     const uint32_t n_matmul_jobs = octx->n_threads;
-        worker_callback_t matmul_job_func;
+    worker_callback_t matmul_job_func;
     if (is_repacked) {
         switch (src0->type) {
             case HTP_TYPE_Q4_0:   matmul_job_func = matmul_ffn_2d_repacked_q4_0;   break;

@@ -33,14 +33,14 @@ typedef struct {
     size_t        src1_nb3;
     size_t        dst_nb2;
     size_t        dst_nb3;
-} hmx_matmul_f16_f32_batched_params_t;
+} htp_mm_hmx_f16_f32_batched_params_t;
 
-// Batched F16 wrapper over hmx_matmul_2d_f32.
+// Batched F16 wrapper over htp_mm_hmx_2d_f32.
 // Batch semantics match ggml_mul_mat(): src0 broadcasts to src1 in dims 2/3.
-int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32_batched_params_t *params,
-                               int m_chunk, int n_chunk, int use_pipeline, int num_threads, int act_threads, int spad_size);
+int htp_mm_hmx_f16_f32_batched(struct htp_context *ctx, const htp_mm_hmx_f16_f32_batched_params_t *params,
+                               int m_chunk, int n_chunk, int use_pipeline, int num_threads, int act_threads, int vtcm_size);
 
-int hmx_matmul_2d_f32(struct htp_context *ctx,
+int htp_mm_hmx_2d_f32(struct htp_context *ctx,
                                   float *restrict dst,
                                   const float *activation,
                                   const uint8_t *weight,
@@ -58,11 +58,11 @@ int hmx_matmul_2d_f32(struct htp_context *ctx,
                                   int act_threads,
                                   int tile_size,
                                   int aligned_tile_size,
-                                  int spad_size);
+                                  int vtcm_size);
 
 struct mmid_row_mapping;
 
-int hmx_matmul_id_2d_f32(struct htp_context *ctx,
+int htp_mm_hmx_id_2d_f32(struct htp_context *ctx,
                                          float *restrict dst,
                                          const float *activation,
                                          const uint8_t *weight,

@@ -46,14 +46,14 @@
 #include "htp_iface.h"
 #include "htp-drv.h"
 
-struct htp_matmul_kernel_params;
+struct htp_mm_kernel_params;
 struct ggml_hexagon_session;
 static void ggml_hexagon_precompute_matmul_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * dst,
-    struct htp_matmul_kernel_params * kparams
+    struct htp_mm_kernel_params * kparams
 );
 
 using intvec  = std::vector<int>;
@@ -640,7 +640,7 @@ static void repack_q4_0_tiled(ggml_tensor * t, const void * data, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q4_0;
+    const size_t tile_size = HTP_MM_WEIGHT_TILE_SIZE_Q4_0;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -691,7 +691,7 @@ static void repack_tiled_q4_0(void * data, const ggml_tensor * t, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q4_0;
+    const size_t tile_size = HTP_MM_WEIGHT_TILE_SIZE_Q4_0;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -744,7 +744,7 @@ static void repack_q4_1_tiled(ggml_tensor * t, const void * data, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q4_1;
+    const size_t tile_size = HTP_MM_WEIGHT_TILE_SIZE_Q4_1;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -801,7 +801,7 @@ static void repack_tiled_q4_1(void * data, const ggml_tensor * t, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q4_1;
+    const size_t tile_size = HTP_MM_WEIGHT_TILE_SIZE_Q4_1;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -855,7 +855,7 @@ static void repack_q8_0_tiled(ggml_tensor * t, const void * data, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q8_0;
+    const size_t tile_size = HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -901,7 +901,7 @@ static void repack_tiled_q8_0(void * data, const ggml_tensor * t, size_t size) {
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_Q8_0;
+    const size_t tile_size = HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -951,7 +951,7 @@ static void repack_mxfp4_tiled(ggml_tensor * t, const void * data, size_t size) 
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_MXFP4;
+    const size_t tile_size = HTP_MM_WEIGHT_TILE_SIZE_MXFP4;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -1002,7 +1002,7 @@ static void repack_tiled_mxfp4(void * data, const ggml_tensor * t, size_t size) 
 
     int n_col_tiles = ne1_padded / 32;
     int n_k_tiles = ne0_padded / 32;
-    const size_t tile_size = HTP_WEIGHT_TILE_SIZE_MXFP4;
+    const size_t tile_size = HTP_MM_WEIGHT_TILE_SIZE_MXFP4;
     const size_t matrix_size = n_col_tiles * n_k_tiles * tile_size;
 
     for (int i3 = 0; i3 < ne3; i3++) {
@@ -1482,7 +1482,7 @@ struct ggml_hexagon_opbatch {
                 node.node->src[0],
                 node.node->src[1],
                 node.node,
-                (struct htp_matmul_kernel_params *)o.kernel_params
+                (struct htp_mm_kernel_params *)o.kernel_params
             );
         }
 
@@ -2174,14 +2174,12 @@ static bool ggml_hexagon_supported_gated_delta_net(const struct ggml_hexagon_ses
     return true;
 }
 
-
-
 static void ggml_hexagon_precompute_matmul_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * dst,
-    struct htp_matmul_kernel_params * kparams
+    struct htp_mm_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
@@ -2248,8 +2246,8 @@ static void ggml_hexagon_precompute_matmul_params(
     const size_t vtcm_budget = sess->vtcm_size;
 
     if (hmx_eligible) {
-        const int aligned_tile_size = htp_get_weight_aligned_tile_size(wtype);
-        const bool use_pipeline = is_matmul_id ? false : hmx_use_pipeline(ne11);
+        const int aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
+        const bool use_pipeline = is_matmul_id ? false : htp_mm_hmx_use_pipeline(ne11);
         const int num_threads = (is_matmul_id ? (ne12 <= 32) : (ne11 <= 32)) ? 1 : (int)sess->n_threads;
 
         const bool is_batched_val = is_matmul_id ? false : is_batched;
@@ -2257,7 +2255,7 @@ static void ggml_hexagon_precompute_matmul_params(
 
         size_t m_chunk = 0;
         size_t n_chunk = 0;
-        size_t spad_size = 0;
+        size_t vtcm_size = 0;
         bool use_grouped = false;
         int act_threads_selected = 0;
 
@@ -2268,24 +2266,24 @@ static void ggml_hexagon_precompute_matmul_params(
             int best_act_threads = 0;
             size_t best_m_chunk = 0;
             size_t best_n_chunk = 0;
-            size_t best_spad_size = 0;
+            size_t best_vtcm_size = 0;
 
             int act_threads = num_threads;
             while (act_threads >= 1) {
                 const size_t f32_scratch_size = use_dma_activation
-                    ? hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
+                    ? hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
                 size_t group_overhead = 256 + f32_scratch_size;
                 size_t group_size_per_n, group_size_per_m, group_size_per_mn;
-                hmx_get_batched_chunk_costs(ne00_padded, group_size, &group_size_per_n, &group_size_per_m, &group_size_per_mn);
+                htp_mm_hmx_get_batched_chunk_costs(ne00_padded, group_size, &group_size_per_n, &group_size_per_m, &group_size_per_mn);
 
                 size_t m_chunk_candidate = 0;
                 size_t n_chunk_candidate = 0;
-                size_t spad_size_candidate = 0;
+                size_t vtcm_size_candidate = 0;
 
-                if (hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn,
+                if (htp_mm_hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn,
                                        hex_align_up(ne11, 32), ne01,
-                                       (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk_candidate, &n_chunk_candidate, &spad_size_candidate) == 0) {
-                    size_t exact_size = hmx_get_batched_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, group_size, use_dma_activation, use_pipeline, act_threads);
+                                       (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
+                    size_t exact_size = htp_mm_hmx_get_batched_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, group_size, use_dma_activation, use_pipeline, act_threads);
                     if (exact_size <= vtcm_budget) {
                         size_t mblocks = ((size_t) ne11 + m_chunk_candidate - 1) / m_chunk_candidate;
                         if (mblocks < best_mblocks || (mblocks == best_mblocks && act_threads > best_act_threads)) {
@@ -2293,7 +2291,7 @@ static void ggml_hexagon_precompute_matmul_params(
                             best_act_threads = act_threads;
                             best_m_chunk = m_chunk_candidate;
                             best_n_chunk = n_chunk_candidate;
-                            best_spad_size = exact_size;
+                            best_vtcm_size = exact_size;
                         }
                     }
                 }
@@ -2307,7 +2305,7 @@ static void ggml_hexagon_precompute_matmul_params(
             if (best_act_threads > 0) {
                 m_chunk = best_m_chunk;
                 n_chunk = best_n_chunk;
-                spad_size = best_spad_size;
+                vtcm_size = best_vtcm_size;
                 act_threads_selected = best_act_threads;
                 use_grouped = true;
             }
@@ -2319,26 +2317,26 @@ static void ggml_hexagon_precompute_matmul_params(
             int best_act_threads = 0;
             size_t best_m_chunk = 0;
             size_t best_n_chunk = 0;
-            size_t best_spad_size = 0;
+            size_t best_vtcm_size = 0;
 
             const int m_for_chunks = is_matmul_id ? hex_align_up(ne12, 32) : hex_align_up(ne11, 32);
             const int m_for_cost   = is_matmul_id ? ne12 : ne11;
 
             int act_threads = num_threads;
             while (act_threads >= 1) {
-                const size_t act_f32_size = is_matmul_id ? 0 : hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE);
+                const size_t act_f32_size = is_matmul_id ? 0 : hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HTP_MM_HMX_TILE_SIZE);
                 size_t simple_2d_overhead = 256 + act_f32_size;
                 size_t simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn;
-                hmx_get_2d_chunk_costs(wtype, ne00_padded, use_pipeline, aligned_tile_size, &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
+                htp_mm_hmx_get_2d_chunk_costs(wtype, ne00_padded, use_pipeline, aligned_tile_size, &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
 
                 size_t m_chunk_candidate = 0;
                 size_t n_chunk_candidate = 0;
-                size_t spad_size_candidate = 0;
+                size_t vtcm_size_candidate = 0;
 
-                if (hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn,
+                if (htp_mm_hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn,
                                        m_for_chunks, ne01,
-                                       (size_t) ne01 * 3, (size_t) m_for_cost * 2, &m_chunk_candidate, &n_chunk_candidate, &spad_size_candidate) == 0) {
-                    size_t exact_size = hmx_get_2d_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, use_pipeline, is_matmul_id ? 0 : act_threads, aligned_tile_size);
+                                       (size_t) ne01 * 3, (size_t) m_for_cost * 2, &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
+                    size_t exact_size = htp_mm_hmx_get_2d_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, use_pipeline, is_matmul_id ? 0 : act_threads, aligned_tile_size);
                     if (exact_size <= vtcm_budget) {
                         size_t mblocks = ((size_t) m_for_cost + m_chunk_candidate - 1) / m_chunk_candidate;
                         if (mblocks < best_mblocks || (mblocks == best_mblocks && act_threads > best_act_threads)) {
@@ -2346,7 +2344,7 @@ static void ggml_hexagon_precompute_matmul_params(
                             best_act_threads = act_threads;
                             best_m_chunk = m_chunk_candidate;
                             best_n_chunk = n_chunk_candidate;
-                            best_spad_size = exact_size;
+                            best_vtcm_size = exact_size;
                         }
                     }
                 }
@@ -2360,7 +2358,7 @@ static void ggml_hexagon_precompute_matmul_params(
             if (best_act_threads > 0) {
                 m_chunk = best_m_chunk;
                 n_chunk = best_n_chunk;
-                spad_size = best_spad_size;
+                vtcm_size = best_vtcm_size;
                 act_threads_selected = best_act_threads;
             } else {
                 goto fallback_hvx;
@@ -2373,18 +2371,18 @@ static void ggml_hexagon_precompute_matmul_params(
         kparams->n_chunk = n_chunk;
         kparams->num_threads = num_threads;
         kparams->act_threads = act_threads_selected;
-        kparams->tile_size = htp_get_weight_tile_size(wtype);
+        kparams->tile_size = htp_mm_get_weight_tile_size(wtype);
         kparams->aligned_tile_size = aligned_tile_size;
-        kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(ne10) : htp_q8_0_tiled_row_size(ne10);
-        kparams->spad_size = spad_size;
-        kparams->src0_spad_size = 0;
-        kparams->src1_spad_size = 0;
-        kparams->dst_spad_size = 0;
+        kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
+        kparams->vtcm_size = vtcm_size;
+        kparams->vtcm_src0_size = 0;
+        kparams->vtcm_src1_size = 0;
+        kparams->vtcm_dst_size = 0;
 
         if (is_batched && !is_matmul_id) {
-            kparams->kernel_type = HTP_MATMUL_KERNEL_HMX_F16_BATCHED;
+            kparams->kernel_type = HTP_MM_KERNEL_HMX_F16_BATCHED;
         } else {
-            kparams->kernel_type = HTP_MATMUL_KERNEL_HMX_2D;
+            kparams->kernel_type = HTP_MM_KERNEL_HMX_2D;
         }
         return;
     }
@@ -2397,88 +2395,88 @@ fallback_hvx:
 
     if (is_quant) {
         // Quantized HVX
-        kparams->tile_size = htp_get_weight_tile_size(wtype);
-        kparams->aligned_tile_size = htp_get_weight_aligned_tile_size(wtype);
-        kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_q8_1_tiled_row_size(ne10) : htp_q8_0_tiled_row_size(ne10);
+        kparams->tile_size = htp_mm_get_weight_tile_size(wtype);
+        kparams->aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
+        kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
 
         if (src1_nrows < (int)sess->n_threads) {
-            kparams->kernel_type = HTP_MATMUL_KERNEL_HVX_QUANT_BLOCK;
+            kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_BLOCK;
         } else {
-            kparams->kernel_type = HTP_MATMUL_KERNEL_HVX_QUANT_ROW;
+            kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW;
         }
 
-        size_t src0_spad_size = 0, src1_spad_size = 0, dst_spad_size = 0;
-        size_t total_size = hvx_get_spad_sizes(
+        size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
+        size_t total_size = hvx_get_vtcm_sizes(
             kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-            dst->nb[1], src0->nb[1], src1->nb[1], &src0_spad_size, &src1_spad_size, &dst_spad_size
+            dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
         );
-        kparams->spad_size = total_size;
-        kparams->src0_spad_size = src0_spad_size;
-        kparams->src1_spad_size = src1_spad_size;
-        kparams->dst_spad_size = dst_spad_size;
+        kparams->vtcm_size = total_size;
+        kparams->vtcm_src0_size = vtcm_src0_size;
+        kparams->vtcm_src1_size = vtcm_src1_size;
+        kparams->vtcm_dst_size = vtcm_dst_size;
     } else if (wtype == GGML_TYPE_F16) {
         // F16 HVX
         const bool is_batched  = (ne02 > 1) || (ne03 > 1);
         const bool is_permuted = ggml_is_permuted(src0) || ggml_is_permuted(src1);
 
-        size_t src0_spad_size = 0, src1_spad_size = 0, dst_spad_size = 0;
-        size_t vtcm_size = hvx_get_spad_sizes(
-            HTP_MATMUL_KERNEL_HVX_F16_F16_VTCM, wtype, ne10, src1_nrows, sess->n_threads,
-            dst->nb[1], src0->nb[1], src1->nb[1], &src0_spad_size, &src1_spad_size, &dst_spad_size
+        size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
+        size_t vtcm_size = hvx_get_vtcm_sizes(
+            HTP_MM_KERNEL_HVX_F16_F16_VTCM, wtype, ne10, src1_nrows, sess->n_threads,
+            dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
         );
 
         if (!is_batched && !is_permuted && vtcm_size <= vtcm_budget) {
-            kparams->kernel_type = HTP_MATMUL_KERNEL_HVX_F16_F16_VTCM;
+            kparams->kernel_type = HTP_MM_KERNEL_HVX_F16_F16_VTCM;
             kparams->src1_row_size = hex_round_up(ne10 * 2, 128);
-            kparams->spad_size = vtcm_size;
-            kparams->src0_spad_size = src0_spad_size;
-            kparams->src1_spad_size = src1_spad_size;
-            kparams->dst_spad_size = dst_spad_size;
+            kparams->vtcm_size = vtcm_size;
+            kparams->vtcm_src0_size = vtcm_src0_size;
+            kparams->vtcm_src1_size = vtcm_src1_size;
+            kparams->vtcm_dst_size = vtcm_dst_size;
         } else {
             if (src1->type == GGML_TYPE_F32) {
-                kparams->kernel_type = HTP_MATMUL_KERNEL_HVX_F16_F32_DDR;
+                kparams->kernel_type = HTP_MM_KERNEL_HVX_F16_F32_DDR;
             } else {
-                kparams->kernel_type = HTP_MATMUL_KERNEL_HVX_F16_F16_DDR;
+                kparams->kernel_type = HTP_MM_KERNEL_HVX_F16_F16_DDR;
             }
             kparams->src1_row_size = src1->nb[1];
-            size_t ddr_size = hvx_get_spad_sizes(
+            size_t ddr_size = hvx_get_vtcm_sizes(
                 kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-                dst->nb[1], src0->nb[1], src1->nb[1], &src0_spad_size, &src1_spad_size, &dst_spad_size
+                dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
             );
-            kparams->spad_size = ddr_size;
-            kparams->src0_spad_size = src0_spad_size;
-            kparams->src1_spad_size = src1_spad_size;
-            kparams->dst_spad_size = dst_spad_size;
+            kparams->vtcm_size = ddr_size;
+            kparams->vtcm_src0_size = vtcm_src0_size;
+            kparams->vtcm_src1_size = vtcm_src1_size;
+            kparams->vtcm_dst_size = vtcm_dst_size;
         }
     } else {
         // F32 HVX
         const bool is_batched  = (ne02 > 1) || (ne03 > 1);
         const bool is_permuted = ggml_is_permuted(src0) || ggml_is_permuted(src1);
 
-        size_t src0_spad_size = 0, src1_spad_size = 0, dst_spad_size = 0;
-        size_t vtcm_size = hvx_get_spad_sizes(
-            HTP_MATMUL_KERNEL_HVX_F32_F32_VTCM, wtype, ne10, src1_nrows, sess->n_threads,
-            dst->nb[1], src0->nb[1], src1->nb[1], &src0_spad_size, &src1_spad_size, &dst_spad_size
+        size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
+        size_t vtcm_size = hvx_get_vtcm_sizes(
+            HTP_MM_KERNEL_HVX_F32_F32_VTCM, wtype, ne10, src1_nrows, sess->n_threads,
+            dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
         );
 
         if (!is_batched && !is_permuted && vtcm_size <= vtcm_budget) {
-            kparams->kernel_type = HTP_MATMUL_KERNEL_HVX_F32_F32_VTCM;
+            kparams->kernel_type = HTP_MM_KERNEL_HVX_F32_F32_VTCM;
             kparams->src1_row_size = hex_round_up(ne10 * 4, 128);
-            kparams->spad_size = vtcm_size;
-            kparams->src0_spad_size = src0_spad_size;
-            kparams->src1_spad_size = src1_spad_size;
-            kparams->dst_spad_size = dst_spad_size;
+            kparams->vtcm_size = vtcm_size;
+            kparams->vtcm_src0_size = vtcm_src0_size;
+            kparams->vtcm_src1_size = vtcm_src1_size;
+            kparams->vtcm_dst_size = vtcm_dst_size;
         } else {
-            kparams->kernel_type = HTP_MATMUL_KERNEL_HVX_F32_F32_DDR;
+            kparams->kernel_type = HTP_MM_KERNEL_HVX_F32_F32_DDR;
             kparams->src1_row_size = src1->nb[1];
-            size_t ddr_size = hvx_get_spad_sizes(
+            size_t ddr_size = hvx_get_vtcm_sizes(
                 kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-                dst->nb[1], src0->nb[1], src1->nb[1], &src0_spad_size, &src1_spad_size, &dst_spad_size
+                dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
             );
-            kparams->spad_size = ddr_size;
-            kparams->src0_spad_size = src0_spad_size;
-            kparams->src1_spad_size = src1_spad_size;
-            kparams->dst_spad_size = dst_spad_size;
+            kparams->vtcm_size = ddr_size;
+            kparams->vtcm_src0_size = vtcm_src0_size;
+            kparams->vtcm_src1_size = vtcm_src1_size;
+            kparams->vtcm_dst_size = vtcm_dst_size;
         }
     }
 
