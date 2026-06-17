@@ -559,7 +559,7 @@ static int extract_quant_bits(const std::string & filename) {
 
 template <typename FileT>
 static std::vector<FileT> get_split_files(const std::vector<FileT> & files,
-                                               const FileT              & file) {
+                                          const FileT              & file) {
     auto split = get_gguf_split_info(file.path);
 
     if (split.count <= 1) {
@@ -580,8 +580,8 @@ static std::vector<FileT> get_split_files(const std::vector<FileT> & files,
 // preferring deeper shared directory prefix with the model, then closest quantization
 template <typename FileT>
 static FileT find_best_sibling(const std::vector<FileT> & files,
-                                    const std::string        & model,
-                                    const std::string        & keyword) {
+                               const std::string        & model,
+                               const std::string        & keyword) {
     FileT best;
     size_t best_depth = 0;
     int best_diff = 0;
@@ -622,13 +622,13 @@ static FileT find_best_sibling(const std::vector<FileT> & files,
 
 template <typename FileT>
 static FileT find_best_mmproj(const std::vector<FileT> & files,
-                                   const std::string        & model) {
+                              const std::string        & model) {
     return find_best_sibling(files, model, "mmproj");
 }
 
 template <typename FileT>
 static FileT find_best_mtp(const std::vector<FileT> & files,
-                                const std::string        & model) {
+                           const std::string        & model) {
     return find_best_sibling(files, model, "mtp-");
 }
 
@@ -649,7 +649,7 @@ static bool gguf_filename_is_model(const std::string & filepath) {
 
 template <typename FileT>
 static FileT find_best_model(const std::vector<FileT> & files,
-                                  const std::string        & tag) {
+                             const std::string        & tag) {
     std::vector<std::string> tags;
 
     if (!tag.empty()) {
@@ -774,11 +774,13 @@ struct ms_plan {
     ms_cache::ms_file primary;
     ms_cache::ms_files model_files;
     ms_cache::ms_file mmproj;
+    ms_cache::ms_file mtp;
 };
 
 static ms_plan get_ms_plan(const common_params_model  & model,
                            const common_download_opts & opts,
-                           bool download_mmproj) {
+                           bool download_mmproj,
+                           bool download_mtp) {
     ms_plan plan;
 
     auto [repo, tag] = common_download_split_repo_tag(model.ms_repo);
@@ -822,6 +824,10 @@ static ms_plan get_ms_plan(const common_params_model  & model,
 
     if (download_mmproj) {
         plan.mmproj = find_best_mmproj(all, primary.path);
+    }
+
+    if (download_mtp) {
+        plan.mtp = find_best_mtp(all, primary.path);
     }
 
     return plan;
@@ -884,12 +890,15 @@ common_download_model_result common_download_model(const common_params_model  & 
             }
         }
     } else if (is_ms) {
-        ms = get_ms_plan(model, opts, download_mmproj);
+        ms = get_ms_plan(model, opts, download_mmproj, download_mtp);
         for (const auto & f : ms.model_files) {
             tasks.push_back({f.url, f.local_path});
         }
         if (!ms.mmproj.path.empty()) {
             tasks.push_back({ms.mmproj.url, ms.mmproj.local_path});
+        }
+        if (!ms.mtp.path.empty()) {
+            tasks.push_back({ms.mtp.url, ms.mtp.local_path});
         }
     } else if (!model.url.empty()) {
         tasks = get_url_tasks(model);
@@ -955,6 +964,10 @@ common_download_model_result common_download_model(const common_params_model  & 
 
         if (!ms.mmproj.path.empty()) {
             result.mmproj_path = ms_cache::finalize_file(ms.mmproj);
+        }
+
+        if (!ms.mtp.path.empty()) {
+            result.mtp_path = ms_cache::finalize_file(ms.mtp);
         }
     } else {
         result.model_path = model.path;

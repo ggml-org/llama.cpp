@@ -350,6 +350,11 @@ static handle_model_result common_params_handle_model(struct common_params_model
             result.found_mmproj = true;
             result.mmproj.path = download_result.mmproj_path;
         }
+
+        if (!download_result.mtp_path.empty()) {
+            result.found_mtp = true;
+            result.mtp.path = download_result.mtp_path;
+        }
     } else if (!model.url.empty()) {
         if (model.path.empty()) {
             auto f = string_split<std::string>(model.url, '#').front();

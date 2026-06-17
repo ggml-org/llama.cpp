@@ -234,7 +234,7 @@ ms_files get_repo_files(const std::string & repo_id,
     std::string api_url = endpoint + "api/v1/models/" + repo_id + "/repo/files?Revision=master&Recursive=true";
 
     fs::path blobs_path = get_repo_path(repo_id) / "blobs";
-    fs::path ref = get_snapshot_ref();
+    std::string ref = get_snapshot_ref();
     fs::path commit_path = get_repo_path(repo_id) / "snapshots" / ref;
 
     ms_files files;
