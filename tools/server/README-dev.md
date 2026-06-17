@@ -180,6 +180,24 @@ That requires `JSON.stringify` when formatted to message content:
 }
 ```
 
+### Model management API (router mode)
+
+Model management API was added via PR [#23976](https://github.com/ggml-org/llama.cpp/pull/23976)
+
+The main goal of this API is to allow downloading models and/or removing models from the web UI. It relies on the model cache infrastructure under the hood to manage the list of models dynamically.
+
+Instead of building everything from the ground up (like what most AI agents will do when you ask them to implement a similar feature), we built on top of existing, already well-engineered components inside the codebase:
+- Model cache infrastructure as mentioned above (`common/download.h`)
+- Server response queue (`server-queue.h`). We use this feature to broadcast events to SSE clients.
+- Server router thread management (`server-models.h`). We re-use the same thread model that is used for managing subprocess life cycle, except that we don't create a new subprocess, but launch the download right inside the thread.
+
+The flow for downloading a new model:
+- POST request comes in --> `post_router_models` --> validation
+- `server_models::download()` is called
+    - Sets up a new thread `inst.th` and runs the download inside
+- If a stop request comes in, set `stop_download` to `true`
+- Otherwise, upon completion, we call `load_models()` to refresh the list of models
+
 ### Notable Related PRs
 
 - Initial server implementation: https://github.com/ggml-org/llama.cpp/pull/1443

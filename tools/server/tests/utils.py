@@ -340,6 +340,9 @@ class ServerProcess:
         elif method == "POST":
             response = requests.post(url, headers=headers, json=data, timeout=timeout)
             parse_body = True
+        elif method == "DELETE":
+            response = requests.delete(url, headers=headers, timeout=timeout)
+            parse_body = True
         elif method == "OPTIONS":
             response = requests.options(url, headers=headers, timeout=timeout)
         else:
