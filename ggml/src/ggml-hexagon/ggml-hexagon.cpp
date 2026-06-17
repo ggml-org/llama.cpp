@@ -2211,8 +2211,8 @@ static void ggml_hexagon_precompute_matmul_params(
         // HMX weight tile requires N to be 32-aligned.
         if (ne01 % 32 == 0) {
             // HMX supports F16, F32, Q4_0, Q4_1, Q8_0, IQ4_NL, MXFP4 weights.
-            if (wtype == GGML_TYPE_F16 || wtype == GGML_TYPE_F32 ||
-                wtype == GGML_TYPE_Q4_0 || wtype == GGML_TYPE_Q4_1 ||
+            if (wtype == GGML_TYPE_F16  || wtype == GGML_TYPE_F32    ||
+                wtype == GGML_TYPE_Q4_0 || wtype == GGML_TYPE_Q4_1   ||
                 wtype == GGML_TYPE_Q8_0 || wtype == GGML_TYPE_IQ4_NL ||
                 wtype == GGML_TYPE_MXFP4) {
 
@@ -2265,8 +2265,9 @@ static void ggml_hexagon_precompute_matmul_params(
         if (is_batched && wtype == GGML_TYPE_F16 && group_size > 1) {
             // Try grouped path first
             const bool use_dma_activation = (src1->nb[1]/sizeof(float) > (size_t)ne00_padded);
+            const int act_threads = hmx_get_act_threads(num_threads, use_pipeline);
             const size_t f32_scratch_size = use_dma_activation
-                ? hex_align_up(num_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
+                ? hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
             size_t group_overhead = 256 + f32_scratch_size;
             size_t group_size_per_n = 3 * vec_dot_size;
             size_t group_size_per_m = group_size * vec_dot_size;
@@ -2275,7 +2276,7 @@ static void ggml_hexagon_precompute_matmul_params(
             if (hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn,
                                    hex_align_up(ne11, 32), ne01,
                                    (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk, &n_chunk, &spad_size) == 0) {
-                size_t exact_size = hmx_get_batched_vtcm_size(wtype, ne00_padded, m_chunk, n_chunk, group_size, use_dma_activation, num_threads);
+                size_t exact_size = hmx_get_batched_vtcm_size(wtype, ne00_padded, m_chunk, n_chunk, group_size, use_dma_activation, use_pipeline, num_threads);
                 if (exact_size <= vtcm_budget) {
                     spad_size = exact_size;
                     use_grouped = true;
@@ -2284,14 +2285,15 @@ static void ggml_hexagon_precompute_matmul_params(
         }
 
         if (!use_grouped) {
-            // Fallback to legacy path (group_size = 1)
-            const size_t act_f32_size = hex_align_up(num_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE);
-            size_t legacy_overhead = 256 + act_f32_size;
-            size_t legacy_size_per_n = (is_quant ? qweight_row_stride : row_stride) + (use_pipeline ? 2 * vec_dot_size : vec_dot_size);
-            size_t legacy_size_per_m = vec_dot_size;
-            size_t legacy_size_per_mn = (use_pipeline ? 2 : 1) * sizeof(uint16_t);
+            // Fallback to simple 2D path (group_size = 1)
+            const int act_threads = hmx_get_act_threads(num_threads, use_pipeline);
+            const size_t act_f32_size = hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HMX_FP16_TILE_SIZE);
+            size_t simple_2d_overhead = 256 + act_f32_size;
+            size_t simple_2d_size_per_n = (use_pipeline ? 2 : 1) * (is_quant ? qweight_row_stride : row_stride) + (use_pipeline ? 2 * vec_dot_size : vec_dot_size);
+            size_t simple_2d_size_per_m = vec_dot_size;
+            size_t simple_2d_size_per_mn = (use_pipeline ? 2 : 1) * sizeof(uint16_t);
 
-            if (hmx_compute_chunks(vtcm_budget, legacy_overhead, legacy_size_per_n, legacy_size_per_m, legacy_size_per_mn,
+            if (hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn,
                                    hex_align_up(ne11, 32), ne01,
                                    (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk, &n_chunk, &spad_size) == 0) {
                 size_t exact_size = hmx_get_2d_vtcm_size(wtype, ne00_padded, m_chunk, n_chunk, use_pipeline, num_threads, aligned_tile_size);

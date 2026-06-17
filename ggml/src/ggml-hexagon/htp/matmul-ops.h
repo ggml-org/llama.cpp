@@ -256,6 +256,13 @@ static inline size_t hex_align_up_matmul(size_t n, size_t m) {
     return ((n + m - 1) / m) * m;
 }
 
+static inline int hmx_get_act_threads(int num_threads, bool use_pipeline) {
+    if (use_pipeline) {
+        return num_threads < 4 ? num_threads : 4;
+    }
+    return num_threads;
+}
+
 static inline size_t hmx_get_2d_vtcm_size(
     int wtype, int k, size_t mc, size_t nc, bool use_pipeline, int num_threads, int aligned_tile_size
 ) {
@@ -264,10 +271,14 @@ static inline size_t hmx_get_2d_vtcm_size(
     const size_t row_stride = htp_get_tiled_row_stride(wtype, k);
     const size_t vec_dot_size = k * sizeof(uint16_t);
 
-    const size_t act_f32_size = hex_align_up_matmul(num_threads * 4 * k * sizeof(float), HMX_FP16_TILE_SIZE);
-    const size_t weight_area_size = is_quant
+    const int act_threads = hmx_get_act_threads(num_threads, use_pipeline);
+    const size_t act_f32_size = hex_align_up_matmul(act_threads * 4 * k * sizeof(float), HMX_FP16_TILE_SIZE);
+    size_t weight_area_size = is_quant
         ? hex_align_up_matmul((nc / 32) * n_k_tiles * aligned_tile_size, HMX_FP16_TILE_SIZE)
         : hex_align_up_matmul(nc * row_stride, HMX_FP16_TILE_SIZE);
+    if (use_pipeline) {
+        weight_area_size *= 2;
+    }
     const size_t act_area_size    = hex_align_up_matmul(mc * vec_dot_size, HMX_FP16_TILE_SIZE);
     const size_t output_area_size = hex_align_up_matmul(mc * nc * sizeof(uint16_t), HMX_FP16_TILE_SIZE);
 
@@ -280,12 +291,13 @@ static inline size_t hmx_get_2d_vtcm_size(
 }
 
 static inline size_t hmx_get_batched_vtcm_size(
-    int wtype, int k, size_t mc, size_t nc, int group_size, bool use_dma_activation, int num_threads
+    int wtype, int k, size_t mc, size_t nc, int group_size, bool use_dma_activation, bool use_pipeline, int num_threads
 ) {
     (void)wtype;
     const size_t vec_dot_size = k * sizeof(uint16_t);
+    const int act_threads = hmx_get_act_threads(num_threads, use_pipeline);
     const size_t f32_scratch_size = use_dma_activation
-        ? hex_align_up_matmul(num_threads * 4 * k * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
+        ? hex_align_up_matmul(act_threads * 4 * k * sizeof(float), HMX_FP16_TILE_SIZE) : 0;
 
     const size_t act_head_stride  = mc * k;
     const size_t weight_area_size = hex_align_up_matmul(nc * vec_dot_size, HMX_FP16_TILE_SIZE);
