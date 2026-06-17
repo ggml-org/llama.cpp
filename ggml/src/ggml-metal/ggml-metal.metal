@@ -7551,10 +7551,13 @@ kernel void kernel_concat(
 
 typedef decltype(kernel_concat<float>) kernel_concat_t;
 
-template [[host_name("kernel_concat_f32")]] kernel kernel_concat_t kernel_concat<float>;
-template [[host_name("kernel_concat_f16")]] kernel kernel_concat_t kernel_concat<half>;
+template [[host_name("kernel_concat_f32")]]  kernel kernel_concat_t kernel_concat<float>;
+template [[host_name("kernel_concat_f16")]]  kernel kernel_concat_t kernel_concat<half>;
 template [[host_name("kernel_concat_bf16")]] kernel kernel_concat_t kernel_concat<bfloat>;
-template [[host_name("kernel_concat_i32")]] kernel kernel_concat_t kernel_concat<int>;
+template [[host_name("kernel_concat_i8")]]   kernel kernel_concat_t kernel_concat<char>;
+template [[host_name("kernel_concat_i16")]]  kernel kernel_concat_t kernel_concat<short>;
+template [[host_name("kernel_concat_i32")]]  kernel kernel_concat_t kernel_concat<int>;
+template [[host_name("kernel_concat_i64")]]  kernel kernel_concat_t kernel_concat<long>;
 
 template<int nr0, typename args_t>
 void kernel_mul_mv_q2_K_f32_impl(

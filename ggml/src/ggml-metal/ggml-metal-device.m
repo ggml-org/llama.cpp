@@ -1131,7 +1131,10 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 switch (src0_type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
+                    case GGML_TYPE_I8:
+                    case GGML_TYPE_I16:
                     case GGML_TYPE_I32:
+                    case GGML_TYPE_I64:
                         return true;
                     case GGML_TYPE_BF16:
                         return has_bfloat;
