@@ -892,12 +892,14 @@ common_download_model_result common_download_model(const common_params_model  & 
     } else if (is_ms) {
         ms = get_ms_plan(model, opts, download_mmproj, download_mtp);
         for (const auto & f : ms.model_files) {
-            tasks.push_back({f.url, f.local_path});
+            if (!f.url.empty()) {
+                tasks.push_back({f.url, f.local_path});
+            }
         }
-        if (!ms.mmproj.path.empty()) {
+        if (!ms.mmproj.path.empty() && !ms.mmproj.url.empty()) {
             tasks.push_back({ms.mmproj.url, ms.mmproj.local_path});
         }
-        if (!ms.mtp.path.empty()) {
+        if (!ms.mtp.path.empty() && !ms.mtp.url.empty()) {
             tasks.push_back({ms.mtp.url, ms.mtp.local_path});
         }
     } else if (!model.url.empty()) {
@@ -908,6 +910,16 @@ common_download_model_result common_download_model(const common_params_model  & 
     }
 
     if (tasks.empty()) {
+        // All files are already cached (no URLs to download)
+        if (is_ms) {
+            result.model_path = ms.primary.final_path;
+            if (!ms.mmproj.path.empty()) {
+                result.mmproj_path = ms.mmproj.final_path;
+            }
+            if (!ms.mtp.path.empty()) {
+                result.mtp_path = ms.mtp.final_path;
+            }
+        }
         return result;
     }
 
