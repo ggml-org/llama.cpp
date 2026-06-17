@@ -58,6 +58,7 @@ enum slot_state {
     SLOT_STATE_IDLE,
     SLOT_STATE_WAIT_OTHER, // after assigning a task, but waiting for parent slot to process prompt
     SLOT_STATE_STARTED,    // after assigning a task and about to process prompt
+    SLOT_STATE_DISAGG_PREFILL, // running disaggregated prefill chunks on ctx_pfx before handoff
     SLOT_STATE_PROCESSING_PROMPT,
     SLOT_STATE_DONE_PROMPT,
     SLOT_STATE_GENERATING,
@@ -211,6 +212,11 @@ struct server_slot {
     // state
     slot_state state = SLOT_STATE_IDLE;
 
+    // disaggregated prefill cursor over the prompt prefix processed on ctx_pfx
+    int disagg_pos = 0;
+    int disagg_n = 0;
+    bool disagg_prefilled = false;
+
     server_prompt prompt;
 
     bool prompt_save(server_prompt_cache & prompt_cache) const {
@@ -299,6 +305,11 @@ struct server_slot {
         SLT_DBG(*this, "%s", "\n");
 
         n_prompt_tokens_cache = 0;
+
+        // reset disaggregated prefill cursor
+        disagg_pos = 0;
+        disagg_n = 0;
+        disagg_prefilled = false;
 
         last_nl_pos    = 0;
         generated_text = "";
@@ -2770,52 +2781,71 @@ private:
     };
 #endif
 
-    // disaggregated prefill: process prompt[0..n-2] on ctx_pfx, transfer the sequence KV to
-    // ctx_tgt, then record the prefix as already present so the existing path processes only
-    // the last token on ctx_tgt (which produces the logits for the first sampled token)
-    void disagg_prefill(server_slot & slot) {
-        const auto & input_tokens = slot.task->tokens;
+    // disaggregated prefill: start processing prompt[0..n-2] on ctx_pfx, one chunk per tick
+    void disagg_prefill_begin(server_slot & slot) {
+        const int n = (int) slot.task->tokens.size();
 
-        const int n     = (int) input_tokens.size();
-        const int n_pfx = n - 1; // last token runs on ctx_tgt to produce logits
+        slot.disagg_pos = 0;
+        slot.disagg_n = n - 1; // last token runs on ctx_tgt to produce logits
+        slot.disagg_prefilled = false;
 
-        const llama_seq_id seq_pfx = 0; // transient prefill sequence in ctx_pfx
-
-        // reset the slot prompt and its target KV so a reused slot starts from a clean state
+        // reset the slot prompt and the prefill sequence so a reused slot starts clean
         slot.prompt_clear(true);
 
-        common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
+        common_context_seq_rm(ctx_pfx.get(), 0, -1, -1);
+    }
+
+    // disaggregated prefill: process one chunk on ctx_pfx, return true when the prefix is done
+    bool disagg_prefill_step(server_slot & slot) {
+        const auto & input_tokens = slot.task->tokens;
+
+        const llama_seq_id seq_pfx = 0; // transient prefill sequence in ctx_pfx
 
         const int n_batch = llama_n_batch(ctx_pfx.get());
         const int n_chunk = std::min<int>(params_base.n_prefill_chunk, n_batch);
 
-        llama_batch bpfx = llama_batch_init(n_chunk, 0, 1);
+        const int i = slot.disagg_pos;
+        const int n_cur = std::min(n_chunk, slot.disagg_n - i);
 
-        const int64_t t_compute0 = ggml_time_us();
-
-        for (int i = 0; i < n_pfx; i += n_chunk) {
-            common_batch_clear(bpfx);
-            const int n_cur = std::min(n_chunk, n_pfx - i);
-            for (int j = 0; j < n_cur; j++) {
-                common_batch_add(bpfx, input_tokens[i + j], i + j, { seq_pfx }, false);
-            }
-
-            const int64_t t_chunk0 = ggml_time_us();
-            if (llama_decode(ctx_pfx.get(), bpfx) != 0) {
-                SLT_ERR(slot, "%s", "disagg prefill: llama_decode on ctx_pfx failed\n");
-                llama_batch_free(bpfx);
-                return;
-            }
-            llama_synchronize(ctx_pfx.get());
-            const int64_t t_chunk1 = ggml_time_us();
-
-            SLT_INF(slot, "disagg prefill chunk: %d tokens at %d, compute %.1f ms\n",
-                    n_cur, i, (t_chunk1 - t_chunk0) / 1000.0);
+        llama_batch bpfx = llama_batch_init(n_cur, 0, 1);
+        common_batch_clear(bpfx);
+        for (int j = 0; j < n_cur; j++) {
+            common_batch_add(bpfx, input_tokens[i + j], i + j, { seq_pfx }, false);
         }
 
-        const int64_t t_compute1 = ggml_time_us();
+        const int64_t t_chunk0 = ggml_time_us();
+        const int ret = llama_decode(ctx_pfx.get(), bpfx);
+        llama_synchronize(ctx_pfx.get());
+        const int64_t t_chunk1 = ggml_time_us();
 
         llama_batch_free(bpfx);
+
+        if (ret != 0) {
+            SLT_ERR(slot, "%s", "disagg prefill: llama_decode on ctx_pfx failed, falling back to local\n");
+            return true;
+        }
+
+        slot.disagg_pos += n_cur;
+
+        SLT_INF(slot, "disagg prefill chunk: %d tokens at %d, compute %.1f ms\n",
+                n_cur, i, (t_chunk1 - t_chunk0) / 1000.0);
+
+        return slot.disagg_pos >= slot.disagg_n;
+    }
+
+    // disaggregated prefill: hand the prefilled prefix KV from ctx_pfx to ctx_tgt
+    void disagg_prefill_finish(server_slot & slot) {
+        const auto & input_tokens = slot.task->tokens;
+
+        const llama_seq_id seq_pfx = 0; // transient prefill sequence in ctx_pfx
+
+        slot.disagg_prefilled = true;
+
+        // prefill failed mid way, fall back to processing the whole prompt on ctx_tgt
+        if (slot.disagg_pos < slot.disagg_n) {
+            common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
+            return;
+        }
 
         const size_t sz = llama_state_seq_get_size_ext(ctx_pfx.get(), seq_pfx, LLAMA_STATE_SEQ_FLAGS_NONE);
         std::vector<uint8_t> buf(sz);
@@ -2830,13 +2860,12 @@ private:
         common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
 
         // record the prefilled tokens so the prompt path only processes the last token
-        for (int i = 0; i < n_pfx; i++) {
+        for (int i = 0; i < slot.disagg_n; i++) {
             slot.prompt.tokens.push_back(input_tokens[i]);
         }
 
-        SLT_INF(slot, "disagg prefill: %d tokens, %.2f MiB | compute %.1f ms | get(net) %.1f ms | set(local) %.1f ms\n",
-                n_pfx, (float) sz / 1024 / 1024,
-                (t_compute1 - t_compute0) / 1000.0,
+        SLT_INF(slot, "disagg prefill: %d tokens, %.2f MiB | get(net) %.1f ms | set(local) %.1f ms\n",
+                slot.disagg_n, (float) sz / 1024 / 1024,
                 (t_get1 - t_get0) / 1000.0,
                 (t_set1 - t_get1) / 1000.0);
     }
@@ -3157,6 +3186,22 @@ private:
                     return;
                 }
 
+                // disaggregated prefill advances one chunk per tick on ctx_pfx, the decode of
+                // other slots proceeds on ctx_tgt between chunks
+                if (slot.state == SLOT_STATE_DISAGG_PREFILL) {
+                    const bool done = disagg_prefill_step(slot);
+
+                    // a prefill chunk is progress, keep the empty batch watchdog from firing
+                    n_empty_consecutive = 0;
+
+                    if (!done) {
+                        return;
+                    }
+                    disagg_prefill_finish(slot);
+                    slot.state = SLOT_STATE_STARTED;
+                    return;
+                }
+
                 // this slot still has a prompt to be processed
                 if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_STARTED) {
                     const auto & input_tokens = slot.task->tokens;
@@ -3166,8 +3211,10 @@ private:
 
                     // TODO: maybe move branch to outside of this loop in the future
                     if (slot.state == SLOT_STATE_STARTED) {
-                        slot.t_start_process_prompt = ggml_time_us();
-                        slot.t_start_generation = 0;
+                        if (!slot.disagg_prefilled) {
+                            slot.t_start_process_prompt = ggml_time_us();
+                            slot.t_start_generation = 0;
+                        }
 
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
@@ -3201,12 +3248,13 @@ private:
                             return;
                         }
 
-                        // disaggregated prefill: offload the prompt prefix to ctx_pfx, then let the
-                        // existing path process only the last token on ctx_tgt
-                        bool disagg_done = false;
-                        if (ctx_pfx && !input_tokens.has_mtmd && slot.task->n_tokens() >= 2) {
-                            disagg_prefill(slot);
-                            disagg_done = true;
+                        // disaggregated prefill: kick off the chunked prefill on ctx_pfx, the handoff
+                        // and the single last token on ctx_tgt run when the slot returns here
+                        bool disagg_done = slot.disagg_prefilled;
+                        if (ctx_pfx && !input_tokens.has_mtmd && slot.task->n_tokens() >= 2 && !slot.disagg_prefilled) {
+                            disagg_prefill_begin(slot);
+                            slot.state = SLOT_STATE_DISAGG_PREFILL;
+                            return;
                         }
 
                         // TODO: support memory-less logits computation
