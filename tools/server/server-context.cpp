@@ -2822,22 +2822,50 @@ private:
         common_context_seq_rm(ctx_pfx.get(), slot.disagg_seq, -1, -1);
     }
 
-    // disaggregated prefill: process one chunk on ctx_pfx, return true when the prefix is done
-    bool disagg_prefill_step(server_slot & slot) {
-        const auto & input_tokens = slot.task->tokens;
+    // disaggregated prefill: process one chunk for every prefilling slot in a single ctx_pfx batch
+    void disagg_prefill_batch() {
+        if (!ctx_pfx) {
+            return;
+        }
 
-        const llama_seq_id seq_pfx = slot.disagg_seq; // acquired prefill sequence in ctx_pfx
+        std::vector<server_slot *> pfx;
+        for (auto & slot : slots) {
+            if (slot.state == SLOT_STATE_DISAGG_PREFILL) {
+                pfx.push_back(&slot);
+            }
+        }
+
+        if (pfx.empty()) {
+            return;
+        }
 
         const int n_batch = llama_n_batch(ctx_pfx.get());
         const int n_chunk = std::max(1, std::min<int>(params_base.n_prefill_chunk, n_batch));
 
-        const int i = slot.disagg_pos;
-        const int n_cur = std::min(n_chunk, slot.disagg_n - i);
-
-        llama_batch bpfx = llama_batch_init(n_cur, 0, 1);
+        // one chunk per slot on its own sequence, packed into a single ctx_pfx batch
+        llama_batch bpfx = llama_batch_init(n_batch, 0, 1);
         common_batch_clear(bpfx);
-        for (int j = 0; j < n_cur; j++) {
-            common_batch_add(bpfx, input_tokens[i + j], i + j, { seq_pfx }, false);
+
+        std::vector<int> n_cur(pfx.size(), 0);
+        for (size_t s = 0; s < pfx.size(); s++) {
+            server_slot * slot = pfx[s];
+            const auto & toks = slot->task->tokens;
+            const int i = slot->disagg_pos;
+
+            int cur = std::min(n_chunk, slot->disagg_n - i);
+            if (bpfx.n_tokens + cur > n_batch) {
+                cur = n_batch - bpfx.n_tokens;
+            }
+
+            for (int j = 0; j < cur; j++) {
+                common_batch_add(bpfx, toks[i + j], i + j, { slot->disagg_seq }, false);
+            }
+
+            n_cur[s] = cur;
+
+            if (bpfx.n_tokens >= n_batch) {
+                break;
+            }
         }
 
         const int ret = llama_decode(ctx_pfx.get(), bpfx);
@@ -2845,16 +2873,26 @@ private:
 
         llama_batch_free(bpfx);
 
-        if (ret != 0) {
-            SLT_ERR(slot, "%s", "disagg prefill: llama_decode on ctx_pfx failed, falling back to local\n");
-            return true;
+        // a prefill chunk is progress, keep the empty batch watchdog from firing
+        n_empty_consecutive = 0;
+
+        for (size_t s = 0; s < pfx.size(); s++) {
+            server_slot * slot = pfx[s];
+
+            if (ret != 0) {
+                SLT_ERR(*slot, "%s", "disagg prefill: llama_decode on ctx_pfx failed, falling back to local\n");
+                disagg_prefill_finish(*slot);
+                slot->state = SLOT_STATE_STARTED;
+                continue;
+            }
+
+            slot->disagg_pos += n_cur[s];
+
+            if (slot->disagg_pos >= slot->disagg_n) {
+                disagg_prefill_finish(*slot);
+                slot->state = SLOT_STATE_STARTED;
+            }
         }
-
-        slot.disagg_pos += n_cur;
-
-        SLT_DBG(slot, "disagg prefill chunk: %d tokens at %d\n", n_cur, i);
-
-        return slot.disagg_pos >= slot.disagg_n;
     }
 
     // disaggregated prefill: hand the prefilled prefix KV from ctx_pfx to ctx_tgt
@@ -3204,6 +3242,9 @@ private:
         auto & alora_scale       = batch.alora_scale;
         auto & alora_disabled_id = batch.alora_disabled_id;
 
+        // run one batched prefill chunk for all disaggregated prefill slots on ctx_pfx
+        disagg_prefill_batch();
+
         // next, batch any pending prompts without exceeding n_batch
         if (params_base.cont_batching || batch.size() == 0) {
             bool add_ok = true; // false means the batch is full, skip remaining slots
@@ -3228,19 +3269,9 @@ private:
                     return;
                 }
 
-                // disaggregated prefill advances one chunk per tick on ctx_pfx, the decode of
-                // other slots proceeds on ctx_tgt between chunks
+                // disaggregated prefill runs in a single batched ctx_pfx decode before this loop;
+                // a slot still prefilling skips the decode batch this iteration
                 if (slot.state == SLOT_STATE_DISAGG_PREFILL) {
-                    const bool done = disagg_prefill_step(slot);
-
-                    // a prefill chunk is progress, keep the empty batch watchdog from firing
-                    n_empty_consecutive = 0;
-
-                    if (!done) {
-                        return;
-                    }
-                    disagg_prefill_finish(slot);
-                    slot.state = SLOT_STATE_STARTED;
                     return;
                 }
 
