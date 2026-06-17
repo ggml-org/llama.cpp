@@ -2652,8 +2652,8 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 return false;  // typically the lm-head which would be too large for VTCM
             }
 
-            if (ggml_nrows(src1) > 1024 || src1->ne[2] != 1 || src1->ne[3] != 1) {
-                return false;  // no huge batches or broadcasting (for now)
+            if (src1->ne[2] != 1 || src1->ne[3] != 1) {
+                return false;  // no broadcasting (for now)
             }
 
             // src0 (weights) must be repacked
@@ -2671,9 +2671,6 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: src1 broadcasting not supported\n");
                 return false;
             }
-            if (ggml_nrows(src1) > 1024) {
-                return false;  // no huge batches (for now)
-            }
             break;
 
         case GGML_TYPE_F32:
@@ -2688,13 +2685,18 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: src1 broadcasting not supported\n");
                 return false;
             }
-            if (ggml_nrows(src1) > 1024) {
-                return false;  // no huge batches (for now)
-            }
             break;
 
         default:
             return false;
+    }
+
+    struct htp_mm_kernel_params kparams;
+    ggml_hexagon_precompute_matmul_params(sess, src0, src1, dst, &kparams);
+    if ((size_t)kparams.vtcm_size > sess->vtcm_size) {
+        GGML_LOG_DEBUG("ggml-hex: supported_mul_mat VTCM size needed (%d) > budget (%zu)\n",
+                       kparams.vtcm_size, sess->vtcm_size);
+        return false;
     }
 
     return true;
@@ -2728,6 +2730,14 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
 
         default:
             return false;
+    }
+
+    struct htp_mm_kernel_params kparams;
+    ggml_hexagon_precompute_matmul_params(sess, src0, src1, dst, &kparams);
+    if ((size_t)kparams.vtcm_size > sess->vtcm_size) {
+        GGML_LOG_DEBUG("ggml-hex: supported_mul_mat_id VTCM size needed (%d) > budget (%zu)\n",
+                       kparams.vtcm_size, sess->vtcm_size);
+        return false;
     }
 
     return true;
