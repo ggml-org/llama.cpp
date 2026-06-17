@@ -3332,24 +3332,6 @@ private:
                             return;
                         }
 
-                        // disaggregated prefill: kick off the chunked prefill on ctx_pfx, the handoff
-                        // and the single last token on ctx_tgt run when the slot returns here
-                        // completion only: embedding and rerank need ctx_tgt outputs past the last token
-                        // no lora: ctx_pfx never sets adapters, a lora prefix KV would be computed wrong
-                        // skipped with speculative decoding: the draft context KV is not handed off
-                        bool disagg_done = slot.disagg_prefilled;
-                        if (ctx_pfx && !ctx_dft && !input_tokens.has_mtmd &&
-                            slot.task->type == SERVER_TASK_TYPE_COMPLETION && slot.lora.empty() &&
-                            slot.task->n_tokens() >= 2 && !slot.disagg_attempted) {
-                            const int seq = disagg_acquire_seq();
-                            if (seq >= 0) {
-                                slot.disagg_seq = seq;
-                                disagg_prefill_begin(slot);
-                                slot.state = SLOT_STATE_DISAGG_PREFILL;
-                                return;
-                            }
-                        }
-
                         // TODO: support memory-less logits computation
                         if (slot.task->need_logits() && !llama_get_memory(ctx_tgt)) {
                             send_error(slot, "the current context does not logits computation. skipping", ERROR_TYPE_SERVER);
@@ -3389,6 +3371,26 @@ private:
                                 slot.release();
                                 return;
                             }
+
+                            // disaggregated prefill: kick off the chunked prefill on ctx_pfx once the prompt
+                            // is validated, the handoff and the single last token on ctx_tgt run when the
+                            // slot returns here
+                            // completion only: embedding and rerank need ctx_tgt outputs past the last token
+                            // no lora: ctx_pfx never sets adapters, a lora prefix KV would be computed wrong
+                            // skipped with speculative decoding: the draft context KV is not handed off
+                            if (ctx_pfx && !ctx_dft && !input_tokens.has_mtmd &&
+                                slot.task->type == SERVER_TASK_TYPE_COMPLETION && slot.lora.empty() &&
+                                slot.task->n_tokens() >= 2 && !slot.disagg_attempted) {
+                                const int seq = disagg_acquire_seq();
+                                if (seq >= 0) {
+                                    slot.disagg_seq = seq;
+                                    disagg_prefill_begin(slot);
+                                    slot.state = SLOT_STATE_DISAGG_PREFILL;
+                                    return;
+                                }
+                            }
+
+                            bool disagg_done = slot.disagg_prefilled;
 
                             // disagg prefill handed off the prefix KV into ctx_tgt, treat it as already present
                             if (disagg_done) {
