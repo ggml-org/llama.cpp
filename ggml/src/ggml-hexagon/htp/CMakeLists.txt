@@ -21,7 +21,6 @@ add_library(${HTP_LIB} SHARED
     hex-dma.c
     hmx-queue.c
     hmx-flash-attn-ops.c
-    hmx-matmul-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE

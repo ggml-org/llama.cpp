@@ -96,6 +96,11 @@ static_assert(sizeof(struct htp_mm_kernel_params) <= 128, "htp_matmul_kernel_par
 _Static_assert(sizeof(struct htp_mm_kernel_params) <= 128, "htp_matmul_kernel_params is too large for kernel_params blob");
 #endif
 
+struct mmid_row_mapping {
+    uint32_t i1;
+    uint32_t i2;
+};
+
 // Search for optimal (mc, nc) chunk sizes within VTCM budget.
 static inline int htp_mm_hmx_compute_chunks(size_t   vtcm_total,
                               size_t   overhead,

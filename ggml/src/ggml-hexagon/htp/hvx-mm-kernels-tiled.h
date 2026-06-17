@@ -1,5 +1,170 @@
 // Dynamic quantizers that produce tiled activations
 
+static inline HVX_Vector hvx_vec_mul_f16_f16_to_f32_lower32(HVX_Vector v1, HVX_Vector v2) {
+#if __HVX_ARCH__ >= 79
+    HVX_VectorPair p = Q6_Wsf_vmpy_VhfVhf(v1, v2);
+    return Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_hi_W(p), Q6_V_lo_W(p), -4));
+#else
+    HVX_VectorPair p = Q6_Wqf32_vmpy_VhfVhf(v1, v2);
+    HVX_Vector hi = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(p));
+    HVX_Vector lo = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(p));
+    return Q6_V_lo_W(Q6_W_vshuff_VVR(hi, lo, -4));
+#endif
+}
+
+static inline HVX_Vector unpack_and_interleave_4bit(HVX_Vector v_a, HVX_Vector v_b, HVX_Vector mask_h4) {
+    HVX_Vector v_W0 = Q6_V_vand_VV(v_a, mask_h4);
+    HVX_Vector v_W1 = Q6_Vub_vlsr_VubR(v_a, 4);
+    HVX_Vector v_W2 = Q6_V_vand_VV(v_b, mask_h4);
+    HVX_Vector v_W3 = Q6_Vub_vlsr_VubR(v_b, 4);
+
+    HVX_VectorPair v01_pair = Q6_W_vshuff_VVR(v_W1, v_W0, -1);
+    HVX_VectorPair v23_pair = Q6_W_vshuff_VVR(v_W3, v_W2, -1);
+    HVX_VectorPair v0123_pair = Q6_W_vshuff_VVR(Q6_V_lo_W(v23_pair), Q6_V_lo_W(v01_pair), -2);
+    return Q6_V_lo_W(v0123_pair);
+}
+
+static inline HVX_VectorPair unpack_and_interleave_4bit_x2(HVX_Vector v_src, HVX_Vector mask_h4) {
+    HVX_Vector v_lo = Q6_V_vand_VV(v_src, mask_h4);
+    HVX_Vector v_hi = Q6_Vub_vlsr_VubR(v_src, 4);
+    HVX_VectorPair v01_pair = Q6_W_vshuff_VVR(v_hi, v_lo, -1);
+    HVX_Vector v01_lo = Q6_V_lo_W(v01_pair);
+    HVX_Vector v01_hi = Q6_V_hi_W(v01_pair);
+
+    HVX_Vector v23_lo = Q6_V_valign_VVR(v01_hi, v01_lo, 64);
+    HVX_Vector v_W0 = Q6_V_lo_W(Q6_W_vshuff_VVR(v23_lo, v01_lo, -2));
+
+    HVX_Vector v67_lo = Q6_V_valign_VVR(v01_lo, v01_hi, 64);
+    HVX_Vector v_W1 = Q6_V_lo_W(Q6_W_vshuff_VVR(v67_lo, v01_hi, -2));
+
+    return Q6_W_vcombine_VV(v_W1, v_W0);
+}
+
+static inline HVX_Vector accum_4bit_32x1(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act,
+    HVX_Vector i8
+) {
+    HVX_Vector v_sum0 = Q6_V_vzero();
+    HVX_Vector v_sum1 = Q6_V_vzero();
+    HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
+        HVX_Vector v_W0 = Q6_Vb_vsub_VbVb(Q6_V_lo_W(v_W_pair), i8);
+        HVX_Vector v_W1 = Q6_Vb_vsub_VbVb(Q6_V_hi_W(v_W_pair), i8);
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act[i * 2 + 0]);
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act[i * 2 + 1]);
+    }
+
+    return Q6_Vw_vadd_VwVw(v_sum0, v_sum1);
+}
+
+static inline HVX_Vector accum_4bit_32x1_lut(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act,
+    HVX_Vector mask_h4,
+    HVX_Vector lut
+) {
+    HVX_Vector v_sum0 = Q6_V_vzero();
+    HVX_Vector v_sum1 = Q6_V_vzero();
+
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
+        HVX_Vector v_W0 = Q6_Vb_vlut32_VbVbI(Q6_V_lo_W(v_W_pair), lut, 0);
+        HVX_Vector v_W1 = Q6_Vb_vlut32_VbVbI(Q6_V_hi_W(v_W_pair), lut, 0);
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act[i * 2 + 0]);
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act[i * 2 + 1]);
+    }
+
+    return Q6_Vw_vadd_VwVw(v_sum0, v_sum1);
+}
+
+static inline HVX_VectorPair accum_4bit_32x2(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act0,
+    const HVX_Vector * restrict v_act1,
+    HVX_Vector i8
+) {
+    HVX_Vector v_sum0 = Q6_V_vzero();
+    HVX_Vector v_sum1 = Q6_V_vzero();
+    HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
+        HVX_Vector v_W0 = Q6_Vb_vsub_VbVb(Q6_V_lo_W(v_W_pair), i8);
+        HVX_Vector v_W1 = Q6_Vb_vsub_VbVb(Q6_V_hi_W(v_W_pair), i8);
+
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act0[i * 2 + 0]);
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W1, v_act0[i * 2 + 1]);
+
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W0, v_act1[i * 2 + 0]);
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act1[i * 2 + 1]);
+    }
+
+    return Q6_W_vcombine_VV(v_sum1, v_sum0);
+}
+
+static inline HVX_VectorPair accum_4bit_32x2_lut(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act0,
+    const HVX_Vector * restrict v_act1,
+    HVX_Vector mask_h4,
+    HVX_Vector lut
+) {
+    HVX_Vector v_sum0 = Q6_V_vzero();
+    HVX_Vector v_sum1 = Q6_V_vzero();
+
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
+        HVX_Vector v_W0 = Q6_Vb_vlut32_VbVbI(Q6_V_lo_W(v_W_pair), lut, 0);
+        HVX_Vector v_W1 = Q6_Vb_vlut32_VbVbI(Q6_V_hi_W(v_W_pair), lut, 0);
+
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act0[i * 2 + 0]);
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W1, v_act0[i * 2 + 1]);
+
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W0, v_act1[i * 2 + 0]);
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act1[i * 2 + 1]);
+    }
+
+    return Q6_W_vcombine_VV(v_sum1, v_sum0);
+}
+
+static inline HVX_Vector accum_q8_0_32x1(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act
+) {
+    HVX_Vector v_sum = Q6_V_vzero();
+    #pragma unroll
+    for (int g = 0; g < 8; g++) {
+        HVX_Vector v_rot = Q6_V_vror_VR(vptr[g], 64);
+        HVX_Vector v_W = Q6_V_lo_W(Q6_W_vshuff_VVR(v_rot, vptr[g], -2));
+        v_sum = Q6_Vw_vrmpyacc_VwVbVb(v_sum, v_W, v_act[g]);
+    }
+    return v_sum;
+}
+
+static inline HVX_VectorPair accum_q8_0_32x2(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act0,
+    const HVX_Vector * restrict v_act1
+) {
+    HVX_Vector v_sum0 = Q6_V_vzero();
+    HVX_Vector v_sum1 = Q6_V_vzero();
+    #pragma unroll
+    for (int g = 0; g < 8; g++) {
+        HVX_Vector v_rot = Q6_V_vror_VR(vptr[g], 64);
+        HVX_Vector v_W = Q6_V_lo_W(Q6_W_vshuff_VVR(v_rot, vptr[g], -2));
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W, v_act0[g]);
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W, v_act1[g]);
+    }
+    return Q6_W_vcombine_VV(v_sum1, v_sum0);
+}
+
 static inline void quantize_block_f32_q8_1_tiled(float * restrict x, uint8_t * restrict y_block) {
     assert((unsigned long) x % 128 == 0);
     assert((unsigned long) y_block % 128 == 0);
@@ -209,200 +374,6 @@ static void quantize_row_f32_q8_1_tiled(float * restrict x, uint8_t * restrict y
         uint8_t * restrict y_block = y + i * 4 * 1280;
         quantize_block_f32_q8_1_tiled(x + i * qk, y_block);
     }
-}
-
-static void quantize_f32_q8_0_tiled(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_mm_context * mmctx = data;
-    struct htp_ops_context * octx = mmctx->octx;
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    const struct htp_tensor * src = octx->src[1];
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-    uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
-
-    uint64_t t1 = HAP_perf_get_qtimer_count();
-
-    const uint32_t ne0 = src->ne[0];
-    const uint32_t ne1 = src->ne[1];
-    const uint32_t ne2 = src->ne[2];
-    const uint32_t ne3 = src->ne[3];
-
-    const uint32_t nrows = ne1 * ne2 * ne3;                             // total n_rows
-
-    const uint32_t ir_first = nrows_per_thread * ith;                   // first row
-    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
-
-    const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = htp_mm_q8_0_tiled_row_size(ne0);
-
-    uint8_t * restrict src_data = (uint8_t *) src->data + (src_row_size * ir_first);
-    uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
-    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
-
-    const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0_TILED * sizeof(float));
-    hvx_splat_f32_a(tmp_data, 0.0f, src_row_size_padded / sizeof(float));  // zero-out temp row data for padding
-
-    for (uint32_t i = ir_first; i < ir_last; ++i) {
-        hex_l2fetch(src_data, src_row_size, src_row_size, 2);
-        hvx_copy_f32_aa(tmp_data, src_data, ne0);
-
-        quantize_row_f32_q8_0_tiled((float *) tmp_data, dst_data, ne0);
-        dst_data += dst_row_size;
-        src_data += src_row_size;
-    }
-
-    uint64_t t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "quantize-f32-q8_0_tiled: %u/%u : n-rows %u (%u:%u) row-size %u -> %u usec %u\n", ith, nth, nrows, ir_first,
-         ir_last, src_row_size, dst_row_size, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-}
-
-static void quantize_f32_q8_1_tiled(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_mm_context * mmctx = data;
-    struct htp_ops_context * octx = mmctx->octx;
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    const struct htp_tensor * src = octx->src[1];
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-    uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
-
-    uint64_t t1 = HAP_perf_get_qtimer_count();
-
-    const uint32_t ne0 = src->ne[0];
-    const uint32_t ne1 = src->ne[1];
-    const uint32_t ne2 = src->ne[2];
-    const uint32_t ne3 = src->ne[3];
-
-    const uint32_t nrows = ne1 * ne2 * ne3;                             // total n_rows
-
-    const uint32_t ir_first = nrows_per_thread * ith;                   // first row
-    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
-
-    const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = htp_mm_q8_1_tiled_row_size(ne0);
-
-    uint8_t * restrict src_data = (uint8_t *) src->data + (src_row_size * ir_first);
-    uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
-    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
-
-    const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0_TILED * sizeof(float));
-    hvx_splat_f32_a(tmp_data, 0.0f, src_row_size_padded / sizeof(float));  // zero-out temp row data for padding
-
-    for (uint32_t i = ir_first; i < ir_last; ++i) {
-        hex_l2fetch(src_data, src_row_size, src_row_size, 2);
-        hvx_copy_f32_aa(tmp_data, src_data, ne0);
-
-        quantize_row_f32_q8_1_tiled((float *) tmp_data, dst_data, ne0);
-        dst_data += dst_row_size;
-        src_data += src_row_size;
-    }
-
-    uint64_t t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "quantize-f32-q8_1_tiled: %u/%u : n-rows %u (%u:%u) row-size %u -> %u usec %u\n", ith, nth, nrows, ir_first,
-         ir_last, src_row_size, dst_row_size, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-}
-
-static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_mm_context * mmctx = data;
-    struct htp_ops_context * octx = mmctx->octx;
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    const struct htp_tensor * src = octx->src[1];
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-
-    const uint32_t ne0 = src->ne[0];
-    const uint32_t qk = QK_Q8_0_TILED;
-    const uint32_t nb = (ne0 + qk - 1) / qk;
-
-    const uint32_t ib_first = mmctx->quant_ib_first[ith];
-    const uint32_t ib_last  = mmctx->quant_ib_last[ith];
-
-    const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = htp_mm_q8_0_tiled_row_size(ne0);
-    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
-
-    uint32_t r = mmctx->quant_r[ith];
-    uint32_t c = mmctx->quant_c[ith];
-
-    for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
-        const uint8_t * restrict src_ptr = (const uint8_t *) src->data + r * src_row_size + c * qk * sizeof(float);
-        uint8_t * restrict dst_ptr = dst + r * dst_row_size + c * 4 * 1152;
-
-        hex_l2fetch(src_ptr, qk * sizeof(float), qk * sizeof(float), 1);
-
-        if (c == nb - 1) {
-            uint32_t active_elements = ne0 - c * qk;
-            hvx_splat_f32_a(tmp_data, 0.0f, qk);
-            hvx_copy_f32_aa(tmp_data, src_ptr, active_elements);
-        } else {
-            hvx_copy_f32_aa(tmp_data, src_ptr, qk);
-        }
-
-        quantize_block_f32_q8_0_tiled((float *) tmp_data, dst_ptr);
-
-        c++;
-        if (c == nb) {
-            c = 0;
-            r++;
-        }
-    }
-
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-}
-
-static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_mm_context * mmctx = data;
-    struct htp_ops_context * octx = mmctx->octx;
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    const struct htp_tensor * src = octx->src[1];
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-
-    const uint32_t ne0 = src->ne[0];
-    const uint32_t qk = QK_Q8_0_TILED;
-    const uint32_t nb = (ne0 + qk - 1) / qk;
-
-    const uint32_t ib_first = mmctx->quant_ib_first[ith];
-    const uint32_t ib_last  = mmctx->quant_ib_last[ith];
-
-    const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = htp_mm_q8_1_tiled_row_size(ne0);
-    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
-
-    uint32_t r = mmctx->quant_r[ith];
-    uint32_t c = mmctx->quant_c[ith];
-
-    for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
-        const uint8_t * restrict src_ptr = (const uint8_t *) src->data + r * src_row_size + c * qk * sizeof(float);
-        uint8_t * restrict dst_ptr = dst + r * dst_row_size + c * 4 * 1280;
-
-        hex_l2fetch(src_ptr, qk * sizeof(float), qk * sizeof(float), 1);
-
-        if (c == nb - 1) {
-            uint32_t active_elements = ne0 - c * qk;
-            hvx_splat_f32_a(tmp_data, 0.0f, qk);
-            hvx_copy_f32_aa(tmp_data, src_ptr, active_elements);
-        } else {
-            hvx_copy_f32_aa(tmp_data, src_ptr, qk);
-        }
-
-        quantize_block_f32_q8_1_tiled((float *) tmp_data, dst_ptr);
-
-        c++;
-        if (c == nb) {
-            c = 0;
-            r++;
-        }
-    }
-
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
 }
 
 // Dot kernels that consume tiled activations
@@ -852,4 +823,126 @@ static void tiled_vec_dot_mxfp4_32x2(const int n, float * restrict s0, float * r
 
     hvx_vec_store_u(s0, valid_rows * sizeof(float), v_sum_float_c0);
     hvx_vec_store_u(s1, valid_rows * sizeof(float), v_sum_float_c1);
+}
+
+static inline void quantize_f32_q8_0_tiled_kernel(
+    const float * restrict src_data,
+    uint8_t * restrict dst_data,
+    uint8_t * restrict tmp_data,
+    uint32_t ne0,
+    uint32_t nrows,
+    size_t src_row_size,
+    size_t dst_row_size
+) {
+    const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0_TILED * sizeof(float));
+    hvx_splat_f32_a(tmp_data, 0.0f, src_row_size_padded / sizeof(float));
+
+    for (uint32_t i = 0; i < nrows; ++i) {
+        hex_l2fetch(src_data, src_row_size, src_row_size, 2);
+        hvx_copy_f32_aa(tmp_data, (const uint8_t *) src_data, ne0);
+
+        quantize_row_f32_q8_0_tiled((float *) tmp_data, dst_data, ne0);
+        dst_data += dst_row_size;
+        src_data = (const float *)((const uint8_t *) src_data + src_row_size);
+    }
+}
+
+static inline void quantize_f32_q8_1_tiled_kernel(
+    const float * restrict src_data,
+    uint8_t * restrict dst_data,
+    uint8_t * restrict tmp_data,
+    uint32_t ne0,
+    uint32_t nrows,
+    size_t src_row_size,
+    size_t dst_row_size
+) {
+    const size_t src_row_size_padded = hex_round_up(src_row_size, QK_Q8_0_TILED * sizeof(float));
+    hvx_splat_f32_a(tmp_data, 0.0f, src_row_size_padded / sizeof(float));
+
+    for (uint32_t i = 0; i < nrows; ++i) {
+        hex_l2fetch(src_data, src_row_size, src_row_size, 2);
+        hvx_copy_f32_aa(tmp_data, (const uint8_t *) src_data, ne0);
+
+        quantize_row_f32_q8_1_tiled((float *) tmp_data, dst_data, ne0);
+        dst_data += dst_row_size;
+        src_data = (const float *)((const uint8_t *) src_data + src_row_size);
+    }
+}
+
+static inline void quantize_f32_q8_0_tiled_block_kernel(
+    const float * restrict src,
+    uint8_t * restrict dst,
+    uint8_t * restrict tmp_data,
+    uint32_t ne0,
+    uint32_t ib_first,
+    uint32_t ib_last,
+    size_t src_row_size,
+    size_t dst_row_size,
+    uint32_t r,
+    uint32_t c
+) {
+    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t nb = (ne0 + qk - 1) / qk;
+
+    for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
+        const uint8_t * restrict src_ptr = (const uint8_t *) src + r * src_row_size + c * qk * sizeof(float);
+        uint8_t * restrict dst_ptr = dst + r * dst_row_size + c * 4 * 1152;
+
+        hex_l2fetch(src_ptr, qk * sizeof(float), qk * sizeof(float), 1);
+
+        if (c == nb - 1) {
+            uint32_t active_elements = ne0 - c * qk;
+            hvx_splat_f32_a(tmp_data, 0.0f, qk);
+            hvx_copy_f32_aa(tmp_data, src_ptr, active_elements);
+        } else {
+            hvx_copy_f32_aa(tmp_data, src_ptr, qk);
+        }
+
+        quantize_block_f32_q8_0_tiled((float *) tmp_data, dst_ptr);
+
+        c++;
+        if (c == nb) {
+            c = 0;
+            r++;
+        }
+    }
+}
+
+static inline void quantize_f32_q8_1_tiled_block_kernel(
+    const float * restrict src,
+    uint8_t * restrict dst,
+    uint8_t * restrict tmp_data,
+    uint32_t ne0,
+    uint32_t ib_first,
+    uint32_t ib_last,
+    size_t src_row_size,
+    size_t dst_row_size,
+    uint32_t r,
+    uint32_t c
+) {
+    const uint32_t qk = QK_Q8_0_TILED;
+    const uint32_t nb = (ne0 + qk - 1) / qk;
+
+    for (uint32_t ib = ib_first; ib < ib_last; ++ib) {
+        const uint8_t * restrict src_ptr = (const uint8_t *) src + r * src_row_size + c * qk * sizeof(float);
+        uint8_t * restrict dst_ptr = dst + r * dst_row_size + c * 4 * 1280;
+
+        hex_l2fetch(src_ptr, qk * sizeof(float), qk * sizeof(float), 1);
+
+        if (c == nb - 1) {
+            uint32_t active_elements = ne0 - c * qk;
+            hvx_splat_f32_a(tmp_data, 0.0f, qk);
+            hvx_copy_f32_aa(tmp_data, src_ptr, active_elements);
+        } else {
+            hvx_copy_f32_aa(tmp_data, src_ptr, qk);
+        }
+
+        quantize_block_f32_q8_1_tiled((float *) tmp_data, dst_ptr);
+
+        c++;
+        if (c == nb) {
+            c = 0;
+            r++;
+        }
+    }
 }
