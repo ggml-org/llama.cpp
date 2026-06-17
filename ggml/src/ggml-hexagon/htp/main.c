@@ -395,7 +395,6 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         return AEE_ENOMEMORY;
     }
 
-#ifdef HTP_HAS_HMX
     ctx->hmx_enabled = n_hmx;
     ctx->hmx_queue   = NULL;
     if (n_hmx) {
@@ -408,7 +407,6 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         }
     }
     FARF(HIGH, "HMX %s (n_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", n_hmx);
-#endif
 
     qurt_sysenv_max_hthreads_t hw_threads;
     qurt_sysenv_get_max_hw_threads(&hw_threads);
@@ -481,13 +479,11 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
         dma_queue_delete(ctx->dma[i]);
     }
 
-#ifdef HTP_HAS_HMX
     if (ctx->hmx_queue) {
         hmx_queue_delete(ctx->hmx_queue);
         ctx->hmx_queue = NULL;
     }
     ctx->hmx_enabled = false;
-#endif
 
     vtcm_free(ctx);
 
@@ -521,11 +517,7 @@ AEEResult htp_iface_hwinfo(remote_handle64 handle, uint32_t * n_threads, uint32_
     *n_threads = n_hvx_val;
     *n_hvx     = n_hvx_val;
 
-#ifdef HTP_HAS_HMX
     *n_hmx = 1;
-#else
-    *n_hmx = 0;
-#endif
 
     uint32_t vtcm_sz = 8 * 1024 * 1024; // 8MB default fallback
     HAP_compute_res_query_VTCM(0, (unsigned int *)&vtcm_sz, NULL, NULL, NULL);

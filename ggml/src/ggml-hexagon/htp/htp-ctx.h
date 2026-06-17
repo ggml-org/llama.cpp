@@ -93,9 +93,7 @@ struct htp_context {
 
     struct htp_ops_context octx;
 
-#ifdef HTP_HAS_HMX
     struct hmx_queue *     hmx_queue; // Async HMX queue for pipeline overlap
-#endif
 };
 
 int op_matmul(struct htp_ops_context * octx);

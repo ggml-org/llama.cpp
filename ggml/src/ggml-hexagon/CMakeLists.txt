@@ -77,8 +77,6 @@ function(build_htp_skel V)
     set(HTP_SKELS ${HTP_SKELS} PARENT_SCOPE)
 endfunction()
 
-build_htp_skel(v68)
-build_htp_skel(v69)
 build_htp_skel(v73)
 build_htp_skel(v75)
 build_htp_skel(v79)

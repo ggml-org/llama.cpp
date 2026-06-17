@@ -2953,9 +2953,6 @@ static int op_matmul_hvx(struct htp_ops_context * octx) {
 int op_matmul(struct htp_ops_context * octx) {
     htp_matmul_tensors_preamble;
 
-#ifndef HTP_HAS_HMX
-    return op_matmul_hvx(octx);
-#else
     struct htp_matmul_kernel_params * kparams = (struct htp_matmul_kernel_params *)octx->kernel_params;
 
     if (kparams->n_hmx) {
@@ -3020,7 +3017,6 @@ int op_matmul(struct htp_ops_context * octx) {
     }
 
     return op_matmul_hvx(octx);
-#endif // HTP_HAS_HMX
 }
 
 int op_matmul_id(struct htp_ops_context * octx) {
@@ -3111,10 +3107,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    bool hmx_eligible = false;
-#ifdef HTP_HAS_HMX
-    hmx_eligible = kparams->n_hmx;
-#endif
+    bool hmx_eligible = kparams->n_hmx;
 
     mmctx->hmx_eligible = hmx_eligible;
 
