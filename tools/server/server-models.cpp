@@ -100,6 +100,7 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_MODELS_MAX");
     preset.unset_option("LLAMA_ARG_MODELS_PRESET");
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
+    preset.unset_option("LLAMA_ARG_MODELS_PRESET_ONLY");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_MMPROJ");
@@ -280,12 +281,23 @@ void server_models::add_model(server_model_meta && meta) {
 
 void server_models::load_models() {
     // Phase 1: load presets from all sources — pure I/O, no lock needed
+    // When --models-preset-only is set, the cache and --models-dir sources are
+    // skipped so the router serves only the models declared in --models-preset.
+    const bool preset_only = base_params.models_preset_only;
+    if (preset_only && base_params.models_preset.empty()) {
+        SRV_WRN("%s", "--models-preset-only is set but --models-preset is empty; no models will be available\n");
+    }
     // 1. cached models
-    common_presets cached_models = ctx_preset.load_from_cache();
-    SRV_INF("Loaded %zu cached model presets\n", cached_models.size());
+    common_presets cached_models;
+    if (preset_only) {
+        SRV_INF("%s", "Skipping cached model presets (--models-preset-only)\n");
+    } else {
+        cached_models = ctx_preset.load_from_cache();
+        SRV_INF("Loaded %zu cached model presets\n", cached_models.size());
+    }
     // 2. local models from --models-dir
     common_presets local_models;
-    if (!base_params.models_dir.empty()) {
+    if (!preset_only && !base_params.models_dir.empty()) {
         local_models = ctx_preset.load_from_models_dir(base_params.models_dir);
         SRV_INF("Loaded %zu local model presets from %s\n", local_models.size(), base_params.models_dir.c_str());
     }
