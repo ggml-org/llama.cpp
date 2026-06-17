@@ -45,6 +45,7 @@ struct llama_hparams {
     bool rope_finetuned;
     bool use_par_res;
     bool swin_norm;
+    bool norm_before_residual = false;
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
@@ -185,6 +186,9 @@ struct llama_hparams {
     // for Classifiers
     uint32_t n_cls_out = 1;
 
+    // input embedding dimension (0 = use n_embd)
+    uint32_t n_embd_inp_impl = 0;
+
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
 
@@ -224,6 +228,7 @@ struct llama_hparams {
     // complex mapping. If using deepstack_mapping_arr, also make sure to set
     // n_deepstack_layers to the number of unique deepstack layers so that
     // n_embd_imp is accurate (see granite.cpp).
+    // TODO: can be expressed via the `new n_embd_inp_impl` and remove this param
     uint32_t n_deepstack_layers = 0;
 
     // deepstack layer array (Granite4 Vision)

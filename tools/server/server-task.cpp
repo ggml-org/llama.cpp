@@ -605,7 +605,7 @@ task_params server_task::params_from_json_cmpl(
         const auto samplers = data.find("samplers");
         if (samplers != data.end()) {
             if (samplers->is_array()) {
-                params.sampling.samplers = common_sampler_types_from_names(*samplers, false);
+                params.sampling.samplers = common_sampler_types_from_names(*samplers);
             } else if (samplers->is_string()){
                 params.sampling.samplers = common_sampler_types_from_chars(samplers->get<std::string>());
             }
@@ -1393,6 +1393,9 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
 //
 void server_task_result_cmpl_partial::update(task_result_state & state) {
     is_updated = true;
+    if (is_begin) {
+        return; // begin marker only flushes headers, skip parsing
+    }
     state.update_chat_msg(content, true, oaicompat_msg_diffs);
 
     // Copy current state for use in to_json_*() (reflects state BEFORE this chunk)

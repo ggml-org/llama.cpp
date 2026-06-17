@@ -3,6 +3,7 @@
 
 export * from './agentic';
 export * from './api-endpoints';
+export * from './app';
 export * from './attachment-labels';
 export * from './database';
 export * from './reasoning-effort';
@@ -28,6 +29,8 @@ export * from './latex-protection';
 export * from './literal-html';
 export * from './markdown';
 export * from './mermaid-blocks';
+export * from './svg-blocks';
+export * from './diagram-blocks';
 export * from './max-bundle-size';
 export * from './mcp';
 export * from './mcp-form';
@@ -36,7 +39,9 @@ export * from './message-export';
 export * from './model-id';
 export * from './precision';
 export * from './processing-info';
+export * from './pwa';
 export * from './routes';
+export * from './sandbox';
 export * from './settings-keys';
 export * from './settings-registry';
 export * from './supported-file-types';

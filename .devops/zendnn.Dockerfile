@@ -3,7 +3,7 @@ ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
 
-FROM ubuntu:$UBUNTU_VERSION AS build
+FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 
 RUN apt-get update && \
     apt-get install -y gcc-13 g++-13 build-essential git cmake libssl-dev libomp-dev libnuma-dev python3 ca-certificates
@@ -30,7 +30,7 @@ RUN mkdir -p /app/full \
     && cp .devops/tools.sh /app/full/tools.sh
 
 ## Base image
-FROM ubuntu:$UBUNTU_VERSION AS base
+FROM docker.io/ubuntu:$UBUNTU_VERSION AS base
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
@@ -46,7 +46,7 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.source=$IMAGE_SOURCE
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 libnuma1 curl \
+    && apt-get install -y libgomp1 libnuma1 curl ffmpeg \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \
