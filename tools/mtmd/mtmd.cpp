@@ -554,6 +554,13 @@ struct mtmd_context {
                     img_end = "<|media_end|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_LOCATEANYTHING:
+                {
+                    // InternVL-style markers: <img> ... <IMG_CONTEXT> * n ... </img>
+                    img_beg = "<img>";
+                    img_end = "</img>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_LIGHTONOCR:
                 {
                     // <|im_start|> ... (image embeddings) ... <|im_end|>

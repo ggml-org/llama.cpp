@@ -4554,6 +4554,7 @@ class VisionProjectorType:
     GRANITE_SPEECH = "granite_speech"  # audio
     MIMOVL         = "mimovl"
     GRANITE4_VISION = "granite4_vision"
+    LOCATEANYTHING = "locateanything"
 
 
 # Items here are (block size, type size)

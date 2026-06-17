@@ -363,6 +363,7 @@ enum projector_type {
     PROJECTOR_TYPE_GRANITE_SPEECH,
     PROJECTOR_TYPE_MIMOVL,
     PROJECTOR_TYPE_GRANITE4_VISION,
+    PROJECTOR_TYPE_LOCATEANYTHING,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -417,6 +418,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GRANITE_SPEECH, "granite_speech"},
     { PROJECTOR_TYPE_MIMOVL,     "mimovl"},
     { PROJECTOR_TYPE_GRANITE4_VISION, "granite4_vision"},
+    { PROJECTOR_TYPE_LOCATEANYTHING, "locateanything"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

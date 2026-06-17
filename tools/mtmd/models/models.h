@@ -209,6 +209,15 @@ struct clip_graph_kimik25 : clip_graph {
     ggml_tensor * resize_position_embeddings_3d(uint32_t interpolation_mode);
 };
 
+// LocateAnything-3B: MoonViT-SO-400M encoder (shared with Kimi-K2.5) + an "Eagle MLP" connector.
+// The only divergence from Kimi-K2.5 is the projection LayerNorm, which normalises the merged
+// 4608-dim feature directly instead of the pre-merge 1152-dim sub-tokens, so we reuse the
+// 3D pos-emb resize but override build().
+struct clip_graph_locateanything : clip_graph_kimik25 {
+    clip_graph_locateanything(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_kimik25(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_exaone4_5 : clip_graph {
     clip_graph_exaone4_5(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
