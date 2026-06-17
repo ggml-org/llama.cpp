@@ -24,6 +24,7 @@ struct bench_params {
     bool    do_d2d      = true;
     bool    do_async    = true;
     bool    csv         = false;
+    int     async_copies = 4;
 };
 
 struct device_info {
@@ -75,6 +76,7 @@ static void usage(const char * argv0) {
     fprintf(stderr, "  --no-d2h             skip device-to-host tests\n");
     fprintf(stderr, "  --no-d2d             skip device-to-device tests\n");
     fprintf(stderr, "  --no-async           skip async copy tests\n");
+    fprintf(stderr, "  --async-copies N     number of pipelined async copies (default: 4)\n");
     fprintf(stderr, "  --output FORMAT      output format: table (default), csv\n");
 }
 
@@ -110,6 +112,10 @@ static bool parse_args(int argc, char ** argv, bench_params & params) {
             params.do_d2d = false;
         } else if (strcmp(argv[i], "--no-async") == 0) {
             params.do_async = false;
+        } else if (strcmp(argv[i], "--async-copies") == 0) {
+            if (++i >= argc) { usage(argv[0]); return false; }
+            params.async_copies = atoi(argv[i]);
+            if (params.async_copies < 1) { fprintf(stderr, "invalid async-copies: %s\n", argv[i]); return false; }
         } else if (strcmp(argv[i], "--output") == 0) {
             if (++i >= argc) { usage(argv[0]); return false; }
             if (strcmp(argv[i], "csv") == 0) {
@@ -227,6 +233,35 @@ struct tensor_on_device {
     ggml_tensor *    tensor;
 };
 
+static std::vector<tensor_on_device> create_tensors_on_buffer(ggml_backend_buffer_t buffer, size_t size_bytes, int count, const char * prefix) {
+    std::vector<tensor_on_device> result;
+    struct ggml_tallocr talloc = ggml_tallocr_new(buffer);
+
+    for (int i = 0; i < count; i++) {
+        int64_t n_elements = (int64_t)(size_bytes / sizeof(float));
+        if (n_elements == 0) {
+            n_elements = 1;
+        }
+
+        ggml_init_params init_params = {
+            /* .mem_size   = */ ggml_tensor_overhead() + 64,
+            /* .mem_buffer = */ nullptr,
+            /* .no_alloc   = */ true,
+        };
+        ggml_context_ptr ctx(ggml_init(init_params));
+        if (!ctx) { break; }
+
+        ggml_tensor * tensor = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n_elements);
+        char tname[128];
+        snprintf(tname, sizeof(tname), "%s_%d", prefix, i);
+        ggml_set_name(tensor, tname);
+        ggml_tallocr_alloc(&talloc, tensor);
+
+        result.push_back({ std::move(ctx), tensor });
+    }
+    return result;
+}
+
 static tensor_on_device create_tensor_on_buffer(ggml_backend_buffer_t buffer, size_t size_bytes, const char * name) {
     int64_t n_elements = (int64_t)(size_bytes / sizeof(float));
     if (n_elements == 0) {
@@ -329,10 +364,11 @@ int main(int argc, char ** argv) {
         printf("No GPU devices found. Only CPU-to-CPU results available.\n\n");
     }
 
-    // Allocate buffers on each device (sized for the largest test)
+    // Allocate buffers on each device (sized for the largest test * async copies)
     size_t max_size = params.sizes.back();
+    int n_buf_tensors = (params.do_async && params.do_d2d) ? params.async_copies : 1;
     for (auto & dev : devices) {
-        size_t alloc_size = max_size + 4096;
+        size_t alloc_size = (size_t)n_buf_tensors * max_size + 4096;
         if (dev.mem_total > 0 && alloc_size > dev.mem_free) {
             fprintf(stderr, "warning: max test size (%s) exceeds free memory on %s (%zu MB), will skip large sizes\n",
                 format_size(max_size).c_str(), dev.name.c_str(), dev.mem_free / (1024 * 1024));
@@ -392,17 +428,46 @@ int main(int argc, char ** argv) {
             return nullptr;
         };
 
+        // Correctness verification: set/get round-trip on each device
+        std::vector<uint8_t> readback(size);
+        for (auto & t : tensors) {
+            ggml_backend_tensor_set(t.td.tensor, host_data.data(), 0, size);
+            ggml_backend_tensor_get(t.td.tensor, readback.data(), 0, size);
+            if (memcmp(host_data.data(), readback.data(), size) != 0) {
+                fprintf(stderr, "FAIL: set/get round-trip on %s for size %s\n",
+                    devices[t.dev_idx].name.c_str(), format_size(size).c_str());
+            }
+        }
+
+        // Correctness verification: D2D copy
+        if (params.do_d2d) {
+            for (size_t si = 0; si < devices.size(); si++) {
+                for (size_t di = 0; di < devices.size(); di++) {
+                    if (si == di) { continue; }
+                    ggml_tensor * src = find_tensor(si);
+                    ggml_tensor * dst = find_tensor(di);
+                    if (!src || !dst) { continue; }
+
+                    ggml_backend_tensor_copy(src, dst);
+                    ggml_backend_tensor_get(dst, readback.data(), 0, size);
+                    if (memcmp(host_data.data(), readback.data(), size) != 0) {
+                        fprintf(stderr, "FAIL: D2D copy %s -> %s for size %s\n",
+                            devices[si].name.c_str(), devices[di].name.c_str(), format_size(size).c_str());
+                    }
+                }
+            }
+        }
+
         // Host-to-Device
         if (params.do_h2d) {
             for (size_t gi : gpu_indices) {
                 ggml_tensor * dst = find_tensor(gi);
                 if (!dst) { continue; }
-                ggml_backend_t be = devices[gi].backend.get();
 
                 auto r = benchmark_copy("Host", devices[gi].name.c_str(), "set", size, params,
-                    [&]{ ggml_backend_synchronize(be); },
+                    [&]{ },
                     [&]{ ggml_backend_tensor_set(dst, host_data.data(), 0, size); },
-                    [&]{ ggml_backend_synchronize(be); });
+                    [&]{ });
 
                 params.csv ? print_csv_row(r) : print_table_row(r);
             }
@@ -413,12 +478,11 @@ int main(int argc, char ** argv) {
             for (size_t gi : gpu_indices) {
                 ggml_tensor * src = find_tensor(gi);
                 if (!src) { continue; }
-                ggml_backend_t be = devices[gi].backend.get();
 
                 auto r = benchmark_copy(devices[gi].name.c_str(), "Host", "get", size, params,
-                    [&]{ ggml_backend_synchronize(be); },
+                    [&]{ },
                     [&]{ ggml_backend_tensor_get(src, host_data.data(), 0, size); },
-                    [&]{ ggml_backend_synchronize(be); });
+                    [&]{ });
 
                 params.csv ? print_csv_row(r) : print_table_row(r);
             }
@@ -434,50 +498,68 @@ int main(int argc, char ** argv) {
                     ggml_tensor * dst = find_tensor(di);
                     if (!src || !dst) { continue; }
 
-                    ggml_backend_t be_src = devices[si].backend.get();
-                    ggml_backend_t be_dst = devices[di].backend.get();
-
                     auto r = benchmark_copy(
                         devices[si].name.c_str(), devices[di].name.c_str(), "copy_sync", size, params,
-                        [&]{
-                            ggml_backend_synchronize(be_src);
-                            ggml_backend_synchronize(be_dst);
-                        },
+                        [&]{ },
                         [&]{ ggml_backend_tensor_copy(src, dst); },
-                        [&]{
-                            ggml_backend_synchronize(be_src);
-                            ggml_backend_synchronize(be_dst);
-                        });
+                        [&]{ });
 
                     params.csv ? print_csv_row(r) : print_table_row(r);
                 }
             }
         }
 
-        // Device-to-Device (async)
+        // Device-to-Device (async, pipelined)
         if (params.do_d2d && params.do_async) {
+            int n = params.async_copies;
+
+            struct dev_async_tensors {
+                size_t dev_idx;
+                std::vector<tensor_on_device> tds;
+            };
+            std::vector<dev_async_tensors> async_tensors;
+
+            for (size_t i = 0; i < devices.size(); i++) {
+                if (!devices[i].buffer) { continue; }
+                if (devices[i].mem_total > 0 && (size_t)n * size + 4096 > devices[i].mem_free) { continue; }
+                char prefix[64];
+                snprintf(prefix, sizeof(prefix), "%s_async_%s", devices[i].name.c_str(), format_size(size).c_str());
+                auto tds = create_tensors_on_buffer(devices[i].buffer.get(), size, n, prefix);
+                if ((int)tds.size() < n) { continue; }
+                async_tensors.push_back({ i, std::move(tds) });
+            }
+
+            auto find_async = [&](size_t dev_idx) -> std::vector<tensor_on_device> * {
+                for (auto & at : async_tensors) {
+                    if (at.dev_idx == dev_idx) { return &at.tds; }
+                }
+                return nullptr;
+            };
+
+            char method[32];
+            snprintf(method, sizeof(method), "async(%d)", n);
+
             for (size_t si = 0; si < devices.size(); si++) {
                 for (size_t di = 0; di < devices.size(); di++) {
                     if (si == di) { continue; }
 
-                    ggml_tensor * src = find_tensor(si);
-                    ggml_tensor * dst = find_tensor(di);
-                    if (!src || !dst) { continue; }
+                    auto * srcs = find_async(si);
+                    auto * dsts = find_async(di);
+                    if (!srcs || !dsts) { continue; }
 
                     ggml_backend_t be_src = devices[si].backend.get();
                     ggml_backend_t be_dst = devices[di].backend.get();
 
                     auto r = benchmark_copy(
-                        devices[si].name.c_str(), devices[di].name.c_str(), "copy_async", size, params,
+                        devices[si].name.c_str(), devices[di].name.c_str(), method,
+                        (size_t)n * size, params,
+                        [&]{ },
                         [&]{
-                            ggml_backend_synchronize(be_src);
-                            ggml_backend_synchronize(be_dst);
+                            for (int k = 0; k < n; k++) {
+                                ggml_backend_tensor_copy_async(be_src, be_dst, (*srcs)[k].tensor, (*dsts)[k].tensor);
+                            }
                         },
-                        [&]{ ggml_backend_tensor_copy_async(be_src, be_dst, src, dst); },
-                        [&]{
-                            ggml_backend_synchronize(be_src);
-                            ggml_backend_synchronize(be_dst);
-                        });
+                        [&]{ ggml_backend_synchronize(be_dst); });
 
                     params.csv ? print_csv_row(r) : print_table_row(r);
                 }
