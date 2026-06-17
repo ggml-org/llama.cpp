@@ -15869,16 +15869,18 @@ static bool ggml_vk_graph_replay(ggml_backend_vk_context * ctx, vk_cached_graph 
     for (size_t i = 0; i < cached->submissions.size(); i++) {
         auto & sub = cached->submissions[i];
 
-        std::vector<vk::Semaphore> wait_sems;
-        std::vector<uint64_t> wait_vals;
-        std::vector<vk::PipelineStageFlags> wait_stages;
+        vk::Semaphore wait_sem;
+        uint64_t wait_val = 0;
+        vk::PipelineStageFlags wait_stage;
+        uint32_t wait_count = 0;
 
         // First submission may need to wait on transfer semaphore
         if (i == 0 && ctx->device->async_use_transfer_queue &&
             ctx->transfer_semaphore_last_submitted < ctx->transfer_semaphore.value) {
-            wait_sems.push_back(ctx->transfer_semaphore.s);
-            wait_vals.push_back(ctx->transfer_semaphore.value);
-            wait_stages.push_back(ctx->device->compute_queue.stage_flags);
+            wait_sem = ctx->transfer_semaphore.s;
+            wait_val = ctx->transfer_semaphore.value;
+            wait_stage = ctx->device->compute_queue.stage_flags;
+            wait_count = 1;
             ctx->transfer_semaphore_last_submitted = ctx->transfer_semaphore.value;
         }
 
@@ -15888,21 +15890,22 @@ static bool ggml_vk_graph_replay(ggml_backend_vk_context * ctx, vk_cached_graph 
             ctx->almost_ready_fence_pending = true;
         }
 
-        vk::TimelineSemaphoreSubmitInfo tl_info{
-            (uint32_t)wait_vals.size(), wait_vals.data(),
-            0, nullptr,
-        };
-        tl_info.sType = vk::StructureType::eTimelineSemaphoreSubmitInfo;
-        tl_info.pNext = nullptr;
-
         vk::SubmitInfo si{
-            (uint32_t)wait_sems.size(), wait_sems.data(), wait_stages.data(),
+            wait_count, &wait_sem, &wait_stage,
             1, &sub.cmd_buffer->buf,
             0, nullptr,
         };
-        si.setPNext(&tl_info);
 
-        {
+        if (wait_count > 0) {
+            vk::TimelineSemaphoreSubmitInfo tl_info{
+                1, &wait_val,
+                0, nullptr,
+            };
+            si.setPNext(&tl_info);
+
+            std::lock_guard<std::mutex> guard(queue_mutex);
+            ctx->device->compute_queue.queue.submit({ si }, fence);
+        } else {
             std::lock_guard<std::mutex> guard(queue_mutex);
             ctx->device->compute_queue.queue.submit({ si }, fence);
         }
