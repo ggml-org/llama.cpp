@@ -1,5 +1,6 @@
 #include "arg.h"
 #include "common.h"
+#include "chat.h"
 #include "sampling.h"
 #include "speculative.h"
 #include "log.h"
@@ -7,6 +8,7 @@
 
 #include <clocale>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cinttypes>
 #include <string>
@@ -102,9 +104,32 @@ int main(int argc, char ** argv) {
         LOG_INF("speculative decoding will use checkpoints (context does not support partial sequence removal)\n");
     }
 
+    // DFlash drafters are trained on chat-formatted data, so apply the target's chat template
+    // (and, with LLAMA_SPEC_NO_THINK set, disable thinking). Without this a raw prompt gives very
+    // low acceptance; the blog reports thinking-off raising acceptance from a few % to ~90%.
+    std::string prompt = params.prompt;
+    if (is_dflash) {
+        auto chat_templates = common_chat_templates_init(model_tgt, params.chat_template);
+        if (common_chat_templates_was_explicit(chat_templates.get())) {
+            common_chat_msg msg;
+            msg.role    = "user";
+            msg.content = params.prompt;
+
+            common_chat_templates_inputs cinputs;
+            cinputs.messages = { msg };
+            cinputs.add_generation_prompt = true;
+            if (const char * nt = std::getenv("LLAMA_SPEC_NO_THINK"); nt && std::string(nt) != "0") {
+                cinputs.enable_thinking = false;                              // Qwen3 / Qwen3.5
+                cinputs.chat_template_kwargs["reasoning_effort"] = "\"low\""; // gpt-oss
+            }
+            prompt = common_chat_templates_apply(chat_templates.get(), cinputs).prompt;
+            LOG_INF("%s: DFlash chat template applied\n", __func__);
+        }
+    }
+
     // Tokenize the prompt
     std::vector<llama_token> inp;
-    inp = common_tokenize(ctx_tgt, params.prompt, true, true);
+    inp = common_tokenize(ctx_tgt, prompt, true, true);
 
     if (llama_n_ctx(ctx_tgt) < (uint32_t) inp.size()) {
         LOG_ERR("%s: the prompt exceeds the context size (%d tokens, ctx %d)\n", __func__, (int) inp.size(), llama_n_ctx(ctx_tgt));
