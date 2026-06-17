@@ -2846,9 +2846,10 @@ private:
         llama_batch bpfx = llama_batch_init(n_batch, 0, 1);
         common_batch_clear(bpfx);
 
-        std::vector<int> n_cur(pfx.size(), 0);
-        for (size_t s = 0; s < pfx.size(); s++) {
-            server_slot * slot = pfx[s];
+        // only slots whose chunk fits this batch advance, the rest wait the next tick
+        std::vector<server_slot *> used;
+        std::vector<int> n_cur;
+        for (server_slot * slot : pfx) {
             const auto & toks = slot->task->tokens;
             const int i = slot->disagg_pos;
 
@@ -2857,15 +2858,25 @@ private:
                 cur = n_batch - bpfx.n_tokens;
             }
 
+            if (cur <= 0) {
+                break;
+            }
+
             for (int j = 0; j < cur; j++) {
                 common_batch_add(bpfx, toks[i + j], i + j, { slot->disagg_seq }, false);
             }
 
-            n_cur[s] = cur;
+            used.push_back(slot);
+            n_cur.push_back(cur);
 
             if (bpfx.n_tokens >= n_batch) {
                 break;
             }
+        }
+
+        if (bpfx.n_tokens == 0) {
+            llama_batch_free(bpfx);
+            return;
         }
 
         const int ret = llama_decode(ctx_pfx.get(), bpfx);
@@ -2876,8 +2887,8 @@ private:
         // a prefill chunk is progress, keep the empty batch watchdog from firing
         n_empty_consecutive = 0;
 
-        for (size_t s = 0; s < pfx.size(); s++) {
-            server_slot * slot = pfx[s];
+        for (size_t s = 0; s < used.size(); s++) {
+            server_slot * slot = used[s];
 
             if (ret != 0) {
                 SLT_ERR(*slot, "%s", "disagg prefill: llama_decode on ctx_pfx failed, falling back to local\n");
@@ -3323,9 +3334,13 @@ private:
 
                         // disaggregated prefill: kick off the chunked prefill on ctx_pfx, the handoff
                         // and the single last token on ctx_tgt run when the slot returns here
+                        // completion only: embedding and rerank need ctx_tgt outputs past the last token
+                        // no lora: ctx_pfx never sets adapters, a lora prefix KV would be computed wrong
                         // skipped with speculative decoding: the draft context KV is not handed off
                         bool disagg_done = slot.disagg_prefilled;
-                        if (ctx_pfx && !ctx_dft && !input_tokens.has_mtmd && slot.task->n_tokens() >= 2 && !slot.disagg_attempted) {
+                        if (ctx_pfx && !ctx_dft && !input_tokens.has_mtmd &&
+                            slot.task->type == SERVER_TASK_TYPE_COMPLETION && slot.lora.empty() &&
+                            slot.task->n_tokens() >= 2 && !slot.disagg_attempted) {
                             const int seq = disagg_acquire_seq();
                             if (seq >= 0) {
                                 slot.disagg_seq = seq;
