@@ -909,7 +909,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         cp.n_ubatch   = cp.n_batch;
         cp.n_seq_max  = n_seq;
         cp.embeddings = true;
-        ctx_dft_enc = llama_init_from_model((llama_model *) model_dft, cp);
+        ctx_dft_enc = llama_init_from_model(const_cast<llama_model *>(model_dft), cp);
         GGML_ASSERT(ctx_dft_enc && "failed to create DFlash encoder context");
 
         batch = llama_batch_init(llama_n_batch(ctx_dft), 0, n_seq);
@@ -1005,7 +1005,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             llama_set_dflash_accumulated_target_ctx(params.ctx_dft, acc.data(), n_embd_dec, n_ctx_total);
 
             // 3. decode one block of noise tokens: [id_last, mask, mask, ...]
+            // the decoder is stateless (no KV reuse), so clear its memory first to keep the block
+            // positions consistent across draft steps
             const int32_t bs = std::min(dp.n_max > 0 ? dp.n_max : block_size, block_size);
+            llama_memory_seq_rm(llama_get_memory(params.ctx_dft), seq_id, -1, -1);
             common_batch_clear(batch);
             for (int32_t i = 0; i < bs; ++i) {
                 common_batch_add(batch, i == 0 ? dp.id_last : mask_token_id, i, { seq_id }, true);
@@ -1966,6 +1969,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
             case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:
             case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
+            case COMMON_SPECULATIVE_TYPE_DFLASH:
                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
                 break;
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:

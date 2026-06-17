@@ -2407,7 +2407,14 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * res = gf_res_reserve.get();
 
-    const auto gparams = graph_params(res, ubatch, mctx, ctx_type_to_graph_type(cparams.ctx_type));
+    llm_graph_type gtype = ctx_type_to_graph_type(cparams.ctx_type);
+    // DFlash shares one model across two contexts: the encoder reserves the encoder graph, the
+    // decoder (no KV cache, driven via the encode path) reserves the decoder graph
+    if (model.arch == LLM_ARCH_DFLASH) {
+        gtype = dflash_decoder_ctx ? LLM_GRAPH_TYPE_DECODER : LLM_GRAPH_TYPE_ENCODER;
+    }
+
+    const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
     res->reset();
 
