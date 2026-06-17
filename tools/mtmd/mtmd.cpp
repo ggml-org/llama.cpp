@@ -80,9 +80,10 @@ struct mtmd_bitmap {
 
 // position indexing for decoder model
 enum mtmd_pos_type {
-    MTMD_POS_TYPE_NORMAL,    // number of positions equals to number of tokens
-    MTMD_POS_TYPE_MROPE,     // qwen-vl mrope style, each image takes max(t,h,w) position indexes
-    MTMD_POS_TYPE_HUNYUANVL, // HunyuanVL mrope + BOI/EOI/newline layout with XD-RoPE dim-3
+    MTMD_POS_TYPE_NORMAL,     // number of positions equals to number of tokens
+    MTMD_POS_TYPE_MROPE,      // qwen-vl mrope style, each image takes max(t,h,w) position indexes
+    MTMD_POS_TYPE_HUNYUANVL,  // HunyuanVL mrope + BOI/EOI/newline layout with XD-RoPE dim-3
+    MTMD_POS_TYPE_LLAVA_NEXT, // Llava-next: image grid acts as a batch w/out text delimiters
 };
 
 struct mtmd_image_tokens {
@@ -95,6 +96,10 @@ struct mtmd_image_tokens {
         if (pos == MTMD_POS_TYPE_HUNYUANVL) {
             // [BOI] [row0 tokens + newline] ... [row(ny-1) tokens + newline] [EOI]
             return (nx + 1) * ny + 2;
+        }
+        if (pos == MTMD_POS_TYPE_LLAVA_NEXT) {
+            // Batch dim is the tiles in the grid, so doesn't contribute to the final n_tokens
+            return nx * ny;
         }
         uint32_t nz = batch_f32.entries.size();
         if (n_temporal_merge > 1) {
@@ -1200,6 +1205,10 @@ struct mtmd_tokenizer {
                     image_tokens->image_idx = n_images_added;
                     GGML_ASSERT(n_tokens == (size_t)image_tokens->n_tokens());
                 }
+                // Llava-next style (Granite4Vision) uses a batch of tiles in a single mtmd_image_tokens
+                if (ctx->proj_type_v() == PROJECTOR_TYPE_GRANITE4_VISION) {
+                    image_tokens->pos = MTMD_POS_TYPE_LLAVA_NEXT;
+                }
                 image_tokens->batch_f32 = std::move(batch_f32);
                 image_tokens->id = bitmaps[0]->id; // optional
 
@@ -1901,6 +1910,7 @@ mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * ima
                 pos.z = 0; // unused for now
             } break;
         case MTMD_POS_TYPE_NORMAL:
+        case MTMD_POS_TYPE_LLAVA_NEXT:
             {
                 pos.t = pos_0 + i;
                 pos.x = pos_0 + i;
@@ -1954,6 +1964,7 @@ llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
         case MTMD_POS_TYPE_MROPE:
             return std::max(image_tokens->nx, image_tokens->ny);
         case MTMD_POS_TYPE_NORMAL:
+        case MTMD_POS_TYPE_LLAVA_NEXT:
             return image_tokens->n_tokens();
         case MTMD_POS_TYPE_HUNYUANVL:
             // HunyuanVL: the sequential (dim-0) position advances by the full token count
