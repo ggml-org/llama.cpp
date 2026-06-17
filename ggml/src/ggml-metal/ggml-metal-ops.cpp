@@ -556,7 +556,7 @@ int ggml_metal_op_concat(ggml_metal_op_t ctx, int idx) {
         /*.dim  =*/ dim,
     };
 
-    auto pipeline = ggml_metal_library_get_pipeline_base(lib, GGML_OP_CONCAT);
+    auto pipeline = ggml_metal_library_get_pipeline_concat(lib, op->type);
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
