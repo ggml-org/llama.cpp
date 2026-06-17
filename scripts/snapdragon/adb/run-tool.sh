@@ -54,6 +54,9 @@ oppoll=
 opfuse=
 [ "$OC" != "" ] && opfuse="GGML_HEXAGON_OPFUSION=$OC"
 
+mmsel=
+[ "$MM" != "" ] && opsec="GGML_HEXAGON_MM_SELECT=$MM"
+
 set -x
 
 tool=$1; shift
@@ -62,5 +65,5 @@ adb $adbserial $adbhost shell " \
   cd $basedir; ulimit -c unlimited;        \
     LD_LIBRARY_PATH=$basedir/$branch/lib   \
     ADSP_LIBRARY_PATH=$basedir/$branch/lib \
-    $verbose $sched $opmask $profile $nhvx $hmx $ndev $hb $opbatch $opqueue $oppoll $opfuse ./$branch/bin/$tool $@ \
+    $verbose $sched $opmask $profile $nhvx $hmx $ndev $hb $opbatch $opqueue $oppoll $opfuse $mmsel ./$branch/bin/$tool $@ \
 "
