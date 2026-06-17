@@ -158,7 +158,9 @@ common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) co
         if (!end.empty()) {
             if (!start.empty()) {
                 // Standard tag-based: optional(<think>reasoning</think>)
-                return p.optional(p.optspace(start) + p.reasoning(p.until(trim_whitespace(end))) + p.optspace(end));
+                // Allow optional whitespace before the start tag — some models
+                // emit a newline before reasoning begins.
+                return p.optional(p.space() + p.optspace(start) + p.reasoning(p.until(trim_whitespace(end))) + p.optspace(end));
             }
             // Delimiter-style (empty start)
             return p.optional(p.reasoning(p.until(trim_whitespace(end))) + p.optspace(end));
