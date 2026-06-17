@@ -5582,11 +5582,6 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_COS:
         case GGML_OP_CLAMP:
         case GGML_OP_LOG:
-#if defined (GGML_SYCL_F16)
-            return ((op->type == GGML_TYPE_F32 || op->type == GGML_SYCL_F16) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_SYCL_F16) && (op->type == op->src[0]->type));
-#else
-            return (op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32) && (op->type == op->src[0]->type);
-#endif
         case GGML_OP_NORM:
         case GGML_OP_L2_NORM:
         case GGML_OP_GROUP_NORM:
