@@ -4388,13 +4388,40 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 const float mask_value  = -1e30f;
 
                 std::vector<float> mask_data(n_q * n_k);
-                for (int q = 0; q < n_q; ++q) {
-                    for (int k = 0; k < n_k; ++k) {
-                        bool is_padding = (k >= n_tokens_real);
-                        mask_data[q * n_k + k] = (is_padding) ? mask_value : 0.0f;
+                if (n_k == n_q) {
+                    // full attention: mask keys that are padding
+                    for (int q = 0; q < n_q; ++q) {
+                        for (int k = 0; k < n_k; ++k) {
+                            mask_data[q * n_k + k] = (k >= n_tokens_real) ? mask_value : 0.0f;
+                        }
+                    }
+                } else {
+                    // local attention: mask keys outside the valid window
+                    const int att_left = n_k / 2;
+                    for (int q = 0; q < n_q; ++q) {
+                        for (int k = 0; k < n_k; ++k) {
+                            const int key = q - att_left + k;
+                            mask_data[q * n_k + k] = (key >= 0 && key < n_tokens_real) ? 0.0f : mask_value;
+                        }
                     }
                 }
                 set_input_f32(attn_mask->name, mask_data);
+
+                // local attention skew mask: zeroes out the probs that were
+                // computed for keys outside the valid sliding window.
+                if (struct ggml_tensor * local_mask = ggml_graph_get_tensor(gf, "local_mask")) {
+                    const int lm_k = local_mask->ne[0];
+                    const int lm_q = local_mask->ne[1];
+                    const int window_size = lm_k - lm_q + 1;
+                    std::vector<float> lm_data(lm_q * lm_k);
+                    for (int q = 0; q < lm_q; ++q) {
+                        for (int k = 0; k < lm_k; ++k) {
+                            const int rel = k - q;
+                            lm_data[q * lm_k + k] = (rel >= 0 && rel < window_size) ? 1.0f : 0.0f;
+                        }
+                    }
+                    set_input_f32(local_mask->name, lm_data);
+                }
 
                 // Generate rotation frequencies for relative positional encoding.
                 {
@@ -4415,11 +4442,19 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                     // n_time from the conv output, so we read it back from the graph tensor.
                     struct ggml_tensor * rel_pos = ggml_graph_get_tensor(gf, "rel_positions");
                     const int window_size = rel_pos->ne[1];
-                    const int n_time      = (window_size + 1) / 2;
                     std::vector<float> pos(window_size);
-                    for (int t = 0; t < window_size; ++t) {
-                        // The range of the values is high to low which the original model has.
-                        pos[t] = float(n_time - 1 - t);
+                    // local attention: window is fixed at [att_left, att_right]
+                    // full attention: window covers the full sequence, centered
+                    if (ggml_graph_get_tensor(gf, "local_mask")) {
+                        const int att_left = window_size / 2;
+                        for (int t = 0; t < window_size; ++t) {
+                            pos[t] = float(att_left - t);
+                        }
+                    } else {
+                        const int n_time = (window_size + 1) / 2;
+                        for (int t = 0; t < window_size; ++t) {
+                            pos[t] = float(n_time - 1 - t);
+                        }
                     }
                     set_input_f32(rel_pos->name, pos);
                 }
