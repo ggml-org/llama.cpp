@@ -588,6 +588,23 @@ void server_http_context::post(const std::string & path, const server_http_conte
     });
 }
 
+void server_http_context::del(const std::string & path, const server_http_context::handler_t & handler) const {
+    handlers.emplace(path, handler);
+    pimpl->srv->Delete(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+        server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
+            get_params(req),
+            get_headers(req),
+            req.path,
+            build_query_string(req),
+            req.body,
+            {},
+            req.is_connection_closed
+        });
+        server_http_res_ptr response = handler(*request);
+        process_handler_response(std::move(request), response, res);
+    });
+}
+
 //
 // Vertex AI Prediction protocol (AIP_PREDICT_ROUTE)
 // https://cloud.google.com/vertex-ai/docs/predictions/custom-container-requirements
