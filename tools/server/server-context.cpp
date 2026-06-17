@@ -1201,9 +1201,17 @@ private:
                 params_base.n_prefill = 1;
             }
 
+            // the pool cannot hand off more concurrent prefills than there are decode slots
+            if (params_base.n_prefill > params_base.n_parallel) {
+                params_base.n_prefill = params_base.n_parallel;
+            }
+
             auto params_pfx = params_base;
-            params_pfx.devices    = params_base.devices_prefill;
-            params_pfx.n_parallel = params_base.n_prefill; // ctx_pfx seq capacity = n_prefill, maximizes per seq context
+            params_pfx.devices = params_base.devices_prefill;
+
+            // ctx_pfx shares ctx_tgt n_seq_max so both contexts have the same n_stream and the
+            // prefilled KV restores into ctx_tgt, the pool uses only the first n_prefill sequences
+            params_pfx.n_parallel = params_base.n_parallel;
 
             auto mparams_pfx = common_model_params_to_llama(params_pfx);
 
