@@ -2534,7 +2534,8 @@ static void dequantize_tiled_weight_chunk_to_fp16_tiles(
     if (state.n_tasks == 1 || n_threads == 1) {
         dequant_worker_fn(1, 0, &state);
     } else {
-        worker_pool_run_func(ctx->worker_pool, dequant_worker_fn, &state, n_threads);
+        int n_tasks = hex_smin((int) state.n_tasks, n_threads);
+        worker_pool_run_func(ctx->worker_pool, dequant_worker_fn, &state, n_tasks);
     }
 }
 
@@ -2559,7 +2560,8 @@ static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, 
     if (state.n_tasks == 1 || n_threads == 1) {
         transfer_output_chunk_worker_fn(1, 0, &state);
     } else {
-        worker_pool_run_func(ctx->worker_pool, transfer_output_chunk_worker_fn, &state, n_threads);
+        int n_tasks = hex_smin((int) state.n_tasks, n_threads);
+        worker_pool_run_func(ctx->worker_pool, transfer_output_chunk_worker_fn, &state, n_tasks);
     }
 }
 
@@ -2595,7 +2597,8 @@ static void transfer_activation_chunk_threaded(
     if (state.n_tasks == 1 || n_threads == 1) {
         transfer_activation_chunk_worker_fn(1, 0, &state);
     } else {
-        worker_pool_run_func(ctx->worker_pool, transfer_activation_chunk_worker_fn, &state, n_threads);
+        int n_tasks = hex_smin((int) state.n_tasks, n_threads);
+        worker_pool_run_func(ctx->worker_pool, transfer_activation_chunk_worker_fn, &state, n_tasks);
     }
 }
 
