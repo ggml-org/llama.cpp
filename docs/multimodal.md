@@ -7,6 +7,9 @@ llama.cpp supports multimodal input via `libmtmd`. Currently, there are 2 tools 
 
 Currently, we support **image**, **audio** and **video** input.
 
+Generated audio support is documented separately for model-specific paths such
+as [Higgs Audio v3](multimodal/higgs-audio-v3.md).
+
 To enable it, you can use one of the 2 methods below:
 
 - Use `-hf` option with a supported model (see a list of pre-quantized model below)
