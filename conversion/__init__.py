@@ -270,6 +270,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "Lfm2AudioForConditionalGeneration": "lfm2",
     "Lfm2VlForConditionalGeneration": "lfm2",
     "LightOnOCRForConditionalGeneration": "lighton_ocr",
+    "LocateAnythingForConditionalGeneration": "locateanything",
     "Llama4ForConditionalGeneration": "llama4",
     "LlavaForConditionalGeneration": "llava",
     "MERaLiON2ForConditionalGeneration": "ultravox",

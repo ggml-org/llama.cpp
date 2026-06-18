@@ -960,6 +960,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_kimik25>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_LOCATEANYTHING:
+            {
+                builder = std::make_unique<clip_graph_locateanything>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_COGVLM:
             {
                 builder = std::make_unique<clip_graph_cogvlm>(ctx, img);
@@ -1403,6 +1407,29 @@ struct clip_model_loader {
                         } else {
                             hparams.set_limit_image_tokens(2, 4096);
                         }
+                    } break;
+                case PROJECTOR_TYPE_LOCATEANYTHING:
+                    {
+                        // MoonViT encoder shared with Kimi-K2.5, but the HF processor resizes with
+                        // Pillow bicubic and stretches to a multiple of patch*merge (no letterbox),
+                        // rounding the target size UP (ceil) rather than to the nearest multiple.
+                        hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
+                        hparams.image_resize_pad  = PAD_NONE;
+                        hparams.image_resize_round_up = true;
+                        hparams.rope_theta = 10000.0f;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+
+                        int min_pixels = 0, max_pixels = 0;
+                        get_u32(KEY_IMAGE_MIN_PIXELS, min_pixels, false);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, max_pixels, false);
+                        if (min_pixels > 0 && max_pixels > 0) {
+                            hparams.image_min_pixels = min_pixels;
+                            hparams.image_max_pixels = max_pixels;
+                        } else {
+                            // fallback: in_token_limit 25600 patches -> 25600 * 14^2 pixels
+                            hparams.set_limit_image_tokens(4, 25600);
+                        }
+                        hparams.set_warmup_n_tokens(32*32); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_GEMMA3:
                     {
@@ -2276,6 +2303,7 @@ struct clip_model_loader {
             case PROJECTOR_TYPE_KIMIVL:
             case PROJECTOR_TYPE_PADDLEOCR:
             case PROJECTOR_TYPE_KIMIK25:
+            case PROJECTOR_TYPE_LOCATEANYTHING:
                 {
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
@@ -3352,6 +3380,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:
+        case PROJECTOR_TYPE_LOCATEANYTHING:
             {
                 // dynamic size
                 int out_patch_size = params.patch_size * ctx->model.hparams.n_merge;
@@ -4012,6 +4041,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:
+        case PROJECTOR_TYPE_LOCATEANYTHING:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
                 // set the 2D positions
@@ -4560,6 +4590,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_KIMIK25:
+        case PROJECTOR_TYPE_LOCATEANYTHING:
         case PROJECTOR_TYPE_YASA2:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_HUNYUANVL:
