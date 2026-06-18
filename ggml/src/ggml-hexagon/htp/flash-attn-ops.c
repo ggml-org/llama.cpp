@@ -18,7 +18,8 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-ops.h"
-#include "hmx-ops.h"
+
+int hmx_flash_attn_ext(struct htp_ops_context * octx);
 
 // Must be multiple of 32
 #define FLASH_ATTN_BLOCK_SIZE (32 * 2)

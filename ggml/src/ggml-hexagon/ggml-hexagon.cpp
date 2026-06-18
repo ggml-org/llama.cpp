@@ -2439,7 +2439,7 @@ fallback_hvx:
             }
 
             size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
-            size_t total_size = hvx_get_vtcm_sizes(
+            size_t total_size = htp_mm_hvx_get_vtcm_sizes(
                 kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
                 dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
             );
@@ -2460,7 +2460,7 @@ fallback_hvx:
             kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
 
             size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
-            size_t total_size = hvx_get_vtcm_sizes(
+            size_t total_size = htp_mm_hvx_get_vtcm_sizes(
                 kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
                 dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
             );
@@ -2477,7 +2477,7 @@ fallback_hvx:
         const bool is_permuted = ggml_is_permuted(src0) || ggml_is_permuted(src1);
 
         size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
-        size_t vtcm_size = hvx_get_vtcm_sizes(
+        size_t vtcm_size = htp_mm_hvx_get_vtcm_sizes(
             HTP_MM_KERNEL_HVX_F16_F16_VTCM, wtype, ne10, src1_nrows, sess->n_threads,
             dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
         );
@@ -2496,7 +2496,7 @@ fallback_hvx:
                 kparams->kernel_type = HTP_MM_KERNEL_HVX_F16_F16_DDR;
             }
             kparams->src1_row_size = src1->nb[1];
-            size_t ddr_size = hvx_get_vtcm_sizes(
+            size_t ddr_size = htp_mm_hvx_get_vtcm_sizes(
                 kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
                 dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
             );
@@ -2511,7 +2511,7 @@ fallback_hvx:
         const bool is_permuted = ggml_is_permuted(src0) || ggml_is_permuted(src1);
 
         size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
-        size_t vtcm_size = hvx_get_vtcm_sizes(
+        size_t vtcm_size = htp_mm_hvx_get_vtcm_sizes(
             HTP_MM_KERNEL_HVX_F32_F32_VTCM, wtype, ne10, src1_nrows, sess->n_threads,
             dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
         );
@@ -2526,7 +2526,7 @@ fallback_hvx:
         } else {
             kparams->kernel_type = HTP_MM_KERNEL_HVX_F32_F32_DDR;
             kparams->src1_row_size = src1->nb[1];
-            size_t ddr_size = hvx_get_vtcm_sizes(
+            size_t ddr_size = htp_mm_hvx_get_vtcm_sizes(
                 kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
                 dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
             );

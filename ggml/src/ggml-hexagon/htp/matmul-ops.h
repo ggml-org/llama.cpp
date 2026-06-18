@@ -338,7 +338,7 @@ static inline size_t htp_mm_hmx_get_batched_vtcm_size(
            2 * scratch_area_size + 256 + f32_scratch_size;
 }
 
-static inline size_t hvx_get_vtcm_sizes(
+static inline size_t htp_mm_hvx_get_vtcm_sizes(
     int kernel_type,
     int wtype,
     int ne10, // k
