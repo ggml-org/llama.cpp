@@ -616,6 +616,7 @@ struct mtmd_context {
                 {
                     img_end = "\n"; // prevent empty batch on llama-server
                     image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
+                    ov_img_first = false;
                 } break;
             case PROJECTOR_TYPE_HUNYUANVL:
                 {
@@ -1107,6 +1108,7 @@ struct mtmd_tokenizer {
 
                 // add slices (or tiles)
                 if (!chunks.empty()) {
+                    LOG_DBG("%s: adding %d slices (%d rows x %d cols)\n", __func__, (int)chunks.size(), n_row, n_col);
                     GGML_ASSERT((int)chunks.size() == n_row * n_col);
                     add_text(ctx->tok_slices_start);
                     for (int y = 0; y < n_row; y++) {

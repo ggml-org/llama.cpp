@@ -263,10 +263,10 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
         // handle the case where we have a batch of rows
         // sanity check
         for (auto & entry : img_batch->entries) {
-            if (entry->add_viewsep) {
+            if (entry.add_viewsep) {
                 throw std::runtime_error("DeepSeek-OCR: mixed overview and non-overview images in batch");
             }
-            if (entry->nx() != img.nx() || entry->ny() != img.ny()) {
+            if (entry.nx() != img.nx() || entry.ny() != img.ny()) {
                 throw std::runtime_error("DeepSeek-OCR: mixed image sizes in batch");
             }
         }

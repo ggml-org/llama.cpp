@@ -150,6 +150,7 @@ struct mtmd_image_preprocessor_internvl : mtmd_image_preprocessor_llava_uhd {
 struct mtmd_image_preprocessor_deepseekocr : mtmd_image_preprocessor {
     mtmd_image_preprocessor_deepseekocr(const clip_ctx * ctx)
         : mtmd_image_preprocessor(ctx),
+            fuse_row(clip_get_projector_type(ctx) == PROJECTOR_TYPE_DEEPSEEKOCR),
           base_size(hparams.image_size),
           tile_size(hparams.preproc_tile_size),
           min_tiles(hparams.preproc_min_tiles),
@@ -157,6 +158,7 @@ struct mtmd_image_preprocessor_deepseekocr : mtmd_image_preprocessor {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 
 private:
+    bool fuse_row; // v1 fuses a tile-row into one image; v2 keeps tiles separate
     int base_size; // global view
     int tile_size; // each tile
     int min_tiles;

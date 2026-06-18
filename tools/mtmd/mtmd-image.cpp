@@ -1166,6 +1166,17 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const cli
     int grid_w = 1;
     int grid_h = 1;
     const auto img_size = img.get_size();
+
+    // global view: aspect-preserving fit-and-pad to base_size
+    clip_image_u8 padded;
+    img_tool::resize(img, padded,
+                    { base_size, base_size },
+                    RESIZE_ALGO_BICUBIC_PILLOW,
+                    PAD_NEAREST,
+                    hparams.image_pad_color);
+    output.append(hparams, padded, true);
+    output.entries.back().add_viewsep = true;
+
     if (img_size.width > tile_size || img_size.height > tile_size) {
         const float           aspect_ratio  = static_cast<float>(img_size.width) / img_size.height;
         const auto            target_ratios = get_target_ratios();
@@ -1179,32 +1190,36 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const cli
                          PAD_NONE);
 
         for (int row = 0; row < grid_h; row++) {
-            // concat all tiles in this row into a single image, along the H axis
-            // output image size: w = tile_size, h = tile_size * grid_w
-            // this is to ensure the whole row is always processed together
-            clip_image_u8 row_img;
-            row_img.set_size({tile_size, tile_size * grid_w}, false);
-            for (int col = 0; col < grid_w; col++) {
-                for (int py = 0; py < tile_size; py++) {
-                    for (int px = 0; px < tile_size; px++) {
-                        row_img.set_pixel(px, col * tile_size + py,
-                                          refined.get_pixel(col * tile_size + px, row * tile_size + py));
+            if (fuse_row) {
+                // concat all tiles in this row into a single image, along the H axis
+                // output image size: w = tile_size, h = tile_size * grid_w
+                // this is to ensure the whole row is always processed together
+                clip_image_u8 row_img;
+                row_img.set_size({tile_size, tile_size * grid_w}, false);
+                for (int col = 0; col < grid_w; col++) {
+                    for (int py = 0; py < tile_size; py++) {
+                        for (int px = 0; px < tile_size; px++) {
+                            row_img.set_pixel(px, col * tile_size + py,
+                                              refined.get_pixel(col * tile_size + px, row * tile_size + py));
+                        }
                     }
                 }
+                output.append(hparams, row_img, true);
+                grid_w = 1; // reset grid_w to 1 since we fused the row
+            } else {
+                for (int col = 0; col < grid_w; col++) {
+                    clip_image_u8 tile;
+                    img_tool::crop(refined, tile, col * tile_size, row * tile_size, tile_size, tile_size);
+                    output.append(hparams, tile, true);
+                }
             }
-            output.append(hparams, row_img, true);
         }
     }
 
-    // global view: aspect-preserving fit-and-pad to base_size
-    clip_image_u8 padded;
-    img_tool::resize(img, padded, { base_size, base_size }, RESIZE_ALGO_BICUBIC_PILLOW, PAD_NEAREST,
-                     hparams.image_pad_color);
-    output.append(hparams, padded, true);
-    output.entries.back().add_viewsep = true;
+    LOG_DBG("%s: grid size: %d x %d (%d tiles) + global view\n", __func__, grid_w, grid_h, grid_w * grid_h);
+
     output.grid_x = grid_w;
     output.grid_y = grid_h;
-    LOG_DBG("%s: grid size: %d x %d (%d tiles) + global view\n", __func__, grid_w, grid_h, grid_w * grid_h);
     return output;
 }
 

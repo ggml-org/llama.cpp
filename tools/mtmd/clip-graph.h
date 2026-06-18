@@ -66,7 +66,7 @@ struct clip_graph {
     const clip_image_f32 & get_img(size_t idx) const {
         GGML_ASSERT(img_batch);
         GGML_ASSERT(idx < img_batch->entries.size());
-        return *img_batch->entries[idx];
+        return img_batch->entries[idx];
     }
 
     // siglip2 naflex
