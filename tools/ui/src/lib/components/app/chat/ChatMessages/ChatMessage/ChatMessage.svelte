@@ -12,13 +12,15 @@
 		ChatMessageAssistant,
 		ChatMessageUser,
 		ChatMessageSystem,
-		ChatMessageMcpPrompt,
-		ChatMessageCustomInstruction
+		ChatMessageMcpPrompt
 	} from '$lib/components/app/chat';
-	import { DialogInstructionAddNew } from '$lib/components/app';
+	import { DialogPromptAddNew } from '$lib/components/app';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { deriveAgenticSections } from '$lib/utils';
-	import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraCustomInstruction } from '$lib/types';
+	import type {
+		DatabaseMessageExtraMcpPrompt,
+		DatabaseMessageExtraCustomInstruction
+	} from '$lib/types';
 	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
@@ -107,11 +109,11 @@
 	let showDeleteDialog = $state(false);
 	let shouldBranchAfterEdit = $state(false);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
-	let instructionDialogOpen = $state(false);
+	let promptDialogOpen = $state(false);
 	let addToLibrary = $state(false);
 	let deferSystemPromptSave = $state(false);
-	let createdInstructionId = $state('');
-	let createdInstructionTitle = $state('');
+	let createdPromptId = $state('');
+	let createdPromptTitle = $state('');
 
 	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
 	let showBranchAfterEditOption = $derived(message.role === MessageRole.ASSISTANT);
@@ -299,20 +301,28 @@
 			// Defer save if "Add to library" is checked — dialog will trigger the save
 			if (addToLibrary) {
 				deferSystemPromptSave = true;
-				instructionDialogOpen = true;
+				promptDialogOpen = true;
 				addToLibrary = false;
 				return;
 			}
 
 			// Preserve existing extras (including CUSTOM_INSTRUCTION)
 			const existingExtras = message.extra || [];
-			const extrasToSave = existingExtras.filter((e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_INSTRUCTION);
+			const extrasToSave = existingExtras.filter(
+				(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_INSTRUCTION
+			);
 
 			if (extrasToSave.length > 0) {
-				await DatabaseService.updateMessage(message.id, { content: newContent, extra: extrasToSave });
+				await DatabaseService.updateMessage(message.id, {
+					content: newContent,
+					extra: extrasToSave
+				});
 				const index = conversationsStore.findMessageIndex(message.id);
 				if (index !== -1) {
-					conversationsStore.updateMessageAtIndex(index, { content: newContent, extra: extrasToSave });
+					conversationsStore.updateMessageAtIndex(index, {
+						content: newContent,
+						extra: extrasToSave
+					});
 				}
 			} else {
 				await DatabaseService.updateMessage(message.id, { content: newContent });
@@ -354,7 +364,7 @@
 		}
 	}
 
-	async function saveSystemPromptWithInstruction(content: string, instructionId: string, title: string) {
+	async function saveSystemPromptWithPrompt(content: string, instructionId: string, title: string) {
 		const extras: DatabaseMessageExtra[] = [
 			...(message.extra || []),
 			{
@@ -405,28 +415,28 @@
 			onShowDeleteDialogChange={handleShowDeleteDialogChange}
 			{showDeleteDialog}
 			{siblingInfo}
-			addToLibrary={addToLibrary}
+			{addToLibrary}
 			onAddToLibraryChange={(val: boolean) => (addToLibrary = val)}
-			deferSystemPromptSave={deferSystemPromptSave}
+			{deferSystemPromptSave}
 			onSystemPromptSaveComplete={() => {
 				deferSystemPromptSave = false;
-				instructionDialogOpen = false;
+				promptDialogOpen = false;
 				isEditing = false;
 			}}
 		/>
 
-		{#if instructionDialogOpen}
-			<DialogInstructionAddNew
-				open={instructionDialogOpen}
+		{#if promptDialogOpen}
+			<DialogPromptAddNew
+				open={promptDialogOpen}
 				initialContent={editedContent}
 				onAddToLibraryComplete={(id: string, title: string) => {
-					createdInstructionId = id;
-					createdInstructionTitle = title;
-					instructionDialogOpen = false;
+					createdPromptId = id;
+					createdPromptTitle = title;
+					promptDialogOpen = false;
 					deferSystemPromptSave = false;
 					isEditing = false;
-					// Save the system message with instruction reference now that instruction is created
-					saveSystemPromptWithInstruction(editedContent, id, title);
+					// Save the system message with prompt reference now that prompt is created
+					saveSystemPromptWithPrompt(editedContent, id, title);
 				}}
 			/>
 		{/if}

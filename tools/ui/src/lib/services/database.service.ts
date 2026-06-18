@@ -1,17 +1,47 @@
 import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
-import { IDXDB_TABLES, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
+import { IDXDB_TABLES, IDXDB_STORE_SCHEMAS, STORAGE_APP_NAME } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 
 class LlamaUiDatabase extends Dexie {
 	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
 	[IDXDB_TABLES.messages]!: EntityTable<DatabaseMessage, string>;
+	[IDXDB_TABLES.prompts]!: EntityTable<DatabasePrompt, string>;
 
 	constructor() {
 		super(STORAGE_APP_NAME);
 
-		this.version(1).stores(IDXDB_STORES);
+		// v1: original schema (conversations + messages)
+		this.version(1).stores({
+			[IDXDB_TABLES.conversations]: IDXDB_STORE_SCHEMAS.conversations,
+			[IDXDB_TABLES.messages]: IDXDB_STORE_SCHEMAS.messages
+		});
+		// v2: add instructions store
+		this.version(2).stores({
+			[IDXDB_TABLES.conversations]: IDXDB_STORE_SCHEMAS.conversations,
+			[IDXDB_TABLES.messages]: IDXDB_STORE_SCHEMAS.messages,
+			instructions: 'id, lastModified'
+		});
+		// v3: rename instructions store to prompts
+		this.version(3)
+			.stores({
+				[IDXDB_TABLES.conversations]: IDXDB_STORE_SCHEMAS.conversations,
+				[IDXDB_TABLES.messages]: IDXDB_STORE_SCHEMAS.messages,
+				[IDXDB_TABLES.prompts]: IDXDB_STORE_SCHEMAS.prompts
+			})
+			.upgrade(async (trans) => {
+				try {
+					const oldTable = trans.db.table('instructions');
+					const newTable = trans.table(IDXDB_TABLES.prompts);
+					const items = await oldTable.toArray();
+					if (items.length > 0) {
+						await newTable.bulkAdd(items);
+					}
+				} catch (error) {
+					console.warn('[Database] Failed to migrate instructions to prompts:', error);
+				}
+			});
 	}
 }
 
@@ -529,5 +559,41 @@ export class DatabaseService {
 				return newConv;
 			}
 		);
+	}
+
+	/**
+	 *
+	 *
+	 * Prompts
+	 *
+	 *
+	 */
+
+	/**
+	 * Returns all stored prompts.
+	 */
+	static async getAllPrompts(): Promise<DatabasePrompt[]> {
+		return await db[IDXDB_TABLES.prompts].toArray();
+	}
+
+	/**
+	 * Adds a new prompt.
+	 */
+	static async addPrompt(prompt: DatabasePrompt): Promise<void> {
+		await db[IDXDB_TABLES.prompts].add(prompt);
+	}
+
+	/**
+	 * Updates a prompt by id.
+	 */
+	static async updatePrompt(id: string, updates: Partial<DatabasePrompt>): Promise<void> {
+		await db[IDXDB_TABLES.prompts].update(id, updates);
+	}
+
+	/**
+	 * Deletes a prompt by id.
+	 */
+	static async deletePrompt(id: string): Promise<void> {
+		await db[IDXDB_TABLES.prompts].delete(id);
 	}
 }

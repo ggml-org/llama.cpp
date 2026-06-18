@@ -1,10 +1,12 @@
+<!-- Reusable more menu icon with tooltip for dropdown triggers -->
+<svelte:options />
+
 <script lang="ts">
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { MarkdownContent } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import Input from '$lib/components/ui/input/input.svelte';
-	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { Check, MoreHorizontal, Trash2, Edit, ArrowRight } from '@lucide/svelte';
 
@@ -18,15 +20,7 @@
 		onStartNewChat?: (id: string, title: string, content: string) => void;
 	}
 
-	let {
-		id,
-		title,
-		content,
-		lastModified,
-		onDelete,
-		onEdit,
-		onStartNewChat
-	}: Props = $props();
+	let { id, title, content, lastModified, onDelete, onEdit, onStartNewChat }: Props = $props();
 
 	// Edit state
 	let isEditing = $state(false);
@@ -98,9 +92,6 @@
 		});
 	});
 </script>
-
-<!-- Reusable more menu icon with tooltip for dropdown triggers -->
-<svelte:options />
 
 <div class="group relative flex flex-col gap-2">
 	{#if !isEditing}
@@ -178,10 +169,7 @@
 							>
 								{#if currentConfig.renderUserContentAsMarkdown}
 									<div bind:this={contentElement}>
-										<MarkdownContent
-											class="markdown-system-content -my-4"
-											content={content}
-										/>
+										<MarkdownContent class="markdown-system-content -my-4" {content} />
 									</div>
 								{:else}
 									<span
@@ -205,7 +193,7 @@
 											size="sm"
 											variant="outline"
 										>
-											Show full instruction
+											Show full prompt
 										</Button>
 									</div>
 								{/if}
@@ -222,7 +210,7 @@
 										size="sm"
 										variant="outline"
 									>
-										Collapse Instruction
+										Collapse Prompt
 									</Button>
 								</div>
 							{/if}
@@ -297,14 +285,16 @@
 			</div>
 		{/if}
 	{:else}
-		<div class="space-y-3 rounded-[1.125rem] border-2 border-dashed border-border/50 bg-muted px-6 py-4">
+		<div
+			class="space-y-3 rounded-[1.125rem] border-2 border-dashed border-border/50 bg-muted px-6 py-4"
+		>
 			<div class="space-y-1">
 				<label class="text-xs font-medium text-muted-foreground">Title</label>
 				<Input
 					class="text-foreground"
 					type="text"
 					bind:value={editTitle}
-					placeholder="Instruction title"
+					placeholder="Prompt title"
 				/>
 				{#if editTitleError}
 					<p class="text-xs text-destructive">{editTitleError}</p>
@@ -315,20 +305,14 @@
 				<label class="text-xs font-medium text-muted-foreground">Content</label>
 				<textarea
 					class="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-					placeholder="Instruction content..."
+					placeholder="Prompt content..."
 					bind:value={editContent}
 				/>
 			</div>
 
 			<div class="flex justify-end gap-2">
-				<Button size="sm" variant="outline" onclick={handleCancel}>
-					Cancel
-				</Button>
-				<Button
-					size="sm"
-					onclick={handleSave}
-					disabled={!!editTitleError}
-				>
+				<Button size="sm" variant="outline" onclick={handleCancel}>Cancel</Button>
+				<Button size="sm" onclick={handleSave} disabled={!!editTitleError}>
 					<Check class="mr-1 h-3 w-3" />
 					Save
 				</Button>

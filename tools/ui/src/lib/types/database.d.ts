@@ -6,6 +6,13 @@ export interface McpServerOverride {
 	enabled: boolean;
 }
 
+export interface DatabasePrompt {
+	id: string;
+	title: string;
+	content: string;
+	lastModified: number;
+}
+
 export interface DatabaseConversation {
 	currNode: string | null;
 	id: string;

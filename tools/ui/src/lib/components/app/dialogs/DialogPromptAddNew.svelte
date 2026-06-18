@@ -1,16 +1,21 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { instructionsStore } from '$lib/stores/instructions.svelte';
+	import { promptsStore } from '$lib/stores/prompts.svelte';
 
 	interface Props {
 		open: boolean;
 		onOpenChange?: (open: boolean) => void;
 		initialContent?: string;
-		onAddToLibraryComplete?: (instructionId: string, title: string) => void;
+		onAddToLibraryComplete?: (promptId: string, title: string) => void;
 	}
 
-	let { open = $bindable(), onOpenChange, initialContent = '', onAddToLibraryComplete }: Props = $props();
+	let {
+		open = $bindable(),
+		onOpenChange,
+		initialContent = '',
+		onAddToLibraryComplete
+	}: Props = $props();
 
 	let title = $state('');
 	let content = $state('');
@@ -31,19 +36,22 @@
 		onOpenChange?.(value);
 	}
 
-	function saveNewInstruction() {
+	async function saveNewPrompt() {
 		if (titleError) return;
 
-		const newInstruction = instructionsStore.addInstruction({ title: title.trim(), content: content.trim() });
+		const newPrompt = await promptsStore.addPrompt({
+			title: title.trim(),
+			content: content.trim()
+		});
 		handleOpenChange(false);
-		onAddToLibraryComplete?.(newInstruction.id, newInstruction.title);
+		onAddToLibraryComplete?.(newPrompt.id, newPrompt.title);
 	}
 </script>
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
 	<Dialog.Content class="sm:max-w-lg">
 		<Dialog.Header>
-			<Dialog.Title>Add New Instruction</Dialog.Title>
+			<Dialog.Title>Add New Prompt</Dialog.Title>
 		</Dialog.Header>
 
 		<div class="space-y-4 py-4">
@@ -64,18 +72,16 @@
 				<label class="text-sm font-medium text-foreground">Content</label>
 				<textarea
 					class="flex min-h-[120px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-					placeholder="Enter instruction content..."
+					placeholder="Enter prompt content..."
 					bind:value={content}
 				/>
 			</div>
 		</div>
 
 		<Dialog.Footer>
-			<Button variant="secondary" size="sm" onclick={() => handleOpenChange(false)}>
-				Cancel
-			</Button>
+			<Button variant="secondary" size="sm" onclick={() => handleOpenChange(false)}>Cancel</Button>
 
-			<Button variant="default" size="sm" onclick={saveNewInstruction} disabled={!!titleError}>
+			<Button variant="default" size="sm" onclick={saveNewPrompt} disabled={!!titleError}>
 				Add
 			</Button>
 		</Dialog.Footer>

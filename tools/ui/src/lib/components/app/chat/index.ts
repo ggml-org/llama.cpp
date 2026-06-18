@@ -245,14 +245,14 @@ export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFo
  *
  * Dropdown submenu for adding system messages. Provides options to:
  * - Write your own system message (opens chat input)
- * - Select from predefined Instructions (stored in localStorage)
+ * - Select from predefined prompts (stored in IndexedDB)
  * - Select MCP Prompts grouped by server
  *
  * @example
  * ```svelte
  * <ChatFormActionAddSystemMessageSubmenu
  *   onSystemPromptClick={handleSystemPromptClick}
- *   onSystemPromptWithContent={handleInstructionSelect}
+ *   onSystemPromptWithContent={handlePromptSelect}
  *   onMcpPromptClick={handleMcpPromptClick}
  * />
  * ```
@@ -610,10 +610,10 @@ export { default as ChatMessageUserPending } from './ChatMessages/ChatMessage/Ch
 export { default as ChatMessageSystem } from './ChatMessages/ChatMessage/ChatMessageSystem/ChatMessageSystem.svelte';
 
 /**
- * Custom instruction display component. Renders a card showing the referenced
- * custom instruction title and ID.
+ * Custom prompt display component. Renders a card showing the referenced
+ * custom prompt title and ID.
  */
-export { default as ChatMessageCustomInstruction } from './ChatMessages/ChatMessage/ChatMessageCustomInstruction/ChatMessageCustomInstruction.svelte';
+export { default as ChatMessageCustomPrompt } from './ChatMessages/ChatMessage/ChatMessageCustomPrompt/ChatMessageCustomPrompt.svelte';
 
 /**
  *
