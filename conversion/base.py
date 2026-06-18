@@ -112,6 +112,7 @@ class ModelBase:
     # Architectures opt in by overriding the handling (see _Qwen35MtpMixin).
     mtp_only: bool = False
     no_mtp: bool = False
+    allow_extra_unindexed_tensors: bool = False
 
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
@@ -279,6 +280,11 @@ class ModelBase:
                 if len(extra) == 0 and len(missing_files) > 0:
                     raise ValueError(f"Missing or incomplete model files: {missing_files}\n"
                                      f"Missing tensors: {missing}")
+                elif self.allow_extra_unindexed_tensors and len(missing) == 0:
+                    logger.warning(
+                        "Ignoring extra tensors present in model parts but absent from the weight map: %s",
+                        extra,
+                    )
                 else:
                     raise ValueError("Mismatch between weight map and model parts for tensor names:\n"
                                      f"Missing tensors: {missing}\n"
@@ -2609,7 +2615,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
     # For text conversion we route to a dedicated text-only class.
     # TODO: refactor this later to avoid adding exception here
-    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration"):
+    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "HiggsMultimodalQwen3ForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead

@@ -201,6 +201,10 @@ llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURC
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
+llama_build_and_test(test-higgs-sampler.cpp)
+llama_build_and_test(test-higgs-gguf.cpp)
+llama_build_and_test(test-higgs-codec.cpp)
+llama_build_and_test(test-higgs-encode-reference.cpp)
 llama_build_and_test(
     test-peg-parser.cpp
     peg-parser/simple-tokenize.cpp

@@ -95,6 +95,10 @@ LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_c
 // If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
 LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value, bool masked);
 
+// Set whether normal output embeddings honor batch.logits as an output mask.
+// This is useful for decoder-style embedding extraction where only the last row is needed.
+LLAMA_API void llama_set_embeddings_masked(struct llama_context * ctx, bool value);
+
 // mirrors:
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);

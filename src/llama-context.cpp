@@ -65,6 +65,7 @@ llama_context::llama_context(
     cparams.yarn_beta_fast          = params.yarn_beta_fast   >= 0.0f ? params.yarn_beta_fast   : hparams.yarn_beta_fast;
     cparams.yarn_beta_slow          = params.yarn_beta_slow   >= 0.0f ? params.yarn_beta_slow   : hparams.yarn_beta_slow;
     cparams.embeddings              = params.embeddings;
+    cparams.embeddings_masked       = false;
     cparams.embeddings_nextn        = false;
     cparams.embeddings_nextn_masked = false;
     cparams.offload_kqv             = params.offload_kqv;
@@ -1138,6 +1139,12 @@ void llama_context::set_embeddings(bool value) {
     //sched_need_reserve = true;
 }
 
+void llama_context::set_embeddings_masked(bool value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    cparams.embeddings_masked = value;
+}
+
 void llama_context::set_embeddings_nextn(bool value, bool masked) {
     LLAMA_LOG_DEBUG("%s: value = %d, masked = %d\n", __func__, value, masked);
 
@@ -1695,7 +1702,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const int64_t n_embd  = hparams.n_embd_inp();
 
     // when computing embeddings, all tokens are output
-    const bool output_all   = cparams.embeddings;
+    const bool output_all   = cparams.embeddings && !cparams.embeddings_masked;
     const bool has_samplers = !sampling.samplers.empty();
 
     const uint32_t n_seq_max = cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max;
@@ -3639,6 +3646,10 @@ void llama_set_abort_callback(llama_context * ctx, bool (*abort_callback)(void *
 
 void llama_set_embeddings(llama_context * ctx, bool embeddings) {
     ctx->set_embeddings(embeddings);
+}
+
+void llama_set_embeddings_masked(llama_context * ctx, bool value) {
+    ctx->set_embeddings_masked(value);
 }
 
 void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
