@@ -161,9 +161,9 @@ struct common_speculative_impl {
 
     virtual void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) = 0;
 
-    // eagle3: deferred-boundary g_embd stash for checkpoints (default: none)
-    virtual bool get_deferred_boundary(llama_seq_id /*seq_id*/, std::vector<float> & /*g_out*/) const { return false; }
-    virtual void set_deferred_boundary(llama_seq_id /*seq_id*/, llama_pos /*pos*/, const std::vector<float> & /*g*/) {}
+    // (optional) serialize/restore per-seq internal state (e.g. eagle3's deferred boundary).
+    virtual bool get_state(llama_seq_id /*seq_id*/, std::vector<uint8_t> & /*data*/) const { return false; }
+    virtual void set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) {}
 
     // true if this implementation requires the target context to extract post-norm embeddings
     virtual bool need_embd() const = 0;
@@ -852,26 +852,40 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         return llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt);
     }
 
-    bool get_deferred_boundary(llama_seq_id seq_id, std::vector<float> & g_out) const override {
+    bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) const override {
         if (!need_boundary_stash()) {
             return false;
         }
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq || pending_pos_last[seq_id] < 0) {
             return false;
         }
-        g_out = pending_g_last[seq_id];
+
+        const llama_pos          pos = pending_pos_last[seq_id];
+        const std::vector<float> & g = pending_g_last[seq_id];
+
+        data.resize(sizeof(llama_pos) + g.size() * sizeof(float));
+        std::memcpy(data.data(),                     &pos,     sizeof(llama_pos));
+        std::memcpy(data.data() + sizeof(llama_pos), g.data(), g.size() * sizeof(float));
         return true;
     }
 
-    void set_deferred_boundary(llama_seq_id seq_id, llama_pos pos, const std::vector<float> & g) override {
+    void set_state(llama_seq_id seq_id, const std::vector<uint8_t> & data) override {
         if (!need_boundary_stash()) {
             return;
         }
-        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq || (int32_t) g.size() != n_embd_dec) {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
         }
+        if (data.size() != sizeof(llama_pos) + (size_t) n_embd_dec * sizeof(float)) {
+            return;
+        }
+
+        llama_pos pos = -1;
+        std::memcpy(&pos, data.data(), sizeof(llama_pos));
+
         pending_pos_last[seq_id] = pos;
-        pending_g_last[seq_id]   = g;
+        pending_g_last[seq_id].resize(n_embd_dec);
+        std::memcpy(pending_g_last[seq_id].data(), data.data() + sizeof(llama_pos), (size_t) n_embd_dec * sizeof(float));
     }
 
     bool need_embd() const override {
@@ -2151,13 +2165,13 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, u
     }
 }
 
-bool common_speculative_get_deferred_boundary(common_speculative * spec, llama_seq_id seq_id, std::vector<float> & g_out) {
+bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data) {
     if (spec == nullptr) {
         return false;
     }
 
     for (auto & impl : spec->impls) {
-        if (impl->get_deferred_boundary(seq_id, g_out)) {
+        if (impl->get_state(seq_id, data)) {
             return true;
         }
     }
@@ -2165,13 +2179,13 @@ bool common_speculative_get_deferred_boundary(common_speculative * spec, llama_s
     return false;
 }
 
-void common_speculative_set_deferred_boundary(common_speculative * spec, llama_seq_id seq_id, llama_pos pos, const std::vector<float> & g) {
+void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id, const std::vector<uint8_t> & data) {
     if (spec == nullptr) {
         return;
     }
 
     for (auto & impl : spec->impls) {
-        impl->set_deferred_boundary(seq_id, pos, g);
+        impl->set_state(seq_id, data);
     }
 }
 

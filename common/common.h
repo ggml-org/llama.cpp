@@ -1065,8 +1065,9 @@ struct common_prompt_checkpoint {
     std::vector<uint8_t> data_tgt;
     std::vector<uint8_t> data_dft;
 
-    // eagle3: deferred-boundary g_embd row stashed with the checkpoint
-    std::vector<float> data_dft_boundary_g_embd;
+    // (optional) speculative-decoding implementation state stashed with the checkpoint
+    // (e.g. eagle3's deferred-boundary g_embd row)
+    std::vector<uint8_t> data_spec_state;
 
     size_t size() const;
 
