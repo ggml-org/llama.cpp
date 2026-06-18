@@ -161,6 +161,64 @@ You could update your test result in it directly.
 
 Please refer to [Docker with SYCL](../docker.md#docker-with-sycl) for details.
 
+## Quick Development WOW
+
+This chapter is for quick development & try with SYCL backend on Intel GPU.
+
+You need to install following sofeware before development:
+   - Intel GPU driver
+   - oneAPI package
+   - other development tools.
+
+Please refer to [Linux](#linux) or [Windows](#windows-1) for above installation and resolve the trouble in usage. There are the detailed guide.
+
+- Linux
+
+```
+## build from source code
+./examples/sycl/build.sh
+
+## run CONV_2D_DW unit test cases
+./build/bin/test-backend-ops -b SYCL0 -o CONV_2D_DW
+
+## run all unit test cases
+./build/bin/test-backend-ops -b SYCL0
+
+## run with LLM on the first GPU
+./examples/sycl/test.sh -mg 0 -m xxxx.gguf
+
+## run service with LLM on the first GPU
+export ONEAPI_DEVICE_SELECTOR="level_zero:0"
+./examples/sycl/start-svr.sh -m xxxx.gguf
+
+## update the docs/ops.md for new/update OPs
+./examples/sycl/update_ops_doc.sh
+```
+
+- Windows
+
+```
+## build from source code
+examples\sycl\win-build-sycl.bat
+
+## run CONV_2D_DW unit test cases
+build\bin\test-backend-ops.exe -b SYCL0 -o CONV_2D_DW
+
+## run all unit test cases
+build\bin\test-backend-ops.exe -b SYCL0
+
+## run LLM on the first GPU
+examples\sycl\win-test.bat -mg 0 -m xxxx.gguf
+
+## run service with LLM on the first GPU
+set ONEAPI_DEVICE_SELECTOR="level_zero:0"
+examples\sycl\win-start-svr.bat -m xxxx.gguf
+
+## update the docs/ops.md for new/update OPs
+examples\sycl\update_ops_doc.bat
+```
+
+
 ## Linux
 
 ### I. Setup Environment
