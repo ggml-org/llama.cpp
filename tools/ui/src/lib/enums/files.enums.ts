@@ -25,7 +25,9 @@ export enum FileTypeImage {
 	PNG = 'png',
 	GIF = 'gif',
 	WEBP = 'webp',
-	SVG = 'svg'
+	SVG = 'svg',
+	HEIC = 'heic',
+	HEIF = 'heif'
 }
 
 export enum FileTypeAudio {
@@ -90,7 +92,9 @@ export enum FileExtensionImage {
 	PNG = '.png',
 	GIF = '.gif',
 	WEBP = '.webp',
-	SVG = '.svg'
+	SVG = '.svg',
+	HEIC = '.heic',
+	HEIF = '.heif'
 }
 
 export enum FileExtensionAudio {
@@ -119,6 +123,8 @@ export enum FileExtensionText {
 	HTML = '.html',
 	HTM = '.htm',
 	JSON = '.json',
+	JSONL = '.jsonl',
+	ZIP = '.zip',
 	XML = '.xml',
 	YAML = '.yaml',
 	YML = '.yml',
@@ -175,7 +181,8 @@ export enum UriPattern {
 // MIME type enums
 export enum MimeTypeApplication {
 	PDF = 'application/pdf',
-	OCTET_STREAM = 'application/octet-stream'
+	OCTET_STREAM = 'application/octet-stream',
+	ZIP = 'application/zip'
 }
 
 export enum MimeTypeAudio {
@@ -186,6 +193,7 @@ export enum MimeTypeAudio {
 	WAVE = 'audio/wave',
 	X_WAV = 'audio/x-wav',
 	X_WAVE = 'audio/x-wave',
+	VND_WAVE = 'audio/vnd.wave',
 	X_PN_WAV = 'audio/x-pn-wav',
 	WEBM = 'audio/webm',
 	WEBM_OPUS = 'audio/webm;codecs=opus'
@@ -204,7 +212,9 @@ export enum MimeTypeImage {
 	WEBP = 'image/webp',
 	SVG = 'image/svg+xml',
 	ICO = 'image/x-icon',
-	ICO_MICROSOFT = 'image/vnd.microsoft.icon'
+	ICO_MICROSOFT = 'image/vnd.microsoft.icon',
+	HEIC = 'image/heic',
+	HEIF = 'image/heif'
 }
 
 export enum MimeTypeText {
@@ -219,6 +229,7 @@ export enum MimeTypeText {
 	CSS = 'text/css',
 	HTML = 'text/html',
 	JSON = 'application/json',
+	JSONL = 'application/jsonl',
 	XML_TEXT = 'text/xml',
 	XML_APP = 'application/xml',
 	YAML_TEXT = 'text/yaml',

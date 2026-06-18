@@ -29,6 +29,7 @@ import { permissionsStore } from '$lib/stores/permissions.svelte';
 import { ToolSource, ToolPermissionDecision } from '$lib/enums';
 import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
+import { SandboxService } from '$lib/services/sandbox.service';
 import { isAbortError } from '$lib/utils';
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
 import {
@@ -416,21 +417,23 @@ class AgenticStore {
 
 		console.log(`[AgenticStore] Starting agentic flow with ${tools.length} tools`);
 
-		const normalizedMessages: ApiChatMessageData[] = messages
-			.map((msg) => {
-				if ('id' in msg && 'convId' in msg && 'timestamp' in msg)
-					return ChatService.convertDbMessageToApiChatMessageData(
-						msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
-					);
-				return msg as ApiChatMessageData;
-			})
-			.filter((msg) => {
-				if (msg.role === MessageRole.SYSTEM) {
-					const content = typeof msg.content === 'string' ? msg.content : '';
-					return content.trim().length > 0;
-				}
-				return true;
-			});
+		const normalizedMessages: ApiChatMessageData[] = (
+			await Promise.all(
+				messages.map((msg) => {
+					if ('id' in msg && 'convId' in msg && 'timestamp' in msg)
+						return ChatService.convertDbMessageToApiChatMessageData(
+							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
+						);
+					return msg as ApiChatMessageData;
+				})
+			)
+		).filter((msg: { role: ChatRole; content: string | ApiChatMessageContentPart[] }) => {
+			if (msg.role === MessageRole.SYSTEM) {
+				const content = typeof msg.content === 'string' ? msg.content : '';
+				return content.trim().length > 0;
+			}
+			return true;
+		});
 
 		this.updateSession(conversationId, {
 			isRunning: true,
@@ -486,6 +489,7 @@ class AgenticStore {
 			onToolCallsStreaming,
 			onAttachments,
 			onModel,
+			onCompletionId,
 			onAssistantTurnComplete,
 			createToolResultMessage,
 			createAssistantMessage,
@@ -595,6 +599,7 @@ class AgenticStore {
 							}
 						},
 						onModel,
+						onCompletionId,
 						onTimings: (timings?: ChatMessageTimings, progress?: ChatMessagePromptProgress) => {
 							onTimings?.(timings, progress);
 							if (timings) {
@@ -777,6 +782,13 @@ class AgenticStore {
 						if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
 							const executionResult = await ToolsService.executeTool(toolName, args, signal);
+
+							result = executionResult.content;
+
+							if (executionResult.isError) toolSuccess = false;
+						} else if (toolSource === ToolSource.FRONTEND) {
+							const args = this.parseToolArguments(toolCall.function.arguments);
+							const executionResult = await SandboxService.executeTool(toolName, args, signal);
 
 							result = executionResult.content;
 

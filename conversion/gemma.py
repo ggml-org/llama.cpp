@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 
-from typing import Callable, Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING, Sequence
 
 import torch
 
@@ -614,7 +614,7 @@ class Gemma3NModel(Gemma3Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Gemma4ForConditionalGeneration")
+@ModelBase.register("Gemma4ForConditionalGeneration", "Gemma4ForCausalLM")
 class Gemma4Model(Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4
 
@@ -765,6 +765,46 @@ class Gemma4Model(Gemma3Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Gemma4UnifiedForConditionalGeneration")
+class Gemma4UnifiedModel(Gemma4Model):
+    model_arch = gguf.MODEL_ARCH.GEMMA4
+
+    def _get_suppress_tokens(self) -> Sequence[int] | None:
+        gen_cfg_path = self.dir_model / "generation_config.json"
+        if gen_cfg_path.is_file():
+            with open(gen_cfg_path, encoding="utf-8") as f:
+                gen_cfg = json.load(f)
+                return gen_cfg.get("suppress_tokens")
+        return None
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        suppress_tokens = self._get_suppress_tokens()
+        if suppress_tokens is not None:
+            self.gguf_writer.add_suppress_tokens(suppress_tokens)
+
+
+@ModelBase.register("Gemma4AssistantForCausalLM", "Gemma4UnifiedAssistantForCausalLM")
+class Gemma4AssistantModel(Gemma4Model):
+    model_arch = gguf.MODEL_ARCH.GEMMA4_ASSISTANT
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if "masked_embedding" in name:
+            logger.debug(f"Skipping get tensor {name!r} in safetensors so that convert can end normally.")
+            return None
+
+        return super().filter_tensors(item)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_embedding_length_out(self.hparams["backbone_hidden_size"])
+        self.gguf_writer.add_nextn_predict_layers(self.block_count)
+
+
 @ModelBase.register("Gemma4ForConditionalGeneration")
 class Gemma4VisionAudioModel(MmprojModel):
     has_audio_encoder = True
@@ -778,7 +818,8 @@ class Gemma4VisionAudioModel(MmprojModel):
         # remap audio hparams
         if self.hparams_audio:
             self.hparams_audio["feat_in"] = self.hparams_audio.get("input_feat_size", 128)
-            self.hparams_audio["intermediate_size"] = self.hparams_audio["hidden_size"] * 4
+            if "hidden_size" in self.hparams_audio:
+                self.hparams_audio["intermediate_size"] = self.hparams_audio["hidden_size"] * 4
         else:
             self.has_audio_encoder = False
 
@@ -786,14 +827,16 @@ class Gemma4VisionAudioModel(MmprojModel):
         super().set_gguf_parameters()
 
         # vision params
+        assert self.hparams_vision is not None
         self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.GEMMA4V)
-        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("layer_norm_eps", 1e-6))
 
         # audio params
-        if self.hparams_audio:
+        if self.has_audio_encoder:
+            assert self.hparams_audio is not None
             self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.GEMMA4A)
             self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["feat_in"])
-            self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+            self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams_audio.get("layer_norm_eps", 1e-6))
 
     def is_audio_tensor(self, name: str) -> bool:
         return "audio_tower" in name or "embed_audio" in name
@@ -838,3 +881,67 @@ class Gemma4VisionAudioModel(MmprojModel):
                 data_torch = data_torch.permute(0, 3, 1, 2).contiguous()
             mapped_name = self.map_tensor_name(name, (".weight", ".bias", ".input_max", ".input_min", ".output_max", ".output_min"))
             yield (mapped_name, data_torch)
+
+
+@ModelBase.register("Gemma4UnifiedForConditionalGeneration")
+class Gemma4UnifiedVisionAudioModel(Gemma4VisionAudioModel):
+    has_audio_encoder = True
+    has_vision_encoder = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        assert self.hparams_audio is not None
+        text_embd_dim = self.hparams_vision["mm_embed_dim"]
+        self.hparams_vision["hidden_size"] = text_embd_dim
+        self.hparams_audio["hidden_size"] = self.hparams_audio["audio_embed_dim"]
+        # this is a transformer-less vision tower, the params below are redundant but set to avoid error
+        self.hparams_vision["intermediate_size"] = 0
+        self.hparams_vision["num_layers"] = 0
+        self.hparams_vision["num_attention_heads"] = 0
+        self.hparams_audio["intermediate_size"] = 0
+        self.hparams_audio["num_layers"] = 0
+        self.hparams_audio["num_attention_heads"] = 0
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.GEMMA4UV)
+        self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.GEMMA4UA)
+
+    def modify_tensors(self, data_torch, name, bid):
+        if name.endswith("pos_embedding"):
+            name += ".weight"
+            data_torch = data_torch.permute(1, 0, 2)
+        elif ".pos_norm." in name:
+            # rename to patch_ln3 to reuse the tensor name scheme
+            name = name.replace(".pos_norm.", ".patch_ln3.")
+        elif "patch_dense.weight" in name:
+            # ggml im2col outputs in RR..GG..BB.. (CHW) order, but weight expects RGBRGB.. (HWC).
+            # Permute columns so column i aligns with CHW input position i.
+            assert self.hparams_vision is not None
+            if "model_patch_size" in self.hparams_vision:
+                p = self.hparams_vision["model_patch_size"]
+            else:
+                p = self.hparams_vision["patch_size"] * self.hparams_vision["pooling_kernel_size"]
+            i = torch.arange(p * p * 3)
+            ch  = i // (p * p)
+            row = (i % (p * p)) // p
+            col = i % p
+            # perm[i] = HWC column index for CHW position i
+            perm = row * p * 3 + col * 3 + ch
+            data_torch = data_torch[:, perm]
+        elif "patch_ln1.weight" in name or "patch_ln1.bias" in name:
+            # same permutation for patch_ln1 as patch_dense to align with CHW input order
+            assert self.hparams_vision is not None
+            if "model_patch_size" in self.hparams_vision:
+                p = self.hparams_vision["model_patch_size"]
+            else:
+                p = self.hparams_vision["patch_size"] * self.hparams_vision["pooling_kernel_size"]
+            i = torch.arange(p * p * 3)
+            ch  = i // (p * p)
+            row = (i % (p * p)) // p
+            col = i % p
+            # perm[i] = HWC index for CHW position i
+            perm = row * p * 3 + col * 3 + ch
+            data_torch = data_torch[perm]
+        return super().modify_tensors(data_torch, name, bid)

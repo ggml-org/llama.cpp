@@ -45,6 +45,7 @@ namespace syclexp = sycl::ext::oneapi::experimental;
 #define GGML_COMMON_IMPL_SYCL
 #define SYCL_FLASH_ATTN //remove it to disable FLASH_ATTENTION in building.
 #define SYCL_FAST_FP16  //don't change. remove it will break fattn-tile.hpp building
+#define GGML_SYCL_FA_ALL_QUANTS //define it to enable all quantization types in flash attention. undefine it to only support F16, Q4_0 and Q8_0 in flash attention.
 
 /* suppress warning spam */
 #pragma clang diagnostic push
@@ -61,6 +62,7 @@ extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_disable_optimize;
 extern int g_ggml_sycl_prioritize_dmmv;
 extern int g_ggml_sycl_enable_flash_attention;
+extern int g_ggml_sycl_dev2dev_memcpy;
 
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
@@ -123,6 +125,11 @@ enum ggml_sycl_backend_gpu_mode {
   SYCL_UNSET_GPU_MODE = -1,
   SYCL_SINGLE_GPU_MODE = 0,
   SYCL_MUL_GPU_MODE
+};
+
+enum ggml_sycl_dev2dev_memcpy_mode {
+  DEV2DEV_MEMCPY_SYCL = 0,
+  DEV2DEV_MEMCPY_L0 = 1,
 };
 
 static_assert(sizeof(sycl::half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -224,9 +231,12 @@ struct sycl_device_info {
     int max_wg_per_cu; // max work groups per compute unit - refer to
                        // cudaOccupancyMaxActiveBlocksPerMultiprocessor
     bool    vmm;                // virtual memory support
+    bool    l0_discrete_gpu;    // Level Zero backend and not an integrated GPU
+    size_t  vmm_granularity;    // granularity of virtual memory
     size_t  total_vram;
     sycl_hw_info hw_info;
     optimize_feature opt_feature;
+    bool    usm_system_support; // support for USM system allocations
 };
 
 
@@ -238,9 +248,13 @@ struct ggml_sycl_device_info {
     std::array<float, GGML_SYCL_MAX_DEVICES> default_tensor_split = {};
 
     int max_work_group_sizes[GGML_SYCL_MAX_DEVICES] = {0};
+
+    bool ext_oneapi_level_zero = true; // sycl::backend::ext_oneapi_level_zero used by all enumerated GPU devices
 };
 
 const ggml_sycl_device_info & ggml_sycl_info();
+
+static constexpr size_t SYCL_BUFFER_ALIGNMENT = 128;
 
 struct ggml_sycl_pool {
     virtual ~ggml_sycl_pool() = default;
@@ -310,11 +324,16 @@ struct ggml_tensor_extra_gpu {
   optimize_feature optimized_feature;
 };
 
-extern int g_ggml_sycl_enable_level_zero;
+extern int g_ggml_sycl_use_level_zero_api;
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
+
+struct mmid_row_mapping {
+    int32_t i1;
+    int32_t i2;
+};
 
 namespace sycl_ex = sycl::ext::oneapi::experimental;
 struct ggml_backend_sycl_context {
@@ -412,6 +431,8 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<ggml_sycl_fattn_kv_buffers> fattn_bufs[GGML_SYCL_MAX_DEVICES];
 
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
+
+    std::vector<mmid_row_mapping> mmid_row_mapping_host;
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
 
@@ -637,6 +658,8 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 }
 
 bool gpu_has_xmx(sycl::device &dev);
+
+int ggml_sycl_get_env(const char *env_name, int default_val);
 
 template <int N, class T> std::string debug_get_array_str(const std::string & prefix, const T array[N]) {
     if (LIKELY(!g_ggml_sycl_debug)) {

@@ -180,6 +180,10 @@ public:
 
     const mtmd::input_chunk_ptr & find_chunk(size_t idx) const;
 
+    // find next media chunk after idx
+    // returns a pair of pointer to the chunk (nullptr if not found) and its start index in tokens
+    std::pair<const mtmd::input_chunk_ptr *, size_t> find_next_media_chunk(size_t idx) const;
+
     void push_back(llama_token tok);
 
     // will create a copy of the chunk if it contains non-text data
@@ -217,15 +221,6 @@ public:
     // make sure all text tokens are within the vocab range
     bool validate(const struct llama_context * ctx) const;
 
-    // encode and decode the image chunk
-    int32_t process_chunk(
-                llama_context * ctx,
-                mtmd_context * mctx,
-                size_t idx,
-                llama_pos pos,
-                int32_t seq_id,
-                size_t & n_tokens_out) const;
-
     server_tokens clone() const;
 };
 
@@ -258,7 +253,8 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 size_t validate_utf8(const std::string& text);
 
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files);
+// if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
+server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder = false);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -293,6 +289,7 @@ struct server_chat_params {
     common_chat_templates_ptr tmpls;
     bool allow_image;
     bool allow_audio;
+    bool allow_video;
     bool enable_thinking = true;
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;

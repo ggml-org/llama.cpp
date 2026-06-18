@@ -1,9 +1,11 @@
 #pragma once
 
 #include "common.h"
+#include "download.h"
 #include "preset.h"
 #include "server-common.h"
 #include "server-http.h"
+#include "server-queue.h"
 
 #include <mutex>
 #include <condition_variable>
@@ -14,6 +16,8 @@
 /**
  * state diagram:
  *
+ * DOWNLOADING ──► DOWNLOADED ──► (replaced by new instance)
+ *
  * UNLOADED ──► LOADING ──► LOADED ◄──── SLEEPING
  *  ▲            │            │               ▲
  *  └───failed───┘            │               │
@@ -22,39 +26,43 @@
  */
 enum server_model_status {
     // TODO: also add downloading state when the logic is added
+    SERVER_MODEL_STATUS_DOWNLOADING,
+    SERVER_MODEL_STATUS_DOWNLOADED,
     SERVER_MODEL_STATUS_UNLOADED,
     SERVER_MODEL_STATUS_LOADING,
     SERVER_MODEL_STATUS_LOADED,
     SERVER_MODEL_STATUS_SLEEPING
 };
 
-static server_model_status server_model_status_from_string(const std::string & status_str) {
-    if (status_str == "unloaded") {
-        return SERVER_MODEL_STATUS_UNLOADED;
-    }
-    if (status_str == "loading") {
-        return SERVER_MODEL_STATUS_LOADING;
-    }
-    if (status_str == "loaded") {
-        return SERVER_MODEL_STATUS_LOADED;
-    }
-    if (status_str == "sleeping") {
-        return SERVER_MODEL_STATUS_SLEEPING;
-    }
-    throw std::runtime_error("invalid server model status");
-}
+enum server_model_source {
+    SERVER_MODEL_SOURCE_PRESET,
+    SERVER_MODEL_SOURCE_MODELS_DIR,
+    SERVER_MODEL_SOURCE_CACHE,
+};
 
 static std::string server_model_status_to_string(server_model_status status) {
     switch (status) {
-        case SERVER_MODEL_STATUS_UNLOADED: return "unloaded";
-        case SERVER_MODEL_STATUS_LOADING:  return "loading";
-        case SERVER_MODEL_STATUS_LOADED:   return "loaded";
-        case SERVER_MODEL_STATUS_SLEEPING: return "sleeping";
-        default:                           return "unknown";
+        case SERVER_MODEL_STATUS_DOWNLOADING: return "downloading";
+        case SERVER_MODEL_STATUS_DOWNLOADED:  return "downloaded";
+        case SERVER_MODEL_STATUS_UNLOADED:    return "unloaded";
+        case SERVER_MODEL_STATUS_LOADING:     return "loading";
+        case SERVER_MODEL_STATUS_LOADED:      return "loaded";
+        case SERVER_MODEL_STATUS_SLEEPING:    return "sleeping";
+        default:                              return "unknown";
+    }
+}
+
+static std::string server_model_source_to_string(server_model_source source) {
+    switch (source) {
+        case SERVER_MODEL_SOURCE_PRESET:     return "preset";
+        case SERVER_MODEL_SOURCE_MODELS_DIR: return "models_dir";
+        case SERVER_MODEL_SOURCE_CACHE:      return "cache";
+        default:                             return "unknown";
     }
 }
 
 struct server_model_meta {
+    server_model_source source = SERVER_MODEL_SOURCE_CACHE;
     common_preset preset;
     std::string name;
     std::set<std::string> aliases; // additional names that resolve to this model
@@ -63,10 +71,11 @@ struct server_model_meta {
     server_model_status status = SERVER_MODEL_STATUS_UNLOADED;
     int64_t last_used = 0; // for LRU unloading
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
-    json loaded_info; // info to be reflected via /v1/models endpoint
+    json loaded_info; // info to be reflected via /v1/models endpoint ; if in DOWNLOADING state, it should contain download progress info
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
+    // bool need_download = false; // whether the model needs to be downloaded before loading // TODO @ngxson: implement this
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -84,12 +93,15 @@ struct server_model_meta {
     void update_caps();
 };
 
-struct subprocess_s;
+struct server_models_routes;
+struct server_subproc; // defined in server-models.cpp
 
 struct server_models {
+    friend struct server_models_routes;
+
 private:
     struct instance_t {
-        std::shared_ptr<subprocess_s> subproc; // shared between main thread and monitoring thread
+        std::shared_ptr<server_subproc> subproc; // shared between main thread and monitoring thread
         std::thread th;
         server_model_meta meta;
         FILE * stdin_file = nullptr;
@@ -106,6 +118,9 @@ private:
     // set to true while load_models() is executing a reload; load() will wait until clear
     bool is_reloading = false;
 
+    // if true, the next get_meta() will trigger a reload of model list
+    bool need_reload = false;
+
     common_preset_context ctx_preset;
 
     common_params base_params;
@@ -121,8 +136,13 @@ private:
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
 
+    // notify SSE clients
+    void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
+
 public:
     server_models(const common_params & params, int argc, char ** argv);
+
+    server_response sse; // for real-time updates via SSE endpoint
 
     // (re-)load the list of models from various sources and prepare the metadata mapping
     // - if this is called the first time, simply populate the metadata
@@ -146,13 +166,24 @@ public:
     void unload(const std::string & name);
     void unload_all();
 
+    // download a new model, progress is reported via SSE
+    // to stop the download, call unload()
+    void download(common_params_model && model, common_download_opts && opts);
+
     // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status, int exit_code);
     void update_loaded_info(const std::string & name, std::string & raw_info);
+    void update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok = true);
+
+    // remove a cache model from disk and update the list (thread-safe)
+    // note: only cache models can be removed; returns false if the model doesn't exist or is not a cache model
+    bool remove(const std::string & name);
 
     // wait until the model instance is fully loaded (thread-safe)
+    // note: predicate is called while holding the lock
     // return when the model no longer in "loading" state
-    void wait_until_loading_finished(const std::string & name);
+    void wait(const std::string & name, std::function<bool(const server_model_meta &)> predicate);
+    void wait(std::unique_lock<std::mutex> & lk, const std::string & name, std::function<bool(const server_model_meta &)> predicate);
 
     // ensure the model is in ready state (thread-safe)
     // return false if model is ready
@@ -175,8 +206,9 @@ public:
 
 struct server_models_routes {
     common_params params;
-    json ui_settings = json::object();          // Primary: new name
-    json webui_settings = json::object();        // Deprecated: use ui_settings (kept for compat)
+    json ui_settings = json::object();     // Primary: new name
+    json webui_settings = json::object();  // Deprecated: use ui_settings (kept for compat)
+    std::atomic<bool> stopping = false;    // for graceful disconnecting SSE clients during shutdown
     server_models models;
     server_models_routes(const common_params & params, int argc, char ** argv)
             : params(params), models(params, argc, argv) {
@@ -205,6 +237,10 @@ struct server_models_routes {
     server_http_context::handler_t get_router_models;
     server_http_context::handler_t post_router_models_load;
     server_http_context::handler_t post_router_models_unload;
+    // management API
+    server_http_context::handler_t get_router_models_sse;
+    server_http_context::handler_t post_router_models;
+    server_http_context::handler_t del_router_models;
 };
 
 /**

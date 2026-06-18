@@ -307,6 +307,20 @@ def test_completion_with_grammar(jinja: bool, grammar: str, n_predicted: int, re
     assert match_regex(re_content, choice["message"]["content"]), choice["message"]["content"]
 
 
+def test_completion_with_invalid_grammar():
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [
+            {"role": "user", "content": "Does not matter what I say, does it?"},
+        ],
+        "grammar": "root ::= this is (not valid GBNF",
+    })
+    assert res.status_code == 400, res.body
+    assert "error" in res.body
+
+
 @pytest.mark.parametrize("messages", [
     None,
     "string",
@@ -573,3 +587,19 @@ def test_chat_completions_multiple_choices():
         for choice in res.body["choices"]:
             assert "assistant" == choice["message"]["role"]
             assert choice["finish_reason"] == "length"
+
+
+def test_chat_completions_token_count():
+    global server
+    server.start()
+    # make sure cache can be reused across multiple choices and multiple requests
+    # ref: https://github.com/ggml-org/llama.cpp/pull/18663
+    for _ in range(2):
+        res = server.make_request("POST", "/chat/completions/input_tokens", data={
+            "messages": [
+                {"role": "system", "content": "Book"},
+                {"role": "user", "content": "What is the best book"},
+            ],
+        })
+        assert res.status_code == 200
+        assert res.body["input_tokens"] > 5
