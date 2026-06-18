@@ -248,6 +248,47 @@ class Qwen3Model(Qwen2Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("HiggsMultimodalQwen3ForConditionalGeneration")
+class HiggsMultimodalQwen3Model(Qwen3Model):
+    """Text-backbone conversion for Higgs Audio v3 TTS checkpoints.
+
+    Higgs stores a Qwen3 text backbone under custom prefixes and also stores
+    a fused multi-codebook TTS head plus the Higgs audio codec in the same
+    safetensors file. This converter exports only the Qwen3 text backbone as
+    GGUF. The skipped audio tensors require a dedicated llama.cpp TTS runtime
+    graph and are not valid Qwen3 tensors.
+    """
+
+    model_arch = gguf.MODEL_ARCH.QWEN3
+    allow_extra_unindexed_tensors = True
+
+    _TEXT_PREFIX_MAP = {
+        "body.layers.": "model.layers.",
+        "body.norm.": "model.norm.",
+        "tied.embedding.text_embedding.": "model.embed_tokens.",
+        "tied.head.text_head.": "lm_head.",
+    }
+
+    _SUPPORTED_PREFIXES = tuple(_TEXT_PREFIX_MAP)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.startswith(cls._SUPPORTED_PREFIXES):
+            return name, gen
+        return None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        for src, dst in self._TEXT_PREFIX_MAP.items():
+            if name.startswith(src):
+                name = dst + name[len(src):]
+                break
+        else:
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE

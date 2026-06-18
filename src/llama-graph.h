@@ -684,6 +684,7 @@ struct llm_graph_params {
 
         return
             cparams.embeddings  == other.cparams.embeddings  &&
+            cparams.embeddings_masked == other.cparams.embeddings_masked &&
             cparams.causal_attn == other.cparams.causal_attn &&
             arch  == other.arch  &&
             gtype == other.gtype &&

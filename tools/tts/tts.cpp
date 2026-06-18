@@ -13,6 +13,7 @@
 #include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <regex>
@@ -21,6 +22,8 @@
 #include <vector>
 
 using json = nlohmann::ordered_json;
+
+int higgs_tts_main(int argc, char ** argv);
 
 enum outetts_version {
     OUTETTS_V0_2,
@@ -71,7 +74,17 @@ const std::vector<std::string> k_colors = {
 static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s -m model.gguf -p \"Hello!\"\n", argv[0]);
+    LOG("\n    %s -m higgs-qwen3-backbone.gguf --higgs-audio higgs-audio-f16.gguf -o output.wav -p \"Hello!\"\n", argv[0]);
     LOG("\n");
+}
+
+static bool has_higgs_audio_arg(int argc, char ** argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--higgs-audio") == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 struct wav_header {
@@ -538,6 +551,10 @@ static std::string audio_data_from_speaker(json speaker, const outetts_version t
 
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
+
+    if (has_higgs_audio_arg(argc, argv)) {
+        return higgs_tts_main(argc, argv);
+    }
 
     common_params params;
 
