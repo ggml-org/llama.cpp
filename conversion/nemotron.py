@@ -78,12 +78,12 @@ class NemotronNanoV2VLModel(MmprojModel):
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        if super().filter_tensors(item) is None:
+            return None
+
         name, gen = item
 
         if "input_conditioner" in name:
-            return None
-
-        if "language_model" in name:
             return None
 
         # mtmd does not support video yet so skip tensors related to video.
