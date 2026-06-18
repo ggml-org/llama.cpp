@@ -7688,6 +7688,9 @@ static bool ggml_vk_buffer_host_write_direct(const vk_buffer & buf) {
 }
 
 static bool ggml_vk_buffer_host_read_direct(const vk_buffer & buf) {
+    // Returns true if the buffer can be read directly from the host.
+    // This does NOT imply coherency - for non-coherent memory (e.g. eHostCached),
+    // the caller must handle synchronization (pipeline barrier + invalidateMappedMemoryRanges).
     if (!(buf->device->uma && (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible))) {
         return false;
     }
@@ -7837,27 +7840,27 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
     // through PCIe is sufficient fast reading back data from PCIe is slower than going through
     // the HW device to host copy path.
     if (ggml_vk_buffer_host_read_direct(src)) {
-        if (!(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
-            // Synchronize: ensure GPU writes are visible to the host
-            {
-                std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
-                vk_context subctx = ggml_vk_create_temporary_context(src->device->compute_queue.cmd_pool);
-                ggml_vk_ctx_begin(src->device, subctx);
-                subctx->s->buffer->buf.pipelineBarrier(
-                    vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer,
-                    vk::PipelineStageFlagBits::eHost,
-                    {},
-                    { { vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferWrite,
-                        vk::AccessFlagBits::eHostRead } },
-                    {}, {});
-                ggml_vk_ctx_end(subctx);
-                ggml_vk_submit(subctx, src->device->fence);
-                VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX),
-                         "vk_buffer_read_2d uma waitForFences");
-                src->device->device.resetFences({ src->device->fence });
-                ggml_vk_queue_command_pools_cleanup(src->device);
-            }
+        // Synchronize: ensure GPU writes are visible to the host
+        {
+            std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
+            vk_context subctx = ggml_vk_create_temporary_context(src->device->compute_queue.cmd_pool);
+            ggml_vk_ctx_begin(src->device, subctx);
+            subctx->s->buffer->buf.pipelineBarrier(
+                vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eHost,
+                {},
+                { { vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferWrite,
+                    vk::AccessFlagBits::eHostRead } },
+                {}, {});
+            ggml_vk_ctx_end(subctx);
+            ggml_vk_submit(subctx, src->device->fence);
+            VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX),
+                     "vk_buffer_read_2d uma waitForFences");
+            src->device->device.resetFences({ src->device->fence });
+            ggml_vk_queue_command_pools_cleanup(src->device);
+        }
 
+        if (!(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
             uint64_t atom_size = src->device->properties.limits.nonCoherentAtomSize;
             uint64_t aligned_offset = offset & ~(atom_size - 1);
             uint64_t end_offset = (offset + (uint64_t)spitch * height + atom_size - 1) & ~(atom_size - 1);
