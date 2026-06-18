@@ -106,7 +106,7 @@ llama_context::llama_context(
     if (model.arch == LLM_ARCH_EAGLE3) {
         if (model.tok_embd == nullptr || model.output == nullptr) {
             if (params.ctx_other == nullptr) {
-                throw std::runtime_error("EAGLE3 requires ctx_other to be set (this warning is normal during memory fitting)");
+                throw llama_exception("EAGLE3 requires ctx_other to be set (this warning is normal during memory fitting)");
             }
             cparams.ctx_other = params.ctx_other;
         }
