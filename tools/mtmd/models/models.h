@@ -16,6 +16,7 @@ struct clip_graph_gemma4v : clip_graph {
     clip_graph_gemma4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
     ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const override;
+    bool support_batch() const override { return true; }
 };
 
 struct clip_graph_gemma4uv : clip_graph {
@@ -31,10 +32,11 @@ struct clip_graph_pixtral : clip_graph {
 struct clip_graph_qwen2vl : clip_graph {
     clip_graph_qwen2vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
+    ggml_tensor * build_inp_with_temporal_merge();
 };
 
-struct clip_graph_qwen3vl : clip_graph {
-    clip_graph_qwen3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct clip_graph_qwen3vl : clip_graph_qwen2vl {
+    clip_graph_qwen3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_qwen2vl(ctx, img) {}
     ggml_cgraph * build() override;
 };
 

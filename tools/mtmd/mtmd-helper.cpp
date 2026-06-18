@@ -36,6 +36,11 @@
 #error "mtmd-helper is a public library outside of mtmd. it must not include internal headers"
 #endif
 
+#ifdef MTMD_VIDEO
+#include "sheredom/subprocess.h"
+#include <thread>
+#endif
+
 //
 // internal logging functions
 //
@@ -79,6 +84,7 @@ struct mtmd_helper_logger {
     }
 } g_logger;
 
+#define LOG_DBG(...) g_logger.log(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
 #define LOG_INF(...) g_logger.log(GGML_LOG_LEVEL_INFO,  __VA_ARGS__)
 #define LOG_WRN(...) g_logger.log(GGML_LOG_LEVEL_WARN,  __VA_ARGS__)
 #define LOG_ERR(...) g_logger.log(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
@@ -241,7 +247,9 @@ int32_t mtmd_helper_decode_image_chunk(
         llama_pos n_past,
         llama_seq_id seq_id,
         int32_t n_batch,
-        llama_pos * new_n_past) {
+        llama_pos * new_n_past,
+        mtmd_helper_post_decode_callback callback,
+        void * user_data) {
     GGML_ASSERT(n_batch > 0);
     auto chunk_type = mtmd_input_chunk_get_type(chunk);
     const char * name = chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE ? "image" : "audio";
@@ -296,8 +304,21 @@ int32_t mtmd_helper_decode_image_chunk(
         int32_t ret = llama_decode(lctx, batch_embd_view);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
-            llama_set_causal_attn(lctx, true); // restore causal attn
+            if (use_non_causal) {
+                llama_set_causal_attn(lctx, true);
+            }
             return ret;
+        }
+
+        if (callback != nullptr) {
+            ret = callback(batch_embd_view, user_data);
+            if (ret != 0) {
+                LOG_ERR("post-decode callback failed\n");
+                if (use_non_causal) {
+                    llama_set_causal_attn(lctx, true);
+                }
+                return ret;
+            }
         }
 
         LOG_INF("%s decoded (batch %d/%d) in %" PRId64 " ms\n", name, i_batch+1, n_img_batches, ggml_time_ms() - t1);
@@ -373,7 +394,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
 
         float * embd = mtmd_get_output_embd(ctx);
-        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past);
+        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, nullptr, nullptr);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
             llama_batch_free(text_batch);
@@ -478,42 +499,94 @@ static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int 
 
 } // namespace audio_helpers
 
-mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder) {
+// Computes FNV-1a hash of the data
+static std::string fnv_hash(const uint8_t * data, size_t len) {
+    const uint64_t fnv_prime = 0x100000001b3ULL;
+    uint64_t hash = 0xcbf29ce484222325ULL;
+
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= data[i];
+        hash *= fnv_prime;
+    }
+    return std::to_string(hash);
+}
+
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder) {
+    // calculate the hash if needed
+    std::string id;
+    mtmd_bitmap * result = nullptr;
+
+    if (!placeholder) {
+        id = fnv_hash(buf, len);
+    }
+
     if (audio_helpers::is_audio_file((const char *)buf, len)) {
         std::vector<float> pcmf32;
         const int sample_rate = mtmd_get_audio_sample_rate(ctx);
         if (sample_rate < 0) {
             LOG_ERR("This model does not support audio input\n");
-            return nullptr;
+            return {nullptr, nullptr};
         }
         if (!audio_helpers::decode_audio_from_buf(buf, len, sample_rate, pcmf32)) {
             LOG_ERR("Unable to read WAV audio file from buffer\n");
-            return nullptr;
+            return {nullptr, nullptr};
         }
-        return mtmd_bitmap_init_from_audio(pcmf32.size(), placeholder ? nullptr : pcmf32.data());
+        result = mtmd_bitmap_init_from_audio(pcmf32.size(), placeholder ? nullptr : pcmf32.data());
+        mtmd_bitmap_set_id(result, id.empty() ? nullptr : id.c_str());
+        return {result, nullptr};
     }
 
     // otherwise, we assume it's an image
-    mtmd_bitmap * result = nullptr;
-    {
+    if (!result) {
         int nx, ny, nc;
         auto * data = stbi_load_from_memory(buf, len, &nx, &ny, &nc, 3);
-        if (!data) {
-            LOG_ERR("%s: failed to decode image bytes\n", __func__);
-            return nullptr;
+        if (data) {
+            result = mtmd_bitmap_init(nx, ny, placeholder ? nullptr : data);
+            mtmd_bitmap_set_id(result, id.empty() ? nullptr : id.c_str());
+            stbi_image_free(data);
+            return {result, nullptr};
         }
-        result = mtmd_bitmap_init(nx, ny, placeholder ? nullptr : data);
-        stbi_image_free(data);
+        // otherwise, fallthrough to video decoding (if supported)
     }
-    return result;
+
+    // last try: load as video
+#ifdef MTMD_VIDEO
+    if (!result) {
+        auto params = mtmd_helper_video_init_params_default();
+        auto video_ctx = mtmd_helper_video_init_from_buf(ctx, buf, len, params);
+        if (!video_ctx) {
+            LOG_ERR("%s: failed to decode buffer as either image/audio/video\n", __func__);
+            return {nullptr, nullptr};
+        }
+        result = mtmd_bitmap_init_lazy(ctx,
+            id.empty() ? nullptr : id.c_str(),
+            video_ctx,
+            [](size_t, void * user_data, mtmd_bitmap ** out_bitmap, char ** out_text) -> int {
+                auto * vctx = static_cast<mtmd_helper_video *>(user_data);
+                char * text = nullptr;
+                int ret = mtmd_helper_video_read_next(vctx, out_bitmap, &text);
+                *out_text = text; // heap-allocated by read_next; freed automatically by mtmd
+                return ret;
+            });
+         return {result, video_ctx};
+    }
+#else
+    if (!result) {
+        LOG_ERR("%s: failed to decode buffer as either image or audio (video support not compiled in)\n", __func__);
+        return {nullptr, nullptr};
+    }
+#endif
+
+    // should not reach here
+    return {nullptr, nullptr};
 }
 
-mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder) {
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder) {
     std::vector<unsigned char> buf;
     FILE * f = fopen(fname, "rb");
     if (!f) {
         LOG_ERR("Unable to open file %s: %s\n", fname, strerror(errno));
-        return nullptr;
+        return {nullptr, nullptr};
     }
 
     fseek(f, 0, SEEK_END);
@@ -522,7 +595,7 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char *
     if (file_size < 0) {
         LOG_ERR("Failed to get file size of %s\n", fname);
         fclose(f);
-        return nullptr;
+        return {nullptr, nullptr};
     }
     buf.resize(file_size);
 
@@ -530,9 +603,444 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char *
     fclose(f);
     if (n_read != (size_t)file_size) {
         LOG_ERR("Failed to read entire file %s", fname);
-        return nullptr;
+        return {nullptr, nullptr};
     }
 
     return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size(), placeholder);
 }
 
+bool mtmd_helper_support_video(mtmd_context * ctx) {
+#ifdef MTMD_VIDEO
+    return mtmd_support_vision(ctx);
+#else
+    return false;
+#endif
+}
+
+//
+// Video input helpers
+//
+
+#ifdef MTMD_VIDEO
+
+struct mtmd_helper_video {
+    mtmd_context * mctx;
+    std::string path;
+    std::vector<uint8_t> input_buf; // non-empty when initialized from buffer
+    std::string ffmpeg_bin;
+    std::string ffprobe_bin;
+    float fps_target = 0.0f;
+    mtmd_helper_video_info info = {};
+
+    // RAII wrapper for managing subprocess
+    struct subprocess_handle {
+        struct subprocess_s proc = {};
+        bool alive = false;
+        std::thread feeder;
+
+        subprocess_handle() = default;
+        subprocess_handle(const subprocess_handle &) = delete;
+        subprocess_handle & operator=(const subprocess_handle &) = delete;
+        ~subprocess_handle() { stop(); }
+
+        void stop() {
+            if (alive) {
+                subprocess_terminate(&proc);
+            }
+            // join before destroy: feeder holds a FILE* from subprocess_stdin;
+            // subprocess_destroy closes it, so the thread must finish first
+            if (feeder.joinable()) {
+                feeder.join();
+            }
+            if (alive) {
+                subprocess_destroy(&proc);
+                alive = false;
+            }
+        }
+
+        FILE * stdout_pipe() {
+            return subprocess_stdout(&proc);
+        }
+
+        // buf is tied to lifetime of mtmd_helper_video, so it's guaranteed to outlive the feeder thread
+        void start_feeder(const std::vector<uint8_t> & buf) {
+            feeder = std::thread([this, &buf]() {
+                FILE * f = subprocess_stdin(&proc);
+                if (!f) {
+                    return;
+                }
+                fwrite(buf.data(), 1, buf.size(), f);
+                fclose(f);
+                proc.stdin_file = nullptr; // prevent double-close in subprocess_destroy
+            });
+        }
+    };
+
+    subprocess_handle sp;
+    int32_t current_frame = 0;
+
+    std::string prompt_start         = "Video:";
+    int32_t     timestamp_interval_ms = 5000; // emit a timestamp text every N ms (0 = disabled)
+    float       next_timestamp_ms     = 0.0f; // next elapsed-ms threshold at which to emit
+
+    std::vector<uint8_t> frame_buf;
+    std::string pending_text; // text queued to be returned before the next frame
+    bool        start_emitted = false;
+
+    bool is_buf_input() const {
+        return !input_buf.empty();
+    }
+
+    bool probe(float fps_target_arg) {
+        const char * input_arg = is_buf_input() ? "pipe:0" : path.c_str();
+        const char * cmd[] = {
+            ffprobe_bin.c_str(),
+            "-v", "quiet",
+            "-show_entries", "stream=width,height,r_frame_rate,nb_frames,duration",
+            "-select_streams", "v:0",
+            "-of", "default=noprint_wrappers=1",
+            input_arg,
+            nullptr,
+        };
+
+        LOG_DBG("%s: launching:", __func__);
+        for (size_t i = 0; cmd[i]; i++) { LOG_DBG(" %s", cmd[i]); }
+        LOG_DBG("\n");
+
+        subprocess_handle probe_sp;
+        if (subprocess_create(cmd,
+                subprocess_option_search_user_path | subprocess_option_inherit_environment,
+                &probe_sp.proc) != 0) {
+            LOG_ERR("%s: failed to launch ffprobe\n", __func__);
+            return false;
+        }
+        probe_sp.alive = true;
+
+        if (is_buf_input()) {
+            probe_sp.start_feeder(input_buf);
+        }
+
+        uint32_t width  = 0;
+        uint32_t height = 0;
+        float orig_fps = 0.0f;
+        float duration = -1.0f;
+        int32_t n_frames_orig = -1;
+        char line[256];
+        FILE * fp = probe_sp.stdout_pipe();
+
+        while (fgets(line, sizeof(line), fp)) {
+            char * eq = strchr(line, '=');
+            if (!eq) continue;
+            *eq = '\0';
+            const char * key = line;
+            const char * val = eq + 1;
+            char * nl = (char *)strchr(val, '\n');
+            if (nl) *nl = '\0';
+
+            if (strcmp(key, "width") == 0) {
+                width = (uint32_t)atoi(val);
+            } else if (strcmp(key, "height") == 0) {
+                height = (uint32_t)atoi(val);
+            } else if (strcmp(key, "r_frame_rate") == 0) {
+                orig_fps = parse_rational(val);
+            } else if (strcmp(key, "nb_frames") == 0 && strcmp(val, "N/A") != 0) {
+                n_frames_orig = atoi(val);
+            } else if (strcmp(key, "duration") == 0 && strcmp(val, "N/A") != 0) {
+                duration = (float)atof(val);
+            }
+        }
+
+        probe_sp.stop();
+
+        if (width == 0 || height == 0 || orig_fps <= 0.0f) {
+            return false;
+        }
+
+        if (duration < 0.0f && n_frames_orig > 0) {
+            duration = (float)n_frames_orig / orig_fps;
+        }
+
+        fps_target = fps_target_arg > 0.0f ? fps_target_arg : orig_fps;
+        info.width    = width;
+        info.height   = height;
+        info.fps      = fps_target;
+        LOG_DBG("%s: %ux%u fps=%.2f duration=%.2fs n_frames=%d\n",
+                __func__, width, height, fps_target, duration, info.n_frames);
+        info.n_frames = duration > 0.0f ? (int32_t)(duration * fps_target + 0.5f) : -1;
+        frame_buf.resize((size_t)width * height * 3);
+        return true;
+    }
+
+    bool start_ffmpeg(float seek_seconds) {
+        char seek_buf[64];
+        char fps_buf[64];
+
+        std::vector<const char *> cmd;
+        cmd.push_back(ffmpeg_bin.c_str());
+
+        if (!is_buf_input() && seek_seconds > 0.0f) {
+            // input-side seek: fast, keyframe-accurate; only valid for seekable file inputs
+            snprintf(seek_buf, sizeof(seek_buf), "%.6f", seek_seconds);
+            cmd.push_back("-ss");
+            cmd.push_back(seek_buf);
+        }
+
+        cmd.push_back("-nostdin");
+        cmd.push_back("-i");
+        // cache:pipe:0 wraps stdin with a seekable in-memory cache, letting ffmpeg seek
+        // backwards for container headers (e.g. MP4 moov atom at end of file)
+        cmd.push_back(is_buf_input() ? "cache:pipe:0" : path.c_str());
+
+        if (seek_seconds > 0.0f && is_buf_input()) {
+            // output-side seek: frame-accurate but decodes and discards frames up to seek point
+            snprintf(seek_buf, sizeof(seek_buf), "%.6f", seek_seconds);
+            cmd.push_back("-ss");
+            cmd.push_back(seek_buf);
+        }
+
+        if (fps_target > 0.0f) {
+            snprintf(fps_buf, sizeof(fps_buf), "fps=%.6f", fps_target);
+            cmd.push_back("-vf");
+            cmd.push_back(fps_buf);
+        }
+
+        cmd.push_back("-f");
+        cmd.push_back("rawvideo");
+        cmd.push_back("-pix_fmt");
+        cmd.push_back("rgb24");
+        cmd.push_back("pipe:1");
+        cmd.push_back("-loglevel");
+        cmd.push_back("error");
+        cmd.push_back(nullptr);
+
+        LOG_DBG("%s: launching:", __func__);
+        for (size_t i = 0; cmd[i]; i++) {
+            LOG_DBG(" %s", cmd[i]);
+        }
+        LOG_DBG("\n");
+
+        int ret = subprocess_create(
+            cmd.data(),
+            subprocess_option_search_user_path | subprocess_option_inherit_environment,
+            &sp.proc);
+
+        sp.alive = (ret == 0);
+        LOG_DBG("%s: subprocess_create ret=%d proc_alive=%d\n", __func__, ret, (int)sp.alive);
+
+        if (sp.alive && is_buf_input()) {
+            LOG_DBG("%s: starting feeder thread for %zu-byte buffer\n", __func__, input_buf.size());
+            sp.start_feeder(input_buf);
+        }
+
+        return sp.alive;
+    }
+
+    void stop_ffmpeg() {
+        sp.stop();
+    }
+
+    mtmd_bitmap * read_next_frame() {
+        if (!sp.alive) return nullptr;
+
+        FILE * fp = sp.stdout_pipe();
+        const size_t frame_size = (size_t)info.width * info.height * 3;
+        LOG_DBG("%s: reading frame %d, expecting %zu bytes (%ux%u)\n",
+                __func__, current_frame, frame_size, info.width, info.height);
+
+        size_t total_read = 0;
+        while (total_read < frame_size) {
+            size_t n = fread(frame_buf.data() + total_read, 1, frame_size - total_read, fp);
+            if (n == 0) {
+                // clean EOF only if no bytes read yet; partial frame is an error
+                LOG_DBG("%s: fread returned 0 after %zu/%zu bytes (ferror=%d)\n",
+                        __func__, total_read, frame_size, ferror(fp));
+                sp.alive = false;
+                return nullptr;
+            }
+            total_read += n;
+        }
+
+        LOG_DBG("%s: frame %d read OK\n", __func__, current_frame);
+        current_frame++;
+        return mtmd_bitmap_init(info.width, info.height, frame_buf.data());
+    }
+
+    int32_t read_next(mtmd_bitmap ** out_bitmap, char ** out_text) {
+        *out_bitmap = nullptr;
+        *out_text   = nullptr;
+
+        if (!pending_text.empty()) {
+            *out_text = strdup(pending_text.c_str());
+            pending_text.clear();
+            return *out_text ? 0 : -2;
+        }
+
+        LOG_DBG("%s: proc_alive=%d start_emitted=%d current_frame=%d\n",
+                __func__, (int)sp.alive, (int)start_emitted, current_frame);
+
+        if (!sp.alive) {
+            return (current_frame == 0) ? -2 : -1;
+        }
+
+        if (!start_emitted) {
+            start_emitted = true;
+            if (!prompt_start.empty()) {
+                *out_text = strdup(prompt_start.c_str());
+                return *out_text ? 0 : -2;
+            }
+        }
+
+        mtmd_bitmap * frame = read_next_frame();
+        if (!frame) return -1;
+        *out_bitmap = frame;
+
+        if (timestamp_interval_ms > 0) {
+            // current_frame was already incremented by read_next_frame(); undo for elapsed calc
+            float elapsed_ms = (float)(current_frame - 1) / info.fps * 1000.0f;
+            if (elapsed_ms >= next_timestamp_ms) {
+                char ts_buf[32];
+                float elapsed_s = elapsed_ms / 1000.0f;
+                int   minutes   = (int)(elapsed_s / 60);
+                float seconds   = elapsed_s - minutes * 60.0f;
+                snprintf(ts_buf, sizeof(ts_buf), "[%dm%.2fs]", minutes, seconds);
+                pending_text = ts_buf;
+                next_timestamp_ms += (float)timestamp_interval_ms;
+            }
+        }
+
+        return 0;
+    }
+
+    static float parse_rational(const char * s) {
+        int num = 0, den = 1;
+        if (sscanf(s, "%d/%d", &num, &den) == 2 && den > 0) {
+            return (float)num / (float)den;
+        }
+        float val;
+        if (sscanf(s, "%f", &val) == 1) {
+            return val;
+        }
+        return 0.0f;
+    }
+};
+#endif
+
+mtmd_helper_video_init_params mtmd_helper_video_init_params_default() {
+    return {
+        /* fps_target             */ 4.0f,
+        /* ffmpeg_bin_dir         */ nullptr,
+        /* timestamp_interval_ms  */ 5000,
+    };
+}
+
+static std::string video_resolve_bin(const char * bin_dir, const char * name) {
+    if (!bin_dir || bin_dir[0] == '\0') {
+        return name; // rely on PATH
+    }
+    std::string result = bin_dir;
+    char last = result.back();
+    if (last != '/' && last != '\\') {
+#ifdef _WIN32
+        result += '\\';
+#else
+        result += '/';
+#endif
+    }
+    result += name;
+#ifdef _WIN32
+    result += ".exe";
+#endif
+    return result;
+}
+
+mtmd_helper_video * mtmd_helper_video_init(
+        mtmd_context * mctx,
+        const char * path,
+        mtmd_helper_video_init_params params) {
+#ifdef MTMD_VIDEO
+    auto * ctx = new mtmd_helper_video();
+
+    ctx->mctx                 = mctx;
+    ctx->path                 = path;
+    ctx->ffmpeg_bin           = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
+    ctx->ffprobe_bin          = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
+    ctx->timestamp_interval_ms = params.timestamp_interval_ms;
+
+    if (!ctx->probe(params.fps_target)) {
+        LOG_ERR("%s: ffprobe failed for '%s' (is ffprobe in PATH?)\n", __func__, path);
+        delete ctx;
+        return nullptr;
+    }
+
+    if (!ctx->start_ffmpeg(0.0f)) {
+        LOG_ERR("%s: failed to start ffmpeg for '%s' (is ffmpeg in PATH?)\n", __func__, path);
+        delete ctx;
+        return nullptr;
+    }
+
+    return ctx;
+#else
+    LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
+    return nullptr;
+#endif
+}
+
+mtmd_helper_video * mtmd_helper_video_init_from_buf(
+        mtmd_context * mctx,
+        const unsigned char * buf, size_t len,
+        mtmd_helper_video_init_params params) {
+#ifdef MTMD_VIDEO
+    auto * ctx = new mtmd_helper_video();
+
+    ctx->mctx                  = mctx;
+    ctx->input_buf.assign(buf, buf + len);
+    ctx->ffmpeg_bin            = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
+    ctx->ffprobe_bin           = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
+    ctx->timestamp_interval_ms = params.timestamp_interval_ms;
+
+    if (!ctx->probe(params.fps_target)) {
+        LOG_ERR("%s: ffprobe failed on buffer (is ffprobe in PATH?)\n", __func__);
+        delete ctx;
+        return nullptr;
+    }
+
+    if (!ctx->start_ffmpeg(0.0f)) {
+        LOG_ERR("%s: failed to start ffmpeg on buffer (is ffmpeg in PATH?)\n", __func__);
+        delete ctx;
+        return nullptr;
+    }
+
+    return ctx;
+#else
+    LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
+    return nullptr;
+#endif
+}
+
+void mtmd_helper_video_free(mtmd_helper_video * ctx) {
+#ifdef MTMD_VIDEO
+    if (!ctx) return;
+    ctx->stop_ffmpeg();
+    delete ctx;
+#else
+    LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
+#endif
+}
+
+mtmd_helper_video_info mtmd_helper_video_get_info(const mtmd_helper_video * ctx) {
+#ifdef MTMD_VIDEO
+    return ctx->info;
+#else
+    GGML_ASSERT(false && "video is not supported in this build (MTMD_VIDEO is set to OFF)");
+#endif
+}
+
+int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
+        mtmd_bitmap ** out_bitmap, char ** out_text) {
+#ifdef MTMD_VIDEO
+    if (!ctx) return -2;
+    return ctx->read_next(out_bitmap, out_text);
+#else
+    GGML_ASSERT(false && "video is not supported in this build (MTMD_VIDEO is set to OFF)");
+#endif
+}

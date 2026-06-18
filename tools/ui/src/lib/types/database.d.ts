@@ -15,6 +15,7 @@ export interface DatabaseConversation {
 	thinkingEnabled?: boolean;
 	reasoningEffort?: ReasoningEffort;
 	forkedFromConversationId?: string;
+	pinned?: boolean;
 }
 
 export interface DatabaseMessageExtraAudioFile {

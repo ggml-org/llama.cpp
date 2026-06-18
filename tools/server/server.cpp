@@ -94,20 +94,22 @@ int llama_server(int argc, char ** argv) {
     const bool is_router_server = params.model.path.empty();
     common_params_print_info(params, !is_router_server);
 
-    // validate batch size for embeddings
-    // embeddings require all tokens to be processed in a single ubatch
-    // see https://github.com/ggml-org/llama.cpp/issues/12836
-    if (params.embedding && params.n_batch > params.n_ubatch) {
-        SRV_WRN("embeddings enabled with n_batch (%d) > n_ubatch (%d)\n", params.n_batch, params.n_ubatch);
-        SRV_WRN("setting n_batch = n_ubatch = %d to avoid assertion failure\n", params.n_ubatch);
-        params.n_batch = params.n_ubatch;
-    }
+    if (!is_router_server) {
+        // validate batch size for embeddings
+        // embeddings require all tokens to be processed in a single ubatch
+        // see https://github.com/ggml-org/llama.cpp/issues/12836
+        if (params.embedding && params.n_batch > params.n_ubatch) {
+            SRV_WRN("embeddings enabled with n_batch (%d) > n_ubatch (%d)\n", params.n_batch, params.n_ubatch);
+            SRV_WRN("setting n_batch = n_ubatch = %d to avoid assertion failure\n", params.n_ubatch);
+            params.n_batch = params.n_ubatch;
+        }
 
-    if (params.n_parallel < 0) {
-        SRV_INF("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
+        if (params.n_parallel < 0) {
+            SRV_INF("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
 
-        params.n_parallel = 4;
-        params.kv_unified = true;
+            params.n_parallel = 4;
+            params.kv_unified = true;
+        }
     }
 
     // for consistency between server router mode and single-model mode, we set the same model name as alias
@@ -172,8 +174,11 @@ int llama_server(int argc, char ** argv) {
         routes.get_props                   = models_routes->get_router_props;
         routes.get_models                  = models_routes->get_router_models;
 
+        ctx_http.post("/models",               ex_wrapper(models_routes->post_router_models));
         ctx_http.post("/models/load",          ex_wrapper(models_routes->post_router_models_load));
         ctx_http.post("/models/unload",        ex_wrapper(models_routes->post_router_models_unload));
+        ctx_http.get ("/models/sse",           ex_wrapper(models_routes->get_router_models_sse));
+        ctx_http.del ("/models",               ex_wrapper(models_routes->del_router_models));
     }
 
     ctx_http.get ("/health",                   ex_wrapper(routes.get_health)); // public endpoint (no API key check)
@@ -259,6 +264,7 @@ int llama_server(int argc, char ** argv) {
         clean_up = [&models_routes]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
             if (models_routes.has_value()) {
+                models_routes->stopping.store(true); // maybe redundant, but just to be safe
                 models_routes->models.unload_all();
             }
             llama_backend_free();
@@ -272,6 +278,10 @@ int llama_server(int argc, char ** argv) {
         ctx_http.is_ready.store(true);
 
         shutdown_handler = [&](int) {
+            if (models_routes.has_value()) {
+                // important to disconnect any SSE clients
+                models_routes->stopping.store(true);
+            }
             ctx_http.stop();
         };
 
@@ -339,6 +349,12 @@ int llama_server(int argc, char ** argv) {
         SRV_INF("router server is listening on %s\n", ctx_http.listening_address.c_str());
         SRV_WRN("%s", "NOTE: router mode is experimental\n");
         SRV_WRN("%s", "      it is not recommended to use this mode in untrusted environments\n");
+
+        if (!params.models_preset_hf.empty()) {
+            SRV_WRN(      "NOTE: using preset.ini from HF repo '%s'\n", params.models_preset_hf.c_str());
+            SRV_WRN("%s", "      please only use presets that you can trust! Unknown presets may be unsafe\n");
+        }
+
         if (ctx_http.thread.joinable()) {
             ctx_http.thread.join(); // keep the main thread alive
         }

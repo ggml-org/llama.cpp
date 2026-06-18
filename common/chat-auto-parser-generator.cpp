@@ -103,6 +103,10 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
             data.grammar_triggers = {
                 { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_marker }
             };
+            if (autoparser.tools.format.openai_wrapper_trigger) {
+                // model emits the OpenAI function wrapper, trigger on it
+                data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "{\"type\": \"function\"," });
+            }
         }
     }
 
@@ -134,7 +138,7 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs, cons
             auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
             parser = ctx.reasoning_parser + p.space() + p.choice({
                 p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
-                response_format
+                p.space() + response_format  + p.space()
             }) + p.end();
             pure_content = false;
         } else if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && jinja_caps.supports_tool_calls) {
@@ -224,13 +228,13 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         auto single_tool_parser = p.standard_json_tools(
             format.per_call_start, format.per_call_end, inputs.tools, inputs.parallel_tool_calls,
             inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
-            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order);
+            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger);
         tools_parser = p.trigger_rule("tool-calls", p.one_or_more(single_tool_parser + p.space()));
     } else {
         tools_parser = p.standard_json_tools(
             format.section_start, format.section_end, inputs.tools, inputs.parallel_tool_calls,
             inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
-            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order);
+            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger);
     }
 
     // Handle content wrappers if present
@@ -393,8 +397,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                            (schema_info.resolves_to_string(param_schema) ?
                                 p.tool_arg_string_value(until_suffix) :
                                 p.tool_arg_json_value(p.schema(
-                                    p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
-                                    p.space()) +
+                                    p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false))) +
                            p.tool_arg_close(p.literal(arguments.value_suffix)));
 
             auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);

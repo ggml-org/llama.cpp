@@ -1272,13 +1272,13 @@ common_peg_parser common_peg_parser_builder::string_content(char delimiter) {
 
 common_peg_parser common_peg_parser_builder::double_quoted_string() {
     return rule("double-quoted-string", [this]() {
-        return sequence({literal("\""), string_content('"'), literal("\""), space()});
+        return sequence({literal("\""), string_content('"'), literal("\"")});
     });
 }
 
 common_peg_parser common_peg_parser_builder::single_quoted_string() {
     return rule("single-quoted-string", [this]() {
-        return sequence({literal("'"), string_content('\''), literal("'"), space()});
+        return sequence({literal("'"), string_content('\''), literal("'")});
     });
 }
 
@@ -1301,25 +1301,25 @@ common_peg_parser common_peg_parser_builder::json_number() {
         // At EOF in partial mode, chars returns NEED_MORE → negate propagates NEED_MORE → number not committed.
         // This prevents premature commits of partial numbers (e.g. "3" when "3.14" is incoming).
         auto not_number_continuation = negate(chars("[0-9.eE+-]", 1, 1));
-        return sequence({ optional(literal("-")), int_part, optional(frac), optional(exp), not_number_continuation, space() });
+        return sequence({ optional(literal("-")), int_part, optional(frac), optional(exp), not_number_continuation });
     });
 }
 
 common_peg_parser common_peg_parser_builder::json_string() {
     return rule("json-string", [this]() {
-        return sequence({literal("\""), string_content('"'), literal("\""), space()});
+        return sequence({literal("\""), string_content('"'), literal("\"")});
     });
 }
 
 common_peg_parser common_peg_parser_builder::json_bool() {
     return rule("json-bool", [this]() {
-        return sequence({choice({literal("true"), literal("false")}), space()});
+        return choice({literal("true"), literal("false")});
     });
 }
 
 common_peg_parser common_peg_parser_builder::json_null() {
     return rule("json-null", [this]() {
-        return sequence({literal("null"), space()});
+        return literal("null");
     });
 }
 
@@ -1334,8 +1334,7 @@ common_peg_parser common_peg_parser_builder::json_object() {
             choice({
                 literal("}"),
                 sequence({members, ws, literal("}")})
-            }),
-            ws
+            })
         });
     });
 }
@@ -1350,8 +1349,7 @@ common_peg_parser common_peg_parser_builder::json_array() {
             choice({
                 literal("]"),
                 sequence({elements, ws, literal("]")})
-            }),
-            ws
+            })
         });
     });
 }
@@ -1381,16 +1379,13 @@ common_peg_parser common_peg_parser_builder::python_number() {
 
 common_peg_parser common_peg_parser_builder::python_bool() {
     return rule("python-bool", [this]() {
-        return sequence({
-            choice({literal("True"), literal("False")}),
-            space()
-        });
+        return choice({literal("True"), literal("False")});
     });
 }
 
 common_peg_parser common_peg_parser_builder::python_null() {
     return rule("python-none", [this]() {
-        return sequence({literal("None"), space()});
+        return literal("None");
     });
 }
 
@@ -1512,6 +1507,7 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
     auto pieces = matcher.collect_prefix_and_next();
 
     std::string pattern;
+    std::string trailing;  // optional proper-prefix of a delimiter, allowed only at the very end
     for (size_t i = 0; i < pieces.size(); ++i) {
         if (i > 0) {
             pattern += " | ";
@@ -1527,13 +1523,32 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
         }
 
         if (!pre.empty()) {
-            pattern += gbnf_format_literal(common_unicode_cpts_to_utf8(pre)) + " [^" + cls + "]";
+            std::string pre_literal = gbnf_format_literal(common_unicode_cpts_to_utf8(pre));
+            pattern += pre_literal + " [^" + cls + "]";
+            // Each interior alternative consumes a delimiter-prefix plus a disambiguating
+            // char, so the repetition alone cannot match a value that *ends* on a proper
+            // prefix of a delimiter (e.g. a trailing "\n" when the delimiter is
+            // "\n</parameter>\n"). The runtime until() (greedy first-match) accepts such
+            // values, so without this the grammar would reject input the parser accepts.
+            // Allow the value to terminate on any proper prefix as an optional tail.
+            // This makes the grammar a slight superset of the runtime language (a value
+            // may end on the longest prefix, which greedy first-match would not itself
+            // produce); harmless for constrained generation, which only needs to admit
+            // every runtime-valid string.
+            if (!trailing.empty()) {
+                trailing += " | ";
+            }
+            trailing += pre_literal;
         } else {
             pattern += "[^" + cls + "]";
         }
     }
 
-    return "(" + pattern + ")*";
+    std::string result = "(" + pattern + ")*";
+    if (!trailing.empty()) {
+        result += " (" + trailing + ")?";
+    }
+    return result;
 }
 
 static std::unordered_set<std::string> collect_reachable_rules(
