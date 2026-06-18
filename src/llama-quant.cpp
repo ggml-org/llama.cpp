@@ -235,6 +235,7 @@ struct tensor_metadata {
     std::string     remapped_imatrix_name;
     bool            allows_quantization;
     bool            requires_imatrix;
+    bool            is_mtp;
 };
 
 //
@@ -725,6 +726,10 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
         // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
         if (!manual) {
             new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
+            if (params->mtp_tensor_type < GGML_TYPE_COUNT && tm.is_mtp) {
+                // Override type with value from --mtp for mtp blocks
+                new_type = params->mtp_tensor_type;
+            }
         }
 
         // incompatible tensor shapes are handled here - fallback to a compatible type
@@ -1033,12 +1038,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     // scan for blocks that contain nextn (MTP) tensors, so we can apply a
     // fixed fallback quantization level when their imatrix data is missing
-    std::unordered_set<int> nextn_blocks;
+    std::unordered_set<int> mtp_blocks;
     for (const auto & tm : metadata) {
         if (tm.name.find(".nextn.") != std::string::npos) {
             const int blk = tensor_block_index(tm.name);
             if (blk >= 0) {
-                nextn_blocks.insert(blk);
+                mtp_blocks.insert(blk);
             }
         }
     }
@@ -1061,7 +1066,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     //
     // preliminary iteration over all weights
     //
-
     for (size_t i = 0; i < tensors.size(); ++i) {
         const auto * it = tensors[i];
         const struct ggml_tensor * tensor = it->tensor;
@@ -1073,6 +1077,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         gguf_add_tensor(ctx_outs[i_split].get(), tensor);
 
         metadata[i].allows_quantization = tensor_allows_quantization(params, model->arch, tensor);
+        const int blk = tensor_block_index(tensor->name);
+        metadata[i].is_mtp = blk >= 0 && mtp_blocks.count(blk) > 0;
 
         if (metadata[i].allows_quantization) {
             metadata[i].target_type = llama_tensor_get_type(qs, params, tensor, default_type, metadata[i]);
@@ -1081,34 +1087,34 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
 
         metadata[i].requires_imatrix = tensor_requires_imatrix(tensor->name, metadata[i].target_type, ftype);
-
         if (params->imatrix) {
             metadata[i].remapped_imatrix_name = remap_imatrix(tensor->name, mapped);
 
             if (params->imatrix_allow_missing_tensors && metadata[i].allows_quantization && imatrix_data) {
                 auto it = imatrix_data->find(metadata[i].remapped_imatrix_name);
                 if (it == imatrix_data->end()) {
+                    // fallback tensor type when imatrix data is missing:
                     // manual overrides take precedence over the missing-imatrix fallback
                     if (!tensor_has_manual_override(qs, default_type, metadata[i].name)) {
-                        const int blk = tensor_block_index(tensor->name);
-                        const bool is_nextn = blk >= 0 && nextn_blocks.count(blk) > 0;
-
-                        ggml_type fallback_type;
-                        if (is_nextn) {
-                            // MTP/nextn blocks: use a small, fixed quantization level
-                            switch (default_type) {
-                                case GGML_TYPE_Q8_0:
-                                case GGML_TYPE_MXFP4:
-                                    fallback_type = default_type; break;
-                                default:
-                                    fallback_type = GGML_TYPE_Q4_0; break;
+                        ggml_type fallback_type = metadata[i].target_type;
+                        if (metadata[i].is_mtp) {
+                            if (params->mtp_tensor_type == GGML_TYPE_COUNT) {
+                                // MTP layers: if --mtp is not used, use a small, simple quantization level, because
+                                // speed is more important than a minor accuracy loss for drafting / MTP
+                                switch (default_type) {
+                                    case GGML_TYPE_Q8_0:
+                                    case GGML_TYPE_MXFP4:
+                                        fallback_type = default_type; break;
+                                    default:
+                                        fallback_type = GGML_TYPE_Q4_0; break;
+                                }
                             }
                         } else {
                             // other tensors: quantize to the default level for the target ftype
                             fallback_type = default_type;
                         }
 
-                        // ggml_quantize_chunk asserts when called without an imatrix for types that require one
+                        // for tiny tensor types requiring a imatrix data, we fall back to a small type that doesn't (IQ3_S)
                         if (tensor_requires_imatrix(tensor->name, fallback_type, ftype)) {
                             fallback_type = GGML_TYPE_IQ3_S;
                         }
@@ -1380,6 +1386,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.only_copy                      =*/ false,
         /*.pure                           =*/ false,
         /*.imatrix_allow_missing_tensors  =*/ false,
+        /*.mtp_tensor_type                =*/ GGML_TYPE_COUNT,
         /*.keep_split                     =*/ false,
         /*.dry_run                        =*/ false,
         /*.imatrix                        =*/ nullptr,

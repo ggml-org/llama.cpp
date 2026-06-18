@@ -137,6 +137,8 @@ static void usage(const char * executable) {
     printf("  --imatrix-allow-missing-tensors\n");
     printf("                                      when encountering tensors which aren't present in the imatrix data,\n");
     printf("                                      quantize them to a static quantization type instead of exiting with an error.\n");
+    printf("  --mtp ggml_type\n");
+    printf("                                      override the quantization type for MTP/nextn blocks\n");
     printf("  --include-weights tensor_name\n");
     printf("                                      use importance matrix for this/these tensor(s)\n");
     printf("  --exclude-weights tensor_name\n");
@@ -457,6 +459,15 @@ int llama_quantize(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--imatrix-allow-missing-tensors") == 0) {
             params.imatrix_allow_missing_tensors = true;
+        } else if (strcmp(argv[arg_idx], "--mtp") == 0) {
+            if (arg_idx < argc-1) {
+                params.mtp_tensor_type = parse_ggml_type(argv[++arg_idx]);
+                if (params.mtp_tensor_type == GGML_TYPE_COUNT) {
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
         } else if (strcmp(argv[arg_idx], "--include-weights") == 0) {
             if (arg_idx < argc-1) {
                 included_weights.emplace_back(argv[++arg_idx]);
