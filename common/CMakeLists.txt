@@ -65,7 +65,6 @@ add_library(${TARGET}
     chat-peg-parser.h
     chat.cpp
     chat.h
-    ${CHAT_INLINE_TEMPLATES_HEADER}
     common.cpp
     common.h
     console.cpp

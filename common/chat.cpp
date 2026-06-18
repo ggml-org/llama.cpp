@@ -1,6 +1,5 @@
 #include "chat.h"
 
-#include "chat-inline-templates.h"
 #include "chat-auto-parser-helpers.h"
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
@@ -728,7 +727,6 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
     } else {
         default_template_src = chat_template_override;
     }
-
     if (default_template_src.empty() || default_template_src == "chatml") {
         if (!template_tool_use_src.empty()) {
             default_template_src = template_tool_use_src;
