@@ -4,6 +4,7 @@
 #include "server-http.h"
 #include "server-task.h"
 #include "server-queue.h"
+#include "server-schema.h"
 
 #include "build-info.h"
 #include "common.h"
@@ -189,9 +190,10 @@ struct server_slot {
     // stats
     size_t n_sent_text = 0; // number of sent text character
 
-    int64_t t_print_last = 0;
     int64_t t_start_process_prompt;
     int64_t t_start_generation;
+    int64_t t_print_last = 0;
+    int32_t n_decoded_last = 0;
 
     double t_prompt_processing = 0.0; // ms
     double t_token_generation = 0.0;  // ms
@@ -470,11 +472,13 @@ struct server_slot {
             return;
         }
 
+        const double n_gen_second     = 1e3 / (t_token_generation)   * (n_decoded);
+        const double n_gen_second_win = 1e6 / (t_now - t_print_last) * (n_decoded - n_decoded_last);
+
         t_print_last = t_now;
+        n_decoded_last = n_decoded;
 
-        const double n_gen_second = 1e3 / t_token_generation * n_decoded;
-
-        SLT_INF(*this, "n_decoded = %6d, tg = %6.2f t/s\n", n_decoded, n_gen_second);
+        SLT_INF(*this, "n_decoded = %6d, tg = %6.2f t/s, tg_3s = %6.2f t/s\n", n_decoded, n_gen_second, n_gen_second_win);
     }
 
     void print_timings_pp() const {
@@ -3038,8 +3042,8 @@ private:
                         }
                     }
 
-                    const int64_t t_current = ggml_time_us();
-                    slot.t_prompt_processing = (t_current - slot.t_start_process_prompt) / 1e3;
+                    const int64_t t_now = ggml_time_us();
+                    slot.t_prompt_processing = (t_now - slot.t_start_process_prompt) / 1e3;
                     slot.print_timings_pp();
 
                     // truncate any tokens that are beyond n_past for this slot
@@ -3447,17 +3451,19 @@ private:
                 common_sampler_accept(slot.smpl.get(), id, true);
 
                 // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement
-                const int64_t t_current = ggml_time_us();
+                const int64_t t_now = ggml_time_us();
 
                 slot.n_decoded += 1;
 
                 if (slot.n_decoded == 1) {
-                    slot.t_start_generation = t_current;
+                    slot.t_start_generation = t_now;
+                    slot.t_print_last = t_now;
+                    slot.n_decoded_last = 0;
                     slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
                     metrics.on_prompt_eval(slot);
                 }
 
-                slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
+                slot.t_token_generation = std::max<int64_t>(1, t_now - slot.t_start_generation) / 1e3;
 
                 completion_token_output result;
                 result.tok          = id;
@@ -3551,11 +3557,11 @@ private:
                     slot.spec_draft = std::move(accepted);
                 }
 
-                const int64_t t_current = ggml_time_us();
+                const int64_t t_now = ggml_time_us();
 
                 const auto ids = std::move(slot.spec_draft);
 
-                slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
+                slot.t_token_generation = std::max<int64_t>(1, t_now - slot.t_start_generation) / 1e3;
 
                 // update how many tokens out of those tested were accepted
                 slot.n_draft_accepted += ids.size() - 1;
@@ -3820,7 +3826,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.id = rd.get_new_id();
 
             task.tokens = std::move(inputs[i]);
-            task.params = server_task::params_from_json_cmpl(
+            task.params = server_schema::eval_llama_cmpl_schema(
                     ctx_server.vocab,
                     params,
                     meta->slot_n_ctx,

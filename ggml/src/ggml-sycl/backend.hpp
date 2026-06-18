@@ -17,6 +17,7 @@
 #include "common.hpp"
 #include "concat.hpp"
 #include "conv.hpp"
+#include "conv3d.hpp"
 #include "convert.hpp"
 #include "count-equal.hpp"
 #include "cpy.hpp"
