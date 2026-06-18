@@ -7840,8 +7840,6 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
     // through PCIe is sufficient fast reading back data from PCIe is slower than going through
     // the HW device to host copy path.
     if (ggml_vk_buffer_host_read_direct(src)) {
-        GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
-
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
         vk_context subctx = ggml_vk_create_temporary_context(src->device->compute_queue.cmd_pool);
         ggml_vk_ctx_begin(src->device, subctx);
