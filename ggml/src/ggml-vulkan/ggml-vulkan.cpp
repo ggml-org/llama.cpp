@@ -9145,6 +9145,16 @@ static bool ggml_vk_buffer_copy_async_d2d_syncfd(
 
 static constexpr size_t D2D_SEMIASYNC_THRESHOLD = 1 * 1024 * 1024;
 
+// Tier 1: both src and dst have rebar — direct memcpy, 0 GPU submits.
+// CPU rebar reads are ~1-3 GB/s; below this threshold the memcpy is faster
+// than a GPU command buffer submission cycle (~50-100 us).
+static constexpr size_t VK_D2D_DIRECT_MEMCPY_THRESHOLD = 128 * 1024;
+
+// Tier 2: dst has rebar — staging path (1 GPU submit + memcpy via BAR).
+// Below this threshold, staging + memcpy-write beats dmabuf's 2 GPU submits
+// for rebar destinations.
+static constexpr size_t VK_D2D_STAGING_THRESHOLD = 4 * 1024 * 1024;
+
 static bool ggml_vk_buffer_copy_async_d2d_semiasync(
         ggml_backend_vk_context * dst_ctx,
         vk_buffer& dst, size_t dst_offset,
@@ -9201,6 +9211,13 @@ static bool ggml_vk_buffer_copy_async_d2d(
         return false;
     }
 
+    // For small copies to rebar destinations, fall back to sync path
+    // which uses the staging + memcpy-via-BAR optimization
+    bool dst_mapped = dst->ptr && (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible);
+    if (dst_mapped && size <= VK_D2D_STAGING_THRESHOLD) {
+        return false;
+    }
+
     if (path.sync_method == D2D_SYNC_TIMELINE) {
         vk_context compute_ctx = ggml_vk_get_compute_ctx(dst_ctx);
         return ggml_vk_buffer_copy_async_d2d_timeline(compute_ctx, dst, dst_offset, src, src_offset, size, path);
@@ -9239,21 +9256,34 @@ static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& sr
         ggml_vk_queue_command_pools_cleanup(src->device);
     } else {
         VK_LOG_DEBUG("ggml_vk_buffer_copy(MULTI_DEVICE, " << size << ")");
+
+        bool src_mapped = src->ptr && (src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible);
+        bool dst_mapped = dst->ptr && (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible);
+
+        // Tier 1: both src and dst have rebar — direct memcpy, no GPU submits
+        if (src_mapped && dst_mapped && size <= VK_D2D_DIRECT_MEMCPY_THRESHOLD) {
+            memcpy((uint8_t *)dst->ptr + dst_offset, (const uint8_t *)src->ptr + src_offset, size);
+            return;
+        }
+
 #ifdef __linux__
         vk_d2d_path& path = ggml_vk_get_d2d_path(src->device, dst->device, size);
 
         if (path.method != D2D_STAGING) {
-            // buf_a is on the src-side device, buf_b is on the dst-side device
-            // For reverse_direction (dst exports), buf_a is on dst_dev and buf_b is on src_dev
-            vk_buffer& src_side_buf = path.reverse_direction ? path.slots[0].buf_b : path.slots[0].buf_a;
-            vk_buffer& dst_side_buf = path.reverse_direction ? path.slots[0].buf_a : path.slots[0].buf_b;
+            // Tier 2: dst rebar, small/medium — fall through to staging path
+            // (1 GPU submit + memcpy via BAR is faster than 2 GPU submits)
+            if (!(dst_mapped && size <= VK_D2D_STAGING_THRESHOLD)) {
+                // Tier 3: dmabuf path — best bandwidth for large transfers
+                vk_buffer& src_side_buf = path.reverse_direction ? path.slots[0].buf_b : path.slots[0].buf_a;
+                vk_buffer& dst_side_buf = path.reverse_direction ? path.slots[0].buf_a : path.slots[0].buf_b;
 
-            ggml_vk_buffer_copy(src_side_buf, 0, src, src_offset, size);
-            ggml_vk_buffer_copy(dst, dst_offset, dst_side_buf, 0, size);
-            return;
+                ggml_vk_buffer_copy(src_side_buf, 0, src, src_offset, size);
+                ggml_vk_buffer_copy(dst, dst_offset, dst_side_buf, 0, size);
+                return;
+            }
         }
 #endif
-        // Fallback: staging with CPU memcpy
+        // Staging fallback: GPU copy to staging + memcpy (or GPU copy) to dst
         ggml_vk_ensure_sync_staging_buffer(src->device, size);
         ggml_vk_buffer_copy(src->device->sync_staging, 0, src, src_offset, size);
         ggml_vk_buffer_write(dst, dst_offset, src->device->sync_staging->ptr, size);
