@@ -21,7 +21,6 @@ add_library(${HTP_LIB} SHARED
     hex-dma.c
     hmx-queue.c
     flash-attn-ops.c
-    matmul-ops.c
     binary-ops.c
     unary-ops.c
     sum-rows-ops.c
@@ -42,6 +41,7 @@ add_library(${HTP_LIB} SHARED
     gated-delta-net-ops.c
     pad-ops.c
     hmx-flash-attn-ops.c
+    matmul-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
