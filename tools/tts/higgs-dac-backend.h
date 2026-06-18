@@ -53,6 +53,7 @@ public:
         backend_name = ggml_backend_dev_name(dev);
         const enum ggml_backend_dev_type dev_type = ggml_backend_dev_type(dev);
         cache_graph = dev_type == GGML_BACKEND_DEVICE_TYPE_CPU;
+        use_native_conv_transpose = backend_name.rfind("Vulkan", 0) == 0;
         conv_weight_type = cache_graph ? GGML_TYPE_F16 : GGML_TYPE_F32;
     }
 
@@ -213,6 +214,21 @@ private:
         return out;
     }
 
+    static std::vector<float> reorder_conv_transpose1d_native_weight(const dac_conv_transpose1d_weights & conv) {
+        std::vector<float> out((size_t) conv.kernel * (size_t) conv.out_channels * (size_t) conv.in_channels);
+        for (int ic = 0; ic < conv.in_channels; ++ic) {
+            for (int oc = 0; oc < conv.out_channels; ++oc) {
+                for (int k = 0; k < conv.kernel; ++k) {
+                    const size_t src = ((size_t) ic * (size_t) conv.out_channels + (size_t) oc) * (size_t) conv.kernel + (size_t) k;
+                    const size_t dst = (size_t) k
+                            + (size_t) conv.kernel * ((size_t) oc + (size_t) conv.out_channels * (size_t) ic);
+                    out[dst] = conv.weight[src];
+                }
+            }
+        }
+        return out;
+    }
+
     ggml_tensor * conv1d(graph_t & graph, ggml_tensor * x, const dac_conv1d_weights & conv, const int padding, const int dilation) {
         ggml_tensor * weight = add_owned_tensor(
                 graph,
@@ -226,20 +242,46 @@ private:
     }
 
     ggml_tensor * conv_transpose1d(graph_t & graph, ggml_tensor * x, const dac_conv_transpose1d_weights & conv) {
-        ggml_tensor * weight = add_owned_tensor(
-                graph,
-                reorder_conv_transpose1d_col2im_weight(conv),
-                { conv.in_channels, conv.kernel * conv.out_channels },
-                conv_weight_type);
-        ggml_tensor * cols = ggml_mul_mat(graph.ctx.get(), weight, ggml_cont(graph.ctx.get(), ggml_transpose(graph.ctx.get(), x)));
-        ggml_tensor * y = ggml_col2im_1d(graph.ctx.get(), cols, conv.stride, conv.out_channels, conv.padding);
-
         const int desired = (int) ((x->ne[0] - 1) * conv.stride - 2 * conv.padding + conv.kernel + conv.output_padding);
-        if (desired <= 0 || desired < y->ne[0]) {
+        if (desired <= 0) {
             throw std::runtime_error("invalid DAC ConvTranspose1d crop");
         }
-        if (desired > y->ne[0]) {
-            y = ggml_pad(graph.ctx.get(), y, desired - y->ne[0], 0, 0, 0);
+
+        ggml_tensor * y = nullptr;
+        if (use_native_conv_transpose) {
+            ggml_tensor * weight = add_owned_tensor(
+                    graph,
+                    reorder_conv_transpose1d_native_weight(conv),
+                    { conv.kernel, conv.out_channels, conv.in_channels },
+                    conv_weight_type);
+            y = ggml_conv_transpose_1d(graph.ctx.get(), weight, x, conv.stride, 0, 1);
+            if (desired > y->ne[0] - conv.padding) {
+                throw std::runtime_error("invalid DAC ConvTranspose1d native crop");
+            }
+            y = ggml_view_3d(
+                    graph.ctx.get(),
+                    y,
+                    desired,
+                    y->ne[1],
+                    1,
+                    y->nb[1],
+                    y->nb[2],
+                    (size_t) conv.padding * (size_t) y->nb[0]);
+        } else {
+            ggml_tensor * weight = add_owned_tensor(
+                    graph,
+                    reorder_conv_transpose1d_col2im_weight(conv),
+                    { conv.in_channels, conv.kernel * conv.out_channels },
+                    conv_weight_type);
+            ggml_tensor * cols = ggml_mul_mat(graph.ctx.get(), weight, ggml_cont(graph.ctx.get(), ggml_transpose(graph.ctx.get(), x)));
+            y = ggml_col2im_1d(graph.ctx.get(), cols, conv.stride, conv.out_channels, conv.padding);
+
+            if (desired < y->ne[0]) {
+                throw std::runtime_error("invalid DAC ConvTranspose1d crop");
+            }
+            if (desired > y->ne[0]) {
+                y = ggml_pad(graph.ctx.get(), y, desired - y->ne[0], 0, 0, 0);
+            }
         }
 
         ggml_tensor * bias = add_bias_tensor(graph, conv.bias);
@@ -325,6 +367,7 @@ private:
     int cached_frames = 0;
     std::string backend_name;
     bool cache_graph = false;
+    bool use_native_conv_transpose = false;
     ggml_type conv_weight_type = GGML_TYPE_F32;
 };
 
