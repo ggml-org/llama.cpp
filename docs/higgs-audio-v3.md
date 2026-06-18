@@ -164,12 +164,20 @@ them. `--print-codes` prints each delayed Higgs codebook frame.
 standalone entry points; the probe name prints codebook frames by default.
 
 `llama-server` also exposes the native Higgs path as an OpenAI-style speech
-endpoint. Start a Q8 server with the unified backend launcher:
+endpoint. Pass the Higgs companion GGUF with `--mmproj`; the server recognizes
+the Higgs metadata and skips normal multimodal projector loading for that file.
+For example:
 
 ```bat
-run-higgs-server-q8.bat vulkan Vulkan1 1024 16
-run-higgs-server-q8.bat cuda CUDA0 1024 16
-run-higgs-server-q8.bat cpu CPU 1024 16
+build-higgs-vulkan\bin\Release\llama-server.exe ^
+  -m E:\LLAMA\llama.cpp\new4\TEST_4\higgs-qwen3-backbone-q8_0.gguf ^
+  --mmproj E:\LLAMA\llama.cpp\new4\TEST_4\higgs-audio-f16.gguf ^
+  --device Vulkan1 ^
+  -ngl 99 ^
+  -c 1024 ^
+  -np 1 ^
+  --host 127.0.0.1 ^
+  --port 8096
 ```
 
 The raw HTTP endpoint is:
@@ -192,12 +200,12 @@ Content-Type: application/json
 ```
 
 Set the Higgs companion GGUF with the `higgs_audio` JSON field, or with the
-`LLAMA_HIGGS_AUDIO` environment variable. `run-higgs-server-q8.bat` sets
-`LLAMA_HIGGS_AUDIO` automatically. It also sets `LLAMA_HIGGS_CACHE_MODEL=1` and
-`LLAMA_HIGGS_CACHE_CONTEXT=1`, so the first speech request loads and keeps the
-Higgs generation model/context resident for later requests. This intentionally
-keeps VRAM near the higher speech generation watermark instead of dropping back
-to the base server footprint after every prompt.
+`--mmproj` server argument. `LLAMA_HIGGS_AUDIO` is still accepted as a local
+override. Set `LLAMA_HIGGS_CACHE_MODEL=1` and `LLAMA_HIGGS_CACHE_CONTEXT=1`
+before launching the server to keep the Higgs generation model/context resident
+after the first speech request. This intentionally keeps VRAM near the higher
+speech generation watermark instead of dropping back to the base server
+footprint after every prompt.
 
 If no duration is provided, the server estimates duration from text length.
 Longer text creates more Higgs autoregressive steps; for example, an automatic
@@ -293,18 +301,20 @@ build-higgs-vulkan\bin\Release\llama-tts.exe ^
   -p "This WAV file grows while Higgs generation runs."
 ```
 
-## What Does Not Work Yet
+## Remaining Limitations
 
-This is not yet wired into the server runtime. Remaining work:
+The current native path is intentionally focused on local execution. Remaining
+work:
 
-- porting the WAV reference encoder from Python/Torch into pure C++/ggml
 - richer sampling controls beyond temperature/top-k
 - reusing the already-loaded primary server model instead of holding a second
-  cached Higgs generation model
+  cached Higgs generation model/context for speech requests
+- more backend graph coverage for the native HuBERT, semantic, acoustic, FC, and
+  RVQ reference-encode path
 
 The current native path is local and non-commercial-use oriented. It can produce
-WAV output through `llama-tts --higgs-audio`; the Qwen3 backbone and Higgs
-codebook head can use llama.cpp backends, and RVQ/DAC decoding can run through
-CUDA/Vulkan ggml backend graphs for normal and streaming WAV output. This
-remains a focused local runtime rather than a production-quality server
-integration.
+WAV output through `llama-tts --higgs-audio` and through
+`llama-server /v1/audio/speech`; the Qwen3 backbone and Higgs codebook head can
+use llama.cpp backends, and RVQ/DAC decoding can run through CUDA/Vulkan ggml
+backend graphs for normal and streaming WAV output. This remains a focused
+local runtime rather than a production-quality server integration.
