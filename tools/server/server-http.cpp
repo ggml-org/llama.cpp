@@ -492,6 +492,8 @@ using server_http_req_ptr = std::unique_ptr<server_http_req>;
 static void process_handler_response(server_http_req_ptr && request, server_http_res_ptr & response, httplib::Response & res) {
     if (response->is_stream()) {
         res.status = response->status;
+        // Tell Nginx to not buffer any streamed response
+        response->headers["X-Accel-Buffering"] = "no";
         set_headers(res, response->headers);
         const std::string content_type = response->content_type;
         // convert to shared_ptr as both chunked_content_provider() and on_complete() need to use it
