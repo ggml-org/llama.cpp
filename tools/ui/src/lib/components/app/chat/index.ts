@@ -241,6 +241,25 @@ export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormAct
 export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddMcpServersSubmenu.svelte';
 
 /**
+ * **ChatFormActionAddSystemMessageSubmenu** - System message submenu
+ *
+ * Dropdown submenu for adding system messages. Provides options to:
+ * - Write your own system message (opens chat input)
+ * - Select from predefined Instructions (stored in localStorage)
+ * - Select MCP Prompts grouped by server
+ *
+ * @example
+ * ```svelte
+ * <ChatFormActionAddSystemMessageSubmenu
+ *   onSystemPromptClick={handleSystemPromptClick}
+ *   onSystemPromptWithContent={handleInstructionSelect}
+ *   onMcpPromptClick={handleMcpPromptClick}
+ * />
+ * ```
+ */
+export { default as ChatFormActionAddSystemMessageSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddSystemMessageSubmenu.svelte';
+
+/**
  * **ChatFormReasoningToggle** - Thinking toggle button with effort dropdown
  *
  * A toggle button with lightbulb icon that indicates thinking status.
@@ -589,6 +608,12 @@ export { default as ChatMessageUserPending } from './ChatMessages/ChatMessage/Ch
  * Visibility controlled by `showSystemMessage` config setting.
  */
 export { default as ChatMessageSystem } from './ChatMessages/ChatMessage/ChatMessageSystem/ChatMessageSystem.svelte';
+
+/**
+ * Custom instruction display component. Renders a card showing the referenced
+ * custom instruction title and ID.
+ */
+export { default as ChatMessageCustomInstruction } from './ChatMessages/ChatMessage/ChatMessageCustomInstruction/ChatMessageCustomInstruction.svelte';
 
 /**
  *

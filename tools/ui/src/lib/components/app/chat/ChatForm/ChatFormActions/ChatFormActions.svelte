@@ -32,6 +32,7 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
+		onSystemPromptWithContent?: (content: string) => void;
 		onMcpPromptClick?: () => void;
 		onMcpResourcesClick?: () => void;
 	}
@@ -51,6 +52,7 @@
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
+		onSystemPromptWithContent,
 		onMcpPromptClick,
 		onMcpResourcesClick
 	}: Props = $props();
@@ -110,6 +112,7 @@
 				{hasMcpResourcesSupport}
 				{onFileUpload}
 				{onSystemPromptClick}
+				{onSystemPromptWithContent}
 				{onMcpPromptClick}
 				{onMcpResourcesClick}
 				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}

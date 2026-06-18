@@ -12,6 +12,7 @@
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { instructionsStore } from '$lib/stores/instructions.svelte';
 	import { McpLogo } from '$lib/components/app';
 	import { PencilRuler, ChevronDown, ChevronRight } from '@lucide/svelte';
 	import { HealthCheckStatus } from '$lib/enums';
@@ -27,6 +28,7 @@
 		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
+		onSystemPromptWithContent?: (content: string) => void;
 		onMcpPromptClick?: () => void;
 		onMcpResourcesClick?: () => void;
 		trigger: Snippet<[{ disabled: boolean; onclick?: () => void }]>;
@@ -42,6 +44,7 @@
 		hasMcpResourcesSupport = false,
 		onFileUpload,
 		onSystemPromptClick,
+		onSystemPromptWithContent,
 		onMcpPromptClick,
 		onMcpResourcesClick,
 		trigger
@@ -51,6 +54,7 @@
 	let filesExpanded = $state(true);
 	let toolsExpanded = $state(false);
 	let mcpExpanded = $state(false);
+	let instructionsExpanded = $state(false);
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
@@ -278,8 +282,36 @@
 				>
 					<MessageSquare class="h-4 w-4 shrink-0" />
 
-					<span>System Message</span>
+					<span>Write your own</span>
 				</button>
+
+				{#if instructionsStore.getInstructions().length > 0}
+					<Collapsible.Root open={instructionsExpanded} onOpenChange={(open) => (instructionsExpanded = open)}>
+						<Collapsible.Trigger class={sheetItemClass}>
+							{#if instructionsExpanded}
+								<ChevronDown class="h-4 w-4 shrink-0" />
+							{:else}
+								<ChevronRight class="h-4 w-4 shrink-0" />
+							{/if}
+
+							<span>Instructions</span>
+						</Collapsible.Trigger>
+
+						<Collapsible.Content>
+							<div class="ml-6 flex flex-col gap-1">
+								{#each instructionsStore.getInstructions() as instruction (instruction.id)}
+									<button
+										type="button"
+										class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent active:bg-accent"
+										onclick={() => onSystemPromptWithContent?.(instruction.content)}
+									>
+										<span class="truncate">{instruction.title}</span>
+									</button>
+								{/each}
+							</div>
+						</Collapsible.Content>
+					</Collapsible.Root>
+				{/if}
 
 				{#if hasMcpPromptsSupport}
 					<button

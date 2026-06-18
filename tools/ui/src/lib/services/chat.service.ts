@@ -204,9 +204,16 @@ export class ChatService {
 		).filter((msg: { role: ChatRole; content: string | ApiChatMessageContentPart[] }) => {
 			// Filter out empty system messages
 			if (msg.role === MessageRole.SYSTEM) {
-				const content = typeof msg.content === 'string' ? msg.content : '';
-
-				return content.trim().length > 0;
+				if (typeof msg.content === 'string') {
+					return msg.content.trim().length > 0;
+				}
+				// Multipart content (e.g., from custom instruction extras): check for text parts
+				return msg.content.some(
+					(part) =>
+						part.type === ContentPartType.TEXT &&
+						typeof part.text === 'string' &&
+						part.text.trim().length > 0
+				);
 			}
 
 			return true;
@@ -1176,7 +1183,14 @@ export class ChatService {
 			}
 		}
 
-		if (!message.extra || message.extra.length === 0) {
+		// CUSTOM_INSTRUCTION is metadata-only (text lives in message.content); exclude it
+		// so it doesn't force multipart conversion and get dropped as array content.
+		const contentExtras =
+			message.extra?.filter(
+				(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_INSTRUCTION
+			) ?? [];
+
+		if (contentExtras.length === 0) {
 			const result: ApiChatMessageData = {
 				role: message.role as MessageRole,
 				content: message.content
@@ -1195,7 +1209,7 @@ export class ChatService {
 
 		const contentParts: ApiChatMessageContentPart[] = [];
 
-		const textFiles = message.extra.filter(
+		const textFiles = contentExtras.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraTextFile =>
 				extra.type === AttachmentType.TEXT
 		);
@@ -1208,7 +1222,7 @@ export class ChatService {
 		}
 
 		// Handle legacy 'context' type from the old UI (pasted content)
-		const legacyContextFiles = message.extra.filter(
+		const legacyContextFiles = contentExtras.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraLegacyContext =>
 				extra.type === AttachmentType.LEGACY_CONTEXT
 		);
@@ -1220,7 +1234,7 @@ export class ChatService {
 			});
 		}
 
-		const imageFiles = message.extra.filter(
+		const imageFiles = contentExtras.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
 				extra.type === AttachmentType.IMAGE
 		);
@@ -1238,7 +1252,7 @@ export class ChatService {
 			});
 		}
 
-		const audioFiles = message.extra.filter(
+		const audioFiles = contentExtras.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraAudioFile =>
 				extra.type === AttachmentType.AUDIO
 		);
@@ -1260,7 +1274,7 @@ export class ChatService {
 			});
 		}
 
-		const videoFiles = message.extra.filter(
+		const videoFiles = contentExtras.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraVideoFile =>
 				extra.type === AttachmentType.VIDEO
 		);
@@ -1279,7 +1293,7 @@ export class ChatService {
 			});
 		}
 
-		const pdfFiles = message.extra.filter(
+		const pdfFiles = contentExtras.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraPdfFile =>
 				extra.type === AttachmentType.PDF
 		);
@@ -1300,7 +1314,7 @@ export class ChatService {
 			}
 		}
 
-		const mcpPrompts = message.extra.filter(
+		const mcpPrompts = contentExtras.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpPrompt =>
 				extra.type === AttachmentType.MCP_PROMPT
 		);
@@ -1317,7 +1331,7 @@ export class ChatService {
 			});
 		}
 
-		const mcpResources = message.extra.filter(
+		const mcpResources = contentExtras.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpResource =>
 				extra.type === AttachmentType.MCP_RESOURCE
 		);

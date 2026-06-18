@@ -62,6 +62,7 @@
 		onStop?: () => void;
 		onSubmit?: () => void;
 		onSystemPromptClick?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
+		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
 		onUploadedFileRemove?: (fileId: string) => void;
 		onUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
 		onValueChange?: (value: string) => void;
@@ -83,6 +84,7 @@
 		onStop,
 		onSubmit,
 		onSystemPromptClick,
+		onSystemPromptWithContent,
 		onUploadedFileRemove,
 		onUploadedFilesChange,
 		onValueChange
@@ -551,6 +553,7 @@
 				onMicClick={handleMicClick}
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
+				onSystemPromptWithContent={onSystemPromptWithContent}
 				onMcpPromptClick={showMcpPromptButton ? () => (isPromptPickerOpen = true) : undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 			/>

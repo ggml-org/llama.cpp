@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Check, X } from '@lucide/svelte';
+	import { BookText, Check, X } from '@lucide/svelte';
 	import { ChatMessageActionIcons, MarkdownContent } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
@@ -26,7 +26,13 @@
 		onConfirmDelete: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
+		addToLibrary?: boolean;
+		onAddToLibraryChange?: (val: boolean) => void;
+		deferSystemPromptSave?: boolean;
+		onSystemPromptSaveComplete?: () => void;
 		textareaElement?: HTMLTextAreaElement;
+		instructionId?: string;
+		title?: string;
 	}
 
 	let {
@@ -41,7 +47,13 @@
 		onConfirmDelete,
 		onNavigateToSibling,
 		onShowDeleteDialogChange,
-		textareaElement = $bindable()
+		addToLibrary = false,
+		onAddToLibraryChange,
+		deferSystemPromptSave = false,
+		onSystemPromptSaveComplete,
+		textareaElement = $bindable(),
+		instructionId,
+		title
 	}: Props = $props();
 
 	const editCtx = getMessageEditContext();
@@ -49,13 +61,20 @@
 	function handleEditKeydown(event: KeyboardEvent) {
 		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
 			event.preventDefault();
-
-			editCtx.save();
+			handleSave();
 		} else if (event.key === KeyboardKey.ESCAPE) {
 			event.preventDefault();
-
-			editCtx.cancel();
+			handleCancel();
 		}
+	}
+
+	function handleSave() {
+		editCtx.save();
+	}
+
+	function handleCancel() {
+		editCtx.cancel();
+		onAddToLibraryChange?.(false);
 	}
 
 	let isMultiline = $state(false);
@@ -113,23 +132,37 @@
 				placeholder="Edit system message..."
 			></textarea>
 
-			<div class="mt-2 flex justify-end gap-2">
-				<Button class="h-8 px-3" onclick={editCtx.cancel} size="sm" variant="outline">
-					<X class="mr-1 h-3 w-3" />
+			<div class="mt-2 flex flex-col items-end gap-2">
+				{#if !deferSystemPromptSave}
+					<label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+						<input
+							type="checkbox"
+							class="h-4 w-4 rounded border-input"
+							checked={addToLibrary}
+							onchange={(e) => onAddToLibraryChange?.((e.target as HTMLInputElement).checked)}
+						/>
+						Add to library
+					</label>
+				{/if}
 
-					Cancel
-				</Button>
+				<div class="flex gap-2">
+					<Button class="h-8 px-3" onclick={handleCancel} size="sm" variant="outline">
+						<X class="mr-1 h-3 w-3" />
 
-				<Button
-					class="h-8 px-3"
-					onclick={editCtx.save}
-					disabled={!editCtx.editedContent.trim()}
-					size="sm"
-				>
-					<Check class="mr-1 h-3 w-3" />
+						Cancel
+					</Button>
 
-					Save
-				</Button>
+					<Button
+						class="h-8 px-3"
+						onclick={handleSave}
+						disabled={!editCtx.editedContent.trim()}
+						size="sm"
+					>
+						<Check class="mr-1 h-3 w-3" />
+
+						Save
+					</Button>
+				</div>
 			</div>
 		</div>
 	{:else}
@@ -207,6 +240,14 @@
 						{/if}
 					</Card>
 				</button>
+			</div>
+		{/if}
+
+		{#if instructionId && title}
+			<div class="max-w-[80%] flex items-center gap-2">
+				<BookText class="h-3.5 w-3.5 text-muted-foreground" />
+				<span class="text-xs font-medium text-muted-foreground">{title}</span>
+				<span class="text-xs text-muted-foreground/60">{instructionId.slice(0, 8)}</span>
 			</div>
 		{/if}
 

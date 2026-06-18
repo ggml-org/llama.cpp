@@ -350,7 +350,7 @@ class ConversationsStore {
 				this.activeMessages = filteredMessages;
 			} else {
 				const messages = await DatabaseService.getConversationMessages(convId);
-				this.activeMessages = messages;
+				this.activeMessages = messages.filter((m) => m.type !== 'root');
 			}
 
 			return true;

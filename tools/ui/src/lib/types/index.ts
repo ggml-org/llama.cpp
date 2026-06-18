@@ -66,6 +66,7 @@ export type {
 	DatabaseMessageExtraLegacyContext,
 	DatabaseMessageExtraMcpPrompt,
 	DatabaseMessageExtraMcpResource,
+	DatabaseMessageExtraCustomInstruction,
 	DatabaseMessageExtraPdfFile,
 	DatabaseMessageExtraTextFile,
 	DatabaseMessageExtra,
