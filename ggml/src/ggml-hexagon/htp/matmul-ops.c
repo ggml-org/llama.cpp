@@ -7,7 +7,6 @@
 #include <HAP_perf.h>
 #include <HAP_compute_res.h>
 
-
 #include <math.h>
 #include <string.h>
 
@@ -21,6 +20,7 @@
 #include "htp-ops.h"
 #include "matmul-ops.h"
 #include "vtcm-utils.h"
+
 typedef struct {
     float        *dst;
     const float  *activation;
@@ -43,7 +43,6 @@ typedef struct {
     size_t        dst_nb3;
 } hmx_mm_f16_f32_batched_params_t;
 
-
 struct htp_mm_context {
     const char * type;
     struct htp_ops_context * octx;
@@ -63,7 +62,6 @@ struct htp_mm_context {
     void (*vec_dot_32x1)(const int n, float * restrict s,
          const void * restrict vx,
          const void * restrict vy, int valid_rows);
-
 
     // Precomputed values
     uint32_t src0_nrows_per_thread;
@@ -515,45 +513,45 @@ static void vec_dot_f16_f32_uu_1x1(const int n, float * restrict s, const void *
     hvx_vec_store_u(&s[0], 4, rsum);
 }
 
-#define htp_matmul_tensors_preamble                             \
-    const struct htp_tensor * restrict src0 = octx->src[0];     \
-    const struct htp_tensor * restrict src1 = octx->src[1];     \
-    const struct htp_tensor * restrict src2 = octx->src[2];     \
-    const struct htp_tensor * restrict  dst = octx->dst;        \
-                                                                \
-    const uint32_t ne00 = src0->ne[0];                          \
-    const uint32_t ne01 = src0->ne[1];                          \
-    const uint32_t ne02 = src0->ne[2];                          \
-    const uint32_t ne03 = src0->ne[3];                          \
-                                                                \
-    const uint32_t ne10 = src1->ne[0];                          \
-    const uint32_t ne11 = src1->ne[1];                          \
-    const uint32_t ne12 = src1->ne[2];                          \
-    const uint32_t ne13 = src1->ne[3];                          \
-                                                                \
-    const uint32_t ne20 = src2->ne[0];                          \
-    const uint32_t ne21 = src2->ne[1];                          \
-    const uint32_t ne22 = src2->ne[2];                          \
-    const uint32_t ne23 = src2->ne[3];                          \
-                                                                \
-    const uint32_t ne0 = dst->ne[0];                            \
-    const uint32_t ne1 = dst->ne[1];                            \
-    const uint32_t ne2 = dst->ne[2];                            \
-    const uint32_t ne3 = dst->ne[3];                            \
-                                                                \
-    const uint32_t nb00 = src0->nb[0];                          \
-    const uint32_t nb01 = src0->nb[1];                          \
-    const uint32_t nb02 = src0->nb[2];                          \
-    const uint32_t nb03 = src0->nb[3];                          \
-                                                                \
-    const uint32_t nb10 = src1->nb[0];                          \
-    const uint32_t nb11 = src1->nb[1];                          \
-    const uint32_t nb12 = src1->nb[2];                          \
-    const uint32_t nb13 = src1->nb[3];                          \
-                                                                \
-    const uint32_t nb0 = dst->nb[0];                            \
-    const uint32_t nb1 = dst->nb[1];                            \
-    const uint32_t nb2 = dst->nb[2];                            \
+#define htp_matmul_tensors_preamble                                 \
+    const struct htp_tensor * restrict src0 = octx->src[0];         \
+    const struct htp_tensor * restrict src1 = octx->src[1];         \
+    const struct htp_tensor * restrict src2 = octx->src[2];         \
+    const struct htp_tensor * restrict  dst = octx->dst;            \
+                                                                    \
+    const uint32_t ne00 = src0->ne[0];                              \
+    const uint32_t ne01 = src0->ne[1];                              \
+    const uint32_t ne02 = src0->ne[2];                              \
+    const uint32_t ne03 = src0->ne[3];                              \
+                                                                    \
+    const uint32_t ne10 = src1->ne[0];                              \
+    const uint32_t ne11 = src1->ne[1];                              \
+    const uint32_t ne12 = src1->ne[2];                              \
+    const uint32_t ne13 = src1->ne[3];                              \
+                                                                    \
+    const uint32_t ne20 = src2->ne[0];                              \
+    const uint32_t ne21 = src2->ne[1];                              \
+    const uint32_t ne22 = src2->ne[2];                              \
+    const uint32_t ne23 = src2->ne[3];                              \
+                                                                    \
+    const uint32_t ne0 = dst->ne[0];                                \
+    const uint32_t ne1 = dst->ne[1];                                \
+    const uint32_t ne2 = dst->ne[2];                                \
+    const uint32_t ne3 = dst->ne[3];                                \
+                                                                    \
+    const uint32_t nb00 = src0->nb[0];                              \
+    const uint32_t nb01 = src0->nb[1];                              \
+    const uint32_t nb02 = src0->nb[2];                              \
+    const uint32_t nb03 = src0->nb[3];                              \
+                                                                    \
+    const uint32_t nb10 = src1->nb[0];                              \
+    const uint32_t nb11 = src1->nb[1];                              \
+    const uint32_t nb12 = src1->nb[2];                              \
+    const uint32_t nb13 = src1->nb[3];                              \
+                                                                    \
+    const uint32_t nb0 = dst->nb[0];                                \
+    const uint32_t nb1 = dst->nb[1];                                \
+    const uint32_t nb2 = dst->nb[2];                                \
     const uint32_t nb3 = dst->nb[3];
 
 #define htp_matmul_preamble                                         \
@@ -742,7 +740,6 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
          src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],                                                \
          (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));                                                                        \
 }
-
 
 #define MATVEC_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X1)                                                                       \
 static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                                        \
@@ -1006,7 +1003,6 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
          (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));                                                                        \
 }
 
-
 #define MATMUL_FFN_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X2, DOT_2X1)                                                          \
 static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                                    \
     struct htp_mm_context * mmctx = data;                                                                                         \
@@ -1132,164 +1128,45 @@ MATMUL_2D_REPACKED_IMPL(q8_0_flat,  1088, flat_vec_dot_q8_0_32x2,   flat_vec_dot
 MATMUL_2D_REPACKED_IMPL(iq4nl_flat, 576,  flat_vec_dot_iq4nl_32x2,  flat_vec_dot_iq4nl_32x1)
 MATMUL_2D_REPACKED_IMPL(mxfp4_flat, 544,  flat_vec_dot_mxfp4_32x2,  flat_vec_dot_mxfp4_32x1)
 
-#define quantize_preamble                                           \
-    struct htp_mm_context * mmctx = data;                           \
-    struct htp_ops_context * octx = mmctx->octx;                    \
-    const struct htp_tensor * src = octx->src[1];                   \
-    const uint32_t ne0 = src->ne[0];                                \
-    const uint32_t ne1 = src->ne[1];                                \
-    const uint32_t ne2 = src->ne[2];                                \
-    const uint32_t ne3 = src->ne[3];                                \
-    const uint32_t nrows = ne1 * ne2 * ne3;                         \
-    const uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread; \
-    const uint32_t ir_first = nrows_per_thread * ith;
-
-static void quantize_f32_q8_0_tiled(unsigned int nth, unsigned int ith, void * data) {
-    quantize_preamble;
-
-    if (ir_first >= nrows) {
-        return;
-    }
-
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-    const uint32_t ir_last = MIN(ir_first + nrows_per_thread, nrows);
-
-    const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = htp_mm_q8_0_tiled_row_size(ne0);
-
-    const float * restrict src_data = (const float *)((uint8_t *) src->data + (src_row_size * ir_first));
-    uint8_t * restrict     dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
-    uint8_t * restrict     tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
-
-    quantize_f32_q8_0_tiled_kernel(src_data, dst_data, tmp_data, ne0, ir_last - ir_first, src_row_size, dst_row_size);
-
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+#define QUANTIZE_IMPL(name, log_name, kernel_fn, dst_row_size_expr)                                        \
+static void name(unsigned int nth, unsigned int ith, void * data) {                                        \
+    struct htp_mm_context * mmctx = data;                                                                  \
+    struct htp_ops_context * octx = mmctx->octx;                                                           \
+    const struct htp_tensor * src = octx->src[1];                                                          \
+    const uint32_t ne0 = src->ne[0];                                                                       \
+    const uint32_t ne1 = src->ne[1];                                                                       \
+    const uint32_t ne2 = src->ne[2];                                                                       \
+    const uint32_t ne3 = src->ne[3];                                                                       \
+    const uint32_t nrows = ne1 * ne2 * ne3;                                                                \
+    const uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;                                        \
+                                                                                                           \
+    const uint32_t ir_first = nrows_per_thread * ith;                                                      \
+    if (ir_first >= nrows) {                                                                               \
+        return;                                                                                            \
+    }                                                                                                      \
+                                                                                                           \
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                              \
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);                                             \
+                                                                                                           \
+    uint8_t * restrict dst = mmctx->vtcm_src1;                                                             \
+    const uint32_t ir_last = MIN(ir_first + nrows_per_thread, nrows);                                      \
+    const size_t src_row_size = src->nb[1];                                                                \
+    const size_t dst_row_size = (dst_row_size_expr);                                                       \
+    const uint8_t * restrict src_data = (const uint8_t *) src->data + (src_row_size * ir_first);           \
+    uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);                             \
+    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith); \
+    kernel_fn(src_data, dst_data, tmp_data, ne0, ir_last - ir_first, src_row_size, dst_row_size);          \
+                                                                                                           \
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);                                              \
 }
 
-static void quantize_f32_q8_1_tiled(unsigned int nth, unsigned int ith, void * data) {
-    quantize_preamble;
-
-    if (ir_first >= nrows) {
-        return;
-    }
-
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-    const uint32_t ir_last = MIN(ir_first + nrows_per_thread, nrows);
-
-    const size_t src_row_size = src->nb[1];
-    const size_t dst_row_size = htp_mm_q8_1_tiled_row_size(ne0);
-
-    const float * restrict src_data = (const float *)((uint8_t *) src->data + (src_row_size * ir_first));
-    uint8_t * restrict     dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
-    uint8_t * restrict     tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
-
-    quantize_f32_q8_1_tiled_kernel(src_data, dst_data, tmp_data, ne0, ir_last - ir_first, src_row_size, dst_row_size);
-
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-}
-
-static void quantize_f32_f32(unsigned int nth, unsigned int ith, void * data) {
-    quantize_preamble;
-
-    if (ir_first >= nrows) {
-        return;
-    }
-
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-    uint32_t dst_stride = mmctx->vtcm_src1_stride;
-
-    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
-
-    const size_t src_row_size = ne0 * sizeof(float);
-    const size_t src_stride   = src->nb[1];
-
-    uint8_t * restrict src_data = (uint8_t *) src->data + (src_stride * ir_first);
-    uint8_t * restrict dst_data = (uint8_t *) dst       + (dst_stride * ir_first);
-
-    for (uint32_t i = ir_first; i < ir_last; ++i) {
-        hex_l2fetch(src_data, src_row_size, src_stride, 2);
-        hvx_copy_f32_au(dst_data, src_data, ne0);
-
-        dst_data += dst_stride;
-        src_data += src_stride;
-    }
-
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-}
-
-static void quantize_f32_f16(unsigned int nth, unsigned int ith, void * data) {
-    quantize_preamble;
-
-    if (ir_first >= nrows) {
-        return;
-    }
-
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-    uint32_t dst_stride = mmctx->vtcm_src1_stride;
-
-    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
-
-    const size_t src_row_size = ne0 * sizeof(float);
-    const size_t src_stride   = src->nb[1];
-
-    uint8_t * restrict src_data = (uint8_t *) src->data + (src_stride * ir_first);
-    uint8_t * restrict dst_data = (uint8_t *) dst       + (dst_stride * ir_first);
-
-    for (uint32_t i = ir_first; i < ir_last; ++i) {
-        hex_l2fetch(src_data, src_row_size, src_stride, 2);
-        hvx_copy_f16_f32_au(dst_data, src_data, ne0);
-
-        dst_data += dst_stride;
-        src_data += src_stride;
-    }
-
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-}
-
-// TODO just a plain copy that should be done via the DMA during the Op setup
-static void quantize_f16_f16(unsigned int nth, unsigned int ith, void * data) {
-    quantize_preamble;
-
-    if (ir_first >= nrows) {
-        return;
-    }
-
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-    uint32_t dst_stride = mmctx->vtcm_src1_stride;
-
-    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
-
-    const size_t src_row_size = ne0 * sizeof(float);
-    const size_t src_stride   = src->nb[1];
-
-    uint8_t * restrict src_data = (uint8_t *) src->data + (src_stride * ir_first);
-    uint8_t * restrict dst_data = (uint8_t *) dst       + (dst_stride * ir_first);
-
-    for (uint32_t i = ir_first; i < ir_last; ++i) {
-        hex_l2fetch(src_data, src_row_size, src_stride, 2);
-        hvx_copy_f16_au(dst_data, src_data, ne0);
-
-        dst_data += dst_stride;
-        src_data += src_stride;
-    }
-
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-}
+QUANTIZE_IMPL(quantize_f32_q8_0_tiled, "quantize-f32-q8_0_tiled", quantize_f32_q8_0_tiled_kernel, htp_mm_q8_0_tiled_row_size(ne0))
+QUANTIZE_IMPL(quantize_f32_q8_1_tiled, "quantize-f32-q8_1_tiled", quantize_f32_q8_1_tiled_kernel, htp_mm_q8_1_tiled_row_size(ne0))
+QUANTIZE_IMPL(quantize_f32_q8_0_flat,  "quantize-f32-q8_0_flat",  quantize_f32_q8_0_flat_kernel,  htp_mm_q8_0_flat_row_size(ne0))
+QUANTIZE_IMPL(quantize_f32_q8_1_flat,  "quantize-f32-q8_1_flat",  quantize_f32_q8_1_flat_kernel,  htp_mm_q8_1_flat_row_size(ne0))
+QUANTIZE_IMPL(quantize_f32_f32_flat,   "quantize-f32-f32",        quantize_f32_f32_flat_kernel,   mmctx->vtcm_src1_stride)
+QUANTIZE_IMPL(quantize_f32_f16_flat,   "quantize-f32-f16",        quantize_f32_f16_flat_kernel,   mmctx->vtcm_src1_stride)
+QUANTIZE_IMPL(quantize_f16_f16_flat,   "quantize-f16-f16",        quantize_f16_f16_flat_kernel,   mmctx->vtcm_src1_stride)
 
 static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, void * data) {
     struct htp_mm_context * mmctx = data;
@@ -1853,7 +1730,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
 
     switch (kparams->kernel_type) {
         case HTP_MM_KERNEL_HVX_F16_F16_VTCM:
-            quant_job_func         = (src1->type == HTP_TYPE_F32) ? quantize_f32_f16 : quantize_f16_f16;
+            quant_job_func         = (src1->type == HTP_TYPE_F32) ? quantize_f32_f16_flat : quantize_f16_f16_flat;
             mmctx->type            = "f16-f16";
             mmctx->vec_dot_1x1     = vec_dot_f16_f16_aa_1x1;
             mmctx->vec_dot_2x1     = vec_dot_f16_f16_aa_2x1;
@@ -1888,7 +1765,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
             break;
 
         case HTP_MM_KERNEL_HVX_F32_F32_VTCM:
-            quant_job_func         = quantize_f32_f32;
+            quant_job_func         = quantize_f32_f32_flat;
             mmctx->type            = "f32-f32";
             mmctx->vec_dot_1x1     = vec_dot_f32_f32_aa_1x1;
             mmctx->vec_dot_2x1     = vec_dot_f32_f32_aa_2x1;

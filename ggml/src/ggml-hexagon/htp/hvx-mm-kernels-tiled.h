@@ -1,170 +1,5 @@
 // Dynamic quantizers that produce tiled activations
 
-static inline HVX_Vector hvx_vec_mul_f16_f16_to_f32_lower32(HVX_Vector v1, HVX_Vector v2) {
-#if __HVX_ARCH__ >= 79
-    HVX_VectorPair p = Q6_Wsf_vmpy_VhfVhf(v1, v2);
-    return Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_hi_W(p), Q6_V_lo_W(p), -4));
-#else
-    HVX_VectorPair p = Q6_Wqf32_vmpy_VhfVhf(v1, v2);
-    HVX_Vector hi = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(p));
-    HVX_Vector lo = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(p));
-    return Q6_V_lo_W(Q6_W_vshuff_VVR(hi, lo, -4));
-#endif
-}
-
-static inline HVX_Vector unpack_and_interleave_4bit(HVX_Vector v_a, HVX_Vector v_b, HVX_Vector mask_h4) {
-    HVX_Vector v_W0 = Q6_V_vand_VV(v_a, mask_h4);
-    HVX_Vector v_W1 = Q6_Vub_vlsr_VubR(v_a, 4);
-    HVX_Vector v_W2 = Q6_V_vand_VV(v_b, mask_h4);
-    HVX_Vector v_W3 = Q6_Vub_vlsr_VubR(v_b, 4);
-
-    HVX_VectorPair v01_pair = Q6_W_vshuff_VVR(v_W1, v_W0, -1);
-    HVX_VectorPair v23_pair = Q6_W_vshuff_VVR(v_W3, v_W2, -1);
-    HVX_VectorPair v0123_pair = Q6_W_vshuff_VVR(Q6_V_lo_W(v23_pair), Q6_V_lo_W(v01_pair), -2);
-    return Q6_V_lo_W(v0123_pair);
-}
-
-static inline HVX_VectorPair unpack_and_interleave_4bit_x2(HVX_Vector v_src, HVX_Vector mask_h4) {
-    HVX_Vector v_lo = Q6_V_vand_VV(v_src, mask_h4);
-    HVX_Vector v_hi = Q6_Vub_vlsr_VubR(v_src, 4);
-    HVX_VectorPair v01_pair = Q6_W_vshuff_VVR(v_hi, v_lo, -1);
-    HVX_Vector v01_lo = Q6_V_lo_W(v01_pair);
-    HVX_Vector v01_hi = Q6_V_hi_W(v01_pair);
-
-    HVX_Vector v23_lo = Q6_V_valign_VVR(v01_hi, v01_lo, 64);
-    HVX_Vector v_W0 = Q6_V_lo_W(Q6_W_vshuff_VVR(v23_lo, v01_lo, -2));
-
-    HVX_Vector v67_lo = Q6_V_valign_VVR(v01_lo, v01_hi, 64);
-    HVX_Vector v_W1 = Q6_V_lo_W(Q6_W_vshuff_VVR(v67_lo, v01_hi, -2));
-
-    return Q6_W_vcombine_VV(v_W1, v_W0);
-}
-
-static inline HVX_Vector accum_4bit_32x1(
-    const HVX_Vector * restrict vptr,
-    const HVX_Vector * restrict v_act,
-    HVX_Vector i8
-) {
-    HVX_Vector v_sum0 = Q6_V_vzero();
-    HVX_Vector v_sum1 = Q6_V_vzero();
-    HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
-
-    #pragma unroll
-    for (int i = 0; i < 4; i++) {
-        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
-        HVX_Vector v_W0 = Q6_Vb_vsub_VbVb(Q6_V_lo_W(v_W_pair), i8);
-        HVX_Vector v_W1 = Q6_Vb_vsub_VbVb(Q6_V_hi_W(v_W_pair), i8);
-        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act[i * 2 + 0]);
-        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act[i * 2 + 1]);
-    }
-
-    return Q6_Vw_vadd_VwVw(v_sum0, v_sum1);
-}
-
-static inline HVX_Vector accum_4bit_32x1_lut(
-    const HVX_Vector * restrict vptr,
-    const HVX_Vector * restrict v_act,
-    HVX_Vector mask_h4,
-    HVX_Vector lut
-) {
-    HVX_Vector v_sum0 = Q6_V_vzero();
-    HVX_Vector v_sum1 = Q6_V_vzero();
-
-    #pragma unroll
-    for (int i = 0; i < 4; i++) {
-        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
-        HVX_Vector v_W0 = Q6_Vb_vlut32_VbVbI(Q6_V_lo_W(v_W_pair), lut, 0);
-        HVX_Vector v_W1 = Q6_Vb_vlut32_VbVbI(Q6_V_hi_W(v_W_pair), lut, 0);
-        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act[i * 2 + 0]);
-        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act[i * 2 + 1]);
-    }
-
-    return Q6_Vw_vadd_VwVw(v_sum0, v_sum1);
-}
-
-static inline HVX_VectorPair accum_4bit_32x2(
-    const HVX_Vector * restrict vptr,
-    const HVX_Vector * restrict v_act0,
-    const HVX_Vector * restrict v_act1,
-    HVX_Vector i8
-) {
-    HVX_Vector v_sum0 = Q6_V_vzero();
-    HVX_Vector v_sum1 = Q6_V_vzero();
-    HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
-
-    #pragma unroll
-    for (int i = 0; i < 4; i++) {
-        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
-        HVX_Vector v_W0 = Q6_Vb_vsub_VbVb(Q6_V_lo_W(v_W_pair), i8);
-        HVX_Vector v_W1 = Q6_Vb_vsub_VbVb(Q6_V_hi_W(v_W_pair), i8);
-
-        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act0[i * 2 + 0]);
-        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W1, v_act0[i * 2 + 1]);
-
-        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W0, v_act1[i * 2 + 0]);
-        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act1[i * 2 + 1]);
-    }
-
-    return Q6_W_vcombine_VV(v_sum1, v_sum0);
-}
-
-static inline HVX_VectorPair accum_4bit_32x2_lut(
-    const HVX_Vector * restrict vptr,
-    const HVX_Vector * restrict v_act0,
-    const HVX_Vector * restrict v_act1,
-    HVX_Vector mask_h4,
-    HVX_Vector lut
-) {
-    HVX_Vector v_sum0 = Q6_V_vzero();
-    HVX_Vector v_sum1 = Q6_V_vzero();
-
-    #pragma unroll
-    for (int i = 0; i < 4; i++) {
-        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
-        HVX_Vector v_W0 = Q6_Vb_vlut32_VbVbI(Q6_V_lo_W(v_W_pair), lut, 0);
-        HVX_Vector v_W1 = Q6_Vb_vlut32_VbVbI(Q6_V_hi_W(v_W_pair), lut, 0);
-
-        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act0[i * 2 + 0]);
-        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W1, v_act0[i * 2 + 1]);
-
-        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W0, v_act1[i * 2 + 0]);
-        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act1[i * 2 + 1]);
-    }
-
-    return Q6_W_vcombine_VV(v_sum1, v_sum0);
-}
-
-static inline HVX_Vector accum_q8_0_32x1(
-    const HVX_Vector * restrict vptr,
-    const HVX_Vector * restrict v_act
-) {
-    HVX_Vector v_sum = Q6_V_vzero();
-    #pragma unroll
-    for (int g = 0; g < 8; g++) {
-        HVX_Vector v_rot = Q6_V_vror_VR(vptr[g], 64);
-        HVX_Vector v_W = Q6_V_lo_W(Q6_W_vshuff_VVR(v_rot, vptr[g], -2));
-        v_sum = Q6_Vw_vrmpyacc_VwVbVb(v_sum, v_W, v_act[g]);
-    }
-    return v_sum;
-}
-
-static inline HVX_VectorPair accum_q8_0_32x2(
-    const HVX_Vector * restrict vptr,
-    const HVX_Vector * restrict v_act0,
-    const HVX_Vector * restrict v_act1
-) {
-    HVX_Vector v_sum0 = Q6_V_vzero();
-    HVX_Vector v_sum1 = Q6_V_vzero();
-    #pragma unroll
-    for (int g = 0; g < 8; g++) {
-        HVX_Vector v_rot = Q6_V_vror_VR(vptr[g], 64);
-        HVX_Vector v_W = Q6_V_lo_W(Q6_W_vshuff_VVR(v_rot, vptr[g], -2));
-        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W, v_act0[g]);
-        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W, v_act1[g]);
-    }
-    return Q6_W_vcombine_VV(v_sum1, v_sum0);
-}
-
 static inline void quantize_block_f32_q8_1_tiled(float * restrict x, uint8_t * restrict y_block) {
     assert((unsigned long) x % 128 == 0);
     assert((unsigned long) y_block % 128 == 0);
@@ -376,7 +211,172 @@ static void quantize_row_f32_q8_1_tiled(float * restrict x, uint8_t * restrict y
     }
 }
 
-// Dot kernels that consume tiled activations
+// Dot kernels & helpers that consume tiled activations
+
+static inline HVX_Vector hvx_vec_mul_f16_f16_to_f32_lower32(HVX_Vector v1, HVX_Vector v2) {
+#if __HVX_ARCH__ >= 79
+    HVX_VectorPair p = Q6_Wsf_vmpy_VhfVhf(v1, v2);
+    return Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_hi_W(p), Q6_V_lo_W(p), -4));
+#else
+    HVX_VectorPair p = Q6_Wqf32_vmpy_VhfVhf(v1, v2);
+    HVX_Vector hi = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(p));
+    HVX_Vector lo = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(p));
+    return Q6_V_lo_W(Q6_W_vshuff_VVR(hi, lo, -4));
+#endif
+}
+
+static inline HVX_Vector unpack_and_interleave_4bit(HVX_Vector v_a, HVX_Vector v_b, HVX_Vector mask_h4) {
+    HVX_Vector v_W0 = Q6_V_vand_VV(v_a, mask_h4);
+    HVX_Vector v_W1 = Q6_Vub_vlsr_VubR(v_a, 4);
+    HVX_Vector v_W2 = Q6_V_vand_VV(v_b, mask_h4);
+    HVX_Vector v_W3 = Q6_Vub_vlsr_VubR(v_b, 4);
+
+    HVX_VectorPair v01_pair = Q6_W_vshuff_VVR(v_W1, v_W0, -1);
+    HVX_VectorPair v23_pair = Q6_W_vshuff_VVR(v_W3, v_W2, -1);
+    HVX_VectorPair v0123_pair = Q6_W_vshuff_VVR(Q6_V_lo_W(v23_pair), Q6_V_lo_W(v01_pair), -2);
+    return Q6_V_lo_W(v0123_pair);
+}
+
+static inline HVX_VectorPair unpack_and_interleave_4bit_x2(HVX_Vector v_src, HVX_Vector mask_h4) {
+    HVX_Vector v_lo = Q6_V_vand_VV(v_src, mask_h4);
+    HVX_Vector v_hi = Q6_Vub_vlsr_VubR(v_src, 4);
+    HVX_VectorPair v01_pair = Q6_W_vshuff_VVR(v_hi, v_lo, -1);
+    HVX_Vector v01_lo = Q6_V_lo_W(v01_pair);
+    HVX_Vector v01_hi = Q6_V_hi_W(v01_pair);
+
+    HVX_Vector v23_lo = Q6_V_valign_VVR(v01_hi, v01_lo, 64);
+    HVX_Vector v_W0 = Q6_V_lo_W(Q6_W_vshuff_VVR(v23_lo, v01_lo, -2));
+
+    HVX_Vector v67_lo = Q6_V_valign_VVR(v01_lo, v01_hi, 64);
+    HVX_Vector v_W1 = Q6_V_lo_W(Q6_W_vshuff_VVR(v67_lo, v01_hi, -2));
+
+    return Q6_W_vcombine_VV(v_W1, v_W0);
+}
+
+static inline HVX_Vector accum_4bit_32x1(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act,
+    HVX_Vector i8
+) {
+    HVX_Vector v_sum0 = Q6_V_vzero();
+    HVX_Vector v_sum1 = Q6_V_vzero();
+    HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
+        HVX_Vector v_W0 = Q6_Vb_vsub_VbVb(Q6_V_lo_W(v_W_pair), i8);
+        HVX_Vector v_W1 = Q6_Vb_vsub_VbVb(Q6_V_hi_W(v_W_pair), i8);
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act[i * 2 + 0]);
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act[i * 2 + 1]);
+    }
+
+    return Q6_Vw_vadd_VwVw(v_sum0, v_sum1);
+}
+
+static inline HVX_Vector accum_4bit_32x1_lut(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act,
+    HVX_Vector mask_h4,
+    HVX_Vector lut
+) {
+    HVX_Vector v_sum0 = Q6_V_vzero();
+    HVX_Vector v_sum1 = Q6_V_vzero();
+
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
+        HVX_Vector v_W0 = Q6_Vb_vlut32_VbVbI(Q6_V_lo_W(v_W_pair), lut, 0);
+        HVX_Vector v_W1 = Q6_Vb_vlut32_VbVbI(Q6_V_hi_W(v_W_pair), lut, 0);
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act[i * 2 + 0]);
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act[i * 2 + 1]);
+    }
+
+    return Q6_Vw_vadd_VwVw(v_sum0, v_sum1);
+}
+
+static inline HVX_VectorPair accum_4bit_32x2(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act0,
+    const HVX_Vector * restrict v_act1,
+    HVX_Vector i8
+) {
+    HVX_Vector v_sum0 = Q6_V_vzero();
+    HVX_Vector v_sum1 = Q6_V_vzero();
+    HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
+
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
+        HVX_Vector v_W0 = Q6_Vb_vsub_VbVb(Q6_V_lo_W(v_W_pair), i8);
+        HVX_Vector v_W1 = Q6_Vb_vsub_VbVb(Q6_V_hi_W(v_W_pair), i8);
+
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act0[i * 2 + 0]);
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W1, v_act0[i * 2 + 1]);
+
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W0, v_act1[i * 2 + 0]);
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act1[i * 2 + 1]);
+    }
+
+    return Q6_W_vcombine_VV(v_sum1, v_sum0);
+}
+
+static inline HVX_VectorPair accum_4bit_32x2_lut(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act0,
+    const HVX_Vector * restrict v_act1,
+    HVX_Vector mask_h4,
+    HVX_Vector lut
+) {
+    HVX_Vector v_sum0 = Q6_V_vzero();
+    HVX_Vector v_sum1 = Q6_V_vzero();
+
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+        HVX_VectorPair v_W_pair = unpack_and_interleave_4bit_x2(vptr[i], mask_h4);
+        HVX_Vector v_W0 = Q6_Vb_vlut32_VbVbI(Q6_V_lo_W(v_W_pair), lut, 0);
+        HVX_Vector v_W1 = Q6_Vb_vlut32_VbVbI(Q6_V_hi_W(v_W_pair), lut, 0);
+
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W0, v_act0[i * 2 + 0]);
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W1, v_act0[i * 2 + 1]);
+
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W0, v_act1[i * 2 + 0]);
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W1, v_act1[i * 2 + 1]);
+    }
+
+    return Q6_W_vcombine_VV(v_sum1, v_sum0);
+}
+
+static inline HVX_Vector accum_q8_0_32x1(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act
+) {
+    HVX_Vector v_sum = Q6_V_vzero();
+    #pragma unroll
+    for (int g = 0; g < 8; g++) {
+        HVX_Vector v_rot = Q6_V_vror_VR(vptr[g], 64);
+        HVX_Vector v_W = Q6_V_lo_W(Q6_W_vshuff_VVR(v_rot, vptr[g], -2));
+        v_sum = Q6_Vw_vrmpyacc_VwVbVb(v_sum, v_W, v_act[g]);
+    }
+    return v_sum;
+}
+
+static inline HVX_VectorPair accum_q8_0_32x2(
+    const HVX_Vector * restrict vptr,
+    const HVX_Vector * restrict v_act0,
+    const HVX_Vector * restrict v_act1
+) {
+    HVX_Vector v_sum0 = Q6_V_vzero();
+    HVX_Vector v_sum1 = Q6_V_vzero();
+    #pragma unroll
+    for (int g = 0; g < 8; g++) {
+        HVX_Vector v_rot = Q6_V_vror_VR(vptr[g], 64);
+        HVX_Vector v_W = Q6_V_lo_W(Q6_W_vshuff_VVR(v_rot, vptr[g], -2));
+        v_sum0 = Q6_Vw_vrmpyacc_VwVbVb(v_sum0, v_W, v_act0[g]);
+        v_sum1 = Q6_Vw_vrmpyacc_VwVbVb(v_sum1, v_W, v_act1[g]);
+    }
+    return Q6_W_vcombine_VV(v_sum1, v_sum0);
+}
 
 static void tiled_vec_dot_q4_0_32x1(const int n, float * restrict s, const void * restrict vx, const void * restrict vy, int valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
@@ -826,7 +826,7 @@ static void tiled_vec_dot_mxfp4_32x2(const int n, float * restrict s0, float * r
 }
 
 static inline void quantize_f32_q8_0_tiled_kernel(
-    const float * restrict src_data,
+    const uint8_t * restrict src_data,
     uint8_t * restrict dst_data,
     uint8_t * restrict tmp_data,
     uint32_t ne0,
@@ -839,16 +839,16 @@ static inline void quantize_f32_q8_0_tiled_kernel(
 
     for (uint32_t i = 0; i < nrows; ++i) {
         hex_l2fetch(src_data, src_row_size, src_row_size, 2);
-        hvx_copy_f32_aa(tmp_data, (const uint8_t *) src_data, ne0);
+        hvx_copy_f32_aa(tmp_data, src_data, ne0);
 
         quantize_row_f32_q8_0_tiled((float *) tmp_data, dst_data, ne0);
         dst_data += dst_row_size;
-        src_data = (const float *)((const uint8_t *) src_data + src_row_size);
+        src_data += src_row_size;
     }
 }
 
 static inline void quantize_f32_q8_1_tiled_kernel(
-    const float * restrict src_data,
+    const uint8_t * restrict src_data,
     uint8_t * restrict dst_data,
     uint8_t * restrict tmp_data,
     uint32_t ne0,
@@ -861,11 +861,11 @@ static inline void quantize_f32_q8_1_tiled_kernel(
 
     for (uint32_t i = 0; i < nrows; ++i) {
         hex_l2fetch(src_data, src_row_size, src_row_size, 2);
-        hvx_copy_f32_aa(tmp_data, (const uint8_t *) src_data, ne0);
+        hvx_copy_f32_aa(tmp_data, src_data, ne0);
 
         quantize_row_f32_q8_1_tiled((float *) tmp_data, dst_data, ne0);
         dst_data += dst_row_size;
-        src_data = (const float *)((const uint8_t *) src_data + src_row_size);
+        src_data += src_row_size;
     }
 }
 
