@@ -221,6 +221,30 @@ struct llama_layer_nextn {
     struct ggml_tensor * shared_head_norm      = nullptr;
 };
 
+// granite-switch: per-token embedded LoRA adapters, stacked across N = num_adapters + 1
+// slots in dim 2 (slot 0 is zero-filled so base tokens add an exact-zero delta).
+// A: {n_embd_in, max_lora_rank, N}   B: {max_lora_rank, n_embd_out, N}
+// 7 injection sites (q, k, v, o, gate, up, down), each with an A and a B = 14 tensors.
+struct llama_layer_switch_lora {
+    // attention: q/k/v are separate slices of the fused qkv projection (different out dims)
+    struct ggml_tensor * a_q    = nullptr;
+    struct ggml_tensor * b_q    = nullptr;
+    struct ggml_tensor * a_k    = nullptr;
+    struct ggml_tensor * b_k    = nullptr;
+    struct ggml_tensor * a_v    = nullptr;
+    struct ggml_tensor * b_v    = nullptr;
+    struct ggml_tensor * a_o    = nullptr;
+    struct ggml_tensor * b_o    = nullptr;
+
+    // feed-forward
+    struct ggml_tensor * a_gate = nullptr;
+    struct ggml_tensor * b_gate = nullptr;
+    struct ggml_tensor * a_up   = nullptr;
+    struct ggml_tensor * b_up   = nullptr;
+    struct ggml_tensor * a_down = nullptr;
+    struct ggml_tensor * b_down = nullptr;
+};
+
 struct llama_layer {
     // normalization
     struct ggml_tensor * attn_norm       = nullptr;
@@ -525,6 +549,8 @@ struct llama_layer {
     struct llama_layer_shortconv shortconv;
 
     struct llama_layer_nextn nextn;
+
+    struct llama_layer_switch_lora switch_lora;
 };
 
 struct llama_device {
