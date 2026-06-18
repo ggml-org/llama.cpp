@@ -309,6 +309,41 @@ vec_dot_q6_K_q8_1_impl_mmvq(const int &vl, const int &vh,
         vl, vh, u[0], u[1], scales[0], scales[4], d, d8[0], d8[1]);
 }
 
+#define VDR_Q1_0_Q8_1_MMVQ 1
+#define VDR_Q1_0_Q8_1_MMQ  4
+
+static __dpct_inline__ float
+vec_dot_q1_0_q8_1(const void *__restrict__ vbq,
+                  const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
+
+    const block_q1_0 * bq1_0 = (const block_q1_0 *) vbq;
+
+    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+    const float        d1          = bq1_0->d;
+    const int          v           = get_int_from_uint8_aligned(bq1_0->qs, iqs);
+
+    int vi_bytes[8];
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int shift = j * 4;
+        const int bits4 = (v >> shift) & 0x0F;
+        const int b0    = (bits4 & 0x01) ? 1 : -1;
+        const int b1    = (bits4 & 0x02) ? 1 : -1;
+        const int b2    = (bits4 & 0x04) ? 1 : -1;
+        const int b3    = (bits4 & 0x08) ? 1 : -1;
+        vi_bytes[j]     = (b0 & 0xFF) | ((b1 & 0xFF) << 8) | ((b2 & 0xFF) << 16) | ((b3 & 0xFF) << 24);
+    }
+
+    int sumi = 0;
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int u = get_int_from_int8_aligned(bq8_1_chunk->qs, j);
+        sumi        = ggml_sycl_dp4a(vi_bytes[j], u, sumi);
+    }
+
+    return d1 * bq8_1_chunk->ds[0] * sumi;
+}
+
 // VDR = vec dot ratio, how many contiguous integers each thread processes when the vec dot kernel is called
 // MMVQ = mul_mat_vec_q, MMQ = mul_mat_q
 

@@ -976,6 +976,7 @@ static int64_t get_row_rounding(ggml_type type, const std::array<float, GGML_SYC
     }
 
     switch(type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
             return max_compute_capability >= VER_GEN9 ? 128 : 64;
@@ -3507,6 +3508,7 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
             return true;
@@ -3522,6 +3524,7 @@ inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
             return true;
@@ -3532,6 +3535,7 @@ inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q3_K:
@@ -3546,6 +3550,7 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
 
 static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -5385,7 +5390,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_device_buffer_from_host_ptr(ggml_
     return nullptr;
 }
 
-static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_sycl_device_context *sycl_ctx =
         (ggml_backend_sycl_device_context *)dev->context;
     int device = sycl_ctx->device;
@@ -5450,18 +5455,11 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 struct ggml_tensor * a = op->src[0];
                 struct ggml_tensor * b = op->src[1];
 
-                // disable Q1_0 until implementation
-                if (a->type == GGML_TYPE_Q1_0 || b->type == GGML_TYPE_Q1_0) {
-                    return false;
-                }
-
                 if (a->ne[3] != b->ne[3]) {
                     return false;
                 }
 
                 ggml_type src0_type = op->src[0]->type;
-
-
 
                 // TODO: The configuration below needs more work to be supported with oneDNN
                 if (ggml_is_permuted(a) && !ggml_is_contiguous(a) &&
@@ -5472,12 +5470,17 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 // TODO: This specific configuration can fail with oneDNN and needs more debugging
                 if (!ggml_is_permuted(a) && ggml_is_permuted(b) && b->ne[2] > 1 && b->ne[3] > 1 &&
                     a->ne[0] > 128 && a->ne[2] == 1 && src0_type == GGML_TYPE_F16) {
+                        printf("zjy 2\n");
                     return false;
                 }
                 return true;
             }
         case GGML_OP_OUT_PROD:
-            return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->ne[2] == 1 && op->ne[3] == 1;
+            return op->type == GGML_TYPE_F32 &&
+                   (op->src[0]->type == GGML_TYPE_F32 ||
+                    (op->src[0]->type == GGML_TYPE_Q1_0 && op->src[0]->ne[2] == op->src[1]->ne[2] &&
+                     op->src[0]->ne[3] == op->src[1]->ne[3])) &&
+                   op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_GET_ROWS:
             {
                 switch (op->src[0]->type) {
@@ -5732,6 +5735,13 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
     }
 
     GGML_UNUSED(dev);
+}
+
+static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    bool res = do_ggml_backend_sycl_device_supports_op(dev, op);
+    GGML_SYCL_DEBUG("[SYCL] call %s op->op=%s op->type=%s -> %s\n", __func__, ggml_op_name(op->op),
+                    ggml_type_name(op->type), res ? "true" : "false");
+    return res;
 }
 
 static bool ggml_backend_sycl_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {

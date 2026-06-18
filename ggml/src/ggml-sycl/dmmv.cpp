@@ -1423,6 +1423,50 @@ static void dequantize_mul_mat_vec_q4_0_sycl(const void *vx, const dfloat *y,
     }
 }
 
+static void dequantize_mul_mat_vec_q1_0_sycl_reorder(const void *vx, const dfloat *y,
+                                             float *dst, const int ncols,
+                                             const int nrows,
+                                             dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    // the number of rows may exceed maximum grid size in the y or z dimensions, use the x dimension instead
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+    {
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
+
+        stream->parallel_for(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_reorder<QK1_0, QR1_0, dequantize_q1_0_reorder>(
+                    vx, y, dst, ncols, nrows, item_ct1);
+            });
+    }
+}
+
+static void dequantize_mul_mat_vec_q1_0_sycl(const void *vx, const dfloat *y,
+                                             float *dst, const int ncols,
+                                             const int nrows,
+                                             dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    // the number of rows may exceed maximum grid size in the y or z dimensions, use the x dimension instead
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+    {
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
+
+        stream->parallel_for(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec<QK1_0, QR1_0, dequantize_q1_0>(
+                    vx, y, dst, ncols, nrows, item_ct1);
+            });
+    }
+}
+
 static void dequantize_mul_mat_vec_q4_1_sycl(const void *vx, const dfloat *y,
                                              float *dst, const int ncols,
                                              const int nrows,
@@ -1759,6 +1803,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     sycl::half *src1_dfloat = nullptr; // dfloat == half
 
     bool src1_convert_f16 =
+        src0->type == GGML_TYPE_Q1_0 ||
         src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_1 ||
         src0->type == GGML_TYPE_Q5_0 || src0->type == GGML_TYPE_Q5_1 ||
         src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_F16 ||
@@ -1777,6 +1822,14 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
 #endif // GGML_SYCL_F16
 
     switch (src0->type) {
+        case GGML_TYPE_Q1_0:
+            if ((ggml_tensor_extra_gpu*)dst->src[0]->extra &&
+                ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
+                dequantize_mul_mat_vec_q1_0_sycl_reorder(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            } else {
+                dequantize_mul_mat_vec_q1_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            }
+            break;
         case GGML_TYPE_Q4_0:
             if ((ggml_tensor_extra_gpu*)dst->src[0]->extra &&
                 ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
