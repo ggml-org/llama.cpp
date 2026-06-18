@@ -46,11 +46,13 @@ jobs:
 
     steps:
       - id: check
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "should_release=true" >> $GITHUB_OUTPUT
           elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/master" ]]; then
-            if echo "${{ github.event.head_commit.message }}" | grep -q '\[no release\]'; then
+            if echo "$COMMIT_MESSAGE" | grep -q '\[no release\]'; then
               echo "should_release=false" >> $GITHUB_OUTPUT
             else
               echo "should_release=true" >> $GITHUB_OUTPUT
