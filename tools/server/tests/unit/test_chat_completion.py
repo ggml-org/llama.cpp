@@ -307,6 +307,20 @@ def test_completion_with_grammar(jinja: bool, grammar: str, n_predicted: int, re
     assert match_regex(re_content, choice["message"]["content"]), choice["message"]["content"]
 
 
+def test_completion_with_invalid_grammar():
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [
+            {"role": "user", "content": "Does not matter what I say, does it?"},
+        ],
+        "grammar": "root ::= this is (not valid GBNF",
+    })
+    assert res.status_code == 400, res.body
+    assert "error" in res.body
+
+
 @pytest.mark.parametrize("messages", [
     None,
     "string",
