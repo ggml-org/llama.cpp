@@ -9,6 +9,7 @@
 #include <vector>
 #include <stdio.h>
 #include "htp-ops.h"
+#include "htp/matmul-ops.h"
 
 struct htp_opnode {
     ggml_tensor * node = nullptr;
@@ -18,6 +19,8 @@ struct htp_opnode {
     htp_op_code opcode = HTP_OP_INVALID;
 
     std::vector<ggml_tensor *> extra_dsts;
+
+    int32_t kernel_params[HTP_OP_MAX_KERN_PARAMS] = {0};
 
     htp_opnode(ggml_tensor * node = nullptr, std::vector<ggml_tensor *> fused = {}, htp_op_code opcode = HTP_OP_INVALID, std::vector<ggml_tensor *> extra_dsts = {})
         : node(node), fused(std::move(fused)), opcode(opcode), extra_dsts(std::move(extra_dsts)) {}
@@ -152,6 +155,7 @@ struct htp_opformat {
     char types[16 * GGML_MAX_SRC];
     char buffs[64 * GGML_MAX_SRC];
     char names[64 * GGML_MAX_SRC];
+    char kparams[128];
 
     int format_tensor_dims(char * str, const struct ggml_tensor * t) {
         if (!t) {
@@ -277,6 +281,27 @@ struct htp_opformat {
 
         p += sprintf(p, "%s", node.dst()->name);
     }
+    void format_kernel_params(char * str, const htp_opnode & node) {
+        if (node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ID ||
+            node.opcode == HTP_OP_MUL_MAT_QKV || node.opcode == HTP_OP_MUL_MAT_FFN) {
+            const auto * kparams = (const struct htp_mm_kernel_params *) node.kernel_params;
+            const char * path = "unknown";
+            int32_t type = kparams->kernel_type;
+            if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_F16_BATCHED) {
+                path = "hmx-tiled";
+            } else if (type == HTP_MM_KERNEL_HVX_F16_F16_VTCM || type == HTP_MM_KERNEL_HVX_F32_F32_VTCM ||
+                       type == HTP_MM_KERNEL_HVX_QUANT_ROW    || type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
+                path = "hvx-tiled";
+            } else if (type == HTP_MM_KERNEL_HVX_F16_F16_DDR  || type == HTP_MM_KERNEL_HVX_F16_F32_DDR ||
+                       type == HTP_MM_KERNEL_HVX_F32_F32_DDR  || type == HTP_MM_KERNEL_HVX_F32_F16_DDR ||
+                       type == HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT) {
+                path = "hvx-flat";
+            }
+            sprintf(str, "%s vtcm %d", path, (int) kparams->vtcm_size);
+        } else {
+            sprintf(str, "----");
+        }
+    }
 
     void format(const htp_opnode & node) {
         format_op_dims(dims, node);
@@ -284,9 +309,17 @@ struct htp_opformat {
         format_op_types(types, node);
         format_op_buffs(buffs, node);
         format_op_names(names, node);
+        format_kernel_params(kparams, node);
     }
 
-    htp_opformat() {}
+    htp_opformat() {
+        strides[0] = '\0';
+        dims[0]    = '\0';
+        types[0]   = '\0';
+        buffs[0]   = '\0';
+        names[0]   = '\0';
+        kparams[0] = '\0';
+    }
     htp_opformat(const htp_opnode & node) { format(node); }
 };
 

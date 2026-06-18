@@ -135,8 +135,8 @@ static void ggml_hexagon_dump_op_exec(const std::string &sess_name, const htp_op
     if (!opt_verbose) return;
 
     htp_opformat fmt(node);
-    GGML_LOG_DEBUG("ggml-hex: %s execute-op %s: %s : %s : %s : %s : %s : flags 0x%x\n", sess_name.c_str(),
-                node.op_name().c_str(), fmt.names, fmt.dims, fmt.types, fmt.strides, fmt.buffs, req_flags);
+    GGML_LOG_DEBUG("ggml-hex: %s execute-op %s: %s : %s : %s : %s : %s : %s : flags 0x%x\n", sess_name.c_str(),
+                node.op_name().c_str(), fmt.names, fmt.dims, fmt.types, fmt.strides, fmt.buffs, fmt.kparams, req_flags);
 }
 
 static void ggml_hexagon_dump_op_supp(const std::string &sess_name, const struct ggml_tensor * op, bool supp) {
@@ -178,8 +178,8 @@ static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const htp_op
 
     htp_opformat fmt(node);
     float mhz = op_usec > 0 ? (float) op_cycles / op_usec : 0.0f;
-    GGML_LOG_DEBUG("ggml-hex: %s profile-op %s: %s : %s : %s : %s : usec %u cycles %u start %u mhz %.1f%s\n", sess_name.c_str(),
-            node.op_name().c_str(), fmt.names, fmt.dims, fmt.types, fmt.strides, op_usec, op_cycles, pd.cycles_start, mhz, pmu_str);
+    GGML_LOG_DEBUG("ggml-hex: %s profile-op %s: %s : %s : %s : %s : %s : usec %u cycles %u start %u mhz %.1f%s\n", sess_name.c_str(),
+            node.op_name().c_str(), fmt.names, fmt.dims, fmt.types, fmt.strides, fmt.kparams, op_usec, op_cycles, pd.cycles_start, mhz, pmu_str);
 }
 
 // ** backend sessions
@@ -1486,46 +1486,20 @@ struct ggml_hexagon_opbatch {
         ops[n] = node;
 
         htp_op_desc &o = h_ops[n];
-        memcpy(&o.params, &node.node->op_params, sizeof(node.node->op_params));
+        memcpy(o.params,        node.node->op_params, sizeof(node.node->op_params));
+        memcpy(o.kernel_params, node.kernel_params,   sizeof(o.kernel_params));
         o.opcode = node.opcode;
         o.flags  = 0;
-        memset(o.kernel_params, 0, sizeof(o.kernel_params));
-
-        if (o.opcode == HTP_OP_MUL_MAT || o.opcode == HTP_OP_MUL_MAT_ID) {
-            ggml_hexagon_precompute_matmul_params(
-                sess,
-                node.node->src[0],
-                node.node->src[1],
-                node.node,
-                (struct htp_mm_kernel_params *)o.kernel_params
-            );
-        } else if (o.opcode == HTP_OP_MUL_MAT_QKV) {
-            auto inputs = node.get_inputs();
-            ggml_hexagon_precompute_fused_qkv_params(
-                sess,
-                inputs[0],
-                inputs[1],
-                (struct htp_mm_kernel_params *)o.kernel_params
-            );
-        } else if (o.opcode == HTP_OP_MUL_MAT_FFN) {
-            auto inputs = node.get_inputs();
-            ggml_hexagon_precompute_fused_ffn_params(
-                sess,
-                inputs[0],
-                inputs[1],
-                (struct htp_mm_kernel_params *)o.kernel_params
-            );
-        }
 
         if (!(opt_opstage & HTP_OPSTAGE_COMPUTE)) {
             o.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
         }
 
-        ggml_hexagon_dump_op_exec(sess->c_name(), node, o.flags);
+        ggml_hexagon_dump_op_exec(sess->c_name(), ops[n], o.flags);
 
         auto inputs = node.get_inputs();
         for (unsigned int i=0; i < HTP_OP_MAX_INPUTS; i++) {
-            o.src[i] = (i < inputs.size() && inputs[i]) ? add_tensor(inputs[i]) : 0xffff;
+            o.src[i] = (i < inputs.size() && inputs[i])   ? add_tensor(inputs[i]) : 0xffff;
         }
 
         auto outputs = node.get_outputs();
@@ -3450,6 +3424,7 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
                 htp_opnode node(n1, {}, HTP_OP_MUL_MAT_QKV);
                 node.add_fused(n2, true);
                 node.add_fused(n, true);
+                memcpy(node.kernel_params, &kparams, sizeof(kparams));
                 nodes.push_back(std::move(node));
                 i += 2;
                 return true;
@@ -3464,6 +3439,7 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
             if ((size_t)kparams.vtcm_size <= sess->vtcm_size) {
                 htp_opnode node(n, {}, HTP_OP_MUL_MAT_FFN);
                 node.add_fused(n1, true);
+                memcpy(node.kernel_params, &kparams, sizeof(kparams));
                 nodes.push_back(std::move(node));
                 i += 1;
                 return true;
@@ -3485,7 +3461,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
     std::vector<htp_opnode> nodes;
     nodes.reserve(graph->n_nodes);
 
-    // Fusion
+    // Fuse and finalize
     for (int i = 0; i < graph->n_nodes; ++i) {
         ggml_tensor * n = graph->nodes[i];
         if (!op_is_compute(n)) {
@@ -3498,6 +3474,12 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
         htp_opnode node(n, {}, HTP_OP_INVALID);
         node.opcode = op_remap_to_htp(n);
+        if (node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ID) {
+            ggml_hexagon_precompute_matmul_params(sess,
+                node.node->src[0], node.node->src[1], node.node,
+                (struct htp_mm_kernel_params *)node.kernel_params
+            );
+        }
         nodes.push_back(std::move(node));
     }
 
