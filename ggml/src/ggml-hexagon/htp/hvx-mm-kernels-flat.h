@@ -102,36 +102,28 @@ static inline void quantize_block_f32_q8_1_flat(
     v_sums = Q6_Vw_vadd_VwVw(v_sums, Q6_V_vror_VR(v_sums, 8));
     v_sums = Q6_Vw_vadd_VwVw(v_sums, Q6_V_vror_VR(v_sums, 16));
 
-    float vmax0[32] __attribute__((aligned(128)));
-    float vmax1[32] __attribute__((aligned(128)));
-    float vmax2[32] __attribute__((aligned(128)));
-    float vmax3[32] __attribute__((aligned(128)));
-    int32_t sums[32] __attribute__((aligned(128)));
-
-    hvx_vec_store_u(vmax0, 128, vmax0_sf);
-    hvx_vec_store_u(vmax1, 128, vmax1_sf);
-    hvx_vec_store_u(vmax2, 128, vmax2_sf);
-    hvx_vec_store_u(vmax3, 128, vmax3_sf);
-    hvx_vec_store_u(sums, 128, v_sums);
-
-    float d0 = vmax0[0] / 127.0f;
-    float d1 = vmax1[0] / 127.0f;
-    float d2 = vmax2[0] / 127.0f;
-    float d3 = vmax3[0] / 127.0f;
-
     * (HVX_Vector *) (y_quants + block_idx * 128) = vx_i8;
 
-    y_scales[block_idx * 8 + 0] = (__fp16) d0;
-    y_scales[block_idx * 8 + 1] = (__fp16) (sums[0] * d0);
+    HVX_VectorPair vp1 = Q6_W_vshuff_VVR(vd23_hf, vd01_hf, -2);
+    HVX_VectorPair vp2 = Q6_W_vshuff_VVR(Q6_V_hi_W(vp1), Q6_V_lo_W(vp1), -2);
+    HVX_Vector v_scales = Q6_V_lo_W(vp2);
 
-    y_scales[block_idx * 8 + 2] = (__fp16) d1;
-    y_scales[block_idx * 8 + 3] = (__fp16) (sums[8] * d1);
+    HVX_VectorPair v_deal1 = Q6_W_vdeal_VVR(v_sums, v_sums, -4);
+    HVX_Vector v_even1 = Q6_V_lo_W(v_deal1);
+    HVX_VectorPair v_deal2 = Q6_W_vdeal_VVR(v_even1, v_even1, -4);
+    HVX_Vector v_even2 = Q6_V_lo_W(v_deal2);
+    HVX_VectorPair v_deal3 = Q6_W_vdeal_VVR(v_even2, v_even2, -4);
+    HVX_Vector v_sums_shuffled = Q6_V_lo_W(v_deal3);
 
-    y_scales[block_idx * 8 + 4] = (__fp16) d2;
-    y_scales[block_idx * 8 + 5] = (__fp16) (sums[16] * d2);
+    HVX_Vector v_sums_sf = Q6_Vsf_equals_Vw(v_sums_shuffled);
+    HVX_Vector v_sums_hf = hvx_vec_f32_to_f16(v_sums_sf, Q6_V_vzero());
 
-    y_scales[block_idx * 8 + 6] = (__fp16) d3;
-    y_scales[block_idx * 8 + 7] = (__fp16) (sums[24] * d3);
+    HVX_Vector v_prod = hvx_vec_mul_f16_f16(v_scales, v_sums_hf);
+
+    HVX_VectorPair vp_scales = Q6_W_vshuff_VVR(v_prod, v_scales, -2);
+    HVX_Vector v_final = Q6_V_lo_W(vp_scales);
+
+    hvx_vec_store_u(y_scales + block_idx * 8, 16, v_final);
 }
 
 static inline void quantize_row_f32_q8_0_flat(float * restrict x, uint8_t * restrict y, uint32_t k) {
