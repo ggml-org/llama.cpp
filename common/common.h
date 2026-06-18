@@ -1067,7 +1067,7 @@ struct common_prompt_checkpoint {
 
     // (optional) speculative-decoding implementation state stashed with the checkpoint
     // (e.g. eagle3's deferred-boundary g_embd row)
-    std::vector<uint8_t> data_spec_state;
+    std::vector<uint8_t> data_spec;
 
     size_t size() const;
 
