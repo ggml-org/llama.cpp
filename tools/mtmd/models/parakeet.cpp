@@ -58,7 +58,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
     // [freq, time, chan, batch] -> [(freq * chan), time]
     cur = ggml_reshape_2d(ctx0, cur, n_freq * n_chan, n_frames);
 
-    cur = ggml_mul_mat(ctx0, model.pre_encode_out_w, cur);
+    cur = build_mm(model.pre_encode_out_w, cur);
     cur = ggml_add(ctx0, cur, model.pre_encode_out_b);
 
     ggml_set_name(cur, "pre_enc_out");
@@ -120,11 +120,11 @@ ggml_cgraph * clip_graph_parakeet::build() {
             ggml_format_name(cur, "enc_%d_ffn_norm_1", il);
 
             // ffn_1
-            cur = ggml_mul_mat(ctx0, layer.ff_up_w, cur);
+            cur = build_mm(layer.ff_up_w, cur);
             cur = ggml_silu(ctx0, cur);
             ggml_format_name(cur, "enc_%d_silu", il);
 
-            cur = ggml_mul_mat(ctx0, layer.ff_down_w, cur);
+            cur = build_mm(layer.ff_down_w, cur);
             ggml_format_name(cur, "enc_%d_ffn_1", il);
 
             cur = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, fc_factor));
@@ -144,9 +144,9 @@ ggml_cgraph * clip_graph_parakeet::build() {
             const int d_head = n_state / n_head;
 
             // [feat, time_frames, 1, 1]
-            struct ggml_tensor * Q_cur = ggml_mul_mat(ctx0, layer.q_w, cur);
-            struct ggml_tensor * K_cur = ggml_mul_mat(ctx0, layer.k_w, cur);
-            struct ggml_tensor * V_cur = ggml_mul_mat(ctx0, layer.v_w, cur);
+            struct ggml_tensor * Q_cur = build_mm(layer.q_w, cur);
+            struct ggml_tensor * K_cur = build_mm(layer.k_w, cur);
+            struct ggml_tensor * V_cur = build_mm(layer.v_w, cur);
 
             // [d_head, n_heads, n_time, 1]
             Q_cur = ggml_reshape_3d(ctx0, Q_cur, d_head, n_head, n_time);
@@ -154,7 +154,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
             V_cur = ggml_reshape_3d(ctx0, V_cur, d_head, n_head, n_time);
 
             // [n_state, window_size]
-            struct ggml_tensor * pos = ggml_mul_mat(ctx0, layer.linear_pos_w, pos_emb);
+            struct ggml_tensor * pos = build_mm(layer.linear_pos_w, pos_emb);
             // [feat, head, window_size, 1]
             pos = ggml_reshape_3d(ctx0, pos, d_head, n_head, pos_emb->ne[1]);
             // [feat, window_size, head, 1]
@@ -266,7 +266,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
                 }
                 cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 0, 2, 1, 3));
                 cur = ggml_reshape_2d(ctx0, cur, n_state, n_time);
-                cur = ggml_mul_mat(ctx0, layer.o_w, cur);
+                cur = build_mm(layer.o_w, cur);
             } else {
                 // full attention
                 struct ggml_tensor * Q_u = ggml_add(ctx0, Q_cur, layer.pos_bias_u);
@@ -338,7 +338,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
 
                 cur = ggml_permute(ctx0, cur, 2, 0, 1, 3);
                 cur = ggml_cont_2d(ctx0, cur, n_state, n_time);
-                cur = ggml_mul_mat(ctx0, layer.o_w, cur);
+                cur = build_mm(layer.o_w, cur);
             }
             ggml_format_name(cur, "enc_%d_attn_out", il);
 
@@ -356,7 +356,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
             ggml_format_name(cur, "enc_%d_norm_conv", il);
 
             // pointwise 1d convolution:
-            cur = ggml_mul_mat(ctx0, layer.conv_pw1_w, cur);
+            cur = build_mm(layer.conv_pw1_w, cur);
             ggml_format_name(cur, "enc_%d_conv_pw1", il);
 
             {
@@ -389,7 +389,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
             cur = ggml_silu(ctx0, cur);
             ggml_format_name(cur, "enc_%d_conv_silu", il);
 
-            cur = ggml_mul_mat(ctx0, layer.conv_pw2_w, cur);
+            cur = build_mm(layer.conv_pw2_w, cur);
             ggml_format_name(cur, "enc_%d_conv_pw2", il);
 
             cur = ggml_add(ctx0, residual, cur);
@@ -403,9 +403,9 @@ ggml_cgraph * clip_graph_parakeet::build() {
             cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.ff_norm_1_w), layer.ff_norm_1_b);
             ggml_format_name(cur, "enc_%d_ffn_norm_2", il);
 
-            cur = ggml_mul_mat(ctx0, layer.ff_up_1_w, cur);
+            cur = build_mm(layer.ff_up_1_w, cur);
             cur = ggml_silu(ctx0, cur);
-            cur = ggml_mul_mat(ctx0, layer.ff_down_1_w, cur);
+            cur = build_mm(layer.ff_down_1_w, cur);
             cur = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, 0.5));
             ggml_format_name(cur, "enc_%d_ffn_res", il);
         }
