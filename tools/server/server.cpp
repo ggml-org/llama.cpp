@@ -13,7 +13,11 @@
 
 #include <atomic>
 #include <clocale>
+#include <chrono>
 #include <exception>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
 
@@ -23,6 +27,9 @@
 
 static std::function<void(int)> shutdown_handler;
 static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
+static std::mutex higgs_speech_mutex;
+
+int higgs_tts_main(int argc, char ** argv);
 
 static inline void signal_handler(int signal) {
     if (is_terminating.test_and_set()) {
@@ -67,6 +74,200 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
             SRV_ERR("got another exception: %s | while handling exception: %s\n", e.what(), message.c_str());
             res->data = "Internal Server Error";
         }
+        return res;
+    };
+}
+
+static std::string server_tmp_wav_path() {
+    const auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    const auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    const auto path = std::filesystem::temp_directory_path() /
+            ("llama-higgs-speech-" + std::to_string(now) + "-" + std::to_string(tid) + ".wav");
+    return path.string();
+}
+
+static bool read_binary_file(const std::string & path, std::string & data) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    data.assign(
+            std::istreambuf_iterator<char>(in),
+            std::istreambuf_iterator<char>());
+    return in.good() || in.eof();
+}
+
+static std::string higgs_audio_path_from_request(const json & body, const common_params & params) {
+    if (body.contains("higgs_audio") && body["higgs_audio"].is_string()) {
+        return body["higgs_audio"].get<std::string>();
+    }
+    if (const char * env = std::getenv("LLAMA_HIGGS_AUDIO")) {
+        if (env[0] != '\0') {
+            return env;
+        }
+    }
+    if (!params.model.path.empty()) {
+        const auto sibling = std::filesystem::path(params.model.path).parent_path() / "higgs-audio-f16.gguf";
+        if (std::filesystem::exists(sibling)) {
+            return sibling.string();
+        }
+    }
+    return "";
+}
+
+static void add_json_string_arg(std::vector<std::string> & args, const json & body, const char * key, const char * arg) {
+    if (body.contains(key) && body[key].is_string() && !body[key].get<std::string>().empty()) {
+        args.push_back(arg);
+        args.push_back(body[key].get<std::string>());
+    }
+}
+
+static void add_json_number_arg(std::vector<std::string> & args, const json & body, const char * key, const char * arg) {
+    if (body.contains(key) && body[key].is_number()) {
+        args.push_back(arg);
+        args.push_back(body[key].dump());
+    }
+}
+
+static void add_json_int_arg(std::vector<std::string> & args, const json & body, const char * key, const char * arg) {
+    if (body.contains(key) && body[key].is_number_integer()) {
+        args.push_back(arg);
+        args.push_back(std::to_string(body[key].get<int>()));
+    }
+}
+
+static server_http_context::handler_t make_higgs_speech_handler(const common_params & params) {
+    return [&params](const server_http_req & req) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+
+        if (params.model.path.empty()) {
+            res->status = 400;
+            res->data = safe_json_to_str({{"error", format_error_response("Higgs speech requires llama-server to run with a backbone model via -m", ERROR_TYPE_INVALID_REQUEST)}});
+            return res;
+        }
+
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (const std::exception & e) {
+            res->status = 400;
+            res->data = safe_json_to_str({{"error", format_error_response(std::string("request body must be JSON: ") + e.what(), ERROR_TYPE_INVALID_REQUEST)}});
+            return res;
+        }
+
+        if (!body.contains("input") || !body["input"].is_string() || body["input"].get<std::string>().empty()) {
+            res->status = 400;
+            res->data = safe_json_to_str({{"error", format_error_response("\"input\" must be a non-empty string", ERROR_TYPE_INVALID_REQUEST)}});
+            return res;
+        }
+
+        const std::string response_format = body.value("response_format", "wav");
+        if (response_format != "wav") {
+            res->status = 400;
+            res->data = safe_json_to_str({{"error", format_error_response("only response_format=\"wav\" is supported for Higgs speech", ERROR_TYPE_INVALID_REQUEST)}});
+            return res;
+        }
+
+        const std::string higgs_audio_path = higgs_audio_path_from_request(body, params);
+        if (higgs_audio_path.empty()) {
+            res->status = 400;
+            res->data = safe_json_to_str({{"error", format_error_response("missing Higgs companion GGUF; set request field \"higgs_audio\" or LLAMA_HIGGS_AUDIO", ERROR_TYPE_INVALID_REQUEST)}});
+            return res;
+        }
+
+        const std::string out_path = server_tmp_wav_path();
+        std::vector<std::string> args;
+        args.reserve(48);
+        args.push_back("llama-server-higgs-speech");
+        args.push_back("-m");
+        args.push_back(params.model.path);
+        args.push_back("--higgs-audio");
+        args.push_back(higgs_audio_path);
+        args.push_back("-o");
+        args.push_back(out_path);
+        args.push_back("-p");
+        args.push_back(body["input"].get<std::string>());
+        args.push_back("-ngl");
+        args.push_back(std::to_string(params.n_gpu_layers));
+        if (params.n_ctx > 0) {
+            args.push_back("-c");
+            args.push_back(std::to_string(params.n_ctx));
+        }
+
+        args.push_back("--higgs-backend");
+        args.push_back(body.value("higgs_backend", "auto"));
+        args.push_back("--rvq-backend");
+        args.push_back(body.value("rvq_backend", "auto"));
+        args.push_back("--dac-backend");
+        args.push_back(body.value("dac_backend", "CPU"));
+        args.push_back("--verbose");
+
+        add_json_string_arg(args, body, "device", "--device");
+        add_json_string_arg(args, body, "ref_codes", "--ref-codes");
+        add_json_string_arg(args, body, "ref_text", "--ref-text");
+        add_json_number_arg(args, body, "duration", "--duration");
+        add_json_number_arg(args, body, "max_duration", "--max-duration");
+        add_json_number_arg(args, body, "temperature", "--temp");
+        add_json_number_arg(args, body, "temp", "--temp");
+        add_json_int_arg(args, body, "top_k", "--top-k");
+        add_json_int_arg(args, body, "seed", "--seed");
+        if (body.value("raw_prompt", false)) {
+            args.push_back("--raw-prompt");
+        }
+        if (body.value("flash_attn", true)) {
+            args.push_back("--flash-attn");
+        } else {
+            args.push_back("--no-flash-attn");
+        }
+        if (body.value("stream_wav", false)) {
+            args.push_back("--stream-wav");
+            add_json_int_arg(args, body, "stream_stride", "--stream-stride");
+            add_json_int_arg(args, body, "stream_holdback", "--stream-holdback");
+        }
+
+        std::vector<char *> argv;
+        argv.reserve(args.size());
+        for (auto & arg : args) {
+            argv.push_back(arg.data());
+        }
+
+        int rc = 1;
+        {
+            std::lock_guard<std::mutex> lock(higgs_speech_mutex);
+#if defined(_WIN32)
+            _putenv_s("LLAMA_HIGGS_CACHE_MODEL", "1");
+            _putenv_s("LLAMA_HIGGS_CACHE_CONTEXT", "1");
+            _putenv_s("LLAMA_HIGGS_CACHE_COMPANION", "1");
+#else
+            setenv("LLAMA_HIGGS_CACHE_MODEL", "1", 1);
+            setenv("LLAMA_HIGGS_CACHE_CONTEXT", "1", 1);
+            setenv("LLAMA_HIGGS_CACHE_COMPANION", "1", 1);
+#endif
+            rc = higgs_tts_main((int) argv.size(), argv.data());
+        }
+        if (rc != 0) {
+            std::error_code ec;
+            std::filesystem::remove(out_path, ec);
+            res->status = 500;
+            res->data = safe_json_to_str({{"error", format_error_response("Higgs speech generation failed", ERROR_TYPE_SERVER)}});
+            return res;
+        }
+
+        std::string wav;
+        if (!read_binary_file(out_path, wav)) {
+            std::error_code ec;
+            std::filesystem::remove(out_path, ec);
+            res->status = 500;
+            res->data = safe_json_to_str({{"error", format_error_response("failed to read generated Higgs WAV", ERROR_TYPE_SERVER)}});
+            return res;
+        }
+
+        std::error_code ec;
+        std::filesystem::remove(out_path, ec);
+
+        res->content_type = "audio/wav";
+        res->headers["Content-Disposition"] = "attachment; filename=\"speech.wav\"";
+        res->data = std::move(wav);
         return res;
     };
 }
@@ -195,6 +396,13 @@ int llama_server(int argc, char ** argv) {
     ctx_http.post("/responses",                ex_wrapper(routes.post_responses_oai));
     ctx_http.post("/v1/audio/transcriptions",  ex_wrapper(routes.post_transcriptions_oai));
     ctx_http.post("/audio/transcriptions",     ex_wrapper(routes.post_transcriptions_oai));
+    if (is_router_server) {
+        ctx_http.post("/v1/audio/speech",       ex_wrapper(models_routes->proxy_post));
+        ctx_http.post("/audio/speech",          ex_wrapper(models_routes->proxy_post));
+    } else {
+        ctx_http.post("/v1/audio/speech",       ex_wrapper(make_higgs_speech_handler(params)));
+        ctx_http.post("/audio/speech",          ex_wrapper(make_higgs_speech_handler(params)));
+    }
     ctx_http.post("/v1/messages",              ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
     ctx_http.post("/infill",                   ex_wrapper(routes.post_infill));
     ctx_http.post("/embedding",                ex_wrapper(routes.post_embeddings)); // legacy

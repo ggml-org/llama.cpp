@@ -172,7 +172,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
             cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (il == n_layer - 1 && inp_out_ids && (cparams.embeddings_nextn_masked || cparams.embeddings_masked)) {
             cur   = ggml_get_rows(ctx0, cur,   inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -209,12 +209,17 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+    if (!cparams.embeddings_nextn_masked && !cparams.embeddings_masked && inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
+
+    if (cparams.embeddings && cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
+        ggml_build_forward_expand(gf, cur);
+        return;
+    }
 
     // LM head
     cur = build_lora_mm(model.output, cur, model.output_s);
