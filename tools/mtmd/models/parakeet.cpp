@@ -119,12 +119,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
             cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.ff_norm_w), layer.ff_norm_b);
             ggml_format_name(cur, "enc_%d_ffn_norm_1", il);
 
-            // ffn_1
-            cur = build_mm(layer.ff_up_w, cur);
-            cur = ggml_silu(ctx0, cur);
-            ggml_format_name(cur, "enc_%d_silu", il);
-
-            cur = build_mm(layer.ff_down_w, cur);
+            cur = build_ffn(cur, layer.ff_up_w, nullptr, nullptr, nullptr, layer.ff_down_w, nullptr, FFN_SILU, il);
             ggml_format_name(cur, "enc_%d_ffn_1", il);
 
             cur = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, fc_factor));
@@ -403,9 +398,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
             cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.ff_norm_1_w), layer.ff_norm_1_b);
             ggml_format_name(cur, "enc_%d_ffn_norm_2", il);
 
-            cur = build_mm(layer.ff_up_1_w, cur);
-            cur = ggml_silu(ctx0, cur);
-            cur = build_mm(layer.ff_down_1_w, cur);
+            cur = build_ffn(cur, layer.ff_up_1_w, nullptr, nullptr, nullptr, layer.ff_down_1_w, nullptr, FFN_SILU, il);
             cur = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, 0.5));
             ggml_format_name(cur, "enc_%d_ffn_res", il);
         }
