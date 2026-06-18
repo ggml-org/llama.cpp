@@ -542,6 +542,7 @@ jobs:
     steps:
       - name: Set OpenVINO version output
         id: openvino_version
+        shell: bash
         run: echo "value=${{ env.OPENVINO_VERSION_MAJOR }}" >> $GITHUB_OUTPUT
 
       - name: Clone
