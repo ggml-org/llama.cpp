@@ -27,7 +27,7 @@
 #include "hmx-ops.h"
 #include "hmx-utils.h"
 #include "hmx-queue.h"
-#include "hmx-profile.h"
+#include "hex-profile.h"
 
 #include "vtcm-utils.h"
 
@@ -430,6 +430,7 @@ typedef struct {
     int                      n_tasks;
     int                      n_k_tiles;
     struct fastdiv_values    n_k_tiles_div;
+    struct htp_thread_trace * traces;
 } x4x2_dequantize_state_t;
 
 // Dequantize a tile range from x4x2 weight data (already in VTCM) to tile-major FP16.
@@ -533,11 +534,14 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task_##suffix(                 
                                                                                                                \
 static void dequantize_x4x2_worker_loop_##suffix(unsigned int n, unsigned int i, void *data) {                 \
     x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;                                          \
+    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;                                   \
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);                                                 \
     for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {                     \
         int start = task_id * state->n_tiles_per_task;                                                         \
         int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);                             \
         dequantize_x4x2_weight_to_fp16_tiles_task_##suffix(state, start, end);                                 \
     }                                                                                                          \
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);                                                 \
 }
 
 DEFINE_DEQUANTIZE_Q4_TASK(q4_0,   q4_0_to_fp16_lut,   q4_0, HMX_X4X2_DBLK_SIZE, (int)sizeof(__fp16))
@@ -657,11 +661,14 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task_mxfp4(
 
 static void dequantize_x4x2_worker_loop_mxfp4(unsigned int n, unsigned int i, void *data) {
     x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;
+    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
     for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
         int start = task_id * state->n_tiles_per_task;
         int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);
         dequantize_x4x2_weight_to_fp16_tiles_task_mxfp4(state, start, end);
     }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
 }
 
 static void dequantize_x4x2_weight_to_fp16_tiles_task_q8_0(
@@ -717,11 +724,14 @@ static void dequantize_x4x2_weight_to_fp16_tiles_task_q8_0(
 
 static void dequantize_x4x2_worker_loop_q8_0(unsigned int n, unsigned int i, void *data) {
     x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;
+    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
     for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
         int start = task_id * state->n_tiles_per_task;
         int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);
         dequantize_x4x2_weight_to_fp16_tiles_task_q8_0(state, start, end);
     }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
 }
 
 static void convert_f16_weight_to_fp16_tiles_task(
@@ -773,11 +783,14 @@ static void convert_f16_weight_to_fp16_tiles_task(
 
 static void convert_f16_worker_loop(unsigned int n, unsigned int i, void *data) {
     x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;
+    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
     for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
         int start = task_id * state->n_tiles_per_task;
         int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);
         convert_f16_weight_to_fp16_tiles_task(state, start, end);
     }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
 }
 
 static void quantize_f32_weight_to_fp16_tiles_task(
@@ -833,11 +846,14 @@ static void quantize_f32_weight_to_fp16_tiles_task(
 
 static void quantize_f32_worker_loop(unsigned int n, unsigned int i, void *data) {
     x4x2_dequantize_state_t *state = (x4x2_dequantize_state_t *)data;
+    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
     for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
         int start = task_id * state->n_tiles_per_task;
         int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);
         quantize_f32_weight_to_fp16_tiles_task(state, start, end);
     }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
 }
 
 
@@ -868,6 +884,7 @@ static void dequantize_x4x2_weight_chunk_to_fp16_tiles(
     state.weight_type      = weight_type;
     state.n_k_tiles        = n_k_tiles;
     state.n_k_tiles_div    = n_k_tiles_div;
+    state.traces           = ctx ? ctx->trace : NULL;
 
     if (state.n_tasks == 1 || n_threads == 1) {
         dequant_worker_fn(1, 0, &state);
@@ -985,10 +1002,13 @@ typedef struct {
     int            n_chunks_per_task;
     int            n_cols;
     int            n;  // DDR row stride (total output columns)
+    struct htp_thread_trace * traces;
 } output_transfer_task_state_t;
 
 static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
     output_transfer_task_state_t *st = (output_transfer_task_state_t *) data;
+    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, i);
 
     for (unsigned int task_id = i; task_id < (unsigned int)st->n_tasks; task_id += n) {
         int    chunk_idx  = task_id * st->n_chunks_per_task;
@@ -998,6 +1018,7 @@ static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void
         const __fp16 *vtcm_src = st->vtcm_src + chunk_idx * st->n_cols;
         transfer_output_chunk_fp16_to_fp32(dst, vtcm_src, chunk_size, st->n_cols, st->n);
     }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, i);
 }
 
 static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, const __fp16 *vtcm_src,
@@ -1015,6 +1036,7 @@ static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, 
     state.vtcm_src          = vtcm_src;
     state.n_cols            = n_cols;
     state.n                 = n;
+    state.traces            = ctx ? ctx->trace : NULL;
 
     if (state.n_tasks == 1 || n_threads == 1) {
         transfer_output_chunk_worker_fn(1, 0, &state);
@@ -1086,10 +1108,13 @@ typedef struct {
     int          n_chunks_per_task;
     int          k_block;
     int          k_stride;
+    struct htp_thread_trace * traces;
 } activation_transfer_task_state_t;
 
 static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
     activation_transfer_task_state_t *st = (activation_transfer_task_state_t *) data;
+    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, i);
 
     for (unsigned int task_id = i; task_id < (unsigned int)st->n_tasks; task_id += n) {
         // one chunk: one row
@@ -1100,6 +1125,7 @@ static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, 
         const float *src = st->src + chunk_idx * st->k_stride;
         transfer_activation_chunk_fp32_to_fp16(dst, src, chunk_size, st->k_block, st->k_stride);
     }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, i);
 }
 
 static void transfer_activation_chunk_threaded(struct htp_context *ctx, __fp16 *dst, const float *src, int n_rows, int k_block, int k_stride, int n_threads) {
@@ -1117,6 +1143,7 @@ static void transfer_activation_chunk_threaded(struct htp_context *ctx, __fp16 *
     state.src               = src;
     state.k_block           = k_block;
     state.k_stride          = k_stride;
+    state.traces            = ctx ? ctx->trace : NULL;
 
     if (state.n_tasks == 1 || n_threads == 1) {
         transfer_activation_chunk_worker_fn(1, 0, &state);
@@ -1245,13 +1272,7 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
     FARF(HIGH, "hmx-mm-2d: standard : m %d k %d n %d wtype %d mc %zu nc %zu vtcm %zu/%zu",
          m, k, n, weight_type, m_chunk_n_rows, n_chunk_n_cols, vtcm_used, vtcm_budget);
 
-    TIMER_DEFINE(activation_load);
-    TIMER_DEFINE(weight_load);
-    TIMER_DEFINE(hmx_core);
-    TIMER_DEFINE(output_store);
 
-    TIMER_DEFINE(total);
-    TIMER_START(total);
 
     int n_chunk_cnt = hmx_ceil_div(n, n_chunk_n_cols);
 
@@ -1370,7 +1391,12 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
                 dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_scratch0, vtcm_weight, n_cols, k, row_stride, weight_type, n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads);
 
                 // C: HMX Compute (Synchronous)
-                core_dot_chunk_fp16(vtcm_output, vtcm_activation, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HMX_FP16_TILE_N_ROWS);
+                {
+                    struct htp_thread_trace * tr = ctx ? &ctx->trace[HTP_MAX_NTHREADS] : NULL;
+                    htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
+                    core_dot_chunk_fp16(vtcm_output, vtcm_activation, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HMX_FP16_TILE_N_ROWS);
+                    htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
+                }
 
                 // D: Output Store
                 float *output_chunk = dst + (mr * n + nc);
@@ -1380,18 +1406,7 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
         HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
     }
 
-    TIMER_STOP(total);
 
-#if defined(ENABLE_PROFILE_TIMERS)
-    FARF(HIGH, "hex-mm-2d: %lld us : m %d k %d n %d", TIMER_US(total), m, k, n);
-    if (!use_pipeline) {
-        FARF(HIGH, "  activation_load: %lld us, weight_load: %lld us, hmx_core: %lld us, output_store: %lld us",
-             TIMER_US(activation_load), TIMER_US(weight_load), TIMER_US(hmx_core), TIMER_US(output_store));
-        size_t weight_size = (size_t)n * row_stride;
-        float  bandwidth   = 1e-3f * weight_size / (float)TIMER_US(weight_load);
-        FARF(HIGH, "  weight load bandwidth: %.2f GB/s", bandwidth);
-    }
-#endif
 
     return 0;
 }
@@ -1523,13 +1538,7 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
             m_chunk_n_rows, n_chunk_n_cols,
             (size_t) (vtcm_ptr - (uint8_t *) ctx->vtcm_base), vtcm_budget);
 
-    TIMER_DEFINE(activation_load);
-    TIMER_DEFINE(weight_load);
-    TIMER_DEFINE(hmx_core);
-    TIMER_DEFINE(output_store);
-    TIMER_DEFINE(total);
 
-    TIMER_START(total);
 
     const size_t fp16_row_bytes   = (size_t) params->k * sizeof(__fp16);
     const size_t weight_row_bytes = (size_t) params->weight_stride * sizeof(__fp16);
@@ -1549,7 +1558,6 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
                 // contiguous rows into a VTCM scratch buffer first, then HVX
                 // converts from the contiguous VTCM buffer.  This avoids L2 cache
                 // thrashing from HVX loads at large strides.
-                TIMER_START(activation_load);
                 for (int g = 0; g < group_size; ++g) {
                     const float *activation_chunk = hmx_matmul_activation_batch_ptr(params, b2_base + g, b3) + mr * params->act_stride;
                     __fp16 *vtcm_act_g = vtcm_activation + (size_t) g * act_head_stride;
@@ -1569,7 +1577,6 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
                                                               params->k, params->act_stride, ctx->n_threads);
                     }
                 }
-                TIMER_STOP(activation_load);
 
                 void *buf_curr = vtcm_scratch0;
                 void *buf_next = vtcm_scratch1;
@@ -1584,7 +1591,6 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
                     const size_t n_cols = hex_smin((size_t) params->n - nc, n_chunk_n_cols);
                     const size_t n_col_tiles = hmx_ceil_div((int) n_cols, HMX_FP16_TILE_N_COLS);
 
-                    TIMER_START(weight_load);
                     {
                         dma_queue_pop(ctx->dma[0]);
 
@@ -1601,24 +1607,22 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
                                                  0, n_cols);
                         hex_swap_ptr(&buf_curr, &buf_next);
                     }
-                    TIMER_STOP(weight_load);
 
                     // Reuse the interleaved weight for every q_head in this GQA group
                     for (int g = 0; g < group_size; ++g) {
-                        TIMER_START(hmx_core);
                         {
                             const __fp16 * vtcm_act_g = vtcm_activation + (size_t) g * act_head_stride;
+                            struct htp_thread_trace * tr = ctx ? &ctx->trace[HTP_MAX_NTHREADS] : NULL;
+                            htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
                             core_dot_chunk_fp16(vtcm_output, vtcm_act_g, vtcm_weight, vtcm_scales, n_row_tiles, n_col_tiles,
                                                 params->k / 32);
+                            htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
                         }
-                        TIMER_STOP(hmx_core);
 
-                        TIMER_START(output_store);
                         {
                             float *output = hmx_matmul_dst_batch_ptr(params, b2_base + g, b3) + mr * params->dst_stride + nc;
                             transfer_output_chunk_threaded(ctx, output, vtcm_output, (int) n_rows, (int) n_cols, params->dst_stride, ctx->n_threads);
                         }
-                        TIMER_STOP(output_store);
                     }
                 }
             }
@@ -1627,14 +1631,7 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
 
     HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
 
-    TIMER_STOP(total);
 
-#if defined(ENABLE_PROFILE_TIMERS)
-    FARF(HIGH, "%s: %lld us, m=%d k=%d n=%d group=%d", __func__, TIMER_US(total),
-         params->m, params->k, params->n, group_size);
-    FARF(HIGH, "  activation_load: %lld us, weight_load: %lld us, hmx_core: %lld us, output_store: %lld us",
-         TIMER_US(activation_load), TIMER_US(weight_load), TIMER_US(hmx_core), TIMER_US(output_store));
-#endif
 
     return 0;
 }
@@ -1668,6 +1665,7 @@ typedef struct {
     size_t                          nb12;
     int                             start_row;
     int                             cne1;
+    struct htp_thread_trace        *traces;
 } activation_transfer_gathered_task_state_t;
 
 typedef struct {
@@ -1684,6 +1682,7 @@ typedef struct {
     size_t                          dst_nb2;
     int                             start_row;
     int                             cne1;
+    struct htp_thread_trace        *traces;
 } output_transfer_scattered_task_state_t;
 
 static void transfer_activation_chunk_fp32_to_fp16_gathered(
@@ -1780,6 +1779,9 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
 
 static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigned int i, void *data) {
     activation_transfer_gathered_task_state_t *st = data;
+    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, i);
+
     int chunk_idx = i;
     int chunk_size = st->n_chunks_per_task;
     int start_row = st->start_row + chunk_idx * chunk_size;
@@ -1791,6 +1793,7 @@ static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigne
             st->matrix_rows, st->cur_a, st->mapping_stride,
             st->ne11, &st->ne11_div, st->nb11, st->nb12, st->cne1);
     }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, i);
 }
 
 static void transfer_activation_chunk_gathered_threaded(
@@ -1830,6 +1833,7 @@ static void transfer_activation_chunk_gathered_threaded(
         .nb12              = nb12,
         .start_row         = start_row,
         .cne1              = cne1,
+        .traces            = ctx ? ctx->trace : NULL,
     };
 
     if (actual_threads <= 1) {
@@ -1895,6 +1899,9 @@ static void transfer_output_chunk_fp16_to_fp32_scattered(
 
 static void transfer_output_chunk_scattered_worker_fn(unsigned int n, unsigned int i, void *data) {
     output_transfer_scattered_task_state_t *st = data;
+    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, i);
+
     int chunk_idx = i;
     int chunk_size = st->n_chunks_per_task;
     int start_row = st->start_row + chunk_idx * chunk_size;
@@ -1906,6 +1913,7 @@ static void transfer_output_chunk_scattered_worker_fn(unsigned int n, unsigned i
             st->matrix_rows, st->cur_a, st->mapping_stride,
             st->dst_nb1, st->dst_nb2, st->cne1);
     }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, i);
 }
 
 static void transfer_output_chunk_scattered_threaded(
@@ -1942,6 +1950,7 @@ static void transfer_output_chunk_scattered_threaded(
         .dst_nb2           = dst_nb2,
         .start_row         = start_row,
         .cne1              = cne1,
+        .traces            = ctx ? ctx->trace : NULL,
     };
 
     if (actual_threads <= 1) {
@@ -2053,7 +2062,12 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
 
             dequantize_x4x2_weight_chunk_to_fp16_tiles(ctx, vtcm_scratch0, vtcm_weight, n_cols, k, row_stride, weight_type, n_k_tiles, n_k_tiles_div, dequant_worker_fn, num_threads);
 
-            core_dot_chunk_fp16(vtcm_output, vtcm_activation, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HMX_FP16_TILE_N_ROWS);
+            {
+                struct htp_thread_trace * tr = ctx ? &ctx->trace[HTP_MAX_NTHREADS] : NULL;
+                htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
+                core_dot_chunk_fp16(vtcm_output, vtcm_activation, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HMX_FP16_TILE_N_ROWS);
+                htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, HTP_MAX_NTHREADS);
+            }
 
             transfer_output_chunk_scattered_threaded(
                 ctx, dst, vtcm_output, (int) mr, (int) n_rows, (int) n_cols,

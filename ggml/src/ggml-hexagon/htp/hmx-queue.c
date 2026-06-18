@@ -44,7 +44,9 @@ static inline void hmx_queue_process(struct hmx_queue *q, bool* killed) {
                 case HMX_QUEUE_SUSPEND: hmx_unlock(q);  break;
                 default:
                     hmx_lock(q);
+                    htp_trace_event_start(q->trace, HTP_TRACE_EVT_HMX_COMP, ir);
                     d->func(d->data);
+                    htp_trace_event_stop(q->trace, HTP_TRACE_EVT_HMX_COMP, ir);
                     break;
             }
 

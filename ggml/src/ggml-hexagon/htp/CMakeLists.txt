@@ -37,8 +37,8 @@ list(FIND HTP_HMX_VERSIONS ${DSP_VERSION} _hmx_idx)
 
 if (_hmx_idx GREATER_EQUAL 0)
     target_sources(${HTP_LIB} PRIVATE
-        hmx-matmul-ops.c
         hmx-flash-attn-ops.c
+        hmx-matmul-ops.c
         hmx-queue.c
     )
 
