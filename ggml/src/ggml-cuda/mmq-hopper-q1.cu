@@ -4,6 +4,7 @@
 // flagged for KLD validation). Dispatched only when M,N,K % 128 == 0 and cc >= 900; otherwise the
 // caller falls through to the standard MMQ path.
 #include "common.cuh"
+#include <mutex>
 #include <unordered_map>
 
 #if defined(GGML_USE_HOPPER_Q1)  // built only when CUTLASS include dir is provided
@@ -32,8 +33,12 @@ __global__ void quant_act_per128(const float* __restrict__ x, int8_t* __restrict
   for (int o = 16; o > 0; o >>= 1) amax = fmaxf(amax, __shfl_xor_sync(0xffffffff, amax, o));
   const float scale = amax / 127.0f;
   const float inv = scale > 0.f ? 1.0f / scale : 0.f;
-  char4 out = make_char4((char)lrintf(v.x * inv), (char)lrintf(v.y * inv), (char)lrintf(v.z * inv),
-                         (char)lrintf(v.w * inv));
+  // scale maps |x|<=amax to <=127; clamp for robustness against fp rounding at the boundary.
+  auto q8 = [](float f) -> signed char {
+    long r = lrintf(f);
+    return (signed char)(r < -127 ? -127 : (r > 127 ? 127 : r));
+  };
+  char4 out = make_char4(q8(v.x * inv), q8(v.y * inv), q8(v.z * inv), q8(v.w * inv));
   *(reinterpret_cast<char4*>(q + (size_t)m * K + kc * 128) + lane) = out;
   if (lane == 0) d[(size_t)m * (K / 128) + kc] = scale;
 }
@@ -53,17 +58,38 @@ __global__ void repack_q1_dense(const block_q1_0* __restrict__ W, unsigned* __re
 }
 
 struct DenseQ1 { unsigned* bits; float* dw; };
-// experiment-grade cache: weights static for process lifetime; freed at exit by the driver.
-static DenseQ1 get_dense_q1(const void* wdata, long N, long K, cudaStream_t stream) {
-  static std::unordered_map<const void*, DenseQ1> cache;
-  auto it = cache.find(wdata);
+// Cache key: pointer alone is ambiguous across devices and reshaped views.
+struct DenseQ1Key {
+  int device; const void* wdata; long N; long K;
+  bool operator==(const DenseQ1Key& o) const {
+    return device == o.device && wdata == o.wdata && N == o.N && K == o.K;
+  }
+};
+struct DenseQ1KeyHash {
+  size_t operator()(const DenseQ1Key& k) const {
+    size_t h = std::hash<const void*>()(k.wdata);
+    h ^= std::hash<long>()(k.N) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= std::hash<long>()(k.K) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    return h;
+  }
+};
+static DenseQ1 get_dense_q1(const void* wdata, long N, long K, int device, cudaStream_t stream) {
+  static std::unordered_map<DenseQ1Key, DenseQ1, DenseQ1KeyHash> cache;
+  static std::mutex cache_mutex;  // ggml may dispatch from one host thread per device concurrently
+  const DenseQ1Key key{device, wdata, N, K};
+
+  std::lock_guard<std::mutex> lock(cache_mutex);
+  auto it = cache.find(key);
   if (it != cache.end()) return it->second;
   DenseQ1 d{};
   const long nb = N * (K / 128);
-  cudaMalloc(&d.bits, nb * 16);
-  cudaMalloc(&d.dw, nb * sizeof(float));
+  CUDA_CHECK(cudaMalloc(&d.bits, nb * 16));
+  CUDA_CHECK(cudaMalloc(&d.dw, nb * sizeof(float)));
   repack_q1_dense<<<(unsigned)((nb + 255) / 256), 256, 0, stream>>>((const block_q1_0*)wdata, d.bits, d.dw, nb);
-  cache.emplace(wdata, d);
+  // Sync before publishing: a consumer on a different stream has no ordering dependency on
+  // the repack kernel above and could observe uninitialized dense buffers without this fence.
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  cache.emplace(key, d);
   return d;
 }
 
@@ -286,7 +312,8 @@ bool ggml_cuda_mul_mat_q1_hopper(ggml_backend_cuda_context& ctx, const ggml_tens
     return false;
   }
   cudaStream_t stream = ctx.stream();
-  hopper_q1::DenseQ1 wq = hopper_q1::get_dense_q1(src0->data, (long)N, (long)K, stream);
+  const int device = ctx.device;
+  hopper_q1::DenseQ1 wq = hopper_q1::get_dense_q1(src0->data, (long)N, (long)K, device, stream);
   ggml_cuda_pool_alloc<int8_t> act_q(ctx.pool(), (size_t)M * K);
   ggml_cuda_pool_alloc<float> act_d(ctx.pool(), (size_t)M * (K / 128));
   {
@@ -296,21 +323,27 @@ bool ggml_cuda_mul_mat_q1_hopper(ggml_backend_cuda_context& ctx, const ggml_tens
   }
   constexpr int SMEM_BYTES = 2 * (hopper_q1::bM * hopper_q1::bK) + 2 * (hopper_q1::bN * hopper_q1::bK) +
                              2 * (hopper_q1::bM + hopper_q1::bN) * (int)sizeof(float);
-  static bool attr_set = false;
-  if (!attr_set) {
-    cudaFuncSetAttribute(hopper_q1::q1_wgmma_ggml, cudaFuncAttributeMaxDynamicSharedMemorySize, SMEM_BYTES);
-    attr_set = true;
+  // Per-device tracking for SMEM attribute and SM count.
+  static std::unordered_map<int, bool> attr_set_map;
+  static std::unordered_map<int, int>  nsm_map;
+  if (!attr_set_map[device]) {
+    CUDA_CHECK(cudaFuncSetAttribute(hopper_q1::q1_wgmma_ggml, cudaFuncAttributeMaxDynamicSharedMemorySize, SMEM_BYTES));
+    attr_set_map[device] = true;
   }
   const int ntm = (int)(M / hopper_q1::bM), ntn = (int)(N / hopper_q1::bN);
   const int ntiles = ntm * ntn;
-  static int NSM = 0;
-  if (NSM == 0) cudaDeviceGetAttribute(&NSM, cudaDevAttrMultiProcessorCount, ctx.device);
+  if (!nsm_map.count(device)) {
+    int nsm = 0;
+    CUDA_CHECK(cudaDeviceGetAttribute(&nsm, cudaDevAttrMultiProcessorCount, device));
+    nsm_map[device] = nsm;
+  }
+  const int NSM = nsm_map[device];
   if (ntiles < 8 * NSM) {
     // starved grid -> stream-K (persistent; fp32-additive atomic flush into zeroed C)
-    static bool attr_sk = false;
-    if (!attr_sk) {
-      cudaFuncSetAttribute(hopper_q1::q1_wgmma_ggml_sk, cudaFuncAttributeMaxDynamicSharedMemorySize, SMEM_BYTES);
-      attr_sk = true;
+    static std::unordered_map<int, bool> attr_sk_map;
+    if (!attr_sk_map[device]) {
+      CUDA_CHECK(cudaFuncSetAttribute(hopper_q1::q1_wgmma_ggml_sk, cudaFuncAttributeMaxDynamicSharedMemorySize, SMEM_BYTES));
+      attr_sk_map[device] = true;
     }
     const long total = (long)ntiles * (K / 128);
     cudaMemsetAsync(dst->data, 0, (size_t)M * N * sizeof(float), stream);

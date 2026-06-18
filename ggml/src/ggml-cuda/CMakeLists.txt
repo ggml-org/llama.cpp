@@ -144,10 +144,11 @@ if (CUDAToolkit_FOUND)
         if (NOT GGML_CUDA_CUTLASS_DIR)
             message(FATAL_ERROR "GGML_CUDA_HOPPER_Q1 requires GGML_CUDA_CUTLASS_DIR (CUTLASS checkout root)")
         endif()
-        add_compile_definitions(GGML_USE_HOPPER_Q1)
-        include_directories(${GGML_CUDA_CUTLASS_DIR}/include ${GGML_CUDA_CUTLASS_DIR}/tools/util/include)
-        list(APPEND CMAKE_CUDA_FLAGS " --expt-relaxed-constexpr")
-        string(REPLACE ";" " " CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
+        target_compile_definitions(ggml-cuda PRIVATE GGML_USE_HOPPER_Q1)
+        target_include_directories(ggml-cuda PRIVATE
+            ${GGML_CUDA_CUTLASS_DIR}/include
+            ${GGML_CUDA_CUTLASS_DIR}/tools/util/include)
+        target_compile_options(ggml-cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
     endif()
 
     if (GGML_CUDA_FORCE_CUBLAS)
