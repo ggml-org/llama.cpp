@@ -16873,14 +16873,13 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q4_0:
                         return true;
-                    // TurboQuant K/V flash-attention is not supported on Vulkan: the
-                    // turbo FA dequant path was dropped in the upstream catch-up and the
-                    // turbo3 FA SPIR-V variant is not generated (no pipeline), so report
-                    // these as unsupported rather than dispatching to a missing kernel.
+                    // TurboQuant K/V flash attention: dequant is fused into the
+                    // scalar/coopmat1 FA shaders via dequantize4() (flash_attn_dequant.glsl),
+                    // so the standard f16 FA pipeline handles turbo K/V.
                     case GGML_TYPE_TURBO2_0:
                     case GGML_TYPE_TURBO3_0:
                     case GGML_TYPE_TURBO4_0:
-                        return false;
+                        return true;
                     case GGML_TYPE_Q1_0:
                         return coopmat2;
                     default:
