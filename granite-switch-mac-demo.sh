@@ -61,10 +61,14 @@ convert() {
 }
 
 # run NAME PROMPT N
+# -no-cnv: this model ships a chat template, so llama-completion AUTO-ENABLES
+# interactive conversation mode and stops at a `>` prompt waiting for input.
+# -no-cnv disables that: generate once from the raw prompt and exit (and it
+# also prints special tokens, which makes the adapter switch easy to see).
 run() {
   local name="$1" prompt="$2" n="${3:-16}"
   echo "=== $name ==="
-  "$BIN" -m "$GGUF" -ngl "$NGL" --temp 0 -n "$n" -p "$prompt" 2>/dev/null
+  "$BIN" -m "$GGUF" -ngl "$NGL" --temp 0 -n "$n" -no-cnv -p "$prompt" 2>/dev/null
   echo; echo "-----"
 }
 
