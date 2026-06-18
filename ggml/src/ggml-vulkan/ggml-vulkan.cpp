@@ -2360,8 +2360,8 @@ static bool ggml_vk_strip_decode_vector(const uint32_t * code, size_t word_count
 // hardware like Apple M1/M2.
 // Assumes 1. code comes from mul_mm.comp 2. the K-tile loop has no loop
 // control hint and 3. the BK loop is the last loop nested directly inside
-// the K-tile loop. 
-// Returns true when the input was modified; returns false otherwise 
+// the K-tile loop.
+// Returns true when the input was modified; returns false otherwise
 // without touching `out`.
 static bool ggml_vk_roll_bk_loop(const uint32_t * code, size_t word_count, std::vector<uint32_t> & out) {
     if (word_count < 5) {
@@ -2369,7 +2369,7 @@ static bool ggml_vk_roll_bk_loop(const uint32_t * code, size_t word_count, std::
     }
 
     struct vk_spv_loop {
-        size_t   header; 
+        size_t   header;
         size_t   end;
         uint32_t control;
     };
@@ -2408,17 +2408,17 @@ static bool ggml_vk_roll_bk_loop(const uint32_t * code, size_t word_count, std::
         const vk_spv_loop * parent = nullptr;
         bool has_child = false;
         for (const auto & g : loops) {
-            if (encloses(g, h) && (!parent || g.header > parent->header)) { 
-                parent = &g; 
+            if (encloses(g, h) && (!parent || g.header > parent->header)) {
+                parent = &g;
             }
-            if (encloses(h, g)) { 
-                has_child = true; 
+            if (encloses(h, g)) {
+                has_child = true;
             }
         }
         // BK loop should be the last loop nested inside the loop with no hint
         // and have at least one child loop.
-        if (parent && 
-            parent->control == spv::LoopControlMaskNone && 
+        if (parent &&
+            parent->control == spv::LoopControlMaskNone &&
             has_child &&
             (!bk || h.header > bk->header)) {
             bk = &h;
