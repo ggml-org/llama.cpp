@@ -326,6 +326,16 @@ void server_models::load_models() {
         SRV_INF("Loaded %zu custom model presets from %s\n", custom_presets.size(), base_params.models_preset.c_str());
     }
 
+    // prohibit default-model in the global preset section
+    {
+        std::string val;
+        if (global.get_option(COMMON_ARG_PRESET_DEFAULT_MODEL, val)) {
+            throw std::runtime_error(
+                string_format("default-model must be set per-model, "
+                "not in the global preset section"));
+        }
+    }
+
     // cascade, apply global preset first
     cached_models  = ctx_preset.cascade(global, cached_models);
     local_models   = ctx_preset.cascade(global, local_models);
@@ -353,6 +363,29 @@ void server_models::load_models() {
 
     auto get_source = [&](const std::string & name) {
         return source_map.count(name) ? source_map.at(name) : SERVER_MODEL_SOURCE_PRESET;
+    };
+
+    auto resolve_default_model = [&]() {
+        std::string first_default;
+        for (const auto & [name, inst] : mapping) {
+            std::string val;
+            if (!inst.meta.preset.get_option(COMMON_ARG_PRESET_DEFAULT_MODEL, val)) {
+                continue;
+            }
+            if (first_default.empty()) {
+                default_model_name = name;
+                SRV_INF("Default preset model: %s\n", name.c_str());
+                first_default = name;
+            } else {
+                SRV_WRN(
+                    "Multiple default models detected: '%s' and '%s'; "
+                    "using '%s' as default\n",
+                    name.c_str(),
+                    first_default.c_str(),
+                    first_default.c_str()
+                );
+            }
+        }
     };
 
     // Helpers that read `mapping` — must be called while holding the lock.
@@ -429,6 +462,7 @@ void server_models::load_models() {
             add_model(std::move(meta));
         }
         apply_stop_timeout();
+        resolve_default_model();
         log_available_models();
 
         std::vector<std::string> models_to_load;
@@ -605,6 +639,7 @@ void server_models::load_models() {
         cv.notify_all();
 
         log_available_models();
+        resolve_default_model();
 
         // collect autoload candidates while still under the lock
         std::vector<std::string> to_autoload;
@@ -626,6 +661,15 @@ void server_models::load_models() {
 
         notify_sse("models_reload", "*");
     }
+}
+
+std::string server_models::resolve_model_name(const std::string & requested) {
+    // If a non‑empty request matches a known model, use it.
+    if (!requested.empty() && has_model(requested)) {
+        return requested;
+    }
+    // Otherwise fall back to the default model if one is set.
+    return default_model_name.empty() ? requested : default_model_name;
 }
 
 void server_models::update_meta(const std::string & name, const server_model_meta & meta) {
@@ -1466,6 +1510,7 @@ void server_models_routes::init_routes() {
     this->proxy_get = [this](const server_http_req & req) {
         std::string method = "GET";
         std::string name = req.get_param("model");
+        name = models.resolve_model_name(name);
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
@@ -1478,6 +1523,7 @@ void server_models_routes::init_routes() {
         std::string method = "POST";
         json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
+        name = models.resolve_model_name(name);
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
