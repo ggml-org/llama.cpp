@@ -192,7 +192,7 @@ export ONEAPI_DEVICE_SELECTOR="level_zero:0"
 ./examples/sycl/start-svr.sh -m xxxx.gguf
 
 ## update the docs/ops.md for new/update OPs
-./examples/sycl/update_ops_doc.sh
+./examples/sycl/update-ops-doc.sh
 ```
 
 - Windows
@@ -215,7 +215,7 @@ set ONEAPI_DEVICE_SELECTOR="level_zero:0"
 examples\sycl\win-start-svr.bat -m xxxx.gguf
 
 ## update the docs/ops.md for new/update OPs
-examples\sycl\update_ops_doc.bat
+examples\sycl\win-update-ops-doc.bat
 ```
 
 
