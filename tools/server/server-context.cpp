@@ -9,6 +9,7 @@
 #include "build-info.h"
 #include "common.h"
 #include "fit.h"
+#include "gguf.h"
 #include "llama.h"
 #include "log.h"
 #include "sampling.h"
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <filesystem>
@@ -37,6 +39,28 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
+static bool server_is_higgs_audio_gguf(const std::string & path) {
+    if (path.empty()) {
+        return false;
+    }
+
+    gguf_init_params gguf_params = {
+        /* .no_alloc = */ true,
+        /* .ctx      = */ nullptr,
+    };
+    gguf_context * ctx = gguf_init_from_file(path.c_str(), gguf_params);
+    if (ctx == nullptr) {
+        return false;
+    }
+
+    const int64_t key = gguf_find_key(ctx, "higgs_audio.format");
+    const bool ok = key >= 0 &&
+            gguf_get_kv_type(ctx, key) == GGUF_TYPE_STRING &&
+            std::strcmp(gguf_get_val_str(ctx, key), "higgs-audio-v3-tts") == 0;
+    gguf_free(ctx);
+    return ok;
+}
 
 static uint32_t server_n_outputs_max(const common_params & params) {
     const uint32_t n_batch  = params.n_batch;
@@ -878,7 +902,11 @@ private:
         params_base.n_outputs_max = server_n_outputs_max(params_base);
 
         std::string & mmproj_path = params_base.mmproj.path;
-        bool has_mmproj = !mmproj_path.empty();
+        const bool has_higgs_audio_mmproj = server_is_higgs_audio_gguf(mmproj_path);
+        bool has_mmproj = !mmproj_path.empty() && !has_higgs_audio_mmproj;
+        if (has_higgs_audio_mmproj) {
+            SRV_INF("[higgs] using --mmproj as Higgs companion GGUF: '%s'\n", mmproj_path.c_str());
+        }
         mtmd_context_params mparams = mtmd_context_params_default();
         if (has_mmproj) {
             mparams.use_gpu          = params_base.mmproj_use_gpu;

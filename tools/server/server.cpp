@@ -8,12 +8,14 @@
 #include "build-info.h"
 #include "common.h"
 #include "fit.h"
+#include "gguf.h"
 #include "llama.h"
 #include "log.h"
 
 #include <atomic>
 #include <clocale>
 #include <chrono>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -97,6 +99,28 @@ static bool read_binary_file(const std::string & path, std::string & data) {
     return in.good() || in.eof();
 }
 
+static bool is_higgs_audio_gguf(const std::string & path) {
+    if (path.empty()) {
+        return false;
+    }
+
+    gguf_init_params gguf_params = {
+        /* .no_alloc = */ true,
+        /* .ctx      = */ nullptr,
+    };
+    gguf_context * ctx = gguf_init_from_file(path.c_str(), gguf_params);
+    if (ctx == nullptr) {
+        return false;
+    }
+
+    const int64_t key = gguf_find_key(ctx, "higgs_audio.format");
+    const bool ok = key >= 0 &&
+            gguf_get_kv_type(ctx, key) == GGUF_TYPE_STRING &&
+            std::strcmp(gguf_get_val_str(ctx, key), "higgs-audio-v3-tts") == 0;
+    gguf_free(ctx);
+    return ok;
+}
+
 static std::string higgs_audio_path_from_request(const json & body, const common_params & params) {
     if (body.contains("higgs_audio") && body["higgs_audio"].is_string()) {
         return body["higgs_audio"].get<std::string>();
@@ -105,6 +129,9 @@ static std::string higgs_audio_path_from_request(const json & body, const common
         if (env[0] != '\0') {
             return env;
         }
+    }
+    if (is_higgs_audio_gguf(params.mmproj.path)) {
+        return params.mmproj.path;
     }
     if (!params.model.path.empty()) {
         const auto sibling = std::filesystem::path(params.model.path).parent_path() / "higgs-audio-f16.gguf";
