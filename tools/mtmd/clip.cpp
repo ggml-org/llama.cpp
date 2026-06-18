@@ -1798,16 +1798,32 @@ struct clip_model_loader {
             return cur;
         };
 
-        auto get_scalar = [&](const std::string & name, float default_val) {
+        auto get_vector = [&](const std::string & name) {
+            std::vector<float> result;
             auto it = tensor_offset.find(name);
             if (it == tensor_offset.end()) {
+                return result;
+            }
+
+            int idx = gguf_find_tensor(ctx_gguf.get(), name.c_str());
+            if (idx <= 0) {
+                throw std::runtime_error(string_format("%s: failed to find tensor %s\n", __func__, name));
+            }
+            size_t n_bytes = gguf_get_tensor_size(ctx_gguf.get(), idx);
+            size_t n_elems = n_bytes / sizeof(float);
+            result.resize(n_elems);
+            fin.seekg(it->second, std::ios::beg);
+            fin.read(reinterpret_cast<char*>(result.data()), n_bytes);
+            return result;
+        };
+
+        auto get_scalar = [&](const std::string & name, float default_val) {
+            auto v = get_vector(name);
+            if (v.empty()) {
                 return default_val;
             }
-            size_t offset = it->second;
-            fin.seekg(offset, std::ios::beg);
-            float value;
-            fin.read(reinterpret_cast<char*>(&value), sizeof(float));
-            return value;
+            GGML_ASSERT(v.size() == 1 && "expected scalar tensor");
+            return v[0];
         };
 
         model.class_embedding = get_tensor(TN_CLASS_EMBD, false);
@@ -2646,22 +2662,6 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_PARAKEET:
                 {
-                    auto get_vector = [&](const std::string & name) {
-                        std::vector<float> result;
-                        auto it = tensor_offset.find(name);
-                        if (it == tensor_offset.end()) {
-                            return result;
-                        }
-
-                        int idx = gguf_find_tensor(ctx_gguf.get(), name.c_str());
-                        GGML_ASSERT(idx >= 0);
-                        size_t n_bytes = gguf_get_tensor_size(ctx_gguf.get(), idx);
-                        size_t n_elems = n_bytes / sizeof(float);
-                        result.resize(n_elems);
-                        fin.seekg(it->second, std::ios::beg);
-                        fin.read(reinterpret_cast<char*>(result.data()), n_bytes);
-                        return result;
-                    };
 
                     hparams.mel_filters = get_vector(TN_MEL_FILTERS);
                     hparams.window      = get_vector(TN_WINDOW);
