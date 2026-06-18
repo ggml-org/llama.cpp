@@ -6,6 +6,7 @@
 #include "reasoning-budget.h"
 
 #include "ggml.h"
+#include "json_schema_prefill_support.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -198,6 +199,31 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
     std::vector<llama_sampler *> samplers;
 
     const std::string & grammar_str = common_grammar_value(params.grammar);
+
+
+
+    // Compute prefill tokens from the generation prompt
+    std::vector<llama_token> prefill_tokens;
+    auto generation_prompt = params.generation_prompt;
+    if (!generation_prompt.empty()) {
+        fix_thought_json_transition(grammar_str, generation_prompt);
+        params.generation_prompt = generation_prompt;
+
+        GGML_ASSERT(vocab != nullptr);
+        auto tokens = common_tokenize(vocab, generation_prompt, false, true);
+        for (size_t i = 0; i < tokens.size(); i++) {
+            std::string piece = common_token_to_piece(vocab, tokens[i], true);
+            if (i == 0 && std::isspace(piece[0]) && !std::isspace(generation_prompt[0])) {
+                // Some tokenizers will add a space before the first special token, need to exclude
+                continue;
+            }
+            LOG_DBG("%s: prefill token: %d = %s\n", __func__, tokens[i], piece.c_str());
+            prefill_tokens.push_back(tokens[i]);
+        }
+    }
+
+
+
     if (grammar_str.compare(0, 11, "%llguidance") == 0) {
 #ifdef LLAMA_USE_LLGUIDANCE
         grmr = llama_sampler_init_llg(vocab, "lark", grammar_str.c_str());
@@ -260,22 +286,6 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         }
     }
 
-    // Compute prefill tokens from the generation prompt
-    std::vector<llama_token> prefill_tokens;
-    if (!params.generation_prompt.empty()) {
-        GGML_ASSERT(vocab != nullptr);
-        auto tokens = common_tokenize(vocab, params.generation_prompt, false, true);
-        for (size_t i = 0; i < tokens.size(); i++) {
-            std::string piece = common_token_to_piece(vocab, tokens[i], true);
-            if (i == 0 && std::isspace(piece[0]) && !std::isspace(params.generation_prompt[0])) {
-                // Some tokenizers will add a space before the first special token, need to exclude
-                continue;
-            }
-            LOG_DBG("%s: prefill token: %d = %s\n", __func__, tokens[i], piece.c_str());
-            prefill_tokens.push_back(tokens[i]);
-        }
-    }
-
     // Feed generation prompt tokens to the grammar sampler so it advances past
     // tokens the template already placed in the prompt.
     // Only applies to output-format and tool-call grammars; user-supplied grammars must not be prefilled.
@@ -287,7 +297,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
             }
         } catch (std::exception &e) {
             LOG_ERR("%s: error initializing grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
-                common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
+                common_grammar_value(params.grammar).c_str(), generation_prompt.c_str());
             throw e;
         }
     }
