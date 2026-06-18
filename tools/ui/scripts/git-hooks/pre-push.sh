@@ -57,6 +57,7 @@ if [ $lint_ok -ne 0 ]; then
     echo "❌ Lint failed"
     exit 1
 fi
+
 if [ $test_ok -ne 0 ]; then
     echo "❌ Tests failed"
     exit 1

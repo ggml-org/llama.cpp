@@ -27,7 +27,7 @@ echo "Running pre-commit checks for llama-ui..."
 # Format only staged files
 staged_ui=$(git diff --cached --name-only -- tools/ui/)
 if [ -n "$staged_ui" ]; then
-    echo "$staged_ui" | xargs npx --no-install prettier --write
+    echo "$staged_ui" | xargs npm run format
     format_ok=$?
     # Re-stage formatted files
     git add tools/ui/
