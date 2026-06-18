@@ -3008,13 +3008,13 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
             if (memory_type_indices.empty()) {
                 continue;
             }
-            buf->memory_property_flags = req_flags;
 
             bool done = false;
 
             for (auto mtype_it = memory_type_indices.begin(); mtype_it != memory_type_indices.end(); mtype_it++) {
                 try {
                     buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, &mem_flags_info });
+                    buf->memory_property_flags = mem_props.memoryTypes[*mtype_it].propertyFlags;
                     done = true;
                     break;
                 } catch (const vk::SystemError& e) {
@@ -3081,6 +3081,7 @@ static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal});
         } else if (device->uma) {
             // Prefer cached host memory over device-local for UMA to avoid WC read penalties
+            // If unavailable, fall back to device-local memory.
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
