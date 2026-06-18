@@ -964,7 +964,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
     return output;
 }
 
-bool mtmd_image_preprocessor_gemma4::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+mtmd_image_preproc_out mtmd_image_preprocessor_gemma4::preprocess(const clip_image_u8 & img) {
     GGML_ASSERT(hparams.image_max_pixels > 0);
     clip_image_u8 resized_image;
     const clip_image_size original_size = img.get_size();
@@ -977,10 +977,9 @@ bool mtmd_image_preprocessor_gemma4::preprocess(const clip_image_u8 & img, clip_
     img_tool::resize(img, resized_image, target_size,
                         RESIZE_ALGO_BICUBIC,
                         PAD_NONE);
-    clip_image_f32_ptr img_f32(clip_image_f32_init());
-    img_u8_to_f32(resized_image, *img_f32, hparams.image_mean, hparams.image_std);
-    output.entries.push_back(std::move(img_f32));
-    return true;
+    mtmd_image_preproc_out output;
+    output.append(hparams, resized_image, true);
+    return output;
 }
 
 

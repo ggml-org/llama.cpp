@@ -128,7 +128,7 @@ struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
 // transformers Gemma4UnifiedImageProcessor.get_aspect_ratio_preserving_size
 struct mtmd_image_preprocessor_gemma4 : mtmd_image_preprocessor {
     mtmd_image_preprocessor_gemma4(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
 // similar to mtmd_image_preprocessor_dyn_size, but resize the image to have longest edge equal to hparams.image_longest_edge, while preserving aspect ratio
