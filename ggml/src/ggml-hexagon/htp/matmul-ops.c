@@ -1132,86 +1132,161 @@ MATMUL_2D_REPACKED_IMPL(q8_0_flat,  1088, flat_vec_dot_q8_0_32x2,   flat_vec_dot
 MATMUL_2D_REPACKED_IMPL(iq4nl_flat, 576,  flat_vec_dot_iq4nl_32x2,  flat_vec_dot_iq4nl_32x1)
 MATMUL_2D_REPACKED_IMPL(mxfp4_flat, 544,  flat_vec_dot_mxfp4_32x2,  flat_vec_dot_mxfp4_32x1)
 
+#define quantize_preamble                                           \
+    struct htp_mm_context * mmctx = data;                           \
+    struct htp_ops_context * octx = mmctx->octx;                    \
+    const struct htp_tensor * src = octx->src[1];                   \
+    const uint32_t ne0 = src->ne[0];                                \
+    const uint32_t ne1 = src->ne[1];                                \
+    const uint32_t ne2 = src->ne[2];                                \
+    const uint32_t ne3 = src->ne[3];                                \
+    const uint32_t nrows = ne1 * ne2 * ne3;                         \
+    const uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread; \
+    const uint32_t ir_first = nrows_per_thread * ith;
+
 static void quantize_f32_q8_0_tiled(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_mm_context * mmctx = data;
-    struct htp_ops_context * octx = mmctx->octx;
+    quantize_preamble;
+
+    if (ir_first >= nrows) {
+        return;
+    }
+
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
 
-    uint64_t t1 = HAP_perf_get_qtimer_count();
-
-    const struct htp_tensor * src = octx->src[1];
     uint8_t * restrict dst = mmctx->vtcm_src1;
-    uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
-
-    const uint32_t ne0 = src->ne[0];
-    const uint32_t nrows = src->ne[1] * src->ne[2] * src->ne[3];
-
-    const uint32_t ir_first = nrows_per_thread * ith;
-    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);
+    const uint32_t ir_last = MIN(ir_first + nrows_per_thread, nrows);
 
     const size_t src_row_size = src->nb[1];
     const size_t dst_row_size = htp_mm_q8_0_tiled_row_size(ne0);
 
     const float * restrict src_data = (const float *)((uint8_t *) src->data + (src_row_size * ir_first));
-    uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
-    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
+    uint8_t * restrict     dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
+    uint8_t * restrict     tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
 
-    quantize_f32_q8_0_tiled_kernel(
-        src_data,
-        dst_data,
-        tmp_data,
-        ne0,
-        ir_last - ir_first,
-        src_row_size,
-        dst_row_size
-    );
-
-    uint64_t t2 = HAP_perf_get_qtimer_count();
-    FARF(HIGH, "quantize-f32-q8_0_tiled: %u/%u : n-rows %u (%u:%u) row-size %zu -> %zu usec %u\n", ith, nth, nrows, ir_first,
-         ir_last, src->nb[1], htp_mm_q8_0_tiled_row_size(ne0), (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    quantize_f32_q8_0_tiled_kernel(src_data, dst_data, tmp_data, ne0, ir_last - ir_first, src_row_size, dst_row_size);
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
 }
 
 static void quantize_f32_q8_1_tiled(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_mm_context * mmctx = data;
-    struct htp_ops_context * octx = mmctx->octx;
+    quantize_preamble;
+
+    if (ir_first >= nrows) {
+        return;
+    }
+
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
 
-    uint64_t t1 = HAP_perf_get_qtimer_count();
-
-    const struct htp_tensor * src = octx->src[1];
     uint8_t * restrict dst = mmctx->vtcm_src1;
-    uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
-
-    const uint32_t ne0 = src->ne[0];
-    const uint32_t nrows = src->ne[1] * src->ne[2] * src->ne[3];
-
-    const uint32_t ir_first = nrows_per_thread * ith;
-    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);
+    const uint32_t ir_last = MIN(ir_first + nrows_per_thread, nrows);
 
     const size_t src_row_size = src->nb[1];
     const size_t dst_row_size = htp_mm_q8_1_tiled_row_size(ne0);
 
     const float * restrict src_data = (const float *)((uint8_t *) src->data + (src_row_size * ir_first));
-    uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
-    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
+    uint8_t * restrict     dst_data = (uint8_t *) dst + (dst_row_size * ir_first);
+    uint8_t * restrict     tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith);
 
-    quantize_f32_q8_1_tiled_kernel(
-        src_data,
-        dst_data,
-        tmp_data,
-        ne0,
-        ir_last - ir_first,
-        src_row_size,
-        dst_row_size
-    );
+    quantize_f32_q8_1_tiled_kernel(src_data, dst_data, tmp_data, ne0, ir_last - ir_first, src_row_size, dst_row_size);
 
-    uint64_t t2 = HAP_perf_get_qtimer_count();
-    FARF(HIGH, "quantize-f32-q8_1_tiled: %u/%u : n-rows %u (%u:%u) row-size %zu -> %zu usec %u\n", ith, nth, nrows, ir_first,
-         ir_last, src->nb[1], htp_mm_q8_1_tiled_row_size(ne0), (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+}
+
+static void quantize_f32_f32(unsigned int nth, unsigned int ith, void * data) {
+    quantize_preamble;
+
+    if (ir_first >= nrows) {
+        return;
+    }
+
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+
+    uint8_t * restrict dst = mmctx->vtcm_src1;
+    uint32_t dst_stride = mmctx->vtcm_src1_stride;
+
+    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
+
+    const size_t src_row_size = ne0 * sizeof(float);
+    const size_t src_stride   = src->nb[1];
+
+    uint8_t * restrict src_data = (uint8_t *) src->data + (src_stride * ir_first);
+    uint8_t * restrict dst_data = (uint8_t *) dst       + (dst_stride * ir_first);
+
+    for (uint32_t i = ir_first; i < ir_last; ++i) {
+        hex_l2fetch(src_data, src_row_size, src_stride, 2);
+        hvx_copy_f32_au(dst_data, src_data, ne0);
+
+        dst_data += dst_stride;
+        src_data += src_stride;
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+}
+
+static void quantize_f32_f16(unsigned int nth, unsigned int ith, void * data) {
+    quantize_preamble;
+
+    if (ir_first >= nrows) {
+        return;
+    }
+
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+
+    uint8_t * restrict dst = mmctx->vtcm_src1;
+    uint32_t dst_stride = mmctx->vtcm_src1_stride;
+
+    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
+
+    const size_t src_row_size = ne0 * sizeof(float);
+    const size_t src_stride   = src->nb[1];
+
+    uint8_t * restrict src_data = (uint8_t *) src->data + (src_stride * ir_first);
+    uint8_t * restrict dst_data = (uint8_t *) dst       + (dst_stride * ir_first);
+
+    for (uint32_t i = ir_first; i < ir_last; ++i) {
+        hex_l2fetch(src_data, src_row_size, src_stride, 2);
+        hvx_copy_f16_f32_au(dst_data, src_data, ne0);
+
+        dst_data += dst_stride;
+        src_data += src_stride;
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+}
+
+// TODO just a plain copy that should be done via the DMA during the Op setup
+static void quantize_f16_f16(unsigned int nth, unsigned int ith, void * data) {
+    quantize_preamble;
+
+    if (ir_first >= nrows) {
+        return;
+    }
+
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+
+    uint8_t * restrict dst = mmctx->vtcm_src1;
+    uint32_t dst_stride = mmctx->vtcm_src1_stride;
+
+    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
+
+    const size_t src_row_size = ne0 * sizeof(float);
+    const size_t src_stride   = src->nb[1];
+
+    uint8_t * restrict src_data = (uint8_t *) src->data + (src_stride * ir_first);
+    uint8_t * restrict dst_data = (uint8_t *) dst       + (dst_stride * ir_first);
+
+    for (uint32_t i = ir_first; i < ir_last; ++i) {
+        hex_l2fetch(src_data, src_row_size, src_stride, 2);
+        hvx_copy_f16_au(dst_data, src_data, ne0);
+
+        dst_data += dst_stride;
+        src_data += src_stride;
+    }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
 }
@@ -1683,139 +1758,6 @@ static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
          ith, nth, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0],
          src1->ne[1], src1->ne[2], src1->ne[3], src2->ne[0], src2->ne[1], src2->ne[2], src2->ne[3], dst->ne[0],
          dst->ne[1], dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-}
-
-static void quantize_f32_f32(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_mm_context * mmctx = data;
-    struct htp_ops_context * octx = mmctx->octx;
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    const struct htp_tensor * src = octx->src[1];
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-    uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
-    uint32_t dst_stride = mmctx->vtcm_src1_stride;
-
-    uint64_t t1 = HAP_perf_get_qtimer_count();
-
-    const uint32_t ne0 = src->ne[0];
-    const uint32_t ne1 = src->ne[1];
-    const uint32_t ne2 = src->ne[2];
-    const uint32_t ne3 = src->ne[3];
-
-    const uint32_t nrows = ne1 * ne2 * ne3;                             // total n_rows
-
-    const uint32_t ir_first = nrows_per_thread * ith;                   // first row
-    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
-
-    const size_t src_row_size = ne0 * sizeof(float);
-    const size_t src_stride   = src->nb[1];
-
-    uint8_t * restrict src_data = (uint8_t *) src->data + (src_stride * ir_first);
-    uint8_t * restrict dst_data = (uint8_t *) dst       + (dst_stride * ir_first);
-
-    for (uint32_t i = ir_first; i < ir_last; ++i) {
-        hex_l2fetch(src_data, src_row_size, src_stride, 2);
-        hvx_copy_f32_au(dst_data, src_data, ne0);
-
-        dst_data += dst_stride;
-        src_data += src_stride;
-    }
-
-    uint64_t t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "quantize-f32-f32: %u/%u : n-rows %u (%u:%u) row-size %u (%u) -> %u usec %u\n", ith, nth, nrows, ir_first,
-        ir_last, src_row_size, src_stride, dst_stride, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-}
-
-static void quantize_f32_f16(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_mm_context * mmctx = data;
-    struct htp_ops_context * octx = mmctx->octx;
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    const struct htp_tensor * src = octx->src[1];
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-    uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
-    uint32_t dst_stride = mmctx->vtcm_src1_stride;
-
-    uint64_t t1 = HAP_perf_get_qtimer_count();
-
-    const uint32_t ne0 = src->ne[0];
-    const uint32_t ne1 = src->ne[1];
-    const uint32_t ne2 = src->ne[2];
-    const uint32_t ne3 = src->ne[3];
-
-    const uint32_t nrows = ne1 * ne2 * ne3;                             // total n_rows
-
-    const uint32_t ir_first = nrows_per_thread * ith;                   // first row
-    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
-
-    const size_t src_row_size = ne0 * sizeof(float);
-    const size_t src_stride   = src->nb[1];
-
-    uint8_t * restrict src_data = (uint8_t *) src->data + (src_stride * ir_first);
-    uint8_t * restrict dst_data = (uint8_t *) dst       + (dst_stride * ir_first);
-
-    for (uint32_t i = ir_first; i < ir_last; ++i) {
-        hex_l2fetch(src_data, src_row_size, src_stride, 2);
-        hvx_copy_f16_f32_au(dst_data, src_data, ne0);
-
-        dst_data += dst_stride;
-        src_data += src_stride;
-    }
-
-    uint64_t t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "quantize-f32-f16: %u/%u : n-rows %u (%u:%u) row-size %u (%u) -> %u usec %u\n", ith, nth, nrows, ir_first,
-        ir_last, src_row_size, src_stride, dst_stride, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-}
-
-// TODO just a plain copy that should be done via the DMA during the Op setup
-static void quantize_f16_f16(unsigned int nth, unsigned int ith, void * data) {
-    struct htp_mm_context * mmctx = data;
-    struct htp_ops_context * octx = mmctx->octx;
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
-
-    const struct htp_tensor * src = octx->src[1];
-    uint8_t * restrict dst = mmctx->vtcm_src1;
-    uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;
-    uint32_t dst_stride = mmctx->vtcm_src1_stride;
-
-    uint64_t t1 = HAP_perf_get_qtimer_count();
-
-    const uint32_t ne0 = src->ne[0];
-    const uint32_t ne1 = src->ne[1];
-    const uint32_t ne2 = src->ne[2];
-    const uint32_t ne3 = src->ne[3];
-
-    const uint32_t nrows = ne1 * ne2 * ne3;                             // total n_rows
-
-    const uint32_t ir_first = nrows_per_thread * ith;                   // first row
-    const uint32_t ir_last  = MIN(ir_first + nrows_per_thread, nrows);  // last row
-
-    const size_t src_row_size = ne0 * sizeof(float);
-    const size_t src_stride   = src->nb[1];
-
-    uint8_t * restrict src_data = (uint8_t *) src->data + (src_stride * ir_first);
-    uint8_t * restrict dst_data = (uint8_t *) dst       + (dst_stride * ir_first);
-
-    for (uint32_t i = ir_first; i < ir_last; ++i) {
-        hex_l2fetch(src_data, src_row_size, src_stride, 2);
-        hvx_copy_f16_au(dst_data, src_data, ne0);
-
-        dst_data += dst_stride;
-        src_data += src_stride;
-    }
-
-    uint64_t t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "quantize-f16-f16: %u/%u : n-rows %u (%u:%u) row-size %u (%u) -> %u usec %u\n", ith, nth, nrows, ir_first,
-        ir_last, src_row_size, src_stride, dst_stride, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
 }
 
 static int hvx_mm_init_vec_dot(struct htp_mm_context * mmctx, enum htp_data_type type) {
