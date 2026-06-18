@@ -32,7 +32,7 @@
 
 #include <sycl/sycl.hpp>
 #include <sycl/backend.hpp>
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
 #include <level_zero/ze_api.h>
 #endif
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
@@ -87,7 +87,7 @@ int g_ggml_sycl_enable_vmm = 1;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_async_mem_op_requested = 1;
-int g_ggml_sycl_enable_level_zero = 0;
+int g_ggml_sycl_use_level_zero_api = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
 int g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
 int g_ggml_sycl_usm_system = 0;
@@ -157,7 +157,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
             info.ext_oneapi_level_zero = false;
         }
 
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
         if (info.ext_oneapi_level_zero && device.is_gpu() && device.default_queue().get_backend() == sycl::backend::ext_oneapi_level_zero) {
             ze_device_handle_t ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(device.default_queue().get_device());
             ze_device_properties_t props = {};
@@ -172,13 +172,13 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.default_tensor_split[id] /= total_vram;
     }
 
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
     // Large buffers can be allocated before ggml_check_sycl() initializes other
     // g_ggml_sycl_enable_* globals, so initialize this one as early as we can.
-    g_ggml_sycl_enable_level_zero =
-        info.ext_oneapi_level_zero && ggml_sycl_get_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
+    g_ggml_sycl_use_level_zero_api =
+        info.ext_oneapi_level_zero && ggml_sycl_get_env("GGML_SYCL_USE_LEVEL_ZERO_API", 1);
 #else
-    g_ggml_sycl_enable_level_zero = 0;
+    g_ggml_sycl_use_level_zero_api = 0;
 #endif
 
     return info;
@@ -277,7 +277,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
 
         g_ggml_sycl_dev2dev_memcpy = ggml_sycl_get_env("GGML_SYCL_DEV2DEV_MEMCPY", DEV2DEV_MEMCPY_SYCL);
-        if (g_ggml_sycl_enable_level_zero == 0) {
+        if (g_ggml_sycl_use_level_zero_api == 0) {
             g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
         }
 
@@ -312,10 +312,10 @@ static void ggml_check_sycl() try {
 #else
         GGML_LOG_INFO("  GGML_SYCL_DNNL: no\n");
 #endif
-#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO)
-        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO: yes\n");
+#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes\n");
 #else
-        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO: no\n");
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: no\n");
 #endif
 #if defined(GGML_SYCL_USE_VMM)
         GGML_LOG_INFO("  GGML_SYCL_USE_VMM: yes\n");
@@ -331,12 +331,12 @@ static void ggml_check_sycl() try {
 #else
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: graph disabled by compile flag\n");
 #endif
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: %d\n", g_ggml_sycl_enable_level_zero);
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+        GGML_LOG_INFO("  GGML_SYCL_USE_LEVEL_ZERO_API: %d\n", g_ggml_sycl_use_level_zero_api);
         GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d\n", g_ggml_sycl_dev2dev_memcpy);
 #else
-        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: Level Zero disabled by compile flag\n");
-        GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d, enable to SYCL API since missing GGML_SYCL_SUPPORT_LEVEL_ZERO\n",
+        GGML_LOG_INFO("  GGML_SYCL_USE_LEVEL_ZERO_API: Disable Level Zero API usage by compile flag\n");
+        GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d, enable to SYCL API since missing GGML_SYCL_SUPPORT_LEVEL_ZERO_API\n",
                       g_ggml_sycl_dev2dev_memcpy);
 #endif
 #if GGML_SYCL_DNNL
@@ -602,7 +602,7 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
 static bool ggml_sycl_is_l0_discrete_gpu(int device) {
     return ggml_sycl_info().devices[device].l0_discrete_gpu;
 }
@@ -611,12 +611,12 @@ static bool ggml_sycl_is_l0_discrete_gpu(int device) {
 static void dev2dev_memcpy(int device_dst, sycl::queue &q_dst, int device_src, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
 
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
     if (g_ggml_sycl_dev2dev_memcpy == DEV2DEV_MEMCPY_L0) {
         // Use Level Zero direct copy for dGPU-to-dGPU transfers.
         const bool l0_copy_supported =
             ggml_sycl_is_l0_discrete_gpu(device_dst) && ggml_sycl_is_l0_discrete_gpu(device_src);
-        if (g_ggml_sycl_enable_level_zero && l0_copy_supported) {
+        if (g_ggml_sycl_use_level_zero_api && l0_copy_supported) {
             auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_context());
             auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_device());
             ze_command_queue_desc_t cq_desc = {ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC, nullptr, 0, 0,

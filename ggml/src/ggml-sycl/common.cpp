@@ -12,7 +12,7 @@
 
 #include "common.hpp"
 #include <sycl/backend.hpp>
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
 #include <level_zero/ze_api.h>
 #endif
 
@@ -84,9 +84,9 @@ int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block
   return sycl_down_blk_size;
 }
 
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
 static bool ggml_sycl_use_level_zero_device_alloc(sycl::queue &q) {
-    return g_ggml_sycl_enable_level_zero &&
+    return g_ggml_sycl_use_level_zero_api &&
         q.get_device().is_gpu() &&
         q.get_backend() == sycl::backend::ext_oneapi_level_zero;
 }
@@ -95,7 +95,7 @@ static bool ggml_sycl_use_level_zero_device_alloc(sycl::queue &q) {
 // Use Level Zero zeMemAllocDevice to avoid sycl::malloc_device triggering
 // DMA-buf/TTM system RAM staging in the xe kernel driver during multi-GPU inference.
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
     if (ggml_sycl_use_level_zero_device_alloc(q)) {
         void *ptr = nullptr;
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
@@ -127,7 +127,7 @@ void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
 
 void ggml_sycl_free_device(void *ptr, sycl::queue &q) {
     if (!ptr) return;
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
     if (ggml_sycl_use_level_zero_device_alloc(q)) {
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
         zeMemFree(ze_ctx, ptr);
