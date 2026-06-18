@@ -61,6 +61,10 @@ public:
 
     bool get_can_shift() const override;
 
+    // Expand/shrink the recurrent state memory (for prompt cache save/restore)
+    bool expand(uint32_t new_mem_size);
+    bool shrink(uint32_t new_mem_size);
+
     // state write/load
 
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
@@ -120,6 +124,8 @@ private:
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+
+    bool resize(uint32_t new_mem_size);
 
     size_t total_size() const;
 

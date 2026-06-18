@@ -773,6 +773,19 @@ extern "C" {
     // Check if the memory supports shifting
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
+    // Expand the recurrent state to new_n_seq_max cells (for deferred backup allocation).
+    // Returns true on success. No-op if the memory is already large enough or has no recurrent component.
+    LLAMA_API bool llama_memory_recurrent_expand(llama_memory_t mem, uint32_t new_n_seq_max);
+
+    // Shrink the recurrent state to new_n_seq_max cells (frees GPU memory for prefill).
+    // Returns true on success. No-op if the memory is already small enough or has no recurrent component.
+    LLAMA_API bool llama_memory_recurrent_shrink(llama_memory_t mem, uint32_t new_n_seq_max);
+
+    // Context-level recurrent resize. These variants also invalidate the context scheduler/graph cache
+    // because recurrent tensors are reallocated and graph nodes hold tensor pointers.
+    LLAMA_API bool llama_context_recurrent_expand(struct llama_context * ctx, uint32_t new_n_seq_max);
+    LLAMA_API bool llama_context_recurrent_shrink(struct llama_context * ctx, uint32_t new_n_seq_max);
+
     //
     // State / sessions
     //
