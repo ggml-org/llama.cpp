@@ -174,8 +174,11 @@ int llama_server(int argc, char ** argv) {
         routes.get_props                   = models_routes->get_router_props;
         routes.get_models                  = models_routes->get_router_models;
 
+        ctx_http.post("/models",               ex_wrapper(models_routes->post_router_models));
         ctx_http.post("/models/load",          ex_wrapper(models_routes->post_router_models_load));
         ctx_http.post("/models/unload",        ex_wrapper(models_routes->post_router_models_unload));
+        ctx_http.get ("/models/sse",           ex_wrapper(models_routes->get_router_models_sse));
+        ctx_http.del ("/models",               ex_wrapper(models_routes->del_router_models));
     }
 
     ctx_http.get ("/health",                   ex_wrapper(routes.get_health)); // public endpoint (no API key check)
@@ -261,6 +264,7 @@ int llama_server(int argc, char ** argv) {
         clean_up = [&models_routes]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
             if (models_routes.has_value()) {
+                models_routes->stopping.store(true); // maybe redundant, but just to be safe
                 models_routes->models.unload_all();
             }
             llama_backend_free();
@@ -274,6 +278,10 @@ int llama_server(int argc, char ** argv) {
         ctx_http.is_ready.store(true);
 
         shutdown_handler = [&](int) {
+            if (models_routes.has_value()) {
+                // important to disconnect any SSE clients
+                models_routes->stopping.store(true);
+            }
             ctx_http.stop();
         };
 
@@ -341,6 +349,12 @@ int llama_server(int argc, char ** argv) {
         SRV_INF("router server is listening on %s\n", ctx_http.listening_address.c_str());
         SRV_WRN("%s", "NOTE: router mode is experimental\n");
         SRV_WRN("%s", "      it is not recommended to use this mode in untrusted environments\n");
+
+        if (!params.models_preset_hf.empty()) {
+            SRV_WRN(      "NOTE: using preset.ini from HF repo '%s'\n", params.models_preset_hf.c_str());
+            SRV_WRN("%s", "      please only use presets that you can trust! Unknown presets may be unsafe\n");
+        }
+
         if (ctx_http.thread.joinable()) {
             ctx_http.thread.join(); // keep the main thread alive
         }
