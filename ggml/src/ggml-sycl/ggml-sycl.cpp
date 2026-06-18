@@ -335,7 +335,6 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_USE_LEVEL_ZERO_API: Disable Level Zero API usage by compile flag\n");
         GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d, enable to SYCL API since missing GGML_SYCL_SUPPORT_LEVEL_ZERO_API\n",
                       g_ggml_sycl_dev2dev_memcpy);
-        
 #endif
 #if GGML_SYCL_DNNL
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: %d\n", g_ggml_sycl_disable_dnn);
