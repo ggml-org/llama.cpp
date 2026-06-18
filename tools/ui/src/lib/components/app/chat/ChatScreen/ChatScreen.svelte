@@ -26,6 +26,7 @@
 		isEditing,
 		activeProcessingState
 	} from '$lib/stores/chat.svelte';
+	import { instructionsStore } from '$lib/stores/instructions.svelte';
 	import {
 		conversationsStore,
 		activeMessages,

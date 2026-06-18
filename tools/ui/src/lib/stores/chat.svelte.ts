@@ -56,6 +56,7 @@ import type {
 	DatabaseMessageExtra
 } from '$lib/types';
 import {
+    AttachmentType,
 	ContinueIntentKind,
 	ErrorDialogType,
 	MessageRole,
@@ -848,6 +849,17 @@ class ChatStore {
 	}
 
 	async addSystemPrompt(): Promise<void> {
+		await this.addSystemPromptWithContent(SYSTEM_MESSAGE_PLACEHOLDER);
+	}
+
+	async addSystemPromptWithContent(
+		content: string,
+		instructionId?: string,
+		instructionTitle?: string
+	): Promise<void> {
+		const trimmedContent = content.trim();
+		if (!trimmedContent) return;
+
 		let activeConv = conversationsStore.activeConversation;
 		if (!activeConv) {
 			await conversationsStore.createConversation();
@@ -871,10 +883,23 @@ class ChatStore {
 			}
 			const am = conversationsStore.activeMessages;
 			const firstActiveMessage = am.find((m) => m.parent === rootId);
+
+			// Create CUSTOM_INSTRUCTION extra if instruction ID is provided
+			const extra: DatabaseMessageExtra[] | undefined = instructionId
+				? [
+						{
+							type: AttachmentType.CUSTOM_INSTRUCTION,
+							instructionId,
+							title: instructionTitle ?? ''
+						}
+					]
+				: undefined;
+
 			const systemMessage = await DatabaseService.createSystemMessage(
 				activeConv.id,
-				SYSTEM_MESSAGE_PLACEHOLDER,
-				rootId
+				trimmedContent,
+				rootId,
+				{ extra }
 			);
 			if (firstActiveMessage) {
 				await DatabaseService.updateMessage(firstActiveMessage.id, {
@@ -899,7 +924,10 @@ class ChatStore {
 					});
 			}
 			conversationsStore.activeMessages.unshift(systemMessage);
-			this.pendingEditMessageId = systemMessage.id;
+			// Only enter edit mode for plain text inputs, not for saved custom instructions
+			if (!instructionId) {
+				this.pendingEditMessageId = systemMessage.id;
+			}
 			conversationsStore.updateConversationTimestamp();
 		} catch (error) {
 			console.error('Failed to add system prompt:', error);

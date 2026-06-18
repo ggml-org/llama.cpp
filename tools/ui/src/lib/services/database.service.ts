@@ -141,7 +141,8 @@ export class DatabaseService {
 	static async createSystemMessage(
 		convId: string,
 		systemPrompt: string,
-		parentId: string
+		parentId: string,
+		options?: { extra?: DatabaseMessageExtra[] }
 	): Promise<DatabaseMessage> {
 		const trimmedPrompt = systemPrompt.trim();
 		if (!trimmedPrompt) {
@@ -156,7 +157,8 @@ export class DatabaseService {
 			role: MessageRole.SYSTEM,
 			content: trimmedPrompt,
 			parent: parentId,
-			children: []
+			children: [],
+			extra: options?.extra
 		};
 
 		await db[IDXDB_TABLES.messages].add(systemMessage);

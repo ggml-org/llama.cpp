@@ -89,6 +89,12 @@ export interface DatabaseMessageExtraMcpResource {
 	mimeType?: string;
 }
 
+export interface DatabaseMessageExtraCustomInstruction {
+	type: AttachmentType.CUSTOM_INSTRUCTION;
+	instructionId: string;
+	title: string;
+}
+
 export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
@@ -97,6 +103,7 @@ export type DatabaseMessageExtra =
 	| DatabaseMessageExtraPdfFile
 	| DatabaseMessageExtraMcpPrompt
 	| DatabaseMessageExtraMcpResource
+	| DatabaseMessageExtraCustomInstruction
 	| DatabaseMessageExtraLegacyContext;
 
 export interface DatabaseMessage {

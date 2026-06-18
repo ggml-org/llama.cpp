@@ -8,4 +8,8 @@ export class RouterService {
 	static settings(section: string): string {
 		return `${ROUTES.SETTINGS}/${section}`;
 	}
+
+	static instructions(): string {
+		return ROUTES.INSTRUCTIONS;
+	}
 }

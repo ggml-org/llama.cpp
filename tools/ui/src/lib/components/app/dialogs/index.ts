@@ -476,6 +476,19 @@ export { default as DialogMcpResourcesBrowser } from './DialogMcpResourcesBrowse
 export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.svelte';
 
 /**
+ * **DialogInstructionAddNew** - Add new instruction dialog
+ *
+ * Modal dialog for creating a new instruction with title and content.
+ * Integrates with instructionsStore for persistence via localStorage.
+ *
+ * @example
+ * ```svelte
+ * <DialogInstructionAddNew bind:open={showAddDialog} />
+ * ```
+ */
+export { default as DialogInstructionAddNew } from './DialogInstructionAddNew.svelte';
+
+/**
  * **DialogMermaidPreview** - Full-screen Mermaid diagram preview with zoom and pan
  *
  * Full-screen dialog for previewing Mermaid diagrams with interactive controls.

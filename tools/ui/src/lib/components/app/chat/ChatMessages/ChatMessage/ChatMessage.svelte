@@ -12,11 +12,13 @@
 		ChatMessageAssistant,
 		ChatMessageUser,
 		ChatMessageSystem,
-		ChatMessageMcpPrompt
+		ChatMessageMcpPrompt,
+		ChatMessageCustomInstruction
 	} from '$lib/components/app/chat';
+	import { DialogInstructionAddNew } from '$lib/components/app';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { deriveAgenticSections } from '$lib/utils';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraCustomInstruction } from '$lib/types';
 	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
@@ -88,12 +90,28 @@
 
 		return parts.join('\n\n\n');
 	});
+
 	let editedExtras = $derived<DatabaseMessageExtra[]>(message.extra ? [...message.extra] : []);
 	let editedUploadedFiles = $state<ChatUploadedFile[]>([]);
+	let customInstructionExtra = $derived.by(() => {
+		if (message.role !== MessageRole.SYSTEM) return null;
+		if (!message.extra || message.extra.length === 0) return null;
+		for (const extra of message.extra) {
+			if (extra.type === AttachmentType.CUSTOM_INSTRUCTION) {
+				return extra as DatabaseMessageExtraCustomInstruction;
+			}
+		}
+		return null;
+	});
 	let isEditing = $state(false);
 	let showDeleteDialog = $state(false);
 	let shouldBranchAfterEdit = $state(false);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
+	let instructionDialogOpen = $state(false);
+	let addToLibrary = $state(false);
+	let deferSystemPromptSave = $state(false);
+	let createdInstructionId = $state('');
+	let createdInstructionTitle = $state('');
 
 	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
 	let showBranchAfterEditOption = $derived(message.role === MessageRole.ASSISTANT);
@@ -271,16 +289,37 @@
 			if (!newContent) {
 				const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 				isEditing = false;
+				addToLibrary = false;
 				if (conversationDeleted) {
 					goto(ROUTES.START);
 				}
 				return;
 			}
 
-			await DatabaseService.updateMessage(message.id, { content: newContent });
-			const index = conversationsStore.findMessageIndex(message.id);
-			if (index !== -1) {
-				conversationsStore.updateMessageAtIndex(index, { content: newContent });
+			// Defer save if "Add to library" is checked — dialog will trigger the save
+			if (addToLibrary) {
+				deferSystemPromptSave = true;
+				instructionDialogOpen = true;
+				addToLibrary = false;
+				return;
+			}
+
+			// Preserve existing extras (including CUSTOM_INSTRUCTION)
+			const existingExtras = message.extra || [];
+			const extrasToSave = existingExtras.filter((e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_INSTRUCTION);
+
+			if (extrasToSave.length > 0) {
+				await DatabaseService.updateMessage(message.id, { content: newContent, extra: extrasToSave });
+				const index = conversationsStore.findMessageIndex(message.id);
+				if (index !== -1) {
+					conversationsStore.updateMessageAtIndex(index, { content: newContent, extra: extrasToSave });
+				}
+			} else {
+				await DatabaseService.updateMessage(message.id, { content: newContent });
+				const index = conversationsStore.findMessageIndex(message.id);
+				if (index !== -1) {
+					conversationsStore.updateMessageAtIndex(index, { content: newContent });
+				}
 			}
 		} else if (message.role === MessageRole.USER) {
 			const finalExtras = await getMergedExtras();
@@ -307,6 +346,31 @@
 		editedUploadedFiles = [];
 	}
 
+	async function saveSystemPrompt(content: string) {
+		await DatabaseService.updateMessage(message.id, { content });
+		const index = conversationsStore.findMessageIndex(message.id);
+		if (index !== -1) {
+			conversationsStore.updateMessageAtIndex(index, { content });
+		}
+	}
+
+	async function saveSystemPromptWithInstruction(content: string, instructionId: string, title: string) {
+		const extras: DatabaseMessageExtra[] = [
+			...(message.extra || []),
+			{
+				type: AttachmentType.CUSTOM_INSTRUCTION,
+				instructionId,
+				title
+			}
+		];
+
+		await DatabaseService.updateMessage(message.id, { content, extra: extras });
+		const index = conversationsStore.findMessageIndex(message.id);
+		if (index !== -1) {
+			conversationsStore.updateMessageAtIndex(index, { content, extra: extras });
+		}
+	}
+
 	async function getMergedExtras(): Promise<DatabaseMessageExtra[]> {
 		if (editedUploadedFiles.length === 0) {
 			return editedExtras;
@@ -331,6 +395,8 @@
 			class={className}
 			{deletionInfo}
 			{message}
+			instructionId={customInstructionExtra?.instructionId}
+			title={customInstructionExtra?.title}
 			onConfirmDelete={handleConfirmDelete}
 			onCopy={handleCopy}
 			onDelete={handleDelete}
@@ -339,7 +405,31 @@
 			onShowDeleteDialogChange={handleShowDeleteDialogChange}
 			{showDeleteDialog}
 			{siblingInfo}
+			addToLibrary={addToLibrary}
+			onAddToLibraryChange={(val: boolean) => (addToLibrary = val)}
+			deferSystemPromptSave={deferSystemPromptSave}
+			onSystemPromptSaveComplete={() => {
+				deferSystemPromptSave = false;
+				instructionDialogOpen = false;
+				isEditing = false;
+			}}
 		/>
+
+		{#if instructionDialogOpen}
+			<DialogInstructionAddNew
+				open={instructionDialogOpen}
+				initialContent={editedContent}
+				onAddToLibraryComplete={(id: string, title: string) => {
+					createdInstructionId = id;
+					createdInstructionTitle = title;
+					instructionDialogOpen = false;
+					deferSystemPromptSave = false;
+					isEditing = false;
+					// Save the system message with instruction reference now that instruction is created
+					saveSystemPromptWithInstruction(editedContent, id, title);
+				}}
+			/>
+		{/if}
 	{:else if mcpPromptExtra}
 		<ChatMessageMcpPrompt
 			class={className}

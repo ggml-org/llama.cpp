@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Plus, File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
+	import { Plus, File, Zap, FolderOpen } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { buttonVariants } from '$lib/components/ui/button';
@@ -11,7 +11,8 @@
 	} from '$lib/constants';
 	import {
 		ChatFormActionAddToolsSubmenu,
-		ChatFormActionAddMcpServersSubmenu
+		ChatFormActionAddMcpServersSubmenu,
+		ChatFormActionAddSystemMessageSubmenu
 	} from '$lib/components/app';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
@@ -25,6 +26,7 @@
 		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
+		onSystemPromptWithContent?: (content: string) => void;
 		onMcpPromptClick?: () => void;
 		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
@@ -40,6 +42,7 @@
 		hasMcpResourcesSupport = false,
 		onFileUpload,
 		onSystemPromptClick,
+		onSystemPromptWithContent,
 		onMcpPromptClick,
 		onMcpSettingsClick,
 		onMcpResourcesClick
@@ -138,14 +141,11 @@
 				</DropdownMenu.SubContent>
 			</DropdownMenu.Sub>
 
-			<DropdownMenu.Item
-				class="flex cursor-pointer items-center gap-2"
-				onclick={onSystemPromptClick}
-			>
-				<MessageSquare class="h-4 w-4" />
-
-				<span>System Message</span>
-			</DropdownMenu.Item>
+			<ChatFormActionAddSystemMessageSubmenu
+				{onSystemPromptClick}
+				{onSystemPromptWithContent}
+				onMcpPromptClick={onMcpPromptClick}
+			/>
 
 			<ChatFormActionAddToolsSubmenu />
 
