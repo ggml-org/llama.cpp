@@ -3069,7 +3069,7 @@ class tinyBLAS_Q0_PPC {
                 } else {
                     packNormal_q8_fp16(A + ii * lda + kk, lda, mc, k_cur, (uint8_t *)A_pack);
                 }
-                packNormal_q8_fp16(B + jj * ldb + kk, ldb, nc, k-cur, (uint8_t *)B_pack);
+                packNormal_q8_fp16(B + jj * ldb + kk, ldb, nc, k_cur, (uint8_t *)B_pack);
                 KERNEL_Q0(ii, jj, mc, nc, k_cur, kk, A_pack, B_pack);
             }
         }
