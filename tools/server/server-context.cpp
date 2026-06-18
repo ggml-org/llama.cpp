@@ -1,5 +1,6 @@
 #include "server-context.h"
 #include "server-chat.h"
+#include "server-checkpoint.h"
 #include "server-common.h"
 #include "server-http.h"
 #include "server-task.h"
@@ -2316,20 +2317,10 @@ private:
 
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
-        while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
-            // make room for the new checkpoint, if needed
-            const auto & cur = slot.prompt.checkpoints.front();
-
-            SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
-                    cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
-
-            slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
-        }
-
         auto & cur = slot.prompt.checkpoints.emplace_back();
 
         // [TAG_CHECKPOINTS_FIX_POS_MIN]
-        // TODO: here we incorrectly deterimne that the saved checkpoint data covers the [pos_min, pos_max] range
+        // TODO: here we incorrectly determine that the saved checkpoint data covers the [pos_min, pos_max] range
         //       this is not true for SWA models: https://github.com/ggml-org/llama.cpp/pull/24411#issuecomment-4677983225
         cur.update_pos(slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max);
 
@@ -2338,10 +2329,23 @@ private:
         // stash the draft's speculative state with the checkpoint
         common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
 
+        auto it_cur = std::prev(slot.prompt.checkpoints.end());
+
+        while (slot.prompt.checkpoints.size() > (size_t) params_base.n_ctx_checkpoints) {
+            // Preserve broad prompt coverage by removing the checkpoint whose
+            // neighbors are closest together. The newest checkpoint is kept.
+            auto it = server_checkpoint::find_redundant_checkpoint(slot.prompt.checkpoints);
+
+            SLT_WRN(slot, "erasing redundant context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                    it->pos_min, it->pos_max, it->n_tokens, (float) it->size() / 1024 / 1024);
+
+            slot.prompt.checkpoints.erase(it);
+        }
+
         SLT_INF(slot,
                 "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
-                (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
-                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+                (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, it_cur->pos_min,
+                it_cur->pos_max, it_cur->n_tokens, (float) it_cur->size() / 1024 / 1024);
     }
 
     void process_single_task(server_task && task) {
@@ -3537,11 +3541,6 @@ private:
                         slot.i_batch   = batch.size() - 1;
 
                         slot.init_sampler();
-                    } else {
-                        // skip ordinary mid-prompt checkpoints
-                        if (!n_before_user_known && !near_prompt_end) {
-                            do_checkpoint = false;
-                        }
                     }
 
                     const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
@@ -3550,6 +3549,13 @@ private:
                     // checkpoints are created before the current batch is decoded, so
                     // their token position is the batch start rather than the prompt end
                     const int32_t n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
+
+                    const bool is_ladder_checkpoint =
+                        do_checkpoint &&
+                        server_checkpoint::should_create_mid_prompt_checkpoint(
+                            n_tokens_start,
+                            slot.task->n_tokens(),
+                            near_prompt_end);
 
                     {
                         const bool is_on_user =
@@ -3561,9 +3567,10 @@ private:
                             n_tokens_start > n_before_user;
 
                         const bool is_allowed =
-                            !n_before_user_known ||
+                            (!n_before_user_known && near_prompt_end) ||
                             is_on_user ||
-                            (is_after_user && near_prompt_end);
+                            (is_after_user && near_prompt_end) ||
+                            is_ladder_checkpoint;
 
                         if (do_checkpoint && !is_allowed) {
                             do_checkpoint = false;
@@ -3580,7 +3587,13 @@ private:
                     do_checkpoint = do_checkpoint && !has_mtmd;
 
                     // no need to create checkpoints that are too close together
-                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || n_tokens_start > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_step);
+                    {
+                        const int32_t min_step = is_ladder_checkpoint ?
+                            server_checkpoint::ladder_min_step(n_tokens_start, params_base.checkpoint_min_step) :
+                            params_base.checkpoint_min_step;
+
+                        do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || n_tokens_start > slot.prompt.checkpoints.back().n_tokens + min_step);
+                    }
                     SLT_DBG(slot, "main/do_checkpoint = %s, pos_min = %d, pos_max = %d\n", do_checkpoint ? "yes" : "no", pos_min, pos_max);
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
