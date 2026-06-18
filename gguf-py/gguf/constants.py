@@ -159,6 +159,12 @@ class Keys:
         TARGET_HIDDEN_SIZE                = "{arch}.target_hidden_size"
         BLOCK_SIZE                        = "{arch}.block_size"
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
+        # Granite Switch: per-token embedded LoRA adapters
+        NUM_ADAPTERS                      = "{arch}.num_adapters"
+        ADAPTER_TOKEN_IDS                 = "{arch}.adapter_token_ids"
+        ADAPTER_SUBSTITUTE_TOKEN_IDS      = "{arch}.adapter_substitute_token_ids"
+        ADAPTER_RANKS                     = "{arch}.adapter_ranks"
+        MAX_LORA_RANK                     = "{arch}.max_lora_rank"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
@@ -499,6 +505,7 @@ class MODEL_ARCH(IntEnum):
     GRANITE          = auto()
     GRANITE_MOE      = auto()
     GRANITE_HYBRID   = auto()
+    GRANITE_SWITCH   = auto()
     CHAMELEON        = auto()
     WAVTOKENIZER_DEC = auto()
     PLM              = auto()
@@ -983,6 +990,21 @@ class MODEL_TENSOR(IntEnum):
     A_QF_FFN_UP            = auto()
     A_QF_FFN_DOWN          = auto()
     A_QF_FFN_NORM          = auto()
+    # Granite Switch: per-token embedded LoRA adapters (stacked over N = num_adapters + 1)
+    ATTN_QKV_LORA_A_Q      = auto()
+    ATTN_QKV_LORA_B_Q      = auto()
+    ATTN_QKV_LORA_A_K      = auto()
+    ATTN_QKV_LORA_B_K      = auto()
+    ATTN_QKV_LORA_A_V      = auto()
+    ATTN_QKV_LORA_B_V      = auto()
+    ATTN_OUT_LORA_A        = auto()
+    ATTN_OUT_LORA_B        = auto()
+    FFN_GATE_LORA_A        = auto()
+    FFN_GATE_LORA_B        = auto()
+    FFN_UP_LORA_A          = auto()
+    FFN_UP_LORA_B          = auto()
+    FFN_DOWN_LORA_A        = auto()
+    FFN_DOWN_LORA_B        = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -1079,6 +1101,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GRANITE:          "granite",
     MODEL_ARCH.GRANITE_MOE:      "granitemoe",
     MODEL_ARCH.GRANITE_HYBRID:   "granitehybrid",
+    MODEL_ARCH.GRANITE_SWITCH:   "granite-switch",
     MODEL_ARCH.CHAMELEON:        "chameleon",
     MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
     MODEL_ARCH.PLM:              "plm",
@@ -1560,6 +1583,21 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
     MODEL_TENSOR.FC:                        "fc",
     MODEL_TENSOR.D2T:                       "d2t",
+    # Granite Switch: per-token embedded LoRA adapters
+    MODEL_TENSOR.ATTN_QKV_LORA_A_Q:         "blk.{bid}.attn_qkv.lora_a_q",
+    MODEL_TENSOR.ATTN_QKV_LORA_B_Q:         "blk.{bid}.attn_qkv.lora_b_q",
+    MODEL_TENSOR.ATTN_QKV_LORA_A_K:         "blk.{bid}.attn_qkv.lora_a_k",
+    MODEL_TENSOR.ATTN_QKV_LORA_B_K:         "blk.{bid}.attn_qkv.lora_b_k",
+    MODEL_TENSOR.ATTN_QKV_LORA_A_V:         "blk.{bid}.attn_qkv.lora_a_v",
+    MODEL_TENSOR.ATTN_QKV_LORA_B_V:         "blk.{bid}.attn_qkv.lora_b_v",
+    MODEL_TENSOR.ATTN_OUT_LORA_A:           "blk.{bid}.attn_output.lora_a",
+    MODEL_TENSOR.ATTN_OUT_LORA_B:           "blk.{bid}.attn_output.lora_b",
+    MODEL_TENSOR.FFN_GATE_LORA_A:           "blk.{bid}.ffn_gate.lora_a",
+    MODEL_TENSOR.FFN_GATE_LORA_B:           "blk.{bid}.ffn_gate.lora_b",
+    MODEL_TENSOR.FFN_UP_LORA_A:             "blk.{bid}.ffn_up.lora_a",
+    MODEL_TENSOR.FFN_UP_LORA_B:             "blk.{bid}.ffn_up.lora_b",
+    MODEL_TENSOR.FFN_DOWN_LORA_A:           "blk.{bid}.ffn_down.lora_a",
+    MODEL_TENSOR.FFN_DOWN_LORA_B:           "blk.{bid}.ffn_down.lora_b",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -3668,6 +3706,33 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.GRANITE_SWITCH: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        # Per-token embedded LoRA adapters
+        MODEL_TENSOR.ATTN_QKV_LORA_A_Q,
+        MODEL_TENSOR.ATTN_QKV_LORA_B_Q,
+        MODEL_TENSOR.ATTN_QKV_LORA_A_K,
+        MODEL_TENSOR.ATTN_QKV_LORA_B_K,
+        MODEL_TENSOR.ATTN_QKV_LORA_A_V,
+        MODEL_TENSOR.ATTN_QKV_LORA_B_V,
+        MODEL_TENSOR.ATTN_OUT_LORA_A,
+        MODEL_TENSOR.ATTN_OUT_LORA_B,
+        MODEL_TENSOR.FFN_GATE_LORA_A,
+        MODEL_TENSOR.FFN_GATE_LORA_B,
+        MODEL_TENSOR.FFN_UP_LORA_A,
+        MODEL_TENSOR.FFN_UP_LORA_B,
+        MODEL_TENSOR.FFN_DOWN_LORA_A,
+        MODEL_TENSOR.FFN_DOWN_LORA_B,
     ],
     MODEL_ARCH.CHAMELEON: [
         MODEL_TENSOR.TOKEN_EMBD,

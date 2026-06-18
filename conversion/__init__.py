@@ -98,6 +98,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "GraniteMoeForCausalLM": "granite",
     "GraniteMoeHybridForCausalLM": "granite",
     "GraniteMoeSharedForCausalLM": "granite",
+    "GraniteSwitchForCausalLM": "granite",
     "GraniteSpeechForConditionalGeneration": "granite",
     "GraniteSpeechPlusForConditionalGeneration": "granite",
     "Grok1ForCausalLM": "grok",

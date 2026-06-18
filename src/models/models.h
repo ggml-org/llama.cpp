@@ -1536,6 +1536,90 @@ struct llama_model_granite_moe : public llama_model_base {
 };
 
 
+struct llama_model_granite_switch : public llama_model_base {
+    llama_model_granite_switch(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    // --- per-token switch metadata (read from GGUF in load_arch_hparams) ---
+    uint32_t n_adapters    = 0;  // number of real adapters (excludes the zero slot)
+    uint32_t n_slots       = 0;  // n_adapters + 1 (slot 0 = base/zero delta)
+    uint32_t max_lora_rank = 0;
+
+    // token id -> sticky adapter index (1 + adapter, so slot 0 stays "base")
+    std::unordered_map<llama_token, int32_t> control_token_to_index;
+    // control token id -> substitute token id (token-exchange before embedding)
+    std::unordered_map<llama_token, llama_token> control_token_to_substitute;
+
+    // POC: single-sequence sticky adapter state. The most recent control index
+    // seen, carried across ubatches within one decode. Reset to 0 when a ubatch
+    // contains sequence position 0 (start of a fresh prompt). This is sufficient
+    // for llama-cli / the smoke + parity tests; a full multi-sequence
+    // (reset-on-seq_rm) implementation is deferred — see the [[llamacpp-poc-scope]]
+    // note. `mutable` because set_input runs from a const-model graph context.
+    mutable int32_t poc_sticky_index = 0;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+    private:
+        // per-token switched LoRA delta only: B_a·(A_a·x), selected per token.
+        // Returns {n_out, n_tokens}. Used for the fused-qkv slices where the base
+        // term is already computed.
+        ggml_tensor * build_switched_lora_delta(
+                  ggml_tensor * lora_a,  // {n_in, max_lora_rank, N}
+                  ggml_tensor * lora_b,  // {max_lora_rank, n_out, N}
+                  ggml_tensor * cur,     // {n_in, n_tokens}
+                  ggml_tensor * ids);    // {n_tokens} I32 adapter index per token
+
+        // per-token switched LoRA: y = W·x + B_a·(A_a·x), selected per token via mul_mat_id
+        ggml_tensor * build_switched_lora_mm(
+                  ggml_tensor * w,       // base weight (plain 2D)
+                  ggml_tensor * lora_a,  // {n_in, max_lora_rank, N}
+                  ggml_tensor * lora_b,  // {max_lora_rank, n_out, N}
+                  ggml_tensor * cur,     // {n_in, n_tokens}
+                  ggml_tensor * ids);    // {n_tokens} I32 adapter index per token
+
+        ggml_tensor * build_attention_layer(
+                  ggml_tensor             * cur,
+                  ggml_tensor             * inp_pos,
+                  ggml_tensor             * adapter_ids,
+                  llm_graph_input_attn_kv * inp_attn,
+            const llama_model             & model,
+            const int64_t                 n_embd_head,
+            const int                     il);
+
+        ggml_tensor * build_layer_ffn(
+                  ggml_tensor       * cur,
+                  ggml_tensor       * inpSA,
+                  ggml_tensor       * adapter_ids,
+            const llama_model       & model,
+            const int                 il);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
+// Custom graph input for the per-token switch. In set_input it scans the ubatch,
+// computes the sticky adapter index per token (writing adapter_ids), and rewrites
+// control-token ids to their substitute ids (writing sub_tokens) — the
+// token-exchange. Both tensors are I32 [n_tokens]. can_reuse() returns false so
+// these are recomputed every ubatch.
+class llm_graph_input_switch : public llm_graph_input_i {
+public:
+    llm_graph_input_switch(const llama_model_granite_switch & smodel) : smodel(smodel) {}
+    virtual ~llm_graph_input_switch() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * sub_tokens  = nullptr; // I32 [n_tokens] control-substituted token ids
+    ggml_tensor * adapter_ids = nullptr; // I32 [n_tokens] sticky per-token adapter index
+
+    const llama_model_granite_switch & smodel;
+};
+
+
 struct llama_model_minicpm : public llama_model_base {
     llama_model_minicpm(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
