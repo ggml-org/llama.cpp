@@ -386,6 +386,12 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         llama_sampler_chain_add(chain, smpl);
     }
 
+    if (params.repeat_line_window > 0) {
+        llama_sampler_chain_add(chain,
+            llama_sampler_init_repeat_line(vocab, params.repeat_line_window, params.repeat_line_min_length,
+                params.repeat_line_delimiters.c_str(), params.repeat_line_temp_boost));
+    }
+
     if (grmr && params.backend_sampling) {
         LOG_WRN("%s: backend sampling is not compatible with grammar, disabling\n", __func__);
 
