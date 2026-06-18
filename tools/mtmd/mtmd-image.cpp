@@ -26,6 +26,13 @@ void mtmd_image_preproc_out::append(const clip_hparams & hparams, clip_image_f32
     entries.push_back(std::move(img));
 }
 
+void mtmd_image_preproc_out::append_overview(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized) {
+    overview.from_u8(img);
+    if (normalized) {
+        overview.normalize(hparams.image_mean, hparams.image_std);
+    }
+}
+
 // set of tools to manipulate images
 // in the future, we can have HW acceleration by allowing this struct to access 3rd party lib like imagick or opencv
 struct img_tool {
@@ -607,10 +614,11 @@ private:
 mtmd_image_preproc_out mtmd_image_preprocessor_llava_uhd::preprocess(const clip_image_u8 & img) {
     const clip_image_size original_size = img.get_size();
     auto const inst = get_slice_instructions(original_size);
-    std::vector<clip_image_u8> imgs = slice_image(img, inst);
+    auto sliced = slice_image(img, inst);
 
     mtmd_image_preproc_out output;
-    output.append(hparams, imgs, true);
+    output.append_overview(hparams, sliced.overview, true);
+    output.append(hparams, sliced.slices, true);
     output.grid_x = inst.grid_size.width;
     output.grid_y = inst.grid_size.height;
 
@@ -722,22 +730,15 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_ll
     return res;
 }
 
-std::vector<clip_image_u8> mtmd_image_preprocessor_llava_uhd::slice_image(const clip_image_u8 & img, const mtmd_image_preprocessor_llava_uhd::slice_instructions & inst, bool overview_first) {
-    std::vector<clip_image_u8> output;
+mtmd_image_preprocessor_llava_uhd::slice_output mtmd_image_preprocessor_llava_uhd::slice_image(const clip_image_u8 & img, const mtmd_image_preprocessor_llava_uhd::slice_instructions & inst) {
+    slice_output output;
 
     // resize to overview size
-    clip_image_u8 resized_img;
-    img_tool::resize(img, resized_img, inst.overview_size, hparams.image_resize_algo_ov,
+    img_tool::resize(img, output.overview, inst.overview_size, hparams.image_resize_algo_ov,
                         hparams.image_pad_ov, hparams.image_pad_color_ov);
-    if (overview_first) {
-        output.push_back(resized_img);
-    }
 
     if (inst.slices.empty()) {
-        // no slices, just return the resized image
-        if (!overview_first) {
-            output.push_back(resized_img);
-        }
+        // no slices, just return the overview image
         return output;
     }
 
@@ -755,11 +756,7 @@ std::vector<clip_image_u8> mtmd_image_preprocessor_llava_uhd::slice_image(const 
 
         clip_image_u8 img_slice;
         img_tool::crop(refined_img, img_slice, x, y, w, h);
-        output.push_back(std::move(img_slice));
-    }
-
-    if (!overview_first) {
-        output.push_back(resized_img);
+        output.slices.push_back(std::move(img_slice));
     }
 
     return output;
@@ -1077,10 +1074,11 @@ mtmd_image_preproc_out mtmd_image_preprocessor_idefics3::preprocess(const clip_i
             });
         }
     }
-    auto imgs = slice_image(img, instructions);
+    auto sliced = slice_image(img, instructions);
 
     mtmd_image_preproc_out output;
-    output.append(hparams, imgs, true);
+    output.append_overview(hparams, sliced.overview, true);
+    output.append(hparams, sliced.slices, true);
     output.grid_x = instructions.grid_size.width;
     output.grid_y = instructions.grid_size.height;
     return output;
@@ -1094,10 +1092,12 @@ mtmd_image_preproc_out mtmd_image_preprocessor_internvl::preprocess(const clip_i
     GGML_ASSERT(!hparams.image_res_candidates.empty());
     const clip_image_size original_size = img.get_size();
     auto const inst = get_slice_instructions(original_size);
-    std::vector<clip_image_u8> imgs = slice_image(img, inst, false);
+    auto sliced = slice_image(img, inst);
 
     mtmd_image_preproc_out output;
-    output.append(hparams, imgs, true);
+    // InternVL: slices first, then overview
+    output.append(hparams, sliced.slices, true);
+    output.append_overview(hparams, sliced.overview, true);
     output.grid_x = inst.grid_size.width;
     output.grid_y = inst.grid_size.height;
     return output;
@@ -1131,9 +1131,10 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const cli
     img_tool::resize(img, padded, {image_size, image_size}, RESIZE_ALGO_BICUBIC_PILLOW,
                      PAD_NEAREST, hparams.image_pad_color);
     mtmd_image_preproc_out output;
-    output.append(hparams, padded, true);
-    output.grid_x = 1;
-    output.grid_y = 1;
+    output.append_overview(hparams, padded, true);
+    output.grid_x = 0;
+    output.grid_y = 0;
+    // TODO @ngxson : support slicing for DeepSeek-OCR, to do in another PR
     return output;
 }
 
@@ -1226,10 +1227,8 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr2::preprocess(const cl
     clip_image_u8 padded;
     img_tool::resize(img, padded, { base_size, base_size }, RESIZE_ALGO_BICUBIC_PILLOW,
                      PAD_NEAREST, hparams.image_pad_color);
-    output.append(hparams, padded, true);
-    output.entries.back().add_viewsep = true;
-    output.grid_x = 1;
-    output.grid_y = 1;
+    output.append_overview(hparams, padded, true);
+    output.overview.add_viewsep = true;
     return output;
 }
 
@@ -1447,15 +1446,14 @@ mtmd_image_preproc_out mtmd_image_preprocessor_step3vl::preprocess(const clip_im
     const auto instructions = build_slice_instructions(hparams, prepared.get_size());
 
     mtmd_image_preproc_out output;
-    clip_image_f32 overview_f32;
+    // overview (normalized f32, already includes mean/std)
     img_u8_resize_bilinear_to_f32(
         prepared,
-        overview_f32,
+        output.overview,
         hparams.image_size,
         hparams.image_size,
         hparams.image_mean,
         hparams.image_std);
-    output.append(hparams, overview_f32, false);
 
     if (instructions.slices.empty()) {
         output.grid_x = 0;
@@ -1548,13 +1546,13 @@ mtmd_image_preproc_out mtmd_image_preprocessor_youtuvl::preprocess(const clip_im
 
 mtmd_image_preproc_out mtmd_image_preprocessor_granite::preprocess(const clip_image_u8 & img) {
     auto output = mtmd_image_preprocessor_llava_uhd::preprocess(img);
-    if (output.entries.size() == 1) {
+    if (output.entries.size() == 0) {
         // Single-tile (overview only): append one newline row.
-        output.entries[0].add_newline = true;
+        output.overview.add_newline = true;
     } else {
         // Multi-tile: overview gets no newline, grid tiles get one.
-        output.entries[0].add_newline = false;
-        for (size_t i = 1; i < output.entries.size(); ++i) {
+        output.overview.add_newline = false;
+        for (size_t i = 0; i < output.entries.size(); ++i) {
             output.entries[i].add_newline = true;
         }
     }
