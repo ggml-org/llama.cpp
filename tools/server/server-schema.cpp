@@ -476,7 +476,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             const auto & samplers = data.at("samplers");
             if (samplers.is_array()) {
-                ctx.params.sampling.samplers = common_sampler_types_from_names(samplers, false);
+                ctx.params.sampling.samplers = common_sampler_types_from_names(samplers);
             } else if (samplers.is_string()) {
                 ctx.params.sampling.samplers = common_sampler_types_from_chars(samplers.get<std::string>());
             }

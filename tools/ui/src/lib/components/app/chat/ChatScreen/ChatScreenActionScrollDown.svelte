@@ -41,16 +41,13 @@
 	});
 </script>
 
-<div
-	class="pointer-events-{show
-		? 'auto'
-		: 'none'} relative z-50 mx-auto mb-4 flex max-w-[48rem] justify-center"
->
+<div class="relative z-50 mx-auto mb-4 flex max-w-[48rem] justify-center">
 	<Button
 		onclick={scrollToBottom}
 		variant="secondary"
 		size="icon"
-		class="pointer-events-all absolute h-10 w-10 rounded-full bg-background/80 shadow-lg backdrop-blur-sm transition-all duration-200 hover:bg-muted/80"
+		disabled={!show}
+		class="pointer-events-auto absolute h-10 w-10 rounded-full bg-background/80 shadow-lg backdrop-blur-sm transition-all duration-200 hover:bg-muted/80"
 		style="bottom: {buttonBottom}; transform: translateY({show ? '0' : '2rem'}); opacity: {show
 			? 1
 			: 0};"

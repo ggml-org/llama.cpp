@@ -13,7 +13,7 @@ void llama_model_mellum::load_arch_hparams(llama_model_loader & ml) {
         if (res) {
             hparams.set_swa_pattern(swa_period);
         } else {
-            ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer);
+            ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
         }
 
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
@@ -24,7 +24,7 @@ void llama_model_mellum::load_arch_hparams(llama_model_loader & ml) {
         hparams.swa_type = LLAMA_SWA_TYPE_NONE;
     }
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 28: type = LLM_TYPE_12B_A2_5B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }

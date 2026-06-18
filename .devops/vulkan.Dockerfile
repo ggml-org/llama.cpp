@@ -3,7 +3,7 @@ ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
 
-FROM ubuntu:$UBUNTU_VERSION AS build
+FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 
 # Install build tools
 RUN apt update && apt install -y git build-essential cmake wget xz-utils
@@ -33,7 +33,7 @@ RUN mkdir -p /app/full \
     && cp .devops/tools.sh /app/full/tools.sh
 
 ## Base image
-FROM ubuntu:$UBUNTU_VERSION AS base
+FROM docker.io/ubuntu:$UBUNTU_VERSION AS base
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
@@ -49,7 +49,7 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.source=$IMAGE_SOURCE
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 curl libvulkan1 mesa-vulkan-drivers \
+    && apt-get install -y libgomp1 curl ffmpeg libvulkan1 mesa-vulkan-drivers \
     libglvnd0 libgl1 libglx0 libegl1 libgles2 \
     && apt autoremove -y \
     && apt clean -y \

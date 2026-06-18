@@ -959,7 +959,12 @@ class GGUFWriter:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
 
     def add_num_deepstack_layers(self, count: int) -> None:
+        """Add scalar deepstack layer count (qwen3vl format)"""
         self.add_uint32(Keys.LLM.NUM_DEEPSTACK_LAYERS.format(arch=self.arch), count)
+
+    def add_deepstack_mapping(self, layers: Sequence[int]) -> None:
+        """Add per-layer deepstack projector indices (Granite4 Vision format)"""
+        self.add_array(Keys.LLM.DEEPSTACK_MAPPING.format(arch=self.arch), list(layers))
 
     def add_rope_dimension_count(self, count: int) -> None:
         self.add_uint32(Keys.Rope.DIMENSION_COUNT.format(arch=self.arch), count)
@@ -1119,6 +1124,9 @@ class GGUFWriter:
     def add_normalizer_lowercase(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.NORMALIZER_LOWERCASE, value)
 
+    def add_normalizer_strip_accents(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.NORMALIZER_STRIP_ACCENTS, value)
+
     def add_eot_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.EOT_ID, id)
 
@@ -1184,6 +1192,15 @@ class GGUFWriter:
     def add_vision_preproc_image_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PREPROC_IMAGE_SIZE, value)
 
+    def add_vision_projector_query_side(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.Projector.QUERY_SIDE, value)
+
+    def add_vision_projector_window_side(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.Projector.WINDOW_SIDE, value)
+
+    def add_vision_spatial_offsets(self, layers: Sequence[int]) -> None:
+        self.add_array(Keys.ClipVision.Projector.SPATIAL_OFFSETS, layers)
+
     def add_vision_image_mean(self, values: Sequence[float]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_MEAN, values)
 
@@ -1239,6 +1256,12 @@ class GGUFWriter:
 
     def add_vision_window_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)
+
+    def add_vision_feature_layers(self, layers: Sequence[int]) -> None:
+        self.add_array(Keys.ClipVision.FEATURE_LAYERS, layers)
+
+    def add_vision_image_grid_pinpoints(self, layers: Sequence[Sequence[int]]) -> None:
+        self.add_array(Keys.ClipVision.IMAGE_GRID_PINPOINTS, layers)
 
     def add_vision_sam_layers_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SAM.BLOCK_COUNT, value)

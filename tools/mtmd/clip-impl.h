@@ -4,6 +4,7 @@
 #include "gguf.h"
 #include "clip.h"
 
+#include <array>
 #include <climits>
 #include <cstdarg>
 #include <cinttypes>
@@ -35,20 +36,22 @@
 #define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
 
 // vision-specific
-#define KEY_VISION_PROJ_TYPE    "clip.vision.projector_type" // for models with mixed modalities
-#define KEY_IMAGE_SIZE          "clip.vision.image_size"
-#define KEY_IMAGE_MIN_PIXELS    "clip.vision.image_min_pixels"
-#define KEY_IMAGE_MAX_PIXELS    "clip.vision.image_max_pixels"
-#define KEY_PREPROC_MIN_TILES   "clip.vision.preproc_min_tiles"
-#define KEY_PREPROC_MAX_TILES   "clip.vision.preproc_max_tiles"
-#define KEY_PREPROC_IMAGE_SIZE  "clip.vision.preproc_image_size"
-#define KEY_PATCH_SIZE          "clip.vision.patch_size"
-#define KEY_IMAGE_MEAN          "clip.vision.image_mean"
-#define KEY_IMAGE_STD           "clip.vision.image_std"
-#define KEY_FEATURE_LAYER       "clip.vision.feature_layer"
-#define KEY_PROJ_SCALE_FACTOR   "clip.vision.projector.scale_factor"
-#define KEY_SPATIAL_MERGE_SIZE  "clip.vision.spatial_merge_size"
-#define KEY_IS_DEEPSTACK_LAYERS "clip.vision.is_deepstack_layers"
+#define KEY_VISION_PROJ_TYPE        "clip.vision.projector_type" // for models with mixed modalities
+#define KEY_IMAGE_SIZE              "clip.vision.image_size"
+#define KEY_IMAGE_MIN_PIXELS        "clip.vision.image_min_pixels"
+#define KEY_IMAGE_MAX_PIXELS        "clip.vision.image_max_pixels"
+#define KEY_PREPROC_MIN_TILES       "clip.vision.preproc_min_tiles"
+#define KEY_PREPROC_MAX_TILES       "clip.vision.preproc_max_tiles"
+#define KEY_PREPROC_IMAGE_SIZE      "clip.vision.preproc_image_size"
+#define KEY_PATCH_SIZE              "clip.vision.patch_size"
+#define KEY_IMAGE_MEAN              "clip.vision.image_mean"
+#define KEY_IMAGE_STD               "clip.vision.image_std"
+#define KEY_FEATURE_LAYER           "clip.vision.feature_layer"
+#define KEY_PROJ_SCALE_FACTOR       "clip.vision.projector.scale_factor"
+#define KEY_PROJ_SAMPLE_QUERY_SIDE  "clip.vision.projector.query_side"
+#define KEY_PROJ_SAMPLE_WINDOW_SIDE "clip.vision.projector.window_side"
+#define KEY_PROJ_SPATIAL_OFFSETS    "clip.vision.projector.spatial_offsets"
+#define KEY_SPATIAL_MERGE_SIZE      "clip.vision.spatial_merge_size"
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"
@@ -71,7 +74,6 @@
 #define KEY_A_PROJ_WINDOW_SIZE     "clip.audio.projector.window_size"
 #define KEY_A_PROJ_DOWNSAMPLE_RATE "clip.audio.projector.downsample_rate"
 #define KEY_A_PROJ_HEAD_COUNT      "clip.audio.projector.head_count"
-
 
 //
 // tensor name constants
@@ -210,22 +212,28 @@
 #define TN_CTC_OUT_MID     "a.enc_ctc_out_mid.%s"
 #define TN_ATTN_REL_POS_EMB "%s.blk.%d.attn_rel_pos_emb"
 // qformer projector
-#define TN_QF_PROJ_QUERY   "a.proj_query"
-#define TN_QF_PROJ_NORM    "a.proj_norm.%s"
-#define TN_QF_PROJ_LINEAR  "a.proj_linear.%s"
-#define TN_QF_SELF_ATTN_Q  "a.proj_blk.%d.self_attn_q.%s"
-#define TN_QF_SELF_ATTN_K  "a.proj_blk.%d.self_attn_k.%s"
-#define TN_QF_SELF_ATTN_V  "a.proj_blk.%d.self_attn_v.%s"
-#define TN_QF_SELF_ATTN_O  "a.proj_blk.%d.self_attn_out.%s"
-#define TN_QF_SELF_ATTN_N  "a.proj_blk.%d.self_attn_norm.%s"
-#define TN_QF_CROSS_ATTN_Q "a.proj_blk.%d.cross_attn_q.%s"
-#define TN_QF_CROSS_ATTN_K "a.proj_blk.%d.cross_attn_k.%s"
-#define TN_QF_CROSS_ATTN_V "a.proj_blk.%d.cross_attn_v.%s"
-#define TN_QF_CROSS_ATTN_O "a.proj_blk.%d.cross_attn_out.%s"
-#define TN_QF_CROSS_ATTN_N "a.proj_blk.%d.cross_attn_norm.%s"
-#define TN_QF_FFN_UP       "a.proj_blk.%d.ffn_up.%s"
-#define TN_QF_FFN_DOWN     "a.proj_blk.%d.ffn_down.%s"
-#define TN_QF_FFN_NORM     "a.proj_blk.%d.ffn_norm.%s"
+#define TN_QF_PROJ_QUERY   "%s.proj_query"
+#define TN_QF_PROJ_NORM    "%s.proj_norm.%s"
+#define TN_QF_PROJ_LINEAR  "%s.proj_linear.%s"
+#define TN_QF_SELF_ATTN_Q  "%s.proj_blk.%d.self_attn_q.%s"
+#define TN_QF_SELF_ATTN_K  "%s.proj_blk.%d.self_attn_k.%s"
+#define TN_QF_SELF_ATTN_V  "%s.proj_blk.%d.self_attn_v.%s"
+#define TN_QF_SELF_ATTN_O  "%s.proj_blk.%d.self_attn_out.%s"
+#define TN_QF_SELF_ATTN_N  "%s.proj_blk.%d.self_attn_norm.%s"
+#define TN_QF_CROSS_ATTN_Q "%s.proj_blk.%d.cross_attn_q.%s"
+#define TN_QF_CROSS_ATTN_K "%s.proj_blk.%d.cross_attn_k.%s"
+#define TN_QF_CROSS_ATTN_V "%s.proj_blk.%d.cross_attn_v.%s"
+#define TN_QF_CROSS_ATTN_O "%s.proj_blk.%d.cross_attn_out.%s"
+#define TN_QF_CROSS_ATTN_N "%s.proj_blk.%d.cross_attn_norm.%s"
+#define TN_QF_FFN_UP       "%s.proj_blk.%d.ffn_up.%s"
+#define TN_QF_FFN_DOWN     "%s.proj_blk.%d.ffn_down.%s"
+#define TN_QF_FFN_NORM     "%s.proj_blk.%d.ffn_norm.%s"
+// multi-projector qformer (bid => projector ID)
+#define TN_MULTI_PROJ_IMG_POS   "v.proj_blk.%d.img_pos"
+#define TN_MULTI_PROJ_QUERY     "%s.proj_blk.%d.query"
+#define TN_MULTI_PROJ_LINEAR    "%s.proj_blk.%d.linear.%s"
+#define TN_MULTI_PROJ_NORM      "%s.proj_blk.%d.norm.%s"
+#define TN_MULTI_PROJ_POST_NORM "%s.proj_blk.%d.post_norm.%s"
 
 // gemma4 audio conformer
 #define TN_A_MM_INP_PROJ     "mm.a.input_projection.%s"
@@ -354,6 +362,7 @@ enum projector_type {
     PROJECTOR_TYPE_MINICPMV4_6,
     PROJECTOR_TYPE_GRANITE_SPEECH,
     PROJECTOR_TYPE_MIMOVL,
+    PROJECTOR_TYPE_GRANITE4_VISION,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -407,6 +416,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MINICPMV4_6, "minicpmv4_6"},
     { PROJECTOR_TYPE_GRANITE_SPEECH, "granite_speech"},
     { PROJECTOR_TYPE_MIMOVL,     "mimovl"},
+    { PROJECTOR_TYPE_GRANITE4_VISION, "granite4_vision"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -420,24 +430,158 @@ static projector_type clip_projector_type_from_string(const std::string & str) {
 
 // RGB uint8 image
 struct clip_image_u8 {
-    int nx;
-    int ny;
+    clip_image_size get_size() const {
+        return { nx, ny };
+    }
 
+    void set_size(clip_image_size size, bool is_placeholder) {
+        nx = size.width;
+        ny = size.height;
+        if (is_placeholder) {
+            buf.clear();
+        } else {
+            buf.resize((size_t) nx * (size_t) ny * 3);
+        }
+    }
+
+    void cpy_buf(const std::vector<uint8_t> & new_buf) {
+        buf = new_buf;
+    }
+
+    const std::vector<uint8_t> & get_ro_buf() const {
+        if (is_placeholder()) {
+            throw std::runtime_error("this clip_image_u8 is a placeholder");
+        }
+        return buf;
+    }
+
+    // note to contributors: NEVER add a get_rw_buf(), it is a DANGEROUS pattern. always use get_pixel / set_pixel for buffer manipulation
+
+    bool is_placeholder() const {
+        return buf.empty();
+    }
+
+    std::array<uint8_t, 3> get_pixel(int x, int y) const {
+        if (is_placeholder()) {
+            // return a dummy value, so that legacy code can still process image without errors
+            return { 0, 0, 0 };
+        }
+        int idx = (y * nx + x) * 3;
+        return { buf[idx], buf[idx + 1], buf[idx + 2] };
+    }
+
+    void set_pixel(int x, int y, const std::array<uint8_t, 3> & rgb) {
+        if (is_placeholder()) {
+            return; // no-op
+        }
+        int idx = (y * nx + x) * 3;
+        buf[idx] = rgb[0];
+        buf[idx + 1] = rgb[1];
+        buf[idx + 2] = rgb[2];
+    }
+
+    size_t n_elements() const {
+        return n_pixels() * 3;
+    }
+
+  private:
     std::vector<uint8_t> buf;
+    int nx = 0;
+    int ny = 0;
+
+    size_t n_pixels() const {
+        return (size_t) nx * (size_t) ny;
+    }
 };
 
 // For images, buf.size() == nx*ny*3
 //     Memory layout: RGBRGBRGB...
+// For seq, buf.size() == nx*ny*3*nt
+//     Memory layout: RGBRGB...RGBRGB... (nt times)
 // For audio, only one channel is used, buf.size() == nx*ny
 //     nx will be n_frames and ny will be n_mel
 struct clip_image_f32 {
-    int nx;
-    int ny;
-
-    std::vector<float> buf;
-
     // marks the global view in e.g., DeepSeek-OCR Models
     bool add_viewsep = false;
+    // whether a learned newline (or EOI) token should be appended after the image (eg Granite4 Vision)
+    bool add_newline = false;
+
+    clip_image_size get_size() const {
+        return { nx_, ny_ };
+    }
+
+    int nx() const { return nx_; }
+    int ny() const { return ny_; }
+
+    void set_size(clip_image_size size, bool is_placeholder, bool is_audio) {
+        nx_ = size.width;
+        ny_ = size.height;
+        if (is_placeholder) {
+            buf.clear();
+        } else {
+            if (is_audio) {
+                buf.resize((size_t) nx_ * (size_t) ny_);
+            } else {
+                buf.resize((size_t) nx_ * (size_t) ny_ * 3);
+            }
+        }
+    }
+
+    void cpy_buf(const std::vector<float> & new_buf) {
+        buf = new_buf;
+    }
+
+    void from_u8(const clip_image_u8 & img) {
+        auto size = img.get_size();
+        nx_ = size.width;
+        ny_ = size.height;
+        if (img.is_placeholder()) {
+            buf.clear();
+            return; // no-op
+        }
+        buf.resize(img.n_elements());
+        const auto & u8_buf = img.get_ro_buf();
+        for (size_t i = 0; i < img.n_elements(); ++i) {
+            buf[i] = (float) u8_buf[i] / 255.0f;
+        }
+    }
+
+    size_t n_elements() const {
+        return n_pixels() * 3;
+    }
+
+    void normalize(const float mean[3], const float std[3]) {
+        if (is_placeholder()) {
+            return; // no-op
+        }
+        for (size_t i = 0; i < n_pixels(); ++i) {
+            buf[i * 3 + 0] = (buf[i * 3 + 0] - mean[0]) / std[0];
+            buf[i * 3 + 1] = (buf[i * 3 + 1] - mean[1]) / std[1];
+            buf[i * 3 + 2] = (buf[i * 3 + 2] - mean[2]) / std[2];
+        }
+    }
+
+    const std::vector<float> & get_ro_buf() const {
+        if (is_placeholder()) {
+            throw std::runtime_error("this clip_image_f32 is a placeholder");
+        }
+        return buf;
+    }
+
+    // note to contributors: NEVER add a get_rw_buf(), it is a DANGEROUS pattern
+
+    bool is_placeholder() const {
+        return buf.empty();
+    }
+
+  private:
+    std::vector<float> buf;
+    int nx_ = 0;
+    int ny_ = 0;
+
+    size_t n_pixels() const {
+        return (size_t) nx_ * (size_t) ny_;
+    }
 };
 
 //
@@ -485,6 +629,7 @@ static void clip_log_internal(enum ggml_log_level level, const char * format, ..
     va_end(args);
 }
 
+#define LOG_TRC(...) clip_log_internal(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
 #define LOG_DBG(...) clip_log_internal(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
 #define LOG_INF(...) clip_log_internal(GGML_LOG_LEVEL_INFO,  __VA_ARGS__)
 #define LOG_WRN(...) clip_log_internal(GGML_LOG_LEVEL_WARN,  __VA_ARGS__)
