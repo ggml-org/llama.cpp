@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
@@ -496,6 +497,12 @@ class DeepseekV4Model(TextModel):
 
         if type(self)._skipped_mtp_tensors:
             logger.info("Skipping %d DeepSeek-V4 MTP tensor(s) for conversion v0", type(self)._skipped_mtp_tensors)
+
+        # add a default chat template; if the model has a built-in template, it will be overridden later
+        template_path = Path(__file__).parent.parent / "models" / "templates" / "deepseek-ai-DeepSeek-V4.jinja"
+        if template_path.is_file():
+            with open(template_path, "r", encoding="utf-8") as f:
+                self.gguf_writer.add_chat_template(f.read())
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:

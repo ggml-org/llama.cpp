@@ -48,52 +48,6 @@ if (BUILD_SHARED_LIBS)
 endif()
 
 #
-# inline chat templates
-#
-# Built-in Jinja chat templates for model architectures whose GGUF files ship
-# without an embedded chat_template. The header is generated from the manifest
-# common/chat-inline-templates.h.in into the build directory and included by
-# common/chat.cpp (a quoted include resolves to the generated copy because no
-# chat-inline-templates.h exists next to chat.cpp).
-
-set(CHAT_INLINE_TEMPLATES_MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/chat-inline-templates.h.in)
-set(CHAT_INLINE_TEMPLATES_GEN_DIR  ${CMAKE_CURRENT_BINARY_DIR}/generated)
-set(CHAT_INLINE_TEMPLATES_HEADER   ${CHAT_INLINE_TEMPLATES_GEN_DIR}/chat-inline-templates.h)
-set(CHAT_INLINE_TEMPLATES_SCRIPT   ${PROJECT_SOURCE_DIR}/scripts/gen-chat-inline-templates.py)
-
-# every template the manifest may reference, so the header regenerates on edits
-file(GLOB CHAT_INLINE_TEMPLATE_FILES ${PROJECT_SOURCE_DIR}/models/templates/*.jinja)
-
-find_package(Python3 COMPONENTS Interpreter QUIET)
-
-if (Python3_FOUND)
-    add_custom_command(
-        OUTPUT ${CHAT_INLINE_TEMPLATES_HEADER}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CHAT_INLINE_TEMPLATES_GEN_DIR}
-        COMMAND ${Python3_EXECUTABLE} ${CHAT_INLINE_TEMPLATES_SCRIPT}
-                --manifest  ${CHAT_INLINE_TEMPLATES_MANIFEST}
-                --repo-root ${PROJECT_SOURCE_DIR}
-                --output    ${CHAT_INLINE_TEMPLATES_HEADER}
-        DEPENDS ${CHAT_INLINE_TEMPLATES_MANIFEST}
-                ${CHAT_INLINE_TEMPLATES_SCRIPT}
-                ${CHAT_INLINE_TEMPLATE_FILES}
-        COMMENT "Generating chat-inline-templates.h"
-        VERBATIM
-    )
-else()
-    message(WARNING "Python3 not found: inline chat templates disabled (generating empty chat-inline-templates.h)")
-    file(MAKE_DIRECTORY ${CHAT_INLINE_TEMPLATES_GEN_DIR})
-    file(WRITE ${CHAT_INLINE_TEMPLATES_HEADER}
-"// AUTO-GENERATED fallback (Python3 not found) - no inline templates available.
-#pragma once
-#include <cstddef>
-struct common_chat_inline_template_entry { const char * arch; const char * tmpl; };
-static const common_chat_inline_template_entry COMMON_CHAT_INLINE_TEMPLATES[] = { { nullptr, nullptr } };
-static const size_t COMMON_CHAT_INLINE_TEMPLATES_COUNT = 0;
-")
-endif()
-
-#
 # llama-common
 #
 
@@ -172,7 +126,6 @@ set_target_properties(${TARGET} PROPERTIES
 )
 
 target_include_directories(${TARGET} PUBLIC . ../vendor)
-target_include_directories(${TARGET} PRIVATE ${CHAT_INLINE_TEMPLATES_GEN_DIR})
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 
 if (BUILD_SHARED_LIBS)
