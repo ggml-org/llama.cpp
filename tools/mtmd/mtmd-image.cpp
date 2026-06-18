@@ -1105,6 +1105,8 @@ bool mtmd_image_preprocessor_internvl::preprocess(const clip_image_u8 & img, cli
         img_u8_to_f32(*imgs[i], *res, hparams.image_mean, hparams.image_std);
         output.entries.push_back(std::move(res));
     }
+    output.grid_x = inst.grid_size.width;
+    output.grid_y = inst.grid_size.height;
     return true;
 }
 
@@ -1556,5 +1558,24 @@ bool mtmd_image_preprocessor_youtuvl::preprocess(const clip_image_u8 & img, clip
     img_u8_to_f32(resized, *img_f32, hparams.image_mean, hparams.image_std);
     // Add to results
     output.entries.push_back(std::move(img_f32));
+    return true;
+}
+
+bool mtmd_image_preprocessor_granite::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+    // call super class preprocessor
+    bool ok = mtmd_image_preprocessor_llava_uhd::preprocess(img, output);
+    if (!ok) {
+        return false;
+    }
+    if (output.entries.size() == 1) {
+        // Single-tile (overview only): append one newline row.
+        output.entries[0]->add_newline = true;
+    } else {
+        // Multi-tile: overview gets no newline, grid tiles get one.
+        output.entries[0]->add_newline = false;
+        for (size_t i = 1; i < output.entries.size(); ++i) {
+            output.entries[i]->add_newline = true;
+        }
+    }
     return true;
 }

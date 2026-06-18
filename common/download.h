@@ -115,3 +115,10 @@ int common_download_file_single(const std::string & url,
 // resolve and download model from Docker registry
 // return local path to downloaded model file
 std::string common_docker_resolve_model(const std::string & docker);
+
+// Remove a cached model from disk
+// input format: "user/model" or "user/model:tag"
+// - if tag is omitted, removes the entire repo cache directory
+// - if tag is present, removes only files matching that tag (and orphaned blobs)
+// returns true if anything was removed
+bool common_download_remove(const std::string & hf_repo_with_tag);
