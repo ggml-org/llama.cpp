@@ -115,6 +115,9 @@ struct server_slot {
     bool has_new_line   = false;
     bool truncated      = false;
 
+    bool token_healing = false;
+    std::string token_healing_prefix;
+
     stop_type stop;
 
     std::string stopping_word;
@@ -213,6 +216,8 @@ struct server_slot {
         generated_text = "";
         has_new_line   = false;
         truncated      = false;
+        token_healing  = false;
+        token_healing_prefix = "";
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
@@ -1528,6 +1533,21 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
+        // Token healing
+        slot.token_healing = task.params.token_healing;
+        slot.token_healing_prefix = "";
+        if (slot.token_healing && task.tokens.size() > 0) {
+            llama_token last_token = task.tokens[task.tokens.size() - 1];
+            if (last_token != LLAMA_TOKEN_NULL && !llama_vocab_is_control(vocab, last_token) && !llama_vocab_is_eog(vocab, last_token)) {
+                slot.token_healing_prefix = common_token_to_piece(vocab, last_token, false);
+                task.tokens.keep_first(task.tokens.size() - 1);
+                task.params.sampling.token_healing_prefix = slot.token_healing_prefix;
+                SLT_INF(slot, "token healing activated. prefix: '%s', popped token: %d\n", slot.token_healing_prefix.c_str(), last_token);
+            } else {
+                slot.token_healing = false;
+            }
+        }
+
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
             auto task_loras = construct_lora_list(task.params.lora);
@@ -1615,6 +1635,7 @@ private:
             bool backend_sampling = true;
 
             backend_sampling &= task.params.sampling.backend_sampling;
+            backend_sampling &= !task.params.token_healing;
 
             // TODO: speculative decoding requires multiple samples per batch - not supported yet
             backend_sampling &= !(slot.can_speculate());
