@@ -3354,7 +3354,8 @@ static bool is_hmx_eligible(const ggml_tensor * t) {
 }
 
 static bool is_mergeable_mul_mat(const ggml_tensor * t) {
-    if (!t || t->op != GGML_OP_MUL_MAT) return false;
+    if (!t || t->op != GGML_OP_MUL_MAT)   return false;
+    if (t->src[1]->type != GGML_TYPE_F32) return false;
     return ggml_is_quantized(t->src[0]->type) && !is_hmx_eligible(t);
 }
 

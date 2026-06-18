@@ -838,7 +838,8 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     const uint32_t ne10 = src1->ne[0];                                                                                            \
     const uint32_t src1_nrows = src1->ne[1] * src1->ne[2] * src1->ne[3];                                                          \
                                                                                                                                   \
-    const size_t dst_row_size  = dst_k->nb[1];                                                                                    \
+    const size_t dst_k_row_size = dst_k->nb[1]; /* K and V share output width */                                                  \
+    const size_t dst_q_row_size = dst_q->nb[1]; /* Q may be wider (GQA) */                                                        \
     const size_t src1_stride = mmctx->vtcm_src1_stride;                                                                           \
                                                                                                                                   \
     uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;                                 \
@@ -898,13 +899,13 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                 const uint8_t * restrict src1_col0 = (const uint8_t *) (src1_data + (ir1+0) * src1_stride);                       \
                 const uint8_t * restrict src1_col1 = (const uint8_t *) (src1_data + (ir1+1) * src1_stride);                       \
                                                                                                                                   \
-                float * restrict dst_row0_k = (float *) (dst_k->data + ((ir1+0) * dst_row_size));                                 \
-                float * restrict dst_row1_k = (float *) (dst_k->data + ((ir1+1) * dst_row_size));                                 \
+                float * restrict dst_row0_k = (float *) (dst_k->data + ((ir1+0) * dst_k_row_size));                               \
+                float * restrict dst_row1_k = (float *) (dst_k->data + ((ir1+1) * dst_k_row_size));                               \
                 float * dst_ptr0_k = &dst_row0_k[ct * 32];                                                                        \
                 float * dst_ptr1_k = &dst_row1_k[ct * 32];                                                                        \
                                                                                                                                   \
-                float * restrict dst_row0_v = (float *) (dst_v->data + ((ir1+0) * dst_row_size));                                 \
-                float * restrict dst_row1_v = (float *) (dst_v->data + ((ir1+1) * dst_row_size));                                 \
+                float * restrict dst_row0_v = (float *) (dst_v->data + ((ir1+0) * dst_k_row_size));                               \
+                float * restrict dst_row1_v = (float *) (dst_v->data + ((ir1+1) * dst_k_row_size));                               \
                 float * dst_ptr0_v = &dst_row0_v[ct * 32];                                                                        \
                 float * dst_ptr1_v = &dst_row1_v[ct * 32];                                                                        \
                                                                                                                                   \
@@ -915,10 +916,10 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             for (; ir1 < src1_nrows; ++ir1) {                                                                                     \
                 const uint8_t * restrict src1_col = (const uint8_t *) (src1_data + ir1 * src1_stride);                            \
                                                                                                                                   \
-                float * restrict dst_row_k = (float *) (dst_k->data + (ir1 * dst_row_size));                                      \
+                float * restrict dst_row_k = (float *) (dst_k->data + (ir1 * dst_k_row_size));                                    \
                 float * dst_ptr_k = &dst_row_k[ct * 32];                                                                          \
                                                                                                                                   \
-                float * restrict dst_row_v = (float *) (dst_v->data + (ir1 * dst_row_size));                                      \
+                float * restrict dst_row_v = (float *) (dst_v->data + (ir1 * dst_k_row_size));                                    \
                 float * dst_ptr_v = &dst_row_v[ct * 32];                                                                          \
                                                                                                                                   \
                 DOT_2X1(ne10, dst_ptr_k, w_tile_k, src1_col, valid_rows);                                                         \
@@ -966,8 +967,8 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                 const uint8_t * restrict src1_col0 = (const uint8_t *) (src1_data + (ir1+0) * src1_stride);                       \
                 const uint8_t * restrict src1_col1 = (const uint8_t *) (src1_data + (ir1+1) * src1_stride);                       \
                                                                                                                                   \
-                float * restrict dst_row0_q = (float *) (dst_q->data + ((ir1+0) * dst_row_size));                                 \
-                float * restrict dst_row1_q = (float *) (dst_q->data + ((ir1+1) * dst_row_size));                                 \
+                float * restrict dst_row0_q = (float *) (dst_q->data + ((ir1+0) * dst_q_row_size));                               \
+                float * restrict dst_row1_q = (float *) (dst_q->data + ((ir1+1) * dst_q_row_size));                               \
                 float * dst_ptr0_q = &dst_row0_q[ct * 32];                                                                        \
                 float * dst_ptr1_q = &dst_row1_q[ct * 32];                                                                        \
                                                                                                                                   \
@@ -977,7 +978,7 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             for (; ir1 < src1_nrows; ++ir1) {                                                                                     \
                 const uint8_t * restrict src1_col = (const uint8_t *) (src1_data + ir1 * src1_stride);                            \
                                                                                                                                   \
-                float * restrict dst_row_q = (float *) (dst_q->data + (ir1 * dst_row_size));                                      \
+                float * restrict dst_row_q = (float *) (dst_q->data + (ir1 * dst_q_row_size));                                    \
                 float * dst_ptr_q = &dst_row_q[ct * 32];                                                                          \
                                                                                                                                   \
                 DOT_2X1(ne10, dst_ptr_q, w_tile_q, src1_col, valid_rows);                                                         \
@@ -1943,7 +1944,8 @@ static void hvx_mm_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
         return;
     }
 
-    const size_t dst_row_size  = dst_k->nb[1];
+    const size_t dst_k_row_size  = dst_k->nb[1]; // K and V share output width
+    const size_t dst_q_row_size  = dst_q->nb[1]; // Q may be wider (GQA)
     const size_t src0_row_size = src0->nb[1];
     const size_t src2_row_size = src2->nb[1];
     const size_t src3_row_size = src3->nb[1];
@@ -1990,31 +1992,31 @@ static void hvx_mm_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
             const uint8_t * restrict src1_col0 = (const uint8_t *) (src1_data + (ir1+0) * src1_stride);
             const uint8_t * restrict src1_col1 = (const uint8_t *) (src1_data + (ir1+1) * src1_stride);
 
-            float * restrict dst_row0_q = (float *) (dst_q->data + ((ir1+0) * dst_row_size));
-            float * restrict dst_row1_q = (float *) (dst_q->data + ((ir1+1) * dst_row_size));
-            mmctx->vec_dot_2x2(ne00, &dst_row0_q[ir0], &dst_row1_q[ir0], ss0, ss0 + src0_stride, src1_col0, src1_col1);
+            float * restrict dst_row0_k = (float *) (dst_k->data + ((ir1+0) * dst_k_row_size));
+            float * restrict dst_row1_k = (float *) (dst_k->data + ((ir1+1) * dst_k_row_size));
+            mmctx->vec_dot_2x2(ne00, &dst_row0_k[ir0], &dst_row1_k[ir0], ss0, ss0 + src0_stride, src1_col0, src1_col1);
 
-            float * restrict dst_row0_k = (float *) (dst_k->data + ((ir1+0) * dst_row_size));
-            float * restrict dst_row1_k = (float *) (dst_k->data + ((ir1+1) * dst_row_size));
-            mmctx->vec_dot_2x2(ne00, &dst_row0_k[ir0], &dst_row1_k[ir0], ss2, ss2 + src2_stride, src1_col0, src1_col1);
+            float * restrict dst_row0_v = (float *) (dst_v->data + ((ir1+0) * dst_k_row_size));
+            float * restrict dst_row1_v = (float *) (dst_v->data + ((ir1+1) * dst_k_row_size));
+            mmctx->vec_dot_2x2(ne00, &dst_row0_v[ir0], &dst_row1_v[ir0], ss2, ss2 + src2_stride, src1_col0, src1_col1);
 
-            float * restrict dst_row0_v = (float *) (dst_v->data + ((ir1+0) * dst_row_size));
-            float * restrict dst_row1_v = (float *) (dst_v->data + ((ir1+1) * dst_row_size));
-            mmctx->vec_dot_2x2(ne00, &dst_row0_v[ir0], &dst_row1_v[ir0], ss3, ss3 + src3_stride, src1_col0, src1_col1);
+            float * restrict dst_row0_q = (float *) (dst_q->data + ((ir1+0) * dst_q_row_size));
+            float * restrict dst_row1_q = (float *) (dst_q->data + ((ir1+1) * dst_q_row_size));
+            mmctx->vec_dot_2x2(ne00, &dst_row0_q[ir0], &dst_row1_q[ir0], ss3, ss3 + src3_stride, src1_col0, src1_col1);
         }
 
         // Handle remaining src1 rows (fallback to 2×1)
         for (; ir1 < src1_nrows; ++ir1) {
             const uint8_t * restrict src1_col = (const uint8_t *) (src1_data + ir1 * src1_stride);
 
-            float * restrict dst_row_q          = (float *) (dst_q->data + (ir1 * dst_row_size));
-            mmctx->vec_dot_2x1(ne00, &dst_row_q[ir0], ss0, ss0 + src0_stride, src1_col);
+            float * restrict dst_row_k          = (float *) (dst_k->data + (ir1 * dst_k_row_size));
+            mmctx->vec_dot_2x1(ne00, &dst_row_k[ir0], ss0, ss0 + src0_stride, src1_col);
 
-            float * restrict dst_row_k          = (float *) (dst_k->data + (ir1 * dst_row_size));
-            mmctx->vec_dot_2x1(ne00, &dst_row_k[ir0], ss2, ss2 + src2_stride, src1_col);
+            float * restrict dst_row_v          = (float *) (dst_v->data + (ir1 * dst_k_row_size));
+            mmctx->vec_dot_2x1(ne00, &dst_row_v[ir0], ss2, ss2 + src2_stride, src1_col);
 
-            float * restrict dst_row_v          = (float *) (dst_v->data + (ir1 * dst_row_size));
-            mmctx->vec_dot_2x1(ne00, &dst_row_v[ir0], ss3, ss3 + src3_stride, src1_col);
+            float * restrict dst_row_q          = (float *) (dst_q->data + (ir1 * dst_q_row_size));
+            mmctx->vec_dot_2x1(ne00, &dst_row_q[ir0], ss3, ss3 + src3_stride, src1_col);
         }
 
         // Prefetch next (n + vtcm_nrows) rows
@@ -2048,14 +2050,14 @@ static void hvx_mm_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
         for (uint32_t ir1 = 0; ir1 < src1_nrows; ++ir1) {
             const uint8_t * restrict src1_col = (const uint8_t *) (src1_data + ir1 * src1_stride);
 
-            float * restrict dst_row_q          = (float *) (dst_q->data + (ir1 * dst_row_size));
-            mmctx->vec_dot_1x1(ne00, &dst_row_q[ir0], ss0, src1_col);
+            float * restrict dst_row_k          = (float *) (dst_k->data + (ir1 * dst_k_row_size));
+            mmctx->vec_dot_1x1(ne00, &dst_row_k[ir0], ss0, src1_col);
 
-            float * restrict dst_row_k          = (float *) (dst_k->data + (ir1 * dst_row_size));
-            mmctx->vec_dot_1x1(ne00, &dst_row_k[ir0], ss2, src1_col);
+            float * restrict dst_row_v          = (float *) (dst_v->data + (ir1 * dst_k_row_size));
+            mmctx->vec_dot_1x1(ne00, &dst_row_v[ir0], ss2, src1_col);
 
-            float * restrict dst_row_v          = (float *) (dst_v->data + (ir1 * dst_row_size));
-            mmctx->vec_dot_1x1(ne00, &dst_row_v[ir0], ss3, src1_col);
+            float * restrict dst_row_q          = (float *) (dst_q->data + (ir1 * dst_q_row_size));
+            mmctx->vec_dot_1x1(ne00, &dst_row_q[ir0], ss3, src1_col);
         }
     }
 }
