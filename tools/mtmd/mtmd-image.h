@@ -197,3 +197,9 @@ struct mtmd_image_preprocessor_youtuvl : mtmd_image_preprocessor {
     mtmd_image_preprocessor_youtuvl(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
     bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
 };
+
+// similar to llava_uhd, but has add_newline
+struct mtmd_image_preprocessor_granite : mtmd_image_preprocessor_llava_uhd {
+    mtmd_image_preprocessor_granite(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
+    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+};

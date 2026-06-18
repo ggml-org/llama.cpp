@@ -161,6 +161,64 @@ You could update your test result in it directly.
 
 Please refer to [Docker with SYCL](../docker.md#docker-with-sycl) for details.
 
+## Quick Development WOW
+
+This chapter is for quick development & try with SYCL backend on Intel GPU.
+
+You need to install following sofeware before development:
+   - Intel GPU driver
+   - oneAPI package
+   - other development tools.
+
+Please refer to [Linux](#linux) or [Windows](#windows-1) for above installation and resolve the trouble in usage. There are the detailed guide.
+
+- Linux
+
+```
+## build from source code
+./examples/sycl/build.sh
+
+## run CONV_2D_DW unit test cases
+./build/bin/test-backend-ops -b SYCL0 -o CONV_2D_DW
+
+## run all unit test cases
+./build/bin/test-backend-ops -b SYCL0
+
+## run with LLM on the first GPU
+./examples/sycl/test.sh -mg 0 -m xxxx.gguf
+
+## run service with LLM on the first GPU
+export ONEAPI_DEVICE_SELECTOR="level_zero:0"
+./examples/sycl/start-svr.sh -m xxxx.gguf
+
+## update the docs/ops.md for new/update OPs
+./examples/sycl/update-ops-doc.sh
+```
+
+- Windows
+
+```
+## build from source code
+examples\sycl\win-build-sycl.bat
+
+## run CONV_2D_DW unit test cases
+build\bin\test-backend-ops.exe -b SYCL0 -o CONV_2D_DW
+
+## run all unit test cases
+build\bin\test-backend-ops.exe -b SYCL0
+
+## run LLM on the first GPU
+examples\sycl\win-test.bat -mg 0 -m xxxx.gguf
+
+## run service with LLM on the first GPU
+set ONEAPI_DEVICE_SELECTOR="level_zero:0"
+examples\sycl\win-start-svr.bat -m xxxx.gguf
+
+## update the docs/ops.md for new/update OPs
+examples\sycl\win-update-ops-doc.bat
+```
+
+
 ## Linux
 
 ### I. Setup Environment
@@ -712,6 +770,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | Name              | Value            | Function                                                                                                                  |
 |-------------------|------------------|---------------------------------------------------------------------------------------------------------------------------|
 | GGML_SYCL_DEBUG   | 0 (default) or 1 | Enable log function by macro: GGML_SYCL_DEBUG                                                                             |
+| GGML_SYCL_DEV2DEV_MEMCPY | 0 (default) or 1 | Choose the SYCL or L0 API in dev2dev memory copy.<br>Value: <br>*  0: SYCL API (default)<br>* 1: L0 API -- L0 API is found to lead to abnormal crash in some case. This debug flag is used to check the issue.|
 | GGML_SYCL_ENABLE_FLASH_ATTN | 1 (default) or 0| Enable Flash-Attention. It can reduce memory usage. The performance impact depends on the LLM.|
 | GGML_SYCL_DISABLE_OPT | 0 (default) or 1 | Disable optimize features for Intel GPUs. (Recommended to 1 for Intel devices older than Gen 10) |
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because SYCL Graph is still on development, no better performance. |
@@ -730,6 +789,7 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
 |-----------------|----------------------------------------------------------------------------------|
 | DEBUG_SYCL_POOL | Enable device memory pool logging on teardown. Useful for profiling allocations. |
 | DEBUG_SYCL_MALLOC | Enable verbose per-call logging of device pool alloc/free operations. |
+
 
 ## Design Rule
 

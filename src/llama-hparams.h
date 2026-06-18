@@ -193,6 +193,10 @@ struct llama_hparams {
     // input embedding dimension (0 = use n_embd)
     uint32_t n_embd_inp_impl = 0;
 
+    // encoder input embedding dimension (0 = use n_embd_inp())
+    // e.g. the eagle3 encoder fuses target_layers * target_hidden features
+    uint32_t n_embd_inp_enc_impl = 0;
+
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
 
@@ -308,6 +312,9 @@ struct llama_hparams {
 
     // dimension of main + auxiliary input embeddings
     uint32_t n_embd_inp() const;
+
+    // dimension of the encoder input embeddings
+    uint32_t n_embd_inp_enc() const;
 
     // dimension of output embeddings
     uint32_t n_embd_out() const;
