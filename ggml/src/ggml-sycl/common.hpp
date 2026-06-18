@@ -324,7 +324,7 @@ struct ggml_tensor_extra_gpu {
   optimize_feature optimized_feature;
 };
 
-extern int g_ggml_sycl_enable_level_zero;
+extern int g_ggml_sycl_use_level_zero_api;
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
 
