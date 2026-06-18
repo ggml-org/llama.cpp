@@ -580,10 +580,21 @@ class LlamaHfVocab(Vocab):
 
         # Allow the tokenizer to default to slow or fast versions.
         # Explicitly set tokenizer to use local paths.
+        # Workaround for a transformers bug (v4.57.x): Gemma 4 tokenizer config has
+        # extra_special_tokens as a list but the code expects a dict.
+        _extra = None
+        _tok_config = base_path / "tokenizer_config.json"
+        if _tok_config.exists():
+            with open(_tok_config, encoding="utf-8") as _f:
+                _cfg = json.load(_f)
+            if isinstance(_cfg.get("extra_special_tokens"), list):
+                _extra = {t: t for t in _cfg["extra_special_tokens"]}
+        _kwargs = {"extra_special_tokens": _extra} if _extra else {}
         self.tokenizer = AutoTokenizer.from_pretrained(
             base_path,
             cache_dir=base_path,
             local_files_only=True,
+            **_kwargs,
         )
         assert self.tokenizer.is_fast  # assume tokenizer.json is used  # ty: ignore[unresolved-attribute]
 
