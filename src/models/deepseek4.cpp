@@ -1045,7 +1045,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
 
     out = ggml_reshape_3d(ctx0, out, o_group_dim, n_groups, nt);
     out = ggml_permute(ctx0, out, 0, 2, 1, 3);
-    ggml_tensor * oa = ggml_mul_mat(ctx0, ggml_view_3d(ctx0, layer.wo_a, layer.wo_a->ne[0], o_lora_rank, n_groups, layer.wo_a->nb[1], layer.wo_a->nb[1]*o_lora_rank, 0), out);
+    ggml_tensor * oa = ggml_mul_mat(ctx0, ggml_reshape_3d(ctx0, layer.wo_a, layer.wo_a->ne[0], o_lora_rank, n_groups), out);
     cb(oa, "attn_wo_a", il);
     oa = ggml_permute(ctx0, oa, 0, 2, 1, 3);
     oa = ggml_cont_2d(ctx0, oa, o_lora_rank*n_groups, nt);
