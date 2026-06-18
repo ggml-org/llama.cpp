@@ -12,7 +12,7 @@
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { instructionsStore } from '$lib/stores/instructions.svelte';
+	import { promptsStore } from '$lib/stores/prompts.svelte';
 	import { McpLogo } from '$lib/components/app';
 	import { PencilRuler, ChevronDown, ChevronRight } from '@lucide/svelte';
 	import { HealthCheckStatus } from '$lib/enums';
@@ -54,7 +54,7 @@
 	let filesExpanded = $state(true);
 	let toolsExpanded = $state(false);
 	let mcpExpanded = $state(false);
-	let instructionsExpanded = $state(false);
+	let promptsExpanded = $state(false);
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
@@ -285,27 +285,30 @@
 					<span>Write your own</span>
 				</button>
 
-				{#if instructionsStore.getInstructions().length > 0}
-					<Collapsible.Root open={instructionsExpanded} onOpenChange={(open) => (instructionsExpanded = open)}>
+				{#if promptsStore.getPrompts().length > 0}
+					<Collapsible.Root
+						open={promptsExpanded}
+						onOpenChange={(open) => (promptsExpanded = open)}
+					>
 						<Collapsible.Trigger class={sheetItemClass}>
-							{#if instructionsExpanded}
+							{#if promptsExpanded}
 								<ChevronDown class="h-4 w-4 shrink-0" />
 							{:else}
 								<ChevronRight class="h-4 w-4 shrink-0" />
 							{/if}
 
-							<span>Instructions</span>
+							<span>Prompts</span>
 						</Collapsible.Trigger>
 
 						<Collapsible.Content>
 							<div class="ml-6 flex flex-col gap-1">
-								{#each instructionsStore.getInstructions() as instruction (instruction.id)}
+								{#each promptsStore.getPrompts() as prompt (prompt.id)}
 									<button
 										type="button"
 										class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent active:bg-accent"
-										onclick={() => onSystemPromptWithContent?.(instruction.content)}
+										onclick={() => onSystemPromptWithContent?.(prompt.content)}
 									>
-										<span class="truncate">{instruction.title}</span>
+										<span class="truncate">{prompt.title}</span>
 									</button>
 								{/each}
 							</div>

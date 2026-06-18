@@ -12,7 +12,7 @@
 </script>
 
 <div
-	aria-label={`Custom instruction: ${title}`}
+	aria-label={`Custom prompt: ${title}`}
 	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
 >
@@ -28,7 +28,7 @@
 	</div>
 
 	<div class="flex gap-2">
-		<span class="text-xs text-muted-foreground">Custom Instruction</span>
+		<span class="text-xs text-muted-foreground">Custom Prompt</span>
 		<span class="text-xs text-muted-foreground">{instructionId.slice(0, 8)}</span>
 	</div>
 </div>

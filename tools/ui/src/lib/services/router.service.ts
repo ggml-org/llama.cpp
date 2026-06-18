@@ -9,7 +9,7 @@ export class RouterService {
 		return `${ROUTES.SETTINGS}/${section}`;
 	}
 
-	static instructions(): string {
-		return ROUTES.INSTRUCTIONS;
+	static prompts(): string {
+		return ROUTES.PROMPTS;
 	}
 }
