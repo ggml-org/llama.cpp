@@ -1167,6 +1167,11 @@ struct mtmd_tokenizer {
                     add_text(ctx->tok_ov_img_end);
                 }
 
+                if (!ctx->img_end.empty()) {
+                    // add image end token (currently only used by deepseekocr)
+                    add_text(ctx->img_end, true);
+                }
+
             } else {
 
                 if (preproc_out.entries.size() == 0) {

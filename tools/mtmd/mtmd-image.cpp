@@ -1160,8 +1160,6 @@ clip_image_size mtmd_image_preprocessor_deepseekocr::find_closest_aspect_ratio(
 }
 
 mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img) {
-    // output order: [tiles + nl, tiles + nl, ..., global]
-
     mtmd_image_preproc_out output;
     int grid_w = 0;
     int grid_h = 0;
@@ -1218,6 +1216,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const cli
     }
 
     LOG_DBG("%s: grid size: %d x %d (%d tiles) + global view\n", __func__, grid_w, grid_h, grid_w * grid_h);
+    LOG_DBG("%s: overview size: %d x %d\n", __func__, padded.get_size().width, padded.get_size().height);
 
     output.grid_x = grid_w;
     output.grid_y = grid_h;
