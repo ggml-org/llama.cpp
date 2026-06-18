@@ -21,6 +21,7 @@ beforeAll(() => {
 });
 
 import { ChatService } from '$lib/services/chat.service';
+import { STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX } from '$lib/constants';
 
 describe('ChatService stream resume', () => {
 	beforeEach(() => {
@@ -68,7 +69,7 @@ describe('ChatService stream resume', () => {
 	});
 
 	it('returns null on corrupted storage payload', () => {
-		localStorage.setItem('llamacpp.stream.resume.conv-a', '{not-json');
+		localStorage.setItem(`${STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX}conv-a`, '{not-json');
 		expect(ChatService.getStreamState('conv-a')).toBeNull();
 	});
 
@@ -116,7 +117,7 @@ describe('ChatService stream resume', () => {
 
 		it('falls back when a legacy state has no model field', () => {
 			localStorage.setItem(
-				'llamacpp.stream.resume.conv-a',
+				`${STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX}conv-a`,
 				JSON.stringify({ bytesReceived: 10, updatedAt: 1 })
 			);
 			expect(

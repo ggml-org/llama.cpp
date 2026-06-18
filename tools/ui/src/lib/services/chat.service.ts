@@ -16,6 +16,7 @@ import {
 	SSE_DATA_PREFIX,
 	SSE_DONE_MARKER,
 	STREAM_VISIBILITY_KICK_MS,
+	STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX,
 	API_STREAM
 } from '$lib/constants';
 import {
@@ -68,10 +69,8 @@ interface ResumableStreamState {
 	model?: string | null;
 }
 
-const STREAM_RESUME_STORAGE_PREFIX = 'llamacpp.stream.resume.';
-
 function streamStorageKey(conversationId: string): string {
-	return STREAM_RESUME_STORAGE_PREFIX + conversationId;
+	return STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX + conversationId;
 }
 
 export class ChatService {
