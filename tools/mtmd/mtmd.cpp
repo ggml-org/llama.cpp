@@ -114,7 +114,7 @@ struct mtmd_image_tokens {
     // true if one of entries in batch_f32 is a placeholder
     bool is_placeholder() const {
         for (const auto & entry : batch_f32.entries) {
-            if (entry->is_placeholder()) {
+            if (entry.is_placeholder()) {
                 return true;
             }
         }
@@ -147,7 +147,7 @@ struct mtmd_audio_tokens {
     // true if one of entries in batch_f32 is a placeholder
     bool is_placeholder() const {
         for (const auto & entry : batch_f32.entries) {
-            if (entry->is_placeholder()) {
+            if (entry.is_placeholder()) {
                 return true;
             }
         }
@@ -1050,7 +1050,7 @@ struct mtmd_tokenizer {
 
             // TODO @ngxson : this is quite hacky because preprocessor only support batch with one single element, that need to be fixed in the future (e.g. by changing the preprocessor interface always take single input)
 
-            clip_image_f32_batch batch_f32;
+            mtmd_image_preproc_out preproc_out;
 
             for (const auto * bmp : bitmaps) {
                 // sanity check
@@ -1063,42 +1063,40 @@ struct mtmd_tokenizer {
                 }
 
                 // convert mtmd_bitmap to clip_image_u8
-                clip_image_u8_ptr img_u8(clip_image_u8_init());
-                img_u8->set_size(
+                clip_image_u8 img_u8;
+                img_u8.set_size(
                     {(int)bmp->nx, (int)bmp->ny},
                     bmp->is_placeholder());
-                img_u8->cpy_buf(bmp->get_ro_buf());
+                img_u8.cpy_buf(bmp->get_ro_buf());
 
                 // preprocess image
-                clip_image_f32_batch tmp_batch;
-                bool ok = ctx->image_preproc->preprocess(*img_u8, tmp_batch);
-                if (!ok) {
-                    LOG_ERR("Unable to preprocess image\n");
-                    return 2;
-                }
+                mtmd_image_preproc_out tmp_preproc_out = ctx->image_preproc->preprocess(img_u8);
 
-                // move entries and grid dimensions to the "global" batch_f32
-                for (auto & entry : tmp_batch.entries) {
-                    batch_f32.entries.emplace_back(std::move(entry));
+                // move entries and grid dimensions to the "global" preproc_out
+                for (auto & entry : tmp_preproc_out.entries) {
+                    preproc_out.entries.emplace_back(std::move(entry));
                 }
 
                 // for llava-uhd style, we need to handle grid too
-                // we don't care about overwriting these values for now because llama-uhd doesn't support batching anyway
-                batch_f32.grid_x = tmp_batch.grid_x;
-                batch_f32.grid_y = tmp_batch.grid_y;
+                // we don't care about overwriting these values for now because the case where bitmaps.size() > 1 is only for frame merging (qwen-vl), not supported by llava-uhd
+                if (tmp_preproc_out.grid_x > 0 && tmp_preproc_out.grid_y > 0) {
+                    GGML_ASSERT(bitmaps.size() == 1);
+                    preproc_out.grid_x = tmp_preproc_out.grid_x;
+                    preproc_out.grid_y = tmp_preproc_out.grid_y;
+                }
             }
 
             // handle llava-uhd style preprocessing
-            const bool has_tiling_grid = batch_f32.grid_x > 0 && batch_f32.grid_y > 0;
+            const bool has_tiling_grid = preproc_out.grid_x > 0 && preproc_out.grid_y > 0;
             if (has_tiling_grid) {
                 // [QWEN_VIDEO] we do not support "frame merging" for llama-uhd style, so no batching for now
                 GGML_ASSERT(bitmaps.size() == 1);
 
-                const int n_col = batch_f32.grid_x;
-                const int n_row = batch_f32.grid_y;
+                const int n_col = preproc_out.grid_x;
+                const int n_row = preproc_out.grid_y;
                 // split batch into chunks of single images
-                // NOTE: batch_f32 will be invalidated after this call
-                auto chunks = split_batch_to_chunk(std::move(batch_f32), bitmaps[0]->id);
+                // NOTE: preproc_out will be invalidated after this call
+                auto chunks = split_batch_to_chunk(std::move(preproc_out), bitmaps[0]->id);
                 GGML_ASSERT(chunks.size() > 0);
 
                 auto ov_chunk = std::move(chunks.front());
@@ -1150,8 +1148,8 @@ struct mtmd_tokenizer {
             } else {
 
                 size_t n_tokens = 0;
-                for (const auto & e : batch_f32.entries) {
-                    n_tokens += clip_n_output_tokens(ctx->ctx_v, e.get());
+                for (auto & e : preproc_out.entries) {
+                    n_tokens += clip_n_output_tokens(ctx->ctx_v, &e);
                     if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
                         // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
                         break;
@@ -1165,8 +1163,8 @@ struct mtmd_tokenizer {
 
                 if (mtmd_decode_use_mrope(ctx)) {
                     // for Qwen2VL, we need this information for M-RoPE decoding positions
-                    image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
-                    image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, batch_f32.entries[0].get());
+                    image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, &preproc_out.entries[0]);
+                    image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, &preproc_out.entries[0]);
                 } else {
                     // other models, we only need the total number of tokens
                     image_tokens->nx = n_tokens;
@@ -1181,6 +1179,12 @@ struct mtmd_tokenizer {
                     image_tokens->image_idx = n_images_added;
                     GGML_ASSERT(n_tokens == (size_t)image_tokens->n_tokens());
                 }
+
+                clip_image_f32_batch batch_f32;
+                batch_f32.is_audio = false;
+                batch_f32.entries = std::move(preproc_out.entries);
+                // do NOT use preproc_out from this point on, it's moved
+
                 image_tokens->batch_f32 = std::move(batch_f32);
                 image_tokens->id = bitmaps[0]->id; // optional
 
@@ -1260,13 +1264,13 @@ struct mtmd_tokenizer {
             for (auto & mel_spec : mel_spec_chunks) {
                 const bool is_placeholder = mel_spec.data.empty();
 
-                clip_image_f32_ptr mel_f32(clip_image_f32_init());
-                mel_f32->set_size(
+                clip_image_f32 mel_f32;
+                mel_f32.set_size(
                     {mel_spec.n_len, mel_spec.n_mel},
                     is_placeholder, /* is_audio */ true);
-                mel_f32->cpy_buf(mel_spec.data);
+                mel_f32.cpy_buf(mel_spec.data);
 
-                size_t n_tokens = clip_n_output_tokens(ctx->ctx_a, mel_f32.get());
+                size_t n_tokens = clip_n_output_tokens(ctx->ctx_a, &mel_f32);
 
                 clip_image_f32_batch batch_f32;
                 batch_f32.is_audio = true;
@@ -1296,12 +1300,12 @@ struct mtmd_tokenizer {
         return 0;
     }
 
-    std::vector<mtmd_input_chunk> split_batch_to_chunk(clip_image_f32_batch && batch_f32, const std::string & id) {
+    std::vector<mtmd_input_chunk> split_batch_to_chunk(mtmd_image_preproc_out && preproc_out, const std::string & id) {
         std::vector<mtmd_input_chunk> chunks;
 
-        for (auto & entry : batch_f32.entries) {
+        for (auto & entry : preproc_out.entries) {
             mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-            image_tokens->nx = clip_n_output_tokens(ctx->ctx_v, entry.get());
+            image_tokens->nx = clip_n_output_tokens(ctx->ctx_v, &entry);
             image_tokens->ny = 1;
             image_tokens->batch_f32.entries.push_back(std::move(entry));
             image_tokens->id = id;
@@ -1406,16 +1410,16 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
         // e.g., DeepSeek-OCR-2: 144 per tile views, 257 for the global view
         size_t offset = 0;
         for (size_t i = 0; i < entries.size(); i++) {
-            if (entries[i]->is_placeholder()) {
+            if (entries[i].is_placeholder()) {
                 LOG_ERR("%s: image tokens batch entry %zu is placeholder\n", __func__, i);
                 return 1;
             }
-            int n_tokens_per_image = clip_n_output_tokens(ctx_clip, entries[i].get());
+            int n_tokens_per_image = clip_n_output_tokens(ctx_clip, &entries[i]);
             std::vector<float> tmp_embd((size_t)n_tokens_per_image * n_embd_out);
             bool ok_i = clip_image_encode(
                 ctx_clip,
                 ctx->n_threads,
-                entries[i].get(),
+                &entries[i],
                 tmp_embd);
             if (!ok_i) {
                 LOG_ERR("%s: failed to encode image %zu\n", __func__, i);
@@ -2063,16 +2067,18 @@ void mtmd_debug_preprocess_image(mtmd_context * ctx, const std::vector<uint8_t> 
     clip_image_u8 img_u8;
     img_u8.set_size({nx, ny}, false);
     img_u8.cpy_buf(rgb_values);
-    clip_image_f32_batch batch_f32;
     GGML_ASSERT(ctx->image_preproc != nullptr);
-    bool ok = ctx->image_preproc->preprocess(img_u8, batch_f32);
-    if (!ok) {
-        LOG_ERR("%s: failed to preprocess image\n", __func__);
-        return;
+    mtmd_image_preproc_out preproc_out = ctx->image_preproc->preprocess(img_u8);
+
+    clip_image_f32_batch batch_f32;
+    batch_f32.is_audio = false;
+    for (auto & entry : preproc_out.entries) {
+        batch_f32.entries.push_back(std::move(entry));
     }
+
     LOG_INF("%s: preprocessed image to batch_f32 with %d entries\n", __func__, (int)batch_f32.entries.size());
     for (size_t i = 0; i < batch_f32.entries.size(); i++) {
-        LOG_INF("%s: entry %zu has nx=%d, ny=%d\n", __func__, i, batch_f32.entries[i]->nx(), batch_f32.entries[i]->ny());
+        LOG_INF("%s: entry %zu has nx=%d, ny=%d\n", __func__, i, batch_f32.entries[i].nx(), batch_f32.entries[i].ny());
         // TODO: better way to dump entry content?
     }
 }
