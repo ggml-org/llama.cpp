@@ -351,6 +351,11 @@ void server_models::load_models() {
         source_map[name] = SERVER_MODEL_SOURCE_PRESET;
     }
 
+    // server base preset from CLI args takes highest precedence
+    for (auto & [name, preset] : final_presets) {
+        preset.merge(base_preset);
+    }
+
     auto get_source = [&](const std::string & name) {
         return source_map.count(name) ? source_map.at(name) : SERVER_MODEL_SOURCE_PRESET;
     };
