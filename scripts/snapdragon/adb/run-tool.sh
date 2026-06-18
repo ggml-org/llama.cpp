@@ -55,7 +55,7 @@ opfuse=
 [ "$OC" != "" ] && opfuse="GGML_HEXAGON_OPFUSION=$OC"
 
 mmsel=
-[ "$MM" != "" ] && opsec="GGML_HEXAGON_MM_SELECT=$MM"
+[ "$MM" != "" ] && mmsel="GGML_HEXAGON_MM_SELECT=$MM"
 
 set -x
 
