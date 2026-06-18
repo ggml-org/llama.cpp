@@ -198,14 +198,14 @@ private:
         return out;
     }
 
-    static std::vector<float> reorder_conv_transpose1d_weight(const dac_conv_transpose1d_weights & conv) {
-        std::vector<float> out((size_t) conv.kernel * (size_t) conv.out_channels * (size_t) conv.in_channels);
+    static std::vector<float> reorder_conv_transpose1d_col2im_weight(const dac_conv_transpose1d_weights & conv) {
+        std::vector<float> out((size_t) conv.in_channels * (size_t) conv.kernel * (size_t) conv.out_channels);
         for (int ic = 0; ic < conv.in_channels; ++ic) {
             for (int oc = 0; oc < conv.out_channels; ++oc) {
                 for (int k = 0; k < conv.kernel; ++k) {
                     const size_t src = ((size_t) ic * (size_t) conv.out_channels + (size_t) oc) * (size_t) conv.kernel + (size_t) k;
-                    const size_t dst = (size_t) k
-                            + (size_t) conv.kernel * ((size_t) oc + (size_t) conv.out_channels * (size_t) ic);
+                    const size_t dst = (size_t) ic
+                            + (size_t) conv.in_channels * ((size_t) k + (size_t) conv.kernel * (size_t) oc);
                     out[dst] = conv.weight[src];
                 }
             }
@@ -228,18 +228,18 @@ private:
     ggml_tensor * conv_transpose1d(graph_t & graph, ggml_tensor * x, const dac_conv_transpose1d_weights & conv) {
         ggml_tensor * weight = add_owned_tensor(
                 graph,
-                reorder_conv_transpose1d_weight(conv),
-                { conv.kernel, conv.out_channels, conv.in_channels, 1 },
+                reorder_conv_transpose1d_col2im_weight(conv),
+                { conv.in_channels, conv.kernel * conv.out_channels },
                 conv_weight_type);
-        ggml_tensor * y = ggml_conv_transpose_1d(graph.ctx.get(), weight, x, conv.stride, 0, 1);
+        ggml_tensor * cols = ggml_mul_mat(graph.ctx.get(), weight, ggml_cont(graph.ctx.get(), ggml_transpose(graph.ctx.get(), x)));
+        ggml_tensor * y = ggml_col2im_1d(graph.ctx.get(), cols, conv.stride, conv.out_channels, conv.padding);
 
         const int desired = (int) ((x->ne[0] - 1) * conv.stride - 2 * conv.padding + conv.kernel + conv.output_padding);
-        if (desired <= 0 || desired > y->ne[0]) {
+        if (desired <= 0 || desired < y->ne[0]) {
             throw std::runtime_error("invalid DAC ConvTranspose1d crop");
         }
-        if (desired != y->ne[0]) {
-            const size_t offset = (size_t) conv.padding * (size_t) y->nb[0];
-            y = ggml_view_3d(graph.ctx.get(), y, desired, conv.out_channels, 1, y->nb[1], y->nb[2], offset);
+        if (desired > y->ne[0]) {
+            y = ggml_pad(graph.ctx.get(), y, desired - y->ne[0], 0, 0, 0);
         }
 
         ggml_tensor * bias = add_bias_tensor(graph, conv.bias);
@@ -253,12 +253,12 @@ private:
             inv[i] = 1.0f / (alpha[i] + 1.0e-9f);
         }
 
-        ggml_tensor * a = ggml_repeat(graph.ctx.get(), add_alpha_tensor(graph, alpha), x);
-        ggml_tensor * inv_a = ggml_repeat(graph.ctx.get(), add_alpha_tensor(graph, inv), x);
-        ggml_tensor * ax = ggml_mul(graph.ctx.get(), a, x);
+        ggml_tensor * a = add_alpha_tensor(graph, alpha);
+        ggml_tensor * inv_a = add_alpha_tensor(graph, inv);
+        ggml_tensor * ax = ggml_mul(graph.ctx.get(), x, a);
         ggml_tensor * s = ggml_sin(graph.ctx.get(), ax);
         ggml_tensor * s2 = ggml_sqr(graph.ctx.get(), s);
-        return ggml_add(graph.ctx.get(), x, ggml_mul(graph.ctx.get(), inv_a, s2));
+        return ggml_add(graph.ctx.get(), x, ggml_mul(graph.ctx.get(), s2, inv_a));
     }
 
     ggml_tensor * residual_unit(graph_t & graph, ggml_tensor * input, const dac_residual_unit_weights & unit) {
