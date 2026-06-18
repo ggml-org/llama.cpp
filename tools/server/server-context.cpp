@@ -96,7 +96,7 @@ struct server_slot {
     // generation props
     int32_t n_ctx       = 0;  // context size per slot
     int32_t n_keep      = 0;
-    int32_t n_decoded   = 0;
+    int32_t n_decoded   = -1;
     int32_t n_remaining = -1;
     int32_t i_batch     = -1;
 
@@ -3188,7 +3188,7 @@ private:
                         // extract the logits only for the last token
                         batch.logits[batch.n_tokens - 1] = true;
 
-                        slot.n_decoded = 0;
+                        slot.n_decoded = -1;
                         slot.i_batch   = batch.n_tokens - 1;
 
                         slot.init_sampler();
@@ -3451,7 +3451,7 @@ private:
 
                 slot.n_decoded += 1;
 
-                if (slot.n_decoded == 1) {
+                if (slot.n_decoded == 0) {
                     slot.t_start_generation = t_current;
                     slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
                     metrics.on_prompt_eval(slot);
