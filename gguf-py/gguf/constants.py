@@ -388,6 +388,7 @@ class MODEL_ARCH(IntEnum):
     BAICHUAN         = auto()
     GROK             = auto()
     GPT2             = auto()
+    GPT2_OURS        = auto()
     GPTJ             = auto()
     GPTNEOX          = auto()
     MPT              = auto()
@@ -904,6 +905,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.BAICHUAN:         "baichuan",
     MODEL_ARCH.GROK:             "grok",
     MODEL_ARCH.GPT2:             "gpt2",
+    MODEL_ARCH.GPT2_OURS:        "gpt2_ours",
     MODEL_ARCH.GPTJ:             "gptj",
     MODEL_ARCH.GPTNEOX:          "gptneox",
     MODEL_ARCH.MPT:              "mpt",
@@ -2224,6 +2226,18 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_POST_NORM,
     ],
     MODEL_ARCH.GPT2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.POS_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.GPT2_OURS: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.POS_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,

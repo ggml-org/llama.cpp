@@ -64,6 +64,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "FalconH1ForCausalLM": "falcon_h1",
     "FalconMambaForCausalLM": "mamba",
     "GPT2LMHeadModel": "gpt2",
+    "GPT2OursForCausalLM": "gpt2_ours",
     "GPTBigCodeForCausalLM": "starcoder",
     "GPTNeoXForCausalLM": "gptneox",
     "GPTRefactForCausalLM": "refact",

@@ -118,6 +118,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_plamo3(params);
         case LLM_ARCH_GPT2:
             return new llama_model_gpt2(params);
+        case LLM_ARCH_GPT2_OURS:
+            return new llama_model_gpt2_ours(params);
         case LLM_ARCH_CODESHELL:
             return new llama_model_codeshell(params);
         case LLM_ARCH_ORION:
@@ -2234,6 +2236,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         // these models do not use RoPE
         case LLM_ARCH_CLIP:
         case LLM_ARCH_GPT2:
+        case LLM_ARCH_GPT2_OURS:
         case LLM_ARCH_GPTJ:
         case LLM_ARCH_MPT:
         case LLM_ARCH_REFACT:
