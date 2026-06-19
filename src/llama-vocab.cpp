@@ -4102,6 +4102,10 @@ int32_t llama_n_vocab(const struct llama_vocab * vocab) {
     return llama_vocab_n_tokens(vocab);
 }
 
+int32_t llama_vocab_max_token_len(const struct llama_vocab* vocab) {
+    return vocab->max_token_len();
+}
+
 enum llama_vocab_type llama_vocab_type(const struct llama_vocab * vocab) {
     return vocab->get_type();
 }
