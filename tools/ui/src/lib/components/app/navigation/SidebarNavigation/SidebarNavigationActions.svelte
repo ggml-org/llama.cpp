@@ -15,12 +15,12 @@
 	import type { Component } from 'svelte';
 
 	interface Props {
-     	isExpandedMode: boolean;
+		class: string;
+		isExpandedMode: boolean;
 		onSearchClick?: () => void;
 	}
 
-	let { isExpandedMode = false, onSearchClick = () => {} }: Props = $props();
-
+	let { class: className, isExpandedMode = false, onSearchClick = () => {} }: Props = $props();
 
 	let initialized = $state(false);
 	let showIcons = $state(false);
@@ -37,9 +37,11 @@
 		if (item.activeRouteId) {
 			return page.route.id === item.activeRouteId;
 		}
+
 		if (item.activeRoutePrefix) {
 			return !!page.route.id?.startsWith(item.activeRoutePrefix);
 		}
+
 		return false;
 	}
 
@@ -52,37 +54,41 @@
 	<IconComponent class="h-4 w-4" />
 {/snippet}
 
-<div class="flex min-h-0 flex-col gap-0.75">
-
+<div class="{className} flex flex-col {isExpandedMode ? 'gap-0.5 mt-px' : 'gap-0.75'}">
 	{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 		{@const isActive = isItemActive(item)}
 		{@const itemOnClick = getItemOnClick(item)}
 		{@const itemTransition = {
 			duration: ICON_STRIP_TRANSITION_DURATION,
 			delay: !initialized
-				? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER +
-					i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
+				? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
 				: 0,
 			easing: circIn
 		}}
 
-		<!-- {#if showIcons && isExpandedMode} -->
+		{#if showIcons}
 			<div transition:fade={itemTransition}>
 				<Button
-					class="ml-0.5 w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isExpandedMode ? 'rounded-full' : ''} {isActive
-						? 'bg-accent text-accent-foreground'
-						: ''}"
+					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isExpandedMode
+						? ''
+						: 'rounded-full'} {isActive ? 'bg-accent text-accent-foreground' : ''} {isExpandedMode
+						? ''
+						: 'hidden'}"
 					href={item.route}
 					onclick={itemOnClick}
 					variant="ghost"
 					size={isExpandedMode ? 'default' : 'icon'}
 				>
-					<span class="flex min-w-0 items-center gap-2">
+					<span class="flex min-w-0 items-center px-0.5 gap-2">
 						{@render itemIcon(item.icon)}
 
-						{#if showIcons}
-    						<span class="min-w-0 truncate">{item.tooltip}</span>
-                        {/if}
+						{#if showIcons && isExpandedMode}
+							<span
+								in:fade={{ duration: 150, easing: circIn, delay: 50 }}
+								out:fade={{ duration: 100 }}
+								class="min-w-0 truncate">{item.tooltip}</span
+							>
+						{/if}
 					</span>
 
 					{#if isExpandedMode && item.keys}
@@ -90,20 +96,20 @@
 					{/if}
 				</Button>
 			</div>
-		<!-- {:else if showIcons}
-			<div transition:fade={itemTransition}>
+
+			<div transition:fade={itemTransition} class=" {isExpandedMode ? 'hidden' : ''}">
 				<ActionIcon
 					icon={item.icon}
 					tooltip={item.tooltip}
 					tooltipSide={TooltipSide.RIGHT}
 					size="lg"
 					iconSize="h-4 w-4"
-					class="h-9 w-9 rounded-full hover:bg-accent! {isActive
+					class="h-8 w-8 mx-0.5 rounded-full hover:bg-accent! {isActive
 						? 'bg-accent text-accent-foreground'
 						: ''}"
 					onclick={itemOnClick}
 				/>
 			</div>
-		{/if} -->
+		{/if}
 	{/each}
 </div>

@@ -7,10 +7,7 @@
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
 
-	import {
-		SidebarNavigation,
-		DialogConversationTitleUpdate,
-	} from '$lib/components/app';
+	import { SidebarNavigation, DialogConversationTitleUpdate } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
@@ -169,7 +166,6 @@
 
 	$effect(() => {
 		if (alwaysShowSidebarOnDesktop && isDesktop) {
-
 			return;
 		}
 	});
@@ -294,16 +290,16 @@
 <svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
-	<SidebarNavigation
-		onSearchClick={() => {
-			if (chatSidebar?.activateSearchMode) {
-				chatSidebar.activateSearchMode();
-			}
-		}}
-	/>
+	<div class="flex flex-col md:flex-row pt-2">
+		<SidebarNavigation
+			onSearchClick={() => {
+				if (chatSidebar?.activateSearchMode) {
+					chatSidebar.activateSearchMode();
+				}
+			}}
+		/>
 
-	<div class="pl-12">
-    	{@render children?.()}
+		<div class="flex-1">{@render children?.()}</div>
 	</div>
 
 	<ModeWatcher />

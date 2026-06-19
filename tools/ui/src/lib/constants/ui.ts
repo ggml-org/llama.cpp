@@ -1,4 +1,4 @@
-import { Search, SquarePen } from '@lucide/svelte';
+import { Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import type { Component } from 'svelte';
 import { ROUTES } from './routes';
@@ -27,4 +27,5 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		route: ROUTES.MCP_SERVERS,
 		activeRouteId: '/mcp-servers'
 	},
+	{ icon: Settings, tooltip: 'Settings', route: ROUTES.SETTINGS }
 ];

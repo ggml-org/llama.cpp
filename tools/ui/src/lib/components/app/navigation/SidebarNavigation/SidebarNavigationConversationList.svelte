@@ -4,6 +4,7 @@
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
 
 	interface Props {
+		class: string;
 		filteredConversations: DatabaseConversation[];
 		currentChatId: string | undefined;
 		isSearchModeActive: boolean;
@@ -15,6 +16,7 @@
 	}
 
 	let {
+		class: className,
 		filteredConversations,
 		currentChatId,
 		isSearchModeActive,
@@ -47,16 +49,17 @@
 </script>
 
 {#if !isSearchModeActive && pinnedConversations.length > 0}
-	<div
-		class="text-muted-foreground flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium pt-4 whitespace-nowrap"
-	>
-		<div class="flex items-center gap-1">
+	<div class="py-2 flex whitespace-nowrap {className}">
+		<div
+			class="text-muted-foreground inline-flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium gap-1"
+		>
 			<Pin class="h-3.5 w-3.5" />
+
 			<span>Pinned</span>
 		</div>
 	</div>
 
-	<ul class="flex w-full min-w-0 flex-col gap-1">
+	<ul class="flex w-full min-w-0 flex-col gap-1 {className}">
 		{#each pinnedConversations as { conversation, depth } (conversation.id)}
 			<li class="group/item relative mb-1 p-0">
 				<SidebarNavigationConversationItem
@@ -80,7 +83,7 @@
 	</ul>
 {/if}
 
-<div class="mt-2 flex min-h-0 flex-1 flex-col gap-2 whitespace-nowrap">
+<div class="mt-2 flex min-h-0 flex-1 flex-col gap-2 whitespace-nowrap {className}">
 	{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
 		<div
 			class="text-muted-foreground flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium"

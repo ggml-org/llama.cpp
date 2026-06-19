@@ -35,42 +35,42 @@
 	}: Props = $props();
 </script>
 
-{#snippet button(props)}
-    <Button
-       	{...props}
-        {href}
-       	{variant}
-       	{size}
-       	{disabled}
-       	onclick={(e: MouseEvent) => {
-     			if (stopPropagationOnClick) e.stopPropagation();
+{#snippet button(props = {})}
+	<Button
+		{...props}
+		{href}
+		{variant}
+		{size}
+		{disabled}
+		onclick={(e: MouseEvent) => {
+			if (stopPropagationOnClick) e.stopPropagation();
 
-     			onclick?.(e);
-       	}}
-       	class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
-       	aria-label={ariaLabel || tooltip}
-        >
-       	{#if icon}
-     			{@const IconComponent = icon}
+			onclick?.(e);
+		}}
+		class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
+		aria-label={ariaLabel || tooltip}
+	>
+		{#if icon}
+			{@const IconComponent = icon}
 
-     			<IconComponent class={iconSize} />
-       	{/if}
-        </Button>
+			<IconComponent class={iconSize} />
+		{/if}
+	</Button>
 {/snippet}
 
 {#if tooltip}
-    <Tooltip.Root>
-    	<Tooltip.Trigger>
-    		<!-- prevent another nested button element -->
-    		{#snippet child({ props })}
-                {@render button(props)}
-    		{/snippet}
-    	</Tooltip.Trigger>
+	<Tooltip.Root>
+		<Tooltip.Trigger>
+			<!-- prevent another nested button element -->
+			{#snippet child({ props })}
+				{@render button(props)}
+			{/snippet}
+		</Tooltip.Trigger>
 
-    	<Tooltip.Content side={tooltipSide}>
-    		<p>{tooltip}</p>
-    	</Tooltip.Content>
-    </Tooltip.Root>
+		<Tooltip.Content side={tooltipSide}>
+			<p>{tooltip}</p>
+		</Tooltip.Content>
+	</Tooltip.Root>
 {:else}
-    {@render button({ href })}
+	{@render button({ href })}
 {/if}

@@ -3,7 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 
 	interface Props {
-		container: HTMLDivElement | undefined;
+		container: HTMLElement | undefined;
 		hasProcessingInfoVisible: boolean;
 	}
 

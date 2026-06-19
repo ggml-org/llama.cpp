@@ -144,6 +144,7 @@ export { default as SidebarNavigationConversationItem } from './SidebarNavigatio
  * ```
  */
 export { default as SidebarNavigationConversationList } from './SidebarNavigation/SidebarNavigationConversationList.svelte';
+export { default as SidebarNavigationActions } from './SidebarNavigation/SidebarNavigationActions.svelte';
 
 /**
  * Search input for filtering conversations in sidebar. Filters conversation

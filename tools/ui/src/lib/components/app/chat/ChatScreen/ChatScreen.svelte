@@ -46,7 +46,7 @@
 	const autoScroll = createAutoScrollController();
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
-	let chatScrollContainer: HTMLDivElement | undefined = $state();
+	let chatScrollContainer: HTMLElement | undefined = $state();
 	let dragCounter = $state(0);
 	let isDragOver = $state(false);
 	let showFileErrorDialog = $state(false);
@@ -369,6 +369,7 @@
 	});
 
 	$effect(() => {
+		chatScrollContainer = document.documentElement;
 		autoScroll.setContainer(chatScrollContainer);
 	});
 
@@ -381,66 +382,61 @@
 	<ChatScreenDragOverlay />
 {/if}
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onscroll={handleScroll} />
 
 {#if isServerLoading}
 	<ServerLoadingSplash />
 {:else}
 	<div
-		bind:this={chatScrollContainer}
-		aria-label="Chat interface with file drop zone"
-		class="chat-screen flex h-full flex-col overflow-y-auto px-4 md:px-6 min-h-dvh"
+		class="flex grow flex-col chat-screen min-h-[calc(100dvh-1rem)]"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
 		ondrop={handleDrop}
-		onscroll={handleScroll}
 		role="main"
 	>
-		<div class="flex grow flex-col pt-14">
-			{#if !isEmpty}
-				<ChatMessages
-					messages={activeMessages()}
-					onMessagesReady={handleMessagesReady}
-					onUserAction={() => {
-						autoScroll.enable();
-						if (!autoScroll.userScrolledUp) {
-							autoScroll.scrollToBottom();
-						}
-					}}
+		{#if !isEmpty}
+			<ChatMessages
+				messages={activeMessages()}
+				onMessagesReady={handleMessagesReady}
+				onUserAction={() => {
+					autoScroll.enable();
+					if (!autoScroll.userScrolledUp) {
+						autoScroll.scrollToBottom();
+					}
+				}}
+			/>
+		{/if}
+
+		<div
+			class={[
+				'pointer-events-none sticky right-4 left-4 mt-auto transition-all duration-200',
+				isEmpty ? 'bottom-[calc(50dvh-7rem)]' : 'bottom-4 pt-24 md:pt-32'
+			]}
+		>
+			<ChatScreenGreeting {isEmpty} />
+
+			<ChatScreenActionScrollDown
+				container={chatScrollContainer}
+				hasProcessingInfoVisible={processingInfoVisible}
+			/>
+
+			<ChatScreenProcessingInfo onVisibilityChange={handleProcessingInfoVisibility} />
+
+			<ChatScreenServerError />
+
+			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl">
+				<ChatScreenForm
+					disabled={hasPropsError || isEditing()}
+					{initialMessage}
+					isLoading={isCurrentConversationLoading}
+					onFileRemove={handleFileRemove}
+					onFileUpload={handleFileUpload}
+					onSend={handleSendMessage}
+					onStop={() => chatStore.stopGeneration()}
+					onSystemPromptAdd={handleSystemPromptAdd}
+					bind:uploadedFiles
 				/>
-			{/if}
-
-			<div
-				class={[
-					'pointer-events-none sticky right-4 left-4 mt-auto transition-all duration-200',
-					isEmpty ? 'bottom-[calc(50dvh-7rem)]' : 'bottom-4 pt-24 md:pt-32'
-				]}
-			>
-				<ChatScreenGreeting {isEmpty} />
-
-				<ChatScreenActionScrollDown
-					container={chatScrollContainer}
-					hasProcessingInfoVisible={processingInfoVisible}
-				/>
-
-				<ChatScreenProcessingInfo onVisibilityChange={handleProcessingInfoVisibility} />
-
-				<ChatScreenServerError />
-
-				<div class="conversation-chat-form pointer-events-auto rounded-t-3xl">
-					<ChatScreenForm
-						disabled={hasPropsError || isEditing()}
-						{initialMessage}
-						isLoading={isCurrentConversationLoading}
-						onFileRemove={handleFileRemove}
-						onFileUpload={handleFileUpload}
-						onSend={handleSendMessage}
-						onStop={() => chatStore.stopGeneration()}
-						onSystemPromptAdd={handleSystemPromptAdd}
-						bind:uploadedFiles
-					/>
-				</div>
 			</div>
 		</div>
 	</div>
