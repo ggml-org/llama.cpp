@@ -1474,7 +1474,6 @@ void server_models_routes::init_routes() {
                 }},
                 // New key
                 {"ui_settings",          ui_settings},
-                {"webui_settings",       webui_settings},
                 {"build_info",           std::string(llama_build_info())},
                 {"cors_proxy_enabled",   params.ui_mcp_proxy},
             });

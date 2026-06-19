@@ -207,7 +207,6 @@ public:
 struct server_models_routes {
     common_params params;
     json ui_settings = json::object();     // Primary: new name
-    json webui_settings = json::object();  // Deprecated: use ui_settings (kept for compat)
     std::atomic<bool> stopping = false;    // for graceful disconnecting SSE clients during shutdown
     server_models models;
     server_models_routes(const common_params & params, int argc, char ** argv)
@@ -217,7 +216,6 @@ struct server_models_routes {
             try {
                 json json_settings = json::parse(cfg);
                 ui_settings = json_settings;
-                webui_settings = json_settings;  // Deprecated: keep in sync
             } catch (const std::exception & e) {
                 LOG_ERR("%s: failed to parse UI config: %s\n", __func__, e.what());
                 throw;
