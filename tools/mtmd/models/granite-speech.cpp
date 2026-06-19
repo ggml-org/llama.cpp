@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include <algorithm>
+
 ggml_cgraph * clip_graph_granite_speech::build() {
     const int n_frames     = img.nx();
     const int context_size = hparams.audio_chunk_size;
@@ -10,6 +12,24 @@ ggml_cgraph * clip_graph_granite_speech::build() {
     const int num_blocks   = (n_frames + context_size - 1) / context_size;
     const int padded_len   = num_blocks * context_size;
     const int remainder    = n_frames % context_size;
+
+    // Load feature layers for GraniteSpeechPlus (intermediate layer concatenation)
+    std::vector<int32_t> feature_layers;
+    if (hparams.speech_feature_layer.size() > 0) {
+        feature_layers = hparams.speech_feature_layer;
+    }
+
+    // Calculate projector input dimension based on feature layers
+    const int proj_input_dim = n_embd * (feature_layers.size() + 1);
+    const bool use_feature_concat = !feature_layers.empty();
+
+    // Helper lambda to check if a layer index is in feature_layers
+    auto is_feature_layer = [&](int32_t layer) -> bool {
+        for (const auto & fl : feature_layers) {
+            if (fl == layer) return true;
+        }
+        return false;
+    };
 
     ggml_tensor * attn_dists = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, context_size * context_size);
     ggml_set_name(attn_dists, "attn_dists");
@@ -30,6 +50,15 @@ ggml_cgraph * clip_graph_granite_speech::build() {
     cur = build_mm(model.inp_proj_w, cur);
     cur = ggml_add(ctx0, cur, model.inp_proj_b);
     cb(cur, "inp_linear", -1);
+
+    // Capture layer 0 if requested (after input_linear)
+    ggml_tensor * concat_result = nullptr;
+    if (use_feature_concat) {
+        if (std::find(feature_layers.begin(), feature_layers.end(), 0) != feature_layers.end()) {
+            concat_result = cur;
+            cb(concat_result, "feature_layer_0", -1);
+        }
+    }
 
     for (int il = 0; il < n_layer; il++) {
         const auto & layer = model.layers[il];
@@ -168,6 +197,18 @@ ggml_cgraph * clip_graph_granite_speech::build() {
                          NORM_TYPE_NORMAL, eps, il);
         cb(cur, "layer_out", il);
 
+        // Capture intermediate layer (il + 1) if requested
+        if (use_feature_concat) {
+            if (is_feature_layer(il + 1)) {
+                if (concat_result == nullptr) {
+                    concat_result = cur;
+                } else {
+                    concat_result = ggml_concat(ctx0, concat_result, cur, 0);
+                }
+                cb(concat_result, string_format("feature_layer_%d", il + 1).c_str(), il);
+            }
+        }
+
         // CTC branch
         if (il + 1 == ctc_layer) {
             auto * mid = build_mm(model.ctc_out_w, cur);
@@ -178,6 +219,13 @@ ggml_cgraph * clip_graph_granite_speech::build() {
             cur = ggml_add(ctx0, cur, mid);
             cb(cur, "ctc_branch", il);
         }
+    }
+
+    // Append final output to concatenated features if using feature concatenation
+    if (use_feature_concat && concat_result != nullptr) {
+        concat_result = ggml_concat(ctx0, concat_result, cur, 0);
+        cb(concat_result, "concat_final", -1);
+        cur = concat_result;
     }
 
     cb(cur, "encoder_out", -1);
@@ -197,7 +245,7 @@ ggml_cgraph * clip_graph_granite_speech::build() {
             cur = ggml_pad(ctx0, cur, 0, padded_proj - n_frames, 0, 0);
         }
 
-        ggml_tensor * enc_windows = ggml_reshape_3d(ctx0, cur, n_embd, window_size, nblocks_proj);
+        ggml_tensor * enc_windows = ggml_reshape_3d(ctx0, cur, proj_input_dim, window_size, nblocks_proj);
 
         ggml_tensor * queries = build_norm(model.qf_proj_blocks[0].qf_proj_query,
             model.qf_proj_blocks[0].qf_proj_norm_w, model.qf_proj_blocks[0].qf_proj_norm_b,
