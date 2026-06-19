@@ -696,6 +696,7 @@ struct hf_plan {
     hf_cache::hf_files model_files;
     hf_cache::hf_file mmproj;
     hf_cache::hf_file mtp;
+    hf_cache::hf_file preset; // if set, only this file is downloaded
 };
 
 static hf_plan get_hf_plan(const common_params_model  & model,
@@ -715,6 +716,14 @@ static hf_plan get_hf_plan(const common_params_model  & model,
     }
     if (all.empty()) {
         return plan;
+    }
+
+    // if preset.ini exists in the repo root, download only that file
+    for (const auto & f : all) {
+        if (f.path == "preset.ini") {
+            plan.preset = f;
+            return plan;
+        }
     }
 
     hf_cache::hf_file primary;
@@ -794,14 +803,19 @@ common_download_model_result common_download_model(const common_params_model  & 
 
     if (is_hf) {
         hf = get_hf_plan(model, opts, download_mmproj, download_mtp);
-        for (const auto & f : hf.model_files) {
-            tasks.push_back({f.url, f.local_path});
-        }
-        if (!hf.mmproj.path.empty()) {
-            tasks.push_back({hf.mmproj.url, hf.mmproj.local_path});
-        }
-        if (!hf.mtp.path.empty()) {
-            tasks.push_back({hf.mtp.url, hf.mtp.local_path});
+        if (!hf.preset.path.empty()) {
+            // if preset.ini exists, only download that file alone
+            tasks.push_back({hf.preset.url, hf.preset.local_path});
+        } else {
+            for (const auto & f : hf.model_files) {
+                tasks.push_back({f.url, f.local_path});
+            }
+            if (!hf.mmproj.path.empty()) {
+                tasks.push_back({hf.mmproj.url, hf.mmproj.local_path});
+            }
+            if (!hf.mtp.path.empty()) {
+                tasks.push_back({hf.mtp.url, hf.mtp.local_path});
+            }
         }
     } else if (!model.url.empty()) {
         tasks = get_url_tasks(model);
@@ -835,17 +849,22 @@ common_download_model_result common_download_model(const common_params_model  & 
     }
 
     if (is_hf) {
-        for (const auto & f : hf.model_files) {
-            hf_cache::finalize_file(f);
-        }
-        result.model_path = hf.primary.final_path;
+        if (!hf.preset.path.empty()) {
+            // if preset.ini is used, do not set other paths
+            result.preset_path = hf_cache::finalize_file(hf.preset);
+        } else {
+            for (const auto & f : hf.model_files) {
+                hf_cache::finalize_file(f);
+            }
+            result.model_path = hf.primary.final_path;
 
-        if (!hf.mmproj.path.empty()) {
-            result.mmproj_path = hf_cache::finalize_file(hf.mmproj);
-        }
+            if (!hf.mmproj.path.empty()) {
+                result.mmproj_path = hf_cache::finalize_file(hf.mmproj);
+            }
 
-        if (!hf.mtp.path.empty()) {
-            result.mtp_path = hf_cache::finalize_file(hf.mtp);
+            if (!hf.mtp.path.empty()) {
+                result.mtp_path = hf_cache::finalize_file(hf.mtp);
+            }
         }
     } else {
         result.model_path = model.path;

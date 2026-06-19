@@ -63,6 +63,7 @@ struct common_download_model_result {
     std::string model_path;
     std::string mmproj_path;
     std::string mtp_path;
+    std::string preset_path;
 };
 
 // throw if the file is missing or invalid (e.g. ETag check failed)

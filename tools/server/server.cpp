@@ -227,8 +227,7 @@ int llama_server(int argc, char ** argv) {
     ctx_http.register_gcp_compat();
 
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
-    // Supports both new ui_mcp_proxy and deprecated webui_mcp_proxy fields
-    if (params.ui_mcp_proxy || params.webui_mcp_proxy) {
+    if (params.ui_mcp_proxy) {
         SRV_WRN("%s", "-----------------\n");
         SRV_WRN("%s", "CORS proxy is enabled, do not expose server to untrusted environments\n");
         SRV_WRN("%s", "This feature is EXPERIMENTAL and may be removed or changed in future versions\n");
@@ -349,6 +348,12 @@ int llama_server(int argc, char ** argv) {
         SRV_INF("router server is listening on %s\n", ctx_http.listening_address.c_str());
         SRV_WRN("%s", "NOTE: router mode is experimental\n");
         SRV_WRN("%s", "      it is not recommended to use this mode in untrusted environments\n");
+
+        if (!params.models_preset_hf.empty()) {
+            SRV_WRN(      "NOTE: using preset.ini from HF repo '%s'\n", params.models_preset_hf.c_str());
+            SRV_WRN("%s", "      please only use presets that you can trust! Unknown presets may be unsafe\n");
+        }
+
         if (ctx_http.thread.joinable()) {
             ctx_http.thread.join(); // keep the main thread alive
         }
