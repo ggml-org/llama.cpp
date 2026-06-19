@@ -107,14 +107,14 @@ static inline int htp_mm_hmx_compute_chunks(size_t   vtcm_total,
                               size_t   per_n_cost,
                               size_t   per_m_cost,
                               size_t   per_mn_cost,
-                              int      m,
-                              int      n,
+                              size_t   m,
+                              size_t   n,
                               size_t   m_block_cost,
                               size_t   n_block_cost,
                               size_t * m_chunk_out,
                               size_t * n_chunk_out,
                               size_t * total_out) {
-    if (m <= 0 || n <= 0) return -1;
+    if (m == 0 || n == 0) return -1;
     if (vtcm_total <= overhead) return -1;
     if (per_n_cost == 0 || per_m_cost == 0 || per_mn_cost == 0) return -1;
 
@@ -137,7 +137,7 @@ static inline int htp_mm_hmx_compute_chunks(size_t   vtcm_total,
             size_t remain = usable - n_fixed;
             size_t mc = remain / mc_denom;
             mc = hex_align_down(mc, HTP_MM_HMX_TILE_N_ROWS);
-            mc = hex_smin(mc, (size_t)m);
+            mc = hex_smin(mc, m);
 
             if (mc == 0) {
                 goto next_nc;
@@ -237,8 +237,8 @@ static inline size_t htp_mm_q8_1_flat_row_size(uint32_t ne) {
     return quants_size + scales_size;
 }
 
-static inline size_t htp_mm_get_tiled_row_stride(int weight_type, int k) {
-    int nb = (k + QK_Q4_0_TILED - 1) / QK_Q4_0_TILED;
+static inline size_t htp_mm_get_tiled_row_stride(int weight_type, uint32_t k) {
+    uint32_t nb = (k + QK_Q4_0_TILED - 1) / QK_Q4_0_TILED;
     switch (weight_type) {
         case HTP_TYPE_Q4_0:
         case HTP_TYPE_IQ4_NL:
@@ -263,18 +263,18 @@ static inline size_t htp_mm_align_up(size_t n, size_t m) {
     return ((n + m - 1) / m) * m;
 }
 
-static inline bool htp_mm_hmx_pipeline(int m) {
+static inline bool htp_mm_hmx_pipeline(uint32_t m) {
     return m > 32;
 }
 
 static inline void htp_mm_hmx_get_2d_chunk_costs(
-    int wtype, int k, bool pipeline, int aligned_tile_size,
+    int wtype, uint32_t k, bool pipeline, uint32_t aligned_tile_size,
     size_t * size_per_n_out, size_t * size_per_m_out, size_t * size_per_mn_out
 ) {
     const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32);
     const size_t row_stride = htp_mm_get_tiled_row_stride(wtype, k);
     const size_t vec_dot_size = k * sizeof(uint16_t);
-    const int n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
+    const uint32_t n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
     const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
 
     *size_per_n_out = (pipeline ? 2 : 1) * (is_quant ? qweight_row_stride : row_stride) + 
@@ -284,7 +284,7 @@ static inline void htp_mm_hmx_get_2d_chunk_costs(
 }
 
 static inline void htp_mm_hmx_get_batched_chunk_costs(
-    int k, int group_size,
+    uint32_t k, uint32_t group_size,
     size_t * size_per_n_out, size_t * size_per_m_out, size_t * size_per_mn_out
 ) {
     const size_t vec_dot_size = k * sizeof(uint16_t);
@@ -294,9 +294,9 @@ static inline void htp_mm_hmx_get_batched_chunk_costs(
 }
 
 static inline size_t htp_mm_hmx_get_2d_vtcm_size(
-    int wtype, int k, size_t mc, size_t nc, bool pipeline, int act_threads, int aligned_tile_size
+    int wtype, uint32_t k, size_t mc, size_t nc, bool pipeline, uint32_t act_threads, uint32_t aligned_tile_size
 ) {
-    const int n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
+    const uint32_t n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
     const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32);
     const size_t row_stride = htp_mm_get_tiled_row_stride(wtype, k);
     const size_t vec_dot_size = k * sizeof(uint16_t);
@@ -320,7 +320,7 @@ static inline size_t htp_mm_hmx_get_2d_vtcm_size(
 }
 
 static inline size_t htp_mm_hmx_get_batched_vtcm_size(
-    int wtype, int k, size_t mc, size_t nc, int group_size, bool use_dma_activation, bool pipeline, int act_threads
+    int wtype, uint32_t k, size_t mc, size_t nc, uint32_t group_size, bool use_dma_activation, bool pipeline, uint32_t act_threads
 ) {
     (void)wtype;
     (void)pipeline;
@@ -341,9 +341,9 @@ static inline size_t htp_mm_hmx_get_batched_vtcm_size(
 static inline size_t htp_mm_hvx_get_vtcm_sizes(
     int kernel_type,
     int wtype,
-    int ne10,       // k
-    int src1_nrows, // m_total (or act_nrows)
-    int n_threads,
+    uint32_t ne10,       // k
+    uint32_t src1_nrows, // m_total (or act_nrows)
+    uint32_t n_threads,
     size_t dst_row_size,
     size_t src0_row_size,
     size_t src1_row_size,
@@ -454,9 +454,9 @@ static inline size_t htp_mm_hvx_get_vtcm_sizes(
 
 static inline size_t htp_mm_hvx_id_get_vtcm_sizes(
     int wtype,
-    int ne10,                // k
+    uint32_t ne10,                // k
     uint32_t src1_nrows,
-    int n_threads,
+    uint32_t n_threads,
     size_t src0_row_size,    // nb01
     size_t * vtcm_src0_size_out,
     size_t * vtcm_src1_size_out

@@ -256,7 +256,7 @@ static inline void quantize_f16_f16_flat_kernel(
 
 // Dot kernels that consume flat (non-tiled) activations
 
-static void flat_vec_dot_q4_0_32x1(const int n, float * restrict s, const void * restrict vx, const void * restrict vy, int valid_rows) {
+static void flat_vec_dot_q4_0_32x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -315,7 +315,7 @@ static void flat_vec_dot_q4_0_32x1(const int n, float * restrict s, const void *
     hvx_vec_store_u(s, valid_rows * sizeof(float), v_sum_float);
 }
 
-static void flat_vec_dot_q4_0_32x2(const int n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, int valid_rows) {
+static void flat_vec_dot_q4_0_32x2(const uint32_t n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -401,7 +401,7 @@ static void flat_vec_dot_q4_0_32x2(const int n, float * restrict s0, float * res
     hvx_vec_store_u(s1, valid_rows * sizeof(float), v_sum_float_c1);
 }
 
-static void flat_vec_dot_q4_1_32x1(const int n, float * restrict s, const void * restrict vx, const void * restrict vy, int valid_rows) {
+static void flat_vec_dot_q4_1_32x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -467,7 +467,7 @@ static void flat_vec_dot_q4_1_32x1(const int n, float * restrict s, const void *
     hvx_vec_store_u(s, valid_rows * sizeof(float), v_sum_float);
 }
 
-static void flat_vec_dot_q4_1_32x2(const int n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, int valid_rows) {
+static void flat_vec_dot_q4_1_32x2(const uint32_t n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -565,7 +565,7 @@ static void flat_vec_dot_q4_1_32x2(const int n, float * restrict s0, float * res
     hvx_vec_store_u(s1, valid_rows * sizeof(float), v_sum_float_c1);
 }
 
-static void flat_vec_dot_q8_0_32x1(const int n, float * restrict s, const void * restrict vx, const void * restrict vy, int valid_rows) {
+static void flat_vec_dot_q8_0_32x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -623,7 +623,7 @@ static void flat_vec_dot_q8_0_32x1(const int n, float * restrict s, const void *
     hvx_vec_store_u(s, valid_rows * sizeof(float), v_sum_float);
 }
 
-static void flat_vec_dot_q8_0_32x2(const int n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, int valid_rows) {
+static void flat_vec_dot_q8_0_32x2(const uint32_t n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -708,7 +708,7 @@ static void flat_vec_dot_q8_0_32x2(const int n, float * restrict s0, float * res
     hvx_vec_store_u(s1, valid_rows * sizeof(float), v_sum_float_c1);
 }
 
-static void flat_vec_dot_iq4nl_32x1(const int n, float * restrict s, const void * restrict vx, const void * restrict vy, int valid_rows) {
+static void flat_vec_dot_iq4nl_32x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -768,7 +768,7 @@ static void flat_vec_dot_iq4nl_32x1(const int n, float * restrict s, const void 
     hvx_vec_store_u(s, valid_rows * sizeof(float), v_sum_float);
 }
 
-static void flat_vec_dot_iq4nl_32x2(const int n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, int valid_rows) {
+static void flat_vec_dot_iq4nl_32x2(const uint32_t n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -855,7 +855,7 @@ static void flat_vec_dot_iq4nl_32x2(const int n, float * restrict s0, float * re
     hvx_vec_store_u(s1, valid_rows * sizeof(float), v_sum_float_c1);
 }
 
-static void flat_vec_dot_mxfp4_32x1(const int n, float * restrict s, const void * restrict vx, const void * restrict vy, int valid_rows) {
+static void flat_vec_dot_mxfp4_32x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -924,7 +924,7 @@ static void flat_vec_dot_mxfp4_32x1(const int n, float * restrict s, const void 
     hvx_vec_store_u(s, valid_rows * sizeof(float), v_sum_float);
 }
 
-static void flat_vec_dot_mxfp4_32x2(const int n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, int valid_rows) {
+static void flat_vec_dot_mxfp4_32x2(const uint32_t n, float * restrict s0, float * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;

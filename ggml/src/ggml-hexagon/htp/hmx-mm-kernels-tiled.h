@@ -21,27 +21,27 @@ typedef struct {
     const uint8_t           * src;
 
     struct fastdiv_values     n_k_tiles_div;
-    int                       n_k_tiles;
-    int                       n_tot_tiles;
-    int                       n_tiles_per_task;
-    int                       tile_size;
-    int                       aligned_tile_size;
-    int                       n_tasks;
-    int                       n_cols;
-    int                       k_block;
+    uint32_t                  n_k_tiles;
+    uint32_t                  n_tot_tiles;
+    uint32_t                  n_tiles_per_task;
+    uint32_t                  tile_size;
+    uint32_t                  aligned_tile_size;
+    uint32_t                  n_tasks;
+    uint32_t                  n_cols;
+    uint32_t                  k_block;
     size_t                    row_stride;
-    int                       weight_type;
+    uint32_t                  weight_type;
 } tiled_dequantize_state_t;
 
 // Dequantize a single tile from tiled weight data (already in VTCM) to tile-major FP16.
 static void dequantize_tiled_weight_to_fp16_task_q4_0(
         const tiled_dequantize_state_t *state,
-        int start_tile, int end_tile) {
+        uint32_t start_tile, uint32_t end_tile) {
 
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
     const HVX_Vector i8 = Q6_Vb_vsplat_R(8);
 
-    for (int t = start_tile; t < end_tile; t++) {
+    for (uint32_t t = start_tile; t < end_tile; t++) {
         const uint8_t * tile_src = state->src + t * state->aligned_tile_size;
         __fp16 * dst_ptr = state->dst + t * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -135,11 +135,11 @@ static void dequantize_tiled_weight_to_fp16_task_q4_0(
 
 static void dequantize_tiled_weight_to_fp16_task_q4_1(
         const tiled_dequantize_state_t *state,
-        int start_tile, int end_tile) {
+        uint32_t start_tile, uint32_t end_tile) {
 
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
 
-    for (int t = start_tile; t < end_tile; t++) {
+    for (uint32_t t = start_tile; t < end_tile; t++) {
         const uint8_t * tile_src = state->src + t * state->aligned_tile_size;
         __fp16 * dst_ptr = state->dst + t * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -229,12 +229,12 @@ static void dequantize_tiled_weight_to_fp16_task_q4_1(
 
 static void dequantize_tiled_weight_to_fp16_task_iq4_nl(
         const tiled_dequantize_state_t *state,
-        int start_tile, int end_tile) {
+        uint32_t start_tile, uint32_t end_tile) {
 
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
     const HVX_Vector vlut_cvt = hvx_vmem(iq4_nl_to_fp16_lut);
 
-    for (int t = start_tile; t < end_tile; t++) {
+    for (uint32_t t = start_tile; t < end_tile; t++) {
         const uint8_t * tile_src = state->src + t * state->aligned_tile_size;
         __fp16 * dst_ptr = state->dst + t * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -328,12 +328,12 @@ static void dequantize_tiled_weight_to_fp16_task_iq4_nl(
 
 static void dequantize_tiled_weight_to_fp16_task_mxfp4(
         const tiled_dequantize_state_t *state,
-        int start_tile, int end_tile) {
+        uint32_t start_tile, uint32_t end_tile) {
 
     const HVX_Vector mask_h4 = Q6_Vb_vsplat_R(0x0F);
     const HVX_Vector vlut_cvt = hvx_vmem(mxfp4_to_fp16_lut);
 
-    for (int t = start_tile; t < end_tile; t++) {
+    for (uint32_t t = start_tile; t < end_tile; t++) {
         const uint8_t * tile_src = state->src + t * state->aligned_tile_size;
         __fp16 * dst_ptr = state->dst + t * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -433,9 +433,9 @@ static void dequantize_tiled_weight_to_fp16_task_mxfp4(
 
 static void dequantize_tiled_weight_to_fp16_task_q8_0(
         const tiled_dequantize_state_t *state,
-        int start_tile, int end_tile) {
+        uint32_t start_tile, uint32_t end_tile) {
 
-    for (int t = start_tile; t < end_tile; t++) {
+    for (uint32_t t = start_tile; t < end_tile; t++) {
         const uint8_t * tile_src = state->src + t * state->aligned_tile_size;
         __fp16 * dst_ptr = state->dst + t * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -508,9 +508,9 @@ static void dequantize_tiled_weight_to_fp16_task_q8_0(
 
 static void convert_f16_weight_to_fp16_tiles_task(
         const tiled_dequantize_state_t *state,
-        int start_tile, int end_tile) {
+        uint32_t start_tile, uint32_t end_tile) {
 
-    const int n_k_tiles = state->n_k_tiles;
+    const uint32_t n_k_tiles = state->n_k_tiles;
     const struct fastdiv_values n_k_tiles_div = state->n_k_tiles_div;
 
     const HVX_Vector v_scat_base  = hvx_vmem(hmx_transpose_scatter_offsets);
@@ -525,12 +525,12 @@ static void convert_f16_weight_to_fp16_tiles_task(
 
         __fp16 *tile_base = state->dst + t * HTP_MM_HMX_TILE_N_ELMS;
         {
-            int byte_off = kt * 32 * sizeof(__fp16);
+            uint32_t byte_off = kt * 32 * sizeof(__fp16);
 
             HVX_Vector v_off = v_scat_base;
-            for (int r = 0; r < HTP_MM_HMX_TILE_N_ROWS; r += 2) {
-                int row0 = ct * HTP_MM_HMX_TILE_N_COLS + r;
-                int row1 = row0 + 1;
+            for (uint32_t r = 0; r < HTP_MM_HMX_TILE_N_ROWS; r += 2) {
+                uint32_t row0 = ct * HTP_MM_HMX_TILE_N_COLS + r;
+                uint32_t row1 = row0 + 1;
 
                 const uint8_t *r0 = state->src + row0 * state->row_stride;
                 const uint8_t *r1 = state->src + row1 * state->row_stride;
@@ -555,9 +555,9 @@ static void convert_f16_weight_to_fp16_tiles_task(
 
 static void quantize_f32_weight_to_fp16_tiles_task(
         const tiled_dequantize_state_t *state,
-        int start_tile, int end_tile) {
+        uint32_t start_tile, uint32_t end_tile) {
 
-    const int n_k_tiles = state->n_k_tiles;
+    const uint32_t n_k_tiles = state->n_k_tiles;
     const struct fastdiv_values n_k_tiles_div = state->n_k_tiles_div;
 
     const HVX_Vector v_scat_base  = hvx_vmem(hmx_transpose_scatter_offsets);
@@ -572,12 +572,12 @@ static void quantize_f32_weight_to_fp16_tiles_task(
 
         __fp16 *tile_base = state->dst + t * HTP_MM_HMX_TILE_N_ELMS;
         {
-            int byte_off = kt * 32 * sizeof(float);
+            uint32_t byte_off = kt * 32 * sizeof(float);
 
             HVX_Vector v_off = v_scat_base;
-            for (int r = 0; r < HTP_MM_HMX_TILE_N_ROWS; r += 2) {
-                int row0 = ct * HTP_MM_HMX_TILE_N_COLS + r;
-                int row1 = row0 + 1;
+            for (uint32_t r = 0; r < HTP_MM_HMX_TILE_N_ROWS; r += 2) {
+                uint32_t row0 = ct * HTP_MM_HMX_TILE_N_COLS + r;
+                uint32_t row1 = row0 + 1;
 
                 const uint8_t *r0 = state->src + row0 * state->row_stride;
                 const uint8_t *r1 = state->src + row1 * state->row_stride;
@@ -608,20 +608,20 @@ static void quantize_f32_weight_to_fp16_tiles_task(
 
 // requires external HMX lock
 static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
-                                int n_row_tiles, int n_col_tiles, int n_dot_tiles) {
+                                uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
     __builtin_assume(n_row_tiles > 0);
     __builtin_assume(n_col_tiles > 0);
     __builtin_assume(n_dot_tiles > 0);
 
     Q6_bias_mxmem2_A((void *)scales);
-    for (int r = 0; r < n_row_tiles; ++r) {
+    for (uint32_t r = 0; r < n_row_tiles; ++r) {
         for (size_t c = 0; c < n_col_tiles; ++c) {
             Q6_mxclracc_hf();
 
             const __fp16 *row_tiles = activation + r * n_dot_tiles * HTP_MM_HMX_TILE_N_ELMS;
             const __fp16 *col_tiles = weight + c * n_dot_tiles * HTP_MM_HMX_TILE_N_ELMS;
 
-            for (int k = 0, k_block; k < n_dot_tiles; k += k_block) {
+            for (uint32_t k = 0, k_block; k < n_dot_tiles; k += k_block) {
                 k_block = hex_smin(n_dot_tiles - k, 32);
                 const uint32_t range = 2048u * (uint32_t)k_block - 1;
                 Q6_activation_hf_mxmem_RR_deep((unsigned int)row_tiles, range);
@@ -639,7 +639,7 @@ static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict 
 // C += AB
 static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, const __fp16 *restrict b,
                                 const __fp16 *restrict col_scales, const __fp16 *restrict eye_tile,
-                                int n_row_tiles, int n_col_tiles, int n_dot_tiles, bool zero_init) {
+                                uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles, bool zero_init) {
     __builtin_assume(n_row_tiles > 0);
     __builtin_assume(n_col_tiles > 0);
     __builtin_assume(n_dot_tiles > 0);
@@ -661,9 +661,9 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
                 Q6_weight_hf_mxmem_RR((unsigned int)eye_tile, 2047);
             }
 
-            for (int k = 0, k_block; k < n_dot_tiles; k += k_block) {
+            for (uint32_t k = 0, k_block; k < n_dot_tiles; k += k_block) {
                 k_block = hex_smin(n_dot_tiles - k, 32);
-                const uint32_t range = 2048u * (uint32_t)k_block - 1;
+                const uint32_t range = 2048u * k_block - 1;
                 Q6_activation_hf_mxmem_RR_deep((unsigned int)row_tiles, range);
                 Q6_weight_hf_mxmem_RR((unsigned int)col_tiles, range);
                 row_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
@@ -698,9 +698,9 @@ static inline void hmx_matmul_job_init(hmx_matmul_job_t * job,
                                        const __fp16 *     activation,
                                        const __fp16 *     weight,
                                        const __fp16 *     scales,
-                                       int                n_row_tiles,
-                                       int                n_col_tiles,
-                                       int                n_dot_tiles) {
+                                       uint32_t           n_row_tiles,
+                                       uint32_t           n_col_tiles,
+                                       uint32_t           n_dot_tiles) {
     job->output      = output;
     job->activation  = activation;
     job->weight      = weight;
@@ -712,7 +712,7 @@ static inline void hmx_matmul_job_init(hmx_matmul_job_t * job,
 
 // output : fp16 -> f32p
 
-static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16 *restrict vtcm_src, int n_rows, int n_cols, int dst_stride, int dst_cols) {
+static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16 *restrict vtcm_src, uint32_t n_rows, uint32_t n_cols, uint32_t dst_stride, uint32_t dst_cols) {
     assert(n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
     const size_t tile_row_stride = (n_cols / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -743,9 +743,9 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
             }
         }
 
-        if (limit_c_aligned < (size_t)limit_c) {
+        if (limit_c_aligned < limit_c) {
             size_t c = limit_c_aligned;
-            int valid_c = limit_c - (int)c;
+            size_t valid_c = limit_c - c;
             const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;
             const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;
             HVX_Vector v = ((const HVX_Vector *) tile)[r1];
@@ -762,39 +762,39 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
 typedef struct {
     const __fp16  *vtcm_src;
     float         *dst;
-    int            n_tasks;
-    int            n_tot_chunks;
-    int            n_chunks_per_task;
-    int            n_cols;
-    int            dst_stride;  // DDR row stride
-    int            dst_cols;    // Actual output columns
+    uint32_t       n_tasks;
+    uint32_t       n_tot_chunks;
+    uint32_t       n_chunks_per_task;
+    uint32_t       n_cols;
+    uint32_t       dst_stride;  // DDR row stride
+    uint32_t       dst_cols;    // Actual output columns
     struct htp_thread_trace * traces;
 } output_transfer_task_state_t;
 
 // activations : fp32 -> fp16
 
-static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, const float *restrict src, int n_rows, int k_block, int k_stride, int k_valid) {
-    const int n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
-    const int n_rows_tiled  = (n_rows / HTP_MM_HMX_TILE_N_ROWS) * HTP_MM_HMX_TILE_N_ROWS;
+static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, const float *restrict src, uint32_t n_rows, uint32_t k_block, uint32_t k_stride, uint32_t k_valid) {
+    const uint32_t n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
+    const uint32_t n_rows_tiled  = (n_rows / HTP_MM_HMX_TILE_N_ROWS) * HTP_MM_HMX_TILE_N_ROWS;
 
-    int r = 0;
+    uint32_t r = 0;
 
     #pragma unroll(2)
     for (r = 0; r < n_rows_tiled; r += 2) {
-        int r0 = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
-        int r1 = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
+        uint32_t r0 = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
+        uint32_t r1 = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
 
         const float *ptr_in0 = src + (r + 0) * k_stride;
         const float *ptr_in1 = src + (r + 1) * k_stride;
 
-        int c = 0;
+        uint32_t c = 0;
         for (; c + 32 <= k_valid; c += 32) {
             HVX_Vector v0 = *(const HVX_Vector *)(ptr_in0 + c);
             HVX_Vector v1 = *(const HVX_Vector *)(ptr_in1 + c);
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
-            int c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
-            int tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
 
             HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
             tile[r1 / 2]     = v_out;
@@ -803,15 +803,15 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, co
             HVX_Vector v0 = *(const HVX_Vector *)(ptr_in0 + c);
             HVX_Vector v1 = *(const HVX_Vector *)(ptr_in1 + c);
 
-            int rem = k_valid - c;
+            uint32_t rem = k_valid - c;
             HVX_VectorPred mask = Q6_Q_vsetq2_R(rem > 0 ? rem * sizeof(float) : 0);
             v0 = Q6_V_vmux_QVV(mask, v0, Q6_V_vzero());
             v1 = Q6_V_vmux_QVV(mask, v1, Q6_V_vzero());
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
-            int c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
-            int tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
 
             HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
             tile[r1 / 2]     = v_out;
@@ -819,8 +819,8 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, co
     }
 
     for (; r < n_rows_padded; r += 2) {
-        int r0 = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
-        int r1 = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
+        uint32_t r0 = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
+        uint32_t r1 = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
 
         const bool row0_valid = r       < n_rows;
         const bool row1_valid = (r + 1) < n_rows;
@@ -828,7 +828,7 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, co
         const float *ptr_in0 = row0_valid ? (src + (r + 0) * k_stride) : NULL;
         const float *ptr_in1 = row1_valid ? (src + (r + 1) * k_stride) : NULL;
 
-        int c = 0;
+        uint32_t c = 0;
         for (; c + 32 <= k_valid; c += 32) {
             HVX_Vector v0 = Q6_V_vzero();
             HVX_Vector v1 = Q6_V_vzero();
@@ -837,8 +837,8 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, co
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
-            int c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
-            int tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
 
             HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
             tile[r1 / 2]     = v_out;
@@ -849,15 +849,15 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, co
             if (row0_valid) v0 = *(const HVX_Vector *)(ptr_in0 + c);
             if (row1_valid) v1 = *(const HVX_Vector *)(ptr_in1 + c);
 
-            int rem = k_valid - c;
+            uint32_t rem = k_valid - c;
             HVX_VectorPred mask = Q6_Q_vsetq2_R(rem > 0 ? rem * sizeof(float) : 0);
             v0 = Q6_V_vmux_QVV(mask, v0, Q6_V_vzero());
             v1 = Q6_V_vmux_QVV(mask, v1, Q6_V_vzero());
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
-            int c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
-            int tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
 
             HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
             tile[r1 / 2]     = v_out;
@@ -868,12 +868,12 @@ static void transfer_activation_chunk_fp32_to_fp16(__fp16 *restrict vtcm_dst, co
 typedef struct {
     __fp16      *dst;
     const float *src;
-    int          n_tasks;
-    int          n_tot_chunks;
-    int          n_chunks_per_task;
-    int          k_block;
-    int          k_stride;
-    int          k_valid;
+    uint32_t     n_tasks;
+    uint32_t     n_tot_chunks;
+    uint32_t     n_chunks_per_task;
+    uint32_t     k_block;
+    uint32_t     k_stride;
+    uint32_t     k_valid;
     struct htp_thread_trace * traces;
     struct htp_context * ctx;
     float              * vtcm_f32_act;
@@ -883,34 +883,34 @@ static void transfer_activation_chunk_fp32_to_fp16_dma_pipelined(
         dma_queue *dma_q,
         __fp16 *restrict vtcm_dst,
         const float *restrict src,
-        int n_rows,
-        int k_block,
-        int k_stride,
-        int k_valid,
+        uint32_t n_rows,
+        uint32_t k_block,
+        uint32_t k_stride,
+        uint32_t k_valid,
         float *thread_f32_act) {
 
-    const int n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
-    const int n_steps       = n_rows_padded / 2;
+    const uint32_t n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
+    const uint32_t n_steps       = n_rows_padded / 2;
 
     // pre-fetch step 0
     if (n_steps > 0 && n_rows > 0) {
-        int nrows_to_fetch = (1 < n_rows) ? 2 : 1;
+        uint32_t nrows_to_fetch = (1 < n_rows) ? 2 : 1;
         dma_queue_push(dma_q, dma_make_ptr(thread_f32_act, src),
                        k_block * sizeof(float), k_stride * sizeof(float), k_valid * sizeof(float), nrows_to_fetch);
     }
 
-    for (int s = 0; s < n_steps; ++s) {
-        int r = 2 * s;
+    for (uint32_t s = 0; s < n_steps; ++s) {
+        uint32_t r = 2 * s;
         float *curr_buf = thread_f32_act + (s % 2) * 2 * k_block;
 
         if (r < n_rows) {
             dma_queue_pop(dma_q);
         }
 
-        int next_s = s + 1;
-        int next_r = 2 * next_s;
+        uint32_t next_s = s + 1;
+        uint32_t next_r = 2 * next_s;
         if (next_r < n_rows) {
-            int nrows_to_fetch = (next_r + 1 < n_rows) ? 2 : 1;
+            uint32_t nrows_to_fetch = (next_r + 1 < n_rows) ? 2 : 1;
             const float *next_src = src + next_r * k_stride;
             float *next_buf = thread_f32_act + (next_s % 2) * 2 * k_block;
             dma_queue_push(dma_q, dma_make_ptr(next_buf, next_src),
@@ -923,7 +923,7 @@ static void transfer_activation_chunk_fp32_to_fp16_dma_pipelined(
         const float *ptr_in0 = curr_buf;
         const float *ptr_in1 = curr_buf + k_block;
 
-        int c = 0;
+        uint32_t c = 0;
         for (; c + 32 <= k_valid; c += 32) {
             HVX_Vector v0 = Q6_V_vzero();
             HVX_Vector v1 = Q6_V_vzero();
@@ -932,10 +932,10 @@ static void transfer_activation_chunk_fp32_to_fp16_dma_pipelined(
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
-            int r0       = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
-            int r1       = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
-            int c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
-            int tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+            uint32_t r0       = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
+            uint32_t r1       = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
 
             HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
             tile[r1 / 2]     = v_out;
@@ -946,17 +946,17 @@ static void transfer_activation_chunk_fp32_to_fp16_dma_pipelined(
             if (row0_valid) v0 = *(const HVX_Vector *)(ptr_in0 + c);
             if (row1_valid) v1 = *(const HVX_Vector *)(ptr_in1 + c);
 
-            int rem = k_valid - c;
+            uint32_t rem = k_valid - c;
             HVX_VectorPred mask = Q6_Q_vsetq2_R(rem > 0 ? rem * sizeof(float) : 0);
             v0 = Q6_V_vmux_QVV(mask, v0, Q6_V_vzero());
             v1 = Q6_V_vmux_QVV(mask, v1, Q6_V_vzero());
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
-            int r0       = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
-            int r1       = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
-            int c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
-            int tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+            uint32_t r0       = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
+            uint32_t r1       = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;  // tile column index
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
 
             HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
             tile[r1 / 2]     = v_out;
@@ -968,19 +968,19 @@ typedef struct {
     const struct mmid_row_mapping  *matrix_rows;
     __fp16                         *dst;
     const float                    *src;
-    int                             n_tasks;
-    int                             n_tot_chunks;
-    int                             n_chunks_per_task;
-    int                             k_block;
-    int                             cur_a;
-    int                             mapping_stride;
-    int                             ne11;
+    uint32_t                        n_tasks;
+    uint32_t                        n_tot_chunks;
+    uint32_t                        n_chunks_per_task;
+    uint32_t                        k_block;
+    uint32_t                        cur_a;
+    uint32_t                        mapping_stride;
+    uint32_t                        ne11;
     struct fastdiv_values           ne11_div;
     size_t                          nb11;
     size_t                          nb12;
-    int                             start_row;
-    int                             cne1;
-    int                             k_valid;
+    uint32_t                        start_row;
+    uint32_t                        cne1;
+    uint32_t                        k_valid;
     struct htp_thread_trace        *traces;
 } activation_transfer_gathered_task_state_t;
 
@@ -988,64 +988,64 @@ typedef struct {
     const struct mmid_row_mapping  *matrix_rows;
     const __fp16                   *vtcm_src;
     float                          *dst;
-    int                             n_tasks;
-    int                             n_tot_chunks;
-    int                             n_chunks_per_task;
-    int                             n_cols;
-    int                             cur_a;
-    int                             mapping_stride;
+    uint32_t                        n_tasks;
+    uint32_t                        n_tot_chunks;
+    uint32_t                        n_chunks_per_task;
+    uint32_t                        n_cols;
+    uint32_t                        cur_a;
+    uint32_t                        mapping_stride;
     size_t                          dst_nb1;
     size_t                          dst_nb2;
-    int                             start_row;
-    int                             cne1;
+    uint32_t                        start_row;
+    uint32_t                        cne1;
     struct htp_thread_trace        *traces;
 } output_transfer_scattered_task_state_t;
 
 static void transfer_activation_chunk_fp32_to_fp16_gathered(
             __fp16 *restrict vtcm_dst,
             const float *restrict src,
-            int start_row,
-            int n_rows,
-            int k_block,
+            uint32_t start_row,
+            uint32_t n_rows,
+            uint32_t k_block,
             const struct mmid_row_mapping *matrix_rows,
-            int cur_a,
-            int mapping_stride,
-            int ne11,
+            uint32_t cur_a,
+            uint32_t mapping_stride,
+            uint32_t ne11,
             const struct fastdiv_values * ne11_div,
             size_t nb11,
             size_t nb12,
-            int cne1,
-            int k_valid) {
-    const int n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
-    const int n_rows_tiled  = (n_rows / HTP_MM_HMX_TILE_N_ROWS) * HTP_MM_HMX_TILE_N_ROWS;
+            uint32_t cne1,
+            uint32_t k_valid) {
+    const uint32_t n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
+    const uint32_t n_rows_tiled  = (n_rows / HTP_MM_HMX_TILE_N_ROWS) * HTP_MM_HMX_TILE_N_ROWS;
 
-    int r = 0;
+    uint32_t r = 0;
 
     #pragma unroll(2)
     for (r = 0; r < n_rows_tiled; r += 2) {
-        int r0 = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
-        int r1 = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
+        uint32_t r0 = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
+        uint32_t r1 = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
 
-        int r_idx0 = start_row + r + 0;
-        int r_idx1 = start_row + r + 1;
+        uint32_t r_idx0 = start_row + r + 0;
+        uint32_t r_idx1 = start_row + r + 1;
 
         struct mmid_row_mapping mapping0 = matrix_rows[cur_a * mapping_stride + r_idx0];
         struct mmid_row_mapping mapping1 = matrix_rows[cur_a * mapping_stride + r_idx1];
 
-        int i11_0 = fastmodulo(mapping0.i1, ne11, ne11_div);
-        int i11_1 = fastmodulo(mapping1.i1, ne11, ne11_div);
+        uint32_t i11_0 = fastmodulo(mapping0.i1, ne11, ne11_div);
+        uint32_t i11_1 = fastmodulo(mapping1.i1, ne11, ne11_div);
 
         const float *row0_ptr = (const float *) ((const uint8_t *) src + i11_0 * nb11 + mapping0.i2 * nb12);
         const float *row1_ptr = (const float *) ((const uint8_t *) src + i11_1 * nb11 + mapping1.i2 * nb12);
 
-        int c = 0;
+        uint32_t c = 0;
         for (; c + 32 <= k_valid; c += 32) {
             HVX_Vector v0 = *(const HVX_Vector *)(row0_ptr + c);
             HVX_Vector v1 = *(const HVX_Vector *)(row1_ptr + c);
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
-            int c0       = c / HTP_MM_HMX_TILE_N_COLS;
-            int tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
 
             HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
             tile[r1 / 2]     = v_out;
@@ -1054,15 +1054,15 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
             HVX_Vector v0 = *(const HVX_Vector *)(row0_ptr + c);
             HVX_Vector v1 = *(const HVX_Vector *)(row1_ptr + c);
 
-            int rem = k_valid - c;
+            uint32_t rem = k_valid - c;
             HVX_VectorPred mask = Q6_Q_vsetq2_R(rem > 0 ? rem * sizeof(float) : 0);
             v0 = Q6_V_vmux_QVV(mask, v0, Q6_V_vzero());
             v1 = Q6_V_vmux_QVV(mask, v1, Q6_V_vzero());
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
-            int c0       = c / HTP_MM_HMX_TILE_N_COLS;
-            int tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
 
             HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
             tile[r1 / 2]     = v_out;
@@ -1070,8 +1070,8 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
     }
 
     for (; r < n_rows_padded; r += 2) {
-        int r0 = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
-        int r1 = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
+        uint32_t r0 = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
+        uint32_t r1 = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
 
         const bool row0_valid = (start_row + r + 0) < cne1;
         const bool row1_valid = (start_row + r + 1) < cne1;
@@ -1081,16 +1081,16 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
 
         if (row0_valid) {
             struct mmid_row_mapping mapping0 = matrix_rows[cur_a * mapping_stride + (start_row + r + 0)];
-            int i11_0 = fastmodulo(mapping0.i1, ne11, ne11_div);
+            uint32_t i11_0 = fastmodulo(mapping0.i1, ne11, ne11_div);
             row0_ptr = (const float *) ((const uint8_t *) src + i11_0 * nb11 + mapping0.i2 * nb12);
         }
         if (row1_valid) {
             struct mmid_row_mapping mapping1 = matrix_rows[cur_a * mapping_stride + (start_row + r + 1)];
-            int i11_1 = fastmodulo(mapping1.i1, ne11, ne11_div);
+            uint32_t i11_1 = fastmodulo(mapping1.i1, ne11, ne11_div);
             row1_ptr = (const float *) ((const uint8_t *) src + i11_1 * nb11 + mapping1.i2 * nb12);
         }
 
-        int c = 0;
+        uint32_t c = 0;
         for (; c + 32 <= k_valid; c += 32) {
             HVX_Vector v0 = Q6_V_vzero();
             HVX_Vector v1 = Q6_V_vzero();
@@ -1099,8 +1099,8 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
-            int c0       = c / HTP_MM_HMX_TILE_N_COLS;
-            int tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
 
             HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
             tile[r1 / 2]     = v_out;
@@ -1111,15 +1111,15 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
             if (row0_valid) v0 = *(const HVX_Vector *)(row0_ptr + c);
             if (row1_valid) v1 = *(const HVX_Vector *)(row1_ptr + c);
 
-            int rem = k_valid - c;
+            uint32_t rem = k_valid - c;
             HVX_VectorPred mask = Q6_Q_vsetq2_R(rem > 0 ? rem * sizeof(float) : 0);
             v0 = Q6_V_vmux_QVV(mask, v0, Q6_V_vzero());
             v1 = Q6_V_vmux_QVV(mask, v1, Q6_V_vzero());
 
             HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
 
-            int c0       = c / HTP_MM_HMX_TILE_N_COLS;
-            int tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
 
             HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
             tile[r1 / 2]     = v_out;
@@ -1130,15 +1130,15 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
 static void transfer_output_chunk_fp16_to_fp32_scattered(
             float *restrict dst,
             const __fp16 *restrict vtcm_src,
-            int start_row,
-            int n_rows,
-            int n_cols,
+            uint32_t start_row,
+            uint32_t n_rows,
+            uint32_t n_cols,
             const struct mmid_row_mapping *matrix_rows,
-            int cur_a,
-            int mapping_stride,
+            uint32_t cur_a,
+            uint32_t mapping_stride,
             size_t dst_nb1,
             size_t dst_nb2,
-            int cne1) {
+            uint32_t cne1) {
     assert(n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
     const size_t tile_row_stride = (n_cols / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -1149,8 +1149,8 @@ static void transfer_output_chunk_fp16_to_fp32_scattered(
         const size_t r1 = (r % HTP_MM_HMX_TILE_N_ROWS) / 2;  // index of the row pair within the tile
         const __fp16 *row_base = vtcm_src + r0 * tile_row_stride;
 
-        int r_idx0 = start_row + (int)r + 0;
-        int r_idx1 = start_row + (int)r + 1;
+        uint32_t r_idx0 = start_row + r + 0;
+        uint32_t r_idx1 = start_row + r + 1;
 
         if (r_idx0 >= cne1) break;
 
