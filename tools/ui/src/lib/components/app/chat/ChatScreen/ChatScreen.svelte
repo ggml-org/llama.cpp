@@ -388,7 +388,7 @@
 	<ServerLoadingSplash />
 {:else}
 	<div
-		class="flex grow flex-col chat-screen min-h-[calc(100dvh-1rem)] px-4"
+		class="flex grow flex-col chat-screen min-h-[calc(100dvh-1rem)] px-4 md:py-0 pt-12 pb-56 md:pb-24"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
@@ -410,8 +410,8 @@
 
 		<div
 			class={[
-				'pointer-events-none sticky right-4 left-4 mt-auto transition-all duration-200',
-				isEmpty ? 'bottom-[calc(50dvh-7rem)]' : 'bottom-4 pt-24 md:pt-32'
+				'pointer-events-none md:sticky fixed right-4 left-4 mt-auto transition-all duration-200',
+				isEmpty ? 'md:bottom-[calc(50dvh-7rem)] bottom-4' : 'bottom-4 pt-24 md:pt-32'
 			]}
 		>
 			<ChatScreenGreeting {isEmpty} />

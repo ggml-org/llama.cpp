@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { PanelLeftClose, PanelLeftOpen } from '@lucide/svelte';
+	import { PanelLeftClose, PanelLeftOpen, X } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		Logo,
@@ -15,6 +15,7 @@
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { RouterService } from '$lib/services/router.service';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { TooltipSide } from '$lib/enums';
 
 	interface Props {
@@ -64,6 +65,9 @@
 	});
 
 	async function selectConversation(id: string) {
+		if (isMobile.current) {
+			isExpandedMode = false;
+		}
 		await goto(RouterService.chat(id));
 	}
 
@@ -92,13 +96,15 @@
 	function handleStopGeneration(id: string) {
 		chatStore.stopGenerationForChat(id);
 	}
+
+	let innerWidth = $state(0);
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} bind:innerWidth />
 
 <aside
-	class="sticky top-2 ml-2 mt-2 h-[calc(100dvh-1.125rem)] py-2 rounded-2xl z-10 hidden flex-col justify-between transition-[width,padding] duration-200 ease-out md:flex {isStripExpanded
-		? 'w-72 bg-muted/60 backdrop-blur-xl border-border shadow-md'
+	class="fixed md:sticky top-2 ml-2 md:mt-2 md:h-[calc(100dvh-1.125rem)] py-2 rounded-2xl z-10 flex flex-col justify-between transition-[width,padding] duration-200 ease-out {isStripExpanded
+		? 'md:w-72 w-[calc(100dvw-1rem)] bg-muted/60 backdrop-blur-xl border-border shadow-md'
 		: 'w-12'}"
 >
 	<div class="px-2 flex items-center justify-between">
@@ -110,10 +116,10 @@
 			onmouseleave={() => (logoHovered = false)}
 		>
 			<ActionIcon
-				icon={isExpandedMode || !logoHovered ? Logo : PanelLeftOpen}
+				icon={(!isExpandedMode && logoHovered) && innerWidth > 768 ?  PanelLeftOpen : Logo}
 				size="lg"
-				iconSize="h-4 w-4"
-				class="h-9 w-9 rounded-full hover:bg-accent!"
+				iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+				class="md:h-9 md:w-9 h-10 w-10 rounded-full hover:bg-accent!"
 				href={isExpandedMode ? ROUTES.START : undefined}
 				onclick={isExpandedMode ? undefined : toggleExpandedMode}
 				tooltip={isExpandedMode ? undefined : 'Open Sidebar'}
@@ -125,10 +131,10 @@
 		{#if isExpandedMode}
 			<div in:fade={{ duration: 150, easing: circIn, delay: 50 }} out:fade={{ duration: 100 }}>
 				<ActionIcon
-					icon={PanelLeftClose}
+					icon={innerWidth > 768 ? PanelLeftClose : X}
 					size="lg"
-					iconSize="h-4 w-4"
-					class="h-9 w-9 rounded-full mr-1 hover:bg-accent!"
+					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+					class="md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 hover:bg-accent!"
 					onclick={toggleExpandedMode}
 					tooltip="Close Sidebar"
 					tooltipSide={TooltipSide.LEFT}
@@ -138,7 +144,7 @@
 		{/if}
 	</div>
 
-	<div class="mt-2 flex min-h-0 flex-1 flex-col gap-1">
+	<div class="mt-2 flex min-h-0 flex-1 flex-col gap-1 ">
 		<SidebarNavigationActions
 			{isExpandedMode}
 			class="px-2"
@@ -151,6 +157,11 @@
 			onSearchClick={() => {
 				isExpandedMode = true;
 				isSearchModeActive = true;
+			}}
+			onNewChat={() => {
+				if (isMobile.current) {
+					isExpandedMode = false;
+				}
 			}}
 		/>
 
@@ -175,3 +186,11 @@
 		{/if}
 	</div>
 </aside>
+
+<style>
+    aside {
+        @media (max-width: 768px) {
+            --size: 1.125rem;
+        }
+    }
+</style>

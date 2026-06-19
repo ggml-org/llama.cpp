@@ -11,8 +11,8 @@
 
 <div
 	class={[
-		'pointer-events-none mb-4 hidden px-4 text-center',
-		isEmpty && 'pointer-events-auto block!'
+		'pointer-events-none mb-4 hidden px-4 text-center text-balance',
+		isEmpty && 'mb-[calc(50dvh-8rem)] md:mb-0 pointer-events-auto block!'
 	]}
 	use:fadeInView={{ duration: 300 }}
 >

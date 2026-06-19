@@ -21,6 +21,7 @@
 		searchQuery: string;
 		onSearchDeactivated?: () => void;
 		onSearchClick?: () => void;
+		onNewChat?: () => void;
 	}
 
 	let {
@@ -29,7 +30,8 @@
 		isSearchModeActive = $bindable(false),
 		searchQuery = $bindable(''),
 		onSearchDeactivated,
-		onSearchClick
+		onSearchClick,
+		onNewChat
 	}: Props = $props();
 
 	let initialized = $state(false);
@@ -92,10 +94,15 @@
 		/>
 	</div>
 {:else if isExpandedMode}
-	<div class="{className} flex flex-col gap-1">
+	<div class="{className} flex flex-col gap-3 mt-2 md:mt-0 md:gap-1">
 		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
-			{@const itemOnClick = item.route ? () => goto(item.route!) : onSearchClick}
+			{@const itemOnClick = item.route
+				? () => {
+						onNewChat?.();
+						goto(item.route!);
+					}
+					: onSearchClick}
 			{@const itemTransition = {
 				duration: ICON_STRIP_TRANSITION_DURATION,
 				delay: !initialized
@@ -136,10 +143,15 @@
 		{/each}
 	</div>
 {:else}
-	<div class="{className} flex flex-col gap-1">
+	<div class="{className} flex-col gap-1 hidden md:flex">
 		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
-			{@const itemOnClick = item.route ? () => goto(item.route!) : onSearchClick}
+			{@const itemOnClick = item.route
+				? () => {
+						onNewChat?.();
+						goto(item.route!);
+					}
+					: onSearchClick}
 			{@const itemTransition = {
 				duration: ICON_STRIP_TRANSITION_DURATION,
 				delay: !initialized

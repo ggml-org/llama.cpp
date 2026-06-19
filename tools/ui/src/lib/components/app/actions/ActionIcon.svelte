@@ -33,6 +33,9 @@
 		onclick,
 		ariaLabel
 	}: Props = $props();
+
+	let innerWidth = $state(0);
+	const showTooltip = $derived(!!tooltip && innerWidth > 768);
 </script>
 
 {#snippet button(props = {})}
@@ -58,7 +61,7 @@
 	</Button>
 {/snippet}
 
-{#if tooltip}
+{#if showTooltip}
 	<Tooltip.Root>
 		<Tooltip.Trigger>
 			<!-- prevent another nested button element -->
@@ -74,3 +77,5 @@
 {:else}
 	{@render button({ href })}
 {/if}
+
+<svelte:window bind:innerWidth />

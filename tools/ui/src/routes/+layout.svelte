@@ -291,13 +291,15 @@
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<div class="flex flex-col md:flex-row">
-		<SidebarNavigation
-			onSearchClick={() => {
-				if (chatSidebar?.activateSearchMode) {
-					chatSidebar.activateSearchMode();
-				}
-			}}
-		/>
+		{#if !page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS)}
+            <SidebarNavigation
+                onSearchClick={() => {
+                				if (chatSidebar?.activateSearchMode) {
+                				chatSidebar.activateSearchMode();
+                				}
+                }}
+            />
+		{/if}
 
 		<div class="flex-1">
 			{@render children?.()}

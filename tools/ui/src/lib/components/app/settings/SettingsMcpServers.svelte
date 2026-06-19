@@ -1,17 +1,19 @@
 <script lang="ts">
-	import { Plus } from '@lucide/svelte';
+	import { X, Plus } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { McpServerCard, McpServerCardSkeleton } from '$lib/components/app/mcp';
+	import { ActionIcon, McpServerCard, McpServerCardSkeleton } from '$lib/components/app';
 	import { DialogMcpServerAddNew } from '$lib/components/app/dialogs';
 	import { HealthCheckStatus } from '$lib/enums';
+	import { ROUTES } from '$lib/constants';
 	import { fade } from 'svelte/transition';
 	import { onMount } from 'svelte';
 	import McpLogo from '../mcp/McpLogo.svelte';
+	import { browser } from '$app/environment';
 	import { page } from '$app/state';
-	import { replaceState } from '$app/navigation';
+	import { goto, replaceState } from '$app/navigation';
 
 	interface Props {
 		class?: string;
@@ -23,6 +25,24 @@
 
 	let initialLoadComplete = $state(false);
 	let isAddingServer = $state(false);
+
+	let previousRouteId = $state<string | null>(null);
+
+	$effect(() => {
+		const currentId = page.route.id;
+		return () => {
+			previousRouteId = currentId;
+		};
+	});
+
+	function handleClose() {
+		const prevIsMcpServers = previousRouteId === '/mcp-servers';
+		if (browser && window.history.length > 1 && !prevIsMcpServers) {
+			history.back();
+		} else {
+			goto(ROUTES.START);
+		}
+	}
 
 	onMount(() => {
 		if (page.url.searchParams.has('add')) {
@@ -55,14 +75,18 @@
 </script>
 
 <div in:fade={{ duration: 150 }}>
-	<div class="sticky top-0 z-10 mt-4 flex items-start gap-4 p-4 md:justify-between md:px-8">
+	<div class="fixed top-4.5 right-4 z-50 md:hidden">
+		<ActionIcon icon={X} tooltip="Close" onclick={handleClose} />
+	</div>
+
+	<div class="sticky top-0 z-10 mt-4 mb-2 flex items-start gap-4 md:p-4 p-0 px-4 md:justify-between md:px-8">
 		<div class="flex items-center gap-2">
 			<McpLogo class="h-5 w-5 md:h-6 md:w-6" />
 
-			<h1 class="text-xl font-semibold md:text-2xl">MCP Servers</h1>
+			<h1 class="text-lg font-semibold md:text-2xl">MCP Servers</h1>
 		</div>
 
-		<Button variant="outline" size="sm" class="shrink-0" onclick={() => (isAddingServer = true)}>
+		<Button variant="outline" class="shrink-0 fixed md:static bottom-4 right-4" onclick={() => (isAddingServer = true)}>
 			<Plus class="h-4 w-4" />
 
 			Add New Server
