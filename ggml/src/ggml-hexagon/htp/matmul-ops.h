@@ -277,7 +277,7 @@ static inline void htp_mm_hmx_get_2d_chunk_costs(
     const uint32_t n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
     const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
 
-    *size_per_n_out = (pipeline ? 2 : 1) * (is_quant ? qweight_row_stride : row_stride) + 
+    *size_per_n_out = (pipeline ? 2 : 1) * (is_quant ? qweight_row_stride : row_stride) +
                       (pipeline ? 2 * vec_dot_size : vec_dot_size);
     *size_per_m_out = vec_dot_size;
     *size_per_mn_out = (pipeline ? 2 : 1) * sizeof(uint16_t);
@@ -315,7 +315,7 @@ static inline size_t htp_mm_hmx_get_2d_vtcm_size(
     size_t scratch1_size = pipeline ? scratch0_size : 0;
     size_t scratch2_size = pipeline ? output_area_size : 0;
 
-    return weight_area_size + act_area_size + act_f32_size + output_area_size + 
+    return weight_area_size + act_area_size + act_f32_size + output_area_size +
            scratch0_size + scratch1_size + scratch2_size + 256;
 }
 
@@ -334,7 +334,7 @@ static inline size_t htp_mm_hmx_get_batched_vtcm_size(
     const size_t output_area_size = htp_mm_align_up(group_size * mc * nc * sizeof(uint16_t), HTP_MM_HMX_TILE_SIZE);
     const size_t scratch_area_size = htp_mm_align_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
 
-    return weight_area_size + act_area_size + output_area_size + 
+    return weight_area_size + act_area_size + output_area_size +
            2 * scratch_area_size + 256 + f32_scratch_size;
 }
 
@@ -388,7 +388,7 @@ static inline size_t htp_mm_hvx_get_vtcm_sizes(
         case HTP_MM_KERNEL_HVX_QUANT_BLOCK:
         case HTP_MM_KERNEL_HVX_QUANT_ROW: {
             size_t q_src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
-            
+
             vtcm_dst_size  = htp_mm_round_up(HTP_MM_VTCM_DST_NROWS * dst_row_size, 256);
             vtcm_src0_size = htp_mm_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
             vtcm_src1_size = htp_mm_round_up(q_src1_row_size * src1_nrows, 256);
@@ -416,7 +416,7 @@ static inline size_t htp_mm_hvx_get_vtcm_sizes(
         }
         case HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT: {
             size_t q_src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
-            
+
             vtcm_dst_size  = htp_mm_round_up(HTP_MM_VTCM_DST_NROWS * dst_row_size, 256);
             vtcm_src0_size = htp_mm_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
             vtcm_src1_size = htp_mm_round_up(q_src1_row_size * src1_nrows, 256);

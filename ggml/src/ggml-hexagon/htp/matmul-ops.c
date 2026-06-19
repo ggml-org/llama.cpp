@@ -1791,7 +1791,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
             n_quant_jobs = MIN(src1_nrows, octx->n_threads);
             quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_flat : quantize_f32_q8_0_flat;
             src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
-            
+
             if (src1_nrows > 1) {
                 switch (src0->type) {
                     case HTP_TYPE_Q4_0:   matmul_job_func = hvx_mm_2d_repacked_q4_0_flat;   break;
@@ -3072,7 +3072,7 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
 
             dequantize_tiled_weight_chunk_to_fp16_tiles(
                 ctx, vtcm_scratch0, vtcm_weight,
-                n_cols, k, row_stride, weight_type, 
+                n_cols, k, row_stride, weight_type,
                 n_k_tiles, n_k_tiles_div, dequant_worker_fn, n_threads
             );
 
