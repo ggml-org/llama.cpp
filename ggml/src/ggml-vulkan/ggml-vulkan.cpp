@@ -2506,6 +2506,14 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
 
     vk::PipelineShaderStageCreateFlags pipeline_shader_stage_create_flags{};
 
+#ifdef __APPLE__
+    if (device->driver_id == vk::DriverId::eMoltenvk) {
+        // MoltenVK reports subgroupSize=64, but when `eAllowVaryingSubgroupSizeEXT` is used, it reports the
+        // actual subgroup size (32).
+        pipeline_shader_stage_create_flags |= vk::PipelineShaderStageCreateFlagBits::eAllowVaryingSubgroupSizeEXT;
+    }
+#endif
+
     if (device->subgroup_require_full_support && require_full_subgroups) {
         pipeline_shader_stage_create_flags |= vk::PipelineShaderStageCreateFlagBits::eRequireFullSubgroupsEXT;
     }
