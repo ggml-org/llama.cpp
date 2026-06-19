@@ -202,7 +202,7 @@ struct cli_context {
 
     // TODO: support remote files in the future (http, https, etc)
     std::string load_input_file(const std::string & fname, bool is_media) {
-        std::ifstream file(fname, std::ios::binary);
+        std::ifstream file = fs_open_ifstream(fname, std::ios::binary);
         if (!file) {
             return "";
         }

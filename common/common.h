@@ -842,6 +842,9 @@ struct common_file_info {
 };
 std::vector<common_file_info> fs_list(const std::string & path, bool include_directories);
 
+// fs open, also handle UTF8 on Windows
+std::ifstream fs_open_ifstream(const std::string & fname, std::ios_base::openmode mode);
+
 //
 // TTY utils
 //
