@@ -2093,8 +2093,7 @@ static void ggml_hexagon_precompute_matmul_params(
 
             int act_threads = n_threads;
             while (act_threads >= 1) {
-                const size_t f32_scratch_size = use_dma_activation
-                    ? hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
+                const size_t f32_scratch_size = use_dma_activation ? hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
                 size_t group_overhead = 256 + f32_scratch_size;
                 size_t group_size_per_n, group_size_per_m, group_size_per_mn;
                 htp_mm_hmx_get_batched_chunk_costs(ne00_padded, group_size, &group_size_per_n, &group_size_per_m, &group_size_per_mn);
@@ -2103,8 +2102,7 @@ static void ggml_hexagon_precompute_matmul_params(
                 size_t n_chunk_candidate = 0;
                 size_t vtcm_size_candidate = 0;
 
-                if (htp_mm_hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn,
-                                       hex_align_up(ne11, 32), ne01,
+                if (htp_mm_hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn, hex_align_up(ne11, 32), ne01,
                                        (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
                     size_t exact_size = htp_mm_hmx_get_batched_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, group_size, use_dma_activation, pipeline, act_threads);
                     if (exact_size <= vtcm_budget) {
@@ -2161,8 +2159,7 @@ static void ggml_hexagon_precompute_matmul_params(
                 size_t n_chunk_candidate = 0;
                 size_t vtcm_size_candidate = 0;
 
-                if (htp_mm_hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn,
-                                       m_for_chunks, ne01,
+                if (htp_mm_hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn, m_for_chunks, ne01,
                                        (size_t) ne01 * 3, (size_t) m_for_cost * 2, &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
                     size_t exact_size = htp_mm_hmx_get_2d_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, pipeline, is_matmul_id ? 0 : act_threads, aligned_tile_size);
                     if (exact_size <= vtcm_budget) {
@@ -2261,8 +2258,7 @@ fallback_hvx:
                     kparams->vtcm_dst_size = vtcm_dst_size;
                     goto done_quant;
                 }
-                GGML_LOG_DEBUG("ggml-hex: HVX Tiled path VTCM size needed (%zu) > budget (%zu), falling back to HVX Flat\n",
-                               total_size, vtcm_budget);
+                HEX_VERBOSE("ggml-hex: %s HVX tiled path VTCM size needed (%zu) > budget (%zu), falling back to HVX flat\n", sess->name.c_str(), total_size, vtcm_budget);
             }
 
             // Flat HVX fallback
@@ -2514,10 +2510,6 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 return false;
             }
 
-            if (ggml_nrows(src0) > 16 * 1024) {
-                return false;  // typically the lm-head which would be too large for VTCM
-            }
-
             if (src1->ne[2] != 1 || src1->ne[3] != 1) {
                 return false;  // no broadcasting (for now)
             }
@@ -2530,11 +2522,9 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
 
         case GGML_TYPE_F16:
             if (src0->nb[1] < src0->nb[0]) {
-                GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: permuted F16 src0 not supported\n");
                 return false;
             }
             if (src1->ne[2] < src0->ne[2] || src1->ne[3] < src0->ne[3]) {
-                GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: src1 broadcasting not supported\n");
                 return false;
             }
             break;
@@ -2544,11 +2534,9 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 return false;
             }
             if (src0->nb[1] < src0->nb[0]) {
-                GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: permuted F32 src0 not supported\n");
                 return false;
             }
             if (src1->ne[2] < src0->ne[2] || src1->ne[3] < src0->ne[3]) {
-                GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: src1 broadcasting not supported\n");
                 return false;
             }
             break;
@@ -2560,8 +2548,7 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
     struct htp_mm_kernel_params kparams;
     ggml_hexagon_precompute_matmul_params(sess, src0, src1, dst, &kparams);
     if ((size_t)kparams.vtcm_size > sess->vtcm_size) {
-        GGML_LOG_DEBUG("ggml-hex: supported_mul_mat VTCM size needed (%d) > budget (%zu)\n",
-                       kparams.vtcm_size, sess->vtcm_size);
+        HEX_VERBOSE("ggml-hex: %s supported MUL_MAT VTCM size needed (%d) > budget (%zu)\n", sess->c_name(), kparams.vtcm_size, sess->vtcm_size);
         return false;
     }
 
@@ -2601,8 +2588,7 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
     struct htp_mm_kernel_params kparams;
     ggml_hexagon_precompute_matmul_params(sess, src0, src1, dst, &kparams);
     if ((size_t)kparams.vtcm_size > sess->vtcm_size) {
-        GGML_LOG_DEBUG("ggml-hex: supported_mul_mat_id VTCM size needed (%d) > budget (%zu)\n",
-                       kparams.vtcm_size, sess->vtcm_size);
+        HEX_VERBOSE("ggml-hex: %s supported MUL_MAT_ID VTCM size needed (%d) > budget (%zu)\n", sess->c_name(), kparams.vtcm_size, sess->vtcm_size);
         return false;
     }
 
