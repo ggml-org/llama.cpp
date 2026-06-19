@@ -204,6 +204,10 @@ jobs:
         id: build_date
         run: echo "date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_OUTPUT
 
+      - name: Get build number
+        id: build_number
+        run: echo "value=b$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Free Disk Space (Ubuntu)
         if: ${{ matrix.config.free_disk_space == true }}
         uses: ggml-org/free-disk-space@v1.3.1
@@ -234,6 +238,7 @@ jobs:
           provenance: false
           build-args: |
             BUILD_DATE=${{ steps.build_date.outputs.date }}
+            BUILD_NUMBER=${{ steps.build_number.outputs.value }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
             APP_REVISION=${{ steps.checkout.outputs.commit }}
             IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
@@ -271,6 +276,7 @@ jobs:
           provenance: false
           build-args: |
             BUILD_DATE=${{ steps.build_date.outputs.date }}
+            BUILD_NUMBER=${{ steps.build_number.outputs.value }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
             APP_REVISION=${{ steps.checkout.outputs.commit }}
             IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
@@ -308,6 +314,7 @@ jobs:
           provenance: false
           build-args: |
             BUILD_DATE=${{ steps.build_date.outputs.date }}
+            BUILD_NUMBER=${{ steps.build_number.outputs.value }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
             APP_REVISION=${{ steps.checkout.outputs.commit }}
             IMAGE_URL=${{ github.server_url }}/${{ github.repository }}

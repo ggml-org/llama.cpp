@@ -5,6 +5,20 @@ ARG APP_REVISION=N/A
 
 ## Build Image
 
+ARG NODE_VERSION=24
+
+FROM docker.io/node:$NODE_VERSION AS web
+
+ARG BUILD_NUMBER
+
+WORKDIR /app/tools/ui
+
+COPY tools/ui/package.json tools/ui/package-lock.json ./
+RUN npm ci
+
+COPY tools/ui/ ./
+RUN LLAMA_BUILD_NUMBER="$BUILD_NUMBER" npm run build
+
 FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 
 ARG GGML_SYCL_F16=ON
@@ -21,6 +35,8 @@ RUN apt-get update && \
 WORKDIR /app
 
 COPY . .
+
+COPY --from=web /app/tools/ui/dist tools/ui/dist
 
 RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
         echo "GGML_SYCL_F16 is set" \
