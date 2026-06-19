@@ -10,7 +10,7 @@
 		disabled?: boolean;
 		icon: Component;
 		iconSize?: string;
-		onclick: (e?: MouseEvent) => void;
+		onclick?: (e?: MouseEvent) => void;
 		size?: ButtonSize;
 		stopPropagationOnClick?: boolean;
 		tooltip: string;
@@ -37,24 +37,25 @@
 	<Tooltip.Trigger>
 		<!-- prevent another nested button element -->
 		{#snippet child({ props })}
-			<Button
+ 			<Button
 				{...props}
 				{variant}
 				{size}
 				{disabled}
 				onclick={(e: MouseEvent) => {
-					if (stopPropagationOnClick) e.stopPropagation();
+   					if (stopPropagationOnClick) e.stopPropagation();
 
-					onclick?.(e);
+   					onclick?.(e);
 				}}
 				class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
 				aria-label={ariaLabel || tooltip}
-			>
+ 			>
 				{#if icon}
-					{@const IconComponent = icon}
-					<IconComponent class={iconSize} />
+   					{@const IconComponent = icon}
+
+   					<IconComponent class={iconSize} />
 				{/if}
-			</Button>
+ 			</Button>
 		{/snippet}
 	</Tooltip.Trigger>
 

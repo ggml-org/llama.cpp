@@ -1,9 +1,12 @@
 <script lang="ts">
-	import { Button } from '$lib/components/ui/button/index.js';
+	import { Button } from '$lib/components/ui/button';
 	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import type { ComponentProps } from 'svelte';
 	import { useSidebar } from './context.svelte.js';
 	import { PanelLeftClose } from '@lucide/svelte';
+	import { Logo } from '$lib/components/app/misc';
+	import { TooltipSide } from '$lib/enums/ui.enums.js';
+	import { ActionIcon } from '$lib/components/app';
 
 	let {
 		ref = $bindable(null),
@@ -15,6 +18,7 @@
 	} = $props();
 
 	const sidebar = useSidebar();
+	let isHovered = $state(false);
 </script>
 
 <Button
@@ -32,12 +36,16 @@
 		onclick?.(e);
 		sidebar.toggle();
 	}}
+	onmouseenter={() => (isHovered = true)}
+	onmouseleave={() => (isHovered = false)}
 	{...restProps}
 >
-	{#if sidebar.open}
-		<PanelLeftClose />
-	{:else}
-		<PanelLeftIcon />
-	{/if}
-	<span class="sr-only">Toggle Sidebar</span>
+    <ActionIcon
+		icon={sidebar.open ? PanelLeftClose : isHovered ? PanelLeftIcon : Logo}
+		tooltip={!sidebar.open ? 'Open sidebar' : 'Close sidebar'}
+		tooltipSide={TooltipSide.RIGHT}
+		size="lg"
+		iconSize="h-4 w-4"
+		class="h-9 w-9 rounded-full hover:bg-accent!"
+	/>
 </Button>

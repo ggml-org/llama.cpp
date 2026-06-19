@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { Trash2, Pencil, Pin, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { DialogConfirmation } from '$lib/components/app';
+	import { DialogConfirmation, Logo } from '$lib/components/app';
 	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -182,9 +182,10 @@
 		<Sidebar.Header class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2">
 			<div class="flex items-center justify-between">
 				<a href={ROUTES.START} onclick={handleMobileSidebarItemClick}>
-					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">
+					<!-- <h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">
 						{APP_NAME}
-					</h1>
+					</h1> -->
+					<Logo class="sticky top-4 h-4.5 ml-2 mt-1.25" />
 				</a>
 
 				<Button
