@@ -75,15 +75,28 @@ class MiniMaxM3Model(TextModel):
         self.gguf_writer.add_expert_shared_count(self.find_hparam(["n_shared_experts"]))
         self.gguf_writer.add_expert_weights_scale(self.find_hparam(["routed_scaling_factor"]))
         self.gguf_writer.add_expert_weights_norm(True)
-        sac = self.find_hparam(["sparse_attention_config"])
+        sac = self.hparams.get("sparse_attention_config")
+        if sac is None:
+           sac = (self.hparams.get("text_config") or {}).get("sparse_attention_config")
+        if sac is None:
+            import json, os
+            with open(os.path.join(self.dir_model, "config.json")) as f:
+                sac = json.load(f)["text_config"]["sparse_attention_config"]
         # reuse existing indexer keys (map to hparams.indexer_n_head / head_size / top_k)
-        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.HEAD_COUNT.format(arch=self.arch),   sac["sparse_num_index_heads"])
-        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.KEY_LENGTH.format(arch=self.arch),   sac["sparse_index_dim"])
-        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.TOP_K.format(arch=self.arch),        sac["sparse_topk_blocks"])
-        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.BLOCK_SIZE.format(arch=self.arch),   sac["sparse_block_size"])
-        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.LOCAL_BLOCKS.format(arch=self.arch), sac["sparse_local_block"])
+        arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
+        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.HEAD_COUNT.format(arch=arch),   sac["sparse_num_index_heads"])
+        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.KEY_LENGTH.format(arch=arch),   sac["sparse_index_dim"])
+        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.TOP_K.format(arch=arch),        sac["sparse_topk_blocks"])
+        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.BLOCK_SIZE.format(arch=arch),   sac["sparse_block_size"])
+        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.LOCAL_BLOCKS.format(arch=arch), sac["sparse_local_block"])
         # leading dense layers = count of leading zeros in moe_layer_freq
-        moe_layer_freq = self.find_hparam(["moe_layer_freq"])
+        moe_layer_freq = self.hparams.get("moe_layer_freq")
+        if moe_layer_freq is None:
+            moe_layer_freq = (self.hparams.get("text_config") or {}).get("moe_layer_freq")
+        if moe_layer_freq is None:
+            import json, os
+            with open(os.path.join(self.dir_model, "config.json")) as f:
+                moe_layer_freq = json.load(f)["text_config"]["moe_layer_freq"]
         n_dense = 0
         for v in moe_layer_freq:
             if v == 0:
