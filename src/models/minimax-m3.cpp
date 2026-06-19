@@ -1,4 +1,5 @@
 #include "models.h"
+#include "llama-kv-cache.h"
 #include <cmath>
 #include <vector>
 #include <algorithm>
@@ -86,10 +87,10 @@ static inline void msa_fill_mask(
         const float * iq, const float * ik, const int32_t * pos,
         int Hd, int S, int D, int64_t n_kv,
         int blk, int topk_blocks, int local,
-        int ith, int nth) {
+        int ith, int nth, int64_t key_len ) {
 
     const float NEG = -INFINITY, POS = INFINITY;
-    const int nblk = (S + blk - 1) / blk;
+    const int nblk = (n_kv + blk - 1)/blk;   
     const int topk = topk_blocks < nblk ? topk_blocks : nblk;
 
     std::vector<float> bs(nblk);
@@ -103,7 +104,8 @@ static inline void msa_fill_mask(
         for (int bk = 0; bk < nblk; ++bk) {
             float m = NEG;
             const int j0 = bk * blk;
-            const int j1 = (bk + 1) * blk < S ? (bk + 1) * blk : S;
+            if (j0 >= (int) key_len) { bs[bk] = NEG; continue; }
+            const int j1 = std::min((bk + 1) * blk, (int) key_len);
             for (int j = j0; j < j1; ++j) {
                 if (j > pi) break;                       // keys in order; rest of block is future
                 const float * k = ik + (size_t) j * D;
@@ -135,7 +137,8 @@ static inline void msa_fill_mask(
             const int bk = ord[t];
             if (bs[bk] == NEG) break;                    // fewer real blocks than topk
             const int j0 = bk * blk;
-            const int j1 = (bk + 1) * blk < S ? (bk + 1) * blk : S;
+            if (j0 >= (int) key_len) continue;
+            const int j1 = std::min((bk + 1) * blk, (int) key_len);
             for (int j = j0; j < j1; ++j)
                 if (j <= pi) col[(int64_t) j * dst_skey] = 0.f;
         }
@@ -153,13 +156,22 @@ static void msa_block_mask_op(struct ggml_tensor * dst, int ith, int nth, void *
     const int     S    = iq->ne[2];
     const int64_t n_kv = dst->ne[0];
 
-    GGML_ASSERT(ik->ne[0] == D && ik->ne[1] == 1 && ik->ne[2] == S);
+    GGML_ASSERT(ik->ne[0] == D && ik->ne[1] == 1);   // ne[2] is n_kv (history), not S
+    GGML_ASSERT(ggml_is_contiguous(ik));             // raw j*D indexing needs contiguity
     GGML_ASSERT(dst->ne[1] == (int64_t) S);
-    GGML_ASSERT(ggml_is_contiguous(dst));               // dst(j,i) at j + n_kv*i
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(dst->ne[1] == iq->ne[2]);   // queries axis must match (this is the suspect)
+    const int64_t key_len = n_kv;      // keys actually present this batch
+    if (ith == 0) {
+        fprintf(stderr, "msa: dst ne=[%lld,%lld,%lld,%lld] iq ne=[%lld,%lld,%lld] n_kv(dst.ne0)=%lld\n",
+                (long long)dst->ne[0],(long long)dst->ne[1],(long long)dst->ne[2],(long long)dst->ne[3],
+                (long long)iq->ne[0],(long long)iq->ne[1],(long long)iq->ne[2],
+                (long long)dst->ne[0]);
+    }
 
     msa_fill_mask((float *) dst->data, /*dst_skey=*/1, /*dst_squery=*/dst->ne[0],
                   (const float *) iq->data, (const float *) ik->data, (const int32_t *) pos->data,
-                  Hd, S, D, n_kv, p->blk, p->topk_blocks, p->local, ith, nth);
+                  Hd, S, D, n_kv, p->blk, p->topk_blocks, p->local, ith, nth, key_len);
 }
 
 llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
@@ -238,11 +250,16 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                 ik = ggml_rope_ext(ctx0, ik, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
                                    freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
 
-                const int64_t n_kv = inp_attn->get_kq_mask()->ne[0];       // CONFIRM accessor name
-                ggml_tensor * srcs[3] = { iq, ik, inp_pos };
+                const auto * mctx_cur = inp_attn->mctx;
+                const auto & k_idxs   = inp_attn->get_k_idxs();
+                ggml_build_forward_expand(gf, mctx_cur->cpy_k_idx(ctx0, ik, k_idxs, il));
+                ggml_tensor * ik_kv = mctx_cur->get_k_idx(ctx0, il);      // [128,1,n_kv,1]
+
+                const int64_t n_kv = inp_attn->get_kq_mask()->ne[0];
+                ggml_tensor * srcs[3] = { iq, ik_kv, inp_pos };
                 kq_b = ggml_custom_4d(ctx0, GGML_TYPE_F32, n_kv, n_tokens, 1, 1,
-                                      srcs, 3, msa_block_mask_op, GGML_N_TASKS_MAX, (void *) &mm.msa_p);
-                cb(kq_b, "msa_kq_b", il);                                  // cb'd so rung-2 can diff it
+                                      srcs, 3, msa_block_mask_op, GGML_N_TASKS_MAX, const_cast<msa_params *>(&mm.msa_p));
+                cb(kq_b, "msa_kq_b", il);
             }
 
             cur = build_attn(inp_attn,
