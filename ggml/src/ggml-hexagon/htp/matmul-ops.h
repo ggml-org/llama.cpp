@@ -66,11 +66,11 @@ enum htp_mm_kernel_type {
 // Op-specific struct for precomputed matmul params
 struct htp_mm_kernel_params {
     int32_t  kernel_type;        // enum htp_mm_kernel_type
-    int32_t  n_hmx;              // 1 = use HMX, 0 = use HVX
-    int32_t  use_pipeline;       // 1 = pipelined execution, 0 = standard
+    int32_t  pipeline;           // 1 = pipelined execution, 0 = standard
     int32_t  m_chunk;            // Row chunk size (M chunk)
     int32_t  n_chunk;            // Col chunk size (N chunk)
-    int32_t  num_threads;        // Number of threads to spawn
+    int32_t  n_threads;          // Number of threads to spawn
+    int32_t  n_hmx;              // 1 = use HMX, 0 = use HVX
     int32_t  tile_size;          // Weight tile size
     int32_t  aligned_tile_size;  // Aligned weight tile size (padded to 128)
     int32_t  src1_row_size;      // Row size for quantized activation
@@ -263,12 +263,12 @@ static inline size_t htp_mm_align_up(size_t n, size_t m) {
     return ((n + m - 1) / m) * m;
 }
 
-static inline bool htp_mm_hmx_use_pipeline(int m) {
+static inline bool htp_mm_hmx_pipeline(int m) {
     return m > 32;
 }
 
 static inline void htp_mm_hmx_get_2d_chunk_costs(
-    int wtype, int k, bool use_pipeline, int aligned_tile_size,
+    int wtype, int k, bool pipeline, int aligned_tile_size,
     size_t * size_per_n_out, size_t * size_per_m_out, size_t * size_per_mn_out
 ) {
     const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32);
@@ -277,10 +277,10 @@ static inline void htp_mm_hmx_get_2d_chunk_costs(
     const int n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
     const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
 
-    *size_per_n_out = (use_pipeline ? 2 : 1) * (is_quant ? qweight_row_stride : row_stride) + 
-                      (use_pipeline ? 2 * vec_dot_size : vec_dot_size);
+    *size_per_n_out = (pipeline ? 2 : 1) * (is_quant ? qweight_row_stride : row_stride) + 
+                      (pipeline ? 2 * vec_dot_size : vec_dot_size);
     *size_per_m_out = vec_dot_size;
-    *size_per_mn_out = (use_pipeline ? 2 : 1) * sizeof(uint16_t);
+    *size_per_mn_out = (pipeline ? 2 : 1) * sizeof(uint16_t);
 }
 
 static inline void htp_mm_hmx_get_batched_chunk_costs(
@@ -294,7 +294,7 @@ static inline void htp_mm_hmx_get_batched_chunk_costs(
 }
 
 static inline size_t htp_mm_hmx_get_2d_vtcm_size(
-    int wtype, int k, size_t mc, size_t nc, bool use_pipeline, int act_threads, int aligned_tile_size
+    int wtype, int k, size_t mc, size_t nc, bool pipeline, int act_threads, int aligned_tile_size
 ) {
     const int n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
     const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32);
@@ -305,25 +305,25 @@ static inline size_t htp_mm_hmx_get_2d_vtcm_size(
     size_t weight_area_size = is_quant
         ? htp_mm_align_up((nc / 32) * n_k_tiles * aligned_tile_size, HTP_MM_HMX_TILE_SIZE)
         : htp_mm_align_up(nc * row_stride, HTP_MM_HMX_TILE_SIZE);
-    if (use_pipeline) {
+    if (pipeline) {
         weight_area_size *= 2;
     }
     const size_t act_area_size    = htp_mm_align_up(mc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
     const size_t output_area_size = htp_mm_align_up(mc * nc * sizeof(uint16_t), HTP_MM_HMX_TILE_SIZE);
 
     size_t scratch0_size = htp_mm_align_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
-    size_t scratch1_size = use_pipeline ? scratch0_size : 0;
-    size_t scratch2_size = use_pipeline ? output_area_size : 0;
+    size_t scratch1_size = pipeline ? scratch0_size : 0;
+    size_t scratch2_size = pipeline ? output_area_size : 0;
 
     return weight_area_size + act_area_size + act_f32_size + output_area_size + 
            scratch0_size + scratch1_size + scratch2_size + 256;
 }
 
 static inline size_t htp_mm_hmx_get_batched_vtcm_size(
-    int wtype, int k, size_t mc, size_t nc, int group_size, bool use_dma_activation, bool use_pipeline, int act_threads
+    int wtype, int k, size_t mc, size_t nc, int group_size, bool use_dma_activation, bool pipeline, int act_threads
 ) {
     (void)wtype;
-    (void)use_pipeline;
+    (void)pipeline;
     const size_t vec_dot_size = k * sizeof(uint16_t);
     const size_t f32_scratch_size = use_dma_activation
         ? htp_mm_align_up(act_threads * 4 * k * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;

@@ -2252,8 +2252,8 @@ static void ggml_hexagon_precompute_matmul_params(
 
     if (hmx_eligible) {
         const int aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
-        const bool use_pipeline = is_matmul_id ? false : htp_mm_hmx_use_pipeline(ne11);
-        const int num_threads = (is_matmul_id ? (ne12 <= 32) : (ne11 <= 32)) ? 1 : (int)sess->n_threads;
+        const bool pipeline = is_matmul_id ? false : htp_mm_hmx_pipeline(ne11);
+        const int n_threads = (is_matmul_id ? (ne12 <= 32) : (ne11 <= 32)) ? 1 : (int)sess->n_threads;
 
         const bool is_batched_val = is_matmul_id ? false : is_batched;
         const int group_size = (ne02 > 0 ? ne12 / ne02 : 1);
@@ -2273,7 +2273,7 @@ static void ggml_hexagon_precompute_matmul_params(
             size_t best_n_chunk = 0;
             size_t best_vtcm_size = 0;
 
-            int act_threads = num_threads;
+            int act_threads = n_threads;
             while (act_threads >= 1) {
                 const size_t f32_scratch_size = use_dma_activation
                     ? hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
@@ -2288,7 +2288,7 @@ static void ggml_hexagon_precompute_matmul_params(
                 if (htp_mm_hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn,
                                        hex_align_up(ne11, 32), ne01,
                                        (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
-                    size_t exact_size = htp_mm_hmx_get_batched_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, group_size, use_dma_activation, use_pipeline, act_threads);
+                    size_t exact_size = htp_mm_hmx_get_batched_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, group_size, use_dma_activation, pipeline, act_threads);
                     if (exact_size <= vtcm_budget) {
                         size_t mblocks = ((size_t) ne11 + m_chunk_candidate - 1) / m_chunk_candidate;
                         if (mblocks < best_mblocks || (mblocks == best_mblocks && act_threads > best_act_threads)) {
@@ -2327,12 +2327,12 @@ static void ggml_hexagon_precompute_matmul_params(
             const int m_for_chunks = is_matmul_id ? hex_align_up(ne12, 32) : hex_align_up(ne11, 32);
             const int m_for_cost   = is_matmul_id ? ne12 : ne11;
 
-            int act_threads = num_threads;
+            int act_threads = n_threads;
             while (act_threads >= 1) {
                 const size_t act_f32_size = is_matmul_id ? 0 : hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HTP_MM_HMX_TILE_SIZE);
                 size_t simple_2d_overhead = 256 + act_f32_size;
                 size_t simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn;
-                htp_mm_hmx_get_2d_chunk_costs(wtype, ne00_padded, use_pipeline, aligned_tile_size, &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
+                htp_mm_hmx_get_2d_chunk_costs(wtype, ne00_padded, pipeline, aligned_tile_size, &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
 
                 size_t m_chunk_candidate = 0;
                 size_t n_chunk_candidate = 0;
@@ -2341,7 +2341,7 @@ static void ggml_hexagon_precompute_matmul_params(
                 if (htp_mm_hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn,
                                        m_for_chunks, ne01,
                                        (size_t) ne01 * 3, (size_t) m_for_cost * 2, &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
-                    size_t exact_size = htp_mm_hmx_get_2d_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, use_pipeline, is_matmul_id ? 0 : act_threads, aligned_tile_size);
+                    size_t exact_size = htp_mm_hmx_get_2d_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, pipeline, is_matmul_id ? 0 : act_threads, aligned_tile_size);
                     if (exact_size <= vtcm_budget) {
                         size_t mblocks = ((size_t) m_for_cost + m_chunk_candidate - 1) / m_chunk_candidate;
                         if (mblocks < best_mblocks || (mblocks == best_mblocks && act_threads > best_act_threads)) {
@@ -2371,10 +2371,10 @@ static void ggml_hexagon_precompute_matmul_params(
         }
 
         kparams->n_hmx = 1;
-        kparams->use_pipeline = use_pipeline ? 1 : 0;
+        kparams->pipeline = pipeline ? 1 : 0;
         kparams->m_chunk = m_chunk;
         kparams->n_chunk = n_chunk;
-        kparams->num_threads = num_threads;
+        kparams->n_threads = n_threads;
         kparams->act_threads = act_threads_selected;
         kparams->tile_size = htp_mm_get_weight_tile_size(wtype);
         kparams->aligned_tile_size = aligned_tile_size;
