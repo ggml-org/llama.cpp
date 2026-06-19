@@ -185,7 +185,7 @@
 					<!-- <h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">
 						{APP_NAME}
 					</h1> -->
-					<Logo class="sticky top-4 h-4.5 ml-2 mt-1.25" />
+					<Logo class="sticky top-4 ml-2 mt-1.25" --size="1.125rem" />
 				</a>
 
 				<Button

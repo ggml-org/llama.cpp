@@ -34,6 +34,13 @@ export const FAVICON_PATHS = {
 	SVG_DARK: 'favicon-dark.svg'
 } as const;
 
+// Substituted for `currentColor` in src/lib/assets/logo.svg when generating
+// the light/dark static sources consumed by the PWA asset generator.
+export const FAVICON_COLORS = {
+	LIGHT: '#111111',
+	DARK: '#fafafa'
+} as const;
+
 export const FAVICON_SELECTORS = {
 	ICO_48X48: 'link[rel="icon"][sizes="48x48"]',
 	SVG_ANY: 'link[rel="icon"][type="image/svg+xml"]'

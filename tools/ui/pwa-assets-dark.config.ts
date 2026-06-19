@@ -1,4 +1,8 @@
 import { defineConfig } from '@vite-pwa/assets-generator/config';
+import { FAVICON_COLORS } from './src/lib/constants/pwa';
+import { writeThemeFavicons } from './scripts/favicon-colorize';
+
+writeThemeFavicons(FAVICON_COLORS.LIGHT, FAVICON_COLORS.DARK);
 
 export default defineConfig({
 	headLinkOptions: {
