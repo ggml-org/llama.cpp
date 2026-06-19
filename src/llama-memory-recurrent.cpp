@@ -186,7 +186,9 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                     cell.pos = p0 - 1;
                     return true;
                 }
-                return false;
+                // rollback exceeds snapshot capacity - reset rs_idx to current state
+                // and fall through to normal cell removal below instead of failing
+                set_rs_idx(seq_id, 0);
             }
             // invalidate tails which will be cleared
             if (p0 <= cell.pos && cell.pos < p1) {

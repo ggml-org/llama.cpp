@@ -170,8 +170,9 @@ void llama_memory_hybrid::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p
 }
 
 llama_pos llama_memory_hybrid::seq_pos_min(llama_seq_id seq_id) const {
-    // the min of the total cache is the max of the two caches' min values
-    return std::max(mem_attn->seq_pos_min(seq_id), mem_recr->seq_pos_min(seq_id));
+    // return only the attention cache's minimum position
+    // recurrent cache has one cell per sequence, so its pos_min == pos_max == current state position
+    return mem_attn->seq_pos_min(seq_id);
 }
 
 llama_pos llama_memory_hybrid::seq_pos_max(llama_seq_id seq_id) const {

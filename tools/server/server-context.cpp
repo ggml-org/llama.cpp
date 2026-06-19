@@ -2909,6 +2909,8 @@ private:
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, pos_next - n_swa - (has_new_tokens ? 0 : 1));
 
+                            const bool is_hybrid = llama_model_is_hybrid(model_tgt);
+
                             if (n_past > 0 && n_past <= slot.prompt.n_tokens()) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
                                 if (pos_min == -1) {
@@ -2968,8 +2970,12 @@ private:
                                             // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
                                             LOG_INF("slot %12.*s: id %2d | task %d | Checking checkpoint with [%d, %d] against %d...\n", 12,
                                                 func_name, (slot).id, ((slot).task ? (slot).task->id : -1), cur.pos_min, cur.pos_max, pos_min_thold);
-                                            // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
-                                            if (cur.pos_max > pos_next) {
+                                            // for hybrid models, allow checkpoints that extend beyond pos_next (will be trimmed)
+                                            if (!is_hybrid && cur.pos_max > pos_next) {
+                                                return false;
+                                            }
+                                            // checkpoint must have some valid overlap with the new prompt
+                                            if (cur.pos_min >= pos_next) {
                                                 return false;
                                             }
                                             return cur.pos_min < pos_min_thold || cur.pos_min == 0;
@@ -2983,27 +2989,67 @@ private:
                                         it->load_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         it->load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
-                                        pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
+                                        // for hybrid models, if checkpoint extends beyond pos_next, use pos_next (from LCP)
+                                        // the excess positions will be cleared later; don't let pos_next jump to checkpoint's pos_max
+                                        if (!(is_hybrid && it->pos_max > pos_next)) {
+                                            pos_next = it->pos_max;
+                                        }
                                         n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
                                         SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
                                     }
 
                                     if (do_reset) {
-                                        SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
+                                        // Hybrid memory models can have inflated pos_min from stale recurrent state
+                                        // even when valid attention cache prefix exists. If n_past > 0, reuse it.
+                                        if (n_past <= 0) {
+                                            SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
                                                 "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
-                                        pos_next = 0;
-                                        n_past = 0;
+                                            pos_next = 0;
+                                            n_past = 0;
+                                        }
                                     }
                                 }
-                            }
 
-                            {
-                                // erase any checkpoints with pos_max > pos_next
+                                // For hybrid memory models, clear stale recurrent state beyond the common prefix.
+                                // Run after checkpoint restore/reset so n_past reflects final state.
+                                if (is_hybrid && n_past > 0 && n_past < slot.task->n_tokens()) {
+                                    const auto recr_pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
+                                    if (recr_pos_max > (llama_pos) n_past) {
+                                        SLT_WRN(slot, "clearing stale recurrent state beyond n_past = %d (recr_pos_max = %d)\n", n_past, recr_pos_max);
+                                        llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, n_past, -1);
+                                    }
+                                }
+
+                                // trim or erase checkpoints with pos_max > pos_next
+                                // for hybrid models, if the checkpoint has a large valid prefix (pos_min < pos_next),
+                                // trim it instead of erasing
+                                auto seq_rm_both = [&](llama_pos begin, llama_pos end) {
+                                    common_context_seq_rm(ctx_tgt, slot.id, begin, end);
+                                    if (ctx_dft) {
+                                        common_context_seq_rm(ctx_dft.get(), slot.id, begin, end);
+                                    }
+                                };
+
                                 for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
                                     const auto & cur = *it;
                                     if (cur.pos_max > pos_next) {
-                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.size() / 1024 / 1024);
-                                        it = slot.prompt.checkpoints.erase(it);
+                                        // for hybrid models, keep checkpoints with significant valid prefix
+                                        if (is_hybrid && cur.pos_min < (llama_pos) pos_next) {
+                                            llama_pos overlap = (llama_pos) pos_next - cur.pos_min;
+                                            llama_pos overhang = cur.pos_max - (llama_pos) pos_next;
+                                            SLT_WRN(slot, "Trimming checkpoint [%d,%d]→[%d,%d], valid=%d tokens, discarding %d\n",
+                                                    cur.pos_min, cur.pos_max, cur.pos_min, (llama_pos) pos_next - 1, overlap, overhang);
+                                            // clear the excess KV cache positions that are no longer valid
+                                            seq_rm_both(pos_next, cur.pos_max + 1);
+                                            // update checkpoint metadata to reflect trimmed range
+                                            it->pos_max = pos_next - 1;
+                                            it->n_tokens = pos_next;
+                                            ++it;
+                                        } else {
+                                            SLT_WRN(slot, "Erasing checkpoint [%d,%d] (no valid overlap with pos_next=%d)\n",
+                                                    cur.pos_min, cur.pos_max, (int) pos_next);
+                                            it = slot.prompt.checkpoints.erase(it);
+                                        }
                                     } else {
                                         ++it;
                                     }
