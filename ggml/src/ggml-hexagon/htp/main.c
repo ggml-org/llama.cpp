@@ -514,10 +514,10 @@ AEEResult htp_iface_hwinfo(remote_handle64 handle, uint32_t * n_threads, uint32_
         n_hvx_val = HTP_MAX_NTHREADS;
     }
 
+    // for now we force n_threads == n_hvx
     *n_threads = n_hvx_val;
     *n_hvx     = n_hvx_val;
-
-    *n_hmx = 1;
+    *n_hmx     = 1;
 
     uint32_t vtcm_sz = 8 * 1024 * 1024; // 8MB default fallback
     HAP_compute_res_query_VTCM(0, (unsigned int *)&vtcm_sz, NULL, NULL, NULL);
