@@ -3,6 +3,20 @@ ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
 
+ARG NODE_VERSION=24
+
+FROM docker.io/node:$NODE_VERSION AS web
+
+ARG APP_VERSION
+
+WORKDIR /app/tools/ui
+
+COPY tools/ui/package.json tools/ui/package-lock.json ./
+RUN npm ci
+
+COPY tools/ui/ ./
+RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
+
 FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 
 # Install build tools
@@ -16,6 +30,8 @@ RUN apt install -y libssl-dev curl \
 WORKDIR /app
 
 COPY . .
+
+COPY --from=web /app/tools/ui/dist tools/ui/dist
 
 RUN cmake -B build -DGGML_NATIVE=OFF -DGGML_VULKAN=ON -DLLAMA_BUILD_TESTS=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON && \
     cmake --build build --config Release -j$(nproc)

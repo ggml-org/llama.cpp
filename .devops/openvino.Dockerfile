@@ -22,6 +22,20 @@ ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
 
+ARG NODE_VERSION=24
+
+FROM docker.io/node:$NODE_VERSION AS web
+
+ARG APP_VERSION
+
+WORKDIR /app/tools/ui
+
+COPY tools/ui/package.json tools/ui/package-lock.json ./
+RUN npm ci
+
+COPY tools/ui/ ./
+RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
+
 ## Build Image
 FROM docker.io/ubuntu:${UBUNTU_VERSION} AS build
 
@@ -68,6 +82,8 @@ ENV OpenVINO_DIR=/opt/intel/openvino
 WORKDIR /app
 
 COPY . .
+
+COPY --from=web /app/tools/ui/dist tools/ui/dist
 
 # Build Stage
 RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \

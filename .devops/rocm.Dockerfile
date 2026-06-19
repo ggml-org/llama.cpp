@@ -11,6 +11,20 @@ ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
 
+ARG NODE_VERSION=24
+
+FROM docker.io/node:$NODE_VERSION AS web
+
+ARG APP_VERSION
+
+WORKDIR /app/tools/ui
+
+COPY tools/ui/package.json tools/ui/package-lock.json ./
+RUN npm ci
+
+COPY tools/ui/ ./
+RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
+
 ### Build image
 FROM ${BASE_ROCM_DEV_CONTAINER} AS build
 
@@ -37,6 +51,8 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY . .
+
+COPY --from=web /app/tools/ui/dist tools/ui/dist
 
 RUN HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
     cmake -S . -B build \
