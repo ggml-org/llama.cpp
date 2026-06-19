@@ -82,32 +82,72 @@ std::unique_ptr<llm_graph_context> llama_model_minimax_m3::build_arch_graph(cons
     return std::make_unique<graph>(*this, params);
 }
 
-static inline void msa_fill_mask(
-        float * dst, int64_t dst_skey, int64_t dst_squery,
-        const float * iq, const float * ik, const int32_t * pos,
+// ---- MSA block-mask op --------------------------------------------------
+// Emits the COMBINED attention mask: a copy of the causal/padding mask with
+// every key in a NON-selected block forced to -inf. Selected blocks keep their
+// causal value, so future/pad positions inside a selected block stay masked.
+// Causality is taken FROM the input mask (not recomputed), so this is correct
+// for arbitrary cell<->position layouts. Output dtype matches the input mask
+// (f16 when flash-attn is on, f32 otherwise).
+//
+// Assumes M3's mask is {0 = attendable, negative = forbidden}, which holds
+// because M3 uses no ALiBi/soft-cap-in-mask (soft-cap is applied to kq directly
+// in build_attn_mha). If that ever changes, revisit msa_is_masked().
+
+static inline bool        msa_is_masked(ggml_fp16_t x) { return ggml_fp16_to_fp32(x) < 0.0f; }
+static inline bool        msa_is_masked(float       x) { return x < 0.0f; }
+static inline ggml_fp16_t msa_neg_val (ggml_fp16_t)    { return ggml_fp32_to_fp16(-INFINITY); }
+static inline float       msa_neg_val (float)          { return -INFINITY; }
+//----------------------------------------------------
+// helpers near the top, by msa_is_masked/msa_neg_val:
+static inline float msa_to_f32(float x)       { return x; }
+static inline float msa_to_f32(ggml_fp16_t x) { return ggml_fp16_to_fp32(x); }
+
+template <typename MT>
+static void msa_selfcheck_t(const MT* dst, const MT* msk,
+                            int64_t S, int64_t n_kv, int64_t squery, int ith, int nth) {
+    double maxd = 0; long xor0 = 0;
+    for (int64_t i = ith; i < S; i += nth)
+        for (int64_t j = 0; j < n_kv; ++j) {
+            float a = msa_to_f32(dst[i*squery + j]);
+            float b = msa_to_f32(msk[i*squery + j]);
+            if ((a < 0.f) != (b < 0.f)) xor0++;          // attend/forbid flipped
+            else if (a >= 0.f && a != b) maxd = std::max(maxd, (double)fabsf(a-b));
+        }
+    if (maxd > 0 || xor0)
+        fprintf(stderr, "MSA SELFCHECK FAIL ith=%d maxd=%g xor0=%ld\n", ith, maxd, xor0);
+}
+//-----------------------------------------------
+template <typename MT>
+static inline void msa_fill_mask_t(
+        MT * dst, const MT * src_mask,
+        int64_t mask_skey, int64_t mask_squery,
+        const float * iq, const float * ik,
         int Hd, int S, int D, int64_t n_kv,
         int blk, int topk_blocks, int local,
         int ith, int nth, int64_t key_len ) {
 
-    const float NEG = -INFINITY, POS = INFINITY;
-    const int nblk = (n_kv + blk - 1)/blk;   
+    const int nblk = (int)((key_len + blk - 1) / blk);
     const int topk = topk_blocks < nblk ? topk_blocks : nblk;
 
-    std::vector<float> bs(nblk);
+    std::vector<float> bs (nblk);
     std::vector<int>   ord(nblk);
+    std::vector<char>  sel(nblk);
 
-    for (int i = ith; i < S; i += nth) {                 // split queries across threads
-        const int pi = pos[i];
-        const float * q = iq + (size_t) i * Hd * D;      // [Hd, D] for this query
+    for (int i = ith; i < S; i += nth) {
+        const float * q   = iq + (size_t) i * Hd * D;
+        const MT    * msk = src_mask + (int64_t) i * mask_squery;
+        MT          * out = dst      + (int64_t) i * mask_squery;
 
-        // block scores: max over heads and over keys-in-block, future keys excluded
+        // 2) block scores; causality from the mask (skip keys it forbids).
+        //    amax over keys-in-block and over the Hd index heads.
         for (int bk = 0; bk < nblk; ++bk) {
-            float m = NEG;
+            float m = -INFINITY;
             const int j0 = bk * blk;
-            if (j0 >= (int) key_len) { bs[bk] = NEG; continue; }
+            if (j0 >= (int) key_len) { bs[bk] = -INFINITY; continue; }
             const int j1 = std::min((bk + 1) * blk, (int) key_len);
             for (int j = j0; j < j1; ++j) {
-                if (j > pi) break;                       // keys in order; rest of block is future
+                if (msa_is_masked(msk[(int64_t) j * mask_skey])) continue;
                 const float * k = ik + (size_t) j * D;
                 for (int h = 0; h < Hd; ++h) {
                     const float * qh = q + (size_t) h * D;
@@ -119,36 +159,58 @@ static inline void msa_fill_mask(
             bs[bk] = m;
         }
 
-        // force the local block(s)
-        const int qb = pi / blk;
-        for (int l = 0; l < local; ++l) {
-            int bk = qb - l; if (bk < 0) bk = 0;
-            bs[bk] = POS;
+        // 3) force local block(s)
+        int qb = -1;
+        for (int bk = nblk - 1; bk >= 0; --bk) { if (bs[bk] != -INFINITY) { qb = bk; break; } }
+        for (int l = 0; l < local && qb - l >= 0; ++l) {
+            bs[qb - l] = INFINITY;
         }
 
-        // top-k blocks, descending
+        // 4) top-k blocks, descending
         for (int t = 0; t < nblk; ++t) ord[t] = t;
         std::stable_sort(ord.begin(), ord.end(), [&](int a, int b){ return bs[a] > bs[b]; });
 
-        // default everything masked, then open the selected blocks
-        float * col = dst + (int64_t) i * dst_squery;
-        for (int64_t j = 0; j < n_kv; ++j) col[j * dst_skey] = NEG;
+        // 5) mark selected, then knock out every key in a NON-selected block.
+        std::fill(sel.begin(), sel.end(), (char) 0);
         for (int t = 0; t < topk; ++t) {
             const int bk = ord[t];
-            if (bs[bk] == NEG) break;                    // fewer real blocks than topk
+            if (bs[bk] == -INFINITY) break;
+            sel[bk] = 1;
+        }
+        // --- self-contained MSA selection logger (remove later) ---
+        // Fires once per decode/prefill batch, first query, first thread, first
+        // layer-at-this-n_kv (layers share n_kv within a step and run il-ascending,
+        // so the first call at a given n_kv is the first sparse layer).
+        if (i == 0 && ith == 0) {
+            static int64_t last_n_kv = -1;
+            if (n_kv < last_n_kv) last_n_kv = -1; 
+            if (n_kv != last_n_kv) {
+                last_n_kv = n_kv;
+                FILE * f = fopen("/tmp/msa_sel.log", "a");
+                if (f) {
+                    fprintf(f, "n_kv=%lld qb=%d nblk=%d sel=", (long long) n_kv, qb, nblk);
+                    for (int bk = 0; bk < nblk; ++bk) if (sel[bk]) fprintf(f, "%d,", bk);
+                    fprintf(f, "\n");
+                    fflush(f);
+                }
+            }
+        }
+        // --- end logger ---
+        for (int bk = 0; bk < nblk; ++bk) {
+            if (sel[bk]) continue;
             const int j0 = bk * blk;
-            if (j0 >= (int) key_len) continue;
-            const int j1 = std::min((bk + 1) * blk, (int) key_len);
-            for (int j = j0; j < j1; ++j)
-                if (j <= pi) col[(int64_t) j * dst_skey] = 0.f;
+            const int j1 = (int) std::min<int64_t>((int64_t)(bk + 1) * blk, n_kv);
+            for (int j = j0; j < j1; ++j) {
+                out[(int64_t) j * mask_skey] = msa_neg_val(MT(0));
+            }
         }
     }
 }
 
 static void msa_block_mask_op(struct ggml_tensor * dst, int ith, int nth, void * userdata) {
-    const struct ggml_tensor * iq  = dst->src[0];   // [D, Hd, S]
-    const struct ggml_tensor * ik  = dst->src[1];   // [D, 1,  S]
-    const struct ggml_tensor * pos = dst->src[2];   // [S] i32
+    const struct ggml_tensor * iq   = dst->src[0];   // [D, Hd, S]       f32
+    const struct ggml_tensor * ik   = dst->src[1];   // [D, 1,  n_kv]    f32 (idx cache)
+    const struct ggml_tensor * mask = dst->src[2];   // [n_kv, S, 1, ns] f16/f32
     const msa_params * p = (const msa_params *) userdata;
 
     const int     D    = iq->ne[0];
@@ -156,23 +218,67 @@ static void msa_block_mask_op(struct ggml_tensor * dst, int ith, int nth, void *
     const int     S    = iq->ne[2];
     const int64_t n_kv = dst->ne[0];
 
-    GGML_ASSERT(ik->ne[0] == D && ik->ne[1] == 1);   // ne[2] is n_kv (history), not S
-    GGML_ASSERT(ggml_is_contiguous(ik));             // raw j*D indexing needs contiguity
-    GGML_ASSERT(dst->ne[1] == (int64_t) S);
-    GGML_ASSERT(ggml_is_contiguous(dst));
-    GGML_ASSERT(dst->ne[1] == iq->ne[2]);   // queries axis must match (this is the suspect)
-    const int64_t key_len = n_kv;      // keys actually present this batch
-    if (ith == 0) {
-        fprintf(stderr, "msa: dst ne=[%lld,%lld,%lld,%lld] iq ne=[%lld,%lld,%lld] n_kv(dst.ne0)=%lld\n",
-                (long long)dst->ne[0],(long long)dst->ne[1],(long long)dst->ne[2],(long long)dst->ne[3],
-                (long long)iq->ne[0],(long long)iq->ne[1],(long long)iq->ne[2],
-                (long long)dst->ne[0]);
+    GGML_ASSERT(ik->ne[0] == D && ik->ne[1] == 1);
+    GGML_ASSERT(ggml_is_contiguous(ik));
+    GGML_ASSERT(dst->type == mask->type);
+    GGML_ASSERT(dst->ne[0] == mask->ne[0] && dst->ne[1] == mask->ne[1]);
+    GGML_ASSERT(dst->nb[1] == mask->nb[1]);
+    GGML_ASSERT(mask->ne[1] >= (int64_t) S);
+    GGML_ASSERT(ik->type == GGML_TYPE_F32);                              // idx cache
+    if (dst->src[3]) GGML_ASSERT(dst->src[3]->type == GGML_TYPE_F32);    // raw batch key
+    memcpy(dst->data, mask->data, ggml_nbytes(dst));
+    const int64_t key_len = ik->ne[2];
+    
+    if (getenv("MSA_POPCHK") && ith == 0 && dst->src[3]) {
+        static int64_t last = -1;
+        if (n_kv < last) last = -1;          // reset on new sequence
+        if (n_kv != last) {
+            last = n_kv;
+            const struct ggml_tensor * ikb = dst->src[3];                // raw batch key [D,1,S]
+            const int64_t Sb = ikb->ne[2];
+            const float * a = (const float *) ikb->data;                 // this batch
+            const float * b = (const float *) ik->data + (n_kv - Sb)*D;  // cache tail
+            double maxd = 0;
+            for (int64_t t = 0; t < Sb*(int64_t)D; ++t) maxd = std::max(maxd, (double)fabsf(a[t]-b[t]));
+            const float * c = (const float *) ik->data;
+            double cmin = 1e30, cmax = -1e30; bool nan = false;
+            for (int64_t t = 0; t < n_kv*(int64_t)D; ++t) {
+                float v = c[t]; if (std::isnan(v)) nan = true;
+                cmin = std::min(cmin,(double)v); cmax = std::max(cmax,(double)v);
+            }
+            fprintf(stderr, "MSA POPCHK n_kv_mask=%lld n_kv_cache=%lld Sb=%lld tail_maxabs=%g cache[min=%g max=%g nan=%d]\n",
+                    (long long) n_kv, (long long) ik->ne[2], (long long) Sb, maxd, cmin, cmax, (int)nan);
+        }
     }
 
-    msa_fill_mask((float *) dst->data, /*dst_skey=*/1, /*dst_squery=*/dst->ne[0],
-                  (const float *) iq->data, (const float *) ik->data, (const int32_t *) pos->data,
-                  Hd, S, D, n_kv, p->blk, p->topk_blocks, p->local, ith, nth, key_len);
+    const int64_t mask_skey   = 1;
+    const int64_t mask_squery = mask->nb[1] / ggml_type_size(mask->type);
+    static const int topk_ovr = getenv("MSA_TOPK_OVR") ? atoi(getenv("MSA_TOPK_OVR")) : -1;
+    const int topk_use = topk_ovr > 0 ? topk_ovr : p->topk_blocks;
+    
+    if (dst->type == GGML_TYPE_F16) {
+        msa_fill_mask_t<ggml_fp16_t>(
+            (ggml_fp16_t *) dst->data, (const ggml_fp16_t *) mask->data,
+            mask_skey, mask_squery,
+            (const float *) iq->data, (const float *) ik->data,
+            Hd, S, D, n_kv, p->blk, topk_use, p->local, ith, nth, key_len);
+    } else {
+        msa_fill_mask_t<float>(
+            (float *) dst->data, (const float *) mask->data,
+            mask_skey, mask_squery,
+            (const float *) iq->data, (const float *) ik->data,
+            Hd, S, D, n_kv, p->blk, topk_use, p->local, ith, nth, key_len);
+    }
+    if (getenv("MSA_SELFCHECK")) {
+        if (dst->type == GGML_TYPE_F16)
+            msa_selfcheck_t<ggml_fp16_t>((const ggml_fp16_t*)dst->data, (const ggml_fp16_t*)mask->data,
+                                         iq->ne[2], dst->ne[0], mask_squery, ith, nth);
+        else
+            msa_selfcheck_t<float>((const float*)dst->data, (const float*)mask->data,
+                                   iq->ne[2], dst->ne[0], mask_squery, ith, nth);
+    }
 }
+
 
 llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
@@ -234,7 +340,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
-            ggml_tensor * kq_b = nullptr;
+            ggml_tensor * msa_mask = nullptr;
             if (il >= (int) hparams.n_layer_dense_lead) {                 // sparse layers == MoE layers for M3
                 const int64_t n_idx_dim  = hparams.indexer_head_size;     // 128
                 const int64_t n_idx_head = hparams.indexer_n_head;        // 4
@@ -255,16 +361,22 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                 ggml_build_forward_expand(gf, mctx_cur->cpy_k_idx(ctx0, ik, k_idxs, il));
                 ggml_tensor * ik_kv = mctx_cur->get_k_idx(ctx0, il);      // [128,1,n_kv,1]
 
-                const int64_t n_kv = inp_attn->get_kq_mask()->ne[0];
-                ggml_tensor * srcs[3] = { iq, ik_kv, inp_pos };
-                kq_b = ggml_custom_4d(ctx0, GGML_TYPE_F32, n_kv, n_tokens, 1, 1,
-                                      srcs, 3, msa_block_mask_op, GGML_N_TASKS_MAX, const_cast<msa_params *>(&mm.msa_p));
-                cb(kq_b, "msa_kq_b", il);
+                // fold MSA selection into the attention mask: clone the causal mask,
+                // knock out non-selected blocks. FA can then run.
+                ggml_tensor * kqm = inp_attn->get_kq_mask();   // f16 (FA on) / f32
+                ggml_tensor * srcs[4] = { iq, ik_kv, kqm, ik };   // ik = rope'd batch key [128,1,T]
+                msa_mask = ggml_custom_4d(ctx0, kqm->type, kqm->ne[0], kqm->ne[1], kqm->ne[2], kqm->ne[3],
+                                          srcs, 4, msa_block_mask_op, GGML_N_TASKS_MAX,
+                                          const_cast<msa_params *>(&mm.msa_p));
+                if (getenv("MSA_BYPASS")) msa_mask = nullptr; // -> dense attention switch
+                if (msa_mask) cb(msa_mask, "msa_mask", il);
             }
 
             cur = build_attn(inp_attn,
                     model.layers[il].wo, NULL, model.layers[il].wo_s,
-                    Qcur, Kcur, Vcur, kq_b, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+                    Qcur, Kcur, Vcur, /*kq_b=*/nullptr, nullptr, nullptr,
+                    1.0f/sqrtf(float(n_embd_head)), il,
+                    /*kq_mask_override=*/msa_mask);
         }
 
         if (il == n_layer - 1 && inp_out_ids) {
