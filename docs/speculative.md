@@ -13,6 +13,37 @@ The `llama-server` application supports several implementations of speculative d
 A much smaller model (called the _draft model_) generates drafts.
 A draft model is the most used approach in speculative decoding.
 
+### DFlash (`draft-dflash`)
+
+[DFlash](https://github.com/z-lab/dflash) is a draft-model method that produces an entire block of
+draft tokens in a single forward pass (block diffusion) and injects the target model's hidden states
+into the draft model's attention (KV injection), rather than drafting one token at a time. This makes
+drafting very GPU-friendly while keeping the draft model small.
+
+The draft model is a small block-diffusion model trained for a specific target model (for example
+[`z-lab/Qwen3-4B-DFlash-b16`](https://huggingface.co/z-lab/Qwen3-4B-DFlash-b16) for `Qwen/Qwen3-4B`).
+Convert it with `--target-model-dir` so it inherits the target's tokenizer and token embeddings:
+
+```bash
+python convert_hf_to_gguf.py z-lab/Qwen3-4B-DFlash-b16 \
+    --target-model-dir Qwen/Qwen3-4B --outtype bf16 --outfile Qwen3-4B-DFlash-b16.gguf
+```
+
+DFlash expects chat-formatted input; set `LLAMA_SPEC_NO_THINK=1` to disable "thinking", which
+substantially increases the acceptance rate:
+
+```bash
+LLAMA_SPEC_NO_THINK=1 llama-speculative-simple \
+    -m Qwen3-4B.gguf -md Qwen3-4B-DFlash-b16.gguf \
+    --spec-type draft-dflash --spec-draft-n-max 16
+```
+
+`--spec-draft-n-max` is clamped to the draft model's trained block size.
+
+See:
+
+- #22105
+
 ### n-gram Cache (`ngram-cache`)
 
 An n-gram is a sequence of n tokens. The n-gram cache implementation maintains statistics about short n-gram sequences.
@@ -108,7 +139,7 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 ### General Speculative Parameters
 
 ```
---spec-type [none|draft-simple|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+--spec-type [none|draft-simple|draft-mtp|draft-dflash|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
                                         comma-separated list of types of speculative decoding to use
                                         (default: none)
                                         (env: LLAMA_ARG_SPEC_TYPE)
@@ -248,6 +279,7 @@ Specifies a comma-separated list of speculative decoding types to use.
 | `none` | No speculative decoding (default) |
 | `draft-simple` | Use a simple draft model for speculation |
 | `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |
+| `draft-dflash` | Use a DFlash block-diffusion draft model with KV injection |
 | `ngram-cache` | Use n-gram cache lookup |
 | `ngram-simple` | Use simple n-gram pattern matching |
 | `ngram-map-k` | Use n-gram pattern matching with n-gram-keys |
