@@ -41,7 +41,7 @@
 	<IconComponent class="h-4 w-4" />
 {/snippet}
 
-<div class="mt-2 mb-1 space-y-1.5">
+<div class="mt-2 space-y-0.5">
 	{#if isSearchModeActive}
 		<SearchInput
 			bind:value={searchQuery}
