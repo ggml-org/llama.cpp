@@ -11,6 +11,7 @@ export interface DatabasePrompt {
 	title: string;
 	content: string;
 	lastModified: number;
+	category?: string;
 }
 
 export interface DatabaseConversation {

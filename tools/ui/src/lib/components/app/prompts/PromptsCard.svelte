@@ -4,10 +4,12 @@
 <script lang="ts">
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MarkdownContent } from '$lib/components/app';
+	import { MarkdownContent, CategoryCombobox } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import Input from '$lib/components/ui/input/input.svelte';
+	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { promptsStore } from '$lib/stores/prompts.svelte';
 	import { Check, MoreHorizontal, Trash2, Edit, ArrowRight } from '@lucide/svelte';
 
 	interface Props {
@@ -15,18 +17,23 @@
 		title: string;
 		content: string;
 		lastModified: number;
+		category?: string;
 		onDelete?: () => void;
 		onEdit?: (id: string) => void;
 		onStartNewChat?: (id: string, title: string, content: string) => void;
 	}
 
-	let { id, title, content, lastModified, onDelete, onEdit, onStartNewChat }: Props = $props();
+	let { id, title, content, lastModified, category, onDelete, onEdit, onStartNewChat }: Props =
+		$props();
 
 	// Edit state
 	let isEditing = $state(false);
 	let editTitle = $state(title);
 	let editContent = $state(content);
+	let editCategory = $state(category ?? '');
+	let existingCategories = $derived(promptsStore.getCategories());
 	let editTitleError = $derived.by(() => (!editTitle.trim() ? 'Title is required' : null));
+	let displayCategory = $derived(category && category.trim() ? category.trim() : null);
 
 	// Display state
 	let isExpanded = $state(false);
@@ -60,6 +67,7 @@
 		if (!isEditing) {
 			editTitle = title;
 			editContent = content;
+			editCategory = category ?? '';
 		}
 	});
 
@@ -67,8 +75,20 @@
 		isExpanded = !isExpanded;
 	}
 
-	function handleSave() {
+	async function handleSave() {
+		if (editTitleError) return;
+		const trimmedCategory = editCategory.trim();
+		await promptsStore.updatePrompt(id, {
+			title: editTitle.trim(),
+			content: editContent.trim(),
+			...(trimmedCategory ? { category: trimmedCategory } : { category: undefined })
+		});
+		isEditing = false;
 		onEdit?.(id);
+	}
+
+	function startEdit() {
+		isEditing = true;
 	}
 
 	function handleCancel() {
@@ -116,7 +136,14 @@
 							<div class="mb-2 flex items-start justify-between gap-2">
 								<div class="min-w-0">
 									<h3 class="text-xl font-semibold tracking-tight text-foreground">{title}</h3>
-									<p class="mt-0.5 text-xs text-muted-foreground">{formattedDate}</p>
+									<div class="mt-0.5 flex items-center gap-2">
+										<p class="text-xs text-muted-foreground">{formattedDate}</p>
+										{#if displayCategory}
+											<Badge variant="secondary" class="text-[0.65rem] font-medium"
+												>{displayCategory}</Badge
+											>
+										{/if}
+									</div>
 								</div>
 								<DropdownMenu.Root>
 									<DropdownMenu.Trigger>
@@ -139,7 +166,7 @@
 									<DropdownMenu.Content class="w-32">
 										<DropdownMenu.Item
 											class="flex cursor-pointer items-center gap-2"
-											onclick={() => onEdit?.(id)}
+											onclick={startEdit}
 										>
 											<Edit class="h-4 w-4" />
 											<span>Edit</span>
@@ -217,8 +244,8 @@
 
 							<div class="mt-3 flex justify-end">
 								<Button size="sm" class="gap-1.5" onclick={handleStartNewChat}>
+									New chat
 									<ArrowRight class="h-3.5 w-3.5" />
-									Start new chat
 								</Button>
 							</div>
 						</div>
@@ -234,7 +261,14 @@
 					<div class="flex items-start justify-between gap-2">
 						<div class="min-w-0">
 							<h3 class="text-xl font-semibold tracking-tight text-foreground">{title}</h3>
-							<p class="mt-0.5 text-xs text-muted-foreground">{formattedDate}</p>
+							<div class="mt-0.5 flex items-center gap-2">
+								<p class="text-xs text-muted-foreground">{formattedDate}</p>
+								{#if displayCategory}
+									<Badge variant="secondary" class="text-[0.65rem] font-medium"
+										>{displayCategory}</Badge
+									>
+								{/if}
+							</div>
 						</div>
 						<DropdownMenu.Root>
 							<DropdownMenu.Trigger>
@@ -257,7 +291,7 @@
 							<DropdownMenu.Content class="w-32">
 								<DropdownMenu.Item
 									class="flex cursor-pointer items-center gap-2"
-									onclick={() => onEdit?.(id)}
+									onclick={startEdit}
 								>
 									<Edit class="h-4 w-4" />
 									<span>Edit</span>
@@ -277,8 +311,8 @@
 					</div>
 					<div class="mt-3 flex justify-end">
 						<Button size="sm" class="gap-1.5" onclick={handleStartNewChat}>
+							New chat
 							<ArrowRight class="h-3.5 w-3.5" />
-							Start new chat
 						</Button>
 					</div>
 				</div>
@@ -308,6 +342,11 @@
 					placeholder="Prompt content..."
 					bind:value={editContent}
 				/>
+			</div>
+
+			<div class="space-y-1">
+				<label class="text-xs font-medium text-muted-foreground">Category</label>
+				<CategoryCombobox bind:value={editCategory} categories={existingCategories} />
 			</div>
 
 			<div class="flex justify-end gap-2">
