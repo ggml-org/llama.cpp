@@ -624,12 +624,6 @@ struct common_params {
 
     // UI configs
     bool ui = true;
-
-    // Deprecated: use ui, ui_mcp_proxy, ui_config_json instead
-    bool webui = ui;
-    bool webui_mcp_proxy = false;
-    std::string webui_config_json;
-
     bool ui_mcp_proxy = false;
     std::string ui_config_json;
 

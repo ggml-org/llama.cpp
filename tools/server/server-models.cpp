@@ -1462,9 +1462,9 @@ void server_models_routes::init_routes() {
             auto res = std::make_unique<server_http_res>();
             res_ok(res, {
                 // TODO: add support for this on web UI
-                {"role",          "router"},
-                {"max_instances", params.models_max},
-                {"models_autoload", params.models_autoload},
+                {"role",                 "router"},
+                {"max_instances",        params.models_max},
+                {"models_autoload",      params.models_autoload},
                 // this is a dummy response to make sure the UI doesn't break
                 {"model_alias", "llama-server"},
                 {"model_path",  "none"},
@@ -1473,11 +1473,10 @@ void server_models_routes::init_routes() {
                     {"n_ctx",  0},
                 }},
                 // New key
-                {"ui_settings",     ui_settings},
-                // Deprecated: use ui_settings instead (kept for backward compat)
-                {"webui_settings",  webui_settings},
-                {"build_info",     std::string(llama_build_info())},
-                {"cors_proxy_enabled", params.ui_mcp_proxy || params.webui_mcp_proxy},
+                {"ui_settings",          ui_settings},
+                {"webui_settings",       webui_settings},
+                {"build_info",           std::string(llama_build_info())},
+                {"cors_proxy_enabled",   params.ui_mcp_proxy},
             });
             return res;
         }

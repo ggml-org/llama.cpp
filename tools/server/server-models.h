@@ -212,10 +212,7 @@ struct server_models_routes {
     server_models models;
     server_models_routes(const common_params & params, int argc, char ** argv)
             : params(params), models(params, argc, argv) {
-        // Support both new ui_config_json and deprecated webui_config_json
-        const std::string & cfg = !this->params.ui_config_json.empty()
-            ? this->params.ui_config_json
-            : this->params.webui_config_json;
+        const std::string & cfg = this->params.ui_config_json;
         if (!cfg.empty()) {
             try {
                 json json_settings = json::parse(cfg);
