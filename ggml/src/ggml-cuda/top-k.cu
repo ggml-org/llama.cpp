@@ -87,7 +87,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * tmp_dst_nrows);
     int *                     tmp_dst = temp_dst_alloc.get();
 
-    for (int64_t i = 0; i < nrows; i+= nrows_per_chunk) {
+    for (int64_t i = 0; i < nrows; i += nrows_per_chunk) {
         int64_t chunk_nrows = std::min(nrows_per_chunk, nrows - i);
 
         if (shared_mem > max_shared_mem || ncols > 1024) {
