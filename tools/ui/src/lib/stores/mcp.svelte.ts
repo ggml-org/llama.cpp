@@ -489,7 +489,7 @@ class MCPStore {
 			if (!rootDomain) return null;
 
 			const origin = `${url.protocol}//${rootDomain}`;
-			const candidates = ['favicon.ico', 'favicon.svg', 'favicon.png'];
+			const candidates = ['favicon.ico', 'favicon.png'];
 
 			for (const path of candidates) {
 				const faviconUrl = `${origin}/${path}`;

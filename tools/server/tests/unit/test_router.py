@@ -1,3 +1,4 @@
+import threading
 import pytest
 from utils import *
 
@@ -253,3 +254,98 @@ def test_router_reload_models():
         assert "model-reload-c" in ids, "newly added model should appear"
     finally:
         os.remove(preset_path)
+
+
+MODEL_DOWNLOAD_ID = "ggml-org/test-model-router-download:F16"
+MODEL_DOWNLOAD_TIMEOUT = 300
+
+
+def _listen_sse(server: ServerProcess, collected: list, stop: threading.Event):
+    """Collect /models/sse events into `collected` until `stop` is set."""
+    url = f"http://{server.server_host}:{server.server_port}/models/sse"
+    try:
+        with requests.get(url, stream=True, timeout=MODEL_DOWNLOAD_TIMEOUT) as resp:
+            for line_bytes in resp.iter_lines():
+                if stop.is_set():
+                    break
+                line = line_bytes.decode("utf-8")
+                if line.startswith("data: "):
+                    collected.append(json.loads(line[6:]))
+    except Exception:
+        pass
+
+
+def _wait_for_sse_event(collected: list, event_type: str, model: str, timeout: int) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any(e.get("event") == event_type and e.get("model") == model for e in collected):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def test_router_download_model():
+    """Case 1: download a model, verify SSE events and GET /models."""
+    global server
+    server.start()
+
+    # Ensure the model is not present before we start
+    server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")
+
+    sse_events: list = []
+    stop = threading.Event()
+    sse_thread = threading.Thread(
+        target=_listen_sse, args=(server, sse_events, stop), daemon=True
+    )
+    sse_thread.start()
+
+    # Trigger the download
+    res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
+    assert res.status_code == 200
+    assert res.body.get("success") is True
+
+    # Wait for download_finished SSE event
+    finished = _wait_for_sse_event(
+        sse_events, "download_finished", MODEL_DOWNLOAD_ID, MODEL_DOWNLOAD_TIMEOUT
+    )
+    stop.set()
+
+    assert finished, "Never received download_finished SSE event"
+    assert any(
+        e.get("event") == "download_progress" and e.get("model") == MODEL_DOWNLOAD_ID
+        for e in sse_events
+    ), "No download_progress events received"
+
+    # Model should now appear in GET /models
+    ids = _get_model_ids(is_reload=False)
+    assert MODEL_DOWNLOAD_ID in ids, f"{MODEL_DOWNLOAD_ID} not found in /models after download"
+
+
+def test_router_delete_model():
+    """Case 2: delete the downloaded model, verify it disappears from GET /models."""
+    global server
+    server.start()
+
+    # Ensure the model exists (download it if needed)
+    if MODEL_DOWNLOAD_ID not in _get_model_ids(is_reload=False):
+        res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
+        assert res.status_code == 200
+        sse_events: list = []
+        stop = threading.Event()
+        threading.Thread(
+            target=_listen_sse, args=(server, sse_events, stop), daemon=True
+        ).start()
+        finished = _wait_for_sse_event(
+            sse_events, "download_finished", MODEL_DOWNLOAD_ID, MODEL_DOWNLOAD_TIMEOUT
+        )
+        stop.set()
+        assert finished, "Model did not finish downloading before delete test"
+
+    # Delete the model
+    del_res = server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")
+    assert del_res.status_code == 200
+    assert del_res.body.get("success") is True
+
+    # Model should no longer appear in GET /models
+    ids = _get_model_ids(is_reload=False)
+    assert MODEL_DOWNLOAD_ID not in ids, f"{MODEL_DOWNLOAD_ID} still present after deletion"

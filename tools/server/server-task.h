@@ -19,6 +19,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_RERANK,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_CANCEL,
+    SERVER_TASK_TYPE_CONTROL,
     SERVER_TASK_TYPE_NEXT_RESPONSE,
     SERVER_TASK_TYPE_METRICS,
     SERVER_TASK_TYPE_SLOT_SAVE,
@@ -83,6 +84,10 @@ struct task_params {
     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;
+
+    // realtime control (SERVER_TASK_TYPE_CONTROL)
+    std::string        control_action;
+    std::string        control_cmpl_id;
 
     // per-request parameters for chat parsing
     common_chat_parser_params chat_parser_params;
@@ -205,13 +210,6 @@ struct server_task {
         }
     }
 
-    static task_params params_from_json_cmpl(
-        const llama_vocab * vocab,
-        const common_params & params_base,
-        const int n_ctx_slot,
-        const std::vector<llama_logit_bias> & logit_bias_eog,
-        const json & data);
-
     // utility function
     static std::unordered_set<int> get_list_id(const std::vector<server_task> & tasks) {
         std::unordered_set<int> ids(tasks.size());
@@ -307,6 +305,9 @@ struct server_task_result {
     }
     virtual json to_json() = 0;
     virtual ~server_task_result() = default;
+    virtual server_task_result * clone() const {
+        GGML_ABORT("not implemented for this task type");
+    }
 };
 
 // using shared_ptr for polymorphism of server_task_result
@@ -551,6 +552,19 @@ struct server_task_result_slot_erase : server_task_result {
     virtual json to_json() override;
 };
 
+struct server_task_result_control : server_task_result {
+    bool        success = false;
+    std::string message; // optional detail when success is false
+
+    virtual json to_json() override {
+        json out = json { { "success", success } };
+        if (!message.empty()) {
+            out["message"] = message;
+        }
+        return out;
+    }
+};
+
 struct server_task_result_get_lora : server_task_result {
     struct lora {
         common_adapter_lora_info info;
@@ -630,4 +644,13 @@ struct server_prompt_cache {
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_main, llama_context * ctx_drft, int32_t id_slot);
 
     void update();
+};
+
+// used exclusively by router mode
+struct server_task_result_router : server_task_result {
+    json data;
+    virtual json to_json() override { return data; }
+    virtual server_task_result * clone() const override {
+        return new server_task_result_router(*this);
+    }
 };

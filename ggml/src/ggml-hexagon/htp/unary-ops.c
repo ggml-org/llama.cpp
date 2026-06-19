@@ -692,6 +692,11 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
     const uint8_t * restrict data_src1 = uctx->data_src1;
     uint8_t * restrict       data_dst = uctx->data_dst;
 
+    const struct htp_tensor * src1 = (htp_op == HTP_OP_RMS_NORM_MUL) ? octx->src[1] : NULL;
+    const uint32_t nb11 = src1 ? src1->nb[1] : 0;
+    const uint32_t nb12 = src1 ? src1->nb[2] : 0;
+    const uint32_t nb13 = src1 ? src1->nb[3] : 0;
+
     uint8_t * src0_spad_data = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
     uint8_t * src1_spad_data = octx->src1_spad.data + (ith * octx->src1_spad.size_per_thread);
     uint8_t * dst_spad_data  = octx->dst_spad.data  + (ith * octx->dst_spad.size_per_thread);
@@ -738,10 +743,10 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
             src0_row_size_aligned, nb01, src0_data_row_size, block_size);
 
         if (htp_op == HTP_OP_RMS_NORM_MUL && !uctx->broadcast_weight) {
-            const size_t src1_off = unary_row_offset(ir, ne01, ne02, nb01, nb02, nb03);
+            const size_t src1_off = unary_row_offset(ir, ne01, ne02, nb11, nb12, nb13);
             dma_queue_push(dma_queue,
                 dma_make_ptr(src1_spad_data + (spad_idx * src1_spad_half_size), data_src1 + src1_off),
-                uctx->src1_row_size_aligned, nb01, uctx->src1_data_row_size, block_size);
+                uctx->src1_row_size_aligned, nb11, uctx->src1_data_row_size, block_size);
         }
 
         ir += block_size;
@@ -823,10 +828,10 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
                     src0_row_size_aligned, nb01, src0_data_row_size, pref_block_size);
 
                 if (htp_op == HTP_OP_RMS_NORM_MUL && !uctx->broadcast_weight) {
-                    const size_t src1_pref_off = unary_row_offset(pref_ir, ne01, ne02, nb01, nb02, nb03);
+                    const size_t src1_pref_off = unary_row_offset(pref_ir, ne01, ne02, nb11, nb12, nb13);
                     dma_queue_push(dma_queue,
                         dma_make_ptr(src1_spad, data_src1 + src1_pref_off),
-                        uctx->src1_row_size_aligned, nb01, uctx->src1_data_row_size, pref_block_size);
+                        uctx->src1_row_size_aligned, nb11, uctx->src1_data_row_size, pref_block_size);
                 }
             }
         }
@@ -976,6 +981,10 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
     } else {
         octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
     }
+
+    octx->src0_spad.src = NULL;
+    octx->src1_spad.src = NULL;
+    octx->dst_spad.src  = NULL;
 
     FARF(HIGH, "%s: (%ux%ux%ux%u) -> (%ux%ux%ux%u) : src0-spad-size %u src1-spad-size %u dst-spad-size %u\n", op_type,
          src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],

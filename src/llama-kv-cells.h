@@ -531,3 +531,5 @@ private:
         }
     }
 };
+
+using llama_kv_cells_vec = std::vector<llama_kv_cells>;

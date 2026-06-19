@@ -12,6 +12,7 @@
 #include <HAP_mem.h>
 #include <HAP_power.h>
 #include <HAP_ps.h>
+#include <HAP_dcvs.h>
 #include <qurt.h>
 #include <qurt_thread.h>
 #include <qurt_memory.h>
@@ -63,8 +64,7 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
 
         request.type                              = HAP_power_set_DCVS_v3;
         request.dcvs_v3.set_dcvs_enable           = TRUE;
-        request.dcvs_v3.dcvs_enable               = TRUE;
-        request.dcvs_v3.dcvs_option               = HAP_DCVS_V2_PERFORMANCE_MODE;
+        request.dcvs_v3.dcvs_enable               = FALSE;
         request.dcvs_v3.set_bus_params            = TRUE;
         request.dcvs_v3.bus_params.min_corner     = HAP_DCVS_VCORNER_MAX;
         request.dcvs_v3.bus_params.max_corner     = HAP_DCVS_VCORNER_MAX;
@@ -75,6 +75,10 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         request.dcvs_v3.core_params.target_corner = HAP_DCVS_VCORNER_MAX;
         request.dcvs_v3.set_sleep_disable         = TRUE;
         request.dcvs_v3.sleep_disable             = TRUE;
+
+#if (__HEXAGON_ARCH__ >= 79)
+        HAP_set_dcvs_v3_protected_bus_corners(&request, 1);
+#endif
         if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
             return err;
         }
@@ -103,7 +107,7 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         FARF(ALWAYS, "Setting HMX clock\n");
         err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
-            FARF(ERROR, "Error setting HMX clock.");
+            FARF(ERROR, "ggml-hex: error setting HMX clock.");
             return err;
         }
     }
@@ -117,7 +121,7 @@ AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
         FARF(ALWAYS, "Powering HMX on\n");
         err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
-            FARF(ERROR, "Error powering on HMX.");
+            FARF(ERROR, "ggml-hex: error powering on HMX.");
             return err;
         }
     }
@@ -396,7 +400,9 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
     ctx->hmx_queue   = NULL;
     if (use_hmx) {
         ctx->hmx_queue = hmx_queue_create(16, ctx->vtcm_rctx);
-        if (!ctx->hmx_queue) {
+        if (ctx->hmx_queue) {
+            ctx->hmx_queue->trace = &ctx->trace[HTP_MAX_NTHREADS];
+        } else {
             FARF(ERROR, "hmx-queue-create failed");
             ctx->hmx_enabled = false;
         }
@@ -421,12 +427,23 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
     ctx->n_threads = n_hvx;
     for (int i = 0; i < ctx->n_threads; i++) {
         ctx->dma[i] = dma_queue_create(256); // queue depth
+        if (ctx->dma[i]) {
+            ctx->dma[i]->trace = &ctx->trace[i];
+        }
     }
+
+    ctx->ddr_spad_size = 512 * 1024; // 512 KB
+    ctx->ddr_spad_base = memalign(128, ctx->ddr_spad_size);
 
     // init worker pool
     err = worker_pool_init(&ctx->worker_pool, n_hvx);
     if (err != AEE_SUCCESS) {
         FARF(ERROR, "Unable to create worker pool");
+        if (ctx->ddr_spad_base) {
+            free(ctx->ddr_spad_base);
+            ctx->ddr_spad_base = NULL;
+            ctx->ddr_spad_size = 0;
+        }
         return err;
     }
 
@@ -474,6 +491,12 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
 
     vtcm_free(ctx);
 
+    if (ctx->ddr_spad_base) {
+        free(ctx->ddr_spad_base);
+        ctx->ddr_spad_base = NULL;
+        ctx->ddr_spad_size = 0;
+    }
+
     return AEE_SUCCESS;
 }
 
@@ -484,7 +507,8 @@ static void htp_error_callback(dspqueue_t queue, int error, void * context) {
 
 struct profile_data {
     uint64_t usecs;
-    uint64_t cycles;
+    uint64_t cycles_start;
+    uint64_t cycles_stop;
     uint32_t pmu_counters[HEX_NUM_PMU_COUNTERS];
 };
 
@@ -494,8 +518,9 @@ static inline void profile_start(uint32_t mode, struct profile_data * d) {
             hex_get_pmu(d->pmu_counters);
             // fallthrough
         case HTP_PROF_BASIC:
+        case HTP_PROF_TRACE:
             d->usecs  = HAP_perf_get_qtimer_count();
-            d->cycles = hex_get_cycles();
+            d->cycles_start = hex_get_cycles();
             break;
         default:
             break;
@@ -512,8 +537,9 @@ static inline void profile_stop(uint32_t mode, struct profile_data * d) {
             }
             // fallthrough
         case HTP_PROF_BASIC:
+        case HTP_PROF_TRACE:
             d->usecs  = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - d->usecs);
-            d->cycles = hex_get_cycles() - d->cycles;
+            d->cycles_stop = hex_get_cycles();
             break;
         default:
             break;
@@ -827,14 +853,15 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         const uint32_t t_size = sizeof(struct htp_tensor)    * n_tens;
         const uint32_t o_size = sizeof(struct htp_op_desc)   * n_ops;
         const uint32_t p_size = sizeof(struct htp_prof_desc) * n_ops;
+        const uint32_t tr_size = (HTP_MAX_NTHREADS + 1) * req.n_traces * sizeof(struct htp_trace_desc);
 
-        if (dbuf.size < b_size + t_size + o_size + p_size) {
-            FARF(ERROR, "invalid opbatch memory block size %u", dbuf.size);
+        if (dbuf.size < b_size + t_size + o_size + p_size + tr_size) {
+            FARF(ERROR, "invalid opbatch memory block size %u (req %u)", dbuf.size, b_size + t_size + o_size + p_size + tr_size);
             break;
         }
 
-        FARF(HIGH, "processing opbatch #%u: n-bufs %u n-tensors %u n-ops %u : m-size %u b-size %u t-size %u o-size %u", req.id,
-                n_bufs, n_tens, n_ops, dbuf.size, b_size, t_size, o_size);
+        FARF(HIGH, "processing opbatch #%u: n-bufs %u n-tensors %u n-ops %u n-traces %u : m-size %u b-size %u t-size %u o-size %u", req.id,
+                n_bufs, n_tens, n_ops, req.n_traces, dbuf.size, b_size, t_size, o_size);
 
         // Setup descriptor pointers
         uint8_t * m_ptr = dbuf.ptr;
@@ -850,6 +877,20 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         memset(octx, 0, sizeof(*octx));
         octx->n_threads = ctx->n_threads;
         octx->ctx       = ctx;
+
+        if (ctx->profiler == HTP_PROF_TRACE) {
+            memset(ctx->trace, 0, sizeof(ctx->trace));
+            struct htp_trace_desc * trace_events = (struct htp_trace_desc *) (m_ptr + p_size);
+            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+                ctx->trace[t].events = &trace_events[t * req.n_traces];
+                ctx->trace[t].max_events = req.n_traces;
+            }
+        } else {
+            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+                ctx->trace[t].events = NULL;
+                ctx->trace[t].max_events = 0;
+            }
+        }
 
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
@@ -868,7 +909,8 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
             if (ctx->profiler) {
                 pds[i].opcode = ops[i].opcode;
                 pds[i].usecs  = prof.usecs;
-                pds[i].cycles = prof.cycles;
+                pds[i].cycles_start = prof.cycles_start;
+                pds[i].cycles_stop = prof.cycles_stop;
                 for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
                     pds[i].pmu[j] = prof.pmu_counters[j];
                 }
@@ -881,6 +923,14 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         rsp.n_bufs    = n_bufs;
         rsp.n_tensors = n_tens;
         rsp.n_ops     = n_ops;
+        memset(rsp.pad, 0, sizeof(rsp.pad));
+        if (ctx->profiler == HTP_PROF_TRACE) {
+            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+                rsp.n_traces[t] = ctx->trace[t].count;
+            }
+        } else {
+            memset(rsp.n_traces, 0, sizeof(rsp.n_traces));
+        }
 
         dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
 

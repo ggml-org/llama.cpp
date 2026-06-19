@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 #include <cstdint>
+#include <unordered_map>
 
 struct common_params;
 
@@ -85,6 +86,7 @@ struct server_http_context {
 
     void get(const std::string & path, const handler_t & handler) const;
     void post(const std::string & path, const handler_t & handler) const;
+    void del(const std::string & path, const handler_t & handler) const;
 
     // Register the Google Cloud Platform (Vertex AI) compat (AIP_PREDICT_ROUTE env var, or /predict)
     // Must be called AFTER all other API routes are registered

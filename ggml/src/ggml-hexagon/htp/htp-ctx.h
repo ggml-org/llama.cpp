@@ -4,6 +4,7 @@
 #include "hex-dma.h"
 #include "hmx-queue.h"
 #include "htp-ops.h"
+#include "hex-profile.h"
 #include "worker-pool.h"
 
 #include <assert.h>
@@ -70,6 +71,7 @@ struct htp_context {
     bool                   hmx_enabled;
     bool                   etm;
     uint32_t               profiler;
+    struct htp_thread_trace trace[HTP_MAX_NTHREADS + 1];
 
     uint8_t *              vtcm_base;
     size_t                 vtcm_size;
@@ -78,6 +80,10 @@ struct htp_context {
     atomic_bool            vtcm_needs_release;
 
     uint64_t               max_vmem;
+
+    // Persistent DDR scratchpad for MUL_MAT_ID mappings
+    void *                 ddr_spad_base;
+    size_t                 ddr_spad_size;
 
     struct htp_ops_context octx;
 

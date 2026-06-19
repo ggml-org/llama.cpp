@@ -97,7 +97,9 @@
 {/snippet}
 
 {#snippet removeButton()}
-	<div class="absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
+	<div
+		class="absolute top-2 right-2 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
+	>
 		<ActionIcon icon={X} tooltip="Remove" stopPropagationOnClick onclick={() => onRemove?.(id)} />
 	</div>
 {/snippet}

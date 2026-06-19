@@ -165,7 +165,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-cms, --checkpoint-min-step N` | minimum spacing between context checkpoints in tokens (default: 256, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT) |
 | `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
-| `--cache-idle-slots, --no-cache-idle-slots` | save and clear idle slots on new task (default: enabled, requires unified KV and cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
+| `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
 | `-r, --reverse-prompt PROMPT` | halt generation at PROMPT, return control in interactive mode |
 | `-sp, --special` | special tokens output enabled (default: false) |
@@ -1244,11 +1244,17 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `reasoning_format`: The reasoning format to be parsed. If set to `none`, it will output the raw generated text.
 
+`reasoning_control`: Arms realtime reasoning control for this completion so it can be ended early via `/v1/chat/completions/control`. Defaults to `false`.
+
 `generation_prompt`: The generation prompt that was prefilled in by the template. Prepended to model output before parsing.
 
 `parse_tool_calls`: Whether to parse the generated tool call.
 
 `parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
+
+For multimodal input:
+- Content type `image_url` and `input_audio` are the same as OAI schema
+- Content type `input_video` is an extension from OAI schema. For now, it only accepts base64 input
 
 *Examples:*
 
@@ -1350,6 +1356,22 @@ The server supports parsing and returning reasoning via the `reasoning_content` 
 
 Reasoning input (preserve reasoning in history) is also supported by some specific templates. For more details, please refer to [PR#18994](https://github.com/ggml-org/llama.cpp/pull/18994).
 
+### POST `/v1/chat/completions/control`: Control a running chat completion in real time
+
+Acts on an in-flight completion identified by its `id` (the `id` field streamed back by `/v1/chat/completions`). The request is processed in parallel with the SSE stream, so the client sends it while still reading tokens.
+
+*Options:*
+
+`id`: (Required) The chat completion id to act on. A completion that has already finished matches nothing and the call is a no-op.
+
+`action`: (Required) The control action to perform. Currently the only supported value is `reasoning_end`, which forces the end of the current reasoning block so the model moves on to the final answer. Requires `reasoning_control: true` on the original completion request.
+
+`model`: (Required in router mode) The model name, used to route the request to the right instance. Ignored in single model mode.
+
+**Response format**
+
+Returns a JSON object with a boolean `success` field, and an optional `message` field describing the reason when `success` is `false`.
+
 ### POST `/v1/responses`: OpenAI-compatible Responses API
 
 *Options:*
@@ -1428,6 +1450,36 @@ See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-r
           "encoding_format": "float"
   }'
   ```
+
+### POST `/v1/responses/input_tokens`: Token Counting
+
+Similar to [Response input token counts API](https://developers.openai.com/api/reference/python/resources/responses/subresources/input_tokens/methods/count).
+
+Example response:
+
+```json
+{
+  "object": "response.input_tokens",
+  "input_tokens": 11
+}
+```
+
+### POST `/v1/chat/completions/input_tokens`: Token Counting
+
+Similar to [Response input token counts API](https://developers.openai.com/api/reference/python/resources/responses/subresources/input_tokens/methods/count), but accepts a chat completion body as input.
+
+Note: This is not an official OAI endpoint, but is added for completeness and convenience.
+
+Example response:
+
+```json
+{
+  "object": "response.input_tokens",
+  "input_tokens": 11
+}
+```
+
+## Anthropic-compatible API Endpoints
 
 ### POST `/v1/messages`: Anthropic-compatible Messages API
 
@@ -1726,6 +1778,20 @@ The `status` object can be:
 }
 ```
 
+Note: for "downloading" state, there can be multiple files be downloading in parallel
+
+```json
+"status": {
+  "value": "downloading",
+  "progress": {
+    "https://...model.gguf": {
+      "done": 195963406,
+      "total": 219307424
+    }
+  }
+}
+```
+
 ### POST `/models/load`: Load a model
 
 Load a model
@@ -1759,6 +1825,107 @@ Payload:
   "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
 }
 ```
+
+Response:
+
+```json
+{
+  "success": true
+}
+```
+
+### GET `/models/sse`: Real-time events
+
+Example events:
+
+```js
+{
+  "model": "...",
+  "event": "model_status",
+  "data": {
+    "status": "loading"
+  }
+}
+
+{
+  "model": "...",
+  "event": "download_progress",
+  "data": {
+    // note: there can be multiple files being downloaded in parallel
+    "https://...model.gguf": {
+      "done": 195963406,
+      "total": 219307424
+    }
+  }
+}
+
+{
+  "model": "...",
+  "event": "download_finished",
+  "data": {
+    "status": "loading"
+  }
+}
+
+{
+  "model": "...",
+  "event": "model_remove"
+}
+
+// special event: reload of the list of all models
+{
+  "model": "*",
+  "event": "models_reload"
+}
+```
+
+### POST `/models`: Download new model
+
+Trigger a new download (non-blocking), the progress can be tracked via SSE endpoint `/models/sse`
+
+To cancel model downloading, send an event to `/models/unload`
+
+Download procedure:
+- Send POST request to `/models`
+- Subscribe to `/models/sse` for updates
+- On downloading completed, you will receive either `download_finished` or `download_failed` event
+- Call GET `/models` to trigger model list update. If the download success, you should see the new model in the list
+
+Payload:
+
+```json
+{
+  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
+}
+```
+
+Response (download is started in the background):
+
+```json
+{
+  "success": true
+}
+```
+
+Response (error, cannot start the download):
+
+```json
+{
+  "error": {
+    "code": 400,
+    "message": "model validation failed, unable to download",
+    "type": "invalid_request_error"
+  }
+}
+```
+
+### DELETE `/models`: Delete a model from cache
+
+IMPORTANT: only model stored in cache can be deleted. You cannot delete models in a preset.
+
+Model name must be passed via query param: `?model={name}`
+
+If delete success, it will send an SSE event of type `model_remove`
 
 Response:
 
@@ -1852,4 +2019,4 @@ You can specify default preferences for the web UI using `--ui-config <JSON conf
 
 > **Note:** The old flags `--webui-config` and `--webui-config-file` are deprecated but still work as aliases.
 
-You may find available preferences in [settings-config.ts](../ui/src/lib/constants/settings-config.ts).
+You may find available preferences in [settings-keys.ts](../ui/src/lib/constants/settings-keys.ts).

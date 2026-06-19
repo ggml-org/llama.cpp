@@ -943,6 +943,44 @@ bool mtmd_audio_preprocessor_gemma4a::preprocess(const float *                 s
 }
 
 //
+// mtmd_audio_preprocessor_gemma4ua
+//
+
+void mtmd_audio_preprocessor_gemma4ua::initialize() {
+    // no-op: no FFT or filterbank needed
+}
+
+bool mtmd_audio_preprocessor_gemma4ua::preprocess(const float *                 samples,
+                                                   size_t                        n_samples,
+                                                   std::vector<mtmd_audio_mel> & output) {
+    if (n_samples == 0) {
+        return false;
+    }
+
+    const int frame_size = hparams.n_mel_bins; // 640 samples per token @ 16 kHz = 40 ms
+    const int n_tokens   = ((int)n_samples + frame_size - 1) / frame_size;
+
+    mtmd_audio_mel mel;
+    mel.n_len     = n_tokens;
+    mel.n_len_org = n_tokens;
+    mel.n_mel     = frame_size;
+    mel.data.assign((size_t)frame_size * n_tokens, 0.0f);
+
+    // Store mel-major (data[f * n_tokens + t]) so the ggml tensor loads as
+    // [n_tokens, frame_size] with ne[0]=n_tokens, ne[1]=frame_size.
+    // The graph builder transposes before RMSNorm so normalization is over frame_size.
+    for (int t = 0; t < n_tokens; t++) {
+        for (int f = 0; f < frame_size; f++) {
+            size_t src = (size_t)t * frame_size + f;
+            mel.data[(size_t)f * n_tokens + t] = (src < n_samples) ? samples[src] : 0.0f;
+        }
+    }
+
+    output.push_back(std::move(mel));
+    return true;
+}
+
+//
 // mtmd_audio_streaming_istft implementation
 //
 
