@@ -2,6 +2,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { promptsStore } from '$lib/stores/prompts.svelte';
+	import { CategoryCombobox } from '$lib/components/app';
 
 	interface Props {
 		open: boolean;
@@ -19,7 +20,9 @@
 
 	let title = $state('');
 	let content = $state('');
+	let category = $state('');
 	let titleError = $derived.by(() => (!title.trim() ? 'Title is required' : null));
+	let existingCategories = $derived(promptsStore.getCategories());
 
 	$effect(() => {
 		if (open && initialContent) {
@@ -31,6 +34,7 @@
 		if (!value) {
 			title = '';
 			content = '';
+			category = '';
 		}
 		open = value;
 		onOpenChange?.(value);
@@ -39,9 +43,11 @@
 	async function saveNewPrompt() {
 		if (titleError) return;
 
+		const trimmedCategory = category.trim();
 		const newPrompt = await promptsStore.addPrompt({
 			title: title.trim(),
-			content: content.trim()
+			content: content.trim(),
+			...(trimmedCategory ? { category: trimmedCategory } : {})
 		});
 		handleOpenChange(false);
 		onAddToLibraryComplete?.(newPrompt.id, newPrompt.title);
@@ -74,7 +80,12 @@
 					class="flex min-h-[120px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
 					placeholder="Enter prompt content..."
 					bind:value={content}
-				/>
+				></textarea>
+			</div>
+
+			<div class="space-y-2">
+				<label class="text-sm font-medium text-foreground">Category</label>
+				<CategoryCombobox bind:value={category} categories={existingCategories} />
 			</div>
 		</div>
 

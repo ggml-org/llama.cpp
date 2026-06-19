@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { beforeNavigate, afterNavigate } from '$app/navigation';
+	import { navigating } from '$app/state';
 	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
@@ -161,6 +162,17 @@
 	beforeNavigate((navigation) => {
 		isVisible = false;
 		previousRouteId = navigation.from?.route.id ?? null;
+	});
+
+	// Restore visibility when a navigation is cancelled (e.g. the discard-
+	// unsaved-conversation confirmation on the [id] page), since afterNavigate
+	// never fires in that case.
+	$effect(() => {
+		if (!navigating.to && !isVisible) {
+			requestAnimationFrame(() => {
+				isVisible = true;
+			});
+		}
 	});
 
 	afterNavigate(() => {

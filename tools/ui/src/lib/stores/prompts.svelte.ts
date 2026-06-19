@@ -57,8 +57,20 @@ class PromptsStore {
 		}
 	}
 
-	getPrompts(): Prompt[] {
-		return [...this.#items].sort((a, b) => b.lastModified - a.lastModified);
+	getPrompts(category?: string): Prompt[] {
+		const items = [...this.#items].sort((a, b) => b.lastModified - a.lastModified);
+		if (!category) return items;
+		return items.filter((i) => (i.category ?? '') === category);
+	}
+
+	getUncategorizedPrompts(): Prompt[] {
+		return [...this.#items]
+			.sort((a, b) => b.lastModified - a.lastModified)
+			.filter((i) => !i.category || !i.category.trim());
+	}
+
+	hasUncategorized(): boolean {
+		return this.#items.some((i) => !i.category || !i.category.trim());
 	}
 
 	getPrompt(id: string): Prompt | undefined {
@@ -98,6 +110,13 @@ class PromptsStore {
 	async deletePrompt(id: string): Promise<void> {
 		this.#items = this.#items.filter((i) => i.id !== id);
 		await DatabaseService.deletePrompt(id);
+	}
+
+	getCategories(): string[] {
+		const categories = new Set(
+			this.#items.map((i) => i.category?.trim()).filter((c): c is string => !!c)
+		);
+		return [...categories].sort((a, b) => a.localeCompare(b));
 	}
 
 	searchPrompts(query: string): Prompt[] {

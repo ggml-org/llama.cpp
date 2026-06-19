@@ -1,11 +1,17 @@
 <script lang="ts">
-	import { goto, replaceState } from '$app/navigation';
+	import { beforeNavigate, goto, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { afterNavigate } from '$app/navigation';
-	import { DialogModelNotAvailable } from '$lib/components/app';
+	import { Trash2 } from '@lucide/svelte';
+	import { DialogConfirmation, DialogModelNotAvailable } from '$lib/components/app';
 	import { APP_NAME, ROUTES } from '$lib/constants';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
+	import { MessageRole } from '$lib/enums';
+	import { chatStore, isLoading } from '$lib/stores/chat.svelte';
+	import {
+		activeConversation,
+		activeMessages,
+		conversationsStore
+	} from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 
 	let chatId = $derived(page.params.id);
@@ -22,6 +28,12 @@
 
 	// Track if URL params have been processed for this chat
 	let urlParamsProcessed = $state(false);
+
+	// Pending navigation interrupted by the discard-conversation confirmation.
+	// The original URL is replayed once the user confirms and the conversation is deleted.
+	let pendingNavigationUrl: URL | null = null;
+
+	let showDiscardDialog = $state(false);
 
 	/**
 	 * Clear URL params after message is sent to prevent re-sending on refresh
@@ -75,6 +87,43 @@
 			void modelsStore.selectModelFromLastAssistantResponse();
 		}, 100);
 	});
+
+	// A conversation containing only a system message (no user/assistant turns)
+	// is effectively an unsaved draft. Treat leaving it as a discard action.
+	function isUnsavedSystemOnlyConversation(): boolean {
+		const messages = activeMessages();
+		return !isLoading() && messages.length === 1 && messages[0].role === MessageRole.SYSTEM;
+	}
+
+	beforeNavigate(({ to, cancel }) => {
+		// Only intercept navigations that leave the current chat; same-route
+		// transitions (e.g. switching to another chat id) are also leaves.
+		if (to?.url && to.url.href !== page.url.href && isUnsavedSystemOnlyConversation()) {
+			pendingNavigationUrl = to.url;
+			showDiscardDialog = true;
+			cancel();
+		}
+	});
+
+	async function handleDiscardConfirm() {
+		showDiscardDialog = false;
+		const targetUrl = pendingNavigationUrl;
+		pendingNavigationUrl = null;
+
+		if (!chatId) return;
+
+		// Skip the store's default NEW_CHAT navigation so we can jump straight to
+		// the user's original destination without a start-page flash.
+		await conversationsStore.deleteConversation(chatId, { skipNavigation: true });
+
+		const target = targetUrl && targetUrl.href !== page.url.href ? targetUrl : ROUTES.START;
+		await goto(target);
+	}
+
+	function handleDiscardCancel() {
+		showDiscardDialog = false;
+		pendingNavigationUrl = null;
+	}
 
 	$effect(() => {
 		if (chatId && chatId !== currentChatId) {
@@ -130,4 +179,16 @@
 	bind:open={showModelNotAvailable}
 	modelName={requestedModelName}
 	availableModels={availableModelNames}
+/>
+
+<DialogConfirmation
+	bind:open={showDiscardDialog}
+	title="Discard conversation?"
+	description="This conversation only has a system message and no chat history yet. Leaving will discard it."
+	confirmText="Discard"
+	cancelText="Cancel"
+	variant="destructive"
+	icon={Trash2}
+	onConfirm={handleDiscardConfirm}
+	onCancel={handleDiscardCancel}
 />
