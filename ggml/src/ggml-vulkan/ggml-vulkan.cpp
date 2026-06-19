@@ -17348,6 +17348,16 @@ static int64_t ggml_vk_get_op_batch_size(const ggml_tensor * op) {
 static bool ggml_backend_vk_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_vk_device_context * dev_ctx = (ggml_backend_vk_device_context *)dev->context;
 
+#ifdef __APPLE__
+    const vk_device & device = ggml_vk_get_device(dev_ctx->device);
+    if (device->vendor_id == VK_VENDOR_ID_AMD && device->driver_id == vk::DriverId::eMoltenvk
+            && (op->op == GGML_OP_MUL_MAT_ID)) {
+        // For some reason, MoltenVK on AMD GPUs has a bug that causes garbage output when
+        // MUL_MAT_ID is offloaded (as in MoE models).
+        return false;
+    }
+#endif
+
     return ggml_vk_get_op_batch_size(op) >= dev_ctx->op_offload_min_batch_size;
 }
 
