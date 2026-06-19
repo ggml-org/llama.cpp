@@ -493,6 +493,12 @@ struct llama_layer {
     struct ggml_tensor * indexer_proj     = nullptr;
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
+    
+    // MSA
+    struct ggml_tensor * index_q_proj = nullptr;
+    struct ggml_tensor * index_k_proj = nullptr;
+    struct ggml_tensor * index_q_norm = nullptr;
+    struct ggml_tensor * index_k_norm = nullptr;
 
     // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;

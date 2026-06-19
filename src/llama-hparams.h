@@ -225,6 +225,9 @@ struct llama_hparams {
     uint32_t indexer_n_head    = 0;
     uint32_t indexer_head_size = 0;
     uint32_t indexer_top_k     = 0;
+    // MSA
+    uint32_t indexer_block_size  = 0;
+    uint32_t indexer_local_blocks = 0;
 
     // qwen3vl deepstack
     // When parsed from GGUF, this implies the first N layers consume the first

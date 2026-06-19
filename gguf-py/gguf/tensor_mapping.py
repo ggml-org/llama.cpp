@@ -1277,6 +1277,24 @@ class TensorNameMap:
         MODEL_TENSOR.INDEXER_ATTN_Q_B: (
             "model.layers.{bid}.self_attn.indexer.wq_b", # DSA
         ),
+        
+        MODEL_TENSOR.INDEX_Q_PROJ: (
+            "model.layers.{bid}.self_attn.index_q_proj", # MSA
+        ),
+        
+        MODEL_TENSOR.INDEX_K_PROJ: (
+            "model.layers.{bid}.self_attn.index_k_proj", # MSA
+        ),
+        
+        MODEL_TENSOR.INDEX_Q_NORM: (
+            "model.layers.{bid}.self_attn.index_q_norm", # MSA
+        ),
+        
+        MODEL_TENSOR.INDEX_K_NORM: (
+            "model.layers.{bid}.self_attn.index_k_norm", # MSA
+        ),
+        
+        
 
         ############################################################################
         # TODO: these do not belong to block_mappings_cfg - move them to mappings_cfg

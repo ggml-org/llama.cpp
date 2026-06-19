@@ -58,7 +58,7 @@ class MiniMaxM2Model(TextModel):
 class MiniMaxM3Model(TextModel):
     # Text-only MiniMax-M3 (minimax_m3_vl): MiniMax-M2 style GQA (per-head QK-norm, partial
     # rotary) + DeepSeek-V3 shared experts / leading dense, swigluoai activation. Sparse
-    # attention, vision tower and MTP heads are dropped.
+    # attention and MTP heads are dropped.
     model_arch = gguf.MODEL_ARCH.MINIMAXM3
     _experts_cache: dict[int, dict[str, Tensor]] = {}
 
@@ -75,7 +75,13 @@ class MiniMaxM3Model(TextModel):
         self.gguf_writer.add_expert_shared_count(self.find_hparam(["n_shared_experts"]))
         self.gguf_writer.add_expert_weights_scale(self.find_hparam(["routed_scaling_factor"]))
         self.gguf_writer.add_expert_weights_norm(True)
-
+        sac = self.find_hparam(["sparse_attention_config"])
+        # reuse existing indexer keys (map to hparams.indexer_n_head / head_size / top_k)
+        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.HEAD_COUNT.format(arch=self.arch),   sac["sparse_num_index_heads"])
+        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.KEY_LENGTH.format(arch=self.arch),   sac["sparse_index_dim"])
+        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.TOP_K.format(arch=self.arch),        sac["sparse_topk_blocks"])
+        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.BLOCK_SIZE.format(arch=self.arch),   sac["sparse_block_size"])
+        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.LOCAL_BLOCKS.format(arch=self.arch), sac["sparse_local_block"])
         # leading dense layers = count of leading zeros in moe_layer_freq
         moe_layer_freq = self.find_hparam(["moe_layer_freq"])
         n_dense = 0
@@ -88,7 +94,7 @@ class MiniMaxM3Model(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         # text-only: drop vision, projector, patch-merge and sparse-attention index tensors
-        if name.startswith(("vision_tower", "multi_modal_projector", "patch_merge_mlp")) or ".index_" in name:
+        if name.startswith(("vision_tower", "multi_modal_projector", "patch_merge_mlp")):
             return
 
         # strip VL wrapper prefix to match tensor_mapping names
