@@ -52,6 +52,31 @@ struct server_context_meta {
     uint64_t model_size;
 };
 
+enum server_state {
+    // SERVER_STATE_DOWNLOADING,
+    SERVER_STATE_LOADING,
+    SERVER_STATE_READY,
+    SERVER_STATE_SLEEPING,
+};
+
+static std::string server_state_to_str(server_state state) {
+    switch (state) {
+        case SERVER_STATE_LOADING:     return "loading";
+        case SERVER_STATE_READY:       return "ready";
+        case SERVER_STATE_SLEEPING:    return "sleeping";
+        default: GGML_ASSERT(false && "invalid server_state");
+    }
+}
+
+static server_state server_state_from_str(const std::string & str) {
+    if (str == "loading")     return SERVER_STATE_LOADING;
+    if (str == "ready")       return SERVER_STATE_READY;
+    if (str == "sleeping")    return SERVER_STATE_SLEEPING;
+    GGML_ASSERT(false && "invalid server_state string");
+}
+
+using server_state_callback_t = std::function<void(server_state, json /* payload */)>;
+
 struct server_context {
     std::unique_ptr<server_context_impl> impl;
 
@@ -79,9 +104,8 @@ struct server_context {
     // not thread-safe, should only be used from the main thread
     server_context_meta get_meta() const;
 
-    // register a callback to be called when sleeping state changes
-    // must be set before load_model() is called
-    void on_sleeping_changed(std::function<void(bool)> callback);
+    // note: must be set before load_model() is called
+    void set_state_callback(server_state_callback_t callback);
 };
 
 

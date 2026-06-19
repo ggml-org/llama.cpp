@@ -303,7 +303,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
 
     if (!model.docker_repo.empty()) {
         model.path = common_docker_resolve_model(model.docker_repo);
-        model.name = model.docker_repo;
     } else if (!model.hf_repo.empty()) {
         // If -m was used with -hf, treat the model "path" as the hf_file to download
         if (model.hf_file.empty() && !model.path.empty()) {
@@ -323,7 +322,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
             throw std::runtime_error("failed to download model from Hugging Face");
         }
 
-        model.name = model.hf_repo;
         model.path = download_result.model_path;
 
         if (!download_result.mmproj_path.empty()) {
