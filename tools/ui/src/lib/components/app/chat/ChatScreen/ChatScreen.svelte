@@ -389,7 +389,7 @@
 	<div
 		bind:this={chatScrollContainer}
 		aria-label="Chat interface with file drop zone"
-		class="flex h-full flex-col overflow-y-auto px-4 md:px-6"
+		class="chat-screen flex h-full flex-col overflow-y-auto px-4 md:px-6 min-h-dvh"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}

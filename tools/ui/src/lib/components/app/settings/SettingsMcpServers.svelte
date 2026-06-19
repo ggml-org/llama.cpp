@@ -55,7 +55,7 @@
 </script>
 
 <div in:fade={{ duration: 150 }} class="h-full max-h-[100dvh] overflow-y-auto">
-	<div class="flex items-center gap-2 p-4 md:absolute md:top-8 md:left-8 md:px-0 md:py-2">
+	<div class="flex items-center gap-2 p-4">
 		<McpLogo class="h-5 w-5 md:h-6 md:w-6" />
 
 		<h1 class="text-xl font-semibold md:text-2xl">MCP Servers</h1>

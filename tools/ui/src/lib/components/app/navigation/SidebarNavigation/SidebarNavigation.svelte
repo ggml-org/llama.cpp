@@ -1,36 +1,77 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Trash2, Pencil, X } from '@lucide/svelte';
+	import { PanelLeftClose, Settings } from '@lucide/svelte';
+	import { ActionIcon, KeyboardShortcutInfo, Logo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { DialogConfirmation, Logo } from '$lib/components/app';
-	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
-	import SidebarNavigationConversationList from './SidebarNavigationConversationList.svelte';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import Label from '$lib/components/ui/label/label.svelte';
-	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
-	import * as Sidebar from '$lib/components/ui/sidebar';
-	import Input from '$lib/components/ui/input/input.svelte';
-	import { ROUTES } from '$lib/constants/routes';
-	import { RouterService } from '$lib/services/router.service';
+	import {
+		ICON_STRIP_TRANSITION_DURATION,
+		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
+		SIDEBAR_ACTIONS_ITEMS,
+		ROUTES
+	} from '$lib/constants';
+	import { TooltipSide } from '$lib/enums';
+	import { fade, scale } from 'svelte/transition';
+	import { circIn } from 'svelte/easing';
+	import { onMount } from 'svelte';
+	import type { Component } from 'svelte';
+	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { getPreviewText } from '$lib/utils';
-	import { APP_NAME } from '$lib/constants';
+	import { RouterService } from '$lib/services/router.service';
+	import SidebarNavigationConversationList from './SidebarNavigationConversationList.svelte';
+	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
 
-	const sidebar = Sidebar.useSidebar();
+	interface Props {
+		onSearchClick?: () => void;
+	}
+
+	let { onSearchClick = () => {} }: Props = $props();
+
+	const { handleKeydown } = useKeyboardShortcuts({ activateSearchMode: () => onSearchClick() });
+
+	let initialized = $state(false);
+	let showIcons = $state(false);
+
+	onMount(() => {
+		showIcons = true;
+
+		setTimeout(() => {
+			initialized = true;
+		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * SIDEBAR_ACTIONS_ITEMS.length);
+	});
+
+	let isExpandedMode = $state(false);
+	let hoveredTooltip = $state<string | null>(null);
+
+	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
+
+	function toggleExpandedMode() {
+		isExpandedMode = !isExpandedMode;
+		if (!isExpandedMode) {
+			hoveredTooltip = null;
+		}
+	}
+
+	function isItemActive(item: { activeRouteId?: string; activeRoutePrefix?: string }): boolean {
+		if (item.activeRouteId) {
+			return page.route.id === item.activeRouteId;
+		}
+		if (item.activeRoutePrefix) {
+			return !!page.route.id?.startsWith(item.activeRoutePrefix);
+		}
+		return false;
+	}
+
+	function getItemOnClick(item: { route?: string }) {
+		return item.route ? () => goto(item.route!) : onSearchClick;
+	}
+
+	// --- Conversation list state ---
 
 	let currentChatId = $derived(page.params.id);
 	let isSearchModeActive = $state(false);
 	let searchQuery = $state('');
-	let showDeleteDialog = $state(false);
-	let deleteWithForks = $state(false);
-	let showEditDialog = $state(false);
-	let selectedConversation = $state<DatabaseConversation | null>(null);
-	let editedName = $state('');
-	let selectedConversationNamePreview = $derived.by(() =>
-		selectedConversation ? getPreviewText(selectedConversation.name) : ''
-	);
 
 	let filteredConversations = $derived.by(() => {
 		if (isSearchModeActive) {
@@ -46,116 +87,30 @@
 		return conversations();
 	});
 
-	let selectedConversationHasDescendants = $derived.by(() => {
-		if (!selectedConversation) return false;
-
-		const allConvs = conversations();
-		const queue = [selectedConversation.id];
-
-		while (queue.length > 0) {
-			const parentId = queue.pop()!;
-
-			for (const c of allConvs) {
-				if (c.forkedFromConversationId === parentId) return true;
-			}
-		}
-
-		return false;
-	});
-
-	async function handleDeleteConversation(id: string) {
-		const conversation = conversations().find((conv) => conv.id === id);
-		if (conversation) {
-			selectedConversation = conversation;
-			deleteWithForks = false;
-			showDeleteDialog = true;
-		}
+	async function selectConversation(id: string) {
+		await goto(RouterService.chat(id));
 	}
 
 	async function handleEditConversation(id: string) {
 		const conversation = conversations().find((conv) => conv.id === id);
-		if (conversation) {
-			selectedConversation = conversation;
-			editedName = conversation.name;
-			showEditDialog = true;
+		if (!conversation) return;
+
+		const newName = window.prompt('Rename conversation', conversation.name);
+		if (newName && newName.trim()) {
+			await conversationsStore.updateConversationName(id, newName.trim());
 		}
 	}
 
-	function handleConfirmDelete() {
-		if (selectedConversation) {
-			const convId = selectedConversation.id;
-			const withForks = deleteWithForks;
-			showDeleteDialog = false;
+	async function handleDeleteConversation(id: string) {
+		const conversation = conversations().find((conv) => conv.id === id);
+		if (!conversation) return;
 
-			setTimeout(() => {
-				conversationsStore.deleteConversation(convId, {
-					deleteWithForks: withForks
-				});
-			}, 100); // Wait for animation to finish
-		}
-	}
+		const confirmed = window.confirm(
+			`Delete "${conversation.name}"? This action cannot be undone.`
+		);
+		if (!confirmed) return;
 
-	function handleConfirmEdit() {
-		if (!editedName.trim() || !selectedConversation) return;
-
-		showEditDialog = false;
-
-		conversationsStore.updateConversationName(selectedConversation.id, editedName);
-		selectedConversation = null;
-	}
-
-	export function handleMobileSidebarItemClick() {
-		if (sidebar.isMobile) {
-			sidebar.toggle();
-		}
-	}
-
-	let chatSidebarActions: { activateSearch?: () => void } | undefined = $state();
-	let openedForSearch = $state(false);
-
-	export function activateSearchMode() {
-		if (!sidebar.open) {
-			openedForSearch = true;
-		}
-		chatSidebarActions?.activateSearch?.();
-	}
-
-	function handleSearchDeactivated() {
-		if (openedForSearch) {
-			openedForSearch = false;
-			sidebar.toggle();
-		}
-	}
-
-	$effect(() => {
-		if (!sidebar.open) {
-			isSearchModeActive = false;
-			searchQuery = '';
-			openedForSearch = false;
-		}
-	});
-
-	export function editActiveConversation() {
-		if (currentChatId) {
-			const activeConversation = filteredConversations.find((conv) => conv.id === currentChatId);
-
-			if (activeConversation) {
-				const event = new CustomEvent('edit-active-conversation', {
-					detail: { conversationId: currentChatId }
-				});
-				document.dispatchEvent(event);
-			}
-		}
-	}
-
-	async function selectConversation(id: string) {
-		if (isSearchModeActive) {
-			isSearchModeActive = false;
-			searchQuery = '';
-		}
-
-		handleMobileSidebarItemClick();
-		await goto(RouterService.chat(id));
+		await conversationsStore.deleteConversation(id, { deleteWithForks: false });
 	}
 
 	function handleStopGeneration(id: string) {
@@ -163,99 +118,91 @@
 	}
 </script>
 
-<div class="flex h-full flex-col">
-	<ScrollArea class="h-full flex-1">
-		<Sidebar.Header class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2">
-			<div class="flex items-center justify-between">
-				<a href={ROUTES.START} onclick={handleMobileSidebarItemClick}>
-					<!-- <h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">
-						{APP_NAME}
-					</h1> -->
-					<Logo class="sticky top-4 ml-2 mt-1.25" --size="1.125rem" />
-				</a>
+{#snippet itemIcon(IconComponent: Component)}
+	<IconComponent class="h-4 w-4" />
+{/snippet}
 
-				<Button
-					class="rounded-full md:hidden"
-					variant="ghost"
-					size="icon"
-					onclick={() => sidebar.toggle()}
-				>
-					<X class="h-4 w-4" />
-					<span class="sr-only">Close sidebar</span>
-				</Button>
-			</div>
+<svelte:window onkeydown={handleKeydown} />
 
-			<SidebarNavigationActions
-				bind:this={chatSidebarActions}
-				{handleMobileSidebarItemClick}
-				bind:isSearchModeActive
-				bind:searchQuery
-				onSearchDeactivated={handleSearchDeactivated}
-			/>
-		</Sidebar.Header>
-
-		<SidebarNavigationConversationList
-			{filteredConversations}
-			{currentChatId}
-			{isSearchModeActive}
-			{searchQuery}
-			onSelect={selectConversation}
-			onEdit={handleEditConversation}
-			onDelete={handleDeleteConversation}
-			onStop={handleStopGeneration}
+<aside
+	class="fixed top-2 bottom-2 left-2 py-2 rounded-xl z-10 hidden flex-col justify-between transition-[width,padding] duration-200 ease-out md:flex {isStripExpanded
+		? 'w-72 bg-muted/50 backdrop-blur-xl'
+		: 'w-12'}"
+>
+	<div class="px-2 flex items-center justify-between">
+		<ActionIcon
+			icon={Logo}
+			size="lg"
+			iconSize="h-4 w-4"
+			class="h-9 w-9 rounded-full hover:bg-accent!"
+			href={isExpandedMode ? ROUTES.START : undefined}
+			onclick={isExpandedMode ? undefined : toggleExpandedMode}
+			ariaLabel={isExpandedMode ? 'Go to start' : 'Expand navigation'}
 		/>
-	</ScrollArea>
-</div>
 
-<DialogConfirmation
-	bind:open={showDeleteDialog}
-	title="Delete Conversation"
-	description={selectedConversation
-		? `Are you sure you want to delete "${selectedConversationNamePreview}"? This action cannot be undone and will permanently remove all messages in this conversation.`
-		: ''}
-	confirmText="Delete"
-	cancelText="Cancel"
-	variant="destructive"
-	icon={Trash2}
-	onConfirm={handleConfirmDelete}
-	onCancel={() => {
-		showDeleteDialog = false;
-		selectedConversation = null;
-	}}
->
-	{#if selectedConversationHasDescendants}
-		<div class="flex items-center gap-2 py-2">
-			<Checkbox id="delete-with-forks" bind:checked={deleteWithForks} />
+		{#if isExpandedMode}
+			<div transition:fade={{ duration: 150, easing: circIn, delay: 50 }}>
+				<ActionIcon
+					icon={PanelLeftClose}
+					size="lg"
+					iconSize="h-4 w-4"
+					class="h-9 w-9 rounded-full mr-1 hover:bg-accent!"
+					onclick={toggleExpandedMode}
+					ariaLabel="Collapse navigation"
+				/>
+			</div>
+		{/if}
+	</div>
 
-			<Label for="delete-with-forks" class="text-sm">Also delete all forked conversations</Label>
+	<div class="mt-2 flex min-h-0 flex-1 flex-col justify-between gap-1 px-2">
+		<SidebarNavigationActions {isExpandedMode} />
+
+		{#if isExpandedMode}
+			<div
+				class="flex min-h-0 flex-1 flex-col"
+				transition:fade={{ duration: 150, easing: circIn }}
+			>
+				<SidebarNavigationConversationList
+					{filteredConversations}
+					{currentChatId}
+					{isSearchModeActive}
+					{searchQuery}
+					onSelect={selectConversation}
+					onEdit={handleEditConversation}
+					onDelete={handleDeleteConversation}
+					onStop={handleStopGeneration}
+				/>
+			</div>
+		{/if}
+
+		<div class="flex flex-col gap-0.5">
+			<div role="presentation">
+				{#if isExpandedMode || hoveredTooltip === 'Settings'}
+					<div transition:scale={{ duration: 150, start: 0.9, opacity: 0 }} class="origin-left">
+						<Button
+							class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
+							href={ROUTES.SETTINGS}
+							variant="ghost"
+						>
+							<div class="flex items-center gap-2">
+								<Settings class="h-4 w-4" />
+
+								Settings
+							</div>
+						</Button>
+					</div>
+				{:else}
+					<ActionIcon
+						icon={Settings}
+						size="lg"
+						iconSize="h-4 w-4"
+						class="h-9 w-9 rounded-full hover:bg-accent!"
+						href={ROUTES.SETTINGS}
+						tooltip="Settings"
+						tooltipSide={TooltipSide.RIGHT}
+					/>
+				{/if}
+			</div>
 		</div>
-	{/if}
-</DialogConfirmation>
-
-<DialogConfirmation
-	bind:open={showEditDialog}
-	title="Edit Conversation Name"
-	description=""
-	confirmText="Save"
-	cancelText="Cancel"
-	icon={Pencil}
-	onConfirm={handleConfirmEdit}
-	onCancel={() => {
-		showEditDialog = false;
-		selectedConversation = null;
-	}}
-	onKeydown={(event) => {
-		if (event.key === 'Enter') {
-			event.preventDefault();
-			event.stopImmediatePropagation();
-			handleConfirmEdit();
-		}
-	}}
->
-	<Input
-		class="text-foreground"
-		placeholder="Enter a new name"
-		type="text"
-		bind:value={editedName}
-	/>
-</DialogConfirmation>
+	</div>
+</aside>

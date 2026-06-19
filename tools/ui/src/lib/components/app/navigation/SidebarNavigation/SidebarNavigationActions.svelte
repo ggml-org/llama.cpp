@@ -1,39 +1,50 @@
 <script lang="ts">
-	import { KeyboardShortcutInfo } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import type { Component } from 'svelte';
-	import { SearchInput } from '$lib/components/app';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { SIDEBAR_ACTIONS_ITEMS } from '$lib/constants/ui';
+	import { ActionIcon, KeyboardShortcutInfo, Logo } from '$lib/components/app';
+	import { Button } from '$lib/components/ui/button';
+	import {
+		ICON_STRIP_TRANSITION_DURATION,
+		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
+		SIDEBAR_ACTIONS_ITEMS
+	} from '$lib/constants';
+	import { TooltipSide } from '$lib/enums';
+	import { fade } from 'svelte/transition';
+	import { circIn } from 'svelte/easing';
+	import { onMount } from 'svelte';
+	import type { Component } from 'svelte';
 
 	interface Props {
-		handleMobileSidebarItemClick: () => void;
-		isSearchModeActive: boolean;
-		searchQuery: string;
-		isCancelAlwaysVisible?: boolean;
-		onSearchDeactivated?: () => void;
+     	isExpandedMode: boolean;
+		onSearchClick?: () => void;
 	}
 
-	let {
-		handleMobileSidebarItemClick,
-		isSearchModeActive = $bindable(),
-		searchQuery = $bindable(),
-		isCancelAlwaysVisible = false,
-		onSearchDeactivated
-	}: Props = $props();
+	let { isExpandedMode = false, onSearchClick = () => {} }: Props = $props();
 
-	let searchInputRef = $state<HTMLInputElement | null>(null);
 
-	function handleSearchModeDeactivate() {
-		isSearchModeActive = false;
-		searchQuery = '';
-		onSearchDeactivated?.();
+	let initialized = $state(false);
+	let showIcons = $state(false);
+
+	onMount(() => {
+		showIcons = true;
+
+		setTimeout(() => {
+			initialized = true;
+		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * SIDEBAR_ACTIONS_ITEMS.length);
+	});
+
+	function isItemActive(item: { activeRouteId?: string; activeRoutePrefix?: string }): boolean {
+		if (item.activeRouteId) {
+			return page.route.id === item.activeRouteId;
+		}
+		if (item.activeRoutePrefix) {
+			return !!page.route.id?.startsWith(item.activeRoutePrefix);
+		}
+		return false;
 	}
 
-	export function activateSearch() {
-		isSearchModeActive = true;
-		// Focus after Svelte renders the input
-		queueMicrotask(() => searchInputRef?.focus());
+	function getItemOnClick(item: { route?: string }) {
+		return item.route ? () => goto(item.route!) : onSearchClick;
 	}
 </script>
 
@@ -41,56 +52,58 @@
 	<IconComponent class="h-4 w-4" />
 {/snippet}
 
-<div class="mt-2 space-y-0.5">
-	{#if isSearchModeActive}
-		<SearchInput
-			bind:value={searchQuery}
-			bind:ref={searchInputRef}
-			onClose={handleSearchModeDeactivate}
-			onKeyDown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
-			placeholder="Search conversations..."
-			{isCancelAlwaysVisible}
-		/>
-	{:else}
-		{#each SIDEBAR_ACTIONS_ITEMS as item (item.route)}
-			{#if !item.route}
-				<Button
-					class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100"
-					onclick={activateSearch}
-					variant="ghost"
-				>
-					<div class="flex items-center gap-2">
-						{@render itemIcon(item.icon)}
+<div class="flex min-h-0 flex-col gap-0.75">
 
-						{item.tooltip}
-					</div>
+	{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
+		{@const isActive = isItemActive(item)}
+		{@const itemOnClick = getItemOnClick(item)}
+		{@const itemTransition = {
+			duration: ICON_STRIP_TRANSITION_DURATION,
+			delay: !initialized
+				? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER +
+					i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
+				: 0,
+			easing: circIn
+		}}
 
-					{#if item.keys}
-						<KeyboardShortcutInfo keys={item.keys} />
-					{/if}
-				</Button>
-			{:else}
+		<!-- {#if showIcons && isExpandedMode} -->
+			<div transition:fade={itemTransition}>
 				<Button
-					class="w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {(item.activeRouteId &&
-						page.route.id === item.activeRouteId) ||
-					(item.activeRoutePrefix && page.route.id?.startsWith(item.activeRoutePrefix))
+					class="ml-0.5 w-full justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isExpandedMode ? 'rounded-full' : ''} {isActive
 						? 'bg-accent text-accent-foreground'
 						: ''}"
 					href={item.route}
-					onclick={handleMobileSidebarItemClick}
+					onclick={itemOnClick}
 					variant="ghost"
+					size={isExpandedMode ? 'default' : 'icon'}
 				>
-					<div class="flex items-center gap-2">
+					<span class="flex min-w-0 items-center gap-2">
 						{@render itemIcon(item.icon)}
 
-						{item.tooltip}
-					</div>
+						{#if showIcons}
+    						<span class="min-w-0 truncate">{item.tooltip}</span>
+                        {/if}
+					</span>
 
-					{#if item.keys}
+					{#if isExpandedMode && item.keys}
 						<KeyboardShortcutInfo keys={item.keys} />
 					{/if}
 				</Button>
-			{/if}
-		{/each}
-	{/if}
+			</div>
+		<!-- {:else if showIcons}
+			<div transition:fade={itemTransition}>
+				<ActionIcon
+					icon={item.icon}
+					tooltip={item.tooltip}
+					tooltipSide={TooltipSide.RIGHT}
+					size="lg"
+					iconSize="h-4 w-4"
+					class="h-9 w-9 rounded-full hover:bg-accent! {isActive
+						? 'bg-accent text-accent-foreground'
+						: ''}"
+					onclick={itemOnClick}
+				/>
+			</div>
+		{/if} -->
+	{/each}
 </div>
