@@ -2034,7 +2034,7 @@ bool common_prompt_batch_decode(
 }
 
 size_t common_prompt_checkpoint::size() const {
-    return data_tgt.size() + data_dft.size();
+    return data_tgt.size() + data_dft.size() + data_spec.size();
 }
 
 bool common_prompt_checkpoint::empty() const {
@@ -2049,6 +2049,7 @@ void common_prompt_checkpoint::clear() {
 
     data_tgt.clear();
     data_dft.clear();
+    data_spec.clear();
 }
 
 void common_prompt_checkpoint::update_pos(
@@ -2138,4 +2139,5 @@ void common_prompt_checkpoint::clear_tgt() {
 
 void common_prompt_checkpoint::clear_dft() {
     data_dft.clear();
+    data_spec.clear();
 }

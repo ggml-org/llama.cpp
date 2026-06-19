@@ -363,7 +363,7 @@ struct common_params_speculative {
 
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;
@@ -1064,6 +1064,10 @@ struct common_prompt_checkpoint {
 
     std::vector<uint8_t> data_tgt;
     std::vector<uint8_t> data_dft;
+
+    // (optional) speculative-decoding implementation state stashed with the checkpoint
+    // (e.g. eagle3's deferred-boundary g_embd row)
+    std::vector<uint8_t> data_spec;
 
     size_t size() const;
 
