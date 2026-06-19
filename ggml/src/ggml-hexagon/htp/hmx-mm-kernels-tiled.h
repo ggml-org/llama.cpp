@@ -1023,11 +1023,10 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
 
     #pragma unroll(2)
     for (r = 0; r < n_rows_tiled; r += 2) {
-        uint32_t r0 = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
-        uint32_t r1 = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
-
         uint32_t r_idx0 = start_row + r + 0;
         uint32_t r_idx1 = start_row + r + 1;
+        uint32_t r0 = r_idx0 / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
+        uint32_t r1 = r_idx0 % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
 
         struct mmid_row_mapping mapping0 = matrix_rows[cur_a * mapping_stride + r_idx0];
         struct mmid_row_mapping mapping1 = matrix_rows[cur_a * mapping_stride + r_idx1];
@@ -1070,8 +1069,9 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
     }
 
     for (; r < n_rows_padded; r += 2) {
-        uint32_t r0 = r / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
-        uint32_t r1 = r % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
+        uint32_t r_idx0 = start_row + r;
+        uint32_t r0 = r_idx0 / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
+        uint32_t r1 = r_idx0 % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
 
         const bool row0_valid = (start_row + r + 0) < cne1;
         const bool row1_valid = (start_row + r + 1) < cne1;
@@ -1145,12 +1145,11 @@ static void transfer_output_chunk_fp16_to_fp32_scattered(
     const HVX_Vector one = hvx_vec_splat_f16(1.0);
 
     for (size_t r = 0; r < n_rows; r += 2) {
-        const size_t r0 = r / HTP_MM_HMX_TILE_N_ROWS;
-        const size_t r1 = (r % HTP_MM_HMX_TILE_N_ROWS) / 2;  // index of the row pair within the tile
-        const __fp16 *row_base = vtcm_src + r0 * tile_row_stride;
-
         uint32_t r_idx0 = start_row + r + 0;
         uint32_t r_idx1 = start_row + r + 1;
+        const size_t r0 = r_idx0 / HTP_MM_HMX_TILE_N_ROWS;
+        const size_t r1 = (r_idx0 % HTP_MM_HMX_TILE_N_ROWS) / 2;  // index of the row pair within the tile
+        const __fp16 *row_base = vtcm_src + r0 * tile_row_stride;
 
         if (r_idx0 >= cne1) break;
 

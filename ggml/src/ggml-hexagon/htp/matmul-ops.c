@@ -2287,10 +2287,9 @@ static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigne
     int start_row = st->start_row + chunk_idx * chunk_size;
     int n_rows = hex_smin(st->cne1 - start_row, chunk_size);
     if (n_rows > 0) {
-        __fp16 *dst = st->dst + (size_t)(start_row - st->start_row) * st->k_block;
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
         transfer_activation_chunk_fp32_to_fp16_gathered(
-            dst, st->src, start_row, n_rows, st->k_block,
+            st->dst, st->src, start_row, n_rows, st->k_block,
             st->matrix_rows, st->cur_a, st->mapping_stride,
             st->ne11, &st->ne11_div, st->nb11, st->nb12, st->cne1, st->k_valid);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
@@ -2305,10 +2304,9 @@ static void transfer_output_chunk_scattered_worker_fn(unsigned int n, unsigned i
     int start_row = st->start_row + chunk_idx * chunk_size;
     int n_rows = hex_smin(st->cne1 - start_row, chunk_size);
     if (n_rows > 0) {
-        const __fp16 *src = st->vtcm_src + (size_t)(start_row - st->start_row) * st->n_cols;
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, chunk_idx);
         transfer_output_chunk_fp16_to_fp32_scattered(
-            st->dst, src, start_row, n_rows, st->n_cols,
+            st->dst, st->vtcm_src, start_row, n_rows, st->n_cols,
             st->matrix_rows, st->cur_a, st->mapping_stride,
             st->dst_nb1, st->dst_nb2, st->cne1);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, chunk_idx);
@@ -2871,7 +2869,7 @@ static void transfer_activation_chunk_gathered_threaded(
             int k_valid) {
     if (n_rows <= 0) return;
     int chunks_per_thread = hmx_ceil_div(n_rows, n_threads);
-    chunks_per_thread = hex_align_up(chunks_per_thread, HTP_MM_HMX_TILE_N_ROWS);
+    chunks_per_thread = hex_align_up(chunks_per_thread, 2);
 
     int actual_threads = hmx_ceil_div(n_rows, chunks_per_thread);
 
@@ -2918,7 +2916,7 @@ static void transfer_output_chunk_scattered_threaded(
             int n_threads) {
     if (n_rows <= 0) return;
     int chunks_per_thread = hmx_ceil_div(n_rows, n_threads);
-    chunks_per_thread = hex_align_up(chunks_per_thread, HTP_MM_HMX_TILE_N_ROWS);
+    chunks_per_thread = hex_align_up(chunks_per_thread, 2);
 
     int actual_threads = hmx_ceil_div(n_rows, chunks_per_thread);
 
@@ -3061,7 +3059,10 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
                 n_k_tiles, n_k_tiles_div, dequant_worker_fn, n_threads
             );
 
+            struct htp_thread_trace * tr = &ctx->trace[HTP_MAX_NTHREADS];
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, nc);
             core_dot_chunk_fp16(vtcm_output, vtcm_f16_act, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HTP_MM_HMX_TILE_N_ROWS);
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, nc);
 
             transfer_output_chunk_scattered_threaded(
                 ctx, dst + nc, vtcm_output, (int) mr, (int) n_rows, (int) n_cols,
