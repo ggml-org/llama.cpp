@@ -718,6 +718,9 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
 
     const HVX_Vector one = hvx_vec_splat_f16(1.0);
 
+    const size_t limit_c         = hex_smin(n_cols, dst_cols);
+    const size_t limit_c_aligned = (limit_c & ~31);
+
     for (size_t r = 0; r < n_rows; r += 2) {
         const size_t r0 = r / HTP_MM_HMX_TILE_N_ROWS;
         const size_t r1 = (r % HTP_MM_HMX_TILE_N_ROWS) / 2;  // index of the row pair within the tile
@@ -725,26 +728,32 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
         float *output_row_base = dst + r * dst_stride;  // global memory row base for row r (and r+1)
 
         #pragma unroll(4)
-        for (size_t c = 0; c < n_cols; c += HTP_MM_HMX_TILE_N_COLS) {
+        for (size_t c = 0; c < limit_c_aligned; c += HTP_MM_HMX_TILE_N_COLS) {
+            const size_t c0    = c / HTP_MM_HMX_TILE_N_COLS;
+            const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;
+            HVX_Vector v = ((const HVX_Vector *) tile)[r1];
+            HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);
+
+            HVX_Vector *pv_out0 = (HVX_Vector *) (output_row_base + c + 0);
+            HVX_Vector *pv_out1 = (HVX_Vector *) (output_row_base + c + dst_stride);
+
+            *pv_out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
+            if (r + 1 < n_rows) {
+                *pv_out1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+            }
+        }
+
+        if (limit_c_aligned < (size_t)limit_c) {
+            size_t c = limit_c_aligned;
+            int valid_c = limit_c - (int)c;
             const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;
             const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;
             HVX_Vector v = ((const HVX_Vector *) tile)[r1];
             HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);
 
-            volatile HVX_Vector *pv_out0 = (volatile HVX_Vector *) (output_row_base + c + 0);
-            volatile HVX_Vector *pv_out1 = (volatile HVX_Vector *) (output_row_base + c + dst_stride);  // next row in global memory
-
-            int valid_c = dst_cols - (int)c;
-            if (valid_c >= 32) {
-                *pv_out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
-                if (r + 1 < n_rows) {
-                    *pv_out1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
-                }
-            } else if (valid_c > 0) {
-                hvx_vec_store_u(output_row_base + c, valid_c * sizeof(float), Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)));
-                if (r + 1 < n_rows) {
-                    hvx_vec_store_u(output_row_base + c + dst_stride, valid_c * sizeof(float), Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)));
-                }
+            hvx_vec_store_u(output_row_base + c, valid_c * sizeof(float), Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)));
+            if (r + 1 < n_rows) {
+                hvx_vec_store_u(output_row_base + c + dst_stride, valid_c * sizeof(float), Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)));
             }
         }
     }
@@ -1161,8 +1170,8 @@ static void transfer_output_chunk_fp16_to_fp32_scattered(
             HVX_Vector v = ((const HVX_Vector *) tile)[r1];
             HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);
 
-            volatile HVX_Vector *pv_out0 = (volatile HVX_Vector *) (output_row0 + c);
-            volatile HVX_Vector *pv_out1 = output_row1 ? (volatile HVX_Vector *) (output_row1 + c) : NULL;
+            HVX_Vector *pv_out0 = (HVX_Vector *) (output_row0 + c);
+            HVX_Vector *pv_out1 = output_row1 ? (HVX_Vector *) (output_row1 + c) : NULL;
 
             *pv_out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
             if (pv_out1) {
