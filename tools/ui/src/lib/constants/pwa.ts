@@ -229,8 +229,13 @@ export const PWA_GENERATOR_DEVICES = [
 ] as const;
 
 // PWA assets generator configuration — used by pwa-assets.config.ts
+// FAVICON_PADDING: fraction (0..1) of the icon reserved as equal margin on
+// each side. Applied to icon PNG/ICO outputs by @vite-pwa/assets-generator and
+// post-processed into the static favicon.svg so the in-app logo (which reads
+// src/lib/assets/logo.svg directly) is unaffected.
 export const PWA_ASSET_GENERATOR = {
 	LINK_PRESET: '2023',
+	FAVICON_PADDING: 0.04,
 	SPLASH_PADDING: 0.75,
 	FIT_MODE: 'contain',
 	ADD_MEDIA_SCREEN: true,
