@@ -7,7 +7,7 @@ ARG NODE_VERSION=24
 
 FROM docker.io/node:$NODE_VERSION AS web
 
-ARG BUILD_NUMBER
+ARG APP_VERSION
 
 WORKDIR /app/tools/ui
 
@@ -15,7 +15,7 @@ COPY tools/ui/package.json tools/ui/package-lock.json ./
 RUN npm ci
 
 COPY tools/ui/ ./
-RUN LLAMA_BUILD_NUMBER="$BUILD_NUMBER" npm run build
+RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 
 FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 
