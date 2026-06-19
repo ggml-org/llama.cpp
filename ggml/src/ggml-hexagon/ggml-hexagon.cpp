@@ -172,7 +172,7 @@ static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const htp_op
     char pmu_str[256] = "";
     if (opt_profile == 2) {
         static_assert(HTP_PROF_PMU_NCNT == 8, "current implementation assumes 8 PMU counters");
-        sprintf(pmu_str, " pmu [%u,%u,%u,%u,%u,%u,%u,%u]",
+        snprintf(pmu_str, sizeof(pmu_str), " pmu [%u,%u,%u,%u,%u,%u,%u,%u]",
                 pmu[0], pmu[1], pmu[2], pmu[3], pmu[4], pmu[5], pmu[6], pmu[7]);
     }
 
@@ -1534,7 +1534,7 @@ struct ggml_hexagon_opqueue {
 
             char evt_str[256] = "";
             if (opt_profile == 3) {
-                sprintf(evt_str, " evt [%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u]",
+                snprintf(evt_str, sizeof(evt_str), " evt [%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u]",
                         rsp.n_traces[0], rsp.n_traces[1], rsp.n_traces[2], rsp.n_traces[3],
                         rsp.n_traces[4], rsp.n_traces[5], rsp.n_traces[6], rsp.n_traces[7],
                         rsp.n_traces[8], rsp.n_traces[9], rsp.n_traces[10]);
