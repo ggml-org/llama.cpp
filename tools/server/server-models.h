@@ -170,7 +170,7 @@ private:
     common_preset_context ctx_preset;
 
     common_params base_params;
-    std::string bin_path;
+    std::filesystem::path bin_path;
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
 

@@ -25,7 +25,6 @@
 #include <filesystem>
 #include <random>
 #include <sstream>
-#include <cstring>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -255,14 +254,8 @@ server_models::server_models(
               base_preset(ctx_preset.load_from_args(argc, argv)) {
     // clean up base preset
     unset_reserved_args(base_preset, true);
-    // set binary path
-    try {
-        bin_path = get_server_exec_path().string();
-    } catch (const std::exception & e) {
-        bin_path = argv[0];
-        LOG_WRN("failed to get server executable path: %s\n", e.what());
-        LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
-    }
+
+    bin_path = argv[0]; // TODO: argv[0] is most of the time the path to the executable...
     load_models();
 }
 
@@ -315,7 +308,7 @@ void server_models::add_model(server_model_meta && meta) {
         }
     }
 
-    meta.update_args(ctx_preset, bin_path); // render args
+    meta.update_args(ctx_preset, bin_path.string()); // render args
     meta.update_caps();
     std::string name = meta.name;
     mapping[name] = instance_t{
