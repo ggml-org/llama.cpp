@@ -194,8 +194,8 @@ class Keys:
             HEAD_COUNT = "{arch}.attention.indexer.head_count"
             KEY_LENGTH = "{arch}.attention.indexer.key_length"
             TOP_K      = "{arch}.attention.indexer.top_k"
-            BLOCK_SIZE   = "{arch}.attention.indexer.block_size"    //MSA
-            LOCAL_BLOCKS = "{arch}.attention.indexer.local_blocks"  //MSA
+            BLOCK_SIZE   = "{arch}.attention.indexer.block_size"    #MSA
+            LOCAL_BLOCKS = "{arch}.attention.indexer.local_blocks"  #MSA
 
     class Rope:
         DIMENSION_COUNT           = "{arch}.rope.dimension_count"
