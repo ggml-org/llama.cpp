@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { PanelLeftClose } from '@lucide/svelte';
+	import { PanelLeftClose, PanelLeftOpen } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		Logo,
@@ -15,6 +15,7 @@
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { RouterService } from '$lib/services/router.service';
+	import { TooltipSide } from '$lib/enums';
 
 	interface Props {
 		onSearchClick?: () => void;
@@ -26,6 +27,7 @@
 
 	let isExpandedMode = $state(false);
 	let hoveredTooltip = $state<string | null>(null);
+	let logoHovered = $state(false);
 
 	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
 
@@ -35,6 +37,13 @@
 			hoveredTooltip = null;
 		}
 	}
+
+	$effect(() => {
+		if (!isExpandedMode) {
+			isSearchModeActive = false;
+			searchQuery = '';
+		}
+	});
 
 	let currentChatId = $derived(page.params.id);
 	let isSearchModeActive = $state(false);
@@ -88,20 +97,30 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <aside
-	class="sticky top-2 left-2 max-h-[calc(100dvh-1rem)] py-2 rounded-xl z-10 hidden flex-col justify-between transition-[width,padding] duration-200 ease-out md:flex {isStripExpanded
-		? 'w-72 bg-muted/50 backdrop-blur-xl border-border shadow-md'
+	class="sticky top-2 ml-2 mt-2 h-[calc(100dvh-1.125rem)] py-2 rounded-2xl z-10 hidden flex-col justify-between transition-[width,padding] duration-200 ease-out md:flex {isStripExpanded
+		? 'w-72 bg-muted/60 backdrop-blur-xl border-border shadow-md'
 		: 'w-12'}"
 >
 	<div class="px-2 flex items-center justify-between">
-		<ActionIcon
-			icon={Logo}
-			size="lg"
-			iconSize="h-4 w-4"
-			class="h-9 w-9 rounded-full hover:bg-accent!"
-			href={isExpandedMode ? ROUTES.START : undefined}
-			onclick={isExpandedMode ? undefined : toggleExpandedMode}
-			ariaLabel={isExpandedMode ? 'Go to start' : 'Expand navigation'}
-		/>
+		<div
+			role="button"
+			tabindex="0"
+			class="relative"
+			onmouseenter={() => (logoHovered = true)}
+			onmouseleave={() => (logoHovered = false)}
+		>
+			<ActionIcon
+				icon={isExpandedMode || !logoHovered ? Logo : PanelLeftOpen}
+				size="lg"
+				iconSize="h-4 w-4"
+				class="h-9 w-9 rounded-full hover:bg-accent!"
+				href={isExpandedMode ? ROUTES.START : undefined}
+				onclick={isExpandedMode ? undefined : toggleExpandedMode}
+				tooltip={isExpandedMode ? undefined : 'Open Sidebar'}
+				tooltipSide={TooltipSide.RIGHT}
+				ariaLabel={isExpandedMode ? 'Go to start' : 'Expand navigation'}
+			/>
+		</div>
 
 		{#if isExpandedMode}
 			<div in:fade={{ duration: 150, easing: circIn, delay: 50 }} out:fade={{ duration: 100 }}>
@@ -111,6 +130,8 @@
 					iconSize="h-4 w-4"
 					class="h-9 w-9 rounded-full mr-1 hover:bg-accent!"
 					onclick={toggleExpandedMode}
+					tooltip="Close Sidebar"
+					tooltipSide={TooltipSide.LEFT}
 					ariaLabel="Collapse navigation"
 				/>
 			</div>
@@ -118,7 +139,20 @@
 	</div>
 
 	<div class="mt-2 flex min-h-0 flex-1 flex-col gap-1">
-		<SidebarNavigationActions {isExpandedMode} class="px-2" />
+		<SidebarNavigationActions
+			{isExpandedMode}
+			class="px-2"
+			bind:isSearchModeActive
+			bind:searchQuery
+			onSearchDeactivated={() => {
+				isSearchModeActive = false;
+				searchQuery = '';
+			}}
+			onSearchClick={() => {
+				isExpandedMode = true;
+				isSearchModeActive = true;
+			}}
+		/>
 
 		{#if isExpandedMode}
 			<div

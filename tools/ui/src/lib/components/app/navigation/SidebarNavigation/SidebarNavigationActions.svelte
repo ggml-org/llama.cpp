@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ActionIcon, KeyboardShortcutInfo, Logo } from '$lib/components/app';
+	import { ActionIcon, KeyboardShortcutInfo, SearchInput } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		ICON_STRIP_TRANSITION_DURATION,
@@ -17,13 +17,30 @@
 	interface Props {
 		class: string;
 		isExpandedMode: boolean;
+		isSearchModeActive: boolean;
+		searchQuery: string;
+		onSearchDeactivated?: () => void;
 		onSearchClick?: () => void;
 	}
 
-	let { class: className, isExpandedMode = false, onSearchClick = () => {} }: Props = $props();
+	let {
+		class: className,
+		isExpandedMode = false,
+		isSearchModeActive = $bindable(false),
+		searchQuery = $bindable(''),
+		onSearchDeactivated,
+		onSearchClick
+	}: Props = $props();
 
 	let initialized = $state(false);
 	let showIcons = $state(false);
+	let searchInputRef = $state<HTMLInputElement | null>(null);
+
+	$effect(() => {
+		if (isSearchModeActive && searchInputRef) {
+			searchInputRef.focus();
+		}
+	});
 
 	onMount(() => {
 		showIcons = true;
@@ -33,7 +50,17 @@
 		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * SIDEBAR_ACTIONS_ITEMS.length);
 	});
 
-	function isItemActive(item: { activeRouteId?: string; activeRoutePrefix?: string }): boolean {
+	function handleSearchModeDeactivate() {
+		isSearchModeActive = false;
+		searchQuery = '';
+		onSearchDeactivated?.();
+	}
+
+	function isItemActive(item: {
+		activeRouteId?: string;
+		activeRoutePrefix?: string;
+		activeUrlIncludes?: string;
+	}): boolean {
 		if (item.activeRouteId) {
 			return page.route.id === item.activeRouteId;
 		}
@@ -42,11 +69,11 @@
 			return !!page.route.id?.startsWith(item.activeRoutePrefix);
 		}
 
-		return false;
-	}
+		if (item.activeUrlIncludes) {
+			return page.url?.hash?.includes(item.activeUrlIncludes) ?? false;
+		}
 
-	function getItemOnClick(item: { route?: string }) {
-		return item.route ? () => goto(item.route!) : onSearchClick;
+		return false;
 	}
 </script>
 
@@ -54,62 +81,88 @@
 	<IconComponent class="h-4 w-4" />
 {/snippet}
 
-<div class="{className} flex flex-col {isExpandedMode ? 'gap-0.5 mt-px' : 'gap-0.75'}">
-	{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
-		{@const isActive = isItemActive(item)}
-		{@const itemOnClick = getItemOnClick(item)}
-		{@const itemTransition = {
-			duration: ICON_STRIP_TRANSITION_DURATION,
-			delay: !initialized
-				? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
-				: 0,
-			easing: circIn
-		}}
+{#if isSearchModeActive}
+	<div class="px-2">
+		<SearchInput
+			bind:value={searchQuery}
+			bind:ref={searchInputRef}
+			onClose={handleSearchModeDeactivate}
+			onKeyDown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
+			placeholder="Search conversations..."
+		/>
+	</div>
+{:else if isExpandedMode}
+	<div class="{className} flex flex-col gap-1">
+		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
+			{@const isActive = isItemActive(item)}
+			{@const itemOnClick = item.route ? () => goto(item.route!) : onSearchClick}
+			{@const itemTransition = {
+				duration: ICON_STRIP_TRANSITION_DURATION,
+				delay: !initialized
+					? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
+					: 0,
+				easing: circIn
+			}}
 
-		{#if showIcons}
-			<div transition:fade={itemTransition}>
-				<Button
-					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isExpandedMode
-						? ''
-						: 'rounded-full'} {isActive ? 'bg-accent text-accent-foreground' : ''} {isExpandedMode
-						? ''
-						: 'hidden'}"
-					href={item.route}
-					onclick={itemOnClick}
-					variant="ghost"
-					size={isExpandedMode ? 'default' : 'icon'}
-				>
-					<span class="flex min-w-0 items-center px-0.5 gap-2">
-						{@render itemIcon(item.icon)}
+			{#if showIcons}
+				<div transition:fade={itemTransition}>
+					<Button
+						class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isActive
+							? 'bg-accent text-accent-foreground'
+							: ''}"
+						href={item.route}
+						onclick={itemOnClick}
+						variant="ghost"
+						size="default"
+					>
+						<span class="flex min-w-0 items-center px-0.5 gap-2">
+							{@render itemIcon(item.icon)}
 
-						{#if showIcons && isExpandedMode}
-							<span
-								in:fade={{ duration: 150, easing: circIn, delay: 50 }}
-								out:fade={{ duration: 100 }}
-								class="min-w-0 truncate">{item.tooltip}</span
-							>
+							{#if showIcons}
+								<span
+									in:fade={{ duration: 150, easing: circIn, delay: 50 }}
+									out:fade={{ duration: 100 }}
+									class="min-w-0 truncate">{item.tooltip}</span
+								>
+							{/if}
+						</span>
+
+						{#if item.keys}
+							<KeyboardShortcutInfo keys={item.keys} />
 						{/if}
-					</span>
+					</Button>
+				</div>
+			{/if}
+		{/each}
+	</div>
+{:else}
+	<div class="{className} flex flex-col gap-1">
+		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
+			{@const isActive = isItemActive(item)}
+			{@const itemOnClick = item.route ? () => goto(item.route!) : onSearchClick}
+			{@const itemTransition = {
+				duration: ICON_STRIP_TRANSITION_DURATION,
+				delay: !initialized
+					? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
+					: 0,
+				easing: circIn
+			}}
 
-					{#if isExpandedMode && item.keys}
-						<KeyboardShortcutInfo keys={item.keys} />
-					{/if}
-				</Button>
-			</div>
-
-			<div transition:fade={itemTransition} class=" {isExpandedMode ? 'hidden' : ''}">
-				<ActionIcon
-					icon={item.icon}
-					tooltip={item.tooltip}
-					tooltipSide={TooltipSide.RIGHT}
-					size="lg"
-					iconSize="h-4 w-4"
-					class="h-8 w-8 mx-0.5 rounded-full hover:bg-accent! {isActive
-						? 'bg-accent text-accent-foreground'
-						: ''}"
-					onclick={itemOnClick}
-				/>
-			</div>
-		{/if}
-	{/each}
-</div>
+			{#if showIcons}
+				<div transition:fade={itemTransition}>
+					<ActionIcon
+						icon={item.icon}
+						tooltip={item.tooltip}
+						tooltipSide={TooltipSide.RIGHT}
+						size="lg"
+						iconSize="h-4 w-4"
+						class="h-9 w-9 rounded-full hover:bg-accent! {isActive
+							? 'bg-accent text-accent-foreground'
+							: ''}"
+						onclick={itemOnClick}
+					/>
+				</div>
+			{/if}
+		{/each}
+	</div>
+{/if}

@@ -39,7 +39,8 @@ describe('colorizeFaviconSvg', () => {
 
 	it('does not alter any other part of the SVG', () => {
 		const { light, dark } = colorizeFaviconSvg(SOURCE_SVG, '#111111', '#fafafa');
-		const stripColors = (s: string) => s.replaceAll('#111111', '').replaceAll('#fafafa', '');
+		const stripColors = (s: string) =>
+			s.replaceAll('#111111', '').replaceAll('#fafafa', '').replaceAll('currentColor', '');
 		const expected = stripColors(SOURCE_SVG);
 		expect(stripColors(light)).toBe(expected);
 		expect(stripColors(dark)).toBe(expected);

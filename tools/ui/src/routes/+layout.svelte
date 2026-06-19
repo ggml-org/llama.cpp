@@ -290,7 +290,7 @@
 <svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
-	<div class="flex flex-col md:flex-row pt-2">
+	<div class="flex flex-col md:flex-row">
 		<SidebarNavigation
 			onSearchClick={() => {
 				if (chatSidebar?.activateSearchMode) {
@@ -299,7 +299,9 @@
 			}}
 		/>
 
-		<div class="flex-1">{@render children?.()}</div>
+		<div class="flex-1">
+			{@render children?.()}
+		</div>
 	</div>
 
 	<ModeWatcher />

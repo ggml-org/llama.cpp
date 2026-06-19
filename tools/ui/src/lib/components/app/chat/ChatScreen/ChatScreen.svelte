@@ -388,7 +388,7 @@
 	<ServerLoadingSplash />
 {:else}
 	<div
-		class="flex grow flex-col chat-screen min-h-[calc(100dvh-1rem)]"
+		class="flex grow flex-col chat-screen min-h-[calc(100dvh-1rem)] px-4"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
