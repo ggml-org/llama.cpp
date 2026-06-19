@@ -2442,10 +2442,7 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                                   int aligned_tile_size,
                                   int vtcm_size) {
     if (k % 32 != 0 || n % 32 != 0) { return -1; }
-
-    if (!hex_is_aligned(dst, VLEN) || !hex_is_aligned(activation, VLEN) || !hex_is_aligned(weight, VLEN)) {
-        return -1;
-    }
+    if (!hex_is_aligned(dst, VLEN) || !hex_is_aligned(activation, VLEN)) { return -1; }
 
     size_t row_stride = htp_mm_get_tiled_row_stride(weight_type, k);
     if (row_stride == 0) {
@@ -2708,18 +2705,11 @@ static int hmx_mm_f16_f32_batched_simple(struct htp_context *ctx,
 
 static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_batched_params_t *params,
                                int m_chunk, int n_chunk, int pipeline, int n_threads, int act_threads, int vtcm_size) {
-    if (!ctx || !params || !params->dst || !params->activation || !params->weight) { return -1; }
-    if (!params->m || !params->k || !params->n) { return -1; }
     if (params->act_stride < params->k || params->weight_stride < params->k || params->dst_stride < params->n) { return -1; }
     if (params->ne02 <= 0 || params->ne03 <= 0 || params->ne12 <= 0 || params->ne13 <= 0) { return -1; }
     if (params->ne12 % params->ne02 != 0 || params->ne13 % params->ne03 != 0) { return -1; }
     if (params->k % 32 != 0 || params->n % 32 != 0) { return -1; }
-
-    if (!hex_is_aligned(params->dst, VLEN) ||
-        !hex_is_aligned(params->activation, VLEN) ||
-        !hex_is_aligned(params->weight, VLEN)) {
-        return -1;
-    }
+    if (!hex_is_aligned(params->dst, VLEN) || !hex_is_aligned(params->activation, VLEN)) { return -1; }
 
     const int group_size = hmx_mm_batch_r2(params);
     const size_t vtcm_budget  = ctx->vtcm_size;
@@ -2728,9 +2718,7 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
     // If simple, or if group_size <= 1, we use simple fallback loop.
     // Grouped path is only valid if group_size > 1 and it fits within VTCM budget.
     bool run_grouped = (group_size > 1 && (size_t)vtcm_size <= vtcm_budget);
-
     if (!run_grouped) {
-        FARF(HIGH, "%s: using simple batched loop", __func__);
         return hmx_mm_f16_f32_batched_simple(ctx, params, m_chunk, n_chunk, pipeline, n_threads, act_threads, vtcm_size);
     }
 
@@ -2976,10 +2964,7 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
     const int m_padded = hex_align_up(m, 32);
 
     if (k % 32 != 0 || n % 32 != 0) { return -1; }
-
-    if (!hex_is_aligned(dst, VLEN) || !hex_is_aligned(activation, VLEN) || !hex_is_aligned(weight, VLEN)) {
-        return -1;
-    }
+    if (!hex_is_aligned(dst, VLEN) || !hex_is_aligned(activation, VLEN)) { return -1; }
 
     size_t row_stride = htp_mm_get_tiled_row_stride(weight_type, k);
     if (row_stride == 0) {
