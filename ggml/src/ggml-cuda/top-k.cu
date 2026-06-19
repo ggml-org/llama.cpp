@@ -83,11 +83,12 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     // make sure chunk_nrows can be safely cast to int below
     GGML_ASSERT(nrows_per_chunk <= std::numeric_limits<int>::max());
 
+    int64_t tmp_dst_nrows = std::min(nrows_per_chunk, nrows);
+    ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * tmp_dst_nrows);
+    int *                     tmp_dst = temp_dst_alloc.get();
+
     for (int64_t i = 0; i < nrows; i+= nrows_per_chunk) {
         int64_t chunk_nrows = std::min(nrows_per_chunk, nrows - i);
-
-        ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * chunk_nrows);
-        int *                     tmp_dst = temp_dst_alloc.get();
 
         if (shared_mem > max_shared_mem || ncols > 1024) {
             argsort_f32_i32_cuda_cub(pool, src0_d, tmp_dst, ncols, chunk_nrows, GGML_SORT_ORDER_DESC, stream);
