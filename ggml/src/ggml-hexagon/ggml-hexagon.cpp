@@ -2324,8 +2324,13 @@ static void ggml_hexagon_precompute_matmul_params(
             size_t best_n_chunk = 0;
             size_t best_vtcm_size = 0;
 
-            const int m_for_chunks = is_matmul_id ? hex_align_up(ne12, 32) : hex_align_up(ne11, 32);
-            const int m_for_cost   = is_matmul_id ? ne12 : ne11;
+            // For MUL_MAT_ID the kernel runs one 2D matmul per expert, with M equal to the number of rows routed to that expert.
+            // A single expert can receive up to all routed rows (dst->ne[1]*dst->ne[2] = n_expert_used*n_tokens), so size the chunk
+            // search for that upper bound rather than ne12 (token positions only).
+            // We recompute m_chunk per expert against the actual count in the NPU kernel.
+            const int m_id_rows    = (int) ((size_t) dst->ne[1] * dst->ne[2]);
+            const int m_for_chunks = is_matmul_id ? hex_align_up(m_id_rows, 32) : hex_align_up(ne11, 32);
+            const int m_for_cost   = is_matmul_id ? m_id_rows : ne11;
 
             int act_threads = n_threads;
             while (act_threads >= 1) {
@@ -2403,45 +2408,60 @@ fallback_hvx:
         kparams->tile_size = htp_mm_get_weight_tile_size(wtype);
         kparams->aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
 
-        bool try_tiled = (opt_mm_select >= 2);
-        if (try_tiled) {
+        if (is_matmul_id) {
+            kparams->kernel_type   = (src1_nrows < (int) sess->n_threads) ? HTP_MM_KERNEL_HVX_QUANT_BLOCK : HTP_MM_KERNEL_HVX_QUANT_ROW;
             kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
-            if (src1_nrows < (int)sess->n_threads) {
-                kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_BLOCK;
-            } else {
-                kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW;
+
+            size_t vtcm_src0_size = 0, vtcm_src1_size = 0;
+            size_t total_size = htp_mm_hvx_id_get_vtcm_sizes(
+                wtype, ne10, src1_nrows, sess->n_threads, src0->nb[1],
+                &vtcm_src0_size, &vtcm_src1_size
+            );
+            kparams->vtcm_size      = total_size;
+            kparams->vtcm_src0_size = vtcm_src0_size;
+            kparams->vtcm_src1_size = vtcm_src1_size;
+            kparams->vtcm_dst_size  = 0;
+        } else {
+            bool try_tiled = (opt_mm_select >= 2);
+            if (try_tiled) {
+                kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
+                if (src1_nrows < (int)sess->n_threads) {
+                    kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_BLOCK;
+                } else {
+                    kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW;
+                }
+
+                size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
+                size_t total_size = htp_mm_hvx_get_vtcm_sizes(
+                    kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
+                    dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
+                );
+                if (total_size <= vtcm_budget) {
+                    kparams->vtcm_size = total_size;
+                    kparams->vtcm_src0_size = vtcm_src0_size;
+                    kparams->vtcm_src1_size = vtcm_src1_size;
+                    kparams->vtcm_dst_size = vtcm_dst_size;
+                    goto done_quant;
+                }
+                GGML_LOG_DEBUG("ggml-hex: HVX Tiled path VTCM size needed (%zu) > budget (%zu), falling back to HVX Flat\n",
+                               total_size, vtcm_budget);
             }
 
-            size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
-            size_t total_size = htp_mm_hvx_get_vtcm_sizes(
-                kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-                dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
-            );
-            if (total_size <= vtcm_budget) {
+            // Flat HVX fallback
+            {
+                kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
+                kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
+
+                size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
+                size_t total_size = htp_mm_hvx_get_vtcm_sizes(
+                    kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
+                    dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
+                );
                 kparams->vtcm_size = total_size;
                 kparams->vtcm_src0_size = vtcm_src0_size;
                 kparams->vtcm_src1_size = vtcm_src1_size;
                 kparams->vtcm_dst_size = vtcm_dst_size;
-                goto done_quant;
             }
-            GGML_LOG_DEBUG("ggml-hex: HVX Tiled path VTCM size needed (%zu) > budget (%zu), falling back to HVX Flat\n",
-                           total_size, vtcm_budget);
-        }
-
-        // Flat HVX fallback
-        {
-            kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
-            kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
-
-            size_t vtcm_src0_size = 0, vtcm_src1_size = 0, vtcm_dst_size = 0;
-            size_t total_size = htp_mm_hvx_get_vtcm_sizes(
-                kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-                dst->nb[1], src0->nb[1], src1->nb[1], &vtcm_src0_size, &vtcm_src1_size, &vtcm_dst_size
-            );
-            kparams->vtcm_size = total_size;
-            kparams->vtcm_src0_size = vtcm_src0_size;
-            kparams->vtcm_src1_size = vtcm_src1_size;
-            kparams->vtcm_dst_size = vtcm_dst_size;
         }
 
     done_quant:;

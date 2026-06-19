@@ -341,7 +341,7 @@ static inline size_t htp_mm_hmx_get_batched_vtcm_size(
 static inline size_t htp_mm_hvx_get_vtcm_sizes(
     int kernel_type,
     int wtype,
-    int ne10, // k
+    int ne10,       // k
     int src1_nrows, // m_total (or act_nrows)
     int n_threads,
     size_t dst_row_size,
@@ -450,6 +450,51 @@ static inline size_t htp_mm_hvx_get_vtcm_sizes(
     *vtcm_dst_size_out  = vtcm_dst_size;
 
     return vtcm_src0_size + vtcm_src1_size + vtcm_dst_size;
+}
+
+static inline size_t htp_mm_hvx_id_get_vtcm_sizes(
+    int wtype,
+    int ne10,                // k
+    uint32_t src1_nrows,
+    int n_threads,
+    size_t src0_row_size,    // nb01
+    size_t * vtcm_src0_size_out,
+    size_t * vtcm_src1_size_out
+) {
+    const bool is_repack = (wtype == HTP_TYPE_Q4_0 || wtype == HTP_TYPE_Q4_1 ||
+                            wtype == HTP_TYPE_Q8_0 || wtype == HTP_TYPE_IQ4_NL ||
+                            wtype == HTP_TYPE_MXFP4);
+
+    const size_t src0_row_size_padded = htp_mm_round_up(src0_row_size, 128);
+    const size_t src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10)
+                                                          : htp_mm_q8_0_tiled_row_size(ne10);
+
+    size_t src0_sz_per_thread = htp_mm_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
+    size_t src1_sz            = htp_mm_round_up(src1_row_size * src1_nrows, 256);
+
+    // src0 spad also holds temporary transposed src1 columns during dynamic quantization.
+    const size_t src1_row_size_padded = htp_mm_round_up(src1_row_size, QK_Q8_0_TILED * sizeof(float));
+    if (src0_sz_per_thread < src1_row_size_padded) {
+        src0_sz_per_thread = src1_row_size_padded;
+    }
+
+    if (is_repack) {
+        const uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
+        const uint32_t n_k_tiles    = ne10 / 32;
+        const uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
+        size_t repacked_vtcm_size = htp_mm_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
+        if (repacked_vtcm_size < src1_row_size_padded) {
+            repacked_vtcm_size = src1_row_size_padded;
+        }
+        src0_sz_per_thread = repacked_vtcm_size;
+    }
+
+    const size_t vtcm_src0_size = src0_sz_per_thread * n_threads;
+
+    *vtcm_src0_size_out = vtcm_src0_size;
+    *vtcm_src1_size_out = src1_sz;
+
+    return vtcm_src0_size + src1_sz;
 }
 
 #ifdef __cplusplus

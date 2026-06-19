@@ -3013,13 +3013,14 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
     int aligned_tile_size = htp_mm_get_weight_aligned_tile_size(weight_type);
 
     const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
-
     const size_t weight_row_stride = is_quant ? qweight_row_stride : row_stride;
-    const size_t size_per_n = weight_row_stride + vec_dot_size;
-    const size_t size_per_mn = sizeof(__fp16);
+
+    size_t size_per_n = 0, size_per_m = 0, size_per_mn = 0;
+    htp_mm_hmx_get_2d_chunk_costs(weight_type, k, /*pipeline=*/false, aligned_tile_size,
+                                  &size_per_n, &size_per_m, &size_per_mn);
 
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0;
-    if (htp_mm_hmx_compute_chunks(vtcm_budget, /*overhead=*/256, size_per_n, /*per_m=*/vec_dot_size, size_per_mn,
+    if (htp_mm_hmx_compute_chunks(vtcm_budget, /*overhead=*/256, size_per_n, size_per_m, size_per_mn,
                            m_padded, n,
                            /*m_block_cost=*/(size_t) n * 3,
                            /*n_block_cost=*/(size_t) m_padded * 2, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used)) {
@@ -3234,37 +3235,19 @@ static int hvx_mm_op_matmul_id(
     }
     size_t src1_row_size  = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
 
-    size_t dst_sz_per_thread  = hex_round_up(HTP_MM_VTCM_DST_NROWS * 0, 256);
-    size_t src0_sz_per_thread = hex_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
-    size_t src1_sz_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
-    size_t src2_sz_per_thread = 0; // We moved the mapping to DDR!
+    // Scratchpad sizes are computed on the host (htp_mm_hvx_id_get_vtcm_sizes) and passed in.
+    // The ID layout is routing-independent, so the host has exact visibility -- consume it here
+    // rather than recomputing, to keep host budgeting and device allocation in lockstep.
+    size_t src0_sz = kparams->vtcm_src0_size;
+    size_t src1_sz = kparams->vtcm_src1_size;
+    size_t src2_sz = 0; // mapping lives in DDR
+    size_t dst_sz  = 0; // ID kernels scatter straight to DDR
+    size_t vtcm_size = kparams->vtcm_size;
 
-    // Ensure src0 spad has enough size to host temporary transposed src1 columns
-    size_t src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0_TILED * sizeof(float));
-    if (src0_sz_per_thread < src1_row_size_padded) {
-        src0_sz_per_thread = src1_row_size_padded;
-    }
-
-    const bool is_repacked = (src0->type == HTP_TYPE_Q4_0 || src0->type == HTP_TYPE_Q4_1 ||
-                              src0->type == HTP_TYPE_Q8_0 || src0->type == HTP_TYPE_IQ4_NL ||
-                              src0->type == HTP_TYPE_MXFP4);
-    if (is_repacked) {
-        const uint32_t n_k_tiles = ne10 / 32;
-        const uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(src0->type);
-        const uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
-        size_t repacked_vtcm_size = hex_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
-        if (repacked_vtcm_size < src1_row_size_padded) {
-            repacked_vtcm_size = src1_row_size_padded;
-        }
-        src0_sz_per_thread = repacked_vtcm_size;
-    }
-
-    size_t src1_sz = src1_sz_per_thread;
-    size_t src0_sz = src0_sz_per_thread * octx->n_threads;
-    size_t src2_sz = src2_sz_per_thread * octx->n_threads;
-    size_t dst_sz  = dst_sz_per_thread * octx->n_threads;
-
-    size_t vtcm_size = src2_sz + src1_sz + src0_sz + dst_sz;
+    size_t src0_sz_per_thread = src0_sz / octx->n_threads;
+    size_t src1_sz_per_thread = src1_sz;
+    size_t src2_sz_per_thread = 0;
+    size_t dst_sz_per_thread  = 0;
 
     FARF(HIGH, "matmul-id-%s : src0-spad-size %zu src1-spad-size %zu src2-spad-size %zu dst-spad-size %zu (%zu)\n", mmctx->type,
          src0_sz, src1_sz, src2_sz, dst_sz, vtcm_size);
