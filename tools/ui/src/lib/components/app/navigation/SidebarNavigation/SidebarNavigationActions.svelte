@@ -87,7 +87,7 @@
 {/snippet}
 
 {#if isSearchModeActive}
-	<div class="px-2">
+	<div class="px-4 my-2">
 		<SearchInput
 			bind:value={searchQuery}
 			bind:ref={searchInputRef}
