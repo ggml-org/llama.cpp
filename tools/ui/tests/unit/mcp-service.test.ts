@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client';
 import { MCPService } from '$lib/services/mcp.service';
 import { MCPConnectionPhase, MCPTransportType } from '$lib/enums';
 import type { MCPConnectionLog, MCPServerConfig } from '$lib/types';
+import { CORS_PROXY_HEADER_PREFIX } from '$lib/constants';
 
 type DiagnosticFetchFactory = (
 	serverName: string,
@@ -16,11 +17,12 @@ type DiagnosticFetchFactory = (
 const createDiagnosticFetch = (
 	config: MCPServerConfig,
 	onLog?: (log: MCPConnectionLog) => void,
-	baseInit: RequestInit = {}
+	baseInit: RequestInit = {},
+	useProxy = false
 ) =>
 	(
 		MCPService as unknown as { createDiagnosticFetch: DiagnosticFetchFactory }
-	).createDiagnosticFetch('test-server', config, baseInit, new URL(config.url), false, onLog);
+	).createDiagnosticFetch('test-server', config, baseInit, new URL(config.url), useProxy, onLog);
 
 describe('MCPService', () => {
 	afterEach(() => {
@@ -89,6 +91,64 @@ describe('MCPService', () => {
 					'x-auth-token': '[redacted]',
 					'x-vendor-api-key': '[redacted]',
 					'content-type': 'application/json'
+				}
+			}
+		});
+	});
+
+	it('wraps dynamic request headers when using the CORS proxy', async () => {
+		const logs: MCPConnectionLog[] = [];
+		const proxiedAuthToken = `${CORS_PROXY_HEADER_PREFIX}x-auth-token`;
+		const proxiedContentType = `${CORS_PROXY_HEADER_PREFIX}content-type`;
+		const proxiedSessionId = `${CORS_PROXY_HEADER_PREFIX}mcp-session-id`;
+		const response = new Response('{}', {
+			status: 200,
+			headers: { 'content-type': 'application/json' }
+		});
+		const fetchMock = vi.fn().mockResolvedValue(response);
+
+		vi.stubGlobal('fetch', fetchMock);
+
+		const config: MCPServerConfig = {
+			url: 'https://example.com/mcp',
+			transport: MCPTransportType.STREAMABLE_HTTP,
+			useProxy: true
+		};
+
+		const controller = createDiagnosticFetch(
+			config,
+			(log) => logs.push(log),
+			{
+				headers: {
+					authorization: 'Bearer llama-server-key',
+					[proxiedAuthToken]: 'target-token'
+				}
+			},
+			true
+		);
+
+		await controller.fetch('http://localhost:8080/cors-proxy?url=https%3A%2F%2Fexample.com%2Fmcp', {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				'mcp-session-id': 'session-request-12345'
+			},
+			body: '{}'
+		});
+
+		const sentHeaders = fetchMock.mock.calls[0]?.[1]?.headers as Headers;
+		expect(sentHeaders.get('authorization')).toBe('Bearer llama-server-key');
+		expect(sentHeaders.get(proxiedAuthToken)).toBe('target-token');
+		expect(sentHeaders.get(proxiedContentType)).toBe('application/json');
+		expect(sentHeaders.get(proxiedSessionId)).toBe('session-request-12345');
+		expect(sentHeaders.has('content-type')).toBe(false);
+		expect(sentHeaders.has('mcp-session-id')).toBe(false);
+		expect(logs[0].details).toMatchObject({
+			request: {
+				headers: {
+					authorization: '[redacted]',
+					[proxiedAuthToken]: '[redacted]',
+					[proxiedSessionId]: '....12345'
 				}
 			}
 		});

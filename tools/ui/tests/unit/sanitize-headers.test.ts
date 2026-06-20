@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sanitizeHeaders } from '$lib/utils/api-headers';
+import { CORS_PROXY_HEADER_PREFIX } from '$lib/constants';
 
 describe('sanitizeHeaders', () => {
 	it('returns empty object for undefined input', () => {
@@ -51,5 +52,22 @@ describe('sanitizeHeaders', () => {
 		const headers = new Headers({ 'X-Custom-Token': 'token-value' });
 		const result = sanitizeHeaders(headers, ['X-CUSTOM-TOKEN']);
 		expect(result['x-custom-token']).toBe('[redacted]');
+	});
+
+	it('redacts proxied sensitive and custom target headers', () => {
+		const proxiedAuthorization = `${CORS_PROXY_HEADER_PREFIX}authorization`;
+		const proxiedSessionId = `${CORS_PROXY_HEADER_PREFIX}mcp-session-id`;
+		const proxiedVendorKey = `${CORS_PROXY_HEADER_PREFIX}x-vendor-key`;
+		const headers = new Headers({
+			[proxiedAuthorization]: 'Bearer secret',
+			[proxiedSessionId]: 'session-12345',
+			[proxiedVendorKey]: 'vendor-secret'
+		});
+		const partial = new Map([['mcp-session-id', 5]]);
+		const result = sanitizeHeaders(headers, ['x-vendor-key'], partial);
+
+		expect(result[proxiedAuthorization]).toBe('[redacted]');
+		expect(result[proxiedSessionId]).toBe('....12345');
+		expect(result[proxiedVendorKey]).toBe('[redacted]');
 	});
 });

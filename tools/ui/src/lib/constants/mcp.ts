@@ -51,6 +51,9 @@ export const EXPECTED_THEMED_ICON_PAIR_COUNT = 2;
 /** CORS proxy URL query parameter name */
 export const CORS_PROXY_URL_PARAM = 'url';
 
+/** Header prefix for headers that should be forwarded by the CORS proxy */
+export const CORS_PROXY_HEADER_PREFIX = 'x-llama-server-proxy-header-';
+
 /** Number of trailing characters to keep visible when partially redacting mcp-session-id */
 export const MCP_SESSION_ID_VISIBLE_CHARS = 5;
 
