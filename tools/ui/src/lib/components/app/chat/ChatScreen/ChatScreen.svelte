@@ -72,6 +72,8 @@
 
 	let processingInfoVisible = $state(false);
 
+	let innerHeight = $state(0);
+
 	let emptyFileNames = $state<string[]>([]);
 
 	let initialMessage = $state('');
@@ -340,12 +342,6 @@
 		}
 	}
 
-	afterNavigate(() => {
-		if (!disableAutoScroll) {
-			autoScroll.enable();
-		}
-	});
-
 	function handleMessagesReady() {
 		// Respect the user's explicit setting, but keep the one-time scroll on
 		// the messages-ready $effect even on mobile (where the auto-scroll
@@ -364,7 +360,15 @@
 	}
 
 	onMount(() => {
-		autoScroll.startObserving();
+		if (isMobile.current) {
+    		autoScroll.startObserving();
+		}
+
+		if (isMobile.current) {
+    		setTimeout(() => {
+        		window.scrollTo({ top: document.body.scrollHeight });
+    		}, 10);
+		}
 
 		if (!disableAutoScroll) {
 			autoScroll.enable();
@@ -377,15 +381,31 @@
 		}
 	});
 
+	afterNavigate(() => {
+		if (!disableAutoScroll && !isMobile.current) {
+			autoScroll.enable();
+		}
+
+		if (isMobile.current) {
+    		setTimeout(() => {
+        		window.scrollTo({ top: document.body.scrollHeight });
+    		}, 10);
+		}
+	});
+
 	onDestroy(() => autoScroll.destroy());
 
 	$effect(() => {
-		chatScrollContainer = document.documentElement;
-		autoScroll.setContainer(chatScrollContainer);
+	  if (!isMobile.current) {
+			chatScrollContainer = document.documentElement;
+			autoScroll.setContainer(chatScrollContainer);
+		}
 	});
 
 	$effect(() => {
-		autoScroll.setDisabled(disableAutoScroll);
+        if (!isMobile.current) {
+    		autoScroll.setDisabled(disableAutoScroll);
+        }
 	});
 </script>
 
