@@ -103,7 +103,7 @@ struct server_batch {
         if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
-        LOG_INF("adding token to batch: slot=%d, token=%d, pos=%d, output=%d\n", id_slot, token, pos, output);
+        // LOG_INF("adding token to batch: slot=%d, token=%d, pos=%d, output=%d\n", id_slot, token, pos, output);
         tokens.push_back({ id_slot, token, pos, output });
         return true;
     }
