@@ -270,15 +270,27 @@
 				const emptyFileNamesSet = new Set(result.emptyFiles);
 				uploadedFiles = uploadedFiles.filter((file) => !emptyFileNamesSet.has(file.name));
 			}
+
 			return false;
 		}
 
 		const extras = result?.extras;
 
 		// Enable autoscroll for user-initiated message sending
-		autoScroll.enable();
-		await chatStore.sendMessage(message, extras);
+		if (!isMobile.current) {
+			autoScroll.enable();
+		}
+
 		autoScroll.scrollToBottom();
+
+		requestAnimationFrame(() => {
+			chatScrollContainer?.scrollTo({
+				top: chatScrollContainer.scrollHeight,
+				behavior: 'smooth'
+			});
+		});
+
+		await chatStore.sendMessage(message, extras);
 
 		return true;
 	}
@@ -334,13 +346,9 @@
 	}
 
 	function handleMessagesReady() {
-		// Respect the user's explicit setting, but keep the one-time scroll on
-		// the messages-ready $effect even on mobile (where the auto-scroll
-		// controller is disabled). Unlike the per-token auto-scroll, this only
-		// fires when allConversationMessages changes (load, edit, regenerate, ...).
 		if (config().disableAutoScroll) return;
 
-		if (!autoScroll.userScrolledUp) {
+		if (!autoScroll.userScrolledUp && !isMobile.current) {
 			requestAnimationFrame(() => {
 				chatScrollContainer?.scrollTo({
 					top: chatScrollContainer.scrollHeight,
@@ -387,8 +395,9 @@
 	onDestroy(() => autoScroll.destroy());
 
 	$effect(() => {
+		chatScrollContainer = document.documentElement;
+
 		if (!isMobile.current) {
-			chatScrollContainer = document.documentElement;
 			autoScroll.setContainer(chatScrollContainer);
 		}
 	});
