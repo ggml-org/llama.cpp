@@ -1,16 +1,14 @@
 <script lang="ts">
-	import { ArrowLeft } from '@lucide/svelte';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { browser } from '$app/environment';
 
-	import { ActionIcon, SearchInput, SidebarNavigationSearchResults } from '$lib/components/app';
+	import { SearchInput, SidebarNavigationSearchResults } from '$lib/components/app';
 	import { ROUTES } from '$lib/constants/routes';
 	import { RouterService } from '$lib/services/router.service';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
-	import { TooltipSide } from '$lib/enums';
 
 	let searchQuery = $state('');
 	let searchInputRef = $state<HTMLInputElement | null>(null);
@@ -28,12 +26,6 @@
 	$effect(() => {
 		if (browser && !isMobile.current) {
 			goto(ROUTES.NEW_CHAT, { replaceState: true });
-		}
-	});
-
-	$effect(() => {
-		if (browser && isMobile.current) {
-			searchInputRef?.focus();
 		}
 	});
 
@@ -80,39 +72,23 @@
 	<title>Search · llama.cpp</title>
 </svelte:head>
 
-<!-- Sticky header keeps the input pinned; avoids iOS scrolling it off when the keyboard opens. -->
-<div class="md:hidden">
-	<div class="sticky top-0 z-10 flex flex-col bg-background px-2 pt-2 pb-3">
-		<div class="flex items-center gap-2">
-			<ActionIcon
-				icon={ArrowLeft}
-				size="lg"
-				iconSize="h-4 w-4"
-				class="h-9 w-9 shrink-0 rounded-full hover:bg-accent!"
-				onclick={handleBack}
-				tooltip="Back"
-				tooltipSide={TooltipSide.RIGHT}
-				ariaLabel="Back"
-			/>
+<div class="fixed top-0 z-10 left-0 right-0 p-2">
+	<SearchInput
+		bind:value={searchQuery}
+		bind:ref={searchInputRef}
+		onClose={handleBack}
+		placeholder="Search conversations..."
+	/>
+</div>
 
-			<SearchInput
-				bind:value={searchQuery}
-				bind:ref={searchInputRef}
-				placeholder="Search conversations..."
-				class="flex-1"
-			/>
-		</div>
-	</div>
-
-	<div class="px-2 pb-2">
-		<SidebarNavigationSearchResults
-			{searchQuery}
-			{filteredConversations}
-			{currentChatId}
-			onSelect={selectConversation}
-			onEdit={handleEditConversation}
-			onDelete={handleDeleteConversation}
-			onStop={handleStopGeneration}
-		/>
-	</div>
+<div class="p-2 pt-16">
+	<SidebarNavigationSearchResults
+		{searchQuery}
+		{filteredConversations}
+		{currentChatId}
+		onSelect={selectConversation}
+		onEdit={handleEditConversation}
+		onDelete={handleDeleteConversation}
+		onStop={handleStopGeneration}
+	/>
 </div>

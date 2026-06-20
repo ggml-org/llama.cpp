@@ -107,7 +107,9 @@
 						onNewChat?.();
 						goto(item.route!);
 					}
-				: onSearchClick}
+				: isSearchOnMobile
+					? undefined
+					: onSearchClick}
 			{@const itemTransition = {
 				duration: ICON_STRIP_TRANSITION_DURATION,
 				delay: !initialized
@@ -151,12 +153,15 @@
 	<div class="{className} flex-col gap-1 hidden md:flex">
 		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
+			{@const isSearchOnMobile = item.icon === Search && isMobile.current}
 			{@const itemOnClick = item.route
 				? () => {
 						onNewChat?.();
 						goto(item.route!);
 					}
-				: onSearchClick}
+				: isSearchOnMobile
+					? undefined
+					: onSearchClick}
 			{@const itemTransition = {
 				duration: ICON_STRIP_TRANSITION_DURATION,
 				delay: !initialized

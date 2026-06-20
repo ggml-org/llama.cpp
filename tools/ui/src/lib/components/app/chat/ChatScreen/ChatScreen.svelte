@@ -416,14 +416,14 @@
 		>
 			<ChatScreenGreeting {isEmpty} />
 
-			<ChatScreenActionScrollDown
+			<!-- <ChatScreenActionScrollDown
 				container={chatScrollContainer}
 				hasProcessingInfoVisible={processingInfoVisible}
-			/>
-
-			<ChatScreenProcessingInfo onVisibilityChange={handleProcessingInfoVisibility} />
+			/> -->
 
 			<ChatScreenServerError />
+
+			<ChatScreenProcessingInfo onVisibilityChange={handleProcessingInfoVisibility} />
 
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl">
 				<ChatScreenForm

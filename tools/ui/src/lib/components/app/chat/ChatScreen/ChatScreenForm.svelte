@@ -2,6 +2,7 @@
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
@@ -83,12 +84,14 @@
 	}
 
 	onMount(() => {
-		setTimeout(() => chatFormRef?.focus(), 10);
+		if (!isMobile.current) {
+			setTimeout(() => chatFormRef?.focus(), 100);
+		}
 	});
 
 	afterNavigate((navigation) => {
-		if (navigation?.from != null) {
-			setTimeout(() => chatFormRef?.focus(), 10);
+		if (navigation?.from != null && !isMobile.current) {
+			setTimeout(() => chatFormRef?.focus(), 100);
 		}
 	});
 

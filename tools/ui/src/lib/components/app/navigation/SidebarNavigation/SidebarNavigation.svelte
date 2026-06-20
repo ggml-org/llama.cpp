@@ -46,6 +46,15 @@
 		}
 	});
 
+	// On mobile the dedicated /search route hides the sidebar (see the aside
+	// render guard below). Collapse it as we enter /search so it doesn't
+	// reappear expanded when the user navigates back via the back button.
+	$effect(() => {
+		if (isMobile.current && page.url.hash.includes(ROUTES.SEARCH)) {
+			isExpandedMode = false;
+		}
+	});
+
 	let currentChatId = $derived(page.params.id);
 	let isSearchModeActive = $state(false);
 	let searchQuery = $state('');
@@ -105,7 +114,7 @@
 
 {#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.SEARCH))}
     <aside
-    	class="fixed md:sticky top-2 ml-2 md:mt-2 md:h-[calc(100dvh-1.125rem)] max-h-[calc(100dvh-1.125rem)] py-2 rounded-2xl z-10 flex flex-col justify-between transition-[width,padding] duration-200 ease-out {isStripExpanded
+    	class="fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 md:h-[calc(100dvh-1.125rem)] max-h-[calc(100dvh-1.125rem)] pt-2 rounded-2xl z-10 flex flex-col justify-between transition-[width,padding] duration-200 ease-out {isStripExpanded
     		? 'md:w-72 w-[calc(100dvw-1rem)] bg-muted/60 backdrop-blur-xl border-border shadow-md'
     		: 'w-12'}"
     >
