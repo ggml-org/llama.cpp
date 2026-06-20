@@ -2621,31 +2621,33 @@ private:
         }
 
         llama_batch batch_view;
-        int32_t i_next = 0;
+        int32_t off_next = 0;
         int32_t n_batch = llama_n_batch(ctx_tgt);
-        for (int32_t i = 0; i < batch.size(); i = i_next) {
+        for (int32_t off = 0; off < batch.size(); off = off_next) {
             try {
-                const int32_t n_tokens = std::min(n_batch, batch.size() - i);
+                // TODO @ngxson : maybe handle n_batch == 1 here instead of inside decode()
 
-                bool ok = decode(n_batch, batch_view);
+                const int32_t n_tokens = std::min(n_batch, batch.size() - off);
+
+                batch_view = batch.get_view(off, n_batch);
+                bool ok = decode(n_batch, off, batch_view);
 
                 if (ok) {
                     // move the head of the batch forward with the number of tokens we just processed
-                    i_next = i + n_tokens;
+                    off_next = off + n_tokens;
 
                     // on successful decode, restore the original batch size
                     n_batch = llama_n_batch(ctx_tgt);
                 } else {
-                    // get a new batch view and try again
-                    batch_view = batch.get_view(i, n_batch);
-                    continue; // decode again
+                    // try again with the updated n_batch
+                    continue;
                 }
             } catch (const std::exception & e) {
                 SRV_ERR("decode() failed: %s\n", e.what());
             }
 
             try {
-                post_decode(batch_view);
+                post_decode(n_batch, off, batch_view);
             } catch (const std::exception & e) {
                 SRV_ERR("post_decode() failed: %s\n", e.what());
             }
@@ -3401,8 +3403,8 @@ private:
 
     // returns true = success ; false = retry with smaller batch size
     // throw std::runtime_error on fatal error
-    bool decode(int32_t & n_batch, llama_batch & batch_view) {
-        SRV_DBG("decoding batch, n_tokens = %d\n", batch.size());
+    bool decode(int32_t & n_batch, int32_t off, llama_batch & batch_view) {
+        SRV_DBG("n_batch (effective) = %d, off = %d\n", n_batch, off);
 
         auto & slot_batched      = batch.slot_batched;
         auto & alora_scale       = batch.alora_scale;
@@ -3461,7 +3463,7 @@ private:
                 // TODO: handle ret == 2 (abort) when we start aborting
 
                 if (!err.empty()) {
-                    SRV_ERR("%s n_batch = %d, ret = %d\n", err.c_str(), n_batch, ret);
+                    SRV_ERR("%s off = %d, n_batch = %d, ret = %d\n", err.c_str(), off, n_batch, ret);
 
                     for (auto & slot : slots) {
                         if (slot.is_processing()) {
@@ -3482,10 +3484,9 @@ private:
             // retry with half the batch size to try to find a free slot in the KV cache
             if (!try_clear_idle_slots()) {
                 n_batch /= 2;
-                // TODO @ngxson : handle sub-batching
             }
 
-            SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size, n_batch = %d, ret = %d\n", n_batch, ret);
+            SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size, off = %d, n_batch = %d, ret = %d\n", off, n_batch, ret);
 
             return false; // retry with the updated n_batch
         }
@@ -3526,7 +3527,22 @@ private:
         return true;
     }
 
-    void post_decode(llama_batch & batch_view) {
+    void post_decode(int32_t n_batch, int32_t off, llama_batch & batch_view) {
+        // for checking if a given batch index is inside batch_view
+        auto is_inside_view = [&](int32_t idx) {
+            return idx >= off && idx < off + n_batch;
+        };
+
+        // TODO @ngxson : it's tricky to make sub-batch compatible with common_sampler_sample_and_accept_n,
+        // so for now we will throw an error in this case: https://github.com/ggml-org/llama.cpp/issues/24840
+        for (auto & slot : slots) {
+            for (auto & i : slot.spec_i_batch) {
+                if (!is_inside_view(i)) {
+                    throw std::runtime_error(string_format("speculative batch index %d is not inside the current sub-batch [%d, %d)", i, off, off + n_batch));
+                }
+            }
+        }
+
         auto accept_special_token = [&](server_slot & slot, llama_token token) {
             return params_base.special ||
                 slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
@@ -3540,7 +3556,10 @@ private:
                 }
             }
 
-            // TODO @ngxson : bring back slot.i_batch check when sub-batching is implemented
+            if (is_inside_view(slot.i_batch)) {
+                // the required token not in this sub-batch, skip
+                continue; // continue loop of slots
+            }
 
             if (slot.state == SLOT_STATE_DONE_PROMPT) {
                 if (slot.task->type == SERVER_TASK_TYPE_EMBEDDING) {
@@ -3574,7 +3593,8 @@ private:
                 continue; // sample using speculative decoding
             }
 
-            const int tok_idx = slot.i_batch;
+            // shifted according to the current sub-batch
+            const int tok_idx = slot.i_batch - off;
 
             llama_token id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
 
