@@ -17,6 +17,7 @@
 #   define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 #define JSON_ASSERT GGML_ASSERT
@@ -302,7 +303,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
 
     if (!model.docker_repo.empty()) {
         model.path = common_docker_resolve_model(model.docker_repo);
-        model.name = model.docker_repo;
     } else if (!model.hf_repo.empty()) {
         // If -m was used with -hf, treat the model "path" as the hf_file to download
         if (model.hf_file.empty() && !model.path.empty()) {
@@ -322,7 +322,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
             throw std::runtime_error("failed to download model from Hugging Face");
         }
 
-        model.name = model.hf_repo;
         model.path = download_result.model_path;
 
         if (!download_result.mmproj_path.empty()) {
@@ -893,7 +892,44 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
     return true;
 }
 
+#ifdef _WIN32
+struct utf8_argv {
+    std::vector<std::string> buf;
+    std::vector<char*> ptrs;
+};
+
+static utf8_argv make_utf8_argv() {
+    utf8_argv out;
+    int wargc = 0;
+    LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (!wargv) return out;
+
+    out.buf.reserve(wargc);
+    for (int i = 0; i < wargc; ++i) {
+        int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wargv[i], -1, nullptr, 0, nullptr, nullptr);
+        if (n <= 0) { out.buf.emplace_back(); continue; }
+        auto& s = out.buf.emplace_back();
+        s.resize(static_cast<size_t>(n - 1));
+        (void)WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, s.data(), n, nullptr, nullptr);
+    }
+    LocalFree(wargv);
+
+    out.ptrs.reserve(out.buf.size() + 1);
+    for (auto& s : out.buf) out.ptrs.push_back(s.data());
+    out.ptrs.push_back(nullptr);
+    return out;
+}
+#endif
+
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
+#ifdef _WIN32
+    auto utf8 = make_utf8_argv();
+    // repair argv only when it matches the process command line
+    if (static_cast<int>(utf8.buf.size()) == argc) {
+        argv = utf8.ptrs.data();
+    }
+#endif
+
     auto ctx_arg = common_params_parser_init(params, ex, print_usage);
     const common_params params_org = ctx_arg.params; // the example can modify the default params
 
@@ -2830,62 +2866,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.api_prefix = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_API_PREFIX"));
-    // Deprecated: use --ui-config instead (kept for backward compat)
     add_opt(common_arg(
-        {"--webui-config"}, "JSON",
-        "[DEPRECATED: use --ui-config] JSON that provides default WebUI settings (overrides WebUI defaults)",
-        [](common_params & params, const std::string & value) {
-            params.ui_config_json = value;
-            params.webui_config_json = value;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_CONFIG"));
-
-    add_opt(common_arg(
-        {"--ui-config"}, "JSON",
+        {"--ui-config", "--webui-config"}, "JSON",
         "JSON that provides default UI settings (overrides UI defaults)",
         [](common_params & params, const std::string & value) {
             params.ui_config_json = value;
-            params.webui_config_json = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_CONFIG"));
-
-    // Deprecated: use --ui-config-file instead (kept for backward compat)
     add_opt(common_arg(
-        {"--webui-config-file"}, "PATH",
-        "[DEPRECATED: use --ui-config-file] JSON file that provides default WebUI settings (overrides WebUI defaults)",
-        [](common_params & params, const std::string & value) {
-            params.ui_config_json = read_file(value);
-            params.webui_config_json = params.ui_config_json;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_CONFIG_FILE"));
-
-    add_opt(common_arg(
-        {"--ui-config-file"}, "PATH",
+        {"--ui-config-file", "--webui-config-file"}, "PATH",
         "JSON file that provides default UI settings (overrides UI defaults)",
         [](common_params & params, const std::string & value) {
             params.ui_config_json = read_file(value);
-            params.webui_config_json = params.ui_config_json;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_CONFIG_FILE"));
-
-    // Deprecated: use --ui-mcp-proxy instead (kept for backward compat)
     add_opt(common_arg(
-        {"--webui-mcp-proxy"},
-        {"--no-webui-mcp-proxy"},
-        "[DEPRECATED: use --ui-mcp-proxy/--no-ui-mcp-proxy] experimental: whether to enable MCP CORS proxy",
-        [](common_params & params, bool value) {
-            params.ui_mcp_proxy = value;
-            params.webui_mcp_proxy = value;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_MCP_PROXY"));
-
-    add_opt(common_arg(
-        {"--ui-mcp-proxy"},
-        {"--no-ui-mcp-proxy"},
+        {"--ui-mcp-proxy", "--webui-mcp-proxy"},
+        {"--no-ui-mcp-proxy", "--no-webui-mcp-proxy"},
         "experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)",
         [](common_params & params, bool value) {
             params.ui_mcp_proxy = value;
-            params.webui_mcp_proxy = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY"));
     add_opt(common_arg(
@@ -2897,24 +2897,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.server_tools = parse_csv_row(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
-    // Deprecated: use --ui/--no-ui instead (kept for backward compat)
     add_opt(common_arg(
-        {"--webui"},
-        {"--no-webui"},
-        "[DEPRECATED: use --ui/--no-ui] whether to enable the Web UI",
+        {"-ag", "--agent"},
+        {"-no-ag", "--no-agent"},
+        "whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)",
         [](common_params & params, bool value) {
-            params.ui = value;
-            params.webui = value;
+            if (value) {
+                params.server_tools = {"all"};
+                params.ui_mcp_proxy = true;
+            } else {
+                params.server_tools.clear();
+                params.ui_mcp_proxy = false;
+            }
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI"));
-
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_AGENT"));
     add_opt(common_arg(
-        {"--ui"},
-        {"--no-ui"},
+        {"--ui", "--webui"},
+        {"--no-ui", "--no-webui"},
         string_format("whether to enable the Web UI (default: %s)", params.ui ? "enabled" : "disabled"),
         [](common_params & params, bool value) {
             params.ui = value;
-            params.webui = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI"));
     add_opt(common_arg(
@@ -2945,7 +2947,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_API_KEY"));
     add_opt(common_arg(
         {"--api-key-file"}, "FNAME",
-        "path to file containing API keys (default: none)",
+        "path to file containing API keys, one per line; lines starting with a hash are treated as comments (default: none)",
         [](common_params & params, const std::string & value) {
             std::ifstream key_file(value);
             if (!key_file) {
@@ -2953,7 +2955,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             std::string key;
             while (std::getline(key_file, key)) {
-                if (!key.empty()) {
+                if (!key.empty() && key[0] != '#') {
                     params.api_keys.push_back(key);
                 }
             }
