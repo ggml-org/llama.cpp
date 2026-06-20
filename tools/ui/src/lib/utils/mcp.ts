@@ -107,6 +107,7 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 				(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
 				DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			headers: headers || undefined,
+			oauth: Boolean((entry as { oauth?: unknown })?.oauth),
 			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 		} satisfies MCPServerSettingsEntry;
 	});

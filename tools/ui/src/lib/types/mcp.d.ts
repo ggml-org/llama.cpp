@@ -12,6 +12,7 @@ import type {
 	PromptMessage,
 	Transport
 } from '@modelcontextprotocol/sdk';
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { MimeTypeUnion } from './common';
 import type { ColorMode } from '$lib/enums';
 
@@ -176,6 +177,7 @@ export interface HealthCheckParams {
 	url: string;
 	requestTimeoutSeconds: number;
 	headers?: string;
+	oauth?: boolean;
 	useProxy?: boolean;
 }
 
@@ -185,6 +187,8 @@ export type MCPServerConfig = {
 	protocols?: string | string[];
 	headers?: Record<string, string>;
 	credentials?: RequestCredentials;
+	oauth?: boolean;
+	authProvider?: OAuthClientProvider;
 	handshakeTimeoutMs?: number;
 	requestTimeoutMs?: number;
 	capabilities?: ClientCapabilities;
@@ -217,6 +221,7 @@ export type MCPServerSettingsEntry = {
 	headers?: string;
 	name?: string;
 	iconUrl?: string;
+	oauth?: boolean;
 	useProxy?: boolean;
 };
 

@@ -22,6 +22,7 @@
 import { browser } from '$app/environment';
 import { SETTINGS_KEYS } from '$lib/constants';
 import { MCPService } from '$lib/services/mcp.service';
+import { BrowserMcpOAuthProvider } from '$lib/services/mcp-oauth.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
@@ -151,6 +152,7 @@ class MCPStore {
 					(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
 					DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 				headers: headers || undefined,
+				oauth: Boolean((entry as { oauth?: unknown })?.oauth),
 				useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 			} satisfies MCPServerSettingsEntry;
 		});
@@ -184,6 +186,7 @@ class MCPStore {
 			handshakeTimeoutMs: connectionTimeoutMs,
 			requestTimeoutMs: Math.round(entry.requestTimeoutSeconds * 1000),
 			headers,
+			oauth: Boolean(entry.oauth),
 			useProxy: entry.useProxy
 		};
 	}
@@ -535,6 +538,7 @@ class MCPStore {
 			url: serverData.url.trim(),
 			name: serverData.name,
 			headers: serverData.headers?.trim() || undefined,
+			oauth: Boolean(serverData.oauth),
 			requestTimeoutSeconds:
 				Number(config().mcpRequestTimeoutSeconds) || DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			useProxy: serverData.useProxy
@@ -558,7 +562,27 @@ class MCPStore {
 			SETTINGS_KEYS.MCP_SERVERS,
 			JSON.stringify(servers.filter((s) => s.id !== id))
 		);
+		BrowserMcpOAuthProvider.clearServer(id);
 		this.clearHealthCheck(id);
+	}
+
+	async completeOAuthCallback(): Promise<boolean> {
+		if (!browser) {
+			return false;
+		}
+
+		const result = await BrowserMcpOAuthProvider.completeCallbackFromLocation();
+		if (!result) {
+			return false;
+		}
+
+		const server = this.getServerById(result.serverId);
+		if (server) {
+			this.clearHealthCheck(result.serverId);
+			await this.runHealthCheck(server, server.enabled);
+		}
+
+		return true;
 	}
 
 	hasAvailableServers(): boolean {
@@ -1312,6 +1336,7 @@ class MCPStore {
 			url: string;
 			requestTimeoutSeconds: number;
 			headers?: string;
+			oauth?: boolean;
 		}[],
 		skipIfChecked = true,
 		promoteToActive = false
@@ -1411,6 +1436,7 @@ class MCPStore {
 				handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
 				requestTimeoutMs: timeoutMs,
 				headers,
+				oauth: Boolean(server.oauth),
 				useProxy: server.useProxy
 			};
 

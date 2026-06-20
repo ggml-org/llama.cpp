@@ -24,6 +24,7 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { ROUTES } from '$lib/constants/routes';
 	import { RouterService } from '$lib/services/router.service';
+	import { BrowserMcpOAuthProvider } from '$lib/services/mcp-oauth.service';
 	import { Toaster } from 'svelte-sonner';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -167,6 +168,23 @@
 	onMount(() => {
 		updateFavicon();
 		mounted = true;
+
+		const unsubscribeOAuthStatus = BrowserMcpOAuthProvider.subscribeStatus((status) => {
+			if (status.phase === 'complete') {
+				const server = mcpStore.getServerById(status.serverId);
+				if (server) {
+					mcpStore.runHealthCheck(server, server.enabled).catch((error) => {
+						console.warn('[layout] MCP OAuth reconnect failed:', error);
+					});
+				}
+			}
+		});
+
+		mcpStore.completeOAuthCallback().catch((error) => {
+			console.warn('[layout] MCP OAuth callback failed:', error);
+		});
+
+		return unsubscribeOAuthStatus;
 	});
 
 	$effect(() => {

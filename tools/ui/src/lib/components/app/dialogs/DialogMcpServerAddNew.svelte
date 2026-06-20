@@ -16,6 +16,7 @@
 
 	let newServerUrl = $state('');
 	let newServerHeaders = $state('');
+	let newServerOauth = $state(false);
 	let newServerUrlError = $derived.by(() => {
 		if (!newServerUrl.trim()) return 'URL is required';
 		try {
@@ -31,6 +32,7 @@
 		if (!value) {
 			newServerUrl = '';
 			newServerHeaders = '';
+			newServerOauth = false;
 		}
 		open = value;
 		onOpenChange?.(value);
@@ -45,7 +47,8 @@
 			id: newServerId,
 			enabled: true,
 			url: newServerUrl.trim(),
-			headers: newServerHeaders.trim() || undefined
+			headers: newServerHeaders.trim() || undefined,
+			oauth: newServerOauth
 		});
 
 		conversationsStore.setMcpServerOverride(newServerId, true);
@@ -64,8 +67,10 @@
 			<McpServerForm
 				url={newServerUrl}
 				headers={newServerHeaders}
+				oauth={newServerOauth}
 				onUrlChange={(v) => (newServerUrl = v)}
 				onHeadersChange={(v) => (newServerHeaders = v)}
+				onOAuthChange={(v) => (newServerOauth = v)}
 				urlError={newServerUrl ? newServerUrlError : null}
 				id="new-server"
 			/>

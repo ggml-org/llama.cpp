@@ -94,6 +94,43 @@ describe('MCPService', () => {
 		});
 	});
 
+	it('wraps OAuth Authorization for proxied MCP requests while preserving proxy auth', async () => {
+		const response = new Response('{}', {
+			status: 200,
+			headers: { 'content-type': 'application/json' }
+		});
+		const fetchMock = vi.fn().mockResolvedValue(response);
+
+		vi.stubGlobal('fetch', fetchMock);
+
+		const config: MCPServerConfig = {
+			url: 'https://example.com/mcp',
+			transport: MCPTransportType.STREAMABLE_HTTP,
+			oauth: true,
+			useProxy: true
+		};
+
+		const controller = (
+			MCPService as unknown as { createDiagnosticFetch: DiagnosticFetchFactory }
+		).createDiagnosticFetch(
+			'test-server',
+			config,
+			{ headers: { Authorization: 'Bearer llama-server-key' } },
+			new URL('https://chat.example/cors-proxy?url=https%3A%2F%2Fexample.com%2Fmcp'),
+			true
+		);
+
+		await controller.fetch('https://chat.example/cors-proxy?url=https%3A%2F%2Fexample.com%2Fmcp', {
+			method: 'POST',
+			headers: { Authorization: 'Bearer mcp-oauth-token' },
+			body: '{}'
+		});
+
+		const headers = fetchMock.mock.calls[0][1].headers as Headers;
+		expect(headers.get('authorization')).toBe('Bearer llama-server-key');
+		expect(headers.get('x-proxy-header-authorization')).toBe('Bearer mcp-oauth-token');
+	});
+
 	it('partially redacts mcp-session-id in diagnostic request and response logs', async () => {
 		const logs: MCPConnectionLog[] = [];
 		const response = new Response('{}', {

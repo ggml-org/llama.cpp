@@ -5,6 +5,7 @@
 	import type { MCPServerSettingsEntry, HealthCheckState } from '$lib/types';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { BrowserMcpOAuthProvider } from '$lib/services/mcp-oauth.service';
 	import {
 		McpServerCardActions,
 		McpServerCardDeleteDialog,
@@ -32,6 +33,7 @@
 	let isHealthChecking = $derived(healthState.status === HealthCheckStatus.CONNECTING);
 	let isConnected = $derived(healthState.status === HealthCheckStatus.SUCCESS);
 	let isError = $derived(healthState.status === HealthCheckStatus.ERROR);
+	let showAuthorize = $derived(Boolean(server.oauth) && !isConnected);
 	let showSkeleton = $derived(isIdle || isHealthChecking);
 	let errorMessage = $derived(
 		healthState.status === HealthCheckStatus.ERROR ? healthState.message : undefined
@@ -64,10 +66,22 @@
 		mcpStore.runHealthCheck(server);
 	}
 
+	function handleAuthorize() {
+		const authorizationWindow = window.open('about:blank', '_blank');
+		BrowserMcpOAuthProvider.beginInteractiveAuthorization(authorizationWindow);
+
+		mcpStore.runHealthCheck(server);
+	}
+
 	async function startEditing() {
 		isEditing = true;
 		await tick();
-		editFormRef?.setInitialValues(server.url, server.headers || '', server.useProxy || false);
+		editFormRef?.setInitialValues(
+			server.url,
+			server.headers || '',
+			server.useProxy || false,
+			Boolean(server.oauth)
+		);
 	}
 
 	function cancelEditing() {
@@ -78,16 +92,17 @@
 		}
 	}
 
-	function saveEditing(url: string, headers: string, useProxy: boolean) {
+	function saveEditing(url: string, headers: string, useProxy: boolean, oauth: boolean) {
 		onUpdate({
 			url: url,
 			headers: headers || undefined,
-			useProxy: useProxy
+			useProxy: useProxy,
+			oauth: oauth
 		});
 		isEditing = false;
 
 		if (server.enabled && url) {
-			setTimeout(() => mcpStore.runHealthCheck({ ...server, url, useProxy }), 100);
+			setTimeout(() => mcpStore.runHealthCheck({ ...server, url, useProxy, oauth }), 100);
 		}
 	}
 
@@ -103,6 +118,7 @@
 			serverId={server.id}
 			serverUrl={server.url}
 			serverUseProxy={server.useProxy}
+			serverOauth={server.oauth}
 			onSave={saveEditing}
 			onCancel={cancelEditing}
 		/>
@@ -176,8 +192,10 @@
 
 			<McpServerCardActions
 				{isHealthChecking}
+				{showAuthorize}
 				onEdit={startEditing}
 				onRefresh={handleHealthCheck}
+				onAuthorize={handleAuthorize}
 				onDelete={handleDeleteClick}
 			/>
 		</div>

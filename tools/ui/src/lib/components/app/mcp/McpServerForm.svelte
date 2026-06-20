@@ -13,9 +13,11 @@
 		url: string;
 		headers: string;
 		useProxy?: boolean;
+		oauth?: boolean;
 		onUrlChange: (url: string) => void;
 		onHeadersChange: (headers: string) => void;
 		onUseProxyChange?: (useProxy: boolean) => void;
+		onOAuthChange?: (oauth: boolean) => void;
 		urlError?: string | null;
 		id?: string;
 	}
@@ -24,9 +26,11 @@
 		url,
 		headers,
 		useProxy = false,
+		oauth = false,
 		onUrlChange,
 		onHeadersChange,
 		onUseProxyChange,
+		onOAuthChange,
 		urlError = null,
 		id = 'server'
 	}: Props = $props();
@@ -92,6 +96,21 @@
 							flag)</span
 						>
 					{/if}
+				</span>
+			</label>
+		{/if}
+
+		{#if !isWebSocket && onOAuthChange}
+			<label class="mt-3 flex cursor-pointer items-start gap-2">
+				<Switch
+					class="mt-1"
+					id="oauth-{id}"
+					checked={oauth}
+					onCheckedChange={(checked) => onOAuthChange?.(checked)}
+				/>
+
+				<span>
+					<span class="text-xs text-muted-foreground">Authenticate with OAuth</span>
 				</span>
 			</label>
 		{/if}

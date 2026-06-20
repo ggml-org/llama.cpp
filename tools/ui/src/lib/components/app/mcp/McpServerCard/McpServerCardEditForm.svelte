@@ -6,15 +6,18 @@
 		serverId: string;
 		serverUrl: string;
 		serverUseProxy?: boolean;
-		onSave: (url: string, headers: string, useProxy: boolean) => void;
+		serverOauth?: boolean;
+		onSave: (url: string, headers: string, useProxy: boolean, oauth: boolean) => void;
 		onCancel: () => void;
 	}
 
-	let { serverId, serverUrl, serverUseProxy = false, onSave, onCancel }: Props = $props();
+	let { serverId, serverUrl, serverUseProxy = false, serverOauth = false, onSave, onCancel }: Props =
+		$props();
 
 	let editUrl = $derived(serverUrl);
 	let editHeaders = $state('');
 	let editUseProxy = $derived(serverUseProxy);
+	let editOauth = $derived(serverOauth);
 
 	let urlError = $derived.by(() => {
 		if (!editUrl.trim()) return 'URL is required';
@@ -30,13 +33,14 @@
 
 	function handleSave() {
 		if (!canSave) return;
-		onSave(editUrl.trim(), editHeaders.trim(), editUseProxy);
+		onSave(editUrl.trim(), editHeaders.trim(), editUseProxy, editOauth);
 	}
 
-	export function setInitialValues(url: string, headers: string, useProxy: boolean) {
+	export function setInitialValues(url: string, headers: string, useProxy: boolean, oauth: boolean) {
 		editUrl = url;
 		editHeaders = headers;
 		editUseProxy = useProxy;
+		editOauth = oauth;
 	}
 </script>
 
@@ -47,9 +51,11 @@
 		url={editUrl}
 		headers={editHeaders}
 		useProxy={editUseProxy}
+		oauth={editOauth}
 		onUrlChange={(v) => (editUrl = v)}
 		onHeadersChange={(v) => (editHeaders = v)}
 		onUseProxyChange={(v) => (editUseProxy = v)}
+		onOAuthChange={(v) => (editOauth = v)}
 		urlError={editUrl ? urlError : null}
 		id={serverId}
 	/>
