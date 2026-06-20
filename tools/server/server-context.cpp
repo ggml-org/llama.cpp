@@ -2588,6 +2588,28 @@ private:
         }
     }
 
+    void iterate(std::vector<server_slot> & slots, std::function<void(server_slot &)> callback) {
+        for (auto & slot : slots) {
+            try {
+                callback(slot);
+            } catch (const std::exception & e) {
+                SLT_ERR(slot, "got exception: %s\n", e.what());
+                slot.release();
+            }
+        }
+    }
+
+    void iterate(std::vector<server_slot *> & slots, std::function<void(server_slot &)> callback) {
+        for (auto & slot : slots) {
+            try {
+                callback(*slot);
+            } catch (const std::exception & e) {
+                SLT_ERR(*slot, "got exception: %s\n", e.what());
+                slot->release();
+            }
+        }
+    }
+
     void update_slots() {
         // check if all slots are idle
         {
@@ -2651,20 +2673,24 @@ private:
             } catch (const std::exception & e) {
                 SRV_ERR("post_decode() failed: %s\n", e.what());
             }
+
+            if (batch.size() >= n_batch) {
+                break;
+            }
         }
     }
 
     void pre_decode() {
         // apply context-shift if needed
         // TODO: simplify and improve
-        for (server_slot & slot : slots) {
+        iterate(slots, [&](server_slot & slot) {
             if (slot.state == SLOT_STATE_GENERATING && slot.prompt.n_tokens() + 1 >= slot.n_ctx) {
                 if (!params_base.ctx_shift) {
                     // this check is redundant (for good)
                     // we should never get here, because generation should already stopped in process_token()
                     send_error(slot, "context shift is disabled", ERROR_TYPE_SERVER);
                     slot.release();
-                    continue;
+                    return;
                 }
 
                 if (mctx) {
@@ -2676,7 +2702,7 @@ private:
                 if (slot.task->is_parent() || slot.task->is_child()) {
                     send_error(slot, "context shift cannot be used for shared prompt", ERROR_TYPE_SERVER);
                     slot.release();
-                    continue;
+                    return;
                 }
 
                 // Shift context
@@ -2722,7 +2748,7 @@ private:
 
                 slot.truncated = true;
             }
-        }
+        });
 
         // start populating the batch for this iteration
         batch.clear();
@@ -2734,16 +2760,16 @@ private:
         std::vector<server_slot *> drafting;
 
         // determine which slots are generating and drafting
-        for (auto & slot : slots) {
+        iterate(slots, [&](server_slot & slot) {
             if (slot.state != SLOT_STATE_GENERATING) {
-                continue;
+                return;
             }
 
             // check if we can batch this slot with the previous one
             if (!slot_batched) {
                 slot_batched = &slot;
             } else if (!slot_batched->can_batch_with(slot)) {
-                continue;
+                return;
             }
 
             generating.push_back(&slot);
@@ -2791,7 +2817,7 @@ private:
                     }
                 }
             }
-        }
+        });
 
         // generate the actual drafts (if any)
         {
@@ -2799,9 +2825,7 @@ private:
         }
 
         // make checkpoints if needed
-        for (auto * slot_ptr : drafting) {
-            auto & slot = *slot_ptr;
-
+        iterate(drafting, [&](server_slot & slot) {
             auto & draft = slot.spec_draft;
             auto & ckpt  = slot.spec_ckpt;
 
@@ -2844,14 +2868,12 @@ private:
                     ckpt.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                 }
             }
-        }
+        });
 
         // update the batch with the sampled/drafted tokens
-        for (auto * slot_ptr : generating) {
-            auto & slot = *slot_ptr;
-
+        iterate(generating, [&](server_slot & slot) {
             slot.handle_last_sampled_token(batch);
-        }
+        });
 
         // process in chunks of params.n_batch
         int32_t n_batch  = llama_n_batch(ctx_tgt);
@@ -2862,20 +2884,20 @@ private:
 
         // next, batch any pending prompts without exceeding n_batch
         if (params_base.cont_batching || batch.size() == 0) {
-            for (auto & slot : slots) {
+            iterate(slots, [&](server_slot & slot) {
                 if (!slot.is_processing()) {
-                    continue;
+                    return;
                 }
 
                 // check if we can batch this slot with the previous one
                 if (slot_batched && !slot_batched->can_batch_with(slot)) {
-                    continue;
+                    return;
                 }
 
                 // check if this is a child slot
                 if (slot.state == SLOT_STATE_WAIT_OTHER) {
                     SLT_DBG(slot, "%s", "waiting for parent slot to complete\n");
-                    continue;
+                    return;
                 }
 
                 // this slot still has a prompt to be processed
@@ -2919,14 +2941,14 @@ private:
                             send_final_response(slot);
                             slot.release();
 
-                            continue;
+                            return;
                         }
 
                         // TODO: support memory-less logits computation
                         if (slot.task->need_logits() && !llama_get_memory(ctx_tgt)) {
                             send_error(slot, "the current context does not logits computation. skipping", ERROR_TYPE_SERVER);
                             slot.release();
-                            continue;
+                            return;
                         }
 
                         if (!slot.can_split()) {
@@ -2938,7 +2960,7 @@ private:
                                                slot.task->n_tokens(), n_ubatch),
                                            ERROR_TYPE_SERVER);
                                 slot.release();
-                                continue;
+                                return;
                             }
 
                             if (slot.task->n_tokens() > slot.n_ctx) {
@@ -2949,7 +2971,7 @@ private:
                                         slot.task->n_tokens(), slot.n_ctx),
                                     ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                                 slot.release();
-                                continue;
+                                return;
                             }
                         } else {
                             if (slot.task->n_tokens() >= slot.n_ctx) {
@@ -2959,7 +2981,7 @@ private:
                                                          slot.task->n_tokens(), slot.n_ctx),
                                            ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                                 slot.release();
-                                continue;
+                                return;
                             }
 
                             if (slot.task->params.cache_prompt) {
@@ -3180,7 +3202,7 @@ private:
                     if (!slot.can_split()) {
                         // cannot fit the prompt in the current batch - will try next iter
                         if (batch.size() + slot.task->n_tokens() > n_batch) {
-                            continue;
+                            return;
                         }
                     }
 
@@ -3393,11 +3415,7 @@ private:
                 if (!slot_batched) {
                     slot_batched = &slot;
                 }
-
-                if (batch.size() >= n_batch) {
-                    break;
-                }
-            }
+            });
         }
     }
 
@@ -3535,20 +3553,20 @@ private:
 
         // TODO @ngxson : it's tricky to make sub-batch compatible with common_sampler_sample_and_accept_n,
         // so for now we will throw an error in this case: https://github.com/ggml-org/llama.cpp/issues/24840
-        for (auto & slot : slots) {
+        iterate(slots, [&](server_slot & slot) {
             for (auto & i : slot.spec_i_batch) {
                 if (!is_inside_view(i)) {
                     throw std::runtime_error(string_format("speculative batch index %d is not inside the current sub-batch [%d, %d)", i, off, off + n_batch));
                 }
             }
-        }
+        });
 
         auto accept_special_token = [&](server_slot & slot, llama_token token) {
             return params_base.special ||
                 slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
         };
 
-        for (auto & slot : slots) {
+        iterate(slots, [&](server_slot & slot) {
             // optionally send prompt processing progress
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
                 if (slot.task->params.stream && slot.task->params.return_progress) {
@@ -3556,9 +3574,9 @@ private:
                 }
             }
 
-            if (is_inside_view(slot.i_batch)) {
+            if (!is_inside_view(slot.i_batch)) {
                 // the required token not in this sub-batch, skip
-                continue; // continue loop of slots
+                return;
             }
 
             if (slot.state == SLOT_STATE_DONE_PROMPT) {
@@ -3567,14 +3585,14 @@ private:
                     send_embedding(slot, batch_view);
                     slot.release();
                     slot.i_batch = -1;
-                    continue; // continue loop of slots
+                    return;
                 }
 
                 if (slot.task->type == SERVER_TASK_TYPE_RERANK) {
                     send_rerank(slot, batch_view);
                     slot.release();
                     slot.i_batch = -1;
-                    continue; // continue loop of slots
+                    return;
                 }
 
                 GGML_ASSERT(slot.task->need_sampling());
@@ -3586,11 +3604,11 @@ private:
                     common_speculative_begin(spec.get(), slot.id, slot.prompt.tokens.get_text_tokens());
                 }
             } else if (slot.state != SLOT_STATE_GENERATING) {
-                continue; // continue loop of slots
+                return;
             }
 
             if (slot.can_speculate() && !slot.spec_draft.empty()) {
-                continue; // sample using speculative decoding
+                return; // sample using speculative decoding
             }
 
             // shifted according to the current sub-batch
@@ -3633,16 +3651,16 @@ private:
                 metrics.on_prediction(slot);
                 slot.release();
 
-                continue;
+                return;
             }
 
             slot.print_timings_tg();
-        }
+        });
 
         // speculative decoding - main model sample and accept
-        for (auto & slot : slots) {
+        iterate(slots, [&](server_slot & slot) {
             if (slot.state != SLOT_STATE_GENERATING || !slot.can_speculate() || slot.spec_draft.empty()) {
-                continue;
+                return;
             }
 
             // save the original draft size
@@ -3696,7 +3714,7 @@ private:
                         slot.prompt.tokens.keep_first(ckpt.n_tokens);
                         slot.smpl = std::move(smpl_save);
 
-                        continue;
+                        return;
                     }
                 }
 
@@ -3755,14 +3773,14 @@ private:
                     metrics.on_prediction(slot);
                     slot.release();
 
-                    break;
+                    return;
                 }
             }
 
             slot.print_timings_tg();
 
             SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) n_draft, slot.prompt.n_tokens());
-        }
+        });
     }
 
     int get_slot_n_ctx() {
