@@ -66,7 +66,40 @@ def parse_log(file_path):
 
     for line in f:
         line_idx += 1
-        op_match = op_pattern.search(line)
+        if "|" in line and "profile-op" in line:
+            parts = [p.strip() for p in line.split("|")]
+            prefix = parts[0]
+            prefix_match = re.search(r"profile-op\s+(?P<op_name>[A-Z_0-9+]+)", prefix)
+            if not prefix_match:
+                continue
+
+            if len(parts) == 7:
+                dims, types, strides, params, timings = parts[2], parts[3], parts[4], parts[5], parts[6]
+            elif len(parts) == 6:
+                dims, types, strides, params, timings = parts[2], parts[3], parts[4], "", parts[5]
+            else:
+                continue
+
+            timing_match = re.search(
+                r"(?:op-)?usec\s+(?P<usec>\d+)\s+(?:op-)?cycles\s+(?P<cycles>\d+)(?:\s+start\s+(?P<start>\d+))?(?:\s+mhz\s+(?P<mhz>[\d.]+))?(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?(?:\s+evt\s+\[(?P<evt>[\d,\s]+)\])?",
+                timings
+            )
+            if not timing_match:
+                continue
+
+            op_match = timing_match
+            op_name = prefix_match.group("op_name")
+        else:
+            op_match = op_pattern.search(line)
+            if op_match:
+                op_name = op_match.group('op_name')
+                dims = op_match.group('dims').strip() if op_match.group('dims') else ''
+                types = op_match.group('types').strip() if op_match.group('types') else ''
+                strides = op_match.group('strides').strip() if op_match.group('strides') else ''
+                params = op_match.group('params').strip() if ('params' in op_match.groupdict() and op_match.group('params')) else ''
+            else:
+                op_match = None
+
         if op_match:
             cycles_start_raw = op_match.group('start')
             unwrapped_cycles_start = None
@@ -77,11 +110,11 @@ def parse_log(file_path):
             op_text = line[idx + 11:].strip() if idx != -1 else line.strip()
 
             current_op = {
-                'name':         op_match.group('op_name'),
-                'dims':         op_match.group('dims').strip() if op_match.group('dims') else '',
-                'types':        op_match.group('types').strip() if op_match.group('types') else '',
-                'strides':      op_match.group('strides').strip() if op_match.group('strides') else '',
-                'params':       op_match.group('params').strip() if op_match.group('params') else '',
+                'name':         op_name,
+                'dims':         dims,
+                'types':        types,
+                'strides':      strides,
+                'params':       params,
                 'op_text':      op_text,
                 'usec':         int(op_match.group('usec')),
                 'cycles':       int(op_match.group('cycles')),
