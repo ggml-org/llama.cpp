@@ -193,6 +193,25 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
+    t.test("until grammar multiple delimiters", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            return p.until_one_of({"ab", "cd", "ef"});
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= until-0
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-0 ::= | [a] until-0-1 | [c] until-0-3 | [e] until-0-5 | [^ace] until-0
+            until-0-1 ::= | [a] until-0-1 | [c] until-0-3 | [e] until-0-5 | [^abce] until-0
+            until-0-3 ::= | [a] until-0-1 | [c] until-0-3 | [e] until-0-5 | [^acde] until-0
+            until-0-5 ::= | [a] until-0-1 | [c] until-0-3 | [e] until-0-5 | [^acef] until-0
+        )""", gbnf);
+    });
+
     t.test("complex expressions with parentheses", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.one_or_more(p.literal("a") | p.literal("b"));
