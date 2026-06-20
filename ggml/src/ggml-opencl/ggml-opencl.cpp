@@ -447,6 +447,12 @@ struct ggml_backend_opencl_context {
     bool adreno_xmem_gemm_enabled = false;
 #endif
 
+    // prealloc buffers for dot8 local memory broadcast GEMM
+    ggml_cl_buffer prealloc_dot8_act;
+    ggml_cl_buffer prealloc_dot8_params;
+
+    bool adreno_dot8_lmbcast_q8_0_gemm_enabled = false;
+
     // prealloc buffers for MoE router table preprocess
     bool toggle_reorder = false;
     ggml_cl_buffer prealloc_post_router;
@@ -682,6 +688,9 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mm_q5_k_f32_l4_lm;
     cl_kernel kernel_mul_mm_q6_k_f32_l4_lm;
     cl_kernel kernel_mul_mm_iq4_nl_f32_l4_lm;
+
+    cl_kernel kernel_gemm_dot8_q8_0_pack_act;
+    cl_kernel kernel_gemm_dot8_q8_0_f32_lmbcast;
 
     std::vector<ProfilingInfo> profiling_info;
     std::vector<ProfilingInfo> profiling_results;
@@ -3699,6 +3708,26 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         GGML_LOG_CONT(".");
     }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
+
+    if (backend_ctx->adreno_dot8_lmbcast_q8_0_gemm_enabled) {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_dot8_q8_0_f32_lmbcast.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_dot8_q8_0_f32_lmbcast.cl");
+#endif
+        cl_program prog =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_gemm_dot8_q8_0_pack_act =
+            clCreateKernel(prog, "kernel_gemm_dot8_q8_0_pack_act", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemm_dot8_q8_0_f32_lmbcast =
+            clCreateKernel(prog, "kernel_gemm_dot8_q8_0_f32_lmbcast", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
+    }
+
     GGML_LOG_CONT("\n");
     backend_ctx->kernels_loaded = true;
 }
@@ -3991,6 +4020,10 @@ static void ggml_opencl_print_backend_info(ggml_backend_opencl_device_context * 
     }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
+    if (backend_ctx->adreno_dot8_lmbcast_q8_0_gemm_enabled) {
+        GGML_LOG_INFO("ggml_opencl: Adreno q8_0 int8-dot GEMM (local-memory broadcast) enabled\n");
+    }
+
     if (backend_ctx->adreno_use_large_buffer) {
         if (!backend_ctx->adreno_has_large_buffer) {
             GGML_LOG_INFO("ggml_opencl: Adreno large buffer requested but not supported by driver, will use regular buffer\n");
@@ -4189,6 +4222,11 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     backend_ctx->adreno_xmem_gemm_enabled = getenv("GGML_OPENCL_ADRENO_XMEM_GEMM") != nullptr &&
                                              backend_ctx->gpu_family == GPU_FAMILY::ADRENO;
 #endif
+
+    // determine whether to use dot8 + local memory broadcast GEMM for Q8_0
+    backend_ctx->adreno_dot8_lmbcast_q8_0_gemm_enabled = backend_ctx->gpu_family == GPU_FAMILY::ADRENO &&
+                                            strstr(ext_buffer, "cl_qcom_dot_product8") != NULL &&
+                                            getenv("GGML_OPENCL_DISABLE_DOT8_GEMM_Q8_0") == nullptr;
 
     // determine whether to use large buffer for Adreno
     backend_ctx->adreno_use_large_buffer = getenv("GGML_OPENCL_ADRENO_USE_LARGE_BUFFER") != nullptr &&
@@ -13098,6 +13136,40 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clReleaseMemObject(q_img));
         CL_CHECK(clReleaseMemObject(b_img));
         CL_CHECK(clReleaseMemObject(b_sub_buf));
+    } else if (backend_ctx->adreno_dot8_lmbcast_q8_0_gemm_enabled && M % 32 == 0 &&
+               src1->ne[2] == 1 && src1->ne[3] == 1) {
+        const int nblk = K/32;
+
+        backend_ctx->prealloc_dot8_act.allocate(context, (size_t)2*nblk*N*16);
+        backend_ctx->prealloc_dot8_params.allocate(context, (size_t)N*nblk*8);
+
+        kernel = backend_ctx->kernel_gemm_dot8_q8_0_pack_act;
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &backend_ctx->prealloc_dot8_act.buffer));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &backend_ctx->prealloc_dot8_params.buffer));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra1->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offset1));
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),      &K));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &N));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &nblk));
+
+        size_t pack_gws[3] = {(size_t)CEIL_DIV(N*nblk, 64)*64, 1, 1};
+        size_t pack_lws[3] = {64, 1, 1};
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, pack_gws, pack_lws, dst);
+
+        kernel = backend_ctx->kernel_gemm_dot8_q8_0_f32_lmbcast;
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0_q8_0->q));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &backend_ctx->prealloc_dot8_act.buffer));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra0_q8_0->d));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &backend_ctx->prealloc_dot8_params.buffer));
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),   &extrad->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_ulong), &offsetd));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &N));
+        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),      &M));
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),      &nblk));
+
+        size_t gws[3] = {(size_t)CEIL_DIV(N, 64)*64, (size_t)(M/32), 1};
+        size_t lws[3] = {64, 1, 1};
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
     } else {
         cl_mem b_sub_buf = nullptr;
         cl_mem b_sub_buf_trans = nullptr;
