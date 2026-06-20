@@ -147,6 +147,33 @@ export { default as SidebarNavigationConversationList } from './SidebarNavigatio
 export { default as SidebarNavigationActions } from './SidebarNavigation/SidebarNavigationActions.svelte';
 
 /**
+ * **SidebarNavigationSearchResults** - Filtered conversation list for search.
+ *
+ * Pure-presentational rendering of the search-mode subtree: "Search results"
+ * header, the matching items rendered through {@link SidebarNavigationConversationItem},
+ * and contextual empty-state messages. Used both inline inside
+ * {@link SidebarNavigationConversationList} (when search mode is active in the
+ * sidebar) and as the body of the mobile `/search` route.
+ *
+ * The caller is expected to provide an already-filtered list via
+ * `filteredConversations` and a `searchQuery` for the empty-state messages.
+ *
+ * @example
+ * ```svelte
+ * <SidebarNavigationSearchResults
+ *   {searchQuery}
+ *   {filteredConversations}
+ *   {currentChatId}
+ *   onSelect={...}
+ *   onEdit={...}
+ *   onDelete={...}
+ *   onStop={...}
+ * />
+ * ```
+ */
+export { default as SidebarNavigationSearchResults } from './SidebarNavigation/SidebarNavigationSearchResults.svelte';
+
+/**
  * Search input for filtering conversations in sidebar. Filters conversation
  * list by title as user types. Shows clear button when query is not empty.
  * Integrated into sidebar header with proper styling.
