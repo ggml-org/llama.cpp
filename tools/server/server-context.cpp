@@ -75,6 +75,7 @@ struct server_batch {
         bool output;
     };
     std::vector<token> tokens;
+    int32_t n_tokens_alloc = 0;
 
     // track if given slot can be batched with slots already in the batch
     server_slot * slot_batched = nullptr;
@@ -83,22 +84,25 @@ struct server_batch {
     size_t alora_disabled_id = 0;
 
     server_batch() {
-        batch.token = nullptr;
-    }
-    server_batch(int32_t n_tokens_alloc) {
-        batch = llama_batch_init(n_tokens_alloc, 0, 1);
-        tokens.reserve(n_tokens_alloc);
+        batch.token = nullptr; // sentinel: uninitialized batch
     }
 
     ~server_batch() {
         llama_batch_free(batch);
-    } 
+    }
+
+    void init(int32_t n_tokens_alloc) {
+        this->n_tokens_alloc = n_tokens_alloc;
+        batch = llama_batch_init(n_tokens_alloc, 0, 1);
+        tokens.reserve(n_tokens_alloc);
+    }
 
     bool add(int32_t id_slot, llama_token token, llama_pos pos, bool output) {
         GGML_ASSERT(batch.token != nullptr);
-        if (tokens.size() >= tokens.capacity()) {
+        if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
+        // LOG_DBG("adding token to batch: slot=%d, token=%d, pos=%d, output=%d\n", id_slot, token, pos, output);
         tokens.push_back({ id_slot, token, pos, output });
         return true;
     }
@@ -120,6 +124,8 @@ struct server_batch {
     }
 
     llama_batch render() {
+        GGML_ASSERT(batch.token != nullptr);
+        common_batch_clear(batch);
         for (int32_t i = 0; i < size(); i++) {
             const auto & t = tokens[i];
             common_batch_add(batch, t.token, t.pos, { t.id_slot }, t.output);
@@ -1278,7 +1284,7 @@ private:
         // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
         {
             const int32_t n_batch = llama_n_batch(ctx_tgt);
-            batch = server_batch(std::max(n_batch, params_base.n_parallel));
+            batch.init(std::max(n_batch, params_base.n_parallel));
         }
 
         if (params_base.cache_ram_mib != 0) {
@@ -2600,10 +2606,12 @@ private:
             SRV_ERR("decode() failed: %s\n", e.what());
         }
 
-        try {
-            post_decode(batch_view);
-        } catch (const std::exception & e) {
-            SRV_ERR("post_decode() failed: %s\n", e.what());
+        if (batch.size() > 0) {
+            try {
+                post_decode(batch_view);
+            } catch (const std::exception & e) {
+                SRV_ERR("post_decode() failed: %s\n", e.what());
+            }
         }
     }
 
@@ -3382,6 +3390,8 @@ private:
             if (++n_empty_consecutive > 3) {
                 GGML_ABORT("fatal error - please provide logs and repro in %s\n", "https://github.com/ggml-org/llama.cpp/pull/20277");
             }
+
+            return true; // nothing to decode
         } else {
             n_empty_consecutive = 0;
         }
