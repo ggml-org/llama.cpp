@@ -126,7 +126,7 @@ def test_cors_proxy_only_forwards_explicit_proxy_headers():
     try:
         server = ServerPreset.tinyllama2()
         server.api_key = TEST_API_KEY
-        server.webui_mcp_proxy = True
+        server.ui_mcp_proxy = True
         server.start()
 
         res = server.make_request("GET", f"/cors-proxy?url=http://127.0.0.1:{target.server_port}/capture", headers={
