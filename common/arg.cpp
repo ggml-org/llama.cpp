@@ -17,6 +17,7 @@
 #   define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 #define JSON_ASSERT GGML_ASSERT
@@ -302,7 +303,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
 
     if (!model.docker_repo.empty()) {
         model.path = common_docker_resolve_model(model.docker_repo);
-        model.name = model.docker_repo;
     } else if (!model.hf_repo.empty()) {
         // If -m was used with -hf, treat the model "path" as the hf_file to download
         if (model.hf_file.empty() && !model.path.empty()) {
@@ -322,7 +322,6 @@ static handle_model_result common_params_handle_model(struct common_params_model
             throw std::runtime_error("failed to download model from Hugging Face");
         }
 
-        model.name = model.hf_repo;
         model.path = download_result.model_path;
 
         if (!download_result.mmproj_path.empty()) {
@@ -893,7 +892,44 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
     return true;
 }
 
+#ifdef _WIN32
+struct utf8_argv {
+    std::vector<std::string> buf;
+    std::vector<char*> ptrs;
+};
+
+static utf8_argv make_utf8_argv() {
+    utf8_argv out;
+    int wargc = 0;
+    LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (!wargv) return out;
+
+    out.buf.reserve(wargc);
+    for (int i = 0; i < wargc; ++i) {
+        int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wargv[i], -1, nullptr, 0, nullptr, nullptr);
+        if (n <= 0) { out.buf.emplace_back(); continue; }
+        auto& s = out.buf.emplace_back();
+        s.resize(static_cast<size_t>(n - 1));
+        (void)WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, s.data(), n, nullptr, nullptr);
+    }
+    LocalFree(wargv);
+
+    out.ptrs.reserve(out.buf.size() + 1);
+    for (auto& s : out.buf) out.ptrs.push_back(s.data());
+    out.ptrs.push_back(nullptr);
+    return out;
+}
+#endif
+
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
+#ifdef _WIN32
+    auto utf8 = make_utf8_argv();
+    if (!utf8.ptrs.empty()) {
+        argc = static_cast<int>(utf8.buf.size());
+        argv = utf8.ptrs.data();
+    }
+#endif
+
     auto ctx_arg = common_params_parser_init(params, ex, print_usage);
     const common_params params_org = ctx_arg.params; // the example can modify the default params
 

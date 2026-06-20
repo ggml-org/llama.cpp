@@ -1,5 +1,6 @@
 #include "server-common.h"
 #include "server-models.h"
+#include "server-context.h"
 
 #include "build-info.h"
 #include "preset.h"
@@ -44,9 +45,7 @@ extern char **environ;
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
 
 #define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
-#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready" // also sent when waking up from sleep
-#define CMD_CHILD_TO_ROUTER_SLEEP "cmd_child_to_router:sleep"
-#define CMD_CHILD_TO_ROUTER_INFO  "cmd_child_to_router:info:" // followed by json string
+#define CMD_CHILD_TO_ROUTER_STATE "cmd_child_to_router:state:" // followed by json string
 
 // address for child process, this is needed because router may run on 0.0.0.0
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
@@ -904,12 +903,8 @@ void server_models::load(const std::string & name) {
                 while (fgets(buffer, vec_buf.size(), stdout_file) != nullptr) {
                     LOG("[%5d] %s", port, buffer);
                     std::string str(buffer);
-                    if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_READY)) {
-                        this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0);
-                    } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_INFO)) {
-                        this->update_loaded_info(name, str);
-                    } else if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_SLEEP)) {
-                        this->update_status(name, SERVER_MODEL_STATUS_SLEEPING, 0);
+                    if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_STATE)) {
+                        this->handle_child_state(name, str);
                     }
                 }
             } else {
@@ -976,7 +971,10 @@ void server_models::load(const std::string & name) {
         subprocess_destroy(&child_proc->get());
 
         // update status and exit code
-        this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, exit_code);
+        this->update_status(name, {
+            SERVER_MODEL_STATUS_UNLOADED,
+            exit_code
+        });
         SRV_INF("instance name=%s exited with status %d\n", name.c_str(), exit_code);
     });
 
@@ -1016,7 +1014,8 @@ struct server_models_download_res : public common_download_callback {
             common_download_model(model, opts);
             is_ok = true;
         } catch (const std::exception & e) {
-            SRV_ERR("download failed for model name=%s: %s\n", model.name.c_str(), e.what());
+            auto model_name = model.get_name();
+            SRV_ERR("download failed for model name=%s: %s\n", model_name.c_str(), e.what());
             is_ok = false;
         }
         return is_ok;
@@ -1036,7 +1035,7 @@ struct server_models_download_res : public common_download_callback {
 };
 
 void server_models::download(common_params_model && model, common_download_opts && opts) {
-    std::string name = model.name;
+    std::string name = model.get_name();
     GGML_ASSERT(name == model.hf_repo);
 
     std::unique_lock<std::mutex> lk(mutex);
@@ -1064,9 +1063,10 @@ void server_models::download(common_params_model && model, common_download_opts 
     inst.th = std::thread([this, dl = std::move(dl)]() {
         dl->opts.callback = dl.get();
         bool ok = dl->run();
+        auto model_name = dl->model.get_name();
         SRV_INF("download finished for model name=%s with status=%s\n",
-                    dl->model.name.c_str(), ok ? "success" : "failure");
-        update_download_progress(dl->model.name, {}, true, ok);
+                    model_name.c_str(), ok ? "success" : "failure");
+        update_download_progress(model_name, {}, true, ok);
         // need_reload is set inside update_download_progress under the mutex;
         // the next load_models() call will clean up this instance
     });
@@ -1130,47 +1130,30 @@ void server_models::unload_all() {
     }
 }
 
-void server_models::update_status(const std::string & name, server_model_status status, int exit_code) {
+void server_models::update_status(const std::string & name, const update_status_args & args) {
     std::unique_lock<std::mutex> lk(mutex);
     auto it = mapping.find(name);
     if (it != mapping.end()) {
         auto & meta = it->second.meta;
-        meta.status    = status;
-        meta.exit_code = exit_code;
+        meta.status      = args.status;
+        meta.exit_code   = args.exit_code;
+        if (!args.loaded_info.is_null()) {
+            meta.loaded_info = args.loaded_info;
+        }
     }
     // broadcast status change to SSE
     {
         json data = {
-            {"status", server_model_status_to_string(status)},
+            {"status", server_model_status_to_string(args.status)},
         };
-        if (status == SERVER_MODEL_STATUS_UNLOADED) {
-            data["exit_code"] = exit_code;
+        if (args.status == SERVER_MODEL_STATUS_UNLOADED) {
+            data["exit_code"] = args.exit_code;
+        }
+        if (!args.loaded_info.is_null()) {
+            data["info"] = args.loaded_info;
         }
         // note: notify_sse doesn't acquire the lock, so no deadlock here
         notify_sse("status_change", name, data);
-    }
-    cv.notify_all();
-}
-
-void server_models::update_loaded_info(const std::string & name, std::string & raw_info) {
-    if (!string_starts_with(raw_info, CMD_CHILD_TO_ROUTER_INFO)) {
-        SRV_WRN("invalid loaded info format from child for model name=%s: %s\n", name.c_str(), raw_info.c_str());
-        return;
-    }
-
-    json info;
-    try {
-        info = json::parse(raw_info.substr(strlen(CMD_CHILD_TO_ROUTER_INFO)));
-    } catch (const std::exception & e) {
-        SRV_WRN("failed to parse loaded info from child for model name=%s: %s\n", name.c_str(), e.what());
-        return;
-    }
-
-    std::unique_lock<std::mutex> lk(mutex);
-    auto it = mapping.find(name);
-    if (it != mapping.end()) {
-        auto & meta = it->second.meta;
-        meta.loaded_info = info;
     }
     cv.notify_all();
 }
@@ -1323,21 +1306,54 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     return proxy;
 }
 
-bool server_models::is_child_server() {
+void server_models::handle_child_state(const std::string & name, const std::string & raw_input) {
+    server_state state;
+    json payload;
+
+    try {
+        json data = json::parse(raw_input.substr(strlen(CMD_CHILD_TO_ROUTER_STATE)));
+        state = server_state_from_str(json_value(data, "state", std::string()));
+        payload = json_value(data, "payload", json{});
+    } catch (const std::exception & e) {
+        SRV_ERR("failed to parse child state update for name=%s: %s\n", name.c_str(), e.what());
+        return;
+    }
+
+    switch (state) {
+        case SERVER_STATE_LOADING:
+            {
+                // do nothing for now
+                // TODO: report loading progress for first load and wakeup from sleep
+            } break;
+        case SERVER_STATE_READY:
+            {
+                update_status(name, {
+                    SERVER_MODEL_STATUS_LOADED,
+                    0,
+                    // note: payload can be empty if this is a wakeup from sleep
+                    payload.size() > 0 ? payload : nullptr
+                });
+            } break;
+        case SERVER_STATE_SLEEPING:
+            {
+                update_status(name, { SERVER_MODEL_STATUS_SLEEPING });
+            } break;
+        default:
+            // should never happen, but just in case
+            GGML_ASSERT(false && "unexpected state from child server");
+    }
+}
+
+//
+// server_child
+//
+
+bool server_child::is_child() {
     const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
     return router_port != nullptr;
 }
 
-std::thread server_models::setup_child_server(const std::function<void(int)> & shutdown_handler, const json & model_info) {
-    // send a notification to the router server that a model instance is ready
-    common_log_pause(common_log_main());
-    fflush(stdout);
-    fprintf(stdout, "%s\n", CMD_CHILD_TO_ROUTER_READY);
-    fflush(stdout);
-    fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_INFO, safe_json_to_str(model_info).c_str());
-    fflush(stdout);
-    common_log_resume(common_log_main());
-
+std::thread server_child::setup(const std::function<void(int)> & shutdown_handler) {
     // setup thread for monitoring stdin
     return std::thread([shutdown_handler]() {
         // wait for EOF on stdin
@@ -1363,10 +1379,14 @@ std::thread server_models::setup_child_server(const std::function<void(int)> & s
     });
 }
 
-void server_models::notify_router_sleeping_state(bool is_sleeping) {
+void server_child::notify_to_router(const std::string & state, const json & payload) {
+    json data = {
+        {"state", state},
+        {"payload", payload},
+    };
     common_log_pause(common_log_main());
     fflush(stdout);
-    fprintf(stdout, "%s\n", is_sleeping ? CMD_CHILD_TO_ROUTER_SLEEP : CMD_CHILD_TO_ROUTER_READY);
+    fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
     fflush(stdout);
     common_log_resume(common_log_main());
 }
@@ -1474,7 +1494,6 @@ void server_models_routes::init_routes() {
                 }},
                 // New key
                 {"ui_settings",          ui_settings},
-                {"webui_settings",       webui_settings},
                 {"build_info",           std::string(llama_build_info())},
                 {"cors_proxy_enabled",   params.ui_mcp_proxy},
             });
@@ -1645,7 +1664,6 @@ void server_models_routes::init_routes() {
         common_params_model model;
         common_download_opts opts;
 
-        model.name           = name;
         model.hf_repo        = name;
         opts.bearer_token    = params.hf_token;
         opts.download_mmproj = true;
