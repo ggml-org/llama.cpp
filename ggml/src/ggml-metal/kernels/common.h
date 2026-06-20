@@ -1,12 +1,5 @@
 #pragma once
 
-#define GGML_COMMON_DECL_METAL
-#define GGML_COMMON_IMPL_METAL
-#if defined(GGML_METAL_EMBED_LIBRARY)
-__embed_ggml-common.h__
-#else
-#include "ggml-common.h"
-#endif
 #include "ggml-metal-impl.h"
 
 #include <metal_stdlib>

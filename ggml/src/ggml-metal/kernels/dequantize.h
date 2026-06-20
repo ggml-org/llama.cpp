@@ -2,6 +2,14 @@
 
 #include "common.h"
 
+#define GGML_COMMON_DECL_METAL
+#define GGML_COMMON_IMPL_METAL
+#if defined(GGML_METAL_EMBED_LIBRARY)
+__embed_ggml-common.h__
+#else
+#include "ggml-common.h"
+#endif
+
 #define QK_NL 16 // shared by mul_mm and get_rows_q instantiations
 
 // NOTE: this is not dequantizing - we are simply fitting the template
