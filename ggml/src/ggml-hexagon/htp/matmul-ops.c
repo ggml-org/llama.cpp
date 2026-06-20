@@ -2278,8 +2278,7 @@ static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void
         size_t chunk_size = hex_smin(st->n_tot_chunks - chunk_idx, st->n_chunks_per_task);
 
         float        *dst      = st->dst      + chunk_idx * st->dst_stride;
-        const __fp16 *vtcm_src = st->vtcm_src + chunk_idx * st->n_cols;
-        transfer_output_chunk_fp16_to_fp32(dst, vtcm_src, chunk_size, st->n_cols, st->dst_stride, st->dst_cols);
+        transfer_output_chunk_fp16_to_fp32(dst, st->vtcm_src, chunk_idx, chunk_size, st->n_cols, st->dst_stride, st->dst_cols);
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, i);
@@ -2410,11 +2409,16 @@ static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, 
                                               int n_rows, int n_cols, int dst_stride, int dst_cols, int n_threads) {
     assert(n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
 
+    if (n_rows <= 0) return;
+
     size_t n_tot_chunks      = n_rows;
-    size_t n_chunks_per_task = (n_threads == 1) ? n_tot_chunks : HTP_MM_HMX_TILE_N_ROWS;  // must be multiple of HTP_MM_HMX_TILE_N_ROWS (32)
+    size_t n_chunks_per_task = (n_threads == 1) ? n_tot_chunks : hmx_ceil_div(n_rows, n_threads);
+    n_chunks_per_task        = hex_align_up(n_chunks_per_task, 2);
+
+    int actual_threads = hmx_ceil_div(n_rows, n_chunks_per_task);
 
     output_transfer_task_state_t state;
-    state.n_tasks           = (n_tot_chunks + n_chunks_per_task - 1) / n_chunks_per_task;
+    state.n_tasks           = actual_threads;
     state.n_tot_chunks      = n_tot_chunks;
     state.n_chunks_per_task = n_chunks_per_task;
     state.dst               = dst;
@@ -2424,11 +2428,10 @@ static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, 
     state.dst_cols          = dst_cols;
     state.traces            = ctx->trace;
 
-    if (state.n_tasks == 1 || n_threads == 1) {
+    if (actual_threads <= 1) {
         transfer_output_chunk_worker_fn(1, 0, &state);
     } else {
-        int n_tasks = hex_smin((int) state.n_tasks, n_threads);
-        worker_pool_run_func(ctx->worker_pool, transfer_output_chunk_worker_fn, &state, n_tasks);
+        worker_pool_run_func(ctx->worker_pool, transfer_output_chunk_worker_fn, &state, actual_threads);
     }
 }
 

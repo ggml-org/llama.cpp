@@ -712,7 +712,7 @@ static inline void hmx_matmul_job_init(hmx_matmul_job_t * job,
 
 // output : fp16 -> f32p
 
-static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16 *restrict vtcm_src, uint32_t n_rows, uint32_t n_cols, uint32_t dst_stride, uint32_t dst_cols) {
+static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16 *restrict vtcm_src, uint32_t start_row, uint32_t n_rows, uint32_t n_cols, uint32_t dst_stride, uint32_t dst_cols) {
     assert(n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
     const size_t tile_row_stride = (n_cols / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -722,8 +722,9 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
     const size_t limit_c_aligned = (limit_c & ~31);
 
     for (size_t r = 0; r < n_rows; r += 2) {
-        const size_t r0 = r / HTP_MM_HMX_TILE_N_ROWS;
-        const size_t r1 = (r % HTP_MM_HMX_TILE_N_ROWS) / 2;  // index of the row pair within the tile
+        const size_t r_idx0 = start_row + r + 0;
+        const size_t r0 = r_idx0 / HTP_MM_HMX_TILE_N_ROWS;
+        const size_t r1 = (r_idx0 % HTP_MM_HMX_TILE_N_ROWS) / 2;  // index of the row pair within the tile
         const __fp16 *row_base = vtcm_src + r0 * tile_row_stride;
         float *output_row_base = dst + r * dst_stride;  // global memory row base for row r (and r+1)
 
