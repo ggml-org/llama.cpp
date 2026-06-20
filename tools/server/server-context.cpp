@@ -707,6 +707,12 @@ struct server_metrics {
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
 
+    // extended metrics (cache reuse + speculative decoding)
+    uint64_t n_prompt_tokens_cache_total = 0;
+    uint64_t n_draft_total_total         = 0;
+    uint64_t n_draft_accepted_total      = 0;
+    uint64_t n_draft_verif_steps_total   = 0;
+
     void init() {
         t_start = ggml_time_us();
     }
@@ -716,6 +722,7 @@ struct server_metrics {
         n_prompt_tokens_processed       += slot.n_prompt_tokens_processed;
         t_prompt_processing             += slot.t_prompt_processing;
         t_prompt_processing_total       += slot.t_prompt_processing;
+        n_prompt_tokens_cache_total     += slot.n_prompt_tokens_cache;
 
         n_tokens_max = std::max(n_tokens_max, (uint64_t) slot.prompt.n_tokens());
     }
@@ -725,6 +732,13 @@ struct server_metrics {
         n_tokens_predicted         += slot.n_decoded;
         t_tokens_generation        += slot.t_token_generation;
         t_tokens_generation_total  += slot.t_token_generation;
+    }
+
+    // aggregate per-request speculative-decoding stats (call once at final response)
+    void on_draft_stats(const server_slot & slot) {
+        n_draft_total_total       += (uint64_t) slot.n_draft_total;
+        n_draft_accepted_total    += (uint64_t) slot.n_draft_accepted;
+        n_draft_verif_steps_total += (uint64_t) slot.n_draft_verif_steps;
     }
 
     void on_decoded(const std::vector<server_slot> & slots) {
@@ -1924,6 +1938,8 @@ private:
     }
 
     void send_final_response(server_slot & slot) {
+        metrics.on_draft_stats(slot);
+
         auto res = std::make_unique<server_task_result_cmpl_final>();
 
         res->id      = slot.task->id;
@@ -2332,6 +2348,11 @@ private:
 
                     res->n_decode_total          = metrics.n_decode_total;
                     res->n_busy_slots_total      = metrics.n_busy_slots_total;
+
+                    res->n_prompt_tokens_cache_total = metrics.n_prompt_tokens_cache_total;
+                    res->n_draft_total_total         = metrics.n_draft_total_total;
+                    res->n_draft_accepted_total      = metrics.n_draft_accepted_total;
+                    res->n_draft_verif_steps_total   = metrics.n_draft_verif_steps_total;
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -4140,6 +4161,22 @@ void server_routes::init_routes() {
                     {"name",  "n_tokens_max"},
                     {"help",  "Largest observed n_tokens."},
                     {"value",  res_task->n_tokens_max}
+            }, {
+                    {"name",  "prompt_tokens_cache_total"},
+                    {"help",  "Number of prompt tokens served from cache (KV/prompt cache reuse)."},
+                    {"value",  res_task->n_prompt_tokens_cache_total}
+            }, {
+                    {"name",  "draft_tokens_total"},
+                    {"help",  "Speculative decoding: total draft tokens proposed."},
+                    {"value",  res_task->n_draft_total_total}
+            }, {
+                    {"name",  "draft_tokens_accepted_total"},
+                    {"help",  "Speculative decoding: draft tokens accepted by target model."},
+                    {"value",  res_task->n_draft_accepted_total}
+            }, {
+                    {"name",  "draft_verify_steps_total"},
+                    {"help",  "Speculative decoding: number of draft verification steps."},
+                    {"value",  res_task->n_draft_verif_steps_total}
             }}},
             {"gauge", {{
                     {"name",  "prompt_tokens_seconds"},
@@ -4161,6 +4198,18 @@ void server_routes::init_routes() {
                     {"name",  "n_busy_slots_per_decode"},
                     {"help",  "Average number of busy slots per llama_decode() call"},
                     {"value",  (float) res_task->n_busy_slots_total / std::max((float) res_task->n_decode_total, 1.f)}
+            },{
+                    {"name",  "prompt_cache_hit_ratio"},
+                    {"help",  "Fraction of prompt tokens served from cache (cache / (cache + processed))."},
+                    {"value",  (res_task->n_prompt_tokens_cache_total + res_task->n_prompt_tokens_processed_total) ? (double) res_task->n_prompt_tokens_cache_total / (double) (res_task->n_prompt_tokens_cache_total + res_task->n_prompt_tokens_processed_total) : 0.}
+            },{
+                    {"name",  "draft_acceptance_rate"},
+                    {"help",  "Speculative decoding: accepted / proposed draft tokens."},
+                    {"value",  res_task->n_draft_total_total ? (double) res_task->n_draft_accepted_total / (double) res_task->n_draft_total_total : 0.}
+            },{
+                    {"name",  "draft_mean_accept_len"},
+                    {"help",  "Speculative decoding: mean accepted tokens per verification step (1 + accepted/steps)."},
+                    {"value",  res_task->n_draft_verif_steps_total ? 1.0 + (double) res_task->n_draft_accepted_total / (double) res_task->n_draft_verif_steps_total : 0.}
             }}}
         };
 
