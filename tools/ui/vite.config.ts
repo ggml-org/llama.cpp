@@ -4,7 +4,7 @@ import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
-import { defineConfig, searchForWorkspaceRoot } from 'vite';
+import { defineConfig, loadEnv, searchForWorkspaceRoot } from 'vite';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen';
 import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
@@ -13,8 +13,6 @@ import { playwright } from '@vitest/browser-playwright';
 import { SVELTEKIT_PWA_OPTIONS } from './src/lib/constants/pwa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-const SERVER_ORIGIN = import.meta.env?.VITE_PUBLIC_SERVER_ORIGIN || 'http://localhost:8080';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const browserBaseConfig: any = {
@@ -27,7 +25,10 @@ const browserBaseConfig: any = {
 	instances: [{ browser: 'chromium' }]
 };
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+	const env = loadEnv(mode, process.cwd(), 'VITE_PUBLIC_');
+	const SERVER_ORIGIN = env.VITE_PUBLIC_SERVER_ORIGIN || 'http://localhost:8080';
+	return {
 	resolve: {
 		alias: {
 			'katex-fonts': resolve('node_modules/katex/dist/fonts')
@@ -103,4 +104,4 @@ export default defineConfig({
 			allow: [searchForWorkspaceRoot(process.cwd()), resolve(__dirname, 'tests')]
 		}
 	}
-});
+}});
