@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { afterNavigate, goto } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { browser } from '$app/environment';
 
@@ -74,7 +74,7 @@
 
 <div class="fixed top-0 z-10 left-0 right-0 p-2">
 	<SearchInput
-        autofocus
+		autofocus
 		bind:value={searchQuery}
 		bind:ref={searchInputRef}
 		onClose={handleBack}

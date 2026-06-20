@@ -16,6 +16,6 @@
 	}: Props = $props();
 </script>
 
-<div class="mb-4 px-2 {className}" >
-    <SearchInput bind:value {placeholder} {onInput} />
+<div class="mb-4 px-2 {className}">
+	<SearchInput bind:value {placeholder} {onInput} />
 </div>

@@ -3,7 +3,7 @@
 	import { Search, X } from '@lucide/svelte';
 
 	interface Props {
-	    autofocus?: boolean;
+		autofocus?: boolean;
 		value?: string;
 		placeholder?: string;
 		onInput?: (value: string) => void;
@@ -16,7 +16,7 @@
 	}
 
 	let {
-        autofocus,
+		autofocus,
 		value = $bindable(''),
 		placeholder = 'Search...',
 		onInput,
@@ -54,7 +54,7 @@
 	/>
 
 	<Input
-	    {autofocus}
+		{autofocus}
 		{id}
 		bind:value
 		bind:ref

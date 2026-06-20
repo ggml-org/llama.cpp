@@ -79,14 +79,21 @@
 		<ActionIcon icon={X} tooltip="Close" onclick={handleClose} />
 	</div>
 
-	<div class="sticky top-0 z-10 mt-4 mb-2 flex items-start gap-4 md:p-4 p-0 px-4 md:justify-between md:px-8">
+	<div
+		class="sticky top-0 z-10 mt-4 mb-2 flex items-start gap-4 md:p-4 p-0 px-4 md:justify-between md:px-8"
+	>
 		<div class="flex items-center gap-2">
 			<McpLogo class="h-5 w-5 md:h-6 md:w-6" />
 
 			<h1 class="text-lg font-semibold md:text-2xl">MCP Servers</h1>
 		</div>
 
-		<Button variant="outline" size="lg" class="shrink-0 fixed md:static bottom-6 right-6" onclick={() => (isAddingServer = true)}>
+		<Button
+			variant="outline"
+			size="lg"
+			class="shrink-0 fixed md:static bottom-6 right-6"
+			onclick={() => (isAddingServer = true)}
+		>
 			<Plus class="h-4 w-4" />
 
 			Add New Server

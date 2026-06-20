@@ -38,7 +38,7 @@
 	}
 
 	export function focus() {
-        if (viewport.isMobile) return;
+		if (viewport.isMobile) return;
 
 		textareaElement?.focus({ preventScroll: true });
 	}

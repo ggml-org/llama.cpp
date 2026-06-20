@@ -113,113 +113,125 @@
 
 <svelte:window onkeydown={handleKeydown} bind:innerWidth />
 
-
 {#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.SEARCH))}
-    <aside
-       	class="fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 {isExpandedMode && device.isStandalone ? 'h-[calc(100dvh-2rem)]' : isExpandedMode && device.isIOSDevice ? 'h-[calc(100dvh-0.5rem)]' : isExpandedMode ? 'h-[calc(100dvh-1rem)]' : ''} md:h-[calc(100dvh-1.125rem)] pt-2 rounded-3xl md:rounded-2xl z-10 flex flex-col justify-between md:transition-[width,padding] w-[calc(100dvw-1rem)]  duration-200 ease-out {isStripExpanded
-    		? 'md:w-72 bg-muted/60 md:backdrop-blur-xl border-border shadow-md'
-    		: 'md:w-12'} {isExpandedMode ? 'is-expanded' : ''}"
-    >
-    	<div class="px-2 flex items-center justify-between">
-    		<div
-    			role="button"
-    			tabindex="0"
-    			class="relative"
-    			onmouseenter={() => (logoHovered = true)}
-    			onmouseleave={() => (logoHovered = false)}
-    		>
-    			<ActionIcon
-    				icon={(!isExpandedMode && logoHovered) && innerWidth > 768 ?  PanelLeftOpen : Logo}
-    				size="lg"
-    				iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
-    				class="{isExpandedMode ? 'bg-muted!' : 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full hover:bg-accent!"
-    				href={isExpandedMode ? ROUTES.START : undefined}
-    				onclick={isExpandedMode ? undefined : toggleExpandedMode}
-    				tooltip={isExpandedMode ? undefined : 'Open Sidebar'}
-    				tooltipSide={TooltipSide.RIGHT}
-    				ariaLabel={isExpandedMode ? 'Go to start' : 'Expand navigation'}
-    			/>
-    		</div>
+	<aside
+		class="fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 {isExpandedMode &&
+		device.isStandalone
+			? 'h-[calc(100dvh-2rem)]'
+			: isExpandedMode && device.isIOSDevice
+				? 'h-[calc(100dvh-0.5rem)]'
+				: isExpandedMode
+					? 'h-[calc(100dvh-1rem)]'
+					: ''} md:h-[calc(100dvh-1.125rem)] pt-2 rounded-3xl md:rounded-2xl z-10 flex flex-col justify-between md:transition-[width,padding] w-[calc(100dvw-1rem)] duration-200 ease-out {isStripExpanded
+			? 'md:w-72 bg-muted/60 md:backdrop-blur-xl border-border shadow-md'
+			: 'md:w-12'} {isExpandedMode ? 'is-expanded' : ''}"
+	>
+		<div class="px-2 flex items-center justify-between">
+			<div
+				role="button"
+				tabindex="0"
+				class="relative"
+				onmouseenter={() => (logoHovered = true)}
+				onmouseleave={() => (logoHovered = false)}
+			>
+				<ActionIcon
+					icon={!isExpandedMode && logoHovered && innerWidth > 768 ? PanelLeftOpen : Logo}
+					size="lg"
+					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+					class="{isExpandedMode
+						? 'bg-muted!'
+						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full hover:bg-accent!"
+					href={isExpandedMode ? ROUTES.START : undefined}
+					onclick={isExpandedMode ? undefined : toggleExpandedMode}
+					tooltip={isExpandedMode ? undefined : 'Open Sidebar'}
+					tooltipSide={TooltipSide.RIGHT}
+					ariaLabel={isExpandedMode ? 'Go to start' : 'Expand navigation'}
+				/>
+			</div>
 
-    		{#if isExpandedMode || isOnMobile}
-    			<div class="{(!isExpandedMode && isOnMobile) ? 'hidden' : ''}" in:fade={{ duration: 150, easing: circIn, delay: 50 }} out:fade={{ duration: 100 }}>
-    				<ActionIcon
-    					icon={innerWidth > 768 ? PanelLeftClose : X}
-    					size="lg"
-    					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
-    					class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 hover:bg-accent!"
-    					onclick={toggleExpandedMode}
-    					tooltip="Close Sidebar"
-    					tooltipSide={TooltipSide.LEFT}
-    					ariaLabel="Collapse navigation"
-    				/>
-    			</div>
-    		{/if}
-    	</div>
+			{#if isExpandedMode || isOnMobile}
+				<div
+					class={!isExpandedMode && isOnMobile ? 'hidden' : ''}
+					in:fade={{ duration: 150, easing: circIn, delay: 50 }}
+					out:fade={{ duration: 100 }}
+				>
+					<ActionIcon
+						icon={innerWidth > 768 ? PanelLeftClose : X}
+						size="lg"
+						iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 hover:bg-accent!"
+						onclick={toggleExpandedMode}
+						tooltip="Close Sidebar"
+						tooltipSide={TooltipSide.LEFT}
+						ariaLabel="Collapse navigation"
+					/>
+				</div>
+			{/if}
+		</div>
 
-    	<div class="mt-2 flex min-h-0 flex-1 flex-col gap-1 ">
-    		<SidebarNavigationActions
-    			{isExpandedMode}
-    			class="px-2"
-    			bind:isSearchModeActive
-    			bind:searchQuery
-    			onSearchDeactivated={() => {
-    				isSearchModeActive = false;
-    				searchQuery = '';
-    			}}
-    			onSearchClick={() => {
-    				isExpandedMode = true;
-    				isSearchModeActive = true;
-    			}}
-    			onNewChat={() => {
-    				if (isMobile.current) {
-    					isExpandedMode = false;
-    				}
-    			}}
-    		/>
+		<div class="mt-2 flex min-h-0 flex-1 flex-col gap-1">
+			<SidebarNavigationActions
+				{isExpandedMode}
+				class="px-2"
+				bind:isSearchModeActive
+				bind:searchQuery
+				onSearchDeactivated={() => {
+					isSearchModeActive = false;
+					searchQuery = '';
+				}}
+				onSearchClick={() => {
+					isExpandedMode = true;
+					isSearchModeActive = true;
+				}}
+				onNewChat={() => {
+					if (isMobile.current) {
+						isExpandedMode = false;
+					}
+				}}
+			/>
 
-    		{#if isExpandedMode || isOnMobile}
-    			<div
-    				class="flex min-h-0 flex-1 flex-col {(!isExpandedMode && isOnMobile) ? 'hidden' : ''}"
-    				in:fade={{ duration: 150, easing: circIn, delay: 50 }}
-    				out:fade={{ duration: 100 }}
-    			>
-    				<SidebarNavigationConversationList
-    					class="px-2"
-    					{filteredConversations}
-    					{currentChatId}
-    					{isSearchModeActive}
-    					{searchQuery}
-    					onSelect={selectConversation}
-    					onEdit={handleEditConversation}
-    					onDelete={handleDeleteConversation}
-    					onStop={handleStopGeneration}
-    				/>
-    			</div>
-    		{/if}
-    	</div>
-    </aside>
+			{#if isExpandedMode || isOnMobile}
+				<div
+					class="flex min-h-0 flex-1 flex-col {!isExpandedMode && isOnMobile ? 'hidden' : ''}"
+					in:fade={{ duration: 150, easing: circIn, delay: 50 }}
+					out:fade={{ duration: 100 }}
+				>
+					<SidebarNavigationConversationList
+						class="px-2"
+						{filteredConversations}
+						{currentChatId}
+						{isSearchModeActive}
+						{searchQuery}
+						onSelect={selectConversation}
+						onEdit={handleEditConversation}
+						onDelete={handleDeleteConversation}
+						onStop={handleStopGeneration}
+					/>
+				</div>
+			{/if}
+		</div>
+	</aside>
 {/if}
 
 <style>
-    aside {
-        @media (max-width: 768px) {
-            --size: 1.125rem;
-        }
-    }
+	aside {
+		@media (max-width: 768px) {
+			--size: 1.125rem;
+		}
+	}
 
-    @media (max-width: 768px) {
-        aside.is-expanded::before {
-            content: '';
-            position: fixed;
-            top: -0.5rem;
-            bottom: -0.25rem;
-            left: -0.5rem;
-            right: -0.5rem;
-            z-index: -1;
-            background: var(--background);
-            backdrop-filter: blur(1rem);
-            pointer-events: none;
-        }
-    }
+	@media (max-width: 768px) {
+		aside.is-expanded::before {
+			content: '';
+			position: fixed;
+			top: -0.5rem;
+			bottom: -0.25rem;
+			left: -0.5rem;
+			right: -0.5rem;
+			z-index: -1;
+			background: var(--background);
+			backdrop-filter: blur(1rem);
+			pointer-events: none;
+		}
+	}
 </style>

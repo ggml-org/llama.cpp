@@ -7,7 +7,6 @@
 		ChatMessages,
 		ChatScreenDragOverlay,
 		ChatScreenProcessingInfo,
-		ChatScreenActionScrollDown,
 		DialogEmptyFileAlert,
 		DialogFileUploadError,
 		DialogChatError,
@@ -69,10 +68,6 @@
 	let showDeleteDialog = $state(false);
 
 	let showEmptyFileDialog = $state(false);
-
-	let processingInfoVisible = $state(false);
-
-	let innerHeight = $state(0);
 
 	let emptyFileNames = $state<string[]>([]);
 
@@ -179,10 +174,6 @@
 		}
 
 		showDeleteDialog = false;
-	}
-
-	function handleProcessingInfoVisibility(visible: boolean) {
-		processingInfoVisible = visible;
 	}
 
 	function handleDragEnter(event: DragEvent) {
@@ -361,13 +352,13 @@
 
 	onMount(() => {
 		if (isMobile.current) {
-    		autoScroll.startObserving();
+			autoScroll.startObserving();
 		}
 
 		if (isMobile.current) {
-    		setTimeout(() => {
-        		window.scrollTo({ top: document.body.scrollHeight });
-    		}, 10);
+			setTimeout(() => {
+				window.scrollTo({ top: document.body.scrollHeight });
+			}, 10);
 		}
 
 		if (!disableAutoScroll) {
@@ -387,25 +378,25 @@
 		}
 
 		if (isMobile.current) {
-    		setTimeout(() => {
-        		window.scrollTo({ top: document.body.scrollHeight });
-    		}, 10);
+			setTimeout(() => {
+				window.scrollTo({ top: document.body.scrollHeight });
+			}, 10);
 		}
 	});
 
 	onDestroy(() => autoScroll.destroy());
 
 	$effect(() => {
-	  if (!isMobile.current) {
+		if (!isMobile.current) {
 			chatScrollContainer = document.documentElement;
 			autoScroll.setContainer(chatScrollContainer);
 		}
 	});
 
 	$effect(() => {
-        if (!isMobile.current) {
-    		autoScroll.setDisabled(disableAutoScroll);
-        }
+		if (!isMobile.current) {
+			autoScroll.setDisabled(disableAutoScroll);
+		}
 	});
 </script>
 
@@ -442,20 +433,19 @@
 		<div
 			class={[
 				'pointer-events-none md:sticky fixed  mt-auto transition-all duration-200',
-				device.isStandalone ? 'bottom-6 right-4 left-4' : device.isIOSSafari ? 'bottom-1 left-2 right-2' : 'bottom-2 right-2 left-2',
+				device.isStandalone
+					? 'bottom-6 right-4 left-4'
+					: device.isIOSSafari
+						? 'bottom-1 left-2 right-2'
+						: 'bottom-2 right-2 left-2',
 				isEmpty ? 'md:bottom-[calc(50dvh-4rem)]' : 'md:bottom-4 pt-24 md:pt-32'
 			]}
 		>
 			<ChatScreenGreeting {isEmpty} />
 
-			<!-- <ChatScreenActionScrollDown
-				container={chatScrollContainer}
-				hasProcessingInfoVisible={processingInfoVisible}
-			/> -->
-
 			<ChatScreenServerError />
 
-			<ChatScreenProcessingInfo onVisibilityChange={handleProcessingInfoVisibility} />
+			<ChatScreenProcessingInfo />
 
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl">
 				<ChatScreenForm
