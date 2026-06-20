@@ -5022,14 +5022,14 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         tst.test("Hello, world!\nWhat's up?").tools({ special_function_tool }).expect(message_assist).expect_reconstruction().run();
 
         tst.test(
-             "```json\n\"42\" \n```")
+             "```json\n\"42\"\n```")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .json_schema(const_schema)
             .expect_content(R"("42")")
             .run();
 
         tst.test(
-             "\"42\" \n")
+             "\"42\"\n")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .json_schema(const_schema)
             .expect_content(R"("42")")
