@@ -2594,6 +2594,7 @@ private:
                 callback(slot);
             } catch (const std::exception & e) {
                 SLT_ERR(slot, "got exception: %s\n", e.what());
+                send_error(slot, std::string("got exception: ") + e.what(), ERROR_TYPE_SERVER);
                 slot.release();
             }
         }
@@ -2605,7 +2606,17 @@ private:
                 callback(*slot);
             } catch (const std::exception & e) {
                 SLT_ERR(*slot, "got exception: %s\n", e.what());
+                send_error(*slot, std::string("got exception: ") + e.what(), ERROR_TYPE_SERVER);
                 slot->release();
+            }
+        }
+    }
+
+    void abort_all_slots(const std::string & reason) {
+        for (auto & slot : slots) {
+            if (slot.is_processing()) {
+                send_error(slot, reason, ERROR_TYPE_SERVER);
+                slot.release();
             }
         }
     }
@@ -2640,6 +2651,7 @@ private:
             batch.render();
         } catch (const std::exception & e) {
             SRV_ERR("pre_decode() failed: %s\n", e.what());
+            abort_all_slots("pre_decode() failed: " + std::string(e.what()));
         }
 
         llama_batch batch_view;
@@ -2666,12 +2678,14 @@ private:
                 }
             } catch (const std::exception & e) {
                 SRV_ERR("decode() failed: %s\n", e.what());
+                abort_all_slots("decode() failed: " + std::string(e.what()));
             }
 
             try {
                 post_decode(n_batch, off, batch_view);
             } catch (const std::exception & e) {
                 SRV_ERR("post_decode() failed: %s\n", e.what());
+                abort_all_slots("post_decode() failed: " + std::string(e.what()));
             }
 
             if (batch.size() >= n_batch) {
