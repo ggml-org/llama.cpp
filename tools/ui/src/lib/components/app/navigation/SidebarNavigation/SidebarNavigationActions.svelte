@@ -41,6 +41,8 @@
 	let showIcons = $state(false);
 	let searchInputRef = $state<HTMLInputElement | null>(null);
 
+	const isOnMobile = $derived(isMobile.current);
+
 	$effect(() => {
 		if (isSearchModeActive && searchInputRef) {
 			searchInputRef.focus();
@@ -96,8 +98,8 @@
 			placeholder="Search conversations..."
 		/>
 	</div>
-{:else if isExpandedMode}
-	<div class="{className} flex flex-col gap-3 mt-2 md:mt-0 md:gap-1">
+{:else if isExpandedMode || isOnMobile}
+	<div class="{className} flex flex-col gap-3 mt-2 md:mt-0 md:gap-1 {(!isExpandedMode && isOnMobile) ? 'hidden' : ''}">
 		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && isMobile.current}

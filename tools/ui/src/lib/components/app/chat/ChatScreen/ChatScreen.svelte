@@ -422,7 +422,7 @@
 		<div
 			class={[
 				'pointer-events-none md:sticky fixed  mt-auto transition-all duration-200',
-				device.isStandalone ? 'bottom-6 right-4 left-4' : device.isIOSSafari ? 'bottom-0 left-2 right-2' : 'bottom-2 right-2 left-2',
+				device.isStandalone ? 'bottom-6 right-4 left-4' : device.isIOSSafari ? 'bottom-1 left-2 right-2' : 'bottom-2 right-2 left-2',
 				isEmpty ? 'md:bottom-[calc(50dvh-4rem)]' : 'md:bottom-4 pt-24 md:pt-32'
 			]}
 		>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import * as viewport from '$lib/stores/viewport.svelte';
 	import { autoResizeTextarea } from '$lib/utils';
 	import { onMount } from 'svelte';
 
@@ -37,6 +38,8 @@
 	}
 
 	export function focus() {
+        if (viewport.isMobile) return;
+
 		textareaElement?.focus({ preventScroll: true });
 	}
 

@@ -32,6 +32,7 @@
 	let logoHovered = $state(false);
 
 	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
+	const isOnMobile = $derived(isMobile.current);
 
 	function toggleExpandedMode() {
 		isExpandedMode = !isExpandedMode;
@@ -115,8 +116,8 @@
 
 {#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.SEARCH))}
     <aside
-       	class="fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 {device.isStandalone ? 'h-[calc(100dvh-2rem)]' : device.isIOSDevice ? 'h-[calc(100dvh-0.5rem)]' : 'h-[calc(100dvh-1rem)]'} md:h-[calc(100dvh-1.125rem)] pt-2 rounded-3xl md:rounded-2xl z-10 flex flex-col justify-between md:transition-[width,padding] w-[calc(100dvw-1rem)]  duration-200 ease-out {isStripExpanded
-    		? 'md:w-72 bg-muted/60 backdrop-blur-xl border-border shadow-md'
+       	class="fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 {isExpandedMode && device.isStandalone ? 'h-[calc(100dvh-2rem)]' : isExpandedMode && device.isIOSDevice ? 'h-[calc(100dvh-0.5rem)]' : isExpandedMode ? 'h-[calc(100dvh-1rem)]' : ''} md:h-[calc(100dvh-1.125rem)] pt-2 rounded-3xl md:rounded-2xl z-10 flex flex-col justify-between md:transition-[width,padding] w-[calc(100dvw-1rem)]  duration-200 ease-out {isStripExpanded
+    		? 'md:w-72 bg-muted/60 md:backdrop-blur-xl border-border shadow-md'
     		: 'md:w-12'} {isExpandedMode ? 'is-expanded' : ''}"
     >
     	<div class="px-2 flex items-center justify-between">
@@ -140,8 +141,8 @@
     			/>
     		</div>
 
-    		{#if isExpandedMode}
-    			<div in:fade={{ duration: 150, easing: circIn, delay: 50 }} out:fade={{ duration: 100 }}>
+    		{#if isExpandedMode || isOnMobile}
+    			<div class="{(!isExpandedMode && isOnMobile) ? 'hidden' : ''}" in:fade={{ duration: 150, easing: circIn, delay: 50 }} out:fade={{ duration: 100 }}>
     				<ActionIcon
     					icon={innerWidth > 768 ? PanelLeftClose : X}
     					size="lg"
@@ -177,9 +178,9 @@
     			}}
     		/>
 
-    		{#if isExpandedMode}
+    		{#if isExpandedMode || isOnMobile}
     			<div
-    				class="flex min-h-0 flex-1 flex-col"
+    				class="flex min-h-0 flex-1 flex-col {(!isExpandedMode && isOnMobile) ? 'hidden' : ''}"
     				in:fade={{ duration: 150, easing: circIn, delay: 50 }}
     				out:fade={{ duration: 100 }}
     			>
@@ -218,6 +219,7 @@
             z-index: -1;
             background: var(--background);
             backdrop-filter: blur(1rem);
+            pointer-events: none;
         }
     }
 </style>
