@@ -1538,8 +1538,15 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
                                           const std::vector<std::string> & strings) {
     aho_corasick ac(strings);
 
-    auto state_name = [&](size_t s) {
-        return s == 0 ? prefix : prefix + "-" + std::to_string(s);
+    auto state_name = [&](size_t s) -> std::string {
+        if (s == 0) {
+            return prefix;
+        }
+        std::string num = std::to_string(s);
+        if (num.size() < 2) {
+            num = std::string(2 - num.size(), '0') + num;
+        }
+        return prefix + "-" + num;
     };
 
     auto char_class = [](const std::vector<uint32_t> & chars, bool negate) {

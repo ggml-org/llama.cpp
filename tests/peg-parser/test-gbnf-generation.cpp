@@ -131,12 +131,12 @@ void test_gbnf_generation(testing &t) {
         assert_gbnf_equal(t, R"""(
             root ::= until-0
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            until-0 ::= | [<] until-0-1 | [^<] until-0
-            until-0-1 ::= | [<] until-0-1 | [/] until-0-2 | [^/<] until-0
-            until-0-2 ::= | [<] until-0-1 | [t] until-0-3 | [^<t] until-0
-            until-0-3 ::= | [<] until-0-1 | [a] until-0-4 | [^<a] until-0
-            until-0-4 ::= | [<] until-0-1 | [g] until-0-5 | [^<g] until-0
-            until-0-5 ::= | [<] until-0-1 | [^<>] until-0
+            until-0 ::= | [<] until-0-01 | [^<] until-0
+            until-0-01 ::= | [<] until-0-01 | [/] until-0-02 | [^/<] until-0
+            until-0-02 ::= | [<] until-0-01 | [t] until-0-03 | [^<t] until-0
+            until-0-03 ::= | [<] until-0-01 | [a] until-0-04 | [^<a] until-0
+            until-0-04 ::= | [<] until-0-01 | [g] until-0-05 | [^<g] until-0
+            until-0-05 ::= | [<] until-0-01 | [^<>] until-0
         )""", gbnf);
     });
 
@@ -152,20 +152,20 @@ void test_gbnf_generation(testing &t) {
         assert_gbnf_equal(t, R"""(
             root ::= until-0
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            until-0 ::= | [\n] until-0-1 | [^\n] until-0
-            until-0-1 ::= | [\n] until-0-1 | [<] until-0-2 | [^\n<] until-0
-            until-0-10 ::= | [\n] until-0-1 | [e] until-0-11 | [^\ne] until-0
-            until-0-11 ::= | [\n] until-0-1 | [r] until-0-12 | [^\nr] until-0
-            until-0-12 ::= | [\n] until-0-1 | [>] until-0-13 | [^\n>] until-0
+            until-0 ::= | [\n] until-0-01 | [^\n] until-0
+            until-0-01 ::= | [\n] until-0-01 | [<] until-0-02 | [^\n<] until-0
+            until-0-02 ::= | [\n] until-0-01 | [/] until-0-03 | [^\n/] until-0
+            until-0-03 ::= | [\n] until-0-01 | [p] until-0-04 | [^\np] until-0
+            until-0-04 ::= | [\n] until-0-01 | [a] until-0-05 | [^\na] until-0
+            until-0-05 ::= | [\n] until-0-01 | [r] until-0-06 | [^\nr] until-0
+            until-0-06 ::= | [\n] until-0-01 | [a] until-0-07 | [^\na] until-0
+            until-0-07 ::= | [\n] until-0-01 | [m] until-0-08 | [^\nm] until-0
+            until-0-08 ::= | [\n] until-0-01 | [e] until-0-09 | [^\ne] until-0
+            until-0-09 ::= | [\n] until-0-01 | [t] until-0-10 | [^\nt] until-0
+            until-0-10 ::= | [\n] until-0-01 | [e] until-0-11 | [^\ne] until-0
+            until-0-11 ::= | [\n] until-0-01 | [r] until-0-12 | [^\nr] until-0
+            until-0-12 ::= | [\n] until-0-01 | [>] until-0-13 | [^\n>] until-0
             until-0-13 ::= | [^\n] until-0
-            until-0-2 ::= | [\n] until-0-1 | [/] until-0-3 | [^\n/] until-0
-            until-0-3 ::= | [\n] until-0-1 | [p] until-0-4 | [^\np] until-0
-            until-0-4 ::= | [\n] until-0-1 | [a] until-0-5 | [^\na] until-0
-            until-0-5 ::= | [\n] until-0-1 | [r] until-0-6 | [^\nr] until-0
-            until-0-6 ::= | [\n] until-0-1 | [a] until-0-7 | [^\na] until-0
-            until-0-7 ::= | [\n] until-0-1 | [m] until-0-8 | [^\nm] until-0
-            until-0-8 ::= | [\n] until-0-1 | [e] until-0-9 | [^\ne] until-0
-            until-0-9 ::= | [\n] until-0-1 | [t] until-0-10 | [^\nt] until-0
         )""", gbnf);
     });
 
@@ -183,13 +183,13 @@ void test_gbnf_generation(testing &t) {
         assert_gbnf_equal(t, R"""(
             root ::= until-0
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            until-0 ::= | [<] until-0-1 | [^<] until-0
-            until-0-1 ::= | [<] until-0-1 | [\uFF5C] until-0-2 | [^<\uFF5C] until-0
-            until-0-2 ::= | [<] until-0-1 | [D] until-0-3 | [^<D] until-0
-            until-0-3 ::= | [<] until-0-1 | [S] until-0-4 | [^<S] until-0
-            until-0-4 ::= | [<] until-0-1 | [M] until-0-5 | [^<M] until-0
-            until-0-5 ::= | [<] until-0-1 | [L] until-0-6 | [^<L] until-0
-            until-0-6 ::= | [<] until-0-1 | [^<\uFF5C] until-0
+            until-0 ::= | [<] until-0-01 | [^<] until-0
+            until-0-01 ::= | [<] until-0-01 | [\uFF5C] until-0-02 | [^<\uFF5C] until-0
+            until-0-02 ::= | [<] until-0-01 | [D] until-0-03 | [^<D] until-0
+            until-0-03 ::= | [<] until-0-01 | [S] until-0-04 | [^<S] until-0
+            until-0-04 ::= | [<] until-0-01 | [M] until-0-05 | [^<M] until-0
+            until-0-05 ::= | [<] until-0-01 | [L] until-0-06 | [^<L] until-0
+            until-0-06 ::= | [<] until-0-01 | [^<\uFF5C] until-0
         )""", gbnf);
     });
 
@@ -205,10 +205,10 @@ void test_gbnf_generation(testing &t) {
         assert_gbnf_equal(t, R"""(
             root ::= until-0
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            until-0 ::= | [a] until-0-1 | [c] until-0-3 | [e] until-0-5 | [^ace] until-0
-            until-0-1 ::= | [a] until-0-1 | [c] until-0-3 | [e] until-0-5 | [^abce] until-0
-            until-0-3 ::= | [a] until-0-1 | [c] until-0-3 | [e] until-0-5 | [^acde] until-0
-            until-0-5 ::= | [a] until-0-1 | [c] until-0-3 | [e] until-0-5 | [^acef] until-0
+            until-0 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^ace] until-0
+            until-0-01 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^abce] until-0
+            until-0-03 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^acde] until-0
+            until-0-05 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^acef] until-0
         )""", gbnf);
     });
 
