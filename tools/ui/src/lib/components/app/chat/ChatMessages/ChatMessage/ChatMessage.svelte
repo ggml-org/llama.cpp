@@ -324,7 +324,7 @@
 	}
 </script>
 
-<div use:fadeInView>
+<div use:fadeInView class="chat-message">
 	{#if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem
 			bind:textareaElement

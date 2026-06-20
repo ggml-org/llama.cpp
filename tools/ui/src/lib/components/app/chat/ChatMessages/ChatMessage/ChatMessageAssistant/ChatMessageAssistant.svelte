@@ -219,12 +219,12 @@
 </script>
 
 <div
-	class="text-md group w-full leading-7.5 {className}"
+	class="chat-message-assistant text-md group w-full leading-7.5 {className}"
 	role="group"
 	aria-label="Assistant message with actions"
 >
 	{#if showProcessingInfoTop}
-		<div class="mt-6 w-full max-w-[48rem]" in:fade>
+		<div class="mt-6 w-full max-w-3xl" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
 					{modelLoadingText ??
@@ -351,6 +351,14 @@
 </div>
 
 <style>
+	:global(.chat-message) .chat-message-assistant {
+		min-height: calc(100dvh - 22rem);
+
+		@media (width > 768px) {
+			min-height: calc(100dvh-26rem);
+		}
+	}
+
 	.processing-container {
 		display: flex;
 		flex-direction: column;
@@ -393,4 +401,8 @@
 		white-space: pre-wrap;
 		word-break: break-word;
 	}
+
+	/*:global(.chat-message):last-child div {
+        margin-top: calc(-1 * (100dvh - 40rem));
+    }*/
 </style>

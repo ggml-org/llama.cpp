@@ -299,14 +299,14 @@
 			autoScroll.enable();
 		}
 
-		autoScroll.scrollToBottom(); // doesn't work so i need to use the function below
+		// autoScroll.scrollToBottom(); // doesn't work so i need to use the function below
 
-		requestAnimationFrame(() => {
+		setTimeout(() => {
 			chatScrollContainer?.scrollTo({
 				top: chatScrollContainer.scrollHeight,
 				behavior: 'smooth'
 			});
-		});
+		}, 100);
 
 		if (isMobile.current) {
 			autoScroll.setDisabled(disableAutoScroll);
@@ -395,6 +395,20 @@
 			autoScroll.setDisabled(disableAutoScroll);
 		}
 	});
+
+	// On mobile, keep auto-scroll disabled while streaming/loading, then re-enable
+	// once the assistant/agentic response is finished so new messages still scroll.
+	$effect(() => {
+		if (isMobile.current) return;
+
+		const shouldDisableAutoScroll = config().disableAutoScroll || isCurrentConversationLoading;
+
+		autoScroll.setDisabled(shouldDisableAutoScroll);
+
+		if (!shouldDisableAutoScroll) {
+			autoScroll.enable();
+		}
+	});
 </script>
 
 {#if isDragOver}
@@ -407,7 +421,7 @@
 	<ServerLoadingSplash />
 {:else}
 	<div
-		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-full px-2 md:px-4 md:py-0 pt-12 pb-56 md:pb-4"
+		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-full px-4 md:py-0 pt-12 pb-48 md:pb-4"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
@@ -435,7 +449,7 @@
 					: device.isIOSSafari
 						? 'bottom-1 left-2 right-2'
 						: 'bottom-2 right-2 left-2',
-				isEmpty ? 'md:bottom-[calc(50dvh-4rem)]' : 'md:bottom-4 pt-24 md:pt-32'
+				isEmpty ? 'md:bottom-[calc(50dvh-4rem)]' : 'md:bottom-4 pt-24 md:pt-24'
 			]}
 		>
 			<ChatScreenGreeting {isEmpty} />

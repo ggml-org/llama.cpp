@@ -254,7 +254,7 @@
 >
 	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
 		<ChatMessage
-			class="mx-auto mt-12 w-full max-w-[48rem]"
+			class="mx-auto mt-12 w-full max-w-3xl"
 			{message}
 			{toolMessages}
 			{isLastAssistantMessage}
