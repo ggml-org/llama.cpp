@@ -95,7 +95,6 @@ struct htp_mm_context {
     uint32_t vtcm_src1_stride;
     uint32_t vtcm_src2_stride;
     uint32_t vtcm_src3_stride;
-    uint32_t vtcm_dst_stride;
 
     // Cached thread offsets/sizes
     uint32_t vtcm_src0_size_per_thread;
@@ -103,8 +102,6 @@ struct htp_mm_context {
     uint32_t vtcm_src2_size_per_thread;
     uint32_t vtcm_src3_size_per_thread;
     uint32_t vtcm_dst_size_per_thread;
-
-    bool hmx_eligible;
 };
 
 // vdelta control to expand first 32 e8m0 values into 32 uint32 elements
@@ -667,6 +664,10 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                   \
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                                     \
                                                                                                                                   \
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;                      \
+    const uint32_t n_prefetch = kparams->n_prefetch;                                                                              \
+    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);                                                                  \
+                                                                                                                                  \
     const size_t dst_row_size  = nb1;                                                                                             \
     const size_t src1_row_size = nb11;                                                                                            \
     const size_t src1_stride = mmctx->vtcm_src1_stride;                                                                           \
@@ -692,7 +693,7 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                 \
                                                                                                                                   \
     uint32_t push_ct = ct_start;                                                                                                  \
-    for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                              \
+    for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end; d++, push_ct++) {                                                    \
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                                \
                        src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);              \
     }                                                                                                                             \
@@ -756,6 +757,10 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                   \
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                                     \
                                                                                                                                   \
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;                      \
+    const uint32_t n_prefetch = kparams->n_prefetch;                                                                              \
+    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);                                                                  \
+                                                                                                                                  \
     const size_t dst_row_size  = nb1;                                                                                             \
     const size_t src1_row_size = nb11;                                                                                            \
     const size_t src1_stride = mmctx->vtcm_src1_stride;                                                                           \
@@ -785,7 +790,7 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                 \
                                                                                                                                   \
     uint32_t push_ct = ct_start;                                                                                                  \
-    for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                              \
+    for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end; d++, push_ct++) {                                                    \
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                                \
                        src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);              \
     }                                                                                                                             \
@@ -852,6 +857,10 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                                                                                                                                   \
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                                     \
                                                                                                                                   \
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;                      \
+    const uint32_t n_prefetch = kparams->n_prefetch;                                                                              \
+    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);                                                                  \
+                                                                                                                                  \
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;                                                             \
     const uint8_t * restrict src2_row = (const uint8_t *) src2->data;                                                             \
     const uint8_t * restrict src3_row = (const uint8_t *) src3->data;                                                             \
@@ -879,7 +888,7 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
         uint32_t ct_end_kv   = (end_row_kv + 31) / 32;                                                                            \
                                                                                                                                   \
         uint32_t push_ct = ct_start_kv;                                                                                           \
-        for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end_kv; d++, push_ct++) {                                       \
+        for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end_kv; d++, push_ct++) {                                             \
             dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                            \
                            src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);          \
             dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + d * tile_row_transfer_size_aligned,                            \
@@ -950,7 +959,7 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
         uint32_t ct_end_q   = (end_row_q + 31) / 32;                                                                              \
                                                                                                                                   \
         uint32_t push_ct = ct_start_q;                                                                                            \
-        for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end_q; d++, push_ct++) {                                        \
+        for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end_q; d++, push_ct++) {                                              \
             dma_queue_push(dma_queue, dma_make_ptr(vtcm_src3_ptr + d * tile_row_transfer_size_aligned,                            \
                            src3_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);          \
         }                                                                                                                         \
@@ -1038,6 +1047,10 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     const uint32_t tile_size = TILE_SIZE;                                                                                         \
     const uint32_t aligned_tile_size = hex_align_up(tile_size, 128);                                                              \
                                                                                                                                   \
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;                      \
+    const uint32_t n_prefetch = kparams->n_prefetch;                                                                              \
+    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);                                                                  \
+                                                                                                                                  \
     uint32_t n_k_tiles_w = ne00 / 32;                                                                                             \
     uint32_t n_k_tiles_a = ne10 / 32;                                                                                             \
     uint32_t tile_row_stride = n_k_tiles_w * tile_size;                                                                           \
@@ -1052,7 +1065,7 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                 \
                                                                                                                                   \
     uint32_t push_ct = ct_start;                                                                                                  \
-    for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {                                              \
+    for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end; d++, push_ct++) {                                                    \
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                                \
                        src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);              \
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + d * tile_row_transfer_size_aligned,                                \
@@ -1258,6 +1271,11 @@ MATMUL_FFN_2D_REPACKED_IMPL(mxfp4_flat, 544,  flat_vec_dot_mxfp4_32x2,  flat_vec
 static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
 
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
+    const uint32_t n_prefetch = kparams->n_prefetch;
+    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+    const uint32_t prefetch_mask = n_prefetch - 1;
+
     const uint32_t src0_nrows = ne01 * ne02 * ne03;  // src0 rows
     const uint32_t src1_nrows = ne11 * ne12 * ne13;  // src1 rows
 
@@ -1280,8 +1298,6 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
     const size_t src1_stride = mmctx->vtcm_src1_stride;
 
     // Per-thread VTCMs for all tensors
-    // Note that the entire src1 tensor is already in VTCM
-    // For other tensors we allocate N rows per thread, padded to HVX vector size
     uint8_t * restrict vtcm_dst_ptr  = mmctx->vtcm_dst  + mmctx->vtcm_dst_size_per_thread  * ith;
     uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;
     uint8_t * restrict src1_data     = mmctx->vtcm_src1;
@@ -1295,7 +1311,7 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
     #pragma unroll(4)
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
         const int is0 = (ir0 - src0_start_row);
-        if (is0 >= HTP_MM_VTCM_SRC0_NROWS) {
+        if (is0 >= (int)n_prefetch) {
             break;
         }
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
@@ -1326,8 +1342,8 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);
 
         // Prefetch next (n + vtcm_nrows) row
-        const int pr0 = (ir0 + HTP_MM_VTCM_SRC0_NROWS);
-        const int is0 = (pr0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        const int pr0 = (ir0 + n_prefetch);
+        const int is0 = (pr0 - src0_start_row) & prefetch_mask;
         if (pr0 < src0_end_row_x2) {
             dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + pr0 * src0_row_size),
                            src0_stride, src0_row_size, src0_row_size, 2);
@@ -1337,7 +1353,7 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
     // Process the last row (if any)
     if (src0_end_row != src0_end_row_x2) {
         uint32_t  ir0 = src0_end_row_x2;
-        const int is0 = (ir0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        const int is0 = (ir0 - src0_start_row) & prefetch_mask;
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 1);
         const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
@@ -1383,11 +1399,9 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
     const size_t src1_stride = mmctx->vtcm_src1_stride;
 
     // Per-thread VTCMs for all tensors
-    // Note that the entire src1 tensor is already in VTCM
-    // For other tensors we allocate N rows per thread, padded to HVX vector size
     uint8_t * vtcm_dst_ptr  = mmctx->vtcm_dst  + mmctx->vtcm_dst_size_per_thread  * ith;
     uint8_t * vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;
-    uint8_t * src1_data = mmctx->vtcm_src1;
+    uint8_t * src1_data     = mmctx->vtcm_src1;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
@@ -1400,11 +1414,16 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
 
     const uint32_t src0_end_row_x2 = src0_start_row + ((src0_end_row - src0_start_row) & ~1U);
 
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
+    const uint32_t n_prefetch = kparams->n_prefetch;
+    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+    const uint32_t prefetch_mask = n_prefetch - 1;
+
     // Prefill vtcm with 2x src0 rows
     #pragma unroll(2)
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
         const uint32_t is0 = (ir0 - src0_start_row);
-        if (is0 >= HTP_MM_VTCM_SRC0_NROWS) {
+        if (is0 >= n_prefetch) {
             break;
         }
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
@@ -1419,8 +1438,8 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);
 
         // Prefetch next (n + vtcm_nrows) row
-        const uint32_t pr0 = (ir0 + HTP_MM_VTCM_SRC0_NROWS);
-        const uint32_t is0 = (pr0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        const uint32_t pr0 = (ir0 + n_prefetch);
+        const uint32_t is0 = (pr0 - src0_start_row) & prefetch_mask;
         if (pr0 < src0_end_row_x2) {
             dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + pr0 * src0_row_size),
                            src0_stride, src0_row_size, src0_row_size, 2);
@@ -1430,7 +1449,7 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
     // Process the last row (if any)
     if (src0_end_row != src0_end_row_x2) {
         const uint32_t ir0 = src0_end_row_x2;
-        const uint32_t is0 = (ir0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        const uint32_t is0 = (ir0 - src0_start_row) & prefetch_mask;
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 1);
         const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
@@ -1451,7 +1470,6 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id) * ids->ne[0] * ids->ne[1] + (i1)]
 
-// src1 tensor is already in VTCM
 static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
 
@@ -1472,6 +1490,10 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
     }
 
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
+
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
+    const uint32_t n_prefetch = kparams->n_prefetch;
+    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
 
     const uint32_t n_ids = ids->ne[0];  // n_expert_used
     const uint32_t n_as  = ne02;        // n_expert
@@ -1495,10 +1517,6 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
             continue;
         }
 
-        if (mmctx->hmx_eligible) {
-            continue;
-        }
-
         const uint8_t * src0_row = (const uint8_t *) src0->data + cur_a * nb02;
 
         const uint32_t tile_size = htp_mm_get_weight_tile_size(src0->type);
@@ -1512,7 +1530,7 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
         const uint32_t ct_end   = (src0_end_row + 31) / 32;
 
         uint32_t push_ct = ct_start;
-        for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {
+        for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end; d++, push_ct++) {
             dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned, src0_row + push_ct * tile_row_stride),
                            aligned_tile_size, tile_size, tile_size, n_k_tiles_a);
         }
@@ -1573,6 +1591,10 @@ static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
 
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
 
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
+    const uint32_t n_prefetch = kparams->n_prefetch;
+    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+
     assert(ne13 % ne03 == 0);
 
     const size_t dst_row_size  = nb1;
@@ -1607,7 +1629,7 @@ static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
         const uint32_t ct_end   = (src0_end_row + 31) / 32;
 
         uint32_t push_ct = ct_start;
-        for (uint32_t d = 0; d < HTP_MM_DMA_DEPTH && push_ct < ct_end; d++, push_ct++) {
+        for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end; d++, push_ct++) {
             dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned, src0_row + push_ct * tile_row_stride),
                            aligned_tile_size, tile_size, tile_size, n_k_tiles_a);
         }
@@ -1850,9 +1872,11 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
         src1_sz = kparams->vtcm_src1_size;
         dst_sz  = kparams->vtcm_dst_size;
     } else {
+        const uint32_t n_prefetch = kparams->n_prefetch;
+        assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
         htp_mm_hvx_get_vtcm_sizes(
             kparams->kernel_type, src0->type, ne10, src1_nrows, octx->n_threads,
-            dst_row_size, src0_row_size, src1_row_size,
+            dst_row_size, src0_row_size, src1_row_size, n_prefetch,
             &src0_sz, &src1_sz, &dst_sz
         );
     }
@@ -1961,6 +1985,11 @@ static void hvx_mm_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
 
     dma_queue * dma_queue = octx->ctx->dma[ith];
 
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
+    const uint32_t n_prefetch = kparams->n_prefetch;
+    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+    const uint32_t prefetch_mask = n_prefetch - 1;
+
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;
     const uint8_t * restrict src2_row = (const uint8_t *) src2->data;
     const uint8_t * restrict src3_row = (const uint8_t *) src3->data;
@@ -1968,7 +1997,7 @@ static void hvx_mm_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
     // Prefill spad with src0, src2, src3 rows
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
         const int is0 = (ir0 - src0_start_row);
-        if (is0 >= HTP_MM_VTCM_SRC0_NROWS) {
+        if (is0 >= (int)n_prefetch) {
             break;
         }
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
@@ -2019,8 +2048,8 @@ static void hvx_mm_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
         }
 
         // Prefetch next (n + vtcm_nrows) rows
-        const int pr0 = (ir0 + HTP_MM_VTCM_SRC0_NROWS);
-        const int is0 = (pr0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        const int pr0 = (ir0 + n_prefetch);
+        const int is0 = (pr0 - src0_start_row) & prefetch_mask;
         if (pr0 < src0_end_row_x2) {
             dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + pr0 * src0_row_size),
                            src0_stride, src0_row_size, src0_row_size, 2);
@@ -2034,7 +2063,7 @@ static void hvx_mm_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
     // Process last row (if any)
     if (src0_end_row != src0_end_row_x2) {
         uint32_t  ir0 = src0_end_row_x2;
-        const int is0 = (ir0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        const int is0 = (ir0 - src0_start_row) & prefetch_mask;
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 1);
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + ir0 * src2_row_size),
@@ -2106,13 +2135,18 @@ static void hvx_mm_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
 
     dma_queue * dma_queue = octx->ctx->dma[ith];
 
+    const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
+    const uint32_t n_prefetch = kparams->n_prefetch;
+    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+    const uint32_t prefetch_mask = n_prefetch - 1;
+
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;
     const uint8_t * restrict src2_row = (const uint8_t *) src2->data;
 
     // Prefill spad with src0, src2 rows
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
         const int is0 = (ir0 - src0_start_row);
-        if (is0 >= HTP_MM_VTCM_SRC0_NROWS) {
+        if (is0 >= (int)n_prefetch) {
             break;
         }
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
@@ -2153,8 +2187,8 @@ static void hvx_mm_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
         }
 
         // Prefetch next rows
-        const int pr0 = (ir0 + HTP_MM_VTCM_SRC0_NROWS);
-        const int is0 = (pr0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        const int pr0 = (ir0 + n_prefetch);
+        const int is0 = (pr0 - src0_start_row) & prefetch_mask;
         if (pr0 < src0_end_row_x2) {
             dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + pr0 * src0_row_size),
                            src0_stride, src0_row_size, src0_row_size, 2);
@@ -2166,7 +2200,7 @@ static void hvx_mm_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
     // Process last row (if any)
     if (src0_end_row != src0_end_row_x2) {
         uint32_t  ir0 = src0_end_row_x2;
-        const int is0 = (ir0 - src0_start_row) % HTP_MM_VTCM_SRC0_NROWS;
+        const int is0 = (ir0 - src0_start_row) & prefetch_mask;
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 1);
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + ir0 * src2_row_size),
@@ -3135,7 +3169,7 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
         ret = hmx_mm_f16_f32_batched(octx->ctx, &batch_params,
                                      kparams->m_chunk, kparams->n_chunk,
                                      kparams->pipeline, n_threads,
-                                     kparams->act_threads,
+                                     kparams->n_act_threads,
                                      kparams->vtcm_size);
     } else {
         ret = hmx_mm_2d_f32(
@@ -3143,7 +3177,7 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
             m_total, k, n, act_stride, (int) src0->nb[1], (int) src0->type, (int) src1->ne[0],
             (int)(dst->nb[1] / sizeof(float)), (int)dst->ne[0],
             kparams->m_chunk, kparams->n_chunk, kparams->pipeline, n_threads,
-            kparams->act_threads,
+            kparams->n_act_threads,
             kparams->tile_size, kparams->aligned_tile_size, kparams->vtcm_size
         );
     }

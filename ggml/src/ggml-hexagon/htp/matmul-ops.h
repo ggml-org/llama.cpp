@@ -16,6 +16,7 @@ extern "C" {
 #define HTP_MM_HMX_TILE_N_ROWS 32
 #define HTP_MM_HMX_TILE_SIZE   (32 * 32 * sizeof(__fp16)) // 2048 bytes
 #define HTP_MM_HMX_TILE_N_ELMS 1024
+#define HTP_MM_HMX_MIN_NROWS   4
 
 // --- Weight Repacked Tile Sizes ---
 #define HTP_MM_WEIGHT_TILE_SIZE_Q4_0   576
@@ -35,11 +36,7 @@ extern "C" {
 #define HTP_MM_ACT_TILE_SIZE_Q8_0      1152
 #define HTP_MM_ACT_TILE_SIZE_Q8_1      1280
 
-#define HTP_MM_VTCM_SRC0_NROWS 16
-#define HTP_MM_VTCM_SRC1_NROWS 16
-#define HTP_MM_VTCM_DST_NROWS  2
-
-#define HTP_MM_DMA_DEPTH 2
+#define HTP_MM_MAX_PREFETCH 16
 
 enum htp_mm_kernel_type {
     HTP_MM_KERNEL_UNSUPPORTED = 0,
@@ -70,17 +67,18 @@ struct htp_mm_kernel_params {
     int32_t  m_chunk;            // Row chunk size (M chunk)
     int32_t  n_chunk;            // Col chunk size (N chunk)
     int32_t  n_threads;          // Number of threads to spawn
+    int32_t  n_act_threads;      // Number of threads for activation preparation
     int32_t  n_hmx;              // 1 = use HMX, 0 = use HVX
+    int32_t  n_prefetch;         // Prefetch lookahead buffers/rows in VTCM
     int32_t  tile_size;          // Weight tile size
     int32_t  aligned_tile_size;  // Aligned weight tile size (padded to 128)
     int32_t  src1_row_size;      // Row size for quantized activation
     int32_t  vtcm_size;          // Total required scratchpad size in VTCM
     int32_t  vtcm_src0_size;     // src0 scratchpad size in VTCM
     int32_t  vtcm_src1_size;     // src1 scratchpad size in VTCM
-    int32_t  vtcm_dst_size;      // dst scratchpad size in VTCM
     int32_t  vtcm_src2_size;     // src2 scratchpad size in VTCM (fused only)
     int32_t  vtcm_src3_size;     // src3 scratchpad size in VTCM (fused only)
-    int32_t  act_threads;        // Number of threads for activation preparation
+    int32_t  vtcm_dst_size;      // dst scratchpad size in VTCM
 
     // Precomputed division values
     struct fastdiv_values div_ne12_ne1;
@@ -347,6 +345,7 @@ static inline size_t htp_mm_hvx_get_vtcm_sizes(
     size_t dst_row_size,
     size_t src0_row_size,
     size_t src1_row_size,
+    uint32_t n_prefetch,
     size_t * vtcm_src0_size_out,
     size_t * vtcm_src1_size_out,
     size_t * vtcm_dst_size_out
@@ -360,37 +359,38 @@ static inline size_t htp_mm_hvx_get_vtcm_sizes(
                             wtype == HTP_TYPE_MXFP4);
 
     const size_t src0_row_size_padded = htp_mm_round_up(src0_row_size, 128);
+    const size_t dst_nrows = (src1_nrows > 1) ? 0 : 1;
 
     switch (kernel_type) {
         case HTP_MM_KERNEL_HVX_F16_F16_VTCM: {
             size_t f16_src1_row_size = htp_mm_round_up(ne10 * 2, 128);
             vtcm_src1_size = htp_mm_round_up(f16_src1_row_size * src1_nrows, 256);
-            vtcm_src0_size = htp_mm_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256) * n_threads;
-            vtcm_dst_size  = htp_mm_round_up(HTP_MM_VTCM_DST_NROWS * dst_row_size, 256) * n_threads;
+            vtcm_src0_size = htp_mm_round_up(n_prefetch * src0_row_size_padded, 256) * n_threads;
+            vtcm_dst_size  = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) * n_threads : 0;
             break;
         }
         case HTP_MM_KERNEL_HVX_F16_F32_DDR:
         case HTP_MM_KERNEL_HVX_F16_F16_DDR:
         case HTP_MM_KERNEL_HVX_F32_F32_DDR:
         case HTP_MM_KERNEL_HVX_F32_F16_DDR: {
-            vtcm_src0_size = htp_mm_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size, 256) * n_threads;
-            vtcm_src1_size = htp_mm_round_up(HTP_MM_VTCM_SRC1_NROWS * src1_row_size, 256) * n_threads;
-            vtcm_dst_size  = htp_mm_round_up(HTP_MM_VTCM_DST_NROWS * dst_row_size, 256) * n_threads;
+            vtcm_src0_size = htp_mm_round_up(n_prefetch * src0_row_size, 256) * n_threads;
+            vtcm_src1_size = htp_mm_round_up(n_prefetch * src1_row_size, 256) * n_threads;
+            vtcm_dst_size  = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) * n_threads : 0;
             break;
         }
         case HTP_MM_KERNEL_HVX_F32_F32_VTCM: {
             size_t f32_src1_row_size = htp_mm_round_up(ne10 * 4, 128);
             vtcm_src1_size = htp_mm_round_up(f32_src1_row_size * src1_nrows, 256);
-            vtcm_src0_size = htp_mm_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256) * n_threads;
-            vtcm_dst_size  = htp_mm_round_up(HTP_MM_VTCM_DST_NROWS * dst_row_size, 256) * n_threads;
+            vtcm_src0_size = htp_mm_round_up(n_prefetch * src0_row_size_padded, 256) * n_threads;
+            vtcm_dst_size  = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) * n_threads : 0;
             break;
         }
         case HTP_MM_KERNEL_HVX_QUANT_BLOCK:
         case HTP_MM_KERNEL_HVX_QUANT_ROW: {
             size_t q_src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
 
-            vtcm_dst_size  = htp_mm_round_up(HTP_MM_VTCM_DST_NROWS * dst_row_size, 256);
-            vtcm_src0_size = htp_mm_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
+            vtcm_dst_size  = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) : 0;
+            vtcm_src0_size = htp_mm_round_up(n_prefetch * src0_row_size_padded, 256);
             vtcm_src1_size = htp_mm_round_up(q_src1_row_size * src1_nrows, 256);
 
             // src0 spad is also used in dynamic quantizer to store padded src1 rows
@@ -406,7 +406,7 @@ static inline size_t htp_mm_hvx_get_vtcm_sizes(
                 uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
                 uint32_t n_k_tiles = ne10 / 32;
                 uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
-                size_t repacked_vtcm_size = htp_mm_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
+                size_t repacked_vtcm_size = htp_mm_round_up(n_prefetch * tile_row_size, 256);
                 if (repacked_vtcm_size < src1_row_size_padded) {
                     repacked_vtcm_size = src1_row_size_padded;
                 }
@@ -417,8 +417,8 @@ static inline size_t htp_mm_hvx_get_vtcm_sizes(
         case HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT: {
             size_t q_src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
 
-            vtcm_dst_size  = htp_mm_round_up(HTP_MM_VTCM_DST_NROWS * dst_row_size, 256);
-            vtcm_src0_size = htp_mm_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
+            vtcm_dst_size  = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) : 0;
+            vtcm_src0_size = htp_mm_round_up(n_prefetch * src0_row_size_padded, 256);
             vtcm_src1_size = htp_mm_round_up(q_src1_row_size * src1_nrows, 256);
 
             size_t src1_row_size_padded = htp_mm_round_up(q_src1_row_size, 256);
@@ -433,7 +433,7 @@ static inline size_t htp_mm_hvx_get_vtcm_sizes(
                 uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
                 uint32_t n_k_tiles = ne10 / 32;
                 uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
-                size_t repacked_vtcm_size = htp_mm_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
+                size_t repacked_vtcm_size = htp_mm_round_up(n_prefetch * tile_row_size, 256);
                 if (repacked_vtcm_size < src1_row_size_padded) {
                     repacked_vtcm_size = src1_row_size_padded;
                 }
@@ -458,6 +458,7 @@ static inline size_t htp_mm_hvx_id_get_vtcm_sizes(
     uint32_t src1_nrows,
     uint32_t n_threads,
     size_t src0_row_size,    // nb01
+    uint32_t n_prefetch,
     size_t * vtcm_src0_size_out,
     size_t * vtcm_src1_size_out
 ) {
@@ -469,7 +470,7 @@ static inline size_t htp_mm_hvx_id_get_vtcm_sizes(
     const size_t src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10)
                                                           : htp_mm_q8_0_tiled_row_size(ne10);
 
-    size_t src0_sz_per_thread = htp_mm_round_up(HTP_MM_VTCM_SRC0_NROWS * src0_row_size_padded, 256);
+    size_t src0_sz_per_thread = htp_mm_round_up(n_prefetch * src0_row_size_padded, 256);
     size_t src1_sz            = htp_mm_round_up(src1_row_size * src1_nrows, 256);
 
     // src0 spad also holds temporary transposed src1 columns during dynamic quantization.
@@ -482,7 +483,7 @@ static inline size_t htp_mm_hvx_id_get_vtcm_sizes(
         const uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
         const uint32_t n_k_tiles    = ne10 / 32;
         const uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
-        size_t repacked_vtcm_size = htp_mm_round_up(HTP_MM_DMA_DEPTH * tile_row_size, 256);
+        size_t repacked_vtcm_size = htp_mm_round_up(n_prefetch * tile_row_size, 256);
         if (repacked_vtcm_size < src1_row_size_padded) {
             repacked_vtcm_size = src1_row_size_padded;
         }
