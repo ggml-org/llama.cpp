@@ -1542,9 +1542,7 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
             return prefix;
         }
         std::string num = std::to_string(s);
-        if (num.size() < 2) {
-            num = std::string(2 - num.size(), '0') + num;
-        }
+        num = num.size() == 1 ? ("0" + num) : num;
         return prefix + "-" + num;
     };
 
