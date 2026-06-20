@@ -14,7 +14,6 @@
 #include <regex>
 #include <set>
 #include <stdexcept>
-#include <unordered_set>
 
 // Trick to catch missing branches
 template <typename T>
@@ -1020,12 +1019,12 @@ void common_peg_arena::resolve_refs() {
 }
 
 std::string common_peg_arena::dump(common_peg_parser_id id) const {
-    std::unordered_set<common_peg_parser_id> visited;
+    std::set<common_peg_parser_id> visited;
     return dump_impl(id, visited);
 }
 
 std::string common_peg_arena::dump_impl(common_peg_parser_id                       id,
-                                        std::unordered_set<common_peg_parser_id> & visited) const {
+                                        std::set<common_peg_parser_id> & visited) const {
     // Check for cycles
     if (visited.count(id)) {
         return "[cycle]";
@@ -1592,12 +1591,12 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
     return state_name(0);
 }
 
-static std::unordered_set<std::string> collect_reachable_rules(
+static std::set<std::string> collect_reachable_rules(
     const common_peg_arena & arena,
     const common_peg_parser_id & rule
 ) {
-    std::unordered_set<std::string> reachable;
-    std::unordered_set<std::string> visited;
+    std::set<std::string> reachable;
+    std::set<std::string> visited;
 
     std::function<void(common_peg_parser_id)> visit = [&](common_peg_parser_id id) {
         const auto & parser = arena.get(id);
@@ -1830,7 +1829,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
     };
 
     // Collect reachable rules
-    std::unordered_set<std::string> reachable_rules;
+    std::set<std::string> reachable_rules;
 
     if (lazy) {
         // Collect rules reachable from trigger rules

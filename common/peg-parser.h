@@ -3,8 +3,8 @@
 #include <nlohmann/json_fwd.hpp>
 
 #include <memory>
+#include <set>
 #include <unordered_map>
-#include <unordered_set>
 #include <string>
 #include <string_view>
 #include <functional>
@@ -335,7 +335,7 @@ class common_peg_arena {
     friend class common_peg_parser_builder;
 
   private:
-    std::string dump_impl(common_peg_parser_id id, std::unordered_set<common_peg_parser_id> & visited) const;
+    std::string dump_impl(common_peg_parser_id id, std::set<common_peg_parser_id> & visited) const;
 
     common_peg_parser_id add_parser(common_peg_parser_variant parser);
     void add_rule(const std::string & name, common_peg_parser_id id);
