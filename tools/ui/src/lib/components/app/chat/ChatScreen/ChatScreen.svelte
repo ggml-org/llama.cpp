@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { Trash2 } from '@lucide/svelte';
-	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
 		ChatScreenForm,
@@ -290,7 +289,13 @@
 			});
 		});
 
+		if (isMobile.current) {
+			autoScroll.setDisabled(disableAutoScroll);
+		}
+
 		await chatStore.sendMessage(message, extras);
+
+		autoScroll.setContainer(chatScrollContainer);
 
 		return true;
 	}
@@ -345,29 +350,8 @@
 		}
 	}
 
-	// function handleMessagesReady() {
-	// 	if (config().disableAutoScroll) return;
-
-	// 	if (!autoScroll.userScrolledUp && !isMobile.current) {
-	// 		requestAnimationFrame(() => {
-	// 			chatScrollContainer?.scrollTo({
-	// 				top: chatScrollContainer.scrollHeight,
-	// 				behavior: 'instant'
-	// 			});
-	// 		});
-	// 	}
-	// }
-
 	onMount(() => {
-		if (!isMobile.current) {
-			autoScroll.startObserving();
-		}
-
-		// if (isMobile.current) {
-		// 	setTimeout(() => {
-		// 		window.scrollTo({ top: document.body.scrollHeight });
-		// 	}, 10);
-		// }
+		autoScroll.startObserving();
 
 		if (!disableAutoScroll) {
 			autoScroll.enable();
@@ -380,26 +364,11 @@
 		}
 	});
 
-	// afterNavigate(() => {
-	// 	if (!disableAutoScroll && !isMobile.current) {
-	// 		autoScroll.enable();
-	// 	}
-
-	// 	if (isMobile.current) {
-	// 		setTimeout(() => {
-	// 			window.scrollTo({ top: document.body.scrollHeight });
-	// 		}, 10);
-	// 	}
-	// });
-
-	// onDestroy(() => autoScroll.destroy());
+	onDestroy(() => autoScroll.destroy());
 
 	$effect(() => {
 		chatScrollContainer = document.documentElement;
-
-		if (!isMobile.current) {
-			autoScroll.setContainer(chatScrollContainer);
-		}
+  		autoScroll.setContainer(chatScrollContainer);
 	});
 
 	// $effect(() => {
@@ -414,6 +383,7 @@
 {/if}
 
 <svelte:window onkeydown={handleKeydown} />
+<!-- <svelte:window onkeydown={handleKeydown} onscroll={handleScroll} /> -->
 
 {#if isServerLoading}
 	<ServerLoadingSplash />
@@ -427,7 +397,16 @@
 		role="main"
 	>
 		{#if !isEmpty}
-			<ChatMessages messages={activeMessages()} />
+			<ChatMessages
+				messages={activeMessages()}
+				onUserAction={() => {
+					autoScroll.enable();
+
+					if (!autoScroll.userScrolledUp) {
+						autoScroll.scrollToBottom();
+					}
+				}}
+			/>
 		{/if}
 
 		<div
