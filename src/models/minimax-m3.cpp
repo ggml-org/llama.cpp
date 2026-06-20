@@ -5,9 +5,9 @@
 #include <algorithm>
 #include <cstdint>
 
-// MiniMax-M3, text-only: MiniMax-M2 style GQA (per-head QK-norm, partial rotary) with
+// MiniMax-M3: MiniMax-M2 style GQA (per-head QK-norm, partial rotary) with
 // DeepSeek-V3 leading-dense + routed/shared experts (sigmoid gating, routed scaling) and
-// swigluoai activation. Sparse attention falls back to dense; vision tower and MTP are dropped.
+// swigluoai activation. MTP is dropped.
 
 void llama_model_minimax_m3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -82,24 +82,23 @@ std::unique_ptr<llm_graph_context> llama_model_minimax_m3::build_arch_graph(cons
     return std::make_unique<graph>(*this, params);
 }
 
-// ---- MSA block-mask op --------------------------------------------------
+// ---- MSA block-mask op ------
 // Emits the COMBINED attention mask: a copy of the causal/padding mask with
 // every key in a NON-selected block forced to -inf. Selected blocks keep their
 // causal value, so future/pad positions inside a selected block stay masked.
-// Causality is taken FROM the input mask (not recomputed), so this is correct
-// for arbitrary cell<->position layouts. Output dtype matches the input mask
+// Causality is taken FROM the input mask (not recomputed). Output dtype matches the input mask
 // (f16 when flash-attn is on, f32 otherwise).
 //
-// Assumes M3's mask is {0 = attendable, negative = forbidden}, which holds
+// Assumes M3's mask is {0 = attendable, negative = forbidden}, which in this case holds
 // because M3 uses no ALiBi/soft-cap-in-mask (soft-cap is applied to kq directly
-// in build_attn_mha). If that ever changes, revisit msa_is_masked().
+// in build_attn_mha).
 
 static inline bool        msa_is_masked(ggml_fp16_t x) { return ggml_fp16_to_fp32(x) < 0.0f; }
 static inline bool        msa_is_masked(float       x) { return x < 0.0f; }
 static inline ggml_fp16_t msa_neg_val (ggml_fp16_t)    { return ggml_fp32_to_fp16(-INFINITY); }
 static inline float       msa_neg_val (float)          { return -INFINITY; }
 //----------------------------------------------------
-// helpers near the top, by msa_is_masked/msa_neg_val:
+// Correction checkers:
 static inline float msa_to_f32(float x)       { return x; }
 static inline float msa_to_f32(ggml_fp16_t x) { return ggml_fp16_to_fp32(x); }
 
@@ -139,8 +138,7 @@ static inline void msa_fill_mask_t(
         const MT    * msk = src_mask + (int64_t) i * mask_squery;
         MT          * out = dst      + (int64_t) i * mask_squery;
 
-        // 2) block scores; causality from the mask (skip keys it forbids).
-        //    amax over keys-in-block and over the Hd index heads.
+        //block scores; Causality from the mask (skip keys it forbids). Amax over keys-in-block and over the Hd index heads.    
         for (int bk = 0; bk < nblk; ++bk) {
             float m = -INFINITY;
             const int j0 = bk * blk;
@@ -159,28 +157,25 @@ static inline void msa_fill_mask_t(
             bs[bk] = m;
         }
 
-        // 3) force local block(s)
+        //force local block(s)
         int qb = -1;
         for (int bk = nblk - 1; bk >= 0; --bk) { if (bs[bk] != -INFINITY) { qb = bk; break; } }
         for (int l = 0; l < local && qb - l >= 0; ++l) {
             bs[qb - l] = INFINITY;
         }
 
-        // 4) top-k blocks, descending
+        //top-k blocks, descending
         for (int t = 0; t < nblk; ++t) ord[t] = t;
         std::stable_sort(ord.begin(), ord.end(), [&](int a, int b){ return bs[a] > bs[b]; });
 
-        // 5) mark selected, then knock out every key in a NON-selected block.
+        //mark selected, then knock out every key in a NON-selected block.
         std::fill(sel.begin(), sel.end(), (char) 0);
         for (int t = 0; t < topk; ++t) {
             const int bk = ord[t];
             if (bs[bk] == -INFINITY) break;
             sel[bk] = 1;
         }
-        // --- self-contained MSA selection logger (remove later) ---
-        // Fires once per decode/prefill batch, first query, first thread, first
-        // layer-at-this-n_kv (layers share n_kv within a step and run il-ascending,
-        // so the first call at a given n_kv is the first sparse layer).
+        // --- MSA Selection Logger---
         if (i == 0 && ith == 0) {
             static int64_t last_n_kv = -1;
             if (n_kv < last_n_kv) last_n_kv = -1; 
@@ -279,6 +274,190 @@ static void msa_block_mask_op(struct ggml_tensor * dst, int ith, int nth, void *
     }
 }
 
+// ---- Decomposed MSA ----
+// Helper to the GPU front (mul_mat -> head-amax -> +causal_mask ->
+// block-amax via ggml_pool_2d). The front computes per-block scores; this op
+// does the serial tail: force local block(s), top-k select, knock out keys in non-selected blocks.
+// masked/empty detection is a THRESHOLD, not == -INFINITY
+// ggml_pool_2d MAX seeds with -FLT_MAX, so a fully masked/empty block (future
+// positions, the 256-pad tail) emerges as -FLT_MAX, a large FINITE negative.
+// An ==-INFINITY test would treat those as real, mis-point qb at a pad block,
+// and land the local-force on padding instead of the diagonal. msa_score_masked
+// catches -inf AND -FLT_MAX, but NOT +inf.
+
+// HARD CONSTRAINT: pool_2d output size is floor((n-k)/s)+1 with no padding, so
+// the GPU front emits nblk = n_kv/blk. That equals ceil(n_kv/blk) and is correct
+// only when blk | n_kv. n_kv is padded to a multiple of 256 and blk=128 divides
+// it, added asserts below to trip if that ever changes.
+//
+// PRODUCTION  srcs = { bs[nblk,S] f32 , mask[n_kv,S,1,ns] }
+// VERIFY      srcs = { bs , mask , iq[D,Hd,S] f32 , ik_kv[D,1,n_kv] f32 }  (MSA_VERIFY_BS=1)
+//   recomputes bs the monolithic way and logs max|dbs| + per-column
+//   selection diff in the SAME forward pass, so it is immune to
+//   sampling / cache-state nondeterminism. Slow (single-thread recompute every
+//   layer/step).
+
+static inline bool msa_score_masked(float x) { return x <= -1e30f; }  // -inf or pool -FLT_MAX; not +inf
+
+template <typename MT>
+static inline void msa_select_from_scores_t(
+        MT * dst,
+        int64_t mask_skey, int64_t mask_squery,
+        const float * bs_in,                 // [nblk, S], column i at bs_in + i*nblk
+        int S, int64_t n_kv,
+        int blk, int topk_blocks, int local,
+        int ith, int nth, int nblk ) {
+
+    const int topk = topk_blocks < nblk ? topk_blocks : nblk;
+
+    std::vector<float> bs (nblk);
+    std::vector<int>   ord(nblk);
+    std::vector<char>  sel(nblk);
+
+    for (int i = ith; i < S; i += nth) {
+        MT          * out  = dst   + (int64_t) i * mask_squery;   // base already memcpy'd from mask
+        const float * bcol = bs_in + (size_t)  i * nblk;
+
+        for (int bk = 0; bk < nblk; ++bk) bs[bk] = bcol[bk];      // local copy; never mutate src
+
+        // qb = highest block with a real (non-masked) score == local block of this query.
+        // threshold, so the pool's -FLT_MAX on pad/future blocks counts as empty.
+        int qb = -1;
+        for (int bk = nblk - 1; bk >= 0; --bk) { if (!msa_score_masked(bs[bk])) { qb = bk; break; } }
+        for (int l = 0; l < local && qb - l >= 0; ++l) bs[qb - l] = INFINITY;
+
+        for (int t = 0; t < nblk; ++t) ord[t] = t;
+        std::stable_sort(ord.begin(), ord.end(), [&](int a, int b){ return bs[a] > bs[b]; });
+
+        std::fill(sel.begin(), sel.end(), (char) 0);
+        for (int t = 0; t < topk; ++t) {
+            const int bk = ord[t];
+            if (msa_score_masked(bs[bk])) break;   // first empty block: real blocks < topk
+            sel[bk] = 1;
+        }
+
+        for (int bk = 0; bk < nblk; ++bk) {
+            if (sel[bk]) continue;
+            const int j0 = bk * blk;
+            const int j1 = (int) std::min<int64_t>((int64_t)(bk + 1) * blk, n_kv);
+            for (int j = j0; j < j1; ++j) out[(int64_t) j * mask_skey] = msa_neg_val(MT(0));
+        }
+    }
+}
+
+// VERIFY ONLY:
+template <typename MT>
+static void msa_verify_bs(
+        const float * bs_gpu, const MT * src_mask,
+        int64_t mask_skey, int64_t mask_squery,
+        const float * iq, const float * ik,
+        int Hd, int S, int D, int64_t n_kv,
+        int blk, int topk_blocks, int local, int nblk, int64_t key_len ) {
+
+    const int topk = topk_blocks < nblk ? topk_blocks : nblk;
+    std::vector<float> bsc(nblk), bsg(nblk);
+    std::vector<int>   ord(nblk);
+    std::vector<char>  selc(nblk), selg(nblk);
+    double max_abs = 0.0;
+    long   finite_pairs = 0, gross = 0, sel_diff_cols = 0;
+
+    auto sel_of = [&](const std::vector<float>& in, std::vector<char>& out){
+        std::vector<float> b(in);
+        int qb = -1; for (int bk = nblk-1; bk >= 0; --bk) { if (!msa_score_masked(b[bk])) { qb = bk; break; } }
+        for (int l = 0; l < local && qb-l >= 0; ++l) b[qb-l] = INFINITY;
+        for (int t = 0; t < nblk; ++t) ord[t] = t;
+        std::stable_sort(ord.begin(), ord.end(), [&](int a, int b2){ return b[a] > b[b2]; });
+        out.assign(nblk, 0);
+        for (int t = 0; t < topk; ++t) { int bk = ord[t]; if (msa_score_masked(b[bk])) break; out[bk] = 1; }
+    };
+
+    for (int i = 0; i < S; ++i) {
+        const float * q   = iq + (size_t) i * Hd * D;
+        const MT    * msk = src_mask + (int64_t) i * mask_squery;
+
+        // monolithic bs: joint head+key amax, masked keys skipped (-> -inf if empty)
+        for (int bk = 0; bk < nblk; ++bk) {
+            float m = -INFINITY; const int j0 = bk * blk;
+            if (j0 >= (int) key_len) { bsc[bk] = -INFINITY; continue; }
+            const int j1 = std::min((bk + 1) * blk, (int) key_len);
+            for (int j = j0; j < j1; ++j) {
+                if (msa_is_masked(msk[(int64_t) j * mask_skey])) continue;
+                const float * k = ik + (size_t) j * D;
+                for (int h = 0; h < Hd; ++h) {
+                    const float * qh = q + (size_t) h * D; float s = 0.f;
+                    for (int d = 0; d < D; ++d) s += qh[d] * k[d];
+                    if (s > m) m = s;
+                }
+            }
+            bsc[bk] = m;
+        }
+        for (int bk = 0; bk < nblk; ++bk) bsg[bk] = bs_gpu[(size_t) i * nblk + bk];
+
+        //score delta (both-masked equal; one masked = gross layout error)
+        for (int bk = 0; bk < nblk; ++bk) {
+            bool mc = msa_score_masked(bsc[bk]), mg = msa_score_masked(bsg[bk]);
+            if (mc && mg) continue;
+            if (mc != mg) { gross++; max_abs = std::max(max_abs, 1e30); continue; }
+            max_abs = std::max(max_abs, (double) fabsf(bsc[bk] - bsg[bk])); finite_pairs++;
+        }
+        //selection agreement
+        sel_of(bsc, selc); sel_of(bsg, selg);
+        if (selc != selg) sel_diff_cols++;
+    }
+    fprintf(stderr, "MSA VERIFY n_kv=%lld nblk=%d S=%d | StageA max|dbs|=%.3g finite=%ld gross=%ld | StageB sel_diff=%ld%s\n",
+            (long long) n_kv, nblk, S, max_abs, finite_pairs, gross, sel_diff_cols,
+            (gross || max_abs > 1e-2 || sel_diff_cols) ? "  <-- INVESTIGATE" : "");
+}
+
+static void msa_mask_from_scores_op(struct ggml_tensor * dst, int ith, int nth, void * userdata) {
+    const struct ggml_tensor * bs   = dst->src[0];   // [nblk, S]        f32
+    const struct ggml_tensor * mask = dst->src[1];   // [n_kv, S, 1, ns] f16/f32
+    const msa_params * p = (const msa_params *) userdata;
+
+    const int     S    = bs->ne[1];
+    const int     nblk = bs->ne[0];
+    const int64_t n_kv = dst->ne[0];
+
+    GGML_ASSERT(bs->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(bs));
+    GGML_ASSERT(dst->type == mask->type);
+    GGML_ASSERT(dst->ne[0] == mask->ne[0] && dst->ne[1] == mask->ne[1]);
+    GGML_ASSERT(dst->nb[1] == mask->nb[1]);
+    GGML_ASSERT(mask->ne[1] >= (int64_t) S);
+    GGML_ASSERT(n_kv % p->blk == 0);                 // pool drops a partial tail block
+    GGML_ASSERT((int64_t) nblk == n_kv / p->blk);    // GPU front block count must match
+
+    memcpy(dst->data, mask->data, ggml_nbytes(dst));
+
+    const int64_t mask_skey   = 1;
+    const int64_t mask_squery = mask->nb[1] / ggml_type_size(mask->type);
+
+    if (dst->type == GGML_TYPE_F16) {
+        msa_select_from_scores_t<ggml_fp16_t>(
+            (ggml_fp16_t *) dst->data, mask_skey, mask_squery, (const float *) bs->data,
+            S, n_kv, p->blk, p->topk_blocks, p->local, ith, nth, nblk);
+    } else {
+        msa_select_from_scores_t<float>(
+            (float *) dst->data, mask_skey, mask_squery, (const float *) bs->data,
+            S, n_kv, p->blk, p->topk_blocks, p->local, ith, nth, nblk);
+    }
+
+    if (ith == 0 && getenv("MSA_VERIFY_BS") && dst->src[2] && dst->src[3]) {
+        const struct ggml_tensor * iq = dst->src[2];
+        const struct ggml_tensor * ik = dst->src[3];
+        const int D  = iq->ne[0];
+        const int Hd = iq->ne[1];
+        if (dst->type == GGML_TYPE_F16)
+            msa_verify_bs<ggml_fp16_t>((const float*) bs->data, (const ggml_fp16_t*) mask->data,
+                mask_skey, mask_squery, (const float*) iq->data, (const float*) ik->data,
+                Hd, S, D, n_kv, p->blk, p->topk_blocks, p->local, nblk, ik->ne[2]);
+        else
+            msa_verify_bs<float>((const float*) bs->data, (const float*) mask->data,
+                mask_skey, mask_squery, (const float*) iq->data, (const float*) ik->data,
+                Hd, S, D, n_kv, p->blk, p->topk_blocks, p->local, nblk, ik->ne[2]);
+    }
+}
+
 
 llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
@@ -361,13 +540,49 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                 ggml_build_forward_expand(gf, mctx_cur->cpy_k_idx(ctx0, ik, k_idxs, il));
                 ggml_tensor * ik_kv = mctx_cur->get_k_idx(ctx0, il);      // [128,1,n_kv,1]
 
-                // fold MSA selection into the attention mask: clone the causal mask,
-                // knock out non-selected blocks. FA can then run.
-                ggml_tensor * kqm = inp_attn->get_kq_mask();   // f16 (FA on) / f32
-                ggml_tensor * srcs[4] = { iq, ik_kv, kqm, ik };   // ik = rope'd batch key [128,1,T]
-                msa_mask = ggml_custom_4d(ctx0, kqm->type, kqm->ne[0], kqm->ne[1], kqm->ne[2], kqm->ne[3],
-                                          srcs, 4, msa_block_mask_op, GGML_N_TASKS_MAX,
-                                          const_cast<msa_params *>(&mm.msa_p));
+                ggml_tensor * kqm  = inp_attn->get_kq_mask();   // f16 (FA on) / f32
+                const int64_t n_kv = kqm->ne[0];
+
+                if (getenv("MSA_DECOMP")) {
+                    // --- decomposed: scores on device ---
+                    // sc = mul_mat(ik,iq) -> head-amax -> +causal_mask -> block-amax. The
+                    // mask-add drives masked/future/pad cells to -inf so they lose the block
+                    // max (pool seeds -FLT_MAX; residual op treats both as empty). nblk = n_kv/blk.
+                    const int blk = mm.msa_p.blk;
+
+                    ggml_tensor * ik2d = ggml_reshape_2d(ctx0, ik_kv, n_idx_dim, n_kv);              // [D, n_kv]
+                    ggml_tensor * iq2d = ggml_reshape_2d(ctx0, iq, n_idx_dim, n_idx_head*n_tokens);  // [D, Hd*S]
+                    ggml_tensor * sc   = ggml_mul_mat(ctx0, ik2d, iq2d);                             // [n_kv, Hd*S] f32
+                    sc = ggml_reshape_3d(ctx0, sc, n_kv, n_idx_head, n_tokens);                      // [n_kv, Hd, S]
+
+                    // head-amax over Hd (dim 1) -> [n_kv, 1, S] -> [n_kv, S]
+                    ggml_tensor * sch = ggml_pool_2d(ctx0, sc, GGML_OP_POOL_MAX,
+                                                     1, (int) n_idx_head, 1, (int) n_idx_head, 0, 0);
+                    sch = ggml_reshape_2d(ctx0, sch, n_kv, n_tokens);
+
+                    // + causal mask (cast to f32 only when FA f16).
+                    // assumes mask->ne[1] == n_tokens (no GGML_KQ_MASK_PAD); 
+                    ggml_tensor * mf = (kqm->type == GGML_TYPE_F32) ? kqm : ggml_cast(ctx0, kqm, GGML_TYPE_F32);
+                    sch = ggml_add(ctx0, sch, mf);
+
+                    // block-amax over n_kv (dim 0) -> [nblk, S]
+                    ggml_tensor * bs = ggml_pool_2d(ctx0, sch, GGML_OP_POOL_MAX, blk, 1, blk, 1, 0, 0);
+
+                    ggml_tensor * srcs[4] = { bs, kqm, nullptr, nullptr };
+                    int nsrc = 2;
+                    if (getenv("MSA_VERIFY_BS")) { srcs[2] = iq; srcs[3] = ik_kv; nsrc = 4; }
+                    msa_mask = ggml_custom_4d(ctx0, kqm->type, kqm->ne[0], kqm->ne[1], kqm->ne[2], kqm->ne[3],
+                                              srcs, nsrc, msa_mask_from_scores_op, GGML_N_TASKS_MAX,
+                                              const_cast<msa_params *>(&mm.msa_p));
+                } else {
+                    // --- monolithic op: ---
+                    // clone the causal mask, knock out non-selected blocks. FA can then run.
+                    // 4th src (ik) is the rope'd batch key, used only by MSA_POPCHK.
+                    ggml_tensor * srcs[4] = { iq, ik_kv, kqm, ik };
+                    msa_mask = ggml_custom_4d(ctx0, kqm->type, kqm->ne[0], kqm->ne[1], kqm->ne[2], kqm->ne[3],
+                                              srcs, 4, msa_block_mask_op, GGML_N_TASKS_MAX,
+                                              const_cast<msa_params *>(&mm.msa_p));
+                }
                 if (getenv("MSA_BYPASS")) msa_mask = nullptr; // -> dense attention switch
                 if (msa_mask) cb(msa_mask, "msa_mask", il);
             }
