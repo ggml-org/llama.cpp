@@ -1322,12 +1322,11 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
-                // TODO @aldehir : need to extend json-schema-to-grammar to produce more than JSON rules
-                // const auto & params   = function.at("parameters");
+                const auto & params   = function.at("parameters");
 
                 tool_choice |= p.rule("tool-" + name, p.tool(p.sequence({
                     p.tool_open(p.tool_name(p.literal(name)) + p.peek(p.literal("{"))),
-                    p.tool_args(p.ref("gemma4-dict")),
+                    p.tool_args(p.schema(p.ref("gemma4-dict"), "tool-" + name + "-schema", params)),
                 })));
             });
 
@@ -1355,6 +1354,8 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
 
     if (include_grammar) {
         data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
+        common_grammar_options options;
+        options.dialect = COMMON_SCHEMA_DIALECT_GEMMA4;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
@@ -1366,7 +1367,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
                 builder.resolve_refs(schema);
             }
             parser.build_grammar(builder, data.grammar_lazy);
-        });
+        }, options);
 
         data.grammar_triggers = {
             { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call>" },
