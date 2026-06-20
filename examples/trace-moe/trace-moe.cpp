@@ -31,6 +31,8 @@
 #include "log.h"
 #include <filesystem>
 
+#include <nlohmann/json.hpp>
+
 #include "llama.h"
 
 #include <atomic>
@@ -56,6 +58,7 @@ enum class Backpressure { Block, Drop, Sample };
 
 struct TraceConfig {
     std::string trace_out;
+    std::string trace_prompts;              // path to JSONL prompts file (batched mode)
     std::string task_label     = "adhoc";
     std::string language       = "en";
     std::string script         = "Latin";
@@ -166,6 +169,10 @@ struct TraceWriter {
         out_path = path;
         bp = b;
         max_queue = qsize > 0 ? qsize : 8192;
+        // reset state for reuse across prompts in batched mode: a previous close()
+        // set stop=true and joined the writer thread, so we must clear stop before
+        // spawning a fresh thread (otherwise run() exits immediately on empty queue).
+        stop.store(false);
         fh = std::fopen(path.c_str(), "w");
         if (!fh) return false;
         writer = std::thread([this]{ run(); });
@@ -413,6 +420,7 @@ TraceConfig config_from_trace_flags(
             if (i + 1 < trace_args.size()) { dst = trace_args[++i]; }
         };
         if (a == "--trace-out")              take_next(cfg.trace_out);
+        else if (a == "--trace-prompts")         take_next(cfg.trace_prompts);
         else if (a == "--trace-task-label")  take_next(cfg.task_label);
         else if (a == "--trace-language")    take_next(cfg.language);
         else if (a == "--trace-script")      take_next(cfg.script);
@@ -468,6 +476,226 @@ std::vector<int> parse_layers(const std::string & spec) {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// batched multi-prompt mode
+// ---------------------------------------------------------------------------
+// A single prompt spec parsed from the --trace-prompts JSONL file.
+struct PromptSpec {
+    std::string prompt;
+    std::string task_label;
+    std::string language;
+    std::string script;
+    std::string prompt_family;
+    std::string test_id;
+};
+
+// Parse a JSONL file of prompts. Each line: {"prompt": "...", "task_label": "...",
+// "language": "...", "test_id": "...", "script": "...", "prompt_family": "..."}.
+// Fields other than "prompt" are optional and override the cfg defaults.
+std::vector<PromptSpec> load_prompt_specs(const std::string & path) {
+    std::vector<PromptSpec> out;
+    std::FILE * f = std::fopen(path.c_str(), "r");
+    if (!f) {
+        LOG_ERR("%s: could not open --trace-prompts file: %s\n", __func__, path.c_str());
+        return out;
+    }
+    char * line = nullptr;
+    size_t cap = 0;
+    ssize_t len;
+    int lineno = 0;
+    while ((len = getline(&line, &cap, f)) != -1) {
+        ++lineno;
+        std::string s(line, (size_t) len);
+        // strip trailing newline
+        while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+        if (s.empty()) continue;
+        try {
+            auto j = nlohmann::json::parse(s);
+            PromptSpec ps;
+            ps.prompt = j.value("prompt", "");
+            if (ps.prompt.empty()) {
+                LOG_WRN("%s: line %d has empty prompt, skipping\n", __func__, lineno);
+                continue;
+            }
+            ps.task_label    = j.value("task_label",    "");
+            ps.language      = j.value("language",      "");
+            ps.script        = j.value("script",        "");
+            ps.prompt_family = j.value("prompt_family", "");
+            ps.test_id       = j.value("test_id",       "");
+            out.push_back(std::move(ps));
+        } catch (const std::exception & e) {
+            LOG_WRN("%s: line %d JSON parse error: %s, skipping\n", __func__, lineno, e.what());
+        }
+    }
+    free(line);
+    std::fclose(f);
+    return out;
+}
+
+// Result of tracing one prompt.
+struct PromptResult {
+    uint64_t prompt_n_tokens = 0;
+    uint64_t gen_n_tokens    = 0;
+    uint64_t records_written = 0;
+    uint64_t records_dropped = 0;
+    uint64_t records_sampled = 0;
+    double    wall            = 0.0;
+};
+
+// Trace a single prompt end-to-end (tokenize -> prefill -> generate), writing
+// one JSONL trace file (+ .meta.json) to out_path. The caller owns the model/
+// context/sampler and is responsible for clearing the KV cache between prompts.
+PromptResult run_one_prompt(
+        TraceState & st,
+        llama_context * ctx,
+        const llama_vocab * vocab,
+        llama_sampler * smpl,
+        const common_params & params,
+        const std::string & model_name,
+        Backpressure bp,
+        const std::string & run_id,
+        const std::string & out_path,
+        const PromptSpec & ps) {
+    PromptResult res;
+    // reset per-prompt counters AND per-prompt metadata in cfg (render_record
+    // reads cfg.task_label/language/script/prompt_family/test_id into each record).
+    st.cfg.task_label    = ps.task_label;
+    st.cfg.language      = ps.language;
+    st.cfg.script        = ps.script;
+    st.cfg.prompt_family = ps.prompt_family;
+    st.cfg.test_id       = ps.test_id;
+    st.run_id = run_id;
+    st.token_base = 0;
+    st.batch_n_tokens = 0;
+    st.current_phase = "prefill";
+    st.phase_tokens_emitted[0] = 0;
+    st.phase_tokens_emitted[1] = 0;
+    st.pending_topk.clear();
+    st.pending_topk_n_used.clear();
+    st.pending_topk_n_tokens.clear();
+    st.writer.written.store(0);
+    st.writer.dropped.store(0);
+    st.writer.sampled.store(0);
+
+    if (!st.writer.open(out_path, bp, /*qsize*/ 8192)) {
+        LOG_ERR("ERROR: could not open trace output: %s\n", out_path.c_str());
+        return res;
+    }
+
+    auto t_start = std::chrono::steady_clock::now();
+
+    const bool add_bos = llama_vocab_get_add_bos(vocab);
+    std::vector<llama_token> tokens = common_tokenize(ctx, ps.prompt, add_bos, true);
+    if (tokens.empty()) {
+        LOG_ERR("%s: no input tokens for test_id=%s\n", __func__, ps.test_id.c_str());
+        st.writer.close();
+        return res;
+    }
+    LOG_INF("%s: [%s] prompt tokens = %zu\n", __func__, ps.test_id.c_str(), tokens.size());
+
+    // ---------------- prefill ----------------
+    if (st.trace_prefill) {
+        st.current_phase = "prefill";
+        st.token_base = 0;
+        st.batch_n_tokens = (int) tokens.size();
+        llama_batch batch = llama_batch_get_one(tokens.data(), (int) tokens.size());
+        if (llama_decode(ctx, batch) != 0) {
+            LOG_ERR("%s: prefill decode failed for test_id=%s\n", __func__, ps.test_id.c_str());
+        }
+    } else {
+        // still seed KV cache for generation
+        llama_batch batch = llama_batch_get_one(tokens.data(), (int) tokens.size());
+        llama_decode(ctx, batch);
+    }
+
+    // ---------------- generation ----------------
+    if (st.trace_generation && params.n_predict > 0) {
+        st.current_phase = "generation";
+        llama_token new_token_id = llama_sampler_sample(smpl, ctx, -1);
+        for (int step = 0; step < params.n_predict; ++step) {
+            if (llama_vocab_is_eog(vocab, new_token_id)) break;
+            if (st.cfg.trace_max_tokens > 0 && st.phase_tokens_emitted[1] >= st.cfg.trace_max_tokens) break;
+            st.token_base = (int) tokens.size() + step;
+            st.batch_n_tokens = 1;
+            llama_batch batch = llama_batch_get_one(&new_token_id, 1);
+            int ret = llama_decode(ctx, batch);
+            if (ret != 0) {
+                LOG_WRN("%s: generation decode failed at step %d for test_id=%s\n",
+                        __func__, step, ps.test_id.c_str());
+                break;
+            }
+            ++res.gen_n_tokens;
+            new_token_id = llama_sampler_sample(smpl, ctx, -1);
+        }
+    }
+    res.prompt_n_tokens = tokens.size();
+
+    auto t_end = std::chrono::steady_clock::now();
+    res.wall = std::chrono::duration<double>(t_end - t_start).count();
+
+    st.writer.close();
+    res.records_written  = st.writer.written.load();
+    res.records_dropped  = st.writer.dropped.load();
+    res.records_sampled = st.writer.sampled.load();
+
+    // ---------------- metadata sidecar ----------------
+    std::string meta = out_path + ".meta.json";
+    std::FILE * mf = std::fopen(meta.c_str(), "w");
+    if (mf) {
+        std::fprintf(mf, "{\n");
+        std::fprintf(mf, "  \"schema_version\": %d,\n", TRACE_SCHEMA_VERSION);
+        std::fprintf(mf, "  \"run_id\": \"%s\",\n", run_id.c_str());
+        std::fprintf(mf, "  \"model\": \"%s\",\n", model_name.c_str());
+        std::fprintf(mf, "  \"model_path\": \"%s\",\n", params.model.path.c_str());
+        std::fprintf(mf, "  \"command_line\": \"llama-trace-moe ...\",\n");
+        std::fprintf(mf, "  \"prompt_sha256\": \"(see run log)\",\n");
+        std::fprintf(mf, "  \"task_label\": \"%s\",\n", ps.task_label.c_str());
+        std::fprintf(mf, "  \"language\": \"%s\",\n", ps.language.c_str());
+        std::fprintf(mf, "  \"script\": \"%s\",\n", ps.script.c_str());
+        std::fprintf(mf, "  \"prompt_family\": \"%s\",\n", ps.prompt_family.c_str());
+        std::fprintf(mf, "  \"test_id\": \"%s\",\n", ps.test_id.c_str());
+        std::string thinking_mode = "unknown";
+        std::string reasoning_effort = "unknown";
+        {
+            auto it = params.default_template_kwargs.find("enable_thinking");
+            if (it != params.default_template_kwargs.end()) {
+                thinking_mode = (it->second == "false" || it->second == "0") ? "disabled" : "enabled";
+            }
+            auto ir = params.default_template_kwargs.find("reasoning_effort");
+            if (ir != params.default_template_kwargs.end()) {
+                reasoning_effort = ir->second.empty() ? "none" : ir->second;
+            }
+        }
+        std::fprintf(mf, "  \"thinking_mode\": \"%s\",\n", thinking_mode.c_str());
+        std::fprintf(mf, "  \"reasoning_effort\": \"%s\",\n", reasoning_effort.c_str());
+        std::fprintf(mf, "  \"max_new_tokens\": %d,\n", params.n_predict);
+        std::fprintf(mf, "  \"phase_modes\": {\"prefill\": %s, \"generation\": %s},\n",
+            st.trace_prefill ? "true" : "false",
+            st.trace_generation ? "true" : "false");
+        std::fprintf(mf, "  \"trace_layers\": \"%s\",\n",
+            st.cfg.trace_layers.empty() ? "all" : st.cfg.trace_layers.c_str());
+        std::fprintf(mf, "  \"trace_max_tokens\": %d,\n", st.cfg.trace_max_tokens);
+        std::fprintf(mf, "  \"backpressure\": \"%s\",\n", st.cfg.backpressure.c_str());
+        std::fprintf(mf, "  \"queue_size\": %zu,\n", st.writer.max_queue);
+        std::fprintf(mf, "  \"records_written\": %llu,\n", (unsigned long long) res.records_written);
+        std::fprintf(mf, "  \"records_dropped\": %llu,\n", (unsigned long long) res.records_dropped);
+        std::fprintf(mf, "  \"records_sampled\": %llu,\n", (unsigned long long) res.records_sampled);
+        std::fprintf(mf, "  \"prompt_token_count\": %llu,\n", (unsigned long long) res.prompt_n_tokens);
+        std::fprintf(mf, "  \"gen_token_count\": %llu,\n", (unsigned long long) res.gen_n_tokens);
+        std::fprintf(mf, "  \"wall_seconds\": %.3f\n", res.wall);
+        std::fprintf(mf, "}\n");
+        std::fclose(mf);
+    }
+
+    LOG("%s: [%s] trace written to %s (%llu records, %llu dropped, %llu sampled, %.2fs)\n",
+        __func__, ps.test_id.c_str(), out_path.c_str(),
+        (unsigned long long) res.records_written,
+        (unsigned long long) res.records_dropped,
+        (unsigned long long) res.records_sampled,
+        res.wall);
+    return res;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -499,10 +727,11 @@ int main(int argc, char ** argv) {
                 "See traces/README.md.",
                 __func__, join(cfg.stripped_chat_flags, ", ").c_str());
     }
-    if (params.prompt.empty() && params.in_files.empty()) {
-        // require a prompt
-        LOG_ERR("ERROR: provide -p <prompt> or -f <file>\n");
-        return 2;
+    if (cfg.trace_prompts.empty()) {
+        if (params.prompt.empty() && params.in_files.empty()) {
+            LOG_ERR("ERROR: provide -p <prompt> or -f <file>, or --trace-prompts <file.jsonl>\n");
+            return 2;
+        }
     }
 
     // backpressure
@@ -513,7 +742,6 @@ int main(int argc, char ** argv) {
 
     TraceState st;
     st.cfg = cfg;
-    st.run_id = cfg.test_id + "-" + cfg.language + "-" + std::to_string((long long) std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
     const std::string model_name = std::filesystem::path(params.model.path).parent_path().filename().string();
     st.model_name = model_name.empty() ? params.model.path : model_name;
     st.max_new_tokens = params.n_predict;
@@ -521,158 +749,114 @@ int main(int argc, char ** argv) {
     st.trace_prefill = (cfg.phase == "prefill" || cfg.phase == "both");
     st.trace_generation = (cfg.phase == "generation" || cfg.phase == "both");
 
-    if (!st.writer.open(cfg.trace_out, bp, /*qsize*/ 8192)) {
-        LOG_ERR("ERROR: could not open trace output: %s\n", cfg.trace_out.c_str());
-        return 2;
-    }
-
     params.cb_eval = trace_cb_eval;
     params.cb_eval_user_data = &st;
     params.warmup = false;
 
-    auto t_start_mono = std::chrono::steady_clock::now();
-
+    // ---- load model ONCE (batched mode traces N prompts against this one model) ----
+    auto t_total_start = std::chrono::steady_clock::now();
     auto llama_init = common_init_from_params(params);
     auto * model = llama_init->model();
     auto * ctx   = llama_init->context();
     if (!model || !ctx) {
         LOG_ERR("ERROR: failed to init llama\n");
-        st.writer.close();
         return 1;
     }
-
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    // Note: there is no stable public llama.cpp API to read n_expert_total directly;
-    // leave 0 here — the analyzer tolerates an absent n_expert field.
     (void) model;
-
-    // ---- tokenize prompt ----
-    // common_params_parse already loads -p/--prompt and -f/--file into params.prompt,
-    // so we tokenize that verbatim (this mirrors examples/eval-callback, which also
-    // does NOT apply a chat template). For chat-template parity with llama-cli, use
-    // scripts/tracing/run_glm52_moe_trace.sh, which relies on --jinja -cnv being
-    // honored by common_init_from_params for generation.
-    const bool add_bos = llama_vocab_get_add_bos(vocab);
-    std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, add_bos, true);
-    if (tokens.empty()) {
-        LOG_ERR("ERROR: no input tokens — provide -p <prompt> or -f <file>\n");
-        st.writer.close();
-        return 1;
-    }
-    LOG_INF("%s: prompt tokens = %zu\n", __func__, tokens.size());
 
     // ---- sampler for generation ----
     struct llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(params.sampling.temp));
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
-    uint64_t prompt_n_tokens = tokens.size();
-
-    // ---------------- prefill ----------------
-    if (st.trace_prefill && !tokens.empty()) {
-        st.current_phase = "prefill";
-        st.token_base = 0;
-        st.batch_n_tokens = (int) tokens.size();
-        llama_batch batch = llama_batch_get_one(tokens.data(), (int) tokens.size());
-        if (llama_decode(ctx, batch) != 0) {
-            LOG_ERR("ERROR: prefill decode failed\n");
+    // ---- build prompt spec list ----
+    // Batched mode (--trace-prompts): each JSONL line is one prompt with metadata.
+    // Single mode: synthesize one spec from params.prompt + cfg defaults.
+    const bool batched = !cfg.trace_prompts.empty();
+    std::vector<PromptSpec> specs;
+    if (batched) {
+        specs = load_prompt_specs(cfg.trace_prompts);
+        if (specs.empty()) {
+            LOG_ERR("ERROR: no prompts parsed from %s\n", cfg.trace_prompts.c_str());
+            llama_sampler_free(smpl);
+            llama_backend_free();
+            return 1;
         }
-    } else if (!tokens.empty()) {
-        // still need a prefill decode to seed KV cache for generation
-        llama_batch batch = llama_batch_get_one(tokens.data(), (int) tokens.size());
-        llama_decode(ctx, batch);
+        // fill spec defaults from cfg where the JSONL entry omitted them
+        for (auto & ps : specs) {
+            if (ps.task_label.empty())    ps.task_label    = cfg.task_label;
+            if (ps.language.empty())      ps.language      = cfg.language;
+            if (ps.script.empty())        ps.script        = cfg.script;
+            if (ps.prompt_family.empty()) ps.prompt_family = cfg.prompt_family;
+            if (ps.test_id.empty())       ps.test_id       = cfg.test_id;
+        }
+    } else {
+        PromptSpec ps;
+        ps.prompt        = params.prompt;
+        ps.task_label    = cfg.task_label;
+        ps.language      = cfg.language;
+        ps.script        = cfg.script;
+        ps.prompt_family = cfg.prompt_family;
+        ps.test_id       = cfg.test_id;
+        specs.push_back(std::move(ps));
     }
 
-    // ---------------- generation ----------------
-    uint64_t gen_n_tokens = 0;
-    if (st.trace_generation && params.n_predict > 0) {
-        st.current_phase = "generation";
-        // seed generation from the last logits of prefill (greedy)
-        llama_token new_token_id = llama_sampler_sample(smpl, ctx, -1);
-        for (int step = 0; step < params.n_predict; ++step) {
-            if (llama_vocab_is_eog(vocab, new_token_id)) break;
-            if (st.cfg.trace_max_tokens > 0 && st.phase_tokens_emitted[1] >= st.cfg.trace_max_tokens) {
-                // keep generating for KV but stop tracing? For simplicity stop generation too.
-                break;
-            }
-            st.token_base = (int) prompt_n_tokens + step;
-            st.batch_n_tokens = 1;
-            llama_batch batch = llama_batch_get_one(&new_token_id, 1);
-            int ret = llama_decode(ctx, batch);
-            if (ret != 0) {
-                LOG_WRN("%s: generation decode failed at step %d (ret=%d)\n", __func__, step, ret);
-                break;
-            }
-            gen_n_tokens++;
-            new_token_id = llama_sampler_sample(smpl, ctx, -1);
+    // ---- output path(s) ----
+    // Batched: --trace-out is an output directory; each prompt writes
+    // <dir>/<test_id>.jsonl (+ .meta.json). Single: --trace-out is the file.
+    std::string out_dir;
+    if (batched) {
+        out_dir = cfg.trace_out;
+        std::error_code ec;
+        std::filesystem::create_directories(out_dir, ec);
+        if (ec) {
+            LOG_ERR("ERROR: could not create output dir %s: %s\n", out_dir.c_str(), ec.message().c_str());
+            llama_sampler_free(smpl);
+            llama_backend_free();
+            return 2;
         }
     }
 
-    auto t_end_mono = std::chrono::steady_clock::now();
-    double wall = std::chrono::duration<double>(t_end_mono - t_start_mono).count();
+    // ---- run ----
+    const std::string ts = std::to_string((long long) std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+    uint64_t total_records = 0, total_dropped = 0, total_sampled = 0;
+    for (size_t i = 0; i < specs.size(); ++i) {
+        PromptSpec & ps = specs[i];
+        std::string out_path;
+        if (batched) {
+            // include language in the filename: the suite reuses test_id across
+            // languages (same prompt translated), so test_id alone would collide.
+            std::string fname = ps.test_id.empty() ? ("prompt_" + std::to_string(i)) : ps.test_id;
+            if (!ps.language.empty()) fname += "-" + ps.language;
+            out_path = out_dir + "/" + fname + ".jsonl";
+        } else {
+            out_path = cfg.trace_out;
+        }
+        std::string run_id = ps.test_id + "-" + ps.language + "-" + ts;
+
+        PromptResult r = run_one_prompt(st, ctx, vocab, smpl, params, model_name, bp, run_id, out_path, ps);
+        total_records  += r.records_written;
+        total_dropped  += r.records_dropped;
+        total_sampled += r.records_sampled;
+
+        // clear KV cache between prompts so each starts with a clean slate
+        llama_memory_clear(llama_get_memory(ctx), true);
+    }
 
     llama_sampler_free(smpl);
 
-    st.writer.close();
+    auto t_total_end = std::chrono::steady_clock::now();
+    double wall_total = std::chrono::duration<double>(t_total_end - t_total_start).count();
 
-    // ---------------- metadata sidecar ----------------
-    std::string meta = cfg.trace_out + ".meta.json";
-    std::FILE * mf = std::fopen(meta.c_str(), "w");
-    if (mf) {
-        std::fprintf(mf, "{\n");
-        std::fprintf(mf, "  \"schema_version\": %d,\n", TRACE_SCHEMA_VERSION);
-        std::fprintf(mf, "  \"run_id\": \"%s\",\n", st.run_id.c_str());
-        std::fprintf(mf, "  \"model\": \"%s\",\n", st.model_name.c_str());
-        std::fprintf(mf, "  \"model_path\": \"%s\",\n", params.model.path.c_str());
-        std::fprintf(mf, "  \"command_line\": \"llama-trace-moe ...\",\n");
-        std::fprintf(mf, "  \"prompt_sha256\": \"(see run log)\",\n");
-        std::fprintf(mf, "  \"task_label\": \"%s\",\n", cfg.task_label.c_str());
-        std::fprintf(mf, "  \"language\": \"%s\",\n", cfg.language.c_str());
-        std::fprintf(mf, "  \"script\": \"%s\",\n", cfg.script.c_str());
-        std::fprintf(mf, "  \"prompt_family\": \"%s\",\n", cfg.prompt_family.c_str());
-        std::fprintf(mf, "  \"test_id\": \"%s\",\n", cfg.test_id.c_str());
-        // Derive thinking mode best-effort from the default chat-template kwargs map.
-        std::string thinking_mode = "unknown";
-        std::string reasoning_effort = "unknown";
-        {
-            auto it = params.default_template_kwargs.find("enable_thinking");
-            if (it != params.default_template_kwargs.end()) {
-                thinking_mode = (it->second == "false" || it->second == "0") ? "disabled" : "enabled";
-            }
-            auto ir = params.default_template_kwargs.find("reasoning_effort");
-            if (ir != params.default_template_kwargs.end()) {
-                reasoning_effort = ir->second.empty() ? "none" : ir->second;
-            }
-        }
-        std::fprintf(mf, "  \"thinking_mode\": \"%s\",\n", thinking_mode.c_str());
-        std::fprintf(mf, "  \"reasoning_effort\": \"%s\",\n", reasoning_effort.c_str());
-        std::fprintf(mf, "  \"max_new_tokens\": %d,\n", params.n_predict);
-        std::fprintf(mf, "  \"phase_modes\": {\"prefill\": %s, \"generation\": %s},\n",
-            st.trace_prefill ? "true" : "false",
-            st.trace_generation ? "true" : "false");
-        std::fprintf(mf, "  \"trace_layers\": \"%s\",\n",
-            cfg.trace_layers.empty() ? "all" : cfg.trace_layers.c_str());
-        std::fprintf(mf, "  \"trace_max_tokens\": %d,\n", cfg.trace_max_tokens);
-        std::fprintf(mf, "  \"backpressure\": \"%s\",\n", cfg.backpressure.c_str());
-        std::fprintf(mf, "  \"queue_size\": %zu,\n", st.writer.max_queue);
-        std::fprintf(mf, "  \"records_written\": %llu,\n", (unsigned long long) st.writer.written.load());
-        std::fprintf(mf, "  \"records_dropped\": %llu,\n", (unsigned long long) st.writer.dropped.load());
-        std::fprintf(mf, "  \"records_sampled\": %llu,\n", (unsigned long long) st.writer.sampled.load());
-        std::fprintf(mf, "  \"prompt_token_count\": %llu,\n", (unsigned long long) prompt_n_tokens);
-        std::fprintf(mf, "  \"gen_token_count\": %llu,\n", (unsigned long long) gen_n_tokens);
-        std::fprintf(mf, "  \"wall_seconds\": %.3f,\n", wall);
-        std::fprintf(mf, "  \"cli_path\": \"llama-trace-moe\",\n");
-        std::fprintf(mf, "  \"cli_build\": \"patched llama.cpp build-metal\"\n");
-        std::fprintf(mf, "}\n");
-        std::fclose(mf);
+    if (batched) {
+        LOG("%s: batched %zu prompts -> %s (%llu total records, %llu dropped, %llu sampled, %.2fs total)\n",
+            __func__, specs.size(), cfg.trace_out.c_str(),
+            (unsigned long long) total_records,
+            (unsigned long long) total_dropped,
+            (unsigned long long) total_sampled,
+            wall_total);
     }
-
-    LOG("%s: trace written to %s (%llu records, %llu dropped, %llu sampled, %.2fs)\n",
-        __func__, cfg.trace_out.c_str(),
-        (unsigned long long) st.writer.written.load(),
-        (unsigned long long) st.writer.dropped.load(),
-        (unsigned long long) st.writer.sampled.load(),
-        wall);
 
     llama_backend_free();
     return 0;
