@@ -2354,6 +2354,16 @@ private:
                     res->n_draft_accepted_total      = metrics.n_draft_accepted_total;
                     res->n_draft_verif_steps_total   = metrics.n_draft_verif_steps_total;
 
+                    if (model_tgt) {
+                        res->model_size_bytes = llama_model_size(model_tgt);
+                        res->model_n_params   = llama_model_n_params(model_tgt);
+                    }
+                    res->n_ctx_total = (uint64_t) n_ctx;
+                    if (ctx_tgt) {
+                        res->kv_cache_bytes = (uint64_t) llama_state_get_size(ctx_tgt);
+                    }
+
+
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
                     }
@@ -4210,6 +4220,22 @@ void server_routes::init_routes() {
                     {"name",  "draft_mean_accept_len"},
                     {"help",  "Speculative decoding: mean accepted tokens per verification step (1 + accepted/steps)."},
                     {"value",  res_task->n_draft_verif_steps_total ? 1.0 + (double) res_task->n_draft_accepted_total / (double) res_task->n_draft_verif_steps_total : 0.}
+            },{
+                    {"name",  "model_size_bytes"},
+                    {"help",  "Model weights size in bytes."},
+                    {"value",  res_task->model_size_bytes}
+            },{
+                    {"name",  "model_n_params"},
+                    {"help",  "Number of model parameters."},
+                    {"value",  res_task->model_n_params}
+            },{
+                    {"name",  "n_ctx"},
+                    {"help",  "Total context size across all slots."},
+                    {"value",  res_task->n_ctx_total}
+            },{
+                    {"name",  "kv_cache_bytes"},
+                    {"help",  "KV cache state size in bytes."},
+                    {"value",  res_task->kv_cache_bytes}
             }}}
         };
 
