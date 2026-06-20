@@ -1019,78 +1019,8 @@ public:
     }
 
     std::string format_grammar() {
-        auto is_alpha = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
-        auto is_alnum = [&](char c) { return is_alpha(c) || (c >= '0' && c <= '9'); };
-
-        // Collect the rule names referenced in a rule's content, skipping string
-        // literals ("..."), character classes ([...]) and quantifiers ({m,n}).
-        auto collect_references = [&](const std::string & content, std::unordered_set<std::string> & refs) {
-            size_t i = 0;
-            size_t n = content.size();
-            while (i < n) {
-                char c = content[i];
-                if (c == '"') {
-                    i++;
-                    while (i < n) {
-                        if (content[i] == '\\' && i + 1 < n) { i += 2; }
-                        else if (content[i] == '"') { i++; break; }
-                        else { i++; }
-                    }
-                } else if (c == '[') {
-                    i++;
-                    while (i < n) {
-                        if (content[i] == '\\' && i + 1 < n) { i += 2; }
-                        else if (content[i] == ']') { i++; break; }
-                        else { i++; }
-                    }
-                } else if (c == '{') {
-                    while (i < n && content[i] != '}') { i++; }
-                    if (i < n) { i++; }
-                } else if (is_alnum(c) || (c == '-' && i + 1 < n && is_alnum(content[i + 1]))) {
-                    size_t start = i;
-                    if (c == '-') { i++; }
-                    while (i < n && (is_alnum(content[i]) || content[i] == '-')) { i++; }
-                    refs.insert(content.substr(start, i - start));
-                } else {
-                    i++;
-                }
-            }
-        };
-
-        // Drop rules that nothing references (e.g. the "space" rule when no value
-        // carries trailing whitespace). Entry rules ("root", "root0", ...) are
-        // always kept even though no other rule refers to them.
-        std::unordered_set<std::string> referenced;
-        for (const auto & kv : _rules) {
-            std::unordered_set<std::string> refs;
-            collect_references(kv.second, refs);
-            for (const auto & r : refs) {
-                if (r != kv.first) {
-                    referenced.insert(r);
-                }
-            }
-        }
-
-        auto is_entry = [](const std::string & name) {
-            if (name == "root") {
-                return true;
-            }
-            if (name.rfind("root", 0) != 0 || name.size() <= 4) {
-                return false;
-            }
-            for (size_t i = 4; i < name.size(); i++) {
-                if (name[i] < '0' || name[i] > '9') {
-                    return false;
-                }
-            }
-            return true;
-        };
-
         std::stringstream ss;
         for (const auto & kv : _rules) {
-            if (!is_entry(kv.first) && referenced.find(kv.first) == referenced.end()) {
-                continue;
-            }
             ss << kv.first << " ::= " << kv.second << '\n';
         }
         return ss.str();

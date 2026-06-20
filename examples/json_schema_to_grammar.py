@@ -769,64 +769,10 @@ class SchemaConverter:
 
         return rule
 
-    def _rule_references(self, content):
-        # Collect rule names referenced in a rule's content, skipping string
-        # literals ("..."), character classes ([...]) and quantifiers ({m,n}).
-        refs = set()
-        i, n = 0, len(content)
-        while i < n:
-            c = content[i]
-            if c == '"':
-                i += 1
-                while i < n:
-                    if content[i] == '\\' and i + 1 < n:
-                        i += 2
-                    elif content[i] == '"':
-                        i += 1
-                        break
-                    else:
-                        i += 1
-            elif c == '[':
-                i += 1
-                while i < n:
-                    if content[i] == '\\' and i + 1 < n:
-                        i += 2
-                    elif content[i] == ']':
-                        i += 1
-                        break
-                    else:
-                        i += 1
-            elif c == '{':
-                while i < n and content[i] != '}':
-                    i += 1
-                if i < n:
-                    i += 1
-            elif c.isalnum() or (c == '-' and i + 1 < n and content[i + 1].isalnum()):
-                start = i
-                if c == '-':
-                    i += 1
-                while i < n and (content[i].isalnum() or content[i] == '-'):
-                    i += 1
-                refs.add(content[start:i])
-            else:
-                i += 1
-        return refs
-
     def format_grammar(self):
-        # Drop rules that nothing references (e.g. the "space" rule when no value
-        # carries trailing whitespace). Entry rules ("root", "root0", ...) are
-        # always kept even though no other rule refers to them.
-        referenced = set()
-        for name, rule in self._rules.items():
-            referenced |= (self._rule_references(rule) - {name})
-
-        def is_entry(name):
-            return name == 'root' or (name.startswith('root') and name[4:].isdigit())
-
         return '\n'.join(
             f'{name} ::= {rule}'
             for name, rule in sorted(self._rules.items(), key=lambda kv: kv[0])
-            if is_entry(name) or name in referenced
         )
 
 
