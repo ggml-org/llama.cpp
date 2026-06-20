@@ -35,6 +35,7 @@
 #include <nlohmann/json.hpp>
 
 #include "llama.h"
+#include "gguf.h"  // Story 8 AC: read *.expert_count KV for n_expert_total
 
 #include <atomic>
 #include <chrono>
@@ -694,6 +695,13 @@ PromptResult run_one_prompt(
         return res;
     }
 
+    // Story 8 AC: reset perf counters so this prompt's prefill/gen timings are
+    // isolated from prior prompts in batched mode. perf_reset zeroes
+    // t_p_eval_us/n_p_eval/t_eval_us/n_eval but preserves t_load_us (model
+    // load time, not needed here). After the decode loop we read perf_context
+    // to compute per-prompt prompt-eval and gen tok/s.
+    llama_perf_context_reset(ctx);
+
     auto t_start = std::chrono::steady_clock::now();
 
     const bool add_bos = llama_vocab_get_add_bos(vocab);
@@ -870,6 +878,31 @@ PromptResult run_one_prompt(
         std::fprintf(mf, "  \"records_sampled\": %llu,\n", (unsigned long long) res.records_sampled);
         std::fprintf(mf, "  \"prompt_token_count\": %llu,\n", (unsigned long long) res.prompt_n_tokens);
         std::fprintf(mf, "  \"gen_token_count\": %llu,\n", (unsigned long long) res.gen_n_tokens);
+        // Story 8 AC: per-prompt speed metrics from llama_perf_context.
+        // t_p_eval_ms is total pref-time for this prompt; t_eval_ms is total
+        // gen-time. n_p_eval is prompt tokens processed; n_eval is tokens
+        // generated. tok/s = tokens / (ms/1000) = tokens*1000/ms.
+        {
+            llama_perf_context_data perf = llama_perf_context(ctx);
+            double p_per_sec = (perf.t_p_eval_ms > 0.0)
+                ? (double) perf.n_p_eval * 1000.0 / perf.t_p_eval_ms
+                : 0.0;
+            double g_per_sec = (perf.t_eval_ms   > 0.0)
+                ? (double) perf.n_eval   * 1000.0 / perf.t_eval_ms
+                : 0.0;
+            std::fprintf(mf, "  \"perf_prompt_eval_per_sec\": %.4f,\n", p_per_sec);
+            std::fprintf(mf, "  \"perf_gen_per_sec\": %.4f,\n", g_per_sec);
+            std::fprintf(mf, "  \"perf_prompt_eval_ms\": %.3f,\n", perf.t_p_eval_ms);
+            std::fprintf(mf, "  \"perf_eval_ms\": %.3f,\n", perf.t_eval_ms);
+            std::fprintf(mf, "  \"perf_n_prompt_eval\": %d,\n", (int) perf.n_p_eval);
+            std::fprintf(mf, "  \"perf_n_eval\": %d,\n", (int) perf.n_eval);
+        }
+        // Story 8 AC: write n_expert_total to the sidecar too so the analyzer
+        // can label experts as #X of N total even if records themselves don't
+        // carry it (e.g. dense models, or older trace files).
+        if (st.n_expert_total > 0) {
+            std::fprintf(mf, "  \"n_expert_total\": %d,\n", st.n_expert_total);
+        }
         std::fprintf(mf, "  \"wall_seconds\": %.3f\n", res.wall);
         std::fprintf(mf, "}\n");
         std::fclose(mf);
@@ -885,6 +918,42 @@ PromptResult run_one_prompt(
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// Story 8 AC: read n_expert_total from the GGUF file's metadata.
+//
+// There is no public llama API for "how many experts per layer". The
+// hparams field (hparams.n_expert) is private/experimental. But the GGUF KV
+// "<arch>.expert_count" is always written by llama_model_saver and is unique
+// per model (one arch per file). We scan all KV keys for the suffix
+// ".expert_count" — there is exactly one such key per multi-arch GGUF — and
+// read its u32 value. Returns 0 if the file can't be opened or the key is
+// absent (older sidecars / dense models). For GLM-5.2 this is 256, matching
+// the verified expert ID range 0..255 observed in real traces.
+// ---------------------------------------------------------------------------
+static int read_n_expert_total_from_gguf(const std::string & model_path) {
+    gguf_init_params params = {};
+    params.no_alloc = true;  // metadata only; don't load tensor data
+    params.ctx      = nullptr;
+    gguf_context * gctx = gguf_init_from_file(model_path.c_str(), params);
+    if (!gctx) return 0;
+    int found = 0;
+    const int64_t n_kv = gguf_get_n_kv(gctx);
+    for (int64_t i = 0; i < n_kv; ++i) {
+        const char * key = gguf_get_key(gctx, i);
+        if (!key) continue;
+        std::string ks(key);
+        // Suffix match — every arch writes "<arch>.expert_count".
+        static const std::string suffix = ".expert_count";
+        if (ks.size() > suffix.size() &&
+            ks.compare(ks.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            found = (int) gguf_get_val_u32(gctx, i);
+            break;
+        }
+    }
+    gguf_free(gctx);
+    return found;
+}
 
 // ---------------------------------------------------------------------------
 // main
@@ -966,6 +1035,15 @@ int main(int argc, char ** argv) {
     }
     const llama_vocab * vocab = llama_model_get_vocab(model);
     (void) model;
+
+    // Story 8 AC: populate n_expert_total once per model (it's a global KV —
+    // all MoE layers in one GGUF share the same expert_count). render_record
+    // emits "n_expert":N per routing event when this is >0, so the analyzer
+    // can label experts as #X of N total. For GLM-5.2 this is 256.
+    st.n_expert_total = read_n_expert_total_from_gguf(params.model.path);
+    if (st.n_expert_total > 0) {
+        LOG_INF("%s: n_expert_total = %d (from GGUF KV)", __func__, st.n_expert_total);
+    }
 
     // ---- sampler for generation ----
     struct llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
