@@ -1532,6 +1532,8 @@ static std::string gbnf_escape_char_class(uint32_t c) {
 // GBNF grammar matching strings that contain no string in `strings` as a
 // substring. Emits the complement of an Aho-Corasick automaton DFA and returns
 // the start state rule name.
+//
+// ref: https://github.com/ggml-org/llama.cpp/pull/24839
 static std::string gbnf_excluding_grammar(const common_grammar_builder & builder,
                                           const std::string &            prefix,
                                           const std::vector<std::string> & strings) {
