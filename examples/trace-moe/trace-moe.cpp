@@ -30,6 +30,7 @@
 #include "common.h"
 #include "log.h"
 #include <filesystem>
+#include <fstream>
 
 #include <nlohmann/json.hpp>
 
@@ -42,12 +43,118 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <mutex>
+#include <regex>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+
+// Self-contained SHA-256 (FIPS-180-4) — no external crypto dependency.
+// Used only for prompt_sha256 + model_sha256_prefix in the .meta.json sidecar;
+// never participates in inference. ~60 LoC, public-domain reference impl.
+namespace sha256_detail {
+    struct SHA256 {
+        uint32_t state[8];
+        uint64_t bitlen;
+        uint8_t  data[64];
+        size_t   datalen;
+    };
+    static const uint32_t K[64] = {
+        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+    };
+    static inline uint32_t rotr(uint32_t x, uint32_t n) { return (x >> n) | (x << (32 - n)); }
+    static inline void sha256_init(SHA256 & c) {
+        c.bitlen = 0; c.datalen = 0;
+        static const uint32_t H0[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
+        for (int i = 0; i < 8; i++) c.state[i] = H0[i];
+    }
+    static inline void sha256_transform(SHA256 & c, const uint8_t * d) {
+        uint32_t m[64], a,b,cc,dd,e,f,g,h, W1, W2;
+        for (int i = 0; i < 16; i++)
+            m[i] = (uint32_t(d[i*4]) << 24) | (uint32_t(d[i*4+1]) << 16) | (uint32_t(d[i*4+2]) << 8) | uint32_t(d[i*4+3]);
+        for (int i = 16; i < 64; i++) {
+            W1 = rotr(m[i-15],7) ^ rotr(m[i-15],18) ^ (m[i-15] >> 3);
+            W2 = rotr(m[i-2],17) ^ rotr(m[i-2],19) ^ (m[i-2] >> 10);
+            m[i] = m[i-16] + W1 + m[i-7] + W2;
+        }
+        a=c.state[0]; b=c.state[1]; cc=c.state[2]; dd=c.state[3];
+        e=c.state[4]; f=c.state[5]; g=c.state[6]; h=c.state[7];
+        for (int i = 0; i < 64; i++) {
+            uint32_t S1 = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25);
+            uint32_t ch = (e & f) ^ (~e & g);
+            uint32_t t1 = h + S1 + ch + K[i] + m[i];
+            uint32_t S0 = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22);
+            uint32_t mj = (a & b) ^ (a & cc) ^ (b & cc);
+            uint32_t t2 = S0 + mj;
+            h=g; g=f; f=e; e=dd+t1; dd=cc; cc=b; b=a; a=t1+t2;
+        }
+        c.state[0]+=a; c.state[1]+=b; c.state[2]+=cc; c.state[3]+=dd;
+        c.state[4]+=e; c.state[5]+=f; c.state[6]+=g; c.state[7]+=h;
+    }
+    static inline void sha256_update(SHA256 & c, const uint8_t * data, size_t len) {
+        for (size_t i = 0; i < len; i++) {
+            c.data[c.datalen++] = data[i];
+            if (c.datalen == 64) { sha256_transform(c, c.data); c.bitlen += 512; c.datalen = 0; }
+        }
+    }
+    static inline void sha256_final(SHA256 & c, uint8_t out[32]) {
+        uint64_t bits = c.bitlen + uint64_t(c.datalen) * 8;
+        c.data[c.datalen++] = 0x80;
+        if (c.datalen > 56) { while (c.datalen < 64) c.data[c.datalen++] = 0; sha256_transform(c, c.data); c.datalen = 0; }
+        while (c.datalen < 56) c.data[c.datalen++] = 0;
+        for (int i = 7; i >= 0; i--) c.data[c.datalen++] = uint8_t((bits >> (i*8)) & 0xFF);
+        sha256_transform(c, c.data);
+        for (int i = 0; i < 8; i++) {
+            out[i*4]   = uint8_t((c.state[i] >> 24) & 0xFF);
+            out[i*4+1] = uint8_t((c.state[i] >> 16) & 0xFF);
+            out[i*4+2] = uint8_t((c.state[i] >> 8) & 0xFF);
+            out[i*4+3] = uint8_t(c.state[i] & 0xFF);
+        }
+    }
+}
+// Compute hex SHA-256 over a byte buffer. Returns lowercase 64-char hex.
+static std::string sha256_hex(const uint8_t * data, size_t len) {
+    sha256_detail::SHA256 ctx;
+    sha256_detail::sha256_init(ctx);
+    sha256_detail::sha256_update(ctx, data, len);
+    uint8_t digest[32];
+    sha256_detail::sha256_final(ctx, digest);
+    static const char * hx = "0123456789abcdef";
+    std::string out(64, '0');
+    for (int i = 0; i < 32; i++) {
+        out[i*2]   = hx[(digest[i] >> 4) & 0xF];
+        out[i*2+1] = hx[digest[i] & 0xF];
+    }
+    return out;
+}
+static std::string sha256_hex(const std::string & s) {
+    return sha256_hex(reinterpret_cast<const uint8_t *>(s.data()), s.size());
+}
+// ISO 8601 UTC timestamp, e.g. "2026-06-20T18:42:01Z".
+static std::string iso_utc_now() {
+    using std::chrono::system_clock;
+    auto now = system_clock::now();
+    std::time_t t = system_clock::to_time_t(now);
+    std::tm tm{};
+#if defined(_WIN32)
+    gmtime_s(&tm, &t);
+#else
+    gmtime_r(&t, &tm);
+#endif
+    char buf[24];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return std::string(buf);
+}
 #include <vector>
 
 namespace {
@@ -68,6 +175,11 @@ struct TraceConfig {
     std::string backpressure   = "sample";
     std::string trace_layers;             // "0,1,2,6" or "0..78" or "" = all
     int         trace_max_tokens = 0;     // 0 = unlimited
+    // Reproducibility provenance (Story 9 AC): full argv joined as a string,
+    // and process start time in UTC ISO 8601. Set once in main() before the
+    // batch loop so every per-prompt sidecar carries the same provenance.
+    std::string full_command_line;
+    std::string started_at_iso;
     // chat-template flags that this example (LLAMA_EXAMPLE_COMMON) cannot parse and
     // that the tracer would ignore anyway (it tokenizes params.prompt verbatim).
     // Collected here so main() can log one honest notice.
@@ -647,8 +759,84 @@ PromptResult run_one_prompt(
         std::fprintf(mf, "  \"run_id\": \"%s\",\n", run_id.c_str());
         std::fprintf(mf, "  \"model\": \"%s\",\n", model_name.c_str());
         std::fprintf(mf, "  \"model_path\": \"%s\",\n", params.model.path.c_str());
-        std::fprintf(mf, "  \"command_line\": \"llama-trace-moe ...\",\n");
-        std::fprintf(mf, "  \"prompt_sha256\": \"(see run log)\",\n");
+        // Story 9 AC: real command_line (was "llama-trace-moe ..." placeholder).
+        // JSON-escape because argv can contain quotes/backslashes.
+        {
+            std::string cl_escaped;
+            json_escape_append(st.cfg.full_command_line, cl_escaped);
+            std::fprintf(mf, "  \"command_line\": \"%s\",\n", cl_escaped.c_str());
+        }
+        // Story 9 AC: real prompt_sha256 (was "(see run log)" placeholder).
+        // Hash the UTF-8 bytes of params.prompt — whether the prompt came from
+        // -p or was loaded into params.prompt from -f, this is the actual text
+        // the tokenizer saw (verbatim; the tracer does not apply a chat template).
+        {
+            std::string ph = sha256_hex(params.prompt);
+            std::fprintf(mf, "  \"prompt_sha256\": \"%s\",\n", ph.c_str());
+        }
+        // Story 9 AC: prompt_path when -f <file> was used (single-prompt mode).
+        // Batched mode (--trace-prompts) has no single prompt file; field stays null.
+        if (!params.prompt_file.empty()) {
+            std::string pf_escaped;
+            json_escape_append(params.prompt_file, pf_escaped);
+            std::fprintf(mf, "  \"prompt_path\": \"%s\",\n", pf_escaped.c_str());
+        }
+        // Story 9 AC: model_size_bytes + model_sha256_prefix (over first 1 MiB to
+        // stay cheap; hashing the full 26 GB shard would dominate a trace run).
+        // For multi-shard models (path matches *-of-N.gguf), also glob sibling
+        // shards and write model_total_size_bytes so the sidecar reports the
+        // full model size (per-shard size like 9.4 MiB looks misleadingly tiny
+        // for shard 1, which only carries the GGUF header).
+        {
+            std::error_code ec;
+            auto sz = std::filesystem::file_size(params.model.path, ec);
+            if (!ec) {
+                std::fprintf(mf, "  \"model_size_bytes\": %llu,\n", (unsigned long long) sz);
+            }
+            // Glob all sibling shards: same directory, same stem prefix before
+            // the final -NNNNN-of-NNNNN suffix. Robust to single-shard models
+            // (no glob match → skip field).
+            {
+                std::filesystem::path p(params.model.path);
+                std::string stem = p.stem().string();  // e.g. "GLM-5.2-mixed-00001-of-00009"
+                static const std::regex re_of("^(.*?)?-?\\d+-of-\\d+$");
+                std::smatch ms;
+                if (std::regex_match(stem, ms, re_of) && ms.size() == 2) {
+                    std::string base = ms[1].str();
+                    // strip trailing dash from base
+                    if (!base.empty() && base.back() == '-') base.pop_back();
+                    uint64_t total = 0; bool found_any = false;
+                    std::error_code ec2;
+                    for (auto & entry : std::filesystem::directory_iterator(p.parent_path(), ec2)) {
+                        if (ec2) break;
+                        if (entry.path().extension() != ".gguf") continue;
+                        std::string s = entry.path().stem().string();
+                        if (s.rfind(base, 0) != 0) continue;
+                        std::error_code ec3;
+                        auto esz = std::filesystem::file_size(entry, ec3);
+                        if (!ec3) { total += esz; found_any = true; }
+                    }
+                    if (found_any) {
+                        std::fprintf(mf, "  \"model_total_size_bytes\": %llu,\n", (unsigned long long) total);
+                    }
+                }
+            }
+            std::ifstream fh(params.model.path, std::ios::binary);
+            if (fh) {
+                std::vector<uint8_t> head(1u << 20);  // 1 MiB
+                fh.read(reinterpret_cast<char *>(head.data()), head.size());
+                auto got = fh.gcount();
+                if (got > 0) {
+                    std::string h = sha256_hex(head.data(), size_t(got));
+                    // 16 hex chars = 64-bit prefix; enough for provenance diffing.
+                    std::fprintf(mf, "  \"model_sha256_prefix\": \"%s\",\n", h.substr(0, 16).c_str());
+                }
+            }
+        }
+        // Story 9 AC: ISO timestamps (UTC). started_at captured once in main();
+        // ended_at computed here at meta-write time.
+        std::fprintf(mf, "  \"started_at\": \"%s\",\n", st.cfg.started_at_iso.c_str());
+        std::fprintf(mf, "  \"ended_at\": \"%s\",\n", iso_utc_now().c_str());
         std::fprintf(mf, "  \"task_label\": \"%s\",\n", ps.task_label.c_str());
         std::fprintf(mf, "  \"language\": \"%s\",\n", ps.language.c_str());
         std::fprintf(mf, "  \"script\": \"%s\",\n", ps.script.c_str());
@@ -717,6 +905,20 @@ int main(int argc, char ** argv) {
 
     common_params params;
     common_init();
+
+    // Reproducibility provenance (Story 9 AC): capture the full command line
+    // (rejoined from argv) and the process start time. These are written into
+    // every per-prompt .meta.json sidecar so a trace can be reproduced.
+    {
+        std::string cl;
+        for (int i = 0; i < argc_kept; i++) {
+            if (i > 0) cl += " ";
+            cl += argv_kept[i];
+        }
+        cfg.full_command_line = cl;
+        cfg.started_at_iso    = iso_utc_now();
+    }
+
     if (!common_params_parse(argc_kept, argv_kept, params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
     }
