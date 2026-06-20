@@ -277,6 +277,7 @@ struct server_slot {
     // stats
     size_t n_sent_text = 0; // number of sent text character
 
+    // TODO @ngxson : move all metrics to a sub-struct for clarity
     int64_t t_start_process_prompt;
     int64_t t_start_generation;
     int64_t t_print_last = 0;
@@ -2899,7 +2900,7 @@ private:
 
         // next, batch any pending prompts without exceeding n_batch
         if (params_base.cont_batching || batch.size() == 0) {
-            bool add_ok = true;
+            bool add_ok = true; // false means the batch is full, skip remaining slots
 
             iterate(slots, [&](server_slot & slot) {
                 if (!add_ok || batch.size() >= n_batch) {
@@ -3566,10 +3567,10 @@ private:
         return true;
     }
 
-    void post_decode(int32_t n_batch, int32_t off, llama_batch & batch_view) {
+    void post_decode(int32_t n_batch_tokens, int32_t off, llama_batch & batch_view) {
         // for checking if a given batch index is inside batch_view
         auto is_inside_view = [&](int32_t idx) {
-            return idx >= off && idx < off + n_batch;
+            return idx >= off && idx < off + n_batch_tokens;
         };
 
         // TODO @ngxson : it's tricky to make sub-batch compatible with common_sampler_sample_and_accept_n,
@@ -3577,7 +3578,7 @@ private:
         iterate(slots, [&](server_slot & slot) {
             for (auto & i : slot.spec_i_batch) {
                 if (!is_inside_view(i)) {
-                    throw std::runtime_error(string_format("speculative batch index %d is not inside the current sub-batch [%d, %d)", i, off, off + n_batch));
+                    throw std::runtime_error(string_format("speculative batch index %d is not inside the current sub-batch [%d, %d)", i, off, off + n_batch_tokens));
                 }
             }
         });
