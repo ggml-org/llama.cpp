@@ -190,7 +190,6 @@ static ggml_tensor * dsv4_with_zero_dep(ggml_context * ctx, ggml_tensor * t, ggm
 
 static constexpr int64_t DSV4_CSA_RATIO  = 4;
 static constexpr int64_t DSV4_HCA_RATIO  = 128;
-static constexpr int64_t DSV4_SWA_WINDOW = 128;
 
 static ggml_tensor * dsv4_hc_affine(
         ggml_context * ctx,
