@@ -2661,12 +2661,11 @@ private:
         int32_t off_next = 0;
         int32_t n_batch = llama_n_batch(ctx_tgt);
         for (int32_t off = 0; off < batch.size(); off = off_next) {
+            const int32_t n_tokens = std::min(n_batch, batch.size() - off);
             try {
                 // TODO @ngxson : maybe handle n_batch == 1 here instead of inside decode()
 
-                const int32_t n_tokens = std::min(n_batch, batch.size() - off);
-
-                batch_view = batch.get_view(off, n_batch);
+                batch_view = batch.get_view(off, n_tokens);
                 bool ok = decode(n_batch, off, batch_view);
 
                 if (ok) {
@@ -2686,7 +2685,7 @@ private:
             }
 
             try {
-                post_decode(n_batch, off, batch_view);
+                post_decode(n_tokens, off, batch_view);
             } catch (const std::exception & e) {
                 SRV_ERR("post_decode() failed: %s\n", e.what());
                 abort_all_slots("post_decode() failed: " + std::string(e.what()));
