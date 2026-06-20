@@ -1127,6 +1127,124 @@ static void transfer_activation_chunk_fp32_to_fp16_gathered(
     }
 }
 
+static void transfer_activation_chunk_fp32_to_fp16_gathered_flat(
+            __fp16 *restrict vtcm_dst,
+            const float *restrict src,
+            uint32_t start_row,
+            uint32_t n_rows,
+            uint32_t k_block,
+            const struct mmid_row_mapping *matrix_rows,
+            uint32_t cur_a,
+            uint32_t mapping_stride,
+            size_t nb12,
+            uint32_t cne1,
+            uint32_t k_valid) {
+    const uint32_t n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
+    const uint32_t n_rows_tiled  = (n_rows / HTP_MM_HMX_TILE_N_ROWS) * HTP_MM_HMX_TILE_N_ROWS;
+
+    uint32_t r = 0;
+
+    #pragma unroll(2)
+    for (r = 0; r < n_rows_tiled; r += 2) {
+        uint32_t r_idx0 = start_row + r + 0;
+        uint32_t r_idx1 = start_row + r + 1;
+        uint32_t r0 = r_idx0 / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
+        uint32_t r1 = r_idx0 % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
+
+        struct mmid_row_mapping mapping0 = matrix_rows[cur_a * mapping_stride + r_idx0];
+        struct mmid_row_mapping mapping1 = matrix_rows[cur_a * mapping_stride + r_idx1];
+
+        const float *row0_ptr = (const float *) ((const uint8_t *) src + mapping0.i2 * nb12);
+        const float *row1_ptr = (const float *) ((const uint8_t *) src + mapping1.i2 * nb12);
+
+        uint32_t c = 0;
+        for (; c + 32 <= k_valid; c += 32) {
+            HVX_Vector v0 = *(const HVX_Vector *)(row0_ptr + c);
+            HVX_Vector v1 = *(const HVX_Vector *)(row1_ptr + c);
+            HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
+
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+
+            HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
+            tile[r1 / 2]     = v_out;
+        }
+        if (c < k_block) {
+            HVX_Vector v0 = *(const HVX_Vector *)(row0_ptr + c);
+            HVX_Vector v1 = *(const HVX_Vector *)(row1_ptr + c);
+
+            uint32_t rem = k_valid - c;
+            HVX_VectorPred mask = Q6_Q_vsetq2_R(rem > 0 ? rem * sizeof(float) : 0);
+            v0 = Q6_V_vmux_QVV(mask, v0, Q6_V_vzero());
+            v1 = Q6_V_vmux_QVV(mask, v1, Q6_V_vzero());
+
+            HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
+
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+
+            HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
+            tile[r1 / 2]     = v_out;
+        }
+    }
+
+    for (; r < n_rows_padded; r += 2) {
+        uint32_t r_idx0 = start_row + r;
+        uint32_t r0 = r_idx0 / HTP_MM_HMX_TILE_N_ROWS;  // tile row index
+        uint32_t r1 = r_idx0 % HTP_MM_HMX_TILE_N_ROWS;  // intra-tile row idx
+
+        const bool row0_valid = (start_row + r + 0) < cne1;
+        const bool row1_valid = (start_row + r + 1) < cne1;
+
+        const float *row0_ptr = NULL;
+        const float *row1_ptr = NULL;
+
+        if (row0_valid) {
+            struct mmid_row_mapping mapping0 = matrix_rows[cur_a * mapping_stride + (start_row + r + 0)];
+            row0_ptr = (const float *) ((const uint8_t *) src + mapping0.i2 * nb12);
+        }
+        if (row1_valid) {
+            struct mmid_row_mapping mapping1 = matrix_rows[cur_a * mapping_stride + (start_row + r + 1)];
+            row1_ptr = (const float *) ((const uint8_t *) src + mapping1.i2 * nb12);
+        }
+
+        uint32_t c = 0;
+        for (; c + 32 <= k_valid; c += 32) {
+            HVX_Vector v0 = Q6_V_vzero();
+            HVX_Vector v1 = Q6_V_vzero();
+            if (row0_valid) v0 = *(const HVX_Vector *)(row0_ptr + c);
+            if (row1_valid) v1 = *(const HVX_Vector *)(row1_ptr + c);
+
+            HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
+
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+
+            HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
+            tile[r1 / 2]     = v_out;
+        }
+        if (c < k_block) {
+            HVX_Vector v0 = Q6_V_vzero();
+            HVX_Vector v1 = Q6_V_vzero();
+            if (row0_valid) v0 = *(const HVX_Vector *)(row0_ptr + c);
+            if (row1_valid) v1 = *(const HVX_Vector *)(row1_ptr + c);
+
+            uint32_t rem = k_valid - c;
+            HVX_VectorPred mask = Q6_Q_vsetq2_R(rem > 0 ? rem * sizeof(float) : 0);
+            v0 = Q6_V_vmux_QVV(mask, v0, Q6_V_vzero());
+            v1 = Q6_V_vmux_QVV(mask, v1, Q6_V_vzero());
+
+            HVX_Vector v_out = hvx_vec_f32_to_f16_shuff(v0, v1);
+
+            uint32_t c0       = c / HTP_MM_HMX_TILE_N_COLS;
+            uint32_t tile_idx = r0 * (k_block / HTP_MM_HMX_TILE_N_COLS) + c0;
+
+            HVX_Vector *tile = (HVX_Vector *) (vtcm_dst + tile_idx * HTP_MM_HMX_TILE_N_ELMS);
+            tile[r1 / 2]     = v_out;
+        }
+    }
+}
+
 static void transfer_output_chunk_fp16_to_fp32_scattered(
             float *restrict dst,
             const __fp16 *restrict vtcm_src,

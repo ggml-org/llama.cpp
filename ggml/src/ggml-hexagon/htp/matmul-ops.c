@@ -2187,8 +2187,6 @@ static void hvx_mm_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
     }
 }
 
-
-
 #define DEQUANTIZE_WORKER_LOOP_IMPL(SUFFIX)                                                     \
 static void dequantize_tiled_worker_loop_##SUFFIX(unsigned int n, unsigned int i, void *data) { \
     tiled_dequantize_state_t *state = (tiled_dequantize_state_t *)data;                         \
@@ -2292,6 +2290,23 @@ static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigne
             st->dst, st->src, start_row, n_rows, st->k_block,
             st->matrix_rows, st->cur_a, st->mapping_stride,
             st->ne11, &st->ne11_div, st->nb11, st->nb12, st->cne1, st->k_valid);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
+    }
+}
+
+static void transfer_activation_chunk_gathered_worker_flat_fn(unsigned int n, unsigned int i, void *data) {
+    activation_transfer_gathered_task_state_t *st = data;
+    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+    int chunk_idx = i;
+    int chunk_size = st->n_chunks_per_task;
+    int start_row = st->start_row + chunk_idx * chunk_size;
+    int n_rows = hex_smin(st->cne1 - start_row, chunk_size);
+    if (n_rows > 0) {
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
+        transfer_activation_chunk_fp32_to_fp16_gathered_flat(
+            st->dst, st->src, start_row, n_rows, st->k_block,
+            st->matrix_rows, st->cur_a, st->mapping_stride,
+            st->nb12, st->cne1, st->k_valid);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
     }
 }
@@ -2884,7 +2899,7 @@ static void transfer_activation_chunk_gathered_threaded(
         .cur_a             = cur_a,
         .mapping_stride    = mapping_stride,
         .ne11              = ne11,
-        .ne11_div          = init_fastdiv_values(ne11),
+        .ne11_div          = ne11 > 1 ? init_fastdiv_values(ne11) : (struct fastdiv_values){0, 0},
         .nb11              = nb11,
         .nb12              = nb12,
         .start_row         = start_row,
@@ -2893,10 +2908,13 @@ static void transfer_activation_chunk_gathered_threaded(
         .traces            = ctx->trace,
     };
 
+    worker_callback_t worker_fn = ne11 == 1 ? transfer_activation_chunk_gathered_worker_flat_fn :
+                                              transfer_activation_chunk_gathered_worker_fn;
+
     if (actual_threads <= 1) {
-        transfer_activation_chunk_gathered_worker_fn(1, 0, &state);
+        worker_fn(1, 0, &state);
     } else {
-        worker_pool_run_func(ctx->worker_pool, transfer_activation_chunk_gathered_worker_fn, &state, actual_threads);
+        worker_pool_run_func(ctx->worker_pool, worker_fn, &state, actual_threads);
     }
 }
 
