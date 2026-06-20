@@ -763,7 +763,7 @@ value call_statement::execute_impl(context & ctx) {
 
     value callee_val = call_expr->callee->execute(ctx);
     if (!is_val<value_func>(callee_val)) {
-        throw std::runtime_error("Callee expression is not a function: got " + callee_val->type());
+        throw std::runtime_error("Callee is not a function: got " + callee_val->type());
     }
     auto * callee_func = cast_val<value_func>(callee_val);
 
@@ -937,7 +937,7 @@ value call_expression::execute_impl(context & ctx) {
     // execute callee
     value callee_val = callee->execute(ctx);
     if (!is_val<value_func>(callee_val)) {
-        throw std::runtime_error("Callee expression is not a function: got " + callee_val->type());
+        throw std::runtime_error("Callee is not a function: got " + callee_val->type());
     }
     auto * callee_func = cast_val<value_func>(callee_val);
     JJ_DEBUG("Calling function '%s' with %zu arguments", callee_func->name.c_str(), args.count());
