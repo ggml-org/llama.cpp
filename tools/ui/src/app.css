@@ -192,3 +192,7 @@
 		scrollbar-width: none;
 	}
 }
+
+.mermaidTooltip {
+    display: none !important;
+}

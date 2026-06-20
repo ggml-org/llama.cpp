@@ -347,11 +347,18 @@
 	});
 
 	function handleMessagesReady() {
-		if (disableAutoScroll) return;
+		// Respect the user's explicit setting, but keep the one-time scroll on
+		// the messages-ready $effect even on mobile (where the auto-scroll
+		// controller is disabled). Unlike the per-token auto-scroll, this only
+		// fires when allConversationMessages changes (load, edit, regenerate, ...).
+		if (config().disableAutoScroll) return;
 
 		if (!autoScroll.userScrolledUp) {
 			requestAnimationFrame(() => {
-				autoScroll.scrollToBottom('instant');
+				chatScrollContainer?.scrollTo({
+					top: chatScrollContainer.scrollHeight,
+					behavior: 'instant'
+				});
 			});
 		}
 	}
@@ -392,7 +399,7 @@
 	<ServerLoadingSplash />
 {:else}
 	<div
-		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] px-2 md:px-4 md:py-0 pt-12 pb-56 md:pb-4"
+		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-full px-2 md:px-4 md:py-0 pt-12 pb-56 md:pb-4"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
@@ -415,8 +422,8 @@
 		<div
 			class={[
 				'pointer-events-none md:sticky fixed  mt-auto transition-all duration-200',
-				device.isStandalone ? 'bottom-7 right-5 left-5' : 'bottom-2 right-2 left-2',
-				isEmpty ? 'md:bottom-[calc(50dvh-7rem)]' : 'md:bottom-4 pt-24 md:pt-32'
+				device.isStandalone ? 'bottom-6 right-4 left-4' : device.isIOSSafari ? 'bottom-0 left-2 right-2' : 'bottom-2 right-2 left-2',
+				isEmpty ? 'md:bottom-[calc(50dvh-4rem)]' : 'md:bottom-4 pt-24 md:pt-32'
 			]}
 		>
 			<ChatScreenGreeting {isEmpty} />

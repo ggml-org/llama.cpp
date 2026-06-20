@@ -17,6 +17,7 @@
 	import { RouterService } from '$lib/services/router.service';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { TooltipSide } from '$lib/enums';
+	import { device } from '$lib/stores/device.svelte';
 
 	interface Props {
 		onSearchClick?: () => void;
@@ -114,9 +115,9 @@
 
 {#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.SEARCH))}
     <aside
-    	class="fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 md:h-[calc(100dvh-1.125rem)] max-h-[calc(100dvh-1.125rem)] pt-2 rounded-2xl z-10 flex flex-col justify-between transition-[width,padding] duration-200 ease-out {isStripExpanded
-    		? 'md:w-72 w-[calc(100dvw-1rem)] bg-muted/60 backdrop-blur-xl border-border shadow-md'
-    		: 'w-12'}"
+       	class="fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 {device.isStandalone ? 'h-[calc(100dvh-2rem)]' : device.isIOSDevice ? 'h-[calc(100dvh-0.5rem)]' : 'h-[calc(100dvh-1rem)]'} md:h-[calc(100dvh-1.125rem)] pt-2 rounded-3xl md:rounded-2xl z-10 flex flex-col justify-between md:transition-[width,padding] w-[calc(100dvw-1rem)]  duration-200 ease-out {isStripExpanded
+    		? 'md:w-72 bg-muted/60 backdrop-blur-xl border-border shadow-md'
+    		: 'md:w-12'} {isExpandedMode ? 'is-expanded' : ''}"
     >
     	<div class="px-2 flex items-center justify-between">
     		<div
@@ -203,6 +204,20 @@
     aside {
         @media (max-width: 768px) {
             --size: 1.125rem;
+        }
+    }
+
+    @media (max-width: 768px) {
+        aside.is-expanded::before {
+            content: '';
+            position: fixed;
+            top: -0.5rem;
+            bottom: -0.25rem;
+            left: -0.5rem;
+            right: -0.5rem;
+            z-index: -1;
+            background: var(--background);
+            backdrop-filter: blur(1rem);
         }
     }
 </style>
