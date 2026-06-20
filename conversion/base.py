@@ -1119,8 +1119,10 @@ class TextModel(ModelBase):
 
         rope_theta = self.find_hparam(["global_rope_theta", "rope_global_theta", "rope_theta_global", "rope_theta", "rotary_emb_base"], optional=True)
         local_rope_theta = self.find_hparam(["local_rope_theta", "rope_local_theta", "rope_theta_local", "swa_rope_theta", "rope_local_base_freq"], optional=True)
+        partial_rotary_factor = self.find_hparam(["partial_rotary_factor", "rope_pct", "rope_percent"], optional=True)
+        original_max_position_embeddings = self.find_hparam(["original_max_position_embeddings"], optional=True)
 
-        # Ensure "rope_theta" and "rope_type" is mirrored in rope_parameters
+        # Ensure global params are mirrored in rope_parameters
         if "full_attention" not in self.rope_parameters and "sliding_attention" not in self.rope_parameters:
             if local_rope_theta is not None:
                 self.rope_parameters["sliding_attention"] = {"rope_theta": local_rope_theta}
@@ -1128,6 +1130,10 @@ class TextModel(ModelBase):
                 self.rope_parameters["rope_theta"] = rope_theta
             if "rope_type" not in self.rope_parameters and (rope_type := self.rope_parameters.get("type")) is not None:
                 self.rope_parameters["rope_type"] = rope_type
+            if "partial_rotary_factor" not in self.rope_parameters and partial_rotary_factor is not None:
+                self.rope_parameters["partial_rotary_factor"] = partial_rotary_factor
+            if "original_max_position_embeddings" not in self.rope_parameters and original_max_position_embeddings is not None:
+                self.rope_parameters["original_max_position_embeddings"] = original_max_position_embeddings
 
     @classmethod
     def __init_subclass__(cls):

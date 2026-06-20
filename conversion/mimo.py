@@ -154,7 +154,7 @@ class MimoV2Model(TextModel):
         self.gguf_writer.add_expert_count(self.hparams["n_routed_experts"])
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
 
-        rope_dim = int(self.hparams["head_dim"] * self.hparams["partial_rotary_factor"])
+        rope_dim = int(self.hparams["head_dim"] * self.rope_parameters["partial_rotary_factor"])
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("layernorm_epsilon", 1e-5))

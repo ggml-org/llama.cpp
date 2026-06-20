@@ -24,7 +24,7 @@ class ExaoneModel(TextModel):
 
         assert (hparams["activation_function"] == "silu")
 
-        rotary_factor = self.find_hparam(["partial_rotary_factor", "rope_pct"], optional=True)
+        rotary_factor = self.rope_parameters.get("partial_rotary_factor")
         rotary_factor = rotary_factor if rotary_factor is not None else 1.0
         self.gguf_writer.add_rope_dimension_count(int(rotary_factor * (hparams["hidden_size"] // hparams["num_attention_heads"])))
 
@@ -39,7 +39,7 @@ class ExaoneModel(TextModel):
                 factor = rope_params.get("factor", 8.0)
                 low_freq_factor = rope_params.get("low_freq_factor", 1.0)
                 high_freq_factor = rope_params.get("high_freq_factor", 4.0)
-                old_context_len = self.hparams.get("original_max_position_embeddings", 8192)
+                old_context_len = rope_params.get("original_max_position_embeddings", 8192)
 
                 low_freq_wavelen = old_context_len / low_freq_factor
                 high_freq_wavelen = old_context_len / high_freq_factor
@@ -104,7 +104,7 @@ class Exaone4Model(TextModel):
                 factor = rope_params.get("factor", 16.0)
                 low_freq_factor = rope_params.get("low_freq_factor", 1.0)
                 high_freq_factor = rope_params.get("high_freq_factor", 4.0)
-                old_context_len = self.hparams.get("original_max_position_embeddings", 8192)
+                old_context_len = rope_params.get("original_max_position_embeddings", 8192)
 
                 low_freq_wavelen = old_context_len / low_freq_factor
                 high_freq_wavelen = old_context_len / high_freq_factor

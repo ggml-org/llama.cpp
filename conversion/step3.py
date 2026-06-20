@@ -314,7 +314,7 @@ class Step35Model(TextModel):
         factor = float(rope_params.get("factor", 8.0))
         low_freq_factor = float(rope_params.get("low_freq_factor", 1.0))
         high_freq_factor = float(rope_params.get("high_freq_factor", 4.0))
-        old_context_len = int(rope_params.get("original_max_position_embeddings", self.hparams.get("original_max_position_embeddings", 8192)))
+        old_context_len = int(rope_params.get("original_max_position_embeddings", 8192))
 
         low_freq_wavelen = old_context_len / low_freq_factor
         high_freq_wavelen = old_context_len / high_freq_factor

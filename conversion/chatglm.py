@@ -148,7 +148,7 @@ class ChatGLMModel(TextModel):
             rope_dim = self.hparams["attention_dim"]
         else:
             rope_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
-        self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.5)))
+        self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.rope_parameters.get("partial_rotary_factor", 0.5)))
         self.gguf_writer.add_add_bos_token(False)
         rope_freq = 10000
         if "rope_ratio" in self.hparams:
