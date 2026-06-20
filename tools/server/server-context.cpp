@@ -2629,9 +2629,11 @@ private:
     int64_t t_pre_decode  = 0;
     int64_t t_decode      = 0;
     int64_t t_post_decode = 0;
+    int64_t t_sampl       = 0;
     int64_t n_pre_decode  = 0;
     int64_t n_decode      = 0;
     int64_t n_post_decode = 0;
+    int64_t n_sampl       = 0;
 #define DEBUG_TIMINGS
 #ifdef DEBUG_TIMINGS
     struct scoped_timer {
@@ -2663,6 +2665,7 @@ private:
             SRV_INF("avg t_pre_decode  = %f ms\n", (double) t_pre_decode / n_pre_decode / 1000.0);
             SRV_INF("avg t_decode      = %f ms\n", (double) t_decode / n_decode / 1000.0);
             SRV_INF("avg t_post_decode = %f ms\n", (double) t_post_decode / n_post_decode / 1000.0);
+            SRV_INF("avg t_sampl       = %f ms\n", (double) t_sampl / n_sampl / 1000.0);
         }
 #endif
 
@@ -2710,6 +2713,9 @@ private:
 
                 batch_view = batch.get_view(off, n_tokens);
                 bool ok = decode(n_batch, off, batch_view);
+#ifdef DEBUG_TIMINGS
+                llama_synchronize(ctx_tgt);
+#endif
 
                 if (ok) {
                     // move the head of the batch forward with the number of tokens we just processed
@@ -3679,7 +3685,11 @@ private:
             // shifted according to the current sub-batch
             const int tok_idx = slot.i_batch - off;
 
-            llama_token id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+            llama_token id;
+            {
+                scoped_timer timer(t_sampl, n_sampl);
+                id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+            }
 
             slot.i_batch = -1;
 
