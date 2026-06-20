@@ -122,7 +122,7 @@ struct trie {
     }
 };
 
-// Aho-Corasick automaton over a trie of forbidden strings.
+// Aho-Corasick automaton
 struct aho_corasick {
     trie                t;
     std::vector<size_t> fail;      // failure links
@@ -170,7 +170,7 @@ struct aho_corasick {
     size_t num_states()          const { return t.nodes.size(); }
     bool   is_terminal(size_t s) const { return terminal[s]; }
 
-    // Goto: follow failure links until a transition on `ch` exists.
+    // follow failure links until a transition on `ch` exists.
     size_t next(size_t state, uint32_t ch) const {
         const auto & nodes = t.nodes;
         while (state && nodes[state].children.find(ch) == nodes[state].children.end()) {
@@ -1531,8 +1531,8 @@ static std::string gbnf_escape_char_class(uint32_t c) {
 }
 
 // GBNF grammar matching strings that contain no string in `strings` as a
-// substring. Emits the Aho-Corasick automaton as a grammar and returns the
-// start state rule name.
+// substring. Emits the complement of an Aho-Corasick automaton DFA and returns
+// the start state rule name.
 static std::string gbnf_excluding_grammar(const common_grammar_builder & builder,
                                           const std::string &            prefix,
                                           const std::vector<std::string> & strings) {
