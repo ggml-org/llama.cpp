@@ -722,6 +722,10 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     hparams_hca(model.hparams),
     hparams_lid(model.hparams) {
 
+    if (n_seq_max > 1) {
+        throw std::runtime_error("DSV4 KV cache currently supports only single-sequence decoding");
+    }
+
     const layer_filter_cb filter_raw = [&](int32_t il) {
         if (filter && !filter(il)) {
             return false;

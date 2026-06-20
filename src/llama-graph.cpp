@@ -828,15 +828,7 @@ bool llm_graph_input_dsv4::can_reuse(const llm_graph_params & params) {
 
     bool res = true;
 
-    if (inp_raw->self_k_idxs && inp_raw->self_k_idxs->buffer) {
-        res &= inp_raw->self_k_idxs->ne[0] == params.ubatch.n_tokens;
-        res &= can_reuse_kq_mask(inp_raw->self_kq_mask, mctx->get_raw()->get_base(), params.ubatch, params.cparams);
-    }
-
-    if (inp_raw->self_k_idxs_swa && inp_raw->self_k_idxs_swa->buffer) {
-        res &= inp_raw->self_k_idxs_swa->ne[0] == params.ubatch.n_tokens;
-        res &= can_reuse_kq_mask(inp_raw->self_kq_mask_swa, mctx->get_raw()->get_swa(), params.ubatch, params.cparams);
-    }
+    res &= inp_raw->can_reuse(params);
 
     res &= dsv4_can_reuse_comp_input(inp_csa, mctx->get_csa_plan(params.ubatch), params.ubatch.n_tokens);
     res &= dsv4_can_reuse_comp_input(inp_hca, mctx->get_hca_plan(params.ubatch), params.ubatch.n_tokens);
