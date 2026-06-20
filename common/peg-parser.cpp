@@ -6,11 +6,13 @@
 #include "unicode.h"
 
 #include <algorithm>
+#include <deque>
 #include <initializer_list>
 #include <map>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <regex>
+#include <set>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -88,40 +90,7 @@ struct trie {
         return match_result{match_result::NO_MATCH};
     }
 
-    struct prefix_and_next {
-        std::vector<uint32_t> prefix;
-        std::vector<uint32_t> next_chars;
-    };
-
-    std::vector<prefix_and_next> collect_prefix_and_next() {
-        std::vector<uint32_t>        prefix;
-        std::vector<prefix_and_next> result;
-        collect_prefix_and_next(0, prefix, result);
-        return result;
-    }
-
   private:
-    void collect_prefix_and_next(size_t index, std::vector<uint32_t> & prefix, std::vector<prefix_and_next> & out) {
-        if (!nodes[index].is_word) {
-            if (!nodes[index].children.empty()) {
-                std::vector<uint32_t> chars;
-                chars.reserve(nodes[index].children.size());
-                for (const auto & p : nodes[index].children) {
-                    chars.push_back(p.first);
-                }
-                out.emplace_back(prefix_and_next{prefix, chars});
-            }
-        }
-
-        for (const auto & p : nodes[index].children) {
-            uint32_t ch = p.first;
-            auto child = p.second;
-            prefix.push_back(ch);
-            collect_prefix_and_next(child, prefix, out);
-            prefix.pop_back();
-        }
-    }
-
     size_t create_node() {
         size_t index = nodes.size();
         nodes.emplace_back();
@@ -150,6 +119,65 @@ struct trie {
             }
         }
         nodes[current].is_word = true;
+    }
+};
+
+// Aho-Corasick automaton over a trie of forbidden strings.
+struct aho_corasick {
+    trie                t;
+    std::vector<size_t> fail;      // failure links
+    std::vector<size_t> order;     // states in BFS order
+    std::vector<bool>   terminal;  // match states (directly or via a suffix link)
+    std::set<uint32_t>  alphabet;  // every character with a transition
+
+    aho_corasick(const std::vector<std::string> & strings) : t(strings) {
+        const auto & nodes = t.nodes;
+        const size_t n = nodes.size();
+
+        fail.assign(n, 0);
+        order.reserve(n);
+
+        std::deque<size_t> queue{ 0 };
+        while (!queue.empty()) {
+            size_t u = queue.front();
+            queue.pop_front();
+            order.push_back(u);
+            for (const auto & [ch, v] : nodes[u].children) {
+                if (u != 0) {
+                    size_t f = fail[u];
+                    while (f && nodes[f].children.find(ch) == nodes[f].children.end()) {
+                        f = fail[f];
+                    }
+                    auto it = nodes[f].children.find(ch);
+                    fail[v] = (it != nodes[f].children.end() && it->second != v) ? it->second : 0;
+                }
+                queue.push_back(v);
+            }
+        }
+
+        terminal.assign(n, false);
+        for (size_t u : order) {
+            terminal[u] = nodes[u].is_word || (u != 0 && terminal[fail[u]]);
+        }
+
+        for (const auto & node : nodes) {
+            for (const auto & [ch, v] : node.children) {
+                alphabet.insert(ch);
+            }
+        }
+    }
+
+    size_t num_states()          const { return t.nodes.size(); }
+    bool   is_terminal(size_t s) const { return terminal[s]; }
+
+    // Goto: follow failure links until a transition on `ch` exists.
+    size_t next(size_t state, uint32_t ch) const {
+        const auto & nodes = t.nodes;
+        while (state && nodes[state].children.find(ch) == nodes[state].children.end()) {
+            state = fail[state];
+        }
+        auto it = nodes[state].children.find(ch);
+        return it != nodes[state].children.end() ? it->second : 0;
     }
 };
 
@@ -1502,53 +1530,59 @@ static std::string gbnf_escape_char_class(uint32_t c) {
     return std::string(buf);
 }
 
-static std::string gbnf_excluding_pattern(const std::vector<std::string> & strings) {
-    trie matcher(strings);
-    auto pieces = matcher.collect_prefix_and_next();
+// GBNF grammar matching strings that contain no string in `strings` as a
+// substring. Emits the Aho-Corasick automaton as a grammar and returns the
+// start state rule name.
+static std::string gbnf_excluding_grammar(const common_grammar_builder & builder,
+                                          const std::string &            prefix,
+                                          const std::vector<std::string> & strings) {
+    aho_corasick ac(strings);
 
-    std::string pattern;
-    std::string trailing;  // optional proper-prefix of a delimiter, allowed only at the very end
-    for (size_t i = 0; i < pieces.size(); ++i) {
-        if (i > 0) {
-            pattern += " | ";
-        }
+    auto state_name = [&](size_t s) {
+        return s == 0 ? prefix : prefix + "-" + std::to_string(s);
+    };
 
-        const auto & pre = pieces[i].prefix;
-        const auto & chars = pieces[i].next_chars;
-
-        std::string cls;
-        cls.reserve(chars.size());
+    auto char_class = [](const std::vector<uint32_t> & chars, bool negate) {
+        std::string s = negate ? "[^" : "[";
         for (uint32_t ch : chars) {
-            cls += gbnf_escape_char_class(ch);
+            s += gbnf_escape_char_class(ch);
+        }
+        return s + "]";
+    };
+
+    for (size_t q = 0; q < ac.num_states(); q++) {
+        if (ac.is_terminal(q)) {
+            continue; // match states are dropped
         }
 
-        if (!pre.empty()) {
-            std::string pre_literal = gbnf_format_literal(common_unicode_cpts_to_utf8(pre));
-            pattern += pre_literal + " [^" + cls + "]";
-            // Each interior alternative consumes a delimiter-prefix plus a disambiguating
-            // char, so the repetition alone cannot match a value that *ends* on a proper
-            // prefix of a delimiter (e.g. a trailing "\n" when the delimiter is
-            // "\n</parameter>\n"). The runtime until() (greedy first-match) accepts such
-            // values, so without this the grammar would reject input the parser accepts.
-            // Allow the value to terminate on any proper prefix as an optional tail.
-            // This makes the grammar a slight superset of the runtime language (a value
-            // may end on the longest prefix, which greedy first-match would not itself
-            // produce); harmless for constrained generation, which only needs to admit
-            // every runtime-valid string.
-            if (!trailing.empty()) {
-                trailing += " | ";
+        std::map<size_t, std::vector<uint32_t>> buckets;
+        std::vector<uint32_t> excluded;
+        for (uint32_t c : ac.alphabet) {
+            size_t d = ac.next(q, c);
+            if (ac.is_terminal(d)) {
+                excluded.push_back(c); // completes a forbidden string -> omit
+            } else if (d != 0) {
+                buckets[d].push_back(c); // specific non-root destination
+                excluded.push_back(c);
             }
-            trailing += pre_literal;
-        } else {
-            pattern += "[^" + cls + "]";
         }
+
+        std::string rhs = "|"; // every state is accepting
+        for (const auto & [d, chars] : buckets) {
+            rhs += " " + char_class(chars, false) + " " + state_name(d) + " |";
+        }
+        rhs += " " + char_class(excluded, true) + " " + state_name(0);
+
+        builder.add_rule(state_name(q), rhs);
     }
 
-    std::string result = "(" + pattern + ")*";
-    if (!trailing.empty()) {
-        result += " (" + trailing + ")?";
+    // An empty delimiter makes the start state terminal. Emit an entry rule
+    // that matches nothing so the returned reference stays valid.
+    if (ac.is_terminal(0)) {
+        builder.add_rule(prefix, "|");
     }
-    return result;
+
+    return state_name(0);
 }
 
 static std::unordered_set<std::string> collect_reachable_rules(
@@ -1765,7 +1799,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 if (p.delimiters.empty()) {
                     return ".*";
                 }
-                return gbnf_excluding_pattern(p.delimiters);
+                return gbnf_excluding_grammar(builder, "until-" + std::to_string(id), p.delimiters);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 if (schema_delegates(p)) {
                     return to_gbnf(p.child);
