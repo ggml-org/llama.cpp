@@ -17,7 +17,8 @@ import {
 	DEFAULT_CLIENT_VERSION,
 	DEFAULT_IMAGE_MIME_TYPE,
 	CORS_PROXY_HEADER_PREFIX,
-	MCP_PARTIAL_REDACT_HEADERS
+	MCP_PARTIAL_REDACT_HEADERS,
+	CORS_PROXY_ENDPOINT
 } from '$lib/constants';
 import {
 	MCPConnectionPhase,
@@ -251,6 +252,36 @@ export class MCPService {
 
 		return {
 			fetch: async (input, init) => {
+				if (useProxy && typeof window !== 'undefined') {
+					let requestUrlStr = '';
+					if (typeof input === 'string') {
+						requestUrlStr = input;
+					} else if (input instanceof URL) {
+						requestUrlStr = input.href;
+					}
+
+					if (requestUrlStr) {
+						const parsedRequestUrl = new URL(requestUrlStr, window.location.origin);
+						if (
+							parsedRequestUrl.origin === window.location.origin &&
+							!parsedRequestUrl.pathname.includes(CORS_PROXY_ENDPOINT)
+						) {
+							const originalConfigUrl = new URL(config.url);
+							const realTargetUrl = new URL(
+								parsedRequestUrl.pathname + parsedRequestUrl.search,
+								originalConfigUrl.origin
+							);
+							const proxiedUrl = buildProxiedUrl(realTargetUrl.href);
+
+							if (typeof input === 'string') {
+								input = proxiedUrl.href;
+							} else if (input instanceof URL) {
+								input = proxiedUrl;
+							}
+						}
+					}
+				}
+
 				const startedAt = performance.now();
 				const requestHeaders = new Headers(baseInit.headers);
 
@@ -411,6 +442,32 @@ export class MCPService {
 				transport: new WebSocketClientTransport(url),
 				type: MCPTransportType.WEBSOCKET,
 				stopPhaseLogging: () => {}
+			};
+		}
+
+		if (config.transport === MCPTransportType.SSE) {
+			const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
+			const { fetch: diagnosticFetch, disable: stopPhaseLogging } = this.createDiagnosticFetch(
+				serverName,
+				config,
+				requestInit,
+				url,
+				useProxy,
+				onLog
+			);
+
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+				console.log(`[MCPService] Creating SSE transport for ${url.href}`);
+			}
+
+			return {
+				transport: new SSEClientTransport(url, {
+					requestInit,
+					fetch: diagnosticFetch,
+					eventSourceInit: { fetch: diagnosticFetch }
+				}),
+				type: MCPTransportType.SSE,
+				stopPhaseLogging
 			};
 		}
 

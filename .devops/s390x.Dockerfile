@@ -4,8 +4,22 @@ ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
 
+ARG NODE_VERSION=24
+
+FROM docker.io/node:$NODE_VERSION AS web
+
+ARG APP_VERSION
+
+WORKDIR /app/tools/ui
+
+COPY tools/ui/package.json tools/ui/package-lock.json ./
+RUN npm ci
+
+COPY tools/ui/ ./
+RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
+
 ### Build Llama.cpp stage
-FROM gcc:${GCC_VERSION} AS build
+FROM docker.io/gcc:${GCC_VERSION} AS build
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -19,6 +33,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 COPY . .
+
+COPY --from=web /app/tools/ui/dist tools/ui/dist
 
 RUN --mount=type=cache,target=/root/.ccache \
     --mount=type=cache,target=/app/build \
@@ -55,7 +71,7 @@ COPY --from=build /opt/llama.cpp/conversion /llama.cpp/conversion
 
 
 ### Base image
-FROM ubuntu:${UBUNTU_VERSION} AS base
+FROM docker.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
