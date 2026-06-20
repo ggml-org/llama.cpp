@@ -11,6 +11,8 @@
 #include <cstring>
 #include <climits>
 #include <algorithm>
+#include <ctime>
+#include <string>
 
 namespace fs = std::filesystem;
 
@@ -710,16 +712,34 @@ struct server_tool_get_datetime : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Returns the current date and time"},
+                {"description", "Returns current date and time as structured JSON with ISO-8601 format, timezone, and weekday"},
             }},
         };
     }
 
     json invoke(json) override {
-        auto now = std::chrono::system_clock::now();
-        auto time = std::chrono::system_clock::to_time_t(now);
+        using namespace std::chrono;
 
-        return {{"result", std::ctime(&time)}};
+        auto t = system_clock::to_time_t(system_clock::now());
+        tm local{};
+
+        #ifdef _WIN32
+            localtime_s(&local, &t);
+        #else
+            localtime_r(&t, &local);
+        #endif 
+
+
+        char iso[64], wday[32], zone[64];
+        strftime(iso,  sizeof(iso),  "%Y-%m-%dT%H:%M:%S%z", &local);
+        strftime(wday, sizeof(wday), "%A", &local);
+        strftime(zone, sizeof(zone), "%Z", &local);
+
+        std::string s = iso;
+        if (s.size() >= 5 && (s[s.size()-5] == '+' || s[s.size()-5] == '-'))
+            s.insert(s.end()-2, ':');
+
+        return {{"datetime_iso", s}, {"timezone", zone}, {"weekday", wday}};
     }
 };
 
