@@ -1,13 +1,16 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { Search } from '@lucide/svelte';
 	import { ActionIcon, KeyboardShortcutInfo, SearchInput } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		ICON_STRIP_TRANSITION_DURATION,
 		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
+		ROUTES,
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { TooltipSide } from '$lib/enums';
 	import { fade } from 'svelte/transition';
 	import { circIn } from 'svelte/easing';
@@ -97,12 +100,14 @@
 	<div class="{className} flex flex-col gap-3 mt-2 md:mt-0 md:gap-1">
 		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
+			{@const isSearchOnMobile = item.icon === Search && isMobile.current}
+			{@const itemHref = isSearchOnMobile ? ROUTES.SEARCH : item.route}
 			{@const itemOnClick = item.route
 				? () => {
 						onNewChat?.();
 						goto(item.route!);
 					}
-					: onSearchClick}
+				: onSearchClick}
 			{@const itemTransition = {
 				duration: ICON_STRIP_TRANSITION_DURATION,
 				delay: !initialized
@@ -117,7 +122,7 @@
 						class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isActive
 							? 'bg-accent text-accent-foreground'
 							: ''}"
-						href={item.route}
+						href={itemHref}
 						onclick={itemOnClick}
 						variant="ghost"
 						size="default"
@@ -151,7 +156,7 @@
 						onNewChat?.();
 						goto(item.route!);
 					}
-					: onSearchClick}
+				: onSearchClick}
 			{@const itemTransition = {
 				duration: ICON_STRIP_TRANSITION_DURATION,
 				delay: !initialized
