@@ -276,12 +276,12 @@
 
 		const extras = result?.extras;
 
-		// Enable autoscroll for user-initiated message sending
+		// // Enable autoscroll for user-initiated message sending
 		if (!isMobile.current) {
 			autoScroll.enable();
 		}
 
-		autoScroll.scrollToBottom();
+		autoScroll.scrollToBottom(); // doesn't work so i need to use the function below
 
 		requestAnimationFrame(() => {
 			chatScrollContainer?.scrollTo({
@@ -345,29 +345,29 @@
 		}
 	}
 
-	function handleMessagesReady() {
-		if (config().disableAutoScroll) return;
+	// function handleMessagesReady() {
+	// 	if (config().disableAutoScroll) return;
 
-		if (!autoScroll.userScrolledUp && !isMobile.current) {
-			requestAnimationFrame(() => {
-				chatScrollContainer?.scrollTo({
-					top: chatScrollContainer.scrollHeight,
-					behavior: 'instant'
-				});
-			});
-		}
-	}
+	// 	if (!autoScroll.userScrolledUp && !isMobile.current) {
+	// 		requestAnimationFrame(() => {
+	// 			chatScrollContainer?.scrollTo({
+	// 				top: chatScrollContainer.scrollHeight,
+	// 				behavior: 'instant'
+	// 			});
+	// 		});
+	// 	}
+	// }
 
 	onMount(() => {
 		if (!isMobile.current) {
 			autoScroll.startObserving();
 		}
 
-		if (isMobile.current) {
-			setTimeout(() => {
-				window.scrollTo({ top: document.body.scrollHeight });
-			}, 10);
-		}
+		// if (isMobile.current) {
+		// 	setTimeout(() => {
+		// 		window.scrollTo({ top: document.body.scrollHeight });
+		// 	}, 10);
+		// }
 
 		if (!disableAutoScroll) {
 			autoScroll.enable();
@@ -380,19 +380,19 @@
 		}
 	});
 
-	afterNavigate(() => {
-		if (!disableAutoScroll && !isMobile.current) {
-			autoScroll.enable();
-		}
+	// afterNavigate(() => {
+	// 	if (!disableAutoScroll && !isMobile.current) {
+	// 		autoScroll.enable();
+	// 	}
 
-		if (isMobile.current) {
-			setTimeout(() => {
-				window.scrollTo({ top: document.body.scrollHeight });
-			}, 10);
-		}
-	});
+	// 	if (isMobile.current) {
+	// 		setTimeout(() => {
+	// 			window.scrollTo({ top: document.body.scrollHeight });
+	// 		}, 10);
+	// 	}
+	// });
 
-	onDestroy(() => autoScroll.destroy());
+	// onDestroy(() => autoScroll.destroy());
 
 	$effect(() => {
 		chatScrollContainer = document.documentElement;
@@ -402,18 +402,18 @@
 		}
 	});
 
-	$effect(() => {
-		if (!isMobile.current) {
-			autoScroll.setDisabled(disableAutoScroll);
-		}
-	});
+	// $effect(() => {
+	// 	if (!isMobile.current) {
+	// 		autoScroll.setDisabled(disableAutoScroll);
+	// 	}
+	// });
 </script>
 
 {#if isDragOver}
 	<ChatScreenDragOverlay />
 {/if}
 
-<svelte:window onkeydown={handleKeydown} onscroll={handleScroll} />
+<svelte:window onkeydown={handleKeydown} />
 
 {#if isServerLoading}
 	<ServerLoadingSplash />
@@ -427,16 +427,7 @@
 		role="main"
 	>
 		{#if !isEmpty}
-			<ChatMessages
-				messages={activeMessages()}
-				onMessagesReady={handleMessagesReady}
-				onUserAction={() => {
-					autoScroll.enable();
-					if (!autoScroll.userScrolledUp) {
-						autoScroll.scrollToBottom();
-					}
-				}}
-			/>
+			<ChatMessages messages={activeMessages()} />
 		{/if}
 
 		<div
