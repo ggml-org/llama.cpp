@@ -847,10 +847,6 @@ static void init_quantize_state_counters(quantize_state_impl & qs, std::vector<t
             qs.has_tied_embeddings = false;
         }
     }
-    // PATCHED (llama.cpp issue #24379): use n_layer_all so the MTP/NextN
-    // block (layer index == n_layer, e.g. blk.78 for GLM-5.2) is in range
-    // during quantization. Otherwise quantize errors with
-    //   "Bad layer N for tensor blk.N.ffn_*_shexp.weight. Must be in [0, N)"
     qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)qs.model.hparams.n_layer_all;
 }
 
