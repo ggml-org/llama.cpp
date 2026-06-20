@@ -38,6 +38,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { beforeNavigate, afterNavigate } from '$app/navigation';
 	import { onDestroy, onMount } from 'svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 
@@ -71,6 +72,8 @@
 	let emptyFileNames = $state<string[]>([]);
 
 	let initialMessage = $state('');
+
+	let isNavigating = false;
 
 	let isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
@@ -251,9 +254,25 @@
 		await chatStore.addSystemPrompt();
 	}
 
-	function handleScroll() {
+	function handleScroll(event: UIEvent) {
+		// Ignore scroll events caused by navigation layout changes or by our own
+		// programmatic scrolls so they don't accidentally disable auto-scroll.
+		if (isNavigating || !event.isTrusted) return;
+
 		autoScroll.handleScroll();
 	}
+
+	beforeNavigate(() => {
+		isNavigating = true;
+		autoScroll.resetScrollState();
+	});
+
+	afterNavigate(() => {
+		setTimeout(() => {
+			isNavigating = false;
+			autoScroll.resetScrollState();
+		}, 10);
+	});
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
 		const plainFiles = files ? $state.snapshot(files) : undefined;
@@ -368,22 +387,21 @@
 
 	$effect(() => {
 		chatScrollContainer = document.documentElement;
-  		autoScroll.setContainer(chatScrollContainer);
+		autoScroll.setContainer(chatScrollContainer);
 	});
 
-	// $effect(() => {
-	// 	if (!isMobile.current) {
-	// 		autoScroll.setDisabled(disableAutoScroll);
-	// 	}
-	// });
+	$effect(() => {
+		if (!isMobile.current) {
+			autoScroll.setDisabled(disableAutoScroll);
+		}
+	});
 </script>
 
 {#if isDragOver}
 	<ChatScreenDragOverlay />
 {/if}
 
-<svelte:window onkeydown={handleKeydown} />
-<!-- <svelte:window onkeydown={handleKeydown} onscroll={handleScroll} /> -->
+<svelte:window onkeydown={handleKeydown} onscroll={handleScroll} />
 
 {#if isServerLoading}
 	<ServerLoadingSplash />
