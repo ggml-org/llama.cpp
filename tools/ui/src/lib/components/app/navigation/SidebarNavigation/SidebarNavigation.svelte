@@ -103,7 +103,7 @@
 <svelte:window onkeydown={handleKeydown} bind:innerWidth />
 
 <aside
-	class="fixed md:sticky top-2 ml-2 md:mt-2 md:h-[calc(100dvh-1.125rem)] py-2 rounded-2xl z-10 flex flex-col justify-between transition-[width,padding] duration-200 ease-out {isStripExpanded
+	class="fixed md:sticky top-2 ml-2 md:mt-2 md:h-[calc(100dvh-1.125rem)] max-h-[calc(100dvh-1.125rem)] py-2 rounded-2xl z-10 flex flex-col justify-between transition-[width,padding] duration-200 ease-out {isStripExpanded
 		? 'md:w-72 w-[calc(100dvw-1rem)] bg-muted/60 backdrop-blur-xl border-border shadow-md'
 		: 'w-12'}"
 >
