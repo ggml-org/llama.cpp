@@ -1342,7 +1342,7 @@ common_peg_parser common_peg_parser_builder::json_object() {
 common_peg_parser common_peg_parser_builder::json_array() {
     return rule("json-array", [this]() {
         auto ws = space();
-        auto elements = sequence({json(), zero_or_more(sequence({literal(","), ws, json()}))});
+        auto elements = sequence({json(), zero_or_more(sequence({ws, literal(","), ws, json()}))});
         return sequence({
             literal("["),
             ws,
