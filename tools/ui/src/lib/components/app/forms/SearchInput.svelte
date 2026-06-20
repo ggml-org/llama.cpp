@@ -41,7 +41,7 @@
 		if (value) {
 			value = '';
 			onInput?.('');
-			ref?.focus();
+			ref?.focus({ preventScroll: true });
 		} else {
 			onClose?.();
 		}

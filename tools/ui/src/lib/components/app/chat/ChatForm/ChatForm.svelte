@@ -510,7 +510,7 @@
 		/>
 
 		<div
-			class="flex-column relative min-h-[48px] items-center rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:!py-3"
+			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
 			onpaste={handlePaste}
 		>
 			<ChatFormTextarea

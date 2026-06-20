@@ -231,7 +231,7 @@
 			editedContent = message.content;
 		}
 
-		textareaElement?.focus();
+		textareaElement?.focus({ preventScroll: true });
 		editedExtras = message.extra ? [...message.extra] : [];
 		editedUploadedFiles = [];
 

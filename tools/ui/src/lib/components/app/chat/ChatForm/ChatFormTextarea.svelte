@@ -37,7 +37,7 @@
 	}
 
 	export function focus() {
-		textareaElement?.focus();
+		textareaElement?.focus({ preventScroll: true });
 	}
 
 	export function resetHeight() {

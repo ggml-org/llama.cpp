@@ -19,6 +19,8 @@
 	import { ErrorDialogType } from '$lib/enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
+	import { device } from '$lib/stores/device.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import {
 		chatStore,
 		errorDialog,
@@ -38,14 +40,14 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 
 	let { showCenteredEmpty = false } = $props();
 
 	const autoScroll = createAutoScrollController();
 
-	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
+	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
 	let chatScrollContainer: HTMLElement | undefined = $state();
 	let dragCounter = $state(0);
 	let isDragOver = $state(false);
@@ -368,6 +370,8 @@
 		}
 	});
 
+	onDestroy(() => autoScroll.destroy());
+
 	$effect(() => {
 		chatScrollContainer = document.documentElement;
 		autoScroll.setContainer(chatScrollContainer);
@@ -388,7 +392,7 @@
 	<ServerLoadingSplash />
 {:else}
 	<div
-		class="flex grow flex-col chat-screen min-h-[calc(100dvh-1rem)] px-4 md:py-0 pt-12 pb-56 md:pb-24"
+		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] px-2 md:px-4 md:py-0 pt-12 pb-56 md:pb-4"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
@@ -410,8 +414,9 @@
 
 		<div
 			class={[
-				'pointer-events-none md:sticky fixed right-4 left-4 mt-auto transition-all duration-200',
-				isEmpty ? 'md:bottom-[calc(50dvh-7rem)] bottom-4' : 'bottom-4 pt-24 md:pt-32'
+				'pointer-events-none md:sticky fixed  mt-auto transition-all duration-200',
+				device.isStandalone ? 'bottom-7 right-5 left-5' : 'bottom-2 right-2 left-2',
+				isEmpty ? 'md:bottom-[calc(50dvh-7rem)]' : 'md:bottom-4 pt-24 md:pt-32'
 			]}
 		>
 			<ChatScreenGreeting {isEmpty} />

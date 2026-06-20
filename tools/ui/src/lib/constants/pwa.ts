@@ -7,7 +7,8 @@ import { APP_NAME } from './app';
 
 export const MEDIA_QUERIES = {
 	PREFERS_DARK: '(prefers-color-scheme: dark)',
-	PREFERS_LIGHT: '(prefers-color-scheme: light)'
+	PREFERS_LIGHT: '(prefers-color-scheme: light)',
+	DISPLAY_MODE_STANDALONE: '(display-mode: standalone)'
 } as const;
 
 export const THEME_COLORS = {

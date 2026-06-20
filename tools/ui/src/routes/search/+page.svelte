@@ -74,6 +74,7 @@
 
 <div class="fixed top-0 z-10 left-0 right-0 p-2">
 	<SearchInput
+        autofocus
 		bind:value={searchQuery}
 		bind:ref={searchInputRef}
 		onClose={handleBack}
