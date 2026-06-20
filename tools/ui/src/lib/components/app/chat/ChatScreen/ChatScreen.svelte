@@ -351,7 +351,7 @@
 	}
 
 	onMount(() => {
-		if (isMobile.current) {
+		if (!isMobile.current) {
 			autoScroll.startObserving();
 		}
 
