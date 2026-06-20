@@ -1475,6 +1475,96 @@ static bool is_autoload(const common_params & params, const server_http_req & re
 }
 
 void server_models_routes::init_routes() {
+    this->get_router_metrics = [this](const server_http_req & req) {
+        // If a specific model is requested, preserve old behavior (proxy to it).
+        if (!req.get_param("model").empty()) {
+            return proxy_get(req);
+        }
+
+        // Otherwise: fan out over ALL models. Router-level lifecycle metrics for
+        // every model (even sleeping); child token/cache/draft metrics fetched
+        // only for RUNNING models so we never wake a sleeping one.
+        const auto all = models.get_all_meta();
+
+        // Router-level metrics (we control help/type once).
+        std::stringstream out;
+        out << "# HELP llamacpp_router:model_up 1 if the model instance is running (loaded/loading/sleeping).\n";
+        out << "# TYPE llamacpp_router:model_up gauge\n";
+        for (const auto & m : all) {
+            out << "llamacpp_router:model_up{model=\"" << m.name << "\"} " << (m.is_running() ? 1 : 0) << "\n";
+        }
+        out << "# HELP llamacpp_router:model_loaded 1 if the model is fully loaded (in VRAM, ready).\n";
+        out << "# TYPE llamacpp_router:model_loaded gauge\n";
+        for (const auto & m : all) {
+            out << "llamacpp_router:model_loaded{model=\"" << m.name << "\"} " << (m.is_ready() ? 1 : 0) << "\n";
+        }
+        out << "# HELP llamacpp_router:model_last_used_seconds Unix time the model was last routed a request.\n";
+        out << "# TYPE llamacpp_router:model_last_used_seconds gauge\n";
+        for (const auto & m : all) {
+            if (m.last_used > 0) {
+                out << "llamacpp_router:model_last_used_seconds{model=\"" << m.name << "\"} "
+                    << (double) m.last_used / 1.e3 << "\n";
+            }
+        }
+
+        // Child token/cache/draft metrics, fanned out and re-labelled by model.
+        // Dedup HELP/TYPE across models (emit once per metric name, first seen).
+        std::set<std::string> seen_meta;
+        for (const auto & m : all) {
+            if (!m.is_ready()) {
+                continue; // only scrape models already in VRAM; never wake a sleeper
+            }
+            httplib::Client cli(CHILD_ADDR, m.port);
+            cli.set_connection_timeout(2, 0);
+            cli.set_read_timeout(3, 0);
+            auto r = cli.Get("/metrics");
+            if (!r || r->status != 200) {
+                continue;
+            }
+            std::stringstream body(r->body);
+            std::string line;
+            while (std::getline(body, line)) {
+                if (line.empty()) {
+                    continue;
+                }
+                if (line.rfind("# HELP ", 0) == 0 || line.rfind("# TYPE ", 0) == 0) {
+                    // "# HELP <name> ..." -> dedup on the type+name key
+                    std::string key = line.substr(0, line.find(' ', 7));
+                    // include HELP/TYPE discriminator so both survive
+                    std::string dedup = line.substr(0, 6) + key;
+                    if (seen_meta.insert(dedup).second) {
+                        out << line << "\n";
+                    }
+                    continue;
+                }
+                if (line[0] == '#') {
+                    continue;
+                }
+                // data line: "name VALUE" or "name{labels} VALUE" -> inject model label
+                size_t sp = line.rfind(' ');
+                if (sp == std::string::npos) {
+                    continue;
+                }
+                std::string series = line.substr(0, sp);
+                std::string value  = line.substr(sp + 1);
+                std::string labelled;
+                size_t br = series.find('{');
+                if (br == std::string::npos) {
+                    labelled = series + "{model=\"" + m.name + "\"}";
+                } else {
+                    labelled = series.substr(0, br + 1) + "model=\"" + m.name + "\"," + series.substr(br + 1);
+                }
+                out << labelled << " " << value << "\n";
+            }
+        }
+
+        auto res = std::make_unique<server_http_res>();
+        res->content_type = "text/plain; version=0.0.4";
+        res->status = 200;
+        res->data = out.str();
+        return res;
+    };
+
     this->get_router_props = [this](const server_http_req & req) {
         std::string name = req.get_param("model");
         if (name.empty()) {
