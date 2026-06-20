@@ -39,11 +39,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <ctime>
 #include <deque>
 #include <mutex>
@@ -176,6 +178,16 @@ struct TraceConfig {
     std::string backpressure   = "sample";
     std::string trace_layers;             // "0,1,2,6" or "0..78" or "" = all
     int         trace_max_tokens = 0;     // 0 = unlimited
+    // Story 6 AC: bounded activation summarization. Default off — full
+    // activation dumps would dominate the JSONL for prefill on 20k-token
+    // prompts. 'trace_activations' is a comma-separated list of tensor
+    // stems to capture ('l_out', 'kqv_out', 'ffn_out', 'ffn_moe_out',
+    // 'ffn_swiglu', 'attn_norm', 'ffn_norm', ...). Empty string = off.
+    // 'trace_activation_topk' = N: top-N channels per (tensor, token) by
+    // |magnitude|. 0 = use DEFAULT (10).
+    std::string trace_activations;        // "" = off; "l_out" / "l_out,kqv_out" = on
+    int         trace_activation_topk = 0; // 0 = default (10)
+    int         trace_activation_stride = 2; // emit for every Nth layer to bound prefill JSONL
     // Reproducibility provenance (Story 9 AC): full argv joined as a string,
     // and process start time in UTC ISO 8601. Set once in main() before the
     // batch loop so every per-prompt sidecar carries the same provenance.
@@ -257,6 +269,59 @@ std::string render_record(
     }
     s += "]";
     s += ",\"router_entropy\":"; { char buf[32]; std::snprintf(buf, sizeof(buf), "%.6g", (double) entropy); s += buf; }
+    s += "}\n";
+    return s;
+}
+
+// Story 6 AC: render a bounded activation-summary JSONL record. Mirrors
+// render_record's provenance block (run_id / model / phase / token_index /
+// layer / task_label / language / script / prompt_family / test_id) but
+// adds the activation-specific fields: tensor_stem, n_channels, topk,
+// top_k_channels [[idx, magnitude], ...] (sorted by |magnitude| desc),
+// and per-token stat summaries (l2_norm / mean / std / max_abs).
+//
+// top_k_channels magnitude is the raw signed value so the analyzer can
+// distinguish excitatory vs inhibitory channels; analyzer bucketing keys on
+// channel_idx (frequency) not magnitude.
+std::string render_activation_record(
+        const std::string & run_id, const std::string & model, const char * phase,
+        int token_index, int layer,
+        const std::string & tensor_stem, int n_channels, int topk,
+        const std::vector<std::pair<int, float>> & top_k_channels,
+        double l2_norm, double mean, double std_dev, double max_abs,
+        const TraceConfig & cfg) {
+    std::string s;
+    s.reserve(256 + top_k_channels.size() * 24);
+    s += "{\"schema_version\":";
+    s += std::to_string(TRACE_SCHEMA_VERSION);
+    s += ",\"event\":\"activation_summary\"";
+    s += ",\"run_id\":\"";     json_escape_append(run_id, s); s += "\"";
+    s += ",\"model\":\"";      json_escape_append(model, s);  s += "\"";
+    s += ",\"phase\":\"";      s += phase;                     s += "\"";
+    s += ",\"token_index\":";  s += std::to_string(token_index);
+    s += ",\"layer\":";        s += std::to_string(layer);
+    s += ",\"task_label\":\""; json_escape_append(cfg.task_label, s);  s += "\"";
+    s += ",\"language\":\"";   json_escape_append(cfg.language, s);    s += "\"";
+    s += ",\"script\":\"";     json_escape_append(cfg.script, s);      s += "\"";
+    s += ",\"prompt_family\":\""; json_escape_append(cfg.prompt_family, s); s += "\"";
+    s += ",\"test_id\":\"";    json_escape_append(cfg.test_id, s);     s += "\"";
+    s += ",\"tensor_stem\":\""; json_escape_append(tensor_stem, s);    s += "\"";
+    s += ",\"n_channels\":"; s += std::to_string(n_channels);
+    s += ",\"topk\":";        s += std::to_string(topk);
+    // top_k_channels (already sorted desc by |magnitude|)
+    s += ",\"top_k_channels\":[";
+    for (size_t i = 0; i < top_k_channels.size(); ++i) {
+        if (i) s += ",";
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "[%d,%.6g]",
+            top_k_channels[i].first, (double) top_k_channels[i].second);
+        s += buf;
+    }
+    s += "]";
+    s += ",\"l2_norm\":";  { char buf[32]; std::snprintf(buf, sizeof(buf), "%.6g", l2_norm);  s += buf; }
+    s += ",\"mean\":";      { char buf[32]; std::snprintf(buf, sizeof(buf), "%.6g", mean);     s += buf; }
+    s += ",\"std\":";       { char buf[32]; std::snprintf(buf, sizeof(buf), "%.6g", std_dev);  s += buf; }
+    s += ",\"max_abs\":";   { char buf[32]; std::snprintf(buf, sizeof(buf), "%.6g", max_abs);  s += buf; }
     s += "}\n";
     return s;
 }
@@ -367,6 +432,11 @@ struct TraceState {
     int n_expert_total = 0;
 
     std::vector<int> selected_layers; // empty = all
+    // Story 6 AC: activation tensor stems the user opted into (parsed from
+    // --trace-activations 'a,b,c' cfg field). Empty = no activation records.
+    std::vector<std::string> activation_stems;
+    int activation_topk = 10;          // DEFAULT_ACTIVATION_TOPK mirrored from Python schema
+    int activation_stride = 2;          // emit every Nth layer to bound prefill JSONL
     bool trace_prefill = true;
     bool trace_generation = true;
 
@@ -402,6 +472,31 @@ bool is_weights_tensor(const char * name) {
     // accept "ffn_moe_weights" or "ffn_moe_weights-N"
     if (s.size() == std::string("ffn_moe_weights").size()) return true;
     return s[std::string("ffn_moe_weights").size()] == '-';
+}
+
+// Story 6 AC: detect named activation tensors the user opted into via
+// --trace-activations. The callback is fired for EVERY intermediate tensor,
+// so predicate must be tight: match '<stem>-N' exactly where stem is in the
+// configured stems vector. Returns the stem via out_stem on match.
+bool is_activation_tensor(const char * name, const std::vector<std::string> & stems,
+                          std::string & out_stem) {
+    if (stems.empty()) return false;
+    std::string s(name);
+    auto pos = s.find_last_of('-');
+    if (pos == std::string::npos) return false;
+    std::string stem = s.substr(0, pos);
+    // layer suffix must be a non-negative integer (not another word)
+    try {
+        int layer = std::stoi(s.substr(pos + 1));
+        (void) layer;
+    } catch (...) { return false; }
+    for (const auto & want : stems) {
+        if (stem == want) {
+            out_stem = stem;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool layer_selected(const TraceState & st, int layer) {
@@ -452,6 +547,105 @@ bool trace_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
     auto * st = static_cast<TraceState *>(user_data);
     const char * name = t->name;
     if (!name || !name[0]) return true;
+
+    // Story 6 AC: activation summary path. If the user opted in via
+    // --trace-activations and the current tensor is one of the requested
+    // stems, compute top-K channels by |magnitude| + per-token stat
+    // summaries and push an activation_summary record. This is separate from
+    // the routing-event path below so the JSONL holds both event types.
+    if (!st->activation_stems.empty()) {
+        std::string matched_stem;
+        if (is_activation_tensor(name, st->activation_stems, matched_stem)) {
+            int layer = extract_layer(name);
+            if (layer >= 0 && layer_selected(*st, layer) &&
+                (layer % st->activation_stride) == 0) {
+                // ALWAYS copy via ggml_backend_tensor_get for the same Metal
+                // sync reason as the routing-event path.
+                size_t nbytes = ggml_nbytes(t);
+                std::vector<uint8_t> raw(nbytes);
+                ggml_backend_tensor_get(t, raw.data(), 0, nbytes);
+                // Activation tensors are F32 [n_embd, n_tokens] contiguous.
+                // (The probe on GLM-5.2 confirmed l_out-N is ne=[6144, T].)
+                if (t->type == GGML_TYPE_F32) {
+                    int n_channels = (int) t->ne[0];
+                    int n_tokens  = (int) t->ne[1];
+                    const float * src = reinterpret_cast<const float *>(raw.data());
+                    int topk = st->activation_topk > 0 ? st->activation_topk : 10;
+                    // Per-token: compute top-K channels + stats. Push one
+                    // activation_summary record per token in the batch.
+                    for (int tok = 0; tok < n_tokens; ++tok) {
+                        // zero-copy view into this token's channel vector
+                        const float * v = src + (size_t) tok * n_channels;
+                        // Compute mean / max_abs in single pass; L2 needs sumsq.
+                        double sum = 0.0, sumsq = 0.0, max_abs_val = 0.0;
+                        for (int c = 0; c < n_channels; ++c) {
+                            double x = (double) v[c];
+                            sum += x;
+                            sumsq += x * x;
+                            double ax = std::fabs(x);
+                            if (ax > max_abs_val) max_abs_val = ax;
+                        }
+                        double mean_v = sum / n_channels;
+                        double var = (sumsq / n_channels) - mean_v * mean_v;
+                        if (var < 0.0) var = 0.0;  // numerical robustness
+                        double std_v = std::sqrt(var);
+                        double l2 = std::sqrt(sumsq);
+                        // Build top-K channels by |magnitude|. Use a partial
+                        // sort to bound cost: copy (idx, val) pairs, partial_sort
+                        // on |val| desc, take first topk.
+                        // For 6144 channels × every-token, n_channels² scans must
+                        // NOT happen per token. Use a min-heap of size topk for O(N log K).
+                        std::vector<std::pair<float, int>> heap;  // (|val|, idx)
+                        heap.reserve(topk + 1);
+                        for (int c = 0; c < n_channels; ++c) {
+                            float av = std::fabs(v[c]);
+                            if ((int) heap.size() < topk) {
+                                heap.push_back({av, c});
+                                if ((int) heap.size() == topk) {
+                                    // heapify to min-heap on |val|
+                                    std::make_heap(heap.begin(), heap.end(),
+                                        [](const auto & a, const auto & b){ return a.first > b.first; });
+                                }
+                            } else if (av > heap.front().first) {
+                                std::pop_heap(heap.begin(), heap.end(),
+                                    [](const auto & a, const auto & b){ return a.first > b.first; });
+                                heap.back() = {av, c};
+                                std::push_heap(heap.begin(), heap.end(),
+                                    [](const auto & a, const auto & b){ return a.first > b.first; });
+                            }
+                        }
+                        // Extract + sort by |val| descending for the JSONL row
+                        std::sort(heap.begin(), heap.end(),
+                            [](const auto & a, const auto & b){ return a.first > b.first; });
+                        std::vector<std::pair<int, float>> top_channels;
+                        top_channels.reserve(heap.size());
+                        for (const auto & p : heap) {
+                            top_channels.push_back({p.second, v[p.second]});
+                        }
+                        int pi = (std::string(st->current_phase) == "generation") ? 1 : 0;
+                        int tok_idx = st->token_base + tok;
+                        // Respect trace_max_tokens per phase
+                        if (st->cfg.trace_max_tokens > 0 &&
+                            st->phase_tokens_emitted[pi] >= st->cfg.trace_max_tokens) {
+                            // skip this token's activation record too
+                            continue;
+                        }
+                        std::string rec = render_activation_record(
+                            st->run_id, st->model_name, st->current_phase,
+                            tok_idx, layer,
+                            matched_stem, n_channels, topk,
+                            top_channels, l2, mean_v, std_v, max_abs_val,
+                            st->cfg);
+                        st->writer.push(std::move(rec));
+                        st->phase_tokens_emitted[pi]++;
+                    }
+                }
+            }
+            // either way (matched stem or not), don't fall through to MoE path
+            return true;
+        }
+    }
+
     if (!is_topk_tensor(name) && !is_weights_tensor(name)) return true;
 
     int layer = extract_layer(name);
@@ -544,6 +738,20 @@ TraceConfig config_from_trace_flags(
         else if (a == "--trace-layers")      take_next(cfg.trace_layers);
         else if (a == "--trace-max-tokens")  {
             std::string tmp; take_next(tmp); cfg.trace_max_tokens = std::atoi(tmp.c_str());
+        }
+        // Story 6 AC: bounded activation summaries. Default off. Comma-
+        // separated list of tensor stems to intercept (e.g. "l_out" or
+        // "l_out,kqv_out,ffn_out"). Validation of which stems are real
+        // happens at runtime — the eval callback simply won't fire for
+        // stems that never appear in the graph.
+        else if (a == "--trace-activations") {
+            take_next(cfg.trace_activations);
+        }
+        else if (a == "--trace-activation-topk") {
+            std::string tmp; take_next(tmp); cfg.trace_activation_topk = std::atoi(tmp.c_str());
+        }
+        else if (a == "--trace-activation-stride") {
+            std::string tmp; take_next(tmp); cfg.trace_activation_stride = std::atoi(tmp.c_str());
         }
         // These flags are set_examples()-restricted to CLI/SERVER/MTMD and the
         // tracer would ignore them regardless (it never applies a chat template).
@@ -872,6 +1080,18 @@ PromptResult run_one_prompt(
             st.cfg.trace_layers.empty() ? "all" : st.cfg.trace_layers.c_str());
         std::fprintf(mf, "  \"trace_max_tokens\": %d,\n", st.cfg.trace_max_tokens);
         std::fprintf(mf, "  \"backpressure\": \"%s\",\n", st.cfg.backpressure.c_str());
+        // Story 6 AC: activation-summary sidecar fields. Absent (omitted) when
+        // --trace-activations was not passed, so analyzer/report can detect.
+        if (!st.activation_stems.empty()) {
+            std::string joined_stems;
+            for (size_t i = 0; i < st.activation_stems.size(); ++i) {
+                if (i) joined_stems += ",";
+                joined_stems += st.activation_stems[i];
+            }
+            std::fprintf(mf, "  \"activation_stems\": \"%s\",\n", joined_stems.c_str());
+            std::fprintf(mf, "  \"activation_topk\": %d,\n", st.activation_topk);
+            std::fprintf(mf, "  \"activation_stride\": %d,\n", st.activation_stride);
+        }
         std::fprintf(mf, "  \"queue_size\": %zu,\n", st.writer.max_queue);
         std::fprintf(mf, "  \"records_written\": %llu,\n", (unsigned long long) res.records_written);
         std::fprintf(mf, "  \"records_dropped\": %llu,\n", (unsigned long long) res.records_dropped);
@@ -1019,6 +1239,31 @@ int main(int argc, char ** argv) {
     st.selected_layers = parse_layers(cfg.trace_layers);
     st.trace_prefill = (cfg.phase == "prefill" || cfg.phase == "both");
     st.trace_generation = (cfg.phase == "generation" || cfg.phase == "both");
+    // Story 6 AC: parse activation-stem list. Comma-separated, e.g.
+    // "l_out,kqv_out,ffn_out". Empty string → no activation tracers.
+    if (!cfg.trace_activations.empty()) {
+        std::string s = cfg.trace_activations;
+        size_t pos;
+        while ((pos = s.find(',')) != std::string::npos) {
+            std::string tok = s.substr(0, pos);
+            // trim whitespace
+            while (!tok.empty() && std::isspace((unsigned char) tok.front())) tok.erase(0, 1);
+            while (!tok.empty() && std::isspace((unsigned char) tok.back())) tok.pop_back();
+            if (!tok.empty()) st.activation_stems.push_back(tok);
+            s.erase(0, pos + 1);
+        }
+        while (!s.empty() && std::isspace((unsigned char) s.front())) s.erase(0, 1);
+        while (!s.empty() && std::isspace((unsigned char) s.back())) s.pop_back();
+        if (!s.empty()) st.activation_stems.push_back(s);
+        st.activation_topk = cfg.trace_activation_topk > 0 ? cfg.trace_activation_topk : 10;
+        st.activation_stride = cfg.trace_activation_stride > 0 ? cfg.trace_activation_stride : 2;
+        LOG_INF("%s: activation tracing on — stems=[", __func__);
+        for (size_t i = 0; i < st.activation_stems.size(); ++i) {
+            if (i) LOG_INF(",");
+            LOG_INF("%s", st.activation_stems[i].c_str());
+        }
+        LOG_INF("] topk=%d stride=%d\n", st.activation_topk, st.activation_stride);
+    }
 
     params.cb_eval = trace_cb_eval;
     params.cb_eval_user_data = &st;
