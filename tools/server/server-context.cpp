@@ -67,6 +67,7 @@ struct server_slot; // forward declaration
 
 struct server_batch {
     llama_batch batch;
+    bool batch_rendered = false;
 
     struct token {
         int32_t id_slot;
@@ -102,16 +103,18 @@ struct server_batch {
         if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
-        // LOG_DBG("adding token to batch: slot=%d, token=%d, pos=%d, output=%d\n", id_slot, token, pos, output);
+        LOG_INF("adding token to batch: slot=%d, token=%d, pos=%d, output=%d\n", id_slot, token, pos, output);
         tokens.push_back({ id_slot, token, pos, output });
         return true;
     }
 
     void clear() {
         tokens.clear();
+        common_batch_clear(batch);
         slot_batched      = nullptr;
         alora_scale       = -1.0f;
         alora_disabled_id = 0;
+        batch_rendered    = false;
     }
 
     int32_t size() const {
@@ -123,14 +126,32 @@ struct server_batch {
         tokens[idx].output = output;
     }
 
-    llama_batch render() {
+    void render() {
         GGML_ASSERT(batch.token != nullptr);
         common_batch_clear(batch);
         for (int32_t i = 0; i < size(); i++) {
             const auto & t = tokens[i];
             common_batch_add(batch, t.token, t.pos, { t.id_slot }, t.output);
         }
-        return batch;
+        batch_rendered = true;
+    }
+
+    llama_batch get_view(int32_t off, int32_t n_tokens) {
+        GGML_ASSERT(batch.token != nullptr);
+        GGML_ASSERT(off >= 0 && off < size());
+        GGML_ASSERT(n_tokens > 0 && off + n_tokens <= size());
+
+        llama_batch view = {
+            n_tokens,
+            batch.token    + off,
+            nullptr,
+            batch.pos      + off,
+            batch.n_seq_id + off,
+            batch.seq_id   + off,
+            batch.logits   + off,
+        };
+
+        return view;
     }
 };
 
@@ -2592,21 +2613,37 @@ private:
             }
         }
 
-        llama_batch batch_view;
         try {
             pre_decode();
-            batch_view = batch.render();
+            batch.render();
         } catch (const std::exception & e) {
             SRV_ERR("pre_decode() failed: %s\n", e.what());
         }
 
-        try {
-            decode(llama_n_batch(ctx_tgt), batch_view);
-        } catch (const std::exception & e) {
-            SRV_ERR("decode() failed: %s\n", e.what());
-        }
+        llama_batch batch_view;
+        int32_t i_next = 0;
+        int32_t n_batch = llama_n_batch(ctx_tgt);
+        for (int32_t i = 0; i < batch.size(); i = i_next) {
+            try {
+                const int32_t n_tokens = std::min(n_batch, batch.size() - i);
 
-        if (batch.size() > 0) {
+                bool ok = decode(n_batch, batch_view);
+
+                if (ok) {
+                    // move the head of the batch forward with the number of tokens we just processed
+                    i_next = i + n_tokens;
+
+                    // on successful decode, restore the original batch size
+                    n_batch = llama_n_batch(ctx_tgt);
+                } else {
+                    // get a new batch view and try again
+                    batch_view = batch.get_view(i, n_batch);
+                    continue; // decode again
+                }
+            } catch (const std::exception & e) {
+                SRV_ERR("decode() failed: %s\n", e.what());
+            }
+
             try {
                 post_decode(batch_view);
             } catch (const std::exception & e) {
@@ -3362,7 +3399,9 @@ private:
         }
     }
 
-    bool decode(int32_t n_batch, llama_batch & batch_view) {
+    // returns true = success ; false = retry with smaller batch size
+    // throw std::runtime_error on fatal error
+    bool decode(int32_t & n_batch, llama_batch & batch_view) {
         SRV_DBG("decoding batch, n_tokens = %d\n", batch.size());
 
         auto & slot_batched      = batch.slot_batched;
@@ -3448,7 +3487,7 @@ private:
 
             SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size, n_batch = %d, ret = %d\n", n_batch, ret);
 
-            return false; // retry with smaller batch size
+            return false; // retry with the updated n_batch
         }
 
         // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
@@ -3458,7 +3497,7 @@ private:
             SRV_ERR("%s", "failed to process speculative batch\n");
 
             // TODO: handle error
-            return false;
+            throw std::runtime_error("failed to process speculative batch");
         }
 
         // handle `n_cmpl > 1` tasks - when the main prompt is processed, activate all child tasks too
