@@ -12,7 +12,7 @@ from collections import defaultdict
 logger = logging.getLogger("ggml-hexagon-trace")
 
 op_pattern = re.compile(
-    r"profile-op\s+(?P<op_name>[A-Z_0-9+]+):\s+.*?\s+:\s+(?P<dims>[\d:x\s\->!]+)\s+:\s+(?P<types>[a-z\d_\s\->x]+)\s+:\s+(?P<strides>[\d:x\s\->!]+)\s+:\s+(?:op-)?usec\s+(?P<usec>\d+)\s+(?:op-)?cycles\s+(?P<cycles>\d+)(?:\s+start\s+(?P<start>\d+))?(?:\s+mhz\s+(?P<mhz>[\d.]+))?(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?(?:\s+evt\s+\[(?P<evt>[\d,\s]+)\])?"
+    r"profile-op\s+(?P<op_name>[A-Z_0-9+]+):\s+.*?\s+:\s+(?P<dims>[\d:x\s\->!]+)\s+:\s+(?P<types>[a-z\d_\s\->x]+)\s+:\s+(?P<strides>[\d:x\s\->!]+?)\s+:\s+(?:(?P<params>.*?)\s+:\s+)?(?:op-)?usec\s+(?P<usec>\d+)\s+(?:op-)?cycles\s+(?P<cycles>\d+)(?:\s+start\s+(?P<start>\d+))?(?:\s+mhz\s+(?P<mhz>[\d.]+))?(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?(?:\s+evt\s+\[(?P<evt>[\d,\s]+)\])?"
 )
 
 trace_pattern = re.compile(
@@ -81,6 +81,7 @@ def parse_log(file_path):
                 'dims':         op_match.group('dims').strip() if op_match.group('dims') else '',
                 'types':        op_match.group('types').strip() if op_match.group('types') else '',
                 'strides':      op_match.group('strides').strip() if op_match.group('strides') else '',
+                'params':       op_match.group('params').strip() if op_match.group('params') else '',
                 'op_text':      op_text,
                 'usec':         int(op_match.group('usec')),
                 'cycles':       int(op_match.group('cycles')),
@@ -397,6 +398,8 @@ def generate_perfetto_trace(filtered_ops, output_path):
                 debug_annots.append(make_debug_annotation("line", int_val=op['line_num']))
             if 'strides' in op and op['strides']:
                 debug_annots.append(make_debug_annotation("strides", string_val=op['strides']))
+            if 'params' in op and op['params'] and op['params'] != '----':
+                debug_annots.append(make_debug_annotation("params", string_val=op['params']))
 
             # Slice Begin
             evt_begin = make_track_event(1, 2, name=f"{op['name']} ({op['dims']})", category="operator", debug_annotations=debug_annots)
