@@ -492,6 +492,8 @@ using server_http_req_ptr = std::unique_ptr<server_http_req>;
 static void process_handler_response(server_http_req_ptr && request, server_http_res_ptr & response, httplib::Response & res) {
     if (response->is_stream()) {
         res.status = response->status;
+        // Tell Nginx to not buffer any streamed response
+        response->headers["X-Accel-Buffering"] = "no";
         set_headers(res, response->headers);
         const std::string content_type = response->content_type;
         // convert to shared_ptr as both chunked_content_provider() and on_complete() need to use it
@@ -581,6 +583,23 @@ void server_http_context::post(const std::string & path, const server_http_conte
             build_query_string(req),
             body,
             std::move(files),
+            req.is_connection_closed
+        });
+        server_http_res_ptr response = handler(*request);
+        process_handler_response(std::move(request), response, res);
+    });
+}
+
+void server_http_context::del(const std::string & path, const server_http_context::handler_t & handler) const {
+    handlers.emplace(path, handler);
+    pimpl->srv->Delete(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+        server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
+            get_params(req),
+            get_headers(req),
+            req.path,
+            build_query_string(req),
+            req.body,
+            {},
             req.is_connection_closed
         });
         server_http_res_ptr response = handler(*request);

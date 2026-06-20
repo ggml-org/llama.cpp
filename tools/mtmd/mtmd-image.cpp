@@ -4,17 +4,33 @@
 #include <cmath>
 #include <vector>
 
-//
-// base implementation
-//
-
-void mtmd_image_preprocessor::img_u8_to_f32(const clip_image_u8 & src, clip_image_f32 & dst, const float mean[3], const float std[3]) {
-    dst.from_u8(src);
-    dst.normalize(mean, std);
+void mtmd_image_preproc_out::append(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized) {
+    clip_image_f32 dst;
+    dst.from_u8(img);
+    if (normalized) {
+        dst.normalize(hparams.image_mean, hparams.image_std);
+    }
+    entries.push_back(std::move(dst));
 }
 
-void mtmd_image_preprocessor::img_u8_to_f32(const clip_image_u8 & src, clip_image_f32 & dst) {
-    dst.from_u8(src);
+void mtmd_image_preproc_out::append(const clip_hparams & hparams, const std::vector<clip_image_u8> & imgs, bool normalized) {
+    for (const auto & img : imgs) {
+        append(hparams, img, normalized);
+    }
+}
+
+void mtmd_image_preproc_out::append(const clip_hparams & hparams, clip_image_f32 & img, bool normalized) {
+    if (normalized) {
+        img.normalize(hparams.image_mean, hparams.image_std);
+    }
+    entries.push_back(std::move(img));
+}
+
+void mtmd_image_preproc_out::append_overview(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized) {
+    overview.from_u8(img);
+    if (normalized) {
+        overview.normalize(hparams.image_mean, hparams.image_std);
+    }
 }
 
 // set of tools to manipulate images
@@ -595,21 +611,18 @@ private:
 // mtmd_image_preprocessor_llava_uhd
 //
 
-bool mtmd_image_preprocessor_llava_uhd::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+mtmd_image_preproc_out mtmd_image_preprocessor_llava_uhd::preprocess(const clip_image_u8 & img) {
     const clip_image_size original_size = img.get_size();
     auto const inst = get_slice_instructions(original_size);
-    std::vector<clip_image_u8_ptr> imgs = slice_image(img, inst);
+    auto sliced = slice_image(img, inst);
 
-    for (size_t i = 0; i < imgs.size(); ++i) {
-        // clip_image_save_to_bmp(*imgs[i], "slice_" + std::to_string(i) + ".bmp");
-        clip_image_f32_ptr res(clip_image_f32_init());
-        img_u8_to_f32(*imgs[i], *res, hparams.image_mean, hparams.image_std);
-        output.entries.push_back(std::move(res));
-    }
-
+    mtmd_image_preproc_out output;
+    output.append_overview(hparams, sliced.overview, true);
+    output.append(hparams, sliced.slices, true);
     output.grid_x = inst.grid_size.width;
     output.grid_y = inst.grid_size.height;
-    return true;
+
+    return output;
 }
 
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_llava_uhd::get_slice_instructions(const clip_image_size & original_size) {
@@ -717,28 +730,21 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_ll
     return res;
 }
 
-std::vector<clip_image_u8_ptr> mtmd_image_preprocessor_llava_uhd::slice_image(const clip_image_u8 & img, const mtmd_image_preprocessor_llava_uhd::slice_instructions & inst, bool overview_first) {
-    std::vector<clip_image_u8_ptr> output;
+mtmd_image_preprocessor_llava_uhd::slice_output mtmd_image_preprocessor_llava_uhd::slice_image(const clip_image_u8 & img, const mtmd_image_preprocessor_llava_uhd::slice_instructions & inst) {
+    slice_output output;
 
     // resize to overview size
-    clip_image_u8_ptr resized_img(clip_image_u8_init());
-    img_tool::resize(img, *resized_img, inst.overview_size, hparams.image_resize_algo_ov,
+    img_tool::resize(img, output.overview, inst.overview_size, hparams.image_resize_algo_ov,
                         hparams.image_pad_ov, hparams.image_pad_color_ov);
-    if (overview_first) {
-        output.push_back(std::move(resized_img));
-    }
 
     if (inst.slices.empty()) {
-        // no slices, just return the resized image
-        if (!overview_first) {
-            output.push_back(std::move(resized_img));
-        }
+        // no slices, just return the overview image
         return output;
     }
 
     // resize to refined size
-    clip_image_u8_ptr refined_img(clip_image_u8_init());
-    img_tool::resize(img, *refined_img, inst.refined_size, hparams.image_resize_algo_rf,
+    clip_image_u8 refined_img;
+    img_tool::resize(img, refined_img, inst.refined_size, hparams.image_resize_algo_rf,
                         hparams.image_pad_rf, hparams.image_pad_color_rf);
 
     // create slices
@@ -748,13 +754,9 @@ std::vector<clip_image_u8_ptr> mtmd_image_preprocessor_llava_uhd::slice_image(co
         int w = slice.size.width;
         int h = slice.size.height;
 
-        clip_image_u8_ptr img_slice(clip_image_u8_init());
-        img_tool::crop(*refined_img, *img_slice, x, y, w, h);
-        output.push_back(std::move(img_slice));
-    }
-
-    if (!overview_first) {
-        output.push_back(std::move(resized_img));
+        clip_image_u8 img_slice;
+        img_tool::crop(refined_img, img_slice, x, y, w, h);
+        output.slices.push_back(std::move(img_slice));
     }
 
     return output;
@@ -871,24 +873,23 @@ clip_image_size mtmd_image_preprocessor_llava_uhd::get_best_grid(const int max_s
 // mtmd_image_preprocessor_fixed_size
 //
 
-bool mtmd_image_preprocessor_fixed_size::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+mtmd_image_preproc_out mtmd_image_preprocessor_fixed_size::preprocess(const clip_image_u8 & img) {
     clip_image_u8 resized_image;
     int sz = hparams.image_size;
     img_tool::resize(img, resized_image, {sz, sz},
                         hparams.image_resize_algo,
                         hparams.image_resize_pad,
                         hparams.image_pad_color);
-    clip_image_f32_ptr img_f32(clip_image_f32_init());
-    img_u8_to_f32(resized_image, *img_f32, hparams.image_mean, hparams.image_std);
-    output.entries.push_back(std::move(img_f32));
-    return true;
+    mtmd_image_preproc_out output;
+    output.append(hparams, resized_image, true);
+    return output;
 }
 
 //
 // mtmd_image_preprocessor_dyn_size
 //
 
-bool mtmd_image_preprocessor_dyn_size::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_image_u8 & img) {
     GGML_ASSERT(hparams.image_min_pixels > 0 && hparams.image_max_pixels > 0);
     clip_image_u8 resized_image;
     const clip_image_size original_size = img.get_size();
@@ -903,17 +904,16 @@ bool mtmd_image_preprocessor_dyn_size::preprocess(const clip_image_u8 & img, cli
                         hparams.image_resize_algo,
                         hparams.image_resize_pad,
                         hparams.image_pad_color);
-    clip_image_f32_ptr img_f32(clip_image_f32_init());
-    img_u8_to_f32(resized_image, *img_f32, hparams.image_mean, hparams.image_std);
-    output.entries.push_back(std::move(img_f32));
-    return true;
+    mtmd_image_preproc_out output;
+    output.append(hparams, resized_image, true);
+    return output;
 }
 
 //
 // mtmd_image_preprocessor_longest_edge
 //
 
-bool mtmd_image_preprocessor_longest_edge::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+mtmd_image_preproc_out mtmd_image_preprocessor_longest_edge::preprocess(const clip_image_u8 & img) {
     GGML_ASSERT(hparams.image_longest_edge > 0);
     clip_image_u8 resized_image;
     const clip_image_size original_size = img.get_size();
@@ -927,10 +927,9 @@ bool mtmd_image_preprocessor_longest_edge::preprocess(const clip_image_u8 & img,
                         hparams.image_resize_algo,
                         hparams.image_resize_pad,
                         hparams.image_pad_color);
-    clip_image_f32_ptr img_f32(clip_image_f32_init());
-    img_u8_to_f32(resized_image, *img_f32, hparams.image_mean, hparams.image_std);
-    output.entries.push_back(std::move(img_f32));
-    return true;
+    mtmd_image_preproc_out output;
+    output.append(hparams, resized_image, true);
+    return output;
 }
 
 //
@@ -1040,7 +1039,7 @@ clip_image_size mtmd_image_preprocessor_lfm2::get_grid_layout(int height, int wi
 // mtmd_image_preprocessor_idefics3
 //
 
-bool mtmd_image_preprocessor_idefics3::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+mtmd_image_preproc_out mtmd_image_preprocessor_idefics3::preprocess(const clip_image_u8 & img) {
     // The refined size has two steps:
     // 1. Resize w/ aspect-ratio preserving such that the longer side is
     //      the preprocessor longest size
@@ -1075,44 +1074,40 @@ bool mtmd_image_preprocessor_idefics3::preprocess(const clip_image_u8 & img, cli
             });
         }
     }
-    auto imgs = slice_image(img, instructions);
+    auto sliced = slice_image(img, instructions);
 
-    // cast and normalize to f32
-    for (size_t i = 0; i < imgs.size(); ++i) {
-        // clip_image_save_to_bmp(*imgs[i], "slice_" + std::to_string(i) + ".bmp");
-        clip_image_f32_ptr res(clip_image_f32_init());
-        img_u8_to_f32(*imgs[i], *res, hparams.image_mean, hparams.image_std);
-        output.entries.push_back(std::move(res));
-    }
-
+    mtmd_image_preproc_out output;
+    output.append_overview(hparams, sliced.overview, true);
+    output.append(hparams, sliced.slices, true);
     output.grid_x = instructions.grid_size.width;
     output.grid_y = instructions.grid_size.height;
-    return true;
+    return output;
 }
 
 //
 // mtmd_image_preprocessor_internvl
 //
 
-bool mtmd_image_preprocessor_internvl::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+mtmd_image_preproc_out mtmd_image_preprocessor_internvl::preprocess(const clip_image_u8 & img) {
     GGML_ASSERT(!hparams.image_res_candidates.empty());
     const clip_image_size original_size = img.get_size();
     auto const inst = get_slice_instructions(original_size);
-    std::vector<clip_image_u8_ptr> imgs = slice_image(img, inst, false);
+    auto sliced = slice_image(img, inst);
 
-    for (size_t i = 0; i < imgs.size(); ++i) {
-        clip_image_f32_ptr res(clip_image_f32_init());
-        img_u8_to_f32(*imgs[i], *res, hparams.image_mean, hparams.image_std);
-        output.entries.push_back(std::move(res));
-    }
-    return true;
+    mtmd_image_preproc_out output;
+    // InternVL: slices first, then overview
+    output.append(hparams, sliced.slices, true);
+    output.append_overview(hparams, sliced.overview, true);
+    output.grid_x = inst.grid_size.width;
+    output.grid_y = inst.grid_size.height;
+    return output;
 }
 
 //
 // mtmd_image_preprocessor_deepseekocr
 //
 
-bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img) {
     static constexpr int native_resolutions[] = { 1024 /* base */, 1280 /* large */ };
     // TODO: support 512 (tiny) and 640 (small) once we have eval data for them
 
@@ -1135,14 +1130,12 @@ bool mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img, 
     clip_image_u8 padded;
     img_tool::resize(img, padded, {image_size, image_size}, RESIZE_ALGO_BICUBIC_PILLOW,
                      PAD_NEAREST, hparams.image_pad_color);
-
-    clip_image_f32_ptr res(clip_image_f32_init());
-    img_u8_to_f32(padded, *res, hparams.image_mean, hparams.image_std);
-    output.entries.push_back(std::move(res));
-
-    output.grid_x = 1;
-    output.grid_y = 1;
-    return true;
+    mtmd_image_preproc_out output;
+    output.append_overview(hparams, padded, true);
+    output.grid_x = 0;
+    output.grid_y = 0;
+    // TODO @ngxson : support slicing for DeepSeek-OCR, to do in another PR
+    return output;
 }
 
 //
@@ -1205,10 +1198,11 @@ clip_image_size mtmd_image_preprocessor_deepseekocr2::find_closest_aspect_ratio(
     return best_ratio;
 }
 
-bool mtmd_image_preprocessor_deepseekocr2::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr2::preprocess(const clip_image_u8 & img) {
     // emit 768x768 local tiles when the image is larger than a tile in either
     // dimension, then always a 1024x1024 global view. order: [tiles..., global].
 
+    mtmd_image_preproc_out output;
     const auto img_size = img.get_size();
     if (img_size.width > tile_size || img_size.height > tile_size) {
         const float           aspect_ratio  = static_cast<float>(img_size.width) / img_size.height;
@@ -1224,9 +1218,7 @@ bool mtmd_image_preprocessor_deepseekocr2::preprocess(const clip_image_u8 & img,
             for (int col = 0; col < grid.width; col++) {
                 clip_image_u8 tile;
                 img_tool::crop(refined, tile, col * tile_size, row * tile_size, tile_size, tile_size);
-                clip_image_f32_ptr res(clip_image_f32_init());
-                img_u8_to_f32(tile, *res, hparams.image_mean, hparams.image_std);
-                output.entries.push_back(std::move(res));
+                output.append(hparams, tile, true);
             }
         }
     }
@@ -1235,14 +1227,9 @@ bool mtmd_image_preprocessor_deepseekocr2::preprocess(const clip_image_u8 & img,
     clip_image_u8 padded;
     img_tool::resize(img, padded, { base_size, base_size }, RESIZE_ALGO_BICUBIC_PILLOW,
                      PAD_NEAREST, hparams.image_pad_color);
-    clip_image_f32_ptr global(clip_image_f32_init());
-    img_u8_to_f32(padded, *global, hparams.image_mean, hparams.image_std);
-    global->add_viewsep = true;
-    output.entries.push_back(std::move(global));
-
-    output.grid_x = 1;
-    output.grid_y = 1;
-    return true;
+    output.append_overview(hparams, padded, true);
+    output.overview.add_viewsep = true;
+    return output;
 }
 
 //
@@ -1258,7 +1245,8 @@ void mtmd_image_preprocessor_step3vl::img_u8_resize_bilinear_to_f32(
         const float std[3]) {
     const auto src_size = src.get_size();
     if (src_size.width == target_width && src_size.height == target_height) {
-        img_u8_to_f32(src, dst, mean, std);
+        dst.from_u8(src);
+        dst.normalize(mean, std);
         return;
     }
 
@@ -1453,24 +1441,24 @@ mtmd_image_preprocessor_step3vl::slice_instructions mtmd_image_preprocessor_step
     return instructions;
 }
 
-bool mtmd_image_preprocessor_step3vl::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+mtmd_image_preproc_out mtmd_image_preprocessor_step3vl::preprocess(const clip_image_u8 & img) {
     clip_image_u8 prepared = prepare_image(img, hparams);
     const auto instructions = build_slice_instructions(hparams, prepared.get_size());
 
-    clip_image_f32_ptr overview_f32(clip_image_f32_init());
+    mtmd_image_preproc_out output;
+    // overview (normalized f32, already includes mean/std)
     img_u8_resize_bilinear_to_f32(
         prepared,
-        *overview_f32,
+        output.overview,
         hparams.image_size,
         hparams.image_size,
         hparams.image_mean,
         hparams.image_std);
-    output.entries.push_back(std::move(overview_f32));
 
     if (instructions.slices.empty()) {
         output.grid_x = 0;
         output.grid_y = 0;
-        return true;
+        return output;
     }
 
     clip_image_u8 img_for_crop = prepared;
@@ -1486,28 +1474,28 @@ bool mtmd_image_preprocessor_step3vl::preprocess(const clip_image_u8 & img, clip
         // If the requested patch extends past the source image, pad the out-of-bounds area with black.
         clip_image_u8 patch = crop_with_black_padding(img_for_crop, slice.x, slice.y, slice.size.width, slice.size.height);
 
-        clip_image_f32_ptr patch_f32(clip_image_f32_init());
+        clip_image_f32 patch_f32;
         img_u8_resize_bilinear_to_f32(
             patch,
-            *patch_f32,
+            patch_f32,
             crop_size,
             crop_size,
             hparams.image_mean,
             hparams.image_std);
-        output.entries.push_back(std::move(patch_f32));
+        output.append(hparams, patch_f32, false);
     }
 
     output.grid_x = instructions.grid_size.width;
     output.grid_y = instructions.grid_size.height;
 
-    return true;
+    return output;
 }
 
 //
 // mtmd_image_preprocessor_youtuvl
 //
 
-bool mtmd_image_preprocessor_youtuvl::preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) {
+mtmd_image_preproc_out mtmd_image_preprocessor_youtuvl::preprocess(const clip_image_u8 & img) {
     const int patch_size = hparams.patch_size;   // typically 16
     const int merge_size = hparams.n_merge;      // typically 2
     const int align_size = patch_size * merge_size;  // 32
@@ -1551,10 +1539,22 @@ bool mtmd_image_preprocessor_youtuvl::preprocess(const clip_image_u8 & img, clip
     clip_image_u8 resized;
     img_tool::resize(img, resized, new_size, hparams.image_resize_algo, hparams.image_resize_pad);
 
-    // Normalize to float32
-    clip_image_f32_ptr img_f32(clip_image_f32_init());
-    img_u8_to_f32(resized, *img_f32, hparams.image_mean, hparams.image_std);
-    // Add to results
-    output.entries.push_back(std::move(img_f32));
-    return true;
+    mtmd_image_preproc_out output;
+    output.append(hparams, resized, true);
+    return output;
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_granite::preprocess(const clip_image_u8 & img) {
+    auto output = mtmd_image_preprocessor_llava_uhd::preprocess(img);
+    if (output.entries.size() == 0) {
+        // Single-tile (overview only): append one newline row.
+        output.overview.add_newline = true;
+    } else {
+        // Multi-tile: overview gets no newline, grid tiles get one.
+        output.overview.add_newline = false;
+        for (size_t i = 0; i < output.entries.size(); ++i) {
+            output.entries[i].add_newline = true;
+        }
+    }
+    return output;
 }

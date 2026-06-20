@@ -295,7 +295,16 @@ struct common_params_model {
     std::string hf_repo     = ""; // HF repo                                                // NOLINT
     std::string hf_file     = ""; // HF file                                                // NOLINT
     std::string docker_repo = ""; // Docker repo                                            // NOLINT
-    std::string name        = ""; // in format <user>/<model>[:<tag>] (tag is optional)     // NOLINT
+
+    std::string get_name() {
+        if (!hf_repo.empty()) {
+            return hf_repo;
+        }
+        if (!docker_repo.empty()) {
+            return docker_repo;
+        }
+        return path;
+    }
 };
 
 // draft-model-based speculative decoding parameters
@@ -363,7 +372,7 @@ struct common_params_speculative {
 
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;
@@ -624,12 +633,6 @@ struct common_params {
 
     // UI configs
     bool ui = true;
-
-    // Deprecated: use ui, ui_mcp_proxy, ui_config_json instead
-    bool webui = ui;
-    bool webui_mcp_proxy = false;
-    std::string webui_config_json;
-
     bool ui_mcp_proxy = false;
     std::string ui_config_json;
 
@@ -642,10 +645,11 @@ struct common_params {
     std::vector<std::string> server_tools;
 
     // router server configs
-    std::string models_dir    = ""; // directory containing models for the router server
-    std::string models_preset = ""; // directory containing model presets for the router server
-    int models_max = 4;             // maximum number of models to load simultaneously
-    bool models_autoload = true;    // automatically load models when requested via the router server
+    std::string models_dir    = "";     // directory containing models for the router server
+    std::string models_preset = "";     // directory containing model presets for the router server
+    int models_max = 4;                 // maximum number of models to load simultaneously
+    bool models_autoload = true;        // automatically load models when requested via the router server
+    std::string models_preset_hf = "";  // show a warning about remote presets on router loaded (if not empty)
 
     bool log_json = false;
 
@@ -846,6 +850,9 @@ struct common_file_info {
     bool        is_dir = false;
 };
 std::vector<common_file_info> fs_list(const std::string & path, bool include_directories);
+
+// fs open, also handle UTF8 on Windows
+std::ifstream fs_open_ifstream(const std::string & fname, std::ios_base::openmode mode);
 
 //
 // TTY utils
@@ -1063,6 +1070,10 @@ struct common_prompt_checkpoint {
 
     std::vector<uint8_t> data_tgt;
     std::vector<uint8_t> data_dft;
+
+    // (optional) speculative-decoding implementation state stashed with the checkpoint
+    // (e.g. eagle3's deferred-boundary g_embd row)
+    std::vector<uint8_t> data_spec;
 
     size_t size() const;
 

@@ -18,12 +18,17 @@ import {
 	SVG_BLOCK_CLASS,
 	SVG_LANGUAGE,
 	SVG_SOURCE_ATTR,
-	SVG_ID_ATTR
+	SVG_ID_ATTR,
+	DIAGRAM_VIEW_MODE_ATTR,
+	DIAGRAM_VIEW_RENDERED
 } from '$lib/constants';
+import type { DiagramPreData } from './pre-transform';
 import {
 	createBlockHeader,
 	createCopyButton,
 	createPreviewButton,
+	createToggleSourceButton,
+	createSourceView,
 	createWrapper,
 	generateBlockId
 } from './code-block-utils';
@@ -65,13 +70,24 @@ export const rehypeEnhanceSvgBlocks: Plugin<[], Root> = () => {
 
 			const actions = [
 				createCopyButton(svgId, SVG_ID_ATTR, 'Copy svg source'),
+				createToggleSourceButton(svgId, SVG_ID_ATTR, 'Toggle svg source'),
 				createPreviewButton(svgId, SVG_ID_ATTR, 'Preview svg')
 			];
 
 			const header = createBlockHeader(SVG_LANGUAGE, svgId, SVG_ID_ATTR, actions);
-			const wrapper = createWrapper(header, node, SVG_WRAPPER_CLASS, SVG_SCROLL_CONTAINER_CLASS, {
-				[SVG_ID_ATTR]: svgId
-			});
+			const preservedCode = (node.data as DiagramPreData | undefined)?.sourceCode;
+			const sourceView = createSourceView(preservedCode, svgSource, SVG_LANGUAGE);
+			const wrapper = createWrapper(
+				header,
+				node,
+				SVG_WRAPPER_CLASS,
+				SVG_SCROLL_CONTAINER_CLASS,
+				{
+					[SVG_ID_ATTR]: svgId,
+					[DIAGRAM_VIEW_MODE_ATTR]: DIAGRAM_VIEW_RENDERED
+				},
+				[sourceView]
+			);
 
 			// Replace pre with wrapper in parent
 			(parent.children as ElementContent[])[index] = wrapper;
