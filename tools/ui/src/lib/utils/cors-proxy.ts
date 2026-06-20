@@ -3,7 +3,11 @@
  */
 
 import { base } from '$app/paths';
-import { CORS_PROXY_ENDPOINT, CORS_PROXY_HEADER_PREFIX, CORS_PROXY_URL_PARAM } from '$lib/constants';
+import {
+	CORS_PROXY_ENDPOINT,
+	CORS_PROXY_HEADER_PREFIX,
+	CORS_PROXY_URL_PARAM
+} from '$lib/constants';
 
 /**
  * Build a proxied URL that routes through llama-server's CORS proxy.
