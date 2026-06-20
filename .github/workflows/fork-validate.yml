@@ -1,0 +1,19 @@
+name: Fork Validate
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Verify cmake project layout
+      run: |
+        cmake --version
+        test -f CMakeLists.txt
+        test -f ggml/CMakeLists.txt
+        echo "llama.cpp fork layout ok"
