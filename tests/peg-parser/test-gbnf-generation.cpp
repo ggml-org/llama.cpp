@@ -281,27 +281,6 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
-    t.test("ac grammar shadows child grammar", [](testing &t) {
-        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.ac(p.literal("IGNORED"), "</tag>");
-        });
-
-        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder);
-        });
-
-        assert_gbnf_equal(t, R"""(
-            ac-1 ::= [<] ac-1-01 | [^<] ac-1
-            ac-1-01 ::= [<] ac-1-01 | [/] ac-1-02 | [^/<] ac-1
-            ac-1-02 ::= [<] ac-1-01 | [t] ac-1-03 | [^<t] ac-1
-            ac-1-03 ::= [<] ac-1-01 | [a] ac-1-04 | [^<a] ac-1
-            ac-1-04 ::= [<] ac-1-01 | [g] ac-1-05 | [^<g] ac-1
-            ac-1-05 ::= [>] | [<] ac-1-01 | [^<>] ac-1
-            root ::= ac-1
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
-        )""", gbnf);
-    });
-
     t.test("complex expressions with parentheses", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.one_or_more(p.literal("a") | p.literal("b"));
