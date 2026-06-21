@@ -72,6 +72,7 @@ struct server_model_meta {
     int64_t last_used = 0; // for LRU unloading
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
     json loaded_info; // info to be reflected via /v1/models endpoint ; if in DOWNLOADING state, it should contain download progress info
+    json progress; // reflect load or download progress info, if any
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
@@ -170,12 +171,14 @@ public:
     // to stop the download, call unload()
     void download(common_params_model && model, common_download_opts && opts);
 
-    // update the status of a model instance (thread-safe)
     struct update_status_args {
         server_model_status status;
         int exit_code = 0; // only valid if status == UNLOADED
         json loaded_info = nullptr;
+        json progress = nullptr;
     };
+    // update the status of a model instance (thread-safe)
+    // also send SSE notification to /models/sse endpoint
     void update_status(const std::string & name, const update_status_args & args);
     void update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok = true);
 
@@ -208,6 +211,9 @@ public:
 };
 
 struct server_child {
+    // serializes the notify_to_router writes
+    std::mutex mtx_stdout;
+
     // return true if the current process is a child server instance
     bool is_child();
 
