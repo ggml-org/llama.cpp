@@ -1186,7 +1186,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const cli
 
         clip_image_u8 refined;
         img_tool::resize(img, refined, { tile_size * grid_w, tile_size * grid_h }, RESIZE_ALGO_BICUBIC_PILLOW,
-                         PAD_NONE);
+                         PAD_NEAREST, hparams.image_pad_color);
 
         for (int row = 0; row < grid_h; row++) {
             if (fuse_row) {

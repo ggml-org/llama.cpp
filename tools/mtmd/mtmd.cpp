@@ -616,9 +616,10 @@ struct mtmd_context {
             case PROJECTOR_TYPE_DEEPSEEKOCR:
             case PROJECTOR_TYPE_DEEPSEEKOCR2:
                 {
+                    tok_ov_img_start = {lookup_token("<image>")};
                     img_end = "\n"; // prevent empty batch on llama-server
                     image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
-                    ov_img_first = false;
+                    ov_img_first = true; // MUST be true for DeepSeek-VL-2 to output [global, sep, tiles...]
                 } break;
             case PROJECTOR_TYPE_HUNYUANVL:
                 {
