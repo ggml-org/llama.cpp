@@ -901,6 +901,9 @@ private:
 
     common_speculative_ptr spec;
 
+    struct ggml_threadpool * threadpool       = nullptr;
+    struct ggml_threadpool * threadpool_batch = nullptr;
+
     bool add_bos_token = true;
 
     int32_t n_ctx; // total context for all clients / slots
@@ -932,6 +935,15 @@ private:
     bool sleeping = false;
 
     void destroy() {
+        if (threadpool) {
+            ggml_threadpool_free(threadpool);
+            threadpool = nullptr;
+        }
+        if (threadpool_batch) {
+            ggml_threadpool_free(threadpool_batch);
+            threadpool_batch = nullptr;
+        }
+
         spec.reset();
         ctx_dft.reset();
         model_dft.reset();
@@ -1150,6 +1162,46 @@ private:
         n_ctx = llama_n_ctx(ctx_tgt);
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
+
+        // create and attach CPU threadpools
+        // this is important for backends that rely on CPU-side orchestration (e.g. Hexagon NPU)
+        {
+            SRV_INF("llama threadpool init, n_threads = %d\n", (int) params_base.cpuparams.n_threads);
+
+            auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            if (cpu_dev) {
+                auto * reg = ggml_backend_dev_backend_reg(cpu_dev);
+                auto * ggml_threadpool_new_fn = (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new");
+
+                if (ggml_threadpool_new_fn) {
+                    struct ggml_threadpool_params tpp_batch =
+                            ggml_threadpool_params_from_cpu_params(params_base.cpuparams_batch);
+                    struct ggml_threadpool_params tpp =
+                            ggml_threadpool_params_from_cpu_params(params_base.cpuparams);
+
+                    if (!ggml_threadpool_params_match(&tpp, &tpp_batch)) {
+                        threadpool_batch = ggml_threadpool_new_fn(&tpp_batch);
+                        if (!threadpool_batch) {
+                            SRV_ERR("batch threadpool create failed : n_threads %d\n", tpp_batch.n_threads);
+                        }
+
+                        // start the non-batch threadpool in the paused state
+                        tpp.paused = true;
+                    }
+
+                    threadpool = ggml_threadpool_new_fn(&tpp);
+                    if (!threadpool) {
+                        SRV_ERR("threadpool create failed : n_threads %d\n", tpp.n_threads);
+                    }
+
+                    llama_attach_threadpool(ctx_tgt, threadpool, threadpool_batch);
+                } else {
+                    SRV_WRN("%s", "failed to get ggml_threadpool_new from CPU backend\n");
+                }
+            } else {
+                SRV_WRN("%s", "no CPU backend found for threadpool creation\n");
+            }
+        }
 
         if (params_base.speculative.has_dft()) {
             if (callback_state) {
