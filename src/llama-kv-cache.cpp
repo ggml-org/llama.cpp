@@ -1918,6 +1918,13 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 
     const auto & cparams = lctx->get_cparams();
 
+    int32_t pos_max = 0;
+    for (uint32_t s = 0; s < n_stream; ++s) {
+        for (llama_seq_id seq_id = 0; seq_id < LLAMA_MAX_SEQ; ++seq_id) {
+            pos_max = std::max(pos_max, (int32_t) v_cells[s].seq_pos_max(seq_id));
+        }
+    }
+
     for (const auto & layer : layers) {
         const uint32_t il = layer.il;
 
@@ -1931,7 +1938,7 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
         const float freq_base_l  = model.get_rope_freq_base (cparams, il);
         const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+        ggml_tensor * rope_factors = model.get_rope_factors(cparams, pos_max, il);
 
         ggml_tensor * k =
             ggml_view_3d(ctx, layer.k,

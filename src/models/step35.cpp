@@ -245,7 +245,7 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
 
             // RoPE (partial rotary factors per layer)
             const bool is_swa = hparams.is_swa(il);
-            ggml_tensor * rope_factors = is_swa ? nullptr : model.get_rope_factors(cparams, il);
+            ggml_tensor * rope_factors = is_swa ? nullptr : model.get_rope_factors(cparams, pos_max, il);
             const int64_t n_rot_l = hparams.n_rot(il);
             Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, rope_factors,
@@ -450,7 +450,7 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     }
 
     const bool    is_swa       = hparams.is_swa(il);
-    ggml_tensor * rope_factors = is_swa ? nullptr : model.get_rope_factors(cparams, il);
+    ggml_tensor * rope_factors = is_swa ? nullptr : model.get_rope_factors(cparams, pos_max, il);
     const int64_t n_rot_l      = hparams.n_rot(il);
 
     Qcur = ggml_rope_ext(

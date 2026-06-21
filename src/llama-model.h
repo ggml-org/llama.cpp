@@ -638,7 +638,7 @@ struct llama_model {
     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
 
-    ggml_tensor * get_rope_factors(const llama_cparams & cparams, int il) const;
+    ggml_tensor * get_rope_factors(const llama_cparams & cparams, int32_t pos_max, int il) const;
 
     llama_memory_i * create_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
 

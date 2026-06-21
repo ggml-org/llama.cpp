@@ -1985,15 +1985,15 @@ float llama_model::get_rope_freq_scale(const llama_cparams & cparams, int il) co
     return hparams.is_swa(il) ? hparams.rope_freq_scale_train_swa : cparams.rope_freq_scale;
 }
 
-ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int il) const {
-    const uint32_t n_ctx_seq = cparams.n_ctx_seq;
+ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int32_t pos_max, int il) const {
+    GGML_UNUSED(cparams);
 
-    // choose long/short freq factors based on the context size
     if (layers[il].rope_freqs != nullptr) {
         return layers[il].rope_freqs;
     }
 
-    if (n_ctx_seq > hparams.n_ctx_orig_yarn) {
+    // long factors once positions reach the original training length
+    if (pos_max >= (int32_t) hparams.n_ctx_orig_yarn) {
         return layers[il].rope_long;
     }
 

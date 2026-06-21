@@ -9,6 +9,16 @@
 #include <algorithm>
 #include <sstream>
 
+int32_t llama_ubatch::pos_max() const {
+    int32_t res = 0;
+    if (pos) {
+        for (uint32_t i = 0; i < n_tokens; ++i) {
+            res = std::max(res, (int32_t) pos[i]);
+        }
+    }
+    return res;
+}
+
 llama_batch_allocr::llama_batch_allocr(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {
     const char * LLAMA_BATCH_DEBUG = getenv("LLAMA_BATCH_DEBUG");
     debug = LLAMA_BATCH_DEBUG ? atoi(LLAMA_BATCH_DEBUG) : 0;

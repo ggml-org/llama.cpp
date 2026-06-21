@@ -2400,6 +2400,7 @@ llm_graph_params llama_context::graph_params(
         /*.hparams     =*/ model.hparams,
         /*.cparams     =*/ cparams,
         /*.ubatch      =*/ ubatch,
+        /*.pos_max     =*/ ubatch.pos_max(),
         /*.gtype       =*/ gtype,
         /*.sched       =*/ sched.get(),
         /*.backend_cpu =*/ backend_cpu,
