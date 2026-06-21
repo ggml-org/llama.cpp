@@ -1189,6 +1189,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 }
 
                 if (chain_heads) {
+                    // ref: https://github.com/ggml-org/llama.cpp/pull/24340#discussion_r3448031546
                     chain_h[seq_id].insert(chain_h[seq_id].end(), h_row, h_row + n_embd);
 
                     const int n_rows = (int) result.size() + 1; // id_last + tokens drafted so far
