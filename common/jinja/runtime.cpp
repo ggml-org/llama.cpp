@@ -686,7 +686,7 @@ value set_statement::execute_impl(context & ctx) {
     return mk_val<value_undefined>();
 }
 
-static const auto bind_parameters = [](const std::string & name, const statements & this_args, const func_args & args, const size_t expected_count, const size_t input_count, context & ctx) {
+static inline void bind_parameters(const std::string & name, const statements & this_args, const func_args & args, const size_t expected_count, const size_t input_count, context & ctx) {
     for (size_t i = 0; i < expected_count; ++i) {
         if (i < input_count) {
             if (is_stmt<identifier>(this_args[i])) {
@@ -726,7 +726,7 @@ static const auto bind_parameters = [](const std::string & name, const statement
             //ctx.var[param_name] = default_args[i]->execute(ctx);
         }
     }
-};
+}
 
 value macro_statement::execute_impl(context & ctx) {
     if (!is_stmt<identifier>(this->name)) {
