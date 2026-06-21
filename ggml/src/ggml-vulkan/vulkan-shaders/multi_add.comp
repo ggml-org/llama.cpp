@@ -22,7 +22,6 @@ layout (push_constant) uniform parameter2
     uint rms_partials;
 } p;
 
-// Revert workaround for MoltenVK Bug, see https://github.com/ggml-org/llama.cpp/issues/15498
 layout (binding = 0)  readonly buffer A0 {A_TYPE data_a[];} a0;
 layout (binding = 1)  readonly buffer A1 {A_TYPE data_a[];} a1;
 layout (binding = 2)  readonly buffer A2 {A_TYPE data_a[];} a2;
