@@ -1295,9 +1295,12 @@ struct mtmd_tokenizer {
             for (auto & mel_spec : mel_spec_chunks) {
                 const bool is_placeholder = mel_spec.data.empty();
 
+                // Validate dimensions fit in clip_image_size (int)
+                GGML_ASSERT(mel_spec.n_len <= INT32_MAX && mel_spec.n_len >= 0);
+                GGML_ASSERT(mel_spec.n_mel <= INT32_MAX && mel_spec.n_mel >= 0);
                 clip_image_f32 mel_f32;
                 mel_f32.set_size(
-                    {mel_spec.n_len, mel_spec.n_mel},
+                    {(int)mel_spec.n_len, (int)mel_spec.n_mel},
                     is_placeholder, /* is_audio */ true);
                 mel_f32.cpy_buf(mel_spec.data);
 

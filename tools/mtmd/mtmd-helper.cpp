@@ -582,12 +582,28 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
 }
 
 mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder) {
-    std::vector<unsigned char> buf;
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, NULL, 0);
+    if (!wlen) {
+        LOG_ERR("Unable to convert filename to UTF-16: %s\n", fname);
+        return {nullptr, nullptr};
+    }
+    std::vector<wchar_t> wfname(wlen);
+    wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, wfname.data(), wlen);
+    if (!wlen) {
+        LOG_ERR("Unable to convert filename to UTF-16: %s\n", fname);
+        return {nullptr, nullptr};
+    }
+    FILE * f = _wfopen(wfname.data(), L"rb");
+#else
     FILE * f = fopen(fname, "rb");
+#endif
     if (!f) {
         LOG_ERR("Unable to open file %s: %s\n", fname, strerror(errno));
         return {nullptr, nullptr};
     }
+
+    std::vector<unsigned char> buf;
 
     fseek(f, 0, SEEK_END);
     long file_size = ftell(f);

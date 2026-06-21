@@ -180,6 +180,17 @@ That requires `JSON.stringify` when formatted to message content:
 }
 ```
 
+### Router mode: how child <--> router communicates
+
+Upon spawning a new child process using `subprocess`, both child and router listen to the stdout/stderr (combined)
+
+For the direction from child to router:
+- Generic messages are logs, it will be forwarded to router's stdout
+- Special state update messages are prefixed by `cmd_child_to_router:state:`, followed by a JSON. See `server_models::handle_child_state` for more
+
+For the direction from router to child:
+- When server sends `cmd_router_to_child:exit`, the child should exit gracefully --> if after `DEFAULT_STOP_TIMEOUT` and the child is still running, force-kill it
+
 ### Model management API (router mode)
 
 Model management API was added via PR [#23976](https://github.com/ggml-org/llama.cpp/pull/23976)

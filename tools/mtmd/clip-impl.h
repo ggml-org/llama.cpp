@@ -13,6 +13,14 @@
 #include <sstream>
 #include <vector>
 #include <memory>
+#include <fstream>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 // Internal header for clip.cpp
 
@@ -660,6 +668,22 @@ struct clip_image_f32_batch {
 //
 // common utils
 //
+
+#ifdef _WIN32
+static std::ifstream open_ifstream_binary(const std::string & fname) {
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, NULL, 0);
+    if (!wlen) {
+        throw std::runtime_error("failed to convert filename to UTF-16: " + fname);
+    }
+    std::vector<wchar_t> wfname(wlen);
+    (void)MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, wfname.data(), wlen);
+    return std::ifstream(wfname.data(), std::ios::binary);
+}
+#else
+static std::ifstream open_ifstream_binary(const std::string & fname) {
+    return std::ifstream(fname, std::ios::binary);
+}
+#endif
 
 static std::string string_format(const char * fmt, ...) {
     va_list ap;

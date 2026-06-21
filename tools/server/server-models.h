@@ -171,8 +171,12 @@ public:
     void download(common_params_model && model, common_download_opts && opts);
 
     // update the status of a model instance (thread-safe)
-    void update_status(const std::string & name, server_model_status status, int exit_code);
-    void update_loaded_info(const std::string & name, std::string & raw_info);
+    struct update_status_args {
+        server_model_status status;
+        int exit_code = 0; // only valid if status == UNLOADED
+        json loaded_info = nullptr;
+    };
+    void update_status(const std::string & name, const update_status_args & args);
     void update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok = true);
 
     // remove a cache model from disk and update the list (thread-safe)
@@ -193,34 +197,41 @@ public:
     // proxy an HTTP request to the model instance
     server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used);
 
+    // handle message sent from server_child::notify_to_router()
+    // raw input must starts with CMD_CHILD_TO_ROUTER_STATE, followed by a JSON string
+    // this function is not thread-safe, must be called from instance's monitoring thread
+    // payload per state:
+    //     state = loading     -> payload = {} (TODO: add progress info)
+    //     state = ready       -> payload = model_info (json), or {} if wakeup from sleeping
+    //     state = sleeping    -> payload = {}
+    void handle_child_state(const std::string & name, const std::string & raw_input);
+};
+
+struct server_child {
     // return true if the current process is a child server instance
-    static bool is_child_server();
+    bool is_child();
 
-    // notify the router server that a model instance is ready
+    // register the shutdown_handler to be called by the router
     // return the monitoring thread (to be joined by the caller)
-    static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler, const json & model_info);
+    std::thread setup(const std::function<void(int)> & shutdown_handler);
 
-    // notify the router server that the sleeping state has changed
-    static void notify_router_sleeping_state(bool sleeping);
+    // notify router server for status changes (e.g. loading, downloading, sleeping, etc.)
+    // message will be handled by server_models::handle_child_state() on the router side
+    void notify_to_router(const std::string & state_name, const json & payload);
 };
 
 struct server_models_routes {
     common_params params;
     json ui_settings = json::object();     // Primary: new name
-    json webui_settings = json::object();  // Deprecated: use ui_settings (kept for compat)
     std::atomic<bool> stopping = false;    // for graceful disconnecting SSE clients during shutdown
     server_models models;
     server_models_routes(const common_params & params, int argc, char ** argv)
             : params(params), models(params, argc, argv) {
-        // Support both new ui_config_json and deprecated webui_config_json
-        const std::string & cfg = !this->params.ui_config_json.empty()
-            ? this->params.ui_config_json
-            : this->params.webui_config_json;
+        const std::string & cfg = this->params.ui_config_json;
         if (!cfg.empty()) {
             try {
                 json json_settings = json::parse(cfg);
                 ui_settings = json_settings;
-                webui_settings = json_settings;  // Deprecated: keep in sync
             } catch (const std::exception & e) {
                 LOG_ERR("%s: failed to parse UI config: %s\n", __func__, e.what());
                 throw;
