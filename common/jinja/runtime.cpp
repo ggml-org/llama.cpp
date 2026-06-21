@@ -769,7 +769,7 @@ value call_statement::execute_impl(context & ctx) {
 
     context caller_ctx(ctx); // new scope for caller execution
 
-    const func_handler func = [this, &caller_ctx](const func_args & args) -> value {
+    const func_handler func = [this, caller_ctx = std::move(caller_ctx)](const func_args & args) -> value {
         context block_ctx(caller_ctx); // new scope for block execution
 
         bind_parameters("caller", this->caller_args, args, block_ctx);
