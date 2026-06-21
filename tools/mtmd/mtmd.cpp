@@ -2142,8 +2142,7 @@ std::map<ggml_backend_dev_t, size_t> mtmd_get_memory_usage(const char * mmproj_f
 
     try {
         mtmd_log_set(stub_log_callback, nullptr); // suppress logging
-        // TODO @ngxson : fix no_alloc here
-        ctx.reset(new mtmd_context(mmproj_fname, nullptr, ctx_params));
+        ctx.reset(new mtmd_context(mmproj_fname, nullptr, ctx_params, true));
         mtmd_log_set(saved_log_callback, saved_log_user_data); // restore log callback
         std::map<ggml_backend_dev_t, size_t> total_mem;
         auto merge = [&](const struct clip_ctx * c) {
