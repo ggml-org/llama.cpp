@@ -1,4 +1,3 @@
-#include "ggml-backend-impl.h"
 #include "ggml-decoder.h"
 #include "ggml-impl.h"
 
@@ -45,6 +44,7 @@ struct graph_key_hash {
 
 struct decoder_runtime_ctx {
     decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) : mutex(std::move(mutex)) {}
+
     std::shared_ptr<std::mutex> mutex;
     std::shared_ptr<GgmlOvDecoder> ptr;
 };
@@ -64,11 +64,7 @@ struct ov_runtime_context {
     std::map<std::string, std::string> kv_state_input_name_map;
     std::atomic<int> backend_count;
 
-    ov_runtime_context() :
-        device("CPU"),
-        stateful(false),
-        stateful_kv_size(0),
-        backend_count(0) {}
+    ov_runtime_context() : device("CPU"), stateful(false), stateful_kv_size(0), backend_count(0) {}
 
     void clear_caches() {
         std::lock_guard<std::mutex> lock(ctx_mutex);
@@ -86,6 +82,8 @@ enum ggml_status ov_graph_compute_dynamic(struct ggml_cgraph * cgraph, std::shar
 enum ggml_status ov_graph_compute_static(struct ggml_cgraph * cgraph, std::shared_ptr<ov_runtime_context> r_ctx);
 
 size_t checksum(const void * data, size_t size);
+
+bool save_ggml_tensor_data_to_txt(const ggml_tensor * tensor, const std::string & file_path);
 
 void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor);
 
@@ -117,8 +115,6 @@ std::vector<T> pad_input(const ggml_tensor * tensor, size_t padded_rows, size_t 
                         padded_rows, padded_cols, pad_value);
 }
 
-void set_zero_diagonal(std::vector<float> & matrix, size_t rows, size_t cols);
-
 const ggml_tensor * get_inp_pos_tensor(struct ggml_cgraph * cgraph);
 
 bool get_is_prefill(const ggml_tensor * inp_pos);
@@ -136,6 +132,13 @@ ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
                                    const ggml_tensor * ggml_tensor);
 
 bool is_naive(struct ggml_cgraph * cgraph);
+
+/**
+ * @brief Heuristically checks whether the given computation graph is a split-model fragment.
+ * @param cgraph Pointer to the GGML computation graph to analyze.
+ * @return true if the graph is identified as split; otherwise false.
+ */
+bool is_model_splitted(struct ggml_cgraph * cgraph);
 
 enum ggml_status naive_compute(struct ggml_cgraph * cgraph,
                                ov::Core & core,

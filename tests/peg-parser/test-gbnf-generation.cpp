@@ -129,8 +129,86 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            root ::= ([^<] | "<" [^/] | "</" [^t] | "</t" [^a] | "</ta" [^g] | "</tag" [^>])*
+            root ::= until-0
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-0 ::= | [<] until-0-01 | [^<] until-0
+            until-0-01 ::= | [<] until-0-01 | [/] until-0-02 | [^/<] until-0
+            until-0-02 ::= | [<] until-0-01 | [t] until-0-03 | [^<t] until-0
+            until-0-03 ::= | [<] until-0-01 | [a] until-0-04 | [^<a] until-0
+            until-0-04 ::= | [<] until-0-01 | [g] until-0-05 | [^<g] until-0
+            until-0-05 ::= | [<] until-0-01 | [^<>] until-0
+        )""", gbnf);
+    });
+
+    t.test("until grammar overlapping delimiter", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            return p.until("\n</parameter>\n");
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= until-0
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-0 ::= | [\n] until-0-01 | [^\n] until-0
+            until-0-01 ::= | [\n] until-0-01 | [<] until-0-02 | [^\n<] until-0
+            until-0-02 ::= | [\n] until-0-01 | [/] until-0-03 | [^\n/] until-0
+            until-0-03 ::= | [\n] until-0-01 | [p] until-0-04 | [^\np] until-0
+            until-0-04 ::= | [\n] until-0-01 | [a] until-0-05 | [^\na] until-0
+            until-0-05 ::= | [\n] until-0-01 | [r] until-0-06 | [^\nr] until-0
+            until-0-06 ::= | [\n] until-0-01 | [a] until-0-07 | [^\na] until-0
+            until-0-07 ::= | [\n] until-0-01 | [m] until-0-08 | [^\nm] until-0
+            until-0-08 ::= | [\n] until-0-01 | [e] until-0-09 | [^\ne] until-0
+            until-0-09 ::= | [\n] until-0-01 | [t] until-0-10 | [^\nt] until-0
+            until-0-10 ::= | [\n] until-0-01 | [e] until-0-11 | [^\ne] until-0
+            until-0-11 ::= | [\n] until-0-01 | [r] until-0-12 | [^\nr] until-0
+            until-0-12 ::= | [\n] until-0-01 | [>] until-0-13 | [^\n>] until-0
+            until-0-13 ::= | [^\n] until-0
+        )""", gbnf);
+    });
+
+    // DeepSeek-V3.2 tag prefix. The DSML token (｜DSML｜) embeds U+FF5C,
+    // so the delimiter mixes ASCII and multi-byte codepoints.
+    t.test("until grammar unicode delimiter", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            return p.until("<｜DSML｜");
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= until-0
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-0 ::= | [<] until-0-01 | [^<] until-0
+            until-0-01 ::= | [<] until-0-01 | [\uFF5C] until-0-02 | [^<\uFF5C] until-0
+            until-0-02 ::= | [<] until-0-01 | [D] until-0-03 | [^<D] until-0
+            until-0-03 ::= | [<] until-0-01 | [S] until-0-04 | [^<S] until-0
+            until-0-04 ::= | [<] until-0-01 | [M] until-0-05 | [^<M] until-0
+            until-0-05 ::= | [<] until-0-01 | [L] until-0-06 | [^<L] until-0
+            until-0-06 ::= | [<] until-0-01 | [^<\uFF5C] until-0
+        )""", gbnf);
+    });
+
+    t.test("until grammar multiple delimiters", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            return p.until_one_of({"ab", "cd", "ef"});
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= until-0
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-0 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^ace] until-0
+            until-0-01 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^abce] until-0
+            until-0-03 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^acde] until-0
+            until-0-05 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^acef] until-0
         )""", gbnf);
     });
 

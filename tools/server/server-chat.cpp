@@ -257,8 +257,11 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         for (json resp_tool : response_body.at("tools")) {
             json chatcmpl_tool;
 
-            if (json_value(resp_tool, "type", std::string()) != "function") {
-                throw std::invalid_argument("'type' of tool must be 'function'");
+            const std::string type = json_value(resp_tool, "type", std::string());
+            if (type != "function") {
+                // Non-function Responses tools have no Chat Completions equivalent.
+                SRV_WRN("unsupported Responses tool type '%s' skipped\n", type.c_str());
+                continue;
             }
             resp_tool.erase("type");
             chatcmpl_tool["type"] = "function";
@@ -270,7 +273,9 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
             chatcmpl_tools.push_back(chatcmpl_tool);
         }
         chatcmpl_body.erase("tools");
-        chatcmpl_body["tools"] = chatcmpl_tools;
+        if (!chatcmpl_tools.empty()) {
+            chatcmpl_body["tools"] = chatcmpl_tools;
+        }
     }
 
     if (response_body.contains("max_output_tokens")) {
@@ -575,14 +580,14 @@ json server_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff) {
 json convert_transcriptions_to_chatcmpl(
         const json & inp_body,
         const common_chat_templates * tmpls,
-        const std::map<std::string, raw_buffer> & in_files,
+        const std::map<std::string, uploaded_file> & in_files,
         std::vector<raw_buffer> & out_files) {
     // TODO @ngxson : this function may need to be improved in the future
     // handle input files
     out_files.clear();
     auto it = in_files.find("file");
     if (it != in_files.end()) {
-        out_files.push_back(it->second);
+        out_files.push_back(it->second.data);
     } else {
         throw std::invalid_argument("No input file found for transcription");
     }

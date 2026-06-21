@@ -41,7 +41,7 @@ bool llama_adapter_cvec::init(const llama_model & model) {
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
-                /*.mem_size   =*/ hparams.n_layer*ggml_tensor_overhead(),
+                /*.mem_size   =*/ hparams.n_layer()*ggml_tensor_overhead(),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -61,9 +61,9 @@ bool llama_adapter_cvec::init(const llama_model & model) {
     };
 
     // make tensors
-    tensors.reserve(hparams.n_layer);
+    tensors.reserve(hparams.n_layer());
     tensors.push_back(nullptr); // there's never a tensor for layer 0
-    for (size_t il = 1; il < hparams.n_layer; il++) {
+    for (size_t il = 1; il < hparams.n_layer(); il++) {
         ggml_backend_buffer_type_t buft = model.select_buft(il);
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
@@ -121,7 +121,7 @@ bool llama_adapter_cvec::apply(
     layer_start = il_start;
     layer_end   = il_end;
 
-    for (size_t il = 1; il < hparams.n_layer; il++) {
+    for (size_t il = 1; il < hparams.n_layer(); il++) {
         assert(tensors[il] != nullptr);
 
         const size_t off = n_embd * (il - 1); // buffer doesn't have data for layer 0, since it's never present

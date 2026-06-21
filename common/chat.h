@@ -89,9 +89,20 @@ struct common_chat_msg {
 
     nlohmann::ordered_json to_json_oaicompat(bool concat_typed_text = false) const;
 
+    std::string render_content(const std::string & delimiter = "\n\n") const;
+
     bool empty() const {
         return content.empty() && content_parts.empty() && tool_calls.empty() && reasoning_content.empty() &&
                tool_name.empty() && tool_call_id.empty();
+    }
+
+    bool contains_media() const {
+        for (const auto & part : content_parts) {
+            if (part.type == "media_marker") {
+                return true;
+            }
+        }
+        return false;
     }
 
     void set_tool_call_ids(std::vector<std::string> &           ids_cache,
@@ -132,6 +143,17 @@ struct common_chat_msg_diff {
     }
 };
 
+struct common_chat_msg_span {
+    std::string role;
+    std::size_t pos = 0;
+    std::size_t len = 0;
+};
+
+struct common_chat_msg_delimiter {
+    std::string role;
+    std::string delimiter;
+};
+
 struct common_chat_tool {
     std::string name;
     std::string description;
@@ -155,12 +177,22 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_COUNT,  // Not a format, just the # formats
 };
 
+
+// Continuation method provided via `continue_final_message`
+enum common_chat_continuation {
+    COMMON_CHAT_CONTINUATION_NONE,
+    COMMON_CHAT_CONTINUATION_AUTO,
+    COMMON_CHAT_CONTINUATION_REASONING,
+    COMMON_CHAT_CONTINUATION_CONTENT,
+};
+
 struct common_chat_templates_inputs {
     std::vector<common_chat_msg>          messages;
     std::string                           grammar;
     std::string                           json_schema;
-    bool                                  add_generation_prompt = true;
-    bool                                  use_jinja             = true;
+    bool                                  add_generation_prompt  = true;
+    common_chat_continuation              continue_final_message = COMMON_CHAT_CONTINUATION_NONE;
+    bool                                  use_jinja              = true;
     // Parameters below only supported when use_jinja is true
     std::vector<common_chat_tool>         tools;
     common_chat_tool_choice               tool_choice         = COMMON_CHAT_TOOL_CHOICE_AUTO;
@@ -187,6 +219,7 @@ struct common_chat_params {
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
     std::string                         parser;
+    std::vector<common_chat_msg_span>   message_spans;
 };
 
 // per-message parsing syntax
@@ -198,6 +231,8 @@ struct common_chat_parser_params {
     bool                    reasoning_in_content = false;
     std::string             generation_prompt;
     bool                    parse_tool_calls     = true;
+    bool                    is_continuation      = false;
+    bool                    echo                 = false;  // Include assistant prefilled msg in output
     bool                    debug                = false;  // Enable debug output for PEG parser
     common_peg_arena        parser               = {};
     common_chat_parser_params() = default;
@@ -258,6 +293,8 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const nlohmann::or
 
 std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const nlohmann::ordered_json & tools);
 
+common_chat_continuation common_chat_continuation_parse(const nlohmann::ordered_json & value);
+
 // DEPRECATED: only used in tests
 nlohmann::ordered_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
 
@@ -270,10 +307,15 @@ std::string common_chat_template_direct_apply(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs);
 
+std::string common_chat_template_generation_prompt(
+    const common_chat_template &          tmpl,
+    const autoparser::generation_params & inputs);
+
 std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
         autoparser::generation_params & params);
+
 
 // specialized per-task preset
 struct common_chat_prompt_preset {
@@ -282,3 +324,6 @@ struct common_chat_prompt_preset {
 };
 
 common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates);
+
+std::vector<common_chat_msg_span> common_chat_split_by_role(const std::string & prompt, const std::vector<common_chat_msg_delimiter> & delims);
+

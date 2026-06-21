@@ -2005,12 +2005,12 @@ void tinygemm_kernel_amx(int M, int N, int KB, const void * RESTRICT _A, const v
     const int lda = KB * sizeof(TA);
     //const int ldb = KB * sizeof(TB);
 
-    static thread_local packed_B_t Tile0[TILE_N * TILE_K];
-    static thread_local packed_B_t Tile1[TILE_N * TILE_K];
-    static thread_local int8_t Tile23[TILE_M * TILE_K];
+    alignas(64) static thread_local packed_B_t Tile0[TILE_N * TILE_K];
+    alignas(64) static thread_local packed_B_t Tile1[TILE_N * TILE_K];
+    alignas(64) static thread_local int8_t Tile23[TILE_M * TILE_K];
 
-    static thread_local int32_t TileC0[TILE_M * TILE_N * 4];
-    static thread_local int32_t TileC1[TILE_M * TILE_N * 4];
+    alignas(64) static thread_local int32_t TileC0[TILE_M * TILE_N * 4];
+    alignas(64) static thread_local int32_t TileC1[TILE_M * TILE_N * 4];
 
     // double buffering C to interleave avx512 and amx
     int32_t * C_cur = TileC0;
@@ -2187,21 +2187,21 @@ void tinygemm_kernel_amx(int M, int N, int KB, const void * RESTRICT _A, const v
     const int m1 = std::max(M - TILE_M, 0);
     //const int lda = KB * sizeof(TA);
 
-    static thread_local int8_t Tile0[TILE_N * TILE_K];
-    static thread_local int8_t Tile1[TILE_N * TILE_K];
-    static thread_local int8_t Tile23[TILE_M * TILE_K];
+    alignas(64) static thread_local int8_t Tile0[TILE_N * TILE_K];
+    alignas(64) static thread_local int8_t Tile1[TILE_N * TILE_K];
+    alignas(64) static thread_local int8_t Tile23[TILE_M * TILE_K];
 
     // mat mul result for each group
-    static thread_local int32_t Tile4[TILE_M * TILE_N];
-    static thread_local int32_t Tile5[TILE_M * TILE_N];
-    static thread_local int32_t Tile6[TILE_M * TILE_N];
-    static thread_local int32_t Tile7[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Tile4[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Tile5[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Tile6[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Tile7[TILE_M * TILE_N];
 
     // sum of each QK_K block, contains 8 groups, int32
-    static thread_local int32_t Sumi4[TILE_M * TILE_N];
-    static thread_local int32_t Sumi5[TILE_M * TILE_N];
-    static thread_local int32_t Sumi6[TILE_M * TILE_N];
-    static thread_local int32_t Sumi7[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Sumi4[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Sumi5[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Sumi6[TILE_M * TILE_N];
+    alignas(64) static thread_local int32_t Sumi7[TILE_M * TILE_N];
 
     const int k_group_size = std::is_same<TB, block_q6_K>::value ? 16 : 32;
     for (int i = 0; i < KB; ++i) {
@@ -2417,15 +2417,14 @@ void ggml_backend_amx_mul_mat(const ggml_compute_params * params, struct ggml_te
             // Q4_K, Q5_K, Q6_K, IQ4_XS handles 8 TILE_K per blck_size
             GGML_ASSERT(TILE_K == blck_size || TILE_K * 8 == blck_size);
 
-            parallel_for_ggml(params, n_batch, [&](int begin, int end) {
-                for (int batch_idx = begin; batch_idx < end; ++batch_idx) {
+            parallel_for_ggml(params, n_batch * M, [&](int begin, int end) {
+                for (int idx = begin; idx < end; ++idx) {
+                    int batch_idx = idx / M;
+                    int m         = idx % M;
                     int64_t src1_offset = ggml_batch_offset(src1, batch_idx, ne2);
                     const float * A_data = (const float *)((const char *)src1->data + src1_offset);
                     char * wdata_batch = (char *)wdata + batch_idx * M * row_size_A;
-
-                    for (int m = 0; m < M; ++m) {
-                        from_float<vec_dot_type>(A_data + m * K, wdata_batch + m * row_size_A, K);
-                    }
+                    from_float<vec_dot_type>(A_data + m * K, wdata_batch + m * row_size_A, K);
                 }
             });
         });

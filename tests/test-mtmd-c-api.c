@@ -2,6 +2,7 @@
 #include <assert.h>
 
 #include "mtmd.h"
+#include "mtmd-helper.h"
 
 int main(void) {
     printf("\n\nTesting libmtmd C API...\n");
@@ -16,6 +17,11 @@ int main(void) {
         fprintf(stderr, "Failed to create input chunks\n");
         return 1;
     }
+
+    // simple test for the helper
+    size_t n_tokens_total = mtmd_helper_get_n_tokens(chunks);
+    printf("Total tokens in chunks: %zu\n", n_tokens_total);
+    assert(n_tokens_total > 0);
 
     size_t n_chunks = mtmd_input_chunks_size(chunks);
     printf("Number of chunks: %zu\n", n_chunks);
