@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <unordered_map>
 #include <string>
 #include <string_view>
@@ -275,6 +276,11 @@ struct common_peg_gbnf_parser {
     std::string grammar;
 };
 
+struct common_peg_ac_parser {
+    common_peg_parser_id child;
+    std::vector<std::string> delimiters;
+};
+
 // Variant holding all parser types
 using common_peg_parser_variant = std::variant<
     common_peg_epsilon_parser,
@@ -296,7 +302,8 @@ using common_peg_parser_variant = std::variant<
     common_peg_ref_parser,
     common_peg_atomic_parser,
     common_peg_tag_parser,
-    common_peg_gbnf_parser
+    common_peg_gbnf_parser,
+    common_peg_ac_parser
 >;
 
 class common_peg_arena {
@@ -513,6 +520,18 @@ class common_peg_parser_builder {
     // Wraps a child parser but emits a custom GBNF grammar string instead of
     // the child's grammar. Parsing delegates entirely to the child.
     common_peg_parser gbnf(const common_peg_parser & p, const std::string & grammar) { return add(common_peg_gbnf_parser{p, grammar}); }
+
+    // Wraps a child parser but emits a GBNF grammar built from the Aho-Corasick
+    // automaton of `delimiters`, matching everything up to and including the
+    // first delimiter. Parsing delegates entirely to the child, which is
+    // responsible for consuming the delimiter (e.g. until(D) + literal(D)).
+    common_peg_parser ac(const common_peg_parser & p, const std::vector<std::string> & delimiters) {
+        if (delimiters.empty()) {
+            throw std::runtime_error("ac parser requires at least one delimiter");
+        }
+        return add(common_peg_ac_parser{p, delimiters});
+    }
+    common_peg_parser ac(const common_peg_parser & p, const std::string & delimiter) { return ac(p, std::vector<std::string>{delimiter}); }
 
     void set_root(const common_peg_parser & p);
 

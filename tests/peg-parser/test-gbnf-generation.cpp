@@ -212,6 +212,96 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
+    t.test("ac grammar", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            return p.ac(p.until("</tag>") + p.literal("</tag>"), "</tag>");
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            ac-3 ::= [<] ac-3-01 | [^<] ac-3
+            ac-3-01 ::= [<] ac-3-01 | [/] ac-3-02 | [^/<] ac-3
+            ac-3-02 ::= [<] ac-3-01 | [t] ac-3-03 | [^<t] ac-3
+            ac-3-03 ::= [<] ac-3-01 | [a] ac-3-04 | [^<a] ac-3
+            ac-3-04 ::= [<] ac-3-01 | [g] ac-3-05 | [^<g] ac-3
+            ac-3-05 ::= [>] | [<] ac-3-01 | [^<>] ac-3
+            root ::= ac-3
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf);
+    });
+
+    t.test("ac grammar terminates at first delimiter", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            return p.ac(p.until("\n</parameter>\n") + p.literal("\n</parameter>\n"), "\n</parameter>\n");
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            ac-3 ::= [\n] ac-3-01 | [^\n] ac-3
+            ac-3-01 ::= [\n] ac-3-01 | [<] ac-3-02 | [^\n<] ac-3
+            ac-3-02 ::= [\n] ac-3-01 | [/] ac-3-03 | [^\n/] ac-3
+            ac-3-03 ::= [\n] ac-3-01 | [p] ac-3-04 | [^\np] ac-3
+            ac-3-04 ::= [\n] ac-3-01 | [a] ac-3-05 | [^\na] ac-3
+            ac-3-05 ::= [\n] ac-3-01 | [r] ac-3-06 | [^\nr] ac-3
+            ac-3-06 ::= [\n] ac-3-01 | [a] ac-3-07 | [^\na] ac-3
+            ac-3-07 ::= [\n] ac-3-01 | [m] ac-3-08 | [^\nm] ac-3
+            ac-3-08 ::= [\n] ac-3-01 | [e] ac-3-09 | [^\ne] ac-3
+            ac-3-09 ::= [\n] ac-3-01 | [t] ac-3-10 | [^\nt] ac-3
+            ac-3-10 ::= [\n] ac-3-01 | [e] ac-3-11 | [^\ne] ac-3
+            ac-3-11 ::= [\n] ac-3-01 | [r] ac-3-12 | [^\nr] ac-3
+            ac-3-12 ::= [\n] ac-3-01 | [>] ac-3-13 | [^\n>] ac-3
+            ac-3-13 ::= [\n] | [^\n] ac-3
+            root ::= ac-3
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf);
+    });
+
+    t.test("ac grammar multiple delimiters", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            return p.ac(p.eps(), std::vector<std::string>{"ab", "cd", "ef"});
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            ac-1 ::= [a] ac-1-01 | [c] ac-1-03 | [e] ac-1-05 | [^ace] ac-1
+            ac-1-01 ::= [b] | [a] ac-1-01 | [c] ac-1-03 | [e] ac-1-05 | [^abce] ac-1
+            ac-1-03 ::= [d] | [a] ac-1-01 | [c] ac-1-03 | [e] ac-1-05 | [^acde] ac-1
+            ac-1-05 ::= [f] | [a] ac-1-01 | [c] ac-1-03 | [e] ac-1-05 | [^acef] ac-1
+            root ::= ac-1
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf);
+    });
+
+    t.test("ac grammar shadows child grammar", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            return p.ac(p.literal("IGNORED"), "</tag>");
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            ac-1 ::= [<] ac-1-01 | [^<] ac-1
+            ac-1-01 ::= [<] ac-1-01 | [/] ac-1-02 | [^/<] ac-1
+            ac-1-02 ::= [<] ac-1-01 | [t] ac-1-03 | [^<t] ac-1
+            ac-1-03 ::= [<] ac-1-01 | [a] ac-1-04 | [^<a] ac-1
+            ac-1-04 ::= [<] ac-1-01 | [g] ac-1-05 | [^<g] ac-1
+            ac-1-05 ::= [>] | [<] ac-1-01 | [^<>] ac-1
+            root ::= ac-1
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf);
+    });
+
     t.test("complex expressions with parentheses", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.one_or_more(p.literal("a") | p.literal("b"));
