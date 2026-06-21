@@ -11,6 +11,7 @@
 #include <cstring>
 #include <climits>
 #include <algorithm>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
