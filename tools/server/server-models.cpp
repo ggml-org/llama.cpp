@@ -442,6 +442,7 @@ void server_models::load_models() {
                 /* last_used     */ 0,
                 /* args          */ std::vector<std::string>(),
                 /* loaded_info   */ {},
+                /* progress      */ {},
                 /* exit_code     */ 0,
                 /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
                 /* multimodal    */ mtmd_caps{false, false},
@@ -608,6 +609,7 @@ void server_models::load_models() {
                     /* last_used     */ 0,
                     /* args          */ std::vector<std::string>(),
                     /* loaded_info   */ {},
+                    /* progress      */ {},
                     /* exit_code     */ 0,
                     /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
                     /* multimodal    */ mtmd_caps{false, false},
@@ -1140,6 +1142,9 @@ void server_models::update_status(const std::string & name, const update_status_
         if (!args.loaded_info.is_null()) {
             meta.loaded_info = args.loaded_info;
         }
+        if (!args.progress.is_null()) {
+            meta.progress = args.progress;
+        }
     }
     // broadcast status change to SSE
     {
@@ -1151,6 +1156,9 @@ void server_models::update_status(const std::string & name, const update_status_
         }
         if (!args.loaded_info.is_null()) {
             data["info"] = args.loaded_info;
+        }
+        if (!args.progress.is_null()) {
+            data["progress"] = args.progress;
         }
         // note: notify_sse doesn't acquire the lock, so no deadlock here
         notify_sse("status_change", name, data);
@@ -1322,8 +1330,12 @@ void server_models::handle_child_state(const std::string & name, const std::stri
     switch (state) {
         case SERVER_STATE_LOADING:
             {
-                // do nothing for now
-                // TODO: report loading progress for first load and wakeup from sleep
+                update_status(name, {
+                    SERVER_MODEL_STATUS_LOADING,
+                    0,
+                    nullptr, // no loaded_info yet
+                    payload,
+                });
             } break;
         case SERVER_STATE_READY:
             {
@@ -1331,7 +1343,8 @@ void server_models::handle_child_state(const std::string & name, const std::stri
                     SERVER_MODEL_STATUS_LOADED,
                     0,
                     // note: payload can be empty if this is a wakeup from sleep
-                    payload.size() > 0 ? payload : nullptr
+                    payload.size() > 0 ? payload : nullptr,
+                    {}, // reset progress info
                 });
             } break;
         case SERVER_STATE_SLEEPING:
@@ -1384,6 +1397,7 @@ void server_child::notify_to_router(const std::string & state, const json & payl
         {"state", state},
         {"payload", payload},
     };
+    std::lock_guard<std::mutex> lk(mtx_stdout);
     common_log_pause(common_log_main());
     fflush(stdout);
     fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
