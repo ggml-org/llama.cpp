@@ -2302,7 +2302,7 @@ static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, 
         const float *src = st->src + chunk_idx * st->k_stride;
 
         if (st->vtcm_f32_act) {
-            float *thread_f32_act = st->vtcm_f32_act + i * 4 * st->k_block;
+            float *thread_f32_act = st->vtcm_f32_act + i * HTP_MM_DMA_ACT_MULTIPLIER * st->k_block;
             transfer_activation_chunk_fp32_to_fp16_dma_pipelined(
                 st->ctx->dma[i], dst, src, chunk_size, st->k_block, st->k_stride, st->k_valid, thread_f32_act
             );
@@ -2529,7 +2529,7 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
 
     const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
 
-    const size_t act_f32_size     = hex_align_up((size_t)act_threads * 4 * k * sizeof(float), HTP_MM_HMX_TILE_SIZE);
+    const size_t act_f32_size     = hex_align_up((size_t)act_threads * HTP_MM_DMA_ACT_MULTIPLIER * k * sizeof(float), HTP_MM_HMX_TILE_SIZE);
 
     const size_t weight_area_size = is_quant
         ? hex_align_up((n_chunk_n_cols / 32) * n_k_tiles * aligned_tile_size, HTP_MM_HMX_TILE_SIZE)
@@ -2784,7 +2784,7 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
     // strided rows into a contiguous block before the F32->F16 conversion.
     const bool use_dma_activation = (params->act_stride > params->k);
     const size_t f32_scratch_size = use_dma_activation
-        ? hex_align_up((size_t)act_threads * 4 * (size_t) params->k * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
+        ? hex_align_up((size_t)act_threads * HTP_MM_DMA_ACT_MULTIPLIER * (size_t) params->k * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
 
     size_t m_chunk_n_rows = m_chunk;
     size_t n_chunk_n_cols = n_chunk;

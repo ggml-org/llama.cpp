@@ -2093,7 +2093,7 @@ static void ggml_hexagon_precompute_matmul_params(
 
             int act_threads = n_threads;
             while (act_threads >= 1) {
-                const size_t f32_scratch_size = use_dma_activation ? hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
+                const size_t f32_scratch_size = use_dma_activation ? hex_align_up(act_threads * HTP_MM_DMA_ACT_MULTIPLIER * ne00_padded * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
                 size_t group_overhead = 256 + f32_scratch_size;
                 size_t group_size_per_n, group_size_per_m, group_size_per_mn;
                 htp_mm_hmx_get_batched_chunk_costs(ne00_padded, group_size, &group_size_per_n, &group_size_per_m, &group_size_per_mn);
@@ -2150,7 +2150,7 @@ static void ggml_hexagon_precompute_matmul_params(
 
             int act_threads = n_threads;
             while (act_threads >= 1) {
-                const size_t act_f32_size = is_matmul_id ? 0 : hex_align_up(act_threads * 4 * ne00_padded * sizeof(float), HTP_MM_HMX_TILE_SIZE);
+                const size_t act_f32_size = is_matmul_id ? 0 : hex_align_up(act_threads * HTP_MM_DMA_ACT_MULTIPLIER * ne00_padded * sizeof(float), HTP_MM_HMX_TILE_SIZE);
                 size_t simple_2d_overhead = 256 + act_f32_size;
                 size_t simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn;
                 htp_mm_hmx_get_2d_chunk_costs(wtype, ne00_padded, pipeline, aligned_tile_size, &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
