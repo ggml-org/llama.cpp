@@ -72,7 +72,12 @@ static __dpct_inline__ T op_elu(T x) {
 template<typename T>
 static __dpct_inline__ T op_tanh(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
-        return sycl::ext::oneapi::experimental::tanh(x);
+        constexpr int ver = __INTEL_LLVM_COMPILER;
+#if defined(__INTEL_LLVM_COMPILER) && (__INTEL_LLVM_COMPILER >= 20260000)
+            return sycl::ext::oneapi::experimental::tanh(x);
+#else
+            return static_cast<T>(sycl::tanh(static_cast<float>(x)));
+#endif
     } else {
         return sycl::tanh(x);
     }
