@@ -5759,11 +5759,17 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
     auto * comm_ctx = static_cast<ggml_backend_sycl_comm_context *>(comm_ctx_v);
     const size_t n_backends = comm_ctx->backends.size();
 
-    // Fast path: N=2, FP32, contiguous, matching shapes.
+    // Fast path: N=2, F32/F16, contiguous, matching shapes.
     if (n_backends != 2) {
         return false;
     }
-    if (tensors[0]->type != GGML_TYPE_F32 || tensors[1]->type != GGML_TYPE_F32) {
+    // Accept F32 or F16 inputs natively (types must match). F16 takes the
+    // direct 2-byte memcpy + add path below; other types return false so the
+    // meta-backend uses its generic all-reduce.
+    if (tensors[0]->type != tensors[1]->type) {
+        return false;
+    }
+    if (tensors[0]->type != GGML_TYPE_F32 && tensors[0]->type != GGML_TYPE_F16) {
         return false;
     }
     if (!ggml_is_contiguous(tensors[0]) || !ggml_is_contiguous(tensors[1])) {
@@ -5793,6 +5799,34 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
     uint8_t * buf0 = comm_ctx->buf0->get();
     uint8_t * buf1 = comm_ctx->buf1->get();
 
+    // F16 native path: direct 2-byte cross-device copy + add, skipping the
+    // F32 round-trip the meta-backend fallback would force. Cross-device copies
+    // go through dev2dev_memcpy because the two devices are in separate SYCL
+    // contexts (a raw peer-USM q->memcpy would be a silent no-op).
+    if (tensors[0]->type == GGML_TYPE_F16) {
+        sycl::half * f16_out0 = (sycl::half *) tensors[0]->data;
+        sycl::half * f16_out1 = (sycl::half *) tensors[1]->data;
+        sycl::half * f16_tmp0 = (sycl::half *) buf0;
+        sycl::half * f16_tmp1 = (sycl::half *) buf1;
+
+        q0->wait();
+        q1->wait();
+        dev2dev_memcpy(*q0, *q1, f16_tmp0, tensors[1]->data, nbytes);
+        dev2dev_memcpy(*q1, *q0, f16_tmp1, tensors[0]->data, nbytes);
+
+        q0->submit([&](sycl::handler & h) {
+            h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+                f16_out0[i] = (sycl::half) ((float) f16_out0[i] + (float) f16_tmp0[i]);
+            });
+        });
+        q1->submit([&](sycl::handler & h) {
+            h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+                f16_out1[i] = (sycl::half) ((float) f16_out1[i] + (float) f16_tmp1[i]);
+            });
+        });
+        return true;
+    }
+
     float * out0 = (float *) tensors[0]->data;
     float * out1 = (float *) tensors[1]->data;
 
@@ -5807,17 +5841,21 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
         float * tmp0 = (float *) buf0;
         float * tmp1 = (float *) buf1;
 
-        sycl::event e0 = q0->memcpy(tmp0, tensors[1]->data, nbytes);
-        sycl::event e1 = q1->memcpy(tmp1, tensors[0]->data, nbytes);
+        // COMM-D2D-FIX: the two devices are in SEPARATE SYCL contexts, so a raw
+        // q->memcpy of a peer USM pointer is a silent no-op. Route cross-device
+        // copies through dev2dev_memcpy (L0 direct copy / host staging). It is
+        // synchronous, so wait for the local partials to be produced first.
+        q0->wait();
+        q1->wait();
+        dev2dev_memcpy(*q0, *q1, tmp0, tensors[1]->data, nbytes);
+        dev2dev_memcpy(*q1, *q0, tmp1, tensors[0]->data, nbytes);
 
         q0->submit([&](sycl::handler & h) {
-            h.depends_on(e0);
             h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
                 out0[i] += tmp0[i];
             });
         });
         q1->submit([&](sycl::handler & h) {
-            h.depends_on(e1);
             h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
                 out1[i] += tmp1[i];
             });
@@ -5842,28 +5880,22 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
         outbox1[i] = (uint16_t) (sycl::bit_cast<uint32_t>(out1[i]) >> 16);
     });
 
-    // Phase B: cross-device memcpy of compressed bytes (half FP32 size).
+    // Phase B: COMM-D2D-FIX-BF16 cross-device copy of compressed bytes via
+    // dev2dev_memcpy (separate SYCL contexts; sync copy after compress).
     const size_t bf16_bytes = nelem * sizeof(uint16_t);
-    sycl::event m0 = q0->submit([&](sycl::handler & h) {
-        h.depends_on(c1);
-        h.memcpy(inbox0, outbox1, bf16_bytes);
-    });
-
-    sycl::event m1 = q1->submit([&](sycl::handler & h) {
-        h.depends_on(c0);
-        h.memcpy(inbox1, outbox0, bf16_bytes);
-    });
+    c0.wait();
+    c1.wait();
+    dev2dev_memcpy(*q0, *q1, inbox0, outbox1, bf16_bytes);
+    dev2dev_memcpy(*q1, *q0, inbox1, outbox0, bf16_bytes);
 
     // Phase C: decompress + add into local FP32 partial.
     q0->submit([&](sycl::handler & h) {
-        h.depends_on(m0);
         h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
             out0[i] += sycl::bit_cast<float>(((uint32_t) inbox0[i]) << 16);
         });
     });
 
     q1->submit([&](sycl::handler & h) {
-        h.depends_on(m1);
         h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
             out1[i] += sycl::bit_cast<float>(((uint32_t) inbox1[i]) << 16);
         });
