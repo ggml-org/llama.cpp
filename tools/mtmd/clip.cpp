@@ -1045,8 +1045,17 @@ struct clip_model_loader {
     bool has_vision = false;
     bool has_audio  = false;
 
+    mtmd_progress_callback progress_callback = nullptr;
+    void * progress_callback_user_data = nullptr;
+
     // TODO @ngxson : we should not pass clip_ctx here, it should be clip_model
-    clip_model_loader(const char * fname, bool skip_tensors = false) : fname(fname) {
+    clip_model_loader(const char * fname,
+            bool skip_tensors = false,
+            mtmd_progress_callback progress_cb = nullptr,
+            void * progress_user_data = nullptr)
+        : fname(fname),
+          progress_callback(progress_cb),
+          progress_callback_user_data(progress_user_data) {
         struct ggml_context * meta = nullptr;
 
         struct gguf_init_params params = {
@@ -2790,10 +2799,22 @@ struct clip_model_loader {
         if (!ctx_clip.no_alloc) {
             std::vector<uint8_t> read_buf;
 
+            // start loading event
+            if (progress_callback){
+                progress_callback(0.0, progress_callback_user_data);
+            }
+
+            // compute total tensor data size for progress reporting
+            size_t total_data_size = 0;
+            for (auto & t : tensors_to_load) {
+                total_data_size += ggml_nbytes(t);
+            }
+
             // alloc memory and offload data
             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
             ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
             ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            size_t data_loaded = 0;
             for (auto & t : tensors_to_load) {
                 ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
                 GGML_ASSERT(cur && "tensor not found in ctx_data");
@@ -2813,6 +2834,13 @@ struct clip_model_loader {
                     read_buf.resize(num_bytes);
                     fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
                     ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
+                }
+                data_loaded += num_bytes;
+                if (progress_callback && total_data_size > 0) {
+                    const float progress = (float)data_loaded / (float)total_data_size;
+                    if (!progress_callback(progress, progress_callback_user_data)) {
+                        throw std::runtime_error(string_format("%s: model loading cancelled by progress_callback\n", __func__));
+                    }
                 }
             }
             fin.close();
@@ -3105,7 +3133,10 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
     clip_ctx * ctx_audio = nullptr;
 
     try {
-        clip_model_loader loader(fname);
+        clip_model_loader loader(fname,
+            /* skip_tensors */ false,
+            ctx_params.progress_callback,
+            ctx_params.progress_callback_user_data);
         bool skip_audio = false;
 
         if (loader.has_vision) {

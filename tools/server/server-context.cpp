@@ -833,8 +833,6 @@ private:
 
     bool sleeping = false;
 
-    int64_t t_last_load_progress_ms = 0;
-
     void destroy() {
         spec.reset();
         ctx_dft.reset();
@@ -865,12 +863,18 @@ private:
         sleeping = new_state;
     }
 
+    struct load_progress_data {
+        server_context_impl * ctx;
+        std::string stage;
+        int64_t t_last_load_progress_ms = 0;
+        load_progress_data(server_context_impl * ctx, const std::string & stage) : ctx(ctx), stage(stage) {}
+    };
     static bool load_progress_callback(float progress, void * user_data) {
-        auto * ctx = static_cast<server_context_impl *>(user_data);
-        GGML_ASSERT(ctx);
+        auto * d = static_cast<load_progress_data *>(user_data);
+        GGML_ASSERT(d);
         // always emit the first and final sample; throttle the rest to one per 200ms
         {
-            auto & t_last = ctx->t_last_load_progress_ms;
+            auto & t_last = d->t_last_load_progress_ms;
             const int64_t t_now = ggml_time_ms();
             const bool first = t_last == 0;
             const bool done  = progress >= 1.0f;
@@ -880,9 +884,9 @@ private:
             }
             t_last = t_now;
         }
-        if (ctx->callback_state) {
-            ctx->callback_state(SERVER_STATE_LOADING, {
-                {"stage", "text_model"},
+        if (d->ctx->callback_state) {
+            d->ctx->callback_state(SERVER_STATE_LOADING, {
+                {"stage", d->stage},
                 {"value", progress},
             });
         }
@@ -892,6 +896,9 @@ private:
     // load the model and initialize llama_context
     // this may also be called to resume from sleeping state
     bool load_model(common_params & params) {
+        load_progress_data load_progress_text(this, "text_model");
+        load_progress_data load_progress_mmproj(this, "mmproj_model");
+
         bool is_resume = sleeping;
 
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
@@ -912,6 +919,9 @@ private:
             mparams.image_max_tokens = params_base.image_max_tokens;
             mparams.batch_max_tokens = params_base.mtmd_batch_max_tokens;
             mparams.media_marker     = get_media_marker();
+            // progress callback
+            mparams.progress_callback           = load_progress_callback;
+            mparams.progress_callback_user_data = &load_progress_mmproj;
         }
 
         // optionally get the memory usage of mmproj
@@ -1023,9 +1033,8 @@ private:
 
         // attach a progress callback
         {
-            t_last_load_progress_ms = 0;
             params_base.load_progress_callback = load_progress_callback;
-            params_base.load_progress_callback_user_data = this;
+            params_base.load_progress_callback_user_data = &load_progress_text;
         }
 
         llama_init = common_init_from_params(params_base);
@@ -1120,10 +1129,6 @@ private:
         }
 
         if (has_mmproj) {
-            if (callback_state) {
-                callback_state(SERVER_STATE_LOADING, {{"stage", "mmproj_model"}});
-            }
-
             if (!is_resume) {
                 mtmd_helper_log_set(common_log_default_callback, nullptr);
             }

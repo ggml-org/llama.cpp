@@ -83,6 +83,8 @@ typedef struct mtmd_input_chunks mtmd_input_chunks;
 typedef struct mtmd_input_text   mtmd_input_text;
 typedef struct mtmd_batch        mtmd_batch;
 
+typedef bool (*mtmd_progress_callback)(float progress, void * user_data);
+
 struct mtmd_context_params {
     bool use_gpu;
     bool print_timings;
@@ -104,6 +106,12 @@ struct mtmd_context_params {
     int32_t batch_max_tokens; // maximum number of output tokens in a batch
                               // (note: this is not a hard-limit, the first image will always be added even if it exceeds this limit)
                               // (default: 1024)
+
+    // Called with a progress value between 0.0 and 1.0. Pass NULL to disable.
+    // If the provided progress_callback returns true, model loading continues.
+    // If it returns false, model loading is immediately aborted.
+    mtmd_progress_callback progress_callback;
+    void * progress_callback_user_data;
 };
 
 MTMD_API const char * mtmd_default_marker(void);
