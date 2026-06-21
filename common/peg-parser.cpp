@@ -1536,6 +1536,64 @@ static std::string gbnf_escape_char_class(uint32_t c) {
     return std::string(buf);
 }
 
+static std::string gbnf_char_class(const std::vector<uint32_t> & chars, bool negate) {
+    std::string s = negate ? "[^" : "[";
+    for (uint32_t ch : chars) {
+        s += gbnf_escape_char_class(ch);
+    }
+    return s + "]";
+}
+
+static std::string gbnf_ac_grammar(
+    const common_grammar_builder &   builder,
+    const std::string &              prefix,
+    const std::vector<std::string> & strings,
+    const std::function<std::string(const std::vector<uint32_t> &,
+                                    const std::map<size_t, std::vector<uint32_t>> &,
+                                    const std::vector<uint32_t> &,
+                                    const std::function<std::string(size_t)> &)> & build_rule) {
+    aho_corasick ac(strings);
+
+    auto state_name = [&](size_t s) -> std::string {
+        if (s == 0) {
+            return prefix;
+        }
+        std::string num = std::to_string(s);
+        num = num.size() == 1 ? ("0" + num) : num;
+        return prefix + "-" + num;
+    };
+
+    for (size_t q = 0; q < ac.num_states(); q++) {
+        if (ac.is_terminal(q)) {
+            continue; // match states accept
+        }
+
+        std::map<size_t, std::vector<uint32_t>> buckets;
+        std::vector<uint32_t> completing;  // chars that complete a delimiter here
+        std::vector<uint32_t> specific;    // chars with an explicit transition
+        for (uint32_t c : ac.alphabet) {
+            size_t d = ac.next(q, c);
+            if (ac.is_terminal(d)) {
+                completing.push_back(c);
+                specific.push_back(c);
+            } else if (d != 0) {
+                buckets[d].push_back(c); // specific non-root destination
+                specific.push_back(c);
+            }
+        }
+
+        builder.add_rule(state_name(q), build_rule(completing, buckets, specific, state_name));
+    }
+
+    // An empty delimiter makes the start state terminal. Emit an entry rule
+    // that matches the empty string so the returned reference stays valid.
+    if (ac.is_terminal(0)) {
+        builder.add_rule(prefix, "|");
+    }
+
+    return state_name(0);
+}
+
 // GBNF grammar matching strings that contain no string in `strings` as a
 // substring. Emits the complement of an Aho-Corasick automaton DFA and returns
 // the start state rule name.
@@ -1544,58 +1602,20 @@ static std::string gbnf_escape_char_class(uint32_t c) {
 static std::string gbnf_excluding_grammar(const common_grammar_builder & builder,
                                           const std::string &            prefix,
                                           const std::vector<std::string> & strings) {
-    aho_corasick ac(strings);
-
-    auto state_name = [&](size_t s) -> std::string {
-        if (s == 0) {
-            return prefix;
-        }
-        std::string num = std::to_string(s);
-        num = num.size() == 1 ? ("0" + num) : num;
-        return prefix + "-" + num;
-    };
-
-    auto char_class = [](const std::vector<uint32_t> & chars, bool negate) {
-        std::string s = negate ? "[^" : "[";
-        for (uint32_t ch : chars) {
-            s += gbnf_escape_char_class(ch);
-        }
-        return s + "]";
-    };
-
-    for (size_t q = 0; q < ac.num_states(); q++) {
-        if (ac.is_terminal(q)) {
-            continue; // match states are dropped
-        }
-
-        std::map<size_t, std::vector<uint32_t>> buckets;
-        std::vector<uint32_t> excluded;
-        for (uint32_t c : ac.alphabet) {
-            size_t d = ac.next(q, c);
-            if (ac.is_terminal(d)) {
-                excluded.push_back(c); // completes a forbidden string -> omit
-            } else if (d != 0) {
-                buckets[d].push_back(c); // specific non-root destination
-                excluded.push_back(c);
+    return gbnf_ac_grammar(builder, prefix, strings,
+        [](const std::vector<uint32_t> & /*completing*/,
+           const std::map<size_t, std::vector<uint32_t>> & buckets,
+           const std::vector<uint32_t> & specific,
+           const std::function<std::string(size_t)> & state_name) {
+            // every state is accepting and completing chars get no
+            // alternative, so a forbidden string can never be matched
+            std::string rhs = "|";
+            for (const auto & [d, chars] : buckets) {
+                rhs += " " + gbnf_char_class(chars, false) + " " + state_name(d) + " |";
             }
-        }
-
-        std::string rhs = "|"; // every state is accepting
-        for (const auto & [d, chars] : buckets) {
-            rhs += " " + char_class(chars, false) + " " + state_name(d) + " |";
-        }
-        rhs += " " + char_class(excluded, true) + " " + state_name(0);
-
-        builder.add_rule(state_name(q), rhs);
-    }
-
-    // An empty delimiter makes the start state terminal. Emit an entry rule
-    // that matches nothing so the returned reference stays valid.
-    if (ac.is_terminal(0)) {
-        builder.add_rule(prefix, "|");
-    }
-
-    return state_name(0);
+            rhs += " " + gbnf_char_class(specific, true) + " " + state_name(0);
+            return rhs;
+        });
 }
 
 // GBNF grammar matching everything up to and including the first occurrence of
@@ -1604,64 +1624,22 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
 static std::string gbnf_including_grammar(const common_grammar_builder & builder,
                                           const std::string &            prefix,
                                           const std::vector<std::string> & strings) {
-    aho_corasick ac(strings);
-
-    auto state_name = [&](size_t s) -> std::string {
-        if (s == 0) {
-            return prefix;
-        }
-        std::string num = std::to_string(s);
-        num = num.size() == 1 ? ("0" + num) : num;
-        return prefix + "-" + num;
-    };
-
-    auto char_class = [](const std::vector<uint32_t> & chars, bool negate) {
-        std::string s = negate ? "[^" : "[";
-        for (uint32_t ch : chars) {
-            s += gbnf_escape_char_class(ch);
-        }
-        return s + "]";
-    };
-
-    for (size_t q = 0; q < ac.num_states(); q++) {
-        if (ac.is_terminal(q)) {
-            continue; // match states accept; no rule emitted
-        }
-
-        std::map<size_t, std::vector<uint32_t>> buckets;
-        std::vector<uint32_t> completing;  // chars that complete a delimiter here
-        std::vector<uint32_t> specific;    // chars with an explicit (non-reset) transition
-        for (uint32_t c : ac.alphabet) {
-            size_t d = ac.next(q, c);
-            if (ac.is_terminal(d)) {
-                completing.push_back(c); // consuming c finishes a forbidden string -> accept
-                specific.push_back(c);
-            } else if (d != 0) {
-                buckets[d].push_back(c); // specific non-root destination
-                specific.push_back(c);
+    return gbnf_ac_grammar(builder, prefix, strings,
+        [](const std::vector<uint32_t> & completing,
+           const std::map<size_t, std::vector<uint32_t>> & buckets,
+           const std::vector<uint32_t> & specific,
+           const std::function<std::string(size_t)> & state_name) {
+            std::vector<std::string> alts;
+            if (!completing.empty()) {
+                alts.push_back(gbnf_char_class(completing, false)); // terminate on match
             }
-        }
-
-        std::vector<std::string> alts;
-        if (!completing.empty()) {
-            alts.push_back(char_class(completing, false)); // terminate on completion
-        }
-        for (const auto & [d, chars] : buckets) {
-            alts.push_back(char_class(chars, false) + " " + state_name(d));
-        }
-        // every other character keeps scanning from the start state
-        alts.push_back(char_class(specific, true) + " " + state_name(0));
-
-        builder.add_rule(state_name(q), string_join(alts, " | "));
-    }
-
-    // An empty delimiter makes the start state terminal: the first occurrence is
-    // at position 0, so the rule matches the empty string.
-    if (ac.is_terminal(0)) {
-        builder.add_rule(prefix, "|");
-    }
-
-    return state_name(0);
+            for (const auto & [d, chars] : buckets) {
+                alts.push_back(gbnf_char_class(chars, false) + " " + state_name(d));
+            }
+            // every other character keeps scanning from the start state
+            alts.push_back(gbnf_char_class(specific, true) + " " + state_name(0));
+            return string_join(alts, " | ");
+        });
 }
 
 static std::set<std::string> collect_reachable_rules(
