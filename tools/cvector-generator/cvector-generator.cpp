@@ -2,6 +2,7 @@
 #include "gguf.h"
 
 #include "arg.h"
+#include "build-info.h"
 #include "common.h"
 #include "llama.h"
 #include "pca.hpp"
@@ -110,7 +111,7 @@ struct callback_data {
             auto diff_filtered = filter_nonzero_rows(v_pos[il]);
             v_diff_filtered.push_back(diff_filtered);
         }
-        return v_diff_filtered; // for convinient, we return the result std::vector
+        return v_diff_filtered; // for convenient, we return the result std::vector
     }
 
     // delete zero rows from a given 2D tensor
@@ -400,6 +401,8 @@ int main(int argc, char ** argv) {
 
     params.out_file = "control_vector.gguf";
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_CVECTOR_GENERATOR, print_usage)) {
         return 1;
     }
@@ -418,7 +421,7 @@ int main(int argc, char ** argv) {
     params.cb_eval_user_data = &cb_data;
     params.warmup = false;
 
-    print_build_info();
+    llama_print_build_info();
     llama_backend_init();
     llama_numa_init(params.numa);
 

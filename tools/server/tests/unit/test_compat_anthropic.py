@@ -63,8 +63,10 @@ def test_anthropic_messages_basic():
     assert "text" in res.body["content"][0], "Text content block missing 'text' field"
     assert res.body["stop_reason"] in ["end_turn", "max_tokens"], f"Invalid stop_reason: {res.body.get('stop_reason')}"
     assert "usage" in res.body, "Missing 'usage' field"
+    assert "cache_read_input_tokens" in res.body["usage"], "Missing usage.cache_read_input_tokens"
     assert "input_tokens" in res.body["usage"], "Missing usage.input_tokens"
     assert "output_tokens" in res.body["usage"], "Missing usage.output_tokens"
+    assert isinstance(res.body["usage"]["cache_read_input_tokens"], int), "cache_read_input_tokens should be integer"
     assert isinstance(res.body["usage"]["input_tokens"], int), "input_tokens should be integer"
     assert isinstance(res.body["usage"]["output_tokens"], int), "output_tokens should be integer"
     assert res.body["usage"]["output_tokens"] > 0, "Should have generated some tokens"
@@ -808,6 +810,139 @@ def test_anthropic_vs_openai_different_response_format():
 
 
 # Extended thinking tests with reasoning models
+
+# The next two tests cover the input path (conversation history):
+# Client sends thinking blocks -> convert_anthropic_to_oai -> reasoning_content -> template
+
+def test_anthropic_thinking_history_in_count_tokens():
+    """Test that interleaved thinking blocks in conversation history are not dropped during conversion."""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.start()
+
+    tool = {
+        "name": "list_files",
+        "description": "List files",
+        "input_schema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"]
+        }
+    }
+
+    messages_without_thinking = [
+        {"role": "user", "content": "Fix the bug"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "call_1", "name": "list_files", "input": {"path": "."}}
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "main.py"}
+            ]
+        },
+    ]
+
+    messages_with_thinking = [
+        {"role": "user", "content": "Fix the bug"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "I should check the project structure first to understand the codebase layout."},
+                {"type": "tool_use", "id": "call_1", "name": "list_files", "input": {"path": "."}}
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "main.py"}
+            ]
+        },
+    ]
+
+    res_without = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "messages": messages_without_thinking,
+        "tools": [tool],
+    })
+    assert res_without.status_code == 200, f"Expected 200: {res_without.body}"
+
+    res_with = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "messages": messages_with_thinking,
+        "tools": [tool],
+    })
+    assert res_with.status_code == 200, f"Expected 200: {res_with.body}"
+
+    # Thinking blocks should increase the token count
+    assert res_with.body["input_tokens"] > res_without.body["input_tokens"], \
+        f"Expected more tokens with thinking ({res_with.body['input_tokens']}) than without ({res_without.body['input_tokens']})"
+
+
+def test_anthropic_thinking_history_in_template():
+    """Test that reasoning_content from converted interleaved thinking blocks renders in the prompt."""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.start()
+
+    reasoning_1 = "I should check the project structure first."
+    reasoning_2 = "Now I need to read the main file."
+
+    res = server.make_request("POST", "/apply-template", data={
+        "messages": [
+            {"role": "user", "content": "Fix the bug in main.py"},
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": reasoning_1,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "list_files", "arguments": "{\"path\": \".\"}"}
+                }]
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "main.py\nutils.py"},
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": reasoning_2,
+                "tool_calls": [{
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{\"path\": \"main.py\"}"}
+                }]
+            },
+            {"role": "tool", "tool_call_id": "call_2", "content": "print('hello')"},
+        ],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "list_files",
+                "description": "List files",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+            }
+        }, {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+            }
+        }],
+    })
+    assert res.status_code == 200, f"Expected 200, got {res.status_code}: {res.body}"
+    prompt = res.body["prompt"]
+
+    # Both reasoning_content values should be rendered in <think> tags
+    assert reasoning_1 in prompt, f"Expected first reasoning text in prompt: {prompt}"
+    assert reasoning_2 in prompt, f"Expected second reasoning text in prompt: {prompt}"
+    assert prompt.count("<think>") >= 2, f"Expected at least 2 <think> blocks in prompt: {prompt}"
+
 
 @pytest.mark.slow
 @pytest.mark.parametrize("stream", [False, True])

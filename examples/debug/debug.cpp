@@ -9,6 +9,7 @@
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <regex>
 
 static void print_usage(int /*argc*/, char ** argv) {
@@ -201,10 +202,14 @@ static bool run(llama_context * ctx, const common_params & params) {
     print_tokenized_prompt(ctx, tokens, params.prompt);
 
     if (params.save_logits) {
-        output_data output {ctx, model, params};
-        std::filesystem::path model_path{params.model.path};
-        std::string model_name{model_path.stem().string()};
-        save_output_data(output, model_name, params.logits_output_dir);
+        try {
+            output_data output {ctx, model, params};
+            std::filesystem::path model_path{params.model.path};
+            std::string model_name{model_path.stem().string()};
+            save_output_data(output, model_name, params.logits_output_dir);
+        } catch (const std::exception & e) {
+            LOG_ERR("%s : error saving logits: %s\n", __func__, e.what());
+        }
     }
 
     return true;
@@ -213,16 +218,19 @@ static bool run(llama_context * ctx, const common_params & params) {
 int main(int argc, char ** argv) {
     common_params params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_DEBUG, print_usage)) {
         return 1;
     }
 
-    common_init();
-
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    base_callback_data cb_data(params, params.tensor_filter);
+    std::optional<common_debug_cb_user_data> cb_data;
+    if (!params.save_logits) {
+        cb_data.emplace(params, params.tensor_filter);
+    }
 
     auto llama_init = common_init_from_params(params);
 

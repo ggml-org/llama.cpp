@@ -13,17 +13,10 @@ ggml_cgraph * clip_graph_qwen3vl::build() {
 
     int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
 
-    ggml_tensor * inp_raw = build_inp_raw();
-    ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+    ggml_tensor * inp = build_inp_with_temporal_merge();
 
-    GGML_ASSERT(img.nx % (patch_size * 2) == 0);
-    GGML_ASSERT(img.ny % (patch_size * 2) == 0);
-
-    // second conv dimension
+    // spatial merge
     {
-        auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-        inp = ggml_add(ctx0, inp, inp_1);
-
         inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [w, h, c, b] -> [c, w, h, b]
         inp = ggml_cont_4d(
             ctx0, inp,
@@ -85,7 +78,7 @@ ggml_cgraph * clip_graph_qwen3vl::build() {
 
         // self-attention
         {
-            cur = ggml_mul_mat(ctx0, layer.qkv_w, cur);
+            cur = build_mm(layer.qkv_w, cur);
             cur = ggml_add(ctx0, cur, layer.qkv_b);
 
             ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,

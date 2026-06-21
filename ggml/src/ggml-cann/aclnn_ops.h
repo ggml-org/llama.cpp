@@ -32,6 +32,9 @@
 #include <aclnnop/aclnn_cat.h>
 #include <aclnnop/aclnn_clamp.h>
 #include <aclnnop/aclnn_cos.h>
+#include <aclnnop/aclnn_cumsum.h>
+#include <aclnnop/aclnn_tril.h>
+#include <aclnnop/aclnn_triu.h>
 #include <aclnnop/aclnn_exp.h>
 #include <aclnnop/aclnn_gelu.h>
 #include <aclnnop/aclnn_gelu_v2.h>
@@ -47,6 +50,9 @@
 #include <aclnnop/aclnn_sign.h>
 #include <aclnnop/aclnn_silu.h>
 #include <aclnnop/aclnn_sin.h>
+#include <aclnnop/aclnn_softplus.h>
+#include <aclnnop/aclnn_swi_glu.h>
+#include <aclnnop/aclnn_geglu.h>
 #include <aclnnop/aclnn_slice.h>
 #include <aclnnop/aclnn_sqrt.h>
 #include <aclnnop/aclnn_tanh.h>
@@ -68,6 +74,9 @@
  *              GGML_OP_REPEAT and specifies the desired dimensions.
  */
 void ggml_cann_repeat(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+void ggml_cann_swiglu(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+void ggml_cann_geglu(ggml_backend_cann_context & ctx, ggml_tensor * dst, int64_t approximate);
 
 /**
  * @brief   Applies the Leaky ReLU activation function to a tensor using the CANN
@@ -326,6 +335,48 @@ void ggml_cann_sum_rows(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 void ggml_cann_sum(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 /**
+ * @brief   Computes the cumulative sum of a ggml tensor along dim 0 using the
+ *          CANN backend.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor. dst->op is `GGML_OP_CUMSUM`.
+ */
+void ggml_cann_cumsum(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
+ * @brief   Computes a triangular mask (tril/triu) of a square ggml tensor
+ *          using the CANN backend.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor. dst->op is `GGML_OP_TRI`.
+ */
+void ggml_cann_tri(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
+ * @brief   Solves a triangular linear system AX=B using the CANN backend.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor. dst->op is `GGML_OP_SOLVE_TRI`.
+ */
+void ggml_cann_solve_tri(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
+ * @brief   Creates a diagonal matrix from a vector using the CANN backend.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor. dst->op is `GGML_OP_DIAG`.
+ */
+void ggml_cann_diag(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
+ * @brief   Fills a tensor with a constant scalar value using the CANN backend.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor. dst->op is `GGML_OP_FILL`.
+ */
+void ggml_cann_fill(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
  * @brief   Upsamples a ggml tensor using nearest neighbor interpolation using
  *          the CANN backend.
  *
@@ -461,6 +512,9 @@ void ggml_cann_timestep_embedding(ggml_backend_cann_context & ctx, ggml_tensor *
 // @see ggml_cann_dup.
 void ggml_cann_cpy(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
+// @see ggml_cann_acc, but copies src1 into dst instead of adding.
+void ggml_cann_set(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
 /**
  * @brief   Computes the softmax activation with optional masking.
  *
@@ -542,6 +596,21 @@ void ggml_cann_mul_mat(ggml_backend_cann_context & ctx, ggml_tensor * dst);
  *       not equal 1.
  */
 void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
+ * @brief Pre-load the RoPE cache before ACL graph capture.
+ *
+ * This function must be called outside of graph capture to perform
+ * host-to-device memory copies and device memory allocations that are
+ * not allowed on a captured stream.  After pre-loading, the rope cache
+ * metadata is updated so that the subsequent call to
+ * aclnn_rope_cache_init (inside graph capture) skips these operations
+ * and only records the on-device computations into the captured graph.
+ *
+ * @param ctx  CANN backend context.
+ * @param dst  A ROPE destination tensor from the computation graph.
+ */
+void ggml_cann_rope_cache_preload(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 /**
  * @brief   Computes the index of the maximum value along the specified dimension
@@ -798,6 +867,8 @@ void ggml_cann_count_equal(ggml_backend_cann_context & ctx, ggml_tensor * dst);
  *            dst->op is expected to be `GGML_OP_STEP`.
  */
 void ggml_cann_step(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+void ggml_cann_softplus(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+void ggml_cann_geglu_quick(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 /**
  * @brief   Performs the Flash Attention extended operator using the CANN backend.

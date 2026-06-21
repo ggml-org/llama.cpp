@@ -59,6 +59,8 @@ void ggml_sycl_hardswish(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_exp(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
+void ggml_sycl_expm1(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
 void ggml_sycl_log(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_softplus(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
@@ -70,8 +72,6 @@ void ggml_sycl_step(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 void ggml_sycl_leaky_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_sqr(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
-
-void ggml_sycl_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 

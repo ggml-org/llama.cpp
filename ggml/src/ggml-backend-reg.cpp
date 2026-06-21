@@ -82,6 +82,10 @@
 #include "ggml-zendnn.h"
 #endif
 
+#ifdef GGML_USE_OPENVINO
+#include "ggml-openvino.h"
+#endif
+
 namespace fs = std::filesystem;
 
 static std::string path_str(const fs::path & path) {
@@ -154,6 +158,9 @@ struct ggml_backend_registry {
 #ifdef GGML_USE_RPC
         register_backend(ggml_backend_rpc_reg());
 #endif
+#ifdef GGML_USE_OPENVINO
+        register_backend(ggml_backend_openvino_reg());
+#endif
 #ifdef GGML_USE_CPU
         register_backend(ggml_backend_cpu_reg());
 #endif
@@ -174,6 +181,12 @@ struct ggml_backend_registry {
             return;
         }
 
+        for (auto & entry : backends) {
+            if (entry.reg == reg) {
+                return;
+            }
+        }
+
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: registered backend %s (%zu devices)\n",
             __func__, ggml_backend_reg_name(reg), ggml_backend_reg_dev_count(reg));
@@ -185,6 +198,12 @@ struct ggml_backend_registry {
     }
 
     void register_device(ggml_backend_dev_t device) {
+        for (auto & dev : devices) {
+            if (dev == device) {
+                return;
+            }
+        }
+
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: registered device %s (%s)\n", __func__, ggml_backend_dev_name(device), ggml_backend_dev_description(device));
 #endif
@@ -557,6 +576,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("opencl", silent, dir_path);
     ggml_backend_load_best("hexagon", silent, dir_path);
     ggml_backend_load_best("musa", silent, dir_path);
+    ggml_backend_load_best("openvino", silent, dir_path);
     ggml_backend_load_best("cpu", silent, dir_path);
     // check the environment variable GGML_BACKEND_PATH to load an out-of-tree backend
     const char * backend_path = std::getenv("GGML_BACKEND_PATH");

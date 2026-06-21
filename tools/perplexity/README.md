@@ -27,10 +27,10 @@ In addition to the KL divergence the following statistics are calculated with `-
 * Ratio of mean FP16 PPL and quantized PPL. Uncertainty is estimated on logits, then propagated. The logarithm of this metric is also calculated and printed, it is 0 if the logit distributions are the same.
 * Difference of mean FP16 PPL and quantized PPL. Uncertainty is estimated on logits, then propagated.
 * Mean change in "correct" token probability. Positive values mean the model gets better at prediction, negative values mean it gets worse.
-* Pearson correlation coefficient of the "correct" token probabilites between models.
+* Pearson correlation coefficient of the "correct" token probabilities between models.
 * Percentiles of change in "correct" token probability. Positive values mean the model gets better at prediction, negative values mean it gets worse. Can be used to judge noise vs. quality loss from quantization. If the percentiles are symmetric then the quantization is essentially just adding noise. If the negative values are significantly larger than the positive values then this indicates that the model is actually becoming worse from the quantization.
 * The root mean square of the change in token probabilities. If you were to assume that the quantization simply causes Gaussian noise on the token probabilities then this would be the standard deviation of said noise. The uncertainty on the value is calculated that the change in token probabilities follows a Gaussian distribution. Related discussion: https://github.com/ggml-org/llama.cpp/discussions/2875 .
-* Same top p: Percentage of how often the token was assigned the highest probabilites by both models. The uncertainty is calculated from the Gaussian approximation of the binomial distribution.
+* Same top p: Percentage of how often the token was assigned the highest probabilities by both models. The uncertainty is calculated from the Gaussian approximation of the binomial distribution.
 
 ## LLaMA 3 8b Scoreboard
 

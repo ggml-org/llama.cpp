@@ -4,6 +4,36 @@ This document provides an in-depth technical overview of `llama-server`, intende
 
 If you are an end user consuming `llama-server` as a product, please refer to the main [README](./README.md) instead.
 
+## Scope of features
+
+In-scope types of feature:
+
+- Backend:
+    - Basic inference features: text completion, embeddings output
+    - Chat-oriented features: chat completion, tool calling
+    - Third-party API compatibility, e.g. OAI-compat, Anthropic-compat
+    - Multimodal input/output
+    - Memory management: save/load state, context checkpoints
+    - Model management
+    - Features that are required by the Web UI
+- Frontend:
+    - Chat-oriented features, example: basic chat, image upload, edit messages
+    - Agentic features, example: MCP
+    - Model management
+
+Note: For security reasons, features that require reading or writing external files must be **disabled by default**. This covers features like: MCP, model save/load
+
+Out-of-scope features:
+
+- Backend:
+    - Features that require a loop of external API calls, e.g. server-side agentic loop. This is because external API calls in C++ are costly to maintain. Any complex third-party logic should be implemented outside of server code.
+    - Features that expose the internal state of the model to the API, example: getting the intermediate activation from API. This is because llama.cpp doesn't support a stable API for doing this, and relying on `eval_callback` can make it complicated to maintain as this API is not intended to be used in multi-sequence setup.
+    - Model-specific features. All API calls and features must remain model-agnostic.
+- Frontend:
+    - Third-party plugins, it is costly to maintain a public plugin API for such features. Instead, users can make their own MCP server for their needs.
+    - Customizable themes, it is also costly to maintain. While we do focus on the aesthetic, we try to achieve this by perfecting a small set of themes.
+    - Browser-specific features, example: [Chrome's built-in AI API](https://developer.chrome.com/docs/ai/built-in-apis).
+
 ## Backend
 
 ### Overview
@@ -95,6 +125,90 @@ The framework automatically starts a `llama-server` instance, sends requests, an
 
 For detailed instructions, see the [test documentation](./tests/README.md).
 
+### API for tools
+
+This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
+
+**GET /tools**
+
+Get a list of tools, each tool has these fields:
+- `tool` (string): the ID name of the tool, to be used in POST call. Example: `read_file`
+- `display_name` (string): the name to be displayed on UI. Example: `Read file`
+- `type` (string): always be `"builtin"` for now
+- `permissions` (object): a mapping string --> boolean that indicates the permission required by this tool. This is useful for the UI to ask the user before calling the tool. For now, the only permission supported is `"write"`
+- `definition` (object): the OAI-compat definition of this tool
+
+**POST /tools**
+
+Invoke a tool call, request body is a JSON object with:
+- `tool` (string): the name of the tool
+- `params` (object): a mapping from argument name (string) to argument value
+
+Returns JSON object. There are two response formats:
+
+Format 1: Plain text. The text will be placed into a field called `plain_text_response`, example:
+
+```json
+{
+    "plain_text_response": "this is a text response"
+}
+```
+
+The client should extract this value and place it inside message content (note: content is no longer a JSON), example
+
+```json
+{
+    "role": "tool",
+    "content": "this is a text response"
+}
+```
+
+Format 2: Normal JSON response, example:
+
+```json
+{
+    "error": "cannot open this file"
+}
+```
+
+That requires `JSON.stringify` when formatted to message content:
+
+```json
+{
+    "role": "tool",
+    "content": "{\"error\":\"cannot open this file\"}"
+}
+```
+
+### Router mode: how child <--> router communicates
+
+Upon spawning a new child process using `subprocess`, both child and router listen to the stdout/stderr (combined)
+
+For the direction from child to router:
+- Generic messages are logs, it will be forwarded to router's stdout
+- Special state update messages are prefixed by `cmd_child_to_router:state:`, followed by a JSON. See `server_models::handle_child_state` for more
+
+For the direction from router to child:
+- When server sends `cmd_router_to_child:exit`, the child should exit gracefully --> if after `DEFAULT_STOP_TIMEOUT` and the child is still running, force-kill it
+
+### Model management API (router mode)
+
+Model management API was added via PR [#23976](https://github.com/ggml-org/llama.cpp/pull/23976)
+
+The main goal of this API is to allow downloading models and/or removing models from the web UI. It relies on the model cache infrastructure under the hood to manage the list of models dynamically.
+
+Instead of building everything from the ground up (like what most AI agents will do when you ask them to implement a similar feature), we built on top of existing, already well-engineered components inside the codebase:
+- Model cache infrastructure as mentioned above (`common/download.h`)
+- Server response queue (`server-queue.h`). We use this feature to broadcast events to SSE clients.
+- Server router thread management (`server-models.h`). We re-use the same thread model that is used for managing subprocess life cycle, except that we don't create a new subprocess, but launch the download right inside the thread.
+
+The flow for downloading a new model:
+- POST request comes in --> `post_router_models` --> validation
+- `server_models::download()` is called
+    - Sets up a new thread `inst.th` and runs the download inside
+- If a stop request comes in, set `stop_download` to `true`
+- Otherwise, upon completion, we call `load_models()` to refresh the list of models
+
 ### Notable Related PRs
 
 - Initial server implementation: https://github.com/ggml-org/llama.cpp/pull/1443
@@ -139,7 +253,7 @@ The SvelteKit-based Web UI is introduced in this PR: https://github.com/ggml-org
 
 ### Architecture
 
-The WebUI follows a layered architecture:
+The UI follows a layered architecture:
 
 ```
 Routes → Components → Hooks → Stores → Services → Storage/API
@@ -149,7 +263,7 @@ Routes → Components → Hooks → Stores → Services → Storage/API
 -   **Services** - stateless API/database communication (`ChatService`, `ModelsService`, `PropsService`, `DatabaseService`)
 -   **Hooks** - reusable logic (`useModelChangeValidation`, `useProcessingState`)
 
-For detailed architecture diagrams, see [`tools/server/webui/docs/`](webui/docs/):
+For detailed architecture diagrams, see [`tools/ui/docs/`](../ui/docs/):
 
 -   `high-level-architecture.mmd` - full architecture with all modules
 -   `high-level-architecture-simplified.mmd` - simplified overview
@@ -161,7 +275,7 @@ For detailed architecture diagrams, see [`tools/server/webui/docs/`](webui/docs/
 
 ```sh
 # make sure you have Node.js installed
-cd tools/server/webui
+cd tools/ui
 npm i
 
 # run dev server (with hot reload)
@@ -174,6 +288,6 @@ npm run test
 npm run build
 ```
 
-After `public/index.html.gz` has been generated, rebuild `llama-server` as described in the [build](#build) section to include the updated UI.
+After `public/index.html` has been generated, rebuild `llama-server` as described in the [build](#build) section to include the updated UI.
 
 **Note:** The Vite dev server automatically proxies API requests to `http://localhost:8080`. Make sure `llama-server` is running on that port during development.

@@ -12,6 +12,8 @@ body:
         after recreating the CMake build directory and with `-DGGML_CCACHE=OFF`.
         If the compilation succeeds with ccache disabled you should be able to permanently fix the issue
         by clearing `~/.cache/ccache` (on Linux).
+
+        Please fill out this template yourself, copypasting language model outputs is [strictly prohibited](https://github.com/ggml-org/llama.cpp/blob/master/CONTRIBUTING.md#ai-usage-policy).
   - type: textarea
     id: commit
     attributes:
@@ -41,7 +43,7 @@ body:
     attributes:
         label: GGML backends
         description: Which GGML backends do you know to be affected?
-        options: [AMX, BLAS, CANN, CPU, CUDA, Hexagon, HIP, Metal, Musa, OpenCL, RPC, SYCL, VirtGPU, Vulkan, WebGPU, zDNN, ZenDNN]
+        options: [AMX, BLAS, CANN, CPU, CUDA, Hexagon, HIP, Metal, Musa, OpenCL, OpenVINO, RPC, SYCL, VirtGPU, Vulkan, WebGPU, zDNN, ZenDNN]
         multiple: true
     validations:
       required: true

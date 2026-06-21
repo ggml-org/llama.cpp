@@ -977,6 +977,35 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     sumf = hsum_float_8(acc);
 
     *s = sumf;
+
+#elif defined(__loongarch_sx)
+
+    __m128 acc = (__m128)__lsx_vldi(0);
+
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d);
+        const __m128i qx_0 = __lsx_vld((const __m128i *)x[ib].qs, 0);
+        const __m128i qx_1 = __lsx_vld((const __m128i *)x[ib].qs + 1, 0);
+        const __m128i qy_0 = __lsx_vld((const __m128i *)y[ib].qs, 0);
+        const __m128i qy_1 = __lsx_vld((const __m128i *)y[ib].qs + 1, 0);
+
+        const __m128i p16_0 = lsx_maddubs_h(qx_0, qy_0);
+        const __m128i p16_1 = lsx_maddubs_h(qx_1, qy_1);
+
+        // Sum int16 pairs → int32
+        const __m128i s_0 = __lsx_vaddwev_w_h(p16_0, p16_1);
+        const __m128i s_1 = __lsx_vaddwod_w_h(p16_0, p16_1);
+
+        const __m128 q = __lsx_vffint_s_w(__lsx_vadd_w(s_0, s_1));
+        acc = __lsx_vfmadd_s(__lsx_vreplfr2vr_s(d), q, acc);
+    }
+
+    __m128 res = lsx_hadd_s(acc, acc);
+    res = lsx_hadd_s(res, res);
+    sumf = ((v4f32)res)[0];
+
+    *s = sumf;
+
 #else
     UNUSED(nb);
     UNUSED(ib);
@@ -1442,6 +1471,99 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     *s = hsum_float_8(acc);
+
+#elif defined(__loongarch_sx)
+
+    const __m128i m32s = __lsx_vreplgr2vr_b(32);
+
+    __m128 acc_0 = (__m128)__lsx_vldi(0);
+    __m128 acc_1 = (__m128)__lsx_vldi(0);
+
+    for (int i = 0; i < nb; ++i) {
+
+        const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
+
+        const uint8_t * GGML_RESTRICT q4 = x[i].ql;
+        const uint8_t * GGML_RESTRICT qh = x[i].qh;
+        const int8_t  * GGML_RESTRICT q8 = y[i].qs;
+
+        const __m128i scale_i8 = __lsx_vld(x[i].scales, 0);
+        const __m128i scales_lo = __lsx_vsllwil_h_b(scale_i8, 0);
+        const __m128i scales_hi = __lsx_vsllwil_h_b(__lsx_vbsrl_v(scale_i8, 8), 0);
+
+        __m128i sumi_0 = __lsx_vldi(0);
+        __m128i sumi_1 = __lsx_vldi(0);
+
+        for (int j = 0; j < QK_K/128; ++j) {
+
+            const __m128i q4bitsH_0 = __lsx_vld((const __m128i*)qh, 0); qh += 16;
+            const __m128i q4bitsH_1 = __lsx_vld((const __m128i*)qh, 0); qh += 16;
+
+            const __m128i q4h_0 = __lsx_vslli_b(__lsx_vandi_b(q4bitsH_0, 3), 4);
+            const __m128i q4h_1 = __lsx_vslli_b(__lsx_vandi_b(q4bitsH_1, 3), 4);
+            const __m128i q4h_2 = __lsx_vslli_b(__lsx_vandi_b(q4bitsH_0, 3 << 2), 2);
+            const __m128i q4h_3 = __lsx_vslli_b(__lsx_vandi_b(q4bitsH_1, 3 << 2), 2);
+            const __m128i q4h_4 = __lsx_vandi_b(q4bitsH_0, 3 << 4);
+            const __m128i q4h_5 = __lsx_vandi_b(q4bitsH_1, 3 << 4);
+            const __m128i q4h_6 = __lsx_vsrli_b(__lsx_vandi_b(q4bitsH_0, 3 << 6), 2);
+            const __m128i q4h_7 = __lsx_vsrli_b(__lsx_vandi_b(q4bitsH_1, 3 << 6), 2);
+
+            const __m128i q4bits1_0 = __lsx_vld((const __m128i*)q4, 0); q4 += 16;
+            const __m128i q4bits1_1 = __lsx_vld((const __m128i*)q4, 0); q4 += 16;
+            const __m128i q4bits2_0 = __lsx_vld((const __m128i*)q4, 0); q4 += 16;
+            const __m128i q4bits2_1 = __lsx_vld((const __m128i*)q4, 0); q4 += 16;
+
+            const __m128i q4_0 = __lsx_vor_v(__lsx_vandi_b(q4bits1_0, 0xf), q4h_0);
+            const __m128i q4_1 = __lsx_vor_v(__lsx_vandi_b(q4bits1_1, 0xf), q4h_1);
+            const __m128i q4_2 = __lsx_vor_v(__lsx_vandi_b(q4bits2_0, 0xf), q4h_2);
+            const __m128i q4_3 = __lsx_vor_v(__lsx_vandi_b(q4bits2_1, 0xf), q4h_3);
+            const __m128i q4_4 = __lsx_vor_v(__lsx_vsrli_b(q4bits1_0, 4), q4h_4);
+            const __m128i q4_5 = __lsx_vor_v(__lsx_vsrli_b(q4bits1_1, 4), q4h_5);
+            const __m128i q4_6 = __lsx_vor_v(__lsx_vsrli_b(q4bits2_0, 4), q4h_6);
+            const __m128i q4_7 = __lsx_vor_v(__lsx_vsrli_b(q4bits2_1, 4), q4h_7);
+
+            const __m128i q8_0 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+            const __m128i q8_1 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+            const __m128i q8_2 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+            const __m128i q8_3 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+            const __m128i q8_4 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+            const __m128i q8_5 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+            const __m128i q8_6 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+            const __m128i q8_7 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+
+            __m128i p16_0 = lsx_maddubs_h(__lsx_vsub_b(q4_0, m32s), q8_0);
+            __m128i p16_1 = lsx_maddubs_h(__lsx_vsub_b(q4_1, m32s), q8_1);
+            __m128i p16_2 = lsx_maddubs_h(__lsx_vsub_b(q4_2, m32s), q8_2);
+            __m128i p16_3 = lsx_maddubs_h(__lsx_vsub_b(q4_3, m32s), q8_3);
+            __m128i p16_4 = lsx_maddubs_h(__lsx_vsub_b(q4_4, m32s), q8_4);
+            __m128i p16_5 = lsx_maddubs_h(__lsx_vsub_b(q4_5, m32s), q8_5);
+            __m128i p16_6 = lsx_maddubs_h(__lsx_vsub_b(q4_6, m32s), q8_6);
+            __m128i p16_7 = lsx_maddubs_h(__lsx_vsub_b(q4_7, m32s), q8_7);
+
+            const __m128i sc_vec = j == 0 ? scales_lo : scales_hi;
+
+            p16_0 = lsx_madd_h(__lsx_vreplvei_h(sc_vec, 0), p16_0);
+            p16_1 = lsx_madd_h(__lsx_vreplvei_h(sc_vec, 1), p16_1);
+            p16_2 = lsx_madd_h(__lsx_vreplvei_h(sc_vec, 2), p16_2);
+            p16_3 = lsx_madd_h(__lsx_vreplvei_h(sc_vec, 3), p16_3);
+            p16_4 = lsx_madd_h(__lsx_vreplvei_h(sc_vec, 4), p16_4);
+            p16_5 = lsx_madd_h(__lsx_vreplvei_h(sc_vec, 5), p16_5);
+            p16_6 = lsx_madd_h(__lsx_vreplvei_h(sc_vec, 6), p16_6);
+            p16_7 = lsx_madd_h(__lsx_vreplvei_h(sc_vec, 7), p16_7);
+
+            sumi_0 = __lsx_vadd_w(sumi_0, __lsx_vadd_w(p16_0, p16_2));
+            sumi_1 = __lsx_vadd_w(sumi_1, __lsx_vadd_w(p16_1, p16_3));
+            sumi_0 = __lsx_vadd_w(sumi_0, __lsx_vadd_w(p16_4, p16_6));
+            sumi_1 = __lsx_vadd_w(sumi_1, __lsx_vadd_w(p16_5, p16_7));
+        }
+
+        __m128 p_0 = __lsx_vfmul_s(__lsx_vreplfr2vr_s(d), __lsx_vffint_s_w(sumi_0));
+        __m128 p_1 = __lsx_vfmul_s(__lsx_vreplfr2vr_s(d), __lsx_vffint_s_w(sumi_1));
+        acc_0 = __lsx_vfadd_s(p_0, acc_0);
+        acc_1 = __lsx_vfadd_s(p_1, acc_1);
+    }
+
+    *s = hsum_float_4x4(acc_0, acc_1, (__m128)__lsx_vldi(0), (__m128)__lsx_vldi(0));
 
 #else
     UNUSED(x);
@@ -2149,6 +2271,35 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 
     *s = hsum_float_8(accum);
 
+#elif defined(__loongarch_sx)
+
+    const __m128i values128 = __lsx_vld((const __m128i*)kvalues_iq4nl, 0);
+
+    __m128 accum = (__m128)__lsx_vldi(0);
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const uint8_t * qs = x[ibl].qs;
+        const int8_t  * q8 = y[ibl].qs;
+        uint16_t sh = x[ibl].scales_h;
+        __m128i sumi = __lsx_vldi(0);
+        for (int ib = 0; ib < QK_K/32; ++ib) {
+            const __m128i q4bits = __lsx_vld((const __m128i*)qs, 0); qs += 16;
+            const __m128i q8b_0 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+            const __m128i q8b_1 = __lsx_vld((const __m128i*)q8, 0); q8 += 16;
+            const __m128i q4b_0 = __lsx_vshuf_b(values128, values128, __lsx_vandi_b(q4bits, 0xf));
+            const __m128i q4b_1 = __lsx_vshuf_b(values128, values128, __lsx_vsrli_b(q4bits, 4));
+            const __m128i p16_0 = lsx_maddubs_h(q4b_0, q8b_0);
+            const __m128i p16_1 = lsx_maddubs_h(q4b_1, q8b_1);
+            const int16_t ls = (((x[ibl].scales_l[ib/2] >> ((ib & 1) * 4)) & 0xf) | ((sh & 0x3) << 4)) - 32;
+            sh >>= 2;
+            sumi = __lsx_vadd_w(lsx_madd_h(p16_0, __lsx_vreplgr2vr_h(ls)), sumi);
+            sumi = __lsx_vadd_w(lsx_madd_h(p16_1, __lsx_vreplgr2vr_h(ls)), sumi);
+        }
+        const float ds = GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d;
+        accum = __lsx_vfadd_s(__lsx_vfmul_s(__lsx_vreplfr2vr_s(ds), __lsx_vffint_s_w(sumi)), accum);
+    }
+
+    *s = ((v4f32)lsx_hadd_s(lsx_hadd_s(accum, accum), lsx_hadd_s(accum, accum)))[0];
+
 #else
     UNUSED(x);
     UNUSED(y);
@@ -2156,4 +2307,3 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
     ggml_vec_dot_iq4_xs_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
-

@@ -200,6 +200,7 @@ add_library(ggml-base
             ggml.cpp
             ggml-alloc.c
             ggml-backend.cpp
+            ggml-backend-meta.cpp
             ggml-opt.cpp
             ggml-threading.cpp
             ggml-threading.h
@@ -219,6 +220,23 @@ endif()
 
 if (GGML_SCHED_NO_REALLOC)
     target_compile_definitions(ggml-base PUBLIC GGML_SCHED_NO_REALLOC)
+endif()
+
+if (GGML_OPENMP)
+    find_package(OpenMP)
+    if (OpenMP_FOUND)
+        set(GGML_OPENMP_ENABLED "ON" CACHE INTERNAL "")
+    else()
+        set(GGML_OPENMP_ENABLED "OFF" CACHE INTERNAL "")
+        message(WARNING "OpenMP not found")
+    endif()
+else()
+    set(GGML_OPENMP_ENABLED "OFF" CACHE INTERNAL "")
+endif()
+
+if (GGML_OPENMP_ENABLED)
+    target_compile_definitions(ggml-base PRIVATE GGML_USE_OPENMP)
+    target_link_libraries(ggml-base PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
 endif()
 
 add_library(ggml
@@ -420,7 +438,14 @@ if (GGML_CPU_ALL_VARIANTS)
             ggml_add_cpu_backend_variant(power8_2       POWER8  VSX)
             ggml_add_cpu_backend_variant(power9         POWER9  VSX)
             ggml_add_cpu_backend_variant(power10        POWER10 VSX)
-            ggml_add_cpu_backend_variant(power11        POWER11 VSX)
+            # POWER11 backend: only if compiler supports -mcpu=power11
+            check_cxx_compiler_flag("-mcpu=power11" GGML_CXX_SUPPORTS_POWER11)
+            if (GGML_CXX_SUPPORTS_POWER11)
+                message(STATUS "Compiler supports -mcpu=power11, enabling POWER11 backend")
+                ggml_add_cpu_backend_variant(power11 POWER11 VSX)
+            else()
+                message(STATUS "Skipping POWER11 backend: compiler does not support -mcpu=power11")
+            endif()
         else()
             message(FATAL_ERROR "Unsupported PowerPC target OS: ${CMAKE_SYSTEM_NAME}")
         endif()
@@ -460,6 +485,7 @@ ggml_add_backend(zDNN)
 ggml_add_backend(OpenCL)
 ggml_add_backend(Hexagon)
 ggml_add_backend(ZenDNN)
+ggml_add_backend(OPENVINO)
 
 foreach (target ggml-base ggml)
     target_include_directories(${target} PUBLIC    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> $<INSTALL_INTERFACE:include>)
@@ -468,11 +494,10 @@ endforeach()
 
 target_link_libraries(ggml-base PRIVATE Threads::Threads)
 
-find_library(MATH_LIBRARY m)
-if (MATH_LIBRARY)
-    if (NOT WIN32 OR NOT DEFINED ENV{ONEAPI_ROOT})
-        target_link_libraries(ggml-base PRIVATE m)
-    endif()
+if (DEFINED MATH_LIBRARY)
+    target_link_libraries(ggml-base PRIVATE ${MATH_LIBRARY})
+elseif (NOT WIN32 AND NOT DEFINED ENV{ONEAPI_ROOT})
+    target_link_libraries(ggml-base PRIVATE m)
 endif()
 
 if (CMAKE_SYSTEM_NAME MATCHES "Android")

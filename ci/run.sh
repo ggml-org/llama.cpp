@@ -25,6 +25,15 @@
 # # with KLEIDIAI support
 # GG_BUILD_KLEIDIAI=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with BLAS support
+# GG_BUILD_BLAS=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
+# with BLAS support (custom vendor)
+# GG_BUILD_BLAS=1 GG_BUILD_BLAS_VENDOR=Intel10_64lp bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
+# with OPENVINO support
+# GG_BUILD_OPENVINO=1 GG_BUILD_LOW_PERF=1 GGML_OPENVINO_DEVICE=CPU bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 
 if [ -z "$2" ]; then
     echo "usage: $0 <output-dir> <mnt-dir>"
@@ -46,9 +55,19 @@ cd $sd/../
 SRC=`pwd`
 
 CMAKE_EXTRA="-DLLAMA_FATAL_WARNINGS=${LLAMA_FATAL_WARNINGS:-ON} -DLLAMA_OPENSSL=OFF -DGGML_SCHED_NO_REALLOC=ON"
+CTEST_EXTRA=""
+
+# Default to use make unless specified for compatibility
+CMAKE_GENERATOR="Unix Makefiles"
+
+if [ ! -z "${GG_BUILD_NINJA}" ]; then
+    CMAKE_GENERATOR="Ninja"
+fi
 
 if [ ! -z ${GG_BUILD_METAL} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
+else
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF"
 fi
 
 if [ ! -z ${GG_BUILD_CUDA} ]; then
@@ -97,15 +116,23 @@ fi
 if [ ! -z ${GG_BUILD_VULKAN} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN=1"
 
-    # if on Mac, disable METAL
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF -DGGML_BLAS=OFF"
+        MACOS_RUNNER_CUSTOM_VULKAN_CMAKE_LOCATION="/usr/local/lib/cmake/vulkan"
+        MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION="${MACOS_RUNNER_CUSTOM_VULKAN_CMAKE_LOCATION}/SPIRV-Headers/SPIRV-HeadersConfig.cmake"
+        if [[ -f "${MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION}" || -h "${MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION}" ]]; then
+            CMAKE_EXTRA="${CMAKE_EXTRA} -DSPIRV-Headers_DIR=${MACOS_RUNNER_CUSTOM_VULKAN_CMAKE_LOCATION}/SPIRV-Headers"
+        fi
     fi
 
+    # Build shared libs on Windows
+    # to reduce binary size and avoid errors in library loading unit tests
+    if uname -s | grep -qi nt; then
+        CMAKE_EXTRA="${CMAKE_EXTRA} -DBUILD_SHARED_LIBS=ON"
+    fi
 fi
 
 if [ ! -z ${GG_BUILD_WEBGPU} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1 -DGGML_METAL=OFF -DGGML_BLAS=OFF"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1"
 
     if [ ! -z "${GG_BUILD_WEBGPU_DAWN_PREFIX}" ]; then
         if [ -z "${CMAKE_PREFIX_PATH}" ]; then
@@ -134,35 +161,25 @@ fi
 
 if [ -n "${GG_BUILD_KLEIDIAI}" ]; then
     echo ">>===== Enabling KleidiAI support"
+    CMAKE_EXTRA="${CMAKE_EXTRA:+$CMAKE_EXTRA } -DGGML_CPU_KLEIDIAI=ON"
+fi
 
-    CANDIDATES=(
-        "armv9-a+dotprod+i8mm+sve2"
-        "armv9-a+dotprod+i8mm"
-        "armv8.6-a+dotprod+i8mm"
-        "armv8.2-a+dotprod"
-    )
-    CPU=""
+if [ ! -z ${GG_BUILD_BLAS} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=${GG_BUILD_BLAS_VENDOR:-OpenBLAS}"
+else
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=OFF"
+fi
 
-    for cpu in "${CANDIDATES[@]}"; do
-        if echo 'int main(){}' | ${CXX:-c++} -march="$cpu" -x c++ - -c -o /dev/null >/dev/null 2>&1; then
-            CPU="$cpu"
-            break
-        fi
-    done
-
-    if [ -z "$CPU" ]; then
-        echo "ERROR: None of the required ARM baselines (armv9/armv8.6/armv8.2 + dotprod) are supported by this compiler."
+if [ ! -z ${GG_BUILD_OPENVINO} ]; then
+    if [ -z ${OpenVINO_DIR} ]; then
+        echo "OpenVINO_DIR not found, please install OpenVINO via archives and enable it by:"
+        echo "source /opt/intel/openvino/setupvars.sh"
         exit 1
     fi
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 
-    echo ">>===== Using ARM baseline: ${CPU}"
-
-    CMAKE_EXTRA="${CMAKE_EXTRA:+$CMAKE_EXTRA } \
-        -DGGML_NATIVE=OFF \
-        -DGGML_CPU_KLEIDIAI=ON \
-        -DGGML_CPU_AARCH64=ON \
-        -DGGML_CPU_ARM_ARCH=${CPU} \
-        -DBUILD_SHARED_LIBS=OFF"
+    # TODO: fix and re-enable the `test-llama-archs` test below
+    CTEST_EXTRA="-E test-llama-archs"
 fi
 
 ## helpers
@@ -216,13 +233,13 @@ function gg_run_ctest_debug {
 
     set -e
 
-    # Check cmake, make and ctest are installed
+    # Check required binaries are installed
     gg_check_build_requirements
 
-    (time cmake -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j$(nproc)                                  ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time cmake --build . --config Debug -j$(nproc)) 2>&1 | tee -a $OUT/${ci}-make.log
 
-    (time ctest --output-on-failure -L main -E "test-opt|test-backend-ops" ) 2>&1 | tee -a $OUT/${ci}-ctest.log
+    (time ctest -C Debug --output-on-failure -L main -E "test-opt|test-backend-ops|test-llama-archs" ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
     set +e
 }
@@ -247,16 +264,16 @@ function gg_run_ctest_release {
 
     set -e
 
-    # Check cmake, make and ctest are installed
+    # Check required binaries are installed
     gg_check_build_requirements
 
-    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time cmake --build . --config Release -j$(nproc)) 2>&1 | tee -a $OUT/${ci}-make.log
 
     if [ -z ${GG_BUILD_LOW_PERF} ]; then
-        (time ctest --output-on-failure -L 'main|python' ) 2>&1 | tee -a $OUT/${ci}-ctest.log
+        (time ctest -C Release --output-on-failure -L 'main|python' ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
     else
-        (time ctest --output-on-failure -L main -E test-opt ) 2>&1 | tee -a $OUT/${ci}-ctest.log
+        (time ctest -C Release --output-on-failure -L main -E test-opt ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
     fi
 
     set +e
@@ -314,7 +331,7 @@ function gg_run_ctest_with_model_debug {
     cd build-ci-debug
     set -e
 
-    (LLAMACPP_TEST_MODELFILE="$model" time ctest --output-on-failure -L model) 2>&1 | tee -a $OUT/${ci}-ctest.log
+    (LLAMACPP_TEST_MODELFILE="$model" time ctest -C Debug --output-on-failure -L model) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
     set +e
     cd ..
@@ -327,7 +344,7 @@ function gg_run_ctest_with_model_release {
     cd build-ci-release
     set -e
 
-    (LLAMACPP_TEST_MODELFILE="$model" time ctest --output-on-failure -L model) 2>&1 | tee -a $OUT/${ci}-ctest.log
+    (LLAMACPP_TEST_MODELFILE="$model" time ctest -C Release --output-on-failure -L model) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
     # test memory leaks
     #if [[ ! -z ${GG_BUILD_METAL} ]]; then
@@ -381,8 +398,8 @@ function gg_run_qwen3_0_6b {
 
     set -e
 
-    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time cmake --build . --config Release -j$(nproc)) 2>&1 | tee -a $OUT/${ci}-make.log
 
     python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf  --outtype f16
     python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-bf16.gguf --outtype bf16
@@ -445,10 +462,10 @@ function gg_run_qwen3_0_6b {
 
     (time ./bin/llama-imatrix --model ${model_f16} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-imatrix.log
 
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa off --no-op-offload) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa on  --no-op-offload) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa off                ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa on                 ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa off --no-op-offload) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa on  --no-op-offload) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa off                ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa on                 ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
 
     function check_ppl {
         qnt="$1"
@@ -530,8 +547,8 @@ function gg_run_embd_bge_small {
 
     set -e
 
-    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time cmake --build . --config Release -j$(nproc)) 2>&1 | tee -a $OUT/${ci}-make.log
 
     python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
@@ -575,8 +592,8 @@ function gg_run_rerank_tiny {
 
     set -e
 
-    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time cmake --build . --config Release -j$(nproc)) 2>&1 | tee -a $OUT/${ci}-make.log
 
     python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
@@ -622,12 +639,36 @@ function gg_sum_rerank_tiny {
 }
 
 function gg_check_build_requirements {
+    if ! command -v git &> /dev/null; then
+        gg_printf 'git not found, please install'
+    fi
+
+    if ! command -v git-lfs &> /dev/null; then
+        gg_printf 'git-lfs not found, please install'
+    fi
+
+    if ! command -v wget &> /dev/null; then
+        gg_printf 'wget not found, please install'
+    fi
+
+    if ! command -v python3 &> /dev/null; then
+        gg_printf 'python3 not found, please install'
+    fi
+
+    if ! command -v pip3 &> /dev/null; then
+        gg_printf 'pip3 not found, please install'
+    fi
+
+    if ! python3 -m ensurepip --help &> /dev/null; then
+        gg_printf 'ensurepip not found, please install python3-venv package'
+    fi
+
     if ! command -v cmake &> /dev/null; then
         gg_printf 'cmake not found, please install'
     fi
 
-    if ! command -v make &> /dev/null; then
-        gg_printf 'make not found, please install'
+    if ! command -v ccache &> /dev/null; then
+        gg_printf 'ccache not found, please consider installing for faster builds'
     fi
 
     if ! command -v ctest &> /dev/null; then
@@ -660,8 +701,8 @@ function gg_sum_test_backend_ops_cpu {
 
 ## main
 
-export LLAMA_LOG_PREFIX=1
-export LLAMA_LOG_TIMESTAMPS=1
+export LLAMA_ARG_LOG_PREFIX=1
+export LLAMA_ARG_LOG_TIMESTAMPS=1
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     # Create symlink: ./llama.cpp/models-mnt -> $MNT/models

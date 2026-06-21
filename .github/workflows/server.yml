@@ -1,4 +1,3 @@
-# Server build and tests
 name: Server
 
 on:
@@ -15,37 +14,48 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
+    paths: [
+      '.github/workflows/server.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
+    paths: [
+      '.github/workflows/server.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
 
 env:
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
-  LLAMA_LOG_VERBOSITY: 10
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_VERBOSITY: 10
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  server:
-    runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        sanitizer: [ADDRESS, UNDEFINED] # THREAD is very slow
-        build_type: [RelWithDebInfo]
-        include:
-          - build_type: Release
-            sanitizer: ""
-            extra_args: ""
-          - build_type: Release
-            sanitizer: ""
-            extra_args: "LLAMA_ARG_BACKEND_SAMPLING=1"
-      fail-fast: false
+  ubuntu:
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Dependencies
@@ -69,19 +79,19 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: server-ubuntu-24.04-arm
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
       - name: Build
         id: cmake_build
         run: |
           cmake -B build \
-            -DLLAMA_BUILD_BORINGSSL=ON \
-            -DGGML_SCHED_NO_REALLOC=ON \
-            -DGGML_SANITIZE_ADDRESS=${{ matrix.sanitizer == 'ADDRESS' }} \
-            -DGGML_SANITIZE_THREAD=${{ matrix.sanitizer == 'THREAD' }} \
-            -DGGML_SANITIZE_UNDEFINED=${{ matrix.sanitizer == 'UNDEFINED' }} \
-            -DLLAMA_SANITIZE_ADDRESS=${{ matrix.sanitizer == 'ADDRESS' }} \
-            -DLLAMA_SANITIZE_THREAD=${{ matrix.sanitizer == 'THREAD' }} \
-            -DLLAMA_SANITIZE_UNDEFINED=${{ matrix.sanitizer == 'UNDEFINED' }}
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
+            -DGGML_SCHED_NO_REALLOC=ON
+          cmake --build build --config Release -j $(nproc) --target llama-server
 
       - name: Python setup
         id: setup_python
@@ -92,22 +102,34 @@ jobs:
 
       - name: Tests
         id: server_integration_tests
-        if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) }}
         run: |
           cd tools/server/tests
-          export ${{ matrix.extra_args }}
           pytest -v -x -m "not slow"
 
       - name: Slow tests
         id: server_integration_tests_slow
-        if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
+        if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
         run: |
           cd tools/server/tests
-          export ${{ matrix.extra_args }}
           SLOW_TESTS=1 pytest -v -x
 
-  server-windows:
-    runs-on: windows-2022
+      - name: Tests (Backend sampling)
+        id: server_integration_tests_backend_sampling
+        run: |
+          cd tools/server/tests
+          export LLAMA_ARG_BACKEND_SAMPLING=1
+          pytest -v -x -m "not slow"
+
+      - name: Slow tests (Backend sampling)
+        id: server_integration_tests_slow_backend_sampling
+        if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
+        run: |
+          cd tools/server/tests
+          export LLAMA_ARG_BACKEND_SAMPLING=1
+          SLOW_TESTS=1 pytest -v -x
+
+  windows:
+    runs-on: windows-2025
 
     steps:
       - name: Clone
@@ -117,11 +139,24 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: server-windows-2025-x64
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
       - name: Build
         id: cmake_build
+        shell: cmd
         run: |
-          cmake -B build -DLLAMA_BUILD_BORINGSSL=ON -DGGML_SCHED_NO_REALLOC=ON
-          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
+          cmake -B build -G "Ninja Multi-Config" ^
+            -DCMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_SCHED_NO_REALLOC=ON
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS% --target llama-server
 
       - name: Python setup
         id: setup_python
@@ -132,7 +167,6 @@ jobs:
 
       - name: Tests
         id: server_integration_tests
-        if: ${{ !matrix.disabled_on_pr || !github.event.pull_request }}
         run: |
           cd tools/server/tests
           $env:PYTHONIOENCODING = ":replace"
@@ -140,7 +174,7 @@ jobs:
 
       - name: Slow tests
         id: server_integration_tests_slow
-        if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
+        if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
         run: |
           cd tools/server/tests
           $env:SLOW_TESTS = "1"
