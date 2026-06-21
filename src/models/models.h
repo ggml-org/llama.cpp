@@ -1068,6 +1068,62 @@ struct llama_model_deepseek2 : public llama_model_base {
         graph(const llama_model & model, const llm_graph_params & params);
     };
 
+    struct graph_mtp : public llm_graph_context {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
+
+        // TODO some helpers could probably be shared
+
+        struct mtp_mla_q {
+            ggml_tensor * nope;
+            ggml_tensor * pe;
+        };
+
+        mtp_mla_q build_mtp_mla_q(
+            const llama_layer & layer,
+            ggml_tensor * cur,
+            int il);
+
+        struct mtp_mla_kv {
+            ggml_tensor * cmpr;
+            ggml_tensor * pe;
+        };
+
+        mtp_mla_kv build_mtp_mla_kv(
+                const llama_layer & layer,
+                ggml_tensor * cur,
+                int il);
+
+        ggml_tensor * build_mtp_input_embd_h(
+            const llama_model & model,
+            const llama_layer & layer,
+            ggml_tensor ** h_embd,
+            int il);
+
+        ggml_tensor * build_mtp_fusion(
+            ggml_tensor * tok_embd,
+            ggml_tensor * h_embd,
+            const llama_layer & layer,
+            int il);
+
+        ggml_tensor * build_mtp_moe_ffn(
+            const llama_layer & layer,
+            ggml_tensor * ffn_inp,
+            int il);
+
+        ggml_tensor * build_mtp_mla_attn(
+            const llama_layer & layer,
+            ggml_tensor * cur,
+            ggml_tensor * inp_pos,
+            llm_graph_input_attn_k * inp_attn_k,
+            int il);
+
+        ggml_tensor * build_mtp_logits_head(
+                const llama_model & model,
+                const llama_layer & layer,
+                ggml_tensor * cur,
+                ggml_tensor * inp_out_ids);
+    };
+
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
