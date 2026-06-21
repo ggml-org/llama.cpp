@@ -215,6 +215,11 @@ struct ggml_hexagon_session {
     size_t   max_vmem  = 0;
     size_t   max_bufsize = 0;
 
+    struct {
+        uint64_t uid = 0;
+        std::vector<htp_opnode> htp_nodes;
+    } cached_graph;
+
     ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) noexcept(false);
     ~ggml_hexagon_session() noexcept(true);
 
@@ -3372,34 +3377,50 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     HEX_VERBOSE("ggml-hex: %s graph-compute n_nodes %d\n", sess->c_name(), graph->n_nodes);
 
-    std::vector<htp_opnode> nodes;
-    nodes.reserve(graph->n_nodes);
+    const std::vector<htp_opnode> * nodes_ptr = nullptr;
+    std::vector<htp_opnode> computed_nodes;
 
-    // Fuse and finalize
-    for (int i = 0; i < graph->n_nodes; ++i) {
-        ggml_tensor * n = graph->nodes[i];
-        if (!op_is_compute(n)) {
-            continue;
+    // Check for cache hit
+    bool cache_hit = (graph->uid != 0 && sess->cached_graph.uid == graph->uid);
+    if (cache_hit) {
+        nodes_ptr = &sess->cached_graph.htp_nodes;
+    } else {
+        computed_nodes.reserve(graph->n_nodes);
+
+        // Fuse and finalize
+        for (int i = 0; i < graph->n_nodes; ++i) {
+            ggml_tensor * n = graph->nodes[i];
+            if (!op_is_compute(n)) {
+                continue;
+            }
+
+            if (try_fuse_node(sess, graph, i, computed_nodes)) {
+                continue;
+            }
+
+            htp_opnode node(n, {}, HTP_OP_INVALID);
+            node.opcode = op_remap_to_htp(n);
+            if (node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ID) {
+                ggml_hexagon_precompute_matmul_params(sess,
+                    node.node->src[0], node.node->src[1], node.node,
+                    (struct htp_mm_kernel_params *)node.kernel_params
+                );
+            }
+            computed_nodes.push_back(std::move(node));
         }
 
-        if (try_fuse_node(sess, graph, i, nodes)) {
-            continue;
+        if (graph->uid != 0) {
+            sess->cached_graph.uid = graph->uid;
+            sess->cached_graph.htp_nodes = std::move(computed_nodes);
+            nodes_ptr = &sess->cached_graph.htp_nodes;
+        } else {
+            nodes_ptr = &computed_nodes;
         }
-
-        htp_opnode node(n, {}, HTP_OP_INVALID);
-        node.opcode = op_remap_to_htp(n);
-        if (node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ID) {
-            ggml_hexagon_precompute_matmul_params(sess,
-                node.node->src[0], node.node->src[1], node.node,
-                (struct htp_mm_kernel_params *)node.kernel_params
-            );
-        }
-        nodes.push_back(std::move(node));
     }
 
     // Queue and execute
     if (opt_opstage & HTP_OPSTAGE_QUEUE) {
-        for (const auto & node : nodes) {
+        for (const auto & node : *nodes_ptr) {
             sess->enqueue_op(node);
         }
     }
