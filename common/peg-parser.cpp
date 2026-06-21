@@ -1565,11 +1565,11 @@ static std::string gbnf_ac_grammar(
 
     for (size_t q = 0; q < ac.num_states(); q++) {
         if (ac.is_terminal(q)) {
-            continue; // match states accept
+            continue; // match states
         }
 
         std::map<size_t, std::vector<uint32_t>> buckets;
-        std::vector<uint32_t> completing;  // chars that complete a delimiter here
+        std::vector<uint32_t> completing;  // chars that complete a delimiter
         std::vector<uint32_t> specific;    // chars with an explicit transition
         for (uint32_t c : ac.alphabet) {
             size_t d = ac.next(q, c);
