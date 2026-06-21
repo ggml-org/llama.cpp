@@ -991,7 +991,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         if (chain_heads) {
             this->params.n_max = std::min(this->params.n_max, n_mtp_layers);
-            
+
             chain_h.assign(n_seq, {});
             for (auto & c : chain_h) {
                 c.reserve((size_t) (this->params.n_max + 1) * n_embd);
