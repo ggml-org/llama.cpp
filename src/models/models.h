@@ -1760,6 +1760,13 @@ struct llama_model_minimax_m3 : public llama_model_base {
                 ggml_tensor * wo, ggml_tensor * wo_s,
                 ggml_tensor * q_cur, ggml_tensor * k_cur, ggml_tensor * v_cur,
                 ggml_tensor * msa_mask4, float kq_scale, int il) const;
+        // MSA decode-only gather path (S==1): per-group top-k block gather + FA.
+        ggml_tensor * build_attn_msa_decode(
+                llm_graph_input_attn_kv * inp,
+                ggml_tensor * wo, ggml_tensor * wo_s,
+                ggml_tensor * q_cur, ggml_tensor * k_cur, ggml_tensor * v_cur,
+                ggml_tensor * bs, ggml_tensor * local_bias, ggml_tensor * kqm,
+                int topk_blocks, float kq_scale, int il) const;
     };
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };

@@ -82,6 +82,30 @@ std::unique_ptr<llm_graph_context> llama_model_minimax_m3::build_arch_graph(cons
     return std::make_unique<graph>(*this, params);
 }
 
+// Per-step local-block force for the MSA decode path. bias[b, i] = +BIG iff block b is one of
+// query i's local blocks (L = pos/blk, plus local-1 neighbours). Added to block scores before
+// top_k so the local window is always selected, matching msa_select_*'s bs[qb-l]=INF.
+class llm_graph_input_msa_local : public llm_graph_input_i {
+public:
+    llm_graph_input_msa_local(int blk, int local, int64_t nblk) : blk(blk), local(local), nblk(nblk) {}
+    void set_input(const llama_ubatch * ubatch) override {
+        if (!bias || !ubatch->pos) return;
+        const int64_t n_tokens = ubatch->n_tokens;
+        std::vector<float> data((size_t) nblk * n_tokens, 0.0f);
+        for (int64_t i = 0; i < n_tokens; ++i) {
+            const int L = (int) (ubatch->pos[i] / blk);
+            for (int l = 0; l < local && L - l >= 0; ++l) {
+                if (L - l < nblk) data[(size_t) i * nblk + (L - l)] = 1e30f;
+            }
+        }
+        ggml_backend_tensor_set(bias, data.data(), 0, data.size() * sizeof(float));
+    }
+    ggml_tensor * bias = nullptr;   // [nblk, n_tokens] f32
+    int     blk;
+    int     local;
+    int64_t nblk;
+};
+
 // ---- MSA block-mask op ------
 // Emits the COMBINED attention mask: a copy of the causal/padding mask with
 // every key in a NON-selected block forced to -inf. Selected blocks keep their
@@ -614,6 +638,44 @@ static void msa_mask_from_scores_4way_op(struct ggml_tensor * dst, int ith, int 
     }
 }
 
+// Debug: dump the decode path's selected block set (from top_k) in the 4-way SELDUMP format.
+// src[0] = idx [K, Hd] I32 (top_k output, post local-force);  src[1] = kqm [n_kv,1] (for abs_pos).
+// nblk is carried in dst->ne[2] purely for the printout. Gated on MSA_DUMP_SEL.
+static void msa_dump_sel_op(struct ggml_tensor * dst, int ith, int nth, void * userdata) {
+    (void) nth; (void) userdata;
+    if (ith != 0) return;
+    const char * e = getenv("MSA_DUMP_SEL");
+    if (!e) return;
+
+    const struct ggml_tensor * idx = dst->src[0];   // I32 [K, Hd]
+    const struct ggml_tensor * kqm = dst->src[1];   // [n_kv, 1] causal mask
+    const int     K        = (int) idx->ne[0];
+    const int     Hd       = (int) idx->ne[1];
+    const int64_t n_kv     = kqm->ne[0];
+    const int     nblk_dbg = (int) dst->ne[2];
+
+    // abs_pos = highest causally-visible key (matches msa_select_4way_t's SELDUMP)
+    int abs_pos = -1;
+    if (kqm->type == GGML_TYPE_F16) {
+        const ggml_fp16_t * m = (const ggml_fp16_t *) kqm->data;
+        for (int64_t j = n_kv - 1; j >= 0; --j) if (!msa_is_masked(m[j])) { abs_pos = (int) j; break; }
+    } else {
+        const float * m = (const float *) kqm->data;
+        for (int64_t j = n_kv - 1; j >= 0; --j) if (!msa_is_masked(m[j])) { abs_pos = (int) j; break; }
+    }
+    if (abs_pos != atoi(e)) return;
+
+    const int32_t * I = (const int32_t *) idx->data;
+    for (int h = 0; h < Hd; ++h) {
+        std::vector<int> s(I + (size_t) h * K, I + (size_t) h * K + K);   // top_k order is unspecified
+        std::sort(s.begin(), s.end());                                    // sort to match 4-way's ascending print
+        char b[4096]; int n = 0;
+        n += snprintf(b + n, sizeof(b) - n, "SELDUMP pos=%d g=%d nblk=%d sel:", abs_pos, h, nblk_dbg);
+        for (int t = 0; t < K && n < (int) sizeof(b) - 8; ++t) n += snprintf(b + n, sizeof(b) - n, " %d", s[t]);
+        fprintf(stderr, "%s\n", b);
+    }
+}
+
 ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_4way(
         llm_graph_input_attn_kv * inp,
         ggml_tensor * wo, ggml_tensor * wo_s,
@@ -692,6 +754,104 @@ ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_4way(
     return cur;
 }
 
+ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_decode(
+        llm_graph_input_attn_kv * inp,
+        ggml_tensor * wo, ggml_tensor * wo_s,
+        ggml_tensor * q_cur, ggml_tensor * k_cur, ggml_tensor * v_cur,
+        ggml_tensor * bs,          // [nblk, Hd, 1] per-group block scores (mask-added) from the front
+        ggml_tensor * local_bias,  // [nblk, 1] f32, +BIG at local block(s)
+        ggml_tensor * kqm,         // [n_kv, 1, 1, 1] causal mask (f16/f32), contiguous
+        int topk_blocks, float kq_scale, int il) const {
+
+    GGML_ASSERT(!inp->self_k_rot && !inp->self_v_rot && "MSA decode: attn-rot not supported");
+    GGML_ASSERT(q_cur->ne[2] == 1 && "MSA decode path is S==1 only");
+
+    // --- store K/V to cache (mirror build_attn_msa_4way) ---
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, v_cur);
+    ggml_build_forward_expand(gf, k_cur);
+    const auto * mctx_cur = inp->mctx;
+    {
+        const auto & k_idxs = inp->get_k_idxs();
+        const auto & v_idxs = inp->get_v_idxs();
+        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+    }
+    ggml_tensor * k = mctx_cur->get_k(ctx0, il);   // [D, HKV, n_kv, 1]
+    ggml_tensor * v = mctx_cur->get_v(ctx0, il);   // [D, HKV, n_kv, 1] (v_trans=false under FA)
+
+    const int64_t D    = k->ne[0];
+    const int64_t HKV  = k->ne[1];
+    const int64_t n_kv = k->ne[2];
+    const int64_t HQ   = q_cur->ne[1];
+    const int64_t Gp   = HQ / HKV;
+    const int64_t nblk = bs->ne[0];
+    const int64_t Hd   = bs->ne[1];
+    const int     blk  = (int) (n_kv / nblk);
+    const int     K    = topk_blocks < (int) nblk ? topk_blocks : (int) nblk;
+    GGML_ASSERT(Hd == HKV);
+    GGML_ASSERT((int64_t) blk * nblk == n_kv);
+    GGML_ASSERT(!(v->nb[1] > v->nb[2]) && "MSA decode assumes v_trans=false (FA on)");
+
+    // --- force local block(s): bs += local_bias (broadcast over Hd) ---
+    ggml_tensor * bsf = ggml_add(ctx0, bs, ggml_reshape_3d(ctx0, local_bias, nblk, 1, 1)); // [nblk,Hd,1]
+    bsf = ggml_reshape_2d(ctx0, bsf, nblk, Hd);                                            // [nblk,Hd]
+
+    // --- top-k block indices per group ---
+    ggml_tensor * idx = ggml_top_k(ctx0, bsf, K);                                          // I32 [K, Hd]
+
+    // debug-only: dump the selected block set in 4-way SELDUMP format (side-effect node)
+    if (getenv("MSA_DUMP_SEL")) {
+        ggml_tensor * dsrcs[2] = { idx, kqm };
+        ggml_tensor * dmp = ggml_custom_4d(ctx0, GGML_TYPE_I32, K, Hd, nblk, 1,
+                                           dsrcs, 2, msa_dump_sel_op, 1, nullptr);
+        ggml_build_forward_expand(gf, dmp);
+    }
+
+    // --- expand block idx -> token idx: blk*idx + arange(blk) ---
+    ggml_tensor * idxf = ggml_scale(ctx0, ggml_cast(ctx0, idx, GGML_TYPE_F32), (float) blk); // [K,Hd] f32
+    idxf = ggml_reshape_3d(ctx0, idxf, 1, K, Hd);                                            // [1,K,Hd]
+    ggml_tensor * tgt = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, blk, K, Hd);
+    ggml_tensor * rep = ggml_repeat(ctx0, idxf, tgt);                                        // [blk,K,Hd]
+    ggml_tensor * ar  = ggml_reshape_3d(ctx0, ggml_arange(ctx0, 0.f, (float) blk, 1.f), blk, 1, 1);
+    ggml_tensor * tokf = ggml_add(ctx0, rep, ar);                                            // [blk,K,Hd]
+    tokf = ggml_reshape_2d(ctx0, tokf, (int64_t) blk * K, Hd);                                // [blk*K,Hd]
+    ggml_tensor * tok = ggml_cast(ctx0, tokf, GGML_TYPE_I32);                                 // [blk*K,Hd] I32
+
+    ggml_tensor * km1 = ggml_reshape_2d(ctx0, kqm, 1, n_kv);   // [1, n_kv] for mask-gather (decode: kqm is [n_kv,1])
+
+    ggml_tensor * acc = nullptr;
+    for (int g = 0; g < (int) HKV; ++g) {
+        ggml_tensor * tg = ggml_cont(ctx0, ggml_view_2d(ctx0, tok, (int64_t) blk * K, 1,
+                                                        tok->nb[1], (size_t) g * tok->nb[1])); // [blk*K,1] I32
+
+        // gather K/V for kv-head g from the strided [D,n_kv] head-slice (no cont of the cache)
+        ggml_tensor * Kg2 = ggml_view_2d(ctx0, k, D, n_kv, k->nb[2], (size_t) g * k->nb[1]);
+        ggml_tensor * Vg2 = ggml_view_2d(ctx0, v, D, n_kv, v->nb[2], (size_t) g * v->nb[1]);
+        ggml_tensor * Kg  = ggml_get_rows(ctx0, Kg2, tg);   // [D, blk*K] f32
+        ggml_tensor * Vg  = ggml_get_rows(ctx0, Vg2, tg);   // [D, blk*K] f32
+        ggml_tensor * mg  = ggml_get_rows(ctx0, km1, tg);   // [1, blk*K] f32 (causal/padding per key)
+
+        // shape for FA: q_g [D,1,Gp,1]; gathered K/V [D, blk*K, 1, 1] f16; mask [blk*K,1,1,1] f16
+        ggml_tensor * qg = ggml_view_3d(ctx0, q_cur, D, Gp, 1,
+                                        q_cur->nb[1], q_cur->nb[2], (size_t) g * Gp * q_cur->nb[1]);
+        qg = ggml_permute(ctx0, ggml_reshape_4d(ctx0, ggml_cont(ctx0, qg), D, Gp, 1, 1), 0, 2, 1, 3);
+        ggml_tensor * kgf = ggml_cast(ctx0, ggml_reshape_4d(ctx0, Kg, D, (int64_t) blk * K, 1, 1), GGML_TYPE_F16);
+        ggml_tensor * vgf = ggml_cast(ctx0, ggml_reshape_4d(ctx0, Vg, D, (int64_t) blk * K, 1, 1), GGML_TYPE_F16);
+        ggml_tensor * mgf = ggml_cast(ctx0, ggml_reshape_4d(ctx0, mg, (int64_t) blk * K, 1, 1, 1), GGML_TYPE_F16);
+
+        ggml_tensor * og = ggml_flash_attn_ext(ctx0, qg, kgf, vgf, mgf, kq_scale,
+                                               hparams.f_max_alibi_bias, 0.0f);
+        ggml_flash_attn_ext_set_prec(og, GGML_PREC_F32);    // [D, Gp, 1, 1]
+        acc = acc ? ggml_concat(ctx0, acc, og, 1) : og;     // concat along head axis
+    }
+
+    ggml_tensor * cur = ggml_reshape_2d(ctx0, acc, acc->ne[0]*acc->ne[1], acc->ne[2]*acc->ne[3]); // [n_embd,1]
+    cb(cur, "kqv_out", il);
+    if (wo) cur = build_lora_mm(wo, cur, wo_s);
+    return cur;
+}
+
 llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     const auto & mm = static_cast<const llama_model_minimax_m3 &>(model);
@@ -710,6 +870,21 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
 
     ggml_tensor * inp_pos = build_inp_pos();
     auto inp_attn = build_attn_inp_kv();
+
+    // MSA decode-only gather path is active for single-token batches; build its local-force input once.
+    // MSA_FORCE_4WAY (debug) keeps the 4-way path even at decode, so you can A/B lego-vs-4way SELDUMP.
+    const bool msa_decode = (n_tokens == 1) && !getenv("MSA_BYPASS") && !getenv("MSA_SHARED")
+                                            && !getenv("MSA_FORCE_4WAY");
+    llm_graph_input_msa_local * msa_loc = nullptr;
+    if (msa_decode) {
+        ggml_tensor * kqm0 = inp_attn->get_kq_mask();
+        const int64_t n_kv0 = kqm0->ne[0];
+        const int64_t nblk0 = n_kv0 / mm.msa_p.blk;
+        auto loc = std::make_unique<llm_graph_input_msa_local>(mm.msa_p.blk, mm.msa_p.local, nblk0);
+        loc->bias = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nblk0, n_tokens);   // [nblk,1] at decode
+        ggml_set_input(loc->bias);
+        msa_loc = (llm_graph_input_msa_local *) res->add_input(std::move(loc));
+    }
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
@@ -754,6 +929,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
             cb(Vcur, "Vcur", il);
             ggml_tensor * msa_mask4 = nullptr;   // [n_kv, S, Hd, ns] per-group (default)
             ggml_tensor * msa_mask  = nullptr;   // [n_kv, S, 1,  ns] shared    (legacy debug)
+            bool          msa_decode_done = false; 
             if (il >= (int) hparams.n_layer_dense_lead) {                 // sparse layers == MoE layers for M3
                 const int64_t n_idx_dim  = hparams.indexer_head_size;     // 128
                 const int64_t n_idx_head = hparams.indexer_n_head;        // 4
@@ -799,14 +975,23 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                     // block-amax over n_kv (dim 0), keep Hd -> [nblk, Hd, S]
                     ggml_tensor * bs = ggml_pool_2d(ctx0, sc, GGML_OP_POOL_MAX, blk, 1, blk, 1, 0, 0);
 
-                    ggml_tensor * srcs[4] = { bs, kqm, nullptr, nullptr };
-                    int nsrc = 2;
-                    if (getenv("MSA_VERIFY_BS4")) { srcs[2] = iq; srcs[3] = ik_kv; nsrc = 4; }
-                    msa_mask4 = ggml_custom_4d(ctx0, kqm->type,
-                                               n_kv, n_tokens, n_idx_head, kqm->ne[3],
-                                               srcs, nsrc, msa_mask_from_scores_4way_op, GGML_N_TASKS_MAX,
-                                               const_cast<msa_params *>(&mm.msa_p));
-                    cb(msa_mask4, "msa_mask4", il);
+                    if (msa_decode) {
+                        // decode gather path: skip the CPU tail op + msa_mask4 entirely
+                        cur = build_attn_msa_decode(inp_attn,
+                                model.layers[il].wo, model.layers[il].wo_s,
+                                Qcur, Kcur, Vcur, bs, msa_loc->bias, kqm,
+                                mm.msa_p.topk_blocks, 1.0f/sqrtf(float(n_embd_head)), il);
+                        msa_decode_done = true;   // signal the dispatch below to skip
+                    } else {
+                        ggml_tensor * srcs[4] = { bs, kqm, nullptr, nullptr };
+                        int nsrc = 2;
+                        if (getenv("MSA_VERIFY_BS4")) { srcs[2] = iq; srcs[3] = ik_kv; nsrc = 4; }
+                        msa_mask4 = ggml_custom_4d(ctx0, kqm->type,
+                                                   n_kv, n_tokens, n_idx_head, kqm->ne[3],
+                                                   srcs, nsrc, msa_mask_from_scores_4way_op, GGML_N_TASKS_MAX,
+                                                   const_cast<msa_params *>(&mm.msa_p));
+                        cb(msa_mask4, "msa_mask4", il);
+                    }
                 } else if (want_shared) {
                     // --- legacy shared-mask monolithic op (single FA call via build_attn) ---
                     ggml_tensor * srcs[4] = { iq, ik_kv, kqm, ik };
@@ -820,19 +1005,15 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                 if (msa_mask) cb(msa_mask, "msa_mask", il);
             }
 
-            if (il >= (int) hparams.n_layer_dense_lead && msa_mask4) {
-                // sparse layer, per-group path
-                cur = build_attn_msa_4way(inp_attn,
-                        model.layers[il].wo, model.layers[il].wo_s,
-                        Qcur, Kcur, Vcur, msa_mask4,
-                        1.0f/sqrtf(float(n_embd_head)), il);
+            if (msa_decode_done) {
+                // cur already computed by build_attn_msa_decode above
+            } else if (il >= (int) hparams.n_layer_dense_lead && msa_mask4) {
+                cur = build_attn_msa_4way(inp_attn, model.layers[il].wo, model.layers[il].wo_s,
+                        Qcur, Kcur, Vcur, msa_mask4, 1.0f/sqrtf(float(n_embd_head)), il);
             } else {
-                // dense layers, MSA_BYPASS (msa_mask == nullptr), or legacy shared (msa_mask set)
-                cur = build_attn(inp_attn,
-                        model.layers[il].wo, NULL, model.layers[il].wo_s,
-                        Qcur, Kcur, Vcur, /*kq_b=*/nullptr, nullptr, nullptr,
-                        1.0f/sqrtf(float(n_embd_head)), il,
-                        /*kq_mask_override=*/msa_mask);
+                cur = build_attn(inp_attn, model.layers[il].wo, NULL, model.layers[il].wo_s,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
+                        1.0f/sqrtf(float(n_embd_head)), il, /*kq_mask_override=*/msa_mask);
             }
         }
 
@@ -902,3 +1083,4 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
 
     ggml_build_forward_expand(gf, cur);
 }
+
