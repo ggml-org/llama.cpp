@@ -1750,11 +1750,17 @@ struct llama_model_minimax_m3 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     msa_params msa_p;
-
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
-    };
 
+        // MSA 4-way per-group FA split (exact per-group selection). msa_mask4 is
+        // [n_kv, S, Hd, ns] f16, channel g = group g's combined causal+block mask.
+        ggml_tensor * build_attn_msa_4way(
+                llm_graph_input_attn_kv * inp,
+                ggml_tensor * wo, ggml_tensor * wo_s,
+                ggml_tensor * q_cur, ggml_tensor * k_cur, ggml_tensor * v_cur,
+                ggml_tensor * msa_mask4, float kq_scale, int il) const;
+    };
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
