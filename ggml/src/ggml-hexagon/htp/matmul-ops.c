@@ -2271,7 +2271,9 @@ static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void
     output_transfer_task_state_t *st = (output_transfer_task_state_t *) data;
 
     struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, i);
+
+    int start_chunk_idx = i * st->n_chunks_per_task;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, start_chunk_idx);
 
     for (unsigned int task_id = i; task_id < (unsigned int)st->n_tasks; task_id += n) {
         int    chunk_idx  = task_id * st->n_chunks_per_task;
@@ -2281,14 +2283,16 @@ static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void
         transfer_output_chunk_fp16_to_fp32(dst, st->vtcm_src, chunk_idx, chunk_size, st->n_cols, st->dst_stride, st->dst_cols);
     }
 
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, i);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, start_chunk_idx);
 }
 
 static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
     activation_transfer_task_state_t *st = (activation_transfer_task_state_t *) data;
 
     struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, i);
+
+    int start_chunk_idx = i * st->n_chunks_per_task;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, start_chunk_idx);
 
     for (unsigned int task_id = i; task_id < (unsigned int)st->n_tasks; task_id += n) {
         int    chunk_idx  = task_id * st->n_chunks_per_task;
@@ -2307,7 +2311,7 @@ static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, 
         }
     }
 
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, i);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, start_chunk_idx);
 }
 
 static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigned int i, void *data) {
