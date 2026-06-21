@@ -1859,9 +1859,37 @@ Example events:
 
 {
   "model": "...",
-  "event": "download_finished",
+  "event": "model_status",
   "data": {
-    "status": "loading"
+    "status": "loading",
+    "progress": {
+      "stages": ["text_model", "spec_model", "mmproj_model"],
+      "current": "text_model",
+      "value": 0.5
+    }
+  }
+}
+// note for "loading" status:
+// - subsequent events will follow the same order of "stages" list
+// - mmap is may report incorrect progress on some platforms; if you need exact progress, use --no-mmap
+
+{
+  "model": "...",
+  "event": "model_status",
+  "data": {
+    "status": "loaded",
+    "info": {
+      // note: only include info on first load
+      // waking up from sleep doesn't have this
+    }
+  }
+}
+
+{
+  "model": "...",
+  "event": "model_status",
+  "data": {
+    "status": "sleeping"
   }
 }
 

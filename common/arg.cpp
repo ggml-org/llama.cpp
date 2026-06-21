@@ -924,8 +924,8 @@ static utf8_argv make_utf8_argv() {
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
 #ifdef _WIN32
     auto utf8 = make_utf8_argv();
-    if (!utf8.ptrs.empty()) {
-        argc = static_cast<int>(utf8.buf.size());
+    // repair argv only when it matches the process command line
+    if (static_cast<int>(utf8.buf.size()) == argc) {
         argv = utf8.ptrs.data();
     }
 #endif
@@ -2897,7 +2897,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.server_tools = parse_csv_row(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
-        add_opt(common_arg(
+    add_opt(common_arg(
         {"-ag", "--agent"},
         {"-no-ag", "--no-agent"},
         "whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)",
