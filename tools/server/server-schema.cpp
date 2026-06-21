@@ -503,7 +503,7 @@ task_params eval_llama_cmpl_schema(
     params.antiprompt    = params_base.antiprompt;
 
     // enabling this will output extra debug information in the HTTP responses from the server
-    params.verbose       = params_base.verbosity > 9;
+    params.verbose       = params_base.verbosity > 9 || json_value(data, "verbose", false);
 
     params.chat_parser_params.reasoning_format = params_base.reasoning_format;
 
