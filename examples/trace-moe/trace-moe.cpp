@@ -326,6 +326,41 @@ std::string render_activation_record(
     return s;
 }
 
+// ShortGPT-style Block Influence: emitted as a separate event alongside
+// activation_summary, but ALWAYS (independent of activation_stride) when the
+// user opted into l_out via --trace-activations. BI = 1 - cos(h_in, h_out)
+// where h_in = previous layer's l_out residual and h_out = this layer's l_out
+// residual, both for the same token. The cache is cleared between prompts in
+// run_one_prompt. The 'layer:N' on the record is the layer whose transform
+// produced h_out (i.e. layer N's BI, computed from l_out-{N-1} and l_out-N).
+std::string render_bi_record(
+        const std::string & run_id, const std::string & model, const char * phase,
+        int token_index, int layer, int n_channels,
+        double cos_sim, double bi_score, const TraceConfig & cfg) {
+    // Build with std::string::push_back + arithmetic conversions to avoid the
+    // multiple-escape fragility of chained s += "..." clauses for JSON.
+    std::string s;
+    s.reserve(320);
+    s.push_back('{');
+    s += "\"schema_version\":"; s += std::to_string(TRACE_SCHEMA_VERSION);
+    s += ",\"event\":\"block_influence\"";
+    s += ",\"run_id\":\"";  json_escape_append(run_id, s); s.push_back('"');
+    s += ",\"model\":\"";   json_escape_append(model, s); s.push_back('"');
+    s += ",\"phase\":\"";   s += phase; s.push_back('"');
+    s += ",\"token_index\":"; s += std::to_string(token_index);
+    s += ",\"layer\":";       s += std::to_string(layer);
+    s += ",\"task_label\":\""; json_escape_append(cfg.task_label, s); s.push_back('"');
+    s += ",\"language\":\"";   json_escape_append(cfg.language, s); s.push_back('"');
+    s += ",\"script\":\"";     json_escape_append(cfg.script, s); s.push_back('"');
+    s += ",\"prompt_family\":\""; json_escape_append(cfg.prompt_family, s); s.push_back('"');
+    s += ",\"test_id\":\"";    json_escape_append(cfg.test_id, s); s.push_back('"');
+    s += ",\"n_channels\":"; s += std::to_string(n_channels);
+    { char buf[32]; std::snprintf(buf, sizeof(buf), "%.6g", cos_sim);  s += ",\"cos_sim\":";  s += buf; }
+    { char buf[32]; std::snprintf(buf, sizeof(buf), "%.6g", bi_score); s += ",\"bi_score\":"; s += buf; }
+    s += "}\n";
+    return s;
+}
+
 // ---------------------------------------------------------------------------
 // Async, bounded writer.
 // ---------------------------------------------------------------------------
@@ -445,6 +480,20 @@ struct TraceState {
     std::unordered_map<int, int> pending_topk_n_used;   // n_used of the pending topk
     std::unordered_map<int, int> pending_topk_n_tokens; // n_tokens of the pending topk
 
+    // ShortGPT Block Influence cache: per-token, the previous layer's l_out
+    // residual stream (full 6144-float F32 vector). When layer N's l_out fires
+    // for token t, we look up this cache; if a vector is present (from layer
+    // N-1), compute cos_sim(h_in, h_out) and emit a 'block_influence'
+    // record. Memory cost: ~n_channels float per token currently in flight
+    // (~24 KB/token at n_channels=6144). Resets every prompt in run_one_prompt.
+    //
+    // Note: the trace_cb_eval callback fires for EVERY ggml_tensor node in
+    // graph-eval order. For a standard pre-norm residual stream, l_out-N's
+    // output is layer N+1's input, so cos_sim(prev_l_out_per_token[t],
+    // current_l_out[t]) gives BI for layer N (the transform that produced
+    // current_l_out).
+    std::unordered_map<int, std::vector<float>> prev_l_out_per_token;
+
     // (readback now uses a per-call fresh buffer; no shared scratch field)
 };
 
@@ -557,8 +606,59 @@ bool trace_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
         std::string matched_stem;
         if (is_activation_tensor(name, st->activation_stems, matched_stem)) {
             int layer = extract_layer(name);
-            if (layer >= 0 && layer_selected(*st, layer) &&
-                (layer % st->activation_stride) == 0) {
+            if (layer >= 0 && layer_selected(*st, layer)) {
+                // --------------------------------------------------------------------
+                // ShortGPT BI: ALWAYS (independent of activation_stride) when the
+                // matched stem is 'l_out'. We do a separate host copy here so the
+                // existing top-K activation_summary emission below is untouched,
+                // at the cost of one redundant copy per layer only when l_out
+                // is the matched stem. For other stems (kqv_out, ffn_out, ...)
+                // this whole block is skipped.
+                // --------------------------------------------------------------------
+                if (matched_stem == "l_out" && t->type == GGML_TYPE_F32) {
+                    size_t bi_nbytes = ggml_nbytes(t);
+                    std::vector<uint8_t> bi_raw(bi_nbytes);
+                    ggml_backend_tensor_get(t, bi_raw.data(), 0, bi_nbytes);
+                    int n_channels = (int) t->ne[0];
+                    int n_tokens   = (int) t->ne[1];
+                    const float * bi_src =
+                        reinterpret_cast<const float *>(bi_raw.data());
+                    int pi = (std::string(st->current_phase) == "generation") ? 1 : 0;
+                    bool phase_on = (pi == 0) ? st->trace_prefill : st->trace_generation;
+                    for (int tok = 0; tok < n_tokens; ++tok) {
+                        int tok_idx = st->token_base + tok;
+                        const float * v = bi_src + (size_t) tok * n_channels;
+                        auto it = st->prev_l_out_per_token.find(tok_idx);
+                        if (it != st->prev_l_out_per_token.end() && phase_on) {
+                            const float * prev = it->second.data();
+                            double dot = 0.0, na = 0.0, nb = 0.0;
+                            for (int c = 0; c < n_channels; ++c) {
+                                double a = (double) v[c];
+                                double b = (double) prev[c];
+                                dot += a * b;
+                                na  += a * a;
+                                nb  += b * b;
+                            }
+                            double denom = std::sqrt(na) * std::sqrt(nb);
+                            double cos_sim = denom > 0.0 ? dot / denom : 0.0;
+                            double bi_score = 1.0 - cos_sim;
+                            std::string rec = render_bi_record(
+                                st->run_id, st->model_name, st->current_phase,
+                                tok_idx, layer, n_channels,
+                                cos_sim, bi_score, st->cfg);
+                            st->writer.push(std::move(rec));
+                        }
+                        // Cache current as 'previous' for the next layer's
+                        // cos_sim lookup, even when this phase's records are
+                        // disabled — keeps continuity so that re-enabling the
+                        // phase mid-prompt doesn't produce a bogus 'no prev'
+                        // miss on the layer where tracing was off.
+                        st->prev_l_out_per_token[tok_idx] =
+                            std::vector<float>(v, v + n_channels);
+                    }
+                }
+
+                if ((layer % st->activation_stride) == 0) {
                 // ALWAYS copy via ggml_backend_tensor_get for the same Metal
                 // sync reason as the routing-event path.
                 size_t nbytes = ggml_nbytes(t);
@@ -639,6 +739,7 @@ bool trace_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
                         st->writer.push(std::move(rec));
                         st->phase_tokens_emitted[pi]++;
                     }
+                }
                 }
             }
             // either way (matched stem or not), don't fall through to MoE path
@@ -894,6 +995,10 @@ PromptResult run_one_prompt(
     st.pending_topk.clear();
     st.pending_topk_n_used.clear();
     st.pending_topk_n_tokens.clear();
+    // ShortGPT BI: clear the per-token previous-layer residual cache so the
+    // next prompt's token 0 doesn't cos-compare against this prompt's final
+    // residual (which would be a bogus metric and rot memory across runs).
+    st.prev_l_out_per_token.clear();
     st.writer.written.store(0);
     st.writer.dropped.store(0);
     st.writer.sampled.store(0);
