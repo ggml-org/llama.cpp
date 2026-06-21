@@ -1486,6 +1486,13 @@ common_peg_parser common_peg_parser_builder::json_member(const std::string & key
     });
 }
 
+common_peg_parser common_peg_parser_builder::ac(const common_peg_parser & p, const std::vector<std::string> & delimiters) {
+    if (delimiters.empty()) {
+        throw std::runtime_error("ac parser requires at least one delimiter");
+    }
+    return add(common_peg_ac_parser{p, delimiters});
+}
+
 static std::string gbnf_escape_char_class(uint32_t c) {
     if (c == '-' || c == ']' || c == '[' || c == '\\') {
         return "\\" + std::string(1, (char) c);
