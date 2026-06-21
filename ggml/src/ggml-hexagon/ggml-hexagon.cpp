@@ -366,46 +366,6 @@ static enum ggml_status ggml_backend_hexagon_buffer_init_tensor(ggml_backend_buf
 }
 
 // ======== Q4_0_TILED ====================
-struct x2_q4 {
-    int v[2];
-};
-
-static x2_q4 unpack_q4(uint8_t v) {
-    x2_q4 x = { (int) (v & 0x0f) - 8, (int) (v >> 4) - 8 };
-    return x;
-}
-
-static void dump_block_q4_0(const block_q4_0 * b, int i) {
-    HEX_VERBOSE("ggml-hex: repack q4_0 %d: %d %d %d %d ... %d %d %d %d : %.6f\n", i, unpack_q4(b->qs[0]).v[0],
-                unpack_q4(b->qs[1]).v[0], unpack_q4(b->qs[2]).v[0], unpack_q4(b->qs[3]).v[0], unpack_q4(b->qs[12]).v[1],
-                unpack_q4(b->qs[13]).v[1], unpack_q4(b->qs[14]).v[1], unpack_q4(b->qs[15]).v[1],
-                GGML_FP16_TO_FP32(b->d));
-}
-
-static void dump_packed_block_q4_0_tiled(const uint8_t * v, unsigned int i, size_t k) {
-    static const int qk        = QK_Q4_0_TILED;
-    const int        dblk_size = 8 * 2;   // 8x __fp16
-    const int        qblk_size = qk / 2;  // int4
-    const int        qrow_size = k / 2;   // int4 (not padded)
-
-    const uint8_t * v_q = v + 0;          // quants first
-    const uint8_t * v_d = v + qrow_size;  // then scales
-
-    const uint8_t *   q = v_q + i * qblk_size;
-    const ggml_half * d = (const ggml_half *) (v_d + i * dblk_size);
-
-    HEX_VERBOSE("ggml-hex: repack q4_0_tiled-%d: %d %d %d %d ... %d %d %d %d ... %d %d %d %d : %.6f %.6f %.6f %.6f\n", i,
-                unpack_q4(q[0]).v[0], unpack_q4(q[1]).v[0], unpack_q4(q[2]).v[0], unpack_q4(q[3]).v[0],
-                unpack_q4(q[60]).v[0], unpack_q4(q[61]).v[0], unpack_q4(q[62]).v[0], unpack_q4(q[63]).v[0],
-                unpack_q4(q[124]).v[0], unpack_q4(q[125]).v[0], unpack_q4(q[126]).v[0], unpack_q4(q[127]).v[0],
-                GGML_FP16_TO_FP32(d[0]), GGML_FP16_TO_FP32(d[1]), GGML_FP16_TO_FP32(d[2]), GGML_FP16_TO_FP32(d[3]));
-
-    HEX_VERBOSE("ggml-hex: repack q4_0_tiled-%d: %d %d %d %d ... %d %d %d %d ... %d %d %d %d : %.6f %.6f %.6f %.6f\n",
-                i + 1, unpack_q4(q[0]).v[1], unpack_q4(q[1]).v[1], unpack_q4(q[2]).v[1], unpack_q4(q[3]).v[1],
-                unpack_q4(q[60]).v[1], unpack_q4(q[61]).v[1], unpack_q4(q[62]).v[1], unpack_q4(q[63]).v[1],
-                unpack_q4(q[124]).v[1], unpack_q4(q[125]).v[1], unpack_q4(q[126]).v[1], unpack_q4(q[127]).v[1],
-                GGML_FP16_TO_FP32(d[4]), GGML_FP16_TO_FP32(d[5]), GGML_FP16_TO_FP32(d[6]), GGML_FP16_TO_FP32(d[7]));
-}
 
 static void unpack_q4_0_quants(uint8_t * qs, const block_q4_0 * x, unsigned int bi) {
     static const int qk = QK4_0;
@@ -469,8 +429,6 @@ static void pack_mxfp4_quants(block_mxfp4 * x, const uint8_t * qs, unsigned int 
         x->qs[i]         = x0 | (x1 << 4);
     }
 }
-
-
 
 // repack q4_0 data into q4_0_tiled tensor
 static void repack_q4_0_tiled(ggml_tensor * t, const void * data, size_t size) {
