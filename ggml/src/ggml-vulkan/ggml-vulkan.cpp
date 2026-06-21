@@ -311,7 +311,6 @@ enum vk_device_architecture {
     INTEL_XE2,
     NVIDIA_PRE_TURING,
     NVIDIA_TURING,
-    QUALCOMM_ADRENO,
 };
 
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
@@ -422,18 +421,6 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
                 return vk_device_architecture::NVIDIA_TURING;
             }
         }
-    } else if(props.vendorID == VK_VENDOR_ID_QUALCOMM) {
-
-        const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
-        bool cooperative_matrix = false;
-
-        for (const auto& properties : ext_props) {
-            if (strcmp("VK_KHR_cooperative_matrix", properties.extensionName) == 0) {
-                cooperative_matrix = true;
-            }
-        }
-
-        return vk_device_architecture::QUALCOMM_ADRENO;
     }
     return vk_device_architecture::OTHER;
 }
