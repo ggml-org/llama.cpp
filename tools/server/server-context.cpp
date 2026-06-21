@@ -136,8 +136,9 @@ struct server_batch {
         batch_rendered = true;
     }
 
-    llama_batch get_view(int32_t off, int32_t n_tokens) {
+    llama_batch get_view(int32_t off, int32_t n_tokens) const {
         GGML_ASSERT(batch.token != nullptr);
+        GGML_ASSERT(batch_rendered);
         GGML_ASSERT(off >= 0 && off < size());
         GGML_ASSERT(n_tokens > 0 && off + n_tokens <= size());
 
