@@ -2394,16 +2394,10 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
         "</param>",
         "<think>",
         "</think>",
-        "<|im_start|>",
-        "<tool_response>",
-        "</tool_response>",
     };
 
-    const std::string GEN_PROMPT  = "<|im_start|>assistant\n";
-    const std::string THINK_START = "<think>";
-    const std::string THINK_END   = "</think>";
-    data.thinking_start_tag = THINK_START;
-    data.thinking_end_tag   = THINK_END;
+    data.thinking_start_tag = "<think>";
+    data.thinking_end_tag   = "</think>";
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
@@ -2412,9 +2406,9 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
 
-        data.generation_prompt = GEN_PROMPT + THINK_START + "\n" + msg.reasoning_content;
+        data.generation_prompt = "<|im_start|>assistant\n<think>\n" + msg.reasoning_content;
         if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
-            data.generation_prompt += "\n" + THINK_END + "\n\n" + msg.render_content();
+            data.generation_prompt += "\n</think>\n\n" + msg.render_content();
         }
 
         data.prompt += data.generation_prompt;
@@ -2423,26 +2417,15 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto end = p.end();
 
-        static const std::string SP_SPACE = "\xC4\xA0"; // U+0120 (valid UTF-8)
-        static const std::string SP_NL    = "\xC4\x8A"; // U+010A (valid UTF-8)
+        auto im_end_suffix = p.optional(p.literal("<|im_end|>") + p.space());
 
-        auto ws = [&]() {
-            return p.choice({ p.space(), p.literal(SP_SPACE), p.literal(SP_NL) });
-        };
-
-        static const std::string IM_END = "<|im_end|>";
-        auto im_end_suffix = p.optional(p.literal(IM_END) + ws());
-
-        auto assistant_prefix = p.literal(GEN_PROMPT);
+        auto assistant_prefix = p.literal("<|im_start|>assistant\n");
 
         auto thinking = p.eps();
-        if (!inputs.enable_thinking) {
-            thinking = p.literal("<think>\n\n</think>\n\n");
-        } else if (extract_reasoning) {
-            thinking = p.literal(THINK_START) + p.optional(p.literal("\n")) +
-                p.reasoning(p.until(THINK_END)) + p.literal(THINK_END) + ws();
+        if (extract_reasoning || !inputs.enable_thinking) {
+            thinking = ("<think>" << p.reasoning(p.until("</think>")) << "</think>") + p.space();
         } else {
-            thinking = p.literal(THINK_START) + p.literal("\n");
+            thinking = p.literal("<think>\n");
         }
 
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
@@ -2490,30 +2473,24 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
                         p.tool_arg_open(p.literal("<param name=\"") + p.tool_arg_name(p.literal(prop_name)) +
                                         p.literal("\">")) +
                         value_parser +
-                        p.tool_arg_close(p.literal("</param>") + ws()));
+                        p.tool_arg_close(p.literal("</param>") + p.space()));
 
                     arg_choice |= arg_rule;
                 }
-                args = p.zero_or_more(arg_choice + ws());
+                args = p.zero_or_more(arg_choice + p.space());
             }
 
             auto tool_parser = p.tool(
                 p.tool_open(p.literal("<function name=\"") + p.tool_name(p.literal(name)) + p.literal("\">")) +
-                p.tool_args(args) + ws() +
-                p.tool_close(p.literal("</function>")));
+                p.tool_args(args) << p.tool_close(p.literal("</function>")));
 
             tool_choice |= p.rule("tool-" + name, tool_parser);
         });
 
-        // Do not wrap trigger_rule("tool-calls", ...) in another rule("tool-calls", ...):
-        // parallel mode already defines trigger_rule("tool-calls", ...) and a second
-        // rule with the same name resolves to itself -> peg stack overflow.
-        common_peg_parser tool_calls = p.eps();
-        if (inputs.parallel_tool_calls) {
-            tool_calls = p.trigger_rule("tool-calls", p.one_or_more(tool_choice + ws()));
-        } else {
-            tool_calls = p.trigger_rule("tool-call", tool_choice);
-        }
+        // Do not wrap trigger_rule("tool-call", ...) in a rule("tool-call", ...): a rule
+        // and trigger_rule sharing a name resolve to each other -> peg stack overflow.
+        auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
+        auto tool_calls = p.trigger_rule("tool-call", p.repeat(tool_choice + p.space(), 1, max_calls));
 
         auto content = p.content(p.until("<function"));
 
