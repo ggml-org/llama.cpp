@@ -5752,11 +5752,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
                                       (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eArithmetic);
         device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                    (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
-#ifdef __APPLE__
-        if (device->vendor_id == VK_VENDOR_ID_AMD) {
-            device->subgroup_shuffle = false;
-        }
-#endif
         device->subgroup_clustered = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                      (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eClustered);
 
@@ -16897,6 +16892,16 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 bool coopmat2 = device->coopmat2;
                 uint32_t HSK = op->src[1]->ne[0];
                 uint32_t HSV = op->src[2]->ne[0];
+
+#ifdef __APPLE__
+                // Subgroup shuffle on MoltenVK seems to only work when HSK and HSV are multiples of 32.
+                if (device->driver_id == vk::DriverId::eMoltenvk) {
+                    if ((HSK % 32) != 0 || (HSV % 32) != 0) {
+                        return false;
+                    }
+                }
+#endif
+
                 if ((HSK % 8) != 0 || (HSV % 8) != 0) {
                     return false;
                 }
