@@ -686,7 +686,11 @@ value set_statement::execute_impl(context & ctx) {
     return mk_val<value_undefined>();
 }
 
-static inline void bind_parameters(const std::string & name, const statements & this_args, const func_args & args, const size_t expected_count, const size_t input_count, context & ctx) {
+static inline void bind_parameters(const std::string & name, const statements & this_args, const func_args & args, context & ctx) {
+    const size_t expected_count = this_args.size();
+    const size_t input_count = args.count();
+
+    JJ_DEBUG("Invoking '%s' with %zu input arguments (expected %zu)", name.c_str(), input_count, expected_count);
     for (size_t i = 0; i < expected_count; ++i) {
         if (i < input_count) {
             if (is_stmt<identifier>(this_args[i])) {
@@ -735,13 +739,9 @@ value macro_statement::execute_impl(context & ctx) {
     std::string name = cast_stmt<identifier>(this->name)->val;
 
     const func_handler func = [this, name](const func_args & args) -> value {
-        size_t expected_count = this->args.size();
-        size_t input_count = args.count();
-
-        JJ_DEBUG("Invoking macro '%s' with %zu input arguments (expected %zu)", name.c_str(), input_count, expected_count);
         context macro_ctx(args.ctx); // new scope for macro execution
 
-        bind_parameters(name, this->args, args, expected_count, input_count, macro_ctx);
+        bind_parameters(name, this->args, args, macro_ctx);
 
         // execute macro body
         JJ_DEBUG("Executing macro '%s' body with %zu statements", name.c_str(), this->body.size());
@@ -770,13 +770,9 @@ value call_statement::execute_impl(context & ctx) {
     context caller_ctx(ctx); // new scope for caller execution
 
     const func_handler func = [this, &caller_ctx](const func_args & args) -> value {
-        size_t expected_count = this->caller_args.size();
-        size_t input_count = args.count();
-
-        JJ_DEBUG("Caller function invoked with %zu input arguments (expected %zu)", input_count, expected_count);
         context block_ctx(caller_ctx); // new scope for block execution
 
-        bind_parameters("caller", this->caller_args, args, expected_count, input_count, block_ctx);
+        bind_parameters("caller", this->caller_args, args, block_ctx);
 
         JJ_DEBUG("Executing call body with %zu statements", this->body.size());
         auto res = exec_statements(this->body, block_ctx);
