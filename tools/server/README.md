@@ -175,13 +175,12 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-np, --parallel N` | number of server slots (default: -1, -1 = auto)<br/>(env: LLAMA_ARG_N_PARALLEL) |
 | `-cb, --cont-batching, -nocb, --no-cont-batching` | whether to enable continuous batching (a.k.a dynamic batching) (default: enabled)<br/>(env: LLAMA_ARG_CONT_BATCHING) |
 | `-mm, --mmproj FILE` | path to a multimodal projector file. see tools/mtmd/README.md<br/>note: if -hf is used, this argument can be omitted<br/>(env: LLAMA_ARG_MMPROJ) |
-| `-tk, --talker-model FILE` | path to the qwen3-omni talker gguf, enables the /v1/audio/speech endpoint<br/>(env: LLAMA_ARG_TALKER_MODEL) |
-| `-c2w, --code2wav-model FILE` | path to the qwen3-omni code2wav gguf, the talker code detokenizer<br/>(env: LLAMA_ARG_CODE2WAV_MODEL) |
 | `-mmu, --mmproj-url URL` | URL to a multimodal projector file. see tools/mtmd/README.md<br/>(env: LLAMA_ARG_MMPROJ_URL) |
 | `--mmproj-auto, --no-mmproj, --no-mmproj-auto` | whether to use multimodal projector file (if available), useful when using -hf (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_AUTO) |
 | `--mmproj-offload, --no-mmproj-offload` | whether to enable GPU offloading for multimodal projector (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_OFFLOAD) |
 | `--image-min-tokens N` | minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MIN_TOKENS) |
 | `--image-max-tokens N` | maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MAX_TOKENS) |
+| `--mtmd-batch-max-tokens N` | maximum number of image tokens per batch when encoding images (default: 1024)<br/>(env: LLAMA_ARG_MTMD_BATCH_MAX_TOKENS) |
 | `-a, --alias STRING` | set model name aliases, comma-separated (to be used by API)<br/>(env: LLAMA_ARG_ALIAS) |
 | `--tags STRING` | set model tags, comma-separated (informational, not used for routing)<br/>(env: LLAMA_ARG_TAGS) |
 | `--embd-normalize N` | normalisation for embeddings (default: 2) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm) |
@@ -190,23 +189,21 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--reuse-port` | allow multiple sockets to bind to the same port (default: disabled)<br/>(env: LLAMA_ARG_REUSE_PORT) |
 | `--path PATH` | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH) |
 | `--api-prefix PREFIX` | prefix path the server serves from, without the trailing slash (default: )<br/>(env: LLAMA_ARG_API_PREFIX) |
-| `--webui-config JSON` | [DEPRECATED: use --ui-config] JSON that provides default WebUI settings (overrides WebUI defaults)<br/>(env: LLAMA_ARG_WEBUI_CONFIG) |
-| `--ui-config JSON` | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG) |
-| `--webui-config-file PATH` | [DEPRECATED: use --ui-config-file] JSON file that provides default WebUI settings (overrides WebUI defaults)<br/>(env: LLAMA_ARG_WEBUI_CONFIG_FILE) |
-| `--ui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
-| `--webui-mcp-proxy, --no-webui-mcp-proxy` | [DEPRECATED: use --ui-mcp-proxy/--no-ui-mcp-proxy] experimental: whether to enable MCP CORS proxy<br/>(env: LLAMA_ARG_WEBUI_MCP_PROXY) |
-| `--ui-mcp-proxy, --no-ui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
+| `--ui-config, --webui-config JSON` | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG) |
+| `--ui-config-file, --webui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
+| `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
 | `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff, get_datetime<br/>(env: LLAMA_ARG_TOOLS) |
-| `--webui, --no-webui` | [DEPRECATED: use --ui/--no-ui] whether to enable the Web UI<br/>(env: LLAMA_ARG_WEBUI) |
-| `--ui, --no-ui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI) |
+| `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_AGENT) |
+| `--ui, --webui, --no-ui, --no-webui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
 | `--rerank, --reranking` | enable reranking endpoint on server (default: disabled)<br/>(env: LLAMA_ARG_RERANKING) |
 | `--api-key KEY` | API key to use for authentication, multiple keys can be provided as a comma-separated list (default: none)<br/>(env: LLAMA_API_KEY) |
-| `--api-key-file FNAME` | path to file containing API keys (default: none)<br/>(env: LLAMA_ARG_API_KEY_FILE) |
+| `--api-key-file FNAME` | path to file containing API keys, one per line; lines starting with a hash are treated as comments (default: none)<br/>(env: LLAMA_ARG_API_KEY_FILE) |
 | `--ssl-key-file FNAME` | path to file a PEM-encoded SSL private key<br/>(env: LLAMA_ARG_SSL_KEY_FILE) |
 | `--ssl-cert-file FNAME` | path to file a PEM-encoded SSL certificate<br/>(env: LLAMA_ARG_SSL_CERT_FILE) |
 | `--chat-template-kwargs STRING` | sets additional params for the json template parser, must be a valid json object string, e.g. '{"key1":"value1","key2":"value2"}'<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_KWARGS) |
 | `-to, --timeout N` | server read/write timeout in seconds (default: 3600)<br/>(env: LLAMA_ARG_TIMEOUT) |
+| `--sse-ping-interval N` | server SSE ping interval in seconds (-1 = disabled, default: 30)<br/>(env: LLAMA_ARG_SSE_PING_INTERVAL) |
 | `--threads-http N` | number of threads used to process HTTP requests (default: -1)<br/>(env: LLAMA_ARG_THREADS_HTTP) |
 | `--cache-prompt, --no-cache-prompt` | whether to enable prompt caching (default: enabled)<br/>(env: LLAMA_ARG_CACHE_PROMPT) |
 | `--cache-reuse N` | min chunk size to attempt reusing from the cache via KV shifting, requires prompt caching to be enabled (default: 0)<br/>[(card)](https://ggml.ai/f0.png)<br/>(env: LLAMA_ARG_CACHE_REUSE) |
@@ -231,6 +228,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled) |
 | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
 | `--sleep-idle-seconds SECONDS` | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled) |
+| `--log-prompts-dir PATH` | Log prompts to directory (only used for debugging, default: disabled) |
 | `--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]` | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_HF_REPO) |
 | `--spec-draft-threads, -td, --threads-draft N` | number of threads to use during generation (default: same as --threads) |
 | `--spec-draft-threads-batch, -tbd, --threads-batch-draft N` | number of threads to use during batch and prompt processing (default: same as --threads-draft) |
@@ -1778,6 +1776,20 @@ The `status` object can be:
 }
 ```
 
+Note: for "downloading" state, there can be multiple files be downloading in parallel
+
+```json
+"status": {
+  "value": "downloading",
+  "progress": {
+    "https://...model.gguf": {
+      "done": 195963406,
+      "total": 219307424
+    }
+  }
+}
+```
+
 ### POST `/models/load`: Load a model
 
 Load a model
@@ -1811,6 +1823,135 @@ Payload:
   "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
 }
 ```
+
+Response:
+
+```json
+{
+  "success": true
+}
+```
+
+### GET `/models/sse`: Real-time events
+
+Example events:
+
+```js
+{
+  "model": "...",
+  "event": "model_status",
+  "data": {
+    "status": "loading"
+  }
+}
+
+{
+  "model": "...",
+  "event": "download_progress",
+  "data": {
+    // note: there can be multiple files being downloaded in parallel
+    "https://...model.gguf": {
+      "done": 195963406,
+      "total": 219307424
+    }
+  }
+}
+
+{
+  "model": "...",
+  "event": "model_status",
+  "data": {
+    "status": "loading",
+    "progress": {
+      "stages": ["text_model", "spec_model", "mmproj_model"],
+      "current": "text_model",
+      "value": 0.5
+    }
+  }
+}
+// note for "loading" status:
+// - subsequent events will follow the same order of "stages" list
+// - mmap is may report incorrect progress on some platforms; if you need exact progress, use --no-mmap
+
+{
+  "model": "...",
+  "event": "model_status",
+  "data": {
+    "status": "loaded",
+    "info": {
+      // note: only include info on first load
+      // waking up from sleep doesn't have this
+    }
+  }
+}
+
+{
+  "model": "...",
+  "event": "model_status",
+  "data": {
+    "status": "sleeping"
+  }
+}
+
+{
+  "model": "...",
+  "event": "model_remove"
+}
+
+// special event: reload of the list of all models
+{
+  "model": "*",
+  "event": "models_reload"
+}
+```
+
+### POST `/models`: Download new model
+
+Trigger a new download (non-blocking), the progress can be tracked via SSE endpoint `/models/sse`
+
+To cancel model downloading, send an event to `/models/unload`
+
+Download procedure:
+- Send POST request to `/models`
+- Subscribe to `/models/sse` for updates
+- On downloading completed, you will receive either `download_finished` or `download_failed` event
+- Call GET `/models` to trigger model list update. If the download success, you should see the new model in the list
+
+Payload:
+
+```json
+{
+  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
+}
+```
+
+Response (download is started in the background):
+
+```json
+{
+  "success": true
+}
+```
+
+Response (error, cannot start the download):
+
+```json
+{
+  "error": {
+    "code": 400,
+    "message": "model validation failed, unable to download",
+    "type": "invalid_request_error"
+  }
+}
+```
+
+### DELETE `/models`: Delete a model from cache
+
+IMPORTANT: only model stored in cache can be deleted. You cannot delete models in a preset.
+
+Model name must be passed via query param: `?model={name}`
+
+If delete success, it will send an SSE event of type `model_remove`
 
 Response:
 
