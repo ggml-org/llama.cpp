@@ -1,7 +1,7 @@
 import { base } from '$app/paths';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
-import { ServerModelStatus, ModelModality } from '$lib/enums';
+import { ServerModelStatus, ServerModelsSseEventType, ModelModality } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { PropsService } from '$lib/services/props.service';
 import { serverStore, isRouterMode } from '$lib/stores/server.svelte';
@@ -746,18 +746,18 @@ class ModelsStore {
 	 */
 	private applyStatusEvent(event: ApiModelsSseEvent): void {
 		switch (event.event) {
-			case 'status_change':
-			case 'model_status':
-			case 'status_update':
+			case ServerModelsSseEventType.STATUS_CHANGE:
+			case ServerModelsSseEventType.MODEL_STATUS:
+			case ServerModelsSseEventType.STATUS_UPDATE:
 				this.applyModelStatus(event);
 				break;
-			case 'models_reload':
+			case ServerModelsSseEventType.MODELS_RELOAD:
 				void this.fetchRouterModels();
 				break;
-			case 'model_remove':
+			case ServerModelsSseEventType.MODEL_REMOVE:
 				this.removeRouterModel(event.model);
 				break;
-			case 'download_progress':
+			case ServerModelsSseEventType.DOWNLOAD_PROGRESS:
 				break;
 		}
 	}

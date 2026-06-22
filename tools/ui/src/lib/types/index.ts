@@ -14,7 +14,6 @@ export type {
 	ApiModelLoadStage,
 	ApiModelsSseProgress,
 	ApiModelsSseData,
-	ApiModelsSseEventType,
 	ApiModelsSseEvent,
 	ApiModelDetails,
 	ApiModelListResponse,

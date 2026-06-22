@@ -1,4 +1,10 @@
-import type { ContentPartType, FileTypeAudio, ServerModelStatus, ServerRole } from '$lib/enums';
+import type {
+	ContentPartType,
+	FileTypeAudio,
+	ServerModelStatus,
+	ServerModelsSseEventType,
+	ServerRole
+} from '$lib/enums';
 import type { ChatMessagePromptProgress, ChatRole } from './chat';
 
 export type AudioInputFormat = FileTypeAudio.WAV | FileTypeAudio.MP3;
@@ -126,21 +132,13 @@ export interface ApiModelsSseData {
  * Only the status_* events carry a status payload, models_reload signals a
  * full list refresh, model_remove drops a row, download_* drive download UI.
  */
-export type ApiModelsSseEventType =
-	| 'status_change'
-	| 'model_status'
-	| 'status_update'
-	| 'models_reload'
-	| 'model_remove'
-	| 'download_progress';
-
 /**
  * One /models/sse record. event discriminates the kind, model names the
  * target instance, data carries the status payload when present.
  */
 export interface ApiModelsSseEvent {
 	model: string;
-	event: ApiModelsSseEventType;
+	event: ServerModelsSseEventType;
 	data: ApiModelsSseData;
 }
 
