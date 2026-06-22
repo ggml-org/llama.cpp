@@ -128,7 +128,8 @@
 				'.chat-message:nth-last-child(2) .chat-message-user .chat-message-user-bubble'
 			) as HTMLElement | null;
 			const bubbleHeight = lastUserBubble?.scrollHeight ?? 0;
-			const baseHeight = container.scrollHeight - 836;
+			const customOffset = innerHeight - (isMobile.current ? 8 : 48);
+			const baseHeight = container.scrollHeight - customOffset;
 
 			container.scrollTo({
 				top: bubbleHeight > 0 ? baseHeight - bubbleHeight : baseHeight,
