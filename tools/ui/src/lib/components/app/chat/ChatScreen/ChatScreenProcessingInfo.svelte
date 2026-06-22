@@ -5,13 +5,8 @@
 	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { activeMessages, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { getProcessingInfoContext } from '$lib/contexts';
-	import { page } from '$app/state';
 
 	const processingState = useProcessingState();
-	const processingInfoCtx = getProcessingInfoContext();
-
-	let showProcessingInfo = $derived(processingInfoCtx.showProcessingInfo);
 
 	let isCurrentConversationLoading = $derived(isLoading());
 	let isStreaming = $derived(isChatStreaming());
@@ -68,12 +63,7 @@
 	});
 </script>
 
-<div
-	class={[
-		'chat-processing-info-container pointer-events-none relative',
-		page.params.id && showProcessingInfo && 'visible'
-	]}
->
+<div class="chat-processing-info-container pointer-events-none relative w-full visible">
 	<div class="chat-processing-info-content absolute bottom-4 left-1/2 -translate-x-1/2">
 		{#each processingDetails as detail (detail)}
 			<span class="chat-processing-info-detail pointer-events-auto backdrop-blur-sm">{detail}</span>

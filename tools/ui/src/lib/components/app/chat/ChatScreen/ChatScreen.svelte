@@ -228,18 +228,22 @@
 
 			<ChatScreenServerError />
 
-			<ChatScreenProcessingInfo />
+			<div class="pointer-events-none flex flex-col gap-6 items-center w-full">
+				{#if autoScroll.userScrolledUp && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
+					<ChatScreenActionScrollDown
+						onclick={() => {
+							scroll.chatScrollContainer?.scrollTo({
+								top: scroll.chatScrollContainer.scrollHeight,
+								behavior: 'smooth'
+							});
+						}}
+					/>
+				{/if}
 
-			{#if autoScroll.userScrolledUp && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
-				<ChatScreenActionScrollDown
-					onclick={() => {
-						scroll.chatScrollContainer?.scrollTo({
-							top: scroll.chatScrollContainer.scrollHeight,
-							behavior: 'smooth'
-						});
-					}}
-				/>
-			{/if}
+				{#if showProcessingInfo}
+					<ChatScreenProcessingInfo />
+				{/if}
+			</div>
 
 			<ChatScreenForm
 				class="pointer-events-auto conversation-chat-form"
