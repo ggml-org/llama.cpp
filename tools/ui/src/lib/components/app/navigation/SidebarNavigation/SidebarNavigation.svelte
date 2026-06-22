@@ -123,7 +123,7 @@
 				: isExpandedMode
 					? 'h-[calc(100dvh-1rem)]'
 					: ''} md:h-[calc(100dvh-1.125rem)] pt-2 rounded-3xl md:rounded-2xl z-10 flex flex-col justify-between md:transition-[width,padding] w-[calc(100dvw-1rem)] duration-200 ease-out {isStripExpanded
-			? 'md:w-72 bg-muted/60 md:backdrop-blur-xl border-border shadow-md'
+			? 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl border-border shadow-md'
 			: 'md:w-12'} {isExpandedMode ? 'is-expanded' : ''}"
 	>
 		<div class="px-2 flex items-center justify-between">
@@ -139,8 +139,8 @@
 					size="lg"
 					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
 					class="{isExpandedMode
-						? 'bg-muted!'
-						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full hover:bg-accent!"
+						? 'md:bg-muted!'
+						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-accent!"
 					href={isExpandedMode ? ROUTES.START : undefined}
 					onclick={isExpandedMode ? undefined : toggleExpandedMode}
 					tooltip={isExpandedMode ? undefined : 'Open Sidebar'}
@@ -156,7 +156,7 @@
 					out:fade={{ duration: 100 }}
 				>
 					<ActionIcon
-						icon={innerWidth > 768 ? PanelLeftClose : X}
+						icon={isMobile.current ? X : PanelLeftClose}
 						size="lg"
 						iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
 						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 hover:bg-accent!"
