@@ -303,6 +303,7 @@ struct server_models_routes {
     void init_routes();
     // handlers using lambda function, so that they can capture `this` without `std::bind`
     server_http_context::handler_t get_router_props;
+    server_http_context::handler_t get_router_metrics;
     server_http_context::handler_t proxy_get;
     server_http_context::handler_t proxy_post;
     server_http_context::handler_t get_router_models;

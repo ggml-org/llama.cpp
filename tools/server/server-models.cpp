@@ -1652,6 +1652,34 @@ void server_models_routes::init_routes() {
         return proxy_get(req);
     };
 
+    this->get_router_metrics = [this](const server_http_req & req) {
+        // if a model is explicitly requested, proxy directly to it
+        std::string name = req.get_param("model");
+        if (!name.empty()) {
+            return proxy_get(req);
+        }
+        // otherwise, target the single running model (if exactly one is running)
+        std::string running_name;
+        int n_running = 0;
+        for (const auto & meta : models.get_all_meta()) {
+            if (meta.is_running()) {
+                n_running++;
+                running_name = meta.name;
+            }
+        }
+        if (n_running == 0) {
+            auto res = std::make_unique<server_http_res>();
+            res_err(res, format_error_response("no model is currently running", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (n_running > 1) {
+            auto res = std::make_unique<server_http_res>();
+            res_err(res, format_error_response("multiple models are running, specify one via the 'model' query parameter", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        return models.proxy_request(req, "GET", running_name, false);
+    };
+
     this->proxy_get = [this](const server_http_req & req) {
         std::string method = "GET";
         std::string name = req.get_param("model");
