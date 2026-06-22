@@ -1169,6 +1169,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--threads-sampling"}, "N",
+        "number of threads to use during sampling (default: same as --threads)",
+        [](common_params & params, int value) {
+            params.sampling_n_threads = value;
+            if (params.sampling_n_threads <= 0) {
+                params.sampling_n_threads = std::thread::hardware_concurrency();
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-C", "--cpu-mask"}, "M",
         "CPU affinity mask: arbitrarily long hex. Complements cpu-range (default: \"\")",
         [](common_params & params, const std::string & mask) {

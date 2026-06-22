@@ -381,6 +381,8 @@ server_tokens format_prompt_rerank(
 // to be used for multi-threaded sampling
 //
 
+// the main thread participates as one of the pool's workers, so init(n)
+// only spawns n-1 background threads (the caller is the nth)
 struct server_threadpool {
     std::vector<std::thread> threads;
     std::queue<std::function<void()>> tasks;
@@ -400,10 +402,12 @@ struct server_threadpool {
                 handler(item);
             });
         }
+        // the calling thread runs tasks too, until all are done
         wait_all();
     }
 
 private:
     void enqueue(std::function<void()> fn);
     void wait_all();
+    void run_worker();
 };

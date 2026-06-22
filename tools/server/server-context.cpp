@@ -1460,7 +1460,15 @@ private:
 
         metrics.init();
 
-        threadpool.init(params_base.cpuparams.n_threads);
+        // initialize threadpool
+        {
+            int threadpool_size = params_base.sampling_n_threads;
+            if (threadpool_size <= 0) {
+                threadpool_size = params_base.cpuparams.n_threads;
+            }
+            SRV_DBG("%s: initializing threadpool, size = %d\n", __func__, threadpool_size);
+            threadpool.init(threadpool_size);
+        }
 
         if (params_base.cache_idle_slots) {
             if (params_base.cache_ram_mib == 0) {
