@@ -97,8 +97,8 @@ jobs:
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  gpu-webgpu-nvidia:
-    runs-on: [self-hosted, Linux, NVIDIA, X64]
+  gpu-webgpu-linux:
+    runs-on: [self-hosted, Linux, Intel, X64]
 
     steps:
       - name: Clone
