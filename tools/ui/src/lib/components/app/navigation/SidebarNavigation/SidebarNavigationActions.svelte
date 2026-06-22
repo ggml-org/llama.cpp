@@ -100,7 +100,7 @@
 	</div>
 {:else if isExpandedMode || isOnMobile}
 	<div
-		class="{className} flex flex-col gap-3 mt-2 md:mt-0 md:gap-1 {!isExpandedMode && isOnMobile
+		class="{className} flex flex-col gap-5 md:gap-1 mt-2 md:mt-0 {!isExpandedMode && isOnMobile
 			? 'hidden'
 			: ''}"
 	>

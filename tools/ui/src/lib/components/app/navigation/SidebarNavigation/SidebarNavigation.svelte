@@ -10,7 +10,7 @@
 	} from '$lib/components/app';
 	import { ROUTES } from '$lib/constants';
 	import { fade } from 'svelte/transition';
-	import { circIn } from 'svelte/easing';
+
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -18,6 +18,7 @@
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { TooltipSide } from '$lib/enums';
 	import { device } from '$lib/stores/device.svelte';
+	import { circIn } from 'svelte/easing';
 
 	interface Props {
 		onSearchClick?: () => void;
@@ -115,16 +116,30 @@
 
 {#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.SEARCH))}
 	<aside
-		class="fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 {isExpandedMode &&
-		device.isStandalone
-			? 'h-[calc(100dvh-2rem)]'
-			: isExpandedMode && device.isIOSDevice
-				? 'h-[calc(100dvh-0.5rem)]'
-				: isExpandedMode
-					? 'h-[calc(100dvh-1rem)]'
-					: ''} md:h-[calc(100dvh-1.125rem)] pt-2 rounded-3xl md:rounded-2xl z-10 flex flex-col justify-between md:transition-[width,padding] w-[calc(100dvw-1rem)] duration-200 ease-out {isStripExpanded
-			? 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl border-border shadow-md'
-			: 'md:w-12'} {isExpandedMode ? 'is-expanded' : ''}"
+		class={[
+			// Layout & positioning
+			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 w-[calc(100dvw-1rem)]',
+			// Dimensions & overflow
+			'md:h-[calc(100dvh-1.125rem)]',
+			isExpandedMode &&
+				(device.isStandalone
+					? 'h-[calc(100dvh-2rem)]'
+					: device.isIOSDevice
+						? 'h-[calc(100dvh-0.5rem)]'
+						: 'h-[calc(100dvh-1rem)]'),
+			// Shape & depth
+			'rounded-3xl md:rounded-2xl',
+			// Flex layout
+			'flex flex-col justify-between',
+			// Transition
+			'md:transition-[width,padding] duration-200 ease-out',
+			// Expanded state: width, surface, depth
+			isStripExpanded && 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl border-border shadow-md',
+			// Collapsed state
+			!isStripExpanded && 'md:w-12',
+			// Expanded mode flag (for mobile ::before overlay)
+			isExpandedMode && 'is-expanded'
+		]}
 	>
 		<div class="px-2 flex items-center justify-between">
 			<div
@@ -151,7 +166,10 @@
 
 			{#if isExpandedMode || isOnMobile}
 				<div
-					class={!isExpandedMode && isOnMobile ? 'hidden' : ''}
+					class="flex items-center transition-all duration-150 ease-out {isMobile.current &&
+					!isExpandedMode
+						? 'opacity-0 !h-0'
+						: ''}"
 					in:fade={{ duration: 150, easing: circIn, delay: 50 }}
 					out:fade={{ duration: 100 }}
 				>
@@ -169,33 +187,35 @@
 			{/if}
 		</div>
 
-		<div class="mt-2 flex min-h-0 flex-1 flex-col gap-1">
-			<SidebarNavigationActions
-				{isExpandedMode}
-				class="px-2"
-				bind:isSearchModeActive
-				bind:searchQuery
-				onSearchDeactivated={() => {
-					isSearchModeActive = false;
-					searchQuery = '';
-				}}
-				onSearchClick={() => {
-					isExpandedMode = true;
-					isSearchModeActive = true;
-				}}
-				onNewChat={() => {
-					if (isMobile.current) {
-						isExpandedMode = false;
-					}
-				}}
-			/>
+		<div class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 overflow-y-auto">
+			<div
+				class="flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {isMobile.current
+					? 'transition-[opacity,height] duration-200 ease-out'
+					: ''} {isMobile.current && !isExpandedMode ? 'opacity-0 !h-0' : ''}"
+				in:fade={{ duration: 200 }}
+				out:fade={{ duration: 200 }}
+			>
+				<SidebarNavigationActions
+					isExpandedMode={innerWidth > 768 ? isExpandedMode : true}
+					class="px-2"
+					bind:isSearchModeActive
+					bind:searchQuery
+					onSearchDeactivated={() => {
+						isSearchModeActive = false;
+						searchQuery = '';
+					}}
+					onSearchClick={() => {
+						isExpandedMode = true;
+						isSearchModeActive = true;
+					}}
+					onNewChat={() => {
+						if (isMobile.current) {
+							isExpandedMode = false;
+						}
+					}}
+				/>
 
-			{#if isExpandedMode || isOnMobile}
-				<div
-					class="flex min-h-0 flex-1 flex-col {!isExpandedMode && isOnMobile ? 'hidden' : ''}"
-					in:fade={{ duration: 150, easing: circIn, delay: 50 }}
-					out:fade={{ duration: 100 }}
-				>
+				{#if isExpandedMode || isOnMobile}
 					<SidebarNavigationConversationList
 						class="px-2"
 						{filteredConversations}
@@ -207,8 +227,8 @@
 						onDelete={handleDeleteConversation}
 						onStop={handleStopGeneration}
 					/>
-				</div>
-			{/if}
+				{/if}
+			</div>
 		</div>
 	</aside>
 {/if}
