@@ -11,6 +11,10 @@ export type {
 	ApiChatMessageData,
 	ApiModelStatus,
 	ApiModelDataEntry,
+	ApiModelLoadStage,
+	ApiModelsSseProgress,
+	ApiModelsSseData,
+	ApiModelsSseEvent,
 	ApiModelDetails,
 	ApiModelListResponse,
 	ApiLlamaCppServerProps,
@@ -70,7 +74,12 @@ export type {
 } from './database';
 
 // Model types
-export type { ModelModalities, ModelOption, ModalityCapabilities } from './models';
+export type {
+	ModelModalities,
+	ModelOption,
+	ModelLoadProgress,
+	ModalityCapabilities
+} from './models';
 
 // Settings types
 export type {
@@ -165,3 +174,6 @@ export type { ToolEntry, ToolGroup } from './tools';
 
 // Reasoning
 export type { ReasoningEffortLevel } from './reasoning';
+
+// Splash
+export type { SplashDimensions } from './splash';

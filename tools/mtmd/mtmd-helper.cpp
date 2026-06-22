@@ -247,7 +247,9 @@ int32_t mtmd_helper_decode_image_chunk(
         llama_pos n_past,
         llama_seq_id seq_id,
         int32_t n_batch,
-        llama_pos * new_n_past) {
+        llama_pos * new_n_past,
+        mtmd_helper_post_decode_callback callback,
+        void * user_data) {
     GGML_ASSERT(n_batch > 0);
     auto chunk_type = mtmd_input_chunk_get_type(chunk);
     const char * name = chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE ? "image" : "audio";
@@ -302,8 +304,21 @@ int32_t mtmd_helper_decode_image_chunk(
         int32_t ret = llama_decode(lctx, batch_embd_view);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
-            llama_set_causal_attn(lctx, true); // restore causal attn
+            if (use_non_causal) {
+                llama_set_causal_attn(lctx, true);
+            }
             return ret;
+        }
+
+        if (callback != nullptr) {
+            ret = callback(batch_embd_view, user_data);
+            if (ret != 0) {
+                LOG_ERR("post-decode callback failed\n");
+                if (use_non_causal) {
+                    llama_set_causal_attn(lctx, true);
+                }
+                return ret;
+            }
         }
 
         LOG_INF("%s decoded (batch %d/%d) in %" PRId64 " ms\n", name, i_batch+1, n_img_batches, ggml_time_ms() - t1);
@@ -379,7 +394,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
 
         float * embd = mtmd_get_output_embd(ctx);
-        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past);
+        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, nullptr, nullptr);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
             llama_batch_free(text_batch);
@@ -567,12 +582,28 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
 }
 
 mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder) {
-    std::vector<unsigned char> buf;
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, NULL, 0);
+    if (!wlen) {
+        LOG_ERR("Unable to convert filename to UTF-16: %s\n", fname);
+        return {nullptr, nullptr};
+    }
+    std::vector<wchar_t> wfname(wlen);
+    wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, wfname.data(), wlen);
+    if (!wlen) {
+        LOG_ERR("Unable to convert filename to UTF-16: %s\n", fname);
+        return {nullptr, nullptr};
+    }
+    FILE * f = _wfopen(wfname.data(), L"rb");
+#else
     FILE * f = fopen(fname, "rb");
+#endif
     if (!f) {
         LOG_ERR("Unable to open file %s: %s\n", fname, strerror(errno));
         return {nullptr, nullptr};
     }
+
+    std::vector<unsigned char> buf;
 
     fseek(f, 0, SEEK_END);
     long file_size = ftell(f);
@@ -617,10 +648,52 @@ struct mtmd_helper_video {
     float fps_target = 0.0f;
     mtmd_helper_video_info info = {};
 
-    struct subprocess_s proc = {};
-    bool proc_alive = false;
+    // RAII wrapper for managing subprocess
+    struct subprocess_handle {
+        struct subprocess_s proc = {};
+        bool alive = false;
+        std::thread feeder;
+
+        subprocess_handle() = default;
+        subprocess_handle(const subprocess_handle &) = delete;
+        subprocess_handle & operator=(const subprocess_handle &) = delete;
+        ~subprocess_handle() { stop(); }
+
+        void stop() {
+            if (alive) {
+                subprocess_terminate(&proc);
+            }
+            // join before destroy: feeder holds a FILE* from subprocess_stdin;
+            // subprocess_destroy closes it, so the thread must finish first
+            if (feeder.joinable()) {
+                feeder.join();
+            }
+            if (alive) {
+                subprocess_destroy(&proc);
+                alive = false;
+            }
+        }
+
+        FILE * stdout_pipe() {
+            return subprocess_stdout(&proc);
+        }
+
+        // buf is tied to lifetime of mtmd_helper_video, so it's guaranteed to outlive the feeder thread
+        void start_feeder(const std::vector<uint8_t> & buf) {
+            feeder = std::thread([this, &buf]() {
+                FILE * f = subprocess_stdin(&proc);
+                if (!f) {
+                    return;
+                }
+                fwrite(buf.data(), 1, buf.size(), f);
+                fclose(f);
+                proc.stdin_file = nullptr; // prevent double-close in subprocess_destroy
+            });
+        }
+    };
+
+    subprocess_handle sp;
     int32_t current_frame = 0;
-    std::thread feeder_thread;
 
     std::string prompt_start         = "Video:";
     int32_t     timestamp_interval_ms = 5000; // emit a timestamp text every N ms (0 = disabled)
@@ -630,19 +703,8 @@ struct mtmd_helper_video {
     std::string pending_text; // text queued to be returned before the next frame
     bool        start_emitted = false;
 
-    bool is_buf_input() const { return !input_buf.empty(); }
-
-    // must run in a separate thread alongside stdout reading to avoid pipe deadlock
-    void feed_stdin(struct subprocess_s * sp) {
-        FILE * f = subprocess_stdin(sp);
-        if (!f) {
-            LOG_DBG("%s: subprocess has no stdin pipe\n", __func__);
-            return;
-        }
-        LOG_DBG("%s: feeding %zu bytes to stdin\n", __func__, input_buf.size());
-        size_t written = fwrite(input_buf.data(), 1, input_buf.size(), f);
-        LOG_DBG("%s: wrote %zu bytes, closing stdin\n", __func__, written);
-        fclose(f);
+    bool is_buf_input() const {
+        return !input_buf.empty();
     }
 
     bool probe(float fps_target_arg) {
@@ -661,17 +723,17 @@ struct mtmd_helper_video {
         for (size_t i = 0; cmd[i]; i++) { LOG_DBG(" %s", cmd[i]); }
         LOG_DBG("\n");
 
-        struct subprocess_s fprobe;
+        subprocess_handle probe_sp;
         if (subprocess_create(cmd,
                 subprocess_option_search_user_path | subprocess_option_inherit_environment,
-                &fprobe) != 0) {
+                &probe_sp.proc) != 0) {
             LOG_ERR("%s: failed to launch ffprobe\n", __func__);
             return false;
         }
+        probe_sp.alive = true;
 
-        std::thread probe_feeder;
         if (is_buf_input()) {
-            probe_feeder = std::thread([this, &fprobe]() { feed_stdin(&fprobe); });
+            probe_sp.start_feeder(input_buf);
         }
 
         uint32_t width  = 0;
@@ -680,7 +742,7 @@ struct mtmd_helper_video {
         float duration = -1.0f;
         int32_t n_frames_orig = -1;
         char line[256];
-        FILE * fp = subprocess_stdout(&fprobe);
+        FILE * fp = probe_sp.stdout_pipe();
 
         while (fgets(line, sizeof(line), fp)) {
             char * eq = strchr(line, '=');
@@ -704,13 +766,7 @@ struct mtmd_helper_video {
             }
         }
 
-        if (probe_feeder.joinable()) {
-            probe_feeder.join();
-        }
-
-        int ret_code;
-        subprocess_join(&fprobe, &ret_code);
-        subprocess_destroy(&fprobe);
+        probe_sp.stop();
 
         if (width == 0 || height == 0 || orig_fps <= 0.0f) {
             return false;
@@ -745,6 +801,7 @@ struct mtmd_helper_video {
             cmd.push_back(seek_buf);
         }
 
+        cmd.push_back("-nostdin");
         cmd.push_back("-i");
         // cache:pipe:0 wraps stdin with a seekable in-memory cache, letting ffmpeg seek
         // backwards for container headers (e.g. MP4 moov atom at end of file)
@@ -781,34 +838,27 @@ struct mtmd_helper_video {
         int ret = subprocess_create(
             cmd.data(),
             subprocess_option_search_user_path | subprocess_option_inherit_environment,
-            &proc);
+            &sp.proc);
 
-        proc_alive = (ret == 0);
-        LOG_DBG("%s: subprocess_create ret=%d proc_alive=%d\n", __func__, ret, (int)proc_alive);
+        sp.alive = (ret == 0);
+        LOG_DBG("%s: subprocess_create ret=%d proc_alive=%d\n", __func__, ret, (int)sp.alive);
 
-        if (proc_alive && is_buf_input()) {
+        if (sp.alive && is_buf_input()) {
             LOG_DBG("%s: starting feeder thread for %zu-byte buffer\n", __func__, input_buf.size());
-            feeder_thread = std::thread([this]() { feed_stdin(&proc); });
+            sp.start_feeder(input_buf);
         }
 
-        return proc_alive;
+        return sp.alive;
     }
 
     void stop_ffmpeg() {
-        if (proc_alive) {
-            subprocess_terminate(&proc);
-            subprocess_destroy(&proc);
-            proc_alive = false;
-        }
-        if (feeder_thread.joinable()) {
-            feeder_thread.join();
-        }
+        sp.stop();
     }
 
     mtmd_bitmap * read_next_frame() {
-        if (!proc_alive) return nullptr;
+        if (!sp.alive) return nullptr;
 
-        FILE * fp = subprocess_stdout(&proc);
+        FILE * fp = sp.stdout_pipe();
         const size_t frame_size = (size_t)info.width * info.height * 3;
         LOG_DBG("%s: reading frame %d, expecting %zu bytes (%ux%u)\n",
                 __func__, current_frame, frame_size, info.width, info.height);
@@ -820,7 +870,7 @@ struct mtmd_helper_video {
                 // clean EOF only if no bytes read yet; partial frame is an error
                 LOG_DBG("%s: fread returned 0 after %zu/%zu bytes (ferror=%d)\n",
                         __func__, total_read, frame_size, ferror(fp));
-                proc_alive = false;
+                sp.alive = false;
                 return nullptr;
             }
             total_read += n;
@@ -842,9 +892,9 @@ struct mtmd_helper_video {
         }
 
         LOG_DBG("%s: proc_alive=%d start_emitted=%d current_frame=%d\n",
-                __func__, (int)proc_alive, (int)start_emitted, current_frame);
+                __func__, (int)sp.alive, (int)start_emitted, current_frame);
 
-        if (!proc_alive) {
+        if (!sp.alive) {
             return (current_frame == 0) ? -2 : -1;
         }
 
