@@ -41,8 +41,33 @@
 
 	let { showCenteredEmpty = false } = $props();
 
-	const activeModel = useChatScreenActiveModel();
+	setProcessingInfoContext({
+		get showProcessingInfo() {
+			return showProcessingInfo;
+		}
+	});
 
+	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
+	let emptyFileNames = $state<string[]>([]);
+	let initialMessage = $state('');
+	let showDeleteDialog = $state(false);
+	let showEmptyFileDialog = $state(false);
+	let isEmpty = $derived(
+		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
+	);
+	let activeErrorDialog = $derived(errorDialog());
+	let isServerLoading = $derived(serverLoading());
+	let hasPropsError = $derived(!!serverError());
+	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
+	let showProcessingInfo = $derived(
+		isCurrentConversationLoading ||
+			(config().keepStatsVisible && !!page.params.id) ||
+			activeProcessingState() !== null
+	);
+
+	const autoScroll = createAutoScrollController();
+	const scroll = useChatScreenScroll(autoScroll);
+	const activeModel = useChatScreenActiveModel();
 	const fileUpload = useChatScreenFileUpload({
 		capabilities: () => ({
 			hasVision: activeModel.hasVisionModality,
@@ -51,14 +76,26 @@
 		}),
 		activeModelId: () => activeModel.activeModelId
 	});
-
 	const dragAndDrop = useChatScreenDragAndDrop({
 		onDrop: fileUpload.handleFileUpload
 	});
+	const { handleKeydown } = useKeyboardShortcuts({
+		deleteActiveConversation: () => {
+			if (activeConversation()) {
+				showDeleteDialog = true;
+			}
+		}
+	});
 
-	let showEmptyFileDialog = $state(false);
-	let emptyFileNames = $state<string[]>([]);
-	let initialMessage = $state('');
+	async function handleDeleteConfirm() {
+		const conversation = activeConversation();
+
+		if (conversation) {
+			await conversationsStore.deleteConversation(conversation.id);
+		}
+
+		showDeleteDialog = false;
+	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
 		const plainFiles = files ? $state.snapshot(files) : undefined;
@@ -98,69 +135,18 @@
 		return true;
 	}
 
-	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
-		if (draft.message || draft.files.length > 0) {
-			chatStore.savePendingDraft(draft.message, draft.files);
-		}
-		await chatStore.addSystemPrompt();
-	}
-
-	onMount(() => {
-		const pendingDraft = chatStore.consumePendingDraft();
-		if (pendingDraft) {
-			initialMessage = pendingDraft.message;
-			fileUpload.uploadedFiles = pendingDraft.files;
-		}
-	});
-
-	let showDeleteDialog = $state(false);
-
-	async function handleDeleteConfirm() {
-		const conversation = activeConversation();
-		if (conversation) {
-			await conversationsStore.deleteConversation(conversation.id);
-		}
-		showDeleteDialog = false;
-	}
-
-	const { handleKeydown } = useKeyboardShortcuts({
-		deleteActiveConversation: () => {
-			if (activeConversation()) {
-				showDeleteDialog = true;
-			}
-		}
-	});
-
-	let isEmpty = $derived(
-		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
-	);
-
-	let activeErrorDialog = $derived(errorDialog());
-	let isServerLoading = $derived(serverLoading());
-	let hasPropsError = $derived(!!serverError());
-	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
-	let showProcessingInfo = $derived(
-		isCurrentConversationLoading ||
-			(config().keepStatsVisible && !!page.params.id) ||
-			activeProcessingState() !== null
-	);
-
-	setProcessingInfoContext({
-		get showProcessingInfo() {
-			return showProcessingInfo;
-		}
-	});
-
 	function handleErrorDialogOpenChange(open: boolean) {
 		if (!open) {
 			chatStore.dismissErrorDialog();
 		}
 	}
 
-	const autoScroll = createAutoScrollController();
-	const scroll = useChatScreenScroll(autoScroll);
-
-	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
+	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
+		if (draft.message || draft.files.length > 0) {
+			chatStore.savePendingDraft(draft.message, draft.files);
+		}
+		await chatStore.addSystemPrompt();
+	}
 
 	$effect(() => {
 		if (!isMobile.current) {
@@ -179,6 +165,12 @@
 	});
 
 	onMount(() => {
+		const pendingDraft = chatStore.consumePendingDraft();
+		if (pendingDraft) {
+			initialMessage = pendingDraft.message;
+			fileUpload.uploadedFiles = pendingDraft.files;
+		}
+
 		autoScroll.startObserving();
 		if (!disableAutoScroll) {
 			autoScroll.enable();
@@ -265,11 +257,11 @@
 {/if}
 
 <ChatScreenDialogsAndAlerts
-	showDeleteDialog={showDeleteDialog}
-	handleDeleteConfirm={handleDeleteConfirm}
-	showEmptyFileDialog={showEmptyFileDialog}
-	emptyFileNames={emptyFileNames}
-	activeErrorDialog={activeErrorDialog}
-	handleErrorDialogOpenChange={handleErrorDialogOpenChange}
-	fileUpload={fileUpload}
+	{showDeleteDialog}
+	{handleDeleteConfirm}
+	{showEmptyFileDialog}
+	{emptyFileNames}
+	{activeErrorDialog}
+	{handleErrorDialogOpenChange}
+	{fileUpload}
 />
