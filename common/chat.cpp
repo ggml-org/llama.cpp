@@ -2402,7 +2402,7 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
     auto has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar     = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
@@ -2425,15 +2425,15 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
 
         // Response format parser
         if (has_response_format) {
-            return generation_prompt + (reasoning << p.content(p.schema(p.json(), "response-format", inputs.json_schema)));
+            return generation_prompt + reasoning + p.content(p.schema(p.json(), "response-format", inputs.json_schema));
         }
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             // CDATA lets a value carry characters that would otherwise close the tag (e.g.
             // </param>); capture the inner text only, excluding the CDATA markers.
             auto string_value = p.choice({
-                p.literal("<![CDATA[") + p.ac(p.tool_arg_string_value(p.until("]]>")) + p.literal("]]>"), "]]>"),
-                p.negate(p.literal("<![CDATA[")) + p.ac(p.tool_arg_string_value(p.until("</param>")) + p.literal("</param>"), "</param>")
+                p.literal("<![CDATA[") + p.ac(p.tool_arg_string_value(p.until("]]>")) + p.literal("]]>"), "]]>") + p.tool_arg_close(p.literal("</param>")),
+                p.negate(p.literal("<![CDATA[")) + p.ac(p.tool_arg_string_value(p.until("</param>")) + p.tool_arg_close(p.literal("</param>")), "</param>")
             });
 
             auto tool_choice = p.choice();
@@ -2455,7 +2455,7 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
                         } else {
                             value_parser = p.tool_arg_json_value(
                                     p.schema(p.json(), "tool-" + name + "-arg-" + prop_name + "-schema", prop_schema, false)
-                                ) + p.literal("</param>");
+                                ) + p.tool_arg_close(p.literal("</param>"));
                         }
 
                         auto arg_rule = p.tool_arg(
@@ -2490,7 +2490,7 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
