@@ -3705,9 +3705,10 @@ private:
     }
 
     struct sampling_task {
-        server_slot * slot;
-        int32_t tok_idx;
-        llama_token sampled_id; // result
+        bool skip = true;
+        server_slot * slot = nullptr;
+        int32_t tok_idx = 0;
+        llama_token sampled_id = LLAMA_TOKEN_NULL; // result
     };
 
     void post_decode(int32_t n_batch_tokens, int32_t off, llama_batch & batch_view) {
@@ -3732,9 +3733,11 @@ private:
         };
 
         std::vector<sampling_task> smpl_tasks;
-        smpl_tasks.reserve(slots.size());
+        smpl_tasks.resize(slots.size());
 
         iterate(slots, [&](server_slot & slot) {
+            auto & smpl_task = smpl_tasks[slot.id];
+
             // optionally send prompt processing progress
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
                 if (slot.task->params.stream && slot.task->params.return_progress) {
@@ -3779,25 +3782,26 @@ private:
                 return; // sample using speculative decoding
             }
 
-            // shifted according to the current sub-batch
-            const int tok_idx = slot.i_batch - off;
-            smpl_tasks.push_back({&slot, tok_idx, LLAMA_TOKEN_NULL});
+            // otherwise, we must sample the next token
+            // also shift batch idx according to the current sub-batch
+            smpl_task.skip    = false;
+            smpl_task.tok_idx = slot.i_batch - off;
         });
 
         // run multiple sampling tasks in parallel
+        GGML_ASSERT(smpl_tasks.size() == slots.size());
         threadpool.run_all<sampling_task>(smpl_tasks, [](sampling_task & task) {
-            task.sampled_id = common_sampler_sample(task.slot->smpl.get(), task.slot->ctx_tgt, task.tok_idx);
+            if (!task.skip) {
+                LOG_INF("sampling for slot %d, tok_idx = %d\n", task.slot->id, task.tok_idx);
+                task.sampled_id = common_sampler_sample(task.slot->smpl.get(),
+                                        task.slot->ctx_tgt, task.tok_idx);
+            }
         });
 
         iterate(slots, [&](server_slot & slot) {
             auto & smpl_task = smpl_tasks[slot.id];
             auto tok_idx = smpl_task.tok_idx;
-
-            llama_token id;
-            {
-                scoped_timer timer(t_sampl, n_sampl);
-                id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
-            }
+            auto id = smpl_task.sampled_id;
 
             slot.i_batch = -1;
 
