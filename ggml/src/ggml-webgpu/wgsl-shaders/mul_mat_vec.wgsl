@@ -151,5 +151,7 @@ fn main(
             }
 #endif
 
+    workgroupBarrier();
+
     }
 }
