@@ -90,6 +90,17 @@
     { "name": "x64-windows-sycl-release-f16", "inherits": [ "sycl-base", "release", "sycl_f16" ] },
 
     { "name": "x64-windows-vulkan-debug", "inherits": [ "base", "vulkan", "debug" ] },
-    { "name": "x64-windows-vulkan-release", "inherits": [ "base", "vulkan", "release" ] }
+    { "name": "x64-windows-vulkan-release", "inherits": [ "base", "vulkan", "release" ] },
+    
+    { "name": "base-windows", "hidden": true, "generator": "Visual Studio 17 2022", "binaryDir": "${sourceDir}/build-${presetName}",
+      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON", "CMAKE_INSTALL_RPATH": "$ORIGIN;$ORIGIN/..", "CMAKE_BUILD_TYPE": "Release"}
+    },
+    { "name": "ggml-cuda-win", "inherits": "base-windows", 
+      "cacheVariables": { "CMAKE_CUDA_ARCHITECTURES": "121", "GGML_CUDA": "ON", "LLAMA_CURL": "OFF"}
+    }
+  ],
+  "buildPresets": [
+    { "name": "all-core-windows", "hidden": true, "jobs": 0 },
+    { "name": "build-ggml-cuda", "configurePreset": "ggml-cuda-win", "inherits": "all-core-windows"  }
   ]
 }
