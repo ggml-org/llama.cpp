@@ -545,7 +545,8 @@ class ModelsStore {
 	 * 1. Model from active conversation's last assistant response (if loaded)
 	 * 2. Model from active conversation's last assistant response (if not loaded)
 	 * 3. First loaded model (not from active conversation)
-	 * 4. First available model
+	 * 4. A favorite model
+	 * 5. First available model
 	 */
 	async ensureFirstModelSelected(): Promise<void> {
 		if (this.selectedModelName) return;
@@ -571,6 +572,13 @@ class ModelsStore {
 		if (loadedModel) {
 			await this.selectModelById(loadedModel.id);
 			await this.fetchModelProps(loadedModel.model);
+			return;
+		}
+
+		// Try loading a favorite model
+		const favorite = this.favoriteModelIds.values().next()?.value
+		if (favorite) {
+			await this.selectModelById(favorite);
 			return;
 		}
 
