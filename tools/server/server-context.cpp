@@ -3705,7 +3705,6 @@ private:
     }
 
     struct sampling_task {
-        bool skip = true;
         server_slot * slot = nullptr;
         int32_t tok_idx = 0;
         llama_token sampled_id = LLAMA_TOKEN_NULL; // result
@@ -3734,6 +3733,7 @@ private:
 
         std::vector<sampling_task> smpl_tasks;
         smpl_tasks.resize(slots.size());
+        bool need_sampling = false;
 
         iterate(slots, [&](server_slot & slot) {
             auto & smpl_task = smpl_tasks[slot.id];
@@ -3784,22 +3784,30 @@ private:
 
             // otherwise, we must sample the next token
             // also shift batch idx according to the current sub-batch
-            smpl_task.skip    = false;
+            smpl_task.slot    = &slot;
             smpl_task.tok_idx = slot.i_batch - off;
+            need_sampling     = true;
         });
 
         // run multiple sampling tasks in parallel
         GGML_ASSERT(smpl_tasks.size() == slots.size());
-        threadpool.run_all<sampling_task>(smpl_tasks, [](sampling_task & task) {
-            if (!task.skip) {
-                LOG_INF("sampling for slot %d, tok_idx = %d\n", task.slot->id, task.tok_idx);
-                task.sampled_id = common_sampler_sample(task.slot->smpl.get(),
-                                        task.slot->ctx_tgt, task.tok_idx);
-            }
-        });
+        if (need_sampling) {
+            llama_synchronize(ctx_tgt);
+            threadpool.run_all<sampling_task>(smpl_tasks, [](sampling_task & task) {
+                if (task.slot) {
+                    task.sampled_id = common_sampler_sample(task.slot->smpl.get(),
+                                            task.slot->ctx_tgt, task.tok_idx);
+                }
+            });
+        }
 
         iterate(slots, [&](server_slot & slot) {
             auto & smpl_task = smpl_tasks[slot.id];
+
+            if (!smpl_task.slot) {
+                return;
+            }
+
             auto tok_idx = smpl_task.tok_idx;
             auto id = smpl_task.sampled_id;
 
