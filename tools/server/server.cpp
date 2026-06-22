@@ -134,6 +134,7 @@ int llama_server(int argc, char ** argv) {
     //
 
     // register API routes
+    server_child child; // only used in non-router mode
     server_routes routes(params, ctx_server);
     server_tools tools;
 
@@ -255,10 +256,20 @@ int llama_server(int argc, char ** argv) {
     }
 
     //
+    // Handle downloading model
+    //
+
+    if (child.is_child() && child.get_mode() == SERVER_CHILD_MODE_DOWNLOAD) {
+        return child.run_download(params);
+    } else if (!is_router_server) {
+        // single-model mode (NOT spawned by router)
+        common_params_handle_models(params, LLAMA_EXAMPLE_SERVER);
+    }
+
+    //
     // Start the server
     //
 
-    server_child child; // only used in non-router mode
     std::function<void()> clean_up;
 
     if (is_router_server) {

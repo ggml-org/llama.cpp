@@ -204,9 +204,9 @@ Instead of building everything from the ground up (like what most AI agents will
 
 The flow for downloading a new model:
 - POST request comes in --> `post_router_models` --> validation
-- `server_models::download()` is called
-    - Sets up a new thread `inst.th` and runs the download inside
-- If a stop request comes in, set `stop_download` to `true`
+- A new `llama-server` subprocess will be spawned with special `SERVER_CHILD_MODE_DOWNLOAD`
+- Child process runs the download and report status back to router via stdin/out
+- If a stop request comes in, the router asks the child process to stop (same mechanism as running a model in child process)
 - Otherwise, upon completion, we call `load_models()` to refresh the list of models
 
 ### Notable Related PRs
