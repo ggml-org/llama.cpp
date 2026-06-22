@@ -212,7 +212,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
 				label: 'Show message generation statistics',
-				help: 'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
+				help: 'Display generation statistics (tokens/second, token count, duration).',
 				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,

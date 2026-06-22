@@ -52,6 +52,15 @@ export interface SettingsFieldConfig {
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
 }
 
+export interface CompletionServiceCallbacks {
+	// Callbacks
+	onChunk: (chunk: string) => void;
+	onModel?: (model: string) => void;
+	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
+	onComplete: (response: string, timings?: ChatMessageTimings) => void;
+	onError: (error: Error) => void;
+}
+
 /** Re-exported for backward compatibility. */
 export interface SettingsSection {
 	fields?: SettingsFieldConfig[];

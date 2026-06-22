@@ -179,6 +179,20 @@ class ModelsStore {
 		return typeof nCtx === 'number' ? nCtx : null;
 	}
 
+	/**
+	 * Get context size valid both in MODEL or ROUTER modes
+	 */
+	get contextSize(): number | null {
+		if (serverStore.isRouterMode) {
+			return this.selectedModelContextSize;
+		}
+
+		return serverStore.contextSize;
+	}
+
+	/**
+	 * Check if props are being fetched for a model
+	 */
 	isModelPropsFetching(modelId: string): boolean {
 		return this.modelPropsFetching.has(modelId);
 	}
@@ -820,6 +834,7 @@ export const loadingModelIds = () => modelsStore.loadingModelIds;
 export const propsCacheVersion = () => modelsStore.propsCacheVersion;
 export const singleModelName = () => modelsStore.singleModelName;
 export const selectedModelContextSize = () => modelsStore.selectedModelContextSize;
+export const getContextSize = () => modelsStore.contextSize;
 export const favoriteModelIds = () => modelsStore.favoriteModelIds;
 export const supportsThinking = () => modelsStore.supportsThinking;
 export const checkModelSupportsThinking = (modelId: string) =>

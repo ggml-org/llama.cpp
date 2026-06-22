@@ -22,6 +22,8 @@ export const ROUTES = {
 	CHAT: '#/chat',
 	/** MCP servers. */
 	MCP_SERVERS: '#/mcp-servers',
+	/** Notebook page. */
+	NOTEBOOK: '#/notebook',
 	/** Settings base — for dynamic settings URLs use RouterService. */
 	SETTINGS: '#/settings'
 } as const;

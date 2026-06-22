@@ -40,6 +40,7 @@
 	import { SETTINGS_KEYS } from '$lib/constants';
 
 	let { children } = $props();
+
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
 	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
