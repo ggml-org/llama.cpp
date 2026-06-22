@@ -16,6 +16,10 @@
 	import { setProcessingInfoContext } from '$lib/contexts';
 	import { ErrorDialogType } from '$lib/enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
+	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
+	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
+	import { useChatScreenFileUpload } from '$lib/hooks/use-chat-screen-file-upload.svelte';
+	import { useChatScreenScroll } from '$lib/hooks/use-chat-screen-scroll.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { device } from '$lib/stores/device.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
@@ -25,7 +29,6 @@
 		isLoading,
 		isChatStreaming,
 		isEditing,
-		getAddFilesHandler,
 		activeProcessingState
 	} from '$lib/stores/chat.svelte';
 	import {
@@ -34,11 +37,8 @@
 		activeConversation
 	} from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { serverLoading, serverError, isRouterMode } from '$lib/stores/server.svelte';
-	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
-	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
-	import { beforeNavigate, afterNavigate } from '$app/navigation';
+	import { serverLoading, serverError } from '$lib/stores/server.svelte';
+	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { onDestroy, onMount } from 'svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 	import ChatScreenActionScrollDown from './ChatScreenActionScrollDown.svelte';
@@ -46,198 +46,86 @@
 
 	let { showCenteredEmpty = false } = $props();
 
-	const autoScroll = createAutoScrollController();
+	const activeModel = useChatScreenActiveModel();
 
-	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
-	let chatScrollContainer: HTMLElement | undefined = $state();
-	let dragCounter = $state(0);
-	let isDragOver = $state(false);
-	let showFileErrorDialog = $state(false);
-	let uploadedFiles = $state<ChatUploadedFile[]>([]);
+	const fileUpload = useChatScreenFileUpload({
+		capabilities: () => ({
+			hasVision: activeModel.hasVisionModality,
+			hasAudio: activeModel.hasAudioModality,
+			hasVideo: activeModel.hasVideoModality
+		}),
+		activeModelId: () => activeModel.activeModelId
+	});
 
-	let fileErrorData = $state<{
-		generallyUnsupported: File[];
-		modalityUnsupported: File[];
-		modalityReasons: Record<string, string>;
-		supportedTypes: string[];
-	}>({
-		generallyUnsupported: [],
-		modalityUnsupported: [],
-		modalityReasons: {},
-		supportedTypes: []
+	const dragAndDrop = useChatScreenDragAndDrop({
+		onDrop: fileUpload.handleFileUpload
+	});
+
+	let showEmptyFileDialog = $state(false);
+	let emptyFileNames = $state<string[]>([]);
+	let initialMessage = $state('');
+
+	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
+		const plainFiles = files ? $state.snapshot(files) : undefined;
+		const result = plainFiles
+			? await parseFilesToMessageExtras(plainFiles, activeModel.activeModelId ?? undefined)
+			: undefined;
+
+		if (result?.emptyFiles && result.emptyFiles.length > 0) {
+			emptyFileNames = result.emptyFiles;
+			showEmptyFileDialog = true;
+			if (files) {
+				const emptyFileNamesSet = new Set(result.emptyFiles);
+				fileUpload.uploadedFiles = fileUpload.uploadedFiles.filter(
+					(file) => !emptyFileNamesSet.has(file.name)
+				);
+			}
+			return false;
+		}
+
+		if (!isMobile.current) {
+			autoScroll.enable();
+		}
+
+		setTimeout(() => {
+			scroll.chatScrollContainer?.scrollTo({
+				top: scroll.chatScrollContainer.scrollHeight,
+				behavior: 'smooth'
+			});
+		}, 100);
+
+		if (isMobile.current) {
+			autoScroll.setDisabled(disableAutoScroll);
+		}
+
+		await chatStore.sendMessage(message, result?.extras);
+		autoScroll.setContainer(scroll.chatScrollContainer);
+		return true;
+	}
+
+	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
+		if (draft.message || draft.files.length > 0) {
+			chatStore.savePendingDraft(draft.message, draft.files);
+		}
+		await chatStore.addSystemPrompt();
+	}
+
+	onMount(() => {
+		const pendingDraft = chatStore.consumePendingDraft();
+		if (pendingDraft) {
+			initialMessage = pendingDraft.message;
+			fileUpload.uploadedFiles = pendingDraft.files;
+		}
 	});
 
 	let showDeleteDialog = $state(false);
 
-	let showEmptyFileDialog = $state(false);
-
-	let emptyFileNames = $state<string[]>([]);
-
-	let initialMessage = $state('');
-
-	let isNavigating = false;
-
-	let isEmpty = $derived(
-		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
-	);
-
-	let activeErrorDialog = $derived(errorDialog());
-	let isServerLoading = $derived(serverLoading());
-	let hasPropsError = $derived(!!serverError());
-
-	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
-
-	let showProcessingInfo = $derived(
-		isCurrentConversationLoading ||
-			(config().keepStatsVisible && !!page.params.id) ||
-			activeProcessingState() !== null
-	);
-
-	let isRouter = $derived(isRouterMode());
-
-	let conversationModel = $derived(
-		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
-	);
-
-	let activeModelId = $derived.by(() => {
-		const options = modelOptions();
-
-		if (!isRouter) {
-			return options.length > 0 ? options[0].model : null;
-		}
-
-		const selectedId = selectedModelId();
-		if (selectedId) {
-			const model = options.find((m) => m.id === selectedId);
-			if (model) return model.model;
-		}
-
-		if (conversationModel) {
-			const model = options.find((m) => m.model === conversationModel);
-			if (model) return model.model;
-		}
-
-		return null;
-	});
-
-	let modelPropsVersion = $state(0);
-
-	setProcessingInfoContext({
-		get showProcessingInfo() {
-			return showProcessingInfo;
-		}
-	});
-
-	$effect(() => {
-		if (activeModelId) {
-			const cached = modelsStore.getModelProps(activeModelId);
-
-			if (!cached) {
-				modelsStore.fetchModelProps(activeModelId).then(() => {
-					modelPropsVersion++;
-				});
-			}
-		}
-	});
-
-	let hasAudioModality = $derived.by(() => {
-		if (activeModelId) {
-			void modelPropsVersion;
-
-			return modelsStore.modelSupportsAudio(activeModelId);
-		}
-
-		return false;
-	});
-
-	let hasVideoModality = $derived.by(() => {
-		if (activeModelId) {
-			void modelPropsVersion;
-
-			return modelsStore.modelSupportsVideo(activeModelId);
-		}
-
-		return false;
-	});
-
-	let hasVisionModality = $derived.by(() => {
-		if (activeModelId) {
-			void modelPropsVersion;
-
-			return modelsStore.modelSupportsVision(activeModelId);
-		}
-
-		return false;
-	});
-
 	async function handleDeleteConfirm() {
 		const conversation = activeConversation();
-
 		if (conversation) {
 			await conversationsStore.deleteConversation(conversation.id);
 		}
-
 		showDeleteDialog = false;
-	}
-
-	function handleDragEnter(event: DragEvent) {
-		event.preventDefault();
-
-		dragCounter++;
-
-		if (event.dataTransfer?.types.includes('Files')) {
-			isDragOver = true;
-		}
-	}
-
-	function handleDragLeave(event: DragEvent) {
-		event.preventDefault();
-
-		dragCounter--;
-
-		if (dragCounter === 0) {
-			isDragOver = false;
-		}
-	}
-
-	function handleErrorDialogOpenChange(open: boolean) {
-		if (!open) {
-			chatStore.dismissErrorDialog();
-		}
-	}
-
-	function handleDragOver(event: DragEvent) {
-		event.preventDefault();
-	}
-
-	function handleDrop(event: DragEvent) {
-		event.preventDefault();
-
-		isDragOver = false;
-		dragCounter = 0;
-
-		if (event.dataTransfer?.files) {
-			const files = Array.from(event.dataTransfer.files);
-
-			if (isEditing()) {
-				const handler = getAddFilesHandler();
-
-				if (handler) {
-					handler(files);
-					return;
-				}
-			}
-
-			processFiles(files);
-		}
-	}
-
-	function handleFileRemove(fileId: string) {
-		uploadedFiles = uploadedFiles.filter((f) => f.id !== fileId);
-	}
-
-	function handleFileUpload(files: File[]) {
-		processFiles(files);
 	}
 
 	const { handleKeydown } = useKeyboardShortcuts({
@@ -248,149 +136,36 @@
 		}
 	});
 
-	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
-		if (draft.message || draft.files.length > 0) {
-			chatStore.savePendingDraft(draft.message, draft.files);
-		}
+	let isEmpty = $derived(
+		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
+	);
 
-		await chatStore.addSystemPrompt();
-	}
+	let activeErrorDialog = $derived(errorDialog());
+	let isServerLoading = $derived(serverLoading());
+	let hasPropsError = $derived(!!serverError());
+	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
+	let showProcessingInfo = $derived(
+		isCurrentConversationLoading ||
+			(config().keepStatsVisible && !!page.params.id) ||
+			activeProcessingState() !== null
+	);
 
-	function handleScroll(event: UIEvent) {
-		// Ignore scroll events caused by navigation layout changes or by our own
-		// programmatic scrolls so they don't accidentally disable auto-scroll.
-		if (isNavigating || !event.isTrusted) return;
-
-		autoScroll.handleScroll();
-	}
-
-	beforeNavigate(() => {
-		isNavigating = true;
-		autoScroll.resetScrollState();
-	});
-
-	afterNavigate(() => {
-		setTimeout(() => {
-			isNavigating = false;
-			autoScroll.resetScrollState();
-		}, 10);
-	});
-
-	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
-		const plainFiles = files ? $state.snapshot(files) : undefined;
-		const result = plainFiles
-			? await parseFilesToMessageExtras(plainFiles, activeModelId ?? undefined)
-			: undefined;
-
-		if (result?.emptyFiles && result.emptyFiles.length > 0) {
-			emptyFileNames = result.emptyFiles;
-			showEmptyFileDialog = true;
-
-			if (files) {
-				const emptyFileNamesSet = new Set(result.emptyFiles);
-				uploadedFiles = uploadedFiles.filter((file) => !emptyFileNamesSet.has(file.name));
-			}
-
-			return false;
-		}
-
-		const extras = result?.extras;
-
-		// // Enable autoscroll for user-initiated message sending
-		if (!isMobile.current) {
-			autoScroll.enable();
-		}
-
-		// autoScroll.scrollToBottom(); // doesn't work so i need to use the function below
-
-		setTimeout(() => {
-			chatScrollContainer?.scrollTo({
-				top: chatScrollContainer.scrollHeight,
-				behavior: 'smooth'
-			});
-		}, 100);
-
-		if (isMobile.current) {
-			autoScroll.setDisabled(disableAutoScroll);
-		}
-
-		await chatStore.sendMessage(message, extras);
-
-		autoScroll.setContainer(chatScrollContainer);
-
-		return true;
-	}
-
-	async function processFiles(files: File[]) {
-		const generallySupported: File[] = [];
-		const generallyUnsupported: File[] = [];
-
-		for (const file of files) {
-			if (isFileTypeSupported(file.name, file.type)) {
-				generallySupported.push(file);
-			} else {
-				generallyUnsupported.push(file);
-			}
-		}
-
-		// Use model-specific capabilities for file validation
-		const capabilities = {
-			hasVision: hasVisionModality,
-			hasAudio: hasAudioModality,
-			hasVideo: hasVideoModality
-		};
-		const { supportedFiles, unsupportedFiles, modalityReasons } = filterFilesByModalities(
-			generallySupported,
-			capabilities
-		);
-
-		const allUnsupportedFiles = [...generallyUnsupported, ...unsupportedFiles];
-
-		if (allUnsupportedFiles.length > 0) {
-			const supportedTypes: string[] = ['text files', 'PDFs'];
-
-			if (hasVisionModality) supportedTypes.push('images');
-			if (hasAudioModality) supportedTypes.push('audio files');
-			if (hasVideoModality) supportedTypes.push('video files');
-
-			fileErrorData = {
-				generallyUnsupported,
-				modalityUnsupported: unsupportedFiles,
-				modalityReasons,
-				supportedTypes
-			};
-			showFileErrorDialog = true;
-		}
-
-		if (supportedFiles.length > 0) {
-			const processed = await processFilesToChatUploaded(
-				supportedFiles,
-				activeModelId ?? undefined
-			);
-			uploadedFiles = [...uploadedFiles, ...processed];
-		}
-	}
-
-	onMount(() => {
-		autoScroll.startObserving();
-
-		if (!disableAutoScroll) {
-			autoScroll.enable();
-		}
-
-		const pendingDraft = chatStore.consumePendingDraft();
-		if (pendingDraft) {
-			initialMessage = pendingDraft.message;
-			uploadedFiles = pendingDraft.files;
+	setProcessingInfoContext({
+		get showProcessingInfo() {
+			return showProcessingInfo;
 		}
 	});
 
-	onDestroy(() => autoScroll.destroy());
+	function handleErrorDialogOpenChange(open: boolean) {
+		if (!open) {
+			chatStore.dismissErrorDialog();
+		}
+	}
 
-	$effect(() => {
-		chatScrollContainer = document.documentElement;
-		autoScroll.setContainer(chatScrollContainer);
-	});
+	const autoScroll = createAutoScrollController();
+	const scroll = useChatScreenScroll(autoScroll);
+
+	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
 
 	$effect(() => {
 		if (!isMobile.current) {
@@ -398,36 +173,41 @@
 		}
 	});
 
-	// On mobile, keep auto-scroll disabled while streaming/loading, then re-enable
-	// once the assistant/agentic response is finished so new messages still scroll.
+	// Disable auto-scroll while loading/streaming on desktop, re-enable on idle.
 	$effect(() => {
 		if (isMobile.current) return;
-
 		const shouldDisableAutoScroll = config().disableAutoScroll || isCurrentConversationLoading;
-
 		autoScroll.setDisabled(shouldDisableAutoScroll);
-
 		if (!shouldDisableAutoScroll) {
 			autoScroll.enable();
 		}
 	});
+
+	onMount(() => {
+		autoScroll.startObserving();
+		if (!disableAutoScroll) {
+			autoScroll.enable();
+		}
+	});
+
+	onDestroy(() => autoScroll.destroy());
 </script>
 
-{#if isDragOver}
+{#if dragAndDrop.isDragOver}
 	<ChatScreenDragOverlay />
 {/if}
 
-<svelte:window onkeydown={handleKeydown} onscroll={handleScroll} />
+<svelte:window onkeydown={handleKeydown} onscroll={scroll.handleScroll} />
 
 {#if isServerLoading}
 	<ServerLoadingSplash />
 {:else}
 	<div
 		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-full px-4 md:py-0 pt-12 pb-48 md:pb-4"
-		ondragenter={handleDragEnter}
-		ondragleave={handleDragLeave}
-		ondragover={handleDragOver}
-		ondrop={handleDrop}
+		ondragenter={dragAndDrop.dragHandlers.dragenter}
+		ondragleave={dragAndDrop.dragHandlers.dragleave}
+		ondragover={dragAndDrop.dragHandlers.dragover}
+		ondrop={dragAndDrop.dragHandlers.drop}
 		role="main"
 	>
 		{#if !isEmpty}
@@ -465,8 +245,8 @@
 			{#if autoScroll.userScrolledUp && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
 				<ChatScreenActionScrollDown
 					onclick={() => {
-						chatScrollContainer?.scrollTo({
-							top: chatScrollContainer.scrollHeight,
+						scroll.chatScrollContainer?.scrollTo({
+							top: scroll.chatScrollContainer.scrollHeight,
 							behavior: 'smooth'
 						});
 					}}
@@ -478,18 +258,21 @@
 				disabled={hasPropsError || isEditing()}
 				{initialMessage}
 				isLoading={isCurrentConversationLoading}
-				onFileRemove={handleFileRemove}
-				onFileUpload={handleFileUpload}
+				onFileRemove={fileUpload.handleFileRemove}
+				onFileUpload={fileUpload.handleFileUpload}
 				onSend={handleSendMessage}
 				onStop={() => chatStore.stopGeneration()}
 				onSystemPromptAdd={handleSystemPromptAdd}
-				bind:uploadedFiles
+				bind:uploadedFiles={fileUpload.uploadedFiles}
 			/>
 		</div>
 	</div>
 {/if}
 
-<DialogFileUploadError bind:open={showFileErrorDialog} {fileErrorData} />
+<DialogFileUploadError
+	bind:open={fileUpload.showFileErrorDialog}
+	fileErrorData={fileUpload.fileErrorData}
+/>
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}
