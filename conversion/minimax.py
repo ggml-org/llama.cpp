@@ -57,8 +57,7 @@ class MiniMaxM2Model(TextModel):
 @ModelBase.register("MiniMaxM3SparseForCausalLM", "MiniMaxM3SparseForConditionalGeneration")
 class MiniMaxM3Model(TextModel):
     # Text-only MiniMax-M3 (minimax_m3_vl): MiniMax-M2 style GQA (per-head QK-norm, partial
-    # rotary) + DeepSeek-V3 shared experts / leading dense, swigluoai activation. Sparse
-    # attention and MTP heads are dropped.
+    # rotary) + DeepSeek-V3 shared experts / leading dense, swigluoai activation and Minimax Sparse Attention. MTP heads are dropped.
     model_arch = gguf.MODEL_ARCH.MINIMAXM3
     _experts_cache: dict[int, dict[str, Tensor]] = {}
 
@@ -106,7 +105,7 @@ class MiniMaxM3Model(TextModel):
         self.gguf_writer.add_leading_dense_block_count(n_dense)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        # text-only: drop vision, projector, patch-merge and sparse-attention index tensors
+        # text-only: drop vision, projector, patch-merge tensors
         if name.startswith(("vision_tower", "multi_modal_projector", "patch_merge_mlp")):
             return
 
@@ -156,7 +155,7 @@ class MiniMaxM3VisionModel(MmprojModel):
     # token / abs-pos table) with a Conv3d patch embed and 3D (T/H/W) RoPE. The text
     # tower is handled by MiniMaxM3Model; here we keep only the vision-side tensors.
     #
-    # Projector is two on-disk modules:
+    # Projector is two modules:
     #   multi_modal_projector.linear_{1,2}  -> per-patch MLP   (V_MMPROJ -> mm.1, mm.2)
     #   patch_merge_mlp.linear_{1,2}        -> 2x2 merge MLP    (V_MM_MERGE_FC1/FC2)
 

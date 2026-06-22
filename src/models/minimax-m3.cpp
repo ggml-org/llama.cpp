@@ -7,7 +7,7 @@
 
 // MiniMax-M3: MiniMax-M2 style GQA (per-head QK-norm, partial rotary) with
 // DeepSeek-V3 leading-dense + routed/shared experts (sigmoid gating, routed scaling) and
-// swigluoai activation. MTP is dropped.
+// swigluoai activation + Minimax Sparse Attention. MTP is dropped.
 
 void llama_model_minimax_m3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -111,8 +111,7 @@ public:
 // every key in a NON-selected block forced to -inf. Selected blocks keep their
 // causal value, so future/pad positions inside a selected block stay masked.
 // Causality is taken FROM the input mask (not recomputed). Output dtype matches the input mask
-// (f16 when flash-attn is on, f32 otherwise).
-//
+
 // Assumes M3's mask is {0 = attendable, negative = forbidden}, which in this case holds
 // because M3 uses no ALiBi/soft-cap-in-mask (soft-cap is applied to kq directly
 // in build_attn_mha).
@@ -121,7 +120,7 @@ static inline bool        msa_is_masked(ggml_fp16_t x) { return ggml_fp16_to_fp3
 static inline bool        msa_is_masked(float       x) { return x < 0.0f; }
 static inline ggml_fp16_t msa_neg_val (ggml_fp16_t)    { return ggml_fp32_to_fp16(-INFINITY); }
 static inline float       msa_neg_val (float)          { return -INFINITY; }
-//----------------------------------------------------
+//--------------DEBUGREMOVE--------------------------------------
 // Correction checkers:
 static inline float msa_to_f32(float x)       { return x; }
 static inline float msa_to_f32(ggml_fp16_t x) { return ggml_fp16_to_fp32(x); }
@@ -199,7 +198,7 @@ static inline void msa_fill_mask_t(
             if (bs[bk] == -INFINITY) break;
             sel[bk] = 1;
         }
-        // --- MSA Selection Logger---
+        // --- MSA Selection Logger--- DEBUGREMOVE
         if (i == 0 && ith == 0) {
             static int64_t last_n_kv = -1;
             if (n_kv < last_n_kv) last_n_kv = -1; 
@@ -348,7 +347,7 @@ static inline void msa_select_from_scores_t(
     }
 }
 
-// VERIFY ONLY:
+// VERIFY ONLY: DEBUGREMOVE
 template <typename MT>
 static void msa_verify_bs(
         const float * bs_gpu, const MT * src_mask,
@@ -428,7 +427,7 @@ static void msa_mask_from_scores_op(struct ggml_tensor * dst, int ith, int nth, 
     GGML_ASSERT(dst->nb[1] == mask->nb[1]);
     GGML_ASSERT(mask->ne[1] >= (int64_t) S);
     GGML_ASSERT(n_kv % p->blk == 0);                 // pool drops a partial tail block
-    GGML_ASSERT((int64_t) nblk == n_kv / p->blk);    // GPU front block count must match
+    GGML_ASSERT((int64_t) nblk == n_kv / p->blk);    // GPU block count must match
 
     memcpy(dst->data, mask->data, ggml_nbytes(dst));
 
@@ -464,7 +463,7 @@ static void msa_mask_from_scores_op(struct ggml_tensor * dst, int ith, int nth, 
 // ---- MSA 4-way per-group selection -------------------------------------------------
 // dst = [n_kv, S, Hd, ns] f16/f32. Channel h = base causal mask (from src[1]) with the
 // blocks NOT in group h's top-k forced to -inf. bs = [nblk, Hd, S] f32 (per-group block
-// scores from the decomposed front). Per (query i, group h) the nblk scores are contiguous
+// scores from the decomposed OP). Per (query i, group h) the nblk scores are contiguous
 // at bs + i*nblk*Hd + h*nblk. No global memcpy: each (i,h) copies its base-mask column,
 // so threads partitioned over i never race (channels within a column are disjoint).
 template <typename MT>
@@ -506,7 +505,7 @@ static inline void msa_select_4way_t(
                 if (msa_score_masked(bs[bk])) break;   // sorted desc: first empty => fewer than topk real
                 sel[bk] = 1;
             }
-           // ===== TEMP reuse probe. abs_pos read from the mask
+           // ===== TEMP reuse probe. abs_pos read from the mask DEBUGREMOVE
             // (highest causally-visible key), robust to KV padding, unlike (n_kv - S).
             if (const char * e = getenv("MSA_DUMP_SEL")) {
                 int abs_pos = -1;
@@ -574,7 +573,7 @@ static void msa_mask_from_scores_4way_op(struct ggml_tensor * dst, int ith, int 
             p->blk, p->topk_blocks, p->local, ith, nth, nblk);
     }
 
-    // per-group correctness check vs a MASKED monolithic recompute (slow, single-thread).
+    // per-group correctness check vs a MASKED monolithic recompute. DEBUGREMOVE
     if (ith == 0 && getenv("MSA_VERIFY_BS4") && dst->src[2] && dst->src[3]) {
         const struct ggml_tensor * iq    = dst->src[2];   // [D, Hd, S] f32
         const struct ggml_tensor * ik    = dst->src[3];   // [D, 1, n_kv] f32
@@ -613,7 +612,7 @@ static void msa_mask_from_scores_4way_op(struct ggml_tensor * dst, int ith, int 
                     float m = -INFINITY; const int j0 = bk*p->blk;
                     const int j1 = std::min<int>((bk+1)*p->blk, (int) key_len);
                     for (int j = j0; j < j1; ++j) {
-                        if (key_masked(j, i)) continue;          // <-- causal/padding mask (was missing)
+                        if (key_masked(j, i)) continue;          // causal/padding mask
                         const float * kk = IK + (size_t) j*D; float s = 0;
                         for (int d = 0; d < D; ++d) s += qh[d]*kk[d];
                         if (s > m) m = s;
@@ -630,17 +629,17 @@ static void msa_mask_from_scores_4way_op(struct ggml_tensor * dst, int ith, int 
                 std::vector<float> a=bman,b=bgpu; sel_of(a,sc_); sel_of(b,sg_); if (sc_!=sg_) sel_diff++;
             }
         }
-        // TF32 on the f32 indexer mul_mat gives max|dbs| ~0.1; only gross score mismatch
-        // (layout bug -> 1e30) or any selection mismatch is a real problem.
+        // TF32 on the F32 indexer mul_mat gives max|dbs| ~0.1; only gross score mismatch
+        // (layout bug -> 1e30) or any selection mismatch is a real problem. DEBUGREMOVE
         fprintf(stderr, "MSA4 VERIFY n_kv=%lld nblk=%d Hd=%d S=%d | max|dbs|=%.3g per-group sel_diff=%ld%s\n",
                 (long long) n_kv, nblk, Hd, S, max_abs, sel_diff,
                 (max_abs > 0.5 || sel_diff) ? "  <-- INVESTIGATE" : "");
     }
 }
 
-// Debug: dump the decode path's selected block set (from top_k) in the 4-way SELDUMP format.
+// Debug: dump the decode path's selected block set (from top_k).
 // src[0] = idx [K, Hd] I32 (top_k output, post local-force);  src[1] = kqm [n_kv,1] (for abs_pos).
-// nblk is carried in dst->ne[2] purely for the printout. Gated on MSA_DUMP_SEL.
+// nblk is carried in dst->ne[2] purely for the printout. DEBUGREMOVE
 static void msa_dump_sel_op(struct ggml_tensor * dst, int ith, int nth, void * userdata) {
     (void) nth; (void) userdata;
     if (ith != 0) return;
@@ -710,7 +709,7 @@ ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_4way(
     GGML_ASSERT(ns == 1 && "MSA 4-way assumes single stream (-np 1)");
     GGML_ASSERT(msa_mask4->ne[2] == HKV);          // one channel per group
 
-    const bool v_trans = v->nb[1] > v->nb[2];      // false under FA; handled defensively
+    const bool v_trans = v->nb[1] > v->nb[2];      // false under FA
 
     ggml_tensor * acc = nullptr;
     for (int g = 0; g < (int) HKV; ++g) {
@@ -742,6 +741,7 @@ ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_4way(
         ggml_tensor * og = ggml_flash_attn_ext(ctx0, qg, kg, vg, mg, kq_scale,
                                                hparams.f_max_alibi_bias, 0.0f);
         ggml_flash_attn_ext_set_prec(og, GGML_PREC_F32);   // [D, Gp, T, 1]
+        cb(og, LLAMA_TENSOR_NAME_FATTN, il);
 
         acc = acc ? ggml_concat(ctx0, acc, og, 1) : og;    // concat along HEAD axis (ne[1])
     }
@@ -766,7 +766,7 @@ ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_decode(
     GGML_ASSERT(!inp->self_k_rot && !inp->self_v_rot && "MSA decode: attn-rot not supported");
     GGML_ASSERT(q_cur->ne[2] == 1 && "MSA decode path is S==1 only");
 
-    // --- store K/V to cache (mirror build_attn_msa_4way) ---
+    // --- store K/V to cache---
     ggml_build_forward_expand(gf, q_cur);
     ggml_build_forward_expand(gf, v_cur);
     ggml_build_forward_expand(gf, k_cur);
@@ -800,7 +800,7 @@ ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_decode(
     // --- top-k block indices per group ---
     ggml_tensor * idx = ggml_top_k(ctx0, bsf, K);                                          // I32 [K, Hd]
 
-    // debug-only: dump the selected block set in 4-way SELDUMP format (side-effect node)
+    // debug-only: dump the selected block set in 4-way SELDUMP format (side-effect node) DEBUGREMOVE
     if (getenv("MSA_DUMP_SEL")) {
         ggml_tensor * dsrcs[2] = { idx, kqm };
         ggml_tensor * dmp = ggml_custom_4d(ctx0, GGML_TYPE_I32, K, Hd, nblk, 1,
@@ -843,6 +843,7 @@ ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_decode(
         ggml_tensor * og = ggml_flash_attn_ext(ctx0, qg, kgf, vgf, mgf, kq_scale,
                                                hparams.f_max_alibi_bias, 0.0f);
         ggml_flash_attn_ext_set_prec(og, GGML_PREC_F32);    // [D, Gp, 1, 1]
+        cb(og, LLAMA_TENSOR_NAME_FATTN, il); 
         acc = acc ? ggml_concat(ctx0, acc, og, 1) : og;     // concat along head axis
     }
 
@@ -872,9 +873,32 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
     auto inp_attn = build_attn_inp_kv();
 
     // MSA decode-only gather path is active for single-token batches; build its local-force input once.
-    // MSA_FORCE_4WAY (debug) keeps the 4-way path even at decode, so you can A/B lego-vs-4way SELDUMP.
-    const bool msa_decode = (n_tokens == 1) && !getenv("MSA_BYPASS") && !getenv("MSA_SHARED")
-                                            && !getenv("MSA_FORCE_4WAY");
+    // MSA's decode-gather AND 4-way paths both call ggml_flash_attn_ext directly and assume the
+    // non-transposed V layout that llama.cpp only provides when flash attention is enabled
+    // (v_trans = !cparams.flash_attn). So MSA as a whole requires FA; without it we fall back to
+    // incorrect dense build_attn, which handles the transposed-V / explicit-softmax path.
+    const bool fa_on       = cparams.flash_attn;     // resolved FA: supported AND enabled
+    const bool want_bypass = getenv("MSA_BYPASS");
+    const bool msa_enabled = fa_on && !want_bypass;
+
+    static bool warned_no_fa = false;
+    if (!fa_on && !want_bypass && !warned_no_fa) {
+        LLAMA_LOG_WARN("%s: flash attention disabled; MSA requires it -> running DENSE attention "
+                       "(no sparse selection). Enable flash attention for MSA.\n", __func__);
+        warned_no_fa = true;
+    }
+    //---------------------------------
+    static bool warned_MSA_Active = false;                                                              //DEBUGREMOVE
+    if (!want_bypass && !warned_no_fa && fa_on) {
+        LLAMA_LOG_WARN("%s: flash attention enabled; Enabling MSA -> running SPARSE attention "
+                       "Everything Correct.\n", __func__);
+        warned_MSA_Active = true;
+    }
+    //------------------------------------
+    
+    const bool msa_decode = msa_enabled && !getenv("MSA_SHARED") && !getenv("MSA_FORCE_4WAY")
+                                        && (n_tokens == 1);
+                                     
     llm_graph_input_msa_local * msa_loc = nullptr;
     if (msa_decode) {
         ggml_tensor * kqm0 = inp_attn->get_kq_mask();
@@ -956,10 +980,10 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
 
 
                 const bool want_bypass = getenv("MSA_BYPASS");          // -> dense
-                const bool want_shared = getenv("MSA_SHARED");          // -> old monolithic single-mask
+                const bool want_shared = getenv("MSA_SHARED");          // -> old monolithic INCORRECT single-mask
 
                 if (!want_bypass && !want_shared) {
-                    // --- DEFAULT: per-group decomposed front (no head-amax) ---
+                    // --- DEFAULT: per-group decomposed (no head-amax) ---
                     const int blk = mm.msa_p.blk;
 
                     ggml_tensor * ik2d = ggml_reshape_2d(ctx0, ik_kv, n_idx_dim, n_kv);
@@ -977,7 +1001,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                     ggml_tensor * bs = ggml_pool_2d(ctx0, sc, GGML_OP_POOL_MAX, blk, 1, blk, 1, 0, 0);
 
                     if (msa_decode) {
-                        // decode gather path: skip the CPU tail op + msa_mask4 entirely
+                        // decode gather skip the CPU tail op + msa_mask4 entirely
                         cur = build_attn_msa_decode(inp_attn,
                                 model.layers[il].wo, model.layers[il].wo_s,
                                 Qcur, Kcur, Vcur, bs, msa_loc->bias, kqm,
@@ -986,7 +1010,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                     } else {
                         ggml_tensor * srcs[4] = { bs, kqm, nullptr, nullptr };
                         int nsrc = 2;
-                        if (getenv("MSA_VERIFY_BS4")) { srcs[2] = iq; srcs[3] = ik_kv; nsrc = 4; }
+                        if (getenv("MSA_VERIFY_BS4")) { srcs[2] = iq; srcs[3] = ik_kv; nsrc = 4; } //DEBUGREMOVE
                         msa_mask4 = ggml_custom_4d(ctx0, kqm->type,
                                                    n_kv, n_tokens, n_idx_head, kqm->ne[3],
                                                    srcs, nsrc, msa_mask_from_scores_4way_op, GGML_N_TASKS_MAX,
@@ -994,7 +1018,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                         cb(msa_mask4, "msa_mask4", il);
                     }
                 } else if (want_shared) {
-                    // --- legacy shared-mask monolithic op (single FA call via build_attn) ---
+                    // --- legacy shared-mask INCORRECT monolithic op (single FA call via build_attn) ---
                     ggml_tensor * srcs[4] = { iq, ik_kv, kqm, ik };
                     msa_mask = ggml_custom_4d(ctx0, kqm->type, kqm->ne[0], kqm->ne[1], kqm->ne[2], kqm->ne[3],
                                               srcs, 4, msa_block_mask_op, GGML_N_TASKS_MAX,

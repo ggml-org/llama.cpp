@@ -257,9 +257,7 @@ llama_kv_cache::llama_kv_cache(
         }
         
         const uint32_t n_embd_k_idx = hparams.n_embd_k_idx(il);
-        // Indexer keys share the SAME buffer (hence device) as k/v for this layer.
-        // Were forced onto a CPU buffer, which made the scheduler copy the whole
-        // [n_embd_k_idx, n_kv] cache host->device every sparse layer, every decode step.
+        // Indexer keys share the SAME buffer as k/v for this layer.
         ggml_tensor * k_idx = n_embd_k_idx > 0
             ? ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_k_idx, kv_size, n_stream)
             : nullptr;
