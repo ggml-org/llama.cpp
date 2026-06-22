@@ -449,7 +449,9 @@
 					: device.isIOSSafari
 						? 'bottom-1 left-2 right-2'
 						: 'bottom-2 right-2 left-2',
-				isEmpty ? 'md:bottom-[calc(50dvh-4rem)]' : 'md:bottom-4 pt-24 md:pt-24'
+				isEmpty
+					? 'md:bottom-[calc(50dvh-7rem)] 2xl:bottom-[calc(50dvh-4rem)]'
+					: 'md:bottom-4 pt-24 md:pt-24'
 			]}
 		>
 			<ChatScreenGreeting {isEmpty} />
