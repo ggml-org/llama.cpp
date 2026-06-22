@@ -90,8 +90,10 @@ int llama_server(int argc, char ** argv) {
     llama_numa_init(params.numa);
 
     // router server never loads a model and must not touch the GPU
+    const bool is_router_server = params.model.path.empty()
+                               && params.model.hf_repo.empty();
+
     // skip device enumeration so the CUDA primary context stays uncreated
-    const bool is_router_server = params.model.path.empty();
     common_params_print_info(params, !is_router_server);
 
     if (!is_router_server) {
@@ -113,8 +115,9 @@ int llama_server(int argc, char ** argv) {
     }
 
     // for consistency between server router mode and single-model mode, we set the same model name as alias
-    if (params.model_alias.empty() && !params.model.name.empty()) {
-        params.model_alias.insert(params.model.name);
+    auto model_name = params.model.get_name();
+    if (params.model_alias.empty() && !model_name.empty()) {
+        params.model_alias.insert(model_name);
     }
 
     // struct that contains llama context and inference
@@ -174,8 +177,11 @@ int llama_server(int argc, char ** argv) {
         routes.get_props                   = models_routes->get_router_props;
         routes.get_models                  = models_routes->get_router_models;
 
+        ctx_http.post("/models",               ex_wrapper(models_routes->post_router_models));
         ctx_http.post("/models/load",          ex_wrapper(models_routes->post_router_models_load));
         ctx_http.post("/models/unload",        ex_wrapper(models_routes->post_router_models_unload));
+        ctx_http.get ("/models/sse",           ex_wrapper(models_routes->get_router_models_sse));
+        ctx_http.del ("/models",               ex_wrapper(models_routes->del_router_models));
     }
 
     ctx_http.get ("/health",                   ex_wrapper(routes.get_health)); // public endpoint (no API key check)
@@ -224,8 +230,7 @@ int llama_server(int argc, char ** argv) {
     ctx_http.register_gcp_compat();
 
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
-    // Supports both new ui_mcp_proxy and deprecated webui_mcp_proxy fields
-    if (params.ui_mcp_proxy || params.webui_mcp_proxy) {
+    if (params.ui_mcp_proxy) {
         SRV_WRN("%s", "-----------------\n");
         SRV_WRN("%s", "CORS proxy is enabled, do not expose server to untrusted environments\n");
         SRV_WRN("%s", "This feature is EXPERIMENTAL and may be removed or changed in future versions\n");
@@ -253,6 +258,7 @@ int llama_server(int argc, char ** argv) {
     // Start the server
     //
 
+    server_child child; // only used in non-router mode
     std::function<void()> clean_up;
 
     if (is_router_server) {
@@ -261,6 +267,7 @@ int llama_server(int argc, char ** argv) {
         clean_up = [&models_routes]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
             if (models_routes.has_value()) {
+                models_routes->stopping.store(true); // maybe redundant, but just to be safe
                 models_routes->models.unload_all();
             }
             llama_backend_free();
@@ -274,6 +281,10 @@ int llama_server(int argc, char ** argv) {
         ctx_http.is_ready.store(true);
 
         shutdown_handler = [&](int) {
+            if (models_routes.has_value()) {
+                // important to disconnect any SSE clients
+                models_routes->stopping.store(true);
+            }
             ctx_http.stop();
         };
 
@@ -293,14 +304,15 @@ int llama_server(int argc, char ** argv) {
             return 1;
         }
 
-        // load the model
-        SRV_INF("%s", "loading model\n");
-
-        if (server_models::is_child_server()) {
-            ctx_server.on_sleeping_changed([&](bool sleeping) {
-                server_models::notify_router_sleeping_state(sleeping);
+        // setup communication child --> router if necessary
+        if (child.is_child()) {
+            ctx_server.set_state_callback([&](server_state state, json payload) {
+                child.notify_to_router(server_state_to_str(state), payload);
             });
         }
+
+        // load the model
+        SRV_INF("%s", "loading model\n");
 
         if (!ctx_server.load_model(params)) {
             clean_up();
@@ -341,6 +353,12 @@ int llama_server(int argc, char ** argv) {
         SRV_INF("router server is listening on %s\n", ctx_http.listening_address.c_str());
         SRV_WRN("%s", "NOTE: router mode is experimental\n");
         SRV_WRN("%s", "      it is not recommended to use this mode in untrusted environments\n");
+
+        if (!params.models_preset_hf.empty()) {
+            SRV_WRN(      "NOTE: using preset.ini from HF repo '%s'\n", params.models_preset_hf.c_str());
+            SRV_WRN("%s", "      please only use presets that you can trust! Unknown presets may be unsafe\n");
+        }
+
         if (ctx_http.thread.joinable()) {
             ctx_http.thread.join(); // keep the main thread alive
         }
@@ -352,9 +370,9 @@ int llama_server(int argc, char ** argv) {
 
         // optionally, notify router server that this instance is ready
         std::thread monitor_thread;
-        if (server_models::is_child_server()) {
-            json model_info = routes.get_model_info();
-            monitor_thread = server_models::setup_child_server(shutdown_handler, model_info);
+        if (child.is_child()) {
+            monitor_thread = child.setup(shutdown_handler);
+            child.notify_to_router(server_state_to_str(SERVER_STATE_READY), routes.get_model_info());
         }
 
         // this call blocks the main thread until queue_tasks.terminate() is called

@@ -28,7 +28,7 @@ class StableLMModel(TextModel):
         self.gguf_writer.add_embedding_length(hparams["hidden_size"])
         self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_feed_forward_length(hparams["intermediate_size"])
-        rotary_factor = self.find_hparam(["partial_rotary_factor", "rope_pct"])
+        rotary_factor = self.rope_parameters["partial_rotary_factor"]
         self.gguf_writer.add_rope_dimension_count(int(rotary_factor * (hparams["hidden_size"] // hparams["num_attention_heads"])))
         self.gguf_writer.add_head_count(hparams["num_attention_heads"])
         self.gguf_writer.add_head_count_kv(hparams["num_key_value_heads"])

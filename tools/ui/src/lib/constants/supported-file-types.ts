@@ -63,6 +63,10 @@ export const IMAGE_FILE_TYPES = {
 	[FileTypeImage.SVG]: {
 		extensions: [FileExtensionImage.SVG],
 		mimeTypes: [MimeTypeImage.SVG]
+	},
+	[FileTypeImage.HEIC]: {
+		extensions: [FileExtensionImage.HEIC, FileExtensionImage.HEIF],
+		mimeTypes: [MimeTypeImage.HEIC, MimeTypeImage.HEIF]
 	}
 } as const;
 

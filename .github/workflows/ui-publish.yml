@@ -40,6 +40,12 @@ jobs:
           name: ui-build
           path: tools/ui/dist/
 
+      - name: Create distribution archive
+        run: |
+          tar -czf dist.tar.gz -C tools/ui/dist .
+          sha256sum dist.tar.gz > dist.tar.gz.sha256
+          mv dist.tar.gz dist.tar.gz.sha256 tools/ui/dist/
+
       - name: Install Hugging Face Hub CLI
         run: pip install -U huggingface_hub
 

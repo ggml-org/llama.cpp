@@ -13,6 +13,20 @@ ARG APP_REVISION=N/A
 # BUILD STAGE
 # Compile all binary files and libraries
 # ==============================================================================
+ARG NODE_VERSION=24
+
+FROM docker.io/node:$NODE_VERSION AS web
+
+ARG APP_VERSION
+
+WORKDIR /app/tools/ui
+
+COPY tools/ui/package.json tools/ui/package-lock.json ./
+RUN npm ci
+
+COPY tools/ui/ ./
+RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
+
 FROM ${CANN_BASE_IMAGE} AS build
 
 # -- Install build dependencies --
@@ -25,6 +39,8 @@ WORKDIR /app
 
 # -- Copy project files --
 COPY . .
+
+COPY --from=web /app/tools/ui/dist tools/ui/dist
 
 # -- Set CANN environment variables (required for compilation) --
 # Using ENV instead of `source` allows environment variables to persist across the entire image layer

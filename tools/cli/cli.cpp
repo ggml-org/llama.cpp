@@ -97,11 +97,18 @@ struct cli_context {
                 task.params.chat_parser_params.parser.load(chat_params.parser);
             }
 
+            // Copy the preserved tokens into the sampling params
+            const llama_vocab * vocab = llama_model_get_vocab(
+                llama_get_model(ctx_server.get_llama_context()));
+            for (const auto & token : chat_params.preserved_tokens) {
+                auto ids = common_tokenize(vocab, token, false, true);
+                if (ids.size() == 1) {
+                    task.params.sampling.preserved_tokens.insert(ids[0]);
+                }
+            }
+
             // reasoning budget sampler
             if (!chat_params.thinking_end_tag.empty()) {
-                const llama_vocab * vocab = llama_model_get_vocab(
-                    llama_get_model(ctx_server.get_llama_context()));
-
                 task.params.sampling.reasoning_budget_tokens = defaults.sampling.reasoning_budget_tokens;
                 task.params.sampling.generation_prompt = chat_params.generation_prompt;
 
@@ -195,7 +202,7 @@ struct cli_context {
 
     // TODO: support remote files in the future (http, https, etc)
     std::string load_input_file(const std::string & fname, bool is_media) {
-        std::ifstream file(fname, std::ios::binary);
+        std::ifstream file = fs_open_ifstream(fname, std::ios::binary);
         if (!file) {
             return "";
         }

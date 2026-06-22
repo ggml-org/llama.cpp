@@ -435,6 +435,24 @@ static void test_expressions(testing & t) {
         "('c', 'b', 'a')"
     );
 
+    test_template(t, "string slice negative step",
+        "{{ 'abcdef'[::-2] }}",
+        json::object(),
+        "fdb"
+    );
+
+    test_template(t, "string slice negative start and step",
+        "{{ 'abcdef'[-1:1:-1] }}",
+        json::object(),
+        "fedc"
+    );
+
+    test_template(t, "string slice negative start, stop and step",
+        "{{ 'abcdef'[-1:-5:-1] }}",
+        json::object(),
+        "fedc"
+    );
+
     test_template(t, "arithmetic",
         "{{ (a + b) * c }}",
         {{"a", 2}, {"b", 3}, {"c", 4}},
@@ -583,8 +601,8 @@ static void test_filters(testing & t) {
         "hello jinja"
     );
 
-    test_template(t, "length list",
-        "{{ items|length }}",
+    test_template(t, "length (count alias) list",
+        "{{ items|count }}",
         {{"items", json::array({1, 2, 3})}},
         "3"
     );
@@ -693,8 +711,8 @@ static void test_filters(testing & t) {
         "fallback"
     );
 
-    test_template(t, "default with falsy value",
-        "{{ ''|default('fallback', true) }}",
+    test_template(t, "default (d alias) with falsy value",
+        "{{ ''|d('fallback', true) }}",
         json::object(),
         "fallback"
     );
@@ -976,6 +994,32 @@ static void test_macros(testing & t) {
         "{% macro greet(first, last, greeting='Hello') %}{{ greeting }}, {{ first }} {{ last }}{% endmacro %}{{ greet(last='Smith', first='John') }},{{ greet(last='Doe', greeting='Hi', first='Jane') }}",
         json::object(),
         "Hello, John Smith,Hi, Jane Doe"
+    );
+
+    test_template(t, "macro with caller",
+        "\
+{%- macro nest_dict(o, i, ff='') %}\n\
+  {{- caller(ff) }}\n\
+  {%- for k, v in o|items %}\n\
+    {{- i + k + ': ' }}\n\
+    {%- if v is mapping %}\n\
+      {{- '{' }}\n\
+      {% call(f) nest_dict(v, i + '    ') %}\n\
+        {{- 'fail' if ff is undefined }}\n\
+      {%- endcall %}\n\
+      {{- i + '}' }}\n\
+    {% else %}\n\
+      {{- v|string }}\n\
+    {% endif %}\n\
+  {%- endfor %}\n\
+{%- endmacro %}\n\
+{%- call(f) nest_dict({'root1': 1, 'root2': {'nest1': 1, 'nest2': {'nest3': 2}}}, '    ', 'Dict') %}\n\
+  {{- 'fail' if ff is defined }}\n\
+  {{- f + ' {' }}\n\
+{% endcall %}\n\
+{{- '}' }}",
+        json::object(),
+        "Dict {\n    root1: 1\n    root2: {\n        nest1: 1\n        nest2: {\n            nest3: 2\n        }\n    }\n}"
     );
 }
 
@@ -1318,6 +1362,12 @@ static void test_string_methods(testing & t) {
         "{{ s.replace('world', 'jinja') }}",
         {{"s", "hello world"}},
         "hello jinja"
+    );
+
+    test_template(t, "string.replace() empty",
+        "{{ s.replace('', '.') }}",
+        {{"s", "hello world"}},
+        ".h.e.l.l.o. .w.o.r.l.d."
     );
 
     test_template(t, "string.replace() with count",

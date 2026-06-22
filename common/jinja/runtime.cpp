@@ -316,12 +316,22 @@ value filter_expression::execute_impl(context & ctx) {
 
     JJ_DEBUG("Applying filter to %s", input->type().c_str());
 
+    auto set_filter_alias = [](auto & filter_id) {
+        if (filter_id == "count") {
+            filter_id = "length";
+        } else if (filter_id == "d") {
+            filter_id = "default";
+        } else if (filter_id == "e") {
+            filter_id = "escape";
+        } else if (filter_id == "trim") {
+            filter_id = "strip";
+        }
+    };
+
     if (is_stmt<identifier>(filter)) {
         auto filter_id = cast_stmt<identifier>(filter)->val;
 
-        if (filter_id == "trim") {
-            filter_id = "strip"; // alias
-        }
+        set_filter_alias(filter_id);
         JJ_DEBUG("Applying filter '%s' to %s", filter_id.c_str(), input->type().c_str());
         // TODO: Refactor filters so this coercion can be done automatically
         if (!input->is_undefined() && !is_val<value_string>(input) && (
@@ -345,9 +355,7 @@ value filter_expression::execute_impl(context & ctx) {
         }
         auto filter_id = cast_stmt<identifier>(call->callee)->val;
 
-        if (filter_id == "trim") {
-            filter_id = "strip"; // alias
-        }
+        set_filter_alias(filter_id);
         JJ_DEBUG("Applying filter '%s' with arguments to %s", filter_id.c_str(), input->type().c_str());
         func_args args(ctx);
         for (const auto & arg_expr : call->args) {
@@ -678,59 +686,62 @@ value set_statement::execute_impl(context & ctx) {
     return mk_val<value_undefined>();
 }
 
+static inline void bind_parameters(const std::string & name, const statements & this_args, const func_args & args, context & ctx) {
+    const size_t expected_count = this_args.size();
+    const size_t input_count = args.count();
+
+    JJ_DEBUG("Invoking '%s' with %zu input arguments (expected %zu)", name.c_str(), input_count, expected_count);
+    for (size_t i = 0; i < expected_count; ++i) {
+        if (i < input_count) {
+            if (is_stmt<identifier>(this_args[i])) {
+                // normal parameter
+                std::string param_name = cast_stmt<identifier>(this_args[i])->val;
+                value param_value = args.get_kwarg_or_pos(param_name, i);
+                JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), param_value->type().c_str());
+                ctx.set_val(param_name, param_value);
+            } else if (is_stmt<keyword_argument_expression>(this_args[i])) {
+                // default argument used as normal parameter
+                auto kwarg = cast_stmt<keyword_argument_expression>(this_args[i]);
+                if (!is_stmt<identifier>(kwarg->key)) {
+                    throw std::runtime_error("Keyword argument key must be an identifier in '" + name + "'");
+                }
+                std::string param_name = cast_stmt<identifier>(kwarg->key)->val;
+                value param_value = args.get_kwarg_or_pos(param_name, i);
+                JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), param_value->type().c_str());
+                ctx.set_val(param_name, param_value);
+            } else {
+                throw std::runtime_error("Invalid parameter type in '" + name + "'");
+            }
+        } else {
+            auto & default_arg = this_args[i];
+            if (is_stmt<keyword_argument_expression>(default_arg)) {
+                auto kwarg = cast_stmt<keyword_argument_expression>(default_arg);
+                if (!is_stmt<identifier>(kwarg->key)) {
+                    throw std::runtime_error("Keyword argument key must be an identifier in '" + name + "'");
+                }
+                std::string param_name = cast_stmt<identifier>(kwarg->key)->val;
+                JJ_DEBUG("  Binding parameter '%s' to default argument of type %s", param_name.c_str(), kwarg->val->type().c_str());
+                ctx.set_val(param_name, kwarg->val->execute(args.ctx));
+            } else {
+                throw std::runtime_error("Not enough arguments provided to '" + name + "'");
+            }
+            //std::string param_name = cast_stmt<identifier>(default_args[i])->val;
+            //JJ_DEBUG("  Binding parameter '%s' to default", param_name.c_str());
+            //ctx.var[param_name] = default_args[i]->execute(ctx);
+        }
+    }
+}
+
 value macro_statement::execute_impl(context & ctx) {
     if (!is_stmt<identifier>(this->name)) {
         throw std::runtime_error("Macro name must be an identifier");
     }
     std::string name = cast_stmt<identifier>(this->name)->val;
 
-    const func_handler func = [this, name, &ctx](const func_args & args) -> value {
-        size_t expected_count = this->args.size();
-        size_t input_count = args.count();
+    const func_handler func = [this, name](const func_args & args) -> value {
+        context macro_ctx(args.ctx); // new scope for macro execution
 
-        JJ_DEBUG("Invoking macro '%s' with %zu input arguments (expected %zu)", name.c_str(), input_count, expected_count);
-        context macro_ctx(ctx); // new scope for macro execution
-
-        // bind parameters
-        for (size_t i = 0; i < expected_count; ++i) {
-            if (i < input_count) {
-                if (is_stmt<identifier>(this->args[i])) {
-                    // normal parameter
-                    std::string param_name = cast_stmt<identifier>(this->args[i])->val;
-                    value param_value = args.get_kwarg_or_pos(param_name, i);
-                    JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), param_value->type().c_str());
-                    macro_ctx.set_val(param_name, param_value);
-                } else if (is_stmt<keyword_argument_expression>(this->args[i])) {
-                    // default argument used as normal parameter
-                    auto kwarg = cast_stmt<keyword_argument_expression>(this->args[i]);
-                    if (!is_stmt<identifier>(kwarg->key)) {
-                        throw std::runtime_error("Keyword argument key must be an identifier in macro '" + name + "'");
-                    }
-                    std::string param_name = cast_stmt<identifier>(kwarg->key)->val;
-                    value param_value = args.get_kwarg_or_pos(param_name, i);
-                    JJ_DEBUG("  Binding parameter '%s' to argument of type %s", param_name.c_str(), param_value->type().c_str());
-                    macro_ctx.set_val(param_name, param_value);
-                } else {
-                    throw std::runtime_error("Invalid parameter type in macro '" + name + "'");
-                }
-            } else {
-                auto & default_arg = this->args[i];
-                if (is_stmt<keyword_argument_expression>(default_arg)) {
-                    auto kwarg = cast_stmt<keyword_argument_expression>(default_arg);
-                    if (!is_stmt<identifier>(kwarg->key)) {
-                        throw std::runtime_error("Keyword argument key must be an identifier in macro '" + name + "'");
-                    }
-                    std::string param_name = cast_stmt<identifier>(kwarg->key)->val;
-                    JJ_DEBUG("  Binding parameter '%s' to default argument of type %s", param_name.c_str(), kwarg->val->type().c_str());
-                    macro_ctx.set_val(param_name, kwarg->val->execute(ctx));
-                } else {
-                    throw std::runtime_error("Not enough arguments provided to macro '" + name + "'");
-                }
-                //std::string param_name = cast_stmt<identifier>(default_args[i])->val;
-                //JJ_DEBUG("  Binding parameter '%s' to default", param_name.c_str());
-                //macro_ctx.var[param_name] = default_args[i]->execute(ctx);
-            }
-        }
+        bind_parameters(name, this->args, args, macro_ctx);
 
         // execute macro body
         JJ_DEBUG("Executing macro '%s' body with %zu statements", name.c_str(), this->body.size());
@@ -742,6 +753,46 @@ value macro_statement::execute_impl(context & ctx) {
     JJ_DEBUG("Defining macro '%s' with %zu parameters", name.c_str(), args.size());
     ctx.set_val(name, mk_val<value_func>(name, func));
     return mk_val<value_undefined>();
+}
+
+value call_statement::execute_impl(context & ctx) {
+    auto call_expr = cast_stmt<call_expression>(this->call);
+    if (!call_expr) {
+        throw std::runtime_error("Call statement requires a valid call expression");
+    }
+
+    value callee_val = call_expr->callee->execute(ctx);
+    if (!is_val<value_func>(callee_val)) {
+        throw std::runtime_error("Callee is not a function: got " + callee_val->type());
+    }
+    auto * callee_func = cast_val<value_func>(callee_val);
+
+    context caller_ctx(ctx); // new scope for caller execution
+
+    const func_handler func = [this, caller_ctx = std::move(caller_ctx)](const func_args & args) -> value {
+        context block_ctx(caller_ctx); // new scope for block execution
+
+        bind_parameters("caller", this->caller_args, args, block_ctx);
+
+        JJ_DEBUG("Executing call body with %zu statements", this->body.size());
+        auto res = exec_statements(this->body, block_ctx);
+        JJ_DEBUG("Call body execution complete, result: %s", res->val_str.str().c_str());
+        return res;
+    };
+
+    context call_ctx(ctx);
+    call_ctx.set_val("caller", mk_val<value_func>("caller", func));
+
+    func_args args(call_ctx);
+
+    for (const auto & arg_expr : call_expr->args) {
+        auto arg_val = arg_expr->execute(ctx);
+        JJ_DEBUG("  Argument type: %s", arg_val->type().c_str());
+        args.push_back(arg_val);
+    }
+
+    JJ_DEBUG("Calling macro '%s' with %zu arguments", callee_func->name.c_str(), args.count());
+    return callee_func->invoke(args);
 }
 
 value member_expression::execute_impl(context & ctx) {
@@ -761,9 +812,9 @@ value member_expression::execute_impl(context & ctx) {
 
         if (is_stmt<slice_expression>(this->property)) {
             auto s = cast_stmt<slice_expression>(this->property);
-            value start_val = s->start_expr ? s->start_expr->execute(ctx) : mk_val<value_int>(0);
-            value stop_val  = s->stop_expr  ? s->stop_expr->execute(ctx)  : mk_val<value_int>(arr_size);
             value step_val  = s->step_expr  ? s->step_expr->execute(ctx)  : mk_val<value_int>(1);
+            value start_val = s->start_expr ? s->start_expr->execute(ctx) : (step_val->as_int() < 0 ? mk_val<value_int>(arr_size - 1) : mk_val<value_int>(0));
+            value stop_val  = s->stop_expr  ? s->stop_expr->execute(ctx)  : (step_val->as_int() < 0 ? mk_val<value_int>(-1) : mk_val<value_int>(arr_size));
 
             // translate to function call: obj.slice(start, stop, step)
             JJ_DEBUG("Member expression is a slice: start %s, stop %s, step %s",

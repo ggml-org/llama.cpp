@@ -693,7 +693,7 @@ class Gemma4Model(Gemma3Model):
             self.gguf_writer.add_head_count_kv(value_arr)
 
         # handle n_rot differently for global vs swa layers
-        partial_rotary_factor_swa = self.hparams.get("partial_rotary_factor", 1.0)
+        partial_rotary_factor_swa = self.rope_parameters.get("partial_rotary_factor", 1.0)
         n_rot_full = int(head_dim_full) # "proportional" is used, see generate_extra_tensors
         n_rot_swa = int(head_dim_swa * partial_rotary_factor_swa)
         self.gguf_writer.add_rope_dimension_count(n_rot_full)

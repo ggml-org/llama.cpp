@@ -331,6 +331,17 @@ void server_response::send(server_task_result_ptr && result) {
     }
 }
 
+void server_response::broadcast(server_task_result_ptr && result) {
+    std::unique_lock<std::mutex> lock(mutex_results);
+    for (const auto & id_task : waiting_task_ids) {
+        RES_DBG("task id = %d pushed to result queue\n", id_task);
+        server_task_result_ptr res_copy(result->clone());
+        res_copy->id = id_task; // override id with target task id
+        queue_results.emplace_back(std::move(res_copy));
+    }
+    condition_results.notify_all();
+}
+
 void server_response::terminate() {
     running = false;
     condition_results.notify_all();

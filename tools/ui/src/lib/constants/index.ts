@@ -29,6 +29,8 @@ export * from './latex-protection';
 export * from './literal-html';
 export * from './markdown';
 export * from './mermaid-blocks';
+export * from './svg-blocks';
+export * from './diagram-blocks';
 export * from './max-bundle-size';
 export * from './mcp';
 export * from './mcp-form';

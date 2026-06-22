@@ -552,6 +552,7 @@ struct call_statement : public statement {
         for (const auto & arg : this->caller_args) chk_type<expression>(arg);
     }
     std::string type() const override { return "CallStatement"; }
+    value execute_impl(context & ctx) override;
 };
 
 struct ternary_expression : public expression {

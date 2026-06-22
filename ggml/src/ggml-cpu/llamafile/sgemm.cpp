@@ -2345,7 +2345,7 @@ class tinyBLAS_Q0_PPC {
             else if (n_aligned % 16 == 0) nc = 16;
             else                          nc = 8;
         }
-        bool can_use_tiled = n_aligned > 0 && (m % mc == 0) && (k % kc == 0);
+        bool can_use_tiled = n_aligned > 0 && (m % mc == 0);
         if (can_use_tiled) {
             matmul_tiled(m, n_aligned, mc, nc, kc);
             if (n > n_aligned) {
@@ -3063,13 +3063,14 @@ class tinyBLAS_Q0_PPC {
             int64_t ii = (job / xtiles) * mc;
             int64_t jj = (job % xtiles) * nc;
             for (int64_t kk = 0; kk < k; kk += kc) {
+                int64_t k_cur = MIN(kc, k - kk);
                 if constexpr(is_Ablock_q4) {
-                    packNormal_q4_fp16(A + ii * lda + kk, lda, mc, kc, (uint8_t *)A_pack);
+                    packNormal_q4_fp16(A + ii * lda + kk, lda, mc, k_cur, (uint8_t *)A_pack);
                 } else {
-                    packNormal_q8_fp16(A + ii * lda + kk, lda, mc, kc, (uint8_t *)A_pack);
+                    packNormal_q8_fp16(A + ii * lda + kk, lda, mc, k_cur, (uint8_t *)A_pack);
                 }
-                packNormal_q8_fp16(B + jj * ldb + kk, ldb, nc, kc, (uint8_t *)B_pack);
-                KERNEL_Q0(ii, jj, mc, nc, kc, kk, A_pack, B_pack);
+                packNormal_q8_fp16(B + jj * ldb + kk, ldb, nc, k_cur, (uint8_t *)B_pack);
+                KERNEL_Q0(ii, jj, mc, nc, k_cur, kk, A_pack, B_pack);
             }
         }
     }

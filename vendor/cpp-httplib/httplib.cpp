@@ -5809,11 +5809,9 @@ std::string decode_query_component(const std::string &component,
 
   for (size_t i = 0; i < component.size(); i++) {
     if (component[i] == '%' && i + 2 < component.size()) {
-      std::string hex = component.substr(i + 1, 2);
-      char *end;
-      unsigned long value = std::strtoul(hex.c_str(), &end, 16);
-      if (end == hex.c_str() + 2) {
-        result += static_cast<char>(value);
+      auto val = 0;
+      if (detail::from_hex_to_i(component, i + 1, 2, val)) {
+        result += static_cast<char>(val);
         i += 2;
       } else {
         result += component[i];
@@ -12551,6 +12549,21 @@ bool parse_ipv4(const std::string &str, unsigned char *out) {
   return *p == '\0';
 }
 
+// Parse an IP literal (IPv4 or IPv6) into raw network-order bytes.
+// `out` must have room for at least 16 bytes. Returns the address length
+// (4 for IPv4, 16 for IPv6) on success, or 0 if the string is not an IP
+// literal. Used to match a host against iPAddress SANs the same way the
+// OpenSSL backend does via X509_check_ip.
+size_t parse_ip_address(const std::string &str, unsigned char *out) {
+  if (is_ipv4_address(str)) { return parse_ipv4(str, out) ? 4 : 0; }
+  struct in6_addr addr6 = {};
+  if (inet_pton(AF_INET6, str.c_str(), &addr6) == 1) {
+    memcpy(out, &addr6, 16);
+    return 16;
+  }
+  return 0;
+}
+
 #ifdef _WIN32
 // Enumerate Windows system certificates and call callback with DER data
 template <typename Callback>
@@ -12850,6 +12863,30 @@ int openssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx) {
       (error != X509_V_OK) ? X509_verify_cert_error_string(error) : nullptr;
 
   return callback(verify_ctx) ? 1 : 0;
+}
+
+// X509_STORE_get0_objects is deprecated since OpenSSL 4.0 because it is not
+// thread-safe; X509_STORE_get1_objects (OpenSSL 3.3+) returns a snapshot
+// that must be released with release_store_objects
+#if !defined(OPENSSL_IS_BORINGSSL) && !defined(LIBRESSL_VERSION_NUMBER) &&     \
+    OPENSSL_VERSION_NUMBER >= 0x30300000L
+#define CPPHTTPLIB_HAS_X509_STORE_GET1_OBJECTS
+#endif
+
+STACK_OF(X509_OBJECT) * get_store_objects(X509_STORE *store) {
+#ifdef CPPHTTPLIB_HAS_X509_STORE_GET1_OBJECTS
+  return X509_STORE_get1_objects(store);
+#else
+  return X509_STORE_get0_objects(store);
+#endif
+}
+
+void release_store_objects(STACK_OF(X509_OBJECT) * objs) {
+#ifdef CPPHTTPLIB_HAS_X509_STORE_GET1_OBJECTS
+  sk_X509_OBJECT_pop_free(objs, X509_OBJECT_free);
+#else
+  (void)objs; // get0 variant returns an internal pointer; nothing to free
+#endif
 }
 
 } // namespace impl
@@ -13373,11 +13410,19 @@ std::string get_cert_subject_cn(cert_t cert) {
   auto subject_name = X509_get_subject_name(x509);
   if (!subject_name) return "";
 
-  char buf[256];
-  auto len =
-      X509_NAME_get_text_by_NID(subject_name, NID_commonName, buf, sizeof(buf));
-  if (len < 0) return "";
-  return std::string(buf, static_cast<size_t>(len));
+  // X509_NAME_get_text_by_NID is deprecated since OpenSSL 4.0
+  auto idx = X509_NAME_get_index_by_NID(subject_name, NID_commonName, -1);
+  if (idx < 0) return "";
+
+  auto entry = X509_NAME_get_entry(subject_name, idx);
+  if (!entry) return "";
+
+  auto data = X509_NAME_ENTRY_get_data(entry);
+  if (!data) return "";
+
+  return std::string(
+      reinterpret_cast<const char *>(ASN1_STRING_get0_data(data)),
+      static_cast<size_t>(ASN1_STRING_length(data)));
 }
 
 std::string get_cert_issuer_name(cert_t cert) {
@@ -13582,8 +13627,9 @@ size_t get_ca_certs(ctx_t ctx, std::vector<cert_t> &certs) {
   auto store = SSL_CTX_get_cert_store(ssl_ctx);
   if (!store) { return 0; }
 
-  auto objs = X509_STORE_get0_objects(store);
+  auto objs = impl::get_store_objects(store);
   if (!objs) { return 0; }
+  auto se = detail::scope_exit([&] { impl::release_store_objects(objs); });
 
   auto count = sk_X509_OBJECT_num(objs);
   for (decltype(count) i = 0; i < count; i++) {
@@ -13609,8 +13655,9 @@ std::vector<std::string> get_ca_names(ctx_t ctx) {
   auto store = SSL_CTX_get_cert_store(ssl_ctx);
   if (!store) { return names; }
 
-  auto objs = X509_STORE_get0_objects(store);
+  auto objs = impl::get_store_objects(store);
   if (!objs) { return names; }
+  auto se = detail::scope_exit([&] { impl::release_store_objects(objs); });
 
   auto count = sk_X509_OBJECT_num(objs);
   for (decltype(count) i = 0; i < count; i++) {
@@ -13715,110 +13762,6 @@ std::string verify_error_string(long error_code) {
 }
 
 } // namespace tls
-
-bool SSLClient::verify_host(X509 *server_cert) const {
-  /* Quote from RFC2818 section 3.1 "Server Identity"
-
-     If a subjectAltName extension of type dNSName is present, that MUST
-     be used as the identity. Otherwise, the (most specific) Common Name
-     field in the Subject field of the certificate MUST be used. Although
-     the use of the Common Name is existing practice, it is deprecated and
-     Certification Authorities are encouraged to use the dNSName instead.
-
-     Matching is performed using the matching rules specified by
-     [RFC2459].  If more than one identity of a given type is present in
-     the certificate (e.g., more than one dNSName name, a match in any one
-     of the set is considered acceptable.) Names may contain the wildcard
-     character * which is considered to match any single domain name
-     component or component fragment. E.g., *.a.com matches foo.a.com but
-     not bar.foo.a.com. f*.com matches foo.com but not bar.com.
-
-     In some cases, the URI is specified as an IP address rather than a
-     hostname. In this case, the iPAddress subjectAltName must be present
-     in the certificate and must exactly match the IP in the URI.
-
-  */
-  return verify_host_with_subject_alt_name(server_cert) ||
-         verify_host_with_common_name(server_cert);
-}
-
-bool
-SSLClient::verify_host_with_subject_alt_name(X509 *server_cert) const {
-  auto ret = false;
-
-  auto type = GEN_DNS;
-
-  struct in6_addr addr6 = {};
-  struct in_addr addr = {};
-  size_t addr_len = 0;
-
-#ifndef __MINGW32__
-  if (inet_pton(AF_INET6, host_.c_str(), &addr6)) {
-    type = GEN_IPADD;
-    addr_len = sizeof(struct in6_addr);
-  } else if (inet_pton(AF_INET, host_.c_str(), &addr)) {
-    type = GEN_IPADD;
-    addr_len = sizeof(struct in_addr);
-  }
-#endif
-
-  auto alt_names = static_cast<const struct stack_st_GENERAL_NAME *>(
-      X509_get_ext_d2i(server_cert, NID_subject_alt_name, nullptr, nullptr));
-
-  if (alt_names) {
-    auto dsn_matched = false;
-    auto ip_matched = false;
-
-    auto count = sk_GENERAL_NAME_num(alt_names);
-
-    for (decltype(count) i = 0; i < count && !dsn_matched; i++) {
-      auto val = sk_GENERAL_NAME_value(alt_names, i);
-      if (!val || val->type != type) { continue; }
-
-      auto name =
-          reinterpret_cast<const char *>(ASN1_STRING_get0_data(val->d.ia5));
-      if (name == nullptr) { continue; }
-
-      auto name_len = static_cast<size_t>(ASN1_STRING_length(val->d.ia5));
-
-      switch (type) {
-      case GEN_DNS:
-        dsn_matched =
-            detail::match_hostname(std::string(name, name_len), host_);
-        break;
-
-      case GEN_IPADD:
-        if (!memcmp(&addr6, name, addr_len) || !memcmp(&addr, name, addr_len)) {
-          ip_matched = true;
-        }
-        break;
-      }
-    }
-
-    if (dsn_matched || ip_matched) { ret = true; }
-  }
-
-  GENERAL_NAMES_free(const_cast<STACK_OF(GENERAL_NAME) *>(
-      reinterpret_cast<const STACK_OF(GENERAL_NAME) *>(alt_names)));
-  return ret;
-}
-
-bool SSLClient::verify_host_with_common_name(X509 *server_cert) const {
-  const auto subject_name = X509_get_subject_name(server_cert);
-
-  if (subject_name != nullptr) {
-    char name[BUFSIZ];
-    auto name_len = X509_NAME_get_text_by_NID(subject_name, NID_commonName,
-                                              name, sizeof(name));
-
-    if (name_len != -1) {
-      return detail::match_hostname(
-          std::string(name, static_cast<size_t>(name_len)), host_);
-    }
-  }
-
-  return false;
-}
 
 #endif // CPPHTTPLIB_OPENSSL_SUPPORT
 
@@ -14622,10 +14565,10 @@ bool verify_hostname(cert_t cert, const char *hostname) {
   auto mcert = static_cast<const mbedtls_x509_crt *>(cert);
   std::string host_str(hostname);
 
-  // Check if hostname is an IP address
-  bool is_ip = impl::is_ipv4_address(host_str);
-  unsigned char ip_bytes[4];
-  if (is_ip) { impl::parse_ipv4(host_str, ip_bytes); }
+  // Check if hostname is an IP address (IPv4 or IPv6)
+  unsigned char ip_bytes[16];
+  auto ip_len = impl::parse_ip_address(host_str, ip_bytes);
+  auto is_ip = ip_len > 0;
 
   // Check Subject Alternative Names (SAN)
   // In Mbed TLS 3.x, subject_alt_names contains raw values without ASN.1 tags
@@ -14637,9 +14580,9 @@ bool verify_hostname(cert_t cert, const char *hostname) {
     size_t len = san->buf.len;
 
     if (is_ip) {
-      // Check if this SAN is an IPv4 address (4 bytes)
-      if (len == 4 && memcmp(p, ip_bytes, 4) == 0) { return true; }
-      // Check if this SAN is an IPv6 address (16 bytes) - skip for now
+      // For an IP host, only a matching iPAddress SAN of the same family
+      // (4 bytes for IPv4, 16 bytes for IPv6) may authenticate it.
+      if (len == ip_len && memcmp(p, ip_bytes, ip_len) == 0) { return true; }
     } else {
       // Check if this SAN is a DNS name (printable ASCII string)
       bool is_dns = len > 0;
@@ -14654,21 +14597,25 @@ bool verify_hostname(cert_t cert, const char *hostname) {
     san = san->next;
   }
 
-  // Fallback: Check Common Name (CN) in subject
-  char cn[256];
-  int ret = mbedtls_x509_dn_gets(cn, sizeof(cn), &mcert->subject);
-  if (ret > 0) {
-    std::string cn_str(cn);
+  // Fallback: Check Common Name (CN) in subject. Skipped for IP-literal hosts:
+  // an IP identity is only valid via an iPAddress SAN, never the CN (RFC 9110;
+  // the OpenSSL backend's X509_check_ip behaves the same way).
+  if (!is_ip) {
+    char cn[256];
+    int ret = mbedtls_x509_dn_gets(cn, sizeof(cn), &mcert->subject);
+    if (ret > 0) {
+      std::string cn_str(cn);
 
-    // Look for "CN=" in the DN string
-    size_t cn_pos = cn_str.find("CN=");
-    if (cn_pos != std::string::npos) {
-      size_t start = cn_pos + 3;
-      size_t end = cn_str.find(',', start);
-      std::string cn_value =
-          cn_str.substr(start, end == std::string::npos ? end : end - start);
+      // Look for "CN=" in the DN string
+      size_t cn_pos = cn_str.find("CN=");
+      if (cn_pos != std::string::npos) {
+        size_t start = cn_pos + 3;
+        size_t end = cn_str.find(',', start);
+        std::string cn_value =
+            cn_str.substr(start, end == std::string::npos ? end : end - start);
 
-      if (detail::match_hostname(cn_value, host_str)) { return true; }
+        if (detail::match_hostname(cn_value, host_str)) { return true; }
+      }
     }
   }
 
@@ -15774,10 +15721,10 @@ bool verify_hostname(cert_t cert, const char *hostname) {
   auto x509 = static_cast<WOLFSSL_X509 *>(cert);
   std::string host_str(hostname);
 
-  // Check if hostname is an IP address
-  bool is_ip = impl::is_ipv4_address(host_str);
-  unsigned char ip_bytes[4];
-  if (is_ip) { impl::parse_ipv4(host_str, ip_bytes); }
+  // Check if hostname is an IP address (IPv4 or IPv6)
+  unsigned char ip_bytes[16];
+  auto ip_len = impl::parse_ip_address(host_str, ip_bytes);
+  auto is_ip = ip_len > 0;
 
   // Check Subject Alternative Names
   auto *san_names = static_cast<WOLF_STACK_OF(WOLFSSL_GENERAL_NAME) *>(
@@ -15804,10 +15751,12 @@ bool verify_hostname(cert_t cert, const char *hostname) {
           }
         }
       } else if (is_ip && names->type == WOLFSSL_GEN_IPADD) {
-        // IP address
+        // IP address: only an iPAddress SAN of the same family (4 bytes for
+        // IPv4, 16 bytes for IPv6) may authenticate the host.
         unsigned char *ip_data = wolfSSL_ASN1_STRING_data(names->d.iPAddress);
-        int ip_len = wolfSSL_ASN1_STRING_length(names->d.iPAddress);
-        if (ip_data && ip_len == 4 && memcmp(ip_data, ip_bytes, 4) == 0) {
+        auto san_ip_len = wolfSSL_ASN1_STRING_length(names->d.iPAddress);
+        if (ip_data && san_ip_len == static_cast<int>(ip_len) &&
+            memcmp(ip_data, ip_bytes, ip_len) == 0) {
           wolfSSL_sk_free(san_names);
           return true;
         }
@@ -15816,8 +15765,10 @@ bool verify_hostname(cert_t cert, const char *hostname) {
     wolfSSL_sk_free(san_names);
   }
 
-  // Fallback: Check Common Name (CN) in subject
-  WOLFSSL_X509_NAME *subject = wolfSSL_X509_get_subject_name(x509);
+  // Fallback: Check Common Name (CN) in subject. Skipped for IP-literal hosts:
+  // an IP identity is only valid via an iPAddress SAN, never the CN (RFC 9110;
+  // the OpenSSL backend's X509_check_ip behaves the same way).
+  auto subject = is_ip ? nullptr : wolfSSL_X509_get_subject_name(x509);
   if (subject) {
     char cn[256] = {};
     int cn_len = wolfSSL_X509_NAME_get_text_by_NID(subject, NID_commonName, cn,

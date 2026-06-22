@@ -70,6 +70,21 @@ static __dpct_inline__ void dequantize_q4_0_reorder(const void *d_ptr, const int
 #endif // GGML_SYCL_F16
 }
 
+static __dpct_inline__ void dequantize_q1_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
+                                            const int iqs, dfloat2 &v) {
+    // Q1_0 reorder layout: scale values followed by quantized bits
+    const dfloat d = (const dfloat)*((const sycl::half*)d_ptr+ib);
+
+    const int bit_index_0 = iqs + 0;
+    const int bit_index_1 = iqs + 1;
+
+    const int bit_0 = (*((const uint8_t *)qs + bit_index_0 / 8) >> (bit_index_0 % 8)) & 1;
+    const int bit_1 = (*((const uint8_t *)qs + bit_index_1 / 8) >> (bit_index_1 % 8)) & 1;
+
+    v.x() = (2 * bit_0 - 1) * d;
+    v.y() = (2 * bit_1 - 1) * d;
+}
+
 static __dpct_inline__ void dequantize_q4_1(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q4_1 * x = (const block_q4_1 *) vx;

@@ -67,8 +67,8 @@ MTMD_API void mtmd_helper_image_get_decoder_pos(const mtmd_image_tokens * image,
 
 // helper function that automatically:
 // 1. run llama_decode() on text chunks
-// 2. run mtmd_encode() on image chunks, then mtmd_get_output_embd() and then llama_decode()
-// if any of the mtmd_encode() or llama_decode() calls return non-zero, stop and forward the error
+// 2. run mtmd_encode_chunk() on image chunks, then mtmd_get_output_embd() and then llama_decode()
+// if any of the mtmd_encode_chunk() or llama_decode() calls return non-zero, stop and forward the error
 // otherwise, returns 0 on success
 // this function is NOT thread-safe
 MTMD_API int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
@@ -91,6 +91,8 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                                                bool logits_last,
                                                llama_pos * new_n_past);
 
+typedef int32_t (*mtmd_helper_post_decode_callback)(struct llama_batch batch, void * user_data);
+
 // helper function to decode an image whose embeddings have already been calculated
 // this helper will handle batching and pre/post decoding setup (for ex. gemma 3 requires non-causal attention)
 // ret 0 on success, -1 on chunk not being a valid image chunk, 1 on decode failure
@@ -101,7 +103,9 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 llama_pos n_past,
                                                 llama_seq_id seq_id,
                                                 int32_t n_batch,
-                                                llama_pos * new_n_past);
+                                                llama_pos * new_n_past,
+                                                mtmd_helper_post_decode_callback callback,
+                                                void * user_data);
 
 //
 // video input helpers (requires ffmpeg/ffprobe installed on the system)
@@ -157,12 +161,15 @@ MTMD_API int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
 } // extern "C"
 #endif
 
+#ifdef __cplusplus
+#include <set>
+#include <memory>
+
+namespace mtmd_helper {
+
 //
 // C++ wrappers
 //
-
-#ifdef __cplusplus
-namespace mtmd_helper {
 
 // video-related C++ wrappers
 struct mtmd_helper_video_deleter {

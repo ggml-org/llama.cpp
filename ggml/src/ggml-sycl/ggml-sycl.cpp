@@ -32,7 +32,7 @@
 
 #include <sycl/sycl.hpp>
 #include <sycl/backend.hpp>
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
 #include <level_zero/ze_api.h>
 #endif
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
@@ -62,6 +62,9 @@
 #include "ggml-sycl/repeat_back.hpp"
 #include "ggml-sycl/set_rows.hpp"
 #include "ggml-sycl/set.hpp"
+#include "ggml-sycl/conv2d.hpp"
+#include "ggml-sycl/conv2d-dw.hpp"
+#include "ggml-sycl/conv2d-transpose.hpp"
 #include "ggml-sycl/ssm_conv.hpp"
 #include "ggml-sycl/sycl_hw.hpp"
 #include "ggml-sycl/ssm_scan.hpp"
@@ -70,6 +73,10 @@
 #include "ggml-sycl/diag.hpp"
 #include "ggml-sycl/solve_tri.hpp"
 #include "ggml-sycl/gated_delta_net.hpp"
+#include "ggml-sycl/pool.hpp"
+
+#define MEM_SIZE_2M	0x00200000
+#define MEM_SIZE_1G	0x40000000
 
 static bool g_sycl_loaded = false;
 int g_ggml_sycl_debug = 0;
@@ -80,9 +87,10 @@ int g_ggml_sycl_enable_vmm = 1;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_async_mem_op_requested = 1;
-int g_ggml_sycl_enable_level_zero = 0;
+int g_ggml_sycl_use_level_zero_api = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
-
+int g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
+int g_ggml_sycl_usm_system = 0;
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
@@ -136,6 +144,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
         info.devices[i].smpbo = prop.get_local_mem_size();
         info.devices[i].warp_size = WARP_SIZE;
+        info.devices[i].usm_system_support = device.has(sycl::aspect::usm_system_allocations);
 
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
         info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
@@ -147,11 +156,31 @@ static ggml_sycl_device_info ggml_sycl_init() {
             GGML_LOG_WARN("SYCL GPU device %d does not use Level Zero backend, disabling Level Zero memory API\n", i);
             info.ext_oneapi_level_zero = false;
         }
+
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+        if (info.ext_oneapi_level_zero && device.is_gpu() && device.default_queue().get_backend() == sycl::backend::ext_oneapi_level_zero) {
+            ze_device_handle_t ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(device.default_queue().get_device());
+            ze_device_properties_t props = {};
+            props.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
+            ze_result_t r = zeDeviceGetProperties(ze_dev, &props);
+            info.devices[i].l0_discrete_gpu = r == ZE_RESULT_SUCCESS && !(props.flags & ZE_DEVICE_PROPERTY_FLAG_INTEGRATED);
+        }
+#endif
     }
 
     for (int id = 0; id < info.device_count; ++id) {
         info.default_tensor_split[id] /= total_vram;
     }
+
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+    // Large buffers can be allocated before ggml_check_sycl() initializes other
+    // g_ggml_sycl_enable_* globals, so initialize this one as early as we can.
+    g_ggml_sycl_use_level_zero_api =
+        info.ext_oneapi_level_zero && ggml_sycl_get_env("GGML_SYCL_USE_LEVEL_ZERO_API", 1);
+#else
+    g_ggml_sycl_use_level_zero_api = 0;
+#endif
+
     return info;
 }
 
@@ -236,41 +265,29 @@ void ggml_backend_sycl_print_sycl_devices() {
     print_device_opt_feature(device_count);
 }
 
-static inline int get_sycl_env(const char *env_name, int default_val) {
-    char *user_device_string = getenv(env_name);
-    int user_number = default_val;
-
-    unsigned n;
-    if (user_device_string != NULL &&
-        sscanf(user_device_string, " %u", &n) == 1) {
-        user_number = (int)n;
-    } else {
-        user_number = default_val;
-    }
-    return user_number;
-}
-
 static void ggml_check_sycl() try {
     static bool initialized = false;
 
     if (!initialized) {
-        g_ggml_sycl_debug = get_sycl_env("GGML_SYCL_DEBUG", 0);
-        g_ggml_sycl_disable_optimize = get_sycl_env("GGML_SYCL_DISABLE_OPT", 0);
-        g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
-        g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
-        g_ggml_sycl_enable_vmm = get_sycl_env("GGML_SYCL_ENABLE_VMM", 1);
-        g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-        g_ggml_sycl_enable_level_zero = get_sycl_env("GGML_SYCL_ENABLE_LEVEL_ZERO", ggml_sycl_info().ext_oneapi_level_zero);
-#else
-        g_ggml_sycl_enable_level_zero = 0;
-#endif
+        g_ggml_sycl_debug = ggml_sycl_get_env("GGML_SYCL_DEBUG", 0);
+        g_ggml_sycl_disable_optimize = ggml_sycl_get_env("GGML_SYCL_DISABLE_OPT", 0);
+        g_ggml_sycl_disable_graph = ggml_sycl_get_env("GGML_SYCL_DISABLE_GRAPH", 1);
+        g_ggml_sycl_disable_dnn = ggml_sycl_get_env("GGML_SYCL_DISABLE_DNN", 0);
+        g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
+        g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
+
+        g_ggml_sycl_dev2dev_memcpy = ggml_sycl_get_env("GGML_SYCL_DEV2DEV_MEMCPY", DEV2DEV_MEMCPY_SYCL);
+        if (g_ggml_sycl_use_level_zero_api == 0) {
+            g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
+        }
 
 #ifdef SYCL_FLASH_ATTN
-        g_ggml_sycl_enable_flash_attention = get_sycl_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
+        g_ggml_sycl_enable_flash_attention = ggml_sycl_get_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
 #else
         g_ggml_sycl_enable_flash_attention = 0;
 #endif
+
+        g_ggml_sycl_usm_system = ggml_sycl_get_env("GGML_SYCL_USM_SYSTEM", 0);
 
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
 
@@ -295,10 +312,10 @@ static void ggml_check_sycl() try {
 #else
         GGML_LOG_INFO("  GGML_SYCL_DNNL: no\n");
 #endif
-#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO)
-        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO: yes\n");
+#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes\n");
 #else
-        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO: no\n");
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: no\n");
 #endif
 #if defined(GGML_SYCL_USE_VMM)
         GGML_LOG_INFO("  GGML_SYCL_USE_VMM: yes\n");
@@ -314,10 +331,13 @@ static void ggml_check_sycl() try {
 #else
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: graph disabled by compile flag\n");
 #endif
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: %d\n", g_ggml_sycl_enable_level_zero);
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+        GGML_LOG_INFO("  GGML_SYCL_USE_LEVEL_ZERO_API: %d\n", g_ggml_sycl_use_level_zero_api);
+        GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d\n", g_ggml_sycl_dev2dev_memcpy);
 #else
-        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: Level Zero disabled by compile flag\n");
+        GGML_LOG_INFO("  GGML_SYCL_USE_LEVEL_ZERO_API: Disable Level Zero API usage by compile flag\n");
+        GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d, enable to SYCL API since missing GGML_SYCL_SUPPORT_LEVEL_ZERO_API\n",
+                      g_ggml_sycl_dev2dev_memcpy);
 #endif
 #if GGML_SYCL_DNNL
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: %d\n", g_ggml_sycl_disable_dnn);
@@ -330,7 +350,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_VMM: virtual memory extension is not available\n");
 #endif
         GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
-        g_ggml_sycl_use_async_mem_op_requested = get_sycl_env("GGML_SYCL_USE_ASYNC_MEM_OP", 1);
+        g_ggml_sycl_use_async_mem_op_requested = ggml_sycl_get_env("GGML_SYCL_USE_ASYNC_MEM_OP", 1);
         GGML_LOG_INFO("  GGML_SYCL_USE_ASYNC_MEM_OP: %d\n", g_ggml_sycl_use_async_mem_op_requested);
 
 #ifdef SYCL_FLASH_ATTN
@@ -339,6 +359,8 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FLASH_ATTN: %d disabled by compile flag\n",
             g_ggml_sycl_enable_flash_attention);
 #endif
+
+        GGML_LOG_INFO("  GGML_SYCL_USM_SYSTEM: %d\n", g_ggml_sycl_usm_system);
 
 /* NOT REMOVE, keep it for next optimize for XMX.
 #if defined(SYCL_USE_XMX)
@@ -415,6 +437,14 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+inline void free_aligned_mem_host(void * memblock) {
+#ifdef _WIN32
+    _aligned_free(memblock);
+#else
+    free(memblock);
+#endif
+}
+
 // sycl buffer
 
 struct ggml_backend_sycl_buffer_context {
@@ -424,9 +454,10 @@ struct ggml_backend_sycl_buffer_context {
     std::string name;
     optimize_feature opt_feature;
     std::vector<ggml_tensor_extra_gpu *> tensor_extras;
+    bool is_usm_system;
 
-    ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream) :
-        device(device), dev_ptr(dev_ptr), stream(stream) {
+    ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream, bool is_usm_system) :
+        device(device), dev_ptr(dev_ptr), stream(stream), is_usm_system(is_usm_system) {
             check_allow_gpu_index(device);
             name = (GGML_SYCL_NAME + std::to_string(device));
             opt_feature = ggml_sycl_info().devices[device].opt_feature;
@@ -435,7 +466,10 @@ struct ggml_backend_sycl_buffer_context {
     ~ggml_backend_sycl_buffer_context() {
         if (dev_ptr != nullptr) {
             ggml_sycl_set_device(device);
-            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(dev_ptr, *stream)));
+            if (is_usm_system)
+                free_aligned_mem_host(dev_ptr);
+            else
+                SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(dev_ptr, *stream)));
         }
 
         //release extra used by tensors
@@ -568,43 +602,50 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-static bool ggml_sycl_is_l0_discrete_gpu(sycl::queue &q) {
-    if (!q.get_device().is_gpu() || q.get_backend() != sycl::backend::ext_oneapi_level_zero) {
-        return false;
-    }
-
-    ze_device_handle_t ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_device());
-    ze_device_properties_t props = {};
-    props.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
-    ze_result_t r = zeDeviceGetProperties(ze_dev, &props);
-    return r == ZE_RESULT_SUCCESS && !(props.flags & ZE_DEVICE_PROPERTY_FLAG_INTEGRATED);
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+static bool ggml_sycl_is_l0_discrete_gpu(int device) {
+    return ggml_sycl_info().devices[device].l0_discrete_gpu;
 }
 #endif
 
-static void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
+static void dev2dev_memcpy(int device_dst, sycl::queue &q_dst, int device_src, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-    // Use Level Zero direct copy for dGPU-to-dGPU transfers.
-    const bool l0_copy_supported =
-        ggml_sycl_is_l0_discrete_gpu(q_dst) && ggml_sycl_is_l0_discrete_gpu(q_src);
-    if (g_ggml_sycl_enable_level_zero && l0_copy_supported) {
-        auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_context());
-        auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_device());
-        ze_command_queue_desc_t cq_desc = {ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC, nullptr, 0, 0,
-                                           0, ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS, ZE_COMMAND_QUEUE_PRIORITY_NORMAL};
-        ze_command_list_handle_t cl;
-        ze_result_t r = zeCommandListCreateImmediate(ze_ctx, ze_dev, &cq_desc, &cl);
-        if (r == ZE_RESULT_SUCCESS) {
-            r = zeCommandListAppendMemoryCopy(cl, ptr_dst, ptr_src, size, nullptr, 0, nullptr);
-            zeCommandListDestroy(cl);
+
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+    if (g_ggml_sycl_dev2dev_memcpy == DEV2DEV_MEMCPY_L0) {
+        // Use Level Zero direct copy for dGPU-to-dGPU transfers.
+        const bool l0_copy_supported =
+            ggml_sycl_is_l0_discrete_gpu(device_dst) && ggml_sycl_is_l0_discrete_gpu(device_src);
+        if (g_ggml_sycl_use_level_zero_api && l0_copy_supported) {
+            auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_context());
+            auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_device());
+            ze_command_queue_desc_t cq_desc = {ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC, nullptr, 0, 0,
+                                            0, ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS, ZE_COMMAND_QUEUE_PRIORITY_NORMAL};
+            ze_command_list_handle_t cl;
+            ze_result_t r = zeCommandListCreateImmediate(ze_ctx, ze_dev, &cq_desc, &cl);
             if (r == ZE_RESULT_SUCCESS) {
-                return;
+                GGML_SYCL_DEBUG("[SYCL] dev2dev memcpy by L0\n");
+                r = zeCommandListAppendMemoryCopy(cl, ptr_dst, ptr_src, size, nullptr, 0, nullptr);
+                zeCommandListDestroy(cl);
+                if (r == ZE_RESULT_SUCCESS) {
+                    return;
+                }
             }
         }
     }
 #endif
+
+    if (g_ggml_sycl_dev2dev_memcpy == DEV2DEV_MEMCPY_SYCL) {
+        if (q_dst.get_device().ext_oneapi_can_access_peer(q_src.get_device(),
+                                                          sycl::ext::oneapi::peer_access::access_supported)) {
+            GGML_SYCL_DEBUG("[SYCL] dev2dev memcpy by SYCL\n");
+            SYCL_CHECK(CHECK_TRY_ERROR(q_dst.memcpy(ptr_dst, ptr_src, size).wait()));
+            return;
+        }
+    }
+
     // Host-staged copy
+    GGML_SYCL_DEBUG("[SYCL] dev2dev memcpy by host forward\n");
     char *host_buf = (char *)malloc(size);
     q_src.memcpy(host_buf, (const char *)ptr_src, size).wait();
     q_dst.memcpy((char *)ptr_dst, host_buf, size).wait();
@@ -651,7 +692,7 @@ ggml_backend_sycl_buffer_cpy_tensor(ggml_backend_buffer_t buffer,
         size_t size = ggml_nbytes(src);
 
         //todo. it's dirty solutino to walkaroud known issue:device2device cross GPUs.
-        dev2dev_memcpy(*stream_dst, *stream_src, dst->data, src->data, size);
+        dev2dev_memcpy(dst_ctx->device, *stream_dst, src_ctx->device, *stream_src, dst->data, src->data, size);
 
 //todo, it's known issue：error in device2device cross GPUs. reused when the issue is fixed. DON"T remove
 #if 0
@@ -765,21 +806,59 @@ static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_t
     return ctx->name.c_str();
 }
 
+static bool check_usm_system(int device, size_t size) {
+    bool use_usm_system = g_ggml_sycl_usm_system && size >= MEM_SIZE_1G;
+
+    if (use_usm_system && !ggml_sycl_info().devices[device].usm_system_support) {
+        GGML_LOG_INFO("Device does not support USM system allocations\n");
+        use_usm_system = false;
+    }
+
+    return use_usm_system;
+}
+
+inline void * aligned_malloc_host(size_t alignment, size_t size) {
+#ifdef _WIN32
+    return _aligned_malloc(size, alignment);
+#else
+    return aligned_alloc(alignment, size);
+#endif
+}
+
 static ggml_backend_buffer_t
 ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
                                            size_t size) try {
+    ggml_check_sycl();
+
     ggml_backend_sycl_buffer_type_context * buft_ctx = (ggml_backend_sycl_buffer_type_context *)buft->context;
     ggml_sycl_set_device(buft_ctx->device);
     const queue_ptr stream = buft_ctx->stream;
     size = std::max(size, (size_t)1); // syclMalloc returns null for size 0
+    /*
+    Alignment below ensures best performance. While in theory it could lead to
+    wasting memory, this is acceptable because in practice only few buffers are
+    allocated and even less exceed the minimum size accepted here for USM system
+    allocations.
+     */
+    size_t alignment = MEM_SIZE_2M;
+    size_t aligned_size = ((size + alignment - 1) / alignment) * alignment;
+    bool use_usm_system = check_usm_system(buft_ctx->device, aligned_size);
 
     void * dev_ptr;
-    SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)ggml_sycl_malloc_device(size, *stream)));
-    if (!dev_ptr) {
-      GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
-      return nullptr;
+    if (use_usm_system) {
+        dev_ptr = (void *)aligned_malloc_host(alignment, aligned_size);
+        if (!dev_ptr) {
+            GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on host\n", __func__, size);
+            return nullptr;
+        }
+    } else {
+        SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)ggml_sycl_malloc_device(size, *stream)));
+        if (!dev_ptr) {
+          GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
+          return nullptr;
+        }
     }
-    ggml_backend_sycl_buffer_context * ctx = new  ggml_backend_sycl_buffer_context(buft_ctx->device, dev_ptr, buft_ctx->stream);
+    ggml_backend_sycl_buffer_context * ctx = new  ggml_backend_sycl_buffer_context(buft_ctx->device, dev_ptr, buft_ctx->stream, use_usm_system);
     return ggml_backend_buffer_init(buft, ggml_backend_sycl_buffer_interface, ctx, size);
 }
 catch (sycl::exception const &exc) {
@@ -897,6 +976,7 @@ static int64_t get_row_rounding(ggml_type type, const std::array<float, GGML_SYC
     }
 
     switch(type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
             return max_compute_capability >= VER_GEN9 ? 128 : 64;
@@ -1304,22 +1384,6 @@ static const char * ggml_backend_sycl_host_buffer_type_name(ggml_backend_buffer_
     return GGML_SYCL_NAME "_Host";
 
     GGML_UNUSED(buft);
-}
-
-inline void * aligned_malloc_host(size_t alignment, size_t size) {
-#ifdef _WIN32
-    return _aligned_malloc(size, alignment);
-#else
-    return aligned_alloc(alignment, size);
-#endif
-}
-
-inline void free_aligned_mem_host(void * memblock) {
-#ifdef _WIN32
-    _aligned_free(memblock);
-#else
-    free(memblock);
-#endif
 }
 
 static void ggml_backend_sycl_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
@@ -1947,69 +2011,6 @@ static void scale_f32(const float * x, float * dst, const float scale, const flo
 }
 
 
-template <typename Ti, typename To>
-static  void pool2d_nchw_kernel(
-        const int ih, const int iw, const int oh, const int ow,
-        const int kh, const int kw, const int sh, const int sw,
-        const int ph, const int pw, const int parallel_elements,
-        const Ti* src, To* dst, const enum ggml_op_pool op,
-        const sycl::nd_item<3> &item_ct1) {
-        int idx = item_ct1.get_local_id(2) +
-                  item_ct1.get_group(2) * item_ct1.get_local_range(2);
-        if (idx >= parallel_elements) {
-            return;
-        }
-
-        const int I_HW = ih * iw;
-        const int O_HW = oh * ow;
-        const int nc = idx / O_HW;
-        const int cur_oh = idx % O_HW / ow;
-        const int cur_ow = idx % O_HW % ow;
-        const Ti* i_ptr = src + nc * I_HW;
-        To* o_ptr = dst + nc * O_HW;
-        const int start_h = cur_oh * sh - ph;
-        const int bh = sycl::max(0, start_h);
-        const int eh = sycl::min(ih, start_h + kh);
-        const int start_w = cur_ow * sw - pw;
-        const int bw = sycl::max(0, start_w);
-        const int ew = sycl::min(iw, start_w + kw);
-
-        To res = 0;
-
-        switch (op) {
-            case GGML_OP_POOL_AVG: res = 0; break;
-            case GGML_OP_POOL_MAX: res = -FLT_MAX; break;
-            default:
-                res      = (To) sycl::nan(uint32_t(0));
-                break;
-        }
-
-        for (int i = bh; i < eh; i += 1) {
-            for (int j = bw; j < ew; j += 1) {
-#if DPCT_COMPATIBILITY_TEMP >= 350
-                /*
-                DPCT1098:106: The '*' expression is used instead of the __ldg
-                call. These two expressions do not provide the exact same
-                functionality. Check the generated code for potential precision
-                and/or performance issues.
-                */
-                Ti cur = *(i_ptr + i * iw + j);
-#else
-                Ti cur = i_ptr[i * iw + j];
-#endif
-                switch (op) {
-                    case GGML_OP_POOL_AVG: res += (cur / (kh * kw)); break;
-                    case GGML_OP_POOL_MAX: res = sycl::max(res, (To)cur); break;
-                    default:
-                        res = (To) sycl::nan(uint32_t(0));
-                        break;
-                }
-            }
-        }
-        o_ptr[cur_oh * ow + cur_ow] = res;
-}
-
-
 static void ggml_mul_mat_p021_f16_f32_sycl(const void *vx, const float *y,
                                            float *dst, const int ncols_x,
                                            const int nrows_x,
@@ -2558,45 +2559,6 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-static void ggml_sycl_op_pool2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
-    dpct::queue_ptr main_stream = ctx.stream();
-    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
-
-    const int32_t * opts = (const int32_t *)dst->op_params;
-    enum ggml_op_pool op = static_cast<ggml_op_pool>(opts[0]);
-    const int k0 = opts[1];
-    const int k1 = opts[2];
-    const int s0 = opts[3];
-    const int s1 = opts[4];
-    const int p0 = opts[5];
-    const int p1 = opts[6];
-
-    const int64_t IH = dst->src[0]->ne[1];
-    const int64_t IW = dst->src[0]->ne[0];
-
-    const int64_t N = dst->ne[3];
-    const int64_t OC = dst->ne[2];
-    const int64_t OH = dst->ne[1];
-    const int64_t OW = dst->ne[0];
-
-    const int parallel_elements = N * OC * OH * OW;
-    const int num_blocks = (parallel_elements + SYCL_POOL2D_BLOCK_SIZE - 1) / SYCL_POOL2D_BLOCK_SIZE;
-    sycl::range<3> block_nums(1, 1, num_blocks);
-    main_stream->parallel_for(
-        sycl::nd_range<3>(block_nums *
-                              sycl::range<3>(1, 1, SYCL_IM2COL_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_IM2COL_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            pool2d_nchw_kernel(IH, IW, OH, OW, k1, k0, s1, s0, p1, p0,
-                               parallel_elements, src0_dd, dst_dd, op,
-                               item_ct1);
-        });
-}
-
 inline void ggml_sycl_op_sum(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
@@ -3056,7 +3018,7 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                             src1_ddf_i_source += (i0 * ne11 + src1_col_0) * ne10;
 
                             SYCL_CHECK(
-                                CHECK_TRY_ERROR(dev2dev_memcpy(*stream, *main_stream, src1_ddf_i, src1_ddf_i_source,
+                                CHECK_TRY_ERROR(dev2dev_memcpy(i, *stream, ctx.device, *main_stream, src1_ddf_i, src1_ddf_i_source,
                                                                src1_ncols * ne10 * sizeof(float))));
                         }
                     }
@@ -3546,6 +3508,7 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
             return true;
@@ -3561,6 +3524,7 @@ inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
             return true;
@@ -3571,6 +3535,7 @@ inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q3_K:
@@ -3585,6 +3550,7 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
 
 static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -3793,6 +3759,149 @@ static bool reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, d
     return true;
 }
 
+// Reorder each expert slice into a self-contained SoA layout.
+static bool reorder_qw_q4_k_moe(uint8_t * data_device, size_t expert_bytes, int64_t n_expert, dpct::queue_ptr stream) {
+    GGML_ASSERT(expert_bytes % sizeof(block_q4_K) == 0);
+    const int    blocks_per_expert = (int) (expert_bytes / sizeof(block_q4_K));
+    const size_t total_bytes       = expert_bytes * (size_t) n_expert;
+
+    sycl_reorder_temp_buffer tmp(stream, total_bytes);
+    if (!tmp) {
+        GGML_LOG_WARN("%s: failed to allocate %zu bytes for reorder temp buffer, skipping reorder\n", __func__, total_bytes);
+        return false;
+    }
+    uint8_t * tmp_buf = static_cast<uint8_t *>(tmp.ptr);
+
+    sycl::event copy_event;
+    SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, total_bytes)));
+    if (!g_ggml_sycl_use_async_mem_op) {
+        copy_event.wait();
+    }
+
+    const int total_blocks = blocks_per_expert * (int) n_expert;
+    auto reorder_event = stream->parallel_for(total_blocks, [=](auto gb_) {
+        const int          gb   = gb_;
+        const int          e    = gb / blocks_per_expert;
+        const int          ib   = gb % blocks_per_expert;
+        const block_q4_K * x    = (const block_q4_K *) (tmp_buf + (size_t) e * expert_bytes);
+        uint8_t *          base = data_device + (size_t) e * expert_bytes;
+
+        auto * qs_ptr     = base;
+        auto * scales_ptr = qs_ptr + QK_K / 2 * blocks_per_expert;
+        auto * dm_ptr     = (sycl::half2 *) (scales_ptr + K_SCALE_SIZE * blocks_per_expert);
+
+        for (int j = 0; j < QK_K / 2; ++j) {
+            qs_ptr[ib * (QK_K / 2) + j] = x[ib].qs[j];
+        }
+        for (int j = 0; j < K_SCALE_SIZE; ++j) {
+            scales_ptr[ib * K_SCALE_SIZE + j] = x[ib].scales[j];
+        }
+        dm_ptr[ib] = x[ib].dm;
+    });
+    if (!g_ggml_sycl_use_async_mem_op) {
+        reorder_event.wait_and_throw();
+    }
+    return true;
+}
+
+// Reorder each Q5_K expert slice into [qs][qh][scales][dm].
+static bool reorder_qw_q5_k_moe(uint8_t * data_device, size_t expert_bytes, int64_t n_expert, dpct::queue_ptr stream) {
+    GGML_ASSERT(expert_bytes % sizeof(block_q5_K) == 0);
+    const int    blocks_per_expert = (int) (expert_bytes / sizeof(block_q5_K));
+    const size_t total_bytes       = expert_bytes * (size_t) n_expert;
+
+    sycl_reorder_temp_buffer tmp(stream, total_bytes);
+    if (!tmp) {
+        GGML_LOG_WARN("%s: failed to allocate %zu bytes for reorder temp buffer, skipping reorder\n", __func__, total_bytes);
+        return false;
+    }
+    uint8_t * tmp_buf = static_cast<uint8_t *>(tmp.ptr);
+
+    sycl::event copy_event;
+    SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, total_bytes)));
+    if (!g_ggml_sycl_use_async_mem_op) {
+        copy_event.wait();
+    }
+
+    const int total_blocks = blocks_per_expert * (int) n_expert;
+    auto reorder_event = stream->parallel_for(total_blocks, [=](auto gb_) {
+        const int          gb   = gb_;
+        const int          e    = gb / blocks_per_expert;
+        const int          ib   = gb % blocks_per_expert;
+        const block_q5_K * x    = (const block_q5_K *) (tmp_buf + (size_t) e * expert_bytes);
+        uint8_t *          base = data_device + (size_t) e * expert_bytes;
+
+        auto * qs_ptr     = base;
+        auto * qh_ptr     = qs_ptr + (QK_K / 2) * blocks_per_expert;
+        auto * scales_ptr = qh_ptr + (QK_K / 8) * blocks_per_expert;
+        auto * dm_ptr     = (sycl::half2 *) (scales_ptr + K_SCALE_SIZE * blocks_per_expert);
+
+        for (int j = 0; j < QK_K / 2; ++j) {
+            qs_ptr[ib * (QK_K / 2) + j] = x[ib].qs[j];
+        }
+        for (int j = 0; j < QK_K / 8; ++j) {
+            qh_ptr[ib * (QK_K / 8) + j] = x[ib].qh[j];
+        }
+        for (int j = 0; j < K_SCALE_SIZE; ++j) {
+            scales_ptr[ib * K_SCALE_SIZE + j] = x[ib].scales[j];
+        }
+        dm_ptr[ib] = x[ib].dm;
+    });
+    if (!g_ggml_sycl_use_async_mem_op) {
+        reorder_event.wait_and_throw();
+    }
+    return true;
+}
+
+// Reorder each Q6_K expert slice into [ql][qh][scales][d].
+static bool reorder_qw_q6_k_moe(uint8_t * data_device, size_t expert_bytes, int64_t n_expert, dpct::queue_ptr stream) {
+    GGML_ASSERT(expert_bytes % sizeof(block_q6_K) == 0);
+    const int    blocks_per_expert = (int) (expert_bytes / sizeof(block_q6_K));
+    const size_t total_bytes       = expert_bytes * (size_t) n_expert;
+
+    sycl_reorder_temp_buffer tmp(stream, total_bytes);
+    if (!tmp) {
+        GGML_LOG_WARN("%s: failed to allocate %zu bytes for reorder temp buffer, skipping reorder\n", __func__, total_bytes);
+        return false;
+    }
+    uint8_t * tmp_buf = static_cast<uint8_t *>(tmp.ptr);
+
+    sycl::event copy_event;
+    SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, total_bytes)));
+    if (!g_ggml_sycl_use_async_mem_op) {
+        copy_event.wait();
+    }
+
+    const int total_blocks = blocks_per_expert * (int) n_expert;
+    auto reorder_event = stream->parallel_for(total_blocks, [=](auto gb_) {
+        const int          gb   = gb_;
+        const int          e    = gb / blocks_per_expert;
+        const int          ib   = gb % blocks_per_expert;
+        const block_q6_K * x    = (const block_q6_K *) (tmp_buf + (size_t) e * expert_bytes);
+        uint8_t *          base = data_device + (size_t) e * expert_bytes;
+
+        auto * ql_ptr     = base;
+        auto * qh_ptr     = ql_ptr + (QK_K / 2) * blocks_per_expert;
+        auto * scales_ptr = qh_ptr + (QK_K / 4) * blocks_per_expert;
+        auto * d_ptr      = (sycl::half *) (scales_ptr + (QK_K / 16) * blocks_per_expert);
+
+        for (int j = 0; j < QK_K / 2; ++j) {
+            ql_ptr[ib * (QK_K / 2) + j] = x[ib].ql[j];
+        }
+        for (int j = 0; j < QK_K / 4; ++j) {
+            qh_ptr[ib * (QK_K / 4) + j] = x[ib].qh[j];
+        }
+        for (int j = 0; j < QK_K / 16; ++j) {
+            scales_ptr[ib * (QK_K / 16) + j] = x[ib].scales[j];
+        }
+        d_ptr[ib] = x[ib].d;
+    });
+    if (!g_ggml_sycl_use_async_mem_op) {
+        reorder_event.wait_and_throw();
+    }
+    return true;
+}
+
 static bool reorder_qw_q3_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
     GGML_ASSERT(size % sizeof(block_q3_K) == 0);
     GGML_ASSERT(offset % sizeof(block_q3_K) == 0);
@@ -3948,6 +4057,22 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
     size_t nrows = src0->ne[1];
     size_t size = ggml_nbytes(src0);
 
+    // MoE expert weights are addressed per expert via nb[2], so each slice must
+    // remain self-contained after reorder.
+    if (src0->ne[2] > 1) {
+        GGML_ASSERT((size_t) size == (size_t) src0->ne[2] * src0->nb[2]);
+        switch (src0->type) {
+            case GGML_TYPE_Q4_K:
+                return reorder_qw_q4_k_moe(data_device, src0->nb[2], src0->ne[2], stream);
+            case GGML_TYPE_Q5_K:
+                return reorder_qw_q5_k_moe(data_device, src0->nb[2], src0->ne[2], stream);
+            case GGML_TYPE_Q6_K:
+                return reorder_qw_q6_k_moe(data_device, src0->nb[2], src0->ne[2], stream);
+            default:
+                return false;
+        }
+    }
+
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
             return reorder_qw_q4_0(data_device, ncols, nrows, size, 0, stream);
@@ -3962,7 +4087,6 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
         case GGML_TYPE_Q6_K:
             return reorder_qw_q6_k(data_device, size, 0, stream);
         default:
-            GGML_ABORT("reorder_qw() called with unsupported type");
             return false;
     }
 }
@@ -4007,6 +4131,23 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
 
     if (reorder_qw(src0, ctx->stream())) {
         extra->optimized_feature.reorder = true;  // Used to decode/dequan in next steps and avoid re-reordering
+    }
+}
+
+// Lazily reorder supported MoE expert weights once their fused path is used.
+static void opt_for_reorder_id(ggml_backend_sycl_context * ctx, const ggml_tensor * src0) {
+    if (g_ggml_sycl_disable_optimize || !ctx->opt_feature.reorder) {
+        return;
+    }
+    if (src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K && src0->type != GGML_TYPE_Q6_K) {
+        return;
+    }
+    ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+    if (!extra || extra->optimized_feature.reorder) {
+        return;
+    }
+    if (reorder_qw(src0, ctx->stream())) {
+        extra->optimized_feature.reorder = true;
     }
 }
 
@@ -4115,11 +4256,6 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
 }
 
 
-struct mmid_row_mapping {
-    int32_t i1;
-    int32_t i2;
-};
-
 __dpct_inline__ static void k_copy_src1_to_contiguous(
     const char *__restrict__ src1_original, char *__restrict__ src1_contiguous,
     const mmid_row_mapping *__restrict__ row_mapping,
@@ -4175,11 +4311,6 @@ static bool ggml_sycl_mul_mat_id_mmvq_fused(
     if (ne10 != src0->ne[0] || ne10 % QK8_1 != 0) return false;
     if (!ggml_is_contiguous(src1)) return false;
 
-    // Reorder layout not supported; fall back.
-    const ggml_tensor_extra_gpu * src0_extra =
-        static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
-    if (src0_extra && src0_extra->optimized_feature.reorder) return false;
-
     const int64_t n_ids_per_group = ids->ne[0];
     if (ids->ne[1] != 1) return false;
     if (ne11 != 1 && ne11 != n_ids_per_group) return false;
@@ -4189,16 +4320,37 @@ static bool ggml_sycl_mul_mat_id_mmvq_fused(
     const int       n_experts_used   = (int) n_ids_per_group;
     const int       nrows            = (int) src0->ne[1];
 
+    // Lazily reorder the (Q4_K) expert weights into a per-expert SoA layout, then run the reorder
+    // GEMV. Placed after the bail checks so a non-dispatchable op does not pay the reorder cost.
+    opt_for_reorder_id(&ctx, src0);
+    const ggml_tensor_extra_gpu * src0_extra =
+        static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+    const bool use_reorder = src0_extra && src0_extra->optimized_feature.reorder;
+
     ggml_sycl_pool_alloc<char> src1_q8_alloc(ctx.pool(),
         (size_t) ne11 * src1_padded_cols * sizeof(block_q8_1) / QK8_1);
     char * src1_ddq = src1_q8_alloc.get();
-    quantize_row_q8_1_sycl<quantize_q8_1>(
-        (const float *) src1->data, src1_ddq, (int) ne10, (int) ne11,
-        src1_padded_cols, stream);
+    if (use_reorder) {
+        quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+            (const float *) src1->data, src1_ddq, (int) ne10, (int) ne11,
+            src1_padded_cols, stream);
+    } else {
+        quantize_row_q8_1_sycl<quantize_q8_1>(
+            (const float *) src1->data, src1_ddq, (int) ne10, (int) ne11,
+            src1_padded_cols, stream);
+    }
 
     const size_t bytes_per_qrow = (size_t) src1_padded_cols * sizeof(block_q8_1) / QK8_1;
     const size_t src1_row_stride = (ne11 == 1) ? 0 : bytes_per_qrow;
 
+    if (use_reorder) {
+        return ggml_sycl_mul_mat_vec_q_id_reorder(
+            src0->type, src0->data, src1_ddq, (const int32_t *) ids->data,
+            (float *) dst->data, (int) ne10, nrows, n_experts_used,
+            /*expert_weight_stride=*/ src0->nb[2],
+            /*dst_row_stride=*/ dst->nb[1],
+            src1_row_stride, stream);
+    }
     return ggml_sycl_mul_mat_vec_q_id(
         src0->type, src0->data, src1_ddq, (const int32_t *) ids->data,
         (float *) dst->data, (int) ne10, nrows, n_experts_used,
@@ -4274,6 +4426,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
 
     SYCL_CHECK(CHECK_TRY_ERROR(
         stream->memcpy(ids_host.data(), ids_dev, ggml_nbytes(ids))));
+
+    // also ensures ctx.mmid_row_mapping_host is drained before we use it again
     SYCL_CHECK(CHECK_TRY_ERROR(stream->wait()));
 
     ggml_tensor src0_row = *src0;
@@ -4331,7 +4485,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         // where each expert's slice starts and the previous ends (row indices, right-exclusive)
         std::vector<int64_t> expert_row_offsets;
         // the sources (slot/token pairs) of contiguous rows to guide k_copy_src1_to_contiguous
-        std::vector<mmid_row_mapping> routed_row_src;
+        std::vector<mmid_row_mapping> & routed_row_src = ctx.mmid_row_mapping_host;
 
         mmid_counting_sort_rows(ids, ids_host.data(), n_ids, n_as, n_routed_rows,
                                 expert_row_counts, expert_row_offsets, routed_row_src);
@@ -4435,6 +4589,11 @@ static void ggml_sycl_pool2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
     ggml_sycl_op_pool2d(ctx, dst);
 }
 
+static void ggml_sycl_pool1d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_pool1d(ctx, dst);
+}
+
 static void ggml_sycl_im2col(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     ggml_sycl_op_im2col(ctx, dst);
@@ -4443,6 +4602,11 @@ static void ggml_sycl_im2col(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
 static void ggml_sycl_im2col_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     ggml_sycl_op_im2col_3d(ctx, dst);
+}
+
+static void ggml_sycl_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    ggml_sycl_op_conv_3d(ctx, dst);
 }
 
 static void ggml_sycl_sum(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -4508,8 +4672,20 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_ARGMAX:
             ggml_sycl_argmax(ctx, dst);
             break;
+        case GGML_OP_CONV_2D:
+            ggml_sycl_op_conv2d(ctx, dst);
+            break;
+        case GGML_OP_CONV_2D_DW:
+            ggml_sycl_op_conv2d_dw(ctx, dst);
+            break;
+        case GGML_OP_CONV_3D:
+            ggml_sycl_conv_3d(ctx, dst);
+            break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             ggml_sycl_op_conv_transpose_1d(ctx, dst);
+            break;
+        case GGML_OP_CONV_TRANSPOSE_2D:
+            ggml_sycl_op_conv2d_transpose(ctx, dst);
             break;
         case GGML_OP_REPEAT:
             ggml_sycl_repeat(ctx, dst);
@@ -4591,6 +4767,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
                     break;
                 case GGML_UNARY_OP_EXP:
                     ggml_sycl_exp(ctx, dst);
+                    break;
+                case GGML_UNARY_OP_EXPM1:
+                    ggml_sycl_expm1(ctx, dst);
                     break;
                 case GGML_UNARY_OP_SOFTPLUS:
                     ggml_sycl_softplus(ctx, dst);
@@ -4747,6 +4926,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             break;
         case GGML_OP_POOL_2D:
             ggml_sycl_pool2d(ctx, dst);
+            break;
+        case GGML_OP_POOL_1D:
+            ggml_sycl_pool1d(ctx, dst);
             break;
         case GGML_OP_SUM:
             ggml_sycl_sum(ctx, dst);
@@ -5208,7 +5390,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_device_buffer_from_host_ptr(ggml_
     return nullptr;
 }
 
-static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_sycl_device_context *sycl_ctx =
         (ggml_backend_sycl_device_context *)dev->context;
     int device = sycl_ctx->device;
@@ -5222,6 +5404,10 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 }
                 return false;
             }
+        case GGML_OP_CONV_2D:
+        case GGML_OP_CONV_2D_DW:
+        case GGML_OP_CONV_TRANSPOSE_2D:
+            return true;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {
                 case GGML_UNARY_OP_SGN:
@@ -5238,6 +5424,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_GELU_ERF:
                 case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_EXPM1:
                 case GGML_UNARY_OP_SOFTPLUS:
                 case GGML_UNARY_OP_ELU:
                 case GGML_UNARY_OP_CEIL:
@@ -5245,11 +5432,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_FLOOR:
                 case GGML_UNARY_OP_ROUND:
                 case GGML_UNARY_OP_TRUNC:
-#if defined (GGML_SYCL_F16)
-                    return ggml_is_contiguous(op->src[0]) && (op->type == op->src[0]->type);
-#else
-                    return ggml_is_contiguous(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) && (op->type == op->src[0]->type);
-#endif
+                    return true;
                 default:
                     return false;
             }
@@ -5272,18 +5455,11 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 struct ggml_tensor * a = op->src[0];
                 struct ggml_tensor * b = op->src[1];
 
-                // disable Q1_0 until implementation
-                if (a->type == GGML_TYPE_Q1_0 || b->type == GGML_TYPE_Q1_0) {
-                    return false;
-                }
-
                 if (a->ne[3] != b->ne[3]) {
                     return false;
                 }
 
                 ggml_type src0_type = op->src[0]->type;
-
-
 
                 // TODO: The configuration below needs more work to be supported with oneDNN
                 if (ggml_is_permuted(a) && !ggml_is_contiguous(a) &&
@@ -5294,12 +5470,17 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 // TODO: This specific configuration can fail with oneDNN and needs more debugging
                 if (!ggml_is_permuted(a) && ggml_is_permuted(b) && b->ne[2] > 1 && b->ne[3] > 1 &&
                     a->ne[0] > 128 && a->ne[2] == 1 && src0_type == GGML_TYPE_F16) {
+                        printf("zjy 2\n");
                     return false;
                 }
                 return true;
             }
         case GGML_OP_OUT_PROD:
-            return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->ne[2] == 1 && op->ne[3] == 1;
+            return op->type == GGML_TYPE_F32 &&
+                   (op->src[0]->type == GGML_TYPE_F32 ||
+                    (op->src[0]->type == GGML_TYPE_Q1_0 && op->src[0]->ne[2] == op->src[1]->ne[2] &&
+                     op->src[0]->ne[3] == op->src[1]->ne[3])) &&
+                   op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_GET_ROWS:
             {
                 switch (op->src[0]->type) {
@@ -5342,10 +5523,15 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
 
         case GGML_OP_SET_ROWS:
             {
-                return ((op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16 ||
+
+                auto res = ((op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16 ||
                          op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q5_0 ||
-                         op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_IQ4_NL) &&
+                         op->type == GGML_TYPE_Q1_0 ||
+                         op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_IQ4_NL ||
+                         op->type == GGML_TYPE_MXFP4 || op->type == GGML_TYPE_NVFP4) &&
+                        op->src[0]->type == GGML_TYPE_F32 &&
                         (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32));
+                return res;
             }
             break;
         case GGML_OP_CPY:
@@ -5447,11 +5633,6 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_COS:
         case GGML_OP_CLAMP:
         case GGML_OP_LOG:
-#if defined (GGML_SYCL_F16)
-            return ((op->type == GGML_TYPE_F32 || op->type == GGML_SYCL_F16) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_SYCL_F16) && (op->type == op->src[0]->type));
-#else
-            return (op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32) && (op->type == op->src[0]->type);
-#endif
         case GGML_OP_NORM:
         case GGML_OP_L2_NORM:
         case GGML_OP_GROUP_NORM:
@@ -5485,6 +5666,12 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_IM2COL_3D:
         case GGML_OP_UPSCALE:
             return true;
+        case GGML_OP_CONV_3D:
+            return op->type == GGML_TYPE_F32 &&
+                   (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   ggml_is_contiguous(op->src[0]) &&
+                   ggml_is_contiguous(op->src[1]);
         case GGML_OP_SUM:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:
@@ -5502,6 +5689,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 k > 0 && k <= 32;
         }
         case GGML_OP_POOL_2D:
+        case GGML_OP_POOL_1D:
             return true;
         case GGML_OP_ACC:
             return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
@@ -5547,6 +5735,13 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
     }
 
     GGML_UNUSED(dev);
+}
+
+static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    bool res = do_ggml_backend_sycl_device_supports_op(dev, op);
+    GGML_SYCL_DEBUG("[SYCL] call %s op->op=%s op->type=%s -> %s\n", __func__, ggml_op_name(op->op),
+                    ggml_type_name(op->type), res ? "true" : "false");
+    return res;
 }
 
 static bool ggml_backend_sycl_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {

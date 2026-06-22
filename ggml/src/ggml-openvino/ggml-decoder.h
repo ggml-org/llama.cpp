@@ -1,6 +1,7 @@
 #pragma once
 
-#include "ggml-quants.h"
+#include "ggml-backend-impl.h"
+#include "ggml-backend.h"
 #include "ggml.h"
 #include "openvino/decoder.h"
 
@@ -14,21 +15,21 @@
 
 struct ModelParams {
     int ctx = -1;
-    int ctx_swa = -1;
     int ctx_per_seq = -1;
     int ctx_per_seq_swa = -1;
     int n_seq = 1;
-    int n_heads = -1;
     int n_heads_kv = -1;
     int head_size = -1;
     int32_t rope_params[15];
+    bool mixed_rope_params = false;
     std::vector<int> swa_layers;
 
     std::vector<std::string> kv_names;
     size_t kv_buffer_ctx_id = 0;
 
     bool same_rope_params(const ModelParams & other) const {
-        return memcmp(rope_params, other.rope_params, sizeof(int32_t) * 15) == 0;
+        return mixed_rope_params == other.mixed_rope_params &&
+               memcmp(rope_params, other.rope_params, sizeof(int32_t) * 15) == 0;
     }
 
     bool can_reuse_dynamically(const ModelParams & other) const { return same_rope_params(other); }
@@ -56,12 +57,14 @@ public:
         std::string node_name;
         std::string node_op_type;
         std::map<std::string, ggml_tensor *> node_inputs;
+        std::map<std::string, std::vector<std::pair<std::string, ggml_tensor *>>> node_inputs_views;
         std::vector<std::string> node_inputs_names;
         ggml_tensor * node_output;
         std::string node_output_name;
         int node_op_case = 0;
         void * data_addr;
     };
+
     // Graph decoder
     GgmlOvDecoder(ggml_cgraph * cgraph,
                   ModelParams & model_params,
@@ -69,6 +72,7 @@ public:
                   std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
                   bool is_static,
                   bool is_stateful = false,
+                  bool model_is_splitted = false,
                   bool is_prefill = false,
                   int prefill_chunk_size = 256);
 
@@ -83,6 +87,42 @@ public:
     virtual ov::PartialShape get_input_shape(int node_idx, const std::string & name) const override;
 
     virtual std::vector<size_t> get_input_stride(int node_idx, const std::string & name) const override;
+
+    virtual size_t get_view_input_size(int node_idx, const std::string & name) const override;
+
+    virtual size_t get_view_input_offset(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual size_t get_view_input_src_offset(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual std::vector<size_t> get_view_input_stride(int node_idx,
+                                                      const std::string & name,
+                                                      size_t view_index) const override;
+
+    virtual std::vector<size_t> get_view_input_src_stride(int node_idx,
+                                                          const std::string & name,
+                                                          size_t view_index) const override;
+
+    virtual ov::Shape get_view_input_ggml_shape(int node_idx,
+                                                const std::string & name,
+                                                size_t view_index) const override;
+
+    virtual ov::Shape get_view_input_src_ggml_shape(int node_idx,
+                                                    const std::string & name,
+                                                    size_t view_index) const override;
+
+    virtual ov::PartialShape get_view_input_ov_shape(int node_idx,
+                                                     const std::string & name,
+                                                     size_t view_index) const override;
+
+    virtual ov::PartialShape get_view_input_src_ov_shape(int node_idx,
+                                                         const std::string & name,
+                                                         size_t view_index) const override;
+
+    virtual std::string get_view_input_name(int node_idx, const std::string & name, size_t view_index) const override;
+
+    virtual std::string get_view_input_src_name(int node_idx,
+                                                const std::string & name,
+                                                size_t view_index) const override;
 
     virtual ov::element::Type get_input_type(int node_idx, const std::string & name) const override;
 
@@ -106,9 +146,13 @@ public:
 
     virtual ov::element::Type get_output_type(int node_idx) const override;
 
+    virtual std::vector<size_t> get_output_stride(int node_idx) const override;
+
     virtual int32_t * get_input_op_params(int node_idx, const std::string & name) const override;
 
     virtual int32_t * get_output_op_params(int node_idx) const override;
+
+    virtual size_t get_output_op_offset(int node_idx) const override;
 
     virtual std::vector<std::string> get_output_names(int node_idx) const override;
 
@@ -120,7 +164,10 @@ public:
 
     virtual const std::string & get_op_name(int node_idx) const override;
 
-    virtual void visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>, int node_idx)> node_visitor) const override;
+    virtual int32_t get_op_dynamic_dim(int node_idx) const override;
+
+    virtual void visit_subgraph(
+        std::function<void(std::shared_ptr<GgmlDecoder>, int node_idx)> node_visitor) const override;
 
     ggml_tensor * get_input_ggml_tensor(const std::string & name) const { return m_inputs.at(name); }
 
@@ -142,15 +189,11 @@ public:
         return m_model_weights;
     }
 
-    virtual std::vector<std::string> get_model_output_names() const override {
-        return m_model_output_names;
-    }
+    virtual std::vector<std::string> get_model_output_names() const override { return m_model_output_names; }
 
     const std::map<std::string, ggml_tensor *> & get_model_outputs() const { return m_model_outputs; }
 
     virtual int get_ctx_size() const { return m_model_params.ctx; }
-
-    virtual int get_ctx_swa_size() const { return m_model_params.ctx_swa; }
 
     virtual int get_ctx_per_seq() const { return m_model_params.ctx_per_seq; }
 
@@ -169,13 +212,21 @@ public:
 
     virtual int32_t * get_rope_params() const override { return const_cast<int32_t *>(m_model_params.rope_params); }
 
+    virtual bool has_mixed_rope_params() const override { return m_model_params.mixed_rope_params; }
+
     virtual std::map<std::string, std::string> get_kv_param_res_names() const override;
 
     virtual bool is_static() const override { return m_is_static; }
 
     virtual bool is_stateful() const override { return m_is_stateful; }
 
-    ov::PartialShape get_graph_input_shape(const ggml_tensor * op, const ggml_tensor * input) const;
+    int get_static_n_tokens() const { return m_is_prefill ? m_prefill_chunk_size : 1; }
+
+    virtual bool is_splited_model() const override { return m_model_is_splitted; }
+
+    ov::PartialShape get_graph_input_shape(const ggml_tensor * op,
+                                           const ggml_tensor * input,
+                                           int dynamic_dim_index = -1) const;
 
     static void dump_cgraph(const ggml_cgraph * cgraph, std::string & filename);
 
@@ -205,6 +256,7 @@ public:
     bool m_is_prefill = false;
     bool m_naive = false;
     int m_prefill_chunk_size = 0;
+    bool m_model_is_splitted = false;  // label the cgraph is splited or not
 
     static ov::Shape get_shape(const ggml_tensor * tensor);
     static std::vector<size_t> get_stride(const ggml_tensor * tensor);
@@ -227,7 +279,8 @@ public:
     }
 
     inline static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {
-        return op->op == GGML_OP_CPY || (op->op == GGML_OP_FLASH_ATTN_EXT && tensor == op->src[3]);
+        return op->op == GGML_OP_CPY || (op->op == GGML_OP_FLASH_ATTN_EXT && tensor == op->src[3]) ||
+               (op->op == GGML_OP_SOFT_MAX && tensor == op->src[1]);
     }
 
     inline static bool is_rope_freqs_weight(const ggml_tensor * tensor, const ggml_tensor * op) {
@@ -235,7 +288,8 @@ public:
     }
 
     inline static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
-        return op->op == GGML_OP_SET_ROWS && op->src[2] == tensor;
+        return tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY ||
+               (op != nullptr && op->op == GGML_OP_SET_ROWS && op->src[2] == tensor);
     }
 
     inline static bool is_kv_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
@@ -243,23 +297,18 @@ public:
     }
 
     inline static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
-        return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE;
+        return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE &&
+               op->src[1]->op == GGML_OP_NONE;
     }
 
-    static std::string get_graph_input_ov_name(const ggml_tensor * tensor, const ggml_tensor * op) {
-        if (is_inp_tok(tensor, op)) {
-            return "inp_tokens";
-        }
+    std::string get_graph_input_ov_name(const ggml_tensor * tensor, const ggml_tensor * op) {
         if (is_inp_pos(tensor, op)) {
             return "inp_pos";
         }
         if (is_inp_emb(tensor, op)) {
             return "embd";
         }
-        if (is_output_idx(tensor, op)) {
-            return "inp_out_ids";
-        }
-        if (is_inp_mask(tensor, op)) {
+        if (is_stateful() && is_inp_mask(tensor, op)) {
             return std::string(tensor->name).find("swa") == std::string::npos ? "self_kq_mask" : "self_kq_mask_swa";
         }
         return tensor->name;
@@ -271,6 +320,9 @@ private:
     bool node_is_used_as_src(const int node_idx);
     void compute_model_inputs();
     void compute_model_outputs();
+
+    // Infer and propagate dynamic-dimension indices for all tensors in the GGML graph.
+    void compute_node_dynamic_dims();
 
     void validate_cgraph() const;
 
@@ -284,6 +336,7 @@ private:
     std::map<std::string, ggml_tensor *> m_model_outputs;
     std::vector<std::string> m_model_output_names;
     std::vector<NodeInfo> m_node_info_list;
+    std::map<ggml_tensor *, int> m_node_dynamic_dims;
 
     ModelParams m_model_params;
     ComputeParams m_compute_params;
@@ -291,4 +344,4 @@ private:
 
 void print_tensor_address_map(const ggml_cgraph * cgraph);
 
-int extract_layer_from_name(const std::string & name);
+std::optional<int> extract_layer_from_name(const std::string & name);

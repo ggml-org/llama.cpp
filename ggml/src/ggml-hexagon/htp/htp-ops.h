@@ -146,10 +146,36 @@ struct htp_op_desc {
     uint16_t dst;                       // Output tensor index
 };
 
+#ifndef HTP_MAX_NTHREADS
+#define HTP_MAX_NTHREADS 10
+#endif
+
+#define HTP_TRACE_MAX_EVENTS 256
+
 enum htp_profiler_mode {
     HTP_PROF_DISABLED = 0,
     HTP_PROF_BASIC    = 1,
     HTP_PROF_PMU      = 2,
+    HTP_PROF_TRACE    = 3,
+};
+
+enum htp_trace_event_id {
+    HTP_TRACE_EVT_DMA                 = 0,
+
+    HTP_TRACE_EVT_HVX_COMP            = 20,
+    HTP_TRACE_EVT_HVX_A_QUANT         = 21,
+    HTP_TRACE_EVT_HVX_A_PREP          = 22,
+    HTP_TRACE_EVT_HVX_W_DEQUANT       = 23,
+    HTP_TRACE_EVT_HVX_W_PREP          = 24,
+    HTP_TRACE_EVT_HVX_O_PROC          = 25,
+
+    HTP_TRACE_EVT_HMX_COMP            = 40,
+};
+
+struct htp_trace_desc {
+    uint32_t cycles;  // lower 32-bits of cycle counter
+    uint16_t id;      // Event ID
+    uint16_t info;    // bit 15: is_stop. bits 14-0: tile/chunk index or other metadata.
 };
 
 #define HTP_PROF_PMU_NCNT 8
@@ -158,8 +184,8 @@ enum htp_profiler_mode {
 struct htp_prof_desc {
     uint32_t opcode;                 // GGML/HTP Op
     uint32_t usecs;                  // Number of usec
-    uint32_t cycles;                 // Number of cycles
-    uint32_t pad;                    // Unused
+    uint32_t cycles_start;           // Start cycle counter
+    uint32_t cycles_stop;            // Stop cycle counter
     uint32_t pmu[HTP_PROF_PMU_NCNT]; // PMU counters
 };
 
@@ -168,7 +194,7 @@ struct htp_opbatch_req {
     uint32_t n_bufs;      // Number of buffers
     uint32_t n_tensors;   // Number of tensors
     uint32_t n_ops;       // Number of ops
-    uint32_t flags;       // unused
+    uint32_t n_traces;    // Number of trace descriptors per thread
     uint32_t pad;         // unused
     // struct htp_buf_desc  bufs[];    -- dspqueue buf 0
     // struct htp_tensor    tensors[]; -- dspqueue buf 0
@@ -181,7 +207,8 @@ struct htp_opbatch_rsp {
     uint32_t n_bufs;     // Number of buffers
     uint32_t n_tensors;  // Number of tensors
     uint32_t n_ops;      // Number of op profile descriptors
-    uint32_t pad;        // unused
+    uint32_t n_traces[HTP_MAX_NTHREADS + 1];
+    uint8_t  pad[8];     // align to 8 bytes
     // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 

@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.47.0"
-#define CPPHTTPLIB_VERSION_NUM "0x002f00"
+#define CPPHTTPLIB_VERSION "0.48.0"
+#define CPPHTTPLIB_VERSION_NUM "0x003000"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -686,18 +686,70 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
   return {p, std::errc{}};
 }
 
-// from_chars for double (simple wrapper for strtod)
+// from_chars for double (hand-written, locale-independent)
+//
+// The only double consumed by this library is the HTTP quality value, whose
+// grammar is (RFC 9110 12.4.2):
+//   qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] )
+// i.e. a non-negative decimal with no sign, exponent, "inf"/"nan", or wide
+// magnitude. So this parser recognizes exactly  1*DIGIT [ "." *DIGIT ]  with
+// '.' always the decimal separator (std::strtod would instead read it from the
+// global C locale, mis-parsing q-values once an embedder calls
+// setlocale(LC_ALL, "") into a comma-decimal locale). The caller range-checks
+// the result to [0, 1], so inputs outside that range need not be distinguished
+// here. Allocation-free, single pass, and free of the overflow/rounding edge
+// cases that exponent and wide-range handling would introduce.
 inline from_chars_result<double> from_chars(const char *first, const char *last,
                                             double &value) {
-  std::string s(first, last);
-  char *endptr = nullptr;
-  errno = 0;
-  value = std::strtod(s.c_str(), &endptr);
-  if (endptr == s.c_str()) { return {first, std::errc::invalid_argument}; }
-  if (errno == ERANGE) {
-    return {first + (endptr - s.c_str()), std::errc::result_out_of_range};
+  value = 0.0;
+  const char *p = first;
+
+  // Each 1eN is exactly representable, so a single final division by the
+  // matching entry yields a correctly-rounded result.
+  static const double powers_of_ten[] = {
+      1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8, 1e9,
+      1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18};
+  const int max_frac_digits =
+      static_cast<int>(sizeof(powers_of_ten) / sizeof(powers_of_ten[0])) - 1;
+
+  // Accumulate digits into a 64-bit integer and remember how many were
+  // fractional. Two independent caps keep this bounded and safe:
+  //   * accumulation saturates before mantissa could overflow uint64_t, and
+  //   * frac_digits is capped at max_frac_digits so it is always a valid index
+  //     into powers_of_ten (without this an input like "0.000...0" would never
+  //     grow mantissa, so the saturation cap alone would not bound it).
+  // Both caps only drop digits far beyond the precision a q-value needs; any
+  // value they would change is well outside [0, 1] and rejected by the caller.
+  uint64_t mantissa = 0;
+  int frac_digits = 0;
+  bool seen_digit = false;
+
+  const uint64_t limit = ((std::numeric_limits<uint64_t>::max)() - 9) / 10;
+  auto accumulate = [&](char c) {
+    if (mantissa <= limit) {
+      mantissa = mantissa * 10 + static_cast<uint64_t>(c - '0');
+      return true;
+    }
+    return false;
+  };
+
+  for (; p != last && '0' <= *p && *p <= '9'; ++p) {
+    seen_digit = true;
+    accumulate(*p);
   }
-  return {first + (endptr - s.c_str()), std::errc{}};
+
+  if (p != last && *p == '.') {
+    ++p;
+    for (; p != last && '0' <= *p && *p <= '9'; ++p) {
+      seen_digit = true;
+      if (frac_digits < max_frac_digits && accumulate(*p)) { ++frac_digits; }
+    }
+  }
+
+  if (!seen_digit) { return {first, std::errc::invalid_argument}; }
+
+  value = static_cast<double>(mantissa) / powers_of_ten[frac_digits];
+  return {p, std::errc{}};
 }
 
 inline bool parse_port(const char *s, size_t len, int &port) {
@@ -2826,13 +2878,6 @@ private:
 #endif
 
   friend class ClientImpl;
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-private:
-  bool verify_host(X509 *server_cert) const;
-  bool verify_host_with_subject_alt_name(X509 *server_cert) const;
-  bool verify_host_with_common_name(X509 *server_cert) const;
-#endif
 };
 #endif // CPPHTTPLIB_SSL_ENABLED
 

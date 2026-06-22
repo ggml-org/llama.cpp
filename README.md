@@ -37,7 +37,7 @@ LLM inference in C/C++
 
 Getting started with llama.cpp is straightforward. Here are several ways to install it on your machine:
 
-- Install `llama.cpp` using [brew, nix or winget](docs/install.md)
+- Install `llama.cpp` using [brew, nix, winget, or conda-forge](docs/install.md)
 - Run with Docker - see our [Docker documentation](docs/docker.md)
 - Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
 - Build from source by cloning this repository - check out [our build guide](docs/build.md)

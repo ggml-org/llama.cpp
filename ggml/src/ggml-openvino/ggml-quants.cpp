@@ -126,6 +126,68 @@ void extract_q4_1_data(const ggml_tensor * tensor,
     }
 }
 
+// Extracts (weight, scales, zp) from Q5_1 tensors.
+// Data layout is: |16 bit scale|16 bit min|32 bit qh (5th bits)|32 x 4bit low nibbles|.
+// Reconstructed quant q in [0,31]: q = (low nibble) | (qh_bit << 4). Dequant: w*d + m.
+// Weights are stored as u8 (5-bit values do not fit u4), matching make_int8_weights.
+void extract_q5_1_data(const ggml_tensor * tensor,
+                       ov::Tensor & weights_arr,
+                       ov::Tensor & scales_arr,
+                       ov::Tensor & zp_arr,
+                       bool use_bias) {
+    const uint64_t bytes_per_block = 24;  // 2 scale + 2 min + 4 qh + 16 (32x0.5) weights
+    const int qk = 32;
+
+    auto * data = static_cast<uint8_t *>(tensor->data);
+    auto * weights = static_cast<uint8_t *>(weights_arr.data());  // u8 weights, one byte per weight
+    auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+
+    // Read a 16-bit little-endian value without aliasing/const-qual violations.
+    auto read_u16 = [](const uint8_t * p) {
+        uint16_t v;
+        memcpy(&v, p, sizeof(v));
+        return v;
+    };
+
+    auto unpack_block = [&](const uint8_t * block, uint8_t * dst) {
+        uint32_t qh;
+        memcpy(&qh, block + 4, sizeof(uint32_t));
+        const uint8_t * qs = block + 8;
+        for (int j = 0; j < qk / 2; ++j) {
+            const uint8_t lo = qs[j] & 0x0F;
+            const uint8_t hi = qs[j] >> 4;
+            const uint8_t bit_lo = (qh >> j) & 1;
+            const uint8_t bit_hi = (qh >> (j + qk / 2)) & 1;
+            dst[j] = lo | (bit_lo << 4);           // first 16 weights
+            dst[j + qk / 2] = hi | (bit_hi << 4);  // last 16 weights
+        }
+    };
+
+    if (use_bias) {
+        // Store bias (min) directly as f16: dequant w*d + m
+        auto * bias = zp_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+        ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+            const uint8_t * block = data + i * bytes_per_block;
+            float scale = static_cast<float>(ov::float16::from_bits(read_u16(block)));
+            float min = static_cast<float>(ov::float16::from_bits(read_u16(block + 2)));
+            scales[i] = ov::float16(scale);
+            bias[i] = ov::float16(min);
+            unpack_block(block, weights + i * qk);
+        });
+    } else {
+        auto * zp = static_cast<uint8_t *>(zp_arr.data());  // u8 zero points
+        ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+            const uint8_t * block = data + i * bytes_per_block;
+            float scale = static_cast<float>(ov::float16::from_bits(read_u16(block)));
+            float min = static_cast<float>(ov::float16::from_bits(read_u16(block + 2)));
+            scales[i] = ov::float16(scale);
+            // zp = -min / scale (dequant: (w - zp) * s == w*s + min)
+            zp[i] = (scale != 0.0f) ? (uint8_t) std::lround(-min / scale) : 0;
+            unpack_block(block, weights + i * qk);
+        });
+    }
+}
+
 // Extracts (weight, scales, zp) from Q8_0 tensors.
 // Data layout is: |16 bit scale|32 x 8bit weights|.
 // When zp_arr is empty (symmetric), weights are stored as signed i8 directly.
@@ -577,6 +639,7 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
         weights_per_block = 32;
         break;
     case GGML_TYPE_Q8_0:
+    case GGML_TYPE_Q5_1:
     case GGML_TYPE_Q5_K:
         is_u4 = false;
         weights_per_block = 32;
@@ -600,6 +663,9 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
         break;
     case GGML_TYPE_Q4_K:
         extract_q4_k_data(&temp_tensor, weights, scales, zp, use_bias);
+        break;
+    case GGML_TYPE_Q5_1:
+        extract_q5_1_data(&temp_tensor, weights, scales, zp, use_bias);
         break;
     case GGML_TYPE_Q8_0:
         extract_q8_0_data(&temp_tensor, weights, scales, zp);
