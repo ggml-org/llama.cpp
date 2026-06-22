@@ -1807,7 +1807,7 @@ struct clip_model_loader {
 
             int idx = gguf_find_tensor(ctx_gguf.get(), name.c_str());
             if (idx <= 0) {
-                throw std::runtime_error(string_format("%s: failed to find tensor %s\n", __func__, name));
+                throw std::runtime_error(string_format("%s: failed to find tensor %s\n", __func__, name.c_str()));
             }
             size_t n_bytes = gguf_get_tensor_size(ctx_gguf.get(), idx);
             size_t n_elems = n_bytes / sizeof(float);
