@@ -165,16 +165,6 @@
 		}
 	});
 
-	// Disable auto-scroll while loading/streaming on desktop, re-enable on idle.
-	$effect(() => {
-		if (isMobile.current) return;
-		const shouldDisableAutoScroll = config().disableAutoScroll || isCurrentConversationLoading;
-		autoScroll.setDisabled(shouldDisableAutoScroll);
-		if (!shouldDisableAutoScroll) {
-			autoScroll.enable();
-		}
-	});
-
 	onMount(() => {
 		const pendingDraft = chatStore.consumePendingDraft();
 		if (pendingDraft) {
