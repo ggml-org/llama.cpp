@@ -101,6 +101,8 @@ struct mtmd_cli_context {
     int n_threads    = 1;
     llama_pos n_past = 0;
 
+    double n_audio_seconds = 0.0;
+
     common_debug_cb_user_data cb_data;
 
     mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
@@ -180,6 +182,12 @@ struct mtmd_cli_context {
         auto res = mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str(), false);
         if (!res.bitmap) {
             return false;
+        }
+        if (mtmd_bitmap_is_audio(res.bitmap)) {
+            int sample_rate = mtmd_get_audio_sample_rate(ctx_vision.get());
+            if (sample_rate > 0) {
+                n_audio_seconds += (double) mtmd_bitmap_get_nx(res.bitmap) / sample_rate;
+            }
         }
         bitmaps.entries.emplace_back(res.bitmap);
         if (res.video_ctx) {
@@ -453,11 +461,18 @@ int main(int argc, char ** argv) {
                 return 1; // error is already printed by libmtmd
             }
         }
+        int64_t t_start_us = ggml_time_us();
         if (eval_message(ctx, msg)) {
             return 1;
         }
         if (!g_is_interrupted && generate_response(ctx, n_predict)) {
             return 1;
+        }
+        if (ctx.n_audio_seconds > 0.0) {
+            double proc_seconds = (ggml_time_us() - t_start_us) / 1e6;
+            double rtf = proc_seconds / ctx.n_audio_seconds;
+            LOG_INF("ASR summary: audio = %.2f s, processing = %.2f s, RTF = %.3f\n",
+                ctx.n_audio_seconds, proc_seconds, rtf);
         }
 
     } else {
@@ -495,6 +510,7 @@ int main(int argc, char ** argv) {
             if (line == "/clear") {
                 ctx.n_past = 0;
                 ctx.chat_history.clear();
+                ctx.n_audio_seconds = 0.0;
                 llama_memory_clear(llama_get_memory(ctx.lctx), true);
                 if (eval_system_prompt_if_present()) {
                     return 1;
@@ -524,6 +540,7 @@ int main(int argc, char ** argv) {
             common_chat_msg msg;
             msg.role = "user";
             msg.content = content;
+            int64_t t_start_us = ggml_time_us();
             int ret = eval_message(ctx, msg);
             if (ret) {
                 return 1;
@@ -532,6 +549,13 @@ int main(int argc, char ** argv) {
             if (generate_response(ctx, n_predict)) {
                 return 1;
             }
+            if (ctx.n_audio_seconds > 0.0) {
+                double proc_seconds = (ggml_time_us() - t_start_us) / 1e6;
+                double rtf = proc_seconds / ctx.n_audio_seconds;
+                LOG_INF("ASR summary: audio = %.2f s, processing = %.2f s, RTF = %.3f\n",
+                    ctx.n_audio_seconds, proc_seconds, rtf);
+            }
+            ctx.n_audio_seconds = 0.0;
             content.clear();
         }
     }
