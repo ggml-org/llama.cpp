@@ -1822,7 +1822,11 @@ struct clip_model_loader {
             if (v.empty()) {
                 return default_val;
             }
-            GGML_ASSERT(v.size() == 1 && "expected scalar tensor");
+            if (v.size() != 1) {
+                throw std::runtime_error(string_format("%s: expected scalar tensor '%s' but got %d elements\n",
+                            __func__, name.c_str(), (int) v.size()));
+            }
+
             return v[0];
         };
 
