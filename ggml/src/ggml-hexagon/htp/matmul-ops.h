@@ -129,11 +129,11 @@ static inline int htp_mm_hmx_compute_chunks(size_t   vtcm_total,
     const size_t n_max = hex_align_down((size_t)n, HTP_MM_HMX_TILE_N_COLS);
     for (size_t nc = n_max; nc >= HTP_MM_HMX_TILE_N_COLS; nc -= HTP_MM_HMX_TILE_N_COLS) {
         size_t n_fixed = 0, ncmn = 0, mc_denom = 0;
-        if (hmx_mul_overflow(nc, per_n_cost, &n_fixed)) continue;
+        if (hex_mul_overflow(nc, per_n_cost, &n_fixed)) continue;
         if (n_fixed >= usable) goto next_nc;
 
-        if (hmx_mul_overflow(nc, per_mn_cost, &ncmn)) goto next_nc;
-        if (hmx_add_overflow(per_m_cost, ncmn, &mc_denom) || mc_denom == 0) goto next_nc;
+        if (hex_mul_overflow(nc, per_mn_cost, &ncmn)) goto next_nc;
+        if (hex_add_overflow(per_m_cost, ncmn, &mc_denom) || mc_denom == 0) goto next_nc;
 
         {
             size_t remain = usable - n_fixed;
@@ -165,13 +165,13 @@ next_nc:
 
     // Compute exact total (with overflow checks)
     size_t t0 = 0, t1 = 0, t2 = 0, mn = 0, total = 0;
-    if (hmx_mul_overflow(best_n, per_n_cost, &t0)) return -1;
-    if (hmx_mul_overflow(best_m, per_m_cost, &t1)) return -1;
-    if (hmx_mul_overflow(best_m, best_n, &mn))     return -1;
-    if (hmx_mul_overflow(mn, per_mn_cost, &t2))    return -1;
-    if (hmx_add_overflow(t0, t1, &total))          return -1;
-    if (hmx_add_overflow(total, t2, &total))       return -1;
-    if (hmx_add_overflow(total, overhead, &total)) return -1;
+    if (hex_mul_overflow(best_n, per_n_cost, &t0)) return -1;
+    if (hex_mul_overflow(best_m, per_m_cost, &t1)) return -1;
+    if (hex_mul_overflow(best_m, best_n, &mn))     return -1;
+    if (hex_mul_overflow(mn, per_mn_cost, &t2))    return -1;
+    if (hex_add_overflow(t0, t1, &total))          return -1;
+    if (hex_add_overflow(total, t2, &total))       return -1;
+    if (hex_add_overflow(total, overhead, &total)) return -1;
 
     *m_chunk_out = best_m;
     *n_chunk_out = best_n;

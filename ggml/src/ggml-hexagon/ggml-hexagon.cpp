@@ -104,14 +104,6 @@ static std::regex* opt_opfilter = NULL; // regex of ops to not claim
 #define HEX_VERBOSE(...) \
     if (opt_verbose) GGML_LOG_DEBUG(__VA_ARGS__)
 
-static inline uint64_t hex_is_aligned(void * addr, uint32_t align) {
-    return ((size_t) addr & (align - 1)) == 0;
-}
-
-static inline size_t hex_round_up(size_t n, size_t m) {
-    return m * ((n + m - 1) / m);
-}
-
 static const char * status_to_str(uint32_t status) {
     switch (status) {
         case HTP_STATUS_OK:
