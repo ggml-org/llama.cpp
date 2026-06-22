@@ -257,9 +257,11 @@ llama_kv_cache::llama_kv_cache(
         }
         
         const uint32_t n_embd_k_idx = hparams.n_embd_k_idx(il);
-        ggml_context * ctx_idx = n_embd_k_idx > 0 ? ctx_for_buft(ggml_backend_cpu_buffer_type()) : nullptr;
+        // Indexer keys share the SAME buffer (hence device) as k/v for this layer.
+        // Were forced onto a CPU buffer, which made the scheduler copy the whole
+        // [n_embd_k_idx, n_kv] cache host->device every sparse layer, every decode step.
         ggml_tensor * k_idx = n_embd_k_idx > 0
-            ? ggml_new_tensor_3d(ctx_idx, GGML_TYPE_F32, n_embd_k_idx, kv_size, n_stream)
+            ? ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_k_idx, kv_size, n_stream)
             : nullptr;
         if (k_idx) {
             ggml_format_name(k_idx, "cache_k_idx_l%d", il);
@@ -268,7 +270,7 @@ llama_kv_cache::llama_kv_cache(
         std::vector<ggml_tensor *> k_idx_stream;
         for (uint32_t s = 0; s < n_stream; ++s) {
             k_idx_stream.push_back(k_idx
-                ? ggml_view_2d(ctx_idx, k_idx, n_embd_k_idx, kv_size, k_idx->nb[1], s*k_idx->nb[2])
+                ? ggml_view_2d(ctx, k_idx, n_embd_k_idx, kv_size, k_idx->nb[1], s*k_idx->nb[2])
                 : nullptr);
         }
 

@@ -962,7 +962,8 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                     // --- DEFAULT: per-group decomposed front (no head-amax) ---
                     const int blk = mm.msa_p.blk;
 
-                    ggml_tensor * ik2d = ggml_reshape_2d(ctx0, ik_kv, n_idx_dim, n_kv);              // [D, n_kv]
+                    ggml_tensor * ik2d = ggml_reshape_2d(ctx0, ik_kv, n_idx_dim, n_kv);
+                    ik2d = ggml_cont(ctx0, ik2d);   // force contiguous
                     ggml_tensor * iq2d = ggml_reshape_2d(ctx0, iq, n_idx_dim, n_idx_head*n_tokens);  // [D, Hd*S]
                     ggml_tensor * sc   = ggml_mul_mat(ctx0, ik2d, iq2d);                             // [n_kv, Hd*S] f32
                     sc = ggml_reshape_3d(ctx0, sc, n_kv, n_idx_head, n_tokens);                      // [n_kv, Hd, S]
