@@ -120,8 +120,18 @@
 		}
 
 		setTimeout(() => {
-			scroll.chatScrollContainer?.scrollTo({
-				top: scroll.chatScrollContainer.scrollHeight,
+			const container = scroll.chatScrollContainer;
+			if (!container) return;
+
+			// Find the last user message bubble to keep it visible after sending
+			const lastUserBubble = container.querySelector(
+				'.chat-message:nth-last-child(2) .chat-message-user .chat-message-user-bubble'
+			) as HTMLElement | null;
+			const bubbleHeight = lastUserBubble?.scrollHeight ?? 0;
+			const baseHeight = container.scrollHeight - 836;
+
+			container.scrollTo({
+				top: bubbleHeight > 0 ? baseHeight - bubbleHeight : baseHeight,
 				behavior: 'smooth'
 			});
 		}, 100);
