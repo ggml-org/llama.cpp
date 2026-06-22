@@ -257,7 +257,7 @@
 	{/if}
 
 	{#if showProcessingInfoBottom}
-		<div class="mt-4 w-full max-w-[48rem]" in:fade>
+		<div class="mt-4 w-full max-w-3xl" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
 					{modelLoadingText ??
@@ -351,11 +351,11 @@
 </div>
 
 <style>
-	:global(.chat-message) .chat-message-assistant {
+	:global(.chat-message):last-child .chat-message-assistant {
 		min-height: calc(100dvh - 22rem);
 
 		@media (width > 768px) {
-			min-height: calc(100dvh-26rem);
+			min-height: calc(100dvh - 25rem);
 		}
 	}
 
@@ -401,8 +401,4 @@
 		white-space: pre-wrap;
 		word-break: break-word;
 	}
-
-	/*:global(.chat-message):last-child div {
-        margin-top: calc(-1 * (100dvh - 40rem));
-    }*/
 </style>

@@ -458,19 +458,18 @@
 
 			<ChatScreenProcessingInfo />
 
-			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl">
-				<ChatScreenForm
-					disabled={hasPropsError || isEditing()}
-					{initialMessage}
-					isLoading={isCurrentConversationLoading}
-					onFileRemove={handleFileRemove}
-					onFileUpload={handleFileUpload}
-					onSend={handleSendMessage}
-					onStop={() => chatStore.stopGeneration()}
-					onSystemPromptAdd={handleSystemPromptAdd}
-					bind:uploadedFiles
-				/>
-			</div>
+			<ChatScreenForm
+				class="pointer-events-auto conversation-chat-form"
+				disabled={hasPropsError || isEditing()}
+				{initialMessage}
+				isLoading={isCurrentConversationLoading}
+				onFileRemove={handleFileRemove}
+				onFileUpload={handleFileUpload}
+				onSend={handleSendMessage}
+				onStop={() => chatStore.stopGeneration()}
+				onSystemPromptAdd={handleSystemPromptAdd}
+				bind:uploadedFiles
+			/>
 		</div>
 	</div>
 {/if}

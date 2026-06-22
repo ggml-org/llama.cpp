@@ -111,19 +111,17 @@
 	});
 </script>
 
-<div class="relative mx-auto max-w-3xl">
-	<ChatForm
-		bind:this={chatFormRef}
-		bind:value={message}
-		bind:uploadedFiles
-		class={className}
-		{disabled}
-		{isLoading}
-		showMcpPromptButton
-		onFilesAdd={handleFilesAdd}
-		{onStop}
-		onSubmit={handleSubmit}
-		onSystemPromptClick={handleSystemPromptClick}
-		onUploadedFileRemove={handleUploadedFileRemove}
-	/>
-</div>
+<ChatForm
+	class="mx-auto max-w-3xl {className}"
+	bind:this={chatFormRef}
+	bind:value={message}
+	bind:uploadedFiles
+	{disabled}
+	{isLoading}
+	showMcpPromptButton
+	onFilesAdd={handleFilesAdd}
+	{onStop}
+	onSubmit={handleSubmit}
+	onSystemPromptClick={handleSystemPromptClick}
+	onUploadedFileRemove={handleUploadedFileRemove}
+/>
