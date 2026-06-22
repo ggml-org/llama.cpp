@@ -666,7 +666,7 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                   \
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;                      \
     const uint32_t n_prefetch = kparams->n_prefetch;                                                                              \
-    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);                                                                  \
+    assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);                         \
                                                                                                                                   \
     const size_t dst_row_size  = nb1;                                                                                             \
     const size_t src1_row_size = nb11;                                                                                            \
@@ -759,7 +759,7 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                   \
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;                      \
     const uint32_t n_prefetch = kparams->n_prefetch;                                                                              \
-    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);                                                                  \
+    assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);                         \
                                                                                                                                   \
     const size_t dst_row_size  = nb1;                                                                                             \
     const size_t src1_row_size = nb11;                                                                                            \
@@ -859,7 +859,7 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                                                                                                                                   \
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;                      \
     const uint32_t n_prefetch = kparams->n_prefetch;                                                                              \
-    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);                                                                  \
+    assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);                         \
                                                                                                                                   \
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;                                                             \
     const uint8_t * restrict src2_row = (const uint8_t *) src2->data;                                                             \
@@ -1049,7 +1049,7 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                                                                                                                                   \
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;                      \
     const uint32_t n_prefetch = kparams->n_prefetch;                                                                              \
-    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);                                                                  \
+    assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);                         \
                                                                                                                                   \
     uint32_t n_k_tiles_w = ne00 / 32;                                                                                             \
     uint32_t n_k_tiles_a = ne10 / 32;                                                                                             \
@@ -1273,7 +1273,7 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
 
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
     const uint32_t n_prefetch = kparams->n_prefetch;
-    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+    assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);
     const uint32_t prefetch_mask = n_prefetch - 1;
 
     const uint32_t src0_nrows = ne01 * ne02 * ne03;  // src0 rows
@@ -1416,7 +1416,7 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
 
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
     const uint32_t n_prefetch = kparams->n_prefetch;
-    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+    assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);
     const uint32_t prefetch_mask = n_prefetch - 1;
 
     // Prefill vtcm with 2x src0 rows
@@ -1493,7 +1493,7 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
 
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
     const uint32_t n_prefetch = kparams->n_prefetch;
-    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+    assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);
 
     const uint32_t n_ids = ids->ne[0];  // n_expert_used
     const uint32_t n_as  = ne02;        // n_expert
@@ -1593,7 +1593,7 @@ static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
 
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
     const uint32_t n_prefetch = kparams->n_prefetch;
-    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+    assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);
 
     assert(ne13 % ne03 == 0);
 
@@ -1873,7 +1873,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
         dst_sz  = kparams->vtcm_dst_size;
     } else {
         const uint32_t n_prefetch = kparams->n_prefetch;
-        assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+        assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);
         htp_mm_hvx_get_vtcm_sizes(
             kparams->kernel_type, src0->type, ne10, src1_nrows, octx->n_threads,
             dst_row_size, src0_row_size, src1_row_size, n_prefetch,
@@ -1987,7 +1987,7 @@ static void hvx_mm_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
 
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
     const uint32_t n_prefetch = kparams->n_prefetch;
-    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+    assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);
     const uint32_t prefetch_mask = n_prefetch - 1;
 
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;
@@ -2137,7 +2137,7 @@ static void hvx_mm_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
 
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
     const uint32_t n_prefetch = kparams->n_prefetch;
-    assert(n_prefetch > 0 && n_prefetch <= HTP_MM_MAX_PREFETCH);
+    assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);
     const uint32_t prefetch_mask = n_prefetch - 1;
 
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;
