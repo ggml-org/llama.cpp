@@ -28,5 +28,5 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		route: ROUTES.MCP_SERVERS,
 		activeRouteId: '/mcp-servers'
 	},
-	{ icon: Settings, tooltip: 'Settings', route: ROUTES.SETTINGS, activeUrlIncludes: '#/settings' }
+	{ icon: Settings, tooltip: 'Settings', route: `${ROUTES.SETTINGS}/general`, activeUrlIncludes: '#/settings' }
 ];
