@@ -1235,7 +1235,13 @@ int hmx_matmul_2d_f32(struct htp_context *ctx, float *restrict dst, const float 
     const size_t size_per_mn = (use_pipeline ? 2 : 1) * sizeof(__fp16);                       // O x 2 (output double buffer)
 
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0;
-    if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, size_per_n, /*per_m=*/vec_dot_size, size_per_mn,
+    // overhead = constant scales buffer (256 B) + worst-case alignment padding for
+    // every tile-aligned region we carve below: weight + activation + output +
+    // scratch0, plus scratch1 + scratch2 in pipeline mode (each rounded up to
+    // HMX_FP16_TILE_SIZE, so up to TILE_SIZE-1 of padding apiece).
+    const size_t n_aligned_regions = use_pipeline ? 6 : 4;
+    const size_t overhead = 256 + n_aligned_regions * (HMX_FP16_TILE_SIZE - 1);
+    if (hmx_compute_chunks(vtcm_budget, overhead, size_per_n, /*per_m=*/vec_dot_size, size_per_mn,
                            hex_align_up(m, HMX_FP16_TILE_N_ROWS), n,
                            /*m_block_cost=*/(size_t) n * 3,
                            /*n_block_cost=*/(size_t) m * 2, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used)) {
@@ -1497,8 +1503,14 @@ int hmx_matmul_f16_f32_batched(struct htp_context *ctx, const hmx_matmul_f16_f32
     const size_t f32_scratch_per_m = use_dma_activation ? (size_t) params->k * sizeof(float) : 0;
 
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0, vtcm_used = 0;
+    // overhead = constant scales buffer (256 B) + worst-case alignment padding for
+    // every tile-aligned region we carve below: weight + activation + output +
+    // scratch0 + scratch1, plus the f32 activation scratch when DMA-gathering
+    // strided rows (each rounded up to HMX_FP16_TILE_SIZE).
+    const size_t n_aligned_regions = use_dma_activation ? 6 : 5;
+    const size_t overhead = 256 + n_aligned_regions * (HMX_FP16_TILE_SIZE - 1);
     // FP16 weight: interleave and activation load have similar per-element cost.
-    if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256,
+    if (hmx_compute_chunks(vtcm_budget, overhead,
                            /*per_n=*/3 * vec_dot_size,
                            /*per_m=*/group_size * vec_dot_size + f32_scratch_per_m,
                            /*per_mn=*/sizeof(__fp16),
@@ -2013,7 +2025,12 @@ int hmx_matmul_id_2d_f32(struct htp_context *ctx,
     const size_t size_per_mn = sizeof(__fp16);
 
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0;
-    if (hmx_compute_chunks(vtcm_budget, /*overhead=*/256, size_per_n, /*per_m=*/vec_dot_size, size_per_mn,
+    // overhead = constant scales buffer (256 B) + worst-case alignment padding for
+    // every tile-aligned region we carve below: weight + activation + output +
+    // scratch0 (each rounded up to HMX_FP16_TILE_SIZE).
+    const size_t n_aligned_regions = 4;
+    const size_t overhead = 256 + n_aligned_regions * (HMX_FP16_TILE_SIZE - 1);
+    if (hmx_compute_chunks(vtcm_budget, overhead, size_per_n, /*per_m=*/vec_dot_size, size_per_mn,
                            m_padded, n,
                            /*m_block_cost=*/(size_t) n * 3,
                            /*n_block_cost=*/(size_t) m_padded * 2, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used)) {
