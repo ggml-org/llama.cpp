@@ -2165,7 +2165,10 @@ private:
         res->n_tokens  = slot.task->n_tokens();
         res->res_type  = slot.task->params.res_type;
 
-        const int n_embd_out = llama_model_n_embd_out(model_tgt);
+        const int n_embd_model_out = llama_model_n_embd_out(model_tgt);
+        const int n_embd_out = slot.task->params.embd_dimensions > 0
+            ? std::min(n_embd_model_out, slot.task->params.embd_dimensions)
+            : n_embd_model_out;
 
         std::vector<float> embd_res(n_embd_out, 0.0f);
 
@@ -5303,6 +5306,18 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         }
     }
 
+    int embd_dimensions = params.embd_dimensions;
+    if (body.count("dimensions") != 0) {
+        embd_dimensions = body.at("dimensions");
+    }
+    if (embd_dimensions != -1) {
+        const int n_embd_out = llama_model_n_embd_out(ctx_server.model_tgt);
+        if (embd_dimensions <= 0 || embd_dimensions > n_embd_out) {
+            res->error(format_error_response("\"dimensions\" must be between 1 and " + std::to_string(n_embd_out), ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+    }
+
     // create and queue the task
     json responses = json::array();
     auto & rd = res->rd;
@@ -5317,6 +5332,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
             // OAI-compat
             task.params.res_type = res_type;
             task.params.embd_normalize = embd_normalize;
+            task.params.embd_dimensions = embd_dim;
 
             tasks.push_back(std::move(task));
         }

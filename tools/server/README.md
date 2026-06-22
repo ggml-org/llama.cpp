@@ -184,6 +184,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-a, --alias STRING` | set model name aliases, comma-separated (to be used by API)<br/>(env: LLAMA_ARG_ALIAS) |
 | `--tags STRING` | set model tags, comma-separated (informational, not used for routing)<br/>(env: LLAMA_ARG_TAGS) |
 | `--embd-normalize N` | normalisation for embeddings (default: 2) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm) |
+| `--embd-dimensions N` | number of dimensions for embeddings output (default: -1, -1=model default, >0=truncate to first N dims, then normalize (MRL)) |
 | `--host HOST` | ip address to listen, or bind to an UNIX socket if the address ends with .sock (default: 127.0.0.1)<br/>(env: LLAMA_ARG_HOST) |
 | `--port PORT` | port to listen (default: 8080)<br/>(env: LLAMA_ARG_PORT) |
 | `--reuse-port` | allow multiple sockets to bind to the same port (default: disabled)<br/>(env: LLAMA_ARG_REUSE_PORT) |
@@ -684,6 +685,16 @@ This endpoint also supports multimodal embeddings. See the documentation for the
    2: Euclidean/L2
   >2: P-Norm
 ```
+
+`dimensions`: The number of dimensions to return in the embeddings. Can be one of the following:
+```
+  -1: Use model defaults (full embedding dimensions)
+  >0: Truncates and re-normalizes (MRL) the embedding to first N dimensions. Must be between 1 and model's embedding dimensions
+```
+Defaults to the full embedding dimensions (-1).
+Can also be set server-wide using `--embd-dimensions` CLI flag.
+
+> **NOTE**: The underlying model must be trained with [Matryoshka Representation Learning (MRL)](https://arxiv.org/pdf/2205.13147) (e.g. nomic-embed-text-v1.5, embeddinggemma-300m, jina-embeddings-v3 and up), and `dimensions` must be one of the supported values by the model (e.g. 512, 256, 128, but not 42 or 777). Otherwise the output might be useless.
 
 ### POST `/reranking`: Rerank documents according to a given query
 
@@ -1446,6 +1457,19 @@ See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-r
           "input": ["hello", "world"],
           "model":"GPT-4",
           "encoding_format": "float"
+  }'
+  ```
+
+- `dimensions` to truncate the embedding (should support MRL)
+
+  ```shell
+  curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer no-key" \
+  -d '{
+          "input": "hello",
+          "model":"GPT-4",
+          "dimensions": 128
   }'
   ```
 
