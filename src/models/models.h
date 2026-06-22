@@ -1546,18 +1546,20 @@ struct llama_model_granite_switch : public llama_model_base {
     uint32_t n_slots       = 0;  // n_adapters + 1 (slot 0 = base/zero delta)
     uint32_t max_lora_rank = 0;
 
-    // token id -> sticky adapter index (1 + adapter, so slot 0 stays "base")
+    // token id -> adapter slot (1 + adapter, so slot 0 stays "base")
     std::unordered_map<llama_token, int32_t> control_token_to_index;
     // control token id -> substitute token id (token-exchange before embedding)
     std::unordered_map<llama_token, llama_token> control_token_to_substitute;
 
-    // POC: single-sequence sticky adapter state. The most recent control index
-    // seen, carried across ubatches within one decode. Reset to 0 when a ubatch
-    // contains sequence position 0 (start of a fresh prompt). This is sufficient
-    // for llama-cli / the smoke + parity tests; a full multi-sequence
-    // (reset-on-seq_rm) implementation is deferred — see the [[llamacpp-poc-scope]]
-    // note. `mutable` because set_input runs from a const-model graph context.
-    mutable int32_t poc_sticky_index = 0;
+    // Per-token adapter selection is computed in-graph by a single-head causal
+    // "router" attention whose K/V live in the model KV cache at layer index
+    // hparams.router_layer (== n_layer). Because that state is per-sequence (it
+    // lives in the cache, like vLLM's PagedAttention router), CONCURRENT requests
+    // are isolated for free — there is no global sticky state to leak between
+    // sequences (the prior POC's bug). Within one sequence the selection carries
+    // over once fired (flat gain, no recency) — the vLLM/HF single-switch
+    // contract; see the limitation note in granite_switch.cpp. Mirrors the vLLM
+    // backend (single.py) and HF SingleSwitch.
 
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
@@ -1601,11 +1603,16 @@ struct llama_model_granite_switch : public llama_model_base {
 };
 
 
-// Custom graph input for the per-token switch. In set_input it scans the ubatch,
-// computes the sticky adapter index per token (writing adapter_ids), and rewrites
-// control-token ids to their substitute ids (writing sub_tokens) — the
-// token-exchange. Both tensors are I32 [n_tokens]. can_reuse() returns false so
-// these are recomputed every ubatch.
+// Custom graph input for the per-token switch. In set_input it fills, per token:
+//   - sub_tokens  : the token-exchange (control id -> substitute id, else the id)
+//   - router_ksig : +gain for a control token, -gain otherwise (router K, dim 0)
+//   - router_vval : float(adapter_slot) for a control token, 0 otherwise (router V, dim 0)
+//   - router_q    : constant 1.0 (router Q, dim 0)
+// The adapter index per token is NOT computed here — it is recovered in-graph by a
+// single-head causal attention over (router_q, router_ksig, router_vval) whose K/V
+// live in the KV cache, so the selection is per-sequence (no cross-sequence leak).
+// set_input is pure per-token maps (no history / no cross-ubatch carry).
+// can_reuse() returns false so these are recomputed every ubatch.
 class llm_graph_input_switch : public llm_graph_input_i {
 public:
     llm_graph_input_switch(const llama_model_granite_switch & smodel) : smodel(smodel) {}
@@ -1614,7 +1621,9 @@ public:
     void set_input(const llama_ubatch * ubatch) override;
 
     ggml_tensor * sub_tokens  = nullptr; // I32 [n_tokens] control-substituted token ids
-    ggml_tensor * adapter_ids = nullptr; // I32 [n_tokens] sticky per-token adapter index
+    ggml_tensor * router_ksig = nullptr; // F32 [n_tokens] router K signal (±gain)
+    ggml_tensor * router_vval = nullptr; // F32 [n_tokens] router V value (adapter slot / 0)
+    ggml_tensor * router_q    = nullptr; // F32 [n_tokens] router Q value (constant 1.0)
 
     const llama_model_granite_switch & smodel;
 };
