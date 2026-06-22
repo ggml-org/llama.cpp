@@ -829,7 +829,7 @@ static void handle_media(
         bool accept_base64_uri) {
     if (!media_path.empty()) {
         // should already be enforced by arg.cpp, but checking just in case
-        GGML_ASSERT(string_ends_with(media_path, "/"));
+        GGML_ASSERT(media_path.back() == DIRECTORY_SEPARATOR);
     }
 
     if (string_starts_with(url, "http")) {
