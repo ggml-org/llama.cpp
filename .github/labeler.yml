@@ -35,6 +35,7 @@ AMD ZenDNN:
 documentation:
     - changed-files:
         - any-glob-to-any-file:
+            - **/*.md
             - docs/**
             - media/**
 testing:
@@ -47,28 +48,12 @@ build:
             - cmake/**
             - CMakeLists.txt
             - CMakePresets.json
-examples:
-    - changed-files:
-        - any-glob-to-any-file:
-            - examples/**
-            - tools/**
 devops:
     - changed-files:
         - any-glob-to-any-file:
             - .devops/**
             - .github/**
             - ci/**
-python:
-    - changed-files:
-        - any-glob-to-any-file:
-            - "**/*.py"
-            - requirements/**
-            - gguf-py/**
-            - .flake8
-script:
-    - changed-files:
-        - any-glob-to-any-file:
-            - scripts/**
 android:
     - changed-files:
         - any-glob-to-any-file:
@@ -81,9 +66,16 @@ server:
     - changed-files:
         - any-glob-to-any-file:
             - tools/server/**
-
-
-
+conversion:
+    - changed-files:
+        - any-glob-to-any-file:
+            - conversion/**
+            - convert_*.py
+            - gguf-py/**
+vendor:
+    - changed-files:
+        - any-glob-to-any-file:
+            - vendor/**
 ggml:
     - changed-files:
         - any-glob-to-any-file:
