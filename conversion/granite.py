@@ -360,8 +360,8 @@ class GraniteSpeechPlusMmprojModel(GraniteSpeechMmprojModel):
 
         # Add feature_layer if present in encoder config
         if feature_layers := self.hparams_audio.get("cat_hidden_layers"):
-            self.gguf_writer.add_audio_feature_layer(feature_layers)
-            logger.info("gguf: audio feature_layer = %s", feature_layers)
+            self.gguf_writer.add_audio_feature_layers(feature_layers)
+            logger.info("gguf: audio feature_layers = %s", feature_layers)
 
             # Validate projector dimension matches concatenated encoder output
             hidden_dim = self.hparams_audio["hidden_dim"]
