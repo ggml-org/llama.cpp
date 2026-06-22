@@ -179,6 +179,8 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
+        res->t_layer_inp[il] = inpL;
+
         // input for next layer
         inpL = cur;
     }

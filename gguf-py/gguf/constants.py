@@ -917,6 +917,7 @@ class MODEL_TENSOR(IntEnum):
     NEXTN_SHARED_HEAD_NORM = auto()
     # eagle3
     FC                     = auto()  # feature fusion layer
+    FC_NORM                = auto()  # per-layer input normalization (fc_norm)
     D2T                    = auto()  # draft to target vocabulary mapping
     # lfm2 audio
     A_ENC_NORM_CONV        = auto()
@@ -1501,6 +1502,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
     MODEL_TENSOR.FC:                        "fc",
+    MODEL_TENSOR.FC_NORM:                   "fc_norm.{bid}",
     MODEL_TENSOR.D2T:                       "d2t",
 }
 
@@ -4109,6 +4111,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FC,
+        MODEL_TENSOR.FC_NORM,
         MODEL_TENSOR.D2T,
     ],
     MODEL_ARCH.MISTRAL4: [
