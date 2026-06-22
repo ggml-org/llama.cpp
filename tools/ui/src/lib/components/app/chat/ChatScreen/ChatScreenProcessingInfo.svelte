@@ -63,7 +63,7 @@
 	});
 </script>
 
-<div class="chat-processing-info-container pointer-events-none relative w-full visible">
+<div class="chat-processing-info-container pointer-events-none relative w-full hidden md:visible">
 	<div class="chat-processing-info-content absolute bottom-4 left-1/2 -translate-x-1/2">
 		{#each processingDetails as detail (detail)}
 			<span class="chat-processing-info-detail pointer-events-auto backdrop-blur-sm">{detail}</span>
