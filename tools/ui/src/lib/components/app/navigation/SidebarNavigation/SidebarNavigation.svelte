@@ -46,6 +46,7 @@
 		if (!isExpandedMode) {
 			isSearchModeActive = false;
 			searchQuery = '';
+			cancelMobileCollapse();
 		}
 	});
 
@@ -78,7 +79,7 @@
 
 	async function selectConversation(id: string) {
 		if (isMobile.current) {
-			isExpandedMode = false;
+			scheduleMobileCollapse();
 		}
 		await goto(RouterService.chat(id));
 	}
@@ -110,6 +111,24 @@
 	}
 
 	let innerWidth = $state(0);
+	let pendingCollapse = $state<ReturnType<typeof setTimeout> | null>(null);
+
+	function scheduleMobileCollapse() {
+		if (pendingCollapse) {
+			clearTimeout(pendingCollapse);
+		}
+		pendingCollapse = setTimeout(() => {
+			isExpandedMode = false;
+			pendingCollapse = null;
+		}, 100);
+	}
+
+	function cancelMobileCollapse() {
+		if (pendingCollapse) {
+			clearTimeout(pendingCollapse);
+			pendingCollapse = null;
+		}
+	}
 </script>
 
 <svelte:window onkeydown={handleKeydown} bind:innerWidth />
@@ -210,7 +229,7 @@
 					}}
 					onNewChat={() => {
 						if (isMobile.current) {
-							isExpandedMode = false;
+							scheduleMobileCollapse();
 						}
 					}}
 				/>
