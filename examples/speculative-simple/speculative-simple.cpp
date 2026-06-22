@@ -172,7 +172,8 @@ int main(int argc, char ** argv) {
             ckpt.update_pos(
                     prompt_tgt.size(),
                     llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), seq_id),
-                    llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), seq_id));
+                    llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), seq_id),
+                    prompt_tgt.size());
 
             if (use_ckpt_dft) {
                 ckpt.update_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
