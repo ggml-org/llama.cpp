@@ -12,6 +12,7 @@
 #include <random>
 #include <sstream>
 #include <fstream>
+#include <limits>
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -537,37 +538,6 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
         }
     }
     return true;
-}
-
-int32_t server_tokens::process_chunk(
-            llama_context * ctx,
-            mtmd_context * mctx,
-            size_t idx,
-            llama_pos pos,
-            int32_t seq_id,
-            size_t & n_tokens_out) const {
-    const auto & chunk = find_chunk(idx);
-    const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
-                        ? "image" : "audio";
-    SRV_INF("processing %s...\n", name);
-    int32_t n_batch = llama_n_batch(ctx);
-    int64_t t0 = ggml_time_ms();
-    llama_pos new_n_past; // unused for now
-    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
-        chunk.get(),
-        pos,
-        seq_id,
-        n_batch,
-        true, // logits last
-        &new_n_past);
-    SRV_INF("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
-    if (result != 0) {
-        LOG_ERR("mtmd_helper_eval failed with status %d", result);
-        n_tokens_out = 0;
-        return result;
-    }
-    n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
-    return 0;
 }
 
 server_tokens server_tokens::clone() const {
@@ -1269,7 +1239,7 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx) {
+std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top) {
     std::vector<llama_token_data> cur;
 
     const auto * logits = llama_get_logits_ith(ctx, idx);
@@ -1288,21 +1258,34 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
         }
     }
 
-    // sort tokens by logits
-    std::sort(cur.begin(), cur.end(), [](const llama_token_data & a, const llama_token_data & b) {
-        return a.logit > b.logit;
-    });
+    // sort tokens by logits (partial: only the leading `n_top` need ordering)
+    if (n_top > cur.size()) {
+        n_top = cur.size();
+    }
+    if (n_top > 0) {
+        std::partial_sort(cur.begin(), cur.begin() + n_top, cur.end(),
+            [](const llama_token_data & a, const llama_token_data & b) {
+                return a.logit > b.logit;
+            });
+    }
 
     // apply softmax
-    float max_l = cur[0].logit;
+    float max_l = -std::numeric_limits<float>::infinity();
+    if (n_top > 0) {
+        max_l = cur[0].logit; // partial_sort guarantees the absolute maximum is at index 0
+    } else {
+        for (const auto & t : cur) {
+            max_l = std::max(max_l, t.logit);
+        }
+    }
     float cum_sum = 0.0f;
-    for (size_t i = 0; i < cur.size(); ++i) {
-        float p = expf(cur[i].logit - max_l);
-        cur[i].p = p;
+    for (auto & t : cur) {
+        float p = expf(t.logit - max_l);
+        t.p = p;
         cum_sum += p;
     }
-    for (size_t i = 0; i < cur.size(); ++i) {
-        cur[i].p /= cum_sum;
+    for (auto & t : cur) {
+        t.p /= cum_sum;
     }
 
     return cur;

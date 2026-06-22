@@ -25,7 +25,7 @@ import gguf
 from gguf.constants import GGUFValueType
 
 # reuse model definitions from the conversion/ package
-from conversion import LazyTorchTensor, ModelBase, get_model_class
+from conversion import LazyTorchTensor, ModelBase, get_model_class, ModelType, get_model_architecture
 
 logger = logging.getLogger("lora-to-gguf")
 
@@ -396,12 +396,12 @@ if __name__ == '__main__':
         hparams = ModelBase.load_hparams(dir_base_model, False)
 
     with torch.inference_mode():
+        model_arch = get_model_architecture(hparams, ModelType.TEXT)
         try:
-            model_arch = hparams.get("text_config", {}).get("architectures", hparams["architectures"])[0]
-            logger.info("Using model architecture: %s", model_arch)
             model_class = get_model_class(model_arch)
+            logger.info("Using model architecture: %s", model_arch)
         except NotImplementedError:
-            logger.error(f"Model {hparams['architectures'][0]} is not supported")
+            logger.error(f"Model {model_arch} is not supported")
             sys.exit(1)
 
         class LoraModel(model_class):  # ty: ignore[unsupported-base]

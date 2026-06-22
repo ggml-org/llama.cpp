@@ -389,7 +389,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             string(REGEX MATCHALL "POWER *([0-9]+)" MATCHED_STRING "${POWER10_M_UPPER}")
             string(REGEX REPLACE "POWER *([0-9]+)" "\\1" EXTRACTED_NUMBER "${MATCHED_STRING}")
 
-            if (EXTRACTED_NUMBER GREATER_EQUAL 10)
+            if (EXTRACTED_NUMBER EQUAL 10 OR EXTRACTED_NUMBER EQUAL 11)
                 list(APPEND ARCH_FLAGS -mcpu=power10)
             elseif (EXTRACTED_NUMBER EQUAL 9)
                 list(APPEND ARCH_FLAGS -mcpu=power9)

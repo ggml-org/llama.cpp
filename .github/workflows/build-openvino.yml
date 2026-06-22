@@ -37,14 +37,10 @@ jobs:
   ubuntu-24-openvino:
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
-    concurrency:
-      group: openvino-gpu-${{ github.head_ref || github.ref }}
-      cancel-in-progress: false
-
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.0"
-      OPENVINO_VERSION_FULL: "2026.0.0.20965.c6d6a13a886"
+      OPENVINO_VERSION_MAJOR: "2026.2"
+      OPENVINO_VERSION_FULL: "2026.2.0.21903.52ddc073857"
 
     steps:
       - name: Clone
@@ -78,7 +74,7 @@ jobs:
           cmake -B build/ReleaseOV -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_OPENVINO=ON
-          time cmake --build build/ReleaseOV --config Release -j $(nproc)
+          time cmake --build build/ReleaseOV --config Release --parallel
 
       - name: Test (CPU)
         id: cmake_test_cpu
@@ -93,4 +89,81 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           export GGML_OPENVINO_DEVICE=GPU
-          ctest --test-dir build/ReleaseOV -L main -E "test-llama-archs" --verbose --timeout 2000
+          ctest --test-dir build/ReleaseOV -L main -E "test-llama-archs" --verbose --timeout 3000
+
+  openvino-windows-2022:
+    runs-on: windows-2022
+
+    env:
+      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.2"
+      OPENVINO_VERSION_FULL: "2026.2.0.21903.52ddc073857"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: openvino-windows-2022
+          variant: ccache
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Setup Cache
+        uses: actions/cache@v5
+        id: cache-openvino
+        with:
+          path: ./openvino_toolkit
+          key: cache-gha-openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+
+      - name: Setup OpenVINO Toolkit
+        if: steps.cache-openvino.outputs.cache-hit != 'true'
+        uses: ./.github/actions/windows-setup-openvino
+        with:
+          path: ./openvino_toolkit
+          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+          version_full: ${{ env.OPENVINO_VERSION_FULL }}
+
+      - name: Install OpenCL using vcpkg
+        shell: powershell
+        run: |
+          git clone https://github.com/microsoft/vcpkg C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg install opencl
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        run: |
+          REM Find extracted OpenVINO folder dynamically
+          for /d %%i in (openvino_toolkit\*) do set OPENVINO_ROOT=%%i
+
+          if not exist "%OPENVINO_ROOT%\runtime\cmake\OpenVINOConfig.cmake" (
+              echo ERROR: OpenVINOConfig.cmake not found
+              exit /b 1
+          )
+
+          call "%OPENVINO_ROOT%\setupvars.bat"
+
+          cmake -B build\ReleaseOV -G "Visual Studio 17 2022" ^
+            -A x64 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DGGML_OPENVINO=ON ^
+            -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
+
+          cmake --build build\ReleaseOV --config Release -- /m
+
+      - name: Test (CPU)
+        id: cmake_test_cpu
+        shell: cmd
+        # TODO: fix and re-enable the `test-llama-archs` test below
+        run: |
+          REM Find extracted OpenVINO folder dynamically
+          for /d %%i in (openvino_toolkit\*) do set OPENVINO_ROOT=%%i
+          call "%OPENVINO_ROOT%\setupvars.bat"
+
+          cd build
+          ctest --test-dir ReleaseOV -L main -E "test-llama-archs" -C Release --verbose --timeout 3000
