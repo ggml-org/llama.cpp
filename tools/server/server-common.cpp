@@ -1583,3 +1583,54 @@ server_tokens format_prompt_rerank(
 
     return result;
 }
+
+//
+// threadpool
+//
+
+server_threadpool::~server_threadpool() {
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        stop = true;
+    }
+    cv.notify_all();
+    for (auto & t : threads) t.join();
+}
+
+void server_threadpool::init(int n) {
+    for (int i = 0; i < n; i++) {
+        threads.emplace_back([this]() {
+            while (true) {
+                std::function<void()> task;
+                {
+                    std::unique_lock<std::mutex> lock(mtx);
+                    cv.wait(lock, [this]() { return stop || !tasks.empty(); });
+                    if (stop && tasks.empty()) return;
+                    task = std::move(tasks.front());
+                    tasks.pop();
+                }
+                task();
+                {
+                    std::lock_guard<std::mutex> lock(mtx);
+                    pending--;
+                }
+                cv_done.notify_one();
+            }
+        });
+    }
+}
+
+void server_threadpool::enqueue(std::function<void()> fn) {
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        GGML_ASSERT(!stop && !threads.empty());
+        tasks.push(std::move(fn));
+        pending++;
+    }
+    cv.notify_one();
+}
+
+void server_threadpool::wait_all() {
+    std::unique_lock<std::mutex> lock(mtx);
+    cv_done.wait(lock, [this]() { return pending == 0; });
+}

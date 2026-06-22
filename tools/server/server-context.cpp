@@ -866,6 +866,9 @@ public:
     // note: chat_params must not be refreshed upon existing sleeping state
     server_chat_params chat_params;
 
+    // threadpool for parallel sampling
+    server_threadpool threadpool;
+
     server_state_callback_t callback_state = [](server_state, json) -> void {};
 
     server_context_impl() {
@@ -1456,6 +1459,8 @@ private:
         });
 
         metrics.init();
+
+        threadpool.init(params_base.cpuparams.n_threads);
 
         if (params_base.cache_idle_slots) {
             if (params_base.cache_ram_mib == 0) {
@@ -3699,6 +3704,12 @@ private:
         return true;
     }
 
+    struct sampling_task {
+        server_slot * slot;
+        int32_t tok_idx;
+        llama_token sampled_id; // result
+    };
+
     void post_decode(int32_t n_batch_tokens, int32_t off, llama_batch & batch_view) {
         // for checking if a given batch index is inside batch_view
         auto is_inside_view = [&](int32_t idx) {
@@ -3719,6 +3730,9 @@ private:
             return params_base.special ||
                 slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
         };
+
+        std::vector<sampling_task> smpl_tasks;
+        smpl_tasks.reserve(slots.size());
 
         iterate(slots, [&](server_slot & slot) {
             // optionally send prompt processing progress
@@ -3767,6 +3781,17 @@ private:
 
             // shifted according to the current sub-batch
             const int tok_idx = slot.i_batch - off;
+            smpl_tasks.push_back({&slot, tok_idx, LLAMA_TOKEN_NULL});
+        });
+
+        // run multiple sampling tasks in parallel
+        threadpool.run_all<sampling_task>(smpl_tasks, [](sampling_task & task) {
+            task.sampled_id = common_sampler_sample(task.slot->smpl.get(), task.slot->ctx_tgt, task.tok_idx);
+        });
+
+        iterate(slots, [&](server_slot & slot) {
+            auto & smpl_task = smpl_tasks[slot.id];
+            auto tok_idx = smpl_task.tok_idx;
 
             llama_token id;
             {
