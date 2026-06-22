@@ -968,7 +968,7 @@ void mtmd_audio_preprocessor_parakeet::worker_thread(
 
     const double eps = 5.960464477539063e-08;
 
-    for (; i < std::min(n_samples / frame_step + 1, mel.n_len); i += n_threads) {
+    for (; i < std::min(n_samples / frame_step + 1, (int) mel.n_len); i += n_threads) {
         const int offset = i * frame_step;
         const int window_pad_left = (frame_size - window_size) / 2;
 
