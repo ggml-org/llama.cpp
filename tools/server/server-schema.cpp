@@ -14,6 +14,9 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         fields.emplace_back(f);
     };
 
+    add((new field_bool("verbose", params.verbose))
+        ->set_desc("Include __verbose field in the response with additional debug information"));
+
     add((new field_bool("timings_per_token", params.timings_per_token))
         ->set_desc("Include prompt processing and text generation speed information in each response"));
 

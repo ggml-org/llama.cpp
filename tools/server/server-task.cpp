@@ -1068,8 +1068,8 @@ static json server_build_responses_tool_output_item(
 
     return json {
         {"type",      "function_call"},
-        {"id",        item_id.empty() ? "fc_" + random_string() : item_id},
-        {"call_id",   tool_call.id},
+        {"id",        item_id.empty() ? "fc_" + tool_call.id : item_id},
+        {"call_id",   "call_" + tool_call.id},
         {"name",      tool_name},
         {"arguments", tool_name == "update_plan" ? ([&]() { json args = parsed_args;
             if (args.contains("plan") && args.at("plan").is_array()) {

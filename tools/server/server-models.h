@@ -40,6 +40,11 @@ enum server_model_source {
     SERVER_MODEL_SOURCE_CACHE,
 };
 
+enum server_child_mode {
+    SERVER_CHILD_MODE_NORMAL,   // load the model and run normally
+    SERVER_CHILD_MODE_DOWNLOAD, // download the model and exit
+};
+
 static std::string server_model_status_to_string(server_model_status status) {
     switch (status) {
         case SERVER_MODEL_STATUS_DOWNLOADING: return "downloading";
@@ -72,6 +77,7 @@ struct server_model_meta {
     int64_t last_used = 0; // for LRU unloading
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
     json loaded_info; // info to be reflected via /v1/models endpoint ; if in DOWNLOADING state, it should contain download progress info
+    json progress; // reflect load or download progress info, if any
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
@@ -104,7 +110,6 @@ private:
         std::shared_ptr<server_subproc> subproc; // shared between main thread and monitoring thread
         std::thread th;
         server_model_meta meta;
-        FILE * stdin_file = nullptr;
     };
 
     std::mutex mutex;
@@ -160,22 +165,27 @@ public:
     // return a copy of all model metadata (thread-safe)
     std::vector<server_model_meta> get_all_meta();
 
+    struct load_options {
+        server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
+        // used for spawning a downloading child process
+        std::optional<server_model_meta> custom_meta = std::nullopt;
+    };
+
     // load and unload model instances
     // these functions are thread-safe
     void load(const std::string & name);
+    void load(const std::string & name, const load_options & opts);
     void unload(const std::string & name);
     void unload_all();
 
-    // download a new model, progress is reported via SSE
-    // to stop the download, call unload()
-    void download(common_params_model && model, common_download_opts && opts);
-
-    // update the status of a model instance (thread-safe)
     struct update_status_args {
         server_model_status status;
         int exit_code = 0; // only valid if status == UNLOADED
         json loaded_info = nullptr;
+        json progress = nullptr;
     };
+    // update the status of a model instance (thread-safe)
+    // also send SSE notification to /models/sse endpoint
     void update_status(const std::string & name, const update_status_args & args);
     void update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok = true);
 
@@ -208,8 +218,14 @@ public:
 };
 
 struct server_child {
+    // serializes the notify_to_router writes
+    std::mutex mtx_stdout;
+    std::atomic<bool> is_finished_downloading = false; // set by run_download
+
     // return true if the current process is a child server instance
     bool is_child();
+    server_child_mode get_mode();
+    int run_download(common_params & params);
 
     // register the shutdown_handler to be called by the router
     // return the monitoring thread (to be joined by the caller)

@@ -396,7 +396,7 @@ static bool parse_bool_value(const std::string & value) {
 // CLI argument parsing functions
 //
 
-bool common_params_handle_models(common_params & params, llama_example curr_ex) {
+bool common_params_handle_models(common_params & params, llama_example curr_ex, common_download_callback * callback) {
     const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
                                          params.speculative.types.end(),
                                          COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
@@ -407,6 +407,10 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex) 
     opts.skip_download   = params.skip_download;
     opts.download_mtp    = spec_type_draft_mtp;
     opts.download_mmproj = !params.no_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty();
+
+    if (callback) {
+        opts.callback = callback;
+    }
 
     // sub-models (draft, mmproj, vocoder) are explicitly specified by the user,
     // so we should not auto-discover mtp/mmproj siblings for them
@@ -584,8 +588,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
-    // export_graph_ops loads only metadata
-    const bool skip_model_download = ctx_arg.ex == LLAMA_EXAMPLE_EXPORT_GRAPH_OPS;
+    const bool skip_model_download =
+        // server will call common_params_handle_models() later, so we skip it here
+        ctx_arg.ex == LLAMA_EXAMPLE_SERVER ||
+        // export_graph_ops loads only metadata
+        ctx_arg.ex == LLAMA_EXAMPLE_EXPORT_GRAPH_OPS;
 
     if (!skip_model_download) {
         // handle model and download
@@ -594,7 +601,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         // model is required (except for server)
         // TODO @ngxson : maybe show a list of available models in CLI in this case
         if (params.model.path.empty()
-                && ctx_arg.ex != LLAMA_EXAMPLE_SERVER
                 && !params.usage
                 && !params.completion) {
             throw std::invalid_argument("error: --model is required\n");
