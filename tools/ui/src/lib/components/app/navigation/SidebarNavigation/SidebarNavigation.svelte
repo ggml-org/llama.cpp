@@ -154,8 +154,8 @@
 					size="lg"
 					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
 					class="{isExpandedMode
-						? 'md:bg-muted!'
-						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-accent!"
+						? 'bg-muted! md:bg-foreground/5!'
+						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10!"
 					href={isExpandedMode ? ROUTES.START : undefined}
 					onclick={isExpandedMode ? undefined : toggleExpandedMode}
 					tooltip={isExpandedMode ? undefined : 'Open Sidebar'}
@@ -168,7 +168,7 @@
 				<div
 					class="flex items-center transition-all duration-150 ease-out {isMobile.current &&
 					!isExpandedMode
-						? 'opacity-0 !h-0'
+						? 'opacity-0 h-0!'
 						: ''}"
 					in:fade={{ duration: 150, easing: circIn, delay: 50 }}
 					out:fade={{ duration: 100 }}
