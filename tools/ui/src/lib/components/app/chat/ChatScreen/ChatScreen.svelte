@@ -1,20 +1,14 @@
 <script lang="ts">
-	import { Trash2 } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import {
 		ChatScreenForm,
 		ChatMessages,
 		ChatScreenDragOverlay,
 		ChatScreenProcessingInfo,
-		DialogEmptyFileAlert,
-		DialogFileUploadError,
-		DialogChatError,
 		ServerLoadingSplash,
-		DialogConfirmation,
 		ChatScreenServerError
 	} from '$lib/components/app';
 	import { setProcessingInfoContext } from '$lib/contexts';
-	import { ErrorDialogType } from '$lib/enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
@@ -42,6 +36,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 	import ChatScreenActionScrollDown from './ChatScreenActionScrollDown.svelte';
+	import ChatScreenDialogsAndAlerts from './ChatScreenDialogsAndAlerts.svelte';
 	import { ROUTES } from '$lib/constants';
 
 	let { showCenteredEmpty = false } = $props();
@@ -269,37 +264,12 @@
 	</div>
 {/if}
 
-<DialogFileUploadError
-	bind:open={fileUpload.showFileErrorDialog}
-	fileErrorData={fileUpload.fileErrorData}
-/>
-
-<DialogConfirmation
-	bind:open={showDeleteDialog}
-	title="Delete Conversation"
-	description="Are you sure you want to delete this conversation? This action cannot be undone and will permanently remove all messages in this conversation."
-	confirmText="Delete"
-	cancelText="Cancel"
-	variant="destructive"
-	icon={Trash2}
-	onConfirm={handleDeleteConfirm}
-	onCancel={() => (showDeleteDialog = false)}
-/>
-
-<DialogEmptyFileAlert
-	bind:open={showEmptyFileDialog}
-	emptyFiles={emptyFileNames}
-	onOpenChange={(open) => {
-		if (!open) {
-			emptyFileNames = [];
-		}
-	}}
-/>
-
-<DialogChatError
-	message={activeErrorDialog?.message ?? ''}
-	contextInfo={activeErrorDialog?.contextInfo}
-	onOpenChange={handleErrorDialogOpenChange}
-	open={Boolean(activeErrorDialog)}
-	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
+<ChatScreenDialogsAndAlerts
+	showDeleteDialog={showDeleteDialog}
+	handleDeleteConfirm={handleDeleteConfirm}
+	showEmptyFileDialog={showEmptyFileDialog}
+	emptyFileNames={emptyFileNames}
+	activeErrorDialog={activeErrorDialog}
+	handleErrorDialogOpenChange={handleErrorDialogOpenChange}
+	fileUpload={fileUpload}
 />
