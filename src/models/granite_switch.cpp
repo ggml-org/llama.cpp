@@ -6,12 +6,29 @@
 // Granite Switch: a dense, all-attention Granite-4.1 model with N embedded LoRA
 // adapters selected per-token by control tokens.
 //
-// Two cheap CPU steps (no router weights) implement the switch, done in
-// llm_graph_input_switch::set_input:
-//   1. sticky per-token index — each position takes the index of the most recent
-//      control token at-or-before it (0 = base, i+1 = adapter i; cannot revert).
-//   2. token-exchange — rewrite each control token id to its substitute id before
-//      embedding (read index first, then swap).
+// The per-token adapter index is recovered IN-GRAPH by a single-head causal
+// "router" attention (ported faithfully from the vLLM/HF backends), whose K/V
+// live in the model KV cache at an extra layer R == hparams.router_layer:
+//   - set_input fills pure per-token signals (no history): router Q[0]=1,
+//     K[0]=±gain (+ for a control token, - otherwise), V[0]=adapter slot / 0,
+//     plus the token-exchange (control id -> substitute id before embedding).
+//   - the causal softmax over the single visible control token (single-switch
+//     contract) puts ~all weight on it, so attended V[0] ≈ that adapter's slot;
+//     readback = clamp(round(V[0]), 0, n_adapters) -> I32 adapter index.
+// Because the selection state lives in the per-sequence KV cache (like vLLM's
+// PagedAttention router), CONCURRENT requests are isolated for free — there is
+// no global sticky variable to leak between sequences (the prior POC's bug).
+//
+// SINGLE-SWITCH CONTRACT / KNOWN LIMITATION (identical to the vLLM & HF
+// backends): the gain is flat (no recency), so within one sequence there is "no
+// mechanism to transition back to base mid-sequence" (vLLM single.py docstring).
+// A control token's K stays causally visible to all later tokens in the SAME
+// sequence, so once an adapter fires it stays on until that sequence ends.
+// vLLM/HF never observe this because each served request is a fresh sequence; a
+// client that continues ONE KV cache across chat turns (e.g. `ollama run`) must
+// start a fresh sequence per turn to return to base. A recency-biased router
+// would lift this limit but is a deliberate divergence from vLLM and is not done
+// here. See scratch/multiturn_leak_test.cpp and scratch/concurrent_switch_test.cpp.
 //
 // Then a standard Granite decoder, with LoRA added per-token on qkv / o / gate /
 // up / down via ggml_mul_mat_id over stacked tensors. The stacked dim is
@@ -71,6 +88,26 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
         control_token_to_index[(llama_token) token_ids[i]]      = (int32_t) (i + 1);
         control_token_to_substitute[(llama_token) token_ids[i]] = (llama_token) substitute_ids[i];
     }
+
+    // --- router KV layer (per-token adapter selection lives in the KV cache) ---
+    // The GGUF block_count covers only the real decoder layers, so at this point
+    // hparams.n_layer_all == n_real and hparams.n_layer() == n_real. Append ONE
+    // extra single-head attention layer at index R = n_real to hold the router
+    // K/V. We bump n_layer_all to n_real+1 so the KV-cache allocator (which loops
+    // [0, n_layer_all)) gives the router its own per-sequence slot, and set
+    // n_layer_nextn = 1 so n_layer() == n_layer_all - n_layer_nextn stays n_real
+    // — the decoder loop and tensor loading (both bounded by n_layer()) are left
+    // completely unchanged and never touch layer R.
+    const uint32_t n_real = hparams.n_layer(); // == n_layer_all here (nextn==0)
+    hparams.router_layer  = (int32_t) n_real;
+    hparams.n_layer_all   = n_real + 1;
+    hparams.n_layer_nextn = 1;
+
+    // The router is a single causal head. n_embd_head_k/v are global (the router
+    // inherits the model head dim and uses only dim 0; the rest is zero-padded).
+    hparams.n_head_arr[n_real]    = 1;
+    hparams.n_head_kv_arr[n_real] = 1;
+    hparams.n_ff_arr[n_real]      = 0; // no FFN for the router layer
 }
 
 void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
@@ -130,8 +167,19 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
     }
 }
 
+// Router differential gain. Each token's router K dim-0 is +GAIN for a control
+// token and -GAIN otherwise; Q dim-0 is 1.0. In the causal softmax a single
+// visible control token then dominates (its logit beats a normal token's by
+// 2*GAIN), so the readback recovers that adapter's integer slot. 15.0 matches the
+// vLLM/HF backend default (control_token_gain in config.py) and is F16-safe
+// (no F32 KV cache needed).
+static constexpr float GRANITE_SWITCH_ROUTER_GAIN = 15.0f;
+
 // ----------------------------------------------------------------------------
-// switch input: compute sticky adapter index + token-exchanged ids per token.
+// switch input: pure per-token maps. The adapter index is NOT computed here —
+// it is recovered in-graph by the router attention (see build_arch_graph). This
+// is intentionally stateless: no cross-ubatch carry. Per-sequence isolation
+// (no leak between concurrent sequences) comes from the KV cache, not from here.
 // ----------------------------------------------------------------------------
 void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
     if (!ubatch->token) {
@@ -140,42 +188,35 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
 
     const int64_t n_tokens = ubatch->n_tokens;
 
-    std::vector<int32_t> ids(n_tokens);
-    std::vector<int32_t> sub(n_tokens);
+    std::vector<int32_t> sub (n_tokens);
+    std::vector<float>   ksig(n_tokens);
+    std::vector<float>   vval(n_tokens);
+    std::vector<float>   q   (n_tokens, 1.0f); // Q dim-0 is constant 1.0
 
-    // POC single-sequence sticky state: carry the last index across ubatches,
-    // resetting when this ubatch starts a fresh sequence (contains pos 0).
-    bool has_pos0 = false;
-    if (ubatch->pos) {
-        for (int64_t i = 0; i < n_tokens; ++i) {
-            if (ubatch->pos[i] == 0) { has_pos0 = true; break; }
-        }
-    }
-    if (has_pos0) {
-        smodel.poc_sticky_index = 0;
-    }
-
-    int32_t cur = smodel.poc_sticky_index;
     for (int64_t i = 0; i < n_tokens; ++i) {
         const llama_token tok = ubatch->token[i];
 
-        // 1. read index first (sticky): update on a control token.
+        // router K/V signals: control token -> (+gain, slot); else -> (-gain, 0).
         auto it = smodel.control_token_to_index.find(tok);
         if (it != smodel.control_token_to_index.end()) {
-            cur = it->second;
+            ksig[i] = +GRANITE_SWITCH_ROUTER_GAIN;
+            vval[i] = (float) it->second; // adapter slot (1 + adapter)
+        } else {
+            ksig[i] = -GRANITE_SWITCH_ROUTER_GAIN;
+            vval[i] = 0.0f;               // base
         }
-        ids[i] = cur;
 
-        // 2. then token-exchange: rewrite control token to its substitute.
+        // token-exchange: rewrite a control token to its substitute id.
         auto sit = smodel.control_token_to_substitute.find(tok);
         sub[i] = (sit != smodel.control_token_to_substitute.end())
             ? (int32_t) sit->second
             : (int32_t) tok;
     }
-    smodel.poc_sticky_index = cur;
 
-    ggml_backend_tensor_set(adapter_ids, ids.data(), 0, n_tokens*ggml_element_size(adapter_ids));
-    ggml_backend_tensor_set(sub_tokens,  sub.data(), 0, n_tokens*ggml_element_size(sub_tokens));
+    ggml_backend_tensor_set(sub_tokens,  sub.data(),  0, n_tokens*ggml_element_size(sub_tokens));
+    ggml_backend_tensor_set(router_ksig, ksig.data(), 0, n_tokens*ggml_element_size(router_ksig));
+    ggml_backend_tensor_set(router_vval, vval.data(), 0, n_tokens*ggml_element_size(router_vval));
+    ggml_backend_tensor_set(router_q,    q.data(),    0, n_tokens*ggml_element_size(router_q));
 }
 
 // ----------------------------------------------------------------------------
@@ -229,14 +270,20 @@ llama_model_granite_switch::graph::graph(
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
     GGML_ASSERT(n_embd_head == n_rot);
 
-    // --- switch input: substituted ids + per-token adapter indices ---
+    // --- switch input: substituted ids + per-token router K/V/Q signals ---
     auto inp_switch = std::make_unique<llm_graph_input_switch>(smodel);
     inp_switch->sub_tokens  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
-    inp_switch->adapter_ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    inp_switch->router_ksig = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
+    inp_switch->router_vval = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
+    inp_switch->router_q    = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
     ggml_set_input(inp_switch->sub_tokens);
-    ggml_set_input(inp_switch->adapter_ids);
+    ggml_set_input(inp_switch->router_ksig);
+    ggml_set_input(inp_switch->router_vval);
+    ggml_set_input(inp_switch->router_q);
     ggml_tensor * sub_tokens  = inp_switch->sub_tokens;
-    ggml_tensor * adapter_ids = inp_switch->adapter_ids;
+    ggml_tensor * router_ksig = inp_switch->router_ksig;
+    ggml_tensor * router_vval = inp_switch->router_vval;
+    ggml_tensor * router_q    = inp_switch->router_q;
     res->add_input(std::move(inp_switch));
 
     // embed the token-exchanged ids ourselves (we cannot use build_inp_embd
@@ -252,6 +299,40 @@ llama_model_granite_switch::graph::graph(
         inp_pos = build_inp_pos();
     }
     auto * inp_attn = build_attn_inp_kv();
+
+    // --- router attention: recover the per-token adapter index in-graph ---
+    // A single causal head whose K/V live in the KV cache at layer R == router_layer.
+    // Only dim 0 carries signal (rest zero-padded): Q[0]=1, K[0]=±gain, V[0]=slot/0.
+    // The causal softmax over a single visible control token (the single-switch
+    // contract) puts ~all weight on it, so attended V[0] ≈ that adapter's slot.
+    // State persists across decode steps and is isolated per-sequence because the
+    // control token's K/V stay in the per-sequence KV cache (vLLM/HF parity). No
+    // RoPE on the router Q/K — positions are irrelevant to the selection.
+    const int   R = hparams.router_layer;
+    GGML_ASSERT(R >= 0 && "granite-switch: router_layer not configured");
+    // build [n_embd_head, 1, n_tokens] with row 0 = signal, rows 1.. = 0.
+    auto router_lane = [&](ggml_tensor * sig1d) {
+        ggml_tensor * t = ggml_reshape_3d(ctx0, sig1d, 1, 1, n_tokens);
+        return ggml_pad(ctx0, t, (int) n_embd_head - 1, 0, 0, 0); // pad dim0 right with zeros
+    };
+    ggml_tensor * Qr = router_lane(router_q);
+    ggml_tensor * Kr = router_lane(router_ksig);
+    ggml_tensor * Vr = router_lane(router_vval);
+
+    ggml_tensor * router_out = build_attn(inp_attn,
+            nullptr, nullptr, nullptr,
+            Qr, Kr, Vr, nullptr, nullptr, nullptr, /*kq_scale=*/1.0f, /*il=*/R);
+    cb(router_out, "router_out", R);
+
+    // readback: router_out is {n_embd_head, n_tokens}; row 0 is the attended slot.
+    // adapter_index = clamp(round(row0), 0, n_adapters), as I32 for mul_mat_id.
+    ggml_tensor * slot_f = ggml_cont(ctx0,
+        ggml_view_2d(ctx0, router_out, 1, n_tokens, router_out->nb[1], 0));
+    slot_f = ggml_reshape_1d(ctx0, slot_f, n_tokens);
+    slot_f = ggml_clamp(ctx0, slot_f, 0.0f, (float) smodel.n_adapters);
+    slot_f = ggml_round(ctx0, slot_f);                   // round BEFORE cast (cast truncates)
+    ggml_tensor * adapter_ids = ggml_cast(ctx0, slot_f, GGML_TYPE_I32);
+    cb(adapter_ids, "adapter_ids", -1);
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
