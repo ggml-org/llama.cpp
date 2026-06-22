@@ -76,11 +76,11 @@ class MiniMaxM3Model(TextModel):
         self.gguf_writer.add_expert_weights_scale(self.find_hparam(["routed_scaling_factor"]))
         self.gguf_writer.add_expert_weights_norm(True)
 
-        # leading dense layers = count of leading zeros in moe_layer_freq
-        moe_layer_freq = self.find_hparam(["moe_layer_freq"])
+        # leading dense layers: moe_layer_freq (ints) or mlp_layer_types (Transformers 5.12, strings)
+        moe_layer_freq = self.find_hparam(["moe_layer_freq", "mlp_layer_types"])
         n_dense = 0
         for v in moe_layer_freq:
-            if v == 0:
+            if v == 0 or v == "dense":
                 n_dense += 1
             else:
                 break
