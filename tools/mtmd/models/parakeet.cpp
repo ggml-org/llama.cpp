@@ -7,9 +7,8 @@ static constexpr int PARAKEET_LOCAL_ATTN_WINDOW    = 128;
 ggml_cgraph * clip_graph_parakeet::build() {
 
     // Conv subsampling
-    ggml_tensor * inp = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, img.ny(), img.nx(), 1);
-    ggml_set_name(inp, "inp_raw");
-    ggml_set_input(inp);
+    ggml_tensor * inp = build_inp_raw(1);
+    inp = ggml_cont(ctx0, ggml_transpose(ctx0, inp));
 
     // [freq, time, channels, batch]
     ggml_tensor * cur = ggml_conv_2d(ctx0, model.pre_encode_conv_X_w[0], inp, 2, 2, 1, 1, 1, 1);

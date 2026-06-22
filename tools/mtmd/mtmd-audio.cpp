@@ -1006,7 +1006,7 @@ void mtmd_audio_preprocessor_parakeet::worker_thread(
             for (; k < n_fb; k++) {
                 sum += fft_out[k] * cache.filters.data[j * n_fb + k];
             }
-            mel.data[i * mel.n_mel + j] = std::log(sum + eps);
+            mel.data[j * mel.n_len + i] = std::log(sum + eps);
         }
     }
 
@@ -1014,7 +1014,7 @@ void mtmd_audio_preprocessor_parakeet::worker_thread(
     const double empty_sum = std::log(eps);
     for (; i < mel.n_len; i += n_threads) {
         for (int j = 0; j < mel.n_mel; j++) {
-            mel.data[i * mel.n_mel + j] = empty_sum;
+            mel.data[j * mel.n_len + i] = empty_sum;
         }
     }
 }
@@ -1136,13 +1136,13 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
 
             // Calculate Mean ONLY on valid audio frames
             for (int i = 0; i < valid_frames; i++) {
-                sum += (double)out_full.data[i * out_full.n_mel + j];
+                sum += (double)out_full.data[j * out_full.n_len + i];
             }
             double mean = sum / valid_frames;
 
             // Calculate Variance ONLY on valid audio frames
             for (int i = 0; i < valid_frames; i++) {
-                double diff = (double)out_full.data[i * out_full.n_mel + j] - mean;
+                double diff = (double)out_full.data[j * out_full.n_len + i] - mean;
                 sq_diff_sum += diff * diff;
             }
 
@@ -1151,7 +1151,7 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
 
             // Apply to ALL frames (including the padded ones)
             for (int i = 0; i < out_full.n_len; i++) {
-                out_full.data[i * out_full.n_mel + j] = (float)((out_full.data[i * out_full.n_mel + j] - mean) / denominator);
+                out_full.data[j * out_full.n_len + i] = (float)((out_full.data[j * out_full.n_len + i] - mean) / denominator);
             }
         }
     }
