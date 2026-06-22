@@ -19,3 +19,17 @@ export enum ServerModelStatus {
 	SLEEPING = 'sleeping',
 	FAILED = 'failed'
 }
+
+/**
+ * /models/sse event type enum - discriminates the records broadcast on the
+ * model status feed in ROUTER mode. Matches the event names emitted by
+ * tools/server/server-models.cpp from the C++ server.
+ */
+export enum ServerModelsSseEventType {
+	STATUS_CHANGE = 'status_change',
+	MODEL_STATUS = 'model_status',
+	STATUS_UPDATE = 'status_update',
+	MODELS_RELOAD = 'models_reload',
+	MODEL_REMOVE = 'model_remove',
+	DOWNLOAD_PROGRESS = 'download_progress'
+}

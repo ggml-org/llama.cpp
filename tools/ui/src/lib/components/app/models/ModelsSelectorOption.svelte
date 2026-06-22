@@ -13,6 +13,7 @@
 	import type { ModelOption } from '$lib/types/models';
 	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
 
 	interface Props {
 		option: ModelOption;
@@ -50,11 +51,15 @@
 		(serverStatus === ServerModelStatus.LOADED || isSleeping) && !isOperationInProgress
 	);
 	let isLoading = $derived(serverStatus === ServerModelStatus.LOADING || isOperationInProgress);
+
+	let loadProgress = $derived(isLoading ? modelsStore.getLoadProgress(option.model) : null);
+	let loadPercent = $derived(Math.round(modelLoadFraction(loadProgress) * 100));
+	let loadTitle = $derived(modelLoadProgressText(loadProgress));
 </script>
 
 <div
 	class={[
-		'group flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
+		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
 		'cursor-pointer hover:bg-muted focus:bg-muted',
 		(isSelected || isHighlighted) && 'bg-accent text-accent-foreground',
 		!(isSelected || isHighlighted) && 'hover:bg-accent hover:text-accent-foreground',
@@ -62,6 +67,7 @@
 	]}
 	role="option"
 	aria-selected={isSelected || isHighlighted}
+	title={loadTitle}
 	tabindex="0"
 	onclick={() => onSelect(option.id)}
 	onmouseenter={onMouseEnter}
@@ -188,4 +194,15 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if isLoading}
+		<div
+			class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 overflow-hidden rounded-b-sm bg-muted"
+		>
+			<div
+				class="h-full bg-primary transition-[width] duration-200 ease-out"
+				style="width: {loadPercent}%"
+			></div>
+		</div>
+	{/if}
 </div>

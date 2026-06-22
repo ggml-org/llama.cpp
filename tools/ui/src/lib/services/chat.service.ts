@@ -10,7 +10,10 @@ import {
 	SETTINGS_KEYS,
 	API_CHAT,
 	API_SLOTS,
-	CONTROL_ACTION
+	CONTROL_ACTION,
+	SSE_LINE_SEPARATOR,
+	SSE_DATA_PREFIX,
+	SSE_DONE_MARKER
 } from '$lib/constants';
 import {
 	AttachmentType,
@@ -18,8 +21,7 @@ import {
 	FileTypeAudio,
 	MessageRole,
 	MimeTypeAudio,
-	ReasoningFormat,
-	UrlProtocol
+	ReasoningFormat
 } from '$lib/enums';
 import type {
 	ApiChatMessageContentPart,
@@ -642,15 +644,15 @@ export class ChatService {
 				if (abortSignal?.aborted) break;
 
 				chunk += decoder.decode(value, { stream: true });
-				const lines = chunk.split('\n');
+				const lines = chunk.split(SSE_LINE_SEPARATOR);
 				chunk = lines.pop() || '';
 
 				for (const line of lines) {
 					if (abortSignal?.aborted) break;
 
-					if (line.startsWith(UrlProtocol.DATA)) {
-						const data = line.slice(6);
-						if (data === '[DONE]') {
+					if (line.startsWith(SSE_DATA_PREFIX)) {
+						const data = line.slice(SSE_DATA_PREFIX.length).trim();
+						if (data === SSE_DONE_MARKER) {
 							streamFinished = true;
 
 							continue;

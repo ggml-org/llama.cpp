@@ -1,4 +1,10 @@
-import type { ContentPartType, FileTypeAudio, ServerModelStatus, ServerRole } from '$lib/enums';
+import type {
+	ContentPartType,
+	FileTypeAudio,
+	ServerModelStatus,
+	ServerModelsSseEventType,
+	ServerRole
+} from '$lib/enums';
 import type { ChatMessagePromptProgress, ChatRole } from './chat';
 
 export type AudioInputFormat = FileTypeAudio.WAV | FileTypeAudio.MP3;
@@ -94,6 +100,46 @@ export interface ApiModelDataEntry {
 	tags?: string[];
 	/** Legacy meta field (may be present in older responses) */
 	meta?: Record<string, unknown> | null;
+}
+
+/**
+ * Load stage reported by the /models/sse feed, in load order.
+ */
+export type ApiModelLoadStage = 'text_model' | 'spec_model' | 'mmproj_model';
+
+/**
+ * Load progress snapshot: the full ordered stage plan, the active stage,
+ * and its fractional value (0.0 -> 1.0).
+ */
+export interface ApiModelsSseProgress {
+	stages: ApiModelLoadStage[];
+	current: ApiModelLoadStage;
+	value: number;
+}
+
+/**
+ * Status payload carried by a /models/sse envelope.
+ * exit_code appears on unload.
+ */
+export interface ApiModelsSseData {
+	status: ServerModelStatus;
+	progress?: ApiModelsSseProgress;
+	exit_code?: number;
+}
+
+/**
+ * Event kind multiplexed on the /models/sse feed.
+ * Only the status_* events carry a status payload, models_reload signals a
+ * full list refresh, model_remove drops a row, download_* drive download UI.
+ */
+/**
+ * One /models/sse record. event discriminates the kind, model names the
+ * target instance, data carries the status payload when present.
+ */
+export interface ApiModelsSseEvent {
+	model: string;
+	event: ServerModelsSseEventType;
+	data: ApiModelsSseData;
 }
 
 export interface ApiModelDetails {

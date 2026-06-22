@@ -10,7 +10,7 @@
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import { copyToClipboard, deriveAgenticSections } from '$lib/utils';
+	import { copyToClipboard, deriveAgenticSections, modelLoadProgressText } from '$lib/utils';
 	import { AgenticSectionType } from '$lib/enums';
 	import { REASONING_TAGS } from '$lib/constants/agentic';
 	import { tick } from 'svelte';
@@ -185,6 +185,13 @@
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
 
+	// during a router auto-load the message has no model yet, so target the selected one
+	let loadTargetModel = $derived(message.model ?? modelsStore.selectedModelName);
+	let modelLoadProgress = $derived(
+		isRouter && loadTargetModel ? modelsStore.getLoadProgress(loadTargetModel) : null
+	);
+	let modelLoadingText = $derived(modelLoadProgressText(modelLoadProgress));
+
 	let showProcessingInfoTop = $derived(
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
@@ -220,7 +227,8 @@
 		<div class="mt-6 w-full max-w-[48rem]" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
-					{processingState.getPromptProgressText() ??
+					{modelLoadingText ??
+						processingState.getPromptProgressText() ??
 						processingState.getProcessingMessage() ??
 						'Processing...'}
 				</span>
@@ -252,7 +260,8 @@
 		<div class="mt-4 w-full max-w-[48rem]" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
-					{processingState.getPromptProgressText() ??
+					{modelLoadingText ??
+						processingState.getPromptProgressText() ??
 						processingState.getProcessingMessage() ??
 						'Processing...'}
 				</span>
