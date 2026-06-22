@@ -41,6 +41,8 @@
 	import { beforeNavigate, afterNavigate } from '$app/navigation';
 	import { onDestroy, onMount } from 'svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
+	import ChatScreenActionScrollDown from './ChatScreenActionScrollDown.svelte';
+	import { ROUTES } from '$lib/constants';
 
 	let { showCenteredEmpty = false } = $props();
 
@@ -459,6 +461,17 @@
 			<ChatScreenServerError />
 
 			<ChatScreenProcessingInfo />
+
+			{#if autoScroll.userScrolledUp && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
+				<ChatScreenActionScrollDown
+					onclick={() => {
+						chatScrollContainer?.scrollTo({
+							top: chatScrollContainer.scrollHeight,
+							behavior: 'smooth'
+						});
+					}}
+				/>
+			{/if}
 
 			<ChatScreenForm
 				class="pointer-events-auto conversation-chat-form"
