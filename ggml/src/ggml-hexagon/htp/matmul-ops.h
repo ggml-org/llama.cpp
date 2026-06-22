@@ -261,10 +261,6 @@ static inline size_t htp_mm_round_up(size_t n, size_t m) {
     return ((n + m - 1) / m) * m;
 }
 
-static inline size_t htp_mm_align_up(size_t n, size_t m) {
-    return ((n + m - 1) / m) * m;
-}
-
 static inline bool htp_mm_hmx_pipeline(uint32_t m) {
     return m > 32;
 }
@@ -303,17 +299,17 @@ static inline size_t htp_mm_hmx_get_2d_vtcm_size(
     const size_t row_stride = htp_mm_get_tiled_row_stride(wtype, k);
     const size_t vec_dot_size = k * sizeof(uint16_t);
 
-    const size_t act_f32_size = htp_mm_align_up(act_threads * 4 * k * sizeof(float), HTP_MM_HMX_TILE_SIZE);
+    const size_t act_f32_size = htp_mm_round_up(act_threads * 4 * k * sizeof(float), HTP_MM_HMX_TILE_SIZE);
     size_t weight_area_size = is_quant
-        ? htp_mm_align_up((nc / 32) * n_k_tiles * aligned_tile_size, HTP_MM_HMX_TILE_SIZE)
-        : htp_mm_align_up(nc * row_stride, HTP_MM_HMX_TILE_SIZE);
+        ? htp_mm_round_up((nc / 32) * n_k_tiles * aligned_tile_size, HTP_MM_HMX_TILE_SIZE)
+        : htp_mm_round_up(nc * row_stride, HTP_MM_HMX_TILE_SIZE);
     if (pipeline) {
         weight_area_size *= 2;
     }
-    const size_t act_area_size    = htp_mm_align_up(mc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
-    const size_t output_area_size = htp_mm_align_up(mc * nc * sizeof(uint16_t), HTP_MM_HMX_TILE_SIZE);
+    const size_t act_area_size    = htp_mm_round_up(mc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
+    const size_t output_area_size = htp_mm_round_up(mc * nc * sizeof(uint16_t), HTP_MM_HMX_TILE_SIZE);
 
-    size_t scratch0_size = htp_mm_align_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
+    size_t scratch0_size = htp_mm_round_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
     size_t scratch1_size = pipeline ? scratch0_size : 0;
     size_t scratch2_size = pipeline ? output_area_size : 0;
 
@@ -322,19 +318,18 @@ static inline size_t htp_mm_hmx_get_2d_vtcm_size(
 }
 
 static inline size_t htp_mm_hmx_get_batched_vtcm_size(
-    int wtype, uint32_t k, size_t mc, size_t nc, uint32_t group_size, bool use_dma_activation, bool pipeline, uint32_t act_threads
-) {
+    int wtype, uint32_t k, size_t mc, size_t nc, uint32_t group_size, bool use_dma_activation, bool pipeline, uint32_t act_threads) {
     (void)wtype;
     (void)pipeline;
-    const size_t vec_dot_size = k * sizeof(uint16_t);
+    const size_t vec_dot_size     = k * sizeof(uint16_t);
     const size_t f32_scratch_size = use_dma_activation
-        ? htp_mm_align_up(act_threads * 4 * k * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
+        ? htp_mm_round_up(act_threads * 4 * k * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
 
-    const size_t act_head_stride  = mc * k;
-    const size_t weight_area_size = htp_mm_align_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
-    const size_t act_area_size    = htp_mm_align_up(group_size * act_head_stride * sizeof(uint16_t), HTP_MM_HMX_TILE_SIZE);
-    const size_t output_area_size = htp_mm_align_up(group_size * mc * nc * sizeof(uint16_t), HTP_MM_HMX_TILE_SIZE);
-    const size_t scratch_area_size = htp_mm_align_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
+    const size_t act_head_stride   = mc * k;
+    const size_t weight_area_size  = htp_mm_round_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
+    const size_t act_area_size     = htp_mm_round_up(group_size * act_head_stride * sizeof(uint16_t), HTP_MM_HMX_TILE_SIZE);
+    const size_t output_area_size  = htp_mm_round_up(group_size * mc * nc * sizeof(uint16_t), HTP_MM_HMX_TILE_SIZE);
+    const size_t scratch_area_size = htp_mm_round_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
 
     return weight_area_size + act_area_size + output_area_size +
            2 * scratch_area_size + 256 + f32_scratch_size;
