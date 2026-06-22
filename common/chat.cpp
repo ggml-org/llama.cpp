@@ -2399,9 +2399,10 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
     data.thinking_start_tag = "<think>";
     data.thinking_end_tag   = "</think>";
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar     = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
@@ -2415,86 +2416,75 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
     }
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto end = p.end();
+        auto generation_prompt = p.literal("<|im_start|>assistant\n");
 
-        auto im_end_suffix = p.optional(p.literal("<|im_end|>") + p.space());
-
-        auto assistant_prefix = p.literal("<|im_start|>assistant\n");
-
-        auto thinking = p.eps();
-        if (extract_reasoning || !inputs.enable_thinking) {
-            thinking = ("<think>" << p.reasoning(p.until("</think>")) << "</think>") + p.space();
-        } else {
-            thinking = p.literal("<think>\n");
+        auto reasoning = p.eps();
+        if (extract_reasoning) {
+            reasoning = ("<think>" << p.reasoning(p.until("</think>")) << "</think>") + p.space();
         }
 
-        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
-            return assistant_prefix + thinking + p.content(p.rest()) + im_end_suffix + end;
+        // Response format parser
+        if (has_response_format) {
+            return generation_prompt + (reasoning << p.content(p.schema(p.json(), "response-format", inputs.json_schema)));
         }
 
-        static const std::vector<std::string> PARAM_VALUE_STOP = {
-            "</param>",
-            "</function>",
-            "<function",
-            "<param",
-        };
+        if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+            // CDATA lets a value carry characters that would otherwise close the tag (e.g.
+            // </param>); capture the inner text only, excluding the CDATA markers.
+            auto string_value = p.choice({
+                p.literal("<![CDATA[") + p.ac(p.tool_arg_string_value(p.until("]]>")) + p.literal("]]>"), "]]>"),
+                p.negate(p.literal("<![CDATA[")) + p.ac(p.tool_arg_string_value(p.until("</param>")) + p.literal("</param>"), "</param>")
+            });
 
-        // CDATA lets a value carry characters that would otherwise close the tag (e.g.
-        // </param>); capture the inner text only, excluding the CDATA markers.
-        auto string_value = p.choice({
-            p.literal("<![CDATA[") + p.tool_arg_string_value(p.until("]]>")) + p.literal("]]>"),
-            p.tool_arg_string_value(p.until_one_of(PARAM_VALUE_STOP)),
-        });
+            auto tool_choice = p.choice();
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto &      function = tool.at("function");
+                const std::string name     = function.at("name");
+                auto              params   = function.contains("parameters") ? function.at("parameters") : json::object();
 
-        auto tool_choice = p.choice();
-        foreach_function(inputs.tools, [&](const json & tool) {
-            const auto &      function = tool.at("function");
-            const std::string name     = function.at("name");
-            auto params = function.contains("parameters") ? function.at("parameters") : json::object();
+                auto args = p.eps();
+                if (params.contains("properties") && params.at("properties").is_object() && !params.at("properties").empty()) {
+                    auto schema_info = common_schema_info();
+                    schema_info.resolve_refs(params);
 
-            auto args = p.eps();
-            if (params.contains("properties") && params.at("properties").is_object() &&
-                !params.at("properties").empty()) {
-                auto schema_info = common_schema_info();
-                schema_info.resolve_refs(params);
+                    auto arg_choice = p.choice();
+                    for (const auto & [prop_name, prop_schema] : params.at("properties").items()) {
+                        auto value_parser = p.eps();
+                        if (schema_info.resolves_to_string(prop_schema)) {
+                            value_parser = string_value;
+                        } else {
+                            value_parser = p.tool_arg_json_value(
+                                    p.schema(p.json(), "tool-" + name + "-arg-" + prop_name + "-schema", prop_schema, false)
+                                ) + p.literal("</param>");
+                        }
 
-                auto arg_choice = p.choice();
-                for (const auto & [prop_name, prop_schema] : params.at("properties").items()) {
-                    const bool is_string = schema_info.resolves_to_string(prop_schema);
+                        auto arg_rule = p.tool_arg(
+                            p.tool_arg_open(p.literal("<param name=\"") + p.tool_arg_name(p.literal(prop_name)) + p.literal("\">")) +
+                            value_parser
+                        );
 
-                    auto value_parser = is_string ?
-                        string_value :
-                        p.tool_arg_json_value(p.schema(p.json(),
-                                                       "tool-" + name + "-arg-" + prop_name + "-schema",
-                                                       prop_schema,
-                                                       false));
-
-                    auto arg_rule = p.tool_arg(
-                        p.tool_arg_open(p.literal("<param name=\"") + p.tool_arg_name(p.literal(prop_name)) +
-                                        p.literal("\">")) +
-                        value_parser +
-                        p.tool_arg_close(p.literal("</param>") + p.space()));
-
-                    arg_choice |= arg_rule;
+                        arg_choice |= arg_rule;
+                    }
+                    args = p.zero_or_more(arg_choice + p.space());
                 }
-                args = p.zero_or_more(arg_choice + p.space());
-            }
 
-            auto tool_parser = p.tool(
-                p.tool_open(p.literal("<function name=\"") + p.tool_name(p.literal(name)) + p.literal("\">")) +
-                p.tool_args(args) << p.tool_close(p.literal("</function>")));
+                auto tool_parser = p.tool(
+                    p.tool_open(p.literal("<function name=\"") + p.tool_name(p.literal(name)) + p.literal("\">"))
+                    << p.tool_args(args)
+                    << p.tool_close(p.literal("</function>")));
 
-            tool_choice |= p.rule("tool-" + name, tool_parser);
-        });
+                tool_choice |= p.rule("tool-" + name, tool_parser);
+            });
 
-        // Do not wrap trigger_rule("tool-call", ...) in a rule("tool-call", ...): a rule
-        // and trigger_rule sharing a name resolve to each other -> peg stack overflow.
-        auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
-        auto tool_calls = p.trigger_rule("tool-call", p.repeat(tool_choice + p.space(), 1, max_calls));
+            auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
+            auto tool_calls = p.trigger_rule("tool-call", p.repeat(tool_choice + p.space(), 1, max_calls));
 
-        auto content = p.content(p.until("<function"));
+            auto content = p.content(p.until("<function"));
 
-        return assistant_prefix + thinking + content + tool_calls + im_end_suffix + end;
+            return generation_prompt + reasoning + content + tool_calls + p.end();
+        }
+
+        return generation_prompt + reasoning + p.content(p.rest()) + p.end();
     });
 
     data.parser = parser.save();
@@ -2507,6 +2497,10 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
                 auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
                 builder.resolve_refs(schema);
             });
+            if (has_response_format) {
+                auto schema = inputs.json_schema;
+                builder.resolve_refs(schema);
+            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
