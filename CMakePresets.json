@@ -91,16 +91,47 @@
 
     { "name": "x64-windows-vulkan-debug", "inherits": [ "base", "vulkan", "debug" ] },
     { "name": "x64-windows-vulkan-release", "inherits": [ "base", "vulkan", "release" ] },
-    
     { "name": "base-windows", "hidden": true, "generator": "Visual Studio 17 2022", "binaryDir": "${sourceDir}/build-${presetName}",
-      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON", "CMAKE_INSTALL_RPATH": "$ORIGIN;$ORIGIN/..", "CMAKE_BUILD_TYPE": "Release"}
+      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON", "CMAKE_INSTALL_RPATH": "$ORIGIN;$ORIGIN/.."}
     },
-    { "name": "ggml-cuda-win", "inherits": "base-windows", 
-      "cacheVariables": { "CMAKE_CUDA_ARCHITECTURES": "121", "GGML_CUDA": "ON", "LLAMA_CURL": "OFF"}
+    { "name": "ggml-cuda-release", "inherits": "base-windows", 
+      "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "LLAMA_CURL": "OFF",
+                "GGML_NATIVE": "ON",
+                "GGML_RPC": "ON",
+                "LLAMA_BUILD_SERVER": "ON",
+                "GGML_BACKEND_DL": "OFF",
+                "GGML_AVX": "ON",
+                "GGML_AVX2": "ON",
+                "GGML_AVX512": "ON",
+                "GGML_AVX512_VBMI": "ON",
+                "GGML_AVX512_VNNI": "ON",
+                "GGML_AVX512_BF16": "OFF",
+                "GGML_MATMUL_INT8": "ON",
+                "GGML_CUDA": "ON",
+                "CMAKE_CUDA_ARCHITECTURES": "120",
+                "GGML_CUDA_GRAPH": "ON",
+                "GGML_CUDA_USE_CUBLASLT": "ON",
+                "GGML_CUDA_FORCE_CUBLAS": "OFF",
+                "GGML_LTO": "ON",
+                "GGML_OPENMP": "ON",
+                "GGML_FLASH_ATTN": "ON",
+                "GGML_CUDA_FA_ALL_QUANTS": "ON",
+                "GGML_NVTX": "OFF",
+                "CMAKE_TOOLCHAIN_FILE": {
+                        "value": "D:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+                        "type": "FILEPATH"
+                }
+            }
     }
-  ],
-  "buildPresets": [
-    { "name": "all-core-windows", "hidden": true, "jobs": 0 },
-    { "name": "build-ggml-cuda", "configurePreset": "ggml-cuda-win", "inherits": "all-core-windows"  }
-  ]
+    ],
+    "buildPresets": [
+        {
+            "name": "ggml-cuda-release",
+            "configurePreset": "ggml-cuda-release",
+            "jobs": 24, 
+            "configuration": "Release"
+        }
+    ]
 }
