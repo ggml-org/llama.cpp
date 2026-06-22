@@ -102,6 +102,7 @@ struct mtmd_cli_context {
     llama_pos n_past = 0;
 
     double n_audio_seconds = 0.0;
+    double t_encode_seconds = 0.0; // audio/vision encoder time accumulated during eval_message
 
     common_debug_cb_user_data cb_data;
 
@@ -240,6 +241,12 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
     return 0;
 }
 
+static void print_asr_summary(double audio_s, double encode_s, double prefill_s, double decode_s) {
+    double total_s = encode_s + prefill_s + decode_s;
+    LOG_INF("ASR summary: audio = %.2f s, encode = %.2f s, prefill = %.2f s, decode = %.2f s, total = %.2f s, RTF = %.3f\n",
+        audio_s, encode_s, prefill_s, decode_s, total_s, total_s / audio_s);
+}
+
 static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg & new_msg) {
     LOG_DBG("chat_add_and_format: new_msg.role='%s', new_msg.content='%s'\n",
         new_msg.role.c_str(), new_msg.content.c_str());
@@ -335,14 +342,16 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
                     n_added++;
                 }
 
-                int64_t time_start = ggml_time_ms();
+                int64_t time_start = ggml_time_us();
                 LOG_INF("encoding mtmd batch, n_chunks = %d (done = %zu, total = %zu)\n", n_added, i, n_chunks);
                 res = mtmd_batch_encode(ctx.mbatch.get());
                 if (res != 0) {
                     LOG_ERR("Failed to encode mtmd batch, res = %d\n", res);
                     return 1;
                 }
-                LOG_INF("mtmd batch encoding done in %d ms\n", (int)(ggml_time_ms() - time_start));
+                int64_t encode_us = ggml_time_us() - time_start;
+                ctx.t_encode_seconds += encode_us / 1e6;
+                LOG_INF("mtmd batch encoding done in %d ms\n", (int)(encode_us / 1000));
 
                 embd = mtmd_batch_get_output_embd(ctx.mbatch.get(), chunk);
             }
@@ -461,18 +470,20 @@ int main(int argc, char ** argv) {
                 return 1; // error is already printed by libmtmd
             }
         }
-        int64_t t_start_us = ggml_time_us();
+        ctx.t_encode_seconds = 0.0;
+        int64_t t_eval_start_us = ggml_time_us();
         if (eval_message(ctx, msg)) {
             return 1;
         }
+        int64_t t_gen_start_us = ggml_time_us();
         if (!g_is_interrupted && generate_response(ctx, n_predict)) {
             return 1;
         }
         if (ctx.n_audio_seconds > 0.0) {
-            double proc_seconds = (ggml_time_us() - t_start_us) / 1e6;
-            double rtf = proc_seconds / ctx.n_audio_seconds;
-            LOG_INF("ASR summary: audio = %.2f s, processing = %.2f s, RTF = %.3f\n",
-                ctx.n_audio_seconds, proc_seconds, rtf);
+            double encode_s  = ctx.t_encode_seconds;
+            double prefill_s = (t_gen_start_us - t_eval_start_us) / 1e6 - encode_s;
+            double decode_s  = (ggml_time_us() - t_gen_start_us) / 1e6;
+            print_asr_summary(ctx.n_audio_seconds, encode_s, prefill_s, decode_s);
         }
 
     } else {
@@ -540,20 +551,22 @@ int main(int argc, char ** argv) {
             common_chat_msg msg;
             msg.role = "user";
             msg.content = content;
-            int64_t t_start_us = ggml_time_us();
+            ctx.t_encode_seconds = 0.0;
+            int64_t t_eval_start_us = ggml_time_us();
             int ret = eval_message(ctx, msg);
             if (ret) {
                 return 1;
             }
             if (g_is_interrupted) break;
+            int64_t t_gen_start_us = ggml_time_us();
             if (generate_response(ctx, n_predict)) {
                 return 1;
             }
             if (ctx.n_audio_seconds > 0.0) {
-                double proc_seconds = (ggml_time_us() - t_start_us) / 1e6;
-                double rtf = proc_seconds / ctx.n_audio_seconds;
-                LOG_INF("ASR summary: audio = %.2f s, processing = %.2f s, RTF = %.3f\n",
-                    ctx.n_audio_seconds, proc_seconds, rtf);
+                double encode_s  = ctx.t_encode_seconds;
+                double prefill_s = (t_gen_start_us - t_eval_start_us) / 1e6 - encode_s;
+                double decode_s  = (ggml_time_us() - t_gen_start_us) / 1e6;
+                print_asr_summary(ctx.n_audio_seconds, encode_s, prefill_s, decode_s);
             }
             ctx.n_audio_seconds = 0.0;
             content.clear();
