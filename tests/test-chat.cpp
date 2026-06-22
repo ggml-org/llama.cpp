@@ -5596,7 +5596,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
     // MiniCPM5 - XML tool calls with <function name="..."><param name="...">...</param></function>
     {
-        auto tst = peg_tester("models/templates/MiniCPM5-1B.jinja", detailed_debug);
+        auto tst = peg_tester("models/templates/openbmb-MiniCPM5-1B.jinja", detailed_debug);
 
         tst.test("Hello, world!\nWhat's up?")
             .enable_thinking(false)
