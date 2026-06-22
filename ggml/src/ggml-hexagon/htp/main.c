@@ -944,12 +944,13 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
             }
         }
 
-        int op_status = HTP_STATUS_OK;
+        int      op_status = HTP_STATUS_OK;
+        uint32_t op_wakeup = n_ops / 2; // half-way throgh the batch
+
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
 
-            if (i == (n_ops-1)) {
-                // wake up the host before starting the last op
+            if (i == op_wakeup) {
                 dspqueue_write_early_wakeup_noblock(queue, 0, 0);
             }
 
