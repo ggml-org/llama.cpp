@@ -114,6 +114,18 @@ int llama_server(int argc, char ** argv) {
         }
     }
 
+    // size the KV pool from --ctx-per-slot, unless the user pinned it with -c
+    // or with -c 0 for max context
+    const bool ctx_pool_auto_sized = params.n_ctx_per_slot > 0 &&
+                                     params.n_ctx == 0 &&
+                                     (uint32_t) params.fit_params_min_ctx != UINT32_MAX;
+
+    if (ctx_pool_auto_sized) {
+        params.n_ctx = params.n_parallel * params.n_ctx_per_slot;
+        SRV_INF("--ctx-per-slot: sizing KV pool to n_parallel * ctx_per_slot = %d * %d = %d\n", params.n_parallel,
+                params.n_ctx_per_slot, params.n_ctx);
+    }
+
     // for consistency between server router mode and single-model mode, we set the same model name as alias
     auto model_name = params.model.get_name();
     if (params.model_alias.empty() && !model_name.empty()) {
