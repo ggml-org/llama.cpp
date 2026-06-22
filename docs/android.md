@@ -29,7 +29,7 @@ With Termux, you can install and run `llama.cpp` as if the environment were Linu
 
 ```
 $ apt update && apt upgrade -y
-$ apt install git cmake
+$ apt install git cmake libandroid-spawn
 ```
 
 Then, follow the [build instructions](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md), specifically for CMake.
