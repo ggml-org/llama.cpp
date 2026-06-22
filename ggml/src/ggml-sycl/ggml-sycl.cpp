@@ -5811,8 +5811,8 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
 
         q0->wait();
         q1->wait();
-        dev2dev_memcpy(*q0, *q1, f16_tmp0, tensors[1]->data, nbytes);
-        dev2dev_memcpy(*q1, *q0, f16_tmp1, tensors[0]->data, nbytes);
+        dev2dev_memcpy(ctx0->device, *q0, ctx1->device, *q1, f16_tmp0, tensors[1]->data, nbytes);
+        dev2dev_memcpy(ctx1->device, *q1, ctx0->device, *q0, f16_tmp1, tensors[0]->data, nbytes);
 
         q0->submit([&](sycl::handler & h) {
             h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
@@ -5847,8 +5847,8 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
         // synchronous, so wait for the local partials to be produced first.
         q0->wait();
         q1->wait();
-        dev2dev_memcpy(*q0, *q1, tmp0, tensors[1]->data, nbytes);
-        dev2dev_memcpy(*q1, *q0, tmp1, tensors[0]->data, nbytes);
+        dev2dev_memcpy(ctx0->device, *q0, ctx1->device, *q1, tmp0, tensors[1]->data, nbytes);
+        dev2dev_memcpy(ctx1->device, *q1, ctx0->device, *q0, tmp1, tensors[0]->data, nbytes);
 
         q0->submit([&](sycl::handler & h) {
             h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
@@ -5885,8 +5885,8 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
     const size_t bf16_bytes = nelem * sizeof(uint16_t);
     c0.wait();
     c1.wait();
-    dev2dev_memcpy(*q0, *q1, inbox0, outbox1, bf16_bytes);
-    dev2dev_memcpy(*q1, *q0, inbox1, outbox0, bf16_bytes);
+    dev2dev_memcpy(ctx0->device, *q0, ctx1->device, *q1, inbox0, outbox1, bf16_bytes);
+    dev2dev_memcpy(ctx1->device, *q1, ctx0->device, *q0, inbox1, outbox0, bf16_bytes);
 
     // Phase C: decompress + add into local FP32 partial.
     q0->submit([&](sycl::handler & h) {
