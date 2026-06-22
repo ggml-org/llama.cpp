@@ -921,6 +921,10 @@ struct parser_executor {
     common_peg_parse_result operator()(const common_peg_gbnf_parser & p) {
         return arena.parse(p.child, ctx, start_pos);
     }
+
+    common_peg_parse_result operator()(const common_peg_ac_parser & p) {
+        return arena.parse(p.child, ctx, start_pos);
+    }
 };
 
 common_peg_parse_result common_peg_arena::parse(common_peg_parse_context & ctx, size_t start) const {
@@ -989,7 +993,8 @@ void common_peg_arena::resolve_refs() {
                                  std::is_same_v<T, common_peg_not_parser> ||
                                  std::is_same_v<T, common_peg_tag_parser> ||
                                  std::is_same_v<T, common_peg_atomic_parser> ||
-                                 std::is_same_v<T, common_peg_gbnf_parser>) {
+                                 std::is_same_v<T, common_peg_gbnf_parser> ||
+                                 std::is_same_v<T, common_peg_ac_parser>) {
                 p.child = resolve_ref(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 p.child = resolve_ref(p.child);
@@ -1070,6 +1075,8 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id                    
             return "Atomic(" + dump_impl(p.child, visited) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
             return "Gbnf(" + p.grammar + ", " + dump_impl(p.child, visited) + ")";
+        } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
+            return "Ac(" + string_join(p.delimiters, " | ") + ", " + dump_impl(p.child, visited) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_any_parser>) {
             return "Any";
         } else if constexpr (std::is_same_v<T, common_peg_space_parser>) {
@@ -1479,6 +1486,13 @@ common_peg_parser common_peg_parser_builder::json_member(const std::string & key
     });
 }
 
+common_peg_parser common_peg_parser_builder::ac(const common_peg_parser & p, const std::vector<std::string> & delimiters) {
+    if (delimiters.empty()) {
+        throw std::runtime_error("ac parser requires at least one delimiter");
+    }
+    return add(common_peg_ac_parser{p, delimiters});
+}
+
 static std::string gbnf_escape_char_class(uint32_t c) {
     if (c == '-' || c == ']' || c == '[' || c == '\\') {
         return "\\" + std::string(1, (char) c);
@@ -1529,14 +1543,22 @@ static std::string gbnf_escape_char_class(uint32_t c) {
     return std::string(buf);
 }
 
-// GBNF grammar matching strings that contain no string in `strings` as a
-// substring. Emits the complement of an Aho-Corasick automaton DFA and returns
-// the start state rule name.
-//
-// ref: https://github.com/ggml-org/llama.cpp/pull/24839
-static std::string gbnf_excluding_grammar(const common_grammar_builder & builder,
-                                          const std::string &            prefix,
-                                          const std::vector<std::string> & strings) {
+static std::string gbnf_char_class(const std::vector<uint32_t> & chars, bool negate) {
+    std::string s = negate ? "[^" : "[";
+    for (uint32_t ch : chars) {
+        s += gbnf_escape_char_class(ch);
+    }
+    return s + "]";
+}
+
+static std::string gbnf_ac_grammar(
+    const common_grammar_builder &   builder,
+    const std::string &              prefix,
+    const std::vector<std::string> & strings,
+    const std::function<std::string(const std::vector<uint32_t> &,
+                                    const std::map<size_t, std::vector<uint32_t>> &,
+                                    const std::vector<uint32_t> &,
+                                    const std::function<std::string(size_t)> &)> & build_rule) {
     aho_corasick ac(strings);
 
     auto state_name = [&](size_t s) -> std::string {
@@ -1548,47 +1570,83 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
         return prefix + "-" + num;
     };
 
-    auto char_class = [](const std::vector<uint32_t> & chars, bool negate) {
-        std::string s = negate ? "[^" : "[";
-        for (uint32_t ch : chars) {
-            s += gbnf_escape_char_class(ch);
-        }
-        return s + "]";
-    };
-
     for (size_t q = 0; q < ac.num_states(); q++) {
         if (ac.is_terminal(q)) {
-            continue; // match states are dropped
+            continue; // match states
         }
 
         std::map<size_t, std::vector<uint32_t>> buckets;
-        std::vector<uint32_t> excluded;
+        std::vector<uint32_t> completing;  // chars that complete a delimiter
+        std::vector<uint32_t> specific;    // chars with an explicit transition
         for (uint32_t c : ac.alphabet) {
             size_t d = ac.next(q, c);
             if (ac.is_terminal(d)) {
-                excluded.push_back(c); // completes a forbidden string -> omit
+                completing.push_back(c);
+                specific.push_back(c);
             } else if (d != 0) {
                 buckets[d].push_back(c); // specific non-root destination
-                excluded.push_back(c);
+                specific.push_back(c);
             }
         }
 
-        std::string rhs = "|"; // every state is accepting
-        for (const auto & [d, chars] : buckets) {
-            rhs += " " + char_class(chars, false) + " " + state_name(d) + " |";
-        }
-        rhs += " " + char_class(excluded, true) + " " + state_name(0);
-
-        builder.add_rule(state_name(q), rhs);
+        builder.add_rule(state_name(q), build_rule(completing, buckets, specific, state_name));
     }
 
     // An empty delimiter makes the start state terminal. Emit an entry rule
-    // that matches nothing so the returned reference stays valid.
+    // that matches the empty string so the returned reference stays valid.
     if (ac.is_terminal(0)) {
         builder.add_rule(prefix, "|");
     }
 
     return state_name(0);
+}
+
+// GBNF grammar matching strings that contain no string in `strings` as a
+// substring. Emits the complement of an Aho-Corasick automaton DFA and returns
+// the start state rule name.
+//
+// ref: https://github.com/ggml-org/llama.cpp/pull/24839
+static std::string gbnf_excluding_grammar(const common_grammar_builder & builder,
+                                          const std::string &            prefix,
+                                          const std::vector<std::string> & strings) {
+    return gbnf_ac_grammar(builder, prefix, strings,
+        [](const std::vector<uint32_t> & /*completing*/,
+           const std::map<size_t, std::vector<uint32_t>> & buckets,
+           const std::vector<uint32_t> & specific,
+           const std::function<std::string(size_t)> & state_name) {
+            // every state is accepting and completing chars get no
+            // alternative, so a forbidden string can never be matched
+            std::string rhs = "|";
+            for (const auto & [d, chars] : buckets) {
+                rhs += " " + gbnf_char_class(chars, false) + " " + state_name(d) + " |";
+            }
+            rhs += " " + gbnf_char_class(specific, true) + " " + state_name(0);
+            return rhs;
+        });
+}
+
+// GBNF grammar matching everything up to and including the first occurrence of
+// any string in `strings`. Emits the Aho-Corasick automaton DFA and returns
+// the start state rule name.
+static std::string gbnf_including_grammar(const common_grammar_builder & builder,
+                                          const std::string &            prefix,
+                                          const std::vector<std::string> & strings) {
+    return gbnf_ac_grammar(builder, prefix, strings,
+        [](const std::vector<uint32_t> & completing,
+           const std::map<size_t, std::vector<uint32_t>> & buckets,
+           const std::vector<uint32_t> & specific,
+           const std::function<std::string(size_t)> & state_name) {
+            std::vector<std::string> alts;
+            if (!completing.empty()) {
+                alts.push_back(gbnf_char_class(completing, false)); // terminate on match
+            }
+            for (const auto & [d, chars] : buckets) {
+                alts.push_back(gbnf_char_class(chars, false) + " " + state_name(d));
+            }
+            // every other character keeps scanning from the start state
+            alts.push_back(gbnf_char_class(specific, true) + " " + state_name(0));
+            return string_join(alts, " | ");
+        });
 }
 
 static std::set<std::string> collect_reachable_rules(
@@ -1628,6 +1686,7 @@ static std::set<std::string> collect_reachable_rules(
                                  std::is_same_v<T, common_peg_tag_parser> ||
                                  std::is_same_v<T, common_peg_atomic_parser> ||
                                  std::is_same_v<T, common_peg_gbnf_parser> ||
+                                 std::is_same_v<T, common_peg_ac_parser> ||
                                  std::is_same_v<T, common_peg_schema_parser>) {
                 visit(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
@@ -1822,6 +1881,8 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return to_gbnf(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
                 return p.grammar;
+            } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
+                return gbnf_including_grammar(builder, "ac-" + std::to_string(id), p.delimiters);
             } else {
                 static_assert(is_always_false_v<T>);
             }
@@ -1958,6 +2019,8 @@ static nlohmann::json serialize_parser_variant(const common_peg_parser_variant &
             };
         } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
             return json{{"type", "gbnf"}, {"child", p.child}, {"grammar", p.grammar}};
+        } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
+            return json{{"type", "ac"}, {"child", p.child}, {"delimiters", p.delimiters}};
         }
     }, variant);
 }
@@ -2127,6 +2190,16 @@ static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json
         return common_peg_gbnf_parser{
             j["child"].get<common_peg_parser_id>(),
             j["grammar"].get<std::string>(),
+        };
+    }
+
+    if (type == "ac") {
+        if (!j.contains("child") || !j.contains("delimiters") || !j["delimiters"].is_array() || j["delimiters"].empty()) {
+            throw std::runtime_error("ac parser requires 'child' and a non-empty 'delimiters' array");
+        }
+        return common_peg_ac_parser{
+            j["child"].get<common_peg_parser_id>(),
+            j["delimiters"].get<std::vector<std::string>>(),
         };
     }
 
