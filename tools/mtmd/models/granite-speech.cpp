@@ -13,23 +13,9 @@ ggml_cgraph * clip_graph_granite_speech::build() {
     const int padded_len   = num_blocks * context_size;
     const int remainder    = n_frames % context_size;
 
-    // Load feature layers for GraniteSpeechPlus (intermediate layer concatenation)
-    std::vector<int32_t> feature_layers;
-    if (hparams.speech_feature_layer.size() > 0) {
-        feature_layers = hparams.speech_feature_layer;
-    }
-
     // Calculate projector input dimension based on feature layers
-    const int proj_input_dim = n_embd * (feature_layers.size() + 1);
-    const bool use_feature_concat = !feature_layers.empty();
-
-    // Helper lambda to check if a layer index is in feature_layers
-    auto is_feature_layer = [&](int32_t layer) -> bool {
-        for (const auto & fl : feature_layers) {
-            if (fl == layer) return true;
-        }
-        return false;
-    };
+    const int proj_input_dim = n_embd * (hparams.feature_layers.size() + 1);
+    const bool use_feature_concat = !hparams.feature_layers.empty();
 
     ggml_tensor * attn_dists = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, context_size * context_size);
     ggml_set_name(attn_dists, "attn_dists");
@@ -54,7 +40,7 @@ ggml_cgraph * clip_graph_granite_speech::build() {
     // Capture layer 0 if requested (after input_linear)
     ggml_tensor * concat_result = nullptr;
     if (use_feature_concat) {
-        if (std::find(feature_layers.begin(), feature_layers.end(), 0) != feature_layers.end()) {
+        if (std::find(hparams.feature_layers.begin(), hparams.feature_layers.end(), 0) != hparams.feature_layers.end()) {
             concat_result = cur;
             cb(concat_result, "feature_layer_0", -1);
         }
@@ -199,7 +185,7 @@ ggml_cgraph * clip_graph_granite_speech::build() {
 
         // Capture intermediate layer (il + 1) if requested
         if (use_feature_concat) {
-            if (is_feature_layer(il + 1)) {
+            if (hparams.is_feature_layer(il + 1)) {
                 if (concat_result == nullptr) {
                     concat_result = cur;
                 } else {
