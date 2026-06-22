@@ -14,7 +14,10 @@ import {
 	MODEL_PROPS_CACHE_TTL_MS,
 	MODEL_PROPS_CACHE_MAX_ENTRIES,
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
-	API_MODELS
+	API_MODELS,
+	SSE_RECORD_SEPARATOR,
+	SSE_LINE_SEPARATOR,
+	SSE_DATA_PREFIX
 } from '$lib/constants';
 
 import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -695,11 +698,11 @@ class ModelsStore {
 
 						buffer += decoder.decode(value, { stream: true });
 
-						let boundary = buffer.indexOf('\n\n');
+						let boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
 						while (boundary !== -1) {
 							this.handleStatusRecord(buffer.slice(0, boundary));
-							buffer = buffer.slice(boundary + 2);
-							boundary = buffer.indexOf('\n\n');
+							buffer = buffer.slice(boundary + SSE_RECORD_SEPARATOR.length);
+							boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
 						}
 					}
 				}
@@ -719,10 +722,10 @@ class ModelsStore {
 	 */
 	private handleStatusRecord(record: string): void {
 		const payload = record
-			.split('\n')
-			.filter((line) => line.startsWith('data:'))
-			.map((line) => line.slice(5).trim())
-			.join('\n');
+			.split(SSE_LINE_SEPARATOR)
+			.filter((line) => line.startsWith(SSE_DATA_PREFIX))
+			.map((line) => line.slice(SSE_DATA_PREFIX.length).trim())
+			.join(SSE_LINE_SEPARATOR);
 
 		if (payload.length === 0) return;
 
