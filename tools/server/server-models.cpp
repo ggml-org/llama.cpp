@@ -24,6 +24,7 @@
 #include <random>
 #include <sstream>
 #include <cstring>
+#include <limits>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -781,37 +782,104 @@ std::vector<server_model_meta> server_models::get_all_meta() {
     return result;
 }
 
+size_t server_models::count_running_locked() const {
+    size_t count = 0;
+    for (const auto & m : mapping) {
+        if (m.second.meta.is_running()) {
+            count++;
+        }
+    }
+    return count;
+}
+
+bool server_models::is_evictable_locked(const std::string & name) const {
+    auto it = mapping.find(name);
+    if (it == mapping.end()) {
+        return false;
+    }
+
+    const auto & inst = it->second;
+    return inst.meta.is_running()
+        && inst.meta.status != SERVER_MODEL_STATUS_LOADING
+        && inst.active_requests == 0
+        && stopping_models.find(name) == stopping_models.end();
+}
+
+std::optional<std::string> server_models::find_lru_evictable_locked() const {
+    std::optional<std::string> lru_model_name;
+    int64_t lru_last_used = std::numeric_limits<int64_t>::max();
+
+    for (const auto & m : mapping) {
+        if (!is_evictable_locked(m.first)) {
+            continue;
+        }
+        if (m.second.meta.last_used < lru_last_used) {
+            lru_model_name = m.first;
+            lru_last_used = m.second.meta.last_used;
+        }
+    }
+
+    return lru_model_name;
+}
+
 void server_models::unload_lru() {
     if (base_params.models_max <= 0) {
         return; // no limit
     }
-    // remove one of the servers if we passed the models_max (least recently used - LRU)
-    std::string lru_model_name = "";
-    int64_t lru_last_used = ggml_time_ms();
-    size_t count_active = 0;
+
+    std::string lru_model_name;
     {
         std::unique_lock<std::mutex> lk(mutex);
-        for (const auto & m : mapping) {
-            if (m.second.meta.is_running()) {
-                count_active++;
-                if (m.second.meta.last_used < lru_last_used) {
-                    lru_model_name = m.first;
-                    lru_last_used = m.second.meta.last_used;
-                }
+
+        while (count_running_locked() >= (size_t) base_params.models_max) {
+            auto maybe_lru_model_name = find_lru_evictable_locked();
+            if (maybe_lru_model_name.has_value()) {
+                lru_model_name = *maybe_lru_model_name;
+                break;
             }
+
+            SRV_INF("%s", "models_max limit reached; waiting for an idle evictable model\n");
+            cv.wait(lk, [this]() {
+                return count_running_locked() < (size_t) base_params.models_max
+                    || find_lru_evictable_locked().has_value();
+            });
         }
     }
-    if (!lru_model_name.empty() && count_active >= (size_t)base_params.models_max) {
-        SRV_INF("models_max limit reached, removing LRU name=%s\n", lru_model_name.c_str());
+
+    if (!lru_model_name.empty()) {
+        SRV_INF("models_max limit reached, removing idle LRU name=%s\n", lru_model_name.c_str());
         unload(lru_model_name);
         // wait for unload to complete
         {
             std::unique_lock<std::mutex> lk(mutex);
             cv.wait(lk, [this, &lru_model_name]() {
-                return mapping[lru_model_name].meta.status == SERVER_MODEL_STATUS_UNLOADED;
+                auto it = mapping.find(lru_model_name);
+                return it == mapping.end() || it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED;
             });
         }
     }
+}
+
+void server_models::active_request_end(const std::string & name) {
+    std::lock_guard<std::mutex> lk(mutex);
+
+    auto it = mapping.find(name);
+    if (it == mapping.end()) {
+        SRV_WRN("active_request_end: model name=%s no longer exists\n", name.c_str());
+        cv.notify_all();
+        return;
+    }
+
+    if (it->second.active_requests <= 0) {
+        SRV_WRN("active_request_end: active_requests underflow avoided for model name=%s\n", name.c_str());
+        it->second.active_requests = 0;
+        cv.notify_all();
+        return;
+    }
+
+    it->second.active_requests--;
+    SRV_DBG("model name=%s active_requests=%d\n", name.c_str(), it->second.active_requests);
+    cv.notify_all();
 }
 
 void server_models::load(const std::string & name) {
@@ -1289,16 +1357,43 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     if (!meta->is_running()) {
         throw std::invalid_argument("model name=" + name + " is not running");
     }
-    if (update_last_used) {
+
+    {
         std::unique_lock<std::mutex> lk(mutex);
-        mapping[name].meta.last_used = ggml_time_ms();
+        auto it = mapping.find(name);
+        if (it == mapping.end()) {
+            throw std::runtime_error("model name=" + name + " disappeared");
+        }
+        if (!it->second.meta.is_running()) {
+            throw std::invalid_argument("model name=" + name + " is not running");
+        }
+
+        it->second.active_requests++;
+        if (update_last_used) {
+            it->second.meta.last_used = ggml_time_ms();
+        }
+        meta = it->second.meta;
+        SRV_DBG("model name=%s active_requests=%d\n", name.c_str(), it->second.active_requests);
     }
+
+    auto cleanup_once = std::make_shared<std::atomic<bool>>(false);
+    auto request_cleanup = [this, name, cleanup_once]() {
+        bool expected = false;
+        if (!cleanup_once->compare_exchange_strong(expected, true)) {
+            return;
+        }
+
+        this->active_request_end(name);
+    };
+
     SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     std::string proxy_path = req.path;
     if (!req.query_string.empty()) {
         proxy_path += '?' + req.query_string;
     }
-    auto proxy = std::make_unique<server_http_proxy>(
+
+    try {
+        return std::make_unique<server_http_proxy>(
             method,
             "http",
             CHILD_ADDR,
@@ -1309,9 +1404,13 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             req.files,
             req.should_stop,
             base_params.timeout_read,
-            base_params.timeout_write
+            base_params.timeout_write,
+            request_cleanup
             );
-    return proxy;
+    } catch (...) {
+        request_cleanup();
+        throw;
+    }
 }
 
 void server_models::handle_child_state(const std::string & name, const std::string & raw_input) {
@@ -1887,7 +1986,8 @@ server_http_proxy::server_http_proxy(
         const std::map<std::string, uploaded_file> & files,
         const std::function<bool()> should_stop,
         int32_t timeout_read,
-        int32_t timeout_write
+        int32_t timeout_write,
+        std::function<void()> request_cleanup
         ) {
     // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::ClientImpl>(host, port);
@@ -1907,9 +2007,19 @@ server_http_proxy::server_http_proxy(
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
     this->status = 500; // to be overwritten upon response
-    this->cleanup = [pipe]() {
+    auto cleanup_once = std::make_shared<std::atomic<bool>>(false);
+    this->cleanup = [pipe, request_cleanup, cleanup_once]() {
+        bool expected = false;
+        if (!cleanup_once->compare_exchange_strong(expected, true)) {
+            return;
+        }
+
         pipe->close_read();
         pipe->close_write();
+
+        if (request_cleanup) {
+            request_cleanup();
+        }
     };
 
     // wire up the receive end of the pipe

@@ -106,6 +106,7 @@ private:
         std::thread th;
         server_model_meta meta;
         FILE * stdin_file = nullptr;
+        int active_requests = 0; // protected by server_models::mutex
     };
 
     std::mutex mutex;
@@ -131,8 +132,19 @@ private:
 
     void update_meta(const std::string & name, const server_model_meta & meta);
 
+    // not thread-safe, caller must hold mutex
+    size_t count_running_locked() const;
+
+    // not thread-safe, caller must hold mutex
+    bool is_evictable_locked(const std::string & name) const;
+
+    // not thread-safe, caller must hold mutex
+    std::optional<std::string> find_lru_evictable_locked() const;
+
     // unload least recently used models if the limit is reached
     void unload_lru();
+
+    void active_request_end(const std::string & name);
 
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
@@ -277,7 +289,8 @@ public:
                       const std::map<std::string, uploaded_file> & files,
                       const std::function<bool()> should_stop,
                       int32_t timeout_read,
-                      int32_t timeout_write
+                      int32_t timeout_write,
+                      std::function<void()> request_cleanup = nullptr
                       );
     ~server_http_proxy() {
         if (cleanup) {
