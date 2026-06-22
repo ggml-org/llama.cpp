@@ -213,6 +213,7 @@ llama_build_and_test(
     peg-parser/tests.h
 )
 llama_build_and_test(test-regex-partial.cpp)
+llama_build_and_test(test-tokenizer-metadata-validation.cpp)
 
 if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")
     set(MODEL_NAME "tinyllamas/stories15M-q4_0.gguf")
