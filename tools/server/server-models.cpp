@@ -53,7 +53,7 @@ extern char **environ;
 #define CHILD_ADDR "127.0.0.1"
 
 struct server_subproc {
-    std::optional<subprocess_s> sproc; // empty while in DOWNLOADING state
+    std::optional<server_process> sproc; // empty while in DOWNLOADING state
     std::atomic<bool> stopped{false}; // set to cancel a download or signal child process exit
 
     subprocess_s & get() {
