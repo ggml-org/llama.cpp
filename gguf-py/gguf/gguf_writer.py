@@ -1124,6 +1124,9 @@ class GGUFWriter:
     def add_normalizer_lowercase(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.NORMALIZER_LOWERCASE, value)
 
+    def add_normalizer_strip_accents(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.NORMALIZER_STRIP_ACCENTS, value)
+
     def add_eot_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.EOT_ID, id)
 
@@ -1306,6 +1309,9 @@ class GGUFWriter:
 
     def add_audio_max_pos_emb(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.MAX_POS_EMB, value)
+
+    def add_audio_feature_layers(self, layers: Sequence[int]) -> None:
+        self.add_array(Keys.ClipAudio.FEATURE_LAYERS, layers)
 
     def add_audio_projector_window_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.WINDOW_SIZE, value)

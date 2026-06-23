@@ -11,6 +11,7 @@
 #include "ggml-cuda/argsort.cuh"
 #include "ggml-cuda/binbcast.cuh"
 #include "ggml-cuda/clamp.cuh"
+#include "ggml-cuda/col2im-1d.cuh"
 #include "ggml-cuda/concat.cuh"
 #include "ggml-cuda/conv-transpose-1d.cuh"
 #include "ggml-cuda/conv2d.cuh"
@@ -623,18 +624,6 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
 // cuda buffer
 
-struct ggml_backend_cuda_device_context {
-    int device;
-    std::string name;
-    std::string description;
-    std::string pci_bus_id;
-    int op_offload_min_batch_size;
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    std::mutex device_mutex;
-    int active_count = 0;
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-};
-
 struct ggml_backend_cuda_buffer_context {
     int device;
     void * dev_ptr = nullptr;
@@ -652,13 +641,6 @@ struct ggml_backend_cuda_buffer_context {
 
 static void ggml_backend_cuda_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
-
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) buffer->buft->device->context;
-    std::lock_guard<std::mutex> lock(dev_ctx->device_mutex);
-    dev_ctx->active_count--;
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-
     delete ctx;
 }
 
@@ -810,12 +792,6 @@ static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffer(ggml_bac
     }
 
     ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, dev_ptr);
-
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) buft->device->context;
-    std::lock_guard<std::mutex> lock(dev_ctx->device_mutex);
-    dev_ctx->active_count++;
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
     return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
 }
@@ -1516,12 +1492,6 @@ static bool ggml_backend_buft_is_cuda_host(ggml_backend_buffer_type_t buft) {
 }
 
 static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) buffer->buft->device->context;
-    std::lock_guard<std::mutex> lock(dev_ctx->device_mutex);
-    dev_ctx->active_count--;
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-
     CUDA_CHECK(cudaFreeHost(buffer->context));
 }
 
@@ -1529,8 +1499,6 @@ static void * ggml_cuda_host_malloc(size_t size) {
     if (getenv("GGML_CUDA_NO_PINNED") != nullptr) {
         return nullptr;
     }
-
-    ggml_cuda_set_device(0); // cudaMallocHost can create the implicit CUDA device context, make sure that this is consistently done on device 0.
 
     void * ptr = nullptr;
     cudaError_t err = cudaMallocHost((void **) &ptr, size);
@@ -1556,12 +1524,6 @@ static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_buffer(ggm
     ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
     buffer->buft = buft;
     buffer->iface.free_buffer = ggml_backend_cuda_host_buffer_free_buffer;
-
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) buft->device->context;
-    std::lock_guard<std::mutex> lock(dev_ctx->device_mutex);
-    dev_ctx->active_count++;
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
     return buffer;
 }
@@ -3091,6 +3053,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_CONV_TRANSPOSE_1D:
             ggml_cuda_op_conv_transpose_1d(ctx,dst);
             break;
+        case GGML_OP_COL2IM_1D:
+            ggml_cuda_op_col2im_1d(ctx, dst);
+            break;
         case GGML_OP_POOL_2D:
             ggml_cuda_op_pool2d(ctx, dst);
             break;
@@ -3179,12 +3144,6 @@ static const char * ggml_backend_cuda_get_name(ggml_backend_t backend) {
 
 static void ggml_backend_cuda_free(ggml_backend_t backend) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
-
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) backend->device->context;
-    std::lock_guard<std::mutex> lock(dev_ctx->device_mutex);
-    dev_ctx->active_count--;
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
     delete cuda_ctx;
     delete backend;
@@ -4917,6 +4876,14 @@ void ggml_backend_cuda_unregister_host_buffer(void * buffer) {
 
 // backend device
 
+struct ggml_backend_cuda_device_context {
+    int device;
+    std::string name;
+    std::string description;
+    std::string pci_bus_id;
+    int op_offload_min_batch_size;
+};
+
 static const char * ggml_backend_cuda_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
     return ctx->name.c_str();
@@ -5005,11 +4972,6 @@ static bool ggml_backend_cuda_get_available_uma_memory(long * available_memory_k
 
 static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
-
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    std::lock_guard<std::mutex> lock(ctx->device_mutex);
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-
     ggml_cuda_set_device(ctx->device);
     CUDA_CHECK(cudaMemGetInfo(free, total));
 
@@ -5036,13 +4998,6 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
     }
 #endif // defined(__linux__)
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    // If no backends or buffers are active, the cudaMemGetInfo call above lazily created a CUDA
-    // context that permanently consumes VRAM. Reset the device to free it.
-    if (ctx->active_count == 0) {
-        CUDA_CHECK(cudaDeviceReset());
-    }
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
 static enum ggml_backend_dev_type ggml_backend_cuda_device_get_type(ggml_backend_dev_t dev) {
@@ -5338,15 +5293,24 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             } break;
         case GGML_OP_REPEAT:
             {
+                // the CUDA REPEAT path only implements F32/F16; other types assert at runtime
                 ggml_type src0_type = op->src[0]->type;
-                return src0_type != GGML_TYPE_I32 && src0_type != GGML_TYPE_I16;
+                return src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16;
             } break;
         case GGML_OP_REPEAT_BACK:
                 return op->type == GGML_TYPE_F32 && (op->src[0]->ne[2]*op->src[0]->ne[3]) <= (1 << 15);
         case GGML_OP_CONCAT:
             {
                 ggml_type src0_type = op->src[0]->type;
-                return src0_type != GGML_TYPE_I32 && src0_type != GGML_TYPE_I16;
+                ggml_type src1_type = op->src[1]->type;
+                return src0_type == src1_type &&
+                       src0_type == op->type &&
+                       !ggml_is_quantized(src0_type) &&
+                       ggml_blck_size(src0_type) == 1 &&
+                       (ggml_type_size(src0_type) == 1 ||
+                        ggml_type_size(src0_type) == 2 ||
+                        ggml_type_size(src0_type) == 4 ||
+                        ggml_type_size(src0_type) == 8);
             } break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             {
@@ -5356,6 +5320,14 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     return true;
                 }
                 return false;
+            } break;
+        case GGML_OP_COL2IM_1D:
+            {
+                ggml_type src0_type = op->src[0]->type;
+                return (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16 || src0_type == GGML_TYPE_BF16) &&
+                    op->type == src0_type &&
+                    ggml_is_contiguous(op->src[0]) &&
+                    ggml_is_contiguous(op);
             } break;
         case GGML_OP_SILU_BACK:
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
@@ -5740,20 +5712,12 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
         return nullptr;
     }
 
-    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device);
-
     ggml_backend_t cuda_backend = new ggml_backend {
         /* .guid    = */ ggml_backend_cuda_guid(),
         /* .iface   = */ ggml_backend_cuda_interface,
-        /* .device  = */ dev,
+        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device),
         /* .context = */ ctx,
     };
-
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
-    std::lock_guard<std::mutex> lock(dev_ctx->device_mutex);
-    dev_ctx->active_count++;
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
     return cuda_backend;
 }

@@ -283,6 +283,18 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
+				key: SETTINGS_KEYS.RENDER_THINKING_AS_MARKDOWN,
+				label: 'Render thinking as Markdown',
+				help: 'Render the reasoning/thinking block content as formatted Markdown instead of plain text.',
+				defaultValue: true,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.RENDER_THINKING_AS_MARKDOWN,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
 				key: SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS,
 				label: 'Use full height code blocks',
 				help: 'Always display code blocks at their full natural height, overriding any height limits.',
@@ -365,6 +377,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.SHOW_BUILD_VERSION,
+				label: 'Show build version information',
+				help: 'Display the current build version in the bottom-right corner of the interface.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY
 			}
 		]
 	},

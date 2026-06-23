@@ -55,6 +55,7 @@ struct common_download_opts {
     bool skip_download = false; // if true, only validation is performed, common_skip_download_exception may be thrown if the file is missing or invalid
     bool download_mmproj = false;
     bool download_mtp = false;
+    bool preset_only = false; // if true, only check & download remote preset (for router mode)
     common_download_callback * callback = nullptr;
 };
 
@@ -63,6 +64,7 @@ struct common_download_model_result {
     std::string model_path;
     std::string mmproj_path;
     std::string mtp_path;
+    std::string preset_path;
 };
 
 // throw if the file is missing or invalid (e.g. ETag check failed)
@@ -115,3 +117,10 @@ int common_download_file_single(const std::string & url,
 // resolve and download model from Docker registry
 // return local path to downloaded model file
 std::string common_docker_resolve_model(const std::string & docker);
+
+// Remove a cached model from disk
+// input format: "user/model" or "user/model:tag"
+// - if tag is omitted, removes the entire repo cache directory
+// - if tag is present, removes only files matching that tag (and orphaned blobs)
+// returns true if anything was removed
+bool common_download_remove(const std::string & hf_repo_with_tag);

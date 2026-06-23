@@ -45,6 +45,7 @@ struct llama_hparams {
     bool rope_finetuned;
     bool use_par_res;
     bool swin_norm;
+    bool norm_before_residual = false;
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
@@ -188,6 +189,10 @@ struct llama_hparams {
     // input embedding dimension (0 = use n_embd)
     uint32_t n_embd_inp_impl = 0;
 
+    // encoder input embedding dimension (0 = use n_embd_inp())
+    // e.g. the eagle3 encoder fuses target_layers * target_hidden features
+    uint32_t n_embd_inp_enc_impl = 0;
+
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
 
@@ -303,6 +308,9 @@ struct llama_hparams {
 
     // dimension of main + auxiliary input embeddings
     uint32_t n_embd_inp() const;
+
+    // dimension of the encoder input embeddings
+    uint32_t n_embd_inp_enc() const;
 
     // dimension of output embeddings
     uint32_t n_embd_out() const;
