@@ -8,7 +8,6 @@
 #include "download.h"
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
-#include <optional>
 #include <sheredom/subprocess.h>
 
 #include <functional>
@@ -56,13 +55,16 @@ struct server_subproc {
     std::optional<server_process> sproc; // empty while in DOWNLOADING state
     std::atomic<bool> stopped{false}; // set to cancel a download or signal child process exit
 
-    subprocess_s & get() {
-        GGML_ASSERT(sproc.has_value() && "subprocess not initialized");
-        return sproc.value();
+    bool is_alive() const {
+        return sproc.has_value() && sproc->is_alive();
     }
 
-    bool is_alive() {
-        return sproc.has_value() && subprocess_alive(&sproc.value());
+    void terminate() const {
+        if (!sproc.has_value()) {
+            return;
+        }
+
+        sproc->terminate();
     }
 
     void request_exit() {
@@ -75,68 +77,7 @@ struct server_subproc {
         }
         stopped.store(true, std::memory_order_relaxed);
     }
-
-    void terminate() {
-        if (!sproc.has_value()) {
-            return;
-        }
-#if defined(_WIN32)
-        if (sproc->hProcess == NULL) {
-            return;
-        }
-#else
-        if (sproc->child <= 0) {
-            return;
-        }
-#endif
-        subprocess_terminate(&sproc.value());
-    }
 };
-
-// short loopback budget for the resumable stream router to child JSON calls (probe, lookup,
-// delete). distinct from params.timeout_read/write which only applies to the generation proxy
-static constexpr int STREAM_LOOKUP_TIMEOUT_MS = 250;
-
-static std::filesystem::path get_server_exec_path() {
-#if defined(_WIN32)
-    wchar_t buf[32768] = { 0 };  // Large buffer to handle long paths
-    DWORD len = GetModuleFileNameW(nullptr, buf, _countof(buf));
-    if (len == 0 || len >= _countof(buf)) {
-        throw std::runtime_error("GetModuleFileNameW failed or path too long");
-    }
-    return std::filesystem::path(buf);
-#elif defined(__APPLE__) && defined(__MACH__)
-    char small_path[PATH_MAX];
-    uint32_t size = sizeof(small_path);
-
-    if (_NSGetExecutablePath(small_path, &size) == 0) {
-        // resolve any symlinks to get absolute path
-        try {
-            return std::filesystem::canonical(std::filesystem::path(small_path));
-        } catch (...) {
-            return std::filesystem::path(small_path);
-        }
-    } else {
-        // buffer was too small, allocate required size and call again
-        std::vector<char> buf(size);
-        if (_NSGetExecutablePath(buf.data(), &size) == 0) {
-            try {
-                return std::filesystem::canonical(std::filesystem::path(buf.data()));
-            } catch (...) {
-                return std::filesystem::path(buf.data());
-            }
-        }
-        throw std::runtime_error("_NSGetExecutablePath failed after buffer resize");
-    }
-#else
-    char path[FILENAME_MAX];
-    ssize_t count = readlink("/proc/self/exe", path, FILENAME_MAX);
-    if (count <= 0) {
-        throw std::runtime_error("failed to resolve /proc/self/exe");
-    }
-    return std::filesystem::path(std::string(path, count));
-#endif
-}
 
 static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
@@ -246,7 +187,7 @@ void server_model_meta::update_caps() {
 
 server_models::server_models(
         const common_params & params,
-        int argc,
+        const int argc,
         char ** argv)
             : ctx_preset(LLAMA_EXAMPLE_SERVER),
               base_params(params),
@@ -319,7 +260,7 @@ void server_models::add_model(server_model_meta && meta) {
 }
 
 void server_models::notify_sse(const std::string & event, const std::string & model_id, const json & data) {
-    std::unique_ptr<server_task_result_router> result = std::make_unique<server_task_result_router>();
+    auto result = std::make_unique<server_task_result_router>();
     result->data = {
         {"model", model_id},
         {"event", event},
@@ -599,7 +540,7 @@ void server_models::load_models() {
             }
 
             inst.meta.exit_code = 0; // clear failed state so the model can be reloaded
-            inst.meta.update_args(ctx_preset, bin_path);
+            inst.meta.update_args(ctx_preset, bin_path.string());
             inst.meta.update_caps();
         }
 
@@ -641,10 +582,8 @@ void server_models::load_models() {
         // collect autoload candidates while still under the lock
         std::vector<std::string> to_autoload;
         for (const auto & name : newly_added) {
-            auto it = mapping.find(name);
-            if (it != mapping.end()) {
-                std::string val;
-                if (it->second.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
+            if (auto it = mapping.find(name); it != mapping.end()) {
+                if (std::string val; it->second.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
                     to_autoload.push_back(name);
                 }
             }
@@ -661,37 +600,35 @@ void server_models::load_models() {
 }
 
 void server_models::update_meta(const std::string & name, const server_model_meta & meta) {
-    std::lock_guard<std::mutex> lk(mutex);
-    auto it = mapping.find(name);
-    if (it != mapping.end()) {
+    std::lock_guard lk(mutex);
+    if (const auto it = mapping.find(name); it != mapping.end()) {
         it->second.meta = meta;
     }
     cv.notify_all(); // notify wait_until_loading_finished
 }
 
 bool server_models::has_model(const std::string & name) {
-    std::lock_guard<std::mutex> lk(mutex);
+    std::lock_guard lk(mutex);
     if (mapping.find(name) != mapping.end()) {
         return true;
     }
-    for (const auto & [key, inst] : mapping) {
-        if (inst.meta.aliases.count(name)) {
-            return true;
-        }
-    }
-    return false;
+
+    return std::any_of(
+        mapping.cbegin(),
+        mapping.cend(),
+        [name](const auto & item) { return item.second.meta.aliases.count(name); }
+    );
 }
 
 std::optional<server_model_meta> server_models::get_meta(const std::string & name) {
-    std::unique_lock<std::mutex> lk(mutex);
+    std::unique_lock lk(mutex);
     if (need_reload) {
         lk.unlock();
         load_models();
         lk.lock();
     }
 
-    auto it = mapping.find(name);
-    if (it != mapping.end()) {
+    if (const auto it = mapping.find(name); it != mapping.end()) {
         return it->second.meta;
     }
     for (const auto & [key, inst] : mapping) {
@@ -835,7 +772,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
         unload_lru();
     }
 
-    std::unique_lock<std::mutex> lk(mutex);
+    std::unique_lock lk(mutex);
     // edge case: block until any in-progress reload has finished so we always load
     // against the freshest preset and a consistent mapping state
     cv.wait(lk, [this]() { return !is_reloading; });
@@ -857,7 +794,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
                 count_active++;
             }
         }
-        if (count_active >= (size_t)base_params.models_max) {
+        if (count_active >= static_cast<size_t>(base_params.models_max)) {
             throw std::runtime_error("model limit reached, try again later");
         }
     }
@@ -878,7 +815,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
     {
         SRV_INF("spawning server instance with name=%s on port %d\n", inst.meta.name.c_str(), inst.meta.port);
 
-        inst.meta.update_args(ctx_preset, bin_path); // render args
+        inst.meta.update_args(ctx_preset, bin_path.string()); // render args
 
         std::vector<std::string> child_args = inst.meta.args; // copy
         std::vector<std::string> child_env  = base_env; // copy
@@ -896,15 +833,10 @@ void server_models::load(const std::string & name, const load_options & opts) {
         }
         inst.meta.args = child_args; // save for debugging
 
-        std::vector<char *> argv = to_char_ptr_array(child_args);
-        std::vector<char *> envp = to_char_ptr_array(child_env);
-
         // TODO @ngxson : maybe separate stdout and stderr in the future
         //                so that we can use stdout for commands and stderr for logging
-        int options = subprocess_option_no_window | subprocess_option_combined_stdout_stderr;
         inst.subproc->sproc.emplace();
-        int result = subprocess_create_ex(argv.data(), options, envp.data(), &inst.subproc->get());
-        if (result != 0) {
+        if (inst.subproc->sproc->run(child_args, child_env) != 0) {
             throw std::runtime_error("failed to spawn server instance");
         }
     }
@@ -940,7 +872,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
         });
 
         std::thread stopping_thread([&]() {
-            // thread to monitor explicit stop requests; child crash is signalled via child_proc->stopped
+            // thread to monitor explicit stop requests; child crash is signaled via child_proc->stopped
             auto is_stopping = [this, &name]() {
                 return this->stopping_models.find(name) != this->stopping_models.end();
             };
@@ -994,8 +926,9 @@ void server_models::load(const std::string & name, const load_options & opts) {
 
         // get the exit code
         int exit_code = 0;
-        subprocess_join(&child_proc->get(), &exit_code);
-        subprocess_destroy(&child_proc->get());
+        if (child_proc->sproc.has_value()) {
+            exit_code = child_proc->sproc->join();
+        }
 
         // update status and exit code
         if (child_mode == SERVER_CHILD_MODE_DOWNLOAD) {
@@ -1151,7 +1084,7 @@ bool server_models::remove(const std::string & name) {
     // do everything under one lock acquisition; avoid get_meta() /
     // unload() because they can trigger load_models() which erases
     // transient DOWNLOADING / DOWNLOADED entries as a side-effect
-    std::unique_lock<std::mutex> lk(mutex);
+    std::unique_lock lk(mutex);
 
     auto it = mapping.find(name);
     if (it == mapping.end()) {
@@ -2010,7 +1943,7 @@ struct pipe_t {
         cv.notify_all();
     }
     bool read(T & output, const std::function<bool()> & should_stop) {
-        std::unique_lock<std::mutex> lk(mutex);
+        std::unique_lock lk(mutex);
         constexpr auto poll_interval = std::chrono::milliseconds(500);
         while (true) {
             if (!queue.empty()) {
@@ -2064,7 +1997,7 @@ static bool should_strip_proxy_header(const std::string & header_name) {
 
 static std::string generate_multipart_boundary() {
     thread_local std::mt19937 gen(std::random_device{}());
-    static const char chars[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    static constexpr char chars[] = "0123456789abcdefghijklmnopqrstuvwxyz";
     std::uniform_int_distribution<> dis(0, sizeof(chars) - 2);
     std::string boundary = "----llama-cpp-proxy-";
     for (int i = 0; i < 16; i++) {

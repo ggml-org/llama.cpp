@@ -48,7 +48,7 @@ enum server_child_mode {
     SERVER_CHILD_MODE_DOWNLOAD, // download the model and exit
 };
 
-static std::string server_model_status_to_string(server_model_status status) {
+static std::string server_model_status_to_string(const server_model_status status) {
     switch (status) {
         case SERVER_MODEL_STATUS_DOWNLOADING: return "downloading";
         case SERVER_MODEL_STATUS_DOWNLOADED:  return "downloaded";
@@ -60,7 +60,7 @@ static std::string server_model_status_to_string(server_model_status status) {
     }
 }
 
-static std::string server_model_source_to_string(server_model_source source) {
+static std::string server_model_source_to_string(const server_model_source source) {
     switch (source) {
         case SERVER_MODEL_SOURCE_PRESET:     return "preset";
         case SERVER_MODEL_SOURCE_MODELS_DIR: return "models_dir";

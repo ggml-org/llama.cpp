@@ -6,7 +6,6 @@
 #include "server-tools.h"
 
 #include "arg.h"
-#include "build-info.h"
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
@@ -15,7 +14,7 @@
 #include <atomic>
 #include <clocale>
 #include <exception>
-#include <signal.h>
+#include <csignal>
 #include <thread> // for std::thread::hardware_concurrency
 
 #if defined(_WIN32)
@@ -423,10 +422,10 @@ int llama_server(int argc, char ** argv) {
     sigaction(SIGINT, &sigint_action, NULL);
     sigaction(SIGTERM, &sigint_action, NULL);
 #elif defined (_WIN32)
-    auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
-        return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
+    auto console_ctrl_handler = +[](const DWORD ctrl_type) -> BOOL {
+        return ctrl_type == CTRL_C_EVENT ? (signal_handler(SIGINT), true) : false;
     };
-    SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
+    SetConsoleCtrlHandler(console_ctrl_handler, true);
 #endif
 
     if (is_router_server) {
