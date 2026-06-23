@@ -5679,7 +5679,7 @@ static ggml_backend_dev_t ggml_backend_sycl_reg_get_device(ggml_backend_reg_t re
 //
 //   * Large (nelem >= 32K): BF16-compressed. Each device compresses
 //     its FP32 partial to BF16 locally, cross-device memcpys
-//     to the peer (half the PCI bandwidth), where it is deompressed 
+//     to the peer (half the PCI bandwidth), where it is decompressed
 //     and added into the local FP32 partial. 6 SYCL submissions per
 //     allreduce (2 compress + 2 memcpy + 2 decompress-add) vs the
 //     4 for the small path, but the bandwidth saving > 6 GB/s PCIe x 2
