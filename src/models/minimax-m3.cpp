@@ -878,8 +878,10 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
     // (v_trans = !cparams.flash_attn). So MSA as a whole requires FA; without it we fall back to
     // incorrect dense build_attn, which handles the transposed-V / explicit-softmax path.
     const bool fa_on       = cparams.flash_attn;     // resolved FA: supported AND enabled
-    const bool want_bypass = getenv("MSA_BYPASS");
-    const bool msa_enabled = fa_on && !want_bypass;
+    const bool single_stream = cparams.n_seq_max == 1; // MSA block selection is anchored to absolute
+                                                       // KV slots, valid only for single-sequence decode
+    const bool want_bypass  = getenv("MSA_BYPASS");
+    const bool msa_enabled  = fa_on && single_stream && !want_bypass;
 
     static bool warned_no_fa = false;
     if (!fa_on && !want_bypass && !warned_no_fa) {
@@ -887,13 +889,19 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                        "(no sparse selection). Enable flash attention for MSA.\n", __func__);
         warned_no_fa = true;
     }
-    //---------------------------------
-    static bool warned_MSA_Active = false;                                                              //DEBUGREMOVE
-    if (!want_bypass && !warned_no_fa && fa_on) {
-        LLAMA_LOG_WARN("%s: flash attention enabled; Enabling MSA -> running SPARSE attention "
-                       "Everything Correct.\n", __func__);
-        warned_MSA_Active = true;
+    static bool warned_multi_seq = false;
+    if (fa_on && !single_stream && !want_bypass && !warned_multi_seq) {
+        LLAMA_LOG_WARN("%s: n_seq_max > 1; MSA is single-stream only (-np 1) -> running DENSE "
+                       "attention (no sparse selection). Use -np 1 to enable MSA.\n", __func__);
+        warned_multi_seq = true;
     }
+    //---------------------------------
+   // static bool warned_MSA_Active = false;                                                              //DEBUGREMOVE
+    //if (!want_bypass && !warned_no_fa && fa_on) {
+    //    LLAMA_LOG_WARN("%s: flash attention enabled; Enabling MSA -> running SPARSE attention "
+      //                 "Everything Correct.\n", __func__);
+     //   warned_MSA_Active = true;
+    //}
     //------------------------------------
     
     const bool msa_decode = msa_enabled && !getenv("MSA_SHARED") && !getenv("MSA_FORCE_4WAY")
@@ -954,7 +962,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
             ggml_tensor * msa_mask4 = nullptr;   // [n_kv, S, Hd, ns] per-group (default)
             ggml_tensor * msa_mask  = nullptr;   // [n_kv, S, 1,  ns] shared    (legacy debug)
             bool          msa_decode_done = false; 
-            if (il >= (int) hparams.n_layer_dense_lead) {                 // sparse layers == MoE layers for M3
+            if (msa_enabled && il >= (int) hparams.n_layer_dense_lead) {                 // sparse layers == MoE layers for M3
                 const int64_t n_idx_dim  = hparams.indexer_head_size;     // 128
                 const int64_t n_idx_head = hparams.indexer_n_head;        // 4
 
