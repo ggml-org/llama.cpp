@@ -2,8 +2,10 @@
 	let { percent }: { percent: number } = $props();
 </script>
 
-<!-- determinate load fill that highlights the pill left to right, pulsing on the whole surface -->
-<div
-	class="pointer-events-none absolute inset-y-0 left-0 animate-pulse rounded-sm bg-primary/25 transition-[width] duration-200 ease-out"
-	style="width: {percent}%"
-></div>
+<!-- thin determinate load bar pinned to the bottom edge, pulsing while it fills -->
+<div class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 overflow-hidden rounded-b-sm">
+	<div
+		class="h-full animate-pulse bg-primary transition-[width] duration-200 ease-out"
+		style="width: {percent}%"
+	></div>
+</div>
