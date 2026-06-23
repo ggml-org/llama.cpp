@@ -1264,12 +1264,10 @@ struct clip_model_loader {
                 }
             }
 
-            // Load the vision feature layer indices if they are explicitly provided;
-            // if multiple vision feature layers are present, the values will be concatenated
-            // to form the final visual features.
+            // Load the vision/audio feature layer indices if they are explicitly provided
             // NOTE: gguf conversions should standardize the values of the vision feature layer to
             // be non-negative, since we use -1 to mark values as unset here.
-            get_arr_int(KEY_FEATURE_LAYER, hparams.vision_feature_layer, false);
+            get_arr_int(string_format(KEY_FEATURE_LAYERS, prefix), hparams.feature_layers, false);
 
             // model-specific params
             switch (model.proj_type) {
@@ -1651,6 +1649,7 @@ struct clip_model_loader {
                         get_u32(KEY_A_PROJ_WINDOW_SIZE,     hparams.audio_proj_window_size);
                         get_u32(KEY_A_PROJ_DOWNSAMPLE_RATE, hparams.audio_proj_downsample_rate);
                         get_u32(KEY_A_PROJ_HEAD_COUNT,      hparams.audio_proj_head_count);
+                        // NOTE: feature layers loaded above in common path
                     } break;
                 case PROJECTOR_TYPE_JANUS_PRO:
                     {
@@ -1663,11 +1662,11 @@ struct clip_model_loader {
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
                         hparams.image_resize_pad = PAD_CEIL;
 
-                        get_arr_int(KEY_FEATURE_LAYER, hparams.vision_feature_layer);
+                        // NOTE: feature_layers loaded in common path as optional
                         get_arr_int(KEY_PROJ_SPATIAL_OFFSETS, hparams.proj_spatial_offsets);
-                        if (hparams.vision_feature_layer.size() != hparams.proj_spatial_offsets.size()) {
-                            throw std::runtime_error(string_format("%s: vision_feature_layer.size() %d != proj_spatial_offsets.size() %d",
-                                                                   hparams.vision_feature_layer.size(), hparams.proj_spatial_offsets.size()));
+                        if (hparams.feature_layers.size() != hparams.proj_spatial_offsets.size()) {
+                            throw std::runtime_error(string_format("%s: feature_layers.size() %d != proj_spatial_offsets.size() %d",
+                                                                   hparams.feature_layers.size(), hparams.proj_spatial_offsets.size()));
                         }
 
                         get_u32(KEY_PROJ_SAMPLE_QUERY_SIDE,  hparams.downsample_query_side);
@@ -2740,7 +2739,7 @@ struct clip_model_loader {
                     model.image_newline = get_tensor(TN_IMAGE_NEWLINE);
 
                     // Load separate layerwise and spatial projector tensors
-                    const auto projector_count = hparams.vision_feature_layer.size();
+                    const auto projector_count = hparams.feature_layers.size();
                     model.qf_proj_blocks.resize(projector_count);
                     for (size_t bid = 0; bid < projector_count; ++bid) {
                         auto & b = model.qf_proj_blocks[bid];
@@ -4388,7 +4387,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
 
                 // Stage 1b only uses block 0's permutations; future stages
                 // will upload all blocks.
-                for (size_t bid = 0; bid < hparams.vision_feature_layer.size(); ++bid) {
+                for (size_t bid = 0; bid < hparams.feature_layers.size(); ++bid) {
                     const std::string prefix = "g4v_blk" + std::to_string(bid) + "_";
                     upload(prefix + "win_idx",     make_win_idx(image_side, window_side));
                     upload(prefix + "qwin_idx",    make_win_idx(new_side, query_side));

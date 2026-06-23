@@ -518,6 +518,14 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     return max_idx; // all tokens are equal
 }
 
+common_chat_msg_spans server_tokens::find_message_spans(const common_chat_msg_delimiters & delims) const {
+    std::map<size_t, size_t> skips;
+    for (const auto & it : map_idx_to_media) {
+        skips[it.first] = mtmd_input_chunk_get_n_tokens(it.second.get());
+    }
+    return delims.split(tokens, skips);
+}
+
 bool server_tokens::validate(const struct llama_context * ctx) const {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -1104,15 +1112,7 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
-    llama_params["message_spans"] = json::array();
-
-    for (const auto & span : chat_params.message_spans) {
-        llama_params["message_spans"].push_back({
-            { "role", span.role },
-            { "pos",  span.pos  },
-            { "len",  span.len  },
-        });
-    }
+    llama_params["message_delimiters"] = chat_params.message_delimiters.to_json();
 
     // Reasoning budget: pass parameters through to sampling layer
     {
