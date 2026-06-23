@@ -2034,7 +2034,7 @@ static bool ggml_hexagon_precompute_hmx_mm_params(
 ) {
     const int aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
     const bool pipeline = is_matmul_id ? false : htp_mm_hmx_pipeline(ne11);
-    const int n_threads = (is_matmul_id ? (ne12 <= 32) : (ne11 <= 32)) ? 1 : (int)sess->n_threads;
+    const int n_threads = (int)sess->n_threads;
     const int ne10 = src1->ne[0];
 
     const bool is_batched_val = is_matmul_id ? false : is_batched;
