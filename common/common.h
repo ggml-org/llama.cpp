@@ -632,7 +632,7 @@ struct common_params {
     std::map<std::string, std::string> default_template_kwargs;
 
     // CLI params
-    std::string server_base;
+    std::string server_base; // if set, connect to this server instead of starting a new one
 
     // UI configs
     bool ui = true;
