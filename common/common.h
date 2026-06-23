@@ -836,6 +836,7 @@ bool glob_match(const std::string & pattern, const std::string & str);
 // Filesystem utils
 //
 
+std::string fs_normalize_filepath(const std::string & path);
 bool fs_validate_filename(const std::string & filename, bool allow_subdirs = false);
 bool fs_create_directory_with_parents(const std::string & path);
 bool fs_is_directory(const std::string & path);
