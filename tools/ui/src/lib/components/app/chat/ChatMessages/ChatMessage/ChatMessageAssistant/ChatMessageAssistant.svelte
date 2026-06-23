@@ -180,6 +180,9 @@
 
 	let displayedModel = $derived(message.model ?? null);
 
+	// model being switched to while it loads, so the selector bar tracks it
+	let pendingModel = $state<string | null>(null);
+
 	let isCurrentlyLoading = $derived(isLoading());
 	let isStreaming = $derived(isChatStreaming());
 	let hasNoContent = $derived(!message?.content?.trim());
@@ -318,13 +321,19 @@
 			>
 				{#if isRouter}
 					<ModelsSelectorDropdown
-						currentModel={displayedModel}
+						currentModel={pendingModel ?? displayedModel}
 						disabled={isLoading()}
 						onModelChange={async (modelId: string, modelName: string) => {
 							const status = modelsStore.getModelStatus(modelId);
 
 							if (status !== ServerModelStatus.LOADED) {
-								await modelsStore.loadModel(modelId);
+								pendingModel = modelId;
+
+								try {
+									await modelsStore.loadModel(modelId);
+								} finally {
+									pendingModel = null;
+								}
 							}
 
 							onRegenerate(modelName);
