@@ -4448,6 +4448,23 @@ void server_routes::init_routes() {
             }}}
         };
 
+        // label every series with the loaded model so scrapers can distinguish
+        // instances (in router mode each child process serves exactly one model)
+        std::string model_label;
+        {
+            // escape per Prometheus exposition format: backslash, double-quote, newline
+            std::string escaped;
+            for (char c : meta->model_name) {
+                switch (c) {
+                    case '\\': escaped += "\\\\"; break;
+                    case '"':  escaped += "\\\""; break;
+                    case '\n': escaped += "\\n";  break;
+                    default:   escaped += c;      break;
+                }
+            }
+            model_label = "{model=\"" + escaped + "\"}";
+        }
+
         std::stringstream prometheus;
 
         for (const auto & el : all_metrics_def.items()) {
@@ -4459,9 +4476,9 @@ void server_routes::init_routes() {
                 const std::string help = metric_def.at("help");
 
                 auto value = json_value(metric_def, "value", 0.);
-                prometheus << "# HELP llamacpp:" << name << " " << help  << "\n"
-                            << "# TYPE llamacpp:" << name << " " << type  << "\n"
-                            << "llamacpp:"        << name << " " << value << "\n";
+                prometheus << "# HELP llamacpp:" << name << " " << help        << "\n"
+                            << "# TYPE llamacpp:" << name << " " << type        << "\n"
+                            << "llamacpp:"        << name << model_label << " " << value << "\n";
             }
         }
 
