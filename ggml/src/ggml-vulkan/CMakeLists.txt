@@ -60,7 +60,19 @@ if (Vulkan_FOUND)
     message(STATUS "Vulkan found")
 
     ggml_add_backend_library(ggml-vulkan
-                             ggml-vulkan.cpp
+                             ggml-vulkan-instance.cpp
+                             ggml-vulkan-shaders.cpp
+                             ggml-vulkan-buffers.cpp
+                             ggml-vulkan-pipelines.cpp
+                             ggml-vulkan-matmul.cpp
+                             ggml-vulkan-flash-attn.cpp
+                             ggml-vulkan-operators.cpp
+                             ggml-vulkan-graph.cpp
+                             ggml-vulkan-backend.cpp
+                             ggml-vulkan-debug.cpp
+                             ggml-vulkan-types.h
+                             ggml-vulkan-push-constants.h
+                             ggml-vulkan-common.h
                              ../../include/ggml-vulkan.h
                             )
 
