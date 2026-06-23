@@ -120,6 +120,8 @@ struct task_result_state {
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id; // function call ID for current args delta
 
+    uint64_t oai_seq_num = 0;
+
     task_result_state(const common_chat_parser_params & chat_parser_params);
 
     // parse partial tool calls and update the internal state
@@ -372,6 +374,7 @@ struct server_task_result_cmpl_final : server_task_result {
     std::string oai_resp_id;
     std::string oai_resp_reasoning_id;
     std::string oai_resp_message_id;
+    uint64_t * oai_seq_num_ptr = nullptr;
 
     virtual bool is_stop() override {
         return true; // in stream mode, final responses are considered stop
@@ -386,6 +389,7 @@ struct server_task_result_cmpl_final : server_task_result {
         oai_resp_id = state.oai_resp_id;
         oai_resp_reasoning_id = state.oai_resp_reasoning_id;
         oai_resp_message_id = state.oai_resp_message_id;
+        oai_seq_num_ptr = &state.oai_seq_num;
     }
 
     json to_json_non_oaicompat();
@@ -442,6 +446,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::string oai_resp_reasoning_id;
     std::string oai_resp_message_id;
     std::string oai_resp_fc_id;
+    uint64_t * oai_seq_num_ptr = nullptr;
 
     // for Anthropic API: track if any reasoning content has been generated
     bool anthropic_has_reasoning = false;
