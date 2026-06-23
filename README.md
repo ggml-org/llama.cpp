@@ -142,6 +142,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [x] [GigaChat-20B-A3B](https://huggingface.co/ai-sage/GigaChat-20B-A3B-instruct)
 - [X] [Trillion-7B-preview](https://huggingface.co/trillionlabs/Trillion-7B-preview)
 - [x] [Ling models](https://huggingface.co/collections/inclusionAI/ling-67c51c85b34a7ea0aba94c32)
+- [x] [Liquid LFM2 models](https://huggingface.co/collections/LiquidAI/lfm2)
 - [x] [Liquid LFM2.5 models](https://huggingface.co/collections/LiquidAI/lfm25)
 - [x] [Liquid Nanos](https://huggingface.co/collections/LiquidAI/liquid-nanos)
 - [x] [Hunyuan models](https://huggingface.co/collections/tencent/hunyuan-dense-model-6890632cda26b19119c9c5e7)
