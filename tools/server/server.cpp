@@ -21,6 +21,12 @@
 #include <windows.h>
 #endif
 
+// satisfies -Wmissing-declarations (used by llama command)
+int llama_server(int argc, char ** argv);
+
+// to be used via CLI (argc / argv are used by router mode only)
+int llama_server(common_params & params, int argc, char ** argv);
+
 static std::function<void(int)> shutdown_handler;
 static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
 
@@ -71,9 +77,6 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
     };
 }
 
-// satisfies -Wmissing-declarations
-int llama_server(int argc, char ** argv);
-
 int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
@@ -89,6 +92,10 @@ int llama_server(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
+    return llama_server(params, argc, argv);
+}
+
+int llama_server(common_params & params, int argc, char ** argv) {
     // router server never loads a model and must not touch the GPU
     const bool is_router_server = params.model.path.empty()
                                && params.model.hf_repo.empty();

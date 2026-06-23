@@ -8,7 +8,7 @@
 // note: in the future, we may have a server running as daemon and the CLI can connect to it automatically
 
 // llama_server will be available as a dynamic library symbol
-int llama_server(int argc, char ** argv);
+int llama_server(common_params & params, int argc, char ** argv);
 
 struct cli_server {
     std::thread th;
@@ -24,26 +24,16 @@ struct cli_server {
         }
     }
 
-    bool start(std::vector<std::string> args) {
+    bool start(common_params & params) {
         port = common_http_get_free_port();
         if (port <= 0) {
             fprintf(stderr, "failed to get a free port\n");
             exit(1);
         }
 
-        th = std::thread([&, args_ = args]() {
-            auto args = args_; // copy to modify
-            args.push_back("--port");
-            args.push_back(std::to_string(port));
-
-            // convert to char* array
-            std::vector<char *> argv;
-            for (auto & arg : args) {
-                argv.push_back(arg.data());
-            }
-            argv.push_back(nullptr);
-
-            int res = llama_server(static_cast<int>(args.size()), argv.data());
+        th = std::thread([&]() {
+            // argc / argv are only used in router mode, we can skip them for now
+            int res = llama_server(params, 0, nullptr);
             if (res != 0) {
                 fprintf(stderr, "llama_server exited with code %d\n", res);
             }

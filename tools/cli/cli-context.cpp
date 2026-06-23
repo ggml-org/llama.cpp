@@ -41,56 +41,6 @@ static int arg_num_values(const common_arg & opt) {
     return 0;
 }
 
-// keep only the args that llama-server understands, so that the remainder
-// of the command line can be forwarded to the spawned server child
-static std::vector<std::string> filter_server_args(int argc, char ** argv) {
-    std::map<std::string, int> cli_n_values; // arg -> number of values
-    std::set<std::string>      server_args;
-
-    common_params dummy_cli;
-    auto ctx_cli = common_params_parser_init(dummy_cli, LLAMA_EXAMPLE_CLI);
-    for (const auto & opt : ctx_cli.options) {
-        for (const char * a : opt.args) {
-            cli_n_values[a] = arg_num_values(opt);
-        }
-        for (const char * a : opt.args_neg) {
-            cli_n_values[a] = 0;
-        }
-    }
-
-    common_params dummy_server;
-    auto ctx_server = common_params_parser_init(dummy_server, LLAMA_EXAMPLE_SERVER);
-    for (const auto & opt : ctx_server.options) {
-        for (const char * a : opt.args) {
-            server_args.insert(a);
-        }
-        for (const char * a : opt.args_neg) {
-            server_args.insert(a);
-        }
-    }
-
-    std::vector<std::string> result;
-    for (int i = 1; i < argc; i++) {
-        const std::string arg = argv[i];
-        auto it = cli_n_values.find(arg);
-        if (it == cli_n_values.end()) {
-            // not a known arg (should not happen when parsing succeeded)
-            continue;
-        }
-        const bool forward = server_args.count(arg) > 0;
-        if (forward) {
-            result.push_back(arg);
-        }
-        for (int j = 0; j < it->second && i + 1 < argc; j++) {
-            i++;
-            if (forward) {
-                result.push_back(argv[i]);
-            }
-        }
-    }
-    return result;
-}
-
 static std::string format_error_message(const json & err) {
     if (err.contains("error") && err.at("error").is_object()) {
         const auto & e = err.at("error");
@@ -113,7 +63,7 @@ static std::string media_type_from_ext(const std::string & fname) {
     return "image";
 }
 
-bool cli_context::init(int argc, char ** argv) {
+bool cli_context::init() {
     std::optional<view::spinner> spinner;
 
     if (!params.server_base.empty()) {
@@ -138,7 +88,7 @@ bool cli_context::init(int argc, char ** argv) {
         spinner.emplace("Loading model...");
 
         server.emplace();
-        if (!server->start(filter_server_args(argc, argv))) {
+        if (!server->start(params)) {
             view::show_error("server start failed");
             return false;
         }

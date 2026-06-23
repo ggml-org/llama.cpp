@@ -182,7 +182,7 @@ int llama_cli(int argc, char ** argv) {
 
     cli_context ctx_cli(params);
 
-    if (!ctx_cli.init(argc, argv)) {
+    if (!ctx_cli.init()) {
         ctx_cli.shutdown();
         return 1;
     }

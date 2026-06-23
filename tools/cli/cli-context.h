@@ -62,7 +62,7 @@ struct cli_context {
 
     // connect to --server-base or spawn a local llama-server child;
     // argc/argv are needed to forward the server-relevant args to the child
-    bool init(int argc, char ** argv);
+    bool init();
 
     // run the interactive chat loop, returns the process exit code
     int run();
