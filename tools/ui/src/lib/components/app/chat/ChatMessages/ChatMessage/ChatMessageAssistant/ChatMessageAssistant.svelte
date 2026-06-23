@@ -353,6 +353,10 @@
 <style>
 	:global(.chat-message):last-child .chat-message-assistant {
 		min-height: calc(100dvh - 25rem);
+
+		@media (width > 768px) {
+			min-height: calc(100dvh - 24rem);
+		}
 	}
 
 	.processing-container {

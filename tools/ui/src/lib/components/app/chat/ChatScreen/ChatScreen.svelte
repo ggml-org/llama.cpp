@@ -49,6 +49,8 @@
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
 	let isMobileUserScrolledUp = $state(false);
+	let mobileScrollDownHint = $state(false);
+	let mobileScrollDownHintLockedUntil = $state(0);
 	let emptyFileNames = $state<string[]>([]);
 	let initialMessage = $state('');
 	let showDeleteDialog = $state(false);
@@ -95,7 +97,7 @@
 		if (!container) return;
 
 		const distanceFromBottom = container.scrollHeight - container.clientHeight - container.scrollTop;
-		isMobileUserScrolledUp = distanceFromBottom > 100;
+		isMobileUserScrolledUp = distanceFromBottom > 300;
 	}
 
 	async function handleDeleteConfirm() {
@@ -150,6 +152,8 @@
 
 		if (isMobile.current) {
 			autoScroll.setDisabled(disableAutoScroll);
+			mobileScrollDownHint = true;
+			mobileScrollDownHintLockedUntil = Date.now() + 500;
 		}
 
 		await chatStore.sendMessage(message, result?.extras);
@@ -184,9 +188,16 @@
 		}
 
 		autoScroll.startObserving();
+
 		if (!disableAutoScroll) {
 			autoScroll.enable();
 		}
+
+		if (isMobile.current && isCurrentConversationLoading) {
+			mobileScrollDownHint = true;
+			mobileScrollDownHintLockedUntil = Date.now() + 500;
+		}
+
 		handleMobileScroll();
 	});
 
@@ -202,6 +213,9 @@
 	onscroll={(e) => {
 		scroll.handleScroll(e);
 		handleMobileScroll();
+		if (e.isTrusted && Date.now() > mobileScrollDownHintLockedUntil) {
+			mobileScrollDownHint = false;
+		}
 	}}
 />
 
@@ -247,9 +261,10 @@
 			<ChatScreenServerError />
 
 			<div class="pointer-events-none flex flex-col gap-6 items-center w-full">
-				{#if (isMobile.current ? isMobileUserScrolledUp : autoScroll.userScrolledUp) && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
+				{#if (isMobile.current ? mobileScrollDownHint || isMobileUserScrolledUp : autoScroll.userScrolledUp) && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
 					<ChatScreenActionScrollDown
 						onclick={() => {
+							mobileScrollDownHint = false;
 							scroll.chatScrollContainer?.scrollTo({
 								top: scroll.chatScrollContainer.scrollHeight,
 								behavior: 'smooth'
