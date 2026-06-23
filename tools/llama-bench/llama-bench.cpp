@@ -107,13 +107,20 @@ template <typename T> static T avg(const std::vector<T> & v) {
 }
 
 template <typename T> static T stdev(const std::vector<T> & v) {
-    if (v.size() <= 1) {
-        return 0;
+    const std::size_t n = v.size();
+    if (n <= 1) return (T) 0.0;
+
+    long double mean = 0.0L;
+    for (const auto& x : v) mean += static_cast<long double>(x);
+    mean /= static_cast<long double>(n);
+
+    long double ss = 0.0L; // sum of squared deviations
+    for (const auto& x : v) {
+        const long double d = static_cast<long double>(x) - mean;
+        ss += d * d;
     }
-    T mean   = avg(v);
-    T sq_sum = std::inner_product(v.begin(), v.end(), v.begin(), T(0));
-    T stdev  = std::sqrt(sq_sum / (T) (v.size() - 1) - mean * mean * (T) v.size() / (T) (v.size() - 1));
-    return stdev;
+
+    return (T) std::sqrt(static_cast<double>(ss / static_cast<long double>(n - 1))); // sample stdev
 }
 
 static std::string get_cpu_info() {
