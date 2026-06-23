@@ -38,17 +38,7 @@
 #define LOAD_VEC_B 1
 #endif
 
-// Load 2 values at once without affecting index calculations through LOAD_VEC
-#if (defined(DATA_A_F32) || defined(DATA_A_F16) || defined(DATA_A_BF16)) && !defined(ALIGNED)
-#define LOAD_VEC_BATCH_A 2
-#else
-#define LOAD_VEC_BATCH_A 1
-#endif
-#if !defined(ALIGNED)
-#define LOAD_VEC_BATCH_B 2
-#else
-#define LOAD_VEC_BATCH_B 1
-#endif
+layout (constant_id = 11) const uint ALIGNED = 0;
 
 #if !defined(TO_FLOAT_TYPE)
 #define TO_FLOAT_TYPE FLOAT_TYPE
@@ -57,6 +47,13 @@
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
+#if defined(DATA_A_F32)
+layout (binding = 0) readonly buffer A_SCALAR {float data_a_scalar[];};
+#elif defined(DATA_A_F16)
+layout (binding = 0) readonly buffer A_SCALAR {float16_t data_a_scalar[];};
+#elif defined(DATA_A_BF16)
+layout (binding = 0) readonly buffer A_SCALAR {uint16_t data_a_scalar[];};
+#endif
 #if defined(A_TYPE_PACKED16)
 layout (binding = 0) readonly buffer A_PACKED16 {A_TYPE_PACKED16 data_a_packed16[];};
 #endif
@@ -65,6 +62,7 @@ layout (binding = 0) readonly buffer A_PACKED32 {A_TYPE_PACKED32 data_a_packed32
 #endif
 
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
+layout (binding = 1) readonly buffer B_SCALAR {B_TYPE_SCALAR data_b_scalar[];};
 layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
 
 #ifdef MUL_MAT_ID
@@ -194,13 +192,23 @@ void main() {
     const uint warp_r = warp_i % (BM / WM);
     const uint warp_c = warp_i / (BM / WM);
 
-    const uint loadr_a = gl_LocalInvocationID.x % (BK / LOAD_VEC_A / LOAD_VEC_BATCH_A);
-    const uint loadc_a = gl_LocalInvocationID.x / (BK / LOAD_VEC_A / LOAD_VEC_BATCH_A);
-    const uint loadr_b = gl_LocalInvocationID.x % (BK / LOAD_VEC_B / LOAD_VEC_BATCH_B);
-    const uint loadc_b = gl_LocalInvocationID.x / (BK / LOAD_VEC_B / LOAD_VEC_BATCH_B);
+#if defined(DATA_A_F32) || defined(DATA_A_F16) || defined(DATA_A_BF16)
+    const uint LOAD_VEC_A_EFF = (ALIGNED != 0) ? LOAD_VEC_A : 1;
+    const uint LOAD_VEC_BATCH_A = (ALIGNED != 0) ? 1 : 2;
+#else
+    const uint LOAD_VEC_A_EFF = LOAD_VEC_A;
+    const uint LOAD_VEC_BATCH_A = 1;
+#endif
+    const uint LOAD_VEC_B_EFF = (ALIGNED != 0) ? LOAD_VEC_B : 1;
+    const uint LOAD_VEC_BATCH_B = (ALIGNED != 0) ? 1 : 2;
 
-    const uint loadstride_a = gl_WorkGroupSize.x * LOAD_VEC_A * LOAD_VEC_BATCH_A / BK;
-    const uint loadstride_b = gl_WorkGroupSize.x * LOAD_VEC_B * LOAD_VEC_BATCH_B / BK;
+    const uint loadr_a = gl_LocalInvocationID.x % (BK / LOAD_VEC_A_EFF / LOAD_VEC_BATCH_A);
+    const uint loadc_a = gl_LocalInvocationID.x / (BK / LOAD_VEC_A_EFF / LOAD_VEC_BATCH_A);
+    const uint loadr_b = gl_LocalInvocationID.x % (BK / LOAD_VEC_B_EFF / LOAD_VEC_BATCH_B);
+    const uint loadc_b = gl_LocalInvocationID.x / (BK / LOAD_VEC_B_EFF / LOAD_VEC_BATCH_B);
+
+    const uint loadstride_a = gl_WorkGroupSize.x * LOAD_VEC_A_EFF * LOAD_VEC_BATCH_A / BK;
+    const uint loadstride_b = gl_WorkGroupSize.x * LOAD_VEC_B_EFF * LOAD_VEC_BATCH_B / BK;
 
 #ifdef MUL_MAT_ID
 #ifdef MUL_MAT_ID_USE_SUBGROUPS
@@ -239,15 +247,15 @@ void main() {
 
     uint pos_a =
 #ifdef MUL_MAT_ID
-        expert_idx * (p.batch_stride_a / LOAD_VEC_A) +
+        expert_idx * (p.batch_stride_a / LOAD_VEC_A_EFF) +
 #else
-        batch_idx_a * (p.batch_stride_a / LOAD_VEC_A) +
+        batch_idx_a * (p.batch_stride_a / LOAD_VEC_A_EFF) +
 #endif
-        (ir * BM * p.stride_a + start_k) / LOAD_VEC_A;
+        (ir * BM * p.stride_a + start_k) / LOAD_VEC_A_EFF;
 #ifdef MUL_MAT_ID
     uint pos_b = 0;
 #else
-    uint pos_b = (batch_idx * p.batch_stride_b + ic * BN * p.stride_b + start_k) / LOAD_VEC_B;
+    uint pos_b = (batch_idx * p.batch_stride_b + ic * BN * p.stride_b + start_k) / LOAD_VEC_B_EFF;
 #endif
 
 #ifdef COOPMAT
@@ -287,8 +295,8 @@ void main() {
 
         barrier();
 
-        pos_a += BK / LOAD_VEC_A;
-        pos_b += BK / LOAD_VEC_B;
+        pos_a += BK / LOAD_VEC_A_EFF;
+        pos_b += BK / LOAD_VEC_B_EFF;
 
 #ifdef COOPMAT
         [[unroll]] for (uint i = 0; i < BK; i += TK) {
