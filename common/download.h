@@ -55,6 +55,7 @@ struct common_download_opts {
     bool skip_download = false; // if true, only validation is performed, common_skip_download_exception may be thrown if the file is missing or invalid
     bool download_mmproj = false;
     bool download_mtp = false;
+    bool preset_only = false; // if true, only check & download remote preset (for router mode)
     common_download_callback * callback = nullptr;
 };
 

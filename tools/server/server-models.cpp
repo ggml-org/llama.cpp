@@ -224,7 +224,7 @@ void server_model_meta::update_caps() {
         });
         params.offline = true;
         // params.skip_download = true; // TODO: ideally, we should validate the model here, but it takes too much time
-        common_params_handle_models(params, LLAMA_EXAMPLE_SERVER);
+        common_params_handle_models(params, LLAMA_EXAMPLE_SERVER, {});
         if (params.mmproj.path.empty()) {
             multimodal = { false, false };
         } else {
@@ -1393,7 +1393,9 @@ struct server_download_state : public common_download_callback {
 
     bool run(common_params & params) {
         try {
-            common_params_handle_models(params, LLAMA_EXAMPLE_SERVER, this);
+            common_params_handle_models_params p;
+            p.callback = this;
+            common_params_handle_models(params, LLAMA_EXAMPLE_SERVER, p);
             is_ok = true;
         } catch (const std::exception & e) {
             auto model_name = params.model.get_name();
