@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include "htp-ops.h"
 #include "htp/matmul-ops.h"
+#include "htp/flash-attn-ops.h"
 
 struct htp_opnode {
     ggml_tensor * node = nullptr;
@@ -349,6 +350,16 @@ struct htp_opformat {
                        type == HTP_MM_KERNEL_HVX_F32_F32_DDR  || type == HTP_MM_KERNEL_HVX_F32_F16_DDR ||
                        type == HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT) {
                 path = "hvx-flat";
+            }
+            snprintf(str, max_size, "%s vtcm %d", path, (int) kparams->vtcm_size);
+        } else if (node.opcode == HTP_OP_FLASH_ATTN_EXT) {
+            const auto * kparams = (const struct htp_fa_kernel_params *) node.kernel_params;
+            const char * path = "unknown";
+            int32_t type = kparams->kernel_type;
+            if (type == HTP_FA_KERNEL_HMX) {
+                path = kparams->u.hmx.pipeline ? "hmx-pipe" : "hmx-seq";
+            } else if (type == HTP_FA_KERNEL_HVX) {
+                path = "hvx";
             }
             snprintf(str, max_size, "%s vtcm %d", path, (int) kparams->vtcm_size);
         } else {

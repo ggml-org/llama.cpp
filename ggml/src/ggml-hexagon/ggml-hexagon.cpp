@@ -43,6 +43,7 @@
 #include "htp-opnode.h"
 #include "htp-ops.h"
 #include "htp/matmul-ops.h"
+#include "htp/flash-attn-ops.h"
 #include "htp_iface.h"
 #include "htp-drv.h"
 
@@ -1880,6 +1881,129 @@ ggml_hexagon_session::~ggml_hexagon_session() noexcept(true) {
 // ** backend interface
 
 
+static bool ggml_hexagon_precompute_flash_attn_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_fa_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * q    = op->src[0];
+    const struct ggml_tensor * k    = op->src[1];
+    const struct ggml_tensor * v    = op->src[2];
+    const struct ggml_tensor * mask = op->src[3];
+    const struct ggml_tensor * dst  = op;
+
+    const uint32_t neq0 = q->ne[0];  // head_dim (DK)
+    const uint32_t neq1 = q->ne[1];  // n_tokens
+    const uint32_t neq2 = q->ne[2];  // n_heads
+
+    const uint32_t nek1 = k->ne[1];  // kv_len
+
+    const uint32_t nev0 = v->ne[0];  // head_dim (DV)
+
+    const uint32_t DK = neq0;
+    const uint32_t DV = nev0;
+
+    const uint32_t n_kv_heads = k->ne[2];
+    const uint32_t G          = neq2 / n_kv_heads;
+
+    float scale         = 1.0f;
+    float max_bias      = 0.0f;
+    float logit_softcap = 0.0f;
+    memcpy(&scale,         &op->op_params[0], sizeof(float));
+    memcpy(&max_bias,      &op->op_params[1], sizeof(float));
+    memcpy(&logit_softcap, &op->op_params[2], sizeof(float));
+
+    if (logit_softcap != 0.0f) {
+        scale /= logit_softcap;
+    }
+
+    kparams->scale = scale;
+    kparams->max_bias = max_bias;
+    kparams->logit_softcap = logit_softcap;
+
+    kparams->is_q_fp32 = (q->type == GGML_TYPE_F32) ? 1 : 0;
+    kparams->is_dst_fp32 = (dst->type == GGML_TYPE_F32) ? 1 : 0;
+    kparams->G = G;
+
+    const uint32_t n_head = q->ne[2];
+    kparams->n_head_log2 = 1u << (uint32_t) std::floor(std::log2(n_head));
+    kparams->m0 = std::pow(2.0f, -(max_bias) / kparams->n_head_log2);
+    kparams->m1 = std::pow(2.0f, -(max_bias / 2.0f) / kparams->n_head_log2);
+
+    // Check HMX eligibility
+    bool hmx_eligible = (sess->n_hmx > 0) && (opt_mm_select >= 3) &&
+                        (k->type == GGML_TYPE_F16) && (v->type == GGML_TYPE_F16) &&
+                        (DK % 64 == 0) && (DV % 64 == 0) && (op->src[4] == nullptr);
+
+    if (hmx_eligible) {
+        size_t Br = 0, Bc = 0;
+        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK, DV, neq1, nek1, sess->vtcm_size, sess->n_threads);
+        if (ret == 0) {
+            kparams->kernel_type = HTP_FA_KERNEL_HMX;
+            kparams->Br = Br;
+            kparams->Bc = Bc;
+            kparams->n_kv_blocks = (nek1 + Bc - 1) / Bc;
+            kparams->n_threads = (kparams->n_kv_blocks >= 3 && sess->n_threads >= 2) ? sess->n_threads : 1;
+            
+            kparams->u.hmx.g_br = hex_align_up(G * Br, 32);
+            kparams->u.hmx.pipeline = (kparams->n_kv_blocks >= 3 && sess->n_threads >= 2) ? 1 : 0;
+            kparams->vtcm_size = hmx_fa_compute_vtcm_usage(G, DK, DV, Br, Bc, kparams->n_threads, kparams->u.hmx.pipeline != 0);
+
+            const size_t row_vec_bytes = hex_align_up(Bc * sizeof(uint16_t), 256);
+            kparams->u.hmx.row_buf_stride = row_vec_bytes / 128; // HVX vector is 128 bytes
+
+            const size_t m_line_bytes = hex_align_up(Bc * sizeof(uint16_t), 128);
+            kparams->u.hmx.mask_buf_row_stride = m_line_bytes / sizeof(uint16_t);
+            kparams->u.hmx.mask_broadcast = (mask != nullptr && mask->ne[2] == 1) ? 1 : 0;
+            kparams->u.hmx.div_G = init_fastdiv_values(G);
+
+            kparams->qrows = 0;
+            kparams->qrows_per_thread = 0;
+            return true;
+        }
+    }
+
+    // Fallback to HVX
+    kparams->kernel_type = HTP_FA_KERNEL_HVX;
+    kparams->Br = 1;
+    kparams->Bc = 64; // FLASH_ATTN_BLOCK_SIZE
+    kparams->n_kv_blocks = (k->ne[1] + 64 - 1) / 64;
+    kparams->n_threads = sess->n_threads;
+
+    const size_t size_q_row_padded = hex_round_up(q->ne[0] * (kparams->is_q_fp32 ? 4 : 2), 128);
+    const size_t size_k_row_padded = hex_round_up(k->ne[0] * 2, 128);
+    const size_t size_v_row_padded = hex_round_up(v->ne[0] * 2, 128);
+    const size_t size_q_block = size_q_row_padded * 1;
+    const size_t size_k_block = size_k_row_padded * 64;
+    const size_t size_v_block = size_v_row_padded * 64;
+    const size_t size_m_block = hex_round_up(64 * 2, 128);
+    const size_t size_vkq_acc = hex_round_up(v->ne[0] * 4, 128);
+
+    const size_t total_spad = (size_q_block * 1 + size_k_block * 2 + size_v_block * 2 + (mask ? size_m_block * 16 : 0) + size_vkq_acc) * sess->n_threads;
+    kparams->vtcm_size = total_spad;
+
+    kparams->u.hvx.size_q_row_padded = size_q_row_padded;
+    kparams->u.hvx.size_k_row_padded = size_k_row_padded;
+    kparams->u.hvx.size_v_row_padded = size_v_row_padded;
+    kparams->u.hvx.src0_div21 = init_fastdiv_values(q->ne[2] * q->ne[1]);
+    kparams->u.hvx.src0_div1 = init_fastdiv_values(q->ne[1]);
+    kparams->u.hvx.broadcast_rk2 = init_fastdiv_values(q->ne[2]/k->ne[2]);
+    kparams->u.hvx.broadcast_rk3 = init_fastdiv_values(q->ne[3]/k->ne[3]);
+    kparams->u.hvx.broadcast_rv2 = init_fastdiv_values(q->ne[2]/v->ne[2]);
+    kparams->u.hvx.broadcast_rv3 = init_fastdiv_values(q->ne[3]/v->ne[3]);
+    if (mask) {
+        kparams->u.hvx.src3_div2 = init_fastdiv_values(mask->ne[2]);
+        kparams->u.hvx.src3_div3 = init_fastdiv_values(mask->ne[3]);
+    }
+
+    kparams->qrows = q->ne[1] * q->ne[2] * q->ne[3];
+    kparams->qrows_per_thread = (kparams->qrows + sess->n_threads - 1) / sess->n_threads;
+
+    return true;
+}
+
 static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
@@ -1909,6 +2033,17 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
     }
 
     if (dst->ne[3] != 1) {
+        return false;
+    }
+
+    struct htp_fa_kernel_params kparams;
+    if (!ggml_hexagon_precompute_flash_attn_params(sess, op, &kparams)) {
+        return false;
+    }
+
+    if ((size_t) kparams.vtcm_size > sess->vtcm_size) {
+        HEX_VERBOSE("ggml-hex: skip flash_attn_ext because VTCM needed (%d) > budget (%zu)\n",
+                    kparams.vtcm_size, sess->vtcm_size);
         return false;
     }
 
@@ -3406,6 +3541,11 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_precompute_matmul_params(sess,
                     node.node->src[0], node.node->src[1], node.node,
                     (struct htp_mm_kernel_params *)node.kernel_params
+                );
+            } else if (node.opcode == HTP_OP_FLASH_ATTN_EXT) {
+                ggml_hexagon_precompute_flash_attn_params(sess,
+                    node.node,
+                    (struct htp_fa_kernel_params *)node.kernel_params
                 );
             }
             computed_nodes.push_back(std::move(node));

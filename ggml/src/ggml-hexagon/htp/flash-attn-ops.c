@@ -30,6 +30,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 
+#include "flash-attn-ops.h"
 #include "hvx-fa-kernels.h"
 #include "hmx-fa-kernels.h"
 
@@ -209,7 +210,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
     const HVX_Vector logit_cap = hvx_vec_splat_f32(factx->logit_softcap);
 
     dma_cache m_cache;
-    dma_cache_init(&m_cache, spad_m, factx->size_m_block, DMA_CACHE_MAX_SIZE);
+    dma_cache_init(&m_cache, spad_m, factx->size_m_block, FA_DMA_CACHE_MAX_SIZE);
 
     for (uint32_t ir = ir0; ir < ir1; ++ir) {
         const uint32_t iq3 = fastdiv(ir, &factx->src0_div21);
@@ -1294,76 +1295,53 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    // GQA factor
+    const struct htp_fa_kernel_params * kparams = (const struct htp_fa_kernel_params *) octx->kernel_params;
     const uint32_t n_kv_heads = k->ne[2];
-    const uint32_t G          = neq2 / n_kv_heads;
-
-    // Thread count for multi-thread HVX phases
-    const uint32_t n_threads_init = octx->n_threads;
-
-    // Compute dynamic block sizes (GQA-aware, accounting for per-thread row bufs)
-    size_t       Br, Bc;
-    const size_t vtcm_budget = ctx->vtcm_size;
-    if (hmx_fa_find_chunk_size(&Br, &Bc, G, DK, DV, neq1, nek1, vtcm_budget, n_threads_init) != 0) {
-        return HTP_STATUS_VTCM_TOO_SMALL;
-    }
-
-    const size_t g_br = hex_align_up(G * Br, HMX_FP16_TILE_N_ROWS);
-
-    const uint32_t n_kv_blocks  = (nek1 + Bc - 1) / Bc;
-    const bool     pipeline = (n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads_init >= 2);
-
-    // Bypass thread pool dispatch for small prompts/non-pipelined prefill by setting n_threads = 1
-    const uint32_t n_threads = pipeline ? n_threads_init : 1;
-
-    FARF(HIGH, "hmx-fa: neq1=%u nek1=%u DK=%u DV=%u G=%u Br=%zu Bc=%zu g_br=%zu n_kv_blocks=%u pipeline=%d vtcm=%zu",
-         neq1, nek1, DK, DV, G, Br, Bc, g_br, n_kv_blocks, pipeline, vtcm_budget);
 
     // ======== Build context ========
     struct hmx_fa_context factx;
     memset(&factx, 0, sizeof(factx));
     factx.octx           = octx;
-    factx.n_threads      = n_threads;
+    factx.n_threads      = kparams->n_threads;
     factx.DK             = DK;
     factx.DV             = DV;
     factx.n_kv           = nek1;
     factx.n_kv_heads     = n_kv_heads;
     factx.n_heads        = neq2;
-    factx.G              = G;
-    factx.div_G          = init_fastdiv_values(G);
+    factx.G              = kparams->G;
+    factx.div_G          = kparams->u.hmx.div_G;
     factx.neq1           = neq1;
-    factx.Br             = (uint32_t) Br;
-    factx.Bc             = (uint32_t) Bc;
-    factx.g_br           = (uint32_t) g_br;
-    factx.n_kv_blocks    = n_kv_blocks;
-    factx.is_q_fp32      = (q->type == HTP_TYPE_F32);
-    factx.is_dst_fp32    = (dst->type == HTP_TYPE_F32);
-    factx.pipeline   = pipeline;
-    factx.mask_broadcast = (mask != NULL && mask->ne[2] == 1);
-
-    // Extract op parameters
-    float scale = 1.0f, max_bias = 0.0f, logit_softcap = 0.0f;
-    memcpy(&scale, (float *) octx->op_params + 0, sizeof(float));
-    memcpy(&max_bias, (float *) octx->op_params + 1, sizeof(float));
-    memcpy(&logit_softcap, (float *) octx->op_params + 2, sizeof(float));
-
-    if (logit_softcap != 0.0f) {
-        scale /= logit_softcap;
-    }
+    factx.Br             = kparams->Br;
+    factx.Bc             = kparams->Bc;
+    factx.g_br           = kparams->u.hmx.g_br;
+    factx.n_kv_blocks    = kparams->n_kv_blocks;
+    factx.is_q_fp32      = (kparams->is_q_fp32 != 0);
+    factx.is_dst_fp32    = (kparams->is_dst_fp32 != 0);
+    factx.pipeline       = (kparams->u.hmx.pipeline != 0);
+    factx.mask_broadcast = (kparams->u.hmx.mask_broadcast != 0);
 
 #ifdef HMX_FA_USE_EXP2_HF
-    if (logit_softcap == 0.0f) {
-        scale *= 1.44269504f;  // log2(e)
+    if (kparams->logit_softcap == 0.0f) {
+        factx.scale = kparams->scale * 1.44269504f;  // log2(e)
+    } else {
+        factx.scale = kparams->scale;
     }
+#else
+    factx.scale         = kparams->scale;
 #endif
+    factx.max_bias      = kparams->max_bias;
+    factx.logit_softcap = kparams->logit_softcap;
 
-    factx.scale         = scale;
-    factx.max_bias      = max_bias;
-    factx.logit_softcap = logit_softcap;
+    factx.n_head_log2 = kparams->n_head_log2;
+    factx.m0          = kparams->m0;
+    factx.m1          = kparams->m1;
 
-    factx.n_head_log2 = 1u << (uint32_t) floor(log2(neq2));
-    factx.m0          = powf(2.0f, -(max_bias) / factx.n_head_log2);
-    factx.m1          = powf(2.0f, -(max_bias / 2.0f) / factx.n_head_log2);
+    const uint32_t Br = factx.Br;
+    const uint32_t Bc = factx.Bc;
+    const uint32_t g_br = factx.g_br;
+    const bool pipeline = factx.pipeline;
+    const uint32_t n_threads = factx.n_threads;
+    const uint32_t G = factx.G;
 
     // ======== VTCM allocation (GQA-aware) ========
     const size_t size_k_row        = DK * sizeof(__fp16);
@@ -1801,13 +1779,14 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    // HMX path: head_dim multiple of 64, F16 KV, and no sinks
-    if (k->type == HTP_TYPE_F16 && v->type == HTP_TYPE_F16 && k->ne[0] % 64 == 0 && v->ne[0] % 64 == 0 && octx->src[4] == NULL) {
-        int ret = hmx_flash_attn_ext(octx);
-        if (ret == HTP_STATUS_OK) {
-            return ret;
-        }
-        // VTCM too small or other failure -> fall through to HVX path
+    const struct htp_fa_kernel_params * kparams = (const struct htp_fa_kernel_params *) octx->kernel_params;
+
+    if (kparams->kernel_type == HTP_FA_KERNEL_UNSUPPORTED) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    if (kparams->kernel_type == HTP_FA_KERNEL_HMX) {
+        return hmx_flash_attn_ext(octx);
     }
 
     struct htp_fa_context factx;
@@ -1815,74 +1794,57 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
 
     factx.t_start = HAP_perf_get_qtimer_count();
 
-    factx.src0_div21 = init_fastdiv_values(q->ne[2] * q->ne[1]);
-    factx.src0_div1  = init_fastdiv_values(q->ne[1]);
+    factx.src0_div21 = kparams->u.hvx.src0_div21;
+    factx.src0_div1  = kparams->u.hvx.src0_div1;
 
-    factx.broadcast_rk2 = init_fastdiv_values(q->ne[2]/k->ne[2]);
-    factx.broadcast_rk3 = init_fastdiv_values(q->ne[3]/k->ne[3]);
-    factx.broadcast_rv2 = init_fastdiv_values(q->ne[2]/v->ne[2]);
-    factx.broadcast_rv3 = init_fastdiv_values(q->ne[3]/v->ne[3]);
+    factx.broadcast_rk2 = kparams->u.hvx.broadcast_rk2;
+    factx.broadcast_rk3 = kparams->u.hvx.broadcast_rk3;
+    factx.broadcast_rv2 = kparams->u.hvx.broadcast_rv2;
+    factx.broadcast_rv3 = kparams->u.hvx.broadcast_rv3;
 
     if (mask) {
-        factx.src3_div2 = init_fastdiv_values(mask->ne[2]);
-        factx.src3_div3 = init_fastdiv_values(mask->ne[3]);
+        factx.src3_div2 = kparams->u.hvx.src3_div2;
+        factx.src3_div3 = kparams->u.hvx.src3_div3;
     }
 
-    factx.is_q_fp32 = (q->type == HTP_TYPE_F32);
-    factx.size_q_row_padded = hex_round_up(q->ne[0] * (factx.is_q_fp32 ? 4 : 2), 128);
-    factx.size_k_row_padded = hex_round_up(k->ne[0] * sizeof(__fp16), 128);
-    factx.size_v_row_padded = hex_round_up(v->ne[0] * sizeof(__fp16), 128);
+    factx.is_q_fp32 = (kparams->is_q_fp32 != 0);
+    factx.size_q_row_padded = kparams->u.hvx.size_q_row_padded;
+    factx.size_k_row_padded = kparams->u.hvx.size_k_row_padded;
+    factx.size_v_row_padded = kparams->u.hvx.size_v_row_padded;
 
     size_t size_q_block = factx.size_q_row_padded * 1; // single row for now
     factx.size_k_block = factx.size_k_row_padded * FLASH_ATTN_BLOCK_SIZE;
     factx.size_v_block = factx.size_v_row_padded * FLASH_ATTN_BLOCK_SIZE;
     factx.size_m_block = hex_round_up(FLASH_ATTN_BLOCK_SIZE * sizeof(__fp16), 128);
 
-    factx.n_blocks = (k->ne[1] + FLASH_ATTN_BLOCK_SIZE - 1) / FLASH_ATTN_BLOCK_SIZE;
+    factx.n_blocks = kparams->n_kv_blocks;
 
-    float scale         = 1.0f;
-    float max_bias      = 0.0f;
-    float logit_softcap = 0.0f;
+    factx.scale = kparams->scale;
+    factx.max_bias = kparams->max_bias;
+    factx.logit_softcap = kparams->logit_softcap;
 
-    memcpy(&scale,         (float *) octx->op_params + 0, sizeof(float));
-    memcpy(&max_bias,      (float *) octx->op_params + 1, sizeof(float));
-    memcpy(&logit_softcap, (float *) octx->op_params + 2, sizeof(float));
+    factx.n_head_log2 = kparams->n_head_log2;
+    factx.m0          = kparams->m0;
+    factx.m1          = kparams->m1;
 
-    if (logit_softcap != 0.0f) {
-        scale /= logit_softcap;
-    }
-
-    factx.scale = scale;
-    factx.max_bias = max_bias;
-    factx.logit_softcap = logit_softcap;
-
-    uint32_t n_head = q->ne[2];
-    factx.n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
-    factx.m0 = powf(2.0f, -(max_bias       ) / factx.n_head_log2);
-    factx.m1 = powf(2.0f, -(max_bias / 2.0f) / factx.n_head_log2);
-
+    const uint32_t n_head = q->ne[2];
     if (n_head > 512) {
         return HTP_STATUS_NO_SUPPORT;
     }
     for (uint32_t h = 0; h < n_head; ++h) {
-        factx.slopes[h] = (max_bias > 0.0f) ? alibi_slope(h, factx.n_head_log2, factx.m0, factx.m1) : 1.0f;
+        factx.slopes[h] = (kparams->max_bias > 0.0f) ? alibi_slope(h, factx.n_head_log2, factx.m0, factx.m1) : 1.0f;
     }
 
     // total rows in q
-    const uint32_t neq0 = q->ne[0];
-    const uint32_t neq1 = q->ne[1];
-    const uint32_t neq2 = q->ne[2];
-    const uint32_t neq3 = q->ne[3];
-
-    factx.qrows = neq1*neq2*neq3;
-    factx.qrows_per_thread = (factx.qrows + octx->n_threads - 1) / octx->n_threads;
+    factx.qrows = kparams->qrows;
+    factx.qrows_per_thread = kparams->qrows_per_thread;
 
     size_t size_vkq_acc = hex_round_up(v->ne[0] * sizeof(float), 128); // VKQ32
 
     octx->src0_spad.size_per_thread = size_q_block * 1;
     octx->src1_spad.size_per_thread = factx.size_k_block * 2;
     octx->src2_spad.size_per_thread = factx.size_v_block * 2;
-    octx->src3_spad.size_per_thread = mask ? factx.size_m_block * DMA_CACHE_MAX_SIZE : 0;
+    octx->src3_spad.size_per_thread = mask ? factx.size_m_block * FA_DMA_CACHE_MAX_SIZE : 0;
     octx->dst_spad.size_per_thread  = size_vkq_acc;
 
     octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
