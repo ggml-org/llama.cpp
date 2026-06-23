@@ -1559,6 +1559,8 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
         mparams.tensor_buft_overrides = params.tensor_buft_overrides.data();
     }
 
+    mparams.cw = params.cw;  // tri-state: -1 auto, 0 off, 1 on. Loader resolves auto by scanning tensors for downgrade candidates and disables mmap when active.
+
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;

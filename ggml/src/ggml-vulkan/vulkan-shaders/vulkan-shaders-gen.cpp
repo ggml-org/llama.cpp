@@ -70,6 +70,92 @@ const std::vector<std::string> type_names = {
     "bf16",
 };
 
+const std::vector<std::string> load_a_opt_kernels = {
+    "matmul_id_subgroup_mxfp4_f32_cm1",
+    "matmul_f16_cm1",
+    "matmul_f16_f32_cm1",
+    "matmul_f32_f32_cm1",
+    "matmul_q4_k_f32_cm1",
+    "matmul_q6_k_f32_cm1",
+    "matmul_q5_0_f32_cm1",
+    "matmul_q8_0_f32_cm1",
+    "matmul_id_subgroup_mxfp4_f32_aligned_cm1",
+    "matmul_f16_aligned_cm1",
+    "matmul_f16_f32_aligned_cm1",
+    "matmul_f32_f32_aligned_cm1",
+    "matmul_q4_k_f32_aligned_cm1",
+    "matmul_q6_k_f32_aligned_cm1",
+    "matmul_q5_0_f32_aligned_cm1",
+    "matmul_q8_0_f32_aligned_cm1",
+    // f16acc variants (Step 6.2)
+    "matmul_q4_k_f32_f16acc_cm1",
+    "matmul_q6_k_f32_f16acc_cm1",
+    "matmul_q5_0_f32_f16acc_cm1",
+    "matmul_q8_0_f32_f16acc_cm1",
+    "matmul_id_subgroup_mxfp4_f32_f16acc_cm1",
+    "matmul_q4_k_f32_aligned_f16acc_cm1",
+    "matmul_q6_k_f32_aligned_f16acc_cm1",
+    "matmul_q5_0_f32_aligned_f16acc_cm1",
+    "matmul_q8_0_f32_aligned_f16acc_cm1",
+    "matmul_id_subgroup_mxfp4_f32_aligned_f16acc_cm1",
+    // f16 B-type MXFP4 variants (Step 6.2/6.3)
+    "matmul_id_subgroup_mxfp4_f16_cm1",
+    "matmul_id_subgroup_mxfp4_f16_aligned_cm1",
+    "matmul_id_subgroup_mxfp4_f16_f16acc_cm1",
+    "matmul_id_subgroup_mxfp4_f16_aligned_f16acc_cm1",
+    // Q4_K / Q5_K MUL_MAT_ID subgroup variants
+    "matmul_id_subgroup_q4_k_f32_cm1",
+    "matmul_id_subgroup_q4_k_f32_aligned_cm1",
+    "matmul_id_subgroup_q4_k_f32_f16acc_cm1",
+    "matmul_id_subgroup_q4_k_f32_aligned_f16acc_cm1",
+    "matmul_id_subgroup_q4_k_f16_cm1",
+    "matmul_id_subgroup_q4_k_f16_aligned_cm1",
+    "matmul_id_subgroup_q4_k_f16_f16acc_cm1",
+    "matmul_id_subgroup_q4_k_f16_aligned_f16acc_cm1",
+    "matmul_id_subgroup_q5_k_f32_cm1",
+    "matmul_id_subgroup_q5_k_f32_aligned_cm1",
+    "matmul_id_subgroup_q5_k_f32_f16acc_cm1",
+    "matmul_id_subgroup_q5_k_f32_aligned_f16acc_cm1",
+    "matmul_id_subgroup_q5_k_f16_cm1",
+    "matmul_id_subgroup_q5_k_f16_aligned_cm1",
+    "matmul_id_subgroup_q5_k_f16_f16acc_cm1",
+    "matmul_id_subgroup_q5_k_f16_aligned_f16acc_cm1",
+    // Q5_1 dense GEMM and MUL_MAT_ID variants
+    "matmul_q5_1_f32_cm1",
+    "matmul_q5_1_f32_aligned_cm1",
+    "matmul_q5_1_f32_f16acc_cm1",
+    "matmul_q5_1_f32_aligned_f16acc_cm1",
+    "matmul_q5_1_f16_cm1",
+    "matmul_q5_1_f16_aligned_cm1",
+    "matmul_q5_1_f16_f16acc_cm1",
+    "matmul_q5_1_f16_aligned_f16acc_cm1",
+    "matmul_id_subgroup_q5_1_f32_cm1",
+    "matmul_id_subgroup_q5_1_f32_aligned_cm1",
+    "matmul_id_subgroup_q5_1_f32_f16acc_cm1",
+    "matmul_id_subgroup_q5_1_f32_aligned_f16acc_cm1",
+    "matmul_id_subgroup_q5_1_f16_cm1",
+    "matmul_id_subgroup_q5_1_f16_aligned_cm1",
+    "matmul_id_subgroup_q5_1_f16_f16acc_cm1",
+    "matmul_id_subgroup_q5_1_f16_aligned_f16acc_cm1",
+    // f16 B-type dense GEMM variants (Step 6.3)
+    "matmul_q5_0_f16_cm1",
+    "matmul_q5_0_f16_aligned_cm1",
+    "matmul_q5_0_f16_f16acc_cm1",
+    "matmul_q5_0_f16_aligned_f16acc_cm1",
+    "matmul_q8_0_f16_cm1",
+    "matmul_q8_0_f16_aligned_cm1",
+    "matmul_q8_0_f16_f16acc_cm1",
+    "matmul_q8_0_f16_aligned_f16acc_cm1",
+    "matmul_q4_k_f16_cm1",
+    "matmul_q4_k_f16_aligned_cm1",
+    "matmul_q4_k_f16_f16acc_cm1",
+    "matmul_q4_k_f16_aligned_f16acc_cm1",
+    "matmul_q6_k_f16_cm1",
+    "matmul_q6_k_f16_aligned_cm1",
+    "matmul_q6_k_f16_f16acc_cm1",
+    "matmul_q6_k_f16_aligned_f16acc_cm1",
+};
+
 enum MatMulIdType {
     NONE,
     DEFAULT,
@@ -104,6 +190,13 @@ void execute_command(std::vector<std::string>& command, std::string& stdout_str,
     std::string cmd;
     for (const auto& part : command) {
         cmd += part + " ";
+    }
+
+    for (int32_t ii = 0; ii < load_a_opt_kernels.size(); ii++) {
+        if (cmd.find(load_a_opt_kernels.at(ii)) != std::string::npos) {
+            cmd.append(" -DLOAD_A_OPT");
+            std::cout << cmd << std::endl;
+        }
     }
 
     if (!CreateProcessA(NULL, cmd.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
@@ -837,6 +930,14 @@ void process_shaders() {
     string_to_spv("fa_split_k_reduce", "flash_attn_split_k_reduce.comp", {});
 
     string_to_spv("fa_mask_opt", "flash_attn_mask_opt.comp", {});
+
+    string_to_spv("fa_hdim_64", "flash_attn_hdim64.comp", {}, true, true, false, false);
+    string_to_spv("fa_hdim_96", "flash_attn_hdim96.comp", {}, true, true, false, false);
+    string_to_spv("fa_hdim_128", "flash_attn_hdim128.comp", {}, true, true, false, false);
+    string_to_spv("fa_decode_ph1", "flash_attn_decode_phase_1.comp", {}, true, true, false, false);
+    string_to_spv("fa_decode_ph2", "flash_attn_decode_phase_2.comp", {}, true, true, false, false);
+    string_to_spv("fa_prefill_ph1", "flash_attn_prefill_phase_1.comp", {}, true, true, false, false);
+    string_to_spv("fa_prefill_ph2", "flash_attn_prefill_phase_2.comp", {}, true, true, false, false);
 
     string_to_spv("quantize_q8_1", "quantize_q8_1.comp", {});
     string_to_spv("quantize_q8_1_subgroup", "quantize_q8_1.comp", {{"USE_SUBGROUPS", "1"}});
