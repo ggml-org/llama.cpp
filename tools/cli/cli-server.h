@@ -4,9 +4,6 @@
 
 #include "http.h"
 
-// spawn llama-server in a thread and interact with it via a random port
-// note: in the future, we may have a server running as daemon and the CLI can connect to it automatically
-
 // llama_server will be available as a dynamic library symbol
 int llama_server(common_params & params, int argc, char ** argv);
 void llama_server_terminate();
@@ -28,6 +25,7 @@ struct cli_server {
         }
     }
 
+    // spawn llama-server in a thread and interact with it via a random port
     bool start(common_params & params) {
         port = common_http_get_free_port();
         if (port <= 0) {
