@@ -260,9 +260,9 @@
 	}
 
 	@media (max-width: 768px) {
-	    aside {
+		aside {
 			&:not(.is-expanded) {
-    			pointer-events: none;
+				pointer-events: none;
 			}
 		}
 

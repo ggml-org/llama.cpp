@@ -96,7 +96,8 @@
 		const container = scroll.chatScrollContainer;
 		if (!container) return;
 
-		const distanceFromBottom = container.scrollHeight - container.clientHeight - container.scrollTop;
+		const distanceFromBottom =
+			container.scrollHeight - container.clientHeight - container.scrollTop;
 		isMobileUserScrolledUp = distanceFromBottom > 300;
 	}
 
@@ -136,18 +137,22 @@
 			const container = scroll.chatScrollContainer;
 			if (!container) return;
 
-			// Find the last user message bubble to keep it visible after sending
-			const lastUserBubble = container.querySelector(
-				'.chat-message:nth-last-child(2) .chat-message-user .chat-message-user-bubble'
-			) as HTMLElement | null;
-			const bubbleHeight = lastUserBubble?.scrollHeight ?? 0;
-			const customOffset = innerHeight - (isMobile.current ? 8 : 48);
-			const baseHeight = container.scrollHeight - customOffset;
+			if (isMobile.current) {
+				// Find the last user message bubble to keep it visible after sending
+				const lastUserBubble = container.querySelector(
+					'.chat-message:nth-last-child(2) .chat-message-user .chat-message-user-bubble'
+				) as HTMLElement | null;
+				const bubbleHeight = lastUserBubble?.scrollHeight ?? 0;
+				const customOffset = innerHeight - 8;
+				const baseHeight = container.scrollHeight - customOffset;
 
-			container.scrollTo({
-				top: bubbleHeight > 0 ? baseHeight - bubbleHeight : baseHeight,
-				behavior: 'smooth'
-			});
+				container.scrollTo({
+					top: bubbleHeight > 0 ? baseHeight - bubbleHeight : baseHeight,
+					behavior: 'smooth'
+				});
+			} else {
+				autoScroll.scrollToBottom();
+			}
 		}, 100);
 
 		if (isMobile.current) {
@@ -157,7 +162,6 @@
 		}
 
 		await chatStore.sendMessage(message, result?.extras);
-		autoScroll.setContainer(scroll.chatScrollContainer);
 		return true;
 	}
 
@@ -175,8 +179,11 @@
 	}
 
 	$effect(() => {
-		if (!isMobile.current) {
-			autoScroll.setDisabled(disableAutoScroll);
+		const shouldDisableAutoScroll =
+			config().disableAutoScroll || (isMobile.current && isCurrentConversationLoading);
+		autoScroll.setDisabled(shouldDisableAutoScroll);
+		if (!shouldDisableAutoScroll) {
+			autoScroll.enable();
 		}
 	});
 
