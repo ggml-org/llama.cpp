@@ -2625,6 +2625,11 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 return false;
             }
 
+            // hardcoded limit to refuse the lm-head for now
+            if (src0->ne[1] > 32768) {
+                return false;
+            }
+
             if (src1->ne[2] != 1 || src1->ne[3] != 1) {
                 return false;  // no broadcasting (for now)
             }
