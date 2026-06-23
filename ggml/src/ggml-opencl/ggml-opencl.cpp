@@ -4226,6 +4226,7 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     // determine whether to use dot8 + local memory broadcast GEMM for Q8_0
     backend_ctx->adreno_dot8_lmbcast_q8_0_gemm_enabled = backend_ctx->gpu_family == GPU_FAMILY::ADRENO &&
                                             strstr(ext_buffer, "cl_qcom_dot_product8") != NULL &&
+                                            strstr(ext_buffer, "cl_qcom_local_memory_control") != NULL &&
                                             getenv("GGML_OPENCL_DISABLE_DOT8_GEMM_Q8_0") == nullptr;
 
     // determine whether to use large buffer for Adreno
