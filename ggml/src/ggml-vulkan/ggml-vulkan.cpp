@@ -3846,6 +3846,12 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                                       (device->subgroup_size_control && device->subgroup_max_size >= 16);
 
     // mulmat
+    // Warptile layout (indices match mul_mm.comp constantIDs):
+    //   [0..9]  : BLOCK_SIZE, BM, BN, BK, WM, WN, WMITER, TM, TN, TK
+    //   [10]    : WARP / required_subgroup_size (read via WARPTILE_SUBGROUP_SIZE_IDX)
+    //   [11]    : ALIGNED (appended by ggml_vk_mul_mm_spec)
+    //   [12,13] : SHMEM_STRIDE_PAD, APPLY_SLM_A_RESHAPE (Intel coopmat only, appended by ggml_vk_mul_mm_spec)
+    static constexpr size_t WARPTILE_SUBGROUP_SIZE_IDX = 10;
     std::vector<uint32_t> l_warptile, m_warptile, s_warptile,
                           l_warptile_id, m_warptile_id, s_warptile_id,
                           l_warptile_mmq, m_warptile_mmq, s_warptile_mmq,
@@ -3974,7 +3980,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support) {
             // Xe1/Xe2/Xe3 with coopmat enabled - warptile performance tuning
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
-            if (device->architecture == INTEL_PRE_XE2) {
+            if (device->architecture == INTEL_XE1) {
                 l_warptile_mmq  = { 512, 256, 128, 32, 32, 32, 2, 8, 8, 16, 16 };
                 l_mmq_wg_denoms = { 256, 128, 1 };
                 l_align         = 32;  //set as BK
@@ -4119,9 +4125,6 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 claimed_task.parameter_count = parameter_count;
                 claimed_task.wg_denoms = wg_denoms;
                 claimed_task.specialization_constants = specialization_constants;
-                if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support) {
-                    claimed_task.specialization_constants.push_back(0u);
-                }
                 claimed_task.disable_robustness = disable_robustness;
                 claimed_task.require_full_subgroups = require_full_subgroups;
                 claimed_task.required_subgroup_size = required_subgroup_size;
@@ -4265,8 +4268,12 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     }
 #endif
 
-    auto const &ggml_vk_mul_mm_spec = [](std::vector<uint32_t> spec, bool aligned) {
-        spec.push_back(aligned ? 1u : 0u);
+    auto const &ggml_vk_mul_mm_spec = [&device](std::vector<uint32_t> spec, bool aligned) {
+        spec.push_back(aligned ? 1u : 0u);  // constantID=11: ALIGNED
+        if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support) {
+            spec.push_back(0u);  // constantID=12: SHMEM_STRIDE_PAD = 0
+            spec.push_back(1u);  // constantID=13: APPLY_SLM_A_RESHAPE = true
+        }
         return spec;
     };
 
@@ -4394,17 +4401,17 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         // so it is always consistent with the tile and no separate tracking variable is needed.
 #define CREATE_MM(TYPE, PIPELINE_NAME, NAMELC, F16ACC, WG_DENOMS, WARPTILE, PUSHCONST, PARAMCOUNT, ID) \
         if (device->mul_mat ## ID ## _l[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->l, #NAMELC #F16ACC "_l", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, ggml_vk_mul_mm_spec(l_ ## WARPTILE, false), 1, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->l, #NAMELC #F16ACC "_l", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, ggml_vk_mul_mm_spec(l_ ## WARPTILE, false), 1, false, true, (l_ ## WARPTILE)[WARPTILE_SUBGROUP_SIZE_IDX]);   \
         if (device->mul_mat ## ID ## _m[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->m, #NAMELC #F16ACC "_m", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), m_ ## WG_DENOMS, ggml_vk_mul_mm_spec(m_ ## WARPTILE, false), 1, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->m, #NAMELC #F16ACC "_m", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), m_ ## WG_DENOMS, ggml_vk_mul_mm_spec(m_ ## WARPTILE, false), 1, false, true, (m_ ## WARPTILE)[WARPTILE_SUBGROUP_SIZE_IDX]);   \
         if (device->mul_mat ## ID ## _s[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->s, #NAMELC #F16ACC "_s", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, ggml_vk_mul_mm_spec(s_ ## WARPTILE, false), 1, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->s, #NAMELC #F16ACC "_s", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, ggml_vk_mul_mm_spec(s_ ## WARPTILE, false), 1, false, true, (s_ ## WARPTILE)[WARPTILE_SUBGROUP_SIZE_IDX]);   \
         if (device->mul_mat ## ID ## _l[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_l, #NAMELC #F16ACC "_aligned_l", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, ggml_vk_mul_mm_spec(l_ ## WARPTILE, true), l_align, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_l, #NAMELC #F16ACC "_aligned_l", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, ggml_vk_mul_mm_spec(l_ ## WARPTILE, true), l_align, false, true, (l_ ## WARPTILE)[WARPTILE_SUBGROUP_SIZE_IDX]);   \
         if (device->mul_mat ## ID ## _m[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_m, #NAMELC #F16ACC "_aligned_m", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), m_ ## WG_DENOMS, ggml_vk_mul_mm_spec(m_ ## WARPTILE, true), m_align, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_m, #NAMELC #F16ACC "_aligned_m", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), m_ ## WG_DENOMS, ggml_vk_mul_mm_spec(m_ ## WARPTILE, true), m_align, false, true, (m_ ## WARPTILE)[WARPTILE_SUBGROUP_SIZE_IDX]);   \
         if (device->mul_mat ## ID ## _s[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_s, #NAMELC #F16ACC "_aligned_s", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, ggml_vk_mul_mm_spec(s_ ## WARPTILE, true), s_align, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_s, #NAMELC #F16ACC "_aligned_s", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, ggml_vk_mul_mm_spec(s_ ## WARPTILE, true), s_align, false, true, (s_ ## WARPTILE)[WARPTILE_SUBGROUP_SIZE_IDX]);   \
 
         // Create 2 variants, {f16,f32} accumulator
 #define CREATE_MM2(TYPE, PIPELINE_NAME, NAMELC, WG_DENOMS, WARPTILE, PUSHCONST, PARAMCOUNT, ID) \
@@ -4419,9 +4426,9 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         // Same shader SPV as ->l/->a_l, but compiled with a different warp tile via the saved l_warptile_mmq.
 #define CREATE_MM_ALT(TYPE, PIPELINE_NAME, NAMELC, F16ACC, WG_DENOMS, WARPTILE, PUSHCONST, PARAMCOUNT, ID) \
         if (device->mul_mat ## ID ## _l[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->l_alt,   #NAMELC #F16ACC "_l_alt",         NAMELC ##            F16ACC ## _cm1_len, NAMELC ##            F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, l_ ## WARPTILE, 1,       false, true, (l_ ## WARPTILE).back());   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->l_alt,   #NAMELC #F16ACC "_l_alt",         NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, ggml_vk_mul_mm_spec(l_ ## WARPTILE, false), 1,       false, true, (l_ ## WARPTILE)[WARPTILE_SUBGROUP_SIZE_IDX]);   \
         if (device->mul_mat ## ID ## _l[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_l_alt, #NAMELC #F16ACC "_aligned_l_alt", NAMELC ## _aligned ## F16ACC ## _cm1_len, NAMELC ## _aligned ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, l_ ## WARPTILE, l_align, false, true, (l_ ## WARPTILE).back());
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_l_alt, #NAMELC #F16ACC "_aligned_l_alt", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, ggml_vk_mul_mm_spec(l_ ## WARPTILE, true),  l_align, false, true, (l_ ## WARPTILE)[WARPTILE_SUBGROUP_SIZE_IDX]);
 
 #define CREATE_MM2_ALT(TYPE, PIPELINE_NAME, NAMELC, WG_DENOMS, WARPTILE, PUSHCONST, PARAMCOUNT, ID) \
         if (device->coopmat_acc_f16_support) { \
@@ -4505,10 +4512,10 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         CREATE_MM2(GGML_TYPE_Q3_K, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q3_K], matmul_q3_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_Q5_K, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q5_K], matmul_q5_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         // Xe1: Q4_K/Q6_K use sgs=32 with a 128x128 tile; IQ* reverts to the xe1 standard tile.
-        if (device->architecture == INTEL_PRE_XE2) set_warp_tile({512, 128, 128, 32, 32, 32, 2, 8, 8, 16, 32}, {128, 128, 1}, l_align);
+        if (device->architecture == INTEL_XE1) set_warp_tile({512, 128, 128, 32, 32, 32, 2, 8, 8, 16, 32}, {128, 128, 1}, l_align);
         CREATE_MM2(GGML_TYPE_Q4_K, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q4_K], matmul_q4_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_Q6_K, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q6_K], matmul_q6_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
-        if (device->architecture == INTEL_PRE_XE2) restore_warp_tile();
+        if (device->architecture == INTEL_XE1) restore_warp_tile();
         CREATE_MM2(GGML_TYPE_IQ1_S,   pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_IQ1_S],   matmul_iq1_s_f16,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_IQ1_M,   pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_IQ1_M],   matmul_iq1_m_f16,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_IQ2_XXS, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_IQ2_XXS], matmul_iq2_xxs_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
@@ -4555,7 +4562,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
         // Intel matmul_id warptile tuning
         if (device->vendor_id == VK_VENDOR_ID_INTEL) {
-            if (device->architecture == INTEL_PRE_XE2) {
+            if (device->architecture == INTEL_XE1) {
                 l_warptile_mmq  = { 512, 128, 128, 32, 32, 32, 2, 8, 8, 16, 32 };
                 l_mmq_wg_denoms = { 128, 128, 1 };
             }
@@ -10516,6 +10523,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                                                                    mask != nullptr, use_mask_opt, logit_softcap != 0, k->type, v->type);
 
     vk_pipeline pipeline = nullptr;
+
     {
         std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
         auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16;
@@ -10674,10 +10682,10 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                                     pc, { dispatch_x, workgroups_y, workgroups_z });
 
         ggml_vk_sync_buffers(ctx, subctx);
-        const vk_op_flash_attn_split_k_reduce_push_constants pc2 = { HSV, static_cast<uint32_t>(ne1), static_cast<uint32_t>(ne2), static_cast<uint32_t>(ne3), split_k, (sinks != nullptr) };
+        const vk_op_flash_attn_split_k_reduce_push_constants pc2 = { HSV, (uint32_t)ne1, (uint32_t)ne2, (uint32_t)ne3, split_k, (sinks != nullptr) };
         ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_flash_attn_split_k_reduce,
                                     {split_k_buf, sinks_buf, dst_buf},
-                                    pc2, { static_cast<uint32_t>(ne1), HSV, static_cast<uint32_t>(ne2 * ne3) });
+                                    pc2, { (uint32_t)ne1, HSV, (uint32_t)(ne2 * ne3) });
         ctx->prealloc_split_k_need_sync = true;
     } else {
         if (gqa_ratio > 1) {
@@ -16682,11 +16690,13 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
             bool need_disable = false;
 
-            // Note: topk_moe handles src/dst overlap internally for all batch sizes,
-            // so skip the overlap check entirely for topk_moe fusions.
-            bool is_topk_moe = ctx->fused_topk_moe_mode != TOPK_MOE_COUNT;
+            // topk_moe often overwrites the source, but for a given row all the src values are
+            // loaded before anything is stored. If there's only one row, this is safe, so treat
+            // this as a special case.
+            bool is_topk_moe_single_row = ctx->fused_topk_moe_mode != TOPK_MOE_COUNT &&
+                                          ggml_nrows(cgraph->nodes[i]->src[0]) == 1;
 
-            if (!is_topk_moe) {
+            if (!is_topk_moe_single_row) {
                 for (int j = 0; j < 2; ++j) {
                     ggml_tensor *dst = output_nodes[j];
                     if (!dst) {
@@ -17193,12 +17203,6 @@ void ggml_backend_vk_get_device_description(int device, char * description, size
     GGML_ASSERT(device < (int) vk_instance.device_indices.size());
     int dev_idx = vk_instance.device_indices[device];
     ggml_vk_get_device_description(dev_idx, description, description_size);
-}
-
-static bool ggml_backend_vk_is_intel_xe2(int device) {
-    GGML_ASSERT(device < (int) vk_instance.device_indices.size());
-    int dev_idx = vk_instance.device_indices[device];
-    return ggml_vk_get_device(dev_idx)->architecture == INTEL_XE2;
 }
 
 void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total) {
@@ -18121,20 +18125,11 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
     return devices[device];
 }
 
-static void * ggml_backend_vk_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
-    if (std::strcmp(name, "ggml_backend_vk_is_intel_xe2") == 0) {
-        return (void *) ggml_backend_vk_is_intel_xe2;
-    }
-    return nullptr;
-
-    GGML_UNUSED(reg);
-}
-
 static const struct ggml_backend_reg_i ggml_backend_vk_reg_i = {
     /* .get_name         = */ ggml_backend_vk_reg_get_name,
     /* .get_device_count = */ ggml_backend_vk_reg_get_device_count,
     /* .get_device       = */ ggml_backend_vk_reg_get_device,
-    /* .get_proc_address = */ ggml_backend_vk_reg_get_proc_address,
+    /* .get_proc_address = */ NULL,
 };
 
 ggml_backend_reg_t ggml_backend_vk_reg() {
