@@ -933,6 +933,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_snake_f32;
     vk_pipeline pipeline_snake_f16;
     vk_pipeline pipeline_snake_bf16;
+    vk_pipeline pipeline_pool1d_f32;
     vk_pipeline pipeline_pool2d_f32;
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
@@ -1610,6 +1611,17 @@ struct vk_op_conv_transpose_1d_push_constants {
 struct vk_op_snake_push_constants {
     uint32_t ne0;
     uint32_t ne1;
+};
+
+struct vk_op_pool1d_push_constants {
+    uint32_t IL;
+    uint32_t OL;
+    uint32_t OC;
+    uint32_t pelements;
+    uint32_t op;
+    int32_t k0;
+    int32_t s0;
+    int32_t p0;
 };
 
 struct vk_op_pool2d_push_constants {
