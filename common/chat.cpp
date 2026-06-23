@@ -2539,7 +2539,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         params.json_schema = json::parse(inputs.json_schema);
     }
 
-    params.parallel_tool_calls = inputs.parallel_tool_calls;
+    params.parallel_tool_calls = inputs.parallel_tool_calls || caps.supports_parallel_tool_calls;
 
     if (params.tools.is_array()) {
         if (params.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && !params.grammar.empty()) {
