@@ -417,8 +417,6 @@ llama_context::llama_context(
 }
 
 llama_context::~llama_context() {
-    synchronize();
-
     if (!model.hparams.no_alloc) {
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];

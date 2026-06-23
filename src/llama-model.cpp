@@ -550,11 +550,6 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             GGML_ASSERT(tensor->ne[axis] == n_embd + 2*n_embd_gqa);
             return {{n_embd, 1}, {n_embd_gqa, 2}};
         }
-        if ((std::regex_match(tensor_name, pattern_ffn_up_gate_weight) ||
-             std::regex_match(tensor_name, pattern_ffn_up_gate_bias)) &&
-                tensor->ne[axis] == 2*hparams.n_ff(il)) {
-            return {{hparams.n_ff(il), 2}};
-        }
         if (std::regex_match(tensor_name, pattern_ffn_gate_up_weight)) {
             const int64_t n_ff_exp = hparams.n_ff_exp;
             GGML_ASSERT(tensor->ne[axis] == 2*n_ff_exp);
