@@ -19,7 +19,9 @@ namespace view {
 
     struct spinner {
         spinner(const std::string & message) {
-            console::log("%s\n", message.c_str());
+            if (!message.empty()) {
+                console::log("%s ", message.c_str());
+            }
             console::spinner::start();
         }
         ~spinner() {
@@ -60,26 +62,48 @@ namespace view {
     };
     struct assistant_turn {
         assistant_display_mode mode = ASSISTANT_DISPLAY_MODE_CONTENT;
+        bool trailing_newline = true;
+        bool is_inside_reasoning = false;
         assistant_turn() {
             console::set_display(DISPLAY_TYPE_RESET);
         }
         ~assistant_turn() {
             console::set_display(DISPLAY_TYPE_RESET);
+            add_newline_if_needed();
         }
         void push(assistant_display_mode m, const std::string & buffer) {
             if (m != mode) {
+                add_newline_if_needed();
                 switch (m) {
                     case ASSISTANT_DISPLAY_MODE_CONTENT:
-                        console::set_display(DISPLAY_TYPE_RESET);
-                        break;
+                        {
+                            if (is_inside_reasoning) {
+                                console::log("[End thinking]\n\n");
+                                is_inside_reasoning = false;
+                            }
+                            console::set_display(DISPLAY_TYPE_RESET);
+                        } break;
                     case ASSISTANT_DISPLAY_MODE_REASONING:
-                        console::set_display(DISPLAY_TYPE_REASONING);
-                        break;
+                        {
+                            console::set_display(DISPLAY_TYPE_REASONING);
+                            is_inside_reasoning = true;
+                            console::log("\n[Start thinking]\n\n");
+                        } break;
                 }
             }
             mode = m;
+            if (buffer.empty()) {
+                return;
+            }
+            trailing_newline = buffer.back() == '\n';
             console::log("%s", buffer.c_str());
             console::flush();
+        }
+        void add_newline_if_needed() {
+            if (!trailing_newline) {
+                console::log("\n");
+                console::flush();
+            }
         }
     };
 
@@ -95,9 +119,9 @@ namespace view {
         console::log("%s\n", message.c_str());
     }
 
-    static void show_banner(const std::vector<std::string> & lines) {
-        for (const auto & line : lines) {
-            console::log("%s\n", line.c_str());
-        }
+    static void show_info(const std::string & message) {
+        console::set_display(DISPLAY_TYPE_INFO);
+        console::log("%s\n", message.c_str());
+        console::set_display(DISPLAY_TYPE_RESET);
     }
-};
+}

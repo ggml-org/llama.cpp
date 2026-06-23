@@ -64,6 +64,8 @@ static std::string media_type_from_ext(const std::string & fname) {
 }
 
 bool cli_context::init() {
+    view::init(params);
+
     std::optional<view::spinner> spinner;
 
     if (!params.server_base.empty()) {
@@ -85,7 +87,7 @@ bool cli_context::init() {
             return false;
         }
 
-        spinner.emplace("Loading model...");
+        spinner.emplace("\n\nLoading model...");
 
         server.emplace();
         if (!server->start(params)) {
@@ -281,35 +283,35 @@ int cli_context::run() {
         modalities += ", video";
     }
 
-    std::vector<std::string> banner;
-    banner.push_back("\n");
-    banner.push_back(LLAMA_ASCII_LOGO);
-    banner.push_back("\n");
-    banner.push_back("build      : " + build_info);
-    banner.push_back("model      : " + model_name);
-    banner.push_back("modalities : " + modalities);
+    std::string banner;
+    banner += "\n";
+    banner += LLAMA_ASCII_LOGO;
+    banner += "\n";
+    banner += "build      : " + build_info + "\n";
+    banner += "model      : " + model_name + "\n";
+    banner += "modalities : " + modalities + "\n";
     if (!params.system_prompt.empty()) {
-        console::log("using custom system prompt\n");
+        banner += "using custom system prompt\n";
     }
-    console::log("\n");
-    console::log("available commands:\n");
-    console::log("  /exit or Ctrl+C     stop or exit\n");
-    console::log("  /regen              regenerate the last response\n");
-    console::log("  /clear              clear the chat history\n");
-    console::log("  /read <file>        add a text file\n");
-    console::log("  /glob <pattern>     add text files using globbing pattern\n");
+    banner += "\n";
+    banner += "available commands:\n";
+    banner += "  /exit or Ctrl+C     stop or exit\n";
+    banner += "  /regen              regenerate the last response\n";
+    banner += "  /clear              clear the chat history\n";
+    banner += "  /read <file>        add a text file\n";
+    banner += "  /glob <pattern>     add text files using globbing pattern\n";
     if (has_vision) {
-        console::log("  /image <file>       add an image file\n");
+        banner += "  /image <file>       add an image file\n";
     }
     if (has_audio) {
-        console::log("  /audio <file>       add an audio file\n");
+        banner += "  /audio <file>       add an audio file\n";
     }
     if (has_video) {
-        console::log("  /video <file>       add a video file\n");
+        banner += "  /video <file>       add a video file\n";
     }
-    console::log("\n");
+    banner += "\n";
 
-    view::show_banner(banner);
+    view::show_message(banner);
 
     // interactive loop
     std::string cur_msg;
@@ -476,7 +478,11 @@ int cli_context::run() {
         });
 
         if (params.show_timings) {
-            // TODO
+            view::show_info(string_format(
+                "\n[ Prompt: %.1f t/s | Generation: %.1f t/s ]",
+                timings.prompt_per_second,
+                timings.predicted_per_second
+            ));
         }
 
         if (params.single_turn) {
@@ -484,7 +490,7 @@ int cli_context::run() {
         }
     }
 
-    view::show_message("Exiting...");
+    view::show_message("\n\nExiting...");
 
     return 0;
 }
