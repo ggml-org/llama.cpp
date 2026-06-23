@@ -1985,6 +1985,8 @@ static void ggml_hexagon_precompute_matmul_params(
                             wtype == GGML_TYPE_Q8_0 || wtype == GGML_TYPE_IQ4_NL ||
                             wtype == GGML_TYPE_MXFP4);
     const int ne00_padded = is_repack ? hex_round_up(ne00, 32) : ne00;
+    const int ne01_padded = is_repack ? hex_round_up(ne01, 32) : ne01;
+    const int ne11_padded = hex_align_up(ne11, 32);
 
     const bool is_matmul_id = (dst->op == GGML_OP_MUL_MAT_ID);
     const bool is_batched = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
@@ -1995,7 +1997,7 @@ static void ggml_hexagon_precompute_matmul_params(
 
     if (hmx_enabled) {
         // HMX weight tile requires N to be 32-aligned.
-        if (ne01 % 32 == 0) {
+        if (ne01_padded % 32 == 0) {
             // HMX supports F16, F32, Q4_0, Q4_1, Q8_0, IQ4_NL, MXFP4 weights.
             if (wtype == GGML_TYPE_F16  || wtype == GGML_TYPE_F32    ||
                 wtype == GGML_TYPE_Q4_0 || wtype == GGML_TYPE_Q4_1   ||
@@ -2058,8 +2060,9 @@ static void ggml_hexagon_precompute_matmul_params(
                 size_t n_chunk_candidate = 0;
                 size_t vtcm_size_candidate = 0;
 
-                if (htp_mm_hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn, hex_align_up(ne11, 32), ne01,
-                                       (size_t) ne01 * 3, (size_t) ne11 * 2, &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
+                if (htp_mm_hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn, ne11_padded, ne01_padded,
+                                       (size_t) ne01_padded * HTP_MM_HMX_COST_W_DEQUANT, (size_t) ne11 * HTP_MM_HMX_COST_A_CONVERT,
+                                       &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
                     size_t exact_size = htp_mm_hmx_get_batched_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, group_size, use_dma_activation, pipeline, act_threads);
                     if (exact_size <= vtcm_budget) {
                         size_t mblocks = ((size_t) ne11 + m_chunk_candidate - 1) / m_chunk_candidate;
@@ -2101,7 +2104,7 @@ static void ggml_hexagon_precompute_matmul_params(
             // search for that upper bound rather than ne12 (token positions only).
             // We recompute m_chunk per expert against the actual count in the NPU kernel.
             const int m_id_rows    = (int) ((size_t) dst->ne[1] * dst->ne[2]);
-            const int m_for_chunks = is_matmul_id ? hex_align_up(m_id_rows, 32) : hex_align_up(ne11, 32);
+            const int m_for_chunks = is_matmul_id ? hex_align_up(m_id_rows, 32) : ne11_padded;
             const int m_for_cost   = is_matmul_id ? m_id_rows : ne11;
 
             int act_threads = n_threads;
@@ -2115,8 +2118,9 @@ static void ggml_hexagon_precompute_matmul_params(
                 size_t n_chunk_candidate = 0;
                 size_t vtcm_size_candidate = 0;
 
-                if (htp_mm_hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn, m_for_chunks, ne01,
-                                       (size_t) ne01 * 3, (size_t) m_for_cost * 2, &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
+                if (htp_mm_hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn, m_for_chunks, ne01_padded,
+                                       (size_t) ne01_padded * HTP_MM_HMX_COST_W_DEQUANT, (size_t) m_for_cost * HTP_MM_HMX_COST_A_CONVERT,
+                                       &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
                     size_t exact_size = htp_mm_hmx_get_2d_vtcm_size(wtype, ne00_padded, m_chunk_candidate, n_chunk_candidate, pipeline, is_matmul_id ? 0 : act_threads, aligned_tile_size);
                     if (exact_size <= vtcm_budget) {
                         size_t mblocks = ((size_t) m_for_cost + m_chunk_candidate - 1) / m_chunk_candidate;

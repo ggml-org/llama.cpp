@@ -3064,8 +3064,8 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
     size_t m_chunk_n_rows = 0, n_chunk_n_cols = 0;
     if (htp_mm_hmx_compute_chunks(vtcm_budget, /*overhead=*/256, size_per_n, size_per_m, size_per_mn,
                            m_padded, n,
-                           /*m_block_cost=*/(size_t) n * 3,
-                           /*n_block_cost=*/(size_t) m_padded * 2, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used)) {
+                           /*m_block_cost=*/(size_t) n * HTP_MM_HMX_COST_W_DEQUANT,
+                           /*n_block_cost=*/(size_t) m_padded * HTP_MM_HMX_COST_A_CONVERT, &m_chunk_n_rows, &n_chunk_n_cols, &vtcm_used)) {
         FARF(ERROR, "hmx-mm-id-2d: VTCM too small : m %d k %d n %d budget %zu", m_padded, k, n, vtcm_budget);
         return -1;
     }
