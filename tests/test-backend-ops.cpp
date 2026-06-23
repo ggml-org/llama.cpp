@@ -3298,21 +3298,29 @@ struct test_norm : public test_case {
     const std::array<int64_t, 4> ne;
     const bool v; // whether a is a non-contiguous view
     const float eps;
+    const bool noncontig_rows;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, v, eps);
+        return VARS_TO_STR5(type, ne, v, eps, noncontig_rows);
     }
 
     test_norm(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {64, 5, 4, 3},
             bool v = false,
-            float eps = 1e-6f)
-        : type(type), ne(ne), v(v), eps(eps) {}
+            float eps = 1e-6f,
+            bool noncontig_rows = false)
+        : type(type), ne(ne), v(v), eps(eps), noncontig_rows(noncontig_rows) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        const std::array<int64_t, 4> ne_a = noncontig_rows ?
+            std::array<int64_t, 4>{ ne[1], ne[0], ne[2], ne[3] } : ne;
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
         ggml_set_name(a, "a");
 
+        if (noncontig_rows) {
+            a = ggml_permute(ctx, a, 1, 0, 2, 3);
+            ggml_set_name(a, "permuted a");
+        }
         if (v) {
             a = ggml_view_4d(ctx, a, a->ne[0]/2, a->ne[1]/2, a->ne[2]/2, a->ne[3]/2, a->nb[1], a->nb[2], a->nb[3], 0);
             ggml_set_name(a, "view of a");
@@ -6193,21 +6201,29 @@ struct test_l2_norm : public test_case {
     const std::array<int64_t, 4> ne;
     const float eps;
     bool v;
+    bool noncontig_rows;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, eps, v);
+        return VARS_TO_STR5(type, ne, eps, v, noncontig_rows);
     }
 
     test_l2_norm(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {64, 64, 320, 1},
             float eps = 1e-12f,
-            bool v = false)
-        : type(type), ne(ne), eps(eps), v(v) {}
+            bool v = false,
+            bool noncontig_rows = false)
+        : type(type), ne(ne), eps(eps), v(v), noncontig_rows(noncontig_rows) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        const std::array<int64_t, 4> ne_a = noncontig_rows ?
+            std::array<int64_t, 4>{ ne[1], ne[0], ne[2], ne[3] } : ne;
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
         ggml_set_name(a, "a");
 
+        if (noncontig_rows) {
+            a = ggml_permute(ctx, a, 1, 0, 2, 3);
+            ggml_set_name(a, "permuted a");
+        }
         if (v) {
             a = ggml_view_4d(ctx, a, a->ne[0]/2, a->ne[1]/2, a->ne[2]/2, a->ne[3]/2, a->nb[1], a->nb[2], a->nb[3], 0);
             ggml_set_name(a, "view of a");
@@ -8282,9 +8298,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, v, eps));
                 test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, v, eps));
             }
+            test_cases.emplace_back(new test_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, false, eps, true));
             test_cases.emplace_back(new test_rms_norm_back(GGML_TYPE_F32, { n, 5, 4, 3 }, eps));
             test_cases.emplace_back(new test_l2_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false));
             test_cases.emplace_back(new test_l2_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, true));
+            test_cases.emplace_back(new test_l2_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false, true));
         }
     }
 
