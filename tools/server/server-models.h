@@ -40,6 +40,11 @@ enum server_model_source {
     SERVER_MODEL_SOURCE_CACHE,
 };
 
+enum server_child_mode {
+    SERVER_CHILD_MODE_NORMAL,   // load the model and run normally
+    SERVER_CHILD_MODE_DOWNLOAD, // download the model and exit
+};
+
 static std::string server_model_status_to_string(server_model_status status) {
     switch (status) {
         case SERVER_MODEL_STATUS_DOWNLOADING: return "downloading";
@@ -105,7 +110,6 @@ private:
         std::shared_ptr<server_subproc> subproc; // shared between main thread and monitoring thread
         std::thread th;
         server_model_meta meta;
-        FILE * stdin_file = nullptr;
     };
 
     std::mutex mutex;
@@ -161,15 +165,18 @@ public:
     // return a copy of all model metadata (thread-safe)
     std::vector<server_model_meta> get_all_meta();
 
+    struct load_options {
+        server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
+        // used for spawning a downloading child process
+        std::optional<server_model_meta> custom_meta = std::nullopt;
+    };
+
     // load and unload model instances
     // these functions are thread-safe
     void load(const std::string & name);
+    void load(const std::string & name, const load_options & opts);
     void unload(const std::string & name);
     void unload_all();
-
-    // download a new model, progress is reported via SSE
-    // to stop the download, call unload()
-    void download(common_params_model && model, common_download_opts && opts);
 
     struct update_status_args {
         server_model_status status;
@@ -213,9 +220,12 @@ public:
 struct server_child {
     // serializes the notify_to_router writes
     std::mutex mtx_stdout;
+    std::atomic<bool> is_finished_downloading = false; // set by run_download
 
     // return true if the current process is a child server instance
     bool is_child();
+    server_child_mode get_mode();
+    int run_download(common_params & params);
 
     // register the shutdown_handler to be called by the router
     // return the monitoring thread (to be joined by the caller)
