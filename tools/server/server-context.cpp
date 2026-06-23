@@ -89,7 +89,9 @@ struct server_batch {
     }
 
     ~server_batch() {
-        llama_batch_free(batch);
+        if (batch.token != nullptr) {
+            llama_batch_free(batch);
+        }
     }
 
     void init(int32_t n_tokens_alloc) {
@@ -1215,6 +1217,10 @@ private:
             cparams.ctx_other = ctx_tgt;
 
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
+            if (ctx_dft == nullptr) {
+                SRV_ERR("%s", "failed to create draft context\n");
+                return false;
+            }
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
@@ -3436,8 +3442,8 @@ private:
                         has_mtmd = true;
                     }
 
-                    const int32_t n_before_user = slot.task->params.n_before_user;
-                    const bool n_before_user_known = n_before_user > 0;
+                    const auto & spans = slot.task->params.message_spans;
+                    const auto last_user_pos = spans.last_user_message_pos();
 
                     // add prompt tokens for processing in the current batch
                     while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.size() < n_batch) {
@@ -3466,10 +3472,8 @@ private:
 
                         slot.n_prompt_tokens_processed++;
 
-                        // stop the prompt batch exactly before the latest user input, so a checkpoint
-                        // can be created after the previous messages
-                        if (n_before_user_known &&
-                            slot.prompt.n_tokens() == n_before_user) {
+                        // stop the prompt batch exactly before a user message
+                        if (spans.is_user_start(slot.prompt.n_tokens())) {
                             break;
                         }
 
@@ -3498,7 +3502,12 @@ private:
                     // the number of tokens added to the batch for the current slot
                     const auto n_tokens_cur = batch.size() - n_tokens_prev;
 
+                    const auto n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
+
                     const bool near_prompt_end = slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch;
+
+                    const bool is_user_start = spans.is_user_start(n_tokens_start);
+                    const bool is_last_user_message = n_tokens_start == last_user_pos;
 
                     // entire prompt has been processed
                     if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
@@ -3514,37 +3523,15 @@ private:
 
                         slot.init_sampler();
                     } else {
-                        // skip ordinary mid-prompt checkpoints
-                        if (!n_before_user_known && !near_prompt_end) {
+                        // skip ordinary mid-prompt checkpoints, unless the batch starts a user
+                        // message or we are near the end of the prompt
+                        if (!is_user_start && !near_prompt_end) {
                             do_checkpoint = false;
                         }
                     }
 
                     const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
                     const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
-
-                    // checkpoints are created before the current batch is decoded, so
-                    // their token position is the batch start rather than the prompt end
-                    const int32_t n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
-
-                    {
-                        const bool is_on_user =
-                            n_before_user_known &&
-                            n_tokens_start == n_before_user;
-
-                        const bool is_after_user =
-                            n_before_user_known &&
-                            n_tokens_start > n_before_user;
-
-                        const bool is_allowed =
-                            !n_before_user_known ||
-                            is_on_user ||
-                            (is_after_user && near_prompt_end);
-
-                        if (do_checkpoint && !is_allowed) {
-                            do_checkpoint = false;
-                        }
-                    }
 
                     // nothing to checkpoint yet
                     // TODO: is this check needed?
@@ -3555,8 +3542,8 @@ private:
                     // do not checkpoint after mtmd chunks
                     do_checkpoint = do_checkpoint && !has_mtmd;
 
-                    // no need to create checkpoints that are too close together
-                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || n_tokens_start > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_step);
+                    // no need to create checkpoints that are too close together, unless it's the last user message
+                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || is_last_user_message || n_tokens_start > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_step);
                     SLT_DBG(slot, "main/do_checkpoint = %s, pos_min = %d, pos_max = %d\n", do_checkpoint ? "yes" : "no", pos_min, pos_max);
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
@@ -4055,54 +4042,6 @@ void server_context::set_state_callback(server_state_callback_t callback) {
     });
 }
 
-// compute the number of tokens before the last user message in the prompt
-static int32_t prompt_get_n_before_user(
-        const json & message_spans,
-        const std::string & prompt,
-        const std::vector<raw_buffer> & files,
-        const llama_vocab * vocab,
-        mtmd_context * mctx) {
-    int32_t result = -1;
-    int32_t byte_pos = -1;
-
-    for (const auto & span : message_spans) {
-        const std::string role = json_value(span, "role", std::string());
-
-        if (role == "user") {
-            byte_pos = json_value(span, "pos", -1);
-        }
-    }
-
-    if (byte_pos >= 0) {
-        GGML_ASSERT((size_t) byte_pos <= prompt.size());
-
-        const std::string prefix = prompt.substr(0, (size_t) byte_pos);
-
-        const std::string marker = get_media_marker();
-        size_t n_prefix_media = 0;
-        for (size_t pos = 0; (pos = prefix.find(marker, pos)) != std::string::npos; pos += marker.size()) {
-            n_prefix_media++;
-        }
-
-        GGML_ASSERT(n_prefix_media <= files.size());
-
-        if (mctx != nullptr && n_prefix_media > 0) {
-            // TODO: this makes a copy - avoid it
-            std::vector<raw_buffer> prefix_files(files.begin(), files.begin() + n_prefix_media);
-
-            result = (int32_t) process_mtmd_prompt(mctx, prefix, prefix_files).size();
-        } else {
-            result = (int32_t) tokenize_input_prompts(vocab, nullptr, prefix, true, true)[0].size();
-        }
-
-        SRV_TRC("message_spans: last user message: byte_pos=%d, media=%zu, n_before_user=%d\n",
-                byte_pos, n_prefix_media, result);
-    }
-
-    return result;
-}
-
-
 //
 // server_routes
 //
@@ -4150,6 +4089,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
 
+        // message delimiters for checkpointing
+        auto delimiters = common_chat_msg_delimiters_parse(json_value(data, "message_delimiters", json::array()));
+        delimiters.tokenize(ctx_server.vocab);
+
         for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
@@ -4163,16 +4106,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     meta->logit_bias_eog,
                     data);
 
-            const auto message_spans = json_value(data, "message_spans", json::array());
-            if (prompt.is_string() && message_spans.is_array()) {
-                task.params.n_before_user =
-                    prompt_get_n_before_user(
-                        message_spans,
-                        prompt.get<std::string>(),
-                        files,
-                        ctx_server.vocab,
-                        ctx_server.mctx);
-            }
+            task.params.message_spans = task.tokens.find_message_spans(delimiters);
 
             task.id_slot = json_value(data, "id_slot", -1);
 

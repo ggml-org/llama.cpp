@@ -799,6 +799,7 @@ common_download_model_result common_download_model(const common_params_model  & 
 
     bool download_mmproj = opts.download_mmproj;
     bool download_mtp = opts.download_mtp;
+    bool preset_only = opts.preset_only;
     bool is_hf = !model.hf_repo.empty();
 
     if (is_hf) {
@@ -806,7 +807,8 @@ common_download_model_result common_download_model(const common_params_model  & 
         if (!hf.preset.path.empty()) {
             // if preset.ini exists, only download that file alone
             tasks.push_back({hf.preset.url, hf.preset.local_path});
-        } else {
+        } else if (!preset_only) {
+            // only add other files if we're NOT in preset-only mode (normal run, non-router)
             for (const auto & f : hf.model_files) {
                 tasks.push_back({f.url, f.local_path});
             }

@@ -301,6 +301,8 @@ static handle_model_result common_params_handle_model(struct common_params_model
                                                       const common_download_opts & opts) {
     handle_model_result result;
 
+    // TODO @ngxson : refactor this into a new common_model_download_context
+
     if (!model.docker_repo.empty()) {
         model.path = common_docker_resolve_model(model.docker_repo);
     } else if (!model.hf_repo.empty()) {
@@ -396,7 +398,7 @@ static bool parse_bool_value(const std::string & value) {
 // CLI argument parsing functions
 //
 
-bool common_params_handle_models(common_params & params, llama_example curr_ex, common_download_callback * callback) {
+bool common_params_handle_models(common_params & params, llama_example curr_ex, const common_params_handle_models_params & handle_params) {
     const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
                                          params.speculative.types.end(),
                                          COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
@@ -407,9 +409,10 @@ bool common_params_handle_models(common_params & params, llama_example curr_ex, 
     opts.skip_download   = params.skip_download;
     opts.download_mtp    = spec_type_draft_mtp;
     opts.download_mmproj = !params.no_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty();
+    opts.preset_only     = handle_params.preset_only;
 
-    if (callback) {
-        opts.callback = callback;
+    if (handle_params.callback) {
+        opts.callback = handle_params.callback;
     }
 
     // sub-models (draft, mmproj, vocoder) are explicitly specified by the user,
@@ -596,7 +599,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     if (!skip_model_download) {
         // handle model and download
-        common_params_handle_models(params, ctx_arg.ex);
+        common_params_handle_models(params, ctx_arg.ex, {});
 
         // model is required (except for server)
         // TODO @ngxson : maybe show a list of available models in CLI in this case
