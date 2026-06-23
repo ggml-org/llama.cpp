@@ -1,5 +1,5 @@
 <script lang="ts">
-	import * as viewport from '$lib/stores/viewport.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { autoResizeTextarea } from '$lib/utils';
 	import { onMount } from 'svelte';
 
@@ -38,7 +38,7 @@
 	}
 
 	export function focus() {
-		if (viewport.isMobile) return;
+		if (isMobile.current) return;
 
 		textareaElement?.focus({ preventScroll: true });
 	}
@@ -52,7 +52,6 @@
 
 <div class="flex-1 {className}">
 	<textarea
-		autofocus
 		bind:this={textareaElement}
 		bind:value
 		class={[
