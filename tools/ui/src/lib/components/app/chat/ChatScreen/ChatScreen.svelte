@@ -67,6 +67,12 @@
 			(config().keepStatsVisible && !!page.params.id) ||
 			activeProcessingState() !== null
 	);
+	let chatFormBottomPosition = $derived.by(() => {
+		if (!isMobile.current) return '1rem';
+		if (device.isStandalone) return '1.5rem';
+		if (device.isIOSSafari) return '0.25rem';
+		return '0.5rem';
+	});
 
 	const autoScroll = createAutoScrollController();
 	const scroll = useChatScreenScroll(autoScroll);
@@ -137,17 +143,25 @@
 			const container = scroll.chatScrollContainer;
 			if (!container) return;
 
+			const lastUserBubble = container.querySelector(
+				'.chat-message:nth-last-child(2) .chat-message-user .chat-message-user-bubble'
+			) as HTMLElement | null;
+
 			if (isMobile.current) {
-				// Find the last user message bubble to keep it visible after sending
-				const lastUserBubble = container.querySelector(
-					'.chat-message:nth-last-child(2) .chat-message-user .chat-message-user-bubble'
-				) as HTMLElement | null;
+				// Keep the last user message bubble just above the input on mobile
 				const bubbleHeight = lastUserBubble?.scrollHeight ?? 0;
-				const customOffset = innerHeight - 8;
-				const baseHeight = container.scrollHeight - customOffset;
+				const baseHeight = container.scrollHeight - innerHeight;
 
 				container.scrollTo({
 					top: bubbleHeight > 0 ? baseHeight - bubbleHeight : baseHeight,
+					behavior: 'smooth'
+				});
+			} else if (lastUserBubble) {
+				// On desktop, place the last user message near the top of the viewport
+				const topPadding = 24;
+				const bubbleRect = lastUserBubble.getBoundingClientRect();
+				container.scrollTo({
+					top: Math.max(0, container.scrollTop + bubbleRect.top - topPadding),
 					behavior: 'smooth'
 				});
 			} else {
@@ -231,6 +245,7 @@
 {:else}
 	<div
 		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-full px-4 md:py-0 pt-12 pb-48 md:pb-4"
+		style:--chat-form-bottom-position={chatFormBottomPosition}
 		ondragenter={dragAndDrop.dragHandlers.dragenter}
 		ondragleave={dragAndDrop.dragHandlers.dragleave}
 		ondragover={dragAndDrop.dragHandlers.dragover}
@@ -258,10 +273,9 @@
 					: device.isIOSSafari
 						? 'bottom-1 left-2 right-2'
 						: 'bottom-2 right-2 left-2',
-				isEmpty
-					? 'md:bottom-[calc(50dvh-7rem)] 2xl:bottom-[calc(50dvh-4rem)]'
-					: 'md:bottom-4 pt-24 md:pt-24'
+				isEmpty ? 'md:bottom-[calc(50dvh-7rem)] 2xl:bottom-[calc(50dvh-4rem)]' : 'md:bottom-4'
 			]}
+			style:padding-top={!isEmpty ? 'var(--chat-form-padding-top)' : undefined}
 		>
 			<ChatScreenGreeting {isEmpty} />
 

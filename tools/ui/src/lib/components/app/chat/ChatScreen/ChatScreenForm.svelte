@@ -33,7 +33,30 @@
 	}: Props = $props();
 
 	let chatFormRef: ChatForm | undefined = $state(undefined);
+	let formWrapperEl: HTMLDivElement | undefined = $state();
 	let chatId = $derived(page.params.id as string | undefined);
+
+	$effect(() => {
+		if (!formWrapperEl) return;
+
+		const formEl = formWrapperEl.querySelector('form') as HTMLElement | null;
+		if (!formEl) return;
+
+		const updateHeight = () => {
+			const height = Math.round(formEl.getBoundingClientRect().height);
+			document.documentElement.style.setProperty('--chat-form-height', `${height}px`);
+		};
+
+		updateHeight();
+
+		const resizeObserver = new ResizeObserver(updateHeight);
+		resizeObserver.observe(formEl);
+
+		return () => {
+			resizeObserver.disconnect();
+			document.documentElement.style.removeProperty('--chat-form-height');
+		};
+	});
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let message = $derived(initialMessage);
 	let previousIsLoading = $derived(isLoading);
@@ -111,17 +134,19 @@
 	});
 </script>
 
-<ChatForm
-	class="mx-auto max-w-3xl {className}"
-	bind:this={chatFormRef}
-	bind:value={message}
-	bind:uploadedFiles
-	{disabled}
-	{isLoading}
-	showMcpPromptButton
-	onFilesAdd={handleFilesAdd}
-	{onStop}
-	onSubmit={handleSubmit}
-	onSystemPromptClick={handleSystemPromptClick}
-	onUploadedFileRemove={handleUploadedFileRemove}
-/>
+<div class="chat-screen-form-wrapper" bind:this={formWrapperEl}>
+	<ChatForm
+		class="mx-auto max-w-3xl {className}"
+		bind:this={chatFormRef}
+		bind:value={message}
+		bind:uploadedFiles
+		{disabled}
+		{isLoading}
+		showMcpPromptButton
+		onFilesAdd={handleFilesAdd}
+		{onStop}
+		onSubmit={handleSubmit}
+		onSystemPromptClick={handleSystemPromptClick}
+		onUploadedFileRemove={handleUploadedFileRemove}
+	/>
+</div>
