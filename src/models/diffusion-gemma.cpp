@@ -653,7 +653,7 @@ void llama_diffusion_set_device_sc(struct llama_model * model, bool enabled) {
 
 // Stage-1 device sampling entry. Fetches the CUDA backend's dense sampler via the backend-reg proc address
 // (keeps the llama<->ggml-cuda link at the existing backend boundary) and runs it on sc_dev. Returns false
-// for non-DiffusionGemma / no sc_dev / non-CUDA builds so the caller falls back to the host path.
+// for non-DiffusionGemma / no sc_dev / non-CUDA(/ROCm/MUSA) builds so the caller falls back to the host path.
 typedef bool (*dg_cuda_sample_fn)(struct ggml_tensor *, const float *, int *, float *, int *, int, float);
 
 bool llama_diffusion_device_sample(const struct llama_model * model, const float * u, int * argmax,
@@ -662,7 +662,12 @@ bool llama_diffusion_device_sample(const struct llama_model * model, const float
     if (!dm || dm->sc_dev == nullptr || !u || !argmax || !entropy || !sampled || n_tokens <= 0) {
         return false;
     }
+    // The ggml-cuda backend registers under a build-specific name (CUDA / ROCm / MUSA) but exports the same
+    // diffusion-sample proc address from a single source, so probe all three to reach the device sampler on
+    // HIP and MUSA builds too.
     ggml_backend_reg_t reg = ggml_backend_reg_by_name("CUDA");
+    if (!reg) { reg = ggml_backend_reg_by_name("ROCm"); }
+    if (!reg) { reg = ggml_backend_reg_by_name("MUSA"); }
     if (!reg) {
         return false;
     }
