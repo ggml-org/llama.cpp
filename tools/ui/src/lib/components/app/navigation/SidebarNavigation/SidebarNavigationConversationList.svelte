@@ -123,11 +123,11 @@
 				{/each}
 
 				{#if unpinnedConversations.length === 0}
-					<div class="px-2 py-4 text-center">
+					<li class="px-2 py-4 text-center">
 						<p class="mb-4 p-4 text-sm text-muted-foreground">
 							{recentEmptyMessage}
 						</p>
-					</div>
+					</li>
 				{/if}
 			</ul>
 		</div>

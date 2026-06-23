@@ -65,11 +65,11 @@
 			{/each}
 
 			{#if tree.length === 0}
-				<div class="px-2 py-4 text-center">
+				<li class="px-2 py-4 text-center">
 					<p class="mb-4 p-4 text-sm text-muted-foreground">
 						{emptyMessage}
 					</p>
-				</div>
+				</li>
 			{/if}
 		</ul>
 	</div>
