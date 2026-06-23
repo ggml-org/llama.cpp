@@ -1176,7 +1176,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     }
 
     // apply softmax to obtain the probabilities
-    double sum_cum = 0.0f;
+    double sum_cum = 0.0;
     for (size_t i = 0; i < cur_p->size; ++i) {
         float p = expf(cur_p->data[i].logit - max_l);
         cur_p->data[i].p = p;
@@ -1189,7 +1189,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     //
     const double rnd = dist(ctx->rng);
 
-          double sum_run = 0.0f;
+          double sum_run = 0.0;
     const double sum_tgt = sum_cum*rnd;
 
     bool found = false;
@@ -1345,7 +1345,7 @@ static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {
     // std::uniform_real_distribution<double> and
     // std::uniform_real_distribution<float> with same rng will produce
     // different sequences).
-    std::uniform_real_distribution<double> dist(0.0f, 1.0f);
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
 
     auto & rng = sctx->backend_transactional ? sctx->rng_backend : sctx->rng;
 
