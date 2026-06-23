@@ -334,11 +334,13 @@ static handle_model_result common_params_handle_model(struct common_params_model
             result.mtp.path  = download_result.mtp_path;
         }
     } else if (!model.ms_repo.empty()) {
-        // Handle ModelScope repository
-        // Use the complete original value for model name
-        model.name = model.ms_repo;
-
-        auto download_result = common_download_model(model, opts);
+        // If -m was used with -ms, treat the model "path" as the hf_file to download
+        if (model.hf_file.empty() && !model.path.empty()) {
+            model.hf_file = model.path;
+            model.path = "";
+        }
+        common_download_opts ms_opts = opts;
+        auto download_result = common_download_model(model, ms_opts);
 
         if (download_result.model_path.empty()) {
             throw std::runtime_error("failed to download model from ModelScope");
@@ -348,12 +350,12 @@ static handle_model_result common_params_handle_model(struct common_params_model
 
         if (!download_result.mmproj_path.empty()) {
             result.found_mmproj = true;
-            result.mmproj.path = download_result.mmproj_path;
+            result.mmproj.path  = download_result.mmproj_path;
         }
 
         if (!download_result.mtp_path.empty()) {
             result.found_mtp = true;
-            result.mtp.path = download_result.mtp_path;
+            result.mtp.path  = download_result.mtp_path;
         }
     } else if (!model.url.empty()) {
         if (model.path.empty()) {
