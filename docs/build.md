@@ -393,6 +393,20 @@ You can download it from your Linux distro's package manager or from here: [ROCm
   ```
   If necessary, adapt `GPU_TARGETS` to the GPU arch you want to compile for. The above example uses `gfx1100` that corresponds to Radeon RX 7900XTX/XT/GRE. You can find a list of targets [here](https://llvm.org/docs/AMDGPUUsage.html#processors)
   Find your gpu version string by matching the most significant version information from `rocminfo | grep gfx | head -1 | awk '{print $2}'` with the list of processors, e.g. `gfx1035` maps to `gfx1030`.
+- **ROCm HIP SDK 7.1.1 on Windows with MSVC >= 14.40 (VS 17.10+):** HIP device
+  compiles fail with `error: __device__ function 'isless' cannot overload
+  __host__ __device__ function 'isless'` (and the other five `isgreater` /
+  `islessequal` / etc. comparison functions). MSVC 14.40+ declares these as
+  `constexpr` in `<cmath>`, making them implicitly `__host__ __device__` under
+  HIP and colliding with ROCm clang's `__device__`-only forward declares. This
+  is fixed upstream by LLVM PR [#201563](https://github.com/llvm/llvm-project/pull/201563),
+  but the clang shipped in ROCm 7.1.1 predates it. Until the SDK ships a fixed
+  clang, work around it by adding `#include <__clang_cuda_math_forward_declares.h>`
+  immediately **before** the `#include <cmath>` in
+  `%HIP_PATH%\lib\clang\21\include\__clang_hip_runtime_wrapper.h` (back the file
+  up first). Having the `__device__` forward declares precede `<cmath>` stops
+  clang from promoting MSVC's `constexpr` comparisons to `__host__ __device__`.
+  No MSVC downgrade is required. See ggml-org/llama.cpp#22570.
 
 
 The environment variable [`HIP_VISIBLE_DEVICES`](https://rocm.docs.amd.com/en/latest/understand/gpu_isolation.html#hip-visible-devices) can be used to specify which GPU(s) will be used.
