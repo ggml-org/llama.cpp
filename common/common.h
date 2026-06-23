@@ -631,6 +631,9 @@ struct common_params {
 
     std::map<std::string, std::string> default_template_kwargs;
 
+    // CLI params
+    std::string server_base;
+
     // UI configs
     bool ui = true;
     bool ui_mcp_proxy = false;

@@ -2,7 +2,9 @@
 
 set(TARGET llama-cli-impl)
 
-add_library(${TARGET} cli.cpp)
+add_library(${TARGET} cli.cpp
+                      cli-client.cpp
+                      cli-context.cpp)
 set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ../server)
