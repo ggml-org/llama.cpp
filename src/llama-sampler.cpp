@@ -8,7 +8,6 @@
 
 #include <array>
 #include <algorithm>
-#include <cassert>
 #include <cfloat>
 #include <chrono>
 #include <cmath>
@@ -1091,7 +1090,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     }
 
     // fallback to the last token (don't think this can happen)
-    assert(found);
+    GGML_ASSERT(found);
     if (!found) {
         cur_p->selected = cur_p->size - 1;
     }
@@ -2662,7 +2661,7 @@ static void llama_sampler_penalties_accept(struct llama_sampler * smpl, llama_to
         tmp[ctx->prev.rat(i)]++;
     }
 
-    assert(ctx->token_count == tmp);
+    GGML_ASSERT(ctx->token_count == tmp);
 #endif
 }
 
@@ -2683,7 +2682,7 @@ static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_tok
 
         const int count = token_iter->second;
 
-        assert(count > 0 && count <= ctx->penalty_last_n);
+        GGML_ASSERT(count > 0 && count <= ctx->penalty_last_n);
 
         // The academic publication that described this technique actually just only divided, but that would cause tokens with negative logits to become more likely, which is obviously wrong.
         // This is common fix for this problem, which is to multiply by the penalty instead of dividing.
@@ -3677,14 +3676,14 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
             if (len0 < 0) {
                 ctx->buf0.resize(len0);
                 len0 = ctx->vocab->token_to_piece(cur_p->data[i0].id, ctx->buf0.data(), ctx->buf0.size(), 0, false);
-                assert(len0 > 0);
+                GGML_ASSERT(len0 > 0);
             }
 
             int len1 = ctx->vocab->token_to_piece(cur_p->data[i1].id, ctx->buf1.data(), ctx->buf1.size(), 0, false);
             if (len1 < 0) {
                 ctx->buf1.resize(len1);
                 len1 = ctx->vocab->token_to_piece(cur_p->data[i1].id, ctx->buf1.data(), ctx->buf1.size(), 0, false);
-                assert(len1 > 0);
+                GGML_ASSERT(len1 > 0);
             }
 
             // token i0 is a prefix of token i1
