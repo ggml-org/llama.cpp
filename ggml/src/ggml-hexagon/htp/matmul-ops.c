@@ -563,9 +563,6 @@ static void vec_dot_f16_f32_uu_1x1(const uint32_t n, float * restrict s, const v
 static void hvx_mm_4d(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
 
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
-
     assert(ne12 % ne02 == 0);
     assert(ne13 % ne03 == 0);
 
@@ -600,9 +597,8 @@ static void hvx_mm_4d(unsigned int nth, unsigned int ith, void * data) {
     }
 
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir0_start);
 
-    // block-tiling attempt
     const uint32_t blck_0 = 64;
     const uint32_t blck_1 = 64;
 
@@ -634,13 +630,7 @@ static void hvx_mm_4d(unsigned int nth, unsigned int ith, void * data) {
         }
     }
 
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "matmul-4d %d/%d: %ux%ux%ux%u (%u:%u %u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], ir0_start, ir0_end, ir1_start, ir1_end, src1->ne[0],
-         src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0_start);
 }
 
 #include "hmx-mm-kernels-tiled.h"
@@ -676,9 +666,6 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;                                 \
     uint8_t * restrict src1_data = mmctx->vtcm_src1;                                                                              \
                                                                                                                                   \
-    uint64_t t1, t2;                                                                                                              \
-    t1 = HAP_perf_get_qtimer_count();                                                                                             \
-                                                                                                                                  \
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;                                                             \
                                                                                                                                   \
     const uint32_t tile_size = TILE_SIZE;                                                                                         \
@@ -704,7 +691,7 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
         int valid_rows = (int)ne0 - (int)(ct * 32);                                                                               \
         valid_rows = MIN(32, MAX(0, valid_rows));                                                                                 \
                                                                                                                                   \
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                   \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                    \
         uint32_t ir1 = 0;                                                                                                         \
         for (; ir1 + 1 < src1_nrows; ir1 += 2) {                                                                                  \
             const uint8_t * restrict src1_col0 = (const uint8_t *) (src1_data + (ir1+0) * src1_stride);                           \
@@ -725,7 +712,7 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                   \
             DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows);                                                                 \
         }                                                                                                                         \
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                    \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                     \
                                                                                                                                   \
         if (push_ct < ct_end) {                                                                                                   \
             dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile, src0_row + push_ct * tile_row_stride),                      \
@@ -733,13 +720,6 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
             push_ct++;                                                                                                            \
         }                                                                                                                         \
     }                                                                                                                             \
-                                                                                                                                  \
-    t2 = HAP_perf_get_qtimer_count();                                                                                             \
-                                                                                                                                  \
-    FARF(HIGH, "matmul-repacked-%s %u/%u: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", mmctx->type, ith, nth,     \
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0], src1->ne[1],              \
-         src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],                                                \
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));                                                                        \
 }
 
 #define MATVEC_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X1)                                                                       \
@@ -768,9 +748,6 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     uint8_t * vtcm_dst_ptr  = mmctx->vtcm_dst + mmctx->vtcm_dst_size_per_thread * ith;                                            \
     uint8_t * vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;                                          \
     uint8_t * src1_data = mmctx->vtcm_src1;                                                                                       \
-                                                                                                                                  \
-    volatile uint64_t t1, t2;                                                                                                     \
-    t1 = HAP_perf_get_qtimer_count();                                                                                             \
                                                                                                                                   \
     float * tmp = (float *) vtcm_dst_ptr;                                                                                         \
                                                                                                                                   \
@@ -802,9 +779,9 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
         int valid_rows = (int)ne0 - (int)(ct * 32);                                                                               \
         valid_rows = MIN(32, MAX(0, valid_rows));                                                                                 \
                                                                                                                                   \
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                   \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                    \
         DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows);                                                                     \
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                    \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                     \
                                                                                                                                   \
         if (push_ct < ct_end) {                                                                                                   \
             dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile, src0_row + push_ct * tile_row_stride),                      \
@@ -817,13 +794,6 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     if (copy_cnt > 0) {                                                                                                           \
         hvx_copy_f32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, copy_cnt);                                         \
     }                                                                                                                             \
-                                                                                                                                  \
-    t2 = HAP_perf_get_qtimer_count();                                                                                             \
-                                                                                                                                  \
-    FARF(HIGH, "matvec-repacked-%s %u/%u: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", mmctx->type, ith, nth,     \
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0], src1->ne[1],              \
-         src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],                                                \
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));                                                                        \
 }
 
 #define MATMUL_QKV_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X2, DOT_2X1)                                                          \
@@ -851,9 +821,6 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     uint8_t * restrict vtcm_src2_ptr = mmctx->vtcm_src2 + mmctx->vtcm_src2_size_per_thread * ith;                                 \
     uint8_t * restrict vtcm_src3_ptr = mmctx->vtcm_src3 + mmctx->vtcm_src3_size_per_thread * ith;                                 \
     uint8_t * restrict src1_data = mmctx->vtcm_src1;                                                                              \
-                                                                                                                                  \
-    volatile uint64_t t1, t2;                                                                                                     \
-    t1 = HAP_perf_get_qtimer_count();                                                                                             \
                                                                                                                                   \
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                                     \
                                                                                                                                   \
@@ -970,7 +937,7 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             int valid_rows = (int)src3->ne[1] - (int)(ct * 32);                                                                   \
             valid_rows = MIN(32, MAX(0, valid_rows));                                                                             \
                                                                                                                                   \
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                               \
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                \
             uint32_t ir1 = 0;                                                                                                     \
             for (; ir1 + 1 < src1_nrows; ir1 += 2) {                                                                              \
                 const uint8_t * restrict src1_col0 = (const uint8_t *) (src1_data + (ir1+0) * src1_stride);                       \
@@ -992,7 +959,7 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                                                                                                                                   \
                 DOT_2X1(ne10, dst_ptr_q, w_tile_q, src1_col, valid_rows);                                                         \
             }                                                                                                                     \
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                \
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                 \
                                                                                                                                   \
             if (push_ct < ct_end_q) {                                                                                             \
                 dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_q, src3_row + push_ct * tile_row_stride),                \
@@ -1001,16 +968,6 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             }                                                                                                                     \
         }                                                                                                                         \
     }                                                                                                                             \
-                                                                                                                                  \
-    t2 = HAP_perf_get_qtimer_count();                                                                                             \
-                                                                                                                                  \
-    FARF(HIGH, "matmul-qkv-repacked-%s %u/%u: Wk:%ux%ux%ux%u Wv:%ux%ux%ux%u Wq:%ux%ux%ux%u * %ux%ux%ux%u -> usec %u\n",           \
-         mmctx->type, ith, nth,                                                                                                   \
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],                                                                      \
-         src2->ne[0], src2->ne[1], src2->ne[2], src2->ne[3],                                                                      \
-         src3->ne[0], src3->ne[1], src3->ne[2], src3->ne[3],                                                                      \
-         src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],                                                                      \
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));                                                                        \
 }
 
 #define MATMUL_FFN_2D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X2, DOT_2X1)                                                          \
@@ -1035,9 +992,6 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;                                 \
     uint8_t * restrict vtcm_src2_ptr = mmctx->vtcm_src2 + mmctx->vtcm_src2_size_per_thread * ith;                                 \
     uint8_t * restrict src1_data = mmctx->vtcm_src1;                                                                              \
-                                                                                                                                  \
-    volatile uint64_t t1, t2;                                                                                                     \
-    t1 = HAP_perf_get_qtimer_count();                                                                                             \
                                                                                                                                   \
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                                     \
                                                                                                                                   \
@@ -1079,7 +1033,7 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
         int valid_rows = (int)ne01 - (int)(ct * 32);                                                                              \
         valid_rows = MIN(32, MAX(0, valid_rows));                                                                                 \
                                                                                                                                   \
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                   \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                    \
         uint32_t ir1 = 0;                                                                                                         \
         for (; ir1 + 1 < src1_nrows; ir1 += 2) {                                                                                  \
             const uint8_t * restrict src1_col0 = (const uint8_t *) (src1_data + (ir1+0) * src1_stride);                           \
@@ -1111,7 +1065,7 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             DOT_2X1(ne10, dst_ptr_gate, w_tile_gate, src1_col, valid_rows);                                                       \
             DOT_2X1(ne10, dst_ptr_up, w_tile_up, src1_col, valid_rows);                                                           \
         }                                                                                                                         \
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                    \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                     \
                                                                                                                                   \
         if (push_ct < ct_end) {                                                                                                   \
             dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile_gate, src0_row + push_ct * tile_row_stride),                 \
@@ -1121,13 +1075,6 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             push_ct++;                                                                                                            \
         }                                                                                                                         \
     }                                                                                                                             \
-                                                                                                                                  \
-    t2 = HAP_perf_get_qtimer_count();                                                                                             \
-                                                                                                                                  \
-    FARF(HIGH, "matmul-ffn-repacked-%s %u/%u: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", mmctx->type, ith, nth, \
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0], src1->ne[1],              \
-         src1->ne[2], src1->ne[3], dst_gate->ne[0], dst_gate->ne[1], dst_gate->ne[2], dst_gate->ne[3],                            \
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));                                                                        \
 }
 
 MATMUL_2D_REPACKED_IMPL(q4_0,       576,  tiled_vec_dot_q4_0_32x2,  tiled_vec_dot_q4_0_32x1)
@@ -1160,7 +1107,7 @@ static void name(unsigned int nth, unsigned int ith, void * data) {             
     }                                                                                                      \
                                                                                                            \
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                              \
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);                                             \
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ir_first);                                        \
                                                                                                            \
     uint8_t * restrict dst = mmctx->vtcm_src1;                                                             \
     const uint32_t ir_last = MIN(ir_first + nrows_per_thread, nrows);                                      \
@@ -1171,7 +1118,7 @@ static void name(unsigned int nth, unsigned int ith, void * data) {             
     uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith); \
     kernel_fn(src_data, dst_data, tmp_data, ne0, ir_last - ir_first, src_row_size, dst_row_size);          \
                                                                                                            \
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);                                              \
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ir_first);                                         \
 }
 
 QUANTIZE_IMPL(quantize_f32_q8_0_tiled, "quantize-f32-q8_0_tiled", quantize_f32_q8_0_tiled_kernel, htp_mm_q8_0_tiled_row_size(ne0))
@@ -1186,7 +1133,7 @@ static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, vo
     struct htp_mm_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
 
     const struct htp_tensor * src = octx->src[1];
 
@@ -1203,14 +1150,14 @@ static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, vo
         mmctx->quant_c[ith]
     );
 
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
 }
 
 static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, void * data) {
     struct htp_mm_context * mmctx = data;
     struct htp_ops_context * octx = mmctx->octx;
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
 
     const struct htp_tensor * src = octx->src[1];
 
@@ -1227,7 +1174,7 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
         mmctx->quant_c[ith]
     );
 
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ith);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
 }
 
 MATVEC_2D_REPACKED_IMPL(q4_0,       576,  tiled_vec_dot_q4_0_32x1)
@@ -1302,9 +1249,6 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
     uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;
     uint8_t * restrict src1_data     = mmctx->vtcm_src1;
 
-    volatile uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
-
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;
 
     // Prefill vtcm with src0 rows
@@ -1322,7 +1266,7 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
         const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
 
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
         // Process src1 columns in pairs (2×2 tiling)
         uint32_t ir1 = 0;
         for (; ir1 + 1 < src1_nrows; ir1 += 2) {
@@ -1339,7 +1283,7 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
             float * restrict dst_row          = (float *) (dst->data + (ir1 * dst_row_size));
             mmctx->vec_dot_2x1(ne00, &dst_row[ir0], ss0, ss0 + src0_stride, src1_col);
         }
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
 
         // Prefetch next (n + vtcm_nrows) row
         const int pr0 = (ir0 + n_prefetch);
@@ -1358,22 +1302,15 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
                        src0_stride, src0_row_size, src0_row_size, 1);
         const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
 
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
         #pragma unroll(2)
         for (uint32_t ir1 = 0; ir1 < src1_nrows; ++ir1) {
             const uint8_t * restrict src1_col = (const uint8_t *) (src1_data + ir1 * src1_stride);
             float * restrict dst_row          = (float *) (dst->data + (ir1 * dst_row_size));
             mmctx->vec_dot_1x1(ne00, &dst_row[ir0], ss0, src1_col);
         }
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
     }
-
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "matmul-%s %d/%d: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", mmctx->type, ith, nth,
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0], src1->ne[1],
-         src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
 static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
@@ -1403,9 +1340,6 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
     uint8_t * vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;
     uint8_t * src1_data     = mmctx->vtcm_src1;
 
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
-
     float * tmp = (float *) vtcm_dst_ptr;
 
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;
@@ -1433,9 +1367,9 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
     // Process src0 rows
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
         const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
         mmctx->vec_dot_2x1(ne00, &tmp[ir0 - src0_start_row], ss0, ss0 + src0_stride, src1_col);
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
 
         // Prefetch next (n + vtcm_nrows) row
         const uint32_t pr0 = (ir0 + n_prefetch);
@@ -1453,19 +1387,12 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
         dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
                        src0_stride, src0_row_size, src0_row_size, 1);
         const uint8_t * ss0 = dma_queue_pop(dma_queue).dst;
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
         mmctx->vec_dot_1x1(ne00, &tmp[ir0 - src0_start_row], ss0, src1_col);
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
     }
 
     hvx_copy_f32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, src0_end_row - src0_start_row);
-
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "matvec-%s %u/%u: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", mmctx->type, ith, nth,
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0], src1->ne[1],
-         src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id) * ids->ne[0] * ids->ne[1] + (i1)]
@@ -1478,9 +1405,8 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
-    const uint32_t src0_nrows = ne01;  // src0 rows per expert
-    const uint32_t src1_nrows = ne11;
-
+    const uint32_t src0_nrows      = ne01;  // src0 rows per expert
+    const uint32_t src1_nrows      = ne11;
     const uint32_t src0_start_row  = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row    = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
 
@@ -1512,7 +1438,6 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
 
     for (uint32_t cur_a = 0; cur_a < n_as; ++cur_a) {
         const int32_t cne1 = matrix_row_counts[cur_a];
-
         if (cne1 == 0) {
             continue;
         }
@@ -1541,7 +1466,7 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
             int valid_rows = (int)ne01 - (int)(ct * 32);
             valid_rows = MIN(32, MAX(0, valid_rows));
 
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);
             for (uint32_t cid = 0; cid < cne1; ++cid) {
                 struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, cid);
                 const int               rm1         = row_mapping.i1;  // expert idx
@@ -1553,7 +1478,7 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
 
                 mmctx->vec_dot_32x1(ne10, &dst_row[ct * 32], w_tile, src1_col, valid_rows);
             }
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
             if (push_ct < ct_end) {
                 dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile, src0_row + push_ct * tile_row_stride),
@@ -1562,13 +1487,6 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
             }
         }
     }
-
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "matmul-id-%s %d/%d: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u (%ux%ux%ux%u) -> %ux%ux%ux%u usec %u\n", mmctx->type,
-         ith, nth, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0],
-         src1->ne[1], src1->ne[2], src1->ne[3], ids->ne[0], ids->ne[1], ids->ne[2], ids->ne[3], dst->ne[0], dst->ne[1],
-         dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
 static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
@@ -1576,11 +1494,7 @@ static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
 
     const struct htp_tensor * restrict ids = octx->src[2];
 
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
-
-    const uint32_t src0_nrows = ne01;  // src0 rows per expert
-
+    const uint32_t src0_nrows      = ne01;  // src0 rows per expert
     const uint32_t src0_start_row  = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row    = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
 
@@ -1640,9 +1554,9 @@ static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
             int valid_rows = (int)ne01 - (int)(ct * 32);
             valid_rows = MIN(32, MAX(0, valid_rows));
 
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);
             mmctx->vec_dot_32x1(ne10, &dst_row[ct * 32], w_tile, src1_col, valid_rows);
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
             if (push_ct < ct_end) {
                 dma_queue_push(dma_queue, dma_make_ptr((uint8_t *)w_tile, src0_row + push_ct * tile_row_stride),
@@ -1651,13 +1565,6 @@ static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
             }
         }
     }
-
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "matvec-id-%s %d/%d: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u (%ux%ux%ux%u) -> %ux%ux%ux%u usec %u\n", mmctx->type,
-         ith, nth, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0],
-         src1->ne[1], src1->ne[2], src1->ne[3], src2->ne[0], src2->ne[1], src2->ne[2], src2->ne[3], dst->ne[0],
-         dst->ne[1], dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
 static int hvx_mm_init_vec_dot(struct htp_mm_context * mmctx, enum htp_data_type type) {
@@ -2450,7 +2357,6 @@ static void transfer_activation_chunk_threaded(
         int k_valid,
         float *vtcm_f32_act) {
     assert(k_block % HTP_MM_HMX_TILE_N_COLS == 0 && k_stride % HTP_MM_HMX_TILE_N_COLS == 0);
-    assert(VLEN == 32 * sizeof(float));
 
     size_t n_tot_chunks      = n_rows;
     size_t n_chunks_per_task = (n_threads == 1) ? n_tot_chunks : 32;  // must be multiple of 32 to ensure correct destination address
@@ -2778,10 +2684,6 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
 
     const size_t vec_dot_size = params->k * sizeof(__fp16);
 
-    // When the activation has a large stride (e.g. permuted Q tensor with
-    // act_stride >> k), HVX vector loads from strided DDR thrash L2 cache.
-    // Allocate an F32 scratch buffer in VTCM and use 2D DMA to gather
-    // strided rows into a contiguous block before the F32->F16 conversion.
     const bool use_dma_activation = (params->act_stride > params->k);
     const size_t f32_scratch_size = use_dma_activation
         ? hex_align_up((size_t)act_threads * HTP_MM_DMA_ACT_MULTIPLIER * (size_t) params->k * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
@@ -2798,7 +2700,7 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
 
     uint8_t *vtcm_ptr        = (uint8_t *) ctx->vtcm_base;
     __fp16  *vtcm_weight     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size);
-    __fp16  *vtcm_f16_act = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, activation_area_size);
+    __fp16  *vtcm_f16_act    = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, activation_area_size);
     __fp16  *vtcm_output     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, output_area_size);
     void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch_area_size);
     void    *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch_area_size);
@@ -3554,7 +3456,7 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
                 case HTP_TYPE_Q4_0:   matmul_job_func = hvx_mm_qkv_2d_repacked_q4_0_flat;   break;
                 case HTP_TYPE_Q4_1:   matmul_job_func = hvx_mm_qkv_2d_repacked_q4_1_flat;   break;
                 case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mm_qkv_2d_repacked_q8_0_flat;   break;
-                case HTP_TYPE_IQ4_NL:  matmul_job_func = hvx_mm_qkv_2d_repacked_iq4nl_flat;  break;
+                case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_qkv_2d_repacked_iq4nl_flat;  break;
                 case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_qkv_2d_repacked_mxfp4_flat;  break;
                 default:              return HTP_STATUS_NO_SUPPORT;
             }
@@ -3563,7 +3465,7 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
                 case HTP_TYPE_Q4_0:   matmul_job_func = hvx_mm_qkv_2d_repacked_q4_0;   break;
                 case HTP_TYPE_Q4_1:   matmul_job_func = hvx_mm_qkv_2d_repacked_q4_1;   break;
                 case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mm_qkv_2d_repacked_q8_0;   break;
-                case HTP_TYPE_IQ4_NL:  matmul_job_func = hvx_mm_qkv_2d_repacked_iq4nl;  break;
+                case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_qkv_2d_repacked_iq4nl;  break;
                 case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_qkv_2d_repacked_mxfp4;  break;
                 default:              return HTP_STATUS_NO_SUPPORT;
             }
