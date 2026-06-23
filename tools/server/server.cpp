@@ -239,18 +239,20 @@ int llama_server(int argc, char ** argv) {
         ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
     }
     // EXPERIMENTAL built-in tools
+    try {
+        tools.setup(params.server_tools);
+    } catch (const std::exception & e) {
+        SRV_ERR("tools setup failed: %s\n", e.what());
+        return 1;
+    }
+    // always expose GET /tools so the Web UI can query the available tools without
+    // getting a 404 - it returns an empty list when no built-in tools are enabled
+    ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
     if (!params.server_tools.empty()) {
-        try {
-            tools.setup(params.server_tools);
-        } catch (const std::exception & e) {
-            SRV_ERR("tools setup failed: %s\n", e.what());
-            return 1;
-        }
         SRV_WRN("%s", "-----------------\n");
         SRV_WRN("%s", "Built-in tools are enabled, do not expose server to untrusted environments\n");
         SRV_WRN("%s", "This feature is EXPERIMENTAL and may be changed in the future\n");
         SRV_WRN("%s", "-----------------\n");
-        ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
     }
 
