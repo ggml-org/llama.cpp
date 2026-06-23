@@ -13,6 +13,7 @@
 		ModelsSelectorList,
 		ModelsSelectorOption
 	} from '$lib/components/app';
+	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
 	import type { ModelItem } from './utils';
 
 	interface Props {
@@ -169,14 +170,7 @@
 								{/if}
 
 								{#if triggerLoading}
-									<div
-										class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 overflow-hidden rounded-b-sm bg-muted"
-									>
-										<div
-											class="h-full bg-primary transition-[width] duration-200 ease-out"
-											style="width: {triggerLoadPercent}%"
-										></div>
-									</div>
+									<ModelLoadHighlight percent={triggerLoadPercent} />
 								{/if}
 							</DropdownMenu.Trigger>
 						{/snippet}
