@@ -1053,6 +1053,31 @@ void process_shaders() {
         }
     }
 
+    for (auto unroll : {false, true}) {
+        for (auto a_f16 : {false, true}) {
+            std::map<std::string, std::string> defines = {
+                {"A_TYPE", a_f16 ? "float16_t" : "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"},
+                {"UNROLL", unroll ? "[[unroll]]" : ""},
+            };
+            std::string name = std::string("conv3d") + (a_f16 ? "_f16" : "") + "_f32";
+            string_to_spv(name + (unroll ? "_unroll" : ""), "conv3d_mm.comp", defines);
+#if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
+            if (unroll) {
+                auto cm2_defines = defines;
+                cm2_defines["COOPMAT2"] = "1";
+                string_to_spv(name, "conv3d_mm.comp", cm2_defines, true, false, true);
+            }
+#endif
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+            if (unroll) {
+                auto cm1_defines = defines;
+                cm1_defines["COOPMAT"] = "1";
+                string_to_spv(name, "conv3d_mm.comp", cm1_defines, true, true, false);
+            }
+#endif
+        }
+    }
+
     string_to_spv("conv2d_dw_whcn_f32", "conv2d_dw.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"WHCN", "1"}}));
     string_to_spv("conv2d_dw_cwhn_f32", "conv2d_dw.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"CWHN", "1"}}));
     string_to_spv("conv2d_dw_whcn_f16_f32", "conv2d_dw.comp", merge_maps(base_dict, {{"A_TYPE", "float16_t"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"WHCN", "1"}}));

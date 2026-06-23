@@ -493,6 +493,20 @@ struct vk_conv2d_pipeline_state {
     }
 };
 
+struct vk_conv3d_pipeline_state {
+    vk_conv3d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t s2, uint32_t p0, uint32_t p1, uint32_t p2,
+                             uint32_t d0, uint32_t d1, uint32_t d2, uint32_t KW, uint32_t KH, uint32_t KD, uint32_t aligned)
+        : s0(s0), s1(s1), s2(s2), p0(p0), p1(p1), p2(p2), d0(d0), d1(d1), d2(d2), KW(KW), KH(KH), KD(KD), aligned(aligned) {}
+
+    uint32_t s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD;
+    uint32_t aligned;
+
+    bool operator<(const vk_conv3d_pipeline_state &b) const {
+        return std::tie(s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD, aligned) <
+               std::tie(b.s0, b.s1, b.s2, b.p0, b.p1, b.p2, b.d0, b.d1, b.d2, b.KW, b.KH, b.KD, b.aligned);
+    }
+};
+
 struct vk_solve_tri_pipeline_state {
     vk_solve_tri_pipeline_state(uint32_t N, uint32_t K)
         : N(N), K(K) {}
@@ -924,6 +938,8 @@ struct vk_device_struct {
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f16_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f16_f32[CONV_SHAPE_COUNT];
+    std::map<vk_conv3d_pipeline_state, vk_pipeline> pipeline_conv3d_f32[CONV_SHAPE_COUNT];
+    std::map<vk_conv3d_pipeline_state, vk_pipeline> pipeline_conv3d_f16_f32[CONV_SHAPE_COUNT];
     vk_pipeline pipeline_conv2d_dw_whcn_f32, pipeline_conv2d_dw_whcn_f16_f32;
     vk_pipeline pipeline_conv2d_dw_cwhn_f32, pipeline_conv2d_dw_cwhn_f16_f32;
 
@@ -1667,6 +1683,41 @@ template <> void init_pushconst_fastdiv(vk_op_conv2d_push_constants &p) {
     // Compute magic values to divide by OW, OW*OH
     init_fastdiv_values(p.OW,       p.OWmp,    p.OWL);
     init_fastdiv_values(p.OW*p.OH,  p.OWOHmp,  p.OWOHL);
+}
+
+struct vk_op_conv3d_push_constants {
+    uint32_t OC;
+    uint32_t IC;
+    uint32_t N;
+
+    uint32_t IW;
+    uint32_t IH;
+    uint32_t ID;
+    uint32_t OW;
+    uint32_t OH;
+    uint32_t OD;
+
+    uint32_t nb01;
+    uint32_t nb02;
+    uint32_t nb03;
+
+    uint32_t nb11;
+    uint32_t nb12;
+    uint32_t nb13;
+
+    uint32_t nb1;
+    uint32_t nb2;
+    uint32_t nb3;
+
+    uint32_t OWmp;     uint32_t OWL;
+    uint32_t OWOHmp;   uint32_t OWOHL;
+    uint32_t OWOHODmp; uint32_t OWOHODL;
+};
+
+template <> void init_pushconst_fastdiv(vk_op_conv3d_push_constants &p) {
+    init_fastdiv_values(p.OW,             p.OWmp,     p.OWL);
+    init_fastdiv_values(p.OW*p.OH,        p.OWOHmp,   p.OWOHL);
+    init_fastdiv_values(p.OW*p.OH*p.OD,   p.OWOHODmp, p.OWOHODL);
 }
 
 struct vk_op_conv2d_dw_push_constants {
@@ -5330,7 +5381,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
     ggml_vk_create_pipeline(device, device->pipeline_opt_step_sgd_f32, "opt_step_sgd_f32", opt_step_sgd_f32_len, opt_step_sgd_f32_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
-    // conv2d, conv_transpose_2d
+    // conv2d, conv_transpose_2d, conv3d
     for (uint32_t s = 0; s < CONV_SHAPE_COUNT; ++s) {
         // smaller WG for the small-tile fallback gives more concurrent WGs per SM
         uint32_t conv2d_WG_SIZE  = (s == CONV_SHAPE_64x32) ? 128 : 256;
@@ -5393,8 +5444,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             return (conv2d_BS.K * (conv2d_BS.CRS + pad) + conv2d_BS.CRS * (conv2d_BS.NPQ + pad) + csh_elems) * elem_size;
         };
 
-        // coopmat1 needs to store the output through shared memory, so check up front
-        // whether it'll fit and disable it before applying coopmat1 parameters.
+        // 2D, transpose-2D, and 3D conv use the same KxCRS @ CRSxNPQ shmem
+        // layout. cm1 needs Csh for output, so check before applying cm1 params.
         if (conv2d_use_cm1 && device->properties.limits.maxComputeSharedMemorySize < shmem_req(conv2d_cm1_shmem_pad, true, true)) {
             conv2d_use_cm1 = false;
         }
@@ -5486,6 +5537,53 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         }
 #undef CREATE_CONV
 #undef CREATE_CONVS
+
+        std::vector<uint32_t> conv3d_spec_constants = { conv2d_WG_SIZE, conv2d_BS.K, conv2d_BS.CRS, conv2d_BS.NPQ, conv2d_TS_K, conv2d_SHMEM_PAD };
+#define CREATE_CONV3D(type_suffix, spv_suffix) \
+        for (auto &c : device->pipeline_conv3d##type_suffix[s]) { \
+            const vk_conv3d_pipeline_state &state = c.first; \
+            std::vector<uint32_t> spec_constants_cpy = conv3d_spec_constants; \
+            spec_constants_cpy.push_back(state.s0); \
+            spec_constants_cpy.push_back(state.s1); \
+            spec_constants_cpy.push_back(state.s2); \
+            spec_constants_cpy.push_back(state.p0); \
+            spec_constants_cpy.push_back(state.p1); \
+            spec_constants_cpy.push_back(state.p2); \
+            spec_constants_cpy.push_back(state.d0); \
+            spec_constants_cpy.push_back(state.d1); \
+            spec_constants_cpy.push_back(state.d2); \
+            spec_constants_cpy.push_back(state.KW); \
+            spec_constants_cpy.push_back(state.KH); \
+            spec_constants_cpy.push_back(state.KD); \
+            spec_constants_cpy.push_back(state.aligned); \
+            spec_constants_cpy.push_back(conv2d_csh_store); \
+            spec_constants_cpy.push_back(conv2d_WM); \
+            spec_constants_cpy.push_back(conv2d_WN); \
+            ggml_vk_create_pipeline( \
+                device, c.second, "conv3d" #type_suffix, \
+                conv3d##type_suffix##spv_suffix##_len, conv3d##type_suffix##spv_suffix##_data, "main", 3, \
+                sizeof(vk_op_conv3d_push_constants), wg_denoms, spec_constants_cpy, 1, true, conv2d_required_subgroup_size != 0, conv2d_required_subgroup_size); \
+        }
+#if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
+        if (device->coopmat2) {
+            CREATE_CONV3D(_f32, _cm2)
+            CREATE_CONV3D(_f16_f32, _cm2)
+        } else
+#endif
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+        if (conv2d_use_cm1) {
+            CREATE_CONV3D(_f32, _cm1)
+            CREATE_CONV3D(_f16_f32, _cm1)
+        } else
+#endif
+        if (conv2d_UNROLL) {
+            CREATE_CONV3D(_f32, _unroll)
+            CREATE_CONV3D(_f16_f32, _unroll)
+        } else {
+            CREATE_CONV3D(_f32, )
+            CREATE_CONV3D(_f16_f32, )
+        }
+#undef CREATE_CONV3D
     }
 
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f32, "conv2d_dw_whcn_f32", conv2d_dw_whcn_f32_len, conv2d_dw_whcn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
@@ -10901,6 +10999,61 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             }
         }
         return nullptr;
+    case GGML_OP_CONV_3D:
+        if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            const uint32_t OC = (uint32_t)ggml_get_op_params_i32(dst, 11);
+            const uint32_t IC = (uint32_t)ggml_get_op_params_i32(dst, 9);
+            const uint32_t N  = (uint32_t)ggml_get_op_params_i32(dst, 10);
+            const uint32_t NPQ = N * dst->ne[2] * dst->ne[1] * dst->ne[0];
+            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, OC, NPQ);
+
+            const uint32_t KW = (uint32_t)src0->ne[0];
+            const uint32_t KH = (uint32_t)src0->ne[1];
+            const uint32_t KD = (uint32_t)src0->ne[2];
+            const uint32_t s0 = (uint32_t)ggml_get_op_params_i32(dst, 0);
+            const uint32_t s1 = (uint32_t)ggml_get_op_params_i32(dst, 1);
+            const uint32_t s2 = (uint32_t)ggml_get_op_params_i32(dst, 2);
+            const uint32_t p0 = (uint32_t)ggml_get_op_params_i32(dst, 3);
+            const uint32_t p1 = (uint32_t)ggml_get_op_params_i32(dst, 4);
+            const uint32_t p2 = (uint32_t)ggml_get_op_params_i32(dst, 5);
+            const uint32_t d0 = (uint32_t)ggml_get_op_params_i32(dst, 6);
+            const uint32_t d1 = (uint32_t)ggml_get_op_params_i32(dst, 7);
+            const uint32_t d2 = (uint32_t)ggml_get_op_params_i32(dst, 8);
+
+            const uint32_t CRS = IC * KW * KH * KD;
+            const uint32_t BS_K   = vk_conv_block_sizes[shape].K;
+            const uint32_t BS_CRS = vk_conv_block_sizes[shape].CRS;
+            const uint32_t BS_NPQ = vk_conv_block_sizes[shape].NPQ;
+            const uint32_t aligned = ((OC  % BS_K   == 0) &&
+                                      (CRS % BS_CRS == 0) &&
+                                      (NPQ % BS_NPQ == 0)) ? 1u : 0u;
+
+            vk_conv3d_pipeline_state conv3d_pipeline_state(s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD, aligned);
+
+            std::map<vk_conv3d_pipeline_state, vk_pipeline> *pipelines = nullptr;
+            if (src0->type == GGML_TYPE_F32) {
+                pipelines = &ctx->device->pipeline_conv3d_f32[shape];
+            } else if (src0->type == GGML_TYPE_F16) {
+                pipelines = &ctx->device->pipeline_conv3d_f16_f32[shape];
+            } else {
+                return nullptr;
+            }
+
+            vk_pipeline pipeline = nullptr;
+
+            {
+                std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
+                auto it = pipelines->find(conv3d_pipeline_state);
+                if (it != pipelines->end()) {
+                    pipeline = it->second;
+                } else {
+                    (*pipelines)[conv3d_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
+                }
+            }
+
+            return pipeline;
+        }
+        return nullptr;
     case GGML_OP_ADD1:
         if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
             return ctx->device->pipeline_add1_f16_f16;
@@ -11234,6 +11387,21 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             }
         } else {
             GGML_ABORT("invalid push constant type for CONV_2D");
+        }
+        break;
+    case GGML_OP_CONV_3D:
+        if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
+            const uint32_t NPQ = pc.N * pc.OD * pc.OH * pc.OW;
+            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, pc.OC, NPQ);
+            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, vk_conv_block_sizes[shape].NPQ);
+
+            elements = { pc.OC, NPQ_blocks, 1 };
+            if (elements[1] > 512) {
+                elements[2] = CEIL_DIV(elements[1], 512);
+                elements[1] = 512;
+            }
+        } else {
+            GGML_ABORT("invalid push constant type for CONV_3D");
         }
         break;
     case GGML_OP_ADD:
@@ -13134,6 +13302,51 @@ static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context & subctx, 
     ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, nullptr, dst, dst->op, std::move(p));
 }
 
+static void ggml_vk_conv_3d(ggml_backend_vk_context * ctx, vk_context & subctx, const ggml_tensor * src0,
+                            const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+    GGML_ASSERT(nb00 == sizeof(float) || nb00 == sizeof(ggml_fp16_t));
+    GGML_ASSERT(nb10 == sizeof(float));
+    GGML_ASSERT(nb0 == sizeof(float));
+
+    vk_op_conv3d_push_constants p{};
+    p.IC = static_cast<uint32_t>(ggml_get_op_params_i32(dst, 9));
+    p.N  = static_cast<uint32_t>(ggml_get_op_params_i32(dst, 10));
+    p.OC = static_cast<uint32_t>(ggml_get_op_params_i32(dst, 11));
+    GGML_ASSERT(src0->ne[3] == (int64_t)p.IC * p.OC);
+    GGML_ASSERT(src1->ne[3] == (int64_t)p.IC * p.N);
+    GGML_ASSERT(dst->ne[3] == (int64_t)p.OC * p.N);
+
+    p.IW = static_cast<uint32_t>(ne10);
+    p.IH = static_cast<uint32_t>(ne11);
+    p.ID = static_cast<uint32_t>(ne12);
+    p.OW = static_cast<uint32_t>(ne0);
+    p.OH = static_cast<uint32_t>(ne1);
+    p.OD = static_cast<uint32_t>(ne2);
+
+    // the shader clamps src addresses to p.IC * p.N * p.IW * p.IH * p.ID - 1 in uint32, so the
+    // total input element count must fit in a uint32.
+    GGML_ASSERT((uint64_t)p.IC * p.N * p.IW * p.IH * p.ID <= 0xFFFFFFFFull);
+
+    p.nb01 = static_cast<uint32_t>(nb01 / nb00);
+    p.nb02 = static_cast<uint32_t>(nb02 / nb00);
+    p.nb03 = static_cast<uint32_t>(nb03 / nb00);
+
+    p.nb11 = static_cast<uint32_t>(nb11 / nb10);
+    p.nb12 = static_cast<uint32_t>(nb12 / nb10);
+    p.nb13 = static_cast<uint32_t>(nb13 / nb10);
+
+    p.nb1 = static_cast<uint32_t>(nb1 / nb0);
+    p.nb2 = static_cast<uint32_t>(nb2 / nb0);
+    p.nb3 = static_cast<uint32_t>(nb3 / nb0);
+
+    ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_CONV_3D, std::move(p));
+}
+
 static void ggml_vk_conv_2d_dw(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     vk_op_conv2d_dw_push_constants p{};
     p.ne = ggml_nelements(dst);
@@ -14530,6 +14743,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     case GGML_OP_CONV_2D:
     case GGML_OP_CONV_TRANSPOSE_2D:
         ggml_vk_conv_2d(ctx, compute_ctx, src0, src1, node);
+
+        break;
+    case GGML_OP_CONV_3D:
+        ggml_vk_conv_3d(ctx, compute_ctx, src0, src1, node);
 
         break;
     case GGML_OP_CONV_2D_DW:
@@ -17301,6 +17518,13 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     ggml_is_contiguous(op->src[1]) &&
                     ggml_is_contiguous(op));
             }
+        case GGML_OP_CONV_3D:
+            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                op->src[1]->type == GGML_TYPE_F32 &&
+                op->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op->src[1]) &&
+                ggml_is_contiguous(op);
         default:
             return false;
     }
@@ -18144,6 +18368,20 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             const int32_t d0 = tensor->op_params[4];
             const int32_t d1 = tensor->op_params[5];
             tensor_clone = ggml_conv_2d(ggml_ctx, src_clone[0], src_clone[1], s0, s1, p0, p1, d0, d1);
+        } else if (tensor->op == GGML_OP_CONV_3D) {
+            const int32_t s0 = tensor->op_params[0];
+            const int32_t s1 = tensor->op_params[1];
+            const int32_t s2 = tensor->op_params[2];
+            const int32_t p0 = tensor->op_params[3];
+            const int32_t p1 = tensor->op_params[4];
+            const int32_t p2 = tensor->op_params[5];
+            const int32_t d0 = tensor->op_params[6];
+            const int32_t d1 = tensor->op_params[7];
+            const int32_t d2 = tensor->op_params[8];
+            const int32_t IC = tensor->op_params[9];
+            const int32_t N  = tensor->op_params[10];
+            const int32_t OC = tensor->op_params[11];
+            tensor_clone = ggml_conv_3d_direct(ggml_ctx, src_clone[0], src_clone[1], s0, s1, s2, p0, p1, p2, d0, d1, d2, IC, N, OC);
         } else if (tensor->op == GGML_OP_CONV_2D_DW) {
             const int32_t s0 = tensor->op_params[0];
             const int32_t s1 = tensor->op_params[1];
