@@ -68,7 +68,8 @@ bool cli_context::init() {
 
     std::optional<view::spinner> spinner;
 
-    if (!params.server_base.empty()) {
+    bool use_external_server = !params.server_base.empty();
+    if (use_external_server) {
         std::string base = params.server_base;
         while (!base.empty() && base.back() == '/') {
             base.pop_back();
@@ -121,6 +122,15 @@ bool cli_context::init() {
         return false;
     }
 
+    if (use_external_server) {
+        spinner.reset();
+        if (!list_and_ask_models()) {
+            return false;
+        }
+        // restore the spinner for the next step
+        spinner.emplace("Waiting for server...");
+    }
+
     fetch_server_props();
 
     return true;
@@ -147,6 +157,44 @@ void cli_context::fetch_server_props() {
         // /props can be disabled on remote servers; not fatal
         LOG_DBG("failed to fetch /props: %s\n", e.what());
     }
+}
+
+bool cli_context::list_and_ask_models() {
+    auto models = client.list_models();
+    std::string message = "\nAvailable models:";
+    if (!models.empty()) {
+        for (size_t i = 0; i < models.size(); ++i) {
+            message += "\n  " + std::to_string(i + 1) + ". " + models[i];
+        }
+    }
+    message += "\n";
+    view::show_message(message);
+    std::string selection;
+    while (selection.empty()) {
+        if (should_stop()) {
+            return false;
+        }
+        view::user_turn user_turn;
+        selection = user_turn.read_input(false, "Select model by number: ");
+        if (selection.empty()) {
+            continue;
+        }
+        try {
+            size_t idx = std::stoul(selection);
+            if (idx > 0 && idx <= models.size()) {
+                model_name = models[idx - 1];
+                client.model = model_name;
+                view::show_message("Selected model: " + model_name);
+                break;
+            }
+        } catch (...) {
+            // ignore
+        }
+        view::show_error("Invalid selection. Please enter a valid number.");
+        selection.clear();
+        continue;
+    }
+    return true;
 }
 
 void cli_context::add_system_prompt() {

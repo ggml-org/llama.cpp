@@ -28,7 +28,8 @@ static std::string join_path(const common_http_url & parts, const std::string & 
 json cli_client::get(const std::string & path) {
     auto [cli, parts] = common_http_client(server_base);
     cli.set_read_timeout(CLI_HTTP_READ_TIMEOUT_SEC, 0);
-    auto res = cli.Get(join_path(parts, path));
+    auto path_with_model = path + (model.empty() ? "" : ("?model=" + model));
+    auto res = cli.Get(join_path(parts, path_with_model));
     if (!res) {
         throw std::runtime_error("failed to connect to " + server_base + ": " + httplib::to_string(res.error()));
     }
@@ -45,7 +46,11 @@ json cli_client::get(const std::string & path) {
 json cli_client::post(const std::string & path, const json & body) {
     auto [cli, parts] = common_http_client(server_base);
     cli.set_read_timeout(CLI_HTTP_READ_TIMEOUT_SEC, 0);
-    auto res = cli.Post(join_path(parts, path), body.dump(), "application/json");
+    auto body_with_model = body;
+    if (!model.empty()) {
+        body_with_model["model"] = model;
+    }
+    auto res = cli.Post(join_path(parts, path), body_with_model.dump(), "application/json");
     if (!res) {
         throw std::runtime_error("failed to connect to " + server_base + ": " + httplib::to_string(res.error()));
     }
@@ -100,7 +105,11 @@ json cli_client::post_sse(const std::string & path,
     };
 
     httplib::Headers headers = {{"Accept", "text/event-stream"}};
-    auto res = cli.Post(join_path(parts, path), headers, body.dump(), "application/json", receiver);
+    auto body_with_model = body;
+    if (!model.empty()) {
+        body_with_model["model"] = model;
+    }
+    auto res = cli.Post(join_path(parts, path), headers, body_with_model.dump(), "application/json", receiver);
 
     if (!res) {
         if (res.error() == httplib::Error::Canceled && should_stop()) {
@@ -138,4 +147,18 @@ bool cli_client::wait_health(const std::function<bool()> & is_aborted) {
     }
     last_error = "aborted while waiting for the server to become ready";
     return false;
+}
+
+std::vector<std::string> cli_client::list_models() {
+    json resp = get("/v1/models");
+    if (!resp.contains("data") || !resp.at("data").is_array()) {
+        throw std::runtime_error("invalid response from /v1/models");
+    }
+    std::vector<std::string> models;
+    for (const auto & m : resp.at("data")) {
+        if (m.contains("id") && m.at("id").is_string()) {
+            models.push_back(m.at("id").get<std::string>());
+        }
+    }
+    return models;
 }

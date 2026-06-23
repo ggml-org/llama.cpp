@@ -15,6 +15,8 @@ struct cli_client {
     std::string server_base; // base url, for example "http://127.0.0.1:8080"
     std::string last_error;  // set when wait_health() fails
 
+    std::string model; // optional, set when the server has multiple models (router mode)
+
     // simple GET request, returns the response json
     // throws std::runtime_error on transport error or non-2xx status
     json get(const std::string & path);
@@ -49,4 +51,6 @@ struct cli_client {
     json get_props() {
         return get("/props");
     }
+
+    std::vector<std::string> list_models();
 };

@@ -52,6 +52,10 @@ private:
     void add_system_prompt();
     void push_user_message(const std::string & text);
 
+    // check if server have multiple models (router mode)
+    // if yes, list them then ask; do nothing otherwise
+    bool list_and_ask_models();
+
     // read a file and stage it as a multimodal content part; type is one of
     // "image", "audio", "video"; returns false if the file cannot be read
     bool stage_media_file(const std::string & fname, const std::string & type);

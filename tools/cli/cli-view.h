@@ -162,8 +162,12 @@ namespace view {
                 console::log("\n> %s\n", buffer.c_str());
             }
         }
-        std::string read_input(bool multiline_input) {
-            console::log("\n> ");
+        std::string read_input(bool multiline_input, const char * prompt = nullptr) {
+            if (prompt) {
+                console::log("%s", prompt);
+            } else {
+                console::log("\n> ");
+            }
             std::string buffer;
             std::string line;
             bool another_line = true;
