@@ -161,6 +161,14 @@ void cli_context::fetch_server_props() {
 
 bool cli_context::list_and_ask_models() {
     auto models = client.list_models();
+
+    // only one model: use it without asking
+    if (models.size() == 1) {
+        model_name = models[0];
+        client.model = model_name;
+        return true;
+    }
+
     std::string message = "\nAvailable models:";
     if (!models.empty()) {
         for (size_t i = 0; i < models.size(); ++i) {
