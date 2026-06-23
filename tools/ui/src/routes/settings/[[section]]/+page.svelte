@@ -4,6 +4,7 @@
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import { RouterService } from '$lib/services';
 	import { SETTINGS_SECTION_SLUGS } from '$lib/constants';
+
 	afterNavigate(() => {
 		if (!page.params.section) {
 			replaceState(RouterService.settings(SETTINGS_SECTION_SLUGS.GENERAL), {});

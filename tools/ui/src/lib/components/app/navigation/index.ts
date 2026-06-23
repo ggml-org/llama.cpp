@@ -107,13 +107,6 @@ export { default as DropdownMenuActions } from './DropdownMenuActions.svelte';
 export { default as SidebarNavigation } from './SidebarNavigation/SidebarNavigation.svelte';
 
 /**
- * Action buttons for sidebar header. Contains new chat button, settings button,
- * and delete all conversations button. Manages dialog states for settings and
- * delete confirmation.
- */
-// export { default as SidebarNavigationActions } from './SidebarNavigation/SidebarNavigationActions.svelte';
-
-/**
  * Single conversation item in sidebar. Displays conversation title (truncated),
  * last message preview, and timestamp. Shows context menu on right-click with
  * rename and delete options. Highlights when active (matches current route).
