@@ -261,6 +261,17 @@ static void llama_log_softmax(float * array, size_t size) {
 }
 */
 
+static float llama_sampler_find_max_logit(const llama_token_data_array * cur_p)
+{
+    float max_l = cur_p->data[0].logit;
+    if (!cur_p->sorted) {
+        for (size_t i = 1; i < cur_p->size; ++i) {
+            max_l = std::max(max_l, cur_p->data[i].logit);
+        }
+    }
+    return max_l;
+}
+
 static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) {
     if (temp <= 0.0f) {
         // find the token with the highest logit and set the rest to -inf
@@ -280,8 +291,9 @@ static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) 
         return;
     }
 
+    const float inv_temp = 1.0f / temp;
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].logit /= temp;
+        cur_p->data[i].logit *= inv_temp;
     }
 }
 
@@ -293,12 +305,7 @@ static void llama_sampler_softmax_impl(llama_token_data_array * cur_p, bool do_s
         llama_token_data_array_partial_sort_inplace(cur_p, cur_p->size);
     }
 
-    float max_l = cur_p->data[0].logit;
-    if (!cur_p->sorted) {
-        for (size_t i = 1; i < cur_p->size; ++i) {
-            max_l = std::max(max_l, cur_p->data[i].logit);
-        }
-    }
+    const float max_l = llama_sampler_find_max_logit(cur_p);
 
     float cum_sum = 0.0f;
 
@@ -308,8 +315,9 @@ static void llama_sampler_softmax_impl(llama_token_data_array * cur_p, bool do_s
         cum_sum += p;
     }
 
+    const float inv_cum_sum = 1.0f / cum_sum;
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].p /= cum_sum;
+        cur_p->data[i].p *= inv_cum_sum;
     }
 }
 
@@ -1049,12 +1057,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     }
 
     // max logit for numerical stability
-    float max_l = cur_p->data[0].logit;
-    if (!cur_p->sorted) {
-        for (size_t i = 1; i < cur_p->size; ++i) {
-            max_l = std::max(max_l, cur_p->data[i].logit);
-        }
-    }
+    const float max_l = llama_sampler_find_max_logit(cur_p);
 
     // apply softmax to obtain the probabilities
     double sum_cum = 0.0;
@@ -1074,6 +1077,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
           double sum_run = 0.0;
     const double sum_tgt = sum_cum*rnd;
 
+    const float inv_sum_cum = static_cast<float>(1.0/sum_cum);
     bool found = false;
     for (size_t i = 0; i < cur_p->size; ++i) {
         if (!found) {
@@ -1086,7 +1090,7 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
         }
 
         // normalize probs
-        cur_p->data[i].p /= sum_cum;
+        cur_p->data[i].p *= inv_sum_cum;
     }
 
     // fallback to the last token (don't think this can happen)
@@ -1096,8 +1100,9 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     }
 #else
     // for clarity, this is the same as above but does one pass for normalization and one extra pass for sampling
+    const float inv_sum_cum = static_cast<float>(1.0/sum_cum);
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].p /= sum_cum;
+        cur_p->data[i].p *= inv_sum_cum;
     }
 
     cur_p->selected = llama_sample_dist(cur_p, ctx->rng);
@@ -2801,14 +2806,16 @@ static void llama_sampler_top_n_sigma_apply(struct llama_sampler * smpl, llama_t
     for (size_t i = 0; i < cur_p->size; ++i) {
         // Skip -infinity in std calculation
         if (cur_p->data[i].logit != -INFINITY) {
-            acc += pow(cur_p->data[i].logit - mean, 2);
+            const float diff = cur_p->data[i].logit - mean;
+            acc += diff * diff;
         }
     }
-    float std = valid_count > 0 ? sqrt(acc/valid_count) : 0;
+    float std = valid_count > 0 ? sqrtf(acc/valid_count) : 0;
 
     // apply mask
+    const float threshold = max - (ctx->n * std);
     for (size_t i = 0; i < cur_p->size; ++i) {
-        if (cur_p->data[i].logit < max - (ctx->n * std)) {
+        if (cur_p->data[i].logit < threshold) {
             cur_p->data[i].logit = -INFINITY;
         }
     }
