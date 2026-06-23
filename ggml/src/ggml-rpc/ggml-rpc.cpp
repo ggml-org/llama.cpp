@@ -71,8 +71,8 @@ enum rpc_cmd {
     RPC_CMD_HELLO,
     RPC_CMD_DEVICE_COUNT,
     RPC_CMD_GRAPH_RECOMPUTE,
-    // Optional since RPC protocol 4.0.1. New clients only send it after the
-    // server advertises patch >= 1 so that old 4.0.0 servers keep working.
+    // Optional since RPC protocol 4.0.2. New clients only send it after the
+    // server advertises patch >= 2 so that older servers keep working.
     RPC_CMD_GET_DEVICE_SUPPORTS_OP,
     RPC_CMD_COUNT,
 };
@@ -333,7 +333,7 @@ static bool rpc_endpoint_has_op_support_query(const std::string & endpoint) {
     return it != versions.end() &&
         it->second.major == RPC_PROTO_MAJOR_VERSION &&
         it->second.minor == RPC_PROTO_MINOR_VERSION &&
-        it->second.patch >= 1;
+        it->second.patch >= 2;
 }
 
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |

@@ -10,7 +10,10 @@ import {
 	SETTINGS_KEYS,
 	API_CHAT,
 	API_SLOTS,
-	CONTROL_ACTION
+	CONTROL_ACTION,
+	SSE_LINE_SEPARATOR,
+	SSE_DATA_PREFIX,
+	SSE_DONE_MARKER
 } from '$lib/constants';
 import {
 	AttachmentType,
@@ -18,8 +21,7 @@ import {
 	FileTypeAudio,
 	MessageRole,
 	MimeTypeAudio,
-	ReasoningFormat,
-	UrlProtocol
+	ReasoningFormat
 } from '$lib/enums';
 import type {
 	ApiChatMessageContentPart,
@@ -34,7 +36,6 @@ import type {
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '../stores/settings.svelte';
 import { capImageDataURLSize } from '../utils/cap-img-size';
-import { MEGAPIXELS_TO_PIXELS } from '$lib/constants/image-size';
 
 function getAudioInputFormat(mimeType: string): AudioInputFormat {
 	const normalizedMimeType = mimeType.trim().toLowerCase();
@@ -643,15 +644,15 @@ export class ChatService {
 				if (abortSignal?.aborted) break;
 
 				chunk += decoder.decode(value, { stream: true });
-				const lines = chunk.split('\n');
+				const lines = chunk.split(SSE_LINE_SEPARATOR);
 				chunk = lines.pop() || '';
 
 				for (const line of lines) {
 					if (abortSignal?.aborted) break;
 
-					if (line.startsWith(UrlProtocol.DATA)) {
-						const data = line.slice(6);
-						if (data === '[DONE]') {
+					if (line.startsWith(SSE_DATA_PREFIX)) {
+						const data = line.slice(SSE_DATA_PREFIX.length).trim();
+						if (data === SSE_DONE_MARKER) {
 							streamFinished = true;
 
 							continue;
@@ -961,10 +962,11 @@ export class ChatService {
 
 		for (const image of imageFiles) {
 			const maxImageResolution = settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION);
-			let base64Url = image.base64Url;
-			if (maxImageResolution > 1 / MEGAPIXELS_TO_PIXELS) {
-				base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
-			}
+
+			// Caps the resolution and bakes the jpeg exif orientation in one pass,
+			// untouched images pass through as is
+			const base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
+
 			contentParts.push({
 				type: ContentPartType.IMAGE_URL,
 				image_url: { url: base64Url }

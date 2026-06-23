@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Trash2, Pencil, X } from '@lucide/svelte';
+	import { Trash2, Pencil, Pin, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { DialogConfirmation } from '$lib/components/app';
 	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
@@ -51,6 +51,14 @@
 	});
 
 	let conversationTree = $derived(buildConversationTree(filteredConversations));
+
+	let pinnedConversations = $derived.by(() => {
+		return conversationTree.filter(({ conversation }) => conversation.pinned);
+	});
+
+	let unpinnedConversations = $derived.by(() => {
+		return conversationTree.filter(({ conversation }) => !conversation.pinned);
+	});
 
 	let selectedConversationHasDescendants = $derived.by(() => {
 		if (!selectedConversation) return false;
@@ -199,6 +207,41 @@
 			/>
 		</Sidebar.Header>
 
+		{#if !isSearchModeActive && pinnedConversations.length > 0}
+			<Sidebar.Group class="p-0 px-4">
+				<Sidebar.GroupLabel>
+					<div class="flex items-center gap-1">
+						<Pin class="h-3.5 w-3.5" />
+						<span>Pinned</span>
+					</div>
+				</Sidebar.GroupLabel>
+				<Sidebar.GroupContent>
+					<Sidebar.Menu>
+						{#each pinnedConversations as { conversation, depth } (conversation.id)}
+							<Sidebar.MenuItem class="mb-1 p-0">
+								<SidebarNavigationConversationItem
+									conversation={{
+										id: conversation.id,
+										name: conversation.name,
+										lastModified: conversation.lastModified,
+										currNode: conversation.currNode,
+										forkedFromConversationId: conversation.forkedFromConversationId,
+										pinned: conversation.pinned
+									}}
+									{depth}
+									isActive={currentChatId === conversation.id}
+									onSelect={selectConversation}
+									onEdit={handleEditConversation}
+									onDelete={handleDeleteConversation}
+									onStop={handleStopGeneration}
+								/>
+							</Sidebar.MenuItem>
+						{/each}
+					</Sidebar.Menu>
+				</Sidebar.GroupContent>
+			</Sidebar.Group>
+		{/if}
+
 		<Sidebar.Group class="mt-2 h-[calc(100vh-21rem)] space-y-2 p-0 px-3">
 			{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
 				<Sidebar.GroupLabel>
@@ -208,7 +251,7 @@
 
 			<Sidebar.GroupContent>
 				<Sidebar.Menu>
-					{#each conversationTree as { conversation, depth } (conversation.id)}
+					{#each isSearchModeActive ? conversationTree : unpinnedConversations as { conversation, depth } (conversation.id)}
 						<Sidebar.MenuItem class="mb-1 p-0">
 							<SidebarNavigationConversationItem
 								conversation={{
@@ -216,7 +259,8 @@
 									name: conversation.name,
 									lastModified: conversation.lastModified,
 									currNode: conversation.currNode,
-									forkedFromConversationId: conversation.forkedFromConversationId
+									forkedFromConversationId: conversation.forkedFromConversationId,
+									pinned: conversation.pinned
 								}}
 								{depth}
 								isActive={currentChatId === conversation.id}
@@ -228,7 +272,7 @@
 						</Sidebar.MenuItem>
 					{/each}
 
-					{#if conversationTree.length === 0}
+					{#if (isSearchModeActive ? conversationTree : unpinnedConversations).length === 0}
 						<div class="px-2 py-4 text-center">
 							<p class="mb-4 p-4 text-sm text-muted-foreground">
 								{searchQuery.length > 0

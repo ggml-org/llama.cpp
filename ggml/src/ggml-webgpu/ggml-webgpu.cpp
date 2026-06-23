@@ -1245,7 +1245,7 @@ static webgpu_encoded_op ggml_webgpu_gated_delta_net(webgpu_context & ctx,
     const uint32_t h        = (uint32_t) src2->ne[1];
     const uint32_t n_tokens = (uint32_t) src2->ne[2];
     const uint32_t n_seqs   = (uint32_t) src2->ne[3];
-    const uint32_t K        = (uint32_t) src5->ne[1];
+    const uint32_t K        = (uint32_t) ggml_get_op_params_i32(dst, 0);
     const float    scale    = 1.0f / sqrtf((float) s_v);
     uint32_t       scale_u32;
     memcpy(&scale_u32, &scale, sizeof(scale_u32));
@@ -3788,7 +3788,7 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_global_context & ctx) {
     ctx->memset_pipeline = ggml_webgpu_create_pipeline(ctx->device, wgsl_memset, "memset", constants);
 }
 
-static void create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
+static void ggml_backend_webgpu_request_adapter(wgpu::Instance & instance, wgpu::Adapter & adapter) {
     wgpu::RequestAdapterOptions options = {};
 
 #ifndef __EMSCRIPTEN__
@@ -3800,17 +3800,20 @@ static void create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
     options.nextInChain                   = &adapterTogglesDesc;
 #endif
 
-    ctx->webgpu_global_ctx->instance.WaitAny(
-        ctx->webgpu_global_ctx->instance.RequestAdapter(
-            &options, wgpu::CallbackMode::AllowSpontaneous,
-            [&ctx](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char * message) {
-                if (status != wgpu::RequestAdapterStatus::Success) {
-                    GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
-                    return;
-                }
-                ctx->webgpu_global_ctx->adapter = std::move(adapter);
-            }),
-        UINT64_MAX);
+    instance.WaitAny(instance.RequestAdapter(
+                         &options, wgpu::CallbackMode::AllowSpontaneous,
+                         [&adapter](wgpu::RequestAdapterStatus status, wgpu::Adapter _adapter, const char * message) {
+                             if (status != wgpu::RequestAdapterStatus::Success) {
+                                 GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
+                                 return;
+                             }
+                             adapter = std::move(_adapter);
+                         }),
+                     UINT64_MAX);
+}
+
+static void create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
+    ggml_backend_webgpu_request_adapter(ctx->webgpu_global_ctx->instance, ctx->webgpu_global_ctx->adapter);
     GGML_ASSERT(ctx->webgpu_global_ctx->adapter != nullptr);
 
     ctx->webgpu_global_ctx->adapter.GetLimits(&ctx->webgpu_global_ctx->capabilities.limits);
@@ -4253,9 +4256,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 const uint32_t q_tile =
                     use_subgroup_matrix ? capabilities.sg_mat_m : GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE;
                 const uint32_t kv_granularity = use_subgroup_matrix ? capabilities.sg_mat_n : 1u;
-                const bool     kv_direct = use_subgroup_matrix ?
-                                               ggml_webgpu_flash_attn_kv_direct(src0, src1, src2, capabilities.sg_mat_k) :
-                                               false;
+                const bool kv_direct = use_subgroup_matrix ?
+                                           ggml_webgpu_flash_attn_kv_direct(src0, src1, src2, capabilities.sg_mat_k) :
+                                           false;
                 const uint32_t max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(
                     capabilities.limits.maxComputeWorkgroupStorageSize, q_tile, kv_granularity, (uint32_t) src0->ne[0],
                     (uint32_t) src2->ne[0], op->src[3] != nullptr, kv_direct);
@@ -4543,20 +4546,7 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
     // Probe for adapter support
     wgpu::Adapter adapter;
     if (ctx->webgpu_global_ctx->instance != nullptr) {
-        wgpu::RequestAdapterOptions options = {};
-
-        // probe for adapter support
-        ctx->webgpu_global_ctx->instance.WaitAny(
-            ctx->webgpu_global_ctx->instance.RequestAdapter(
-                &options, wgpu::CallbackMode::AllowSpontaneous,
-                [&adapter](wgpu::RequestAdapterStatus status, wgpu::Adapter _adapter, const char * message) {
-                    if (status != wgpu::RequestAdapterStatus::Success) {
-                        GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
-                        return;
-                    }
-                    adapter = std::move(_adapter);
-                }),
-            UINT64_MAX);
+        ggml_backend_webgpu_request_adapter(ctx->webgpu_global_ctx->instance, adapter);
     }
 
     // WebGPU backend requires f16 support and, on native, implicit device synchronization.

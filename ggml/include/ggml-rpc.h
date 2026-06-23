@@ -8,11 +8,11 @@ extern "C" {
 
 #define RPC_PROTO_MAJOR_VERSION    4
 #define RPC_PROTO_MINOR_VERSION    0
-// 4.0.1 adds an optional remote supports_op query command.
-#define RPC_PROTO_PATCH_VERSION    1
+// 4.0.2 adds an optional remote supports_op query command.
+#define RPC_PROTO_PATCH_VERSION    2
 
 #ifdef  __cplusplus
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
 #endif
 
 #define GGML_RPC_MAX_SERVERS       16

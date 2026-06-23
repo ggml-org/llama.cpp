@@ -339,6 +339,9 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
     if (ir0 >= ir1) return;
 
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
+
     dma_queue * dma = octx->ctx->dma[ith];
 
     const uint32_t DK = nek0;
@@ -615,6 +618,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             hvx_copy_f16_f32_ua(dst_ptr, (uint8_t *) VKQ32, DV);
         }
     }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
 }
 
 int op_flash_attn_ext(struct htp_ops_context * octx) {
