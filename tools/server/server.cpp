@@ -290,7 +290,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
         return child.run_download(params);
     } else if (!is_router_server && !is_run_by_cli) {
         // single-model mode (NOT spawned by router)
-        // if this is invoked by CLI, model downloading should already handled
+        // if this is invoked by CLI, model downloading should be already handled
         common_params_handle_models(params, LLAMA_EXAMPLE_SERVER, {});
     }
 
@@ -373,7 +373,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
         };
     }
 
-    // register signal handler is not running by CLI
+    // register signal handler if not running by CLI
     if (!is_run_by_cli) {
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
         struct sigaction sigint_action;
