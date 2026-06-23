@@ -9,6 +9,8 @@
 	<ActionIcon
 		icon={ArrowDown}
 		{onclick}
+		ariaLabel="Scroll to bottom"
+		tooltip="Scroll to bottom"
 		size="lg"
 		iconSize="h-4 w-4"
 		class="h-9 w-9 rounded-full bg-accent text-accent-foreground absolute bottom-4 shadow-md"
