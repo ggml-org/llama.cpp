@@ -905,11 +905,12 @@ struct ggml_webgpu_mul_mat_vec_pipeline_key {
     ggml_type src0_type;
     ggml_type src1_type;
     int       vectorized;
+    uint32_t  num_cols;
     bool      use_mmvq;
 
     bool operator==(const ggml_webgpu_mul_mat_vec_pipeline_key & other) const {
         return src0_type == other.src0_type && src1_type == other.src1_type && vectorized == other.vectorized &&
-               use_mmvq == other.use_mmvq;
+               num_cols == other.num_cols && use_mmvq == other.use_mmvq;
     }
 };
 
@@ -919,6 +920,7 @@ struct ggml_webgpu_mul_mat_vec_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.src0_type);
         ggml_webgpu_hash_combine(seed, key.src1_type);
         ggml_webgpu_hash_combine(seed, key.vectorized);
+        ggml_webgpu_hash_combine(seed, key.num_cols);
         ggml_webgpu_hash_combine(seed, key.use_mmvq);
         return seed;
     }
@@ -993,11 +995,12 @@ struct ggml_webgpu_mul_mat_id_pipeline_key {
     ggml_type src0_type;
     ggml_type src1_type;
     uint32_t  n_experts;
+    uint32_t  num_cols;
     int       vectorized;
 
     bool operator==(const ggml_webgpu_mul_mat_id_pipeline_key & other) const {
         return src0_type == other.src0_type && src1_type == other.src1_type && n_experts == other.n_experts &&
-               vectorized == other.vectorized;
+               num_cols == other.num_cols && vectorized == other.vectorized;
     }
 };
 
@@ -1007,6 +1010,7 @@ struct ggml_webgpu_mul_mat_id_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.src0_type);
         ggml_webgpu_hash_combine(seed, key.src1_type);
         ggml_webgpu_hash_combine(seed, key.n_experts);
+        ggml_webgpu_hash_combine(seed, key.num_cols);
         ggml_webgpu_hash_combine(seed, key.vectorized);
         return seed;
     }
@@ -1107,7 +1111,7 @@ inline bool ggml_webgpu_can_use_mmvq(const ggml_tensor * src0,
                                      const ggml_tensor * src1,
                                      bool                supports_dot_product,
                                      const std::string & vendor) {
-    if (src1->ne[1] == 1) {
+    if (src1->ne[1] <= 4) {
         bool supports_dp4a = vendor == "amd" || vendor == "intel" || vendor == "nvidia";
         if (supports_dp4a && supports_dot_product) {
             switch (src1->type) {
@@ -1889,6 +1893,7 @@ class ggml_webgpu_shader_lib {
                           (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
                              1 :
                              0;
+        key.num_cols   = context.dst->ne[1];
         key.use_mmvq =
             ggml_webgpu_can_use_mmvq(context.src0, context.src1, context.supports_dot_product, context.vendor);
 
@@ -2004,6 +2009,7 @@ class ggml_webgpu_shader_lib {
         if (key.vectorized) {
             variant += "_vectorized";
         }
+        defines.push_back(std::string("NUM_COLS=") + std::to_string(key.num_cols));
 
         auto processed            = preprocessor.preprocess(shader_src, defines);
         auto decisions            = std::make_shared<ggml_webgpu_mul_mat_vec_shader_decisions>();
@@ -2421,6 +2427,7 @@ class ggml_webgpu_shader_lib {
         if (key.vectorized) {
             variant += "_vectorized";
         }
+        defines.push_back(std::string("NUM_COLS=1"));
 
         defines.push_back(std::string("N_EXPERTS=") + std::to_string(key.n_experts));
 
