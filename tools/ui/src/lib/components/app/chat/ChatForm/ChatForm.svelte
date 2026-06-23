@@ -494,7 +494,7 @@
 	/>
 
 	<div
-		class="{INPUT_CLASSES} overflow-hidden rounded-3xl backdrop-blur-md {disabled
+		class="{INPUT_CLASSES} overflow-hidden rounded-4xl md:rounded-3xl backdrop-blur-md {disabled
 			? 'cursor-not-allowed opacity-60'
 			: ''}"
 		data-slot="input-area"
