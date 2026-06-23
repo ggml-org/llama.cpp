@@ -54,13 +54,14 @@ static int    opt_arch    = 0; // autodetect
 static size_t opt_ndev    = 1;
 static size_t opt_nhvx    = 0; // use all
 static int    opt_nhmx    = 1; // when set, enable HMX; when 0, use HVX only
-static int    opt_mm_select = 3; // 3 = HMX -> Tiled -> Flat -> CPU, 2 = Tiled -> Flat -> CPU, 1 = Flat -> CPU
 static size_t opt_vmem    = HTP_OP_MAX_VMEM_DEFAULT;  // max available va space for buffer mappings
 static size_t opt_mbuf    = 1ul * 1024 * 1024 * 1024; // max buffer size
 static int    opt_etm     = 0;
 static int    opt_verbose = 0;
 static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
 static int    opt_hostbuf = 1; // hostbuf ON by default
+
+static int    opt_mm_select = 3; // 3 = HMX -> Tiled -> Flat -> CPU, 2 = Tiled -> Flat -> CPU, 1 = Flat -> CPU
 
 // Default PMU events, if profiling with PMU (mode=2) is enabled
 // See https://docs.qualcomm.com/doc/80-N2040-60/topic/pmu-events.html
@@ -369,7 +370,7 @@ static enum ggml_status ggml_backend_hexagon_buffer_init_tensor(ggml_backend_buf
     return GGML_STATUS_SUCCESS;
 }
 
-// ======== Q4_0_TILED ====================
+// ** Repack helpers for tiled quantized weights
 
 static void unpack_q4_0_quants(uint8_t * qs, const block_q4_0 * x, unsigned int bi) {
     static const int qk = QK4_0;
@@ -582,10 +583,10 @@ static void repack_q4_1_tiled(ggml_tensor * t, const void * data, size_t size) {
                     for (int row = 0; row < 32; row++) {
                         int64_t r = ct * 32 + row;
                         if (r < ne1 && kt < ne0 / 32) {
-                            scale_dst[2 * row]     = src_expert[r * (ne0 / 32) + kt].d;
+                            scale_dst[2 * row + 0] = src_expert[r * (ne0 / 32) + kt].d;
                             scale_dst[2 * row + 1] = src_expert[r * (ne0 / 32) + kt].m;
                         } else {
-                            scale_dst[2 * row]     = 0;
+                            scale_dst[2 * row + 0] = 0;
                             scale_dst[2 * row + 1] = 0;
                         }
                     }
@@ -2392,10 +2393,10 @@ static void ggml_hexagon_precompute_matmul_params(
     const bool is_repack = ggml_hexagon_is_repack_type((ggml_type) wtype);
     const int ne00_padded = is_repack ? hex_round_up(ne00, 32) : ne00;
     const int ne01_padded = is_repack ? hex_round_up(ne01, 32) : ne01;
-    const int ne11_padded = hex_align_up(ne11, 32);
+    const int ne11_padded = hex_round_up(ne11, 32);
 
     const bool is_matmul_id = (dst->op == GGML_OP_MUL_MAT_ID);
-    const bool is_batched = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
+    const bool is_batched   = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
 
     const size_t vtcm_budget = sess->vtcm_size;
 
