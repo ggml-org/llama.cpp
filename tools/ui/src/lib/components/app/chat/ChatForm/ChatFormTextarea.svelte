@@ -52,6 +52,7 @@
 
 <div class="flex-1 {className}">
 	<textarea
+		autofocus
 		bind:this={textareaElement}
 		bind:value
 		class={[
