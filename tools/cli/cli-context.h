@@ -35,6 +35,9 @@ struct cli_context {
     bool has_video  = false;
 
     cli_context(const common_params & params) : params(params) {}
+    ~cli_context() {
+        shutdown();
+    }
 
     // connect to --server-base or spawn a local llama-server child;
     // argc/argv are needed to forward the server-relevant args to the child
