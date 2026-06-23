@@ -330,6 +330,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
     }
 }
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 // ============================================================================
 // SSD (State Space Duality) kernels for Mamba-2 prefill (n_tok > SSM_SSD_MIN_TOKENS)
 //
@@ -750,6 +751,7 @@ static void ssm_scan_ssd_f32_cuda(
         }
     }
 }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];  // s
@@ -792,6 +794,7 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src6->type == GGML_TYPE_I32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     // Mamba-2 with scalar A per head: use SSD matmul path for long sequences.
     // Requires NVIDIA Turing+ otherwise fallback to scan.
     const bool is_mamba2 = (src3->nb[1] == sizeof(float));
@@ -813,10 +816,11 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             src4->nb[2] / sizeof(float), src4->nb[3] / sizeof(float),
             src5->nb[2] / sizeof(float), src5->nb[3] / sizeof(float),
             s_off, nc, nr, nh, ng, n_t, n_s);
-    } else {
-        ssm_scan_f32_cuda(src0_d, src1_d, src2_d, src3_d, src4_d, src5_d, src6_d, dst_d,
-                          src0->nb[2], src0->nb[3], src1->nb[2], src1->nb[3], src2->nb[1], src2->nb[2],
-                          src3->nb[1], src4->nb[2], src4->nb[3], src5->nb[2], src5->nb[3],
-                          s_off, nc, nr, nh, ng, n_t, n_s, stream);
+        return;
     }
+#endif
+    ssm_scan_f32_cuda(src0_d, src1_d, src2_d, src3_d, src4_d, src5_d, src6_d, dst_d,
+                      src0->nb[2], src0->nb[3], src1->nb[2], src1->nb[3], src2->nb[1], src2->nb[2],
+                      src3->nb[1], src4->nb[2], src4->nb[3], src5->nb[2], src5->nb[3],
+                      s_off, nc, nr, nh, ng, n_t, n_s, stream);
 }
