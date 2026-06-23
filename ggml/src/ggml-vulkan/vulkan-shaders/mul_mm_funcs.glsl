@@ -3,7 +3,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 #if LOAD_VEC_A == 8
             if (ALIGNED != 0) {
                 const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-                const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+                uint buf_idx;
+                if (!APPLY_SLM_A_RESHAPE) {
+                    buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+                } else {
+                    const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
+                    const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
+                    buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
+                }
                 FLOAT_TYPEV8 aa = FLOAT_TYPEV8(data_a[idx]);
                 buf_a[buf_idx    ] = aa[0].xy;
                 buf_a[buf_idx + 1] = aa[0].zw;
@@ -11,48 +18,32 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
                 buf_a[buf_idx + 3] = aa[1].zw;
                 return;
             }
-            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-#ifndef LOAD_A_OPT
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
-#else
-            const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
-            const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
-            const uint buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
-#endif
-            FLOAT_TYPEV8 aa = FLOAT_TYPEV8(data_a[idx]);
-            buf_a[buf_idx    ] = aa[0].xy;
-            buf_a[buf_idx + 1] = aa[0].zw;
-            buf_a[buf_idx + 2] = aa[1].xy;
-            buf_a[buf_idx + 3] = aa[1].zw;
 #elif LOAD_VEC_A == 4
             if (ALIGNED != 0) {
                 const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-                const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+                uint buf_idx;
+                if (!APPLY_SLM_A_RESHAPE) {
+                    buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+                } else {
+                    const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
+                    const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
+                    buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
+                }
                 FLOAT_TYPEV4 aa = FLOAT_TYPEV4(data_a[idx]);
                 buf_a[buf_idx    ] = aa.xy;
                 buf_a[buf_idx + 1] = aa.zw;
                 return;
             }
-            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-#ifndef LOAD_A_OPT
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
-#else
-            const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
-            const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
-            const uint buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
 #endif
-            FLOAT_TYPEV4 aa = FLOAT_TYPEV4(data_a[idx]);
-            buf_a[buf_idx    ] = aa.xy;
-            buf_a[buf_idx + 1] = aa.zw;
-#else // LOAD_VEC_BATCH_A == 2
             const uint idx = pos_a + col * p.stride_a + row * 2;
-#ifndef LOAD_A_OPT
-            const uint buf_idx = col * SHMEM_STRIDE + row;
-#else
-            const uint buf_idx_outer = (row) / (TK / 2);
-            const uint buf_idx_inner = (row) % (TK / 2);
-            const uint buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner;
-#endif
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row;
+            } else {
+                const uint buf_idx_outer = row / (TK / 2);
+                const uint buf_idx_inner = row % (TK / 2);
+                buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner;
+            }
             if (idx_m < p.M && block + row * 2 + 1 < end_k) {
                 buf_a[buf_idx] = FLOAT_TYPEV2(data_a_scalar[idx],
                                               data_a_scalar[idx + 1]);
@@ -65,7 +56,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 #if LOAD_VEC_A == 4
             if (ALIGNED != 0) {
                 const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-                const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+                uint buf_idx;
+                if (!APPLY_SLM_A_RESHAPE) {
+                    buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+                } else {
+                    const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
+                    const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
+                    buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
+                }
                 FLOAT_TYPEV4 aa = FLOAT_TYPEV4(TO_FLOAT_TYPE(data_a[idx]));
                 buf_a[buf_idx    ] = aa.xy;
                 buf_a[buf_idx + 1] = aa.zw;
@@ -73,7 +71,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             }
 #endif
             const uint idx = pos_a + col * p.stride_a + row * 2;
-            const uint buf_idx = col * SHMEM_STRIDE + row;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row;
+            } else {
+                const uint outer = row / (TK / 2);
+                const uint inner = row % (TK / 2);
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner;
+            }
             if (idx_m < p.M && block + row * 2 + 1 < end_k) {
                 buf_a[buf_idx] = FLOAT_TYPEV2(TO_FLOAT_TYPE(data_a_scalar[idx]),
                                               TO_FLOAT_TYPE(data_a_scalar[idx + 1]));
@@ -84,7 +89,6 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             }
 #elif defined(DATA_A_Q4_0)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 4;
 
             const uint ib = idx / 4;
             const uint iqs = idx & 0x03;
@@ -94,13 +98,24 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const vec4 v0 = (vec4(unpack8(vui & 0x0F0F0F0F)) - 8.0f) * d;
             const vec4 v1 = (vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) - 8.0f) * d;
 
-            buf_a[buf_idx    ] = FLOAT_TYPEV2(v0.xy);
-            buf_a[buf_idx + 1] = FLOAT_TYPEV2(v0.zw);
-            buf_a[buf_idx + 8] = FLOAT_TYPEV2(v1.xy);
-            buf_a[buf_idx + 9] = FLOAT_TYPEV2(v1.zw);
+            if (!APPLY_SLM_A_RESHAPE) {
+                const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 4;
+                buf_a[buf_idx    ] = FLOAT_TYPEV2(v0.xy);
+                buf_a[buf_idx + 1] = FLOAT_TYPEV2(v0.zw);
+                buf_a[buf_idx + 8] = FLOAT_TYPEV2(v1.xy);
+                buf_a[buf_idx + 9] = FLOAT_TYPEV2(v1.zw);
+            } else {
+                const uint eff_row = row * LOAD_VEC_A / 4;
+                const uint outer = eff_row / TK;
+                const uint buf_idx_0 = outer * BM * TK + col * TK / 2 + eff_row;
+                const uint buf_idx_1 = outer * BM * TK + BM * TK / 2 + col * TK / 2 + eff_row;
+                buf_a[buf_idx_0    ] = FLOAT_TYPEV2(v0.xy);
+                buf_a[buf_idx_0 + 1] = FLOAT_TYPEV2(v0.zw);
+                buf_a[buf_idx_1    ] = FLOAT_TYPEV2(v1.xy);
+                buf_a[buf_idx_1 + 1] = FLOAT_TYPEV2(v1.zw);
+            }
 #elif defined(DATA_A_Q4_1)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 4;
 
             const uint ib = idx / 4;
             const uint iqs = idx & 0x03;
@@ -110,19 +125,24 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const vec4 v0 = vec4(unpack8(vui & 0x0F0F0F0F)) * dm.x + dm.y;
             const vec4 v1 = vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) * dm.x + dm.y;
 
-            buf_a[buf_idx     ] = FLOAT_TYPEV2(v0.xy);
-            buf_a[buf_idx + 1 ] = FLOAT_TYPEV2(v0.zw);
-            buf_a[buf_idx + 8 ] = FLOAT_TYPEV2(v1.xy);
-            buf_a[buf_idx + 9 ] = FLOAT_TYPEV2(v1.zw);
+            if (!APPLY_SLM_A_RESHAPE) {
+                const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 4;
+                buf_a[buf_idx     ] = FLOAT_TYPEV2(v0.xy);
+                buf_a[buf_idx + 1 ] = FLOAT_TYPEV2(v0.zw);
+                buf_a[buf_idx + 8 ] = FLOAT_TYPEV2(v1.xy);
+                buf_a[buf_idx + 9 ] = FLOAT_TYPEV2(v1.zw);
+            } else {
+                const uint eff_row = row * LOAD_VEC_A / 4;
+                const uint outer = eff_row / TK;
+                const uint buf_idx_0 = outer * BM * TK + col * TK / 2 + eff_row;
+                const uint buf_idx_1 = outer * BM * TK + BM * TK / 2 + col * TK / 2 + eff_row;
+                buf_a[buf_idx_0    ] = FLOAT_TYPEV2(v0.xy);
+                buf_a[buf_idx_0 + 1] = FLOAT_TYPEV2(v0.zw);
+                buf_a[buf_idx_1    ] = FLOAT_TYPEV2(v1.xy);
+                buf_a[buf_idx_1 + 1] = FLOAT_TYPEV2(v1.zw);
+            }
 #elif defined(DATA_A_Q5_0)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-#ifndef LOAD_A_OPT
-            const uint buf_idx = col * SHMEM_STRIDE + row;
-#else
-            const uint buf_idx_outer = row / (TK);
-            const uint buf_idx_0 = buf_idx_outer * BM * TK + col * TK / 2 + row;
-            const uint buf_idx_1 = buf_idx_outer * BM * TK + BM * TK / 2 + col * TK / 2 + row;
-#endif
 
             const uint ib = idx / 8;
             const uint iqs = idx & 0x07;
@@ -134,24 +154,19 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
             const uint vui = uint(data_a_packed16[ib].qs[iqs]);
             const vec4 v = (vec4((vui & 0xF) | qh0.x, ((vui >> 4) & 0xF) | qh0.y, ((vui >> 8) & 0xF) | qh1.x, (vui >> 12) | qh1.y) - 16.0f) * d;
-#ifndef LOAD_A_OPT
-            buf_a[buf_idx    ] = FLOAT_TYPEV2(v.xz);
-            buf_a[buf_idx + 8] = FLOAT_TYPEV2(v.yw);
-#else
-            buf_a[buf_idx_0] = FLOAT_TYPEV2(v.xz);
-            buf_a[buf_idx_1] = FLOAT_TYPEV2(v.yw);
-#endif
+            if (!APPLY_SLM_A_RESHAPE) {
+                const uint buf_idx = col * SHMEM_STRIDE + row;
+                buf_a[buf_idx    ] = FLOAT_TYPEV2(v.xz);
+                buf_a[buf_idx + 8] = FLOAT_TYPEV2(v.yw);
+            } else {
+                const uint buf_idx_outer = row / (TK);
+                const uint buf_idx_0 = buf_idx_outer * BM * TK + col * TK / 2 + row;
+                const uint buf_idx_1 = buf_idx_outer * BM * TK + BM * TK / 2 + col * TK / 2 + row;
+                buf_a[buf_idx_0] = FLOAT_TYPEV2(v.xz);
+                buf_a[buf_idx_1] = FLOAT_TYPEV2(v.yw);
+            }
 #elif defined(DATA_A_Q5_1)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-#ifndef LOAD_A_OPT
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 4;
-#else
-            // Follow Q5_0 LOAD_A_OPT pattern, adapted for LOAD_VEC_A=8 (2 VEC2 per half)
-            const uint eff_row = row * LOAD_VEC_A / 4;  // 2 VEC2 positions per load
-            const uint buf_idx_outer = eff_row / TK;
-            const uint buf_idx_0 = buf_idx_outer * BM * TK + col * TK / 2 + eff_row;
-            const uint buf_idx_1 = buf_idx_outer * BM * TK + BM * TK / 2 + col * TK / 2 + eff_row;
-#endif
 
             const uint ib = idx / 4;
             const uint iqs = idx & 0x03;
@@ -167,26 +182,32 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const vec4 v0 = vec4((vui & 0xF) | qh0.x, ((vui >> 4) & 0xF) | qh0.y, ((vui >> 8) & 0xF) | qh1.x, ((vui >> 12) & 0xF) | qh1.y) * dm.x + dm.y;
             const vec4 v1 = vec4(((vui >> 16) & 0xF) | qh2.x, ((vui >> 20) & 0xF) | qh2.y, ((vui >> 24) & 0xF) | qh3.x, ((vui >> 28) & 0xF) | qh3.y) * dm.x + dm.y;
 
-#ifndef LOAD_A_OPT
-            buf_a[buf_idx    ] = FLOAT_TYPEV2(v0.xz);
-            buf_a[buf_idx + 1] = FLOAT_TYPEV2(v1.xz);
-            buf_a[buf_idx + 8] = FLOAT_TYPEV2(v0.yw);
-            buf_a[buf_idx + 9] = FLOAT_TYPEV2(v1.yw);
-#else
-            buf_a[buf_idx_0    ] = FLOAT_TYPEV2(v0.xz);
-            buf_a[buf_idx_0 + 1] = FLOAT_TYPEV2(v1.xz);
-            buf_a[buf_idx_1    ] = FLOAT_TYPEV2(v0.yw);
-            buf_a[buf_idx_1 + 1] = FLOAT_TYPEV2(v1.yw);
-#endif
+            if (!APPLY_SLM_A_RESHAPE) {
+                const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 4;
+                buf_a[buf_idx    ] = FLOAT_TYPEV2(v0.xz);
+                buf_a[buf_idx + 1] = FLOAT_TYPEV2(v1.xz);
+                buf_a[buf_idx + 8] = FLOAT_TYPEV2(v0.yw);
+                buf_a[buf_idx + 9] = FLOAT_TYPEV2(v1.yw);
+            } else {
+                const uint eff_row = row * LOAD_VEC_A / 4;
+                const uint buf_idx_outer = eff_row / TK;
+                const uint buf_idx_0 = buf_idx_outer * BM * TK + col * TK / 2 + eff_row;
+                const uint buf_idx_1 = buf_idx_outer * BM * TK + BM * TK / 2 + col * TK / 2 + eff_row;
+                buf_a[buf_idx_0    ] = FLOAT_TYPEV2(v0.xz);
+                buf_a[buf_idx_0 + 1] = FLOAT_TYPEV2(v1.xz);
+                buf_a[buf_idx_1    ] = FLOAT_TYPEV2(v0.yw);
+                buf_a[buf_idx_1 + 1] = FLOAT_TYPEV2(v1.yw);
+            }
 #elif defined(DATA_A_Q8_0)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-#ifndef LOAD_A_OPT
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
-#else
-            const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
-            const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
-            const uint buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
-#endif
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 8;
             const uint iqs = idx & 0x07;
@@ -200,7 +221,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(v.zw);
 #elif defined(DATA_A_Q1_0)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 16;
             const uint iqs = idx & 0xfu;
@@ -214,7 +242,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             buf_a[buf_idx + 3] = FLOAT_TYPEV2((bits & 0x40u) != 0u ? d : -d, (bits & 0x80u) != 0u ? d : -d);
 #elif defined(DATA_A_Q2_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 64;                          // 4 values per idx
             const uint iqs = (idx % 64) * 2;                   // 0,2,4..126
@@ -233,7 +268,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(v.zw);
 #elif defined(DATA_A_Q3_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 128;                   // 2 values per idx
             const uint iqs = idx % 128;                  // 0..127
@@ -257,13 +299,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
                                           dl * (qs.y - hm.y));
 #elif defined(DATA_A_Q4_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-#ifndef LOAD_A_OPT
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
-#else
-            const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
-            const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
-            const uint buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
-#endif
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
+                const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
+            }
 
             const uint ib  = idx / 64;                    // 4 values per idx
             const uint iqs = (idx % 64) * 2;              // 0,2,4..126
@@ -314,13 +357,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(fma(d, q.z, m), fma(d, q.w, m));
 #elif defined(DATA_A_Q5_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-#ifndef LOAD_A_OPT
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
-#else
-            const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
-            const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
-            const uint buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
-#endif
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
+                const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
+            }
 
             const uint ib = idx / 64;                  // 4 values per idx
             const uint iqs = (idx % 64) * 2;           // 0,2,4..126
@@ -360,13 +404,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(fma(d, q.z, m), fma(d, q.w, m));
 #elif defined(DATA_A_Q6_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-#ifndef LOAD_A_OPT
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
-#else
-            const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
-            const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
-            const uint buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
-#endif
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint buf_idx_outer = (row * LOAD_VEC_A) / TK;
+                const uint buf_idx_inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = buf_idx_outer * BM * TK / 2 + col * TK / 2 + buf_idx_inner / 2;
+            }
 
             const uint ib = idx / 128;                  // 2 values per idx
             const uint iqs = idx % 128;                 // 0..127
@@ -388,7 +433,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             buf_a[buf_idx] = FLOAT_TYPEV2(q.x, q.y);
 #elif defined(DATA_A_IQ1_S)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 32;                  // 8 values per idx
             const uint ib32 = (idx % 32) / 4;         // 0..7
@@ -407,7 +459,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             }
 #elif defined(DATA_A_IQ1_M)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 32;  // 8 values per idx
             const uint ib8 = idx % 32;
@@ -429,7 +488,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             }
 #elif defined(DATA_A_IQ2_XXS)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 32;                 // 8 values per idx
             const uint ib32 = (idx % 32) / 4;         // 0..7
@@ -460,7 +526,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
                                                    (sign & 128) != 0 ? -grid1.w : grid1.w);
 #elif defined(DATA_A_IQ2_XS)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 32;            // 8 values per idx
             const uint ib32 = (idx % 32) / 4;    // 0..7
@@ -486,7 +559,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
                                                    (sign & 128) != 0 ? -grid1.w : grid1.w);
 #elif defined(DATA_A_IQ2_S)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 32;  // 8 values per idx
             const uint ib8 = idx % 32; // 0..31
@@ -514,7 +594,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
                                                    (sign & 128) != 0 ? -grid1.w : grid1.w);
 #elif defined(DATA_A_IQ3_XXS)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 64;            // 4 values per idx
             const uint iqs = idx % 64;           // 0..63
@@ -538,7 +625,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
                                               (sign &   8) != 0 ? -v.w : v.w);
 #elif defined(DATA_A_IQ3_S)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 64;            // 4 values per idx
             const uint iqs = idx % 64;           // 0..63
@@ -560,7 +654,14 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
                                               (sign &   8) != 0 ? -v.w : v.w);
 #elif defined(DATA_A_IQ4_XS)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            uint buf_idx;
+            if (!APPLY_SLM_A_RESHAPE) {
+                buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+            } else {
+                const uint outer = (row * LOAD_VEC_A) / TK;
+                const uint inner = (row * LOAD_VEC_A) % TK;
+                buf_idx = outer * BM * TK / 2 + col * TK / 2 + inner / 2;
+            }
 
             const uint ib = idx / 64;            // 4 values per idx
             const uint ib32 = (idx % 64) / 8;    // 0..7
@@ -578,7 +679,6 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             buf_a[buf_idx + 1] = FLOAT_TYPEV2(v.zw);
 #elif defined(DATA_A_IQ4_NL)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 4;
 
             const uint ib = idx / 8;
             const uint iqs = idx & 0x07;
@@ -586,19 +686,24 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const FLOAT_TYPE d = FLOAT_TYPE(data_a_packed16[ib].d);
             const uint vui = uint(data_a_packed16[ib].qs[iqs]);
 
-            buf_a[buf_idx    ] = d * FLOAT_TYPEV2(kvalues_iq4nl[vui & 0xF],
-                                                  kvalues_iq4nl[bitfieldExtract(vui, 8, 4)]);
-            buf_a[buf_idx + 8] = d * FLOAT_TYPEV2(kvalues_iq4nl[bitfieldExtract(vui, 4, 4)],
-                                                  kvalues_iq4nl[vui >> 12]);
+            if (!APPLY_SLM_A_RESHAPE) {
+                const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 4;
+                buf_a[buf_idx    ] = d * FLOAT_TYPEV2(kvalues_iq4nl[vui & 0xF],
+                                                      kvalues_iq4nl[bitfieldExtract(vui, 8, 4)]);
+                buf_a[buf_idx + 8] = d * FLOAT_TYPEV2(kvalues_iq4nl[bitfieldExtract(vui, 4, 4)],
+                                                      kvalues_iq4nl[vui >> 12]);
+            } else {
+                const uint eff_row = row * LOAD_VEC_A / 4;
+                const uint outer = eff_row / TK;
+                const uint buf_idx_0 = outer * BM * TK + col * TK / 2 + eff_row;
+                const uint buf_idx_1 = outer * BM * TK + BM * TK / 2 + col * TK / 2 + eff_row;
+                buf_a[buf_idx_0] = d * FLOAT_TYPEV2(kvalues_iq4nl[vui & 0xF],
+                                                    kvalues_iq4nl[bitfieldExtract(vui, 8, 4)]);
+                buf_a[buf_idx_1] = d * FLOAT_TYPEV2(kvalues_iq4nl[bitfieldExtract(vui, 4, 4)],
+                                                    kvalues_iq4nl[vui >> 12]);
+            }
 #elif defined(DATA_A_MXFP4)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-#ifndef LOAD_A_OPT
-            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 4;
-#else
-            const uint buf_idx_outer = row / (TK);
-            const uint buf_idx_0 = buf_idx_outer * BM * TK + col * TK / 2 + row;
-            const uint buf_idx_1 = buf_idx_outer * BM * TK + BM * TK / 2 + col * TK / 2 + row;
-#endif
 
             const uint ib = idx / 8;
             const uint iqs = (idx & 0x07) * 2;
@@ -614,23 +719,23 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             // ---------------------------------------------------------------------------
             const uint MXFP4_LUT = 0xC8643210u;
 #define MXFP4_VAL(nibble, scale) (float(bitfieldExtract(MXFP4_LUT, int(((nibble) & 7u) << 2), 4)) * (((nibble) >= 8u) ? -(scale) : (scale)))
-#ifndef LOAD_A_OPT
-            buf_a[buf_idx    ] = FLOAT_TYPEV2(MXFP4_VAL(vui  & 0xF, d),
-                                             MXFP4_VAL(vui2 & 0xF, d));
-            buf_a[buf_idx + 8] = FLOAT_TYPEV2(MXFP4_VAL(vui  >> 4,  d),
-                                             MXFP4_VAL(vui2 >> 4,  d));
-#else
-            buf_a[buf_idx_0] = FLOAT_TYPEV2(MXFP4_VAL(vui  & 0xF, d),
-                                            MXFP4_VAL(vui2 & 0xF, d));
-            buf_a[buf_idx_1] = FLOAT_TYPEV2(MXFP4_VAL(vui  >> 4,  d),
-                                            MXFP4_VAL(vui2 >> 4,  d));
-#endif
+            if (!APPLY_SLM_A_RESHAPE) {
+                const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 4;
+                buf_a[buf_idx    ] = FLOAT_TYPEV2(MXFP4_VAL(vui  & 0xF, d),
+                                                 MXFP4_VAL(vui2 & 0xF, d));
+                buf_a[buf_idx + 8] = FLOAT_TYPEV2(MXFP4_VAL(vui  >> 4,  d),
+                                                 MXFP4_VAL(vui2 >> 4,  d));
+            } else {
+                const uint buf_idx_outer = row / (TK);
+                const uint buf_idx_0 = buf_idx_outer * BM * TK + col * TK / 2 + row;
+                const uint buf_idx_1 = buf_idx_outer * BM * TK + BM * TK / 2 + col * TK / 2 + row;
+                buf_a[buf_idx_0] = FLOAT_TYPEV2(MXFP4_VAL(vui  & 0xF, d),
+                                                MXFP4_VAL(vui2 & 0xF, d));
+                buf_a[buf_idx_1] = FLOAT_TYPEV2(MXFP4_VAL(vui  >> 4,  d),
+                                                MXFP4_VAL(vui2 >> 4,  d));
+            }
 #elif defined(DATA_A_NVFP4)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
-            // lo and hi nibbles are 8 elements apart, which doesn't quite line up with
-            // how the thread mapping and buf_idx calculation works for other types.
-            const uint buf_idx = col * SHMEM_STRIDE + (row & 3) + (row & ~3) * 2;
-
             const uint ib = idx / 16u;
             const uint sub = (idx & 0xC) >> 2;
             const uint iqs = (idx & 0xF) * 2;
@@ -638,10 +743,28 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint vui = uint(data_a[ib].qs[iqs]);
             const uint vui2 = uint(data_a[ib].qs[iqs+1]);
 
-            buf_a[buf_idx    ] = FLOAT_TYPEV2(kvalues_mxfp4[vui  & 0xF] * d,
-                                              kvalues_mxfp4[vui2 & 0xF] * d);
-            buf_a[buf_idx + 4] = FLOAT_TYPEV2(kvalues_mxfp4[vui  >>  4] * d,
-                                              kvalues_mxfp4[vui2 >>  4] * d);
+            // lo and hi nibbles are 8 elements apart, which doesn't quite line up with
+            // how the thread mapping and buf_idx calculation works for other types.
+            const uint eff_row = (row & 3) + (row & ~3) * 2;
+            if (!APPLY_SLM_A_RESHAPE) {
+                const uint buf_idx = col * SHMEM_STRIDE + eff_row;
+                buf_a[buf_idx    ] = FLOAT_TYPEV2(kvalues_mxfp4[vui  & 0xF] * d,
+                                                  kvalues_mxfp4[vui2 & 0xF] * d);
+                buf_a[buf_idx + 4] = FLOAT_TYPEV2(kvalues_mxfp4[vui  >>  4] * d,
+                                                  kvalues_mxfp4[vui2 >>  4] * d);
+            } else {
+                // Reshape [BM, BK/2] -> [BK/TK, BM, TK/2] (FLOAT_TYPEV2).  Because the
+                // hi pair is only 8 K-elements (= 4 FLOAT_TYPEV2) away, it stays inside
+                // the same outer K-tile as the lo pair (TK = 16 > 8) — no need for the
+                // +BM*TK/2 split MXFP4 uses.
+                const uint buf_idx_outer = eff_row / (TK / 2);
+                const uint buf_idx_0 = buf_idx_outer * (BM * TK / 2) + col * (TK / 2) + (eff_row % (TK / 2));
+                const uint buf_idx_1 = buf_idx_0 + 4;
+                buf_a[buf_idx_0] = FLOAT_TYPEV2(kvalues_mxfp4[vui  & 0xF] * d,
+                                                kvalues_mxfp4[vui2 & 0xF] * d);
+                buf_a[buf_idx_1] = FLOAT_TYPEV2(kvalues_mxfp4[vui  >>  4] * d,
+                                                kvalues_mxfp4[vui2 >>  4] * d);
+            }
 #endif
 }
 

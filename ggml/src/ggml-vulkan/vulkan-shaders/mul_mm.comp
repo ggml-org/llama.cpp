@@ -119,9 +119,11 @@ layout (constant_id = 3) const uint BK = 16;  // Assumed to be 32 if working wit
 #endif
 
 #ifdef COOPMAT
-layout(constant_id = 11) const uint SHMEM_STRIDE_PAD = 4;
+layout(constant_id = 12) const uint SHMEM_STRIDE_PAD = 4;
+layout(constant_id = 13) const bool APPLY_SLM_A_RESHAPE = false;
 #else
 const uint SHMEM_STRIDE_PAD = 1;
+const bool APPLY_SLM_A_RESHAPE = false;
 #endif
 #define SHMEM_STRIDE (BK / 2 + SHMEM_STRIDE_PAD)
 
@@ -237,7 +239,7 @@ void main() {
     // Workgroup has no work
     if (ic * BN >= _ne1) return;
 
-    uint required_work_items = (_ne1 - ic * BN) * BK / LOAD_VEC_B;
+    uint required_work_items = (_ne1 - ic * BN) * BK / LOAD_VEC_B_EFF / LOAD_VEC_BATCH_B;
     uint required_warp_c = (_ne1 - ic * BN + WN - 1) / WN ;
 
 #endif
@@ -316,11 +318,11 @@ void main() {
         [[unroll]] for (uint i = 0; i < BK; i += TK) {
             [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
                 // Load from shared into cache
-#ifndef LOAD_A_OPT
-                coopMatLoad(cache_a[cm_row], buf_a, (warp_r * WM + cm_row * TM) * SHMEM_STRIDE + i / 2, SHMEM_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
-#else
-                coopMatLoad(cache_a[cm_row], buf_a, (warp_r * WM + cm_row * TM) * TK / 2 + i * BM / 2, TK / 2, gl_CooperativeMatrixLayoutRowMajor);
-#endif
+                if (!APPLY_SLM_A_RESHAPE) {
+                    coopMatLoad(cache_a[cm_row], buf_a, (warp_r * WM + cm_row * TM) * SHMEM_STRIDE + i / 2, SHMEM_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+                } else {
+                    coopMatLoad(cache_a[cm_row], buf_a, (warp_r * WM + cm_row * TM) * TK / 2 + i * BM / 2, TK / 2, gl_CooperativeMatrixLayoutRowMajor);
+                }
             }
 
             [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
