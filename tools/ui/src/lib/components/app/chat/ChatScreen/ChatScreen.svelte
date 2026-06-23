@@ -135,6 +135,13 @@
 			return false;
 		}
 
+		handleSendLikeScroll();
+
+		await chatStore.sendMessage(message, result?.extras);
+		return true;
+	}
+
+	function handleSendLikeScroll() {
 		if (!isMobile.current) {
 			autoScroll.enable();
 		}
@@ -174,9 +181,6 @@
 			mobileScrollDownHint = true;
 			mobileScrollDownHintLockedUntil = Date.now() + 500;
 		}
-
-		await chatStore.sendMessage(message, result?.extras);
-		return true;
 	}
 
 	function handleErrorDialogOpenChange(open: boolean) {
@@ -256,11 +260,7 @@
 			<ChatMessages
 				messages={activeMessages()}
 				onUserAction={() => {
-					autoScroll.enable();
-
-					if (!autoScroll.userScrolledUp) {
-						autoScroll.scrollToBottom();
-					}
+					handleSendLikeScroll();
 				}}
 			/>
 		{/if}
