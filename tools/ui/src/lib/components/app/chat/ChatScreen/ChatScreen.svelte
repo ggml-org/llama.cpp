@@ -48,6 +48,7 @@
 	});
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
+	let isMobileUserScrolledUp = $state(false);
 	let emptyFileNames = $state<string[]>([]);
 	let initialMessage = $state('');
 	let showDeleteDialog = $state(false);
@@ -86,6 +87,16 @@
 			}
 		}
 	});
+
+	function handleMobileScroll() {
+		if (!isMobile.current) return;
+
+		const container = scroll.chatScrollContainer;
+		if (!container) return;
+
+		const distanceFromBottom = container.scrollHeight - container.clientHeight - container.scrollTop;
+		isMobileUserScrolledUp = distanceFromBottom > 100;
+	}
 
 	async function handleDeleteConfirm() {
 		const conversation = activeConversation();
@@ -176,6 +187,7 @@
 		if (!disableAutoScroll) {
 			autoScroll.enable();
 		}
+		handleMobileScroll();
 	});
 
 	onDestroy(() => autoScroll.destroy());
@@ -185,7 +197,13 @@
 	<ChatScreenDragOverlay />
 {/if}
 
-<svelte:window onkeydown={handleKeydown} onscroll={scroll.handleScroll} />
+<svelte:window
+	onkeydown={handleKeydown}
+	onscroll={(e) => {
+		scroll.handleScroll(e);
+		handleMobileScroll();
+	}}
+/>
 
 {#if isServerLoading}
 	<ServerLoadingSplash />
@@ -229,7 +247,7 @@
 			<ChatScreenServerError />
 
 			<div class="pointer-events-none flex flex-col gap-6 items-center w-full">
-				{#if autoScroll.userScrolledUp && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
+				{#if (isMobile.current ? isMobileUserScrolledUp : autoScroll.userScrolledUp) && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
 					<ChatScreenActionScrollDown
 						onclick={() => {
 							scroll.chatScrollContainer?.scrollTo({

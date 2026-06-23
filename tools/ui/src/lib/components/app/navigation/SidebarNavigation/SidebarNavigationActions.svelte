@@ -101,7 +101,7 @@
 {:else if isExpandedMode || isOnMobile}
 	<div
 		class="{className} flex flex-col gap-5 md:gap-1 mt-2 md:mt-0 {!isExpandedMode && isOnMobile
-			? 'hidden'
+			? 'hidden pointer-events-none'
 			: ''}"
 	>
 		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}

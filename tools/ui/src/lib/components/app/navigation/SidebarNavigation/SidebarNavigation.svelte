@@ -174,7 +174,7 @@
 					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
 					class="{isExpandedMode
 						? 'bg-muted! md:bg-foreground/5!'
-						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10!"
+						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
 					href={isExpandedMode ? ROUTES.START : undefined}
 					onclick={isExpandedMode ? undefined : toggleExpandedMode}
 					tooltip={isExpandedMode ? undefined : 'Open Sidebar'}
@@ -260,6 +260,12 @@
 	}
 
 	@media (max-width: 768px) {
+	    aside {
+			&:not(.is-expanded) {
+    			pointer-events: none;
+			}
+		}
+
 		aside.is-expanded::before {
 			content: '';
 			position: fixed;
