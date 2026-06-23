@@ -8940,8 +8940,9 @@ void kernel_mul_mv_nvfp4_f32_impl(
 
     // UE4M3 scale LUT: 128 entries, loaded cooperatively by all threads
     threadgroup float * ue4m3_lut = shmem_f32 + 32;
-    ue4m3_lut[sgitg*32 + tiisg]      = ue4m3_to_fp32(sgitg*32 + tiisg);
-    ue4m3_lut[sgitg*32 + tiisg + 64] = ue4m3_to_fp32(sgitg*32 + tiisg + 64);
+  for (short i = sgitg*32 + tiisg; i < 128; i += NSG*32) {
+      ue4m3_lut[i] = kvalues_ue4m3_f[i];
+  }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     float sumf[NR0] = {0.f};
