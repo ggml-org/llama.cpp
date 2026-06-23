@@ -106,16 +106,6 @@ public:
     int64_t nblk;
 };
 
-// ---- MSA block-mask op ------
-// Emits the COMBINED attention mask: a copy of the causal/padding mask with
-// every key in a NON-selected block forced to -inf. Selected blocks keep their
-// causal value, so future/pad positions inside a selected block stay masked.
-// Causality is taken FROM the input mask (not recomputed). Output dtype matches the input mask
-
-// Assumes M3's mask is {0 = attendable, negative = forbidden}, which in this case holds
-// because M3 uses no ALiBi/soft-cap-in-mask (soft-cap is applied to kq directly
-// in build_attn_mha).
-
 static inline ggml_fp16_t msa_neg_val (ggml_fp16_t)    { return ggml_fp32_to_fp16(-INFINITY); }
 static inline float       msa_neg_val (float)          { return -INFINITY; }
 
