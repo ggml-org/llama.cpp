@@ -230,6 +230,20 @@
 		}
 	});
 
+	// Live model status and load progress via the /models/sse feed (router mode)
+	$effect(() => {
+		if (!browser) return;
+		if (!isRouterMode()) return;
+
+		untrack(() => {
+			modelsStore.subscribeStatus();
+		});
+
+		return () => {
+			modelsStore.unsubscribeStatus();
+		};
+	});
+
 	// Background MCP server health checks on app load
 	// Fetch enabled servers from settings and run health checks in background
 	$effect(() => {
