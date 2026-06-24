@@ -1077,8 +1077,7 @@ const func_builtins & value_array_t::get_builtins() const {
             value val_reverse = args.get_kwarg_or_pos("reverse",        1);
             value val_case    = args.get_kwarg_or_pos("case_sensitive", 2);
             value attribute   = args.get_kwarg_or_pos("attribute",      3);
-            // FIXME: sorting is currently always case sensitive
-            //const bool case_sensitive = val_case->as_bool(); // undefined == false
+            const bool case_sensitive = val_case->as_bool(); // undefined == false
             const bool reverse = val_reverse->as_bool(); // undefined == false
             const bool attr_is_int = is_val<value_int>(attribute);
             const int64_t attr_int = attr_is_int ? attribute->as_int() : 0;
@@ -1096,6 +1095,11 @@ const func_builtins & value_array_t::get_builtins() const {
                     } else {
                         throw raised_exception("sort: unsupported object attribute comparison between " + a->type() + " and " + b->type());
                     }
+                }
+                if (!case_sensitive && is_val<value_string>(val_a) && is_val<value_string>(val_b)) {
+                    const std::string sa = val_a->as_string().lowercase().str();
+                    const std::string sb = val_b->as_string().lowercase().str();
+                    return reverse ? (sa > sb) : (sa < sb);
                 }
                 return value_compare(val_a, val_b, reverse ? value_compare_op::gt : value_compare_op::lt);
             });
@@ -1194,17 +1198,19 @@ const func_builtins & value_object_t::get_builtins() const {
             value val_case    = args.get_kwarg_or_pos("case_sensitive", 1);
             value val_by      = args.get_kwarg_or_pos("by",             2);
             value val_reverse = args.get_kwarg_or_pos("reverse",        3);
-            // FIXME: sorting is currently always case sensitive
-            //const bool case_sensitive = val_case->as_bool(); // undefined == false
+            const bool case_sensitive = val_case->as_bool(); // undefined == false
             const bool reverse = val_reverse->as_bool(); // undefined == false
             const bool by_value = is_val<value_string>(val_by) && val_by->as_string().str() == "value" ? true : false;
             auto result = mk_val<value_object>(val_input); // copy
             std::sort(result->val_obj.begin(), result->val_obj.end(), [&](const auto & a, const auto & b) {
-                if (by_value) {
-                    return value_compare(a.second, b.second, reverse ? value_compare_op::gt : value_compare_op::lt);
-                } else {
-                    return value_compare(a.first, b.first, reverse ? value_compare_op::gt : value_compare_op::lt);
+                value val_a = by_value ? a.second : a.first;
+                value val_b = by_value ? b.second : b.first;
+                if (!case_sensitive && is_val<value_string>(val_a) && is_val<value_string>(val_b)) {
+                    const std::string sa = val_a->as_string().lowercase().str();
+                    const std::string sb = val_b->as_string().lowercase().str();
+                    return reverse ? (sa > sb) : (sa < sb);
                 }
+                return value_compare(val_a, val_b, reverse ? value_compare_op::gt : value_compare_op::lt);
             });
             return result;
         }},

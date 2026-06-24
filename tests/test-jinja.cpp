@@ -657,6 +657,18 @@ static void test_filters(testing & t) {
         "xyz"
     );
 
+    test_template(t, "sort case_sensitive=false",
+        "{{ items|sort(case_sensitive=false)|join(',') }}",
+        {{"items", json::array({"Banana", "apple", "Cherry", "date"})}},
+        "apple,Banana,Cherry,date"
+    );
+
+    test_template(t, "sort case_sensitive=true",
+        "{{ items|sort(case_sensitive=true)|join(',') }}",
+        {{"items", json::array({"Banana", "apple", "Cherry", "date"})}},
+        "Banana,Cherry,apple,date"
+    );
+
     test_template(t, "join",
         "{{ items|join(', ') }}",
         {{"items", json::array({"a", "b", "c"})}},
@@ -1753,6 +1765,12 @@ static void test_object_methods(testing & t) {
         "{% for k, v in obj|dictsort(case_sensitive=true) %}{{ k }}={{ v }} {% endfor %}",
         {{"obj", {{"a", 1}, {"A", 1}, {"b", 2}, {"B", 2}, {"c", 3}}}},
         "A=1 B=2 a=1 b=2 c=3 "
+    );
+
+    test_template(t, "dictsort case insensitive",
+        "{% for k, v in obj|dictsort(case_sensitive=false) %}{{ k }}={{ v }} {% endfor %}",
+        {{"obj", {{"Banana", 1}, {"apple", 2}, {"Cherry", 3}}}},
+        "apple=2 Banana=1 Cherry=3 "
     );
 
     test_template(t, "object|tojson",
