@@ -1,27 +1,24 @@
-#include "server-common.h"
 #include "server-models.h"
 #include "server-context.h"
 #include "server-stream.h"
 
 #include "build-info.h"
-#include "preset.h"
 #include "download.h"
+#include "preset.h"
+#include "server-common.h"
+#include "server-process.h"
 
-#include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
-#include <sheredom/subprocess.h>
+#include <cpp-httplib/httplib.h>  // TODO: remove this once we use HTTP client from download.h
 
-#include <functional>
-#include <optional>
 #include <algorithm>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <cstring>
-#include <cstdlib>
 #include <atomic>
 #include <chrono>
-#include <queue>
+#include <condition_variable>
 #include <filesystem>
+#include <functional>
+#include <mutex>
+#include <optional>
+#include <queue>
 #include <random>
 #include <sstream>
 
