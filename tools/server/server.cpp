@@ -89,6 +89,17 @@ int llama_server(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
+    // note: router mode also accepts -hf remote-preset, so we need to check that first
+    if (!params.model.hf_repo.empty()) {
+        try {
+            common_params_handle_models_params handle_params;
+            handle_params.preset_only = true;
+            common_params_handle_models(params, LLAMA_EXAMPLE_SERVER, handle_params);
+        } catch (const std::exception & e) {
+            // ignored for now
+        }
+    }
+
     // router server never loads a model and must not touch the GPU
     const bool is_router_server = params.model.path.empty()
                                && params.model.hf_repo.empty();
@@ -134,6 +145,7 @@ int llama_server(int argc, char ** argv) {
     //
 
     // register API routes
+    server_child child; // only used in non-router mode
     server_routes routes(params, ctx_server);
     server_tools tools;
 
@@ -255,10 +267,20 @@ int llama_server(int argc, char ** argv) {
     }
 
     //
+    // Handle downloading model
+    //
+
+    if (child.is_child() && child.get_mode() == SERVER_CHILD_MODE_DOWNLOAD) {
+        return child.run_download(params);
+    } else if (!is_router_server) {
+        // single-model mode (NOT spawned by router)
+        common_params_handle_models(params, LLAMA_EXAMPLE_SERVER, {});
+    }
+
+    //
     // Start the server
     //
 
-    server_child child; // only used in non-router mode
     std::function<void()> clean_up;
 
     if (is_router_server) {

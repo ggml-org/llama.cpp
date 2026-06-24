@@ -231,7 +231,7 @@
 			editedContent = message.content;
 		}
 
-		textareaElement?.focus();
+		textareaElement?.focus({ preventScroll: true });
 		editedExtras = message.extra ? [...message.extra] : [];
 		editedUploadedFiles = [];
 
@@ -324,7 +324,7 @@
 	}
 </script>
 
-<div use:fadeInView>
+<div use:fadeInView class="chat-message">
 	{#if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem
 			bind:textareaElement

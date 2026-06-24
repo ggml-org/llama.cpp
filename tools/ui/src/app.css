@@ -48,6 +48,7 @@
 
 	--chat-form-area-height: 8rem;
 	--chat-form-area-offset: 2rem;
+	--chat-form-padding-top: 6rem;
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
 }
 
@@ -55,6 +56,7 @@
 	:root {
 		--chat-form-area-height: 24rem;
 		--chat-form-area-offset: 12rem;
+		--chat-form-padding-top: 6rem;
 	}
 }
 
@@ -141,7 +143,6 @@
 		@apply bg-background text-foreground;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
-		overflow: hidden; /* Added due to Mermaid rendering somehow causing the double scrollbar */
 	}
 
 	/* Global scrollbar styling - visible only on hover */
@@ -192,4 +193,8 @@
 		-ms-overflow-style: none;
 		scrollbar-width: none;
 	}
+}
+
+.mermaidTooltip {
+	display: none !important;
 }

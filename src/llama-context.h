@@ -115,9 +115,11 @@ struct llama_context {
     void set_embeddings (bool value);
     void set_embeddings_nextn(bool value, bool masked);
     void set_embeddings_layer_inp(uint32_t lid, bool enable);
+    void set_nextn_layer_offset(int32_t offset);
 
     // DFlash: store the accumulated target context for the decoder's KV injection
     void set_dflash_accumulated_target_ctx(const float * data, int32_t n_embd, int32_t n_tokens);
+
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
