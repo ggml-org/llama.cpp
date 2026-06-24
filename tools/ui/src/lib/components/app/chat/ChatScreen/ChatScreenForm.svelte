@@ -149,7 +149,7 @@
 		{onStop}
 		onSubmit={handleSubmit}
 		onSystemPromptClick={handleSystemPromptClick}
-		onSystemPromptWithContent={onSystemPromptWithContent}
+		{onSystemPromptWithContent}
 		onUploadedFileRemove={handleUploadedFileRemove}
 	/>
 </div>

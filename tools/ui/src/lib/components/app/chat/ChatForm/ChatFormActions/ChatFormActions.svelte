@@ -32,7 +32,7 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
-		onSystemPromptWithContent?: (content: string) => void;
+		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
 		onMcpPromptClick?: () => void;
 		onMcpResourcesClick?: () => void;
 	}

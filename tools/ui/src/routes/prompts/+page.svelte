@@ -1,12 +1,16 @@
 <script lang="ts">
-	import { PromptsCard } from '$lib/components/app';
+	import { ActionIcon, PromptsCard } from '$lib/components/app';
 	import { DialogPromptAddNew, DialogConfirmation } from '$lib/components/app/dialogs';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { promptsStore } from '$lib/stores/prompts.svelte';
-	import { Plus, Trash2 } from '@lucide/svelte';
+	import { Plus, Trash2, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { ROUTES } from '$lib/constants';
+	import { browser } from '$app/environment';
+	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 
 	const ALL = 'all';
 	const OTHER = '__other__';
@@ -14,6 +18,23 @@
 	let showDeleteDialog = $state(false);
 	let deleteTarget = $state<{ id: string; title: string } | null>(null);
 	let selectedCategory = $state<string>(ALL);
+	let previousRouteId = $state<string | null>(null);
+
+	$effect(() => {
+		const currentId = page.route.id;
+		return () => {
+			previousRouteId = currentId;
+		};
+	});
+
+	function handleClose() {
+		const prevIsPrompts = previousRouteId === '/prompts';
+		if (browser && window.history.length > 1 && !prevIsPrompts) {
+			history.back();
+		} else {
+			goto(ROUTES.START);
+		}
+	}
 
 	let categories = $derived(promptsStore.getCategories());
 	let hasUncategorized = $derived(promptsStore.hasUncategorized());
@@ -61,6 +82,10 @@
 		}
 	}
 </script>
+
+<div class="fixed top-4.5 right-4 z-50 md:hidden">
+	<ActionIcon icon={X} tooltip="Close" onclick={handleClose} />
+</div>
 
 <div class="mx-auto w-full p-4 md:p-8 md:py-8">
 	<div class="mb-6 flex items-center gap-4">
