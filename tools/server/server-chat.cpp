@@ -295,10 +295,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
             bool merge_prev = !chatcmpl_messages.empty() && chatcmpl_messages.back().value("role", "") == "assistant";
 
             if (!item.is_object()) {
-                chatcmpl_messages.push_back(json {
-                    {"role", "user"},
-                    {"content", json::array({responses_make_text_content("[unsupported Responses input item: " + item.dump() + "]")})},
-                });
+                // Non-object input items are skipped.
                 continue;
             }
 
@@ -523,13 +520,8 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         {"content", "Previous conversation summary:\n\n" + summary},
                     });
                 }
-            } else if (exists_and_is_string(item, "type") && item.at("type") == "ghost_snapshot") {
-                // Ghost snapshots are IDE side, so should not affect the prompt.
             } else {
-                chatcmpl_messages.push_back(json {
-                    {"role", "assistant"},
-                    {"content", json::array({responses_make_text_content("[unsupported Responses item: " + item.dump() + "]")})},
-                });
+                // Unknown or IDE-side items (e.g. ghost_snapshot) are skipped.
             }
         }
     } else {
