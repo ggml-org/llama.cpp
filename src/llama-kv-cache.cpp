@@ -100,6 +100,8 @@ llama_kv_cache::llama_kv_cache(
     v_cells_impl(other ? other->v_cells_impl : std::make_shared<llama_kv_cells_vec>()),
     v_cells(*v_cells_impl) {
 
+    n_ref.fill(-1);
+
     // shared cells view the source cache's K/V tensors, so the cell count
     // follows the source allocation: a fitted target can be smaller than the
     // draft default and oversized views would overflow the source tensors
@@ -377,6 +379,8 @@ llama_kv_cache::llama_kv_cache(
 }
 
 void llama_kv_cache::clear(bool data) {
+    n_ref.fill(-1);
+
     for (uint32_t s = 0; s < n_stream; ++s) {
         v_cells[s].reset();
         v_heads[s] = 0;
@@ -403,6 +407,15 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
 
     if (p1 < 0) {
         p1 = std::numeric_limits<llama_pos>::max();
+    }
+
+    // dropping from pos 0 invalidates the latched prefix
+    if (p0 == 0) {
+        if (seq_id >= 0) {
+            n_ref[seq_id] = -1;
+        } else {
+            n_ref.fill(-1);
+        }
     }
 
     if (seq_id >= 0) {
@@ -1109,6 +1122,22 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
         return;
     }
 
+    // latch L_m at the prefill->decode boundary (first single-token append to a populated
+    // seq); until then the mask is full causal. assumes single-token decode (mtmd-cli/server).
+    if (swa_type == LLAMA_SWA_TYPE_REFERENCE) {
+        uint32_t n_tok_seq[LLAMA_MAX_SEQ] = { 0 };
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            n_tok_seq[ubatch.seq_id[i][0]]++;
+        }
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            const llama_seq_id seq_id = ubatch.seq_id[i][0];
+            if (n_ref[seq_id] < 0 && n_tok_seq[seq_id] == 1 &&
+                v_cells[seq_to_stream[seq_id]].seq_pos_max(seq_id) >= 0) {
+                n_ref[seq_id] = ubatch.pos[i];
+            }
+        }
+    }
+
     // keep track of the max sequence position that we would overwrite with this ubatch
     // for non-SWA cache, this would be always empty
     llama_seq_id seq_pos_max_rm[LLAMA_MAX_SEQ];
@@ -1519,6 +1548,9 @@ struct args_set_input_kq_mask {
     uint32_t       n_swa;
     llama_swa_type swa_type;
 
+    // per-seq R-SWA prefix length L_m (-1 = unlatched), indexed by seq_id
+    const llama_pos * n_ref;
+
     int64_t n_kv;
     int64_t n_stream;
     int64_t n_tps;
@@ -1654,7 +1686,7 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
 
                 // apply SWA if any
                 if (swa) {
-                    if (llama_hparams::is_masked_swa(n_swa, swa_type, p0, p1)) {
+                    if (llama_hparams::is_masked_swa(n_swa, swa_type, p0, p1, args.n_ref[seq_id])) {
                         goto skip;
                     }
                 }
@@ -1734,6 +1766,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
         /*.seq_to_stream    =*/ seq_to_stream,
         /*.n_swa            =*/ n_swa,
         /*.swa_type         =*/ swa_type,
+        /*.n_ref            =*/ n_ref.data(),
         /*.n_kv             =*/ n_kv,
         /*.n_stream         =*/ n_stream,
         /*.n_tps            =*/ n_tps,

@@ -107,9 +107,11 @@ CASES = [
         model_key="unlimited", label="single-view scan",
         image="tools/mtmd/test-1.jpeg",
         ground_truth="tools/mtmd/tests/test-1-ground-truth.txt",
-        # HF reference: Unlimited-OCR scoring (gundam, bf16) on this image/ground-truth.
-        # Decoder runs full MHA, not R-SWA; the band absorbs that gap + bf16 variance.
-        hf_cer=0.1869, hf_chrf=75.23, cer_tol=0.06, chrf_tol=6.0,
+        # HF reference: demo/unlimited_ocr_scores.py (gundam, bf16) in the
+        # Unlimited-OCR-Universal fork, on this same image/ground-truth.
+        # llama.cpp runs R-SWA (n_swa>0 -> LLAMA_SWA_TYPE_REFERENCE) in the decoder,
+        # matching the regime the weights were trained under.
+        hf_cer=0.1869, hf_chrf=75.23, cer_tol=0.04, chrf_tol=4.0,
     ),
 ]
 

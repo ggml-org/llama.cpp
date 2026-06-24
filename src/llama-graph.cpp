@@ -395,6 +395,7 @@ static void print_mask(const T * data, int64_t n_tokens, int64_t n_kv, int64_t n
         case LLAMA_SWA_TYPE_STANDARD:  swa_type_str = "LLAMA_SWA_TYPE_STANDARD"; break;
         case LLAMA_SWA_TYPE_CHUNKED:   swa_type_str = "LLAMA_SWA_TYPE_CHUNKED"; break;
         case LLAMA_SWA_TYPE_SYMMETRIC: swa_type_str = "LLAMA_SWA_TYPE_SYMMETRIC"; break;
+        case LLAMA_SWA_TYPE_REFERENCE: swa_type_str = "LLAMA_SWA_TYPE_REFERENCE"; break;
     };
 
     LLAMA_LOG_DEBUG("%s: n_swa : %d, n_kv: %d, swa_type: %s\n", __func__, (int)n_swa, (int)n_kv, swa_type_str);
@@ -2285,7 +2286,9 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
     auto inp = std::make_unique<llm_graph_input_attn_kv>(hparams, cparams, mctx_cur);
 
     {
-        GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "Use llama_kv_cache_iswa for SWA");
+        // REFERENCE masks within this single cache; other SWA types need iswa
+        GGML_ASSERT((hparams.swa_type == LLAMA_SWA_TYPE_NONE ||
+                     hparams.swa_type == LLAMA_SWA_TYPE_REFERENCE) && "Use llama_kv_cache_iswa for SWA");
 
         inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
