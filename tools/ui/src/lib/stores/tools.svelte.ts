@@ -46,7 +46,7 @@ class ToolsStore {
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
 	private _disabledTools = $state(new SvelteSet<string>());
-	private _toolsEndpointUnreachable = $state(false);
+	private _builtinToolsUnavailable = $state(false);
 
 	constructor() {
 		try {
@@ -274,8 +274,8 @@ class ToolsStore {
 		return this._error;
 	}
 
-	get isToolsEndpointUnreachable(): boolean {
-		return this._toolsEndpointUnreachable;
+	get builtinToolsUnavailable(): boolean {
+		return this._builtinToolsUnavailable;
 	}
 
 	get disabledTools(): SvelteSet<string> {
@@ -384,17 +384,20 @@ class ToolsStore {
 
 		this._loading = true;
 		this._error = null;
-		this._toolsEndpointUnreachable = false;
+		this._builtinToolsUnavailable = false;
 
 		try {
 			const toolInfos = await ToolsService.list();
 			this._builtinTools = toolInfos.map((info) => info.definition);
+			// An empty list means the server was started without --tools, so no
+			// built-in tools are exposed. Treat it the same as a missing endpoint.
+			this._builtinToolsUnavailable = this._builtinTools.length === 0;
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
 			this._error = errorMessage;
-			// 404 from /tools means the server was started without --tools
+			// Older servers return 404 from /tools when started without --tools
 			if (errorMessage.includes('404') || errorMessage.toLowerCase().includes('not found')) {
-				this._toolsEndpointUnreachable = true;
+				this._builtinToolsUnavailable = true;
 			}
 			console.error('[ToolsStore] Failed to fetch built-in tools:', err);
 		} finally {

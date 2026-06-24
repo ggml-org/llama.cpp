@@ -45,8 +45,8 @@ export function useToolsPanel(): UseToolsPanelReturn {
 	const noToolsInfoMessage = $derived.by(() => {
 		if (toolsStore.loading) return null;
 		if (toolsStore.toolGroups.length > 0) return null;
-		// Tools endpoint is unreachable (404) — server started without --tools
-		if (toolsStore.isToolsEndpointUnreachable) {
+		// No built-in tools available — server started without --tools
+		if (toolsStore.builtinToolsUnavailable) {
 			return `To enable Built-In Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
 		}
 		// Other errors — return null so UI shows "Failed to load tools"

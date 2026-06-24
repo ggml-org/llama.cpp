@@ -28,7 +28,7 @@
 
 					Loading tools...
 				</div>
-			{:else if toolsStore.isToolsEndpointUnreachable}
+			{:else if toolsStore.builtinToolsUnavailable}
 				<div class="grid gap-2.5 px-3 py-4 text-sm text-muted-foreground">
 					<span class="flex gap-2">
 						<Info class="mt-0.5 h-4 w-4 shrink-0" />
