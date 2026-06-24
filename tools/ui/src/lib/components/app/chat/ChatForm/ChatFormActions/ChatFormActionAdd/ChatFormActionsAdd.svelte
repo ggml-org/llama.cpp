@@ -42,6 +42,7 @@
 		{hasMcpPromptsSupport}
 		{hasMcpResourcesSupport}
 		{onFileUpload}
+		{onSystemPromptClick}
 		{onMcpPromptClick}
 		{onMcpResourcesClick}
 	>
