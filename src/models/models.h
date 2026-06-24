@@ -1541,7 +1541,7 @@ struct llama_model_granite_switch : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
-    // --- per-token switch metadata (read from GGUF in load_arch_hparams) ---
+    // per-token switch metadata (read from GGUF in load_arch_hparams)
     uint32_t n_adapters    = 0;  // number of real adapters (excludes the zero slot)
     uint32_t n_slots       = 0;  // n_adapters + 1 (slot 0 = base/zero delta)
     uint32_t max_lora_rank = 0;
@@ -1551,30 +1551,21 @@ struct llama_model_granite_switch : public llama_model_base {
     // control token id -> substitute token id (token-exchange before embedding)
     std::unordered_map<llama_token, llama_token> control_token_to_substitute;
 
-    // Per-token adapter selection is computed in-graph by a single-head causal
-    // "router" attention whose K/V live in the model KV cache at layer index
-    // hparams.router_layer (== n_layer). Because that state is per-sequence (it
-    // lives in the cache, like vLLM's PagedAttention router), CONCURRENT requests
-    // are isolated for free — there is no global sticky state to leak between
-    // sequences (the prior POC's bug). Within one sequence the selection carries
-    // over once fired (flat gain, no recency) — the vLLM/HF single-switch
-    // contract; see the limitation note in granite_switch.cpp. Mirrors the vLLM
-    // backend (single.py) and HF SingleSwitch.
+    // the per-token adapter selection is recovered in-graph by a single-head
+    // causal router attention whose K/V live in the KV cache at hparams.router_layer
 
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
 
     private:
-        // per-token switched LoRA delta only: B_a·(A_a·x), selected per token.
-        // Returns {n_out, n_tokens}. Used for the fused-qkv slices where the base
-        // term is already computed.
+        // per-token switched LoRA delta only: B_a·(A_a·x) -> {n_out, n_tokens}
         ggml_tensor * build_switched_lora_delta(
                   ggml_tensor * lora_a,  // {n_in, max_lora_rank, N}
                   ggml_tensor * lora_b,  // {max_lora_rank, n_out, N}
                   ggml_tensor * cur,     // {n_in, n_tokens}
                   ggml_tensor * ids);    // {n_tokens} I32 adapter index per token
 
-        // per-token switched LoRA: y = W·x + B_a·(A_a·x), selected per token via mul_mat_id
+        // per-token switched LoRA: y = W·x + B_a·(A_a·x), selected per token
         ggml_tensor * build_switched_lora_mm(
                   ggml_tensor * w,       // base weight (plain 2D)
                   ggml_tensor * lora_a,  // {n_in, max_lora_rank, N}
@@ -1603,16 +1594,8 @@ struct llama_model_granite_switch : public llama_model_base {
 };
 
 
-// Custom graph input for the per-token switch. In set_input it fills, per token:
-//   - sub_tokens  : the token-exchange (control id -> substitute id, else the id)
-//   - router_ksig : +gain for a control token, -gain otherwise (router K, dim 0)
-//   - router_vval : float(adapter_slot) for a control token, 0 otherwise (router V, dim 0)
-//   - router_q    : constant 1.0 (router Q, dim 0)
-// The adapter index per token is NOT computed here — it is recovered in-graph by a
-// single-head causal attention over (router_q, router_ksig, router_vval) whose K/V
-// live in the KV cache, so the selection is per-sequence (no cross-sequence leak).
-// set_input is pure per-token maps (no history / no cross-ubatch carry).
-// can_reuse() returns false so these are recomputed every ubatch.
+// graph input for the per-token switch: fills the substituted ids and the
+// router Q/K/V signals consumed by the in-graph router attention
 class llm_graph_input_switch : public llm_graph_input_i {
 public:
     llm_graph_input_switch(const llama_model_granite_switch & smodel) : smodel(smodel) {}
