@@ -241,6 +241,13 @@ int llama_server(int argc, char ** argv) {
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();
 
+    // return 403 for disabled endpoints
+    server_http_context::handler_t res_403 = [](const server_http_req &) {
+        auto res = std::make_unique<server_http_res>();
+        res->status = 403;
+        return res;
+    };
+
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
     if (params.ui_mcp_proxy) {
         SRV_WRN("%s", "-----------------\n");
@@ -249,6 +256,9 @@ int llama_server(int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
         ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+    } else {
+        ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
+        ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
     }
     // EXPERIMENTAL built-in tools
     if (!params.server_tools.empty()) {
@@ -264,6 +274,9 @@ int llama_server(int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
+    } else {
+        ctx_http.get ("/tools",           ex_wrapper(res_403));
+        ctx_http.post("/tools",           ex_wrapper(res_403));
     }
 
     //
