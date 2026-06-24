@@ -28,7 +28,7 @@
 		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
-		onSystemPromptWithContent?: (content: string) => void;
+		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
 		onMcpPromptClick?: () => void;
 		onMcpResourcesClick?: () => void;
 		trigger: Snippet<[{ disabled: boolean; onclick?: () => void }]>;
@@ -306,7 +306,8 @@
 									<button
 										type="button"
 										class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent active:bg-accent"
-										onclick={() => onSystemPromptWithContent?.(prompt.content)}
+										onclick={() =>
+											onSystemPromptWithContent?.(prompt.content, prompt.id, prompt.title)}
 									>
 										<span class="truncate">{prompt.title}</span>
 									</button>

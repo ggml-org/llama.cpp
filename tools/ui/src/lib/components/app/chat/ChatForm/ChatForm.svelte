@@ -553,7 +553,7 @@
 				onMicClick={handleMicClick}
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
-				onSystemPromptWithContent={onSystemPromptWithContent}
+				{onSystemPromptWithContent}
 				onMcpPromptClick={showMcpPromptButton ? () => (isPromptPickerOpen = true) : undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 			/>

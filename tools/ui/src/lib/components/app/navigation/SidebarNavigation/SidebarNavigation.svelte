@@ -142,7 +142,7 @@
 
 <svelte:window onkeydown={handleKeydown} bind:innerWidth />
 
-{#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.SEARCH))}
+{#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.PROMPTS) && !page.url.hash.includes(ROUTES.SEARCH))}
 	<aside
 		class={[
 			// Layout & positioning

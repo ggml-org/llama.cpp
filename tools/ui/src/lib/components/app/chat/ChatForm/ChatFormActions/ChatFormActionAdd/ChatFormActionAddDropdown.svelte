@@ -26,7 +26,7 @@
 		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
-		onSystemPromptWithContent?: (content: string) => void;
+		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
 		onMcpPromptClick?: () => void;
 		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
@@ -144,7 +144,7 @@
 			<ChatFormActionAddSystemMessageSubmenu
 				{onSystemPromptClick}
 				{onSystemPromptWithContent}
-				onMcpPromptClick={onMcpPromptClick}
+				{onMcpPromptClick}
 			/>
 
 			<ChatFormActionAddToolsSubmenu />

@@ -26,7 +26,6 @@
 		isEditing,
 		activeProcessingState
 	} from '$lib/stores/chat.svelte';
-	import { promptsStore } from '$lib/stores/prompts.svelte';
 	import {
 		conversationsStore,
 		activeMessages,
@@ -198,6 +197,14 @@
 		await chatStore.addSystemPrompt();
 	}
 
+	async function handleSystemPromptWithContent(
+		content: string,
+		instructionId?: string,
+		title?: string
+	) {
+		await chatStore.addSystemPromptWithContent(content, instructionId, title);
+	}
+
 	$effect(() => {
 		const shouldDisableAutoScroll =
 			config().disableAutoScroll || (isMobile.current && isCurrentConversationLoading);
@@ -315,6 +322,7 @@
 				onSend={handleSendMessage}
 				onStop={() => chatStore.stopGeneration()}
 				onSystemPromptAdd={handleSystemPromptAdd}
+				onSystemPromptWithContent={handleSystemPromptWithContent}
 				bind:uploadedFiles={fileUpload.uploadedFiles}
 			/>
 		</div>
