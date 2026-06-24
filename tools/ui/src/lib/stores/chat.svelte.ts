@@ -803,6 +803,7 @@ class ChatStore {
 				);
 				conversationsStore.addMessageToActive(msg);
 				await conversationsStore.updateCurrentNode(msg.id);
+				currentMessageId = msg.id;
 				return msg;
 			},
 			createAssistantMessage: async () => {
