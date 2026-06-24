@@ -13,6 +13,25 @@ The `llama-server` application supports several implementations of speculative d
 A much smaller model (called the _draft model_) generates drafts.
 A draft model is the most used approach in speculative decoding.
 
+### EAGLE-3 (`draft-eagle3`)
+
+EAGLE-3 uses a small draft model that reads the target model's hidden states to predict the next tokens, so it
+reaches higher acceptance than a standalone draft model of the same size. The draft is a one-layer transformer
+trained for a specific target model; it shares the target's tokenizer and (optionally) a reduced draft vocabulary
+mapped back with a `d2t` table.
+
+Convert the EAGLE-3 checkpoint with `--target-model-dir` so it inherits the target's tokenizer and the layer
+indices to read. Both the SpecForge `LlamaForCausalLMEagle3` and the vLLM/AngelSlim `Eagle3LlamaForCausalLM`
+checkpoint formats are supported (for example [`AngelSlim/Qwen3-4B_eagle3`](https://huggingface.co/AngelSlim/Qwen3-4B_eagle3)
+for `Qwen/Qwen3-4B`):
+
+```bash
+python convert_hf_to_gguf.py AngelSlim/Qwen3-4B_eagle3 \
+    --target-model-dir Qwen/Qwen3-4B --outtype bf16 --outfile Qwen3-4B-eagle3.gguf
+
+llama-server -m Qwen3-4B.gguf -md Qwen3-4B-eagle3.gguf --spec-type draft-eagle3
+```
+
 ### n-gram Cache (`ngram-cache`)
 
 An n-gram is a sequence of n tokens. The n-gram cache implementation maintains statistics about short n-gram sequences.
@@ -108,7 +127,7 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 ### General Speculative Parameters
 
 ```
---spec-type [none|draft-simple|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+--spec-type [none|draft-simple|draft-eagle3|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
                                         comma-separated list of types of speculative decoding to use
                                         (default: none)
                                         (env: LLAMA_ARG_SPEC_TYPE)
