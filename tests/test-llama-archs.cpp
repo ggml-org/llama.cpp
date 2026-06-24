@@ -454,6 +454,9 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
         if (arch == LLM_ARCH_EAGLE3) {
             continue;
         }
+        if (arch == LLM_ARCH_DFLASH) {
+            continue;
+        }
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
                 continue;
@@ -558,6 +561,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
             continue; // FIXME: ISWA KV cache initialization needs more fixture params
         }
         if (arch == LLM_ARCH_EAGLE3) {
+            continue;
+        }
+        if (arch == LLM_ARCH_DFLASH) {
             continue;
         }
 
