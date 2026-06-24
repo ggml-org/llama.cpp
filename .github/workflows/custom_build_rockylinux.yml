@@ -1,0 +1,161 @@
+name: build-linux-cuda
+
+on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      create_release:
+        description: 'Create new release'
+        required: true
+        type: boolean
+      tag_name:
+        description: 'Tag name for the release (required for manual trigger)'
+        required: true
+        type: string
+      gpu_arch:
+        description: 'nvidia gpu arch numbers (semicolon-separated, e.g. 70;75;80;86)'
+        required: false
+        type: string
+        default: '70;75;80;86;89'
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-cuda:
+    runs-on: ubuntu-latest
+
+    container:
+      image: nvidia/cuda:12.8.0-devel-rockylinux8
+
+    env:
+      BUILD_TYPE: Release
+      ARCHIVE_BASENAME: llama-bin-linux-cuda-12.8-rockylinux8
+      TAG_NAME: ${{ github.event.release.tag_name || github.event.inputs.tag_name }}
+
+    steps:
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # dnf -y update
+          dnf -y install epel-release
+          dnf config-manager --set-enabled powertools
+          dnf -y install \
+            git \
+            cmake \
+            gcc-toolset-12 \
+            make \
+            ninja-build \
+            tar \
+            gzip \
+            zip \
+            findutils \
+            file \
+            which
+          dnf clean all
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Create tag if it does not exist
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config --global --add safe.directory "${GITHUB_WORKSPACE:-/__w/llama.cpp/llama.cpp}"
+          if git rev-parse "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
+            echo "Tag ${TAG_NAME} already exists, checking out."
+            git checkout "${TAG_NAME}"
+          else
+            echo "Tag ${TAG_NAME} does not exist, creating it on HEAD."
+            git tag "${TAG_NAME}"
+            git push origin "refs/tags/${TAG_NAME}"
+          fi
+
+      - name: Show build environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+          set +u; source scl_source enable gcc-toolset-12; set -u
+          cat /etc/os-release || true
+          uname -a
+          gcc --version
+          g++ --version
+          cmake --version
+          nvcc --version
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euxo pipefail
+          set +u; source scl_source enable gcc-toolset-12; set -u
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+            -DGGML_CUDA=ON \
+            -DCMAKE_CUDA_COMPILER=$(command -v nvcc) \
+            -DCMAKE_CUDA_ARCHITECTURES="${{ github.event.inputs.gpu_arch }}" \
+            -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          set +u; source scl_source enable gcc-toolset-12; set -u
+          cmake --build build --config ${BUILD_TYPE} -j"$(nproc)"
+
+      - name: Prepare release payload
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          TAG="${TAG_NAME}"
+          OUTDIR="${ARCHIVE_BASENAME}-${TAG}"
+          mkdir -p "${OUTDIR}/bin" "${OUTDIR}/lib" "${OUTDIR}/meta"
+
+          if [[ -d build/bin ]]; then
+            find build/bin -maxdepth 1 -type f \( -name 'llama-*' -o -name 'ggml-*' \) -exec cp -av {} "${OUTDIR}/bin/" \;
+          fi
+
+          # Keep both files and symlinks so SONAME links (for example libmtmd.so.0) survive packaging.
+          find build -maxdepth 3 \( -type f -o -type l \) \( -name 'libllama*' -o -name 'libggml*' -o -name 'libmtmd*' \) -exec cp -av {} "${OUTDIR}/lib/" \; || true
+
+          # Fail fast if required runtime library links are missing from the payload.
+          test -e "${OUTDIR}/lib/libmtmd.so.0"
+          test -e "${OUTDIR}/lib/libllama.so.0"
+
+          git config --global --add safe.directory "${GITHUB_WORKSPACE:-/__w/llama.cpp/llama.cpp}"
+
+          git rev-parse HEAD > "${OUTDIR}/meta/git-commit.txt"
+          git describe --tags --always > "${OUTDIR}/meta/git-describe.txt" || true
+          cat /etc/os-release > "${OUTDIR}/meta/os-release.txt" || true
+          gcc --version > "${OUTDIR}/meta/gcc-version.txt"
+          g++ --version > "${OUTDIR}/meta/gxx-version.txt"
+          cmake --version > "${OUTDIR}/meta/cmake-version.txt"
+          nvcc --version > "${OUTDIR}/meta/nvcc-version.txt"
+
+          if compgen -G "${OUTDIR}/bin/*" > /dev/null; then
+            file "${OUTDIR}"/bin/* > "${OUTDIR}/meta/file-bin.txt" || true
+            ldd "${OUTDIR}"/bin/* > "${OUTDIR}/meta/ldd-bin.txt" || true
+          fi
+
+          if compgen -G "${OUTDIR}/lib/*" > /dev/null; then
+            file "${OUTDIR}"/lib/* > "${OUTDIR}/meta/file-lib.txt" || true
+            ldd "${OUTDIR}"/lib/* > "${OUTDIR}/meta/ldd-lib.txt" || true
+          fi
+
+          tar -czf "${OUTDIR}.tar.gz" "${OUTDIR}"
+          sha256sum "${OUTDIR}.tar.gz" > "${OUTDIR}.tar.gz.sha256"
+
+      - name: Upload release assets
+        if: github.event_name == 'release' || github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          files: |
+            ./${{ env.ARCHIVE_BASENAME }}-${{ env.TAG_NAME }}.tar.gz
+            ./${{ env.ARCHIVE_BASENAME }}-${{ env.TAG_NAME }}.tar.gz.sha256
