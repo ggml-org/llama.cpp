@@ -10,6 +10,7 @@
 		RotateCw
 	} from '@lucide/svelte';
 	import { ActionIcon, ModelId } from '$lib/components/app';
+	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
 	import type { ModelOption } from '$lib/types/models';
 	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
@@ -119,11 +120,11 @@
 		</div>
 
 		{#if isLoading}
-			<div class="flex w-4 [@media(pointer:coarse)]:w-5 items-center justify-center">
+			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-5">
 				<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
 			</div>
 		{:else if isFailed}
-			<div class="flex w-4 [@media(pointer:coarse)]:w-auto items-center justify-center">
+			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
 				<CircleAlert
 					class="h-3.5 w-3.5 text-red-500 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				/>
@@ -140,7 +141,7 @@
 				</div>
 			</div>
 		{:else if isSleeping}
-			<div class="flex w-4 [@media(pointer:coarse)]:w-auto items-center justify-center">
+			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
 				<span
 					class="h-2 w-2 rounded-full bg-orange-400 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				></span>
@@ -159,7 +160,7 @@
 				</div>
 			</div>
 		{:else if isLoaded}
-			<div class="flex w-4 [@media(pointer:coarse)]:w-auto items-center justify-center">
+			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
 				<span
 					class="h-2 w-2 rounded-full bg-green-500 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				></span>
@@ -176,7 +177,7 @@
 				</div>
 			</div>
 		{:else}
-			<div class="flex w-4 [@media(pointer:coarse)]:w-auto items-center justify-center">
+			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
 				<span
 					class="h-2 w-2 rounded-full bg-muted-foreground/50 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				></span>
@@ -196,13 +197,6 @@
 	</div>
 
 	{#if isLoading}
-		<div
-			class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 overflow-hidden rounded-b-sm bg-muted"
-		>
-			<div
-				class="h-full bg-primary transition-[width] duration-200 ease-out"
-				style="width: {loadPercent}%"
-			></div>
-		</div>
+		<ModelLoadHighlight percent={loadPercent} />
 	{/if}
 </div>
