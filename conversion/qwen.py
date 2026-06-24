@@ -274,6 +274,7 @@ class DFlashModel(Qwen3Model):
 
     def set_vocab(self):
         # DFlash drafts share the target tokenizer (vocab is identical)
+        assert self.target_model_dir is not None
         original_dir_model = self.dir_model
         self.dir_model = self.target_model_dir
         try:
