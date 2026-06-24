@@ -2502,6 +2502,73 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto & kq_mask = inp->get_kq_mask_mla();
 
+    // PLAN.md §7.N — sparse-gather DSA attention (opt-in, env-gated).
+    //
+    // Gather ONLY the top_k KV rows selected by the indexer and attend over
+    // those (O(n_top_k) per token) instead of materializing a full [n_kv]
+    // mask and running dense attention over all cached keys (O(n_kv)). This is
+    // the decode-path win DSA is supposed to deliver: at 54K context the
+    // attention matmul shrinks ~26x (53649 -> 2048 keys).
+    //
+    // Correctness gate: enabled only for single-token decode (n_tokens == 1).
+    // For a decode token at position p, all cached positions 0..p are valid
+    // (causal), and n_top_k = min(n_kv, index_topk) selects only valid rows —
+    // the indexer mask already pushed future/invalid positions to -INFINITY
+    // before ggml_top_k, so they are never selected. Hence no mask is needed
+    // on the gathered subset. Prefill (n_tokens > 1) has early query tokens
+    // seeing masked future positions within the growing sequence, so it falls
+    // back to the dense masked path below. Multi-token prefill sparse-gather
+    // (with a per-gather validity mask) is a follow-up AC.
+    //
+    // Frozen-baseline safety: default (env unset) is the unchanged dense path.
+    static const bool sparse_gather = getenv("LLAMA_DSA_SPARSE_GATHER") != nullptr;
+    if (sparse_gather && n_tokens == 1) {
+        // full MLA K cache: [d, n_head_kv=1, n_kv, n_stream] (decode: [576,1,n_kv,1])
+        ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+        // ggml_get_rows gathers dim1, but n_kv is dim2 in the MLA cache layout.
+        // Permute -> [d, n_kv, 1, n_stream], gather, permute back to [d, 1, n_top_k, n_stream].
+        // top_k is already [n_top_k, 1, 1, 1] for decode (n_batch=1, n_stream=1),
+        // matching the (ne2=1, ne3=1) of the permuted K.
+        // GGML_OP_GET_ROWS gathers dim1. The MLA K cache is [d, 1, n_kv, n_stream];
+        // for decode (n_batch=n_stream=1) view it as a 2D [d, n_kv] tensor, gather the
+        // n_top_k rows (top_k is [n_top_k,1,1,1]), then reshape to [d, 1, n_top_k, n_stream].
+        // Using a 2D view + reshape keeps the tensor contiguous-backed (no permute / cont
+        // chain that loses backend buffer placement).
+        GGML_ASSERT(k->ne[1] == 1 && k->ne[3] == 1 && "sparse-gather decode path assumes MQA n_head_kv=1, n_stream=1");
+        ggml_tensor * k_2d = ggml_view_2d(ctx0, k, k->ne[0], k->ne[2], k->nb[2], 0); // [d, n_kv]
+        ggml_tensor * k_gath_2d = ggml_get_rows(ctx0, k_2d, top_k);                 // [d, n_top_k] (F32)
+        // cast back to the cache type (F16) and reshape to [d, 1, n_top_k, 1]
+        ggml_tensor * k_gathered = ggml_reshape_4d(ctx0, k_gath_2d, k->ne[0], 1, top_k->ne[0], 1);
+        k_gathered = ggml_cpy(ctx0, k_gathered, ggml_new_tensor_4d(ctx0, k->type,
+                                k_gathered->ne[0], k_gathered->ne[1], k_gathered->ne[2], k_gathered->ne[3]));
+        cb(k_gathered, "k_gathered", il);
+
+        // V is a view of the MLA K cache's first kv_lora_rank rows (absorbed MQA form).
+        ggml_tensor * v_gathered = ggml_view_4d(ctx0, k_gathered, v_cur->ne[0],
+                                                k_gathered->ne[1], k_gathered->ne[2], k_gathered->ne[3],
+                                                k_gathered->nb[1], k_gathered->nb[2], k_gathered->nb[3], 0);
+        cb(v_gathered, "v_gathered", il);
+
+        // Keep the MLA kq_mask input referenced so the scheduler allocates a buffer
+        // for it (set_input_kq_mask writes to it unconditionally). For decode every
+        // gathered row is a valid past position, so the gathered attention needs no
+        // mask; we pass nullptr to build_attn_mha but keep kq_mask alive here.
+        ggml_build_forward_expand(gf, kq_mask);
+
+        // dense attention over the small gathered subset, no mask
+        ggml_tensor * cur = build_attn_mha(q_cur, k_gathered, v_gathered, kq_b, nullptr, sinks, v_mla, kq_scale, il);
+        cb(cur, "kqv_out_sparse", il);
+
+        if (wo) {
+            cur = build_lora_mm(wo, cur, wo_s);
+        }
+        if (wo_b) {
+            cur = ggml_add(ctx0, cur, wo_b);
+        }
+        return cur;
+    }
+
+    // ── default: masked-dense attention (frozen baseline, unchanged) ──
     // prepare new kq mask - starts filled with -INFINITY
     ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
 
@@ -2527,6 +2594,7 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // combine with the original kq mask
     kq_mask_top_k = ggml_add(ctx0, kq_mask_top_k, kq_mask);
+
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);

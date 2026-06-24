@@ -1238,7 +1238,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_argsort_merge(gg
     return res;
 }
 
-// note: reuse the argsort kernel for top_k
+// top_k: a radix-select kernel (kernel_top_k_f32_i32_radix) is implemented in the
+// .metal file but is NOT selected here — measured slower than the blocked
+// bitonic argsort at every context length (it reads the row 4x from global
+// memory vs the bitonic's single read into shared memory). Kept for reference.
+// Use the standard blocked bitonic argsort + merge.
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k(ggml_metal_library_t lib, const ggml_tensor * op) {
     assert(op->op == GGML_OP_TOP_K);
 

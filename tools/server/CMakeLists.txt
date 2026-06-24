@@ -25,7 +25,10 @@ if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
-target_include_directories(${TARGET} PRIVATE ../mtmd)
+# ../mtmd headers are part of llama-server's PUBLIC interface (server headers
+# expose mtmd types), so the include path must propagate to downstream linkers.
+# See REMEDIATION_PLAN P2.
+target_include_directories(${TARGET} PUBLIC ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
 

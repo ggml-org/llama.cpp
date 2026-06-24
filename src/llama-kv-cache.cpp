@@ -336,8 +336,13 @@ llama_kv_cache::llama_kv_cache(
             ggml_is_quantized(type_k) &&
             hparams.n_embd_head_k() % 64 == 0;
 
-        // always create Hadamard rotation tensors for DeepSeek V3.2 DSA lightning indexer
-        if (model.arch == LLM_ARCH_DEEPSEEK32 && hparams.n_embd_head_k_full == hparams.indexer_head_size) {
+        // always create Hadamard rotation tensors for the DSA lightning indexer
+        // (DeepSeek V3.2 and GLM-5.2 / glm-dsa). The indexer key cache is built
+        // with n_embd_head_k_full == indexer_head_size; both archs run the same
+        // Hadamard transform on the indexer q/k before scoring, so without this
+        // override self_k_rot_lid is null and the indexer mul_mat segfaults.
+        if ((model.arch == LLM_ARCH_DEEPSEEK32 || model.arch == LLM_ARCH_GLM_DSA) &&
+                hparams.n_embd_head_k_full == hparams.indexer_head_size) {
             attn_rot_k = true;
         }
 

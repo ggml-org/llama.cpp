@@ -1101,7 +1101,15 @@ struct llama_model_glm_dsa : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
-    using graph = llama_model_deepseek2::graph;
+    // GLM-5.2 is a DSA (DeepSeek Sparse Attention) model: it owns a dedicated
+    // graph that runs the lightning indexer + top-k sparse attention, rather
+    // than aliasing to the DENSE llama_model_deepseek2::graph (which loads the
+    // indexer tensors but never uses them). The GLM-5.2 GGUF carries a full
+    // indexer on every block (no F/S sharing at the GGUF level), so the body
+    // mirrors llama_model_deepseek32::graph. See PLAN.md §7.L.
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+    };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };

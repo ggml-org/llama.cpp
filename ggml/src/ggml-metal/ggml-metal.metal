@@ -5714,6 +5714,152 @@ kernel void kernel_argsort_merge_f32_i32(
 template [[host_name("kernel_argsort_merge_f32_i32_asc")]]  kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_ASC>;
 template [[host_name("kernel_argsort_merge_f32_i32_desc")]] kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_DESC>;
 
+// ============================================================================
+// Radix-select top-k (linear-time partial select, O(5*n) per row, no full sort).
+//
+// Replaces the bitonic argsort for GGML_OP_TOP_K. Float32 -> monotonic uint32,
+// 4 passes of 8-bit bucket histograms to locate the k-th-largest key, then a
+// scatter pass emitting the top-k indices (unordered; set-equality only).
+//
+// One threadgroup per row (ne01, ne02, ne03). T threads stream the row; uses
+// a 256-int threadgroup histogram per pass + barriers. Threshold path is kept
+// in shared memory. Final scatter writes I32 indices via a threadgroup atomic.
+//
+// Order of output indices is NOT defined; only the SET must match (downstream
+// ggml_set_rows treats them as a set).
+// ============================================================================
+// NOTE: the radix-select kernel below (kernel_top_k_f32_i32_radix) is retained
+// as reference but NOT dispatched — see ggml-metal-ops.cpp comment (measured
+// slower than the bitonic path). REMEDIATION_PLAN P2: removed the duplicate
+// outer #define pair that shadowed the in-kernel pair below; kernel body kept
+// for reference. Full removal deferred to avoid an unverified metallib rebuild.
+
+typedef void (radix_top_k_t)(
+        constant ggml_metal_kargs_argsort & args,
+        device const char  * src0,
+        device       int32_t * dst,
+        threadgroup int32_t * shmem [[threadgroup(0)]],
+        uint3   tgpig [[threadgroup_position_in_grid]],
+        ushort3 tpitg [[thread_position_in_threadgroup]],
+        ushort3   ntg [[threads_per_threadgroup]]);
+
+// threadgroup memory layout (int32 units): hist[256], rem[1], thr[4], slot[1], tie[1]. = 263 ints.
+#define RADIX_TOP_K_TG 256
+#define RADIX_TOP_K_NLEV 4
+
+// monotonic float32 -> uint32 (larger float -> larger uint). NaN maps to a fixed value.
+static inline uint radix_top_k_f2m(float f) {
+    uint u = as_type<uint>(f);
+    // sign bit set (negative): invert all bits. else: flip sign bit.
+    uint mask = (u >> 31) ? 0xFFFFFFFFu : 0x80000000u;
+    return u ^ mask;
+}
+
+// Radix-select top-k (linear-time partial select, ~O(5*n) per row, no full sort).
+// Float32 -> monotonic uint32, 4 passes of 8-bit bucket histograms to locate the
+// k-th-largest key T, then a scatter pass emitting the top-k indices (unordered;
+// set-equality only - downstream ggml_set_rows treats them as a set).
+// One threadgroup per row; grid = (ne01, ne02, ne03).
+kernel void kernel_top_k_f32_i32_radix(
+        constant ggml_metal_kargs_argsort & args,
+        device   const char  * src0,
+        device       int32_t * dst,
+        threadgroup   int32_t * shmem [[threadgroup(0)]],
+        uint3   tgpig [[threadgroup_position_in_grid]],
+        ushort3 tpitg [[thread_position_in_threadgroup]],
+        ushort3   ntg [[threads_per_threadgroup]]) {
+    device const float * src_row = (device const float *) (src0 + args.nb01*tgpig[0] + args.nb02*tgpig[1] + args.nb03*tgpig[2]);
+    device       int32_t * dst_row = dst + args.ne0*tgpig[0] + args.ne0*args.ne1*tgpig[1] + args.ne0*args.ne1*args.ne2*tgpig[2];
+
+    const int n = args.ne00;
+    const int k = args.top_k;
+    if (n == 0 || k == 0) return;
+
+    threadgroup int * hist   = shmem + 0;                 // [256]
+    threadgroup int * rem_p  = shmem + 256;                // [1] remaining to pick at this level
+    threadgroup int * thr_p  = shmem + 256 + 1;           // [NLEV] threshold key bytes
+    threadgroup int * slot_p = shmem + 256 + 1 + RADIX_TOP_K_NLEV;  // [1] scatter slot (cap k)
+    threadgroup int * tie_p  = shmem + 256 + 1 + RADIX_TOP_K_NLEV + 1;  // [1] tie admission cap
+
+    if (tpitg[0] == 0) {
+        *rem_p = k;
+        *slot_p = 0;
+        *tie_p = 0;
+        for (int j = 0; j < RADIX_TOP_K_NLEV; ++j) thr_p[j] = 0;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Build threshold key T (the k-th largest key) via 4 radix passes (MSB first).
+    for (int lev = 0; lev < RADIX_TOP_K_NLEV; ++lev) {
+        const int sh = (RADIX_TOP_K_NLEV - 1 - lev) * 8;
+
+        // zero histogram
+        for (int b = tpitg[0]; b < 256; b += ntg[0]) hist[b] = 0;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // stream active elements (high bytes match T-so-far) and bucket them
+        for (int idx = tpitg[0]; idx < n; idx += ntg[0]) {
+            const uint u = radix_top_k_f2m(src_row[idx]);
+            bool active = true;
+            for (int j = 0; j < lev; ++j) {
+                const int psh = (RADIX_TOP_K_NLEV - 1 - j) * 8;
+                if (((u >> psh) & 0xFFu) != (uint) thr_p[j]) { active = false; break; }
+            }
+            if (!active) continue;
+            const unsigned bucket = (u >> sh) & 0xFFu;
+            atomic_fetch_add_explicit((threadgroup atomic_int *) &hist[bucket], 1, memory_order_relaxed);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // thread 0: cumulative-from-top to find target bucket B.
+        //   cum_gt = count in buckets strictly > B (definitely in top-k)
+        //   pick largest B with cum_gt < remaining, i.e. cum_gt + hist[B] >= remaining
+        if (tpitg[0] == 0) {
+            int remaining = *rem_p;
+            int cum_gt = 0;
+            int B = 0;
+            for (int b = 255; b >= 0; --b) {
+                const int c = hist[b];
+                if (cum_gt + c >= remaining) { B = b; break; }
+                cum_gt += c;
+            }
+            thr_p[lev] = B;
+            *rem_p = remaining - cum_gt;  // elements still needed from bucket B (the ties)
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    // Reconstruct full threshold key T
+    uint T = 0;
+    for (int j = 0; j < RADIX_TOP_K_NLEV; ++j) {
+        const int psh = (RADIX_TOP_K_NLEV - 1 - j) * 8;
+        T |= ((uint) thr_p[j] & 0xFFu) << psh;
+    }
+
+    // ---------------- scatter: emit top-k indices (unordered) ----------------
+    // count(key > T) == k - need_eq  (all get slots)
+    // count(key == T) >= need_eq     (admit exactly need_eq of them via tie cap)
+    const int need_eq = *rem_p;
+    for (int idx = tpitg[0]; idx < n; idx += ntg[0]) {
+        const uint u = radix_top_k_f2m(src_row[idx]);
+        bool emit = false;
+        if (u > T) {
+            emit = true;  // definitely in top-k
+        } else if (u == T) {
+            // admit only need_eq of the ties
+            const int got = atomic_fetch_add_explicit((threadgroup atomic_int *) tie_p, 1, memory_order_relaxed);
+            emit = (got < need_eq);
+        }
+        if (emit) {
+            const int slot = atomic_fetch_add_explicit((threadgroup atomic_int *) slot_p, 1, memory_order_relaxed);
+            if (slot < k) {
+                dst_row[slot] = (int32_t) idx;
+            }
+        }
+    }
+    // total slots claimed == (k - need_eq) + need_eq == k (ties capped at need_eq).
+}
+
 constant bool FC_flash_attn_ext_pad_has_mask [[function_constant(FC_FLASH_ATTN_EXT_PAD + 0)]];
 
 constant int32_t FC_flash_attn_ext_pad_ncpsg [[function_constant(FC_FLASH_ATTN_EXT_PAD + 25)]];

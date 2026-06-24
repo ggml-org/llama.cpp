@@ -4353,6 +4353,11 @@ int ggml_metal_op_top_k(ggml_metal_op_t ctx, int idx) {
 
     auto pipeline = ggml_metal_library_get_pipeline_top_k(lib, op);
 
+    // ---- bitonic argsort + merge path (default) ----
+    // (radix-select variant removed from dispatch: measured slower in practice —
+    // reads the row 4x from global memory for the 4 byte-level histogram passes
+    // vs the bitonic's single read into shared memory.)
+
     // bitonic sort requires the number of elements to be power of 2
     int nth = 1;
     while (nth < ne00 && 2*nth <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {

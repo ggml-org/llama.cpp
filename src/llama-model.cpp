@@ -2024,7 +2024,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 res = nullptr;
             } break;
         case LLM_ARCH_DEEPSEEK32:
+        case LLM_ARCH_GLM_DSA:
             {
+                // GLM-5.2 (glm-dsa) is a DSA model and needs the sparse
+                // lightning-indexer KV cache, same as DeepSeek-3.2. Without
+                // this it fell through to the dense default cache, so the
+                // indexer ran nowhere and long-context decode was dense O(n).
+                // See PLAN.md §7.L.
                 res = new llama_kv_cache_dsa(
                         *this,
                         params.type_k,
