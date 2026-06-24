@@ -524,7 +524,7 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          dest=./build/ReleaseOV/bin/
+          dest=./build/ReleaseOV/bin
           OPENVINO_ROOT=./openvino_toolkit
           ov_lib="$OPENVINO_ROOT/runtime/lib/intel64"
 
@@ -534,13 +534,13 @@ jobs:
                 "$ov_lib"/libopenvino_c.so* \
                 "$ov_lib"/libopenvino_*_plugin.so \
                 "$ov_lib"/libopenvino_intel_npu_compiler*.so \
-                "$OPENVINO_ROOT/runtime/3rdparty/tbb/lib"/*.so* \
+                "$OPENVINO_ROOT"/runtime/3rdparty/tbb/lib/*.so* \
                 "$dest"
           cp -P /usr/lib/x86_64-linux-gnu/libOpenCL.so.1* "$dest" 2>/dev/null || true
-          cp "$ov_lib/cache.json" "$dest" 2>/dev/null || true
+          cp "$ov_lib"/cache.json "$dest" 2>/dev/null || true
 
           # OpenVINO licensing
-          cp -r "$OPENVINO_ROOT/docs/licensing" "$dest/openvino-licensing"
+          cp -r "$OPENVINO_ROOT"/docs/licensing "$dest"/openvino-licensing
 
           cp LICENSE "$dest"
           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C "$dest" .
