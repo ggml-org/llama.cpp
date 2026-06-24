@@ -228,7 +228,7 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
         jmsg["content"] = "";
     }
     if (!reasoning_content.empty()) {
-        jmsg["reasoning_content"] = reasoning_content;
+        jmsg["reasoning_content"] = string_strip(reasoning_content);
     }
     if (!tool_name.empty()) {
         jmsg["name"] = tool_name;

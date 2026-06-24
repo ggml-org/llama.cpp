@@ -80,6 +80,7 @@ static void test_normalize_quotes_with_embedded_quotes(testing & t);
 
 // TAG_WITH_TAGGED argument parsing tests
 static void test_tagged_args_with_embedded_quotes(testing & t);
+static void test_reasoning_render_trims_marker_whitespace(testing & t);
 
 static void test_role_markers_all_templates(testing & t);
 
@@ -105,6 +106,7 @@ int main(int argc, char * argv[]) {
     t.test("standard_json_tools", test_standard_json_tools_formats);
     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
     t.test("tagged_args_embedded_quotes", test_tagged_args_with_embedded_quotes);
+    t.test("reasoning_render_trims_marker_whitespace", test_reasoning_render_trims_marker_whitespace);
     t.test("role_markers_all_templates", test_role_markers_all_templates);
 
     return t.summary();
@@ -1849,6 +1851,32 @@ static json build_edit_tool() {
             }}
         }
     });
+}
+
+static void test_reasoning_render_trims_marker_whitespace(testing & t) {
+    common_chat_template tmpl = load_template(t, "models/templates/stepfun-ai-Step-3.5-Flash.jinja");
+
+    common_chat_templates_ptr tmpls(common_chat_templates_init(nullptr, tmpl.source()));
+
+    common_chat_msg user;
+    user.role    = "user";
+    user.content = "Think briefly.";
+
+    common_chat_msg assistant;
+    assistant.role              = "assistant";
+    assistant.reasoning_content = "hello\n";
+    assistant.content           = "Final answer";
+
+    common_chat_templates_inputs inputs;
+    inputs.messages              = {user, assistant};
+    inputs.add_generation_prompt = false;
+    inputs.reasoning_format      = COMMON_REASONING_FORMAT_AUTO;
+
+    auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+    // The trailing newline came from the close marker and should not be duplicated.
+    t.assert_true("single newline before </think>", params.prompt.find("hello\n</think>") != std::string::npos);
+    t.assert_true("no double newline before </think>", params.prompt.find("hello\n\n</think>") == std::string::npos);
 }
 
 // ============================================================================
