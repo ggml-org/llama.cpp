@@ -105,6 +105,7 @@
 	// Picker State
 	let isPromptPickerOpen = $state(false);
 	let promptSearchQuery = $state('');
+	let pendingPromptKey = $state<string | null>(null);
 	let isInlineResourcePickerOpen = $state(false);
 	let resourceSearchQuery = $state('');
 
@@ -408,6 +409,7 @@
 	function handlePromptPickerClose() {
 		isPromptPickerOpen = false;
 		promptSearchQuery = '';
+		pendingPromptKey = null;
 		textareaRef?.focus();
 	}
 
@@ -484,6 +486,7 @@
 		bind:this={pickersRef}
 		{isPromptPickerOpen}
 		{promptSearchQuery}
+		{pendingPromptKey}
 		{isInlineResourcePickerOpen}
 		{resourceSearchQuery}
 		onPromptPickerClose={handlePromptPickerClose}
@@ -493,6 +496,7 @@
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
 		onInlineResourceBrowse={handleBrowseResources}
+		onPendingPromptConsumed={() => (pendingPromptKey = null)}
 	/>
 
 	<div
@@ -554,7 +558,12 @@
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
 				{onSystemPromptWithContent}
-				onMcpPromptClick={showMcpPromptButton ? () => (isPromptPickerOpen = true) : undefined}
+				onMcpPromptClick={showMcpPromptButton
+					? (prompt) => {
+							pendingPromptKey = prompt ? prompt.serverName + ':' + prompt.name : null;
+							isPromptPickerOpen = true;
+						}
+					: undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 			/>
 		</div>

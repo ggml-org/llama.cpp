@@ -19,6 +19,7 @@
 		class?: string;
 		isOpen?: boolean;
 		searchQuery?: string;
+		pendingPromptKey?: string | null;
 		onClose?: () => void;
 		onPromptLoadStart?: (
 			placeholderId: string,
@@ -27,17 +28,32 @@
 		) => void;
 		onPromptLoadComplete?: (placeholderId: string, result: GetPromptResult) => void;
 		onPromptLoadError?: (placeholderId: string, error: string) => void;
+		onPendingPromptConsumed?: () => void;
 	}
 
 	let {
 		class: className = '',
 		isOpen = false,
 		searchQuery = '',
+		pendingPromptKey = null,
 		onClose,
 		onPromptLoadStart,
 		onPromptLoadComplete,
-		onPromptLoadError
+		onPromptLoadError,
+		onPendingPromptConsumed
 	}: Props = $props();
+
+	function promptKey(prompt: MCPPromptInfo): string {
+		return prompt.serverName + ':' + prompt.name;
+	}
+
+	function applyPendingPrompt() {
+		if (!pendingPromptKey || prompts.length === 0) return;
+		const found = prompts.find((p) => promptKey(p) === pendingPromptKey);
+		if (!found) return;
+		handlePromptClick(found);
+		onPendingPromptConsumed?.();
+	}
 
 	let prompts = $state<MCPPromptInfo[]>([]);
 	let isLoading = $state(false);
@@ -78,6 +94,12 @@
 	$effect(() => {
 		if (filteredPrompts.length > 0 && selectedIndex >= filteredPrompts.length) {
 			selectedIndex = 0;
+		}
+	});
+
+	$effect(() => {
+		if (isOpen && pendingPromptKey && prompts.length > 0 && !isLoading) {
+			applyPendingPrompt();
 		}
 	});
 

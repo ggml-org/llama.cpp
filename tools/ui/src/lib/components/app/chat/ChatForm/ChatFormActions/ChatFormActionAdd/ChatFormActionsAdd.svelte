@@ -3,6 +3,7 @@
 	import ChatFormActionAddDropdown from './ChatFormActionAddDropdown.svelte';
 	import ChatFormActionAddSheet from './ChatFormActionAddSheet.svelte';
 	import ChatFormActionAddButton from './ChatFormActionAddButton.svelte';
+	import type { MCPPromptInfo } from '$lib/types';
 
 	interface Props {
 		disabled?: boolean;
@@ -12,7 +13,7 @@
 		hasMcpResourcesSupport?: boolean;
 		hasVisionModality?: boolean;
 		onFileUpload?: () => void;
-		onMcpPromptClick?: () => void;
+		onMcpPromptClick?: (prompt: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
 		onMcpSettingsClick?: () => void;
 		onSystemPromptClick?: () => void;

@@ -527,12 +527,16 @@ class MCPStore {
 
 	addServer(
 		serverData: Omit<MCPServerSettingsEntry, 'id' | 'requestTimeoutSeconds'> & { id?: string }
-	): void {
+	): boolean {
 		const servers = this.getServers();
+		const normalizedUrl = serverData.url.trim();
+		if (servers.some((s) => s.url.trim() === normalizedUrl)) {
+			return false;
+		}
 		const newServer: MCPServerSettingsEntry = {
 			id: serverData.id || (uuid() ?? `server-${Date.now()}`),
 			enabled: serverData.enabled,
-			url: serverData.url.trim(),
+			url: normalizedUrl,
 			name: serverData.name,
 			headers: serverData.headers?.trim() || undefined,
 			requestTimeoutSeconds:
@@ -540,16 +544,24 @@ class MCPStore {
 			useProxy: serverData.useProxy
 		};
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));
+		return true;
 	}
 
-	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
+	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): boolean {
 		const servers = this.getServers();
+		if (updates.url) {
+			const normalizedUrl = updates.url.trim();
+			const duplicate = servers.some((s) => s.id !== id && s.url.trim() === normalizedUrl);
+			if (duplicate) return false;
+			updates = { ...updates, url: normalizedUrl };
+		}
 		settingsStore.updateConfig(
 			SETTINGS_KEYS.MCP_SERVERS,
 			JSON.stringify(
 				servers.map((server) => (server.id === id ? { ...server, ...updates } : server))
 			)
 		);
+		return true;
 	}
 
 	removeServer(id: string): void {
@@ -559,6 +571,12 @@ class MCPStore {
 			JSON.stringify(servers.filter((s) => s.id !== id))
 		);
 		this.clearHealthCheck(id);
+	}
+
+	hasServerWithUrl(url: string): boolean {
+		const normalized = url.trim();
+		if (!normalized) return false;
+		return this.getServers().some((s) => s.url.trim() === normalized);
 	}
 
 	hasAvailableServers(): boolean {

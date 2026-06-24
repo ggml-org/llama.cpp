@@ -17,6 +17,7 @@
 	import { PencilRuler, ChevronDown, ChevronRight } from '@lucide/svelte';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { AttachmentAction } from '$lib/enums/attachment.enums';
+	import type { MCPPromptInfo } from '$lib/types';
 
 	interface Props {
 		class?: string;
@@ -29,7 +30,7 @@
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
 		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
-		onMcpPromptClick?: () => void;
+		onMcpPromptClick?: (prompt: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
 		trigger: Snippet<[{ disabled: boolean; onclick?: () => void }]>;
 	}

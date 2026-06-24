@@ -6,6 +6,7 @@
 	interface Props {
 		isPromptPickerOpen?: boolean;
 		promptSearchQuery?: string;
+		pendingPromptKey?: string | null;
 		isInlineResourcePickerOpen?: boolean;
 		resourceSearchQuery?: string;
 		onPromptPickerClose?: () => void;
@@ -19,11 +20,13 @@
 		onPromptLoadComplete?: (placeholderId: string, result: GetPromptResult) => void;
 		onPromptLoadError?: (placeholderId: string, error: string) => void;
 		onInlineResourceBrowse?: () => void;
+		onPendingPromptConsumed?: () => void;
 	}
 
 	let {
 		isPromptPickerOpen,
 		promptSearchQuery,
+		pendingPromptKey,
 		isInlineResourcePickerOpen,
 		resourceSearchQuery,
 		onPromptPickerClose,
@@ -32,7 +35,8 @@
 		onPromptLoadStart,
 		onPromptLoadComplete,
 		onPromptLoadError,
-		onInlineResourceBrowse
+		onInlineResourceBrowse,
+		onPendingPromptConsumed
 	}: Props = $props();
 
 	let promptPickerRef: ChatFormPickerMcpPrompts | undefined = $state(undefined);
@@ -59,10 +63,12 @@
 	bind:this={promptPickerRef}
 	isOpen={isPromptPickerOpen}
 	searchQuery={promptSearchQuery}
+	{pendingPromptKey}
 	onClose={onPromptPickerClose}
 	{onPromptLoadStart}
 	{onPromptLoadComplete}
 	{onPromptLoadError}
+	{onPendingPromptConsumed}
 />
 
 <ChatFormPickerMcpResources

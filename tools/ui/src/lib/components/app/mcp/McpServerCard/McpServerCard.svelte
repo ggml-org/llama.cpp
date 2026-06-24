@@ -19,7 +19,7 @@
 		server: MCPServerSettingsEntry;
 		enabled?: boolean;
 		onToggle: (enabled: boolean) => void;
-		onUpdate: (updates: Partial<MCPServerSettingsEntry>) => void;
+		onUpdate: (updates: Partial<MCPServerSettingsEntry>) => boolean;
 		onDelete: () => void;
 	}
 
@@ -79,11 +79,14 @@
 	}
 
 	function saveEditing(url: string, headers: string, useProxy: boolean) {
-		onUpdate({
+		const saved = onUpdate({
 			url: url,
 			headers: headers || undefined,
 			useProxy: useProxy
 		});
+
+		if (!saved) return;
+
 		isEditing = false;
 
 		if (server.enabled && url) {
