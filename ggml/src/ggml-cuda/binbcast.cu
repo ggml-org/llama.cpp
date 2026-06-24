@@ -295,6 +295,8 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
         GGML_ASSERT(nb12 % sizeof(src1_t) == 0);
         GGML_ASSERT(nb13 % sizeof(src1_t) == 0);
 
+        GGML_ASSERT(ne2 * ne3 <= std::numeric_limits<unsigned int>::max());
+
         const int block_size = 128;
 
         int64_t hne0 = std::max(ne0 / 2LL, 1LL);
@@ -317,6 +319,8 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
 
             GGML_ASSERT(block_num              <= std::numeric_limits<uint32_t>::max());
             GGML_ASSERT(block_num * block_size <= std::numeric_limits<uint32_t>::max());
+            GGML_ASSERT(ne0 * ne1              <= std::numeric_limits<uint32_t>::max());
+            GGML_ASSERT(ne0 * ne1 * ne2        <= std::numeric_limits<uint32_t>::max());
 
             const uint3 prod_012    = init_fastdiv_values((uint32_t) (ne0 * ne1 * ne2));
             const uint3 prod_01     = init_fastdiv_values((uint32_t) (ne0 * ne1));
