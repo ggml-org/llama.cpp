@@ -5,10 +5,10 @@ inputs:
     description: "Installation path"
     required: true
   version_major:
-    description: "OpenVINO major version (e.g., 2025.3)"
+    description: "OpenVINO major version (e.g., 2026.2.1)"
     required: true
   version_full:
-    description: "OpenVINO full version (e.g., 2025.3.0.19807.44526285f24)"
+    description: "OpenVINO full version (e.g., 2026.2.1.21919.ede283a88e3)"
     required: true
 
 runs:
