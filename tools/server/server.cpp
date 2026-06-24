@@ -241,10 +241,16 @@ int llama_server(int argc, char ** argv) {
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();
 
-    // return 403 for disabled endpoints
+    // return 403 for disabled features
     server_http_context::handler_t res_403 = [](const server_http_req &) {
         auto res = std::make_unique<server_http_res>();
         res->status = 403;
+        res->data = safe_json_to_str({
+            {"error", {
+                {"message", "this feature is disabled"},
+                {"type", "feature_disabled"},
+            }}
+        });
         return res;
     };
 
@@ -260,6 +266,7 @@ int llama_server(int argc, char ** argv) {
         ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
         ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
     }
+
     // EXPERIMENTAL built-in tools
     if (!params.server_tools.empty()) {
         try {
