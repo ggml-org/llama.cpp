@@ -489,6 +489,26 @@ export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.
 export { default as DialogPromptAddNew } from './DialogPromptAddNew.svelte';
 
 /**
+ * **DialogPromptSync** - Sync a conversation system message to its library prompt
+ *
+ * Shows a unified diff between the system message currently in the
+ * conversation and the latest content of its referenced library prompt,
+ * letting the user accept the update.
+ *
+ * @example
+ * ```svelte
+ * <DialogPromptSync
+ *   bind:open={showSync}
+ *   promptTitle={title}
+ *   currentContent={message.content}
+ *   updatedContent={libraryPrompt.content}
+ *   onUpdate={handleUpdate}
+ * />
+ * ```
+ */
+export { default as DialogPromptSync } from './DialogPromptSync.svelte';
+
+/**
  * **DialogMermaidPreview** - Full-screen Mermaid diagram preview with zoom and pan
  *
  * Full-screen dialog for previewing Mermaid diagrams with interactive controls.

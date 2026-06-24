@@ -14,9 +14,10 @@
 		ChatMessageSystem,
 		ChatMessageMcpPrompt
 	} from '$lib/components/app/chat';
-	import { DialogPromptAddNew } from '$lib/components/app';
+	import { DialogPromptAddNew, DialogPromptSync } from '$lib/components/app';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
-	import { deriveAgenticSections } from '$lib/utils';
+	import { deriveAgenticSections, hasContentDiff } from '$lib/utils';
+	import { promptsStore } from '$lib/stores/prompts.svelte';
 	import type {
 		DatabaseMessageExtraMcpPrompt,
 		DatabaseMessageExtraCustomInstruction
@@ -112,8 +113,19 @@
 	let promptDialogOpen = $state(false);
 	let addToLibrary = $state(false);
 	let deferSystemPromptSave = $state(false);
-	let createdPromptId = $state('');
-	let createdPromptTitle = $state('');
+
+	// Staleness: the message references a library prompt via CUSTOM_INSTRUCTION;
+	// surface an update affordance when the library content has since changed.
+	let referencedPrompt = $derived(
+		customInstructionExtra
+			? promptsStore.getPrompt(customInstructionExtra.instructionId)
+			: undefined
+	);
+	let promptIsStale = $derived.by(() => {
+		if (!customInstructionExtra || !referencedPrompt) return false;
+		return hasContentDiff(message.content, referencedPrompt.content);
+	});
+	let showPromptSyncDialog = $state(false);
 
 	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
 	let showBranchAfterEditOption = $derived(message.role === MessageRole.ASSISTANT);
@@ -356,17 +368,14 @@
 		editedUploadedFiles = [];
 	}
 
-	async function saveSystemPrompt(content: string) {
-		await DatabaseService.updateMessage(message.id, { content });
-		const index = conversationsStore.findMessageIndex(message.id);
-		if (index !== -1) {
-			conversationsStore.updateMessageAtIndex(index, { content });
-		}
-	}
-
 	async function saveSystemPromptWithPrompt(content: string, instructionId: string, title: string) {
+		// message.extra is a deep $state proxy; snapshot to plain values so
+		// Dexie/IndexedDB can structured-clone it (see getMergedExtras precedent)
+		const existingExtras = (
+			message.extra ? $state.snapshot(message.extra) : []
+		) as DatabaseMessageExtra[];
 		const extras: DatabaseMessageExtra[] = [
-			...(message.extra || []),
+			...existingExtras,
 			{
 				type: AttachmentType.CUSTOM_INSTRUCTION,
 				instructionId,
@@ -379,6 +388,19 @@
 		if (index !== -1) {
 			conversationsStore.updateMessageAtIndex(index, { content, extra: extras });
 		}
+	}
+
+	// Apply the latest library prompt content to this system message, keeping
+	// the CUSTOM_INSTRUCTION extra (title may also have changed in the library)
+	async function syncPromptFromLibrary() {
+		if (!customInstructionExtra || !referencedPrompt) return;
+		const { instructionId } = customInstructionExtra;
+		await saveSystemPromptWithPrompt(
+			referencedPrompt.content,
+			instructionId,
+			referencedPrompt.title
+		);
+		showPromptSyncDialog = false;
 	}
 
 	async function getMergedExtras(): Promise<DatabaseMessageExtra[]> {
@@ -407,6 +429,8 @@
 			{message}
 			instructionId={customInstructionExtra?.instructionId}
 			title={customInstructionExtra?.title}
+			{promptIsStale}
+			onPromptUpdate={() => (showPromptSyncDialog = true)}
 			onConfirmDelete={handleConfirmDelete}
 			onCopy={handleCopy}
 			onDelete={handleDelete}
@@ -418,11 +442,6 @@
 			{addToLibrary}
 			onAddToLibraryChange={(val: boolean) => (addToLibrary = val)}
 			{deferSystemPromptSave}
-			onSystemPromptSaveComplete={() => {
-				deferSystemPromptSave = false;
-				promptDialogOpen = false;
-				isEditing = false;
-			}}
 		/>
 
 		{#if promptDialogOpen}
@@ -430,14 +449,22 @@
 				open={promptDialogOpen}
 				initialContent={editedContent}
 				onAddToLibraryComplete={(id: string, title: string) => {
-					createdPromptId = id;
-					createdPromptTitle = title;
 					promptDialogOpen = false;
 					deferSystemPromptSave = false;
 					isEditing = false;
 					// Save the system message with prompt reference now that prompt is created
 					saveSystemPromptWithPrompt(editedContent, id, title);
 				}}
+			/>
+		{/if}
+
+		{#if showPromptSyncDialog && referencedPrompt}
+			<DialogPromptSync
+				bind:open={showPromptSyncDialog}
+				promptTitle={referencedPrompt.title}
+				currentContent={message.content}
+				updatedContent={referencedPrompt.content}
+				onUpdate={syncPromptFromLibrary}
 			/>
 		{/if}
 	{:else if mcpPromptExtra}

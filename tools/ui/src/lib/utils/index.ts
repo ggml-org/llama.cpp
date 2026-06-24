@@ -35,6 +35,9 @@ export {
 // Code
 export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from './code';
 
+// Diff
+export { computeLineDiff, formatUnifiedDiff, hasContentDiff, type DiffHunk } from './diff';
+
 // Config helpers
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 

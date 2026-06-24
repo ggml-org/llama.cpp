@@ -52,6 +52,20 @@ export { default as MarkdownContent } from './MarkdownContent/MarkdownContent.sv
 export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte';
 
 /**
+ * **CodeDiff** - Unified diff view between two text blocks
+ *
+ * Renders a line-based diff (additions/deletions) of `oldContent` vs
+ * `newContent` using the existing SyntaxHighlightedCode component and
+ * highlight.js's built-in `diff` language. Dependency-free LCS diff.
+ *
+ * @example
+ * ```svelte
+ * <CodeDiff oldContent={message.content} newContent={libraryPrompt.content} />
+ * ```
+ */
+export { default as CodeDiff } from './CodeDiff.svelte';
+
+/**
  * **CollapsibleContentBlock** - Expandable content card
  *
  * Reusable collapsible card with header, icon, and auto-scroll.
