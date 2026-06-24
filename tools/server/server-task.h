@@ -4,7 +4,6 @@
 #include "llama.h"
 
 #include <string>
-#include <unordered_map>
 #include <unordered_set>
 #include <list>
 #include <map>
@@ -92,7 +91,6 @@ struct task_params {
 
     // per-request parameters for chat parsing
     common_chat_parser_params chat_parser_params;
-    std::unordered_map<std::string, json> responses_tool_metadata;
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
@@ -122,9 +120,6 @@ struct task_result_state {
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id;      // model's tool_call ID for current function call
     std::string oai_resp_fc_item_id; // our generated fc_ item ID for current function call
-    std::string oai_resp_fc_tool_type = "function";
-    std::string oai_resp_fc_arguments;
-    std::string oai_resp_fc_custom_input;
     std::vector<std::string> oai_resp_fc_item_ids; // all generated fc_ IDs, in order of tool call appearance
     int oai_resp_seq_num    = 0;     // monotonically increasing per-stream
     int oai_resp_output_idx = 0;     // tracks current output item index
@@ -463,10 +458,6 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::string oai_resp_message_id;
     std::string oai_resp_fc_id;
     std::string oai_resp_fc_item_id;
-    std::string oai_resp_fc_tool_type = "function";
-    std::string oai_resp_fc_arguments;
-    std::string oai_resp_fc_custom_input;
-    std::unordered_map<std::string, json> responses_tool_metadata;
     int         oai_resp_seq_num    = 0;
     int         oai_resp_output_idx = 0;
     int         oai_resp_reasoning_output_idx = -1;

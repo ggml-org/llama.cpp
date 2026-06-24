@@ -77,18 +77,6 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             ctx.params.response_fields = json_value(data, "response_fields", std::vector<std::string>());
         }));
 
-    add((new field_json("__responses_tool_metadata"))
-        ->set_desc("Internal Responses API tool metadata")
-        ->set_handler([&](field_eval_context & ctx, const json & data) {
-            const auto & meta = data.at("__responses_tool_metadata");
-            if (!meta.is_object()) {
-                return;
-            }
-            for (const auto & item : meta.items()) {
-                ctx.params.responses_tool_metadata[item.key()] = item.value();
-            }
-        }));
-
     //
     // Sampling params
     //

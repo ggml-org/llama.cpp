@@ -616,288 +616,16 @@ static json build_oai_resp_metadata(const std::string & oai_resp_id,
     };
 }
 
-static json parse_tool_arguments(const std::string & arguments) {
-    if (arguments.empty()) {
-        return json::object();
-    }
-    try {
-        return json::parse(arguments);
-    } catch (const std::exception &) {
-        return json::object();
-    }
-}
-
-static std::string get_responses_tool_type(
-        const std::unordered_map<std::string, json> & responses_tool_metadata,
-        const std::string & tool_name) {
-    const auto it = responses_tool_metadata.find(tool_name);
-    if (it == responses_tool_metadata.end()) {
-        return "function";
-    }
-    return json_value(it->second, "type", std::string("function"));
-}
-
-static bool get_custom_tool_input_value_if_present(const json & parsed_args, std::string & input) {
-    if (parsed_args.contains("input")) {
-        input = parsed_args.at("input").is_string()
-            ? parsed_args.at("input").get<std::string>()
-            : parsed_args.at("input").dump();
-        return true;
-    }
-    if (parsed_args.contains("patch")) {
-        input = parsed_args.at("patch").is_string()
-            ? parsed_args.at("patch").get<std::string>()
-            : parsed_args.at("patch").dump();
-        return true;
-    }
-    return false;
-}
-
-static std::string get_custom_tool_input_value(
-        const json & parsed_args,
-        const std::string & raw_arguments) {
-    std::string input;
-    if (get_custom_tool_input_value_if_present(parsed_args, input)) {
-        return input;
-    }
-    return raw_arguments;
-}
-
-static std::string normalize_apply_patch_hunk_header(const std::string & line) {
-    if (line.rfind("@@ -", 0) != 0) {
-        return line;
-    }
-
-    const size_t new_range = line.find(" +", 4);
-    if (new_range == std::string::npos) {
-        return line;
-    }
-
-    const size_t range_end = line.find(" @@", new_range + 2);
-    if (range_end == std::string::npos) {
-        return line;
-    }
-
-    std::string context = line.substr(range_end + 3);
-    while (!context.empty() && context.front() == ' ') {
-        context.erase(context.begin());
-    }
-    return context.empty() ? "@@" : "@@ " + context;
-}
-
-static std::string normalize_apply_patch_input(const std::string & input) {
-    std::string output;
-    output.reserve(input.size());
-
-    size_t pos = 0;
-    while (pos < input.size()) {
-        const size_t line_end = input.find('\n', pos);
-        const size_t end = line_end == std::string::npos ? input.size() : line_end;
-        std::string line = input.substr(pos, end - pos);
-        bool has_cr = false;
-        if (!line.empty() && line.back() == '\r') {
-            has_cr = true;
-            line.pop_back();
-        }
-
-        output += normalize_apply_patch_hunk_header(line);
-        if (has_cr) {
-            output += '\r';
-        }
-        if (line_end != std::string::npos) {
-            output += '\n';
-        }
-        pos = line_end == std::string::npos ? input.size() : line_end + 1;
-    }
-
-    return output;
-}
-
-static std::string get_custom_tool_input_value(
-        const std::string & tool_name,
-        const json & parsed_args,
-        const std::string & raw_arguments) {
-    std::string input = get_custom_tool_input_value(parsed_args, raw_arguments);
-    if (tool_name == "apply_patch") {
-        input = normalize_apply_patch_input(input);
-    }
-    return input;
-}
-
-static std::string best_effort_custom_tool_delta(
-        const std::string & accumulated_arguments,
-        const std::string & previous_input) {
-    const json parsed_args = parse_tool_arguments(accumulated_arguments);
-    std::string current_input;
-    if (!get_custom_tool_input_value_if_present(parsed_args, current_input)) {
-        return std::string();
-    }
-    if (current_input.size() < previous_input.size()) {
-        return std::string();
-    }
-    return current_input.substr(previous_input.size());
-}
-
-static json build_local_shell_action(const json & args, const std::string & raw_arguments) {
-    if (args.contains("action") && args.at("action").is_object()) {
-        return args.at("action");
-    }
-
-    json action = {
-        {"type", "exec"},
-        {"command", json::array()},
-    };
-
-    if (args.contains("command")) {
-        const json & command = args.at("command");
-        if (command.is_array()) {
-            action["command"] = command;
-        } else if (command.is_string()) {
-            action["command"] = json::array({"bash", "-lc", command.get<std::string>()});
-        }
-    } else if (args.contains("cmd") && args.at("cmd").is_string()) {
-        action["command"] = json::array({"bash", "-lc", args.at("cmd").get<std::string>()});
-    } else if (!raw_arguments.empty()) {
-        action["command"] = json::array({"bash", "-lc", raw_arguments});
-    }
-
-    for (const char * key : {"timeout_ms", "working_directory", "env", "user"}) {
-        if (args.contains(key)) {
-            action[key] = args.at(key);
-        }
-    }
-
-    return action;
-}
-
-static std::string file_search_query_from_args(const json & args) {
-    for (const char * key : {"query", "pattern", "filename", "name"}) {
-        if (args.contains(key) && args.at(key).is_string()) {
-            const std::string value = args.at(key).get<std::string>();
-            if (!value.empty()) {
-                return value;
-            }
-        }
-    }
-    return "";
-}
-
-static json server_build_responses_tool_output_item(
+static json build_responses_function_call_item(
         const common_chat_tool_call & tool_call,
-        const std::unordered_map<std::string, json> & responses_tool_metadata,
         const std::string & status,
         const std::string & item_id) {
-    const auto it = responses_tool_metadata.find(tool_call.name);
-    const json parsed_args = parse_tool_arguments(tool_call.arguments);
-
-    const json & meta = it != responses_tool_metadata.end() ? it->second : json::object();
-    const std::string tool_type = get_responses_tool_type(responses_tool_metadata, tool_call.name);
-    const std::string tool_name = json_value(meta, "name", tool_call.name);
-
-    if (tool_type == "custom") {
-        return json {
-            {"type",    "custom_tool_call"},
-            {"status",  status},
-            {"call_id", tool_call.id},
-            {"name",    tool_name},
-            {"input",   get_custom_tool_input_value(tool_name, parsed_args, tool_call.arguments)},
-        };
-    }
-
-    if (tool_type == "local_shell") {
-        return json {
-            {"type",    "local_shell_call"},
-            {"status",  status},
-            {"call_id", tool_call.id},
-            {"action",  build_local_shell_action(parsed_args, tool_call.arguments)},
-        };
-    }
-
-    if (tool_type == "tool_search") {
-        json arguments = parsed_args.contains("arguments") ? parsed_args.at("arguments") : parsed_args;
-        return json {
-            {"type",      "tool_search_call"},
-            {"status",    status},
-            {"call_id",   tool_call.id},
-            {"execution", json_value(meta, "execution", json_value(parsed_args, "execution", std::string("client")))},
-            {"arguments", arguments},
-        };
-    }
-
-    if (tool_type == "web_search") {
-        json action = json::object();
-        if (parsed_args.contains("action") && parsed_args.at("action").is_object()) {
-            action = parsed_args.at("action");
-        } else if (parsed_args.contains("query") || parsed_args.contains("queries") ||
-                   parsed_args.contains("input") || parsed_args.contains("q") || parsed_args.contains("search_query")) {
-            action = json{{"type", "search"}};
-            if (parsed_args.contains("queries")) {
-                action["queries"] = parsed_args.at("queries");
-            }
-            for (const char * key : {"query", "input", "q", "search_query"}) {
-                if (parsed_args.contains(key)) {
-                    action[key] = parsed_args.at(key);
-                }
-            }
-        } else if (parsed_args.contains("url")) {
-            const std::string action_type = parsed_args.contains("pattern") ? "find_in_page" : "open_page";
-            action = json {
-                {"type", action_type},
-                {"url",  parsed_args.at("url")},
-            };
-            if (parsed_args.contains("pattern")) {
-                action["pattern"] = parsed_args.at("pattern");
-            }
-        }
-        return json {
-            {"type",   "web_search_call"},
-            {"id",     item_id.empty() ? "ws_" + random_string() : item_id},
-            {"status", status},
-            {"action", action},
-        };
-    }
-
-    if (tool_type == "file_search") {
-        const std::string query = file_search_query_from_args(parsed_args);
-        return json {
-            {"type",    "file_search_call"},
-            {"id",      item_id.empty() ? "fs_" + random_string() : item_id},
-            {"status",  status},
-            {"queries", query.empty() ? json::array() : json::array({query})},
-        };
-    }
-
-    if (tool_type == "image_generation") {
-        json output_item = {
-            {"type",   "image_generation_call"},
-            {"id",     item_id.empty() ? "ig_" + random_string() : item_id},
-            {"status", status},
-            {"result", json_value(parsed_args, "result", std::string())},
-        };
-        const std::string revised_prompt = json_value(parsed_args, "revised_prompt",
-            json_value(parsed_args, "prompt", std::string()));
-        if (!revised_prompt.empty()) {
-            output_item["revised_prompt"] = revised_prompt;
-        }
-        return output_item;
-    }
-
     return json {
         {"type",      "function_call"},
         {"id",        item_id.empty() ? "fc_" + tool_call.id : item_id},
         {"call_id",   "call_" + tool_call.id},
-        {"name",      tool_name},
-        {"arguments", tool_name == "update_plan" ? ([&]() { json args = parsed_args;
-            if (args.contains("plan") && args.at("plan").is_array()) {
-                for (auto & item : args["plan"]) {
-                    if (item.is_object() && item.contains("status") && item.at("status").is_string()) {
-                        const std::string s = item.at("status").get<std::string>();
-                        item["status"] = s == "Pending" ? "pending" : s
-                                           == "InProgress" || s == "In Progress" ? "in_progress" : s
-                                           == "Completed" ? "completed" : item["status"];
-                    }
-                } return args.dump();
-            } return tool_call.arguments; })() : tool_call.arguments},
+        {"name",      tool_call.name},
+        {"arguments", tool_call.arguments},
         {"status",    status},
     };
 }
@@ -968,9 +696,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
     }
 
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
-        output.push_back(server_build_responses_tool_output_item(
+        output.push_back(build_responses_function_call_item(
             tool_call,
-            generation_params.responses_tool_metadata,
             "completed",
             ""));
     }
@@ -1036,23 +763,14 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         const std::string fc_id = tc_idx < oai_resp_fc_item_ids.size()
             ? oai_resp_fc_item_ids[tc_idx]
             : "fc_" + random_string(); // fallback for non-streaming path
-        const json output_item = server_build_responses_tool_output_item(
+        const json output_item = build_responses_function_call_item(
             tool_call,
-            generation_params.responses_tool_metadata,
             "completed",
             fc_id);
-        const std::string tool_type = json_value(output_item, "type", std::string());
-        if (tool_type == "function_call") {
-            server_sent_events.push_back(build_responses_sse("response.function_call_arguments.done", seq_num, {
-                {"output_index", output_idx}, {"item_id", fc_id},
-                {"arguments", json_value(output_item, "arguments", tool_call.arguments)},
-            }));
-        } else if (tool_type == "custom_tool_call") {
-            server_sent_events.push_back(build_responses_sse("response.custom_tool_call_input.done", seq_num, {
-                {"output_index", output_idx}, {"item_id", fc_id},
-                {"input", json_value(output_item, "input", std::string())},
-            }));
-        }
+        server_sent_events.push_back(build_responses_sse("response.function_call_arguments.done", seq_num, {
+            {"output_index", output_idx}, {"item_id", fc_id},
+            {"arguments", json_value(output_item, "arguments", tool_call.arguments)},
+        }));
         server_sent_events.push_back(build_responses_sse("response.output_item.done", seq_num, {
             {"output_index", output_idx}, {"item", output_item},
         }));
@@ -1366,9 +1084,6 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     oai_resp_message_id    = state.oai_resp_message_id;
     oai_resp_fc_id         = state.oai_resp_fc_id;
     oai_resp_fc_item_id    = state.oai_resp_fc_item_id;
-    oai_resp_fc_tool_type  = state.oai_resp_fc_tool_type;
-    oai_resp_fc_arguments  = state.oai_resp_fc_arguments;
-    oai_resp_fc_custom_input = state.oai_resp_fc_custom_input;
     oai_resp_seq_num       = state.oai_resp_seq_num;
     oai_resp_output_idx    = state.oai_resp_output_idx;
     oai_resp_reasoning_output_idx = state.oai_resp_reasoning_output_idx;
@@ -1419,31 +1134,12 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
             state.oai_resp_fc_id = diff.tool_call_delta.id;
             state.oai_resp_fc_item_id = "fc_" + random_string();
             oai_resp_fc_item_id = state.oai_resp_fc_item_id;
-            state.oai_resp_fc_tool_type = get_responses_tool_type(responses_tool_metadata, diff.tool_call_delta.name);
-            state.oai_resp_fc_arguments.clear();
-            state.oai_resp_fc_custom_input.clear();
             state.oai_resp_fc_item_ids.push_back(state.oai_resp_fc_item_id);
             state.oai_resp_seq_num++;    // output_item.added
             state.oai_resp_output_idx++;
         }
         if (!diff.tool_call_delta.arguments.empty()) {
-            const std::string tool_type = state.oai_resp_fc_tool_type;
-            if (tool_type == "function") {
-                state.oai_resp_seq_num++; // function_call_arguments.delta
-            }
-            const std::string next_arguments = state.oai_resp_fc_arguments + diff.tool_call_delta.arguments;
-            if (tool_type == "custom") {
-                const std::string delta = best_effort_custom_tool_delta(next_arguments, state.oai_resp_fc_custom_input);
-                const json parsed_args = parse_tool_arguments(next_arguments);
-                std::string current_input;
-                if (get_custom_tool_input_value_if_present(parsed_args, current_input)) {
-                    state.oai_resp_fc_custom_input = current_input;
-                }
-                if (!delta.empty()) {
-                    state.oai_resp_seq_num++; // custom_tool_call_input.delta
-                }
-            }
-            state.oai_resp_fc_arguments = next_arguments;
+            state.oai_resp_seq_num++; // function_call_arguments.delta
         }
     }
 }
@@ -1757,22 +1453,15 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
         if (!diff.tool_call_delta.name.empty()) {
             maybe_close_reasoning();
             maybe_close_text();
-            oai_resp_fc_tool_type = get_responses_tool_type(responses_tool_metadata, diff.tool_call_delta.name);
-            oai_resp_fc_arguments.clear();
-            oai_resp_fc_custom_input.clear();
             const common_chat_tool_call tool_call {
                 diff.tool_call_delta.name,
                 "",
                 diff.tool_call_delta.id,
             };
-            const json output_item = server_build_responses_tool_output_item(
+            const json output_item = build_responses_function_call_item(
                 tool_call,
-                responses_tool_metadata,
                 "in_progress",
                 oai_resp_fc_item_id);
-            if (json_value(output_item, "type", std::string()) == "function_call") {
-                oai_resp_fc_tool_type = "function";
-            }
             events.push_back(json {
                 {"event", "response.output_item.added"},
                 {"data", json {
@@ -1785,39 +1474,16 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
         }
 
         if (!diff.tool_call_delta.arguments.empty()) {
-            if (oai_resp_fc_tool_type == "function") {
-                events.push_back(json {
-                    {"event", "response.function_call_arguments.delta"},
-                    {"data", json {
-                        {"type",            "response.function_call_arguments.delta"},
-                        {"sequence_number", seq_num++},
-                        {"output_index",    output_idx - 1},
-                        {"delta",           diff.tool_call_delta.arguments},
-                        {"item_id",         oai_resp_fc_item_id},
-                    }},
-                });
-            } else if (oai_resp_fc_tool_type == "custom") {
-                const std::string next_arguments = oai_resp_fc_arguments + diff.tool_call_delta.arguments;
-                const std::string delta = best_effort_custom_tool_delta(next_arguments, oai_resp_fc_custom_input);
-                const json parsed_args = parse_tool_arguments(next_arguments);
-                oai_resp_fc_arguments = next_arguments;
-                std::string current_input;
-                if (get_custom_tool_input_value_if_present(parsed_args, current_input)) {
-                    oai_resp_fc_custom_input = current_input;
-                }
-                if (!delta.empty()) {
-                    events.push_back(json {
-                        {"event", "response.custom_tool_call_input.delta"},
-                        {"data", json {
-                            {"type",            "response.custom_tool_call_input.delta"},
-                            {"sequence_number", seq_num++},
-                            {"output_index",    output_idx - 1},
-                            {"delta",           delta},
-                            {"item_id",         oai_resp_fc_item_id},
-                        }},
-                    });
-                }
-            }
+            events.push_back(json {
+                {"event", "response.function_call_arguments.delta"},
+                {"data", json {
+                    {"type",            "response.function_call_arguments.delta"},
+                    {"sequence_number", seq_num++},
+                    {"output_index",    output_idx - 1},
+                    {"delta",           diff.tool_call_delta.arguments},
+                    {"item_id",         oai_resp_fc_item_id},
+                }},
+            });
         }
     }
     return events;

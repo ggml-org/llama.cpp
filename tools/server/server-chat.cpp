@@ -53,66 +53,6 @@ static std::string sanitize_tool_name(const std::string & name, const std::strin
     return out;
 }
 
-static json responses_object_schema(json properties, json required = json::array()) {
-    json schema = {
-        {"type", "object"}, {"properties", std::move(properties)}, {"additionalProperties", true},
-    };
-    if (!required.empty()) {
-        schema["required"] = std::move(required);
-    }
-    return schema;
-}
-
-static json responses_function_tool(
-        const std::string & name,
-        const std::string & description,
-        const json & parameters,
-        bool strict = false) {
-    return json {
-        {"name", name}, {"description", description},
-        {"strict", strict}, {"parameters", parameters},
-    };
-}
-
-static std::string responses_custom_tool_description(const json & resp_tool, const std::string & name) {
-    std::string description = json_value(resp_tool, "description", std::string("Freeform Codex tool input."));
-
-    if (name == "apply_patch") {
-        description +=
-            "\n\nPass only the raw apply_patch body in the input argument. "
-            "The body must begin with '*** Begin Patch' and end with '*** End Patch'. "
-            "Use '*** Add File: path' to create a file and prefix every new file content line with '+'. "
-            "Do not update a file before it exists. "
-            "For update hunks, use '@@' with optional semantic context, not unified diff range headers.";
-    }
-
-    if (resp_tool.contains("format") && resp_tool.at("format").is_object()) {
-        const json & format = resp_tool.at("format");
-        const std::string syntax = json_value(format, "syntax", std::string());
-        const std::string definition = json_value(format, "definition", std::string());
-        if (!definition.empty()) {
-            description += "\n\nFreeform input format";
-            if (!syntax.empty()) {
-                description += " (" + syntax + ")";
-            }
-            description += ":\n" + definition;
-        }
-    }
-
-    return description;
-}
-
-static json responses_custom_tool_parameters(const std::string & name) {
-    std::string input_description = "Freeform tool input.";
-    if (name == "apply_patch") {
-        input_description = "Complete raw apply_patch body, beginning with '*** Begin Patch' and ending with '*** End Patch'.";
-    }
-
-    return responses_object_schema(
-            json {{"input", json {{"type", "string"}, {"description", input_description}}}},
-            json::array({"input"}));
-}
-
 static json parse_arguments_best_effort(const json & value) {
     if (value.is_object() || value.is_array()) {
         return value;
@@ -296,204 +236,38 @@ static std::string compaction_summary_text(const json & item) {
     return "";
 }
 
-static void remember_responses_tool(json & metadata, const std::string & name, const json & resp_tool, const std::string & tool_type) {
-    if (metadata.contains(name) && json_value(metadata.at(name), "type", std::string()) == "web_search" && tool_type == "function") {
-        return;
-    }
-    json meta = resp_tool.is_object() ? resp_tool : json::object();
-    meta["name"] = name;
-    meta["type"] = tool_type;
-    metadata[name] = meta;
-}
-
-static bool has_function_tool_named(const json & tools, const std::string & name) {
-    if (!tools.is_array()) {
-        return false;
-    }
-    for (const auto & tool : tools) {
-        if (!tool.is_object() || json_value(tool, "type", std::string()) != "function") {
-            continue;
-        }
-        if (json_value(tool, "name", std::string()) == name) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool responses_tool_choice_requires_tool(const json & response_body, const std::string & tool_type) {
-    if (!response_body.contains("tool_choice")) {
-        return false;
-    }
-
-    const json & tool_choice = response_body.at("tool_choice");
-    if (tool_choice.is_string()) {
-        const std::string choice = tool_choice.get<std::string>();
-        return choice == "required" || choice == "any";
-    }
-
-    if (!tool_choice.is_object()) {
-        return false;
-    }
-
-    const std::string choice_type = json_value(tool_choice, "type", std::string());
-    if (choice_type == "required" || choice_type == "any") {
-        return true;
-    }
-    return choice_type == tool_type;
-}
-
-static json responses_tool_to_chatcmpl_tool(
-        const json & resp_tool,
-        json & metadata,
-        const json & all_tools,
-        const bool expose_hosted_web_search,
-        const bool expose_hosted_file_search,
-        const bool expose_hosted_image_generation) {
+static json responses_tool_to_chatcmpl_tool(const json & resp_tool) {
     if (!resp_tool.is_object()) {
         SRV_WRN("skipping malformed Responses tool: %s\n", resp_tool.dump().c_str());
         return nullptr;
     }
 
     const std::string tool_type = json_value(resp_tool, "type", std::string("function"));
-    json chat_tool;
-    json fn;
-    std::string name;
-
-    if (tool_type == "function") {
-        name = sanitize_tool_name(json_value(resp_tool, "name", std::string()), "function");
-        fn = resp_tool;
-        fn.erase("type");
-        fn["name"] = name;
-        if (!fn.contains("parameters") || !fn.at("parameters").is_object()) {
-            fn["parameters"] = json {
-                {"type", "object"},
-                {"properties", json::object()},
-                {"additionalProperties", true},
-            };
-        }
-        if (!fn.contains("strict")) {
-            fn["strict"] = true;
-        }
-    } else if (tool_type == "custom") {
-        name = sanitize_tool_name(json_value(resp_tool, "name", std::string("custom_tool")), "custom_tool");
-        fn = responses_function_tool(
-                name,
-                responses_custom_tool_description(resp_tool, name),
-                responses_custom_tool_parameters(name));
-    } else if (tool_type == "local_shell") {
-        // Declared so the model can call it; the client runs the command. No server-side execution.
-        name = sanitize_tool_name(json_value(resp_tool, "name", std::string("local_shell")), "local_shell");
-        fn = responses_function_tool(
-                name,
-                "Run a local shell command.",
-                responses_object_schema(json {
-                    {"command", json {{"type", "array"}, {"items", json {{"type", "string"}}}}},
-                    {"cmd", json {{"type", "string"}}},
-                    {"working_directory", json {{"type", "string"}}},
-                    {"timeout_ms", json {{"type", "integer"}}},
-                }));
-    } else if (tool_type == "tool_search") {
-        name = sanitize_tool_name(json_value(resp_tool, "name", std::string("tool_search")), "tool_search");
-        fn = responses_function_tool(
-                name,
-                json_value(resp_tool, "description", std::string("Search for tools available to this Codex session.")),
-                resp_tool.contains("parameters") && resp_tool.at("parameters").is_object()
-                    ? resp_tool.at("parameters")
-                    : responses_object_schema(
-                            json {
-                                {"query", json {{"type", "string"}}},
-                            },
-                            json::array({"query"})));
-    } else if (tool_type == "task_list" || tool_type == "todo_list") {
-        name = sanitize_tool_name(json_value(resp_tool, "name", std::string("update_plan")), "update_plan");
-        fn = responses_function_tool(
-                name,
-                json_value(resp_tool, "description", std::string("Updates the task plan.")),
-                resp_tool.contains("parameters") && resp_tool.at("parameters").is_object()
-                    ? resp_tool.at("parameters")
-                    : json {
-                        {"type", "object"},
-                        {"properties", json {
-                            {"explanation", json {{"type", "string"}}},
-                            {"plan", json {
-                                {"type", "array"},
-                                {"items", json {
-                                    {"type", "object"},
-                                    {"properties", json {
-                                        {"step", json {{"type", "string"}}},
-                                        {"status", json {{"type", "string"}, {"enum", json::array({"pending", "in_progress", "completed"})}}},
-                                    }},
-                                    {"required", json::array({"step", "status"})},
-                                    {"additionalProperties", false},
-                                }},
-                            }},
-                        }},
-                        {"required", json::array({"plan"})},
-                        {"additionalProperties", false},
-                    });
-    } else if (tool_type == "web_search") {
-        name = "web_search";
-        if (!expose_hosted_web_search) {
-            return nullptr;
-        }
-        // Only expose hosted web_search when explicitly requested by tool_choice
-        // or when the request configured a bridge for the emitted call.
-        if (has_function_tool_named(all_tools, name)) {
-            remember_responses_tool(metadata, name, resp_tool, tool_type);
-            return nullptr;
-        }
-        fn = responses_function_tool(
-                name,
-                "Search or open web pages for current information. For search, provide a non-empty query.",
-                responses_object_schema(json {
-                    {"query", json {{"type", "string"}}},
-                    {"queries", json {{"type", "array"}, {"items", json {{"type", "string"}}}}},
-                    {"search_query", json {{"type", "array"}, {"items", json {{"type", "string"}}}}},
-                    {"input", json {{"type", "string"}}},
-                    {"url", json {{"type", "string"}}},
-                    {"pattern", json {{"type", "string"}}},
-                    {"action", json {{"type", "string"}, {"enum", json::array({"search", "open_page", "find_in_page"})}}},
-                }));
-    } else if (tool_type == "file_search") {
-        name = "file_search";
-        if (!expose_hosted_file_search) {
-            return nullptr;
-        }
-        if (has_function_tool_named(all_tools, name)) {
-            remember_responses_tool(metadata, name, resp_tool, tool_type);
-            return nullptr;
-        }
-        fn = responses_function_tool(
-                name,
-                "Search files in the current workspace. Use mode='files' to find paths by name, or mode='content' to search file contents. Prefer this over shell commands such as find.",
-                responses_object_schema(json {
-                    {"query", json {{"type", "string"}}},
-                    {"mode", json {{"type", "string"}, {"enum", json::array({"files", "content"})}}},
-                    {"path", json {{"type", "string"}, {"description", "Optional relative workspace path to search."}}},
-                }, json::array({"query"})));
-    } else if (tool_type == "image_generation") {
-        name = sanitize_tool_name(json_value(resp_tool, "name", std::string("image_generation")), "image_generation");
-        if (!expose_hosted_image_generation) {
-            return nullptr;
-        }
-        fn = responses_function_tool(
-                name,
-                "Generate an image from a prompt.",
-                responses_object_schema(
-                        json {
-                            {"prompt", json {{"type", "string"}}},
-                        },
-                        json::array({"prompt"})));
-    } else {
-        SRV_DBG("responses compat: item_type='%s', action='skip_unsupported_tool'\n", tool_type.c_str());
+    if (tool_type != "function") {
+        // Non-function Responses tool types have no Chat Completions equivalent and no
+        // server-side backend. Skip them instead of rejecting the request (#20156).
+        SRV_WRN("unsupported Responses tool type '%s' skipped\n", tool_type.c_str());
         return nullptr;
     }
 
-    remember_responses_tool(metadata, name, resp_tool, tool_type);
-    chat_tool["type"] = "function";
-    chat_tool["function"] = fn;
-    return chat_tool;
+    json fn = resp_tool;
+    fn.erase("type");
+    fn["name"] = sanitize_tool_name(json_value(resp_tool, "name", std::string()), "function");
+    if (!fn.contains("parameters") || !fn.at("parameters").is_object()) {
+        fn["parameters"] = json {
+            {"type", "object"},
+            {"properties", json::object()},
+            {"additionalProperties", true},
+        };
+    }
+    if (!fn.contains("strict")) {
+        fn["strict"] = true;
+    }
+
+    return json {
+        {"type",     "function"},
+        {"function", fn},
+    };
 }
 
 json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
@@ -712,41 +486,21 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                  item.at("type") == "file_search_call" ||
                  item.at("type") == "image_generation_call")
             ) {
-                const std::string type = item.at("type").get<std::string>();
+                // Relay every tool call as a plain function call. The client owns tool
+                // semantics; the server does not reconstruct provider-specific shapes.
                 std::string name = json_value(item, "name", std::string());
-                json arguments = json::object();
-
-                if (type == "custom_tool_call") {
-                    if (name.empty()) {
-                        name = "custom_tool";
-                    }
-                    arguments["input"] = json_value(item, "input", std::string());
-                } else if (type == "local_shell_call") {
-                    // Relay the shell action verbatim; the client executes it.
-                    name = "local_shell";
-                    arguments = json_value(item, "action", json::object());
-                } else if (type == "tool_search_call") {
-                    name = "tool_search";
-                    arguments = json_value(item, "arguments", json::object());
-                } else if (type == "web_search_call") {
-                    name = "web_search";
-                    arguments = json_value(item, "action", json::object());
-                } else if (type == "file_search_call") {
-                    name = "file_search";
-                    arguments["query"] = json_value(item, "query", std::string());
-                    if (arguments.at("query").get<std::string>().empty() &&
-                        item.contains("queries") && item.at("queries").is_array() && !item.at("queries").empty() &&
-                        item.at("queries").front().is_string()) {
-                        arguments["query"] = item.at("queries").front();
-                    }
-                } else if (type == "image_generation_call") {
-                    name = "image_generation";
-                    arguments["prompt"] = json_value(item, "revised_prompt", std::string());
-                } else if (type == "function_call") {
-                    if (name.empty()) {
-                        name = "function";
-                    }
-                    arguments = parse_arguments_best_effort(json_value(item, "arguments", json::object()));
+                if (name.empty()) {
+                    name = "function";
+                }
+                json arguments;
+                if (item.contains("arguments")) {
+                    arguments = parse_arguments_best_effort(item.at("arguments"));
+                } else if (item.contains("input")) {
+                    arguments = json {{"input", json_value(item, "input", std::string())}};
+                } else if (item.contains("action")) {
+                    arguments = item.at("action");
+                } else {
+                    arguments = json::object();
                 }
 
                 append_assistant_tool_call(chatcmpl_messages, make_tool_call(
@@ -825,30 +579,15 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         }
     }
     if (!response_tools.empty()) {
-        json responses_tool_metadata = json::object();
         std::vector<json> chatcmpl_tools;
-        // Hosted tool types have no server-side backend; declare them to the model
-        // only when tool_choice explicitly selects one, otherwise they are skipped.
-        const bool expose_web_search = responses_tool_choice_requires_tool(response_body, "web_search");
-        const bool expose_file_search = responses_tool_choice_requires_tool(response_body, "file_search");
-        const bool expose_image_generation = responses_tool_choice_requires_tool(response_body, "image_generation");
         for (const json & resp_tool : response_tools) {
-            json chatcmpl_tool = responses_tool_to_chatcmpl_tool(
-                    resp_tool,
-                    responses_tool_metadata,
-                    response_tools,
-                    expose_web_search,
-                    expose_file_search,
-                    expose_image_generation);
+            json chatcmpl_tool = responses_tool_to_chatcmpl_tool(resp_tool);
             if (!chatcmpl_tool.is_null()) {
                 chatcmpl_tools.push_back(chatcmpl_tool);
             }
         }
         if (!chatcmpl_tools.empty()) {
             chatcmpl_body["tools"] = chatcmpl_tools;
-        }
-        if (!responses_tool_metadata.empty()) {
-            chatcmpl_body["__responses_tool_metadata"] = responses_tool_metadata;
         }
     }
 
@@ -858,9 +597,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         if (choice_type == "auto" || choice_type == "none" || choice_type == "required" || choice_type == "any") {
             chatcmpl_body["tool_choice"] = choice_type == "any" ? "required" : choice_type;
         } else {
-            std::string name = choice_type == "web_search" || choice_type == "file_search"
-                ? choice_type
-                : json_value(choice, "name", std::string());
+            std::string name = json_value(choice, "name", std::string());
             for (const char * key : {"function", "tool"}) {
                 if (name.empty() && choice.contains(key) && choice.at(key).is_object()) {
                     name = json_value(choice.at(key), "name", std::string());

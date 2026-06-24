@@ -17,7 +17,6 @@
 #include "mtmd-helper.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cstddef>
 #include <cinttypes>
 #include <ctime>
@@ -2089,7 +2088,6 @@ private:
         res->res_type          = slot.task->params.res_type;
         res->oaicompat_model   = slot.task->params.oaicompat_model;
         res->oaicompat_cmpl_id = slot.task->params.oaicompat_cmpl_id;
-        res->responses_tool_metadata = slot.task->params.responses_tool_metadata;
 
         // populate res.probs_output
         if (slot.task->params.sampling.n_probs > 0) {
@@ -4405,17 +4403,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     }
 
     return res;
-}
-
-static std::string header_value(const server_http_req & req, const std::string & name) {
-    for (const auto & header : req.headers) {
-        if (header.first.size() == name.size() && std::equal(header.first.begin(), header.first.end(), name.begin(),
-                [](unsigned char a, unsigned char b) { return std::tolower(a) == std::tolower(b); })) {
-            const size_t first = header.second.find_first_not_of(" \t\r\n");
-            return first == std::string::npos ? "" : header.second.substr(first, header.second.find_last_not_of(" \t\r\n") - first + 1);
-        }
-    }
-    return "";
 }
 
 static json responses_relax_tool_required_for_parser(json body) {
