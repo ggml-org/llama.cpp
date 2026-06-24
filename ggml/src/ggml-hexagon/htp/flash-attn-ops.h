@@ -112,6 +112,28 @@ static inline size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, siz
            + 256 * 2;                      // HMX scales (id + qk)
 }
 
+#define FA_HVX_BLOCK_SIZE 64
+
+static inline size_t hvx_fa_compute_vtcm_usage(size_t DK, size_t DV, bool is_q_fp32, bool has_mask, size_t n_threads) {
+    const size_t size_q_row_padded = hex_round_up(DK * (is_q_fp32 ? 4 : 2), 128);
+    const size_t size_k_row_padded = hex_round_up(DK * sizeof(__fp16), 128);
+    const size_t size_v_row_padded = hex_round_up(DV * sizeof(__fp16), 128);
+
+    const size_t size_q_block = size_q_row_padded * 1;
+    const size_t size_k_block = size_k_row_padded * FA_HVX_BLOCK_SIZE;
+    const size_t size_v_block = size_v_row_padded * FA_HVX_BLOCK_SIZE;
+    const size_t size_m_block = hex_round_up(FA_HVX_BLOCK_SIZE * sizeof(__fp16), 128);
+    const size_t size_vkq_acc = hex_round_up(DV * sizeof(float), 128);
+
+    const size_t size_per_thread = size_q_block * 1
+                                 + size_k_block * 2
+                                 + size_v_block * 2
+                                 + (has_mask ? size_m_block * FA_DMA_CACHE_MAX_SIZE : 0)
+                                 + size_vkq_acc;
+
+    return size_per_thread * n_threads;
+}
+
 #define FA_MIN_KV_BLOCKS 3
 
 // Cost-based (Br, Bc) search for flash attention with pipeline constraint.

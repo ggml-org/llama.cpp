@@ -77,6 +77,15 @@ struct htp_fa_context {
 
     bool is_q_fp32;
 
+    size_t size_q_block;
+    size_t size_vkq_acc;
+
+    uint8_t * spad_q;
+    uint8_t * spad_k;
+    uint8_t * spad_v;
+    uint8_t * spad_m;
+    uint8_t * spad_a;
+
     uint64_t t_start;
 };
 
@@ -201,11 +210,11 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
     const size_t size_v_row = DV * sizeof(__fp16);
 
     // Scratchpad buffers for Q, K, V, Mask, and VKQ32 accumulator
-    uint8_t * spad_q = octx->src0_spad.data + octx->src0_spad.size_per_thread * ith;
-    uint8_t * spad_k = octx->src1_spad.data + octx->src1_spad.size_per_thread * ith;
-    uint8_t * spad_v = octx->src2_spad.data + octx->src2_spad.size_per_thread * ith;
-    uint8_t * spad_m = octx->src3_spad.data + octx->src3_spad.size_per_thread * ith;
-    uint8_t * spad_a = octx->dst_spad.data  + octx->dst_spad.size_per_thread  * ith;
+    uint8_t * spad_q = factx->spad_q + factx->size_q_block * ith;
+    uint8_t * spad_k = factx->spad_k + factx->size_k_block * 2 * ith;
+    uint8_t * spad_v = factx->spad_v + factx->size_v_block * 2 * ith;
+    uint8_t * spad_m = factx->spad_m + (mask ? factx->size_m_block * FA_DMA_CACHE_MAX_SIZE : 0) * ith;
+    uint8_t * spad_a = factx->spad_a + factx->size_vkq_acc * ith;
 
     const HVX_Vector logit_cap = hvx_vec_splat_f32(factx->logit_softcap);
 
@@ -1841,29 +1850,20 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
 
     size_t size_vkq_acc = hex_round_up(v->ne[0] * sizeof(float), 128); // VKQ32
 
-    octx->src0_spad.size_per_thread = size_q_block * 1;
-    octx->src1_spad.size_per_thread = factx.size_k_block * 2;
-    octx->src2_spad.size_per_thread = factx.size_v_block * 2;
-    octx->src3_spad.size_per_thread = mask ? factx.size_m_block * FA_DMA_CACHE_MAX_SIZE : 0;
-    octx->dst_spad.size_per_thread  = size_vkq_acc;
+    factx.size_q_block = size_q_block;
+    factx.size_vkq_acc = size_vkq_acc;
 
-    octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-    octx->src1_spad.size = octx->src1_spad.size_per_thread * octx->n_threads;
-    octx->src2_spad.size = octx->src2_spad.size_per_thread * octx->n_threads;
-    octx->src3_spad.size = octx->src3_spad.size_per_thread * octx->n_threads;
-    octx->dst_spad.size  = octx->dst_spad.size_per_thread  * octx->n_threads;
+    uint8_t * vtcm_cur = octx->ctx->vtcm_base;
 
-    size_t total_spad = octx->src0_spad.size + octx->src1_spad.size + octx->src2_spad.size + octx->src3_spad.size + octx->dst_spad.size;
+    factx.spad_q = vtcm_seq_alloc(&vtcm_cur, size_q_block * octx->n_threads);
+    factx.spad_k = vtcm_seq_alloc(&vtcm_cur, factx.size_k_block * 2 * octx->n_threads);
+    factx.spad_v = vtcm_seq_alloc(&vtcm_cur, factx.size_v_block * 2 * octx->n_threads);
+    factx.spad_m = vtcm_seq_alloc(&vtcm_cur, (mask ? factx.size_m_block * FA_DMA_CACHE_MAX_SIZE : 0) * octx->n_threads);
+    factx.spad_a = vtcm_seq_alloc(&vtcm_cur, size_vkq_acc * octx->n_threads);
 
-    if (octx->ctx->vtcm_size < total_spad) {
+    if ((size_t) (vtcm_cur - octx->ctx->vtcm_base) > octx->ctx->vtcm_size) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
-
-    octx->src0_spad.data = octx->ctx->vtcm_base;                        octx->src0_spad.src = NULL;
-    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size; octx->src1_spad.src = NULL;
-    octx->src2_spad.data = octx->src1_spad.data + octx->src1_spad.size; octx->src2_spad.src = NULL;
-    octx->src3_spad.data = octx->src2_spad.data + octx->src2_spad.size; octx->src3_spad.src = NULL;
-    octx->dst_spad.data  = octx->src3_spad.data + octx->src3_spad.size; octx->dst_spad.src  = NULL;
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         worker_pool_run_func(octx->ctx->worker_pool, flash_attn_ext_f16_thread, &factx, octx->n_threads);

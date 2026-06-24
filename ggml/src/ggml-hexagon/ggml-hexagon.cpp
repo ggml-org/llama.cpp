@@ -1975,14 +1975,8 @@ static bool ggml_hexagon_precompute_flash_attn_params(
     const size_t size_q_row_padded = hex_round_up(q->ne[0] * (kparams->is_q_fp32 ? 4 : 2), 128);
     const size_t size_k_row_padded = hex_round_up(k->ne[0] * 2, 128);
     const size_t size_v_row_padded = hex_round_up(v->ne[0] * 2, 128);
-    const size_t size_q_block = size_q_row_padded * 1;
-    const size_t size_k_block = size_k_row_padded * 64;
-    const size_t size_v_block = size_v_row_padded * 64;
-    const size_t size_m_block = hex_round_up(64 * 2, 128);
-    const size_t size_vkq_acc = hex_round_up(v->ne[0] * 4, 128);
 
-    const size_t total_spad = (size_q_block * 1 + size_k_block * 2 + size_v_block * 2 + (mask ? size_m_block * 16 : 0) + size_vkq_acc) * sess->n_threads;
-    kparams->vtcm_size = total_spad;
+    kparams->vtcm_size = hvx_fa_compute_vtcm_usage(DK, DV, kparams->is_q_fp32 != 0, mask != nullptr, sess->n_threads);
 
     kparams->u.hvx.size_q_row_padded = size_q_row_padded;
     kparams->u.hvx.size_k_row_padded = size_k_row_padded;
