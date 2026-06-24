@@ -295,7 +295,16 @@ struct common_params_model {
     std::string hf_repo     = ""; // HF repo                                                // NOLINT
     std::string hf_file     = ""; // HF file                                                // NOLINT
     std::string docker_repo = ""; // Docker repo                                            // NOLINT
-    std::string name        = ""; // in format <user>/<model>[:<tag>] (tag is optional)     // NOLINT
+
+    std::string get_name() {
+        if (!hf_repo.empty()) {
+            return hf_repo;
+        }
+        if (!docker_repo.empty()) {
+            return docker_repo;
+        }
+        return path;
+    }
 };
 
 // draft-model-based speculative decoding parameters
@@ -363,7 +372,7 @@ struct common_params_speculative {
 
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;
@@ -489,6 +498,7 @@ struct common_params {
     std::string input_prefix         = ""; // string to prefix user inputs with                             // NOLINT
     std::string input_suffix         = ""; // string to suffix user inputs with                             // NOLINT
     std::string logits_file          = ""; // file for saving *all* logits                                  // NOLINT
+    std::string path_prompts_log_dir = ""; // directory with logged prompts                                 // NOLINT
 
     // llama-debug specific options
     std::string logits_output_dir = "data"; // directory for saving logits output files                     // NOLINT
@@ -571,9 +581,10 @@ struct common_params {
     struct common_params_model mmproj;
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
-    std::vector<std::string> image; // path to image file(s)
+    std::vector<std::string> image; // path to image file(s) ; TODO: change the name to "media"
     int image_min_tokens = -1;
     int image_max_tokens = -1;
+    int mtmd_batch_max_tokens = 1024;
 
     // finetune
     struct lr_opt lr;
@@ -598,7 +609,7 @@ struct common_params {
     bool    cache_prompt        = true;  // whether to enable prompt caching
     bool    cache_idle_slots    = true;  // save and clear idle slots upon starting a new task
     int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
-    int32_t checkpoint_min_step = 256;   // minimum spacing between context checkpoints
+    int32_t checkpoint_min_step = 8192;  // minimum spacing between context checkpoints
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
     std::string hostname      = "127.0.0.1";
@@ -622,12 +633,6 @@ struct common_params {
 
     // UI configs
     bool ui = true;
-
-    // Deprecated: use ui, ui_mcp_proxy, ui_config_json instead
-    bool webui = ui;
-    bool webui_mcp_proxy = false;
-    std::string webui_config_json;
-
     bool ui_mcp_proxy = false;
     std::string ui_config_json;
 
@@ -640,10 +645,11 @@ struct common_params {
     std::vector<std::string> server_tools;
 
     // router server configs
-    std::string models_dir    = ""; // directory containing models for the router server
-    std::string models_preset = ""; // directory containing model presets for the router server
-    int models_max = 4;             // maximum number of models to load simultaneously
-    bool models_autoload = true;    // automatically load models when requested via the router server
+    std::string models_dir    = "";     // directory containing models for the router server
+    std::string models_preset = "";     // directory containing model presets for the router server
+    int models_max = 4;                 // maximum number of models to load simultaneously
+    bool models_autoload = true;        // automatically load models when requested via the router server
+    std::string models_preset_hf = "";  // show a warning about remote presets on router loaded (if not empty)
 
     bool log_json = false;
 
@@ -844,6 +850,9 @@ struct common_file_info {
     bool        is_dir = false;
 };
 std::vector<common_file_info> fs_list(const std::string & path, bool include_directories);
+
+// fs open, also handle UTF8 on Windows
+std::ifstream fs_open_ifstream(const std::string & fname, std::ios_base::openmode mode);
 
 //
 // TTY utils
@@ -1061,6 +1070,10 @@ struct common_prompt_checkpoint {
 
     std::vector<uint8_t> data_tgt;
     std::vector<uint8_t> data_dft;
+
+    // (optional) speculative-decoding implementation state stashed with the checkpoint
+    // (e.g. eagle3's deferred-boundary g_embd row)
+    std::vector<uint8_t> data_spec;
 
     size_t size() const;
 

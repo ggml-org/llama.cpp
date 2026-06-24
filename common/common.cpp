@@ -1074,6 +1074,18 @@ std::vector<common_file_info> fs_list(const std::string & path, bool include_dir
     return files;
 }
 
+std::ifstream fs_open_ifstream(const std::string & fname, std::ios_base::openmode mode) {
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, NULL, 0);
+    if (!wlen) { return std::ifstream(); }
+    std::vector<wchar_t> wfname(wlen);
+    (void)MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, wfname.data(), wlen);
+    return std::ifstream(wfname.data(), mode);
+#else
+    return std::ifstream(fname, mode);
+#endif
+}
+
 //
 // TTY utils
 //
@@ -1148,7 +1160,7 @@ static void common_init_sampler_from_model(
         if (llama_model_meta_val_str(model, llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_SEQUENCE), buf, sizeof(buf)) > 0) {
             const std::vector<std::string> sampler_names = string_split<std::string>(std::string(buf), ';');
             if (!sampler_names.empty()) {
-                sparams.samplers = common_sampler_types_from_names(sampler_names, true);
+                sparams.samplers = common_sampler_types_from_names(sampler_names);
             }
         }
     }
@@ -2034,7 +2046,7 @@ bool common_prompt_batch_decode(
 }
 
 size_t common_prompt_checkpoint::size() const {
-    return data_tgt.size() + data_dft.size();
+    return data_tgt.size() + data_dft.size() + data_spec.size();
 }
 
 bool common_prompt_checkpoint::empty() const {
@@ -2049,6 +2061,7 @@ void common_prompt_checkpoint::clear() {
 
     data_tgt.clear();
     data_dft.clear();
+    data_spec.clear();
 }
 
 void common_prompt_checkpoint::update_pos(
@@ -2138,4 +2151,5 @@ void common_prompt_checkpoint::clear_tgt() {
 
 void common_prompt_checkpoint::clear_dft() {
     data_dft.clear();
+    data_spec.clear();
 }

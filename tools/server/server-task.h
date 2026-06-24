@@ -62,9 +62,6 @@ struct task_params {
 
     int32_t n_cache_reuse = 0; // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
 
-    // number of prompt tokens before the latest user message
-    int32_t n_before_user = -1;
-
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
 
@@ -91,6 +88,9 @@ struct task_params {
 
     // per-request parameters for chat parsing
     common_chat_parser_params chat_parser_params;
+
+    // message spans for checkpointing
+    common_chat_msg_spans message_spans;
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
@@ -210,13 +210,6 @@ struct server_task {
         }
     }
 
-    static task_params params_from_json_cmpl(
-        const llama_vocab * vocab,
-        const common_params & params_base,
-        const int n_ctx_slot,
-        const std::vector<llama_logit_bias> & logit_bias_eog,
-        const json & data);
-
     // utility function
     static std::unordered_set<int> get_list_id(const std::vector<server_task> & tasks) {
         std::unordered_set<int> ids(tasks.size());
@@ -312,6 +305,9 @@ struct server_task_result {
     }
     virtual json to_json() = 0;
     virtual ~server_task_result() = default;
+    virtual server_task_result * clone() const {
+        GGML_ABORT("not implemented for this task type");
+    }
 };
 
 // using shared_ptr for polymorphism of server_task_result
@@ -648,4 +644,13 @@ struct server_prompt_cache {
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_main, llama_context * ctx_drft, int32_t id_slot);
 
     void update();
+};
+
+// used exclusively by router mode
+struct server_task_result_router : server_task_result {
+    json data;
+    virtual json to_json() override { return data; }
+    virtual server_task_result * clone() const override {
+        return new server_task_result_router(*this);
+    }
 };

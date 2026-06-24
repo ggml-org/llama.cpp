@@ -1,9 +1,6 @@
 <script lang="ts">
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import Page from '../../../src/routes/(chat)/+page.svelte';
-
-	let sidebarOpen = $state(false);
 </script>
 
 <!--
@@ -11,7 +8,5 @@
 	This mirrors the providers from +layout.svelte.
 -->
 <Tooltip.Provider>
-	<Sidebar.Provider bind:open={sidebarOpen}>
-		<Page />
-	</Sidebar.Provider>
+	<Page />
 </Tooltip.Provider>
