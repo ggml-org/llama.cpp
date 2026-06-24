@@ -88,6 +88,16 @@ struct llm_build_delta_net_base : public llm_graph_context {
             ggml_tensor *        b,
             ggml_tensor *        s,
             int                  il);
+
+    // MTP rollback: carry forward the deeper snapshot planes this ubatch did not regenerate.
+    // returns [state_size, n_seqs, n_carry], or nullptr when nothing needs carrying (n_written >= K).
+    ggml_tensor * build_rs_rollback_carry(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        states_all,
+            ggml_tensor *        current_states,
+            int64_t              state_size,
+            int64_t              n_written,
+            int                  il);
 };
 
 struct llm_build_rwkv6_base : public llm_graph_context {
