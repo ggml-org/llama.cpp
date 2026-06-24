@@ -524,7 +524,7 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          dest=./build/ReleaseOV/bin
+          dest=./build/ReleaseOV/bin/
           OPENVINO_ROOT=./openvino_toolkit
           ov_lib="$OPENVINO_ROOT/runtime/lib/intel64"
 
@@ -535,7 +535,7 @@ jobs:
                 "$ov_lib"/libopenvino_*_plugin.so \
                 "$ov_lib"/libopenvino_intel_npu_compiler*.so \
                 "$OPENVINO_ROOT/runtime/3rdparty/tbb/lib"/*.so* \
-                "$dest"/
+                "$dest"
           cp -P /usr/lib/x86_64-linux-gnu/libOpenCL.so.1* "$dest" 2>/dev/null || true
           cp "$ov_lib/cache.json" "$dest" 2>/dev/null || true
 
@@ -669,7 +669,7 @@ jobs:
           Copy-Item -Path (Join-Path $OPENVINO_ROOT 'docs\licensing\*') -Destination $licensingDest -Recurse -Force
 
           Copy-Item LICENSE $dest
-          7z a -snl llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip .\build\ReleaseOV\bin\Release\*
+          7z a -snl llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip $dest\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
