@@ -11,10 +11,10 @@
 	} from '$lib/constants';
 	import {
 		ChatFormActionAddToolsSubmenu,
-		ChatFormActionAddMcpServersSubmenu,
 		ChatFormActionAddSystemMessageSubmenu
 	} from '$lib/components/app';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
+	import { registerMcpDialogReopen } from '$lib/stores/mcp-dialog-reopen';
 
 	interface Props {
 		class?: string;
@@ -54,6 +54,15 @@
 		dropdownOpen = false;
 		onMcpSettingsClick?.();
 	}
+
+	registerMcpDialogReopen(() => {
+		dropdownOpen = true;
+		setTimeout(() => {
+			const trigger = document.querySelector<HTMLElement>('[data-submenu="tools"]');
+			trigger?.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }));
+			trigger?.click();
+		}, 100);
+	});
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
@@ -148,8 +157,6 @@
 			/>
 
 			<ChatFormActionAddToolsSubmenu />
-
-			<ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
 
 			{#if hasMcpPromptsSupport}
 				<DropdownMenu.Separator />
