@@ -12,6 +12,7 @@ target_link_libraries(${TARGET} PRIVATE
     llama-fit-params-impl
     llama-quantize-impl
     llama-perplexity-impl
+    llama-download-impl
 )
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
