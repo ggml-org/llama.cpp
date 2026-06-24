@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { BookText, Check, X } from '@lucide/svelte';
+	import { ScanText, Check, X } from '@lucide/svelte';
 	import { ChatMessageActionIcons, MarkdownContent } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
@@ -29,10 +29,11 @@
 		addToLibrary?: boolean;
 		onAddToLibraryChange?: (val: boolean) => void;
 		deferSystemPromptSave?: boolean;
-		onSystemPromptSaveComplete?: () => void;
 		textareaElement?: HTMLTextAreaElement;
 		instructionId?: string;
 		title?: string;
+		promptIsStale?: boolean;
+		onPromptUpdate?: () => void;
 	}
 
 	let {
@@ -50,10 +51,11 @@
 		addToLibrary = false,
 		onAddToLibraryChange,
 		deferSystemPromptSave = false,
-		onSystemPromptSaveComplete,
 		textareaElement = $bindable(),
 		instructionId,
-		title
+		title,
+		promptIsStale = false,
+		onPromptUpdate
 	}: Props = $props();
 
 	const editCtx = getMessageEditContext();
@@ -245,9 +247,19 @@
 
 		{#if instructionId && title}
 			<div class="max-w-[80%] flex items-center gap-2">
-				<BookText class="h-3.5 w-3.5 text-muted-foreground" />
+				<ScanText class="h-3.5 w-3.5 text-muted-foreground" />
+
 				<span class="text-xs font-medium text-muted-foreground">{title}</span>
-				<span class="text-xs text-muted-foreground/60">{instructionId.slice(0, 8)}</span>
+
+				{#if promptIsStale}
+					<button
+						type="button"
+						class="text-xs font-medium text-amber-600 hover:underline hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
+						onclick={onPromptUpdate}
+					>
+						Newer version available
+					</button>
+				{/if}
 			</div>
 		{/if}
 
