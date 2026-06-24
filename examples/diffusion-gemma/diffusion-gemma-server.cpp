@@ -222,6 +222,9 @@ struct diffusion_server {
         common_chat_templates_inputs inputs;
         inputs.messages = common_chat_msgs_parse_oaicompat(messages);
         inputs.add_generation_prompt = true;
+        // match the reference template default: emit the trailing thought-channel preamble
+        // and skip the system turn (the inputs default of true renders the opposite)
+        inputs.enable_thinking = false;
         return common_chat_templates_apply(templates.get(), inputs).prompt;
     }
 
@@ -1094,7 +1097,8 @@ int main(int argc, char ** argv) {
         std::string prompt;
         try { prompt = srv.format_messages(body["messages"]); }
         catch (const std::exception & e) { res.status = 400; res.set_content(error_json(std::string("failed to format messages: ") + e.what(), "invalid_request_error", 400).dump(), "application/json"); return; }
-        const std::vector<llama_token> prompt_tokens = common_tokenize(srv.vocab, prompt, false, true);
+        // the chat template emits no BOS, so add it at tokenization (add_special)
+        const std::vector<llama_token> prompt_tokens = common_tokenize(srv.vocab, prompt, true, true);
         const bool stream = body.value("stream", false);
 
         const diffusion_result r = run_for_body(body, prompt_tokens);
