@@ -463,6 +463,7 @@ void main() {
                 }
                 rowmaxf = max(rowmaxf, float(Sf[r][c]));
             }
+            rowmaxf += FATTN_KQ_MAX_OFFSET;
             float Moldf = Mf[r];
 
             // M = max(rowmax, Mold)
