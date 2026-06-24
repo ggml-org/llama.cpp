@@ -46,6 +46,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "DbrxForCausalLM": "dbrx",
     "DeciLMForCausalLM": "deci",
     "DeepseekForCausalLM": "deepseek",
+    "DeepseekOCRForCausalLM": "deepseek",
     "DeepseekV2ForCausalLM": "deepseek",
     "DeepseekV3ForCausalLM": "deepseek",
     "DeepseekV32ForCausalLM": "deepseek",
@@ -231,6 +232,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "UMT5ForConditionalGeneration": "t5",
     "UMT5Model": "t5",
     "UltravoxModel": "ultravox",
+    "UnlimitedOCRForCausalLM": "deepseek",
     "VLlama3ForCausalLM": "llama",
     "VoxtralForConditionalGeneration": "llama",
     "WavTokenizerDec": "wavtokenizer",
@@ -296,6 +298,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "StepVLForConditionalGeneration": "step3",
     "Step3p7ForConditionalGeneration": "step3",
     "UltravoxModel": "ultravox",
+    "UnlimitedOCRForCausalLM": "deepseek",
     "VoxtralForConditionalGeneration": "ultravox",
     "YoutuVLForConditionalGeneration": "youtuvl",
 }
