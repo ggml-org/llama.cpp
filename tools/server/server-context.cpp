@@ -2090,8 +2090,6 @@ private:
         res->oaicompat_model   = slot.task->params.oaicompat_model;
         res->oaicompat_cmpl_id = slot.task->params.oaicompat_cmpl_id;
         res->responses_tool_metadata = slot.task->params.responses_tool_metadata;
-        res->responses_web_search_wrapper = slot.task->params.responses_web_search_wrapper;
-        res->responses_file_search_wrapper = slot.task->params.responses_file_search_wrapper;
 
         // populate res.probs_output
         if (slot.task->params.sampling.n_probs > 0) {
@@ -4884,26 +4882,9 @@ void server_routes::init_routes() {
         auto res = create_response();
         std::vector<raw_buffer> files;
         const json response_body = json::parse(req.body);
-        const std::string web_search_wrapper = header_value(req, "X-Llama-Responses-Web-Search-Wrapper");
-        const std::string file_search_wrapper = header_value(req, "X-Llama-Responses-File-Search-Wrapper");
-        json body = server_chat_convert_responses_to_chatcmpl(
-                response_body,
-                web_search_wrapper,
-                file_search_wrapper);
-        if (!web_search_wrapper.empty()) {
-            body["__responses_web_search_wrapper"] = web_search_wrapper;
-        }
-        if (!file_search_wrapper.empty()) {
-            body["__responses_file_search_wrapper"] = file_search_wrapper;
-        }
+        json body = server_chat_convert_responses_to_chatcmpl(response_body);
         SRV_DBG("%s\n", "Request converted: OpenAI Responses -> OpenAI Chat Completions");
-        json debug_body = body;
-        for (const char * key : {"__responses_web_search_wrapper", "__responses_file_search_wrapper"}) {
-            if (debug_body.contains(key)) {
-                debug_body[key] = "<redacted>";
-            }
-        }
-        SRV_DBG("converted request: %s\n", debug_body.dump().c_str());
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
         const bool needs_parser_pass =
             body.contains("tools") && body.at("tools").is_array() && !body.at("tools").empty();
         json parser_body;

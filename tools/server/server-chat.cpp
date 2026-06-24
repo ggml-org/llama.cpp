@@ -3,7 +3,6 @@
 
 #include <cctype>
 #include <sstream>
-#include <unordered_set>
 
 static bool exists_and_is_array(const json & j, const char * key) { return j.contains(key) && j.at(key).is_array(); }
 static bool exists_and_is_string(const json & j, const char * key) { return j.contains(key) && j.at(key).is_string(); }
@@ -230,107 +229,6 @@ static json encode_tool_output_content(const json & output) {
     return output.dump();
 }
 
-static bool responses_shell_bridge_to_web_search(
-        const json & action,
-        const std::string & wrapper,
-        json & arguments) {
-    if (wrapper.empty() || !action.is_object() || json_value(action, "type", std::string()) != "exec") {
-        return false;
-    }
-    if (!action.contains("command") || !action.at("command").is_array()) {
-        return false;
-    }
-    const json & command = action.at("command");
-    if (command.size() < 3 || !command.at(0).is_string() || command.at(0).get<std::string>() != wrapper ||
-        !command.at(1).is_string() || !command.at(2).is_string()) {
-        return false;
-    }
-
-    const std::string subcommand = command.at(1).get<std::string>();
-    if (subcommand == "search") {
-        arguments = json {
-            {"type",  "search"},
-            {"query", command.at(2).get<std::string>()},
-        };
-        return true;
-    }
-    if (subcommand == "extract") {
-        arguments = json {
-            {"type", "open_page"},
-            {"url",  command.at(2).get<std::string>()},
-        };
-        for (size_t i = 3; i + 1 < command.size(); ++i) {
-            if (command.at(i).is_string() && command.at(i).get<std::string>() == "--query" && command.at(i + 1).is_string()) {
-                arguments["type"] = "find_in_page";
-                arguments["pattern"] = command.at(i + 1).get<std::string>();
-                return true;
-            }
-        }
-        return true;
-    }
-    return false;
-}
-
-static std::string strip_wrapping_stars(const std::string & value) {
-    // This is for replaying file_search shell bridge back into a file_search call, Codex will replay this later
-    const size_t first = value.find_first_not_of('*');
-    const size_t last = value.find_last_not_of('*');
-    return first == std::string::npos ? "" : value.substr(first, last - first + 1);
-}
-
-static bool responses_shell_bridge_to_file_search(
-        const json & action,
-        const std::string & wrapper,
-        json & arguments) {
-    if (wrapper.empty() || !action.is_object() || json_value(action, "type", std::string()) != "exec") {
-        return false;
-    }
-    if (!action.contains("command") || !action.at("command").is_array()) {
-        return false;
-    }
-    const json & command = action.at("command");
-    if (command.size() < 2 || !command.at(0).is_string() || command.at(0).get<std::string>() != wrapper) {
-        return false;
-    }
-
-    bool files_mode = false;
-    std::string query;
-    std::string path;
-    for (size_t i = 1; i < command.size(); ++i) {
-        if (!command.at(i).is_string()) {
-            continue;
-        }
-        const std::string arg = command.at(i).get<std::string>();
-        if (arg == "--files") {
-            files_mode = true;
-        } else if (arg == "--" && i + 1 < command.size() && command.at(i + 1).is_string()) {
-            query = command.at(i + 1).get<std::string>();
-            if (i + 2 < command.size() && command.at(i + 2).is_string()) {
-                path = command.at(i + 2).get<std::string>();
-            }
-            break;
-        } else if (files_mode && arg == "--glob" && i + 1 < command.size() && command.at(i + 1).is_string()) {
-            const std::string glob = command.at(i + 1).get<std::string>();
-            if (!glob.empty() && glob[0] != '!') {
-                query = strip_wrapping_stars(glob);
-            }
-            i++;
-        }
-    }
-    if (query.empty()) {
-        return false;
-    }
-
-    arguments = json {
-        {"query", query},
-        {"mode",  files_mode ? "files" : "content"},
-    };
-    if (!path.empty() && path != ".") {
-        arguments["path"] = path;
-    }
-    return true;
-}
-
 static void append_tool_output_message(std::vector<json> & messages, const json & item) {
     const std::string call_id = json_value(item, "call_id", std::string());
     if (call_id.empty()) {
@@ -352,75 +250,6 @@ static void append_tool_output_message(std::vector<json> & messages, const json 
         {"role",         "tool"},
         {"tool_call_id", call_id},
     });
-}
-
-static bool strip_shell_output_metadata_text(const std::string & text, std::string & stripped) {
-    for (const std::string marker : {
-            "\nOutput:\n", "\r\nOutput:\r\n", "\nOutput:\r\n", "\r\nOutput:\n",
-            "Output:\n", "Output:\r\n",
-        }) {
-        const size_t pos = text.find(marker);
-        if (pos != std::string::npos) {
-            stripped = text.substr(pos + marker.size());
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool extract_web_search_bridge_output_text(const json & output, std::string & text) {
-    if (output.is_string()) {
-        const std::string raw = output.get<std::string>();
-        if (strip_shell_output_metadata_text(raw, text)) {
-            return true;
-        }
-        text = raw;
-        return true;
-    }
-    if (output.is_array()) {
-        std::string combined;
-        for (const auto & item : output) {
-            std::string part;
-            if (item.is_string()) {
-                part = item.get<std::string>();
-            } else if (item.is_object() && exists_and_is_string(item, "text")) {
-                part = item.at("text").get<std::string>();
-            }
-            if (!part.empty()) {
-                if (!combined.empty()) {
-                    combined += "\n";
-                }
-                combined += part;
-            }
-        }
-        if (combined.empty()) {
-            return false;
-        }
-        if (strip_shell_output_metadata_text(combined, text)) {
-            return true;
-        }
-        text = combined;
-        return true;
-    }
-    if (output.is_object()) {
-        for (const char * key : {"output", "body", "content"}) {
-            if (output.contains(key) && extract_web_search_bridge_output_text(output.at(key), text)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-static void append_web_search_bridge_output_message(std::vector<json> & messages, const json & item) {
-    json normalized = item;
-    if (normalized.contains("output")) {
-        std::string text;
-        if (extract_web_search_bridge_output_text(normalized.at("output"), text)) {
-            normalized["output"] = text;
-        }
-    }
-    append_tool_output_message(messages, normalized);
 }
 
 static std::string input_file_text(const json & input_item) {
@@ -553,6 +382,7 @@ static json responses_tool_to_chatcmpl_tool(
                 responses_custom_tool_description(resp_tool, name),
                 responses_custom_tool_parameters(name));
     } else if (tool_type == "local_shell") {
+        // Declared so the model can call it; the client runs the command. No server-side execution.
         name = sanitize_tool_name(json_value(resp_tool, "name", std::string("local_shell")), "local_shell");
         fn = responses_function_tool(
                 name,
@@ -666,10 +496,7 @@ static json responses_tool_to_chatcmpl_tool(
     return chat_tool;
 }
 
-json server_chat_convert_responses_to_chatcmpl(
-        const json & response_body,
-        const std::string & hosted_web_search_wrapper,
-        const std::string & hosted_file_search_wrapper) {
+json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (!response_body.contains("input")) {
         throw std::invalid_argument("'input' is required");
     }
@@ -682,8 +509,6 @@ json server_chat_convert_responses_to_chatcmpl(
     chatcmpl_body.erase("input");
     chatcmpl_body.erase("previous_response_id");
     std::vector<json> chatcmpl_messages;
-    std::unordered_set<std::string> web_search_bridge_call_ids;
-    std::unordered_set<std::string> file_search_bridge_call_ids;
 
     if (response_body.contains("instructions")) {
         chatcmpl_messages.push_back({
@@ -897,25 +722,9 @@ json server_chat_convert_responses_to_chatcmpl(
                     }
                     arguments["input"] = json_value(item, "input", std::string());
                 } else if (type == "local_shell_call") {
+                    // Relay the shell action verbatim; the client executes it.
+                    name = "local_shell";
                     arguments = json_value(item, "action", json::object());
-                    json bridged_arguments;
-                    if (responses_shell_bridge_to_web_search(arguments, hosted_web_search_wrapper, bridged_arguments)) {
-                        name = "web_search";
-                        arguments = bridged_arguments;
-                        const std::string call_id = json_value(item, "call_id", json_value(item, "id", std::string()));
-                        if (!call_id.empty()) {
-                            web_search_bridge_call_ids.insert(call_id);
-                        }
-                    } else if (responses_shell_bridge_to_file_search(arguments, hosted_file_search_wrapper, bridged_arguments)) {
-                        name = "file_search";
-                        arguments = bridged_arguments;
-                        const std::string call_id = json_value(item, "call_id", json_value(item, "id", std::string()));
-                        if (!call_id.empty()) {
-                            file_search_bridge_call_ids.insert(call_id);
-                        }
-                    } else {
-                        name = "local_shell";
-                    }
                 } else if (type == "tool_search_call") {
                     name = "tool_search";
                     arguments = json_value(item, "arguments", json::object());
@@ -951,14 +760,7 @@ json server_chat_convert_responses_to_chatcmpl(
                  item.at("type") == "file_search_output"   || item.at("type") == "tool_search_output")
             ) {
                 // #responses_create-input-input_item_list-item-function_tool_call_output
-                const std::string call_id = json_value(item, "call_id", std::string());
-                if (!call_id.empty() &&
-                    (web_search_bridge_call_ids.find(call_id) != web_search_bridge_call_ids.end() ||
-                     file_search_bridge_call_ids.find(call_id) != file_search_bridge_call_ids.end())) {
-                    append_web_search_bridge_output_message(chatcmpl_messages, item);
-                } else {
-                    append_tool_output_message(chatcmpl_messages, item);
-                }
+                append_tool_output_message(chatcmpl_messages, item);
             } else if (exists_and_is_array(item, "summary") &&
                 exists_and_is_string(item, "type") &&
                 item.at("type") == "reasoning") {
@@ -1022,15 +824,13 @@ json server_chat_convert_responses_to_chatcmpl(
             response_tools = response_body.at("tools");
         }
     }
-    if (!hosted_file_search_wrapper.empty() && !has_function_tool_named(response_tools, "file_search")) {
-        response_tools.push_back(json{{"type", "file_search"}});
-    }
     if (!response_tools.empty()) {
         json responses_tool_metadata = json::object();
         std::vector<json> chatcmpl_tools;
-        const bool expose_web_search =
-            !hosted_web_search_wrapper.empty() || responses_tool_choice_requires_tool(response_body, "web_search");
-        const bool expose_file_search = !hosted_file_search_wrapper.empty();
+        // Hosted tool types have no server-side backend; declare them to the model
+        // only when tool_choice explicitly selects one, otherwise they are skipped.
+        const bool expose_web_search = responses_tool_choice_requires_tool(response_body, "web_search");
+        const bool expose_file_search = responses_tool_choice_requires_tool(response_body, "file_search");
         const bool expose_image_generation = responses_tool_choice_requires_tool(response_body, "image_generation");
         for (const json & resp_tool : response_tools) {
             json chatcmpl_tool = responses_tool_to_chatcmpl_tool(

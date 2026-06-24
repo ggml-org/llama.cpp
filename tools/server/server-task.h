@@ -93,8 +93,6 @@ struct task_params {
     // per-request parameters for chat parsing
     common_chat_parser_params chat_parser_params;
     std::unordered_map<std::string, json> responses_tool_metadata;
-    std::string responses_web_search_wrapper;
-    std::string responses_file_search_wrapper;
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
@@ -469,8 +467,6 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::string oai_resp_fc_arguments;
     std::string oai_resp_fc_custom_input;
     std::unordered_map<std::string, json> responses_tool_metadata;
-    std::string responses_web_search_wrapper;
-    std::string responses_file_search_wrapper;
     int         oai_resp_seq_num    = 0;
     int         oai_resp_output_idx = 0;
     int         oai_resp_reasoning_output_idx = -1;

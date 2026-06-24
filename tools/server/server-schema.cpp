@@ -89,25 +89,6 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             }
         }));
 
-    add((new field_json("__responses_web_search_wrapper"))
-        ->set_desc("Internal Responses API web search shell wrapper")
-        ->set_handler([&](field_eval_context & ctx, const json & data) {
-            const auto & value = data.at("__responses_web_search_wrapper");
-            if (value.is_string()) {
-                ctx.params.responses_web_search_wrapper = value.get<std::string>();
-            }
-        }));
-
-    add((new field_json("__responses_file_search_wrapper"))
-        ->set_desc("Internal Responses API file search shell wrapper")
-        ->set_handler([&](field_eval_context & ctx, const json & data) {
-            const auto & value = data.at("__responses_file_search_wrapper");
-            if (value.is_string()) {
-                ctx.params.responses_file_search_wrapper = value.get<std::string>();
-            }
-        }));
-
-
     //
     // Sampling params
     //

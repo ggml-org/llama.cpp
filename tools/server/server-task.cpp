@@ -770,92 +770,6 @@ static json build_local_shell_action(const json & args, const std::string & raw_
     return action;
 }
 
-static std::string first_web_search_query(const json & action) {
-    for (const char * key : {"query", "input", "q", "search_query"}) {
-        if (action.contains(key) && action.at(key).is_string()) {
-            return action.at(key).get<std::string>();
-        }
-    }
-    if (action.contains("queries") && action.at("queries").is_array()) {
-        for (const auto & query : action.at("queries")) {
-            if (query.is_string() && !query.get<std::string>().empty()) {
-                return query.get<std::string>();
-            }
-            if (query.is_object() && query.contains("q") && query.at("q").is_string()) {
-                return query.at("q").get<std::string>();
-            }
-        }
-    }
-    if (action.contains("search_query") && action.at("search_query").is_array()) {
-        return first_web_search_query(json{{"queries", action.at("search_query")}});
-    }
-    if (action.contains("url") && action.at("url").is_string()) {
-        std::string query = action.at("url").get<std::string>();
-        if (action.contains("pattern") && action.at("pattern").is_string()) {
-            query += " " + action.at("pattern").get<std::string>();
-        }
-        return query;
-    }
-    return "";
-}
-
-static json build_web_search_local_shell_call_item(
-        const common_chat_tool_call & tool_call,
-        const std::string & status,
-        const json & action,
-        const std::string & wrapper) {
-    if (wrapper.empty() || wrapper.find_first_of(" \t\r\n") != std::string::npos) {
-        SRV_WRN("%s", "Ignoring X-Llama-Responses-Web-Search-Wrapper: expected a command name or path without arguments\n");
-        return nullptr;
-    }
-
-    if (status == "in_progress") {
-        return json {
-            {"type",    "local_shell_call"},
-            {"status",  status},
-            {"call_id", tool_call.id},
-            {"action",  json{{"type", "exec"}, {"command", json::array()}}},
-        };
-    }
-
-    const std::string action_type = json_value(action, "type", std::string("search"));
-    json command = json::array({wrapper});
-    if (action_type == "open_page" || action_type == "find_in_page") {
-        const std::string url = json_value(action, "url", std::string());
-        if (url.empty()) {
-            SRV_WRN("%s", "Ignoring Responses web_search shell bridge call: missing url\n");
-            return nullptr;
-        }
-        command.push_back("extract");
-        command.push_back(url);
-        if (action_type == "find_in_page" && action.contains("pattern") && action.at("pattern").is_string()) {
-            command.push_back("--query");
-            command.push_back(action.at("pattern").get<std::string>());
-        }
-    } else {
-        const std::string query = first_web_search_query(action);
-        if (query.empty()) {
-            SRV_WRN("%s", "Ignoring Responses web_search shell bridge call: missing query\n");
-            return nullptr;
-        }
-        command.push_back("search");
-        command.push_back(query);
-    }
-    command.push_back("--json");
-
-    const json shell_action = json {
-        {"type", "exec"},
-        {"command", command},
-        {"timeout_ms", 60000},
-    };
-    return json {
-        {"type",    "local_shell_call"},
-        {"status",  status},
-        {"call_id", tool_call.id},
-        {"action",  shell_action},
-    };
-}
-
 static std::string file_search_query_from_args(const json & args) {
     for (const char * key : {"query", "pattern", "filename", "name"}) {
         if (args.contains(key) && args.at(key).is_string()) {
@@ -868,88 +782,11 @@ static std::string file_search_query_from_args(const json & args) {
     return "";
 }
 
-static json build_file_search_local_shell_call_item(
-        const common_chat_tool_call & tool_call,
-        const std::string & status,
-        const json & args,
-        const std::string & wrapper) {
-    if (wrapper.empty() || wrapper.find_first_of(" \t\r\n") != std::string::npos) {
-        SRV_WRN("%s", "Ignoring X-Llama-Responses-File-Search-Wrapper: expected a command name or path without arguments\n");
-        return nullptr;
-    }
-
-    if (status == "in_progress") {
-        return json {
-            {"type",    "local_shell_call"},
-            {"status",  status},
-            {"call_id", tool_call.id},
-            {"action",  json{{"type", "exec"}, {"command", json::array()}}},
-        };
-    }
-
-    const std::string query = file_search_query_from_args(args);
-    if (query.empty()) {
-        SRV_WRN("%s", "Ignoring Responses file_search shell bridge call: missing query\n");
-        return nullptr;
-    }
-
-    std::string path = json_value(args, "path", std::string("."));
-    if (path.empty() || path[0] == '/' || path.find("..") != std::string::npos) {
-        path = ".";
-    }
-
-    const std::string mode = json_value(args, "mode",
-        json_value(args, "search_type", std::string("content")));
-    const bool files_mode = mode == "files" || mode == "file" || mode == "filename" || mode == "path";
-
-    json command = json::array({wrapper});
-    command.push_back("--hidden");
-    command.push_back("--glob");
-    command.push_back("!**/.git/**");
-    command.push_back("--glob");
-    command.push_back("!**/node_modules/**");
-    command.push_back("--glob");
-    command.push_back("!**/build/**");
-    command.push_back("--glob");
-    command.push_back("!**/dist/**");
-
-    if (files_mode) {
-        command.push_back("--files");
-        command.push_back("--glob");
-        command.push_back("*" + query + "*");
-        command.push_back(path);
-    } else {
-        command.push_back("-n");
-        command.push_back("--max-columns");
-        command.push_back("240");
-        command.push_back("--max-columns-preview");
-        command.push_back("--max-filesize");
-        command.push_back("1M");
-        command.push_back("--");
-        command.push_back(query);
-        command.push_back(path);
-    }
-
-    const json shell_action = json {
-        {"type", "exec"},
-        {"command", command},
-        {"timeout_ms", 30000},
-    };
-    return json {
-        {"type",    "local_shell_call"},
-        {"status",  status},
-        {"call_id", tool_call.id},
-        {"action",  shell_action},
-    };
-}
-
 static json server_build_responses_tool_output_item(
         const common_chat_tool_call & tool_call,
         const std::unordered_map<std::string, json> & responses_tool_metadata,
         const std::string & status,
-        const std::string & item_id,
-        const std::string & responses_web_search_wrapper,
-        const std::string & responses_file_search_wrapper) {
+        const std::string & item_id) {
     const auto it = responses_tool_metadata.find(tool_call.name);
     const json parsed_args = parse_tool_arguments(tool_call.arguments);
 
@@ -1012,16 +849,6 @@ static json server_build_responses_tool_output_item(
                 action["pattern"] = parsed_args.at("pattern");
             }
         }
-        if (!responses_web_search_wrapper.empty()) {
-            const json shell_item = build_web_search_local_shell_call_item(
-                    tool_call,
-                    status,
-                    action,
-                    responses_web_search_wrapper);
-            if (!shell_item.is_null()) {
-                return shell_item;
-            }
-        }
         return json {
             {"type",   "web_search_call"},
             {"id",     item_id.empty() ? "ws_" + random_string() : item_id},
@@ -1031,17 +858,6 @@ static json server_build_responses_tool_output_item(
     }
 
     if (tool_type == "file_search") {
-        if (!responses_file_search_wrapper.empty()) {
-            const json shell_item = build_file_search_local_shell_call_item(
-                    tool_call,
-                    status,
-                    parsed_args,
-                    responses_file_search_wrapper);
-            if (!shell_item.is_null()) {
-                return shell_item;
-            }
-        }
-
         const std::string query = file_search_query_from_args(parsed_args);
         return json {
             {"type",    "file_search_call"},
@@ -1156,9 +972,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
             tool_call,
             generation_params.responses_tool_metadata,
             "completed",
-            "",
-            generation_params.responses_web_search_wrapper,
-            generation_params.responses_file_search_wrapper));
+            ""));
     }
 
     std::string output_text = build_output_text(output);
@@ -1226,9 +1040,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
             tool_call,
             generation_params.responses_tool_metadata,
             "completed",
-            fc_id,
-            generation_params.responses_web_search_wrapper,
-            generation_params.responses_file_search_wrapper);
+            fc_id);
         const std::string tool_type = json_value(output_item, "type", std::string());
         if (tool_type == "function_call") {
             server_sent_events.push_back(build_responses_sse("response.function_call_arguments.done", seq_num, {
@@ -1957,9 +1769,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                 tool_call,
                 responses_tool_metadata,
                 "in_progress",
-                oai_resp_fc_item_id,
-                responses_web_search_wrapper,
-                responses_file_search_wrapper);
+                oai_resp_fc_item_id);
             if (json_value(output_item, "type", std::string()) == "function_call") {
                 oai_resp_fc_tool_type = "function";
             }
