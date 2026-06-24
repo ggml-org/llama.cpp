@@ -1211,7 +1211,7 @@ struct clip_model_loader {
                 std::vector<int> pinpoints;
                 get_arr_int(KEY_IMAGE_GRID_PINPOINTS, pinpoints, false);
                 if (!pinpoints.empty()) {
-                    for (size_t i = 0; i < pinpoints.size(); i += 2) {
+                    for (size_t i = 0; i + 1 < pinpoints.size(); i += 2) {
                         hparams.image_res_candidates.push_back({
                             pinpoints[i],
                             pinpoints[i+1],
@@ -1256,6 +1256,9 @@ struct clip_model_loader {
                 int idx_std  = gguf_find_key(ctx_gguf.get(), KEY_IMAGE_STD);
                 GGML_ASSERT(idx_mean >= 0 && "image_mean not found");
                 GGML_ASSERT(idx_std >= 0  && "image_std not found");
+                if (gguf_get_arr_n(ctx_gguf.get(), idx_mean) < 3 || gguf_get_arr_n(ctx_gguf.get(), idx_std) < 3) {
+                    throw std::runtime_error("image_mean and image_std must each have at least 3 elements");
+                }
                 const float * mean_data = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_mean);
                 const float * std_data  = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_std);
                 for (int i = 0; i < 3; ++i) {
