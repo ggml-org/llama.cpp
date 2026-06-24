@@ -405,7 +405,7 @@ static inline size_t htp_mm_hvx_get_vtcm_sizes(
                 vtcm_src0_size = repacked_vtcm_size * n_threads;
             }
 
-            size_t quant_scratch_size_per_thread = htp_mm_round_up(ne10 * sizeof(float), 128);
+            size_t quant_scratch_size_per_thread = htp_mm_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
             size_t dst_size_per_thread = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) : 0;
             if (dst_size_per_thread < quant_scratch_size_per_thread) {
                 dst_size_per_thread = quant_scratch_size_per_thread;
@@ -429,7 +429,7 @@ static inline size_t htp_mm_hvx_get_vtcm_sizes(
                 vtcm_src0_size = repacked_vtcm_size * n_threads;
             }
 
-            size_t quant_scratch_size_per_thread = htp_mm_round_up(ne10 * sizeof(float), 128);
+            size_t quant_scratch_size_per_thread = htp_mm_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
             size_t dst_size_per_thread = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) : 0;
             if (dst_size_per_thread < quant_scratch_size_per_thread) {
                 dst_size_per_thread = quant_scratch_size_per_thread;
@@ -479,7 +479,7 @@ static inline size_t htp_mm_hvx_id_get_vtcm_sizes(
     }
 
     const size_t vtcm_src0_size = src0_sz_per_thread * n_threads;
-    const size_t vtcm_dst_size  = htp_mm_round_up(ne10 * sizeof(float), 128) * n_threads;
+    const size_t vtcm_dst_size  = htp_mm_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float)) * n_threads;
 
     *vtcm_src0_size_out = vtcm_src0_size;
     *vtcm_src1_size_out = src1_sz;

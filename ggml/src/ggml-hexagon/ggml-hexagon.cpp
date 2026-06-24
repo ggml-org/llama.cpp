@@ -2441,7 +2441,7 @@ static void ggml_hexagon_precompute_fused_qkv_params(
     size_t src3_sz_per_thread = 0;
     uint32_t best_n_prefetch = 16;
 
-    size_t quant_scratch_size = hex_round_up(ne10 * sizeof(float), 128) * sess->n_threads;
+    size_t quant_scratch_size = hex_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float)) * sess->n_threads;
 
     if (is_repack) {
         uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
@@ -2533,7 +2533,7 @@ static void ggml_hexagon_precompute_fused_ffn_params(
     size_t src2_sz_per_thread = 0;
     uint32_t best_n_prefetch = 16;
 
-    size_t quant_scratch_size = hex_round_up(ne10 * sizeof(float), 128) * sess->n_threads;
+    size_t quant_scratch_size = hex_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float)) * sess->n_threads;
 
     if (is_repack) {
         uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
