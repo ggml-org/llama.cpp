@@ -495,6 +495,8 @@
 		onPromptLoadStart={handlePromptLoadStart}
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
+		onMcpPromptSystemExecute={(prompt, text, title) =>
+			onSystemPromptWithContent?.(text, `mcp:${prompt.serverName}:${prompt.name}`, title)}
 		onInlineResourceBrowse={handleBrowseResources}
 		onPendingPromptConsumed={() => (pendingPromptKey = null)}
 	/>

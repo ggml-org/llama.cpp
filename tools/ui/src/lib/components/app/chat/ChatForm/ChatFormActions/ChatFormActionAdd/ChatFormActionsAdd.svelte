@@ -13,7 +13,7 @@
 		hasMcpResourcesSupport?: boolean;
 		hasVisionModality?: boolean;
 		onFileUpload?: () => void;
-		onMcpPromptClick?: (prompt: MCPPromptInfo) => void;
+		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
 		onMcpSettingsClick?: () => void;
 		onSystemPromptClick?: () => void;

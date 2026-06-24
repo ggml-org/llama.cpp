@@ -85,13 +85,15 @@
 			useProxy: useProxy
 		});
 
-		if (!saved) return;
+		if (!saved) return false;
 
 		isEditing = false;
 
 		if (server.enabled && url) {
 			setTimeout(() => mcpStore.runHealthCheck({ ...server, url, useProxy }), 100);
 		}
+
+		return true;
 	}
 
 	function handleDeleteClick() {
