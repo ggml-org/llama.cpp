@@ -13,6 +13,14 @@
 #include <sstream>
 #include <vector>
 #include <memory>
+#include <fstream>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 // Internal header for clip.cpp
 
@@ -34,6 +42,7 @@
 #define KEY_N_HEAD              "clip.%s.attention.head_count"
 #define KEY_N_HEAD_KV           "clip.%s.attention.head_count_kv"
 #define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
+#define KEY_FEATURE_LAYERS      "clip.%s.feature_layer"
 
 // vision-specific
 #define KEY_VISION_PROJ_TYPE        "clip.vision.projector_type" // for models with mixed modalities
@@ -46,7 +55,6 @@
 #define KEY_PATCH_SIZE              "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN              "clip.vision.image_mean"
 #define KEY_IMAGE_STD               "clip.vision.image_std"
-#define KEY_FEATURE_LAYER           "clip.vision.feature_layer"
 #define KEY_PROJ_SCALE_FACTOR       "clip.vision.projector.scale_factor"
 #define KEY_PROJ_SAMPLE_QUERY_SIDE  "clip.vision.projector.query_side"
 #define KEY_PROJ_SAMPLE_WINDOW_SIDE "clip.vision.projector.window_side"
@@ -367,56 +375,56 @@ enum projector_type {
 };
 
 static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
-    { PROJECTOR_TYPE_MLP,       "mlp" },
-    { PROJECTOR_TYPE_LDP,       "ldp" },
-    { PROJECTOR_TYPE_LDPV2,     "ldpv2"},
-    { PROJECTOR_TYPE_MINICPMV,  "resampler"},
-    { PROJECTOR_TYPE_GLM_EDGE,  "adapter"},
-    { PROJECTOR_TYPE_QWEN2VL,   "qwen2vl_merger"},
-    { PROJECTOR_TYPE_QWEN25VL,  "qwen2.5vl_merger"},
-    { PROJECTOR_TYPE_QWEN3VL,   "qwen3vl_merger"},
-    { PROJECTOR_TYPE_STEP3VL,   "step3vl"},
-    { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
-    { PROJECTOR_TYPE_GEMMA3NV,  "gemma3nv"},
-    { PROJECTOR_TYPE_GEMMA3NA,  "gemma3na"},
-    { PROJECTOR_TYPE_GEMMA4V,   "gemma4v"},
-    { PROJECTOR_TYPE_GEMMA4A,   "gemma4a"},
-    { PROJECTOR_TYPE_GEMMA4UV,  "gemma4uv"},
-    { PROJECTOR_TYPE_GEMMA4UA,  "gemma4ua"},
-    { PROJECTOR_TYPE_PHI4,      "phi4"},
-    { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
-    { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},
-    { PROJECTOR_TYPE_ULTRAVOX,  "ultravox"},
-    { PROJECTOR_TYPE_INTERNVL,  "internvl"},
-    { PROJECTOR_TYPE_LLAMA4,    "llama4"},
-    { PROJECTOR_TYPE_QWEN2A,    "qwen2a"},
-    { PROJECTOR_TYPE_QWEN3A,    "qwen3a"},
-    { PROJECTOR_TYPE_GLMA,      "glma"},
-    { PROJECTOR_TYPE_QWEN25O,   "qwen2.5o"},
-    { PROJECTOR_TYPE_VOXTRAL,   "voxtral"},
-    { PROJECTOR_TYPE_MERALION,  "meralion"},
-    { PROJECTOR_TYPE_MUSIC_FLAMINGO, "musicflamingo"},
-    { PROJECTOR_TYPE_LFM2,      "lfm2"},
-    { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
-    { PROJECTOR_TYPE_PADDLEOCR, "paddleocr"},
-    { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
-    { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
-    { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
-    { PROJECTOR_TYPE_DOTS_OCR,  "dots_ocr"},
-    { PROJECTOR_TYPE_DEEPSEEKOCR,"deepseekocr"},
-    { PROJECTOR_TYPE_DEEPSEEKOCR2,"deepseekocr2"},
-    { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
-    { PROJECTOR_TYPE_GLM4V,     "glm4v"},
-    { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},
-    { PROJECTOR_TYPE_YASA2,     "yasa2"},
-    { PROJECTOR_TYPE_KIMIK25,   "kimik25"},
-    { PROJECTOR_TYPE_NEMOTRON_V2_VL, "nemotron_v2_vl"},
-    { PROJECTOR_TYPE_EXAONE4_5, "exaone4_5"},
-    { PROJECTOR_TYPE_HUNYUANVL,  "hunyuanvl"},
-    { PROJECTOR_TYPE_MINICPMV4_6, "minicpmv4_6"},
-    { PROJECTOR_TYPE_GRANITE_SPEECH, "granite_speech"},
-    { PROJECTOR_TYPE_MIMOVL,     "mimovl"},
-    { PROJECTOR_TYPE_GRANITE4_VISION, "granite4_vision"},
+    { PROJECTOR_TYPE_MLP,               "mlp" },
+    { PROJECTOR_TYPE_LDP,               "ldp" },
+    { PROJECTOR_TYPE_LDPV2,             "ldpv2"},
+    { PROJECTOR_TYPE_MINICPMV,          "resampler"},
+    { PROJECTOR_TYPE_GLM_EDGE,          "adapter"},
+    { PROJECTOR_TYPE_QWEN2VL,           "qwen2vl_merger"},
+    { PROJECTOR_TYPE_QWEN25VL,          "qwen2.5vl_merger"},
+    { PROJECTOR_TYPE_QWEN3VL,           "qwen3vl_merger"},
+    { PROJECTOR_TYPE_STEP3VL,           "step3vl"},
+    { PROJECTOR_TYPE_GEMMA3,            "gemma3"},
+    { PROJECTOR_TYPE_GEMMA3NV,          "gemma3nv"},
+    { PROJECTOR_TYPE_GEMMA3NA,          "gemma3na"},
+    { PROJECTOR_TYPE_GEMMA4V,           "gemma4v"},
+    { PROJECTOR_TYPE_GEMMA4A,           "gemma4a"},
+    { PROJECTOR_TYPE_GEMMA4UV,          "gemma4uv"},
+    { PROJECTOR_TYPE_GEMMA4UA,          "gemma4ua"},
+    { PROJECTOR_TYPE_PHI4,              "phi4"},
+    { PROJECTOR_TYPE_IDEFICS3,          "idefics3"},
+    { PROJECTOR_TYPE_PIXTRAL,           "pixtral"},
+    { PROJECTOR_TYPE_ULTRAVOX,          "ultravox"},
+    { PROJECTOR_TYPE_INTERNVL,          "internvl"},
+    { PROJECTOR_TYPE_LLAMA4,            "llama4"},
+    { PROJECTOR_TYPE_QWEN2A,            "qwen2a"},
+    { PROJECTOR_TYPE_QWEN3A,            "qwen3a"},
+    { PROJECTOR_TYPE_GLMA,              "glma"},
+    { PROJECTOR_TYPE_QWEN25O,           "qwen2.5o"},
+    { PROJECTOR_TYPE_VOXTRAL,           "voxtral"},
+    { PROJECTOR_TYPE_MERALION,          "meralion"},
+    { PROJECTOR_TYPE_MUSIC_FLAMINGO,    "musicflamingo"},
+    { PROJECTOR_TYPE_LFM2,              "lfm2"},
+    { PROJECTOR_TYPE_KIMIVL,            "kimivl"},
+    { PROJECTOR_TYPE_PADDLEOCR,         "paddleocr"},
+    { PROJECTOR_TYPE_LIGHTONOCR,        "lightonocr"},
+    { PROJECTOR_TYPE_COGVLM,            "cogvlm"},
+    { PROJECTOR_TYPE_JANUS_PRO,         "janus_pro"},
+    { PROJECTOR_TYPE_DOTS_OCR,          "dots_ocr"},
+    { PROJECTOR_TYPE_DEEPSEEKOCR,       "deepseekocr"},
+    { PROJECTOR_TYPE_DEEPSEEKOCR2,      "deepseekocr2"},
+    { PROJECTOR_TYPE_LFM2A,             "lfm2a"},
+    { PROJECTOR_TYPE_GLM4V,             "glm4v"},
+    { PROJECTOR_TYPE_YOUTUVL,           "youtuvl"},
+    { PROJECTOR_TYPE_YASA2,             "yasa2"},
+    { PROJECTOR_TYPE_KIMIK25,           "kimik25"},
+    { PROJECTOR_TYPE_NEMOTRON_V2_VL,    "nemotron_v2_vl"},
+    { PROJECTOR_TYPE_EXAONE4_5,         "exaone4_5"},
+    { PROJECTOR_TYPE_HUNYUANVL,         "hunyuanvl"},
+    { PROJECTOR_TYPE_MINICPMV4_6,       "minicpmv4_6"},
+    { PROJECTOR_TYPE_GRANITE_SPEECH,    "granite_speech"},
+    { PROJECTOR_TYPE_MIMOVL,            "mimovl"},
+    { PROJECTOR_TYPE_GRANITE4_VISION,   "granite4_vision"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -640,47 +648,18 @@ static void clip_log_internal(enum ggml_log_level level, const char * format, ..
 // cpp wrappers
 //
 
-// wrapper for clip_image_size
-struct clip_image_size_deleter {
-    void operator()(clip_image_size * val) { clip_image_size_free(val); }
-};
-typedef std::unique_ptr<clip_image_size, clip_image_size_deleter> clip_image_size_ptr;
-
-// wrapper for clip_image_u8
-struct clip_image_u8_deleter {
-    void operator()(clip_image_u8 * val) { clip_image_u8_free(val); }
-};
-typedef std::unique_ptr<clip_image_u8, clip_image_u8_deleter> clip_image_u8_ptr;
-
-// wrapper for clip_image_f32
-struct clip_image_f32_deleter {
-    void operator()(clip_image_f32 * val) { clip_image_f32_free(val); }
-};
-typedef std::unique_ptr<clip_image_f32, clip_image_f32_deleter> clip_image_f32_ptr;
-
-struct clip_image_u8_batch {
-    std::vector<clip_image_u8_ptr> entries;
-};
-
 struct clip_image_f32_batch {
-    std::vector<clip_image_f32_ptr> entries;
+    std::vector<clip_image_f32> entries;
     bool is_audio = false;
-
-    // for llava-uhd style models, we need to know the grid size
-    // note: entries.size() == grid_x * grid_y + 1 (one overview image)
-    int grid_x = 0;
-    int grid_y = 0;
 
     clip_image_f32_batch clone() const {
         clip_image_f32_batch new_batch{
             /* entries  */ {},
             /* is_audio */ is_audio,
-            /* grid_x   */ grid_x,
-            /* grid_y   */ grid_y,
         };
         new_batch.entries.reserve(entries.size());
         for (const auto & entry : entries) {
-            new_batch.entries.emplace_back(new clip_image_f32(*entry));
+            new_batch.entries.emplace_back(entry); // copy
         }
         return new_batch;
     }
@@ -689,6 +668,22 @@ struct clip_image_f32_batch {
 //
 // common utils
 //
+
+#ifdef _WIN32
+static std::ifstream open_ifstream_binary(const std::string & fname) {
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, NULL, 0);
+    if (!wlen) {
+        throw std::runtime_error("failed to convert filename to UTF-16: " + fname);
+    }
+    std::vector<wchar_t> wfname(wlen);
+    (void)MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, wfname.data(), wlen);
+    return std::ifstream(wfname.data(), std::ios::binary);
+}
+#else
+static std::ifstream open_ifstream_binary(const std::string & fname) {
+    return std::ifstream(fname, std::ios::binary);
+}
+#endif
 
 static std::string string_format(const char * fmt, ...) {
     va_list ap;

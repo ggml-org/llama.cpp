@@ -1562,37 +1562,112 @@ static void test_msgs_oaicompat_json_conversion() {
     }
 }
 
-static void test_split_by_role() {
+static void test_msg_token_delimiters_split() {
     LOG_DBG("%s\n", __func__);
 
+    // Delimiters that share a leading token, distinguished by the second token,
+    // to exercise the per-position token matching.
+    const common_chat_msg_delimiters delims = {
+        { { COMMON_CHAT_ROLE_USER,      "", { 10, 11 } },
+          { COMMON_CHAT_ROLE_ASSISTANT, "", { 10, 12 } } }
+    };
+
     // Empty inputs
-    assert_equals<size_t>(0, common_chat_split_by_role("", {}).size());
-    assert_equals<size_t>(0, common_chat_split_by_role("hello", {}).size());
-    assert_equals<size_t>(0, common_chat_split_by_role("", { { "user", "<|user|>" } }).size());
+    assert_equals<size_t>(0, common_chat_msg_delimiters{}.split({}).spans.size());
+    assert_equals<size_t>(0, common_chat_msg_delimiters{}.split({ 10, 11 }).spans.size());
+    assert_equals<size_t>(0, delims.split({}).spans.size());
 
-    // Multi-role conversation, no leading/trailing content
+    // No delimiters match -> no spans
+    assert_equals<size_t>(0, delims.split({ 100, 101, 102 }).spans.size());
+
+    // Multi-role conversation: <user>Hi<assistant>Hello<user>Bye
     {
-        const std::string prompt = "<|user|>Hi<|assistant|>Hello<|user|>Bye";
-        const auto splits = common_chat_split_by_role(prompt, {
-            { "user",      "<|user|>"      },
-            { "assistant", "<|assistant|>" },
-        });
-        assert_equals<size_t>(3, splits.size());
+        const llama_tokens tokens = {
+            10, 11,            // <user>
+            100, 101,          // Hi
+            10, 12,            // <assistant>
+            200, 201, 202,     // Hello
+            10, 11,            // <user>
+            300, 301,          // Bye
+        };
 
-        assert_equals<std::string>("user", splits[0].role);
-        assert_equals<size_t>(0, splits[0].pos);
-        assert_equals<size_t>(10, splits[0].len);
-        assert_equals<std::string>("<|user|>Hi", prompt.substr(splits[0].pos, splits[0].len));
+        const auto result = delims.split(tokens);
+        const auto & spans = result.spans;
+        assert_equals<size_t>(3, spans.size());
 
-        assert_equals<std::string>("assistant", splits[1].role);
-        assert_equals<size_t>(10, splits[1].pos);
-        assert_equals<size_t>(18, splits[1].len);
-        assert_equals<std::string>("<|assistant|>Hello", prompt.substr(splits[1].pos, splits[1].len));
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(4, spans[0].len);
 
-        assert_equals<std::string>("user", splits[2].role);
-        assert_equals<size_t>(28, splits[2].pos);
-        assert_equals<size_t>(11, splits[2].len);
-        assert_equals<std::string>("<|user|>Bye", prompt.substr(splits[2].pos, splits[2].len));
+        assert_equals(COMMON_CHAT_ROLE_ASSISTANT, spans[1].role);
+        assert_equals<size_t>(4, spans[1].pos);
+        assert_equals<size_t>(5, spans[1].len);
+
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[2].role);
+        assert_equals<size_t>(9, spans[2].pos);
+        assert_equals<size_t>(4, spans[2].len);
+
+        // is_user_start() is true at the token position where a user span begins
+        assert_equals(true,  result.is_user_start(0));
+        assert_equals(false, result.is_user_start(4));  // assistant span
+        assert_equals(true,  result.is_user_start(9));
+    }
+
+    // Content before the first delimiter is not captured as a span
+    {
+        const llama_tokens tokens = {
+            500, 501,    // leading content (dropped)
+            10, 11,      // <user>
+            100,         // Hi
+        };
+
+        const auto spans = delims.split(tokens).spans;
+        assert_equals<size_t>(1, spans.size());
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(2, spans[0].pos);
+        assert_equals<size_t>(3, spans[0].len);
+    }
+
+    // Skipped regions (media chunks) are jumped over but still count as span content
+    {
+        const llama_tokens tokens = {
+            10, 11,             // <user>
+            LLAMA_TOKEN_NULL,   // media chunk (3 tokens)
+            LLAMA_TOKEN_NULL,
+            LLAMA_TOKEN_NULL,
+            100,                // Hi
+            10, 12,             // <assistant>
+        };
+
+        const std::map<size_t, size_t> skips = { { 2, 3 } };
+
+        const auto spans = delims.split(tokens, skips).spans;
+        assert_equals<size_t>(2, spans.size());
+
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(6, spans[0].len);
+
+        assert_equals(COMMON_CHAT_ROLE_ASSISTANT, spans[1].role);
+        assert_equals<size_t>(6, spans[1].pos);
+        assert_equals<size_t>(2, spans[1].len);
+    }
+
+    // A delimiter sequence inside a skipped region is not matched
+    {
+        const llama_tokens tokens = {
+            10, 11,      // <user>
+            10, 12,      // skipped region that happens to contain delimiter tokens
+            100,         // Hi
+        };
+
+        const std::map<size_t, size_t> skips = { { 2, 2 } };
+
+        const auto spans = delims.split(tokens, skips).spans;
+        assert_equals<size_t>(1, spans.size());
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(5, spans[0].len);
     }
 }
 
@@ -1882,11 +1957,29 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
         .expect(simple_assist_msg("Use this format: [link text](url). Example: [Wikipedia](https://www.wikipedia.org)."))
         .run();
 
-    // Python tool with multiline code in string
+    // Python tool with multiline code in string: the \n in the literal decodes to a real
+    // newline, emitted as a JSON \n escape (not a doubled backslash).
     tst.test("<|tool_call_start|>[python(code=\"def hello():\\n    print('hey')\")]<|tool_call_end|>")
         .tools({ python_tool })
         .expect_tool_calls({
-            { "python", R"#({"code": "def hello():\\n    print('hey')"})#", "" }
+            { "python", R"#({"code": "def hello():\n    print('hey')"})#", "" }
+        })
+        .run();
+
+    // String escape sequences decode to their actual characters (newline + tab here),
+    // so a "write a two line file" style call produces real line breaks, not literal "\n".
+    tst.test("<|tool_call_start|>[python(code=\"First line\\nSecond line\\tindented\")]<|tool_call_end|>")
+        .tools({ python_tool })
+        .expect_tool_calls({
+            { "python", R"#({"code": "First line\nSecond line\tindented"})#", "" }
+        })
+        .run();
+
+    // Escaped quotes inside a string argument survive the round-trip.
+    tst.test("<|tool_call_start|>[python(code=\"print(\\\"hi\\\")\")]<|tool_call_end|>")
+        .tools({ python_tool })
+        .expect_tool_calls({
+            { "python", R"#({"code": "print(\"hi\")"})#", "" }
         })
         .run();
 
@@ -1933,6 +2026,10 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             "amount": {"type": "number"},
             "date": {"type": "string"}
         }
+    })";
+
+    const char * const_schema = R"({
+        "const": "42"
     })";
 
     {
@@ -2017,6 +2114,80 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         })
             .expect_tool_calls({
                 { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
+            })
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=edit>\n"
+               "<parameter=filename>\n"
+               "foo.c\n"
+               "</parameter>\n"
+               "<parameter=oldString>\n"
+               "#iclunde\n"
+               "</parameter>\n"
+               "<parameter=newString>\n"
+               "#include\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({
+                edit_tool
+        })
+            .expect_tool_calls({
+                { "edit", "{\"filename\": \"foo.c\", \"oldString\": \"#iclunde\", \"newString\": \"#include\"}", {} },
+            })
+            .run();
+
+        // a parameter value that itself ends in a newline (e.g. a source file with a
+        // trailing newline). The structural delimiter is "\n</parameter>\n", so the value
+        // "#include\n" renders as "...#include\n\n</parameter>\n". The trailing newline must
+        // be preserved faithfully (no stripping), and the generated grammar must admit a
+        // value ending on a delimiter prefix. Regression test for gbnf_excluding_pattern.
+        tst.test(
+               "<tool_call>\n"
+               "<function=edit>\n"
+               "<parameter=filename>\n"
+               "foo.c\n"
+               "</parameter>\n"
+               "<parameter=oldString>\n"
+               "#iclunde\n"
+               "</parameter>\n"
+               "<parameter=newString>\n"
+               "#include\n"
+               "\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({
+                edit_tool
+        })
+            .expect_tool_calls({
+                { "edit", "{\"filename\": \"foo.c\", \"oldString\": \"#iclunde\", \"newString\": \"#include\\n\"}", {} },
+            })
+            .run();
+
+
+        // test code that starts with indent
+        tst.test(
+               "<tool_call>\n"
+               "<function=python>\n"
+               "<parameter=code>\n"
+               "    print(\"Hello, world!\")\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({
+                python_tool
+        })
+            .expect_tool_calls({
+                { "python", "{\"code\": \"    print(\\\"Hello, world!\\\")\"}", {} },
             })
             .run();
 
@@ -2645,6 +2816,100 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     {
+        // Cohere2 MoE (North Code) - dedicated parser.
+        // Marker-wrapped format: <|START_THINKING|>...<|END_THINKING|> then either
+        // <|START_TEXT|>...<|END_TEXT|> (content) or <|START_ACTION|>[json]<|END_ACTION|> (tools).
+        // The generation prompt forces a leading <|START_THINKING|>, so model output begins inside
+        // the thinking block: test inputs start with the reasoning body, not the <|START_THINKING|> tag.
+        auto tst = peg_tester("models/templates/Cohere2MoE.jinja", detailed_debug);
+
+        // Content with reasoning, extracted.
+        tst.test("I'm\nthinking<|END_THINKING|><|START_TEXT|>Hello, world!\nWhat's up?<|END_TEXT|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Content with reasoning, reasoning_format=NONE -> thinking kept inline in content (markers preserved).
+        tst.test("I'm\nthinking<|END_THINKING|><|START_TEXT|>Hello, world!\nWhat's up?<|END_TEXT|>")
+            .expect(message_assist_thoughts_unparsed_r7b)
+            .run();
+
+        // Content with empty thinking block.
+        tst.test("<|END_THINKING|><|START_TEXT|>Hello, world!\nWhat's up?<|END_TEXT|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        // Single tool call with reasoning.
+        tst.test(
+               "I'm\nthinking<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_thoughts_call_idx)
+            .run();
+
+        // Single tool call, empty thinking block (no reasoning content).
+        tst.test(
+               "<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_idx)
+            .run();
+
+        // Tool call with an array argument (todo_list).
+        tst.test(
+               "<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"todo_list\", \"parameters\": {\"todos\": [\"buy milk\", \"walk dog\"]}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ todo_list })
+            .expect(simple_assist_msg("", "", "todo_list", "{\"todos\": [\"buy milk\", \"walk dog\"]}", "0"))
+            .run();
+
+        // Parallel tool calls with reasoning.
+        tst.test(
+               "I'm\nthinking<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}},\n"
+               "    {\"tool_call_id\": \"1\", \"tool_name\": \"python\", \"parameters\": {\"code\": \"print('hey')\"}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, python_tool })
+            .expect_reasoning("I'm\nthinking")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", "0" },
+                { "python", "{\"code\": \"print('hey')\"}", "1" },
+            })
+            .run();
+
+        // Tools available but the model answers with content instead of calling a tool.
+        tst.test("I'm\nthinking<|END_THINKING|><|START_TEXT|>Hello, world!\nWhat's up?<|END_TEXT|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Partial tool call (streaming): name/id resolved before arguments arrive.
+        tst.test(
+               "I'm\nthinking<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", ")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .is_partial(true)
+            .expect(message_assist_thoughts_partial_call)
+            .run();
+    }
+
+    {
         // Google Gemma 2 2B - does not support tool calling
         auto tst = peg_tester("models/templates/google-gemma-2-2b-it.jinja");
 
@@ -3102,18 +3367,16 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         tst.test(
                "<seed:tool_call>\n"
                "<function=edit>\n"
-               "<parameter=filename>\n"
-               "foo.cpp\n"
+               "<parameter=filename>"
+               "foo.cpp"
                "</parameter>\n"
                "<parameter=oldString>"
                "def foo(arg = \"14\"):\n"
                "    return arg + \"bar\"\n"
-               "\n"
                "</parameter>\n"
                "<parameter=newString>"
                "def foo(arg = \"15\"):\n"
                "    pass\n"
-               "\n"
                "</parameter>\n"
                "</function>\n"
                "</seed:tool_call>")
@@ -4833,6 +5096,20 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         auto tst = peg_tester("models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja", detailed_debug);
         tst.test("Hello, world!\nWhat's up?").tools({ special_function_tool }).expect(message_assist).expect_reconstruction().run();
 
+        tst.test(
+             "```json\n\"42\"\n```")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(const_schema)
+            .expect_content(R"("42")")
+            .run();
+
+        tst.test(
+             "\"42\"\n")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(const_schema)
+            .expect_content(R"("42")")
+            .run();
+
         // Continuation tests
         tst.test("world!\nWhat's up?")
             .messages({ message_user, message_assist_prefill_content })
@@ -5655,7 +5932,7 @@ int main(int argc, char ** argv) {
     {
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
-        test_split_by_role();
+        test_msg_token_delimiters_split();
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();
