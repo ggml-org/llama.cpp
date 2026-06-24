@@ -100,6 +100,8 @@ llama_kv_cache::llama_kv_cache(
     v_cells_impl(other ? other->v_cells_impl : std::make_shared<llama_kv_cells_vec>()),
     v_cells(*v_cells_impl) {
 
+    n_ref.fill(-1);
+
     // shared cells view the source cache's K/V tensors, so the cell count
     // follows the source allocation: a fitted target can be smaller than the
     // draft default and oversized views would overflow the source tensors
@@ -377,6 +379,8 @@ llama_kv_cache::llama_kv_cache(
 }
 
 void llama_kv_cache::clear(bool data) {
+    n_ref.fill(-1);
+
     for (uint32_t s = 0; s < n_stream; ++s) {
         v_cells[s].reset();
         v_heads[s] = 0;
@@ -403,6 +407,15 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
 
     if (p1 < 0) {
         p1 = std::numeric_limits<llama_pos>::max();
+    }
+
+    // dropping from pos 0 invalidates the latched prefix
+    if (p0 == 0) {
+        if (seq_id >= 0) {
+            n_ref[seq_id] = -1;
+        } else {
+            n_ref.fill(-1);
+        }
     }
 
     if (seq_id >= 0) {
@@ -465,6 +478,9 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
 
     GGML_ASSERT(seq_id_src >= 0 && (size_t) seq_id_src < seq_to_stream.size());
     GGML_ASSERT(seq_id_dst >= 0 && (size_t) seq_id_dst < seq_to_stream.size());
+
+    // copy inherits the latched prefix
+    n_ref[seq_id_dst] = n_ref[seq_id_src];
 
     const auto s0 = seq_to_stream[seq_id_src];
     const auto s1 = seq_to_stream[seq_id_dst];
@@ -557,6 +573,13 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
 
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
+    // other seqs are purged -> drop their latched prefix
+    for (uint32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
+        if ((llama_seq_id) s != seq_id) {
+            n_ref[s] = -1;
+        }
+    }
+
     auto & cells = v_cells[seq_to_stream[seq_id]];
     auto & head  = v_heads[seq_to_stream[seq_id]];
 
@@ -607,6 +630,11 @@ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, ll
         return;
     }
 
+    // the prefix boundary is an absolute pos -> shift it with its cells
+    if (n_ref[seq_id] >= 0 && n_ref[seq_id] >= p0 && n_ref[seq_id] < p1) {
+        n_ref[seq_id] += shift;
+    }
+
     for (uint32_t i = 0; i < cells.size(); ++i) {
         if (!cells.pos_in(i, p0, p1)) {
             continue;
@@ -652,6 +680,11 @@ void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, in
     // If there is no range then return early to avoid looping over the cache.
     if (p0 == p1) {
         return;
+    }
+
+    // the prefix boundary is an absolute pos -> divide it with its cells
+    if (n_ref[seq_id] >= 0 && n_ref[seq_id] >= p0 && n_ref[seq_id] < p1) {
+        n_ref[seq_id] /= d;
     }
 
     for (uint32_t i = 0; i < cells.size(); ++i) {
@@ -1109,6 +1142,22 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
         return;
     }
 
+    // latch L_m at the prefill->decode boundary (first single-token append to a populated
+    // seq); until then the mask is full causal. assumes single-token decode (mtmd-cli/server).
+    if (swa_type == LLAMA_SWA_TYPE_REFERENCE) {
+        uint32_t n_tok_seq[LLAMA_MAX_SEQ] = { 0 };
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            n_tok_seq[ubatch.seq_id[i][0]]++;
+        }
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            const llama_seq_id seq_id = ubatch.seq_id[i][0];
+            if (n_ref[seq_id] < 0 && n_tok_seq[seq_id] == 1 &&
+                v_cells[seq_to_stream[seq_id]].seq_pos_max(seq_id) >= 0) {
+                n_ref[seq_id] = ubatch.pos[i];
+            }
+        }
+    }
+
     // keep track of the max sequence position that we would overwrite with this ubatch
     // for non-SWA cache, this would be always empty
     llama_seq_id seq_pos_max_rm[LLAMA_MAX_SEQ];
@@ -1519,6 +1568,9 @@ struct args_set_input_kq_mask {
     uint32_t       n_swa;
     llama_swa_type swa_type;
 
+    // per-seq R-SWA prefix length L_m (-1 = unlatched), indexed by seq_id
+    const llama_pos * n_ref;
+
     int64_t n_kv;
     int64_t n_stream;
     int64_t n_tps;
@@ -1654,7 +1706,7 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
 
                 // apply SWA if any
                 if (swa) {
-                    if (llama_hparams::is_masked_swa(n_swa, swa_type, p0, p1)) {
+                    if (llama_hparams::is_masked_swa(n_swa, swa_type, p0, p1, args.n_ref[seq_id])) {
                         goto skip;
                     }
                 }
@@ -1734,6 +1786,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
         /*.seq_to_stream    =*/ seq_to_stream,
         /*.n_swa            =*/ n_swa,
         /*.swa_type         =*/ swa_type,
+        /*.n_ref            =*/ n_ref.data(),
         /*.n_kv             =*/ n_kv,
         /*.n_stream         =*/ n_stream,
         /*.n_tps            =*/ n_tps,
@@ -1960,6 +2013,20 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
 
     io.write(&n_stream, sizeof(n_stream));
 
+    // persist n_ref; REFERENCE-guarded so other cache types' state format is unchanged.
+    // whole-cache case is count-prefixed to tolerate a different n_seq_max on restore.
+    if (swa_type == LLAMA_SWA_TYPE_REFERENCE) {
+        if (seq_id == -1) {
+            const uint32_t n_ref_count = n_seq_max;
+            io.write(&n_ref_count, sizeof(n_ref_count));
+            for (uint32_t i = 0; i < n_ref_count; ++i) {
+                io.write(&n_ref[i], sizeof(llama_pos));
+            }
+        } else {
+            io.write(&n_ref[seq_id], sizeof(llama_pos));
+        }
+    }
+
     for (uint32_t s = 0; s < n_stream; ++s) {
         cell_ranges_t cr { s, {} };
 
@@ -2036,6 +2103,25 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
         throw std::runtime_error("n_stream mismatch");
     }
 
+    // read n_ref now but apply after the restore below; clear()/seq_rm() would reset it
+    std::array<llama_pos, LLAMA_MAX_SEQ> n_ref_restored;
+    n_ref_restored.fill(-1);
+    if (swa_type == LLAMA_SWA_TYPE_REFERENCE) {
+        if (seq_id == -1) {
+            uint32_t n_ref_count = 0;
+            io.read(&n_ref_count, sizeof(n_ref_count));
+            for (uint32_t i = 0; i < n_ref_count; ++i) {
+                llama_pos v;
+                io.read(&v, sizeof(v));
+                if (i < n_seq_max) {
+                    n_ref_restored[i] = v;
+                }
+            }
+        } else {
+            io.read(&n_ref_restored[seq_id], sizeof(llama_pos));
+        }
+    }
+
     for (uint32_t s = 0; s < n_stream; ++s) {
         uint32_t cell_count;
         io.read(&cell_count, sizeof(cell_count));
@@ -2059,6 +2145,17 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
                 seq_rm(seq_id, -1, -1);
             }
             throw std::runtime_error("failed to restore kv cache");
+        }
+    }
+
+    // cells restored -> reinstate n_ref
+    if (swa_type == LLAMA_SWA_TYPE_REFERENCE) {
+        if (seq_id == -1) {
+            for (uint32_t i = 0; i < n_seq_max; ++i) {
+                n_ref[i] = n_ref_restored[i];
+            }
+        } else {
+            n_ref[seq_id] = n_ref_restored[seq_id];
         }
     }
 }

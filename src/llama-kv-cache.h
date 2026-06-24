@@ -259,6 +259,10 @@ private:
     // this is the SWA type of the cache - not to be confused with the model SWA type
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
+    // R-SWA per-seq prefix length L_m (-1 = unlatched -> full causal mask); latched at the
+    // prefill->decode boundary in apply_ubatch, read by set_input_kq_mask.
+    std::array<llama_pos, LLAMA_MAX_SEQ> n_ref;
+
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
 
