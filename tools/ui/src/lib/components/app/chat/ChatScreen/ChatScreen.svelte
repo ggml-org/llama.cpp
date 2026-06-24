@@ -10,6 +10,8 @@
 		ChatScreenServerError
 	} from '$lib/components/app';
 	import { setProcessingInfoContext } from '$lib/contexts';
+	import { CONTEXT_KEY_MCP_ADD_SERVER_DIALOG } from '$lib/constants';
+	import { triggerMcpDialogReopen } from '$lib/stores/mcp-dialog-reopen';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
@@ -34,7 +36,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { serverLoading, serverError } from '$lib/stores/server.svelte';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, setContext } from 'svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 	import ChatScreenActionScrollDown from './ChatScreenActionScrollDown.svelte';
 	import ChatScreenDialogsAndAlerts from './ChatScreenDialogsAndAlerts.svelte';
@@ -45,6 +47,21 @@
 	setProcessingInfoContext({
 		get showProcessingInfo() {
 			return showProcessingInfo;
+		}
+	});
+
+	let isAddingServer = $state(false);
+	let isAddingServerPrev = false;
+
+	setContext(CONTEXT_KEY_MCP_ADD_SERVER_DIALOG, {
+		open: () => (isAddingServer = true)
+	});
+
+	$effect(() => {
+		const wasOpen = isAddingServerPrev;
+		isAddingServerPrev = isAddingServer;
+		if (!isAddingServer && wasOpen) {
+			triggerMcpDialogReopen();
 		}
 	});
 
@@ -337,4 +354,5 @@
 	{activeErrorDialog}
 	{handleErrorDialogOpenChange}
 	{fileUpload}
+	bind:isAddingServer
 />

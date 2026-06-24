@@ -1,20 +1,22 @@
 <script lang="ts">
-	import { PencilRuler, ChevronDown, ChevronRight, Loader2, Info, Check } from '@lucide/svelte';
+	import { PencilRuler, ChevronDown, ChevronRight, Loader2, Info, Check, Plus } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { CLI_FLAGS } from '$lib/constants';
+	import { CLI_FLAGS, CONTEXT_KEY_MCP_ADD_SERVER_DIALOG } from '$lib/constants';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
+	import { getContext } from 'svelte';
 
 	const toolsPanel = useToolsPanel();
 	const hasMcpServersAvailable = $derived(mcpStore.getServersSorted().length > 0);
+	const mcpAddDialog = getContext<{ open: () => void }>(CONTEXT_KEY_MCP_ADD_SERVER_DIALOG);
 </script>
 
 <DropdownMenu.Sub onOpenChange={(open) => open && toolsPanel.handleOpen()}>
-	<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
+	<DropdownMenu.SubTrigger data-submenu="tools" class="flex cursor-pointer items-center gap-2">
 		<PencilRuler class="h-4 w-4" />
 
 		<span>Tools</span>
@@ -63,7 +65,7 @@
 			{/if}
 		{:else}
 			<div class="max-h-80 overflow-y-auto p-2 pr-1">
-				{#each toolsPanel.activeGroups as group (group.label)}
+				{#each toolsPanel.activeGroups as group (group.label + ':' + (group.serverId ?? ''))}
 					{@const isExpanded = toolsPanel.expandedGroups.has(group.label)}
 					{@const checked = toolsPanel.isGroupChecked(group)}
 					{@const favicon = toolsPanel.getFavicon(group)}
@@ -151,6 +153,19 @@
 						</Collapsible.Content>
 					</Collapsible.Root>
 				{/each}
+			</div>
+
+			<div class="flex flex-col gap-1">
+				<DropdownMenu.Separator />
+
+				<DropdownMenu.Item
+					class="flex cursor-pointer items-center gap-2"
+					onclick={() => mcpAddDialog?.open()}
+				>
+					<Plus class="h-4 w-4" />
+
+					<span>Add MCP Server</span>
+				</DropdownMenu.Item>
 			</div>
 		{/if}
 	</DropdownMenu.SubContent>
