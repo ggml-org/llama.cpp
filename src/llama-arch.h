@@ -143,6 +143,7 @@ enum llm_arch {
     LLM_ARCH_TALKIE,
     LLM_ARCH_MELLUM,
     LLM_ARCH_EAGLE3,
+    LLM_ARCH_DFLASH,
     LLM_ARCH_UNKNOWN,
 };
 
