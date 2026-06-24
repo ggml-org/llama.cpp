@@ -28,7 +28,7 @@
 // client that continues ONE KV cache across chat turns (e.g. `ollama run`) must
 // start a fresh sequence per turn to return to base. A recency-biased router
 // would lift this limit but is a deliberate divergence from vLLM and is not done
-// here. See scratch/multiturn_leak_test.cpp and scratch/concurrent_switch_test.cpp.
+// here.
 //
 // Then a standard Granite decoder, with LoRA added per-token on qkv / o / gate /
 // up / down via ggml_mul_mat_id over stacked tensors. The stacked dim is
