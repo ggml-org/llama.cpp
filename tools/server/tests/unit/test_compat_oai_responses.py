@@ -664,9 +664,9 @@ def test_responses_input_file_filename_only():
     assert res.body["status"] == "completed"
 
 
-def test_responses_unknown_content_type_recovery_visible():
-    """Unknown user content types should keep the request alive and inject
-    visible recovery text into the converted prompt."""
+def test_responses_unknown_content_type_skipped():
+    """Unknown user content types are skipped silently: the request completes
+    and the converted prompt is unchanged (no diagnostic text injected)."""
     global server
     server.start()
     baseline = assert_completed_response([
@@ -680,12 +680,12 @@ def test_responses_unknown_content_type_recovery_visible():
             {"type": "input_audio", "data": "base64stuff"},
         ]},
     ])
-    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
+    assert recovered.body["usage"]["input_tokens"] == baseline.body["usage"]["input_tokens"]
 
 
-def test_responses_unknown_assistant_content_type_recovery_visible():
-    """Unknown assistant content types should keep the request alive and inject
-    visible recovery text into the converted prompt."""
+def test_responses_unknown_assistant_content_type_skipped():
+    """Unknown assistant content types are skipped silently: the request
+    completes and the converted prompt is unchanged."""
     global server
     server.start()
     baseline = assert_completed_response([
@@ -703,7 +703,7 @@ def test_responses_unknown_assistant_content_type_recovery_visible():
         ]},
         {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
     ])
-    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
+    assert recovered.body["usage"]["input_tokens"] == baseline.body["usage"]["input_tokens"]
 
 
 def test_responses_unknown_toplevel_item_skipped():
@@ -717,9 +717,9 @@ def test_responses_unknown_toplevel_item_skipped():
     ])
 
 
-def test_responses_malformed_input_text_recovery_visible():
-    """Malformed input_text should keep the request alive and inject visible
-    recovery text instead of silently disappearing."""
+def test_responses_malformed_input_text_skipped():
+    """Malformed input_text (missing text) is skipped silently: the request
+    completes and the converted prompt is unchanged."""
     global server
     server.start()
     baseline = assert_completed_response([
@@ -733,12 +733,12 @@ def test_responses_malformed_input_text_recovery_visible():
             {"type": "input_text"},
         ]},
     ])
-    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
+    assert recovered.body["usage"]["input_tokens"] == baseline.body["usage"]["input_tokens"]
 
 
-def test_responses_malformed_input_image_recovery_visible():
-    """Malformed input_image should keep the request alive and inject visible
-    recovery text into the converted prompt."""
+def test_responses_malformed_input_image_skipped():
+    """Malformed input_image (missing image_url) is skipped silently: the
+    request completes and the converted prompt is unchanged."""
     global server
     server.start()
     baseline = assert_completed_response([
@@ -752,7 +752,7 @@ def test_responses_malformed_input_image_recovery_visible():
             {"type": "input_image"},
         ]},
     ])
-    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
+    assert recovered.body["usage"]["input_tokens"] == baseline.body["usage"]["input_tokens"]
 
 
 def test_responses_image_with_tools():
@@ -807,9 +807,9 @@ def test_responses_malformed_input_file_recovery_visible():
     assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
 
 
-def test_responses_malformed_assistant_output_text_recovery_visible():
-    """Malformed assistant output_text history should keep the request alive
-    and inject visible recovery text."""
+def test_responses_malformed_assistant_output_text_skipped():
+    """Malformed assistant output_text history is skipped silently: the request
+    completes and the converted prompt is unchanged."""
     global server
     server.start()
     baseline = assert_completed_response([
@@ -827,12 +827,12 @@ def test_responses_malformed_assistant_output_text_recovery_visible():
         ]},
         {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
     ])
-    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
+    assert recovered.body["usage"]["input_tokens"] == baseline.body["usage"]["input_tokens"]
 
 
-def test_responses_malformed_assistant_refusal_recovery_visible():
-    """Malformed refusal history should keep the request alive and inject
-    visible recovery text."""
+def test_responses_malformed_assistant_refusal_skipped():
+    """Malformed refusal history is skipped silently: the request completes
+    and the converted prompt is unchanged."""
     global server
     server.start()
     baseline = assert_completed_response([
@@ -850,4 +850,4 @@ def test_responses_malformed_assistant_refusal_recovery_visible():
         ]},
         {"role": "user", "content": [{"type": "input_text", "text": "How are you"}]},
     ])
-    assert recovered.body["usage"]["input_tokens"] > baseline.body["usage"]["input_tokens"]
+    assert recovered.body["usage"]["input_tokens"] == baseline.body["usage"]["input_tokens"]

@@ -18,19 +18,6 @@ static json responses_make_text_content(const std::string & text) {
     };
 }
 
-static void responses_append_recovery_text(
-        std::vector<json> & chatcmpl_content,
-        const std::string & role,
-        const std::string & item_type,
-        const std::string & detail) {
-    SRV_WRN(
-            "responses recovery: role='%s', item_type='%s', action='inject_text', detail='%s'\n",
-            role.c_str(),
-            item_type.c_str(),
-            detail.c_str());
-    chatcmpl_content.push_back(responses_make_text_content("[responses recovery: " + detail + "]"));
-}
-
 static std::string sanitize_tool_name(const std::string & name, const std::string & fallback = "tool") {
     std::string out;
     out.reserve(name.size());
@@ -336,14 +323,12 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
             ) {
                 // #responses_create-input-input_item_list-item-input_message
                 std::vector<json> chatcmpl_content;
-                const std::string role = item.at("role").get<std::string>();
 
                 for (const json & input_item : item.at("content")) {
                     const std::string type = json_value(input_item, "type", std::string());
 
                     if (type == "input_text") {
                         if (!input_item.contains("text")) {
-                            responses_append_recovery_text(chatcmpl_content, role, type, "input_text item missing text");
                             continue;
                         }
                         chatcmpl_content.push_back({
@@ -354,7 +339,6 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         // While `detail` is marked as required,
                         // it has default value("auto") and can be omitted.
                         if (!input_item.contains("image_url")) {
-                            responses_append_recovery_text(chatcmpl_content, role, type, "input_image item missing image_url");
                             continue;
                         }
                         chatcmpl_content.push_back({
@@ -365,14 +349,8 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         });
                     } else if (type == "input_file") {
                         chatcmpl_content.push_back(responses_make_text_content(input_file_text(input_item)));
-                    } else {
-                        const std::string item_type = type.empty() ? std::string("unknown") : type;
-                        responses_append_recovery_text(
-                                chatcmpl_content,
-                                role,
-                                item_type,
-                                "unsupported input content type " + item_type);
                     }
+                    // Unknown or malformed content parts are skipped.
                 }
 
                 if (item.contains("type")) {
@@ -410,7 +388,6 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
             ) {
                 // #responses_create-input-input_item_list-item-output_message
                 std::vector<json> chatcmpl_content;
-                const std::string role = item.at("role").get<std::string>();
 
                 // Handle both string content and array content
                 if (item.contains("content") && item.at("content").is_string()) {
@@ -426,7 +403,6 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         if (type == "output_text" || type == "input_text") {
                             // Accept both output_text and input_text (string content gets converted to input_text)
                             if (!exists_and_is_string(output_text, "text")) {
-                                responses_append_recovery_text(chatcmpl_content, role, type, type + " item missing text");
                                 continue;
                             }
                             chatcmpl_content.push_back({
@@ -435,19 +411,12 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                             });
                         } else if (type == "refusal") {
                             if (!exists_and_is_string(output_text, "refusal")) {
-                                responses_append_recovery_text(chatcmpl_content, role, type, "refusal item missing refusal");
                                 continue;
                             }
                             chatcmpl_content.push_back(responses_make_text_content(
                                 "[assistant refusal] " + output_text.at("refusal").get<std::string>()));
-                        } else {
-                            const std::string item_type = type.empty() ? std::string("unknown") : type;
-                            responses_append_recovery_text(
-                                    chatcmpl_content,
-                                    role,
-                                    item_type,
-                                    "unsupported assistant content type " + item_type);
                         }
+                        // Unknown or malformed assistant content parts are skipped.
                     }
                 }
 
