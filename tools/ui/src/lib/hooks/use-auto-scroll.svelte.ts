@@ -105,7 +105,10 @@ export class AutoScrollController {
 	 */
 	resetScrollState(): void {
 		this._userScrolledUp = false;
-		this._autoScrollEnabled = true;
+		this._autoScrollEnabled = !this._disabled;
+		if (this._container) {
+			this._lastScrollTop = this._container.scrollTop;
+		}
 	}
 
 	/**

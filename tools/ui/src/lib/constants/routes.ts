@@ -23,5 +23,7 @@ export const ROUTES = {
 	/** MCP servers. */
 	MCP_SERVERS: '#/mcp-servers',
 	/** Settings base — for dynamic settings URLs use RouterService. */
-	SETTINGS: '#/settings'
+	SETTINGS: '#/settings',
+	/** Search — mobile-only full-page conversation search. */
+	SEARCH: '#/search'
 } as const;

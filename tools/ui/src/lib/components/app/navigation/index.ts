@@ -63,15 +63,6 @@ export { default as DropdownMenuSearchable } from './DropdownMenuSearchable.svel
  * ```
  */
 export { default as DropdownMenuActions } from './DropdownMenuActions.svelte';
-
-/**
- * **DesktopIconStrip** - Fixed icon strip for desktop sidebar
- *
- * Vertical icon strip shown on desktop when the sidebar is collapsed.
- * Contains navigation shortcuts for new chat, search, MCP, import/export, and settings.
- */
-export { default as DesktopIconStrip } from './DesktopIconStrip.svelte';
-
 /**
  * **SidebarNavigation** - Sidebar with actions menu and conversation list
  *
@@ -116,19 +107,64 @@ export { default as DesktopIconStrip } from './DesktopIconStrip.svelte';
 export { default as SidebarNavigation } from './SidebarNavigation/SidebarNavigation.svelte';
 
 /**
- * Action buttons for sidebar header. Contains new chat button, settings button,
- * and delete all conversations button. Manages dialog states for settings and
- * delete confirmation.
- */
-export { default as SidebarNavigationActions } from './SidebarNavigation/SidebarNavigationActions.svelte';
-
-/**
  * Single conversation item in sidebar. Displays conversation title (truncated),
  * last message preview, and timestamp. Shows context menu on right-click with
  * rename and delete options. Highlights when active (matches current route).
  * Handles click to navigate and keyboard accessibility.
  */
 export { default as SidebarNavigationConversationItem } from './SidebarNavigation/SidebarNavigationConversationItem.svelte';
+
+/**
+ * **SidebarNavigationConversationList** - Grouped conversation list
+ *
+ * Pure-presentational list of conversations. Splits items into a Pinned
+ * section (when not in search mode) and a Recent Conversations / Search
+ * Results section with the unpinned items. Item selection, edit, delete,
+ * and stop-generation are delegated to the caller via callbacks.
+ *
+ * @example
+ * ```svelte
+ * <SidebarNavigationConversationList
+ *   {filteredConversations}
+ *   {currentChatId}
+ *   {isSearchModeActive}
+ *   {searchQuery}
+ *   onSelect={...}
+ *   onEdit={...}
+ *   onDelete={...}
+ *   onStop={...}
+ * />
+ * ```
+ */
+export { default as SidebarNavigationConversationList } from './SidebarNavigation/SidebarNavigationConversationList.svelte';
+export { default as SidebarNavigationActions } from './SidebarNavigation/SidebarNavigationActions.svelte';
+
+/**
+ * **SidebarNavigationSearchResults** - Filtered conversation list for search.
+ *
+ * Pure-presentational rendering of the search-mode subtree: "Search results"
+ * header, the matching items rendered through {@link SidebarNavigationConversationItem},
+ * and contextual empty-state messages. Used both inline inside
+ * {@link SidebarNavigationConversationList} (when search mode is active in the
+ * sidebar) and as the body of the mobile `/search` route.
+ *
+ * The caller is expected to provide an already-filtered list via
+ * `filteredConversations` and a `searchQuery` for the empty-state messages.
+ *
+ * @example
+ * ```svelte
+ * <SidebarNavigationSearchResults
+ *   {searchQuery}
+ *   {filteredConversations}
+ *   {currentChatId}
+ *   onSelect={...}
+ *   onEdit={...}
+ *   onDelete={...}
+ *   onStop={...}
+ * />
+ * ```
+ */
+export { default as SidebarNavigationSearchResults } from './SidebarNavigation/SidebarNavigationSearchResults.svelte';
 
 /**
  * Search input for filtering conversations in sidebar. Filters conversation

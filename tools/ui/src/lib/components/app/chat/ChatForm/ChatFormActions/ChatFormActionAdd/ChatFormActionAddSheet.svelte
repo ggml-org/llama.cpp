@@ -15,6 +15,7 @@
 	import { McpLogo } from '$lib/components/app';
 	import { PencilRuler, ChevronDown, ChevronRight } from '@lucide/svelte';
 	import { HealthCheckStatus } from '$lib/enums';
+	import { AttachmentAction } from '$lib/enums/attachment.enums';
 
 	interface Props {
 		class?: string;
@@ -270,14 +271,22 @@
 					</Collapsible.Root>
 				{/if}
 
-				<button type="button" class={sheetItemClass} onclick={onSystemPromptClick}>
+				<button
+					type="button"
+					class={sheetItemClass}
+					onclick={() => attachmentMenu.callbacks[AttachmentAction.SYSTEM_PROMPT_CLICK]()}
+				>
 					<MessageSquare class="h-4 w-4 shrink-0" />
 
 					<span>System Message</span>
 				</button>
 
 				{#if hasMcpPromptsSupport}
-					<button type="button" class={sheetItemClass} onclick={onMcpPromptClick}>
+					<button
+						type="button"
+						class={sheetItemClass}
+						onclick={() => attachmentMenu.callbacks[AttachmentAction.MCP_PROMPT_CLICK]()}
+					>
 						<Zap class="h-4 w-4 shrink-0" />
 
 						<span>MCP Prompt</span>
@@ -285,7 +294,11 @@
 				{/if}
 
 				{#if hasMcpResourcesSupport}
-					<button type="button" class={sheetItemClass} onclick={onMcpResourcesClick}>
+					<button
+						type="button"
+						class={sheetItemClass}
+						onclick={() => attachmentMenu.callbacks[AttachmentAction.MCP_RESOURCES_CLICK]()}
+					>
 						<FolderOpen class="h-4 w-4 shrink-0" />
 
 						<span>MCP Resources</span>
