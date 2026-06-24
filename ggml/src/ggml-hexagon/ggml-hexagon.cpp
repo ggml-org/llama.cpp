@@ -1881,6 +1881,44 @@ ggml_hexagon_session::~ggml_hexagon_session() noexcept(true) {
 
 // ** backend interface
 
+static bool ggml_hexagon_flash_attn_is_hmx_eligible(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * q,
+    const struct ggml_tensor * k,
+    const struct ggml_tensor * v,
+    const struct ggml_tensor * sinks
+) {
+    if (sess->n_hmx == 0) {
+        return false;
+    }
+
+    if (opt_fa_select < 2) {
+        return false;
+    }
+
+    if (k->type != GGML_TYPE_F16 || v->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    const uint32_t DK = q->ne[0];
+    const uint32_t DV = v->ne[0];
+
+    if (DK % 64 != 0 || DV % 64 != 0) {
+        return false;
+    }
+
+    if (sinks != nullptr) {
+        return false;
+    }
+
+    // Fall back to HVX for small token counts if head dimension is small (DK <= 128)
+    const uint32_t neq1 = q->ne[1];
+    if (DK <= 128 && neq1 < 5) {
+        return false;
+    }
+
+    return true;
+}
 
 static bool ggml_hexagon_precompute_flash_attn_params(
     const struct ggml_hexagon_session * sess,
@@ -1938,11 +1976,8 @@ static bool ggml_hexagon_precompute_flash_attn_params(
     kparams->m1 = std::pow(2.0f, -(max_bias / 2.0f) / kparams->n_head_log2);
 
     // Check HMX eligibility
-    bool hmx_eligible = (sess->n_hmx > 0) && (opt_fa_select >= 2) &&
-                        (k->type == GGML_TYPE_F16) && (v->type == GGML_TYPE_F16) &&
-                        (DK % 64 == 0) && (DV % 64 == 0) && (op->src[4] == nullptr);
-
-    if (hmx_eligible) {
+    const struct ggml_tensor * sinks = op->src[4];
+    if (ggml_hexagon_flash_attn_is_hmx_eligible(sess, q, k, v, sinks)) {
         size_t Br = 0, Bc = 0;
         int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK, DV, neq1, nek1, sess->vtcm_size, sess->n_threads);
         if (ret == 0) {
@@ -3371,7 +3406,7 @@ static inline bool op_is_compute(ggml_tensor *node)
     return !ggml_op_is_empty(node->op) && !ggml_is_empty(node) && (node->flags & GGML_TENSOR_FLAG_COMPUTE);
 }
 
-static bool is_hmx_eligible(const ggml_tensor * t) {
+static bool mm_is_hmx_eligible(const ggml_tensor * t) {
     if (opt_nhmx == 0) { return false; }
 
     const ggml_tensor * src0 = t->src[0];
@@ -3390,7 +3425,7 @@ static bool is_hmx_eligible(const ggml_tensor * t) {
 static bool is_mergeable_mul_mat(const ggml_tensor * t) {
     if (!t || t->op != GGML_OP_MUL_MAT)   return false;
     if (t->src[1]->type != GGML_TYPE_F32) return false;
-    return ggml_is_quantized(t->src[0]->type) && !is_hmx_eligible(t);
+    return ggml_is_quantized(t->src[0]->type) && !mm_is_hmx_eligible(t);
 }
 
 static bool is_mergeable_mul_mat_pair(const ggml_tensor * n1, const ggml_tensor * n2) {
