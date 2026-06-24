@@ -335,6 +335,30 @@ static handle_model_result common_params_handle_model(struct common_params_model
             result.found_mtp = true;
             result.mtp.path  = download_result.mtp_path;
         }
+    } else if (!model.ms_repo.empty()) {
+        // If -m was used with -ms, treat the model "path" as the hf_file to download
+        if (model.hf_file.empty() && !model.path.empty()) {
+            model.hf_file = model.path;
+            model.path = "";
+        }
+        common_download_opts ms_opts = opts;
+        auto download_result = common_download_model(model, ms_opts);
+
+        if (download_result.model_path.empty()) {
+            throw std::runtime_error("failed to download model from ModelScope");
+        }
+
+        model.path = download_result.model_path;
+
+        if (!download_result.mmproj_path.empty()) {
+            result.found_mmproj = true;
+            result.mmproj.path  = download_result.mmproj_path;
+        }
+
+        if (!download_result.mtp_path.empty()) {
+            result.found_mtp = true;
+            result.mtp.path  = download_result.mtp_path;
+        }
     } else if (!model.url.empty()) {
         if (model.path.empty()) {
             auto f = string_split<std::string>(model.url, '#').front();
@@ -504,6 +528,14 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                 throw std::invalid_argument(string_format(
                     "error while handling environment variable \"%s\": %s\n\n", opt.env, e.what()));
             }
+        }
+    }
+
+    // Handle MS_TOKEN environment variable for ModelScope authentication
+    if (params.hf_token.empty()) {
+        const char * ms_token = std::getenv("MS_TOKEN");
+        if (ms_token) {
+            params.hf_token = ms_token;
         }
     }
 
@@ -2645,6 +2677,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_file = value;
         }
     ).set_env("LLAMA_ARG_HF_FILE"));
+    add_opt(common_arg(
+        {"-ms", "-msr", "--ms-repo"}, "<user>/<model>[:quant]",
+        "ModelScope model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
+        "example: Qwen/Qwen3-0.6B-GGUF:Q8_0\n"
+        "(default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.model.ms_repo = value;
+        }
+    ).set_env("LLAMA_ARG_MS_REPO"));
     add_opt(common_arg(
         {"-hfv", "-hfrv", "--hf-repo-v"}, "<user>/<model>[:quant]",
         "Hugging Face model repository for the vocoder model (default: unused)",

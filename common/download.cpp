@@ -5,6 +5,7 @@
 #include "log.h"
 #include "download.h"
 #include "hf-cache.h"
+#include "ms-cache.h"
 
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
@@ -556,14 +557,15 @@ static int extract_quant_bits(const std::string & filename) {
     return std::stoi(split.tag.substr(pos));
 }
 
-static hf_cache::hf_files get_split_files(const hf_cache::hf_files & files,
-                                          const hf_cache::hf_file  & file) {
+template <typename FileT>
+static std::vector<FileT> get_split_files(const std::vector<FileT> & files,
+                                          const FileT              & file) {
     auto split = get_gguf_split_info(file.path);
 
     if (split.count <= 1) {
         return {file};
     }
-    hf_cache::hf_files result;
+    std::vector<FileT> result;
 
     for (const auto & f : files) {
         auto split_f = get_gguf_split_info(f.path);
@@ -576,10 +578,11 @@ static hf_cache::hf_files get_split_files(const hf_cache::hf_files & files,
 
 // pick the best sibling GGUF whose filename contains `keyword` (e.g. "mmproj" / "mtp"),
 // preferring deeper shared directory prefix with the model, then closest quantization
-static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
-                                           const std::string        & model,
-                                           const std::string        & keyword) {
-    hf_cache::hf_file best;
+template <typename FileT>
+static FileT find_best_sibling(const std::vector<FileT> & files,
+                               const std::string        & model,
+                               const std::string        & keyword) {
+    FileT best;
     size_t best_depth = 0;
     int best_diff = 0;
     bool found = false;
@@ -617,13 +620,15 @@ static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
     return best;
 }
 
-static hf_cache::hf_file find_best_mmproj(const hf_cache::hf_files & files,
-                                          const std::string        & model) {
+template <typename FileT>
+static FileT find_best_mmproj(const std::vector<FileT> & files,
+                              const std::string        & model) {
     return find_best_sibling(files, model, "mmproj");
 }
 
-static hf_cache::hf_file find_best_mtp(const hf_cache::hf_files & files,
-                                       const std::string        & model) {
+template <typename FileT>
+static FileT find_best_mtp(const std::vector<FileT> & files,
+                           const std::string        & model) {
     return find_best_sibling(files, model, "mtp-");
 }
 
@@ -642,8 +647,9 @@ static bool gguf_filename_is_model(const std::string & filepath) {
            filename.find("mtp-")    == std::string::npos;
 }
 
-static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
-                                         const std::string        & tag) {
+template <typename FileT>
+static FileT find_best_model(const std::vector<FileT> & files,
+                             const std::string        & tag) {
     std::vector<std::string> tags;
 
     if (!tag.empty()) {
@@ -682,7 +688,8 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
     return {};
 }
 
-static void list_available_gguf_files(const hf_cache::hf_files & files) {
+template <typename FileT>
+static void list_available_gguf_files(const std::vector<FileT> & files) {
     LOG_INF("Available GGUF files:\n");
     for (const auto & f : files) {
         if (string_ends_with(f.path, ".gguf")) {
@@ -763,6 +770,69 @@ static hf_plan get_hf_plan(const common_params_model  & model,
     return plan;
 }
 
+struct ms_plan {
+    ms_cache::ms_file primary;
+    ms_cache::ms_files model_files;
+    ms_cache::ms_file mmproj;
+    ms_cache::ms_file mtp;
+};
+
+static ms_plan get_ms_plan(const common_params_model  & model,
+                           const common_download_opts & opts,
+                           bool download_mmproj,
+                           bool download_mtp) {
+    ms_plan plan;
+
+    auto [repo, tag] = common_download_split_repo_tag(model.ms_repo);
+
+    ms_cache::ms_files all;
+    if (!opts.offline) {
+        all = ms_cache::get_repo_files(repo, opts.bearer_token);
+    }
+    if (all.empty()) {
+        all = ms_cache::get_cached_files(repo);
+    }
+    if (all.empty()) {
+        return plan;
+    }
+
+    ms_cache::ms_file primary;
+
+    if (!model.hf_file.empty()) {
+        for (const auto & f : all) {
+            if (f.path == model.hf_file) {
+                primary = f;
+                break;
+            }
+        }
+        if (primary.path.empty()) {
+            LOG_ERR("%s: file '%s' not found in repository\n", __func__, model.hf_file.c_str());
+            list_available_gguf_files(all);
+            return plan;
+        }
+    } else {
+        primary = find_best_model(all, tag);
+        if (primary.path.empty()) {
+            LOG_ERR("%s: no GGUF files found in repository %s\n", __func__, repo.c_str());
+            list_available_gguf_files(all);
+            return plan;
+        }
+    }
+
+    plan.primary = primary;
+    plan.model_files = get_split_files(all, primary);
+
+    if (download_mmproj) {
+        plan.mmproj = find_best_mmproj(all, primary.path);
+    }
+
+    if (download_mtp) {
+        plan.mtp = find_best_mtp(all, primary.path);
+    }
+
+    return plan;
+}
+
 struct download_task {
     std::string url;
     std::string path;
@@ -796,11 +866,13 @@ common_download_model_result common_download_model(const common_params_model  & 
     common_download_model_result result;
     std::vector<download_task> tasks;
     hf_plan hf;
+    ms_plan ms;
 
     bool download_mmproj = opts.download_mmproj;
     bool download_mtp = opts.download_mtp;
     bool preset_only = opts.preset_only;
     bool is_hf = !model.hf_repo.empty();
+    bool is_ms = !model.ms_repo.empty();
 
     if (is_hf) {
         hf = get_hf_plan(model, opts, download_mmproj, download_mtp);
@@ -819,6 +891,19 @@ common_download_model_result common_download_model(const common_params_model  & 
                 tasks.push_back({hf.mtp.url, hf.mtp.local_path});
             }
         }
+    } else if (is_ms) {
+        ms = get_ms_plan(model, opts, download_mmproj, download_mtp);
+        for (const auto & f : ms.model_files) {
+            if (!f.url.empty()) {
+                tasks.push_back({f.url, f.local_path});
+            }
+        }
+        if (!ms.mmproj.path.empty() && !ms.mmproj.url.empty()) {
+            tasks.push_back({ms.mmproj.url, ms.mmproj.local_path});
+        }
+        if (!ms.mtp.path.empty() && !ms.mtp.url.empty()) {
+            tasks.push_back({ms.mtp.url, ms.mtp.local_path});
+        }
     } else if (!model.url.empty()) {
         tasks = get_url_tasks(model);
     } else {
@@ -827,14 +912,31 @@ common_download_model_result common_download_model(const common_params_model  & 
     }
 
     if (tasks.empty()) {
+        // All files are already cached (no URLs to download)
+        if (is_ms) {
+            result.model_path = ms.primary.final_path;
+            if (!ms.mmproj.path.empty()) {
+                result.mmproj_path = ms.mmproj.final_path;
+            }
+            if (!ms.mtp.path.empty()) {
+                result.mtp_path = ms.mtp.final_path;
+            }
+        }
         return result;
+    }
+
+    // MS uses Cookie auth; build download opts with MS-specific headers
+    // reuse bearer_token to pass MS Cookie token
+    common_download_opts download_opts = opts;
+    if (is_ms && !opts.bearer_token.empty()) {
+        download_opts.headers.emplace_back("Cookie", "m_session_id=" + opts.bearer_token);
     }
 
     std::vector<std::future<int>> futures;
     for (const auto & task : tasks) {
         futures.push_back(std::async(std::launch::async,
-            [&task, &opts, is_hf]() {
-                return common_download_file_single(task.url, task.path, opts, is_hf);
+            [&task, &download_opts, is_hf]() {
+                return common_download_file_single(task.url, task.path, download_opts, is_hf);
             }
         ));
     }
@@ -867,6 +969,19 @@ common_download_model_result common_download_model(const common_params_model  & 
             if (!hf.mtp.path.empty()) {
                 result.mtp_path = hf_cache::finalize_file(hf.mtp);
             }
+        }
+    } else if (is_ms) {
+        for (const auto & f : ms.model_files) {
+            ms_cache::finalize_file(f);
+        }
+        result.model_path = ms.primary.final_path;
+
+        if (!ms.mmproj.path.empty()) {
+            result.mmproj_path = ms_cache::finalize_file(ms.mmproj);
+        }
+
+        if (!ms.mtp.path.empty()) {
+            result.mtp_path = ms_cache::finalize_file(ms.mtp);
         }
     } else {
         result.model_path = model.path;

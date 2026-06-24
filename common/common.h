@@ -295,10 +295,14 @@ struct common_params_model {
     std::string hf_repo     = ""; // HF repo                                                // NOLINT
     std::string hf_file     = ""; // HF file                                                // NOLINT
     std::string docker_repo = ""; // Docker repo                                            // NOLINT
+    std::string ms_repo     = ""; // ModelScope repo                                        // NOLINT
 
     std::string get_name() {
         if (!hf_repo.empty()) {
             return hf_repo;
+        }
+        if (!ms_repo.empty()) {
+            return ms_repo;
         }
         if (!docker_repo.empty()) {
             return docker_repo;
