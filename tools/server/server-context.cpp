@@ -121,6 +121,10 @@ struct server_slot {
     bool has_next_token = true;
     bool has_new_line   = false;
     bool truncated      = false;
+    // A restored checkpoint leaves a short prompt suffix to evaluate. Keep that
+    // suffix out of mixed decode batches; the CUDA path is not stable when it is
+    // evaluated concurrently with other active slots.
+    bool prompt_checkpoint_restored = false;
 
     stop_type stop;
 
@@ -218,6 +222,7 @@ struct server_slot {
         generated_text = "";
         has_new_line   = false;
         truncated      = false;
+        prompt_checkpoint_restored = false;
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
@@ -2669,9 +2674,17 @@ private:
         std::vector<server_slot *> generating;
         std::vector<server_slot *> drafting;
 
+        const bool has_checkpoint_restored_prompt = std::any_of(slots.begin(), slots.end(), [](const server_slot & slot) {
+            return slot.prompt_checkpoint_restored && slot.state == SLOT_STATE_PROCESSING_PROMPT;
+        });
+
         // determine which slots are generating and drafting
         for (auto & slot : slots) {
             if (slot.state != SLOT_STATE_GENERATING) {
+                continue;
+            }
+
+            if (has_checkpoint_restored_prompt) {
                 continue;
             }
 
@@ -3061,6 +3074,7 @@ private:
 
                                         pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
                                         n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
+                                        slot.prompt_checkpoint_restored = true;
                                         SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
                                     }
 
@@ -3110,6 +3124,10 @@ private:
                             }
                         }
                     } // end of SLOT_STATE_STARTED
+
+                    if (slot.prompt_checkpoint_restored && n_tokens_prev > 0) {
+                        continue;
+                    }
 
                     if (!slot.can_split()) {
                         // cannot fit the prompt in the current batch - will try next iter
@@ -3281,6 +3299,7 @@ private:
 
                         slot.n_decoded = 0;
                         slot.i_batch   = batch.n_tokens - 1;
+                        slot.prompt_checkpoint_restored = false;
 
                         slot.init_sampler();
                     } else {
@@ -3327,12 +3346,17 @@ private:
 
                     // no need to create checkpoints that are too close together
                     do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || n_tokens_start > slot.prompt.checkpoints.back().n_tokens + params_base.checkpoint_min_step);
+
                     SLT_DBG(slot, "main/do_checkpoint = %s, pos_min = %d, pos_max = %d\n", do_checkpoint ? "yes" : "no", pos_min, pos_max);
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
                     //       yet processed and therefore it is not part of the checkpoint.
                     if (do_checkpoint) {
                         create_checkpoint(slot, n_tokens_cur, pos_min, pos_max);
+                    }
+
+                    if (slot.prompt_checkpoint_restored || (!slot.prompt.checkpoints.empty() && near_prompt_end)) {
+                        break;
                     }
                 }
 

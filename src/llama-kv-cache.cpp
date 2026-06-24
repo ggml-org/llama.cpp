@@ -166,8 +166,7 @@ llama_kv_cache::llama_kv_cache(
     // #24060/MTP fix: iterate ALL layers (incl. nextn) so an all-nextn draft
     // (gemma4-assistant: n_layer()==0) registers its KV layers; has_kv() still
     // gates per-layer. Upstream loops the full hparams.n_layer member here.
-    const uint32_t n_layer    = hparams.n_layer_all;
-    const uint32_t n_layer_kv = hparams.n_layer_kv();
+    const uint32_t n_layer = hparams.n_layer_all;
 
     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
     struct ggml_backend_buft_comparator {
@@ -183,7 +182,10 @@ llama_kv_cache::llama_kv_cache(
         if (it == ctx_map.end()) {
             ggml_init_params params = {
                 // +3 for turbo rotation matrices (turbo_rotation + turbo_rotation_inv + turbo_innerq_scale_inv)
-                /*.mem_size   =*/ size_t((2u*(1 + n_stream)*n_layer_kv + 3)*ggml_tensor_overhead()),
+                // Size this for the actual layer loop below. Some models expose extra
+                // KV-bearing layers through n_layer_all, and under-reserving tensor
+                // metadata corrupts later KV/checkpoint operations.
+                /*.mem_size   =*/ size_t((2u*(1 + n_stream)*n_layer + 3)*ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
