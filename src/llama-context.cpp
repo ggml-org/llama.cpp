@@ -209,6 +209,9 @@ llama_context::llama_context(
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
 
     cparams.op_offload = params.op_offload;
+    if (model.is_sequential()) {
+        cparams.op_offload = true;
+    }
     cparams.kv_unified = params.kv_unified;
 
     // initialized later
@@ -459,7 +462,77 @@ void llama_context::sched_reserve() {
     gf_res_prev.reset(new llm_graph_result(max_nodes));
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
 
+    // compute per-split weight budget for sequential/VRAM-constrained mode once, apply below
+    size_t sequential_weight_budget = 0;
+    if (model.is_sequential()) {
+        // -- VRAM budget: use smallest free GPU memory, minus headroom for KV/activations --
+        size_t min_free_vram = SIZE_MAX;
+        for (const auto & backend : backend_ptrs) {
+            ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                continue;
+            }
+            size_t free = 0, total = 0;
+            ggml_backend_dev_memory(dev, &free, &total);
+            if (free > 0 && free < min_free_vram) {
+                min_free_vram = free;
+            }
+        }
+        if (min_free_vram != SIZE_MAX && min_free_vram > 0) {
+            // reserve ~40% for KV cache, activations, and compute buffers;
+            // floor 1 GiB, ceil 12 GiB so the budget is neither too tight nor too loose
+            const size_t pct_headroom   = min_free_vram * 2 / 5;
+            const size_t floor_headroom = (size_t)1 * 1024 * 1024 * 1024;
+            const size_t ceil_headroom  = (size_t)12 * 1024 * 1024 * 1024;
+            const size_t headroom = std::min(std::max(pct_headroom, floor_headroom), ceil_headroom);
+            sequential_weight_budget = min_free_vram > headroom ? min_free_vram - headroom : min_free_vram / 2;
+            LLAMA_LOG_INFO("%s: sequential load: VRAM budget = %.1f GiB "
+                           "(free = %.1f GiB, headroom = %.1f GiB)\n",
+                __func__,
+                sequential_weight_budget / (1024.0 * 1024.0 * 1024.0),
+                min_free_vram / (1024.0 * 1024.0 * 1024.0),
+                headroom / (1024.0 * 1024.0 * 1024.0));
+        }
+
+        // -- RAM budget: mmap-faulted pages during weight copy must fit in system RAM --
+        // the async prefetch double-buffers (current + next split in flight),
+        // so use at most 1/4 of physical RAM per split
+        {
+            size_t ram_free = 0, ram_total = 0;
+            ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            if (cpu_dev) {
+                ggml_backend_dev_memory(cpu_dev, &ram_free, &ram_total);
+            }
+            // on Linux the CPU backend reports total physical RAM as "free"
+            // (see ggml_backend_cpu_device_get_memory); use that as the ceiling
+            const size_t phys_ram = ram_free > 0 ? ram_free : ram_total;
+            if (phys_ram > 0) {
+                // use at most 1/4 of physical RAM per split:
+                //   1/4 current split, 1/4 prefetch, 1/2 headroom for OS + other processes
+                const size_t ram_budget = phys_ram / 4;
+                if (sequential_weight_budget == 0 || ram_budget < sequential_weight_budget) {
+                    sequential_weight_budget = ram_budget;
+                }
+                LLAMA_LOG_INFO("%s: sequential load: RAM budget  = %.1f GiB (physical = %.1f GiB)\n",
+                    __func__,
+                    ram_budget / (1024.0 * 1024.0 * 1024.0),
+                    phys_ram / (1024.0 * 1024.0 * 1024.0));
+            }
+        }
+
+        LLAMA_LOG_INFO("%s: sequential load: final per-split budget = %.1f GiB\n",
+            __func__,
+            sequential_weight_budget / (1024.0 * 1024.0 * 1024.0));
+    }
+
     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
+    if (model.is_sequential()) {
+        ggml_backend_sched_set_force_weight_offload(sched.get(), true);
+        ggml_backend_sched_set_async_weight_prefetch(sched.get(), true);
+        if (sequential_weight_budget > 0) {
+            ggml_backend_sched_set_max_weight_bytes_per_split(sched.get(), sequential_weight_budget);
+        }
+    }
 
     llama_memory_context_ptr mctx;
     if (memory) {
@@ -616,6 +689,13 @@ void llama_context::sched_reserve() {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
+                if (model.is_sequential()) {
+                    ggml_backend_sched_set_force_weight_offload(sched.get(), true);
+                    ggml_backend_sched_set_async_weight_prefetch(sched.get(), true);
+                    if (sequential_weight_budget > 0) {
+                        ggml_backend_sched_set_max_weight_bytes_per_split(sched.get(), sequential_weight_budget);
+                    }
+                }
                 gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
             }
             if (!gf) {

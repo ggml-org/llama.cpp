@@ -79,6 +79,7 @@ struct llama_model_loader {
     bool use_direct_io = false;
     bool check_tensors;
     bool no_alloc;
+    bool sequential_load = false;
 
     llama_files files;
     llama_ftype ftype;

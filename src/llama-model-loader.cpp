@@ -1550,7 +1550,13 @@ bool llama_model_loader::load_all_data(
             }
 
             GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
-            if (buf_mmap && cur->data == nullptr) {
+            if (sequential_load && cur->data != nullptr && ggml_backend_buffer_is_host(cur->buffer)) {
+                // sequential mode: tensor data already points directly to mmap, skip copy
+                // the buffer was set up in the creation loop with t->data = mapping->addr() + offset
+                auto & mmap_used = mmaps_used[weight->idx];
+                mmap_used.first  = std::min(mmap_used.first,  weight->offs);
+                mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+            } else if (buf_mmap && cur->data == nullptr) {
                 ggml_backend_tensor_alloc(buf_mmap, cur, data);
                 if (lmlocks) {
                     const auto & lmlock = lmlocks->at(weight->idx);
@@ -1673,9 +1679,15 @@ bool llama_model_loader::load_all_data(
             for (uint32_t idx = 0; idx < mappings.size(); idx++) {
                 const auto & mmap_used = mmaps_used.at(idx);
                 auto & mapping = mappings.at(idx);
-                mapping->unmap_fragment(0, mmap_used.first);
-                if (mmap_used.second != 0) {
-                    mapping->unmap_fragment(mmap_used.second, mapping->size());
+                if (sequential_load) {
+                    // sequential mode: keep tensor data mapped for on-demand disk paging;
+                    // only unmap the metadata header (before first tensor)
+                    mapping->unmap_fragment(0, mmap_used.first);
+                } else {
+                    mapping->unmap_fragment(0, mmap_used.first);
+                    if (mmap_used.second != 0) {
+                        mapping->unmap_fragment(mmap_used.second, mapping->size());
+                    }
                 }
             }
         }

@@ -349,3 +349,30 @@ def test_router_delete_model():
     # Model should no longer appear in GET /models
     ids = _get_model_ids(is_reload=False)
     assert MODEL_DOWNLOAD_ID not in ids, f"{MODEL_DOWNLOAD_ID} still present after deletion"
+
+
+def test_router_models_preset_sequential_load():
+    """models.ini preset with sequential_load = true should be parsed without error."""
+    global server
+
+    preset_path = os.path.join(TMP_DIR, "test_sequential.ini")
+
+    with open(preset_path, "w") as f:
+        f.write(
+            "[model-seq]\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+            "sequential_load = true\n"
+        )
+
+    server.models_preset = preset_path
+    server.start()
+
+    try:
+        ids = _get_model_ids(is_reload=False)
+        assert "model-seq" in ids, "model with sequential_load should appear in model list"
+
+        # load the model and verify it loads successfully with sequential mode
+        _load_model_and_wait("model-seq", timeout=120)
+        assert _get_model_status("model-seq") == "loaded"
+    finally:
+        os.remove(preset_path)

@@ -2041,6 +2041,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_NO_HOST"));
     add_opt(common_arg(
+        {"--sequential", "--sequential-load"},
+        {"--no-sequential", "--no-sequential-load"},
+        string_format("stream layers from disk, auto-fit GPU VRAM to load models exceeding RAM+VRAM (default: %s)", params.sequential_load ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.sequential_load = value;
+        }
+    ).set_env("LLAMA_ARG_SEQUENTIAL"));
+    add_opt(common_arg(
         {"-ctk", "--cache-type-k"}, "TYPE",
         string_format(
             "KV cache data type for K\n"

@@ -1003,6 +1003,10 @@ struct llama_model::impl {
     std::vector<layer_dev> dev_layer;
 
     bool has_tensor_overrides;
+
+    // sequential load: keep weights CPU mmap-backed and let the scheduler stream
+    // eligible weight ops to the device through normal split input copies.
+    bool sequential_load = false;
 };
 
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
@@ -1212,11 +1216,57 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     const auto & tensor_split = params.tensor_split;
 
     const int n_layer_all = hparams.n_layer_all;
-    const int n_gpu_layers = this->n_gpu_layers();
+    int n_gpu_layers = this->n_gpu_layers();
+
+    // sequential load: stream layers from disk, auto-calculate GPU layers from VRAM
+    if (params.sequential_load && !devices.empty()) {
+        pimpl->sequential_load = true;
+
+        // force mmap for disk streaming (no direct_io, no mlock)
+        if (!ml.use_mmap) {
+            LLAMA_LOG_WARN("%s: sequential load requires mmap, forcing use_mmap = true\n", __func__);
+        }
+        ml.use_mmap    = true;
+        ml.use_direct_io = false;
+        params.use_mlock = false;
+
+        // estimate how many layers can be resident at once, for diagnostics only.
+        // The scheduler copies only the weights needed by each offloaded split.
+        const size_t layer_size_est = ml.n_bytes / std::max(n_layer_all, 1);
+        int total_stream_layers = 0;
+        for (const auto & dev : devices) {
+            size_t free = 0, total = 0;
+            ggml_backend_dev_memory(dev.dev, &free, &total);
+            // 20% of free VRAM for non-weight memory, 2 GiB floor, 16 GiB ceiling
+            const size_t pct_headroom   = free / 5;
+            const size_t floor_headroom = (size_t)2 * 1024 * 1024 * 1024;
+            const size_t ceil_headroom  = (size_t)16 * 1024 * 1024 * 1024;
+            const size_t headroom = std::min(std::max(pct_headroom, floor_headroom), ceil_headroom);
+            const size_t usable = free > headroom ? free - headroom : 0;
+            const int dev_layers = (int)(usable / layer_size_est);
+            total_stream_layers += dev_layers;
+            LLAMA_LOG_INFO("%s: sequential load: device %s: free = %.1f GiB, headroom = %.1f GiB, layers = %d\n",
+                __func__, ggml_backend_dev_name(dev.dev),
+                free / (1024.0 * 1024.0 * 1024.0), headroom / (1024.0 * 1024.0 * 1024.0), dev_layers);
+        }
+        total_stream_layers = std::min(total_stream_layers, n_layer_all + 1);
+        total_stream_layers = std::max(total_stream_layers, 1);
+
+        LLAMA_LOG_INFO("%s: sequential load: estimated streaming window = %d/%d layers (est layer = %.1f MiB, total model = %.1f GiB)\n",
+            __func__, total_stream_layers, n_layer_all + 1,
+            layer_size_est / (1024.0 * 1024.0), ml.n_bytes / (1024.0 * 1024.0 * 1024.0));
+
+        // note: CPU layers point directly to mmap (no extra RAM), OS pages on demand
+        LLAMA_LOG_INFO("%s: sequential load: %d layers (~%.1f GiB) streamed from disk via mmap, "
+                       "eligible ops are offloaded through scheduler split copies\n",
+            __func__, n_layer_all + 1, ml.n_bytes / (1024.0 * 1024.0 * 1024.0),
+            total_stream_layers);
+    }
 
     const bool use_mmap_buffer = true;
 
     this->ml = &ml; // to be used by create_tensor() and load_arch_tensors()
+    ml.sequential_load = params.sequential_load;
 
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s, direct_io = %s)\n",
         __func__, ml.use_mmap ? "true" : "false", ml.use_direct_io ? "true" : "false");
@@ -1272,6 +1322,11 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, n_layer_all + 1);
     auto get_layer_buft_list = [&](int il) -> llama_model::impl::layer_dev {
         const bool is_swa = il < n_layer_all && hparams.is_swa(il);
+        // sequential load: ALL layers start on CPU (mmap-direct), GPU window managed at runtime
+        if (pimpl->sequential_load) {
+            LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s (sequential, is_swa = %d)\n", il, ggml_backend_dev_name(cpu_dev), is_swa);
+            return {cpu_dev, &pimpl->cpu_buft_list};
+        }
         if (il < i_gpu_start || (il - i_gpu_start) >= act_gpu_layers) {
             LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(cpu_dev), is_swa);
             return {cpu_dev, &pimpl->cpu_buft_list};
@@ -1540,6 +1595,31 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                 bufs.emplace_back(buf);
                 buf_map.emplace(idx, buf);
             }
+        } else if (ml.sequential_load && ggml_backend_buft_is_host(buft)) {
+            // sequential mode: CPU tensors point directly to mmap (no RAM copy)
+            // tensors retain their GGUF file offsets as data pointers
+            GGML_ASSERT(!ml.no_alloc);
+            ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0); // dummy buffer
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                t->buffer = buf;
+                const auto * weight = ml.get_weight(ggml_get_name(t));
+                if (weight && weight->idx < ml.mappings.size()) {
+                    const auto & mapping = ml.mappings.at(weight->idx);
+                    t->data = (uint8_t *)mapping->addr() + weight->offs;
+                }
+            }
+            LLAMA_LOG_INFO("%s: sequential load: CPU tensors mapped directly to mmap (no RAM allocation)\n", __func__);
+            bufs.emplace_back(buf);
+            for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
+                buf_map.emplace(idx, buf);
+            }
+            // skip the shared bufs/mlock handling below
+            for (auto & buf_ref : bufs) {
+                ggml_backend_buffer_set_usage(buf_ref.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            }
+            pimpl->ctxs_bufs.emplace_back(std::move(ctx_ptr), std::move(bufs));
+            ctx_buf_maps.emplace_back(ctx, buf_map);
+            continue;
         } else {
             ggml_backend_buffer_t buf;
             if (ml.no_alloc) {
@@ -1576,7 +1656,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         ctx_buf_maps.emplace_back(ctx, buf_map);
     }
 
-    if (llama_supports_gpu_offload()) {
+    if (pimpl->sequential_load) {
+        LLAMA_LOG_INFO("%s: sequential load: model weights remain CPU mmap-backed; GPU residency is transient per scheduler split\n", __func__);
+    } else if (llama_supports_gpu_offload()) {
         const int n_gpu = std::min(n_gpu_layers, n_layer_all);
 
         int n_repeating = n_gpu;
@@ -1662,6 +1744,10 @@ uint32_t llama_model::n_gpu_layers() const {
 
 llama_split_mode llama_model::split_mode() const {
     return params.split_mode;
+}
+
+bool llama_model::is_sequential() const {
+    return pimpl->sequential_load;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {
@@ -2275,6 +2361,7 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.sequential_load             =*/ false,
     };
 
     return result;

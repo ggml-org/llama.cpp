@@ -351,6 +351,17 @@ extern "C" {
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 
+    // Force host weight ops to higher-priority devices when possible.
+    GGML_API void                 ggml_backend_sched_set_force_weight_offload(ggml_backend_sched_t sched, bool force);
+
+    // Enable one-split lookahead async upload for host weights copied to device split inputs.
+    GGML_API void                 ggml_backend_sched_set_async_weight_prefetch(ggml_backend_sched_t sched, bool prefetch);
+
+    // Limit total weight bytes per GPU split when force_weight_offload is active.
+    // When non-zero, splits are broken when accumulated weight inputs exceed this limit.
+    // This enables streaming layer-by-layer execution in VRAM-constrained scenarios.
+    GGML_API void                 ggml_backend_sched_set_max_weight_bytes_per_split(ggml_backend_sched_t sched, size_t max_bytes);
+
     //
     // Meta backend
     //

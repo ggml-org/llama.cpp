@@ -289,8 +289,16 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
                     key.c_str()
                 ));
             }
-            if (key_to_opt.find(key) != key_to_opt.end()) {
-                const auto & opt = key_to_opt.at(key);
+            auto it = key_to_opt.find(key);
+            // fallback: try dash-separated form (e.g. sequential_load -> sequential-load)
+            std::string key_dash;
+            if (it == key_to_opt.end() && key.find('_') != std::string::npos) {
+                key_dash = key;
+                string_replace_all(key_dash, "_", "-");
+                it = key_to_opt.find(key_dash);
+            }
+            if (it != key_to_opt.end()) {
+                const auto & opt = it->second;
                 if (is_bool_arg(opt)) {
                     preset.options[opt] = parse_bool_arg(opt, key, value);
                 } else {
