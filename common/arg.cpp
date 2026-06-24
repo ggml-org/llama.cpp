@@ -20,6 +20,28 @@
 #include <shellapi.h>
 #endif
 
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
+
+static int get_console_width() {
+#if defined(_WIN32)
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+        int width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        if (width > 0) {
+            return width;
+        }
+    }
+#elif !defined(__EMSCRIPTEN__)
+    struct winsize w;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0 && w.ws_col > 0) {
+        return w.ws_col;
+    }
+#endif
+    return 0; // unknown, caller decides fallback
+}
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
@@ -180,8 +202,16 @@ static std::vector<std::string> break_str_into_lines(std::string input, size_t m
 std::string common_arg::to_string() const {
     // params for printing to console
     const static int n_leading_spaces = 40;
-    const static int n_char_per_line_help = 70; // TODO: detect this based on current console
-    std::string leading_spaces(n_leading_spaces, ' ');
+
+int console_width = get_console_width();
+
+// ensure safe fallback and prevent too narrow wrapping
+int n_char_per_line_help =
+    (console_width > n_leading_spaces + 10)
+        ? console_width - n_leading_spaces - 2
+        : 70;
+
+std::string leading_spaces(n_leading_spaces, ' ');
 
     std::ostringstream ss;
     auto all_args = get_args(); // also contains args_neg
