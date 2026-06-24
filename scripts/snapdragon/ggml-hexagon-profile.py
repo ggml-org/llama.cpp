@@ -26,7 +26,7 @@ COL_MAP = {
 }
 
 op_pattern = re.compile(
-    r"profile-op\s+(?P<op_name>[A-Z_0-9+]+):\s+.*?\s+:\s+(?P<dims>[\d:x\s\->!]+)\s+:\s+(?P<types>[a-z\d_\s\->x]+)\s+:\s+.*?\s+(?:op-)?usec\s+(?P<usec>\d+)\s+(?:op-)?cycles\s+(?P<cycles>\d+)(?:\s+start\s+(?P<start>\d+))?(?:\s+mhz\s+(?P<mhz>[\d.]+))?(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?(?:\s+evt\s+\[(?P<evt>[\d,\s]+)\])?"
+    r"profile-op\s+(?P<op_name>[A-Z_0-9+]+):\s+.*?\s+:\s+(?P<dims>[\d:x\s\->!]+)\s+:\s+(?P<types>[a-z\d_\s\->x]+)\s+:\s+.*?\s+:\s+(?:op-)?usec\s+(?P<usec>\d+)\s+(?:op-)?cycles\s+(?P<cycles>\d+)(?:\s+start\s+(?P<start>\d+))?(?:\s+mhz\s+(?P<mhz>[\d.]+))?(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?(?:\s+evt\s+\[(?P<evt>[\d,\s]+)\])?"
 )
 
 trace_pattern = re.compile(
@@ -93,9 +93,40 @@ def parse_log(file_path, pmu_index=None):
                 + int(ts_match.group('us'))
             )
 
-        op_match = op_pattern.search(line)
+        if "|" in line and "profile-op" in line:
+            parts = [p.strip() for p in line.split("|")]
+            prefix = parts[0]
+            prefix_match = re.search(r"profile-op\s+(?P<op_name>[A-Z_0-9+]+)", prefix)
+            if not prefix_match:
+                continue
+
+            if len(parts) == 7:
+                dims, types, timings = parts[2], parts[3], parts[6]
+            elif len(parts) == 6:
+                dims, types, timings = parts[2], parts[3], parts[5]
+            else:
+                continue
+
+            timing_match = re.search(
+                r"(?:op-)?usec\s+(?P<usec>\d+)\s+(?:op-)?cycles\s+(?P<cycles>\d+)(?:\s+start\s+(?P<start>\d+))?(?:\s+mhz\s+(?P<mhz>[\d.]+))?(?:\s+pmu\s+\[(?P<pmu>[\d,\s]+)\])?(?:\s+evt\s+\[(?P<evt>[\d,\s]+)\])?",
+                timings
+            )
+            if not timing_match:
+                continue
+
+            op_match = timing_match
+            op_name = prefix_match.group("op_name")
+        else:
+            op_match = op_pattern.search(line)
+            if op_match:
+                op_name = op_match.group('op_name')
+                dims = op_match.group('dims').strip()
+                types = op_match.group('types').strip()
+            else:
+                op_match = None
+
         if op_match:
-            pmu_raw = op_match.group('pmu')
+            pmu_raw = op_match.group('pmu') if 'pmu' in op_match.groupdict() else None
             pmu_val = None
             if pmu_raw and pmu_index is not None:
                 try:
@@ -105,7 +136,7 @@ def parse_log(file_path, pmu_index=None):
                 except (ValueError, IndexError):
                     pmu_val = None
 
-            evt_raw = op_match.group('evt')
+            evt_raw = op_match.group('evt') if 'evt' in op_match.groupdict() else None
             evt_val = None
             if evt_raw:
                 try:
@@ -122,9 +153,9 @@ def parse_log(file_path, pmu_index=None):
             op_text = line[idx + 11:].strip() if idx != -1 else line.strip()
 
             current_op = {
-                'name':         op_match.group('op_name'),
-                'dims':         op_match.group('dims').strip(),
-                'types':        op_match.group('types').strip(),
+                'name':         op_name,
+                'dims':         dims,
+                'types':        types,
                 'op_text':      op_text,
                 'usec':         int(op_match.group('usec')),
                 'cycles':       int(op_match.group('cycles')),

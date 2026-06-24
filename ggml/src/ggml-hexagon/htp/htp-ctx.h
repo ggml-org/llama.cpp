@@ -13,7 +13,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#ifndef HTP_MAX_NTHREADS
 #define HTP_MAX_NTHREADS 10
+#endif
 #define HTP_MAX_MMAPS    16
 
 // Memory mapping
@@ -42,9 +44,13 @@ struct htp_ops_context {
 
     enum htp_op_code    op; // FIXME: rename to opcode
     int32_t             op_params[HTP_OP_MAX_PARAMS];
+    int32_t             kernel_params[HTP_OP_MAX_KERN_PARAMS];
 
     const struct htp_tensor * src[HTP_OP_MAX_INPUTS];
-    const struct htp_tensor * dst;
+    union {
+        const struct htp_tensor * dst;
+        const struct htp_tensor * dsts[HTP_OP_MAX_OUTPUTS];
+    };
 
     // TODO convert these to an array
     struct htp_spad src0_spad;
@@ -87,13 +93,13 @@ struct htp_context {
 
     struct htp_ops_context octx;
 
-#ifdef HTP_HAS_HMX
     struct hmx_queue *     hmx_queue; // Async HMX queue for pipeline overlap
-#endif
 };
 
 int op_matmul(struct htp_ops_context * octx);
 int op_matmul_id(struct htp_ops_context * octx);
+int op_matmul_qkv(struct htp_ops_context * octx);
+int op_matmul_ffn(struct htp_ops_context * octx);
 int op_binary(struct htp_ops_context * octx);
 int op_unary(struct htp_ops_context * octx);
 int op_sum_rows(struct htp_ops_context * octx);
