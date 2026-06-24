@@ -3565,6 +3565,7 @@ static bool ggml_vk_matmul_int_shmem_support(const vk_device& device, const std:
 
     uint32_t block_a_size = 0;
     switch (src0_type) {
+        case GGML_TYPE_E4M3:    block_a_size = 32;                                                            break; // 32 fp8 bytes (f16-style path, 1 byte/elem)
         case GGML_TYPE_Q4_0:    block_a_size = std430_size({{16, 4}, {fp_size,  fp_align}});                  break; // qs[16/4] + dm
         case GGML_TYPE_Q4_1:    block_a_size = std430_size({{16, 4}, {fp2_size, fp2_align}});                 break; // qs[16/4] + dm(vec2)
         case GGML_TYPE_Q5_0:    block_a_size = std430_size({{16, 4}, {4, 4}, {fp_size,  fp_align}});          break; // qs[16/4] + qh + dm
@@ -4255,6 +4256,10 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         CREATE_MM(GGML_TYPE_F32, pipeline_matmul_f32_f16, matmul_f32_f16, , wg_denoms, warptile, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_F16, pipeline_matmul_f16, matmul_f16, wg_denoms, warptile, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_F16, pipeline_matmul_f16_f32, matmul_f16_f32, wg_denoms, warptile, vk_mat_mat_push_constants, 3, );
+        // e4m3 (block quant). Dequantizes to f16 and uses the standard f16 cooperative-matrix, so it runs
+        // on any coopmat device. Uses the mmq warptile/wg_denoms so the BK spec-constant = 32 (block size);
+        // the f16 `warptile` leaves BK at the default 16 -> NaN.
+        CREATE_MM(GGML_TYPE_E4M3, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_E4M3].f32acc, matmul_e4m3, , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
 #if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
         if (device->coopmat_bf16_support) {
             CREATE_MM(GGML_TYPE_BF16, pipeline_matmul_bf16, matmul_bf16, , wg_denoms, warptile, vk_mat_mat_push_constants, 3, )
@@ -7042,6 +7047,13 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_pipeline(ggml_backend_vk_conte
     if (src0_type == GGML_TYPE_BF16 && src1_type == GGML_TYPE_BF16) {
         return ctx->device->pipeline_matmul_bf16;
     }
+    if (src0_type == GGML_TYPE_E4M3 && src1_type != GGML_TYPE_Q8_1) {
+        // e4m3 mul_mat reads the activation as f32 (it has no q8_1/integer-dot MMQ variant). Reject a
+        // Q8_1 query (-> nullptr) so the caller drops the integer-dot quantize_y path and keeps src1 as
+        // f32. Without this, on a build where glslc enables integer-dot, quantize_y quantizes src1 to
+        // q8_1 and feeds it to this f32-reading shader -> NaN.
+        return ctx->device->pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_E4M3].f32acc;
+    }
     if (prec == GGML_PREC_DEFAULT && ctx->device->fp16 && !(ctx->device->coopmat_support && !ctx->device->coopmat_acc_f16_support)) {
         if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F32) {
             return ctx->device->pipeline_matmul_f16_f32.f16acc;
@@ -9374,6 +9386,8 @@ static void ggml_vk_mul_mat(ggml_backend_vk_context * ctx, vk_context& subctx, c
     // mul_mat_vec supports batching ne12*ne13 when ne11==1, or treating ne11 as the batch size (up to four)
     // when ne12 and ne13 are one.
     } else if ((dst->ne[1] == 1 || (dst->ne[1] <= mul_mat_vec_max_cols && src1->ne[2] * src1->ne[3] == 1)) &&
+               // e4m3 has no mul_mat_vec (dmmv) pipeline yet — always use the mm path (handles N=1).
+               src0->type != GGML_TYPE_E4M3 &&
                (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 || ggml_is_quantized(src0->type))) {
         ggml_vk_mul_mat_vec_q_f16(ctx, subctx, cgraph, node_idx);
     } else {
@@ -17108,6 +17122,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     }
                 }
                 switch (src0_type) {
+                    case GGML_TYPE_E4M3:
+                        // Portable dequant->f16 path: standard f16 cooperative-matrix, supported on any
+                        // coopmat device (gated below by the generic mul_mat_{s,m,l} shared-mem checks).
+                        break;
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
                     case GGML_TYPE_BF16:
@@ -17895,7 +17913,7 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
         return arch == vk_device_architecture::INTEL_XE2;
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
-            // Workaround for AMD proprietary driver reporting support on all GPUs
+            // Workaround for AMD proprietary driver reporting support on all GPUs.
             return arch == vk_device_architecture::AMD_RDNA3;
         }
         return true;

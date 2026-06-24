@@ -508,6 +508,42 @@ void dequantize_row_q8_0(const block_q8_0 * GGML_RESTRICT x, float * GGML_RESTRI
     }
 }
 
+// PER-ROW scale (one absmax over all k, replicated into every block's d). Called per-row
+// (k = n_per_row) by ggml_quantize_chunk so the fp8-compute kernel can apply d once per output
+// row in the epilogue (pure fp8 K-reduction). [#3 phase 1b]
+void quantize_row_e4m3_ref(const float * GGML_RESTRICT x, block_e4m3 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_E4M3 == 0);
+    const int nb = k / QK_E4M3;
+
+    float amax = 0.0f;
+    for (int64_t j = 0; j < k; j++) {
+        amax = MAX(amax, fabsf(x[j]));
+    }
+    const float d  = amax / 448.0f;          // e4m3 max finite = 448
+    const float id = d ? 1.0f/d : 0.0f;
+    const ggml_half dh = GGML_FP32_TO_FP16(d);
+
+    for (int i = 0; i < nb; i++) {
+        y[i].d = dh;
+        for (int j = 0; j < QK_E4M3; ++j) {
+            y[i].qs[j] = ggml_fp32_to_e4m3(x[i*QK_E4M3 + j] * id);
+        }
+    }
+}
+
+void dequantize_row_e4m3(const block_e4m3 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_E4M3;
+    assert(k % qk == 0);
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+        for (int j = 0; j < qk; ++j) {
+            y[i*qk + j] = ggml_e4m3_to_fp32(x[i].qs[j]) * d;
+        }
+    }
+}
+
 void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK_MXFP4;
 
@@ -5480,6 +5516,11 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_Q8_0:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_q8_0, data, nb);
+            } break;
+        case GGML_TYPE_E4M3:
+            {
+                // fp8 quants clamp to max-finite (no NaN); only the per-block fp16 scale needs checking.
+                VALIDATE_ROW_DATA_D_F16_IMPL(block_e4m3, data, nb);
             } break;
         case GGML_TYPE_MXFP4:
             {

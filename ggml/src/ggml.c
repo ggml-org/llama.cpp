@@ -465,6 +465,18 @@ ggml_bf16_t ggml_fp32_to_bf16(float x) {
     return GGML_FP32_TO_BF16(x);
 }
 
+void ggml_e4m3_to_fp32_row(const uint8_t * x, float * y, int64_t n) {
+    for (int64_t i = 0; i < n; i++) {
+        y[i] = ggml_e4m3_to_fp32(x[i]);
+    }
+}
+
+void ggml_fp32_to_e4m3_row(const float * x, uint8_t * y, int64_t n) {
+    for (int64_t i = 0; i < n; i++) {
+        y[i] = ggml_fp32_to_e4m3(x[i]);
+    }
+}
+
 void ggml_fp16_to_fp32_row(const ggml_fp16_t * x, float * y, int64_t n) {
     for (int64_t i = 0; i < n; i++) {
         y[i] = GGML_FP16_TO_FP32(x[i]);
@@ -670,6 +682,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_q1_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q1_0_ref,
+    },
+    [GGML_TYPE_E4M3] = {
+        .type_name                = "e4m3",
+        .blck_size                = QK_E4M3,
+        .type_size                = sizeof(block_e4m3),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_e4m3,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_e4m3_ref,
     },
     [GGML_TYPE_Q4_0] = {
         .type_name                = "q4_0",
@@ -7736,6 +7756,14 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_Q8_0:    result = quantize_q8_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_MXFP4:   result = quantize_mxfp4  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_NVFP4:   result = quantize_nvfp4  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_E4M3:    {
+            for (int64_t r = 0; r < nrows; ++r) {   // per-row scale (one absmax/row) for epilogue scaling
+                quantize_row_e4m3_ref(src + start + r * n_per_row,
+                                      (block_e4m3 *)((char *) dst + (start_row + r) * row_size),
+                                      n_per_row);
+            }
+            result = (size_t) nrows * row_size;
+        } break;
         case GGML_TYPE_Q2_K:    result = quantize_q2_K   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q3_K:    result = quantize_q3_K   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_K:    result = quantize_q4_K   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

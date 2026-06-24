@@ -429,7 +429,8 @@ extern "C" {
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
-        GGML_TYPE_COUNT   = 42,
+        GGML_TYPE_E4M3    = 42, // signed fp8 e4m3fn (1 byte) — RDNA4 fp8 WMMA weights
+        GGML_TYPE_COUNT   = 43,
     };
 
     // precision

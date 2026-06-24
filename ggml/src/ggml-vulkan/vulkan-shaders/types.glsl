@@ -34,6 +34,19 @@
 #define A_TYPE_PACKED32 f16vec2
 #endif
 
+// e4m3: q8_0-shaped block (fp16 `d` + 32 e4m3 quants, 34 bytes). Raw uint8 quants, software-decoded to
+// d * e4m3_decode(qs) -> f16 in the load (no fp8 extension; standard f16 cooperative-matrix).
+#if defined(DATA_A_E4M3)
+struct block_e4m3
+{
+    float16_t d;
+    uint8_t qs[32];
+};
+#define QUANT_K 32
+#define QUANT_R 1
+#define A_TYPE block_e4m3
+#endif
+
 #if defined(DATA_A_BF16)
 #define QUANT_K 1
 #define QUANT_R 1

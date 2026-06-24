@@ -552,6 +552,51 @@ static inline uint8_t ggml_fp32_to_ue4m3(float x) {
     return (uint8_t) ((ue4m3_exp << 3) | ue4m3_man);
 }
 
+// Signed fp8 e4m3fn (OCP): 1 sign, 4 exp (bias=7), 3 mantissa. No inf; 0x7F/0xFF = NaN; max=448.
+// Standard decode (matches RDNA4 fp8 WMMA / GL floate4m3_t) — no 0.5 scale convention.
+static inline float ggml_e4m3_to_fp32(uint8_t x) {
+    uint32_t sign = (x >> 7) & 1;
+    int exp = (x >> 3) & 0xF;
+    int man = x & 0x7;
+    float val;
+    if (exp == 0) {
+        val = ldexpf((float) man, -9);                       // subnormal: man * 2^-9
+    } else if (exp == 0xF && man == 0x7) {
+        val = NAN;                                           // e4m3fn NaN
+    } else {
+        val = ldexpf(1.0f + (float) man / 8.0f, exp - 7);
+    }
+    return sign ? -val : val;
+}
+
+static inline uint8_t ggml_fp32_to_e4m3(float x) {
+    uint32_t bits;
+    memcpy(&bits, &x, 4);
+    uint8_t sign = (uint8_t) ((bits >> 31) & 1);
+    float ax = fabsf(x);
+    if (!(ax > 0.0f)) {
+        return (uint8_t) (sign << 7);                        // signed zero (NaN -> 0)
+    }
+    if (ax > 448.0f) {
+        return (uint8_t) ((sign << 7) | 0x7E);               // clamp to max finite
+    }
+    int fp32_exp = (int) ((bits >> 23) & 0xFF) - 127;
+    int fp32_man = (int) ((bits >> 20) & 0x7);               // top 3 mantissa bits
+    int e_exp    = fp32_exp + 7;
+    if (e_exp <= 0) {
+        int man = (int) (ax * 512.0f + 0.5f);                // subnormal: round(ax * 2^9)
+        if (man > 7) man = 7;
+        return (uint8_t) ((sign << 7) | man);
+    }
+    int round_bit = (int) ((bits >> 19) & 1);
+    int man = fp32_man + round_bit;
+    if (man > 7) { man = 0; e_exp++; }
+    if (e_exp > 15 || (e_exp == 15 && man >= 7)) {
+        return (uint8_t) ((sign << 7) | 0x7E);               // overflow -> max finite (avoid NaN)
+    }
+    return (uint8_t) ((sign << 7) | (e_exp << 3) | man);
+}
+
 /**
  * Converts brain16 to float32.
  *

@@ -554,6 +554,13 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
 
     string_to_spv(shader_name + "_f16" + dot2_sfx, source_name, merge_maps(merge_maps(base_dict, float_type_dict_f16), {{"DATA_A_F16", "1"}, {"LOAD_VEC_A", load_vec}, {"LOAD_VEC_B", load_vec}, {"B_TYPE", aligned_b_type_f16}, {"B_TYPE_SCALAR", "float16_t"}, {"B_TYPEV4", "f16vec4"}, {"D_TYPE", "float"}}), fp16, coopmat, coopmat2, f16acc);
 
+    // e4m3 (q8_0-shaped block, fp8 quants). Dequantizes qs*d -> f16 in the load, then the standard f16
+    // cooperative-matrix, so it consumes f32 activations and compiles with stock glslc on any coopmat
+    // stack. Only the coopmat f32acc matmul path has an e4m3 pipeline, matching ggml-vulkan.cpp.
+    if (coopmat && !f16acc && shader_name == "matmul") {
+        string_to_spv(shader_name + "_e4m3", source_name, merge_maps(merge_maps(base_dict, float_type_dict_f16), {{"DATA_A_E4M3", "1"}, {"LOAD_VEC_A", "4"}, {"LOAD_VEC_B", load_vec}, {"B_TYPE", aligned_b_type_f32}, {"B_TYPE_SCALAR", "float"}, {"B_TYPEV4", "vec4"}, {"D_TYPE", "float"}}), fp16, coopmat, coopmat2, f16acc);
+    }
+
     // bf16
     {
         // For aligned matmul loads

@@ -397,6 +397,33 @@ void ggml_vec_dot_q5_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
+// scaled e4m3: x = block_e4m3 (f16 d + 32 e4m3), y = f32. CPU reference for MUL_MAT(e4m3).
+void ggml_vec_dot_e4m3_f32(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK_E4M3;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_e4m3 * GGML_RESTRICT x = vx;
+    const float      * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+        float bsum = 0.0f;
+        for (int j = 0; j < qk; j++) {
+            bsum += ggml_e4m3_to_fp32(x[i].qs[j]) * y[i*qk + j];
+        }
+        sumf += d * bsum;
+    }
+    *s = sumf;
+}
+
 void ggml_vec_dot_q8_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
