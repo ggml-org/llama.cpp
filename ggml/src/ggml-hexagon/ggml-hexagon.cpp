@@ -63,6 +63,7 @@ static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
 static int    opt_hostbuf = 1; // hostbuf ON by default
 
 static int    opt_mm_select = 3; // 3 = HMX -> Tiled -> Flat -> CPU, 2 = Tiled -> Flat -> CPU, 1 = Flat -> CPU
+static int    opt_fa_select = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 
 // Default PMU events, if profiling with PMU (mode=2) is enabled
 // See https://docs.qualcomm.com/doc/80-N2040-60/topic/pmu-events.html
@@ -1886,6 +1887,10 @@ static bool ggml_hexagon_precompute_flash_attn_params(
     const struct ggml_tensor * op,
     struct htp_fa_kernel_params * kparams
 ) {
+    if (opt_fa_select < 1) {
+        return false;
+    }
+
     memset(kparams, 0, sizeof(*kparams));
 
     const struct ggml_tensor * q    = op->src[0];
@@ -1933,7 +1938,7 @@ static bool ggml_hexagon_precompute_flash_attn_params(
     kparams->m1 = std::pow(2.0f, -(max_bias / 2.0f) / kparams->n_head_log2);
 
     // Check HMX eligibility
-    bool hmx_eligible = (sess->n_hmx > 0) && (opt_mm_select >= 3) &&
+    bool hmx_eligible = (sess->n_hmx > 0) && (opt_fa_select >= 2) &&
                         (k->type == GGML_TYPE_F16) && (v->type == GGML_TYPE_F16) &&
                         (DK % 64 == 0) && (DV % 64 == 0) && (op->src[4] == nullptr);
 
@@ -4227,6 +4232,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_use_hmx  = getenv("GGML_HEXAGON_USE_HMX");
     const char * str_nhmx     = getenv("GGML_HEXAGON_NHMX");
     const char * str_mm_select = getenv("GGML_HEXAGON_MM_SELECT");
+    const char * str_fa_select = getenv("GGML_HEXAGON_FA_SELECT");
     const char * str_ndev     = getenv("GGML_HEXAGON_NDEV");
     const char * str_arch     = getenv("GGML_HEXAGON_ARCH");
     const char * str_vmem     = getenv("GGML_HEXAGON_VMEM");
@@ -4268,6 +4274,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_nhvx      = str_nhvx     ? strtoul(str_nhvx, NULL, 0)             : opt_nhvx;
     opt_nhmx      = str_nhmx     ? atoi(str_nhmx)                         : (str_use_hmx ? atoi(str_use_hmx) : opt_nhmx);
     opt_mm_select = str_mm_select ? atoi(str_mm_select)                   : opt_mm_select;
+    opt_fa_select = str_fa_select ? atoi(str_fa_select)                   : opt_fa_select;
     opt_ndev      = str_ndev     ? strtoul(str_ndev, NULL, 0)             : opt_ndev;
     opt_hostbuf   = str_hostbuf  ? atoi(str_hostbuf)                      : opt_hostbuf;
     opt_mbuf      = str_mbuf     ? strtoul(str_mbuf, NULL, 0) * MiB       : opt_mbuf;
