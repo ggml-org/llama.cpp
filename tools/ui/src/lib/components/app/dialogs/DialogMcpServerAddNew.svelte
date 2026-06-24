@@ -26,6 +26,9 @@
 			return 'Invalid URL format';
 		}
 	});
+	let isDuplicateUrl = $derived(
+		newServerUrl.trim().length > 0 && mcpStore.hasServerWithUrl(newServerUrl.trim())
+	);
 
 	function handleOpenChange(value: boolean) {
 		if (!value) {
@@ -41,12 +44,14 @@
 
 		const newServerId = uuid() ?? `${MCP_SERVER_ID_PREFIX}-${Date.now()}`;
 
-		mcpStore.addServer({
+		const added = mcpStore.addServer({
 			id: newServerId,
 			enabled: true,
 			url: newServerUrl.trim(),
 			headers: newServerHeaders.trim() || undefined
 		});
+
+		if (!added) return;
 
 		conversationsStore.setMcpServerOverride(newServerId, true);
 
@@ -66,7 +71,7 @@
 				headers={newServerHeaders}
 				onUrlChange={(v) => (newServerUrl = v)}
 				onHeadersChange={(v) => (newServerHeaders = v)}
-				urlError={newServerUrl ? newServerUrlError : null}
+				urlError={newServerUrl ? (isDuplicateUrl ? 'A server with this URL already exists' : newServerUrlError) : null}
 				id="new-server"
 			/>
 		</div>
@@ -78,7 +83,7 @@
 				variant="default"
 				size="sm"
 				onclick={saveNewServer}
-				disabled={!!newServerUrlError}
+				disabled={!!newServerUrlError || isDuplicateUrl}
 				aria-label="Save"
 			>
 				Add

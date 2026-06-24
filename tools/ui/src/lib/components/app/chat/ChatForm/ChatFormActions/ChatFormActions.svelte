@@ -9,6 +9,7 @@
 		ChatFormActionSubmit,
 		ChatFormReasoningToggle
 	} from '$lib/components/app';
+	import type { MCPPromptInfo } from '$lib/types';
 	import { FileTypeCategory } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { config } from '$lib/stores/settings.svelte';
@@ -33,7 +34,7 @@
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
 		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
-		onMcpPromptClick?: () => void;
+		onMcpPromptClick?: (prompt: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
 	}
 

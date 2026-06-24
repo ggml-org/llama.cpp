@@ -12,7 +12,7 @@
 	interface Props {
 		onSystemPromptClick?: () => void;
 		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
-		onMcpPromptClick?: () => void;
+		onMcpPromptClick?: (prompt: MCPPromptInfo) => void;
 	}
 
 	let { onSystemPromptClick, onSystemPromptWithContent, onMcpPromptClick }: Props = $props();
@@ -97,23 +97,7 @@
 		server: MCPServerSettingsEntry | undefined;
 		serverLabel: string;
 	}) {
-		if (entry.prompt.arguments?.length) {
-			onMcpPromptClick?.();
-			return;
-		}
-
-		try {
-			const result = await mcpStore.getPrompt(entry.prompt.serverName, entry.prompt.name, {});
-			if (result && onSystemPromptWithContent) {
-				onSystemPromptWithContent(
-					result.content,
-					undefined,
-					entry.prompt.title || entry.prompt.name
-				);
-			}
-		} catch (error) {
-			console.warn('[ChatFormActionAddSystemMessageSubmenu] Failed to execute MCP prompt:', error);
-		}
+		onMcpPromptClick?.(entry.prompt);
 	}
 </script>
 

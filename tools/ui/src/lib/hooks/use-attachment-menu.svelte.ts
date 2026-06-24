@@ -1,5 +1,6 @@
 import { page } from '$app/state';
 import { AttachmentAction } from '$lib/enums';
+import type { MCPPromptInfo } from '$lib/types';
 
 export interface AttachmentModalityFlags {
 	hasVisionModality: boolean;
@@ -12,7 +13,7 @@ export interface AttachmentModalityFlags {
 export interface AttachmentActionCallbacks {
 	onFileUpload?: () => void;
 	onSystemPromptClick?: () => void;
-	onMcpPromptClick?: () => void;
+	onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 	onMcpResourcesClick?: () => void;
 }
 

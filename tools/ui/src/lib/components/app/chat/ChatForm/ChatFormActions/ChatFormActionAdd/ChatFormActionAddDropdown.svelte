@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Plus, File, Zap, FolderOpen } from '@lucide/svelte';
+	import { Plus, File, FolderOpen } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { buttonVariants } from '$lib/components/ui/button';
@@ -15,6 +15,7 @@
 	} from '$lib/components/app';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 	import { registerMcpDialogReopen } from '$lib/stores/mcp-dialog-reopen';
+	import type { MCPPromptInfo } from '$lib/types';
 
 	interface Props {
 		class?: string;
@@ -27,7 +28,7 @@
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
 		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
-		onMcpPromptClick?: () => void;
+		onMcpPromptClick?: (prompt: MCPPromptInfo) => void;
 		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
 	}
@@ -157,19 +158,6 @@
 			/>
 
 			<ChatFormActionAddToolsSubmenu />
-
-			{#if hasMcpPromptsSupport}
-				<DropdownMenu.Separator />
-
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={onMcpPromptClick}
-				>
-					<Zap class="h-4 w-4" />
-
-					<span>MCP Prompt</span>
-				</DropdownMenu.Item>
-			{/if}
 
 			{#if hasMcpResourcesSupport}
 				<DropdownMenu.Item
