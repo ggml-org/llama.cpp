@@ -30,6 +30,7 @@ enum handcrafted_file_type {
     // HANDCRAFTED_KV_BAD_VALUE_SIZE          =  30 + offset_has_kv, // removed because it can result in allocations > 1 TB (default sanitizer limit)
     HANDCRAFTED_KV_DUPLICATE_KEY           =  40 + offset_has_kv,
     HANDCRAFTED_KV_BAD_ALIGN               =  50 + offset_has_kv,
+    HANDCRAFTED_KV_BAD_ALIGN_TYPE          =  55 + offset_has_kv,
     HANDCRAFTED_KV_SUCCESS                 = 800 + offset_has_kv,
 
     HANDCRAFTED_TENSORS_BAD_NAME_SIZE      =  10 + offset_has_tensors,
@@ -67,6 +68,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_KV_BAD_TYPE:                return "KV_BAD_TYPE";
         case HANDCRAFTED_KV_DUPLICATE_KEY:           return "KV_DUPLICATE_KEY";
         case HANDCRAFTED_KV_BAD_ALIGN:               return "KV_BAD_ALIGN";
+        case HANDCRAFTED_KV_BAD_ALIGN_TYPE:          return "KV_BAD_ALIGN_TYPE";
         case HANDCRAFTED_KV_SUCCESS:                 return "KV_RANDOM_KV";
 
         case HANDCRAFTED_TENSORS_BAD_NAME_SIZE:      return "TENSORS_BAD_NAME_SIZE";
@@ -255,7 +257,7 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
     }
     {
         uint64_t n_kv = kv_types.size();
-        if (hft == HANDCRAFTED_KV_BAD_ALIGN      ||
+        if (hft == HANDCRAFTED_KV_BAD_ALIGN      || hft == HANDCRAFTED_KV_BAD_ALIGN_TYPE ||
             hft == HANDCRAFTED_TENSORS_BAD_ALIGN || hft == HANDCRAFTED_TENSORS_CUSTOM_ALIGN ||
             hft == HANDCRAFTED_DATA_BAD_ALIGN    || hft == HANDCRAFTED_DATA_CUSTOM_ALIGN) {
 
@@ -340,7 +342,7 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         helper_write(file, data, hft == HANDCRAFTED_KV_BAD_TYPE ? 1 : gguf_type_size(type));
     }
 
-    if (hft == HANDCRAFTED_KV_BAD_ALIGN      ||
+    if (hft == HANDCRAFTED_KV_BAD_ALIGN      || hft == HANDCRAFTED_KV_BAD_ALIGN_TYPE ||
         hft == HANDCRAFTED_TENSORS_BAD_ALIGN || hft == HANDCRAFTED_TENSORS_CUSTOM_ALIGN ||
         hft == HANDCRAFTED_DATA_BAD_ALIGN    || hft == HANDCRAFTED_DATA_CUSTOM_ALIGN) {
 
@@ -348,10 +350,10 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         helper_write(file, n);
         helper_write(file, GGUF_KEY_GENERAL_ALIGNMENT, n);
 
-        const int32_t type = gguf_type(GGUF_TYPE_UINT32);
+        const int32_t type = gguf_type(hft == HANDCRAFTED_KV_BAD_ALIGN_TYPE ? GGUF_TYPE_INT32 : GGUF_TYPE_UINT32);
         helper_write(file, type);
 
-        alignment = expect_context_not_null(hft) ? 1 : 13;
+        alignment = (expect_context_not_null(hft) || hft == HANDCRAFTED_KV_BAD_ALIGN_TYPE) ? 1 : 13;
         helper_write(file, alignment);
     }
 
@@ -735,6 +737,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_KV_BAD_TYPE,
         HANDCRAFTED_KV_DUPLICATE_KEY,
         HANDCRAFTED_KV_BAD_ALIGN,
+        HANDCRAFTED_KV_BAD_ALIGN_TYPE,
         HANDCRAFTED_KV_SUCCESS,
 
         HANDCRAFTED_TENSORS_BAD_NAME_SIZE,
