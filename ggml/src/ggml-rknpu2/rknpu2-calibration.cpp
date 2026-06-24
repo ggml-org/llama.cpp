@@ -35,10 +35,12 @@ float calculate_percentile_amax(const float * data, size_t n_elements, float per
     return abs_values[index];
 }
 
-float calculate_min_mse_amax(const float * data, size_t n_elements, int num_steps) {
+float calculate_min_mse_amax(const float * data, size_t n_elements, int num_steps, float quant_divisor, int clamp_val) {
     if (n_elements == 0) {
         return 0.0f;
     }
+    const int8_t clamp_lo = (int8_t)-clamp_val;
+    const int8_t clamp_hi = (int8_t) clamp_val;
 
     // Determining search range for amax
     float abs_max_val = 0.0f;
@@ -65,7 +67,7 @@ float calculate_min_mse_amax(const float * data, size_t n_elements, int num_step
 
     for (int i = 0; i < num_steps; ++i) {
         const float current_amax = search_min + (float)i * step_size;
-        const float current_scale = current_amax / 7.0f;
+        const float current_scale = current_amax / quant_divisor;
         if (current_scale < 1e-9f) continue;
         const float iscale = 1.0f / current_scale;
 
@@ -74,10 +76,10 @@ float calculate_min_mse_amax(const float * data, size_t n_elements, int num_step
         #pragma omp parallel for reduction(+:current_mse)
         for (size_t j = 0; j < n_elements; ++j) {
             const float original_val = data[j];
-            
+
             // Quantizing
             const float quantized_f = original_val * iscale;
-            const int8_t quantized_i = std::max((int8_t)-7, std::min((int8_t)7, (int8_t)roundf(quantized_f)));
+            const int8_t quantized_i = std::max(clamp_lo, std::min(clamp_hi, (int8_t)roundf(quantized_f)));
             
             // De-quantizing
             const float dequantized_val = (float)quantized_i * current_scale;

@@ -107,6 +107,16 @@ The following benchmarks were conducted on an RK3588, comparing the performance,
 
 *   **Power (W):** Represents relative active power consumption. Calculated as `Power(TextGeneration) - Power(Idle)`. Lower is better.
 
+### Where the NPU helps
+
+The NPU is strongest at **prompt processing**, where matmuls are large and compute-bound: it
+typically delivers a large speedup over the CPU at much lower power. **Token generation** is a
+different regime - each step is a single-row (M=1) matmul that is bound by memory bandwidth, which
+the NPU shares with the CPU on the RK3588. There the NPU has no bandwidth advantage and pays a
+fixed per-operation cost, so for small and medium models CPU token generation can be as fast or
+faster. If your workload is token-generation-dominated, prefer running generation on the CPU, or
+use a lower-bit pipeline (`W8A8`/`W4A4`) to reduce the weight bytes streamed per token.
+
 ## Hybrid Quantization
 
 Hybrid quantization is a technique designed to strike an optimal balance between memory consumption, inference speed, and generation quality.
@@ -170,6 +180,8 @@ The **Perplexity** metrics were measured on the `Granite-4.0-350M-F16` model to 
 
 > **Note:** As seen in the table, pure `W4A4_STANDARD` produces completely broken outputs (extremely high perplexity). This is due to massive outliers being heavily clipped in the limited 4-bit range. The `W4A4_HADAMARD` pipeline mitigates this by mathematically distributing the outliers across all channels, making 4-bit inference actually usable, though it introduces some CPU overhead.
 
+> **Note:** INT8 weights are quantized with a **per-output-channel** scale by default (rather than one scale per core segment), which lowers `W8A8_STANDARD` perplexity at no runtime cost. The calibration method can be tuned with `RKNPU_W8_CALIB` (see FAQ).
+
 #### Default Mappings
 
 If no custom `RKNPU_HYBRID` is provided, the RK3588 backend will automatically map your input GGUF model types to the following default NPU pipelines to provide the best out-of-the-box balance of speed and accuracy:
@@ -200,6 +212,24 @@ RKNPU_CORES="0" ./build/bin/llama-cli -m ./model.gguf
 
 # Use cores 0 and 2
 RKNPU_CORES="0,2" ./build/bin/llama-cli -m ./model.gguf
+```
+
+### Q: How do I trade prompt-processing speed against accuracy?
+By default, INT8 weights use per-output-channel scales, which keeps `W8A8_STANDARD` close to the
+reference accuracy at no runtime cost. A few environment variables let you tune this further:
+
+```sh
+# Route the INT8 default through the Hadamard pipeline (near-lossless, adds a per-token
+# FWHT during prompt processing). Affects Q8_0 and the INT8 leg of Q6_K.
+RKNPU_DEFAULT_HADAMARD=1 ./build/bin/llama-cli -m ./model.gguf
+
+# Pick the INT8 weight calibration: max (default), percentile, or mse. percentile/mse clip
+# weight outliers per channel and can lower perplexity at the cost of model load time.
+RKNPU_W8_CALIB="percentile" ./build/bin/llama-cli -m ./model.gguf
+
+# Control how the activation row count M is padded for the NPU. The default rounds up to a
+# multiple of 64; RKNPU_M_ALIGN=0 restores the older next-power-of-two padding.
+RKNPU_M_ALIGN=64 ./build/bin/llama-cli -m ./model.gguf
 ```
 
 ### Q: How can I run multiple model instances without memory conflicts?

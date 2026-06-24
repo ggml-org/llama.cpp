@@ -273,7 +273,7 @@ struct ggml_backend_rknpu_buffer_context {
     };
     std::unordered_map<size_t, TensorAllocation> tensor_allocs;
 
-    // Per-block scaling factors for quantized weights
+    // Per-output-channel scaling factors for quantized weights, laid out as [k_segment][global_n]
     std::unordered_map<const struct ggml_tensor *, std::vector<float>> quantized_tensor_scales;
 
     // Per-tensor random sign vector for Hadamard Transform
@@ -488,10 +488,17 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             continue;
         }
 
-        // Using next power of two for M for efficient caching
+        // Rounding M up to a small alignment keeps the matmul-context cache small while
+        // avoiding the up-to-2x compute waste of padding to the next power of two.
+        // RKNPU_M_ALIGN=0 restores the next-power-of-two behavior.
         int M_op = M;
         if (M > 1) {
-            M_op = rknpu2_calibration::next_power_of_two(M);
+            static const int m_align = []() {
+                const char* e = std::getenv("RKNPU_M_ALIGN");
+                return e ? atoi(e) : 64;
+            }();
+            M_op = (m_align <= 0) ? rknpu2_calibration::next_power_of_two(M)
+                                  : ((M + m_align - 1) / m_align) * m_align;
         }
 
         const auto* pipeline = config.resolve_op_support(src0);
@@ -543,9 +550,13 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             b_domain_id = it->second.iommu_domain_id;
         }
 
-        // Cleaning the C-matrix buffer
+        // Cleaning the C-matrix buffer (only needed when results accumulate across K-segments;
+        // a single K-segment writes every output element exactly once)
         float* dst_data = (float*)get_tensor_real_ptr(dst);
-        memset(dst_data, 0, (size_t)M * N * sizeof(float));
+        const bool single_k = (all_k_segments.size() == 1);
+        if (!single_k) {
+            memset(dst_data, 0, (size_t)M * N * sizeof(float));
+        }
 
         // Acquiring the Hadamard vector
         std::vector<float> s_vec;
@@ -641,12 +652,16 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
                 #pragma omp parallel for
                 for (int m = 0; m < M; ++m) {
                     const float* src_row = x + (size_t)m * row_stride;
-                    std::vector<float> ready_row(K_seg_op);
+
+                    thread_local static std::vector<float> ready_row;
+                    if (ready_row.size() < (size_t)K_seg_op) ready_row.resize(K_seg_op);
 
                     // Applying Hadamard Transform
                     if (is_hadamard) {
-                        std::vector<float> signed_row(K);
-                        std::vector<float> full_hadamard_row(K_op);
+                        thread_local static std::vector<float> signed_row;
+                        thread_local static std::vector<float> full_hadamard_row;
+                        if (signed_row.size() < (size_t)K) signed_row.resize(K);
+                        if (full_hadamard_row.size() < (size_t)K_op) full_hadamard_row.resize(K_op);
                         for(int k=0; k<K; ++k) signed_row[k] = src_row[k] * s_vec[k];
                         rknpu2_calibration::hadamard_transform(full_hadamard_row.data(), signed_row.data(), K, K_op);
 
@@ -710,12 +725,15 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             // ========== 4. Running operation ==========
             // ==========================================
             {
+                // Each worker runs its segment then syncs its own result back, so the
+                // per-segment FROM_DEVICE syncs overlap instead of running serially.
                 #pragma omp parallel for num_threads(num_active_segments)
                 for (size_t idx = 0; idx < num_active_segments; idx++) {
                     int ret = rknn_matmul_run(matmul_ctxs[idx]->ctx);
                     if (ret != RKNN_SUCC) {
                         // Handle error
                     }
+                    rknn_mem_sync(matmul_ctxs[idx]->ctx, mem_C_segments[idx].get(), RKNN_MEMORY_SYNC_FROM_DEVICE);
                 }
             }
 
@@ -723,29 +741,26 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
             // ========== 5. Collecting results ==========
             // ===========================================
             {
-                for (size_t idx = 0; idx < num_active_segments; idx++) {
-                    RKNN_CHECK(rknn_mem_sync(matmul_ctxs[idx]->ctx, mem_C_segments[idx].get(), RKNN_MEMORY_SYNC_FROM_DEVICE), "sync C FROM_DEVICE");
-                }
-
                 const float hadamard_divisor = pipeline->use_hadamard ? (float)K_op : 1.0f;
+                const bool per_channel = !scales_B_grid.empty();
 
                 #pragma omp parallel for
                 for (int m = 0; m < M; m++) {
+                    const float inv_m = scales_A[m] / hadamard_divisor;
+
                     // Handling types and quantizations
                     switch (pipeline->npu_type_c) {
                         case rknpu2_configuration::NPU_TYPE_FP32: {
                             for (size_t idx = 0; idx < num_active_segments; idx++) {
-                                float scale_B = scales_B_grid.empty() ? 1.0f : scales_B_grid[k_idx * num_active_segments + idx];
-                                float dequant_scale = (scales_A[m] * scale_B) / hadamard_divisor;
-
                                 int N_offset = active_n_segments[idx].offset_n;
                                 int N_segment = active_n_segments[idx].size_n;
-                                float* src_segment_base = (float*)mem_C_segments[idx]->virt_addr;
                                 float* dst_ptr = dst_data + (size_t)m * N + N_offset;
-                                float* src_ptr = src_segment_base + (size_t)m * N_segment;
+                                float* src_ptr = (float*)mem_C_segments[idx]->virt_addr + (size_t)m * N_segment;
+                                const float* scale_B = per_channel ? scales_B_grid.data() + (size_t)k_idx * N + N_offset : nullptr;
 
                                 for(int n=0; n<N_segment; ++n) {
-                                    dst_ptr[n] += src_ptr[n] * dequant_scale;
+                                    float dequant_scale = per_channel ? scale_B[n] * inv_m : inv_m;
+                                    dst_ptr[n] = (single_k ? 0.0f : dst_ptr[n]) + src_ptr[n] * dequant_scale;
                                 }
                             }
                             break;
@@ -753,16 +768,15 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 
                         case rknpu2_configuration::NPU_TYPE_INT32: {
                             for (size_t idx = 0; idx < num_active_segments; idx++) {
-                                float scale_B = scales_B_grid.empty() ? 1.0f : scales_B_grid[k_idx * num_active_segments + idx];
-                                float dequant_scale = (scales_A[m] * scale_B) / hadamard_divisor;
-
                                 int N_offset = active_n_segments[idx].offset_n;
                                 int N_segment = active_n_segments[idx].size_n;
                                 float* dst_ptr = dst_data + (size_t)m * N + N_offset;
                                 int32_t* src_ptr = (int32_t*)mem_C_segments[idx]->virt_addr + (size_t)m * N_segment;
+                                const float* scale_B = per_channel ? scales_B_grid.data() + (size_t)k_idx * N + N_offset : nullptr;
 
                                 for(int n=0; n<N_segment; ++n) {
-                                    dst_ptr[n] += (float)src_ptr[n] * dequant_scale;
+                                    float dequant_scale = per_channel ? scale_B[n] * inv_m : inv_m;
+                                    dst_ptr[n] = (single_k ? 0.0f : dst_ptr[n]) + (float)src_ptr[n] * dequant_scale;
                                 }
                             }
                             break;
@@ -770,16 +784,15 @@ static enum ggml_status ggml_backend_rknpu_graph_compute(ggml_backend_t backend,
 
                         case rknpu2_configuration::NPU_TYPE_INT16: {
                             for (size_t idx = 0; idx < num_active_segments; idx++) {
-                                float scale_B = scales_B_grid.empty() ? 1.0f : scales_B_grid[k_idx * num_active_segments + idx];
-                                float dequant_scale = (scales_A[m] * scale_B) / hadamard_divisor;
-
                                 int N_offset = active_n_segments[idx].offset_n;
                                 int N_segment = active_n_segments[idx].size_n;
                                 float* dst_ptr = dst_data + (size_t)m * N + N_offset;
                                 int16_t* src_ptr = (int16_t*)mem_C_segments[idx]->virt_addr + (size_t)m * N_segment;
+                                const float* scale_B = per_channel ? scales_B_grid.data() + (size_t)k_idx * N + N_offset : nullptr;
 
                                 for(int n=0; n<N_segment; ++n) {
-                                    dst_ptr[n] += (float)src_ptr[n] * dequant_scale;
+                                    float dequant_scale = per_channel ? scale_B[n] * inv_m : inv_m;
+                                    dst_ptr[n] = (single_k ? 0.0f : dst_ptr[n]) + (float)src_ptr[n] * dequant_scale;
                                 }
                             }
                             break;
@@ -952,16 +965,19 @@ static void dequantize_tensor_segment(
     }
 }
 
-// Function for quantizing the FP32 segment to the target NPU format
+// Function for quantizing the FP32 segment to the target NPU format.
+// The segment is column-major (column i occupies k_seg.size_k contiguous floats), so each
+// output channel is quantized with its own scale from col_scales.
 static void quantize_tensor_segment(
     const std::vector<float>& fp32_segment,
     std::vector<uint8_t>& out_quantized,
     const MatrixSegmentK & k_seg,
     const MatrixSegmentN & n_seg,
-    float scale,
+    const std::vector<float>& col_scales,
     rknpu2_configuration::Rknpu2NpuType npu_type)
 {
-    size_t seg_elements = (size_t)n_seg.size_n * k_seg.size_k;
+    const size_t k_sz = (size_t)k_seg.size_k;
+    const size_t seg_elements = (size_t)n_seg.size_n * k_sz;
 
     if (npu_type == rknpu2_configuration::NPU_TYPE_FP16) {
         out_quantized.resize(seg_elements * 2);
@@ -972,19 +988,19 @@ static void quantize_tensor_segment(
     }
     else if (npu_type == rknpu2_configuration::NPU_TYPE_INT8) {
         out_quantized.resize(seg_elements);
-        rknpu2_quantization::quantize_fp32_to_int8(
-            fp32_segment.data(),
-            (int8_t*)out_quantized.data(),
-            seg_elements,
-            scale);
+        int8_t* dst = (int8_t*)out_quantized.data();
+        for (int i = 0; i < n_seg.size_n; ++i) {
+            rknpu2_quantization::quantize_fp32_to_int8(
+                fp32_segment.data() + (size_t)i * k_sz, dst + (size_t)i * k_sz, k_sz, col_scales[i]);
+        }
     }
     else if (npu_type == rknpu2_configuration::NPU_TYPE_INT4) {
         out_quantized.resize(seg_elements / 2);
-        rknpu2_quantization::quantize_fp32_to_int4_packed(
-            fp32_segment.data(),
-            out_quantized.data(),
-            seg_elements,
-            scale);
+        uint8_t* dst = out_quantized.data();
+        for (int i = 0; i < n_seg.size_n; ++i) {
+            rknpu2_quantization::quantize_fp32_to_int4_packed(
+                fp32_segment.data() + (size_t)i * k_sz, dst + (size_t)i * (k_sz / 2), k_sz, col_scales[i]);
+        }
     }
 }
 
@@ -1061,6 +1077,20 @@ static size_t pack_tensor_segment(
     return segment_packed_size;
 }
 
+// INT8 weight calibration method (RKNPU_W8_CALIB), read once
+enum W8CalibMode { W8_MAX, W8_PERCENTILE, W8_MSE };
+static W8CalibMode get_w8_calib_mode() {
+    static const W8CalibMode mode = []() {
+        const char* e = std::getenv("RKNPU_W8_CALIB");
+        if (e) {
+            if (std::string(e) == "percentile") return W8_PERCENTILE;
+            if (std::string(e) == "mse")        return W8_MSE;
+        }
+        return W8_MAX;
+    }();
+    return mode;
+}
+
 static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     auto * ctx = (ggml_backend_rknpu_buffer_context *) buffer->context;
 
@@ -1107,34 +1137,57 @@ static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, s
         std::vector<uint8_t> seg_npu;
         uint8_t* current_write_ptr = tensor_dma_ptr + offset;
 
-        std::vector<float> tensor_block_scales;
+        // Per-output-channel scales, laid out as [k_segment][global_n] (length k_segments * N)
+        std::vector<float> tensor_channel_scales;
+        std::vector<float> col_scales;
+
+        const bool is_int4      = (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT4);
+        const bool is_quantized = (pipeline->npu_type_b != rknpu2_configuration::NPU_TYPE_FP16);
+        const float quant_divisor = is_int4 ? 7.0f : 127.0f;
+        const W8CalibMode w8_calib = get_w8_calib_mode();
 
         // Processing individual segments block-by-block
         for (const auto& k_seg : k_segments) {
             for (const auto& n_seg : n_segments) {
                 if (n_seg.size_n == 0) continue;
 
-                // Dequantizing the block
+                // Dequantizing the block (column-major: column i occupies k_seg.size_k floats)
                 dequantize_tensor_segment(seg_fp32, tensor, ctx, data, K, N, K_op, k_seg, n_seg, pipeline->use_hadamard);
 
-                // Calculating local scale of the block
-                float block_scale = 1.0f;
-                if (pipeline->npu_type_b != rknpu2_configuration::NPU_TYPE_FP16) {
-                    float amax = 0.0f;
-                    if (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT4) {
-                        amax = rknpu2_calibration::calculate_entropy_amax(seg_fp32.data(), seg_fp32.size());
+                col_scales.assign(n_seg.size_n, 1.0f);
+                if (is_quantized) {
+                    if (is_int4) {
+                        // INT4 keeps a single KL-divergence-calibrated scale per block, broadcast
+                        // to its columns (entropy calibration per column would be prohibitive)
+                        float amax = rknpu2_calibration::calculate_entropy_amax(seg_fp32.data(), seg_fp32.size());
+                        float scale = (amax == 0.0f) ? 1.0f : amax / quant_divisor;
+                        std::fill(col_scales.begin(), col_scales.end(), scale);
                     } else {
-                        for (float val : seg_fp32) {
-                            amax = std::max(amax, std::abs(val));
+                        // INT8 uses a per-output-channel scale
+                        #pragma omp parallel for
+                        for (int i = 0; i < n_seg.size_n; ++i) {
+                            const float* col = seg_fp32.data() + (size_t)i * k_seg.size_k;
+                            float amax;
+                            switch (w8_calib) {
+                                case W8_PERCENTILE:
+                                    amax = rknpu2_calibration::calculate_percentile_amax(col, k_seg.size_k, 99.9f);
+                                    break;
+                                case W8_MSE:
+                                    amax = rknpu2_calibration::calculate_min_mse_amax(col, k_seg.size_k, 128, 127.0f, 127);
+                                    break;
+                                default:
+                                    amax = 0.0f;
+                                    for (int kk = 0; kk < k_seg.size_k; ++kk) amax = std::max(amax, std::abs(col[kk]));
+                                    break;
+                            }
+                            col_scales[i] = (amax == 0.0f) ? 1.0f : amax / quant_divisor;
                         }
                     }
-                    float quant_divisor = (pipeline->npu_type_b == rknpu2_configuration::NPU_TYPE_INT4) ? 7.0f : 127.0f;
-                    block_scale = (amax == 0.0f) ? 1.0f : amax / quant_divisor;
+                    tensor_channel_scales.insert(tensor_channel_scales.end(), col_scales.begin(), col_scales.end());
                 }
-                tensor_block_scales.push_back(block_scale);
 
-                // Quantizing
-                quantize_tensor_segment(seg_fp32, seg_npu, k_seg, n_seg, block_scale, pipeline->npu_type_b);
+                // Quantizing per output channel
+                quantize_tensor_segment(seg_fp32, seg_npu, k_seg, n_seg, col_scales, pipeline->npu_type_b);
 
                 // Packing into chip native layout
                 size_t bytes_written = pack_tensor_segment(seg_npu, current_write_ptr, k_seg, n_seg, pipeline);
@@ -1143,9 +1196,12 @@ static void ggml_backend_rknpu_buffer_set_tensor(ggml_backend_buffer_t buffer, s
             }
         }
 
+        GGML_ASSERT((!is_quantized || tensor_channel_scales.size() == (size_t)k_segments.size() * N)
+                    && "per-channel scale grid size mismatch");
+
         {
             std::lock_guard<std::mutex> lock(ctx->mutex);
-            ctx->quantized_tensor_scales[tensor] = tensor_block_scales;
+            ctx->quantized_tensor_scales[tensor] = tensor_channel_scales;
         }
 
         rknn_matmul_ctx sync_ctx = g_domain_manager.get_allocator_context(alloc.iommu_domain_id);

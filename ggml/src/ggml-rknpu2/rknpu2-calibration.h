@@ -28,9 +28,11 @@ float calculate_percentile_amax(const float * data, size_t n_elements, float per
  * @param data Pointer to the source float data.
  * @param n_elements The number of elements in the data array.
  * @param num_steps The number of steps to iterate through in the search space.
+ * @param quant_divisor The quantization divisor (e.g. 7 for INT4, 127 for INT8).
+ * @param clamp_val The symmetric clamp bound (e.g. 7 for INT4, 127 for INT8).
  * @return The amax value that results in the lowest quantization error.
  */
-float calculate_min_mse_amax(const float * data, size_t n_elements, int num_steps = 128);
+float calculate_min_mse_amax(const float * data, size_t n_elements, int num_steps = 128, float quant_divisor = 7.0f, int clamp_val = 7);
 
 /**
  * @brief Finds the optimal amax by minimizing KL-Divergence between FP32 and INT4 distributions.

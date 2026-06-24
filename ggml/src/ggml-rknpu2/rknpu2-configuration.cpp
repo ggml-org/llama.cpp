@@ -207,10 +207,14 @@ Rknpu2ConfigManager::Rknpu2ConfigManager() {
     rk3588_config.use_custom_pattern = use_custom_pattern;
     rk3588_config.custom_hybrid_pattern = custom_pattern;
 
-    // Defining default quantization sequences for each supported ggml_type
+    // Defining default quantization sequences for each supported ggml_type.
+    // RKNPU_DEFAULT_HADAMARD routes the INT8 default through the Hadamard pipeline
+    // (near-lossless, at the cost of a per-token FWHT during prompt processing).
+    const bool default_hadamard = (std::getenv("RKNPU_DEFAULT_HADAMARD") != nullptr);
+    const char* w8 = default_hadamard ? "W8A8_HADAMARD" : "W8A8_STANDARD";
     rk3588_config.default_patterns[(int)GGML_TYPE_F16]  = {"W16A16_STANDARD"};
-    rk3588_config.default_patterns[(int)GGML_TYPE_Q8_0] = {"W8A8_STANDARD"};
-    rk3588_config.default_patterns[(int)GGML_TYPE_Q6_K] = {"W8A8_STANDARD", "W4A4_HADAMARD"};
+    rk3588_config.default_patterns[(int)GGML_TYPE_Q8_0] = {w8};
+    rk3588_config.default_patterns[(int)GGML_TYPE_Q6_K] = {w8, "W4A4_HADAMARD"};
     rk3588_config.default_patterns[(int)GGML_TYPE_Q4_0] = {"W4A4_HADAMARD"};
 
     device_configs["RK3588"] = rk3588_config;
