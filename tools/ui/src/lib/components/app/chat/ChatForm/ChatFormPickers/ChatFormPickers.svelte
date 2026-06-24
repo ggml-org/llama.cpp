@@ -19,6 +19,7 @@
 		) => void;
 		onPromptLoadComplete?: (placeholderId: string, result: GetPromptResult) => void;
 		onPromptLoadError?: (placeholderId: string, error: string) => void;
+		onMcpPromptSystemExecute?: (prompt: MCPPromptInfo, text: string, title: string) => void;
 		onInlineResourceBrowse?: () => void;
 		onPendingPromptConsumed?: () => void;
 	}
@@ -35,6 +36,7 @@
 		onPromptLoadStart,
 		onPromptLoadComplete,
 		onPromptLoadError,
+		onMcpPromptSystemExecute,
 		onInlineResourceBrowse,
 		onPendingPromptConsumed
 	}: Props = $props();
@@ -68,6 +70,7 @@
 	{onPromptLoadStart}
 	{onPromptLoadComplete}
 	{onPromptLoadError}
+	{onMcpPromptSystemExecute}
 	{onPendingPromptConsumed}
 />
 

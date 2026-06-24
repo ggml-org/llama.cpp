@@ -1021,6 +1021,13 @@ class ChatStore {
 		this.showErrorDialog(null);
 		this.setChatLoading(currentConv.id, true);
 		this.clearChatStreaming(currentConv.id);
+		// Also covers conversations started with a system message or an MCP prompt
+		// attachment: in those cases `isNewConversation` is false but no user message
+		// has been sent yet, so the title should still be derived from the first user
+		// message (and trigger LLM-based generation when enabled).
+		const isFirstUserMessage = !conversationsStore.activeMessages.some(
+			(m) => m.role === MessageRole.USER
+		);
 		try {
 			let parentIdForUserMessage: string | undefined;
 			if (isNewConversation) {
@@ -1044,7 +1051,7 @@ class ChatStore {
 				parentIdForUserMessage ?? '-1',
 				allExtras
 			);
-			if (isNewConversation && content)
+			if (isFirstUserMessage && content)
 				await conversationsStore.updateConversationName(
 					currentConv.id,
 					generateConversationTitle(content, Boolean(config().titleGenerationUseFirstLine))
@@ -1057,7 +1064,7 @@ class ChatStore {
 				undefined,
 				undefined,
 				undefined,
-				config().titleGenerationUseLLM && isNewConversation ? content : undefined
+				config().titleGenerationUseLLM && isFirstUserMessage ? content : undefined
 			);
 		} catch (error) {
 			if (isAbortError(error)) {

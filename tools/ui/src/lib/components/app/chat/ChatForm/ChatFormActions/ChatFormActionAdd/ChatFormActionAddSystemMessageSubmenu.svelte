@@ -6,13 +6,15 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpLogo } from '$lib/components/app';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
-	import type { MCPPromptInfo, MCPServerSettingsEntry } from '$lib/types';
+	import { ContentPartType } from '$lib/enums';
+	import { PROMPT_CONTENT_SEPARATOR } from '$lib/constants';
+	import type { MCPPromptInfo, MCPServerSettingsEntry, PromptMessage } from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
 
 	interface Props {
 		onSystemPromptClick?: () => void;
 		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
-		onMcpPromptClick?: (prompt: MCPPromptInfo) => void;
+		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 	}
 
 	let { onSystemPromptClick, onSystemPromptWithContent, onMcpPromptClick }: Props = $props();
@@ -97,7 +99,44 @@
 		server: MCPServerSettingsEntry | undefined;
 		serverLabel: string;
 	}) {
-		onMcpPromptClick?.(entry.prompt);
+		// Prompts with arguments need a picker detour (for the argument form);
+		// prompts without arguments post directly so the conversation gets the
+		// system prompt instantly, like the library prompt branch above.
+		if (entry.prompt.arguments?.length) {
+			onMcpPromptClick?.(entry.prompt);
+			return;
+		}
+
+		void executeAndPostAsSystemPrompt(entry.prompt);
+	}
+
+	function mcpPromptInstructionId(prompt: MCPPromptInfo): string {
+		return `mcp:${prompt.serverName}:${prompt.name}`;
+	}
+
+	async function executeAndPostAsSystemPrompt(prompt: MCPPromptInfo) {
+		if (!onSystemPromptWithContent) return;
+
+		try {
+			const result = await mcpStore.getPrompt(prompt.serverName, prompt.name, {});
+
+			if (!result?.messages) return;
+
+			const text = result.messages
+				.map((msg: PromptMessage) => {
+					if (typeof msg.content === 'string') return msg.content;
+					if (msg.content.type === ContentPartType.TEXT) return msg.content.text;
+					return '';
+				})
+				.filter(Boolean)
+				.join(PROMPT_CONTENT_SEPARATOR);
+
+			if (!text) return;
+
+			onSystemPromptWithContent(text, mcpPromptInstructionId(prompt), prompt.title || prompt.name);
+		} catch (error) {
+			console.warn('[ChatFormActionAddSystemMessageSubmenu] Failed to execute MCP prompt:', error);
+		}
 	}
 </script>
 

@@ -2,8 +2,14 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { debounce, uuid } from '$lib/utils';
-	import { KeyboardKey } from '$lib/enums';
-	import type { MCPPromptInfo, GetPromptResult, MCPServerSettingsEntry } from '$lib/types';
+	import { KeyboardKey, ContentPartType } from '$lib/enums';
+	import { PROMPT_CONTENT_SEPARATOR } from '$lib/constants';
+	import type {
+		MCPPromptInfo,
+		GetPromptResult,
+		MCPServerSettingsEntry,
+		PromptMessage
+	} from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
 	import {
 		ChatFormPickerPopover,
@@ -28,6 +34,7 @@
 		) => void;
 		onPromptLoadComplete?: (placeholderId: string, result: GetPromptResult) => void;
 		onPromptLoadError?: (placeholderId: string, error: string) => void;
+		onMcpPromptSystemExecute?: (prompt: MCPPromptInfo, text: string, title: string) => void;
 		onPendingPromptConsumed?: () => void;
 	}
 
@@ -40,6 +47,7 @@
 		onPromptLoadStart,
 		onPromptLoadComplete,
 		onPromptLoadError,
+		onMcpPromptSystemExecute,
 		onPendingPromptConsumed
 	}: Props = $props();
 
@@ -52,7 +60,9 @@
 		const found = prompts.find((p) => promptKey(p) === pendingPromptKey);
 		if (!found) return;
 		handlePromptClick(found);
-		onPendingPromptConsumed?.();
+		// `executePrompt` consumes `pendingPromptKey` once it completes; leaving
+		// it in place lets `executePrompt` recognize the submenu click as a
+		// system-prompt request, even after the user submits the argument form.
 	}
 
 	let prompts = $state<MCPPromptInfo[]>([]);
@@ -146,6 +156,17 @@
 		}
 	}
 
+	function extractPromptText(result: GetPromptResult): string {
+		return (result.messages ?? [])
+			.map((msg: PromptMessage) => {
+				if (typeof msg.content === 'string') return msg.content;
+				if (msg.content.type === ContentPartType.TEXT) return msg.content.text;
+				return '';
+			})
+			.filter(Boolean)
+			.join(PROMPT_CONTENT_SEPARATOR);
+	}
+
 	async function executePrompt(prompt: MCPPromptInfo, args: Record<string, string>) {
 		promptError = null;
 
@@ -156,16 +177,35 @@
 		);
 		const argsToPass = Object.keys(nonEmptyArgs).length > 0 ? nonEmptyArgs : undefined;
 
-		onPromptLoadStart?.(placeholderId, prompt, argsToPass);
+		// Submenu flow sets `pendingPromptKey` and posts the result as a system
+		// prompt; skipped here so we never leave a placeholder attachment behind.
+		const isSystemMode = !!pendingPromptKey;
+
+		if (!isSystemMode) {
+			onPromptLoadStart?.(placeholderId, prompt, argsToPass);
+		}
+
 		onClose?.();
 
 		try {
 			const result = await mcpStore.getPrompt(prompt.serverName, prompt.name, args);
-			onPromptLoadComplete?.(placeholderId, result);
+
+			if (isSystemMode) {
+				const text = extractPromptText(result);
+				onMcpPromptSystemExecute?.(prompt, text, prompt.title || prompt.name);
+				onPendingPromptConsumed?.();
+			} else {
+				onPromptLoadComplete?.(placeholderId, result);
+			}
 		} catch (error) {
 			const errorMessage =
 				error instanceof Error ? error.message : 'Unknown error executing prompt';
-			onPromptLoadError?.(placeholderId, errorMessage);
+
+			if (isSystemMode) {
+				onPendingPromptConsumed?.();
+			} else {
+				onPromptLoadError?.(placeholderId, errorMessage);
+			}
 		}
 	}
 
