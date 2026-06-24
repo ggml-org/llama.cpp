@@ -33,8 +33,6 @@
 	import { SETTINGS_KEYS } from '$lib/constants';
 
 	let { children } = $props();
-	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
-	let isDesktop = $derived(!isMobile.current);
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
@@ -162,12 +160,6 @@
 		void theme.isSystemDark;
 
 		updateFavicon();
-	});
-
-	$effect(() => {
-		if (alwaysShowSidebarOnDesktop && isDesktop) {
-			return;
-		}
 	});
 
 	// Initialize server properties on app load (run once)
