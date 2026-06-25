@@ -538,8 +538,7 @@ static void process_handler_response(server_http_req_ptr && request, server_http
                     response->spipe->write(chunk.data(), chunk.size());
                 }
                 if (!sink.write(chunk.data(), chunk.size())) {
-                    // peer is gone, stop the wire path here. when a pipe is attached on_complete
-                    // drains the rest of the generation into the ring buffer
+                    // peer is gone, stop the wire path here
                     return false;
                 }
                 SRV_DBG("http: streamed chunk: %s\n", chunk.c_str());
@@ -555,10 +554,7 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             return has_next;
         };
         const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
-            // the peer may have dropped before the producer finished. when a pipe is attached, drain
-            // the rest of the generation into the ring buffer here, on this http worker. httplib
-            // runs a large dynamic pool and the worker blocks in next() on a condvar rather than
-            // burning cpu, so holding it until the generation ends is fine. see stream_pipe_producer::close
+            // on a dropped peer, close() drains the rest of the generation into the ring buffer
             if (response->spipe) {
                 response->spipe->close();
             }
