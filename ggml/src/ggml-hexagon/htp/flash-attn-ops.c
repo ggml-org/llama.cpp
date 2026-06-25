@@ -108,6 +108,8 @@ struct hmx_fa_context {
     uint32_t     n_heads;     // number of Q heads
     uint32_t     G;           // GQA factor = n_heads / n_kv_heads
     struct fastdiv_values div_G;
+    struct fastdiv_values src3_div2;
+    struct fastdiv_values src3_div3;
     uint32_t     n_kv_blocks;
     uint32_t     neq1;        // Q token count
 
@@ -791,6 +793,7 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
     const size_t G              = args->G;
     const size_t n_tiles_per_bc = args->n_tiles_per_bc;
     const size_t n_row_vec_cnt  = hmx_ceil_div(n_rows_g, 64);
+    const uint32_t im3          = args->mask ? fastmodulo(args->ib3, args->mask->ne[3], &factx->src3_div3) : 0;
 
     const size_t vecs_per_t = hmx_ceil_div(n_row_vec_cnt, n);
     const size_t vec_start  = i * vecs_per_t;
@@ -904,8 +907,8 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                         const struct htp_tensor * mask   = args->mask;
                         const size_t              q_idx0 = args->q_start + fastdiv(r + 0, &factx->div_G);
                         const size_t              h_idx0 = args->kv_head * G + fastmodulo(r + 0, G, &factx->div_G);
-                        const uint32_t            im2_0  = h_idx0 % mask->ne[2];
-                        const uint32_t            im3_0  = args->ib3 % mask->ne[3];
+                        const uint32_t            im2_0  = fastmodulo(h_idx0, mask->ne[2], &factx->src3_div2);
+                        const uint32_t            im3_0  = im3;
 
                         const __fp16 * m0_ptr = (const __fp16 *) ((const uint8_t *) mask->data + q_idx0 * mask->nb[1] +
                                                         im2_0 * mask->nb[2] + im3_0 * mask->nb[3]) + args->kv_start + c;
@@ -918,8 +921,8 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                                 v_mask1 = v_mask0;
                             } else {
                                 const size_t   h_idx1 = args->kv_head * G + fastmodulo(r + 1, G, &factx->div_G);
-                                const uint32_t im2_1  = h_idx1 % mask->ne[2];
-                                const uint32_t im3_1  = args->ib3 % mask->ne[3];
+                                const uint32_t im2_1  = fastmodulo(h_idx1, mask->ne[2], &factx->src3_div2);
+                                const uint32_t im3_1  = im3;
                                 const __fp16 * m1_ptr = (const __fp16 *) ((const uint8_t *) mask->data + q_idx1 * mask->nb[1] +
                                                                 im2_1 * mask->nb[2] + im3_1 * mask->nb[3]) + args->kv_start + c;
                                 v_mask1 = *(const HVX_UVector *) m1_ptr;
@@ -1350,6 +1353,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.is_dst_fp32    = (kparams->is_dst_fp32 != 0);
     factx.pipeline       = (kparams->u.hmx.pipeline != 0);
     factx.mask_broadcast = (kparams->u.hmx.mask_broadcast != 0);
+    if (mask) {
+        factx.src3_div2  = kparams->src3_div2;
+        factx.src3_div3  = kparams->src3_div3;
+    }
 
 #ifdef HMX_FA_USE_EXP2_HF
     if (kparams->logit_softcap == 0.0f) {
@@ -1458,6 +1465,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
     // ======== Main loop ========
     for (uint32_t ib3 = 0; ib3 < neq3; ++ib3) {
+        const uint32_t im3 = mask ? fastmodulo(ib3, mask->ne[3], &factx.src3_div3) : 0;
         for (uint32_t kv_head = 0; kv_head < n_kv_heads; ++kv_head) {
             const uint32_t ik2 = kv_head;
             const uint32_t ik3 = ib3 / (neq3 / k->ne[3]);
@@ -1509,7 +1517,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                     do {                                                                                                       \
                         has_mask_dma_var = false;                                                                              \
                         if (mask && factx.mask_broadcast) {                                                                    \
-                            const uint32_t  _im3 = ib3 % mask->ne[3];                                                          \
+                            const uint32_t  _im3 = im3;                                                                        \
                             const uint8_t * _ms  = (const uint8_t *) mask->data + q_start * mask->nb[1] + _im3 * mask->nb[3] + \
                                                   (kv_start_val) * sizeof(__fp16);                                             \
                             dma_queue_push(dma, dma_make_ptr(factx.vtcm_mask_buf, _ms), m_line_bytes, mask->nb[1],             \
@@ -1838,8 +1846,8 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
     factx.broadcast_rv3 = kparams->u.hvx.broadcast_rv3;
 
     if (mask) {
-        factx.src3_div2 = kparams->u.hvx.src3_div2;
-        factx.src3_div3 = kparams->u.hvx.src3_div3;
+        factx.src3_div2 = kparams->src3_div2;
+        factx.src3_div3 = kparams->src3_div3;
     }
 
     factx.is_q_fp32 = (kparams->is_q_fp32 != 0);
