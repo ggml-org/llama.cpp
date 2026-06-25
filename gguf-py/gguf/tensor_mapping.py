@@ -515,6 +515,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4 jamba granite-hybrid
+            "model.layers.{bid}.feed_forward.gate_up_proj",           # zamba2 (fused)
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
             "model.layers.{bid}.block_sparse_moe.up",                 # smallthinker
             "model.transformer.blocks.{bid}.up_proj",                 # llada
@@ -879,6 +880,10 @@ class TensorNameMap:
             "model.layers.{bid}.mamba.out_proj",         # jamba falcon-h1 granite-hybrid
             "model.layers.{bid}.linear_attn.out_proj",   # qwen3next
             "model.layers.layers.{bid}.mixer.out_proj",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_MIX: (
+            "model.layers.{bid}.linear",  # zamba2
         ),
 
         MODEL_TENSOR.SSM_ALPHA: (

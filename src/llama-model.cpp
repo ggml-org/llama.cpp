@@ -151,6 +151,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_mamba2(params);
         case LLM_ARCH_JAMBA:
             return new llama_model_jamba(params);
+        case LLM_ARCH_ZAMBA2:
+            return new llama_model_zamba2(params);
         case LLM_ARCH_XVERSE:
             return new llama_model_xverse(params);
         case LLM_ARCH_COMMAND_R:
@@ -2068,6 +2070,10 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     if (arch == LLM_ARCH_FALCON_H1) {
                         filter_attn = [&](uint32_t) { return true; };
                         filter_recr = [&](uint32_t) { return true; };
+                    } else if (arch == LLM_ARCH_ZAMBA2) {
+                        // Zamba2: attention only on hybrid layers, recurrent state on ALL layers
+                        filter_attn = [&](uint32_t il) { return hparams.n_head_kv(il) > 0; };
+                        filter_recr = [&](uint32_t) { return true; };
                     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
                         filter_attn = [&](uint32_t il) {
                             return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
@@ -2490,6 +2496,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_AFMOE:
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_MIMO2:
+        case LLM_ARCH_ZAMBA2:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_TALKIE:
         case LLM_ARCH_MELLUM:

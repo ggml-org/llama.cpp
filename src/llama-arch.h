@@ -68,6 +68,7 @@ enum llm_arch {
     LLM_ARCH_MAMBA2,
     LLM_ARCH_JAMBA,
     LLM_ARCH_FALCON_H1,
+    LLM_ARCH_ZAMBA2,
     LLM_ARCH_XVERSE,
     LLM_ARCH_COMMAND_R,
     LLM_ARCH_COHERE2,
@@ -449,6 +450,7 @@ enum llm_tensor {
     LLM_TENSOR_SSM_D,
     LLM_TENSOR_SSM_NORM,
     LLM_TENSOR_SSM_OUT,
+    LLM_TENSOR_SSM_MIX,  // zamba2: linear mixing between transformer and mamba
     LLM_TENSOR_SSM_BETA_ALPHA,      // qwen3next
     LLM_TENSOR_SSM_ALPHA,           // qwen3.5
     // Kimi Linear KDA (using SSM_ prefix for consistency)
