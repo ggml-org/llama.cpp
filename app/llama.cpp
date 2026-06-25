@@ -124,7 +124,7 @@ static bool is_cmd(std::string arg) {
             return true;
         }
     }
-    return false
+    return false;
 }
 
 int main(int argc, char ** argv) {
@@ -133,7 +133,7 @@ int main(int argc, char ** argv) {
     const bool help_cmd = argc >= 3 && argv[1] == "help" && is_cmd(argv[2]);
 
     if (help_cmd) {
-        return main(3, {argv[2], "--help");
+        return main(3, {argv[2], "--help"});
     }
     
     for (const auto & cmd : cmds) {
