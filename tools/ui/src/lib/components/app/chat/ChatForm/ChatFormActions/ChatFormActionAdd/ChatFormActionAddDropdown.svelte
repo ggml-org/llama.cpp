@@ -29,7 +29,6 @@
 		onSystemPromptClick?: () => void;
 		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
 		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
-		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
 	}
 
@@ -45,16 +44,10 @@
 		onSystemPromptClick,
 		onSystemPromptWithContent,
 		onMcpPromptClick,
-		onMcpSettingsClick,
 		onMcpResourcesClick
 	}: Props = $props();
 
 	let dropdownOpen = $state(false);
-
-	function handleMcpSettingsClick() {
-		dropdownOpen = false;
-		onMcpSettingsClick?.();
-	}
 
 	registerMcpDialogReopen(() => {
 		dropdownOpen = true;
