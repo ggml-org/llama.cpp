@@ -1363,13 +1363,12 @@ class GGUFWriter:
             if not isinstance(val, Sequence):
                 raise ValueError("Invalid GGUF metadata array, expecting sequence")
 
-            if len(val) == 0:
-                raise ValueError("Invalid GGUF metadata array. Empty array")
-
             if sub_type is not None:
                 ltype = sub_type
             elif isinstance(val, bytes):
                 ltype = GGUFValueType.UINT8
+            elif len(val) == 0:
+                raise ValueError("Invalid GGUF metadata array. Empty array")
             else:
                 ltype = GGUFValueType.get_type(val[0])
                 if not all(GGUFValueType.get_type(i) is ltype for i in val[1:]):
