@@ -17,8 +17,8 @@ A draft model is the most used approach in speculative decoding.
 
 EAGLE-3 uses a small draft model that reads the target model's hidden states to predict the next tokens, so it
 reaches higher acceptance than a standalone draft model of the same size. The draft is a one-layer transformer
-trained for a specific target model; it shares the target's tokenizer and (optionally) a reduced draft vocabulary
-mapped back with a `d2t` table.
+trained for a specific target model; it shares the target model's tokenizer and, optionally, uses a reduced draft
+vocabulary with its own `lm_head`, which is mapped back using a `d2t` table.
 
 Convert the EAGLE-3 checkpoint with `--target-model-dir` so it inherits the target's tokenizer and the layer
 indices to read. Both the SpecForge `LlamaForCausalLMEagle3` and the vLLM/AngelSlim `Eagle3LlamaForCausalLM`
@@ -31,6 +31,18 @@ python convert_hf_to_gguf.py AngelSlim/Qwen3-4B_eagle3 \
 
 llama-server -m Qwen3-4B.gguf -md Qwen3-4B-eagle3.gguf --spec-type draft-eagle3
 ```
+
+Supported EAGLE-3 draft models include:
+
+- [yuhuili/EAGLE3-LLaMA3.1-Instruct-8B](https://huggingface.co/yuhuili/EAGLE3-LLaMA3.1-Instruct-8B)
+- [yuhuili/EAGLE3-LLaMA3.3-Instruct-70B](https://huggingface.co/yuhuili/EAGLE3-LLaMA3.3-Instruct-70B)
+- [RedHatAI/gemma-4-31B-it-speculator.eagle3](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3)
+- [RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3](https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3)
+- [Tengyunw/qwen3_8b_eagle3](https://huggingface.co/Tengyunw/qwen3_8b_eagle3)
+- [Tengyunw/qwen3_30b_moe_eagle3](https://huggingface.co/Tengyunw/qwen3_30b_moe_eagle3)
+- [AngelSlim/Qwen3-8B_eagle3](https://huggingface.co/AngelSlim/Qwen3-8B_eagle3)
+- [AngelSlim/Qwen3-14B_eagle3](https://huggingface.co/AngelSlim/Qwen3-14B_eagle3)
+- [AngelSlim/Qwen3-32B_eagle3](https://huggingface.co/AngelSlim/Qwen3-32B_eagle3)
 
 ### n-gram Cache (`ngram-cache`)
 
@@ -266,6 +278,7 @@ Specifies a comma-separated list of speculative decoding types to use.
 |------|-------------|
 | `none` | No speculative decoding (default) |
 | `draft-simple` | Use a simple draft model for speculation |
+| `draft-eagle3` | Use an EAGLE-3 draft model that reads the target's hidden states |
 | `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |
 | `ngram-cache` | Use n-gram cache lookup |
 | `ngram-simple` | Use simple n-gram pattern matching |
