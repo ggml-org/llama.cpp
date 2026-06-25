@@ -62,6 +62,7 @@
 #include "ggml-sycl/repeat_back.hpp"
 #include "ggml-sycl/set_rows.hpp"
 #include "ggml-sycl/set.hpp"
+#include "ggml-sycl/turbo-wht.hpp"
 #include "ggml-sycl/ssm_conv.hpp"
 #include "ggml-sycl/sycl_hw.hpp"
 #include "ggml-sycl/ssm_scan.hpp"
@@ -87,13 +88,11 @@ int g_ggml_sycl_enable_flash_attention = 1;
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
 
-    info.device_count = dpct::dev_mgr::instance().device_count();
-    if (info.device_count == 0) {
-        GGML_LOG_ERROR("%s: failed to initialize: %s\n", GGML_SYCL_NAME, __func__);
+    const int discovered_devices = dpct::dev_mgr::instance().device_count();
+    if (discovered_devices == 0) {
+        GGML_LOG_WARN("%s: no SYCL devices discovered by the runtime\n", GGML_SYCL_NAME);
         return info;
     }
-
-    GGML_ASSERT(info.device_count <= GGML_SYCL_MAX_DEVICES);
 
     int64_t total_vram = 0;
 /* This is a bit misleading;  reserved for later */
@@ -102,44 +101,52 @@ static ggml_sycl_device_info ggml_sycl_init() {
 // #else
 //     GGML_LOG_INFO("%s: SYCL_USE_XMX: no\n", __func__);
 // #endif
-    for (int i = 0; i < info.device_count; ++i) {
+    for (int i = 0; i < discovered_devices; ++i) {
         dpct::device_info prop;
         auto & device = dpct::dev_mgr::instance().get_device(i);
+
+        if (!device.is_gpu()) {
+            continue;
+        }
 
         SYCL_CHECK(CHECK_TRY_ERROR(dpct::get_device_info(
             prop, device)));
 
+        GGML_ASSERT(info.device_count < GGML_SYCL_MAX_DEVICES);
+
+        const int gpu_index = info.device_count++;
+
 #if !defined(GGML_SYCL_USE_VMM)
-        info.devices[i].vmm = 0;
+        info.devices[gpu_index].vmm = 0;
 #else
-        info.devices[i].vmm = device.has(sycl::aspect::ext_oneapi_virtual_mem);
-        if (info.devices[i].vmm) {
+        info.devices[gpu_index].vmm = device.has(sycl::aspect::ext_oneapi_virtual_mem);
+        if (info.devices[gpu_index].vmm) {
             // NB: SYCL's get_mem_granularity always returns the _minimum_ granularity,
             // but the L0 API requires a larger page size for allocs above 2 MiB and
             // rejects non-multiples with UR_RESULT_ERROR_INVALID_VALUE [sic].
             // Here we clamp it to 2 MiB for simplicity, but other devices may require
             // calling zeVirtualMemQueryPageSize or yet unexposed public API.
             const size_t physical_page = 2ull << 20; // 2 MiB
-            info.devices[i].vmm_granularity = std::max<size_t>(
+            info.devices[gpu_index].vmm_granularity = std::max<size_t>(
                 sycl::ext::oneapi::experimental::get_mem_granularity(
                     device, sycl::context(device)),
                 physical_page);
         }
 #endif
 
-        info.default_tensor_split[i] = total_vram;
+        info.default_tensor_split[gpu_index] = total_vram;
         total_vram += prop.get_global_mem_size();
 
-        info.devices[i].cc =
+        info.devices[gpu_index].cc =
             100 * prop.get_major_version() + 10 * prop.get_minor_version();
-        info.devices[i].nsm = prop.get_max_compute_units() / 16; //16: Number of Xe Cores
-        info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
-        info.devices[i].smpbo = prop.get_local_mem_size();
-        info.devices[i].warp_size = WARP_SIZE;
+        info.devices[gpu_index].nsm = prop.get_max_compute_units() / 16; //16: Number of Xe Cores
+        info.devices[gpu_index].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
+        info.devices[gpu_index].smpbo = prop.get_local_mem_size();
+        info.devices[gpu_index].warp_size = WARP_SIZE;
 
-        info.max_work_group_sizes[i] = prop.get_max_work_group_size();
-        info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
-        info.devices[i].hw_info = get_device_hw_info(&device);
+        info.max_work_group_sizes[gpu_index] = prop.get_max_work_group_size();
+        info.devices[gpu_index].max_wg_per_cu = info.max_work_group_sizes[gpu_index] / prop.get_max_compute_units();
+        info.devices[gpu_index].hw_info = get_device_hw_info(&device);
 
         // Only check GPU devices; CPU devices use OpenCL and would otherwise
         // disable Level Zero for the GPUs on systems without ONEAPI_DEVICE_SELECTOR set.
@@ -147,6 +154,11 @@ static ggml_sycl_device_info ggml_sycl_init() {
             GGML_LOG_WARN("SYCL GPU device %d does not use Level Zero backend, disabling Level Zero memory API\n", i);
             info.ext_oneapi_level_zero = false;
         }
+    }
+
+    if (info.device_count == 0) {
+        GGML_LOG_WARN("%s: no usable SYCL GPU devices found; leaving SYCL backend disabled\n", GGML_SYCL_NAME);
+        return info;
     }
 
     for (int id = 0; id < info.device_count; ++id) {
@@ -206,7 +218,7 @@ static void print_device_opt_feature(int device_count) {
 }
 void ggml_backend_sycl_print_sycl_devices() {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_print_sycl_devices\n");
-    int device_count = dpct::dev_mgr::instance().device_count();
+    int device_count = ggml_sycl_info().device_count;
     std::map<std::string, size_t> DeviceNums;
     GGML_LOG_INFO("Found %d SYCL devices:\n", device_count);
 
@@ -362,16 +374,22 @@ static void ggml_check_sycl() try {
         }
 #endif
         if (CHECK_TRY_ERROR(g_all_sycl_device_count =
-                            dpct::dev_mgr::instance().device_count()) != 0) {
+                            ggml_sycl_info().device_count) != 0) {
             initialized = true;
             g_sycl_loaded = false;
             return;
         }
         GGML_ASSERT(g_all_sycl_device_count <= GGML_SYCL_MAX_DEVICES);
 
+        if (g_all_sycl_device_count == 0) {
+            GGML_LOG_WARN("%s: no usable SYCL GPU devices found; CPU fallback remains available\n", __func__);
+        }
+
         initialized = true;
-        g_sycl_loaded = true;
-        ggml_backend_sycl_print_sycl_devices();
+        g_sycl_loaded = g_all_sycl_device_count > 0;
+        if (g_sycl_loaded) {
+            ggml_backend_sycl_print_sycl_devices();
+        }
     }
 }
 catch (sycl::exception const &exc) {
@@ -3595,6 +3613,8 @@ static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
+        case GGML_TYPE_TQ3_1S:
+        case GGML_TYPE_TQ4_1S:
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
             return true;
@@ -4018,12 +4038,14 @@ static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_
     const int64_t dmmv_x_required = (src0->type == GGML_TYPE_BF16 || src0->type == GGML_TYPE_F16) ?
                                     2*GGML_SYCL_DMMV_X : GGML_SYCL_DMMV_X;
     return ggml_sycl_supports_dmmv(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
-           src0->ne[0] % dmmv_x_required == 0 && src1->ne[1] == 1;
+           src0->ne[0] % dmmv_x_required == 0 && src1->ne[1] == 1 &&
+           src0->type != GGML_TYPE_TURBO2_0 && src0->type != GGML_TYPE_TURBO3_0 && src0->type != GGML_TYPE_TURBO4_0;
 }
 
 static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     return ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
-           src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
+           src1->ne[1] <= MMVQ_MAX_BATCH_SIZE &&
+           src0->type != GGML_TYPE_TURBO2_0 && src0->type != GGML_TYPE_TURBO3_0 && src0->type != GGML_TYPE_TURBO4_0;
 }
 
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4805,6 +4827,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_sycl_flash_attn_ext(ctx, dst);
             break;
+        case GGML_OP_TURBO_WHT:
+            ggml_sycl_op_turbo_wht(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -5277,6 +5302,10 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                     return false;
                 }
 
+                if (a->type == GGML_TYPE_TQ3_1S || a->type == GGML_TYPE_TQ4_1S) {
+                    return true;
+                }
+
                 if (a->ne[3] != b->ne[3]) {
                     return false;
                 }
@@ -5344,7 +5373,9 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             {
                 return ((op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16 ||
                          op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q5_0 ||
-                         op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_IQ4_NL) &&
+                         op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_IQ4_NL ||
+                         op->type == GGML_TYPE_TURBO2_0 || op->type == GGML_TYPE_TURBO3_0 || op->type == GGML_TYPE_TURBO4_0 ||
+                         op->type == GGML_TYPE_TQ3_1S || op->type == GGML_TYPE_TQ4_1S) &&
                         (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32));
             }
             break;
@@ -5542,6 +5573,9 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             return op->src[0]->ne[0] <= SYCL_SOLVE_TRI_MAX_N && op->src[1]->ne[0] <= SYCL_SOLVE_TRI_MAX_K;
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_sycl_flash_attn_ext_supported(device, op);
+        case GGML_OP_TURBO_WHT:
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                   op->src[0]->ne[0] % 32 == 0;
         default:
             return false;
     }

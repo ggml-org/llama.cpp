@@ -400,7 +400,8 @@ llama_context::llama_context(
         sched_reserve();
 
         if (!cparams.flash_attn) {
-            if (ggml_is_quantized(params.type_v)) {
+            if (ggml_is_quantized(params.type_v) &&
+                params.type_v != GGML_TYPE_TURBO2_0 && params.type_v != GGML_TYPE_TURBO3_0 && params.type_v != GGML_TYPE_TURBO4_0) {
                 throw std::runtime_error("quantized V cache was requested, but this requires Flash Attention");
             }
         }
@@ -3557,15 +3558,15 @@ llama_context * llama_init_from_model(
         }
     }
 
-    // TurboQuant cache types require flash attention — auto-enable if disabled
+    // TurboQuant cache types work best with flash attention, but fall back to MUL_MAT if not available
     if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED &&
         (params.type_k == GGML_TYPE_TURBO2_0 || params.type_k == GGML_TYPE_TURBO3_0 || params.type_k == GGML_TYPE_TURBO4_0 ||
          params.type_v == GGML_TYPE_TURBO2_0 || params.type_v == GGML_TYPE_TURBO3_0 || params.type_v == GGML_TYPE_TURBO4_0)) {
-        LLAMA_LOG_WARN("%s: turbo cache types require flash_attn — enabling automatically\n", __func__);
-        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        LLAMA_LOG_WARN("%s: turbo cache types perform best with flash_attn — falling back to MUL_MAT attention\n", __func__);
     }
 
-    if (ggml_is_quantized(params.type_v) && params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED) {
+    if (ggml_is_quantized(params.type_v) && params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED &&
+        params.type_v != GGML_TYPE_TURBO2_0 && params.type_v != GGML_TYPE_TURBO3_0 && params.type_v != GGML_TYPE_TURBO4_0) {
         LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
         return nullptr;
     }

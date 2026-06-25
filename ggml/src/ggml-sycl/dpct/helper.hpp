@@ -919,13 +919,15 @@ namespace dpct
                     filter = "hip";
                 }
                 else {
-                    throw std::runtime_error("invalid device filter: " + std::string(env));
+                    std::cerr << "ONEAPI_DEVICE_SELECTOR uses an unsupported backend filter: "
+                              << env << std::endl;
+                    return result;
                 }
             } else {
                 auto default_device = sycl::device(sycl::default_selector_v);
                 auto default_platform_name = default_device.get_platform().get_info<sycl::info::platform::name>();
 
-                if (std::strstr(default_platform_name.c_str(), "Level-Zero") || default_device.is_cpu()) {
+                if (std::strstr(default_platform_name.c_str(), "Level-Zero")) {
                     filter = "level-zero";
                 }
                 else if (std::strstr(default_platform_name.c_str(), "CUDA")) {
@@ -967,8 +969,10 @@ namespace dpct
                 result = platform_name;
             }
 
-            if (result.empty())
-                throw std::runtime_error("can not find preferred GPU platform");
+            if (result.empty() && !filter.empty()) {
+                std::cerr << "No GPU platform matched preferred filter '" << filter
+                          << "'. SYCL GPU backend will stay disabled." << std::endl;
+            }
 
             return result;
         }
@@ -1026,16 +1030,10 @@ namespace dpct
         {
             sycl::device default_device =
                 sycl::device(sycl::default_selector_v);
-            _devs.push_back(std::make_shared<device_ext>(default_device));
 
             std::vector<sycl::device> sycl_all_devs;
-            // Collect other devices except for the default device.
-            if (default_device.is_cpu())
-                _cpu_device = 0;
 
             auto Platforms = sycl::platform::get_platforms();
-            // Keep track of the number of devices per backend
-            std::map<sycl::backend, size_t> DeviceNums;
             std::map<std::string, std::vector<sycl::device>> backend_devices;
             auto preferred_platform_name = get_preferred_gpu_platform_name();
 
@@ -1043,12 +1041,15 @@ namespace dpct
                 auto Platform = Platforms.back();
                 Platforms.pop_back();
                 auto platform_name = Platform.get_info<sycl::info::platform::name>();
-                if (platform_name.compare(preferred_platform_name) != 0) {
+                if (!preferred_platform_name.empty() && platform_name.compare(preferred_platform_name) != 0) {
                     continue;
                 }
                 auto devices = Platform.get_devices();
-                std::string backend_type = get_device_backend_and_type(devices[0]);
                 for (const auto &device : devices) {
+                    if (!device.is_gpu()) {
+                        continue;
+                    }
+                    std::string backend_type = get_device_backend_and_type(device);
                     backend_devices[backend_type].push_back(device);
                 }
             }
@@ -1067,16 +1068,14 @@ namespace dpct
                 }
             }
 
-            for (auto &dev : sycl_all_devs)
-            {
-                if (dev == default_device)
-                {
-                    continue;
+            if (!sycl_all_devs.empty()) {
+                for (auto &dev : sycl_all_devs) {
+                    _devs.push_back(std::make_shared<device_ext>(dev));
                 }
-                _devs.push_back(std::make_shared<device_ext>(dev));
-                if (_cpu_device == -1 && dev.is_cpu())
-                {
-                    _cpu_device = _devs.size() - 1;
+            } else {
+                _devs.push_back(std::make_shared<device_ext>(default_device));
+                if (default_device.is_cpu()) {
+                    _cpu_device = 0;
                 }
             }
         }
