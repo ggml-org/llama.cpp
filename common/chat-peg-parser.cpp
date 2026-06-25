@@ -87,6 +87,8 @@ static std::string normalize_quotes_to_json(const std::string & input) {
     bool in_single_quoted = false;
     bool in_double_quoted = false;
 
+    auto is_word_char = [](char ch) { return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_'; };
+
     for (size_t i = 0; i < input.size(); ++i) {
         char c = input[i];
 
@@ -150,6 +152,29 @@ static std::string normalize_quotes_to_json(const std::string & input) {
                 // Opening single quote -> convert to double quote
                 in_single_quoted = true;
                 result += '"';
+            }
+        } else if (!in_single_quoted && !in_double_quoted && (c == 'T' || c == 'F' || c == 'N') &&
+                   (i == 0 || !is_word_char(input[i - 1]))) {
+            // Python literals -> JSON; prefix match keeps streamed partials monotonic.
+            static constexpr std::pair<std::string_view, std::string_view> literals[] = {
+                { "True", "true" }, { "False", "false" }, { "None", "null" },
+            };
+            size_t n = 0;
+            while (i + n < input.size() && is_word_char(input[i + n])) {
+                ++n;
+            }
+            std::string_view token(input.data() + i, n);
+            bool matched = false;
+            for (const auto & [py, js] : literals) {
+                if (py.substr(0, n) == token) {
+                    result += js.substr(0, n);
+                    i += n - 1;
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                result += c;
             }
         } else {
             result += c;
@@ -338,7 +363,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     }
 
     if ((is_arg_value || is_arg_string_value) && current_tool) {
-        std::string value_content = std::string(trim_trailing_space(trim_leading_space(node.text, 1), 1));
+        std::string value_content = std::string(node.text);
 
         std::string value_to_add;
         if (value_content.empty() && is_arg_string_value) {
@@ -353,40 +378,8 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
             }
             value_to_add += escape_json_string_inner(value_content);
         } else if (!value_content.empty()) {
-            // For potential containers, normalize Python-style single quotes to JSON double quotes
-            bool is_potential_container = value_content[0] == '[' || value_content[0] == '{';
-            if (is_potential_container) {
-                value_content = normalize_container_value(value_content);
-            }
-
-            // Try to parse as JSON value (number, bool, null, object, array)
-            try {
-                ordered_json parsed = ordered_json::parse(value_content);
-                if (parsed.is_string()) {
-                    // Don't add closing quote yet (added by arg_close) for monotonic streaming
-                    std::string escaped = parsed.dump();
-                    if (!escaped.empty() && escaped.back() == '"') {
-                        escaped.pop_back();
-                    }
-                    value_to_add          = escaped;
-                    closing_quote_pending = true;
-                } else {
-                    // Non-string values: use raw content to preserve whitespace for monotonicity
-                    value_to_add = value_content;
-                }
-            } catch (...) {
-                if (node.is_partial && is_potential_container) {
-                    // Partial container: pass through the already-normalized content
-                    value_to_add = value_content;
-                } else {
-                    // Not valid JSON - treat as string value
-                    if (!closing_quote_pending) {
-                        value_to_add          = "\"";
-                        closing_quote_pending = true;
-                    }
-                    value_to_add += escape_json_string_inner(value_content);
-                }
-            }
+            // Pythonic scalars/containers -> JSON.
+            value_to_add += normalize_container_value(value_content);
         }
 
         args_target() += value_to_add;
@@ -494,11 +487,34 @@ common_peg_parser common_chat_peg_builder::standard_constructed_tools(
     return force_tool_calls ? section : optional(section);
 }
 
+// Like python_value(), but the leaf also accepts JSON-cased true/false/null, used by LFM2/LFM2.5
+common_peg_parser common_chat_peg_builder::python_or_json_value() {
+    return rule("python-or-json-value", [this]() {
+        auto ws    = space();
+        auto value = python_or_json_value();
+
+        auto member  = sequence({ python_string(), ws, literal(":"), ws, value });
+        auto members = sequence({ member, zero_or_more(sequence({ ws, literal(","), ws, member })) });
+        auto dict    = rule("python-or-json-dict", [&]() {
+            return sequence({ literal("{"), ws, choice({ literal("}"), sequence({ members, ws, literal("}") }) }), ws });
+        });
+
+        auto elements = sequence({ value, zero_or_more(sequence({ literal(","), ws, value })) });
+        auto array    = rule("python-or-json-array", [&]() {
+            return sequence({ literal("["), ws, choice({ literal("]"), sequence({ elements, ws, literal("]") }) }), ws });
+        });
+
+        return choice({ dict, array, python_string(), python_number(),
+                        python_bool(), python_null(), json_bool(), json_null() });
+    });
+}
+
 // Python-style tool calls: name(arg1="value1", arg2=123)
 // Used only by LFM2 for now, so we don't merge it into autoparser
 common_peg_parser common_chat_peg_builder::python_style_tool_calls(
     const ordered_json & tools,
-    bool                 parallel_tool_calls) {
+    bool                 parallel_tool_calls,
+    bool                 allow_json_literals) {
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -524,15 +540,16 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
                 auto arg_name_parser = literal(prop_name);
 
                 common_peg_parser arg_value_parser = eps();
-                auto string_value_parser = choice({
-                    literal("\"") + tool_arg_string_value(string_content('"')) + literal("\""),
-                    literal("'") + tool_arg_string_value(string_content('\'')) + literal("'")
-                });
+                // Quoted literal as a value: normalize_quotes_to_json preserves escapes.
+                auto string_value_parser = tool_arg_value(choice({
+                    literal("\"") + string_content('"') + literal("\""),
+                    literal("'") + string_content('\'') + literal("'")
+                }));
 
                 if (is_string_type) {
                     arg_value_parser = string_value_parser;
                 } else {
-                    arg_value_parser = tool_arg_value(python_value());
+                    arg_value_parser = tool_arg_value(allow_json_literals ? python_or_json_value() : python_value());
                 }
 
                 // Full argument: name="value" or name=value
@@ -729,7 +746,8 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
     const std::string &              effective_args_key,
     const std::string &              call_id_key,
     const std::string &              gen_call_id_key,
-    const std::vector<std::string> & parameters_order) {
+    const std::vector<std::string> & parameters_order,
+    bool                             accept_openai_wrapper) {
 
     auto tool_choices    = choice();
     auto name_key_parser = literal("\"" + effective_name_key + "\"");
@@ -791,7 +809,13 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
                 return idx_a < idx_b;
             });
 
-        auto ordered_body = tool_open(literal("{")) + space();
+        // accept an optional leading "type": "function" field when the model emits the OpenAI wrapper
+        common_peg_parser type_field = eps();
+        if (accept_openai_wrapper) {
+            type_field = optional(literal("\"type\"") + space() + literal(":") + space() +
+                                  literal("\"function\"") + space() + literal(",") + space());
+        }
+        auto ordered_body = tool_open(literal("{")) + space() + type_field;
         for (size_t i = 0; i < parser_pairs.size(); i++) {
             ordered_body = ordered_body + parser_pairs[i].first;
             if (i < parser_pairs.size() - 1) {
@@ -813,7 +837,7 @@ common_peg_parser common_chat_peg_builder::prefix(const std::string & s, const s
     if (delimiter.empty()) {
         return literal(s);
     }
-    return literal(s.substr(0, s.rfind(delimiter)));
+    return literal(s.substr(0, s.find(delimiter)));
 }
 
 common_peg_parser common_chat_peg_builder::optspace(const std::string & tag) {
@@ -854,7 +878,8 @@ common_peg_parser common_chat_peg_builder::standard_json_tools(
                                                        bool                             function_is_key,
                                                        const std::string &              call_id_key,
                                                        const std::string &              gen_call_id_key,
-                                                       const std::vector<std::string> & parameters_order) {
+                                                       const std::vector<std::string> & parameters_order,
+                                                       bool                             accept_openai_wrapper) {
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -872,7 +897,7 @@ common_peg_parser common_chat_peg_builder::standard_json_tools(
         if (!name_spec.first.empty() || !args_spec.first.empty()) {
             tool_choices = build_json_tools_nested_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key);
         } else {
-            tool_choices = build_json_tools_flat_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key, parameters_order);
+            tool_choices = build_json_tools_flat_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key, parameters_order, accept_openai_wrapper);
         }
     }
 

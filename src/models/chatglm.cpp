@@ -2,7 +2,8 @@
 
 void llama_model_chatglm::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    switch (hparams.n_layer) {
+
+    switch (hparams.n_layer()) {
         case 28: {
             if (hparams.n_head(0) == 16) {
                 type = LLM_TYPE_1_5B;
@@ -151,7 +152,7 @@ llama_model_chatglm::graph::graph(const llama_model & model, const llm_graph_par
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

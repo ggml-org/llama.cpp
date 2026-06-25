@@ -115,7 +115,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mmproj", action="store_true",
-        help="(Experimental) Export multimodal projector (mmproj) for vision models. This will only work on some vision models. A prefix 'mmproj-' will be added to the output file name.",
+        help="Export multimodal projector (mmproj) for vision models. This will only work on some vision models. An 'mmproj-' prefix will be added to the output file name.",
+    )
+    parser.add_argument(
+        "--mtp", action="store_true",
+        help="Export only the multi-token prediction (MTP) head as a separate GGUF, suitable for use as a speculative draft. An 'mtp-' prefix will be added to the output file name.",
+    )
+    parser.add_argument(
+        "--no-mtp", action="store_true",
+        help="Exclude the multi-token prediction (MTP) head from the converted GGUF. Pair with --mtp on a second run to publish trunk and MTP as two files. Note: the split form duplicates embeddings, but even though the bundled default is more space-efficient overall, this allows differing quantization which may be more performant.",
     )
     parser.add_argument(
         "--mistral-format", action="store_true",
@@ -139,6 +147,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fuse-gate-up-exps", action="store_true",
         help="Fuse gate_exps and up_exps tensors into a single gate_up_exps tensor for MoE models.",
+    )
+    parser.add_argument(
+        "--fp8-as-q8", action="store_true",
+        help="Store tensors dequantized from FP8 as Q8_0 instead of BF16/F16.",
+    )
+
+    parser.add_argument(
+        "--target-model-dir", type=str, default=None,
+        help=(
+            "path to the target model directory; required when converting a standalone draft model "
+            "(e.g. EAGLE3 / DFlash) that needs target-model metadata such as tokenizer, hidden size, and "
+            "layer count to populate its GGUF."
+        ),
     )
 
     args = parser.parse_args()
@@ -226,12 +247,27 @@ def main() -> None:
             assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
             from conversion.pixtral import PixtralModel
             model_class = PixtralModel
-        elif "moe" in hparams:
+        elif hparams.get("moe") is not None:
             from conversion.mistral import MistralMoeModel
             model_class = MistralMoeModel
         else:
             from conversion.mistral import MistralModel
             model_class = MistralModel
+
+        if args.mtp and args.no_mtp:
+            logger.error("--mtp and --no-mtp are mutually exclusive")
+            sys.exit(1)
+
+        if args.mtp or args.no_mtp:
+            from conversion.qwen import _Qwen35MtpMixin
+            from conversion.step3 import Step35Model
+            if not (issubclass(model_class, _Qwen35MtpMixin) or issubclass(model_class, Step35Model)):
+                logger.error("--mtp / --no-mtp are only supported for Qwen3.5/3.6 and Step3.5 text variants today")
+                sys.exit(1)
+            if args.no_mtp:
+                model_class.no_mtp = True
+            if args.mtp:
+                model_class.mtp_only = True
 
         model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
@@ -242,7 +278,9 @@ def main() -> None:
                                      small_first_shard=args.no_tensor_first_split,
                                      remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template,
                                      sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
-                                     fuse_gate_up_exps=args.fuse_gate_up_exps
+                                     target_model_dir=Path(args.target_model_dir) if args.target_model_dir else None,
+                                     fuse_gate_up_exps=args.fuse_gate_up_exps,
+                                     fp8_as_q8=args.fp8_as_q8,
                                      )
 
         if args.vocab_only:

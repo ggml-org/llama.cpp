@@ -2,7 +2,8 @@
 
 void llama_model_starcoder::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
-    switch (hparams.n_layer) {
+
+    switch (hparams.n_layer()) {
         case 24: type = LLM_TYPE_1B; break;
         case 36: type = LLM_TYPE_3B; break;
         case 42: type = LLM_TYPE_7B; break;
@@ -135,7 +136,7 @@ llama_model_starcoder::graph::graph(const llama_model & model, const llm_graph_p
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

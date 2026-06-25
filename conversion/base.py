@@ -91,8 +91,10 @@ class ModelBase:
     gguf_writer: gguf.GGUFWriter
     model_name: str | None
     metadata_override: Path | None
+    metadata: gguf.Metadata
     dir_model_card: Path
     remote_hf_model_id: str | None
+    target_model_dir: Path | None
 
     # subclasses should define this!
     model_arch: gguf.MODEL_ARCH
@@ -106,6 +108,11 @@ class ModelBase:
     disable_mistral_community_chat_template: bool = False
     sentence_transformers_dense_modules: bool = False
 
+    # MTP (multi-token prediction) export modes; set by main() before instantiation.
+    # Architectures opt in by overriding the handling (see _Qwen35MtpMixin).
+    mtp_only: bool = False
+    no_mtp: bool = False
+
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
@@ -113,7 +120,9 @@ class ModelBase:
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
                  disable_mistral_community_chat_template: bool = False,
                  sentence_transformers_dense_modules: bool = False,
-                 fuse_gate_up_exps: bool = False):
+                 target_model_dir: Path | None = None,
+                 fuse_gate_up_exps: bool = False,
+                 fp8_as_q8: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -132,6 +141,7 @@ class ModelBase:
         self.dry_run = dry_run
         self.remote_hf_model_id = remote_hf_model_id
         self.sentence_transformers_dense_modules = sentence_transformers_dense_modules
+        self.target_model_dir = target_model_dir
         self.fuse_gate_up_exps = fuse_gate_up_exps
         self._gate_exp_buffer: dict[int, Tensor] = {}
         self._up_exp_buffer: dict[int, Tensor] = {}
@@ -142,6 +152,8 @@ class ModelBase:
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
         self._is_nvfp4 = False
         self._is_mxfp4 = False
+        self._fp8_as_q8 = fp8_as_q8
+        self._fp8_dequantized: set[str] = set()
 
         # Apply heuristics to figure out typical tensor encoding based on first tensor's dtype
         # NOTE: can't use field "torch_dtype" in config.json, because some finetunes lie.
@@ -423,6 +435,8 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
                         tensors_to_remove.append(name)
+                        if self._fp8_as_q8:
+                            self._fp8_dequantized.add(weight_name)
                     if name.endswith(".activation_scale"):  # unused
                         tensors_to_remove.append(name)
                     if name.endswith("_activation_scale"):  # Mistral-Small-4-119B-2602, unused
@@ -434,6 +448,8 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
                         tensors_to_remove.append(name)
+                        if self._fp8_as_q8:
+                            self._fp8_dequantized.add(weight_name)
                     if name.endswith(".qscale_act"):
                         tensors_to_remove.append(name)
             elif quant_method == "gptq":
@@ -461,7 +477,14 @@ class ModelBase:
             elif quant_method == "compressed-tensors":
                 quant_format = quant_config["format"]
                 groups = quant_config["config_groups"]
-                if len(groups) > 1:
+                nvfp4_compressed_tensors = (
+                    quant_format == "nvfp4-pack-quantized"
+                    or quant_format == "mixed-precision"
+                    and bool(groups)
+                    and all(g.get("format") == "nvfp4-pack-quantized" for g in groups.values() if isinstance(g, dict))
+                )
+
+                if len(groups) > 1 and not nvfp4_compressed_tensors:
                     raise NotImplementedError("Can't handle multiple config groups for compressed-tensors yet")
                 weight_config = tuple(groups.values())[0]["weights"]
 
@@ -470,6 +493,11 @@ class ModelBase:
                     strategy = weight_config.get("strategy")
                     assert strategy == "channel" or strategy == "block"
                     assert weight_config.get("group_size") is None  # didn't find a model using this yet
+                    is_fp8 = (
+                        quant_format == "float-quantized"
+                        and weight_config.get("type") == "float"
+                        and weight_config.get("num_bits") == 8
+                    )
                     for name in self.model_tensors.keys():
                         if name.endswith(".weight_scale"):
                             weight_name = name.removesuffix("_scale")
@@ -477,6 +505,8 @@ class ModelBase:
                             s = self.model_tensors[name]
                             self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), block_size)
                             tensors_to_remove.append(name)
+                            if self._fp8_as_q8 and is_fp8:
+                                self._fp8_dequantized.add(weight_name)
                 elif quant_format == "pack-quantized":
                     assert weight_config.get("strategy") == "group"
                     assert weight_config.get("type", "int") == "int"
@@ -499,6 +529,9 @@ class ModelBase:
                             tensors_to_remove += [base_name + n for n in ("_packed", "_shape", "_scale")]
                             if (base_name + "_zero_point") in self.model_tensors:
                                 tensors_to_remove.append(base_name + "_zero_point")
+                elif nvfp4_compressed_tensors:
+                    # Don't error from compressed-tensors, we'll handle them in _generate_nvfp4_tensors
+                    pass
                 else:
                     raise NotImplementedError(f"Quant format {quant_format!r} for method {quant_method!r} is not yet supported")
             elif quant_method == "modelopt":
@@ -508,10 +541,18 @@ class ModelBase:
                 for name in self.model_tensors.keys():
                     if name.endswith(".weight_scale"):
                         weight_name = name.removesuffix("_scale")
+                        if weight_name not in self.model_tensors:
+                            tensors_to_remove.append(name)
+                            continue
                         w = self.model_tensors[weight_name]
                         s = self.model_tensors[name]
+                        is_fp8_weight = False
+                        if self._fp8_as_q8:
+                            is_fp8_weight = w().dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
                         self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), None)
                         tensors_to_remove.append(name)
+                        if is_fp8_weight:
+                            self._fp8_dequantized.add(weight_name)
                     if name.endswith((".input_scale", ".k_scale", ".v_scale")):
                         tensors_to_remove.append(name)
             elif quant_method is not None:
@@ -599,8 +640,10 @@ class ModelBase:
         return [(new_name, data_torch)]
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
-        del name, new_name, bid, n_dims  # unused
-
+        del new_name, bid  # unused
+        # Force FP8-original tensors to Q8_0 when requested; Q8_0 is faster than F16/BF16.
+        if self._fp8_as_q8 and name in self._fp8_dequantized and n_dims >= 2:
+            return gguf.GGMLQuantizationType.Q8_0
         return False
 
     # some models need extra generated tensors (like rope_freqs)
@@ -740,10 +783,13 @@ class ModelBase:
         del experts, merged
 
     def prepare_tensors(self):
-        # detect NVFP4 quantization (ModelOpt format)
-        quant_algo = (self.hparams.get("quantization_config") or {}).get("quant_algo")
-        quant_method = (self.hparams.get("quantization_config") or {}).get("quant_method")
-        quant_layers = (self.hparams.get("quantization_config") or {}).get("quantized_layers") or {}
+        # detect NVFP4 quantization (ModelOpt and Compressed-tensors formats)
+        quantization_config = self.hparams.get("quantization_config") or {}
+        quant_algo = quantization_config.get("quant_algo")
+        quant_method = quantization_config.get("quant_method")
+        quant_format = quantization_config.get("format")
+        quant_groups = quantization_config.get("config_groups") or {}
+        quant_layers = quantization_config.get("quantized_layers") or {}
         quant_config_file = self.dir_model / "hf_quant_config.json"
 
         if (not quant_algo or not quant_layers) and quant_config_file.is_file():
@@ -754,13 +800,25 @@ class ModelBase:
                 producer_name = (producer.get("name") or "").lower()
                 if quant_method is None:
                     self.hparams.setdefault("quantization_config", {})["quant_method"] = producer_name
+                    quant_method = producer_name
                 quant_algo = quant_config.get("quant_algo", quant_algo)
+                quant_method = quant_config.get("quant_method", quant_method)
+                quant_format = quant_config.get("format", quant_format)
+                quant_groups = quant_config.get("config_groups", quant_groups) or {}
                 quant_layers = quant_config.get("quantized_layers", quant_layers) or {}
 
         # Some models use per-tensor quant_algo (e.g. "MIXED_PRECISION" with
         # per-layer NVFP4/FP8) instead of a single global "NVFP4" value.
+        nvfp4_compressed_tensors = quant_method == "compressed-tensors" and (
+            quant_format == "nvfp4-pack-quantized"
+            or quant_format == "mixed-precision"
+            and bool(quant_groups)
+            and all(g.get("format") == "nvfp4-pack-quantized" for g in quant_groups.values() if isinstance(g, dict))
+        )
         if quant_algo != "NVFP4":
-            if any(v.get("quant_algo") == "NVFP4" for v in quant_layers.values() if isinstance(v, dict)):
+            if nvfp4_compressed_tensors:
+                quant_algo = "NVFP4"
+            elif any(str(v.get("quant_algo")).endswith("NVFP4") for v in quant_layers.values() if isinstance(v, dict)):
                 quant_algo = "NVFP4"
 
         self._is_nvfp4 = quant_algo == "NVFP4"
@@ -770,6 +828,28 @@ class ModelBase:
         # This must run before dequant_model so NVFP4 tensors are removed
         # from model_tensors, leaving only non-NVFP4 (e.g. FP8) for dequant.
         if self._is_nvfp4:
+            if nvfp4_compressed_tensors:
+                # Convert compressed-tensors 'global' scales into the reciprocal
+                def inverse_scale(gen):
+                    def load():
+                        scale = LazyTorchTensor.to_eager(gen()).float()
+                        return 1.0 / scale
+                    return load
+
+                # Change the compressed-tensors names to the ModelOpt names for handling consistently later
+                for name in list(self.model_tensors.keys()):
+                    if name.endswith(".weight_packed"):
+                        weight_name = name.removesuffix("_packed")
+                        if weight_name not in self.model_tensors:
+                            self.model_tensors[weight_name] = self.model_tensors.pop(name)
+                    elif name.endswith(".weight_global_scale"):
+                        scale2_name = name.replace(".weight_global_scale", ".weight_scale_2")
+                        if scale2_name not in self.model_tensors:
+                            self.model_tensors[scale2_name] = inverse_scale(self.model_tensors.pop(name))
+                    elif name.endswith(".input_global_scale"):
+                        input_scale_name = name.replace(".input_global_scale", ".input_scale")
+                        if input_scale_name not in self.model_tensors:
+                            self.model_tensors[input_scale_name] = inverse_scale(self.model_tensors.pop(name))
             self._generate_nvfp4_tensors()
 
         self.dequant_model()
@@ -838,6 +918,8 @@ class ModelBase:
                             gguf.MODEL_TENSOR.SSM_CONV1D_Q,
                             gguf.MODEL_TENSOR.SSM_CONV1D_K,
                             gguf.MODEL_TENSOR.SSM_CONV1D_V,
+                            # DSA indexer weights should be F32
+                            gguf.MODEL_TENSOR.INDEXER_PROJ,
                         )
                     )
                     or new_name[-7:] not in (".weight", ".lora_a", ".lora_b")
@@ -1037,8 +1119,10 @@ class TextModel(ModelBase):
 
         rope_theta = self.find_hparam(["global_rope_theta", "rope_global_theta", "rope_theta_global", "rope_theta", "rotary_emb_base"], optional=True)
         local_rope_theta = self.find_hparam(["local_rope_theta", "rope_local_theta", "rope_theta_local", "swa_rope_theta", "rope_local_base_freq"], optional=True)
+        partial_rotary_factor = self.find_hparam(["partial_rotary_factor", "rope_pct", "rope_percent"], optional=True)
+        original_max_position_embeddings = self.find_hparam(["original_max_position_embeddings"], optional=True)
 
-        # Ensure "rope_theta" and "rope_type" is mirrored in rope_parameters
+        # Ensure global params are mirrored in rope_parameters
         if "full_attention" not in self.rope_parameters and "sliding_attention" not in self.rope_parameters:
             if local_rope_theta is not None:
                 self.rope_parameters["sliding_attention"] = {"rope_theta": local_rope_theta}
@@ -1046,6 +1130,10 @@ class TextModel(ModelBase):
                 self.rope_parameters["rope_theta"] = rope_theta
             if "rope_type" not in self.rope_parameters and (rope_type := self.rope_parameters.get("type")) is not None:
                 self.rope_parameters["rope_type"] = rope_type
+            if "partial_rotary_factor" not in self.rope_parameters and partial_rotary_factor is not None:
+                self.rope_parameters["partial_rotary_factor"] = partial_rotary_factor
+            if "original_max_position_embeddings" not in self.rope_parameters and original_max_position_embeddings is not None:
+                self.rope_parameters["original_max_position_embeddings"] = original_max_position_embeddings
 
     @classmethod
     def __init_subclass__(cls):
@@ -1061,7 +1149,7 @@ class TextModel(ModelBase):
         # Skip multimodal tensors
         if name.startswith(("mlp", "vit.", "vpm.", "siglip2.", "conformer.", "merger.", "resampler.", "sound_encoder.", "sound_projection.", "speech_embeddings.")) \
                 or "visual." in name or "vision." in name or "audio." in name or "talker." in name \
-                or "vision_" in name or "audio_" in name or "sam_model" in name \
+                or "vision_" in name or "audio_" in name \
                 or "token2wav." in name or "code2wav." in name \
                 or "projector." in name or "pre_mm_projector_norm" in name \
                 or "image_newline" in name or "view_seperator" in name \
@@ -1113,7 +1201,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_embedding_length(n_embd)
             logger.info(f"gguf: embedding length = {n_embd}")
 
-        if (n_ff := self.find_hparam(["intermediate_size", "n_inner", "hidden_dim"], optional=True)) is not None:
+        if (n_ff := self.find_hparam(["prefix_dense_intermediate_size", "intermediate_size", "n_inner", "hidden_dim"], optional=True)) is not None:
             self.gguf_writer.add_feed_forward_length(n_ff)
             logger.info(f"gguf: feed forward length = {n_ff}")
 
@@ -1198,7 +1286,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_expert_group_used_count(n_group_used)
             logger.info(f"gguf: expert groups used count = {n_group_used}")
 
-        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func"], optional=True)) is not None:
+        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn"], optional=True)) is not None:
             if score_func == "sigmoid":
                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
             elif score_func == "softmax":
@@ -1368,6 +1456,9 @@ class TextModel(ModelBase):
         if chkhsh == "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4":
             # ref: https://huggingface.co/evilfreelancer/ruGPT3XL
             res = "gpt-2"
+        if chkhsh == "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7":
+            # ref: https://huggingface.co/LiquidAI/LFM2.5-8B-A1B
+            res = "lfm2"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -1410,6 +1501,9 @@ class TextModel(ModelBase):
         if chkhsh == "d772b220ace2baec124bed8cfafce0ead7d6c38a4b65ef11261cf9d5d62246d1":
             # ref: https://huggingface.co/CohereLabs/tiny-aya-base
             res = "tiny_aya"
+        if chkhsh == "52df12b4c8d4176e7481aab4b6e8454d1fd0a210a04a574f6d4e067d10e23c3e":
+            # ref: https://huggingface.co/CohereLabs/North-Mini-Code-1.0
+            res = "cohere2moe"
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
@@ -1519,7 +1613,7 @@ class TextModel(ModelBase):
             # ref: https://huggingface.co/K-intelligence/Midm-2.0-Base-Instruct
             res = "midm-2.0"
         if chkhsh == "169bf0296a13c4d9b7672313f749eb36501d931022de052aad6e36f2bf34dd51":
-            # ref: https://huggingface.co/LiquidAI/LFM2-Tokenizer
+            # ref: https://huggingface.co/LiquidAI/LFM2.5-350M
             res = "lfm2"
         if chkhsh == "2085e1638f6c377a0aa4ead21b27bb4cb941bf800df86ed391011769c1758dfb":
             # ref: https://huggingface.co/LGAI-EXAONE/EXAONE-4.0-32B
@@ -1569,6 +1663,21 @@ class TextModel(ModelBase):
         if chkhsh == "62f6fb0a6fd5098caeabb19b07a5c1099cafc8b9c40eab6ea89ece4ec02fbc57":
             # ref: https://huggingface.co/sarvamai/sarvam-30b
             res = "sarvam-moe"
+        if chkhsh == "f728162c1315c26e40249849799b4ba3fe584c32084b4795b03eb295e63cb5af":
+            # ref: https://huggingface.co/lewtun/talkie-1930-13b-it-hf
+            res = "talkie"
+        if chkhsh == "36f3066e97b7f3994b379aaacde306c1444c6ae84e81a5ae3cd2b7ed3b8c42d4":
+            # ref: https://huggingface.co/openbmb/MiniCPM5-1B
+            res = "minicpm5"
+        if chkhsh == "f241072145675bf8322086f115aebad05e9f869557a238bf2150a2a417d1bf60":
+            # ref: https://huggingface.co/ibm-granite/granite-embedding-97m-multilingual-r2
+            res = "granite-embed-multi-97m"
+        if chkhsh == "789696f5946cc0fc59371f39f6097cafed196b3acded6140432f26bbb1ae1669":
+            # ref: https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2
+            res = "granite-embed-multi-311m"
+        if chkhsh == "9dcf830ee9990cdbf78cc523a5f7bd9ad8f3f9890c2d3581d2785ad10f07049d":
+            # ref: https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base
+            res = "mellum2"
 
         if res is None:
             logger.warning("\n")
@@ -1597,6 +1706,57 @@ class TextModel(ModelBase):
     def _set_vocab_gpt2(self) -> None:
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def _set_vocab_whitespace(self) -> None:
+        tokens, toktypes, _ = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("whitespace")
+        self.gguf_writer.add_tokenizer_pre("whitespace") # pinned, not hash-detected: chktxt hash collides with jina-v1-en
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def _set_vocab_hybriddna(self):
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
+        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
+
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
+        # k-mers can share text with a base-vocab BPE token (e.g. CCCCCC) and get
+        # dropped by get_vocab(); a reserved marker suffix (U+E000) keeps each
+        # k-mer's own id (llama.cpp strips it on detokenization)
+        for kmer in tokenizer.kmers:  # ty: ignore[unresolved-attribute]
+            reverse_vocab[tokenizer.dna_token_to_id[kmer]] = kmer + "\ue000"  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
+        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
+
+        tokens: list[str] = []
+        toktypes: list[int] = []
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        tokpre = self.get_vocab_base_pre(tokenizer)
+        self.gguf_writer.add_tokenizer_model("hybriddna")
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
@@ -2317,10 +2477,9 @@ class MmprojModel(ModelBase):
         raise KeyError(f"could not find any of: {keys}")
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, name, n_dims  # unused
         if ".patch_embd.weight" in new_name or ".patch_merger.weight" in new_name:
             return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
 class LazyTorchTensor(gguf.LazyBase):
@@ -2334,6 +2493,7 @@ class LazyTorchTensor(gguf.LazyBase):
         torch.float16: np.float16,
         torch.float32: np.float32,
         torch.uint8: np.uint8,
+        torch.int64: np.int64,
     }
 
     # only used when byteswapping data. Only correct size is needed
@@ -2455,7 +2615,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
     # For text conversion we route to a dedicated text-only class.
     # TODO: refactor this later to avoid adding exception here
-    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM"):
+    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead

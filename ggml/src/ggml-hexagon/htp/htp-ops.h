@@ -20,6 +20,7 @@ enum htp_data_type {
     HTP_TYPE_F32    = 0,
     HTP_TYPE_F16    = 1,
     HTP_TYPE_Q4_0   = 2,
+    HTP_TYPE_Q4_1   = 3,
     HTP_TYPE_Q8_0   = 8,
     HTP_TYPE_IQ4_NL = 20,
     HTP_TYPE_I32    = 26,
@@ -27,17 +28,19 @@ enum htp_data_type {
     HTP_TYPE_MXFP4  = 39,
 
     // types used internally for repack, dyn.quant, etc
-    HTP_TYPE_Q4_0x4x2 = 200,
-    HTP_TYPE_Q8_0x4x2,
-    HTP_TYPE_MXFP4x4x2,
+    HTP_TYPE_Q4_0_TILED = 200,
+    HTP_TYPE_Q4_1_TILED,
+    HTP_TYPE_Q8_0_TILED,
+    HTP_TYPE_MXFP4_TILED,
 
     HTP_TYPE_INVALID
 };
 
 // Constats for internal types
-#define QK_Q4_0x4x2  256  // 4x Q4_0  blocks packed with next 4x Q4_0 blocks (size in bytes 128)
-#define QK_Q8_0x4x2  256  // 4x Q8_0  blocks concat with next 4x Q8_0 blocks
-#define QK_MXFP4x4x2 256  // 4x MXFP4 blocks concat with next 4x MXFP4 blocks
+#define QK_Q4_0_TILED  256  // 32x32 Q4_0 tiled layout
+#define QK_Q8_0_TILED  128  // 32x32 Q8_0 tiled layout
+#define QK_MXFP4_TILED 256  // 32x32 MXFP4 tiled layout
+
 
 
 // Mask to enable various stages of the Ops.
@@ -55,7 +58,10 @@ enum htp_op_code {
     HTP_OP_DIV = 3,
     HTP_OP_MUL_MAT,
     HTP_OP_MUL_MAT_ID,
+    HTP_OP_MUL_MAT_QKV,
+    HTP_OP_MUL_MAT_FFN,
     HTP_OP_RMS_NORM,
+    HTP_OP_RMS_NORM_MUL,
     HTP_OP_UNARY_SILU,
     HTP_OP_UNARY_GELU,
     HTP_OP_UNARY_SIGMOID,
@@ -86,13 +92,19 @@ enum htp_op_code {
     HTP_OP_SOLVE_TRI,
     HTP_OP_L2_NORM,
     HTP_OP_GATED_DELTA_NET,
+    HTP_OP_TRI,
+    HTP_OP_PAD,
+    HTP_OP_NORM,
+    HTP_OP_CONCAT,
 
     HTP_OP_INVALID
 };
 
 #define HTP_OP_MAX_DIMS    4    // aka GGML_MAX_DIMS
 #define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
+#define HTP_OP_MAX_OUTPUTS 4
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
+#define HTP_OP_MAX_KERN_PARAMS 32
 
 #define HTP_OP_MAX_BUFS    16
 #define HTP_OP_MAX_REQS    256
@@ -135,14 +147,42 @@ struct htp_op_desc {
     uint32_t opcode;                    // GGML/HTP Op
     uint32_t flags;                     // Op flags
     int32_t  params[HTP_OP_MAX_PARAMS]; // Params for the op, e.g. epsilon of RMS norm
+    int32_t  kernel_params[HTP_OP_MAX_KERN_PARAMS]; // generic blob for host-precomputed parameters
     uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
-    uint16_t dst;                       // Output tensor index
+    uint16_t dst[HTP_OP_MAX_OUTPUTS];   // Output tensor indices
+    uint16_t pad[2];                    // padding to align to 64 bits
 };
+
+#ifndef HTP_MAX_NTHREADS
+#define HTP_MAX_NTHREADS 10
+#endif
+
+#define HTP_TRACE_MAX_EVENTS 256
 
 enum htp_profiler_mode {
     HTP_PROF_DISABLED = 0,
     HTP_PROF_BASIC    = 1,
     HTP_PROF_PMU      = 2,
+    HTP_PROF_TRACE    = 3,
+};
+
+enum htp_trace_event_id {
+    HTP_TRACE_EVT_DMA                 = 0,
+
+    HTP_TRACE_EVT_HVX_COMP            = 20,
+    HTP_TRACE_EVT_HVX_A_QUANT         = 21,
+    HTP_TRACE_EVT_HVX_A_PREP          = 22,
+    HTP_TRACE_EVT_HVX_W_DEQUANT       = 23,
+    HTP_TRACE_EVT_HVX_W_PREP          = 24,
+    HTP_TRACE_EVT_HVX_O_PROC          = 25,
+
+    HTP_TRACE_EVT_HMX_COMP            = 40,
+};
+
+struct htp_trace_desc {
+    uint32_t cycles;  // lower 32-bits of cycle counter
+    uint16_t id;      // Event ID
+    uint16_t info;    // bit 15: is_stop. bits 14-0: tile/chunk index or other metadata.
 };
 
 #define HTP_PROF_PMU_NCNT 8
@@ -151,8 +191,8 @@ enum htp_profiler_mode {
 struct htp_prof_desc {
     uint32_t opcode;                 // GGML/HTP Op
     uint32_t usecs;                  // Number of usec
-    uint32_t cycles;                 // Number of cycles
-    uint32_t pad;                    // Unused
+    uint32_t cycles_start;           // Start cycle counter
+    uint32_t cycles_stop;            // Stop cycle counter
     uint32_t pmu[HTP_PROF_PMU_NCNT]; // PMU counters
 };
 
@@ -161,7 +201,7 @@ struct htp_opbatch_req {
     uint32_t n_bufs;      // Number of buffers
     uint32_t n_tensors;   // Number of tensors
     uint32_t n_ops;       // Number of ops
-    uint32_t flags;       // unused
+    uint32_t n_traces;    // Number of trace descriptors per thread
     uint32_t pad;         // unused
     // struct htp_buf_desc  bufs[];    -- dspqueue buf 0
     // struct htp_tensor    tensors[]; -- dspqueue buf 0
@@ -174,7 +214,8 @@ struct htp_opbatch_rsp {
     uint32_t n_bufs;     // Number of buffers
     uint32_t n_tensors;  // Number of tensors
     uint32_t n_ops;      // Number of op profile descriptors
-    uint32_t pad;        // unused
+    uint32_t n_traces[HTP_MAX_NTHREADS + 1];
+    uint8_t  pad[8];     // align to 8 bytes
     // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 

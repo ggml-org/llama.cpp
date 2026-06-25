@@ -199,7 +199,6 @@ llama_build_and_test(test-jinja.cpp)
 llama_test(test-jinja NAME test-jinja-py ARGS -py LABEL python)
 llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 llama_build_and_test(test-chat-template.cpp)
-llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build_and_test(
     test-peg-parser.cpp
@@ -252,12 +251,20 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED test-download-model)
 
+llama_build_and_test(test-recurrent-state-rollback.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+set_tests_properties(test-recurrent-state-rollback PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+# Test state save/load functionality
+llama_build_and_test(test-save-load-state.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-download-model)
+
 if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading
     llama_build_and_test(test-barrier.cpp)
     llama_build_and_test(test-quantize-fns.cpp)
     llama_build_and_test(test-quantize-perf.cpp)
     llama_build_and_test(test-rope.cpp)
+    llama_build_and_test(test-col2im-1d.cpp)
 endif()
 
 # libmtmd

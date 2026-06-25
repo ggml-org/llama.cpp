@@ -3,7 +3,8 @@
 void llama_model_gptneox::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
     ml.get_key(LLM_KV_USE_PARALLEL_RESIDUAL,   hparams.use_par_res);
-    switch (hparams.n_layer) {
+
+    switch (hparams.n_layer()) {
         case 6:
             switch (hparams.n_ff()) {
                 case 512:  type = LLM_TYPE_14M; break;
@@ -209,7 +210,7 @@ llama_model_gptneox::graph::graph(const llama_model & model, const llm_graph_par
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

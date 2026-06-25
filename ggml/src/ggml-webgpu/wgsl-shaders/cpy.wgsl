@@ -49,7 +49,9 @@ struct Params{
 var<uniform> params: Params;
 
 @compute @workgroup_size(WG_SIZE)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+) {
     if (gid.x >= params.ne) {
         return;
     }
@@ -78,4 +80,3 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     dst[params.offset_dst + dst_idx] = DST_TYPE((src[params.offset_src + src_idx]));
 }
-

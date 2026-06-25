@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <map>
+
 // !!! Internal header, to be used by mtmd only !!!
 
 #define MTMD_INTERNAL_HEADER
@@ -15,10 +17,21 @@ struct clip_ctx;
 struct clip_image_size {
     int width;
     int height;
+    bool operator==(const clip_image_size & other) const {
+        return width == other.width && height == other.height;
+    }
+    bool operator!=(const clip_image_size & other) const {
+        return !(*this == other);
+    }
+    int area() const {
+        // avoid overflow when computing area
+        GGML_ASSERT(width  >= 0 && width  <= 46000);
+        GGML_ASSERT(height >= 0 && height <= 46000);
+        return width * height;
+    }
 };
 
 struct clip_image_f32;
-struct clip_image_u8_batch;
 struct clip_image_f32_batch;
 
 enum clip_modality {
@@ -40,6 +53,9 @@ struct clip_context_params {
     bool warmup;
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
+    bool no_alloc;
+    mtmd_progress_callback progress_callback;
+    void * progress_callback_user_data;
 };
 
 struct clip_init_result {
@@ -51,70 +67,35 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
 
 void clip_free(struct clip_ctx * ctx);
 
-size_t clip_embd_nbytes(const struct clip_ctx * ctx);
-size_t clip_embd_nbytes_by_img(const struct clip_ctx * ctx, int img_w, int img_h);
-
-int32_t clip_get_image_size (const struct clip_ctx * ctx);
-int32_t clip_get_patch_size (const struct clip_ctx * ctx);
-int32_t clip_get_hidden_size(const struct clip_ctx * ctx);
-
 // TODO: should be enum, not string
 const char * clip_patch_merge_type(const struct clip_ctx * ctx);
 
-int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * img);
+int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img);
 
 // for M-RoPE, this will be the number of token positions in X and Y directions
 // for other models, X will be the total number of tokens and Y will be 1
-int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * img);
-int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * img);
+int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img);
+int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img);
 
 // this should be equal to the embedding dimension of the text model
 int clip_n_mmproj_embd(const struct clip_ctx * ctx);
 
-struct clip_image_size      * clip_image_size_init(void);
-struct clip_image_u8        * clip_image_u8_init (void);
-struct clip_image_f32       * clip_image_f32_init(void);
-struct clip_image_f32_batch * clip_image_f32_batch_init(void); // only used by libllava
+// TODO: remove clip_image_encode() and always use batched version
+bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, const clip_image_f32 * img, std::vector<float> & out_vec);
+bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, std::vector<float> & out_batch_embd);
 
-// nx, ny are the output image dimensions
-unsigned char * clip_image_u8_get_data(struct clip_image_u8 * img, uint32_t * nx, uint32_t * ny);
-
-void clip_image_size_free (struct clip_image_size * img_size);
-void clip_image_u8_free (struct clip_image_u8  * img);
-void clip_image_f32_free(struct clip_image_f32 * img);
-void clip_image_u8_batch_free (struct clip_image_u8_batch  * batch);
-void clip_image_f32_batch_free(struct clip_image_f32_batch * batch);
-
-// use for accessing underlay data of clip_image_f32_batch
-size_t clip_image_f32_batch_n_images(const struct clip_image_f32_batch * batch); // equivalent to batch->size()
-size_t clip_image_f32_batch_nx(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->nx
-size_t clip_image_f32_batch_ny(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->ny
-struct clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->data
-
-/**
- * Build image from pixels decoded by other libraries instead of stb_image.h for better performance.
- * The memory layout is RGBRGBRGB..., input buffer length must be 3*nx*ny bytes
- */
-void clip_build_img_from_pixels(const unsigned char * rgb_pixels, int nx, int ny, struct clip_image_u8 * img);
-
-struct ggml_tensor * clip_get_newline_tensor(const struct clip_ctx * ctx);
-
-bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, struct clip_image_f32 * img, float * vec);
-bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec);
-
-int clip_is_minicpmv(const struct clip_ctx * ctx);
-bool clip_is_glm(const struct clip_ctx * ctx);
 bool clip_is_llava(const struct clip_ctx * ctx);
 // note for contributor: this clip_is_(model) pattern is deprecated
 //                       do NOT add new functions like this
 
-bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec);
-
-// use by audio input
-void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel, int n_frames, float * mel);
-
 bool clip_has_vision_encoder(const struct clip_ctx * ctx);
 bool clip_has_audio_encoder(const struct clip_ctx * ctx);
+
+bool clip_support_batch(const struct clip_ctx * ctx);
+
+int clip_model_n_temporal_merge(const struct clip_ctx * ctx); // TODO @ngxson : remove, refactor this
+
+std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * ctx);
 
 struct clip_cap {
     bool has_vision;

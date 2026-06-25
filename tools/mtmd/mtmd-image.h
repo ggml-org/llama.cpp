@@ -8,6 +8,24 @@
 
 #define MTMD_INTERNAL_HEADER
 
+struct mtmd_image_preproc_out {
+    std::vector<clip_image_f32> entries;
+    // grid size is required for llava-uhd style models
+
+    clip_image_f32 overview; // overview image (downscaled image)
+    int grid_x = 0;
+    int grid_y = 0;
+
+    void append(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized = true);
+    void append(const clip_hparams & hparams, const std::vector<clip_image_u8> & imgs, bool normalized = true);
+    void append(const clip_hparams & hparams, clip_image_f32 & img, bool normalized = true);
+
+    void append_overview(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized = true);
+    bool has_overview() const {
+        return overview.nx() > 0 || overview.ny() > 0;
+    }
+};
+
 // base class, models must inherit from this class
 struct mtmd_image_preprocessor {
     const clip_hparams & hparams;
@@ -15,10 +33,7 @@ struct mtmd_image_preprocessor {
     mtmd_image_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
 
     virtual ~mtmd_image_preprocessor() = default;
-    virtual bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) = 0;
-
-    void img_u8_to_f32(const clip_image_u8 & src, clip_image_f32 & dst, const float mean[3], const float std[3]);
-    void img_u8_to_f32(const clip_image_u8 & src, clip_image_f32 & dst);
+    virtual mtmd_image_preproc_out preprocess(const clip_image_u8 & img) = 0;
 };
 
 /**
@@ -39,10 +54,12 @@ struct mtmd_image_preprocessor {
  * [overview] --> [slice 1] --> [slice 2]
  *           |                |
  *           +--> [slice 3] --> [slice 4]
+ *
+ * NOTE: for the ordering of overview, set "ov_img_first" on the mtmd_context
  */
 struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     mtmd_image_preprocessor_llava_uhd(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 
     struct slice_coordinates {
         int x;
@@ -60,7 +77,11 @@ struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     // LFM2 override this function to implement its custom slicing logic
     virtual slice_instructions get_slice_instructions(const clip_image_size & original_size);
 
-    std::vector<clip_image_u8_ptr> slice_image(const clip_image_u8 & img, const slice_instructions & inst, bool overview_first = true);
+    struct slice_output {
+        clip_image_u8 overview;
+        std::vector<clip_image_u8> slices;
+    };
+    slice_output slice_image(const clip_image_u8 & img, const slice_instructions & inst);
 
 private:
     clip_image_size get_best_resize(const clip_image_size & original_size, int scale_resolution, int patch_size, bool allow_upscale = false);
@@ -91,7 +112,7 @@ private:
 // downscale or upscale the input image to fixed size
 struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
     mtmd_image_preprocessor_fixed_size(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
 // resize image to multiple of patch_size*n_merge, while preserving aspect ratio
@@ -99,13 +120,13 @@ struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
 // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
 struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
     mtmd_image_preprocessor_dyn_size(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
 // similar to mtmd_image_preprocessor_dyn_size, but resize the image to have longest edge equal to hparams.image_longest_edge, while preserving aspect ratio
 struct mtmd_image_preprocessor_longest_edge : mtmd_image_preprocessor {
     mtmd_image_preprocessor_longest_edge(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
 // custom llava-uhd slicing logic for LFM2
@@ -131,24 +152,44 @@ private:
 
 struct mtmd_image_preprocessor_idefics3 : mtmd_image_preprocessor_llava_uhd {
     mtmd_image_preprocessor_idefics3(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
-    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
 struct mtmd_image_preprocessor_internvl : mtmd_image_preprocessor_llava_uhd {
     mtmd_image_preprocessor_internvl(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
-    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
 struct mtmd_image_preprocessor_deepseekocr : mtmd_image_preprocessor {
     mtmd_image_preprocessor_deepseekocr(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
+};
+
+// DeepSeek-OCR-2: a 1024x1024 global view, plus InternVL-style 768x768 local
+// tiles when the image is larger than a tile in either dimension.
+struct mtmd_image_preprocessor_deepseekocr2 : mtmd_image_preprocessor {
+    static constexpr int base_size = 1024; // global view
+    static constexpr int tile_size = 768;  // local tile
+    static constexpr int min_tiles = 2;
+    static constexpr int max_tiles = 6;
+
+    mtmd_image_preprocessor_deepseekocr2(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
+
+private:
+    static std::vector<clip_image_size> get_target_ratios();
+    static clip_image_size              find_closest_aspect_ratio(
+        float                                aspect_ratio,
+        const std::vector<clip_image_size> & target_ratios,
+        int                                  width,
+        int                                  height);
 };
 
 // custom image preprocessing for Step3VL
 // ref: https://huggingface.co/stepfun-ai/Step3-VL-10B/blob/main/processing_step3.py
 struct mtmd_image_preprocessor_step3vl : mtmd_image_preprocessor_llava_uhd {
     mtmd_image_preprocessor_step3vl(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
-    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
     static slice_instructions build_slice_instructions(const clip_hparams & params, const clip_image_size & prepared_size);
 
 private:
@@ -175,5 +216,11 @@ private:
 
 struct mtmd_image_preprocessor_youtuvl : mtmd_image_preprocessor {
     mtmd_image_preprocessor_youtuvl(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
+};
+
+// similar to llava_uhd, but has add_newline
+struct mtmd_image_preprocessor_granite : mtmd_image_preprocessor_llava_uhd {
+    mtmd_image_preprocessor_granite(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };

@@ -6,7 +6,7 @@ void llama_model_chameleon::load_arch_hparams(llama_model_loader & ml) {
     hparams.f_norm_eps = 1e-5;  // eps for qk-norm, torch default
     ml.get_key(LLM_KV_SWIN_NORM, hparams.swin_norm, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_7B; break;
         case 48: type = LLM_TYPE_34B; break;
         default: type = LLM_TYPE_UNKNOWN;
@@ -181,7 +181,7 @@ llama_model_chameleon::graph::graph(const llama_model & model, const llm_graph_p
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output_with_img_logits", -1);
 
     // TODO: this suppresses the output of image tokens, which is required to enable text-only outputs.
