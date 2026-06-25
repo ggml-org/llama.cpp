@@ -223,8 +223,8 @@ void server_model_meta::update_caps() {
             "LLAMA_ARG_HF_REPO_FILE",
         });
         params.offline = true;
-        // params.skip_download = true; // TODO: ideally, we should validate the model here, but it takes too much time
-        common_params_handle_models(params, LLAMA_EXAMPLE_SERVER, {});
+        common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
+        common_models_handler_apply(handler, params); // note: this won't download the model because offline=true
         if (params.mmproj.path.empty()) {
             multimodal = { false, false };
         } else {
@@ -1393,9 +1393,8 @@ struct server_download_state : public common_download_callback {
 
     bool run(common_params & params) {
         try {
-            common_params_handle_models_params p;
-            p.callback = this;
-            common_params_handle_models(params, LLAMA_EXAMPLE_SERVER, p);
+            common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
+            common_models_handler_apply(handler, params, this);
             is_ok = true;
         } catch (const std::exception & e) {
             auto model_name = params.model.get_name();
@@ -1768,23 +1767,14 @@ void server_models_routes::init_routes() {
             throw std::invalid_argument("model must be a non-empty string");
         }
 
-        common_params_model model;
-        common_download_opts opts;
+        common_params p;
+        p.model.hf_repo  = name;
+        p.hf_token       = params.hf_token;
 
-        model.hf_repo        = name;
-        opts.bearer_token    = params.hf_token;
-        // note: we only check main model, no need sidecar here
-        opts.download_mmproj = false;
-        opts.download_mtp    = false;
-
-        // first, only check if the model is valid and can be downloaded
-        opts.skip_download = true;
+        // validate by fetching metadata
         bool ok = false;
         try {
-            auto validation = common_download_model(model, opts);
-            ok = !validation.model_path.empty();
-        } catch (const common_skip_download_exception &) {
-            // model is valid and will be downloaded
+            common_models_handler_init(p, LLAMA_EXAMPLE_SERVER);
             ok = true;
         } catch (...) {
             SRV_ERR("unknown error while validating model '%s'\n", name.c_str());

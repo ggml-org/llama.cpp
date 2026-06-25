@@ -38,7 +38,8 @@ int llama_download(int argc, char ** argv) {
     }
 
     try {
-        common_params_handle_models(params, LLAMA_EXAMPLE_DOWNLOAD, {});
+        common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_DOWNLOAD);
+        common_models_handler_apply(handler, params);
     } catch (const std::exception & e) {
         fprintf(stderr, "error: %s\n", e.what());
         return 1;

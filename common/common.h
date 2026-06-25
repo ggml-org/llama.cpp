@@ -291,13 +291,13 @@ struct common_params_sampling {
 };
 
 struct common_params_model {
-    std::string path        = ""; // model local path                                       // NOLINT
-    std::string url         = ""; // model url to download                                  // NOLINT
-    std::string hf_repo     = ""; // HF repo                                                // NOLINT
-    std::string hf_file     = ""; // HF file                                                // NOLINT
-    std::string docker_repo = ""; // Docker repo                                            // NOLINT
+    std::string path        = ""; // model local path
+    std::string url         = ""; // model url to download
+    std::string hf_repo     = ""; // HF repo
+    std::string hf_file     = ""; // HF file
+    std::string docker_repo = ""; // Docker repo
 
-    std::string get_name() {
+    std::string get_name() const {
         if (!hf_repo.empty()) {
             return hf_repo;
         }
@@ -305,6 +305,10 @@ struct common_params_model {
             return docker_repo;
         }
         return path;
+    }
+
+    bool empty() const {
+        return get_name().empty();
     }
 };
 
@@ -368,7 +372,7 @@ struct common_params_speculative {
     common_params_speculative_ngram_cache ngram_cache;
 
     bool has_dft() const {
-        return !draft.mparams.path.empty() || !draft.mparams.hf_repo.empty();
+        return !draft.mparams.empty();
     }
 
     uint32_t need_n_rs_seq() const {
@@ -520,7 +524,6 @@ struct common_params {
     int32_t control_vector_layer_start = -1; // layer range for control vector
     int32_t control_vector_layer_end   = -1; // layer range for control vector
     bool    offline                    = false;
-    bool    skip_download              = false; // skip model file downloading
 
     int32_t ppl_stride      = 0;     // stride for perplexity calculations. If left at 0, the pre-existing approach will be used.
     int32_t ppl_output_type = 0;     // = 0 -> ppl output is as usual, = 1 -> ppl output is num_tokens, ppl, one per line
