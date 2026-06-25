@@ -15,30 +15,13 @@
 #include "hvx-utils.h"
 #include "hex-dma.h"
 
-// IM2COL for the VLM patch-embed conv (is_2D, F32 image -> F16 columns).
-//
-// src1 image : [N, IC, IH, IW]  NCHW, F32
-// dst        : [N, OH, OW, IC*KH*KW]  F16, patch block channel-outermost
-//
-// Each (iic, ikh) kernel tap-row maps to a contiguous run of KW elements in
-// both src and dst (validated for the non-overlapping patch-embed regime),
-// so the op is a strided F32->F16 convert-copy: no permute needed.
-//
-// Two kernels:
-//   im2col_patchembed_thread     - pure-DDR convert-copy, handles any is_2D F16
-//                                  shape (incl. padding/dilation/stride edges).
-//   im2col_patchembed_dma_thread - VTCM-staged DMA kernel for the clean
-//                                  non-overlapping regime (s0==KW, s1==KH,
-//                                  p0==p1==0, d0==d1==1); faster on real
-//                                  patch-embed shapes.
-
 struct htp_im2col_context {
     struct htp_ops_context * octx;
-    uint32_t                 npatches_per_thread; // patches = N*OH*OW (pure-DDR kernel)
-    // patch-embed DMA kernel
-    uint32_t pe_rows_per_thread;  // N*OH rows per worker
-    uint32_t pe_src_row_bytes;    // one output row's source: IC*KH*IW*4, rounded 256
-    uint32_t pe_dst_row_bytes;    // one output row's dst: OW*patch_stride*2, rounded 256
+    uint32_t                 npatches_per_thread;  // patches = N*OH*OW (pure-DDR kernel)
+
+    uint32_t pe_rows_per_thread;                   // N*OH rows per worker
+    uint32_t pe_src_row_bytes;                     // one output row's source: IC*KH*IW*4, rounded 256
+    uint32_t pe_dst_row_bytes;                     // one output row's dst: OW*patch_stride*2, rounded 256
 };
 
 #define IM2COL_PATCHEMBED_BODY(FNAME, DST_CTYPE, COPY_FN, DST_ELEM, TAG)                                             \
@@ -70,7 +53,6 @@ struct htp_im2col_context {
         if (patch_start >= patch_end) {                                                                              \
             return;                                                                                                  \
         }                                                                                                            \
-        const uint64_t t1 = HAP_perf_get_qtimer_count();                                                             \
         for (uint32_t p = patch_start; p < patch_end; p++) {                                                         \
             const uint32_t iow             = p % OW;                                                                 \
             const uint32_t ioh             = (p / OW) % OH;                                                          \
@@ -100,32 +82,11 @@ struct htp_im2col_context {
                 }                                                                                                    \
             }                                                                                                        \
         }                                                                                                            \
-        const uint64_t t2 = HAP_perf_get_qtimer_count();                                                             \
-        FARF(HIGH, "im2col-" TAG " %u/%u: patches %u..%u of %u, IC=%u KHxKW=%ux%u OHxOW=%ux%u usec %u\n", ith, nth,  \
-             patch_start, patch_end, npatches, IC, KH, KW, OH, OW, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1)); \
     }
 
-IM2COL_PATCHEMBED_BODY(im2col_patchembed_thread,     __fp16, hvx_copy_f16_f32_uu, sizeof(__fp16), "f32-f16")
-IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float,  hvx_copy_f32_uu,     sizeof(float),  "f32-f32")
+IM2COL_PATCHEMBED_BODY(im2col_patchembed_thread, __fp16, hvx_copy_f16_f32_uu, sizeof(__fp16), "f32-f16")
+IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, sizeof(float), "f32-f32")
 
-
-// Patch-embed DMA kernel (clean regime: s0==KW, s1==KH, p0==p1==0, d0==d1==1,
-// F16 dst). Per output row (in,ioh): gather IC*KH source rows (each IW f32)
-// DDR->VTCM, convert OW patches VTCM->VTCM, store the packed row VTCM->DDR.
-//
-// DMA ring discipline: strictly per-row self-contained cycles.  Each iteration
-// pushes IC*KH gather descriptors, pops them all (ring now empty), computes,
-// pushes exactly one store descriptor, then flushes it (ring now empty again).
-// The ring is always empty at both the top and the bottom of every iteration,
-// so push/pop counts can never desync regardless of the number of rows.
-//
-// Overlap note: gather-to-compute overlap is intentionally dropped here in
-// favour of unambiguous FIFO correctness (dma_queue_flush drains the entire
-// ring, so a pre-loaded next-row gather would be consumed by the current row's
-// store flush).  We still get the primary bandwidth win: one fat DDR->VTCM DMA
-// per (iic,ikh) row and one fat VTCM->DDR store per output row instead of many
-// small per-patch transfers.  Overlap can be reintroduced in a follow-up once a
-// two-queue or descriptor-typed scheme is available.
 #define IM2COL_PATCHEMBED_DMA_BODY(FNAME, DST_CTYPE, COPY_FN, DST_ELEM, TAG)                                         \
     static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                             \
         struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                                \
@@ -149,7 +110,6 @@ IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float,  hvx_copy_f32_uu,   
         const uint32_t row_end          = MIN(row_start + per_thread, nrows);                                        \
         if (row_start >= row_end)                                                                                    \
             return;                                                                                                  \
-        const uint64_t t1 = HAP_perf_get_qtimer_count();                                                             \
         for (uint32_t r = row_start; r < row_end; r++) {                                                             \
             const uint32_t in  = r / OH;                                                                             \
             const uint32_t ioh = r % OH;                                                                             \
@@ -187,56 +147,55 @@ IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float,  hvx_copy_f32_uu,   
                                        OW * patch_stride * (DST_ELEM), OW * patch_stride * (DST_ELEM), 1);           \
             dma_queue_flush(dmaq);                                                                                   \
         }                                                                                                            \
-        const uint64_t t2 = HAP_perf_get_qtimer_count();                                                             \
-        FARF(HIGH, "im2col-" TAG " %u/%u: rows %u..%u of %u, IC=%u KHxKW=%ux%u OHxOW=%ux%u usec %u\n", ith, nth,     \
-             row_start, row_end, nrows, IC, KH, KW, OH, OW, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));        \
     }
 
 IM2COL_PATCHEMBED_DMA_BODY(im2col_patchembed_dma_thread,     __fp16, hvx_copy_f16_f32_uu, sizeof(__fp16), "pe-dma-f16")
 IM2COL_PATCHEMBED_DMA_BODY(im2col_patchembed_dma_f32_thread, float,  hvx_copy_f32_uu,     sizeof(float),  "pe-dma-f32")
 
-// Patch-embed DMA/compute-overlap path (default ON; beats the pure-DDR
-// im2col_patchembed_thread 1.1x-2.5x on patch-embed shapes, biggest wins on
-// large images that fall off the pure-DDR cache cliff). Handles ONLY the clean
-// non-overlapping contiguous F16 regime: is_2D, F16 dst, s0==KW, s1==KH,
-// p0==p1==0, d0==d1==1; everything else uses the pure-DDR kernel. Set to 0 to
-// always use the pure-DDR kernel. See
-// docs/superpowers/specs/2026-06-20-im2col-patchembed-dma-overlap-design.md
-#define IM2COL_PATCHEMBED_DMA 1
-
 static bool im2col_use_patchembed_dma(const struct htp_ops_context * octx) {
-    if (!IM2COL_PATCHEMBED_DMA) return false;
     const int32_t s0 = octx->op_params[0], s1 = octx->op_params[1];
     const int32_t p0 = octx->op_params[2], p1 = octx->op_params[3];
     const int32_t d0 = octx->op_params[4], d1 = octx->op_params[5];
-    const int      is_2D = octx->op_params[6] == 1;
-    if (!is_2D) return false;
-    if (octx->dst->type != HTP_TYPE_F16 && octx->dst->type != HTP_TYPE_F32) return false;
+    const int     is_2D = octx->op_params[6] == 1;
+    if (!is_2D) {
+        return false;
+    }
+    if (octx->dst->type != HTP_TYPE_F16 && octx->dst->type != HTP_TYPE_F32) {
+        return false;
+    }
     const uint32_t KH = octx->src[0]->ne[1], KW = octx->src[0]->ne[0];
-    if (s0 != (int32_t) KW || s1 != (int32_t) KH) return false; // non-overlapping
-    if (p0 != 0 || p1 != 0) return false;                        // no padding
-    if (d0 != 1 || d1 != 1) return false;                        // no dilation
+    if (s0 != (int32_t) KW || s1 != (int32_t) KH) {
+        return false;  // non-overlapping
+    }
+    if (p0 != 0 || p1 != 0) {
+        return false;  // no padding
+    }
+    if (d0 != 1 || d1 != 1) {
+        return false;  // no dilation
+    }
     return true;
 }
 
 // Sizes the per-thread 2x(src,dst) VTCM ping-pong for the patch-embed DMA path.
 // Returns false if it doesn't fit the VTCM budget (caller falls back).
-static bool im2col_patchembed_dma_fits(struct htp_ops_context * octx,
+static bool im2col_patchembed_dma_fits(struct htp_ops_context *    octx,
                                        struct htp_im2col_context * ictx,
-                                       uint32_t n_threads) {
+                                       uint32_t                    n_threads) {
     const uint32_t IC = octx->src[1]->ne[2], IW = octx->src[1]->ne[0];
     const uint32_t KH = octx->src[0]->ne[1], KW = octx->src[0]->ne[0];
-    const uint32_t OW = octx->dst->ne[1];
+    const uint32_t OW           = octx->dst->ne[1];
     const uint32_t patch_stride = IC * KH * KW;
 
-    ictx->pe_src_row_bytes = hex_round_up(IC * KH * IW * sizeof(float), 256);
+    ictx->pe_src_row_bytes  = hex_round_up(IC * KH * IW * sizeof(float), 256);
     const uint32_t dst_elem = (octx->dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
-    ictx->pe_dst_row_bytes = hex_round_up(OW * patch_stride * dst_elem, 256);
+    ictx->pe_dst_row_bytes  = hex_round_up(OW * patch_stride * dst_elem, 256);
 
     // 2 src + 2 dst buffers per thread (ping-pong).
     const uint64_t per_thread = 2ull * ictx->pe_src_row_bytes + 2ull * ictx->pe_dst_row_bytes;
-    const uint64_t total = per_thread * n_threads;
-    if (total > octx->ctx->vtcm_size) return false;
+    const uint64_t total      = per_thread * n_threads;
+    if (total > octx->ctx->vtcm_size) {
+        return false;
+    }
 
     // src buffers first, then dst buffers, in vtcm.
     octx->src1_spad.size_per_thread = 2 * ictx->pe_src_row_bytes;
@@ -257,10 +216,10 @@ int op_im2col(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t N  = src1->ne[3];
-    const uint32_t OH = dst->ne[2];
-    const uint32_t OW = dst->ne[1];
-    const uint32_t npatches = N * OH * OW;
+    const uint32_t N         = src1->ne[3];
+    const uint32_t OH        = dst->ne[2];
+    const uint32_t OW        = dst->ne[1];
+    const uint32_t npatches  = N * OH * OW;
     const uint32_t n_threads = MIN(octx->n_threads, npatches);
 
     if ((octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) || n_threads == 0) {
@@ -268,14 +227,14 @@ int op_im2col(struct htp_ops_context * octx) {
     }
 
     struct htp_im2col_context ictx = { 0 };
-    ictx.octx                = octx;
-    ictx.npatches_per_thread = (npatches + n_threads - 1) / n_threads;
+    ictx.octx                      = octx;
+    ictx.npatches_per_thread       = (npatches + n_threads - 1) / n_threads;
 
     // Clean non-overlapping patch-embed -> DMA kernel (if it fits VTCM);
     // everything else (padding/dilation/stride edges) -> pure-DDR kernel.
     if (im2col_use_patchembed_dma(octx)) {
         const uint32_t nrows = N * OH;
-        const uint32_t pth = MIN(octx->n_threads, nrows);
+        const uint32_t pth   = MIN(octx->n_threads, nrows);
         if (pth > 0 && im2col_patchembed_dma_fits(octx, &ictx, pth)) {
             ictx.pe_rows_per_thread = (nrows + pth - 1) / pth;
             if (dst->type == HTP_TYPE_F16) {
