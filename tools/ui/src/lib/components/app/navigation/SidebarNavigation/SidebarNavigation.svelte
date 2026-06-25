@@ -14,6 +14,7 @@
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { RouterService } from '$lib/services/router.service';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { TooltipSide } from '$lib/enums';
@@ -34,6 +35,14 @@
 
 	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
 	const isOnMobile = $derived(isMobile.current);
+	const alwaysShowOnDesktop = $derived(config().alwaysShowSidebarOnDesktop as boolean);
+
+	// Keep the sidebar expanded on desktop when the user pins it open
+	$effect(() => {
+		if (alwaysShowOnDesktop && !isOnMobile) {
+			isExpandedMode = true;
+		}
+	});
 
 	function toggleExpandedMode() {
 		isExpandedMode = !isExpandedMode;
@@ -183,7 +192,7 @@
 				/>
 			</div>
 
-			{#if isExpandedMode || isOnMobile}
+			{#if isOnMobile || (isExpandedMode && !alwaysShowOnDesktop)}
 				<div
 					class="flex items-center transition-all duration-150 ease-out {isMobile.current &&
 					!isExpandedMode
