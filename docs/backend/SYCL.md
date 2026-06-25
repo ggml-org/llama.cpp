@@ -413,6 +413,15 @@ In two device selection modes, the default SYCL backend is level_zero, you can c
 |------------------|----------------------------------------|
 | Single device    | --split-mode none --main-gpu DEVICE_ID |
 | Multiple devices | --split-mode layer (default)           |
+| Multiple devices | --split-mode tensor (tensor parallelism) |
+
+`--split-mode tensor` (tensor parallelism) shards each layer across the selected
+GPUs. It requires flash attention, which is auto-enabled when `--flash-attn` is
+left at its default `auto`, so `--split-mode tensor` works out of the box.
+Passing `--flash-attn off` together with `--split-mode tensor` is rejected at
+context creation. The default `f16` KV cache is recommended. Tensor parallelism
+is currently optimized for 2 GPUs; other device counts fall back to a generic
+all-reduce.
 
 Examples:
 
@@ -715,6 +724,15 @@ In two device selection modes, the default SYCL backend is level_zero, you can c
 |------------------|----------------------------------------|
 | Single device    | --split-mode none --main-gpu DEVICE_ID |
 | Multiple devices | --split-mode layer (default)           |
+| Multiple devices | --split-mode tensor (tensor parallelism) |
+
+`--split-mode tensor` (tensor parallelism) shards each layer across the selected
+GPUs. It requires flash attention, which is auto-enabled when `--flash-attn` is
+left at its default `auto`, so `--split-mode tensor` works out of the box.
+Passing `--flash-attn off` together with `--split-mode tensor` is rejected at
+context creation. The default `f16` KV cache is recommended. Tensor parallelism
+is currently optimized for 2 GPUs; other device counts fall back to a generic
+all-reduce.
 
 Examples:
 
