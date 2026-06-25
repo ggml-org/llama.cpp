@@ -308,3 +308,6 @@ if (TARGET gguf-model-data)
     target_link_libraries(export-graph-ops PRIVATE gguf-model-data)
     target_compile_definitions(export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
+
+# test-shared-kv-quant-imatrix: regression test for shared-KV models + imatrix-dependent quant
+llama_build_and_test(test-shared-kv-quant-imatrix.cpp)
