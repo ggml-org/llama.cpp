@@ -2399,6 +2399,13 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
     data.thinking_start_tag = "<think>";
     data.thinking_end_tag   = "</think>";
 
+    data.message_delimiters = {
+        { COMMON_CHAT_ROLE_ASSISTANT, "<|im_start|>assistant"             },
+        { COMMON_CHAT_ROLE_TOOL,      "<|im_start|>user\n<tool_response>" },
+        { COMMON_CHAT_ROLE_USER,      "<|im_start|>user"                  },
+        { COMMON_CHAT_ROLE_SYSTEM,    "<|im_start|>system"                },
+    };
+
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
     auto has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
