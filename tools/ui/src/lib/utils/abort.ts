@@ -66,9 +66,7 @@ export function isAbortError(error: unknown): boolean {
 		if (error.name === ABORT_ERROR_NAME) {
 			return true;
 		}
-		// browser specific patterns emitted when a fetch reader is interrupted by page
-		// unload, navigation, or transient network drop. these are functionally aborts,
-		// not actionable application errors, so they should not surface as red console logs
+		// these patterns are functionally aborts, keep them out of the red console
 		if (error instanceof TypeError) {
 			const msg = error.message ?? '';
 			if (ABORT_LIKE_MESSAGE_PATTERNS.some((re) => re.test(msg))) return true;

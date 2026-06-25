@@ -335,7 +335,7 @@ export class ChatService {
 			const headers: Record<string, string> = { ...getJsonHeaders() };
 			// tag streaming requests with the conversation id, this single header is the opt in for the
 			// server side replay buffer and powers discoverActiveStream on tab reopen. with an explicit
-			// model the ::model suffix lets the router skip the loopback probe
+			// model the ::model suffix keeps the per model session distinct
 			if (stream && conversationId) {
 				headers['X-Conversation-Id'] = streamIdentity(conversationId, options.model);
 			}
@@ -936,10 +936,9 @@ export class ChatService {
 				onConnectionState?.(StreamConnectionState.RESUMING);
 				madeProgress = false;
 
-				// the server resends starting at bytesParsed, discard any partial line we held
-				// it will be retransmitted from a clean line boundary. reuse the model the POST was
-				// originally tagged with, the dropdown may have changed since but the server side
-				// identity is frozen at POST time
+				// the server resends starting at bytesParsed, discard any partial line we held, it
+				// will be retransmitted from a clean line boundary. reuse the frozen model, not the
+				// live dropdown
 				const resumeResp = await ChatService.resumeStream(
 					conversationId,
 					abortSignal,

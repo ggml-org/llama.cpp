@@ -91,9 +91,7 @@ class ChatStore {
 	// off when one conv finishes while another is still streaming. mirrors chatLoadingStates
 	// in scope but tracks the attach + tee replay path specifically
 	private attachingConvs = new SvelteSet<string>();
-	// in-flight discoverActiveStream guard, keyed by conv id. prevents a fast remount + visibility
-	// race from launching two concurrent attaches on the same conv (which would dup chunks into
-	// the same DB message)
+	// in-flight discoverActiveStream guard, keyed by conv id
 	private discoveringConvs = new SvelteSet<string>();
 	private abortControllers = new SvelteMap<string, AbortController>();
 	private preEncodeAbortController: AbortController | null = null;
@@ -200,8 +198,7 @@ class ChatStore {
 		if (!convId) return null;
 		let listResp: Response;
 		try {
-			// POST the one conv id we are probing, the server only returns a match if it owns it,
-			// never lists ids the caller did not already provide
+			// POST the one conv id we are probing
 			listResp = await fetch(`./v1/streams/lookup`, {
 				method: 'POST',
 				headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
@@ -353,9 +350,8 @@ class ChatStore {
 			writeActive({ content: '', reasoningContent: undefined });
 		}
 
-		// extract the model suffix from the server side identity, the resume calls inside
-		// handleStreamResponse must reuse the model the session was originally tagged with,
-		// not the current dropdown selection which may have changed since
+		// extract the model suffix, the resume calls in handleStreamResponse must reuse the model
+		// the session was tagged with, not the live dropdown
 		const sepIdx = id.indexOf('::');
 		const attachedModel: string | null = sepIdx === -1 ? null : id.slice(sepIdx + 2);
 		this.setChatStreaming(convId, existingContent, targetMessageId, attachedModel);
@@ -647,18 +643,15 @@ class ChatStore {
 			console.warn('syncRemoteRunningStreams DB read failed:', e);
 			return;
 		}
-		// only ask about conv ids the user already owns. the server never lists ids the caller did
-		// not provide, so a random foreign UUID stays unguessable
+		// only ask about conv ids the user already owns
 		if (ids.length === 0) {
 			for (const id of Array.from(this.remoteRunningConvs)) {
 				this.remoteRunningConvs.delete(id);
 			}
 			return;
 		}
-		// the lookup is keyed by the identity frozen at POST time (conv::model when the stream
-		// carried an explicit model), rebuild it per conv from the persisted state so a running
-		// session started with a model still matches. a single model conv stays a bare id, and
-		// the server response is mapped back to the bare id below for the sidebar set
+		// rebuild the frozen conv::model identity per conv so a session started with a model still
+		// matches. the server response is mapped back to the bare id below for the sidebar set
 		const lookupIds = ids.map((id) =>
 			ChatService.resumeStreamIdentity(id, ChatService.getStreamState(id), null)
 		);
@@ -680,9 +673,7 @@ class ChatStore {
 		const running = new SvelteSet<string>();
 		for (const s of sessions) {
 			if (s && !s.is_done && typeof s.conversation_id === 'string' && s.conversation_id) {
-				// strip the optional ::model suffix, the sidebar lookup is keyed by the bare conv id
-				// straight from the DB. without this the sidebar spinner never matches and stays off
-				// when the running session was started with an explicit model
+				// strip the optional ::model suffix, the sidebar set is keyed by the bare conv id
 				const sepIdx = s.conversation_id.indexOf('::');
 				const bareId = sepIdx === -1 ? s.conversation_id : s.conversation_id.slice(0, sepIdx);
 				running.add(bareId);
@@ -1410,10 +1401,9 @@ class ChatStore {
 	async stopGenerationForChat(convId: string): Promise<void> {
 		await this.savePartialResponseIfNeeded(convId);
 		this.setStreamingActive(false);
-		// tell the server to stop the generation, not just to drop the HTTP socket. without this
-		// the detached drain keeps producing tokens until eos or max_tokens. use the model captured
-		// when the session started rather than the current dropdown, the dropdown may have changed
-		// since and the server side identity (conv id plus ::model suffix) is frozen at POST time
+		// tell the server to stop the generation, not just drop the HTTP socket. without this the
+		// detached drain keeps producing tokens until eos or max_tokens. use the frozen identity
+		// captured when the session started, not the live dropdown
 		const streamStateForStop = this.chatStreamingStates.get(convId);
 		const modelForStop = streamStateForStop?.model ?? selectedModelName();
 		void ChatService.cancelServerStream(convId, modelForStop);
