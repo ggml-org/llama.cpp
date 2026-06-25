@@ -1694,8 +1694,8 @@ struct clip_model_loader {
                 if (hparams.image_size > 65536) {
                     throw std::runtime_error(string_format("%s: image_size (%d) is too large (max 65536)\n", __func__, hparams.image_size));
                 }
-                if (0 <= hparams.patch_size && hparams.patch_size < 65536) {
-                    throw std::runtime_error(string_format("%s: patch_size (%d) must be greater than 0 and less than 65536\n", __func__, hparams.patch_size));
+                if (hparams.patch_size <= 0 || hparams.patch_size >= 65536) {
+                    throw std::runtime_error(string_format("%s: patch_size (%d) must be positive and less than 65536\n", __func__, hparams.patch_size));
                 }
                 if (hparams.n_embd <= 0) {
                     throw std::runtime_error(string_format("%s: n_embd (%d) must be greater than 0\n", __func__, hparams.n_embd));
@@ -1703,7 +1703,7 @@ struct clip_model_loader {
                 if (hparams.image_max_pixels < hparams.image_min_pixels) {
                     throw std::runtime_error(string_format("%s: image_max_pixels (%d) is less than image_min_pixels (%d)\n", __func__, hparams.image_max_pixels, hparams.image_min_pixels));
                 }
-                if (0 <= hparams.n_merge && hparams.n_merge < 65536) {
+                if (hparams.n_merge < 0 || hparams.n_merge >= 65536) {
                     throw std::runtime_error(string_format("%s: n_merge (%d) must be greater than 0 and less than 65536\n", __func__, hparams.n_merge));
                 }
             }
