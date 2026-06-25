@@ -432,6 +432,10 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
     if (msa_decode) {
         ggml_tensor * kqm0 = inp_attn->get_kq_mask();
         const int64_t n_kv0 = kqm0->ne[0];
+        GGML_ASSERT(n_kv0 % mm.msa_p.blk == 0 &&
+            "MSA: KV/mask n_kv must be a multiple of indexer.block_size (128); "
+            "the flash-attention KV padding must be a multiple of the block size. "
+            "A non-multiple would silently drop the partial tail block.");
         const int64_t nblk0 = n_kv0 / mm.msa_p.blk;
         auto loc = std::make_unique<llm_graph_input_msa_local>(mm.msa_p.blk, mm.msa_p.local, nblk0);
         loc->bias = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, nblk0, n_tokens);   // [nblk,1] at decode
@@ -506,6 +510,10 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                 const int64_t n_kv = kqm->ne[0];
                 
                 // --- DEFAULT: per-group decomposed (no head-amax) ---
+                GGML_ASSERT(n_kv0 % mm.msa_p.blk == 0 &&
+                    "MSA: KV/mask n_kv must be a multiple of indexer.block_size (128); "
+                    "the flash-attention KV padding must be a multiple of the block size. "
+                    "A non-multiple would silently drop the partial tail block.");
                 const int blk = mm.msa_p.blk;
 
                 ggml_tensor * ik2d = ggml_reshape_2d(ctx0, ik_kv, n_idx_dim, n_kv);
