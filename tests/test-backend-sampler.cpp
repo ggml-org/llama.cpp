@@ -931,6 +931,148 @@ static void compare_penalties_logits(
     GGML_ASSERT(n_mismatch == 0);
 }
 
+static void compare_top_k_penalties_logits(
+        const test_params & params,
+        int32_t k,
+        int32_t penalty_last_n,
+        float penalty_repeat,
+        float penalty_freq,
+        float penalty_present,
+        const std::string & prompt) {
+    const auto * model = params.model.get();
+    const auto * vocab = llama_model_get_vocab(model);
+    const int n_vocab = llama_vocab_n_tokens(vocab);
+    const int seq_id = 0;
+
+    GGML_ASSERT(n_vocab > k);
+
+    std::vector<float> raw_logits(n_vocab);
+    {
+        std::vector<llama_sampler_seq_config> empty_configs;
+        test_context raw_ctx(params, empty_configs);
+
+        if (!raw_ctx.decode({{ seq_id, prompt }})) {
+            GGML_ASSERT(false && "Failed to decode for raw logits");
+        }
+
+        const int32_t batch_idx = raw_ctx.idx_for_seq(seq_id);
+        float * logits = llama_get_logits_ith(raw_ctx.ctx.get(), batch_idx);
+        GGML_ASSERT(logits != nullptr);
+        std::memcpy(raw_logits.data(), logits, (size_t) n_vocab * sizeof(float));
+    }
+
+    std::vector<llama_token_data> top_k_data;
+    top_k_data.reserve(n_vocab);
+    for (llama_token token = 0; token < n_vocab; ++token) {
+        top_k_data.push_back({ token, raw_logits[token], 0.0f });
+    }
+
+    llama_sampler_ptr top_k(llama_sampler_init_top_k(k));
+    llama_token_data_array top_k_p = { top_k_data.data(), top_k_data.size(), -1, false };
+    llama_sampler_apply(top_k.get(), &top_k_p);
+    GGML_ASSERT(top_k_p.size == (size_t) k);
+
+    const llama_token penalized_token = top_k_p.data[0].id;
+
+    auto accept_history = [&](llama_sampler * smpl) {
+        accept_prompt(smpl, vocab, prompt);
+
+        const int32_t n_extra = std::min<int32_t>(16, n_vocab);
+        GGML_ASSERT(n_extra > k);
+        for (llama_token token = 0; token < n_extra; ++token) {
+            llama_sampler_accept(smpl, token);
+        }
+
+        llama_sampler_accept(smpl, penalized_token);
+        llama_sampler_accept(smpl, penalized_token);
+    };
+
+    struct llama_sampler_chain_params cpu_chain_params = llama_sampler_chain_default_params();
+    llama_sampler_ptr cpu_chain(llama_sampler_chain_init(cpu_chain_params));
+    llama_sampler_chain_add(cpu_chain.get(), llama_sampler_init_top_k(k));
+    llama_sampler_chain_add(cpu_chain.get(), llama_sampler_init_penalties(
+                penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+    accept_history(cpu_chain.get());
+
+    std::vector<llama_token_data> expected_data;
+    expected_data.reserve(n_vocab);
+    for (llama_token token = 0; token < n_vocab; ++token) {
+        expected_data.push_back({ token, raw_logits[token], 0.0f });
+    }
+
+    llama_token_data_array expected_p = { expected_data.data(), expected_data.size(), -1, false };
+    llama_sampler_apply(cpu_chain.get(), &expected_p);
+    GGML_ASSERT(expected_p.size == (size_t) k);
+
+    std::unordered_map<llama_token, float> expected_logits;
+    expected_logits.reserve(expected_p.size);
+    for (size_t i = 0; i < expected_p.size; ++i) {
+        expected_logits[expected_p.data[i].id] = expected_p.data[i].logit;
+    }
+
+    GGML_ASSERT(expected_logits.find(penalized_token) != expected_logits.end());
+    GGML_ASSERT(fabsf(expected_logits[penalized_token] - raw_logits[penalized_token]) > 1e-6f);
+
+    struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
+    llama_sampler_ptr backend_chain(llama_sampler_chain_init(backend_chain_params));
+    llama_sampler_chain_add(backend_chain.get(), llama_sampler_init_top_k(k));
+    llama_sampler_chain_add(backend_chain.get(), llama_sampler_init_penalties(
+                penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+    accept_history(backend_chain.get());
+
+    std::vector<float> backend_logits(k);
+    std::vector<llama_token> backend_candidates(k);
+    {
+        std::vector<llama_sampler_seq_config> backend_configs = {{ seq_id, backend_chain.get() }};
+        test_context backend_ctx(params, backend_configs);
+
+        if (!backend_ctx.decode({{ seq_id, prompt }})) {
+            GGML_ASSERT(false && "Failed to decode for backend top-k penalties");
+        }
+
+        llama_synchronize(backend_ctx.ctx.get());
+
+        const int32_t backend_idx = backend_ctx.idx_for_seq(seq_id);
+        float * logits = llama_get_sampled_logits_ith(backend_ctx.ctx.get(), backend_idx);
+        llama_token * candidates = llama_get_sampled_candidates_ith(backend_ctx.ctx.get(), backend_idx);
+        GGML_ASSERT(logits != nullptr);
+        GGML_ASSERT(candidates != nullptr);
+
+        const uint32_t n_backend_logits = llama_get_sampled_logits_count_ith(backend_ctx.ctx.get(), backend_idx);
+        const uint32_t n_backend_candidates = llama_get_sampled_candidates_count_ith(backend_ctx.ctx.get(), backend_idx);
+        GGML_ASSERT(n_backend_logits == (uint32_t) k);
+        GGML_ASSERT(n_backend_candidates == (uint32_t) k);
+
+        std::memcpy(backend_logits.data(), logits, (size_t) k * sizeof(float));
+        std::memcpy(backend_candidates.data(), candidates, (size_t) k * sizeof(llama_token));
+    }
+
+    int n_mismatch = 0;
+    float max_diff = 0.0f;
+    for (int32_t i = 0; i < k; ++i) {
+        const llama_token token = backend_candidates[i];
+        const auto it = expected_logits.find(token);
+        if (it == expected_logits.end()) {
+            printf("top-k penalties missing backend token %d from CPU result\n", token);
+            ++n_mismatch;
+            continue;
+        }
+
+        const float diff = fabsf(it->second - backend_logits[i]);
+        max_diff = std::max(max_diff, diff);
+        if (diff > 1e-3f) {
+            if (n_mismatch < 5) {
+                printf("top-k penalties mismatch token %d: cpu=%.6f backend=%.6f diff=%.6f\n",
+                        token, it->second, backend_logits[i], diff);
+            }
+            ++n_mismatch;
+        }
+    }
+
+    printf("top-k penalties logits: max_diff=%.6f n_mismatch=%d\n", max_diff, n_mismatch);
+    GGML_ASSERT(n_mismatch == 0);
+}
+
 static void test_backend_penalties_sampling(const test_params & params) {
     printf("Testing backend penalties (repeat + freq + presence)\n");
     compare_penalties_logits(params, 64, 1.1f, 0.5f, 0.25f, "Hello Hello world");
@@ -952,6 +1094,9 @@ static void test_backend_penalties_sampling(const test_params & params) {
             llama_sampler_accept(smpl, tok);
         }
     });
+
+    printf("Testing backend top-k followed by penalties\n");
+    compare_top_k_penalties_logits(params, 8, 64, 1.1f, 0.5f, 0.25f, "Hello");
 
     printf("backend penalties sampling test PASSED\n");
 }
