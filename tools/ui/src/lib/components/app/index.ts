@@ -4,6 +4,7 @@ export * from './chat';
 export * from './content';
 export * from './dialogs';
 export * from './forms';
+export * from './manage';
 export * from './mcp';
 export * from './misc';
 export * from './prompts';

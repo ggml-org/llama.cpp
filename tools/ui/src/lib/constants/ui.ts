@@ -26,13 +26,13 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		icon: McpLogo,
 		tooltip: 'MCP Servers',
 		route: ROUTES.MCP_SERVERS,
-		activeRouteId: '/mcp-servers'
+		activeRouteId: '/(manage)/mcp-servers'
 	},
 	{
 		icon: ScanText,
 		tooltip: 'Prompts',
 		route: ROUTES.PROMPTS,
-		activeRouteId: '/prompts'
+		activeRouteId: '/(manage)/prompts'
 	},
 	{
 		icon: Settings,
