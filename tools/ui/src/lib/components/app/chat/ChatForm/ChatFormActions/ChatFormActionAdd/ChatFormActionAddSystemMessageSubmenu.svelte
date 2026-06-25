@@ -9,16 +9,16 @@
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { ContentPartType } from '$lib/enums';
 	import { PROMPT_CONTENT_SEPARATOR } from '$lib/constants';
-	import type { MCPPromptInfo, MCPServerSettingsEntry, PromptMessage } from '$lib/types';
+	import type { MCPPromptInfo, PromptMessage } from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
 
 	interface Props {
 		onSystemPromptClick?: () => void;
 		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
 		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
-		// Preload MCP prompts when the surrounding dropdown is opened, so the
-		// items are already resolved by the time the user reaches this submenu
-		// (instead of appearing with a delay on first hover).
+		// Kick off MCP initialization when the wrapping dropdown opens so prompts
+		// are available by the time the user hovers into this submenu. The
+		// result comes from `mcpStore.allPrompts`, no fetch happens here.
 		preloadOnOpen?: boolean;
 	}
 
@@ -44,32 +44,21 @@
 		);
 	});
 
-	// Bind open state to load MCP prompts when the submenu opens
 	let subOpen = $state(false);
 
-	// As soon as the wrapping DropdownMenu becomes visible, kick off the MCP
-	// prompts fetch so the items are ready before the user hovers into this
-	// submenu. The fetch is deduped inside loadMcpPrompts().
+	// Trigger MCP connection establishment as the wrapping dropdown opens.
+	// Prompts are pulled eagerly inside `MCPService.connect` and surfaced
+	// synchronously via `mcpStore.allPrompts`, so the submenu renders
+	// without a fetch on open.
 	$effect(() => {
 		if (preloadOnOpen) {
-			void loadMcpPrompts();
+			void mcpStore.ensureInitialized(conversationsStore.getAllMcpServerOverrides());
 		}
 	});
 
-	// MCP prompts as a flat list
-	let mcpPrompts = $state<
-		{
-			prompt: MCPPromptInfo;
-			server: MCPServerSettingsEntry | undefined;
-			serverLabel: string;
-			faviconUrl: string | null;
-		}[]
-	>([]);
-
-	// Build server map for lookups
 	let serverSettingsMap = $derived.by(() => {
 		const servers = mcpStore.getServers();
-		const map = new SvelteMap<string, MCPServerSettingsEntry>();
+		const map = new SvelteMap<string, ReturnType<typeof mcpStore.getServers>[number]>();
 		for (const server of servers) {
 			map.set(server.id, server);
 		}
@@ -77,35 +66,17 @@
 	});
 
 	let filteredMcpPrompts = $derived.by(() => {
-		const q = searchQuery.trim().toLowerCase();
-		if (!q) return mcpPrompts;
-		return mcpPrompts.filter((entry) => {
-			const name = (entry.prompt.title || entry.prompt.name || '').toLowerCase();
-			const description = (entry.prompt.description || '').toLowerCase();
-			const server = entry.serverLabel.toLowerCase();
-			return name.includes(q) || description.includes(q) || server.includes(q);
-		});
-	});
+		const sortedServers = mcpStore.getServersSorted();
+		const serverOrderMap = new Map(sortedServers.map((server, index) => [server.id, index]));
 
-	async function loadMcpPrompts() {
-		if (mcpPrompts.length > 0) return;
-
-		try {
-			const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-			await mcpStore.ensureInitialized(perChatOverrides);
-
-			const allPrompts = await mcpStore.getAllPrompts();
-
-			const sortedServers = mcpStore.getServersSorted();
-			const serverOrderMap = new Map(sortedServers.map((server, index) => [server.id, index]));
-
-			const sorted = [...allPrompts].sort((a, b) => {
+		const entries = mcpStore.allPrompts
+			.slice()
+			.sort((a, b) => {
 				const orderA = serverOrderMap.get(a.serverName) ?? Number.MAX_SAFE_INTEGER;
 				const orderB = serverOrderMap.get(b.serverName) ?? Number.MAX_SAFE_INTEGER;
 				return orderA - orderB;
-			});
-
-			mcpPrompts = sorted.map((prompt) => {
+			})
+			.map((prompt) => {
 				const server = serverSettingsMap.get(prompt.serverName);
 				return {
 					prompt,
@@ -114,17 +85,16 @@
 					faviconUrl: server ? mcpStore.getServerFavicon(server.id) : null
 				};
 			});
-		} catch (error) {
-			console.warn('[ChatFormActionAddSystemMessageSubmenu] Failed to load MCP prompts:', error);
-			mcpPrompts = [];
-		}
-	}
 
-	function handleSubmenuOpen(open: boolean) {
-		if (open) {
-			loadMcpPrompts();
-		}
-	}
+		const q = searchQuery.trim().toLowerCase();
+		if (!q) return entries;
+		return entries.filter((entry) => {
+			const name = (entry.prompt.title || entry.prompt.name || '').toLowerCase();
+			const description = (entry.prompt.description || '').toLowerCase();
+			const server = entry.serverLabel.toLowerCase();
+			return name.includes(q) || description.includes(q) || server.includes(q);
+		});
+	});
 
 	function handlePromptClick(promptId: string) {
 		const prompt = promptsStore.getPrompt(promptId);
@@ -137,11 +107,7 @@
 		onSystemPromptClick?.();
 	}
 
-	async function handleMcpPromptClick(entry: {
-		prompt: MCPPromptInfo;
-		server: MCPServerSettingsEntry | undefined;
-		serverLabel: string;
-	}) {
+	async function handleMcpPromptClick(entry: (typeof filteredMcpPrompts)[number]) {
 		// Prompts with arguments need a picker detour (for the argument form);
 		// prompts without arguments post directly so the conversation gets the
 		// system prompt instantly, like the library prompt branch above.
@@ -183,7 +149,7 @@
 	}
 </script>
 
-<DropdownMenu.Sub bind:open={subOpen} onOpenChange={handleSubmenuOpen}>
+<DropdownMenu.Sub bind:open={subOpen}>
 	<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 		<MessageSquare class="h-4 w-4" />
 
@@ -191,7 +157,7 @@
 	</DropdownMenu.SubTrigger>
 
 	<DropdownMenu.SubContent class="w-72">
-		{#if prompts.length > 0 || mcpPrompts.length > 0}
+		{#if prompts.length > 0 || mcpStore.allPrompts.length > 0}
 			<div class="mb-1.5">
 				<SearchInputMini
 					bind:value={searchQuery}
@@ -273,7 +239,7 @@
 			{/each}
 		{/if}
 
-		{#if searchQuery.trim() !== '' && (prompts.length > 0 || mcpPrompts.length > 0) && filteredLibraryPrompts.length === 0 && filteredMcpPrompts.length === 0}
+		{#if searchQuery.trim() !== '' && (prompts.length > 0 || mcpStore.allPrompts.length > 0) && filteredLibraryPrompts.length === 0 && filteredMcpPrompts.length === 0}
 			<div class="px-2 py-2 text-xs text-muted-foreground">No matches</div>
 		{/if}
 	</DropdownMenu.SubContent>

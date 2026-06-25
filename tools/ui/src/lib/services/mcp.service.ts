@@ -38,6 +38,7 @@ import type {
 	MCPPhaseCallback,
 	MCPConnectionLog,
 	MCPServerInfo,
+	MCPPromptInfo,
 	MCPResource,
 	MCPResourceTemplate,
 	MCPResourceContent,
@@ -751,12 +752,42 @@ export class MCPService {
 			client,
 			transport,
 			tools: [],
+			prompts: [],
 			serverName,
 			transportType,
 			connectionTimeMs: 0,
 			requestTimeoutMs:
 				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000
 		});
+
+		// Prompts are only declared when the server reports the capability;
+		// skip the round-trip when we know it would just return [].
+		let prompts: MCPPromptInfo[] = [];
+		if (serverCapabilities?.prompts) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+				console.log(`[MCPService][${serverName}] Listing prompts...`);
+			}
+
+			try {
+				const result = await client.listPrompts();
+
+				prompts = (result.prompts ?? []).map((prompt) => ({
+					name: prompt.name,
+					description: prompt.description,
+					title: prompt.title,
+					serverName,
+					arguments: prompt.arguments?.map((arg) => ({
+						name: arg.name,
+						description: arg.description,
+						required: arg.required
+					}))
+				}));
+			} catch (error) {
+				if (this.isSessionExpiredError(error)) throw error;
+
+				console.warn(`[MCPService][${serverName}] Failed to list prompts:`, error);
+			}
+		}
 
 		const connectionTimeMs = Math.round(performance.now() - startTime);
 
@@ -765,12 +796,12 @@ export class MCPService {
 			MCPConnectionPhase.CONNECTED,
 			this.createLog(
 				MCPConnectionPhase.CONNECTED,
-				`Connection established with ${tools.length} tools (${connectionTimeMs}ms)`
+				`Connection established with ${tools.length} tools and ${prompts.length} prompts (${connectionTimeMs}ms)`
 			)
 		);
 		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 			console.log(
-				`[MCPService][${serverName}] Initialization complete with ${tools.length} tools in ${connectionTimeMs}ms`
+				`[MCPService][${serverName}] Initialization complete with ${tools.length} tools / ${prompts.length} prompts in ${connectionTimeMs}ms`
 			);
 		}
 
@@ -778,6 +809,7 @@ export class MCPService {
 			client,
 			transport,
 			tools,
+			prompts,
 			serverName,
 			transportType,
 			serverInfo,
