@@ -163,7 +163,6 @@ class Keys:
         NUM_ADAPTERS                      = "{arch}.num_adapters"
         ADAPTER_TOKEN_IDS                 = "{arch}.adapter_token_ids"
         ADAPTER_SUBSTITUTE_TOKEN_IDS      = "{arch}.adapter_substitute_token_ids"
-        ADAPTER_RANKS                     = "{arch}.adapter_ranks"
         MAX_LORA_RANK                     = "{arch}.max_lora_rank"
 
     class Attention:
