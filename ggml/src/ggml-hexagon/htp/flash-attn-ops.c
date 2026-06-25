@@ -198,7 +198,6 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
     if (ir0 >= ir1) return;
 
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
 
     dma_queue * dma = octx->ctx->dma[ith];
 
@@ -278,7 +277,9 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
         uint8_t * q_ptr_vtcm = dma_queue_pop(dma).dst;
         if (factx->is_q_fp32) {
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir);
             hvx_copy_f16_f32_aa(q_ptr_vtcm, q_ptr_vtcm, DK);  // inplace convert f32 to f16
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir);
         }
 
         const HVX_Vector slope_vec = hvx_vec_splat_f16(slope);
@@ -290,6 +291,8 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             uint8_t * k_base = dma_queue_pop(dma).dst; // K
             uint8_t * v_base = dma_queue_pop(dma).dst; // V
             __fp16  * m_base = mask ? dma_queue_pop(dma).dst : NULL; // M
+
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir);
 
             // Inner loop processing the block from VTCM
             uint32_t ic = 0;
@@ -415,8 +418,10 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                     dma_cache_push(dma, &m_cache, m_src, next_block_size * 2, next_block_size * 2, next_block_size * 2, 1);
                 }
             }
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir);
         }
 
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir);
         // sinks
         float M = hvx_vec_get_f32(M_vec);
         float S = hvx_vec_get_f32(S_vec);
@@ -458,8 +463,8 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
         } else if (dst->type == HTP_TYPE_F16) {
             hvx_copy_f16_f32_ua(dst_ptr, (uint8_t *) VKQ32, DV);
         }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir);
     }
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
 }
 
 // ============================================================================
