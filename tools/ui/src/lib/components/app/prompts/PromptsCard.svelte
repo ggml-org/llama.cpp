@@ -187,7 +187,7 @@
 
 							<!-- Content section -->
 							<div
-								class="relative transition-all duration-300 {isExpanded
+								class="relative overflow-hidden transition-all duration-300 {isExpanded
 									? 'cursor-text select-text'
 									: 'select-none'}"
 								style={!isExpanded && showExpandButton
@@ -211,18 +211,6 @@
 									<div
 										class="pointer-events-none absolute right-0 bottom-0 left-0 h-48 bg-gradient-to-t from-muted to-transparent"
 									></div>
-
-									<div
-										class="pointer-events-none absolute right-0 bottom-4 left-0 flex justify-center opacity-0 transition-opacity group-hover/expand:opacity-100"
-									>
-										<Button
-											class="rounded-full px-4 py-1.5 text-xs shadow-md"
-											size="sm"
-											variant="outline"
-										>
-											Show full prompt
-										</Button>
-									</div>
 								{/if}
 							</div>
 
