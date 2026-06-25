@@ -1678,6 +1678,9 @@ class TextModel(ModelBase):
         if chkhsh == "9dcf830ee9990cdbf78cc523a5f7bd9ad8f3f9890c2d3581d2785ad10f07049d":
             # ref: https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base
             res = "mellum2"
+        if chkhsh == "5841594bd6a8eeecd7207aeec6570831cc97ffaeba51e908bdaf560113177bae":
+            # ref: https://huggingface.co/baidu/Unlimited-OCR
+            res = "deepseek-v3"
 
         if res is None:
             logger.warning("\n")
