@@ -277,9 +277,9 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
         uint8_t * q_ptr_vtcm = dma_queue_pop(dma).dst;
         if (factx->is_q_fp32) {
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir);
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, ir);
             hvx_copy_f16_f32_aa(q_ptr_vtcm, q_ptr_vtcm, DK);  // inplace convert f32 to f16
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir);
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, ir);
         }
 
         const HVX_Vector slope_vec = hvx_vec_splat_f16(slope);
@@ -292,7 +292,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             uint8_t * v_base = dma_queue_pop(dma).dst; // V
             __fp16  * m_base = mask ? dma_queue_pop(dma).dst : NULL; // M
 
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir);
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_QK, ir);
 
             // Inner loop processing the block from VTCM
             uint32_t ic = 0;
@@ -343,7 +343,9 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 sb_scores[iv] = scores;
                 v_max = hvx_vec_reduce_max2_f32(scores, v_max); // All lanes have block max
             }
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_QK, ir);
 
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
             {
                 // 4. Online Softmax Update
                 HVX_Vector M_new_vec = Q6_Vsf_vmax_VsfVsf(v_max, M_vec);
@@ -360,6 +362,9 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                     HVX_Vector P = hvx_vec_exp_f32(scores_shifted);
 
                     p_sum_vec = HVX_OP_ADD_F32(p_sum_vec, P);
+
+                    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
+                    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_PV, ir);
 
                     // 5. Accumulate V
                     __fp16 __attribute__((aligned(VLEN))) p_arr[VLEN_FP16];
@@ -392,10 +397,16 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                         const uint8_t * v_ptr = v_base + cur_ic * factx->size_v_row_padded;
                         hvx_mad_f32_f16_aa_rx2(VKQ32, v_ptr, v_ptr + factx->size_v_row_padded, (p_arr + j), (p_arr + j + 1), DV);
                     }
+                    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_PV, ir);
+                    if (ic2 + VLEN_FP32 < current_block_size) {
+                        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
+                    }
                 }
 
+                htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
                 p_sum_vec = hvx_vec_reduce_sum_f32(p_sum_vec);
                 S_vec = HVX_OP_ADD_F32(HVX_OP_MUL_F32(S_vec, ms_vec), p_sum_vec);
+                htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
             }
 
             // Issue DMA for next+1 block (if exists)
@@ -418,10 +429,9 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                     dma_cache_push(dma, &m_cache, m_src, next_block_size * 2, next_block_size * 2, next_block_size * 2, 1);
                 }
             }
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir);
         }
 
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir);
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, ir);
         // sinks
         float M = hvx_vec_get_f32(M_vec);
         float S = hvx_vec_get_f32(S_vec);
@@ -463,7 +473,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
         } else if (dst->type == HTP_TYPE_F16) {
             hvx_copy_f16_f32_ua(dst_ptr, (uint8_t *) VKQ32, DV);
         }
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, ir);
     }
 }
 
@@ -493,10 +503,10 @@ static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) 
     }
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (args->kv_start + start));
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) (args->kv_start + start));
     hmx_interleave_rows_to_tiles(factx->vtcm_k_tiles, factx->vtcm_k_fp16[args->buf_idx], total_rows, (int) factx->DK,
                              (int) args->src_stride, start, end);
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (args->kv_start + start));
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) (args->kv_start + start));
 }
 
 static void fa_phase_k_interleave(struct hmx_fa_context * factx, int kv_rows, size_t src_stride, size_t buf_idx, uint32_t kv_start) {
@@ -534,10 +544,10 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
     __fp16 * v_tiles_dest = factx->pipeline ? factx->vtcm_v_tiles[args->buf_idx] : factx->vtcm_v_tiles[0];
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (args->kv_start + start));
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) (args->kv_start + start));
     hmx_interleave_cols_to_tiles(v_tiles_dest, factx->vtcm_v_fp16[args->buf_idx], total_rows, (int) factx->DV,
                              (int) args->src_stride, (int) args->n_col_tiles, start, end);
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (args->kv_start + start));
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) (args->kv_start + start));
 }
 
 static void fa_phase_v_interleave(struct hmx_fa_context * factx,
@@ -583,7 +593,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
     }
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (args->q_start * G + start));
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) (args->q_start * G + start));
 
     const struct htp_tensor * q       = args->q;
     const uint32_t            q_start = args->q_start;
@@ -638,7 +648,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
             }
         }
     }
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (args->q_start * G + start));
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) (args->q_start * G + start));
 }
 
 static void fa_phase_q_load(struct hmx_fa_context *   factx,
@@ -684,7 +694,7 @@ static void fa_o_store_thread(unsigned int n, unsigned int i, void * data) {
     }
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (args->q_start * G + start));
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) (args->q_start * G + start));
 
     const struct htp_tensor * dst        = args->dst;
     const __fp16 *            o_tile_src = args->o_tile_src;
@@ -731,7 +741,7 @@ static void fa_o_store_thread(unsigned int n, unsigned int i, void * data) {
             }
         }
     }
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (args->q_start * G + start));
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) (args->q_start * G + start));
 }
 
 static void fa_phase_o_store(struct hmx_fa_context *   factx,
@@ -791,7 +801,7 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
     }
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (args->q_start * G + vec_start * 64));
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, (uint16_t) (args->q_start * G + vec_start * 64));
 
     // Per-thread row scratch: thread i uses bufs at offset i * 2 * stride
     const size_t row_buf_stride = factx->row_buf_stride;
@@ -1025,7 +1035,7 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
         factx->vtcm_s_rowmax[r_vec_idx] = rowmax_acc_v;
         factx->vtcm_p_rowsum[r_vec_idx] = rowsum_acc_v;
     }
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (args->q_start * G + vec_start * 64));
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, (uint16_t) (args->q_start * G + vec_start * 64));
 }
 
 static __attribute__((noinline)) void fa_ml_update_and_build_d(struct hmx_fa_context * factx,
@@ -1111,9 +1121,9 @@ static void fa_phase_softmax_and_build_d(struct hmx_fa_context * factx,
     }
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[0] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) sargs->q_start);
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, (uint16_t) sargs->q_start);
     fa_ml_update_and_build_d(factx, sargs->n_rows_g, n_row_tiles, n_row_tiles_g_br);
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) sargs->q_start);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, (uint16_t) sargs->q_start);
 }
 
 // ============================================================================
@@ -1478,9 +1488,9 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 // ---- KV block loop with DMA double-buffering ----
                 size_t buf_idx = 0;
 
-                htp_trace_event_start(tr_hvx, HTP_TRACE_EVT_HVX_COMP, (uint16_t) q_start);
+                htp_trace_event_start(tr_hvx, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) q_start);
                 fa_compute_slopes(&factx, kv_head, n_rows_g);
-                htp_trace_event_stop(tr_hvx, HTP_TRACE_EVT_HVX_COMP, (uint16_t) q_start);
+                htp_trace_event_stop(tr_hvx, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) q_start);
 
                 // Prefetch first KV block
                 if (factx.n_kv_blocks > 0) {
@@ -1735,9 +1745,9 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                 // ---- Final normalization ----
                 {
-                    htp_trace_event_start(tr_hvx, HTP_TRACE_EVT_HVX_COMP, (uint16_t) q_start);
+                    htp_trace_event_start(tr_hvx, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) q_start);
                     fa_build_d_diag_inv_l(&factx, n_row_tiles, n_row_tiles_g_br);
-                    htp_trace_event_stop(tr_hvx, HTP_TRACE_EVT_HVX_COMP, (uint16_t) q_start);
+                    htp_trace_event_stop(tr_hvx, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) q_start);
 
                     if (factx.pipeline) {
                         on_job.o_curr           = o_tile_curr;
