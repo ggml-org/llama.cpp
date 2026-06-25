@@ -89,15 +89,16 @@ int llama_server(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    // note: router mode also accepts -hf remote-preset, so we need to check that first
-    if (!params.model.hf_repo.empty()) {
-        try {
-            common_params_handle_models_params handle_params;
-            handle_params.preset_only = true;
-            common_params_handle_models(params, LLAMA_EXAMPLE_SERVER, handle_params);
-        } catch (const std::exception & e) {
-            // ignored for now
+    common_models_handler models_handler;
+    try {
+        models_handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
+        if (common_models_handler_is_preset_repo(models_handler)) {
+            // apply the preset and start the server in router mode
+            common_models_handler_apply(models_handler, params);
         }
+    } catch (const std::exception & e) {
+        SRV_ERR("failed to fetch model metadata: %s\n", e.what());
+        return 1;
     }
 
     // router server never loads a model and must not touch the GPU
@@ -241,6 +242,19 @@ int llama_server(int argc, char ** argv) {
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();
 
+    // return 403 for disabled features
+    server_http_context::handler_t res_403 = [](const server_http_req &) {
+        auto res = std::make_unique<server_http_res>();
+        res->status = 403;
+        res->data = safe_json_to_str({
+            {"error", {
+                {"message", "this feature is disabled"},
+                {"type", "feature_disabled"},
+            }}
+        });
+        return res;
+    };
+
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
     if (params.ui_mcp_proxy) {
         SRV_WRN("%s", "-----------------\n");
@@ -249,7 +263,11 @@ int llama_server(int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
         ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+    } else {
+        ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
+        ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
     }
+
     // EXPERIMENTAL built-in tools
     if (!params.server_tools.empty()) {
         try {
@@ -264,6 +282,9 @@ int llama_server(int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
+    } else {
+        ctx_http.get ("/tools",           ex_wrapper(res_403));
+        ctx_http.post("/tools",           ex_wrapper(res_403));
     }
 
     //
@@ -274,7 +295,12 @@ int llama_server(int argc, char ** argv) {
         return child.run_download(params);
     } else if (!is_router_server) {
         // single-model mode (NOT spawned by router)
-        common_params_handle_models(params, LLAMA_EXAMPLE_SERVER, {});
+        try {
+            common_models_handler_apply(models_handler, params);
+        } catch (const std::exception & e) {
+            SRV_ERR("failed to download model: %s\n", e.what());
+            return 1;
+        }
     }
 
     //

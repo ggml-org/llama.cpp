@@ -49,7 +49,7 @@
 // g_br = hex_align_up(gqa_factor * Br, 32) replaces Br for all Q/O/S/P/D dimensions.
 // Layout: Q + O_ping + O_pong + K_dma*2 + V_dma*2 + K_tile + V_tile + S + P + D + vectors + scales
 // Mask is DMA'd into a VTCM buffer (Br rows per KV block) to avoid DDR reads in softmax.
-static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_threads, bool use_pipeline) {
+static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_threads, bool pipeline) {
     const size_t g_br         = hex_align_up(gqa_factor * Br, HMX_FP16_TILE_N_ROWS);
     const size_t q_tile_size  = hex_align_up(g_br * DK * sizeof(__fp16), 4096);    // Q:  [g_br, DK]
     const size_t o_tile_size  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);    // O:  [g_br, DV] x2 ping-pong
@@ -70,7 +70,7 @@ static size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV,
            + k_dma_size  * 2               // K DMA x2
            + v_dma_size  * 2               // V DMA x2
            + k_tile_size * 1               // K tiles
-           + v_tile_size * (use_pipeline ? 2 : 1) // V tiles (double-buffered if pipelining)
+           + v_tile_size * (pipeline ? 2 : 1) // V tiles (double-buffered if pipelining)
            + s_tile_size * 2               // S + P
            + d_tile_size * 1               // D (diagonal matrix)
            + col_vec_size * 4              // m_vec, l_vec, s_rowmax, p_rowsum
@@ -290,7 +290,7 @@ static const int16_t d_tile_scatter_offsets[64] __attribute__((aligned(128))) = 
 
 struct hmx_fa_context {
     const struct htp_ops_context * octx;
-    bool         use_pipeline;  // true when n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads >= 2
+    bool         pipeline;  // true when n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads >= 2
     uint32_t     n_threads;
 
     // Op parameters
@@ -409,7 +409,7 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
         return;
     }
 
-    __fp16 * v_tiles_dest = factx->use_pipeline ? factx->vtcm_v_tiles[args->buf_idx] : factx->vtcm_v_tiles[0];
+    __fp16 * v_tiles_dest = factx->pipeline ? factx->vtcm_v_tiles[args->buf_idx] : factx->vtcm_v_tiles[0];
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, start);
@@ -1312,13 +1312,13 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const size_t g_br = hex_align_up(G * Br, HMX_FP16_TILE_N_ROWS);
 
     const uint32_t n_kv_blocks  = (nek1 + Bc - 1) / Bc;
-    const bool     use_pipeline = (n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads_init >= 2);
+    const bool     pipeline = (n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads_init >= 2);
 
     // Bypass thread pool dispatch for small prompts/non-pipelined prefill by setting n_threads = 1
-    const uint32_t n_threads = use_pipeline ? n_threads_init : 1;
+    const uint32_t n_threads = pipeline ? n_threads_init : 1;
 
     FARF(HIGH, "hmx-fa: neq1=%u nek1=%u DK=%u DV=%u G=%u Br=%zu Bc=%zu g_br=%zu n_kv_blocks=%u pipeline=%d vtcm=%zu",
-         neq1, nek1, DK, DV, G, Br, Bc, g_br, n_kv_blocks, use_pipeline, vtcm_budget);
+         neq1, nek1, DK, DV, G, Br, Bc, g_br, n_kv_blocks, pipeline, vtcm_budget);
 
     // ======== Build context ========
     struct hmx_fa_context factx;
@@ -1339,7 +1339,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.n_kv_blocks    = n_kv_blocks;
     factx.is_q_fp32      = (q->type == HTP_TYPE_F32);
     factx.is_dst_fp32    = (dst->type == HTP_TYPE_F32);
-    factx.use_pipeline   = use_pipeline;
+    factx.pipeline   = pipeline;
     factx.mask_broadcast = (mask != NULL && mask->ne[2] == 1);
 
     // Extract op parameters (mutable during softcap adjustment, then stored as const in factx)
@@ -1405,7 +1405,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.vtcm_v_fp16[1]      = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_dma_bytes);
     factx.vtcm_k_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, k_tile_bytes);
     factx.vtcm_v_tiles[0]     = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_tile_bytes);
-    if (use_pipeline) {
+    if (pipeline) {
         factx.vtcm_v_tiles[1] = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_tile_bytes);
     } else {
         factx.vtcm_v_tiles[1] = NULL;
@@ -1456,7 +1456,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     // ======== HMX lock strategy ========
     // Pipeline: queue thread auto-acquires HMX lock on first push; released by suspend.
     // Fallback: main thread holds the lock (original behavior).
-    if (!factx.use_pipeline) {
+    if (!factx.pipeline) {
         HAP_compute_res_hmx_lock(ctx->vtcm_rctx);
     }
 
@@ -1550,7 +1550,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 const size_t k_src_stride = size_k_row_padded / sizeof(__fp16);
                 const size_t v_src_stride = size_v_row_padded / sizeof(__fp16);
 
-                if (factx.use_pipeline) {
+                if (factx.pipeline) {
                     // ==================================================================
                     // Pipeline path: HVX phases ‖ HMX queue worker
                     // ==================================================================
@@ -1780,7 +1780,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                     fa_build_d_diag_inv_l(&factx, n_row_tiles, n_row_tiles_g_br);
 
                     // HMX: O_final = diag(1/l) @ O_prev
-                    if (factx.use_pipeline) {
+                    if (factx.pipeline) {
                         on_job.o_curr           = o_tile_curr;
                         on_job.o_prev           = o_tile_prev;
                         on_job.d_tiles          = factx.vtcm_d_tiles;
@@ -1826,7 +1826,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
         }  // end KV head loop
     }  // end batch loop
 
-    if (factx.use_pipeline) {
+    if (factx.pipeline) {
         hmx_queue_suspend(ctx->hmx_queue);
     } else {
         HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);

@@ -15,7 +15,7 @@
 <Tooltip.Root>
 	<Tooltip.Trigger class="w-full">
 		<Button
-			class="file-upload-button h-8 w-8 rounded-full p-0"
+			class="file-upload-button md:h-8 md:w-8 h-9 w-9 rounded-full p-0"
 			{disabled}
 			{onclick}
 			variant="secondary"

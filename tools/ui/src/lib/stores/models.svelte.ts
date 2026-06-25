@@ -576,7 +576,7 @@ class ModelsStore {
 		}
 
 		// Try loading a favorite model
-		const favorite = this.favoriteModelIds.values().next()?.value
+		const favorite = this.favoriteModelIds.values().next()?.value;
 		if (favorite) {
 			await this.selectModelById(favorite);
 			return;

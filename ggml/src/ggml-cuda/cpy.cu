@@ -53,10 +53,10 @@ static __global__ void cpy_scalar_transpose(const char * cx, char * cdst, const 
     const int64_t nmat = ne / (ne00 * ne01);
     const int64_t n = ne00 * ne01;
 
-    const int x = blockIdx.x * CUDA_CPY_TILE_DIM_2D + threadIdx.x;
-    const int y = blockIdx.y * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
-    const int tx = blockIdx.y * CUDA_CPY_TILE_DIM_2D + threadIdx.x;  // transpose block offset
-    const int ty = blockIdx.x * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
+    const int64_t x  = (int64_t) blockIdx.x * CUDA_CPY_TILE_DIM_2D + threadIdx.x;
+    const int64_t y  = (int64_t) blockIdx.y * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
+    const int64_t tx = (int64_t) blockIdx.y * CUDA_CPY_TILE_DIM_2D + threadIdx.x;  // transpose block offset
+    const int64_t ty = (int64_t) blockIdx.x * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
 
     __shared__ float tile[2][CUDA_CPY_TILE_DIM_2D][CUDA_CPY_TILE_DIM_2D+1];
     int cur_tile_buf = 0;
@@ -197,7 +197,7 @@ static void ggml_cpy_scalar_contiguous_cuda(
 cudaStream_t stream) {
 
     const int64_t num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream);
     ggml_cuda_kernel_launch(cpy_scalar_contiguous<src_t, dst_t>, launch_params, cx, cdst, ne);
 }
@@ -207,6 +207,14 @@ static void ggml_cpy_scalar_cuda(
     const char * cx, char * cdst, const int64_t ne,
     const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
     const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13, cudaStream_t stream) {
+
+    const auto launch_scalar_generic = [&]() {
+        const int64_t num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
+        GGML_ASSERT(num_blocks <= INT_MAX);
+        const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream);
+        ggml_cuda_kernel_launch(cpy_scalar<cpy_1_scalar<src_t, dst_t>>, launch_params,
+            cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
+    };
 
     if (transposed) {
         GGML_ASSERT(ne == ne00*ne01*ne02);  // ne[3] is 1 assumed
@@ -224,20 +232,18 @@ static void ggml_cpy_scalar_cuda(
         int64_t grid_x = (ne01n + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D;
         int64_t grid_y = (ne00n + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D;
         int64_t grid_z = (ne/(ne01n*ne00n) + CUDA_CPY_BLOCK_NM - 1) / CUDA_CPY_BLOCK_NM;
-        GGML_ASSERT(grid_x < UINT_MAX);
-        GGML_ASSERT(grid_y < USHRT_MAX);
-        GGML_ASSERT(grid_z < USHRT_MAX);
-        dim3 dimGrid(grid_x, grid_y, grid_z);
-        dim3 dimBlock(CUDA_CPY_TILE_DIM_2D, CUDA_CPY_BLOCK_ROWS, 1);
-        const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(dimGrid, dimBlock, 0, stream);
-        ggml_cuda_kernel_launch(cpy_scalar_transpose<dst_t>, launch_params,
-            cx, cdst, ne, ne00n, ne01n, ne02n, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
+        GGML_ASSERT(grid_x <= INT_MAX);
+        if (grid_y > USHRT_MAX || grid_z > USHRT_MAX) {
+            launch_scalar_generic();
+        } else {
+            dim3 dimGrid(grid_x, grid_y, grid_z);
+            dim3 dimBlock(CUDA_CPY_TILE_DIM_2D, CUDA_CPY_BLOCK_ROWS, 1);
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(dimGrid, dimBlock, 0, stream);
+            ggml_cuda_kernel_launch(cpy_scalar_transpose<dst_t>, launch_params,
+                cx, cdst, ne, ne00n, ne01n, ne02n, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
+        }
     } else {
-        const int64_t num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
-        GGML_ASSERT(num_blocks < UINT_MAX);
-        const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream);
-        ggml_cuda_kernel_launch(cpy_scalar<cpy_1_scalar<src_t, dst_t>>, launch_params,
-            cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
+        launch_scalar_generic();
     }
 }
 
@@ -248,7 +254,7 @@ static void ggml_cpy_f32_q8_0_cuda(
 
     GGML_ASSERT(ne % QK8_0 == 0);
     const int64_t num_blocks = ne / QK8_0;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_f32_q<cpy_blck_f32_q8_0, QK8_0><<<num_blocks, 1, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
 }
@@ -259,7 +265,7 @@ static void ggml_cpy_q8_0_f32_cuda(
     const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13, cudaStream_t stream) {
 
     const int64_t num_blocks = ne;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_q_f32<cpy_blck_q8_0_f32, QK8_0><<<num_blocks, 1, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
 }
@@ -271,7 +277,7 @@ static void ggml_cpy_f32_q4_0_cuda(
 
     GGML_ASSERT(ne % QK4_0 == 0);
     const int64_t num_blocks = ne / QK4_0;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_f32_q<cpy_blck_f32_q4_0, QK4_0><<<num_blocks, 1, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
 }
@@ -284,7 +290,7 @@ static void ggml_cpy_q4_0_f32_cuda(
     const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
     cudaStream_t stream) {
     const int64_t num_blocks = ne;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_q_f32<cpy_blck_q_f32<dequantize_q4_0, QK4_0>, QK4_0><<<num_blocks, 1, 0, stream>>>(
         cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
          ne10, ne11, ne12, nb10, nb11, nb12, nb13);
@@ -297,7 +303,7 @@ static void ggml_cpy_f32_q4_1_cuda(
 
     GGML_ASSERT(ne % QK4_1 == 0);
     const int64_t num_blocks = ne / QK4_1;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_f32_q<cpy_blck_f32_q4_1, QK4_1><<<num_blocks, 1, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
 }
@@ -310,7 +316,7 @@ static void ggml_cpy_q4_1_f32_cuda(
     const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
     cudaStream_t stream) {
     const int64_t num_blocks = ne;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_q_f32<cpy_blck_q_f32<dequantize_q4_1, QK4_1>, QK4_1><<<num_blocks, 1, 0, stream>>>(
         cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
          ne10, ne11, ne12, nb10, nb11, nb12, nb13);
@@ -323,7 +329,7 @@ static void ggml_cpy_f32_q5_0_cuda(
 
     GGML_ASSERT(ne % QK5_0 == 0);
     const int64_t num_blocks = ne / QK5_0;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_f32_q<cpy_blck_f32_q5_0, QK5_0><<<num_blocks, 1, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
 }
@@ -336,7 +342,7 @@ static void ggml_cpy_q5_0_f32_cuda(
     const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
     cudaStream_t stream) {
     const int64_t num_blocks = ne;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_q_f32<cpy_blck_q_f32<dequantize_q5_0, QK5_0>, QK5_0><<<num_blocks, 1, 0, stream>>>(
         cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
         ne10, ne11, ne12, nb10, nb11, nb12, nb13);
@@ -349,7 +355,7 @@ static void ggml_cpy_f32_q5_1_cuda(
 
     GGML_ASSERT(ne % QK5_1 == 0);
     const int64_t num_blocks = ne / QK5_1;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_f32_q<cpy_blck_f32_q5_1, QK5_1><<<num_blocks, 1, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
 }
@@ -362,7 +368,7 @@ static void ggml_cpy_q5_1_f32_cuda(
     const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
     cudaStream_t stream) {
     const int64_t num_blocks = ne;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_q_f32<cpy_blck_q_f32<dequantize_q5_1, QK5_1>, QK5_1><<<num_blocks, 1, 0, stream>>>(
         cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
         ne10, ne11, ne12, nb10, nb11, nb12, nb13);
@@ -375,7 +381,7 @@ static void ggml_cpy_f32_iq4_nl_cuda(
 
     GGML_ASSERT(ne % QK4_NL == 0);
     const int64_t num_blocks = ne / QK4_NL;
-    GGML_ASSERT(num_blocks < UINT_MAX);
+    GGML_ASSERT(num_blocks <= INT_MAX);
     cpy_f32_q<cpy_blck_f32_iq4_nl, QK4_NL><<<num_blocks, 1, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
 }
