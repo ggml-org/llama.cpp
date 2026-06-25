@@ -219,7 +219,6 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_NUM_ADAPTERS,                      "%s.num_adapters"                      },
     { LLM_KV_ADAPTER_TOKEN_IDS,                 "%s.adapter_token_ids"                 },
     { LLM_KV_ADAPTER_SUBSTITUTE_TOKEN_IDS,      "%s.adapter_substitute_token_ids"      },
-    { LLM_KV_ADAPTER_RANKS,                     "%s.adapter_ranks"                     },
     { LLM_KV_MAX_LORA_RANK,                     "%s.max_lora_rank"                     },
     { LLM_KV_TOKEN_SHIFT_COUNT,                 "%s.token_shift_count"                 },
     { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
