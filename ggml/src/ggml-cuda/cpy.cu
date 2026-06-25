@@ -233,8 +233,7 @@ static void ggml_cpy_scalar_cuda(
         int64_t grid_y = (ne00n + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D;
         int64_t grid_z = (ne/(ne01n*ne00n) + CUDA_CPY_BLOCK_NM - 1) / CUDA_CPY_BLOCK_NM;
         GGML_ASSERT(grid_x < UINT_MAX);
-        GGML_ASSERT(grid_y <= USHRT_MAX);
-        if (grid_z > USHRT_MAX) {
+        if (grid_y > USHRT_MAX || grid_z > USHRT_MAX) {
             launch_scalar_generic();
         } else {
             dim3 dimGrid(grid_x, grid_y, grid_z);
