@@ -17,7 +17,8 @@ extern "C" {
 #define HMX_FP16_TILE_N_COLS  32
 #define HMX_FP16_TILE_N_ELMS  1024
 #define HMX_FP16_TILE_SIZE    2048
-#define FA_DMA_CACHE_MAX_SIZE    16
+#define HVX_FA_DMA_CACHE_SIZE    128
+#define HMX_FA_DMA_CACHE_SIZE    4
 
 enum htp_fa_kernel_type {
     HTP_FA_KERNEL_UNSUPPORTED = 0,
@@ -95,7 +96,7 @@ static inline size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, siz
     const size_t col_vec_size = hex_align_up(g_br * sizeof(__fp16), 256);          // m, l, etc.
     const size_t row_vec_size = hex_align_up(Bc * sizeof(__fp16), 256);
     const size_t m_line_size  = hex_align_up(Bc * sizeof(__fp16), 128);
-    const size_t m_buf_size   = hex_align_up(Br * m_line_size, 4096);
+    const size_t m_buf_size   = hex_align_up(Br * m_line_size, 4096) * HMX_FA_DMA_CACHE_SIZE;
     const size_t slopes_size  = hex_align_up(g_br * sizeof(__fp16), 128);
 
     return   q_tile_size * 1               // Q tiles
@@ -129,7 +130,7 @@ static inline size_t hvx_fa_compute_vtcm_usage(size_t DK, size_t DV, bool is_q_f
     const size_t size_per_thread = size_q_block * 1
                                  + size_k_block * 2
                                  + size_v_block * 2
-                                 + (has_mask ? size_m_block * FA_DMA_CACHE_MAX_SIZE : 0)
+                                 + (has_mask ? size_m_block * HVX_FA_DMA_CACHE_SIZE : 0)
                                  + size_vkq_acc;
 
     return size_per_thread * n_threads;
@@ -194,10 +195,10 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
         }
 
         // Analytically solve for max Bc:
-        //   remain >= Bc * (per_bc + g_br * per_gbr_bc + Br * fp16_mask)
+        //   remain >= Bc * (per_bc + g_br * per_gbr_bc + Br * fp16 * HMX_FA_DMA_CACHE_SIZE)
         // The Br * fp16 term accounts for the VTCM mask buffer [Br * Bc].
         const size_t remain   = usable - gbr_cost;
-        const size_t bc_denom = per_bc + g_br * per_gbr_bc + Br * fp16;
+        const size_t bc_denom = per_bc + g_br * per_gbr_bc + Br * fp16 * HMX_FA_DMA_CACHE_SIZE;
         size_t       Bc       = hex_smin(hex_align_down(remain / bc_denom, bc_unit), Bc_limit);
         if (Bc < bc_unit) {
             if (Br == br_unit) {
