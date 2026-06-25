@@ -1469,17 +1469,17 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     // ======== Main loop ========
     for (uint32_t ib3 = 0; ib3 < neq3; ++ib3) {
         const uint32_t im3 = mask ? fastmodulo(ib3, mask->ne[3], &factx.src3_div3) : 0;
-        for (uint32_t kv_head = 0; kv_head < n_kv_heads; ++kv_head) {
-            const uint32_t ik2 = kv_head;
-            const uint32_t ik3 = ib3 / (neq3 / k->ne[3]);
-            const uint32_t iv2 = kv_head;
-            const uint32_t iv3 = ib3 / (neq3 / v->ne[3]);
+        for (uint32_t q_start = 0; q_start < neq1; q_start += Br) {
+            const uint32_t n_q_rows    = hex_smin(Br, neq1 - q_start);
+            const size_t   n_rows_g    = n_q_rows * G;
+            const size_t   g_br_actual = hex_align_up(n_rows_g, HMX_FP16_TILE_N_ROWS);
+            const size_t   n_row_tiles = g_br_actual / HMX_FP16_TILE_N_ROWS;
 
-            for (uint32_t q_start = 0; q_start < neq1; q_start += Br) {
-                const uint32_t n_q_rows    = hex_smin(Br, neq1 - q_start);
-                const size_t   n_rows_g    = n_q_rows * G;
-                const size_t   g_br_actual = hex_align_up(n_rows_g, HMX_FP16_TILE_N_ROWS);
-                const size_t   n_row_tiles = g_br_actual / HMX_FP16_TILE_N_ROWS;
+            for (uint32_t kv_head = 0; kv_head < n_kv_heads; ++kv_head) {
+                const uint32_t ik2 = kv_head;
+                const uint32_t ik3 = ib3 / (neq3 / k->ne[3]);
+                const uint32_t iv2 = kv_head;
+                const uint32_t iv3 = ib3 / (neq3 / v->ne[3]);
 
                 // ---- Load Q block ----
                 if (n_rows_g < g_br) {

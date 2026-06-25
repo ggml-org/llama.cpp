@@ -20,8 +20,8 @@ add_library(${HTP_LIB} SHARED
     worker-pool.c
     hex-dma.c
     hmx-queue.c
-    matmul-ops.c
     flash-attn-ops.c
+    matmul-ops.c
     binary-ops.c
     unary-ops.c
     sum-rows-ops.c
