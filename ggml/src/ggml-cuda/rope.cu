@@ -84,10 +84,10 @@ static __global__ void rope_norm(const T *            x,
     }
 
     const auto & store_coaelsced = [&](float x0, float x1) {
-        if constexpr (std::is_same_v<float, D>) {
+        if constexpr (std::is_same<float, D>::value) {
             float2 v = make_float2(x0, x1);
             ggml_cuda_memcpy_1<8>(dst + idst, &v);
-        } else if constexpr (std::is_same_v<half, D>) {
+        } else if constexpr (std::is_same<half, D>::value) {
             half2 v = make_half2(x0, x1);
             ggml_cuda_memcpy_1<4>(dst + idst, &v);
         }
