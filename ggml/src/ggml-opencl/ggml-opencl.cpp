@@ -101,7 +101,7 @@ enum ADRENO_GPU_GEN {
     A7X,
     A8X,
     X1E,
-    X2E,   // placeholder; tuning table added when hardware available
+    X2E,
 };
 
 enum ADRENO_CL_COMPILER_TYPE {
@@ -939,7 +939,10 @@ inline std::string read_file(const std::string &path) {
 // fatal=false returns NULL on compile failure instead of aborting; used for
 // optional FA variants that may exhaust the Adreno compiler at large DK.
 static cl_program build_program_from_source_ex(cl_context ctx, cl_device_id dev, const char* program_buffer, const std::string &compile_opts, bool fatal, const char *tag = nullptr) {
-    if (tag) GGML_LOG_INFO("ggml_opencl: compiling %s\n", tag);
+    if (tag) {
+        GGML_LOG_INFO("ggml_opencl: compiling %s\n", tag);
+    }
+
     cl_program p;
     char *program_log;
     size_t program_size;
@@ -3812,25 +3815,33 @@ static void ggml_opencl_log_fa_kernel_spill(ggml_backend_opencl_context * backen
         const char * e = std::getenv("GGML_OPENCL_FA_LOG_SPILL");
         return e && e[0] && e[0] != '0';
     }();
-    if (!enabled || kernel == NULL) return;
+
+    if (!enabled || kernel == NULL) {
+        return;
+    }
 
     cl_ulong priv_mem = 0;
     if (clGetKernelWorkGroupInfo(kernel, backend_ctx->device, CL_KERNEL_PRIVATE_MEM_SIZE,
                                  sizeof(priv_mem), &priv_mem, NULL) == CL_SUCCESS) {
         const char * tag = priv_mem > 0 ? "SPILL" : "ok";
-        fprintf(stderr, "ggml_opencl: [%s] %s DK=%d DV=%d private_mem=%llu bytes\n",
+        GGML_LOG_INFO("ggml_opencl: [%s] %s DK=%d DV=%d private_mem=%llu bytes\n",
                 tag, name, dk, dv, (unsigned long long) priv_mem);
     }
 }
 
 static void ggml_opencl_ensure_fa_pre_kernels(ggml_backend_opencl_context * backend_ctx, int dk, int dv) {
     const std::pair<int, int> dk_dv = {dk, dv};
-    if (backend_ctx->fa.kv_pad_f16.count(dk_dv) > 0) return;
+    if (backend_ctx->fa.kv_pad_f16.count(dk_dv) > 0) {
+        return;
+    }
 
     const ggml_opencl_fa_dim * cfg = nullptr;
     for (const auto & d : g_opencl_fa_dims) {
-        if (d.dk == dk && d.dv == dv) { cfg = &d; break; }
+        if (d.dk == dk && d.dv == dv) {
+            cfg = &d; break;
+        }
     }
+
     if (cfg == nullptr) {
         GGML_ABORT("ggml_opencl: no flash_attn config for DK=%d DV=%d", dk, dv);
     }
@@ -3862,43 +3873,75 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
 
     const ggml_opencl_fa_dim * cfg = nullptr;
     for (const auto & d : g_opencl_fa_dims) {
-        if (d.dk == dk && d.dv == dv) { cfg = &d; break; }
+        if (d.dk == dk && d.dv == dv) {
+            cfg = &d; break;
+        }
     }
-    if (cfg == nullptr) return false;
+    if (cfg == nullptr) {
+        return false;
+    }
 
     switch (variant) {
-        case FA_VARIANT_F16:
-            if (backend_ctx->fa.f16.count(dk_dv)) return true;
+        case FA_VARIANT_F16: {
+            if (backend_ctx->fa.f16.count(dk_dv)) {
+                return true;
+            }
             break;
-        case FA_VARIANT_F32:
-            if (backend_ctx->fa.f32.count(dk_dv)) return true;
+        }
+        case FA_VARIANT_F32: {
+            if (backend_ctx->fa.f32.count(dk_dv)) {
+                return true;
+            }
             break;
-        case FA_VARIANT_F32_F16:
-            if (backend_ctx->fa.f32_f16.count(dk_dv)) return true;
+        }
+        case FA_VARIANT_F32_F16: {
+            if (backend_ctx->fa.f32_f16.count(dk_dv)) {
+                return true;
+            }
             break;
-        case FA_VARIANT_Q8_0:
-            if (backend_ctx->fa.f32_q8_0.count(dk_dv)) return true;
+        }
+        case FA_VARIANT_Q8_0: {
+            if (backend_ctx->fa.f32_q8_0.count(dk_dv)) {
+                return true;
+            }
             break;
-        case FA_VARIANT_Q4_0:
-            if (backend_ctx->fa.f32_q4_0.count(dk_dv)) return true;
+        }
+        case FA_VARIANT_Q4_0: {
+            if (backend_ctx->fa.f32_q4_0.count(dk_dv)) {
+                return true;
+            }
             break;
-        case FA_VARIANT_F32_F16_SPLIT:
-            if (backend_ctx->fa.f32_f16_split.count(dk_dv)) return true;
+        }
+        case FA_VARIANT_F32_F16_SPLIT: {
+            if (backend_ctx->fa.f32_f16_split.count(dk_dv)) {
+                return true;
+            }
             break;
-        case FA_VARIANT_Q8_0_SPLIT:
-            if (backend_ctx->fa.f32_q8_0_split.count(dk_dv)) return true;
+        }
+        case FA_VARIANT_Q8_0_SPLIT: {
+            if (backend_ctx->fa.f32_q8_0_split.count(dk_dv)) {
+                return true;
+            }
             break;
-        case FA_VARIANT_Q4_0_SPLIT:
-            if (backend_ctx->fa.f32_q4_0_split.count(dk_dv)) return true;
+        }
+        case FA_VARIANT_Q4_0_SPLIT: {
+            if (backend_ctx->fa.f32_q4_0_split.count(dk_dv)) {
+                return true;
+            }
             break;
-        case FA_VARIANT_PRE:
+        }
+        case FA_VARIANT_PRE: {
             ggml_opencl_ensure_fa_pre_kernels(backend_ctx, dk, dv);
             return true;
+        }
     }
 
     // Don't retry a variant that failed once.
     const auto attempt_key = std::make_pair(variant, dk_dv);
-    if (backend_ctx->fa.variant_attempted.count(attempt_key)) return false;
+
+    if (backend_ctx->fa.variant_attempted.count(attempt_key)) {
+        return false;
+    }
     backend_ctx->fa.variant_attempted.insert(attempt_key);
 
     const bool is_split = variant == FA_VARIANT_F32_F16_SPLIT ||
@@ -3906,13 +3949,22 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                           variant == FA_VARIANT_Q4_0_SPLIT;
     const bool is_quant = variant == FA_VARIANT_Q8_0 || variant == FA_VARIANT_Q8_0_SPLIT ||
                           variant == FA_VARIANT_Q4_0 || variant == FA_VARIANT_Q4_0_SPLIT;
-    if (is_quant && (dk % 32 != 0 || dv % 32 != 0)) return false;
-    if (is_split && cfg->n_split <= 1) return false;
+    if (is_quant && (dk % 32 != 0 || dv % 32 != 0)) {
+        return false;
+    }
+    if (is_split && cfg->n_split <= 1) {
+        return false;
+    }
     if ((variant == FA_VARIANT_Q8_0_SPLIT || variant == FA_VARIANT_Q4_0_SPLIT) &&
-        ((dk / 32) % cfg->n_split != 0 || (dv / 4) % cfg->n_split != 0)) return false;
+        ((dk / 32) % cfg->n_split != 0 || (dv / 4) % cfg->n_split != 0)) {
+        return false;
+    }
 
     const std::string src = ggml_opencl_fa_kernel_src(variant);
-    if (src.empty()) return false;
+
+    if (src.empty()) {
+        return false;
+    }
     const std::string opts = ggml_opencl_fa_compile_opts(backend_ctx, cfg, variant);
 
     const char * tag = nullptr;
@@ -3928,9 +3980,11 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
         default: break;
     }
     cl_program prog = build_program_from_source_ex(
-        backend_ctx->context, backend_ctx->device, src.c_str(), opts,
-        /*fatal=*/false, tag);
-    if (!prog) return false;
+        backend_ctx->context, backend_ctx->device, src.c_str(), opts, /*fatal=*/false, tag);
+
+    if (!prog) {
+        return false;
+    }
 
     cl_int err;
     switch (variant) {
@@ -4040,14 +4094,22 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
 //           BLOCK_M*N_SPLIT must be <= the 64-lane Adreno subgroup (16*3=48).
 static bool ggml_opencl_ensure_fa_quant_split_override(
         ggml_backend_opencl_context * backend_ctx,
-        int dk, int dv, int quant_bm, int quant_n_split, bool is_q8_0) {
+        int dk, int dv, int quant_bm, int quant_n_split, bool is_q8_0
+) {
     const std::pair<int, int> dk_dv = {dk, dv};
-    if (is_q8_0 && backend_ctx->fa.f32_q8_0_split.count(dk_dv)) return true;
-    if (!is_q8_0 && backend_ctx->fa.f32_q4_0_split.count(dk_dv)) return true;
+    if (is_q8_0 && backend_ctx->fa.f32_q8_0_split.count(dk_dv)) {
+        return true;
+    }
+    if (!is_q8_0 && backend_ctx->fa.f32_q4_0_split.count(dk_dv)) {
+        return true;
+    }
 
     const ggml_opencl_fa_variant variant = is_q8_0 ? FA_VARIANT_Q8_0_SPLIT : FA_VARIANT_Q4_0_SPLIT;
     const auto attempt_key = std::make_pair(variant, dk_dv);
-    if (backend_ctx->fa.variant_attempted.count(attempt_key)) return false;
+    if (backend_ctx->fa.variant_attempted.count(attempt_key)) {
+        return false;
+    }
+
     backend_ctx->fa.variant_attempted.insert(attempt_key);
 
     std::string shuffle_opts;
@@ -4058,9 +4120,13 @@ static bool ggml_opencl_ensure_fa_quant_split_override(
     }
     const ggml_opencl_fa_dim * cfg = nullptr;
     for (const auto & d : g_opencl_fa_dims) {
-        if (d.dk == dk && d.dv == dv) { cfg = &d; break; }
+        if (d.dk == dk && d.dv == dv) {
+            cfg = &d; break;
+        }
     }
-    if (cfg == nullptr) return false;
+    if (cfg == nullptr) {
+        return false;
+    }
 
     // BLK_PREPASS_BM is the prepass-kernel BLOCK_M, needed so the quant kernel
     // indexes the blk[] classification buffer correctly.
@@ -4073,13 +4139,19 @@ static bool ggml_opencl_ensure_fa_quant_split_override(
         " -D BLK_PREPASS_BM=" + std::to_string(cfg->bm);
 
     const std::string src = ggml_opencl_fa_kernel_src(variant);
-    if (src.empty()) return false;
+    if (src.empty()) {
+        return false;
+    }
+
     const std::string tag = std::string("fa ") + (is_q8_0 ? "q8_0" : "q4_0") +
         " split DK=" + std::to_string(dk);
     cl_program prog = build_program_from_source_ex(
-        backend_ctx->context, backend_ctx->device, src.c_str(), opts,
-        /*fatal=*/false, tag.c_str());
-    if (!prog) return false;
+        backend_ctx->context, backend_ctx->device, src.c_str(), opts, /*fatal=*/false, tag.c_str());
+
+    if (!prog) {
+        return false;
+    }
+
     cl_int err;
     cl_kernel k;
     if (is_q8_0) {
