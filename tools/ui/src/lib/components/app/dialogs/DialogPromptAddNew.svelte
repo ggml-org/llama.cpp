@@ -113,9 +113,9 @@
 		</div>
 
 		<Dialog.Footer>
-			<Button variant="outline" onclick={() => handleOpenChange(false)}>Cancel</Button>
+			<Button variant="secondary" size="sm" onclick={() => handleOpenChange(false)}>Cancel</Button>
 
-			<Button onclick={saveNewPrompt} disabled={!!saveError}>Add</Button>
+			<Button size="sm" onclick={saveNewPrompt} disabled={!!saveError}>Add</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

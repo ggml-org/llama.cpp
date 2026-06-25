@@ -1,16 +1,13 @@
-<!-- Reusable more menu icon with tooltip for dropdown triggers -->
-<svelte:options />
-
 <script lang="ts">
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MarkdownContent, CategoryCombobox } from '$lib/components/app';
+	import { MarkdownContent, CategoryCombobox, DropdownMenuActions } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import Input from '$lib/components/ui/input/input.svelte';
+	import Label from '$lib/components/ui/label/label.svelte';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { promptsStore } from '$lib/stores/prompts.svelte';
-	import { Check, MoreHorizontal, Trash2, Edit, ArrowRight } from '@lucide/svelte';
+	import { MoreHorizontal, Trash2, Edit, ArrowRight } from '@lucide/svelte';
 
 	interface Props {
 		id: string;
@@ -33,6 +30,8 @@
 	let editCategory = $state(category ?? '');
 	let existingCategories = $derived(promptsStore.getCategories());
 	let editTitleError = $derived.by(() => (!editTitle.trim() ? 'Title is required' : null));
+	let editContentError = $derived.by(() => (!editContent.trim() ? 'Content is required' : null));
+	let editSaveError = $derived.by(() => editTitleError || editContentError);
 	let displayCategory = $derived(category && category.trim() ? category.trim() : null);
 
 	// Display state
@@ -76,7 +75,7 @@
 	}
 
 	async function handleSave() {
-		if (editTitleError) return;
+		if (editSaveError) return;
 		const trimmedCategory = editCategory.trim();
 		await promptsStore.updatePrompt(id, {
 			title: editTitle.trim(),
@@ -111,6 +110,17 @@
 			day: 'numeric'
 		});
 	});
+
+	const moreActions = [
+		{ icon: Edit, label: 'Edit', onclick: startEdit },
+		{
+			icon: Trash2,
+			label: 'Delete',
+			onclick: handleDelete,
+			variant: 'destructive' as const,
+			separator: true
+		}
+	];
 </script>
 
 <div class="group relative flex flex-col gap-2">
@@ -129,7 +139,7 @@
 						style="border: 2px dashed hsl(var(--border)); max-height: var(--max-message-height);"
 					>
 						<div
-							class="relative flex flex-col justify-between rounded-[1.125rem] border-2 border-dashed border-border/50 bg-muted px-6 py-4"
+							class="relative flex flex-col justify-between rounded-[1.125rem] border-2 border-dashed border-border/50 bg-muted p-4"
 							style="overflow-wrap: anywhere; word-break: break-word; min-height: 6rem;"
 						>
 							<!-- Top bar: title, date, more menu -->
@@ -145,44 +155,11 @@
 										{/if}
 									</div>
 								</div>
-								<DropdownMenu.Root>
-									<DropdownMenu.Trigger>
-										<Tooltip.Root>
-											<Tooltip.Trigger>
-												<Button
-													variant="ghost"
-													size="sm"
-													class="h-6 w-6 p-0 hover:bg-transparent data-[state=open]:bg-transparent!"
-													aria-label="More actions"
-												>
-													<MoreHorizontal class="h-3 w-3" />
-												</Button>
-											</Tooltip.Trigger>
-											<Tooltip.Content side="bottom">
-												<p>More actions</p>
-											</Tooltip.Content>
-										</Tooltip.Root>
-									</DropdownMenu.Trigger>
-									<DropdownMenu.Content class="w-32">
-										<DropdownMenu.Item
-											class="flex cursor-pointer items-center gap-2"
-											onclick={startEdit}
-										>
-											<Edit class="h-4 w-4" />
-											<span>Edit</span>
-										</DropdownMenu.Item>
-
-										<DropdownMenu.Separator />
-
-										<DropdownMenu.Item
-											class="flex cursor-pointer items-center gap-2 text-destructive"
-											onclick={handleDelete}
-										>
-											<Trash2 class="h-4 w-4" />
-											<span>Delete</span>
-										</DropdownMenu.Item>
-									</DropdownMenu.Content>
-								</DropdownMenu.Root>
+								<DropdownMenuActions
+									triggerIcon={MoreHorizontal}
+									triggerTooltip="More actions"
+									actions={moreActions}
+								/>
 							</div>
 
 							<!-- Content section -->
@@ -244,7 +221,7 @@
 			<!-- Empty content: still show title/date and actions inside the dashed box -->
 			<div class="relative">
 				<div
-					class="relative flex flex-col justify-between rounded-[1.125rem] border-2 border-dashed border-border/50 bg-muted px-6 py-4 min-h-[6rem]"
+					class="relative flex flex-col justify-between rounded-[1.125rem] border-2 border-dashed border-border/50 bg-muted p-4 min-h-24"
 				>
 					<div class="flex items-start justify-between gap-2">
 						<div class="min-w-0">
@@ -258,44 +235,11 @@
 								{/if}
 							</div>
 						</div>
-						<DropdownMenu.Root>
-							<DropdownMenu.Trigger>
-								<Tooltip.Root>
-									<Tooltip.Trigger>
-										<Button
-											variant="ghost"
-											size="sm"
-											class="h-6 w-6 p-0 hover:bg-transparent data-[state=open]:bg-transparent!"
-											aria-label="More actions"
-										>
-											<MoreHorizontal class="h-3 w-3" />
-										</Button>
-									</Tooltip.Trigger>
-									<Tooltip.Content side="bottom">
-										<p>More actions</p>
-									</Tooltip.Content>
-								</Tooltip.Root>
-							</DropdownMenu.Trigger>
-							<DropdownMenu.Content class="w-32">
-								<DropdownMenu.Item
-									class="flex cursor-pointer items-center gap-2"
-									onclick={startEdit}
-								>
-									<Edit class="h-4 w-4" />
-									<span>Edit</span>
-								</DropdownMenu.Item>
-
-								<DropdownMenu.Separator />
-
-								<DropdownMenu.Item
-									class="flex cursor-pointer items-center gap-2 text-destructive"
-									onclick={handleDelete}
-								>
-									<Trash2 class="h-4 w-4" />
-									<span>Delete</span>
-								</DropdownMenu.Item>
-							</DropdownMenu.Content>
-						</DropdownMenu.Root>
+						<DropdownMenuActions
+							triggerIcon={MoreHorizontal}
+							triggerTooltip="More actions"
+							actions={moreActions}
+						/>
 					</div>
 					<div class="mt-3 flex justify-end">
 						<Button size="sm" class="gap-1.5" onclick={handleStartNewChat}>
@@ -307,42 +251,52 @@
 			</div>
 		{/if}
 	{:else}
-		<div
-			class="space-y-3 rounded-[1.125rem] border-2 border-dashed border-border/50 bg-muted px-6 py-4"
-		>
-			<div class="space-y-1">
-				<label class="text-xs font-medium text-muted-foreground">Title</label>
+		<div class="space-y-6 rounded-[1.125rem] border-2 border-dashed border-border/50 bg-muted p-4">
+			<div class="space-y-2">
+				<Label for="prompt-edit-title" class="text-sm font-medium">Title</Label>
+
 				<Input
-					class="text-foreground"
+					id="prompt-edit-title"
 					type="text"
 					bind:value={editTitle}
-					placeholder="Prompt title"
+					placeholder="e.g. Code Review Assistant"
+					class="w-full"
 				/>
+
 				{#if editTitleError}
 					<p class="text-xs text-destructive">{editTitleError}</p>
 				{/if}
 			</div>
 
-			<div class="space-y-1">
-				<label class="text-xs font-medium text-muted-foreground">Content</label>
-				<textarea
-					class="flex min-h-[100px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-					placeholder="Prompt content..."
+			<div class="space-y-2">
+				<Label for="prompt-edit-content" class="text-sm font-medium">Content</Label>
+
+				<Textarea
+					id="prompt-edit-content"
 					bind:value={editContent}
+					placeholder="Enter prompt content..."
+					class="min-h-[10rem] w-full"
+				/>
+
+				{#if editContentError}
+					<p class="text-xs text-destructive">{editContentError}</p>
+				{/if}
+			</div>
+
+			<div class="flex flex-col gap-2">
+				<label for="prompt-edit-category" class="text-sm font-medium">Category</label>
+
+				<CategoryCombobox
+					id="prompt-edit-category"
+					bind:value={editCategory}
+					categories={existingCategories}
 				/>
 			</div>
 
-			<div class="space-y-1">
-				<label class="text-xs font-medium text-muted-foreground">Category</label>
-				<CategoryCombobox bind:value={editCategory} categories={existingCategories} />
-			</div>
+			<div class="flex items-center justify-end gap-2">
+				<Button variant="secondary" size="sm" onclick={handleCancel}>Cancel</Button>
 
-			<div class="flex justify-end gap-2">
-				<Button size="sm" variant="outline" onclick={handleCancel}>Cancel</Button>
-				<Button size="sm" onclick={handleSave} disabled={!!editTitleError}>
-					<Check class="mr-1 h-3 w-3" />
-					Save
-				</Button>
+				<Button size="sm" onclick={handleSave} disabled={!!editSaveError}>Save</Button>
 			</div>
 		</div>
 	{/if}
