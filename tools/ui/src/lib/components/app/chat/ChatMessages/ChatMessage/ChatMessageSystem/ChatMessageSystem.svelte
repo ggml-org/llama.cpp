@@ -136,14 +136,15 @@
 
 			<div class="mt-2 flex flex-col items-end gap-2">
 				{#if !deferSystemPromptSave}
-					<label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+					<label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground mt-1 mb-2">
 						<input
 							type="checkbox"
 							class="h-4 w-4 rounded border-input"
 							checked={addToLibrary}
 							onchange={(e) => onAddToLibraryChange?.((e.target as HTMLInputElement).checked)}
 						/>
-						Add to library
+
+						Add to Prompts library
 					</label>
 				{/if}
 
