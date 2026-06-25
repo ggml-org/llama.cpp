@@ -774,7 +774,14 @@ typedef struct {
     size_t                    mask_vtcm_row_stride;  // elements (__fp16) per row in VTCM mask buffer
 } fa_softmax_args_t;
 
-static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
+static inline void fa_softmax_impl(
+    unsigned int n, unsigned int i, void * data,
+    const bool has_mask,
+    const bool mask_broadcast,
+    const bool is_g1,
+    const bool has_alibi,
+    const bool has_softcap
+) {
     fa_softmax_args_t *     args  = (fa_softmax_args_t *) data;
     struct hmx_fa_context * factx = args->factx;
 
@@ -784,7 +791,7 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
     const size_t G              = args->G;
     const size_t n_tiles_per_bc = args->n_tiles_per_bc;
     const size_t n_row_vec_cnt  = hmx_ceil_div(n_rows_g, 64);
-    const uint32_t im3          = args->mask ? fastmodulo(args->ib3, args->mask->ne[3], &factx->src3_div3) : 0;
+    const uint32_t im3          = has_mask ? fastmodulo(args->ib3, args->mask->ne[3], &factx->src3_div3) : 0;
 
     const size_t vecs_per_t = hmx_ceil_div(n_row_vec_cnt, n);
     const size_t vec_start  = i * vecs_per_t;
@@ -835,7 +842,7 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
             }
 
             // Apply softcap if enabled (in F32 precision)
-            if (factx->logit_softcap != 0.0f) {
+            if (has_softcap) {
                 float cap = factx->logit_softcap;
 #ifdef HMX_FA_USE_EXP2_HF
                 cap *= 1.44269504f;  // log2(e)
@@ -861,8 +868,9 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
             }
 
             // Apply mask & compute rowmax(S)
-            HVX_Vector v_slope0, v_slope1;
-            if (args->has_alibi) {
+            HVX_Vector v_slope0 = Q6_V_vzero();
+            HVX_Vector v_slope1 = Q6_V_vzero();
+            if (has_alibi) {
                 HVX_Vector v_s = hvx_vmemu(args->slopes + r);
                 v_slope0 = hvx_vec_repl_f16(v_s);
                 v_slope1 = (r + 1 < (int) n_rows_g) ? hvx_vec_repl_f16(Q6_V_vror_VR(v_s, 2)) : Q6_V_vzero();
@@ -877,47 +885,39 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                 const size_t   ne          = hex_smin(kv_rows - c, 64);
                 HVX_VectorPred q_tail_keep = Q6_Q_vsetq2_R(ne * sizeof(__fp16));
 
-                if (args->mask) {
+                if (has_mask) {
                     HVX_Vector v_mask0, v_mask1;
 
-                    if (args->mask_vtcm) {
-                        // Read mask from VTCM buffer (DMA'd per KV block).
-                        const size_t qi0 = fastdiv(r + 0, &factx->div_G);
-                        v_mask0 = *(const HVX_UVector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
-                        v_mask1 = v_neg_inf;
-                        if (r + 1 < (int) n_rows_g) {
-                            const size_t qi1 = fastdiv(r + 1, &factx->div_G);
-                            if (qi1 == qi0) {
-                                v_mask1 = v_mask0;
-                            } else {
+                    if (mask_broadcast) {
+                        if (is_g1) {
+                            const size_t qi0 = r + 0;
+                            v_mask0 = *(const HVX_UVector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
+                            v_mask1 = v_neg_inf;
+                            if (r + 1 < (int) n_rows_g) {
+                                const size_t qi1 = r + 1;
                                 v_mask1 = *(const HVX_UVector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
+                            }
+                        } else {
+                            const size_t qi0 = fastdiv(r + 0, &factx->div_G);
+                            v_mask0 = *(const HVX_UVector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
+                            v_mask1 = v_neg_inf;
+                            if (r + 1 < (int) n_rows_g) {
+                                const size_t qi1 = fastdiv(r + 1, &factx->div_G);
+                                if (qi1 == qi0) {
+                                    v_mask1 = v_mask0;
+                                } else {
+                                    v_mask1 = *(const HVX_UVector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
+                                }
                             }
                         }
                     } else {
-                        // Fallback: read mask directly from DDR (when mask->ne[2] > 1).
-                        const struct htp_tensor * mask   = args->mask;
-                        const size_t              q_idx0 = args->q_start + fastdiv(r + 0, &factx->div_G);
-                        const size_t              h_idx0 = args->kv_head * G + fastmodulo(r + 0, G, &factx->div_G);
-                        const uint32_t            im2_0  = fastmodulo(h_idx0, mask->ne[2], &factx->src3_div2);
-                        const uint32_t            im3_0  = im3;
-
-                        const __fp16 * m0_ptr = (const __fp16 *) ((const uint8_t *) mask->data + q_idx0 * mask->nb[1] +
-                                                        im2_0 * mask->nb[2] + im3_0 * mask->nb[3]) + args->kv_start + c;
-                        v_mask0 = *(const HVX_UVector *) m0_ptr;
+                        // Head-dependent mask: pre-interleaved per row r.
+                        const size_t r0 = r + 0;
+                        v_mask0 = *(const HVX_UVector *) (args->mask_vtcm + r0 * args->mask_vtcm_row_stride + c);
                         v_mask1 = v_neg_inf;
-
                         if (r + 1 < (int) n_rows_g) {
-                            const size_t q_idx1 = args->q_start + fastdiv(r + 1, &factx->div_G);
-                            if (q_idx1 == q_idx0) {
-                                v_mask1 = v_mask0;
-                            } else {
-                                const size_t   h_idx1 = args->kv_head * G + fastmodulo(r + 1, G, &factx->div_G);
-                                const uint32_t im2_1  = fastmodulo(h_idx1, mask->ne[2], &factx->src3_div2);
-                                const uint32_t im3_1  = im3;
-                                const __fp16 * m1_ptr = (const __fp16 *) ((const uint8_t *) mask->data + q_idx1 * mask->nb[1] +
-                                                                im2_1 * mask->nb[2] + im3_1 * mask->nb[3]) + args->kv_start + c;
-                                v_mask1 = *(const HVX_UVector *) m1_ptr;
-                            }
+                            const size_t r1 = r + 1;
+                            v_mask1 = *(const HVX_UVector *) (args->mask_vtcm + r1 * args->mask_vtcm_row_stride + c);
                         }
                     }
 
@@ -925,7 +925,7 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
                     HVX_VectorPred q_keep0 = Q6_Q_and_QQ(Q6_Q_vcmp_gt_VhfVhf(v_mask0, v_threshold), q_tail_keep);
                     HVX_VectorPred q_keep1 = Q6_Q_and_QQ(Q6_Q_vcmp_gt_VhfVhf(v_mask1, v_threshold), q_tail_keep);
 
-                    if (args->has_alibi) {
+                    if (has_alibi) {
                         HVX_Vector v_sm0 = hvx_vec_mul_f16_f16(v_mask0, v_slope0);
                         HVX_Vector v_sm1 = hvx_vec_mul_f16_f16(v_mask1, v_slope1);
                         my_row_buf0[ci]  = Q6_V_vmux_QVV(q_keep0, hvx_vec_add_f16_f16(my_row_buf0[ci], v_sm0), v_neg_inf);
@@ -1032,6 +1032,46 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, (uint16_t) (args->q_start * G + vec_start * 64));
 }
 
+static void fa_softmax_thread_nomask(unsigned int n, unsigned int i, void * data) {
+    fa_softmax_impl(n, i, data,
+                    /*has_mask=*/false,
+                    /*mask_broadcast=*/false,
+                    /*is_g1=*/false,
+                    /*has_alibi=*/false,
+                    /*has_softcap=*/false);
+}
+
+static void fa_softmax_thread_mask_broadcast_g1(unsigned int n, unsigned int i, void * data) {
+    fa_softmax_impl(n, i, data,
+                    /*has_mask=*/true,
+                    /*mask_broadcast=*/true,
+                    /*is_g1=*/true,
+                    /*has_alibi=*/false,
+                    /*has_softcap=*/false);
+}
+
+static void fa_softmax_thread_mask_broadcast_gn(unsigned int n, unsigned int i, void * data) {
+    fa_softmax_impl(n, i, data,
+                    /*has_mask=*/true,
+                    /*mask_broadcast=*/true,
+                    /*is_g1=*/false,
+                    /*has_alibi=*/false,
+                    /*has_softcap=*/false);
+}
+
+static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
+    fa_softmax_args_t *     args  = (fa_softmax_args_t *) data;
+    struct hmx_fa_context * factx = args->factx;
+
+    const bool has_mask       = (args->mask != NULL);
+    const bool mask_broadcast = factx->mask_broadcast;
+    const bool is_g1          = (args->G == 1);
+    const bool has_alibi      = args->has_alibi;
+    const bool has_softcap    = (factx->logit_softcap != 0.0f);
+
+    fa_softmax_impl(n, i, data, has_mask, mask_broadcast, is_g1, has_alibi, has_softcap);
+}
+
 static __attribute__((noinline)) void fa_ml_update_and_build_d(struct hmx_fa_context * factx,
                                                                size_t                  n_rows_g,
                                                                size_t                  n_row_tiles,
@@ -1107,11 +1147,22 @@ static void fa_phase_softmax_and_build_d(struct hmx_fa_context * factx,
     worker_pool_context_t wp = factx->octx->ctx->worker_pool;
     const size_t n_row_vec_cnt = hmx_ceil_div(sargs->n_rows_g, 64);
 
+    worker_callback_t softmax_fn = fa_softmax_thread;
+    if (sargs->mask == NULL && factx->logit_softcap == 0.0f && !sargs->has_alibi) {
+        softmax_fn = fa_softmax_thread_nomask;
+    } else if (sargs->mask != NULL && factx->mask_broadcast && factx->logit_softcap == 0.0f && !sargs->has_alibi) {
+        if (sargs->G == 1) {
+            softmax_fn = fa_softmax_thread_mask_broadcast_g1;
+        } else {
+            softmax_fn = fa_softmax_thread_mask_broadcast_gn;
+        }
+    }
+
     if (factx->n_threads > 1 && n_row_vec_cnt >= 2) {
         uint32_t n_use = (uint32_t) hex_smin((size_t) factx->n_threads, n_row_vec_cnt);
-        worker_pool_run_func(wp, fa_softmax_thread, sargs, n_use);
+        worker_pool_run_func(wp, softmax_fn, sargs, n_use);
     } else {
-        fa_softmax_thread(1, 0, sargs);
+        softmax_fn(1, 0, sargs);
     }
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[0] : NULL;
@@ -1525,11 +1576,20 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         dma_queue_pop(dma);  // V
 
                         // Push mask DMA
-                        bool has_mask_dma = false;
-                        if (mask && factx.mask_broadcast) {
-                            const uint8_t * ms_src = (const uint8_t *) mask->data + q_start * mask->nb[1] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
-                            dma_cache_push(dma, &factx.m_cache, ms_src, m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_q_rows);
-                            has_mask_dma = true;
+                        if (mask) {
+                            if (factx.mask_broadcast) {
+                                const uint8_t * ms_src = (const uint8_t *) mask->data + q_start * mask->nb[1] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
+                                dma_cache_push(dma, &factx.m_cache, ms_src, m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_q_rows);
+                            } else {
+                                for (uint32_t g = 0; g < G; ++g) {
+                                    const uint32_t h_idx = kv_head * G + g;
+                                    const uint32_t im2 = fastmodulo(h_idx, mask->ne[2], &factx.src3_div2);
+                                    const uint8_t * ms_src = (const uint8_t *) mask->data + q_start * mask->nb[1] +
+                                                             im2 * mask->nb[2] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
+                                    uint8_t * ms_dst = (uint8_t *) factx.vtcm_mask_buf + g * m_line_bytes;
+                                    dma_queue_push(dma, dma_make_ptr(ms_dst, ms_src), G * m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_q_rows);
+                                }
+                            }
                         }
 
                         // ---- Phase 1: K_int ----
@@ -1579,7 +1639,17 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         hmx_queue_pop(hmx_q);
 
                         // ---- Phase 3: softmax + build_D ----
-                        __fp16 * current_mask_vtcm = has_mask_dma ? (__fp16 *) dma_queue_pop(dma).dst : NULL;
+                        __fp16 * current_mask_vtcm = NULL;
+                        if (mask) {
+                            if (factx.mask_broadcast) {
+                                current_mask_vtcm = (__fp16 *) dma_queue_pop(dma).dst;
+                            } else {
+                                for (uint32_t g = 0; g < G; ++g) {
+                                    dma_queue_pop(dma);
+                                }
+                                current_mask_vtcm = factx.vtcm_mask_buf;
+                            }
+                        }
 
                         fa_softmax_args_t sargs;
                         memset(&sargs, 0, sizeof(sargs));
@@ -1638,11 +1708,20 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         dma_queue_pop(dma);  // K
                         dma_queue_pop(dma);  // V
 
-                        bool has_mask_dma = false;
-                        if (mask && factx.mask_broadcast) {
-                            const uint8_t * ms_src = (const uint8_t *) mask->data + q_start * mask->nb[1] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
-                            dma_cache_push(dma, &factx.m_cache, ms_src, m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_q_rows);
-                            has_mask_dma = true;
+                        if (mask) {
+                            if (factx.mask_broadcast) {
+                                const uint8_t * ms_src = (const uint8_t *) mask->data + q_start * mask->nb[1] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
+                                dma_cache_push(dma, &factx.m_cache, ms_src, m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_q_rows);
+                            } else {
+                                for (uint32_t g = 0; g < G; ++g) {
+                                    const uint32_t h_idx = kv_head * G + g;
+                                    const uint32_t im2 = fastmodulo(h_idx, mask->ne[2], &factx.src3_div2);
+                                    const uint8_t * ms_src = (const uint8_t *) mask->data + q_start * mask->nb[1] +
+                                                             im2 * mask->nb[2] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
+                                    uint8_t * ms_dst = (uint8_t *) factx.vtcm_mask_buf + g * m_line_bytes;
+                                    dma_queue_push(dma, dma_make_ptr(ms_dst, ms_src), G * m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_q_rows);
+                                }
+                            }
                         }
                         if (kv_blk + 1 < factx.n_kv_blocks) {
                             const uint32_t  prefetch_start = (kv_blk + 1) * Bc;
@@ -1678,7 +1757,17 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             htp_trace_event_stop(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
                         }
 
-                        __fp16 * current_mask_vtcm = has_mask_dma ? (__fp16 *) dma_queue_pop(dma).dst : NULL;
+                        __fp16 * current_mask_vtcm = NULL;
+                        if (mask) {
+                            if (factx.mask_broadcast) {
+                                current_mask_vtcm = (__fp16 *) dma_queue_pop(dma).dst;
+                            } else {
+                                for (uint32_t g = 0; g < G; ++g) {
+                                    dma_queue_pop(dma);
+                                }
+                                current_mask_vtcm = factx.vtcm_mask_buf;
+                            }
+                        }
 
                         fa_softmax_args_t sargs;
                         memset(&sargs, 0, sizeof(sargs));
