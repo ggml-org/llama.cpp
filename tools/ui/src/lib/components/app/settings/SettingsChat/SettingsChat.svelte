@@ -146,8 +146,7 @@
 		<div class="mx-auto max-w-3xl flex-1">
 			<div class="space-y-6 p-4 md:p-6 md:pt-28">
 				<div class="grid">
-					<div class="mb-6 flex items-center gap-2 border-b border-border/30 pb-6 md:flex">
-						<currentSection.icon class="h-5 w-5" />
+					<div class="mb-6 border-b border-border/30 pb-6 md:flex">
 						<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 					</div>
 
