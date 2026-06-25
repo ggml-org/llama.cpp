@@ -127,6 +127,7 @@ export interface MCPConnection {
 	client: Client;
 	transport: Transport;
 	tools: Tool[];
+	prompts: MCPPromptInfo[];
 	serverName: string;
 	transportType: MCPTransportType;
 	serverInfo?: MCPServerInfo;

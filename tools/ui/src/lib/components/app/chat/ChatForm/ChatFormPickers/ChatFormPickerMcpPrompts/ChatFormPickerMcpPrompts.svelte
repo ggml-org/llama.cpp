@@ -16,7 +16,6 @@
 		ChatFormPickerList,
 		ChatFormPickerListItem,
 		ChatFormPickerItemHeader,
-		ChatFormPickerListItemSkeleton,
 		ChatFormPromptPickerArgumentForm
 	} from '$lib/components/app/chat';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
@@ -65,8 +64,11 @@
 		// system-prompt request, even after the user submits the argument form.
 	}
 
-	let prompts = $state<MCPPromptInfo[]>([]);
-	let isLoading = $state(false);
+	// Prompts are eagerly fetched inside `MCPService.connect` and surfaced
+	// synchronously via `mcpStore.allPrompts`. Local `state($state)` is still
+	// needed for fields we mutate while the picker is open (selected prompt,
+	// arg form, etc.).
+	let prompts = $derived(mcpStore.allPrompts);
 	let selectedPrompt = $state<MCPPromptInfo | null>(null);
 	let promptArgs = $state<Record<string, string>>({});
 	let selectedIndex = $state(0);
@@ -90,9 +92,12 @@
 		return map;
 	});
 
+	// Ensure MCP connections are established when the picker opens; this only
+	// kicks off initialization if it hasn't happened yet. Prompts become
+	// reactive automatically as they arrive from `mcpStore.allPrompts`.
 	$effect(() => {
 		if (isOpen) {
-			loadPrompts();
+			void mcpStore.ensureInitialized(conversationsStore.getAllMcpServerOverrides());
 			selectedIndex = 0;
 		} else {
 			selectedPrompt = null;
@@ -108,33 +113,10 @@
 	});
 
 	$effect(() => {
-		if (isOpen && pendingPromptKey && prompts.length > 0 && !isLoading) {
+		if (isOpen && pendingPromptKey && prompts.length > 0) {
 			applyPendingPrompt();
 		}
 	});
-
-	async function loadPrompts() {
-		isLoading = true;
-
-		try {
-			const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-
-			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
-
-			if (!initialized) {
-				prompts = [];
-
-				return;
-			}
-
-			prompts = await mcpStore.getAllPrompts();
-		} catch (error) {
-			console.error('[ChatFormPickerMcpPrompts] Failed to load prompts:', error);
-			prompts = [];
-		} finally {
-			isLoading = false;
-		}
-	}
 
 	function handlePromptClick(prompt: MCPPromptInfo) {
 		const args = prompt.arguments ?? [];
@@ -455,7 +437,7 @@
 	{:else}
 		<ChatFormPickerList
 			items={filteredPrompts}
-			{isLoading}
+			isLoading={false}
 			{selectedIndex}
 			bind:searchQuery={internalSearchQuery}
 			{showSearchInput}
@@ -487,10 +469,6 @@
 						{/snippet}
 					</ChatFormPickerItemHeader>
 				</ChatFormPickerListItem>
-			{/snippet}
-
-			{#snippet skeleton()}
-				<ChatFormPickerListItemSkeleton titleWidth="w-32" showBadge />
 			{/snippet}
 		</ChatFormPickerList>
 	{/if}
