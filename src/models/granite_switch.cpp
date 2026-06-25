@@ -114,7 +114,8 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
 
 // router K dim-0 is +GAIN for a control token and -GAIN otherwise; in the causal
 // softmax a single visible control token then dominates, so the readback recovers
-// its adapter slot. 15.0 matches the vLLM/HF default and is F16-safe.
+// its adapter slot. This assumes the HF control_token_gain default of 15.0 (the
+// only value IBM ships); it is not read from the GGUF. 15.0 is also F16-safe.
 static constexpr float GRANITE_SWITCH_ROUTER_GAIN = 15.0f;
 
 void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
@@ -159,7 +160,7 @@ std::unique_ptr<llm_graph_context> llama_model_granite_switch::build_arch_graph(
     return std::make_unique<graph>(*this, params);
 }
 
-// per-token switched LoRA delta: B_a·(A_a·x), adapter selected per token via ids.
+// per-token switched LoRA delta: B_a*(A_a*x), adapter selected per token via ids.
 // cur: {n_in, n_tokens}, ids: {n_tokens} -> {n_out, n_tokens}
 ggml_tensor * llama_model_granite_switch::graph::build_switched_lora_delta(
           ggml_tensor * lora_a,
@@ -233,7 +234,7 @@ llama_model_granite_switch::graph::graph(
 
     // router attention: a single causal head whose K/V live in the KV cache at
     // layer R, recovering the per-token adapter index in-graph. Only dim 0 carries
-    // signal (Q[0]=1, K[0]=±gain, V[0]=slot/0), rest zero-padded; no RoPE. State is
+    // signal (Q[0]=1, K[0]=+/-gain, V[0]=slot/0), rest zero-padded; no RoPE. State is
     // isolated per-sequence because the K/V stay in the per-sequence KV cache.
     const int R = hparams.router_layer;
     GGML_ASSERT(R >= 0);
