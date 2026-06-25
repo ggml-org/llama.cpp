@@ -129,7 +129,6 @@ static const char * htp_event_name(uint16_t id) {
         case HTP_TRACE_EVT_HVX_O_PROC:     return "HVX_O_PROC";
         case HTP_TRACE_EVT_HVX_FA_QK:      return "HVX_QK_FA";
         case HTP_TRACE_EVT_HVX_FA_SFM:     return "HVX_SFM_FA";
-        case HTP_TRACE_EVT_HVX_FA_PV:      return "HVX_PV_FA";
         case HTP_TRACE_EVT_HMX_COMP:       return "HMX_COMP";
         default:                           return "UNKNOWN";
     }

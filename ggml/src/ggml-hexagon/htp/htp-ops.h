@@ -178,7 +178,6 @@ enum htp_trace_event_id {
     HTP_TRACE_EVT_HVX_O_PROC          = 25,
     HTP_TRACE_EVT_HVX_FA_QK           = 26,
     HTP_TRACE_EVT_HVX_FA_SFM          = 27,
-    HTP_TRACE_EVT_HVX_FA_PV           = 28,
 
     HTP_TRACE_EVT_HMX_COMP            = 40,
 };

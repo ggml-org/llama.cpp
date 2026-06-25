@@ -366,9 +366,6 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
                     p_sum_vec = HVX_OP_ADD_F32(p_sum_vec, P);
 
-                    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
-                    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_PV, ir);
-
                     // 5. Accumulate V
                     __fp16 __attribute__((aligned(VLEN))) p_arr[VLEN_FP16];
                     hvx_vec_f32_to_f16_a(p_arr, P, hvx_vec_splat_f32(0));
@@ -400,17 +397,12 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                         const uint8_t * v_ptr = v_base + cur_ic * factx->size_v_row_padded;
                         hvx_mad_f32_f16_aa_rx2(VKQ32, v_ptr, v_ptr + factx->size_v_row_padded, (p_arr + j), (p_arr + j + 1), DV);
                     }
-                    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_PV, ir);
-                    if (ic2 + VLEN_FP32 < current_block_size) {
-                        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
-                    }
                 }
 
-                htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
                 p_sum_vec = hvx_vec_reduce_sum_f32(p_sum_vec);
                 S_vec = HVX_OP_ADD_F32(HVX_OP_MUL_F32(S_vec, ms_vec), p_sum_vec);
-                htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
             }
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
 
             // Issue DMA for next+1 block (if exists)
             if (ib + 2 < factx->n_blocks) {
