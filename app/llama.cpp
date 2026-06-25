@@ -118,11 +118,24 @@ static bool matches(const std::string & arg, const command & cmd) {
     return false;
 }
 
+static bool is_cmd(std::string arg) {
+    for (const auto & cmd : cmds) {
+        if (matches(arg, cmd)) {
+            return true;
+        }
+    }
+    return false
+}
+
 int main(int argc, char ** argv) {
     progname = argv[0];
 
-    const std::string arg = argc >= 2 ? argv[1] : "help";
+    const bool help_cmd = argc >= 3 && argv[1] == "help" && is_cmd(argv[2]);
 
+    if (help_cmd) {
+        return main(3, {argv[2], "--help");
+    }
+    
     for (const auto & cmd : cmds) {
         if (matches(arg, cmd)) {
             // keep cmd.name so the router's child processes re-invoke correctly
