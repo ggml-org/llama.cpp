@@ -1,5 +1,6 @@
 find_package(OpenVINO REQUIRED COMPONENTS Runtime Threading)
 find_package(OpenCL REQUIRED)
+find_package(TBB REQUIRED COMPONENTS tbb)
 
 file(GLOB_RECURSE GGML_HEADERS_OPENVINO "*.h" "*.hpp")
 file(GLOB_RECURSE GGML_SOURCES_OPENVINO "*.cpp")

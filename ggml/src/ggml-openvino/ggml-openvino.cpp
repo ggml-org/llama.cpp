@@ -167,13 +167,31 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
         tensor->data = (char *) ctx->data + ((char *) tensor->data - (char *) data_prev);
     }
 
-    // Views share the extra from view_src
+    // Views may share the extra from view_src, but only when the shape and data
+    // pointer are identical (pure same-buffer alias). For RESHAPE, PERMUTE, or
+    // offset VIEWs that change ne or the data address, a fresh extra must be
+    // created so that the OV tensor has the correct shape and points to the
+    // right memory.  Without this, a RESHAPE output would carry the view_src's
+    // extra (wrong shape), causing an OV shape mismatch at inference time.
     if (tensor->view_src != nullptr) {
         GGML_ASSERT(tensor->view_src->buffer->buft == buffer->buft);
-        if (tensor->view_src->extra != nullptr) {
-            tensor->extra = tensor->view_src->extra;
+        bool can_share_extra = (tensor->data == tensor->view_src->data);
+        for (int i = 0; i < GGML_MAX_DIMS && can_share_extra; i++) {
+            if (tensor->ne[i] != tensor->view_src->ne[i]) {
+                can_share_extra = false;
+            }
         }
-        return GGML_STATUS_SUCCESS;
+        if (can_share_extra && tensor->view_src->extra != nullptr) {
+            tensor->extra = tensor->view_src->extra;
+            return GGML_STATUS_SUCCESS;
+        }
+        // Fall through: create a fresh extra for this tensor with its own shape/data.
+        if (getenv("GGML_OPENVINO_DEBUG_NAIVE") && strstr(tensor->name, "ffn_moe") != nullptr) {
+            GGML_LOG_INFO("init_tensor VIEW fallthrough: %s ne=[%ld,%ld,%ld,%ld] data=%p view_src=%s view_src->ne=[%ld,%ld,%ld,%ld] view_src->data=%p\n",
+                tensor->name, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3], tensor->data,
+                tensor->view_src->name, tensor->view_src->ne[0], tensor->view_src->ne[1],
+                tensor->view_src->ne[2], tensor->view_src->ne[3], tensor->view_src->data);
+        }
     }
 
     ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
@@ -187,6 +205,11 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
             }
             ctx->tensor_extras[tensor] = extra;
             tensor->extra = extra;
+            if (getenv("GGML_OPENVINO_DEBUG_NAIVE") && strstr(tensor->name, "ffn_moe_down_biased") != nullptr) {
+                GGML_LOG_INFO("init_tensor: %s ne=[%ld,%ld,%ld,%ld] data=%p view_src=%s is_remote=%d\n",
+                    tensor->name, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3],
+                    tensor->data, tensor->view_src ? tensor->view_src->name : "null", (int)ctx->is_remote);
+            }
         }
     }
 
@@ -962,6 +985,18 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         // path. Keep the normalization divide on CPU to match the reference.
         if (strncmp(op->name, "ffn_moe_weights_norm", sizeof("ffn_moe_weights_norm") - 1) == 0) {
             return true;
+        }
+        // A VIEW that selects a subset of its source (fewer total elements) is a
+        // non-contiguous strided slice (e.g., per-expert output in MoE).
+        // translate_view op_case=0 passes through the full parent OV node unchanged,
+        // so the OV graph would see the full parent shape instead of the view shape,
+        // causing downstream shape mismatches. Fall back to CPU for stride-correct handling.
+        for (int i = 0; i < 2; i++) {
+            const auto * s = op->src[i];
+            if (s != nullptr && s->op == GGML_OP_VIEW && s->src[0] != nullptr &&
+                ggml_nelements(s) != ggml_nelements(s->src[0])) {
+                return true;
+            }
         }
         break;
     }

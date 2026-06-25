@@ -153,13 +153,29 @@ ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
 
     auto output_type = ggml_decoder->get_ov_type(ggml_tensor);
     ov::Shape output_shape;
+
+    // For VIEW op_case=0 (translate_view passthrough), the OV model output has view_src's shape,
+    // not the VIEW's shape. Setting a smaller output tensor causes the GPU plugin to back-propagate
+    // that size, breaking input shape validation on infer(). Detect op_case=0: src is not itself
+    // a VIEW, AND dims differ in ≠1 dimension (exactly 1 dim diff = op_case=3 Slice).
+    const ::ggml_tensor * out = ggml_tensor;
+    if (ggml_tensor->op == GGML_OP_VIEW && ggml_tensor->view_src != nullptr) {
+        const ::ggml_tensor * vsrc = ggml_tensor->view_src;
+        if (vsrc->op != GGML_OP_VIEW) {
+            int diff_count = 0;
+            for (int d = 0; d < GGML_MAX_DIMS; d++)
+                if (ggml_tensor->ne[d] != vsrc->ne[d]) diff_count++;
+            if (diff_count != 1) out = vsrc;
+        }
+    }
+
     if (ggml_decoder->is_static()) {
         output_shape = infer_request->get_output_tensor(output_index).get_shape();
     } else {
-        output_shape = ggml_decoder->get_shape(ggml_tensor);
+        output_shape = ggml_decoder->get_shape(out);
     }
 
-    ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
+    ov::Tensor output_tensor(output_type, output_shape, out->data);
     return output_tensor;
 }
 
@@ -175,6 +191,14 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             return naive_compute(cgraph, core, device, config);
         }
     }
+
+    // Skip non-naive subgraphs with 0-element nodes for the same reason as naive_compute.
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        if (cgraph->nodes[i]->op != GGML_OP_NONE && ggml_nelements(cgraph->nodes[i]) == 0) {
+            return GGML_STATUS_SUCCESS;
+        }
+    }
+
 
     auto start_time = ggml_time_us();
 
@@ -350,6 +374,13 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
         for (size_t i = 0; i < ov_input_names.size(); i++) {
             auto param_name = ov_input_names[i];
             auto input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
+            if (getenv("GGML_OPENVINO_DEBUG_DYN")) {
+                const auto & ish = input_tensor.get_shape();
+                GGML_LOG_INFO("  dyn set_input[%zu] '%s': shape=[%zu,%zu,%zu,%zu]\n",
+                    i, param_name.c_str(),
+                    ish.size()>0?ish[0]:0, ish.size()>1?ish[1]:0,
+                    ish.size()>2?ish[2]:0, ish.size()>3?ish[3]:0);
+            }
             infer_request->set_input_tensor(i, input_tensor);
 
             if (ggml_openvino_getenv_int("GGML_OPENVINO_DEBUG_INPUT")) {
@@ -363,6 +394,14 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 continue;
             }
             auto output_tensor = create_ov_output_tensor(ggml_decoder, infer_request, i, ggml_tensor);
+            if (getenv("GGML_OPENVINO_DEBUG_DYN")) {
+                const auto & osh = output_tensor.get_shape();
+                GGML_LOG_INFO("  dyn set_output[%zu] '%s': shape=[%zu,%zu,%zu,%zu] ggml='%s' (op=%d)\n",
+                    i, ov_output_names[i].c_str(),
+                    osh.size()>0?osh[0]:0, osh.size()>1?osh[1]:0,
+                    osh.size()>2?osh[2]:0, osh.size()>3?osh[3]:0,
+                    ggml_tensor->name, (int)ggml_tensor->op);
+            }
             infer_request->set_output_tensor(i, output_tensor);
         }
 
@@ -712,6 +751,41 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
         return GGML_STATUS_SUCCESS;
     }
 
+    // Skip subgraphs that contain 0-element tensors (e.g., empty SWA residual index sets produced
+    // when non-SWA layers have no complementary-mask positions to process). These subgraphs are
+    // true no-ops — 0 elements means 0 work. The GPU plugin crashes with a divide-by-zero when
+    // JIT-compiling kernels for 0-dimensional shapes.
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        if (cgraph->nodes[i]->op == GGML_OP_NONE) {
+            continue;
+        }
+        if (ggml_nelements(cgraph->nodes[i]) == 0) {
+            return GGML_STATUS_SUCCESS;
+        }
+    }
+
+    if (getenv("GGML_OPENVINO_DEBUG_NAIVE")) {
+        GGML_LOG_INFO("naive_compute: n_nodes=%d\n", cgraph->n_nodes);
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            auto * n = cgraph->nodes[i];
+            GGML_LOG_INFO("  node[%d]: op=%d name=%s ne=[%ld,%ld,%ld,%ld] data=%p view_src=%s extra=%s\n",
+                i, (int)n->op, n->name,
+                n->ne[0], n->ne[1], n->ne[2], n->ne[3],
+                n->data,
+                n->view_src ? n->view_src->name : "null",
+                n->extra ? "set" : "null");
+            for (int j = 0; j < GGML_MAX_SRC && n->src[j]; j++) {
+                auto * s = n->src[j];
+                GGML_LOG_INFO("    src[%d]: op=%d name=%s ne=[%ld,%ld,%ld,%ld] data=%p view_src=%s extra=%s\n",
+                    j, (int)s->op, s->name,
+                    s->ne[0], s->ne[1], s->ne[2], s->ne[3],
+                    s->data,
+                    s->view_src ? s->view_src->name : "null",
+                    s->extra ? "set" : "null");
+            }
+        }
+    }
+
     bool naive = true;
     auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, naive);
     auto decoder = std::make_shared<GgmlOvDecoder>(cgraph, model_weights);
@@ -741,20 +815,38 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
     for (size_t i = 0; i < ov_params.size(); i++) {
         auto param_name = ov_params[i]->get_friendly_name();
         auto input_tensor = get_ov_input_tensor(decoder, param_name);
+        if (getenv("GGML_OPENVINO_DEBUG_NAIVE")) {
+            const auto & ish = input_tensor.get_shape();
+            GGML_LOG_INFO("  set_input[%zu] '%s': shape=[%zu,%zu,%zu,%zu] data=%p\n",
+                i, param_name.c_str(),
+                ish.size()>0?ish[0]:0, ish.size()>1?ish[1]:0,
+                ish.size()>2?ish[2]:0, ish.size()>3?ish[3]:0,
+                input_tensor.data());
+        }
         infer_request->set_input_tensor(i, input_tensor);
     }
 
     // Use get_output_tensor + memcpy instead of set_output_tensor to avoid memory overwritten
     // when i/o buffer overlaps, e.g. the cgraph is a single PERMUTE
 
-    infer_request->infer();
 
     auto ov_results = model->get_results();
     for (size_t i = 0; i < ov_results.size(); i++) {
-        auto output_tensor = infer_request->get_output_tensor(i);
-        auto * ggml_tensor = decoder->get_model_outputs().at(ov_results[i]->get_friendly_name());
+        // auto output_tensor = infer_request->get_output_tensor(i);
+        // auto * ggml_tensor = decoder->get_model_outputs().at(ov_results[i]->get_friendly_name());
+        auto * res_ggml = decoder->get_model_outputs().at(ov_results[i]->get_friendly_name());
+        auto output_tensor = create_ov_output_tensor(decoder, infer_request, i, res_ggml);
+        if (getenv("GGML_OPENVINO_DEBUG_NAIVE")) {
+            const auto & osh = output_tensor.get_shape();
+            GGML_LOG_INFO("  set_output[%zu] '%s': shape=[%zu,%zu,%zu,%zu] data=%p res_ggml='%s' (op=%d)\n",
+                i, ov_results[i]->get_friendly_name().c_str(),
+                osh.size()>0?osh[0]:0, osh.size()>1?osh[1]:0,
+                osh.size()>2?osh[2]:0, osh.size()>3?osh[3]:0,
+                output_tensor.data(), res_ggml->name, (int)res_ggml->op);
+        }
         std::memcpy(ggml_tensor->data, output_tensor.data(), output_tensor.get_byte_size());
     }
+    infer_request->infer();
     return GGML_STATUS_SUCCESS;
 }
 
@@ -812,6 +904,14 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
         if (extra_base->type == ggml_openvino_extra_base::Type::TENSOR) {
             // GGML_LOG_DEBUG("Using ggml_tensor->extra as ov::Tensor for input: %s\n", name.c_str());
             auto * tensor_extra = static_cast<ggml_openvino_tensor_extra *>(extra_base);
+            if (getenv("GGML_OPENVINO_DEBUG_NAIVE")) {
+                const auto & sh = tensor_extra->tensor->get_shape();
+                GGML_LOG_INFO("  input '%s': from extra, shape=[%zu,%zu,%zu,%zu] ne=[%ld,%ld,%ld,%ld]\n",
+                    name.c_str(),
+                    sh.size()>0?sh[0]:0, sh.size()>1?sh[1]:0, sh.size()>2?sh[2]:0, sh.size()>3?sh[3]:0,
+                    ggml_tensor->ne[0], ggml_tensor->ne[1], ggml_tensor->ne[2], ggml_tensor->ne[3]
+                );
+            }
             return *tensor_extra->tensor;
         }
     }
@@ -828,6 +928,14 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
 
     if (ggml_decoder->is_splited_model() && !ggml_is_contiguous(ggml_tensor)) {
         return make_contiguous_split_input_tensor(ggml_decoder, ggml_tensor, input_shape);
+    }
+    if (getenv("GGML_OPENVINO_DEBUG_NAIVE")) {
+        GGML_LOG_INFO("  input '%s': from ne, shape=[%zu,%zu,%zu,%zu] ne=[%ld,%ld,%ld,%ld] op=%d\n",
+            name.c_str(),
+            input_shape.size()>0?input_shape[0]:0, input_shape.size()>1?input_shape[1]:0,
+            input_shape.size()>2?input_shape[2]:0, input_shape.size()>3?input_shape[3]:0,
+            ggml_tensor->ne[0], ggml_tensor->ne[1], ggml_tensor->ne[2], ggml_tensor->ne[3],
+            (int)ggml_tensor->op);
     }
 
     auto input_tensor = ov::Tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape, input_data);
