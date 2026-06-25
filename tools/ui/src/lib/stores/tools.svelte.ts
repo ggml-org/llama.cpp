@@ -392,11 +392,14 @@ class ToolsStore {
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
 			this._error = errorMessage;
-			// 404 from /tools means the server was started without --tools
-			if (errorMessage.includes('404') || errorMessage.toLowerCase().includes('not found')) {
+			// 403 from /tools means the server was started without --tools
+			// TODO: check status code instead of relying on message
+			if (errorMessage.includes('this feature is disabled')) {
 				this._toolsEndpointUnreachable = true;
+				console.info('[ToolsStore] Built-in tools are disabled on the server');
+			} else {
+				console.error('[ToolsStore] Failed to fetch built-in tools:', err);
 			}
-			console.error('[ToolsStore] Failed to fetch built-in tools:', err);
 		} finally {
 			this._loading = false;
 		}
