@@ -901,9 +901,6 @@ class GGUFWriter:
     def add_adapter_substitute_token_ids(self, ids: Sequence[int]) -> None:
         self.add_array(Keys.LLM.ADAPTER_SUBSTITUTE_TOKEN_IDS.format(arch=self.arch), ids)
 
-    def add_adapter_ranks(self, ranks: Sequence[int]) -> None:
-        self.add_array(Keys.LLM.ADAPTER_RANKS.format(arch=self.arch), ranks)
-
     def add_max_lora_rank(self, rank: int) -> None:
         self.add_uint32(Keys.LLM.MAX_LORA_RANK.format(arch=self.arch), rank)
 
