@@ -3639,8 +3639,10 @@ static __global__ void mul_mat_q(
     constexpr int blocks_per_iter = ITER_K / qk;
 
     // kbc == k block continuous, current index in continuous ijk space.
-    int kbc      = int64_t(blockIdx.x)    *(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
-    int kbc_stop = int64_t(blockIdx.x + 1)*(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
+    constexpr float eps = 1e-5f;
+    const int kbc_sup = nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z; // kbc supremum
+    int kbc      = blockIdx.x     == 0         ? 0       : (float(blockIdx.x)     + eps) * kbc_sup / gridDim.x;
+    int kbc_stop = blockIdx.x + 1 == gridDim.x ? kbc_sup : (float(blockIdx.x + 1) + eps) * kbc_sup / gridDim.x;
 
     kbc      -= fastmodulo(kbc,      blocks_per_ne00) % blocks_per_iter;
     kbc_stop -= fastmodulo(kbc_stop, blocks_per_ne00) % blocks_per_iter;
@@ -3805,8 +3807,10 @@ static __global__ void mul_mat_q_stream_k_fixup(
     const int bidx0 = blockIdx.x;
 
     // kbc == k block continuous, current index in continuous ijk space.
-    int kbc0      = int64_t(blockIdx.x)    *(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
-    int kbc0_stop = int64_t(blockIdx.x + 1)*(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
+    constexpr float eps = 1e-5f;
+    const int kbc0_sup = nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z; // kbc0 supremum
+    int kbc0      = blockIdx.x     == 0         ? 0        : (float(blockIdx.x)     + eps) * kbc0_sup / gridDim.x;
+    int kbc0_stop = blockIdx.x + 1 == gridDim.x ? kbc0_sup : (float(blockIdx.x + 1) + eps) * kbc0_sup / gridDim.x;
 
     kbc0      -= fastmodulo(kbc0,      blocks_per_ne00) % blocks_per_iter;
     kbc0_stop -= fastmodulo(kbc0_stop, blocks_per_ne00) % blocks_per_iter;
@@ -3825,7 +3829,7 @@ static __global__ void mul_mat_q_stream_k_fixup(
     int bidx = bidx0 - 1;
     int kbc_stop = kbc0;
     while(true) {
-        int kbc = int64_t(bidx)*(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
+        int kbc = bidx == 0 ? 0 : (float(bidx) + eps) * kbc0_sup / gridDim.x;
         kbc -= fastmodulo(kbc, blocks_per_ne00) % blocks_per_iter;
 
         if (kbc == kbc_stop) { // Did not have any data.
