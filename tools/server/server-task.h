@@ -381,7 +381,15 @@ struct server_task_result_cmpl_final : server_task_result {
 
     virtual void update(task_result_state & state) override {
         is_updated = true;
-        oaicompat_msg = state.update_chat_msg(content, false, oaicompat_msg_diffs);
+        // common_chat_parse can throw std::runtime_error when the PEG
+        // parser fails to match the final output (is_partial=false).
+        // During streaming, the same text was parsed with is_partial=true
+        // and succeeded. Only this final parse can throw.
+        try {
+            oaicompat_msg = state.update_chat_msg(content, false, oaicompat_msg_diffs);
+        } catch (const std::exception & e) {
+            SRV_WRN("Final chat parse failed, using last partial result: %s\n", e.what());
+        }
 
         oai_resp_id = state.oai_resp_id;
         oai_resp_reasoning_id = state.oai_resp_reasoning_id;
