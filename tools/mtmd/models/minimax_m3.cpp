@@ -104,7 +104,7 @@ ggml_cgraph * clip_graph_minimax_m3::build() {
             layer.ff_up_w,   layer.ff_up_b,
             nullptr,         nullptr,
             layer.ff_down_w, layer.ff_down_b,
-            FFN_GELU, il);
+            FFN_GELU_ERF, il);
         cb(cur, "ffn_out", il);
 
         cur  = ggml_add(ctx0, inpL, cur);   // residual 2
@@ -116,14 +116,14 @@ ggml_cgraph * clip_graph_minimax_m3::build() {
     ggml_tensor * emb = inpL;                                   // [n_embd, n_pos]
     emb = build_ffn(emb, model.mm_1_w, model.mm_1_b,
                     nullptr, nullptr,
-                    model.mm_2_w, model.mm_2_b, FFN_GELU, -1);   // [proj_dim, n_pos]
+                    model.mm_2_w, model.mm_2_b, FFN_GELU_ERF, -1);   // [proj_dim, n_pos]
 
     const int64_t proj = emb->ne[0];                            // 6144
     emb = ggml_reshape_2d(ctx0, emb, proj * merge * merge, n_pos / (merge * merge)); // [4*proj, n_pos/4]
 
     emb = build_ffn(emb, model.mm_merge_fc1_w, model.mm_merge_fc1_b,
                     nullptr, nullptr,
-                    model.mm_merge_fc2_w, model.mm_merge_fc2_b, FFN_GELU, -1);        // [proj_dim, n_pos/4]
+                    model.mm_merge_fc2_w, model.mm_merge_fc2_b, FFN_GELU_ERF, -1);        // [proj_dim, n_pos/4]
 
     ggml_build_forward_expand(gf, emb);
     return gf;
