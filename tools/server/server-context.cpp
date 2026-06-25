@@ -5196,6 +5196,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         return res;
     }
 
+    if (params.pooling_type == LLAMA_POOLING_TYPE_RANK) {
+        res->error(format_error_response("This server does not support embeddings. Start it with `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
+        return res;
+    }
+
     if (res_type != TASK_RESPONSE_TYPE_NONE && meta->pooling_type == LLAMA_POOLING_TYPE_NONE) {
         res->error(format_error_response("Pooling type 'none' is not OAI compatible. Please use a different pooling type", ERROR_TYPE_INVALID_REQUEST));
         return res;
