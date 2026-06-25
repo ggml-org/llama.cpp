@@ -23,21 +23,38 @@
 
 struct server_process {
     server_process() = default;
-    ~server_process();
 
     server_process(const server_process &) = delete;
     server_process & operator=(const server_process &) = delete;
     server_process(server_process && o) noexcept;
     server_process & operator=(server_process && o) noexcept;
 
-    [[nodiscard]] FILE * get_stdin() const;
-    [[nodiscard]] FILE * get_stdout() const;
-    [[nodiscard]] bool is_alive() const;
+    ~server_process() {
+        terminate();
+        join();
+    }
 
+    [[nodiscard]] FILE * get_stdin() const { return fStdin; }
+    [[nodiscard]] FILE * get_stdout() const { return fStdout; }
+
+    void close_stdin() {
+        if (fStdin) {
+            fclose(fStdin);
+        }
+        fStdin = nullptr;
+    }
+
+    void close_stdout() {
+        if (fStdout) {
+            fclose(fStdout);
+        }
+        fStdout = nullptr;
+    }
+
+    [[nodiscard]] bool is_alive() const;
     void terminate() const;
     int join();
     int run(const std::vector<std::string> & args, const std::vector<std::string> & env);
-
 private:
 #ifdef _WIN32
     HANDLE hHandle = nullptr;

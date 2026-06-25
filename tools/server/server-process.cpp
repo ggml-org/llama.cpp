@@ -86,9 +86,6 @@ static std::wstring escape_cmdline(const std::vector<std::string> & args) {
     return result;
 }
 
-FILE * server_process::get_stdin() const { return fStdin; }
-FILE * server_process::get_stdout() const { return fStdout; }
-
 bool server_process::is_alive() const {
     if (!hHandle) return false;
 
@@ -214,9 +211,6 @@ int server_process::run(const std::vector<std::string> & args, const std::vector
     return 0;
 }
 
-#else
-#endif
-
 server_process::server_process(server_process && o) noexcept
     : hHandle(o.hHandle), fStdin(o.fStdin), fStdout(o.fStdout)
 {
@@ -239,7 +233,152 @@ server_process & server_process::operator=(server_process && o) noexcept {
     return *this;
 }
 
-server_process::~server_process() {
-    terminate();
-    join();
+#else
+
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <cerrno>
+#include <csignal>
+#include <string>
+#include <vector>
+
+extern char ** environ;
+
+bool server_process::is_alive() const {
+    if (pid <= 0 || joined) return false;
+
+    int wstatus = 0;
+    if (const auto r = waitpid(pid, &wstatus, WNOHANG); r == 0) {
+        return true; // still running
+    }
+    return false;
 }
+
+int server_process::join() {
+    if (pid > 0 && !joined) {
+        int wstatus = 0;
+        if (waitpid(pid, &wstatus, 0) > 0) {
+            status = WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
+            joined = true;
+            pid    = 0;
+        }
+    }
+
+    close_stdin();
+    close_stdout();
+
+    return joined ? status : -1;
+}
+
+void server_process::terminate() const {
+    if (pid > 0) {
+        kill(pid, SIGKILL);
+    }
+}
+
+int server_process::run(const std::vector<std::string> & args, const std::vector<std::string> & env) {
+    if (pid > 0) return -1; // already running
+
+    int stdin_pipe[2]  = {-1, -1};
+    int stdout_pipe[2] = {-1, -1};
+
+    if (pipe(stdin_pipe) != 0) return -1;
+    if (pipe(stdout_pipe) != 0) {
+        close(stdin_pipe[0]);
+        close(stdin_pipe[1]);
+        return -1;
+    }
+
+    std::vector<const char *> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto & a : args) argv.push_back(a.c_str());
+    argv.push_back(nullptr);
+
+    std::vector<const char *> envp;
+    if (!env.empty()) {
+        envp.reserve(env.size() + 1);
+        for (const auto & e : env) envp.push_back(e.c_str());
+        envp.push_back(nullptr);
+    }
+
+    const auto child = fork();
+    if (child < 0) {
+        close(stdin_pipe[0]);
+        close(stdin_pipe[1]);
+        close(stdout_pipe[0]);
+        close(stdout_pipe[1]);
+        return -1;
+    }
+
+    if (child == 0) {
+        // child
+        dup2(stdin_pipe[0],  STDIN_FILENO);
+        dup2(stdout_pipe[1], STDOUT_FILENO);
+        dup2(stdout_pipe[1], STDERR_FILENO);
+
+        close(stdin_pipe[0]);
+        close(stdin_pipe[1]);
+        close(stdout_pipe[0]);
+        close(stdout_pipe[1]);
+
+        execve(args.empty() ? nullptr : args[0].c_str(),
+               const_cast<char * const *>(argv.data()),
+               envp.empty() ? environ : const_cast<char * const *>(envp.data()));
+        _exit(127);
+    }
+
+    // parent - close child-side ends
+    close(stdin_pipe[0]);
+    close(stdout_pipe[1]);
+
+    fStdin = fdopen(stdin_pipe[1], "w");
+    if (!fStdin) {
+        close(stdin_pipe[1]);
+        close(stdout_pipe[0]);
+        kill(child, SIGKILL);
+        waitpid(child, nullptr, 0);
+        return -1;
+    }
+
+    fStdout = fdopen(stdout_pipe[0], "r");
+    if (!fStdout) {
+        fclose(fStdin);
+        fStdin = nullptr;
+        close(stdout_pipe[0]);
+        kill(child, SIGKILL);
+        waitpid(child, nullptr, 0);
+        return -1;
+    }
+
+    pid    = child;
+    status = 0;
+    joined = false;
+    return 0;
+}
+
+server_process::server_process(server_process && o) noexcept
+    : pid(o.pid), fStdin(o.fStdin), fStdout(o.fStdout)
+{
+    o.pid = -1;
+    o.fStdin  = nullptr;
+    o.fStdout = nullptr;
+}
+
+server_process & server_process::operator=(server_process && o) noexcept {
+    if (this != &o) {
+        terminate();
+        join();
+        pid  = o.pid;
+        fStdin  = o.fStdin;
+        fStdout = o.fStdout;
+        o.pid  = -1;
+        o.fStdin  = nullptr;
+        o.fStdout = nullptr;
+    }
+    return *this;
+}
+
+#endif
+
+
