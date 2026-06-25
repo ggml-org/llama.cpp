@@ -1818,6 +1818,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
     do {
         const auto & ubatch = mctx->get_ubatch();
 
+        const int32_t pos_max = ubatch.pos_max();
+        if (model.layers[0].rope_freqs == nullptr && model.layers[0].rope_long != nullptr &&
+            pos_max >= (int32_t) model.hparams.n_ctx_orig_yarn) {
+            LLAMA_LOG_WARN("%s: LongRoPE: sequence length (%d) reached n_ctx_orig_yarn (%u), switching to long rope factors, which may give approximate output\n", __func__, pos_max + 1, model.hparams.n_ctx_orig_yarn);
+        }
+
         // count the outputs in this ubatch
         {
             int32_t n_outputs_new = 0;
