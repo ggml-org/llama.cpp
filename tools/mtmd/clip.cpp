@@ -3116,6 +3116,10 @@ struct clip_model_loader {
             }
             return;
         }
+        const auto type = gguf_get_arr_type(ctx_gguf.get(), i);
+        if (type != GGUF_TYPE_INT32) {
+            throw std::runtime_error(string_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_INT32)\n", __func__, key.c_str(), type, GGUF_TYPE_INT32));
+        }
         const size_t n = gguf_get_arr_n(ctx_gguf.get(), i);
         if (n > (size_t) std::numeric_limits<int>::max()) {
             throw std::runtime_error(string_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
