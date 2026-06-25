@@ -443,7 +443,7 @@ static int common_download_file_single_online(const std::string & url,
 
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url,
                                                              const common_remote_params & params) {
-    auto [cli, parts] = common_http_client(url);
+    std::string current_url = url;
 
     httplib::Headers headers;
     for (const auto & h : params.headers) {
@@ -453,26 +453,59 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
         headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
     }
 
-    if (params.timeout > 0) {
-        cli.set_read_timeout(params.timeout, 0);
-        cli.set_write_timeout(params.timeout, 0);
+    // When ssrf_guard is set, httplib's automatic redirect following is disabled
+    // and each hop is validated here, because httplib re-resolves and follows the
+    // attacker-controlled Location header without re-checking the target IP.
+    const int max_hops = params.ssrf_guard ? 10 : 1;
+
+    for (int hop = 0; hop < max_hops; ++hop) {
+        auto [cli, parts] = common_http_client(current_url);
+
+        if (params.ssrf_guard) {
+            if (!common_host_is_safe(parts.host)) {
+                throw std::runtime_error("error: refusing to fetch non-public address: " + parts.host);
+            }
+            cli.set_follow_location(false); // we follow manually, validating each hop
+        }
+
+        if (params.timeout > 0) {
+            cli.set_read_timeout(params.timeout, 0);
+            cli.set_write_timeout(params.timeout, 0);
+        }
+
+        std::vector<char> buf;
+        auto res = cli.Get(parts.path, headers,
+            [&](const char *data, size_t len) {
+                buf.insert(buf.end(), data, data + len);
+                return params.max_size == 0 ||
+                       buf.size() <= static_cast<size_t>(params.max_size);
+            },
+            nullptr
+        );
+
+        if (!res) {
+            throw std::runtime_error("error: cannot make GET request");
+        }
+
+        // guarded redirect handling: validate the next hop before following it
+        if (params.ssrf_guard && res->status >= 300 && res->status < 400 &&
+            res->has_header("Location")) {
+            std::string loc = res->get_header_value("Location");
+            if (loc.rfind("http://", 0) == 0 || loc.rfind("https://", 0) == 0) {
+                current_url = loc;                          // absolute redirect
+            } else if (!loc.empty() && loc[0] == '/') {
+                current_url = parts.scheme + "://" + parts.host + ":" +
+                              std::to_string(parts.port) + loc; // same host, new path
+            } else {
+                throw std::runtime_error("error: unsupported redirect target");
+            }
+            continue;
+        }
+
+        return { res->status, std::move(buf) };
     }
 
-    std::vector<char> buf;
-    auto res = cli.Get(parts.path, headers,
-        [&](const char *data, size_t len) {
-            buf.insert(buf.end(), data, data + len);
-            return params.max_size == 0 ||
-                   buf.size() <= static_cast<size_t>(params.max_size);
-        },
-        nullptr
-    );
-
-    if (!res) {
-        throw std::runtime_error("error: cannot make GET request");
-    }
-
-    return { res->status, std::move(buf) };
+    throw std::runtime_error("error: too many redirects");
 }
 
 int common_download_file_single(const std::string & url,

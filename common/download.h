@@ -28,6 +28,7 @@ struct common_remote_params {
     common_header_list headers;
     long timeout  = 0;           // in seconds, 0 means no timeout
     long max_size = 0;           // unlimited if 0
+    bool ssrf_guard = false;     // reject private/reserved IPs and re-validate every redirect hop
 };
 
 // get remote file content, returns <http_code, raw_response_body>

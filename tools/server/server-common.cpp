@@ -846,6 +846,7 @@ static void handle_media(
         common_remote_params params;
         params.max_size = 1024 * 1024 * 10; // 10MB
         params.timeout  = 10; // seconds
+        params.ssrf_guard = true; // reject private/reserved IPs, re-validate redirect hops
         SRV_INF("downloading image from '%s'\n", url.c_str());
         auto res = common_remote_get_content(url, params);
         if (200 <= res.first && res.first < 300) {
