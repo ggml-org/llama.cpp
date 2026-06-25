@@ -496,7 +496,7 @@ __kernel void flash_attn_f32_q8_0_q1_split(
 }
 
 // Prefill: q8_0 K/V, n_q > 1. BLOCK_M × BLOCK_N tiling.
-// K path keeps packed int8 in local for dp4a QK dot; V path dequant→half in local.
+// K path keeps packed int8 in local for dp4a QK dot; V path dequant -> half in local.
 // Requires DK % QK8_0 == 0 and DV % QK8_0 == 0 (gated in supports_op).
 #define KV_DATA_TYPE4 half4
 #define CONVERT_KV_ACC4(x) convert_float4(x)
@@ -693,7 +693,7 @@ __kernel void flash_attn_f32_q8_0(
                 }
             }
 #else
-            // Fallback: dequant q8_0 → half in local memory.
+            // Fallback: dequant q8_0 -> half in local memory.
             const int k_blocks_per_row = DK / QK8_0;
             const int n_blocks_total = BLOCK_N * k_blocks_per_row;
             for (int i = tid; i < n_blocks_total; i += WG_SIZE) {
@@ -755,7 +755,7 @@ __kernel void flash_attn_f32_q8_0(
         }
 #else
         {
-            // Default: dequant V → half in local memory.
+            // Default: dequant V -> half in local memory.
             const int v_blocks_per_row = DV / QK8_0;
             const int n_blocks_total = BLOCK_N * v_blocks_per_row;
             for (int i = tid; i < n_blocks_total; i += WG_SIZE) {

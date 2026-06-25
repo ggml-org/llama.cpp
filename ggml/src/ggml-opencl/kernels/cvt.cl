@@ -1582,7 +1582,7 @@ kernel void kernel_restore_block_q8_0(
     }
 }
 
-// View-aware AoS q8_0 → f32 dequant (f32/f32 FA path).
+// View-aware AoS q8_0 -> f32 dequant (f32/f32 FA path).
 kernel void kernel_dequant_q8_0_f32_view_aos(
     global char * src,
     ulong         src_offset,
@@ -1618,7 +1618,7 @@ kernel void kernel_dequant_q8_0_f32_view_aos(
     }
 }
 
-// View-aware AoS q8_0 → f16 dequant. Rows tight, batch strides may be gapped.
+// View-aware AoS q8_0 -> f16 dequant. Rows tight, batch strides may be gapped.
 kernel void kernel_dequant_q8_0_f16_view_aos(
     global char * src,
     ulong         src_offset,
@@ -1654,7 +1654,7 @@ kernel void kernel_dequant_q8_0_f16_view_aos(
     }
 }
 
-// View-aware AoS q4_0 → f32 dequant (mirrors the q8_0 view variant).
+// View-aware AoS q4_0 -> f32 dequant (mirrors the q8_0 view variant).
 kernel void kernel_dequant_q4_0_f32_view_aos(
     global char * src,
     ulong         src_offset,
@@ -1694,7 +1694,7 @@ kernel void kernel_dequant_q4_0_f32_view_aos(
     }
 }
 
-// View-aware AoS q4_0 → f16 dequant (mirrors the q8_0 view variant).
+// View-aware AoS q4_0 -> f16 dequant (mirrors the q8_0 view variant).
 kernel void kernel_dequant_q4_0_f16_view_aos(
     global char * src,
     ulong         src_offset,

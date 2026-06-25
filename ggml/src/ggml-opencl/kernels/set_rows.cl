@@ -158,7 +158,7 @@ kernel void kernel_set_rows_f32_i32(
     }
 }
 
-// f32 → q8_0 quantize set_rows. Block = half d + char qs[32].
+// f32 -> q8_0 quantize set_rows. Block = half d + char qs[32].
 #define QK8_0 32
 
 inline void quantize_q8_0_block(global float * x, global char * qs, global half * d_out) {
@@ -440,7 +440,7 @@ kernel void kernel_set_rows_f16_i32(
     }
 }
 
-// f32 → q4_0 quantize set_rows. Block = half d + uchar qs[16] (shuffled
+// f32 -> q4_0 quantize set_rows. Block = half d + uchar qs[16] (shuffled
 // nibbles: qs[j] low/high = elem j / j+16).
 // Dequant: val[i] = d * (nibble_i - 8)
 // nblk0 = number of q4_0 blocks per row = ne00 / 32.

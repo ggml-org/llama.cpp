@@ -11,7 +11,7 @@ struct ggml_opencl_fa_dim {
     int dk; int dv; int bm; int bn; int n_split; int nkv_split_threshold;
 };
 
-// Split variant fires when n_kv >= threshold (threshold=0 → always split).
+// Split variant fires when n_kv >= threshold (threshold=0 -> always split).
 // Default tuning covers Adreno 7xx/8xx mobile and X1-series laptop GPUs.
 static const ggml_opencl_fa_dim g_fa_dims_adreno_default[] = {
     { 40,  40, 64, 32, 1, 0}, { 64,  64, 64, 32, 2, 64},
@@ -45,7 +45,10 @@ static ggml_opencl_fa_dim_table g_opencl_fa_dims = {
 // Unmatched (dk,dv) pairs are warned and ignored.
 static void ggml_opencl_fa_apply_env_overrides() {
     const char * e = std::getenv("GGML_OPENCL_FA_TUNE");
-    if (!e || !e[0]) return;
+    if (!e || !e[0]) {
+        return;
+    }
+
     std::string s = e;
     size_t pos = 0;
     while (pos < s.size()) {
@@ -80,7 +83,9 @@ static void ggml_opencl_fa_apply_env_overrides() {
 // once it has been tuned on hardware.
 static void ggml_cl_init_fa_dims_table() {
     const size_t count = sizeof(g_fa_dims_adreno_default) / sizeof(g_fa_dims_adreno_default[0]);
-    for (size_t i = 0; i < count; ++i) g_fa_dims_runtime[i] = g_fa_dims_adreno_default[i];
+    for (size_t i = 0; i < count; ++i) {
+        g_fa_dims_runtime[i] = g_fa_dims_adreno_default[i];
+    }
     g_opencl_fa_dims = { g_fa_dims_runtime, count };
     ggml_opencl_fa_apply_env_overrides();
 }

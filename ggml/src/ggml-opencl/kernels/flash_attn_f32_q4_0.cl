@@ -13,7 +13,7 @@
 #endif
 
 // Flash attention: Q=f32, K=q4_0, V=q4_0.
-// Block = half d + uchar qs[16]; qs[j] low/high nibble → elem j / j+16.
+// Block = half d + uchar qs[16]; qs[j] low/high nibble -> elem j / j+16.
 // Dequant: val[i] = d * (nibble_i - 8). dp4a path runs on raw 0..15 nibbles
 // and applies the -8*sum(q) correction once per block (needs Q q_sum).
 
@@ -40,7 +40,7 @@ inline float dot_q4_0_f32(const global char * block_ptr, ACC_TYPE4 * q_slice) {
     const global uchar * qs = (const global uchar *)(block_ptr + 2);
 
     float sum = 0.0f;
-    // Low nibbles → elems 0..15.
+    // Low nibbles -> elems 0..15.
     #pragma unroll
     for (int g = 0; g < 4; ++g) {
         float4 nv = (float4)((float)(int)(qs[g*4 + 0] & 0x0F) - 8.0f,
@@ -49,7 +49,7 @@ inline float dot_q4_0_f32(const global char * block_ptr, ACC_TYPE4 * q_slice) {
                              (float)(int)(qs[g*4 + 3] & 0x0F) - 8.0f);
         sum += dot(q_slice[g], nv);
     }
-    // High nibbles → elems 16..31.
+    // High nibbles -> elems 16..31.
     #pragma unroll
     for (int g = 0; g < 4; ++g) {
         float4 nv = (float4)((float)(int)(qs[g*4 + 0] >> 4) - 8.0f,
@@ -137,7 +137,7 @@ inline float dot_q4_0_int(const global char * k_block_ptr,
     for (int i = 0; i < 8; ++i) {
         sum = dot_acc_sat_4x8packed_ss_int(q_packed[i], k_packed[i], sum);
     }
-    // Correct raw-nibble sum: (nibble - 8) bias → subtract 8 * q_sum.
+    // Correct raw-nibble sum: (nibble - 8) bias -> subtract 8 * q_sum.
     return (float)(sum - 8 * q_sum) * q_d * kd;
 }
 #endif // FA_HAVE_INT_DOT
@@ -552,7 +552,7 @@ __kernel void flash_attn_f32_q4_0_q1_split(
 }
 
 // Prefill: q4_0 K/V, n_q > 1. BLOCK_M × BLOCK_N tiling.
-// K in local as packed nibbles + per-block scale; V dequant → half in local.
+// K in local as packed nibbles + per-block scale; V dequant -> half in local.
 // Requires DK % QK4_0 == 0 and DV % QK4_0 == 0.
 #define KV_DATA_TYPE4 half4
 #define CONVERT_KV_ACC4(x) convert_float4(x)
@@ -738,7 +738,7 @@ __kernel void flash_attn_f32_q4_0(
                 }
             }
 #else
-            // Fallback: dequant q4_0 → half in local memory.
+            // Fallback: dequant q4_0 -> half in local memory.
             const int k_blocks_per_row = DK_Q4_BLOCKS_PREFILL;
             const int n_blocks_total = BLOCK_N * k_blocks_per_row;
             for (int i = tid; i < n_blocks_total; i += WG_SIZE) {
@@ -770,7 +770,7 @@ __kernel void flash_attn_f32_q4_0(
             }
 #endif
         }
-        // V tile load — dequant V → half in local memory.
+        // V tile load — dequant V -> half in local memory.
         {
             const int v_blocks_per_row = DV_Q4_BLOCKS_PREFILL;
             const int n_blocks_total = BLOCK_N * v_blocks_per_row;

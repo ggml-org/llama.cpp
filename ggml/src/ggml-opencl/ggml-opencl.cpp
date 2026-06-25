@@ -438,7 +438,8 @@ struct ggml_opencl_fa_kernels {
     // generic prefill tile dims (f16 / f32 paths)
     std::map<std::pair<int, int>, int>       bm;
     std::map<std::pair<int, int>, int>       bn;
-    // failed (variant, (dk, dv)) compile attempts — don't retry
+    // attempted (variant, (dk, dv))
+    // all attempted FA kernels appear here, but those not registered failed compilation
     std::set<std::pair<int, std::pair<int, int>>> variant_attempted;
 };
 
@@ -954,8 +955,10 @@ static cl_program build_program_from_source_ex(cl_context ctx, cl_device_id dev,
     p = clCreateProgramWithSource(ctx, 1, (const char**)&program_buffer, &program_size, &err);
     if(err < 0) {
         GGML_LOG_ERROR("OpenCL error creating program");
-        if (fatal) exit(1);
-        return NULL;
+        if (fatal) {
+            exit(1);
+        }
+        return nullptr;
     }
 
     err = clBuildProgram(p, 0, NULL, compile_opts.c_str(), NULL, NULL);
@@ -967,8 +970,10 @@ static cl_program build_program_from_source_ex(cl_context ctx, cl_device_id dev,
         GGML_LOG_ERROR("ggml_opencl: kernel compile error (err=%d):\n\n%s\n", err, program_log);
         free(program_log);
         clReleaseProgram(p);
-        if (fatal) exit(1);
-        return NULL;
+        if (fatal) {
+            exit(1);
+        }
+        return nullptr;
     }
 
     return p;
@@ -3718,9 +3723,10 @@ static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev);
 // FA per-(dk,dv) tile tuning table + GGML_OPENCL_FA_TUNE override parsing.
 #include "fa_tune.h"
 
-// FA variant key for the per-(dk,dv,variant) lazy compile cache. Each variant
-// compiles lazily on first dispatch (same pattern as the Q4_K GEMM kernels),
-// keeping the Adreno host-memory footprint small.
+// FA variant key for the per-(dk,dv,variant) lazy compile cache.
+// Kernel built on first dispatch to reduce kernel loading time.
+// NB - a warmup run is recommended to get all necessary FA variants compiled
+// before actual runs.
 enum ggml_opencl_fa_variant {
     FA_VARIANT_PRE      = 0,  // prepass kernels (kv_pad, mask_pad, blk)
     FA_VARIANT_F16      = 1,
@@ -3804,11 +3810,11 @@ static std::string ggml_opencl_fa_compile_opts(ggml_backend_opencl_context * bac
     return opts;
 }
 
-// Log compiled private-memory footprint for an FA kernel. On Adreno any
-// non-zero private_mem means the compiler spilled to DDR global memory
+// Log private memory for an FA kernel. Enable via `GGML_OPENCL_FA_LOG_SPILL=1`.
+// On Adreno non-zero private_mem means spilling to global memory due to resource
+// constraint and usually causes performance degradation.
 // (per-work-item, no cache locality) — a strong signal to pick a config
-// with smaller per-thread state (e.g. larger N_SPLIT). Enabled via
-// GGML_OPENCL_FA_LOG_SPILL=1.
+// with smaller per-thread state (e.g. larger N_SPLIT).
 static void ggml_opencl_log_fa_kernel_spill(ggml_backend_opencl_context * backend_ctx,
                                             cl_kernel kernel, const char * name, int dk, int dv) {
     static const bool enabled = []{
@@ -3816,7 +3822,7 @@ static void ggml_opencl_log_fa_kernel_spill(ggml_backend_opencl_context * backen
         return e && e[0] && e[0] != '0';
     }();
 
-    if (!enabled || kernel == NULL) {
+    if (!enabled || kernel == nullptr) {
         return;
     }
 
@@ -3847,18 +3853,21 @@ static void ggml_opencl_ensure_fa_pre_kernels(ggml_backend_opencl_context * back
     }
 
     GGML_LOG_INFO("ggml_opencl: lazy-compiling flash_attn prepass for DK=%d DV=%d\n", dk, dv);
+
     cl_int err;
     const std::string src  = ggml_opencl_fa_kernel_src(FA_VARIANT_PRE);
     const std::string opts = ggml_opencl_fa_compile_opts(backend_ctx, cfg, FA_VARIANT_PRE);
-    cl_program prog_pre_f16 = build_program_from_source(backend_ctx->context, backend_ctx->device, src.c_str(), opts);
+
+    cl_program prog = build_program_from_source(backend_ctx->context, backend_ctx->device, src.c_str(), opts);
+
     cl_kernel k_kv_pad_f16, k_mask_pad_f16, k_blk_f16;
-    CL_CHECK((k_kv_pad_f16  = clCreateKernel(prog_pre_f16, "flash_attn_kv_pad_f16",   &err), err));
-    CL_CHECK((k_mask_pad_f16 = clCreateKernel(prog_pre_f16, "flash_attn_mask_pad_f16", &err), err));
-    CL_CHECK((k_blk_f16     = clCreateKernel(prog_pre_f16, "flash_attn_blk_f16",      &err), err));
+    CL_CHECK((k_kv_pad_f16  = clCreateKernel(prog, "flash_attn_kv_pad_f16",   &err), err));
+    CL_CHECK((k_mask_pad_f16 = clCreateKernel(prog, "flash_attn_mask_pad_f16", &err), err));
+    CL_CHECK((k_blk_f16     = clCreateKernel(prog, "flash_attn_blk_f16",      &err), err));
     backend_ctx->fa.kv_pad_f16[{dk, dv}]   = k_kv_pad_f16;
     backend_ctx->fa.mask_pad_f16[{dk, dv}] = k_mask_pad_f16;
     backend_ctx->fa.blk_f16[{dk, dv}]      = k_blk_f16;
-    CL_CHECK(clReleaseProgram(prog_pre_f16));
+    CL_CHECK(clReleaseProgram(prog));
 
     backend_ctx->fa.f32_f16_bm[{dk, dv}]      = cfg->bm;
     backend_ctx->fa.f32_f16_bn[{dk, dv}]      = cfg->bn;
@@ -3881,6 +3890,7 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
         return false;
     }
 
+    // if a variant has already been compiled
     switch (variant) {
         case FA_VARIANT_F16: {
             if (backend_ctx->fa.f16.count(dk_dv)) {
@@ -3936,9 +3946,8 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
         }
     }
 
-    // Don't retry a variant that failed once.
+    // not registered but attempted - meaning these kernels failed to compile
     const auto attempt_key = std::make_pair(variant, dk_dv);
-
     if (backend_ctx->fa.variant_attempted.count(attempt_key)) {
         return false;
     }
@@ -4076,7 +4085,8 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
             split_thresh[{dk, dv}] = 0;  // quant prefill: always split
             break;
         }
-        default: break;
+        default:
+            break;
     }
     CL_CHECK(clReleaseProgram(prog));
     return true;
@@ -4085,9 +4095,9 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
 // Compile a quant FA split kernel with a hand-picked (BLOCK_M, N_SPLIT) that
 // overrides the default fa_dims tuning, for the DK values where the default
 // N_SPLIT is degenerate for quant prefill:
-//   DK=256: default N_SPLIT=16 leaves DK/32=8 blocks → 0 blocks/split.
+//   DK=256: default N_SPLIT=16 leaves DK/32=8 blocks -> 0 blocks/split.
 //           Override N_SPLIT=8 (1 block/split), BLOCK_M=16.
-//   DK=96 : DK/32 = 3 blocks, not divisible by the default N_SPLIT=2 →
+//   DK=96 : DK/32 = 3 blocks, not divisible by the default N_SPLIT=2 ->
 //           override N_SPLIT=3. BLOCK_M must be 16, not 32: the N_SPLIT=3
 //           QK-partial reduction uses sub_group_shuffle, so all 3 split
 //           threads of a query must land in one subgroup — WG_SIZE =
@@ -4415,6 +4425,8 @@ static void ggml_opencl_print_backend_info(ggml_backend_opencl_device_context * 
         backend_ctx->driver_version.c_str());
     GGML_LOG_INFO("ggml_opencl: vector subgroup broadcast support: %s\n",
         backend_ctx->has_vector_subgroup_broadcast ? "true" : "false");
+    GGML_LOG_INFO("ggml_opencl: subgroup shuffle support: %s\n",
+        backend_ctx->has_subgroup_shuffle ? "true" : "false");
     GGML_LOG_INFO("ggml_opencl: device FP16 support: %s\n",
         backend_ctx->fp16_support ? "true" : "false");
     GGML_LOG_INFO("ggml_opencl: mem base addr align: %u\n",
@@ -4623,8 +4635,6 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     backend_ctx->has_subgroup_shuffle =
         strstr(ext_buffer, "cl_khr_subgroup_shuffle") != NULL ||
         backend_ctx->has_qcom_subgroup_shuffle;
-    GGML_LOG_INFO("ggml_opencl: subgroup shuffle support: %s\n",
-        backend_ctx->has_subgroup_shuffle ? "true" : "false");
 
     cl_uint base_align_in_bits;
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_MEM_BASE_ADDR_ALIGN, sizeof(cl_uint), &base_align_in_bits, NULL));
@@ -5646,7 +5656,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_NEG:
                 case GGML_UNARY_OP_EXP:
-                    // Adreno F16 exp/expm1 overflow even post-half→float convert.
+                    // Adreno F16 exp/expm1 overflow even post-half->float convert.
                     return op->src[0]->type == GGML_TYPE_F32;
                 case GGML_UNARY_OP_EXPM1:
                     return op->src[0]->type == GGML_TYPE_F32;
@@ -5814,56 +5824,55 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]);
         case GGML_OP_MEAN:
             return op->src[0]->type == GGML_TYPE_F32;
-        case GGML_OP_FLASH_ATTN_EXT:
-            {
-                const ggml_tensor * q = op->src[0];
-                const ggml_tensor * k = op->src[1];
-                const ggml_tensor * v = op->src[2];
+        case GGML_OP_FLASH_ATTN_EXT: {
+            const ggml_tensor * q = op->src[0];
+            const ggml_tensor * k = op->src[1];
+            const ggml_tensor * v = op->src[2];
 
-                const int dk = q->ne[0];
-                const int dv = v->ne[0];
+            const int dk = q->ne[0];
+            const int dv = v->ne[0];
 
-                const struct { int dk; int dv; } supported_dims[] = {
-                    { 40,  40}, { 64,  64}, { 80,  80}, { 96,  96},
-                    {112, 112}, {128, 128}, {192, 128},
-                    {192, 192}, {256, 256},
-                };
+            const struct { int dk; int dv; } supported_dims[] = {
+                { 40,  40}, { 64,  64}, { 80,  80}, { 96,  96},
+                {112, 112}, {128, 128}, {192, 128},
+                {192, 192}, {256, 256},
+            };
 
-                bool dims_supported = false;
-                for (size_t i = 0; i < sizeof(supported_dims)/sizeof(supported_dims[0]); ++i) {
-                    if (supported_dims[i].dk == dk && supported_dims[i].dv == dv) {
-                        dims_supported = true;
-                        break;
-                    }
+            bool dims_supported = false;
+            for (size_t i = 0; i < sizeof(supported_dims)/sizeof(supported_dims[0]); ++i) {
+                if (supported_dims[i].dk == dk && supported_dims[i].dv == dv) {
+                    dims_supported = true;
+                    break;
                 }
-                if (!dims_supported) {
-                    return false;
-                }
-
-                const bool is_f32_f32 = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F32 &&
-                                        v->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
-                const bool is_f16_f16 = q->type == GGML_TYPE_F16 && k->type == GGML_TYPE_F16 &&
-                                        v->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16;
-                const bool is_f32_f16 = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 &&
-                                        v->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F32;
-                const bool is_f32_q8_0 = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_Q8_0 &&
-                                         v->type == GGML_TYPE_Q8_0 && op->type == GGML_TYPE_F32 &&
-                                         dk % 32 == 0 && dv % 32 == 0;
-                const bool is_f32_q4_0 = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_Q4_0 &&
-                                         v->type == GGML_TYPE_Q4_0 && op->type == GGML_TYPE_F32 &&
-                                         dk % 32 == 0 && dv % 32 == 0;
-
-                // Asymmetric KV: host-dequants both sides to F32, uses f32 kernel.
-                auto is_kv_type_ok = [](ggml_type t) {
-                    return t == GGML_TYPE_F16 || t == GGML_TYPE_F32 ||
-                           t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q8_0;
-                };
-                const bool is_f32_asym = q->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
-                                         k->type != v->type &&
-                                         is_kv_type_ok(k->type) && is_kv_type_ok(v->type);
-
-                return is_f32_f32 || is_f16_f16 || is_f32_f16 || is_f32_q8_0 || is_f32_q4_0 || is_f32_asym;
             }
+            if (!dims_supported) {
+                return false;
+            }
+
+            const bool is_f32_f32  = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F32 &&
+                                     v->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+            const bool is_f16_f16  = q->type == GGML_TYPE_F16 && k->type == GGML_TYPE_F16 &&
+                                     v->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16;
+            const bool is_f32_f16  = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 &&
+                                     v->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F32;
+            const bool is_f32_q8_0 = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_Q8_0 &&
+                                     v->type == GGML_TYPE_Q8_0 && op->type == GGML_TYPE_F32 &&
+                                     dk % 32 == 0 && dv % 32 == 0;
+            const bool is_f32_q4_0 = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_Q4_0 &&
+                                     v->type == GGML_TYPE_Q4_0 && op->type == GGML_TYPE_F32 &&
+                                     dk % 32 == 0 && dv % 32 == 0;
+
+            // Asymmetric KV: host-dequants both sides to F32, uses f32 kernel.
+            auto is_kv_type_ok = [](ggml_type t) {
+                return t == GGML_TYPE_F16 || t == GGML_TYPE_F32 ||
+                       t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q8_0;
+            };
+            const bool is_f32_asym = q->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                                     k->type != v->type &&
+                                     is_kv_type_ok(k->type) && is_kv_type_ok(v->type);
+
+            return is_f32_f32 || is_f16_f16 || is_f32_f16 || is_f32_q8_0 || is_f32_q4_0 || is_f32_asym;
+        }
         default:
             return false;
     }
@@ -9358,7 +9367,8 @@ static void ggml_cl_get_rows(ggml_backend_t backend, const ggml_tensor * src0, c
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
-// True iff tensor's on-device layout was converted to SoA by set_tensor.
+// check if a Q8_0 tensor has been SOA'ed in set_tensor
+// we store SOA'ed tensors in a map in set_tensor, check against that map
 static bool ggml_cl_is_q8_0_soa(const ggml_tensor * tensor) {
     if (tensor == nullptr || tensor->type != GGML_TYPE_Q8_0 || tensor->buffer == nullptr) {
         return false;
@@ -9371,7 +9381,8 @@ static bool ggml_cl_is_q8_0_soa(const ggml_tensor * tensor) {
     return ctx->q8_0_soa_tensors.count(key) > 0;
 }
 
-// Q4_0 SoA counterpart.
+// check if a Q4_0 tensor has been SOA'ed in set_tensor
+// we store SOA'ed tensors in a map in set_tensor, check against that map
 static bool ggml_cl_is_q4_0_soa(const ggml_tensor * tensor) {
     if (tensor == nullptr || tensor->type != GGML_TYPE_Q4_0 || tensor->buffer == nullptr) {
         return false;
@@ -9397,29 +9408,16 @@ static void ggml_cl_set_rows(ggml_backend_t backend, const ggml_tensor * src0, c
     // ne2 = ne02
     // ne3 = ne03
 
-    const int      ne01 = src0->ne[1];
-    const int      ne02 = src0->ne[2];
-    const int      ne03 = src0->ne[3];
+    GGML_TENSOR_LOCALS(int,      ne0, src0, ne);
+    GGML_TENSOR_LOCALS(cl_ulong, nb0, src0, nb);
 
-    const cl_ulong nb01 = src0->nb[1];
-    const cl_ulong nb02 = src0->nb[2];
-    const cl_ulong nb03 = src0->nb[3];
+    GGML_TENSOR_LOCALS(int,      ne1, src1, ne);
+    GGML_TENSOR_LOCALS(cl_ulong, nb1, src1, nb);
 
-    const int      ne11 = src1->ne[1];
-    const int      ne12 = src1->ne[2];
-
-    const cl_ulong nb10 = src1->nb[0];
-    const cl_ulong nb11 = src1->nb[1];
-    const cl_ulong nb12 = src1->nb[2];
-
-    const int      ne0  = dst->ne[0];
-
-    const cl_ulong nb1  = dst->nb[1];
-    const cl_ulong nb2  = dst->nb[2];
-    const cl_ulong nb3  = dst->nb[3];
+    GGML_TENSOR_LOCALS(int,      ne, dst, ne);
+    GGML_TENSOR_LOCALS(cl_ulong, nb, dst, nb);
 
     const int nblk0 = ne0/ggml_blck_size(dst->type);
-
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
@@ -12148,7 +12146,8 @@ static void ggml_cl_flash_attn_read_tensor_host(
         const ggml_tensor *           tensor,
         cl_mem src_buffer, cl_ulong src_offset,
         cl_ulong src_nb1, cl_ulong src_nb2, cl_ulong src_nb3,
-        size_t row_bytes, void * dst, size_t total_bytes) {
+        size_t row_bytes, void * dst, size_t total_bytes
+) {
     const bool contiguous_layout =
         src_nb1 == row_bytes &&
         src_nb2 == row_bytes * (cl_ulong) tensor->ne[1] &&
@@ -12188,7 +12187,8 @@ static bool ggml_cl_flash_attn_reconstruct_aos(
         cl_ulong &                            out_offset,
         cl_ulong &                            out_nb1,
         cl_ulong &                            out_nb2,
-        cl_ulong &                            out_nb3) {
+        cl_ulong &                            out_nb3
+) {
     if (tensor == nullptr) {
         return false;
     }
@@ -12198,9 +12198,10 @@ static bool ggml_cl_flash_attn_reconstruct_aos(
         return false;
     }
 
-    // For views, SoA extra is on view_src (view->extra is pre-SoA). The q4_0
-    // noshuffle variant never applies — set_tensor only picks it for 2D
-    // weights, which aren't FA inputs.
+    // For views, SoA extra is on view_src (view->extra is pre-SoA).
+    // Noshuffle layout only applies to 2D weights, as determined by `use_adreno_kernels`,
+    // where ne2 == 1 and ne3 == 1 -- these are never FA inputs.
+    // Therefore, we use `restore_block_qk_0` kernels, not `restore_block_qk_0_noshuffle`.
     const ggml_tensor * soa_src = tensor->view_src ? tensor->view_src : tensor;
     cl_mem extra_q = NULL;
     cl_mem extra_d = NULL;
@@ -12260,9 +12261,11 @@ static bool ggml_cl_flash_attn_dequant_kv_gpu(
         cl_ulong &                       out_offset,
         cl_ulong &                       out_nb1,
         cl_ulong &                       out_nb2,
-        cl_ulong &                       out_nb3) {
+        cl_ulong &                       out_nb3
+) {
     GGML_ASSERT(tensor->type == GGML_TYPE_Q8_0 || tensor->type == GGML_TYPE_Q4_0);
     GGML_ASSERT(target_type == GGML_TYPE_F16 || target_type == GGML_TYPE_F32);
+
     const bool is_q8_0 = tensor->type == GGML_TYPE_Q8_0;
 
     cl_mem   src_buf    = in_src_buf;
@@ -12276,7 +12279,7 @@ static bool ggml_cl_flash_attn_dequant_kv_gpu(
         return false;
     }
 
-    const size_t n_blocks = (size_t) ggml_nelements(tensor) / 32;
+    const size_t n_blocks = (size_t) ggml_nelements(tensor) / 32; // block size is 32
     const size_t elem_size = ggml_type_size(target_type);
     const size_t out_bytes = n_blocks * 32 * elem_size;
     const cl_int nblk0_arg = (cl_int) (tensor->ne[0] / 32);
@@ -12329,7 +12332,8 @@ static bool ggml_cl_flash_attn_prepare_quantized_tensor(
         cl_ulong &                            offset,
         cl_ulong &                            nb1,
         cl_ulong &                            nb2,
-        cl_ulong &                            nb3) {
+        cl_ulong &                            nb3
+) {
     if (!ggml_is_quantized(tensor->type)) {
         return false;
     }
@@ -12380,14 +12384,14 @@ static bool ggml_cl_flash_attn_prepare_quantized_tensor(
 
     static bool warned = false;
     if (!warned) {
-        GGML_LOG_WARN("%s: OpenCL flash attention dequantizes GPU-resident quantized KV cache into temporary linear buffers; performance may be poor\n", __func__);
+        GGML_LOG_WARN("ggml_opencl: OpenCL flash attention dequantizes GPU-resident quantized KV cache into temporary linear buffers; performance may be poor\n");
         warned = true;
     }
 
     return true;
 }
 
-// Host-side F16 → F32 for the asymmetric-KV F32 fallback path.
+// Host-side F16 -> F32 for the asymmetric-KV F32 fallback path.
 static bool ggml_cl_flash_attn_convert_f16_to_f32(
         ggml_backend_opencl_context *         backend_ctx,
         const ggml_tensor *                   tensor,
@@ -12396,7 +12400,8 @@ static bool ggml_cl_flash_attn_convert_f16_to_f32(
         cl_ulong &                            offset,
         cl_ulong &                            nb1,
         cl_ulong &                            nb2,
-        cl_ulong &                            nb3) {
+        cl_ulong &                            nb3
+) {
     if (tensor->type != GGML_TYPE_F16) {
         return false;
     }
@@ -12436,7 +12441,7 @@ static bool ggml_cl_flash_attn_convert_f16_to_f32(
 
     static bool warned = false;
     if (!warned) {
-        GGML_LOG_WARN("%s: OpenCL flash attention asymmetric KV converts an F16 cache to F32 host-side; performance may be poor\n", __func__);
+        GGML_LOG_WARN("ggml_opencl: OpenCL flash attention asymmetric KV converts an F16 cache to F32 host-side; performance may be poor\n");
         warned = true;
     }
 
@@ -12460,10 +12465,12 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     const ggml_tensor * v = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
     const ggml_tensor * sinks = dst->src[4];
+
     GGML_ASSERT(q->extra);
     GGML_ASSERT(k->extra);
     GGML_ASSERT(v->extra);
     GGML_ASSERT(dst->extra);
+
     if (mask) {
         GGML_ASSERT(mask->extra);
     }
@@ -12499,24 +12506,25 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     } else if (is_q8_0) {
         ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_Q8_0);
         if (d_head_q == 96 && d_head_v == 96) {
-            ggml_opencl_ensure_fa_quant_split_override(backend_ctx, 96, 96, /*bm=*/16, /*n_split=*/3, /*is_q8_0=*/true);
+            ggml_opencl_ensure_fa_quant_split_override(backend_ctx, 96, 96, /*quant_bm=*/16, /*quant_n_split=*/3, /*is_q8_0=*/true);
         } else if (d_head_q == 256 && d_head_v == 256) {
-            ggml_opencl_ensure_fa_quant_split_override(backend_ctx, 256, 256, /*bm=*/16, /*n_split=*/8, /*is_q8_0=*/true);
+            ggml_opencl_ensure_fa_quant_split_override(backend_ctx, 256, 256, /*quant_bm=*/16, /*quant_n_split=*/8, /*is_q8_0=*/true);
         } else {
             ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_Q8_0_SPLIT);
         }
     } else if (is_q4_0) {
         ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_Q4_0);
         if (d_head_q == 96 && d_head_v == 96) {
-            ggml_opencl_ensure_fa_quant_split_override(backend_ctx, 96, 96, /*bm=*/16, /*n_split=*/3, /*is_q8_0=*/false);
+            ggml_opencl_ensure_fa_quant_split_override(backend_ctx, 96, 96, /*quant_bm=*/16, /*quant_n_split=*/3, /*is_q8_0=*/false);
         } else if (d_head_q == 256 && d_head_v == 256) {
-            ggml_opencl_ensure_fa_quant_split_override(backend_ctx, 256, 256, /*bm=*/16, /*n_split=*/8, /*is_q8_0=*/false);
+            ggml_opencl_ensure_fa_quant_split_override(backend_ctx, 256, 256, /*quant_bm=*/16, /*quant_n_split=*/8, /*is_q8_0=*/false);
         } else {
             ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_Q4_0_SPLIT);
         }
     } else {
         ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_F32);
     }
+
     const std::pair<int, int> dk_dv = {d_head_q, d_head_v};
     const bool use_native_q8_0_q1 = is_q8_0 && n_q == 1 &&
                                     backend_ctx->fa.f32_q8_0_q1.count(dk_dv) > 0;
@@ -12570,17 +12578,32 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     cl_mem   sinks_buffer = extra_sinks ? extra_sinks->data_device : NULL;
     cl_ulong offset_sinks = extra_sinks ? extra_sinks->offset + sinks->view_offs : 0;
 
-    const cl_ulong q_nb1 = q->nb[1], q_nb2 = q->nb[2], q_nb3 = q->nb[3];
-    cl_ulong k_nb1 = k->nb[1], k_nb2 = k->nb[2], k_nb3 = k->nb[3];
-    cl_ulong v_nb1 = v->nb[1], v_nb2 = v->nb[2], v_nb3 = v->nb[3];
-    const cl_ulong o_nb1 = dst->nb[1], o_nb2 = dst->nb[2], o_nb3 = dst->nb[3];
+    const cl_ulong q_nb1 = q->nb[1];
+    const cl_ulong q_nb2 = q->nb[2];
+    const cl_ulong q_nb3 = q->nb[3];
+
+    cl_ulong k_nb1 = k->nb[1];
+    cl_ulong k_nb2 = k->nb[2];
+    cl_ulong k_nb3 = k->nb[3];
+
+    cl_ulong v_nb1 = v->nb[1];
+    cl_ulong v_nb2 = v->nb[2];
+    cl_ulong v_nb3 = v->nb[3];
+
+    const cl_ulong o_nb1 = dst->nb[1];
+    const cl_ulong o_nb2 = dst->nb[2];
+    const cl_ulong o_nb3 = dst->nb[3];
+
     const cl_ulong mask_nb1 = mask ? mask->nb[1] : 0;
     const cl_ulong mask_nb2 = mask ? mask->nb[2] : 0;
     const cl_ulong mask_nb3 = mask ? mask->nb[3] : 0;
     const int mask_ne2 = mask ? mask->ne[2] : 0;
     const int mask_ne3 = mask ? mask->ne[3] : 0;
 
-    float scale, max_bias, logit_softcap;
+    float scale;
+    float max_bias;
+    float logit_softcap;
+
     const float * params = (const float *)dst->op_params;
     scale         = params[0];
     max_bias      = params[1];
@@ -12630,7 +12653,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     cl_mem k_data_device = k_soa ? NULL : extra_k->data_device;
     cl_mem v_data_device = v_soa ? NULL : extra_v->data_device;
 
-    // SoA q8_0/q4_0 → reconstruct AoS for downstream kernels that expect
+    // SoA q8_0/q4_0 -> reconstruct AoS for downstream kernels that expect
     // tight records (no-op when k/v is already AoS).
     ggml_cl_flash_attn_temp_buffer temp_k_aos;
     ggml_cl_flash_attn_temp_buffer temp_v_aos;
@@ -12639,11 +12662,17 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     ggml_cl_flash_attn_reconstruct_aos(backend_ctx, v, temp_v_aos,
                                        v_data_device, offset_v, v_nb1, v_nb2, v_nb3);
 
-    // Skip host dequant when a native quantised kernel will read the quants.
+    // currently FA kernels support KV cache with f16, f32, q4_0 and q8_0.
+    // there two cases that these kernels cannot cover,
+    //   1. KV cache types are q4_0 or q8_0, but the FA kernels fail to compile
+    //   2. KV cache types not currently supported by an FA kernel, e.g., q4_1
+    // these two cases are supported here by dequantizing to f32/f16 and this
+    // causes performance degradation.
+    // For q4_0 or q8_0 cases that fail kernel compilation, dequant happens in GPU;
+    // for types that do not have FA kernels, dequant happens on host.
     if (!use_native_q8_0_q1 && !use_native_q8_0 &&
         !use_native_q4_0_q1 && !use_native_q4_0) {
-        // Per-tensor GPU dequant — important for asymmetric KV (k, v of
-        // different quant types) which would otherwise host-roundtrip.
+        // for q4_0, q8_0 FA kernels that fail to compile
         bool k_done = false;
         bool v_done = false;
         if (k->type == GGML_TYPE_Q8_0 || k->type == GGML_TYPE_Q4_0) {
@@ -12657,10 +12686,12 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                 temp_v, v_data_device, offset_v, v_nb1, v_nb2, v_nb3);
         }
         if (!k_done) {
-            ggml_cl_flash_attn_prepare_quantized_tensor(backend_ctx, k, kv_target_type, temp_k, k_data_device, offset_k, k_nb1, k_nb2, k_nb3);
+            ggml_cl_flash_attn_prepare_quantized_tensor(
+                backend_ctx, k, kv_target_type, temp_k, k_data_device, offset_k, k_nb1, k_nb2, k_nb3);
         }
         if (!v_done) {
-            ggml_cl_flash_attn_prepare_quantized_tensor(backend_ctx, v, kv_target_type, temp_v, v_data_device, offset_v, v_nb1, v_nb2, v_nb3);
+            ggml_cl_flash_attn_prepare_quantized_tensor(
+                backend_ctx, v, kv_target_type, temp_v, v_data_device, offset_v, v_nb1, v_nb2, v_nb3);
         }
         // Asymmetric KV on the F32 fallback path: convert the F16 side to F32
         // too. (Symmetric F16 / mixed paths handle F16 directly.)
@@ -12801,8 +12832,12 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
 
     if (use_fd) {
         int n_splits = (n_kv + FD_KV_PER_SPLIT - 1) / FD_KV_PER_SPLIT;
-        if (n_splits < FD_MIN_SPLITS) n_splits = FD_MIN_SPLITS;
-        if (n_splits > FD_MAX_SPLITS) n_splits = FD_MAX_SPLITS;
+        if (n_splits < FD_MIN_SPLITS) {
+            n_splits = FD_MIN_SPLITS;
+        }
+        if (n_splits > FD_MAX_SPLITS) {
+            n_splits = FD_MAX_SPLITS;
+        }
         const int kv_per_split = (n_kv + n_splits - 1) / n_splits;
 
         const int fa_partial_floats = 2 + d_head_v;
@@ -15112,10 +15147,12 @@ static void ggml_cl_mul_mat_q5_K_f32_adreno(ggml_backend_t backend, const ggml_t
 // Dequant a possibly-strided q4_0/q8_0 tensor to tight-packed f16. Returns a
 // temp cl_mem the caller must release. SoA inputs are reconstructed into a
 // temp AoS buffer reported via *extra_reconstruct (also caller-released).
+// this is for quantized K cache without FA.
 static cl_mem ggml_cl_mul_mat_dequant_quant_to_f16(
         ggml_backend_opencl_context * backend_ctx,
         const ggml_tensor *           tensor,
-        cl_mem *                      extra_reconstruct /* out, may be NULL */) {
+        cl_mem *                      extra_reconstruct /* out, may be NULL */
+) {
     GGML_ASSERT(tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q8_0);
 
     if (extra_reconstruct) {

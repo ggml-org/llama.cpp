@@ -793,7 +793,7 @@ __kernel void flash_attn_f32_f16_q1_split(
                     (ulong) q_idx * mask_nb1;
     }
 
-    // Share Q via local memory (n_q=1 per split → uniform across WG).
+    // Share Q via local memory (n_q=1 per split -> uniform across WG).
     __local ACC_TYPE4 q_shared[DK_VEC];
     const ulong q_row_offset = batch_idx * q_nb3 + head_idx * q_nb2 + (ulong) q_idx * q_nb1;
     const global Q_DATA_TYPE4 * q_ptr = (const global Q_DATA_TYPE4 *) (q_base + q_row_offset);
