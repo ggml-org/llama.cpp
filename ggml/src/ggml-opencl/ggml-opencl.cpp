@@ -6186,11 +6186,15 @@ struct ggml_backend_opencl_buffer_context {
     std::vector<ggml_tensor_extra_cl_q6_K *> temp_tensor_extras_q6_K;
     std::vector<ggml_tensor_extra_cl_q6_K *> temp_tensor_extras_q6_K_in_use;
 
-    // q8_0 tensors with AoS→SoA layout conversion installed by set_tensor.
+    // q8_0 tensors with AoS->SoA layout conversion installed by set_tensor.
+    // Two types of tensors get SOA'ed - normal weights and MoE weights.
+    // In Q8_0's case, we only have normal weights. If we ever have Q8_0 as MoE
+    // weights, they need to be added to this set in `set_tensors`.
     std::unordered_set<const ggml_tensor *> q8_0_soa_tensors;
 
     // Same for q4_0. KV-cache q4_0 tensors are allocated but never pass
     // through set_tensor, so they stay AoS and aren't in this set.
+    // In Q4_0's case, in addition to normal weights, we have MoE weights.
     std::unordered_set<const ggml_tensor *> q4_0_soa_tensors;
 
     // The buffer_context is initially created by ggml_backend_buft_alloc_buffer
@@ -6367,6 +6371,8 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             };
             extra->q_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_format_q, &img_desc_q, NULL, &err);
             tensor->extra = extra;
+            // MoE tensors are also SOA'ed
+            ctx->q4_0_soa_tensors.insert(tensor);
 
             return;
         }
