@@ -35,6 +35,19 @@ static inline void signal_handler(int signal) {
     shutdown_handler(signal);
 }
 
+// satisfies -Wmissing-declarations (used by llama command)
+int llama_server(int argc, char ** argv);
+
+// to be used via CLI (argc / argv are used by router mode only)
+int llama_server(common_params & params, int argc, char ** argv);
+void llama_server_terminate();
+void llama_server_terminate() {
+    if (shutdown_handler) {
+        shutdown_handler(0);
+    }
+}
+
+
 // wrapper function that handles exceptions and logs errors
 // this is to make sure handler_t never throws exceptions; instead, it returns an error response
 static server_http_context::handler_t ex_wrapper(server_http_context::handler_t func) {
@@ -71,9 +84,6 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
     };
 }
 
-// satisfies -Wmissing-declarations
-int llama_server(int argc, char ** argv);
-
 int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
@@ -89,8 +99,14 @@ int llama_server(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
+    return llama_server(params, argc, argv);
+}
+
+int llama_server(common_params & params, int argc, char ** argv) {
+    bool is_run_by_cli = (argv == nullptr);
+
     // note: router mode also accepts -hf remote-preset, so we need to check that first
-    if (!params.model.hf_repo.empty()) {
+    if (!is_run_by_cli && !params.model.hf_repo.empty()) {
         try {
             common_params_handle_models_params handle_params;
             handle_params.preset_only = true;
@@ -272,8 +288,9 @@ int llama_server(int argc, char ** argv) {
 
     if (child.is_child() && child.get_mode() == SERVER_CHILD_MODE_DOWNLOAD) {
         return child.run_download(params);
-    } else if (!is_router_server) {
+    } else if (!is_router_server && !is_run_by_cli) {
         // single-model mode (NOT spawned by router)
+        // if this is invoked by CLI, model downloading should be already handled
         common_params_handle_models(params, LLAMA_EXAMPLE_SERVER, {});
     }
 
@@ -356,20 +373,22 @@ int llama_server(int argc, char ** argv) {
         };
     }
 
-    // TODO: refactor in common/console
+    // register signal handler if not running by CLI
+    if (!is_run_by_cli) {
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
-    struct sigaction sigint_action;
-    sigint_action.sa_handler = signal_handler;
-    sigemptyset (&sigint_action.sa_mask);
-    sigint_action.sa_flags = 0;
-    sigaction(SIGINT, &sigint_action, NULL);
-    sigaction(SIGTERM, &sigint_action, NULL);
+        struct sigaction sigint_action;
+        sigint_action.sa_handler = signal_handler;
+        sigemptyset (&sigint_action.sa_mask);
+        sigint_action.sa_flags = 0;
+        sigaction(SIGINT, &sigint_action, NULL);
+        sigaction(SIGTERM, &sigint_action, NULL);
 #elif defined (_WIN32)
-    auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
-        return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
-    };
-    SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
+        auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
+            return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
+        };
+        SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
+    }
 
     if (is_router_server) {
         SRV_INF("router server is listening on %s\n", ctx_http.listening_address.c_str());
