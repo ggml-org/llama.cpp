@@ -5600,27 +5600,27 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         tst.test("Hello, world!\nWhat's up?")
             .enable_thinking(false)
-            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist)
             .run();
 
         tst.test(R"(<function name="python"><param name="code">print('Hello, World!')</param></function>)")
             .enable_thinking(false)
-            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ python_tool })
             .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
             .run();
 
         tst.test(R"(<function name="empty_args"></function>)")
             .enable_thinking(false)
-            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ empty_args_tool })
             .expect(simple_assist_msg("", "", "empty_args", "{}"))
             .run();
 
         tst.test(R"(<function name="python"><param name="code">print('x')</param></function>)")
             .enable_thinking(false)
-            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .parallel_tool_calls(true)
             .tools({ python_tool })
             .expect_tool_calls({ { "python", R"#({"code": "print('x')"})#", {} } })
@@ -5629,7 +5629,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         // CDATA lets a string value carry characters that would otherwise close the tag.
         tst.test(R"(<function name="html"><param name="markup"><![CDATA[<a href="/x">hi</a> </param>]]></param></function>)")
             .enable_thinking(false)
-            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ html_tool })
             .expect_tool_calls({ { "html", R"#({"markup": "<a href=\"/x\">hi</a> </param>"})#", {} } })
             .run();
@@ -5645,7 +5645,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         tst.test(R"(<function name="python"><param name="code">print('x')</param></function>
 <function name="python"><param name="code">print('y')</param></function>)")
             .enable_thinking(false)
-            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .parallel_tool_calls(true)
             .tools({ python_tool })
             .expect_tool_calls({
@@ -5655,8 +5655,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         tst.test(" thinking</think>Hello, world!\nWhat's up?")
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .messages({ message_user, message_assist_prefill_reasoning })
             .add_generation_prompt(false)
             .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
@@ -5813,10 +5813,9 @@ static void test_template_generation_prompt() {
     }
 
     {
-        auto tmpls = read_templates("models/templates/MiniCPM5-1B.jinja");
+        auto tmpls = read_templates("models/templates/openbmb-MiniCPM5-1B.jinja");
         check(tmpls, basic(),                  "<|im_start|>assistant\n<think>\n");
-        check(tmpls, continuation_content(),
-              "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
+        check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
         check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
     }
 }
