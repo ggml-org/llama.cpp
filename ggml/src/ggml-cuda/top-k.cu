@@ -75,31 +75,25 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int    ncols_pad      = next_power_of_2(ncols);
     const size_t shared_mem     = ncols_pad * sizeof(int);
     const size_t max_shared_mem = ggml_cuda_info().devices[ggml_cuda_get_device()].smpb;
+    const bool   use_bitonic    = shared_mem <= max_shared_mem && ncols <= 1024;
+    const int    chunk_nrows    = argsort_f32_i32_cuda_cub_chunk_nrows(src0->nb[1], nrows);
 
-    // process input in chunks to avoid excessive temporary buffers memory usage
-    const size_t nb01 = src0->nb[1];
-    const size_t chunk_size = 1LL << 26;
-    const int64_t nrows_per_chunk = chunk_size > nb01 ? chunk_size / nb01 : 1;
-    // make sure chunk_nrows can be safely cast to int below
-    GGML_ASSERT(nrows_per_chunk <= std::numeric_limits<int>::max());
-
-    int64_t tmp_dst_nrows = std::min(nrows_per_chunk, nrows);
-    ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * tmp_dst_nrows);
+    ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * chunk_nrows);
     int *                     tmp_dst = temp_dst_alloc.get();
 
-    for (int64_t i = 0; i < nrows; i += nrows_per_chunk) {
-        int64_t chunk_nrows = std::min(nrows_per_chunk, nrows - i);
+    for (int64_t i = 0; i < nrows; i += chunk_nrows) {
+        int iter_nrows = chunk_nrows < nrows - i ? chunk_nrows : nrows - i;
 
-        if (shared_mem > max_shared_mem || ncols > 1024) {
-            argsort_f32_i32_cuda_cub(pool, src0_d, tmp_dst, ncols, chunk_nrows, GGML_SORT_ORDER_DESC, stream);
+        if (use_bitonic) {
+            argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, iter_nrows, GGML_SORT_ORDER_DESC, stream);
         } else {
-            argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, chunk_nrows, GGML_SORT_ORDER_DESC, stream);
+            argsort_f32_i32_cuda_cub(pool, src0_d, tmp_dst, ncols, iter_nrows, GGML_SORT_ORDER_DESC, stream);
         }
-        CUDA_CHECK(cudaMemcpy2DAsync(dst_d, k * sizeof(int), tmp_dst, ncols * sizeof(int), k * sizeof(int), chunk_nrows,
+        CUDA_CHECK(cudaMemcpy2DAsync(dst_d, k * sizeof(int), tmp_dst, ncols * sizeof(int), k * sizeof(int), iter_nrows,
                                      cudaMemcpyDeviceToDevice, stream));
 
-        src0_d += ncols * chunk_nrows;
-        dst_d  += k     * chunk_nrows;
+        src0_d += ncols * iter_nrows;
+        dst_d  += k     * iter_nrows;
     }
 #else                             // GGML_CUDA_USE_CUB
     ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * nrows);
