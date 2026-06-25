@@ -1,6 +1,7 @@
 #include "models.h"
 
 #include "llama-kv-cache.h"
+#include "llama-kv-cache-iswa.h"
 
 void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
@@ -17,6 +18,15 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         LLAMA_LOG_INFO("%d%s", target_layer_ids[i], i + 1 < target_layer_ids.size() ? ", " : "");
     }
     LLAMA_LOG_INFO("]\n");
+
+    // optional interleaved sliding-window attention with per-layer pattern array.
+    // DFlash has a single rope, so the SWA rope == main rope.
+    if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
+        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
+        hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+        hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+    }
 
     type = LLM_TYPE_UNKNOWN;
 }
@@ -104,7 +114,17 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     ggml_tensor * inp_pos  = build_inp_pos();
-    auto        * inp_attn = build_attn_inp_kv();
+
+    // optional iSWA: pick the matching attention input
+    const bool use_iswa = hparams.swa_type != LLAMA_SWA_TYPE_NONE;
+
+    llm_graph_input_attn_kv      * inp_attn      = nullptr;
+    llm_graph_input_attn_kv_iswa * inp_attn_iswa = nullptr;
+    if (use_iswa) {
+        inp_attn_iswa = build_attn_inp_kv_iswa();
+    } else {
+        inp_attn = build_attn_inp_kv();
+    }
 
     const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
 
@@ -138,8 +158,18 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             cb(Kcur, "Kcur_injected", il);
             cb(Vcur, "Vcur_injected", il);
 
-            ggml_build_forward_expand(gf, inp_attn->mctx->cpy_k(ctx0, Kcur, inp_attn->get_k_idxs(), il));
-            ggml_build_forward_expand(gf, inp_attn->mctx->cpy_v(ctx0, Vcur, inp_attn->get_v_idxs(), il));
+            if (use_iswa) {
+                // route each layer's K/V to its sub-cache: SWA layers -> sliding cache, full -> dense
+                const bool    is_swa = hparams.is_swa(il);
+                const auto  * kv     = is_swa ? inp_attn_iswa->mctx->get_swa() : inp_attn_iswa->mctx->get_base();
+                ggml_tensor * k_idxs = is_swa ? inp_attn_iswa->get_k_idxs_swa() : inp_attn_iswa->get_k_idxs();
+                ggml_tensor * v_idxs = is_swa ? inp_attn_iswa->get_v_idxs_swa() : inp_attn_iswa->get_v_idxs();
+                ggml_build_forward_expand(gf, kv->cpy_k(ctx0, Kcur, k_idxs, il));
+                ggml_build_forward_expand(gf, kv->cpy_v(ctx0, Vcur, v_idxs, il));
+            } else {
+                ggml_build_forward_expand(gf, inp_attn->mctx->cpy_k(ctx0, Kcur, inp_attn->get_k_idxs(), il));
+                ggml_build_forward_expand(gf, inp_attn->mctx->cpy_v(ctx0, Vcur, inp_attn->get_v_idxs(), il));
+            }
         }
 
         res->t_embd = inp_g;
@@ -153,19 +183,19 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     if (tok_embd == nullptr) {
         GGML_ASSERT(cparams.ctx_other != nullptr);
         const auto * model_other = llama_get_model(cparams.ctx_other);
-        
+
         GGML_ASSERT(model_other->tok_embd != nullptr && "DFlash decoder requires the target model's token embeddings");
         tok_embd = model_other->tok_embd;
     }
 
     auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
-    
+
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->tokens);
-    
+
     ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp->tokens);
     cb(inpL, "inp_noise_embd", -1);
-    
+
     res->add_input(std::move(inp));
 
     for (int il = 0; il < n_layer; ++il) {
@@ -200,9 +230,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         cb(Vcur, "Vcur", il);
 
         // cache-aware, non-causal attention
-        ggml_tensor * cur = build_attn(inp_attn,
-                layer.wo, NULL, NULL,
-                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+        ggml_tensor * cur = use_iswa
+            ? build_attn(inp_attn_iswa, layer.wo, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il)
+            : build_attn(inp_attn,      layer.wo, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
 
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
         cb(ffn_inp, "ffn_inp", il);

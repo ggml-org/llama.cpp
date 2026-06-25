@@ -986,7 +986,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
         }
-    
+
         const int32_t N = (int32_t) prompt.size();
         if (N <= 0) {
             return;
@@ -1064,7 +1064,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     /*.seq_id   =*/ nullptr,
                     /*.logits   =*/ nullptr,
                 };
-                
+
                 int32_t rc = llama_encode(ctx_dft, enc_batch);
                 if (rc != 0) {
                     LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
@@ -1078,7 +1078,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 // inject the DFlash decoder K/V cache at the tokens' target positions
                 batch_inject.n_tokens = n_chunk;
                 std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
-                
+
                 for (int32_t i = 0; i < n_chunk; ++i) {
                     batch_inject.pos[i]       = batch_in.pos[i_batch_beg[seq_id] + offset + i];
                     batch_inject.n_seq_id[i]  = 1;
