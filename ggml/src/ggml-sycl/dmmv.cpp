@@ -680,14 +680,14 @@ static void dequantize_mul_mat_vec_q4_k(const void *__restrict__ vx,
             q16[2] = q2[0] & 0x0f0f;
             q16[3] = q2[0] & 0xf0f0;
 
-            float4 s = {0.f, 0.f, 0.f, 0.f};
+            sycl::float4 s = {0.f, 0.f, 0.f, 0.f};
             float smin = 0;
             for (int l = 0; l < 2; ++l) {
-                s.x += y1[l] * q4[l+0]; s.y += y1[l+32] * q4[l+2];
-                s.z += y2[l] * q4[l+4]; s.w += y2[l+32] * q4[l+6];
+                s.x() += y1[l] * q4[l+0]; s.y() += y1[l+32] * q4[l+2];
+                s.z() += y2[l] * q4[l+4]; s.w() += y2[l+32] * q4[l+6];
                 smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
             }
-            tmp += dall * (s.x * sc[0] + s.y * sc[1] * 1.f/16.f + s.z * sc[4] + s.w * sc[5] * 1.f/16.f) - dmin * smin;
+            tmp += dall * (s.x() * sc[0] + s.y() * sc[1] * 1.f/16.f + s.z() * sc[4] + s.w() * sc[5] * 1.f/16.f) - dmin * smin;
 #endif
         }
 
@@ -835,14 +835,14 @@ static void dequantize_mul_mat_vec_q4_k_reorder(const void *__restrict__ vx,
             q16[2] = q2[0] & 0x0f0f;
             q16[3] = q2[0] & 0xf0f0;
 
-            float4 s = {0.f, 0.f, 0.f, 0.f};
+            sycl::float4 s = {0.f, 0.f, 0.f, 0.f};
             float smin = 0;
             for (int l = 0; l < 2; ++l) {
-                s.x += y1[l] * q4[l+0]; s.y += y1[l+32] * q4[l+2];
-                s.z += y2[l] * q4[l+4]; s.w += y2[l+32] * q4[l+6];
+                s.x() += y1[l] * q4[l+0]; s.y() += y1[l+32] * q4[l+2];
+                s.z() += y2[l] * q4[l+4]; s.w() += y2[l+32] * q4[l+6];
                 smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
             }
-            tmp += dall * (s.x * sc[0] + s.y * sc[1] * 1.f/16.f + s.z * sc[4] + s.w * sc[5] * 1.f/16.f) - dmin * smin;
+            tmp += dall * (s.x() * sc[0] + s.y() * sc[1] * 1.f/16.f + s.z() * sc[4] + s.w() * sc[5] * 1.f/16.f) - dmin * smin;
 #endif
         }
 
