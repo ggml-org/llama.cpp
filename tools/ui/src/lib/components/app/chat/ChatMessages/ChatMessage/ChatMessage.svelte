@@ -184,15 +184,44 @@
 		startEdit: handleEdit
 	});
 
-	let mcpPromptExtra = $derived.by(() => {
-		if (message.role !== MessageRole.USER) return null;
-		if (message.content.trim()) return null;
-		if (!message.extra || message.extra.length !== 1) return null;
+	let mcpPromptExtra = $derived.by((): DatabaseMessageExtraMcpPrompt | null => {
+		if (message.role === MessageRole.USER) {
+			if (message.content.trim()) return null;
+			if (!message.extra || message.extra.length !== 1) return null;
 
-		const extra = message.extra[0];
+			const extra = message.extra[0];
 
-		if (extra.type === AttachmentType.MCP_PROMPT) {
-			return extra as DatabaseMessageExtraMcpPrompt;
+			if (extra.type === AttachmentType.MCP_PROMPT) {
+				return extra as DatabaseMessageExtraMcpPrompt;
+			}
+
+			return null;
+		}
+
+		if (message.role === MessageRole.SYSTEM) {
+			// System messages created from an MCP prompt carry the server/prompt
+			// identity through their synthetic `mcp:<server>:<prompt>` instructionId.
+			// Treat them as MCP-prompt messages so they render with the same styled
+			// surface instead of a plain system textarea.
+			const custom = customInstructionExtra;
+
+			if (!custom?.instructionId.startsWith('mcp:')) return null;
+
+			const stripped = custom.instructionId.slice('mcp:'.length);
+			const sepIndex = stripped.indexOf(':');
+
+			if (sepIndex <= 0) return null;
+
+			const serverName = stripped.slice(0, sepIndex);
+			const promptName = stripped.slice(sepIndex + 1);
+
+			return {
+				type: AttachmentType.MCP_PROMPT,
+				name: promptName,
+				serverName,
+				promptName,
+				content: message.content
+			};
 		}
 
 		return null;
@@ -421,7 +450,23 @@
 </script>
 
 <div use:fadeInView class="chat-message">
-	{#if message.role === MessageRole.SYSTEM}
+	{#if mcpPromptExtra}
+		<ChatMessageMcpPrompt
+			class={className}
+			{deletionInfo}
+			{message}
+			role={message.role}
+			mcpPrompt={mcpPromptExtra}
+			onConfirmDelete={handleConfirmDelete}
+			onCopy={handleCopy}
+			onDelete={handleDelete}
+			onEdit={handleEdit}
+			onNavigateToSibling={handleNavigateToSibling}
+			onShowDeleteDialogChange={handleShowDeleteDialogChange}
+			{showDeleteDialog}
+			{siblingInfo}
+		/>
+	{:else if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem
 			bind:textareaElement
 			class={className}
@@ -467,21 +512,6 @@
 				onUpdate={syncPromptFromLibrary}
 			/>
 		{/if}
-	{:else if mcpPromptExtra}
-		<ChatMessageMcpPrompt
-			class={className}
-			{deletionInfo}
-			{message}
-			mcpPrompt={mcpPromptExtra}
-			onConfirmDelete={handleConfirmDelete}
-			onCopy={handleCopy}
-			onDelete={handleDelete}
-			onEdit={handleEdit}
-			onNavigateToSibling={handleNavigateToSibling}
-			onShowDeleteDialogChange={handleShowDeleteDialogChange}
-			{showDeleteDialog}
-			{siblingInfo}
-		/>
 	{:else if message.role === MessageRole.USER}
 		<ChatMessageUser
 			class={className}

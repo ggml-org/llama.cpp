@@ -564,13 +564,31 @@ class MCPStore {
 		return true;
 	}
 
-	removeServer(id: string): void {
+	async removeServer(id: string): Promise<void> {
 		const servers = this.getServers();
 		settingsStore.updateConfig(
 			SETTINGS_KEYS.MCP_SERVERS,
 			JSON.stringify(servers.filter((s) => s.id !== id))
 		);
 		this.clearHealthCheck(id);
+
+		// Drop any active connection so its tools no longer surface in the UI
+		// after the server config entry is gone.
+		const connection = this.connections.get(id);
+		if (connection) {
+			this.connections.delete(id);
+			this.serverConfigs.delete(id);
+			for (const tool of connection.tools) {
+				if (this.toolsIndex.get(tool.name) === id) this.toolsIndex.delete(tool.name);
+			}
+			this.updateState({
+				toolCount: this.toolsIndex.size,
+				connectedServers: Array.from(this.connections.keys())
+			});
+			await MCPService.disconnect(connection).catch((error) =>
+				console.warn(`[MCPStore] Error disconnecting removed server ${id}:`, error)
+			);
+		}
 	}
 
 	hasServerWithUrl(url: string): boolean {

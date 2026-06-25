@@ -129,7 +129,9 @@
 								}
 							}}
 							onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
-							onDelete={() => mcpStore.removeServer(server.id)}
+							onDelete={() => {
+								void mcpStore.removeServer(server.id);
+							}}
 						/>
 					{/if}
 				{/each}
