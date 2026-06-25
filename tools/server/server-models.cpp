@@ -1586,9 +1586,8 @@ static bool is_autoload(const common_params & params, const server_http_req & re
     }
 }
 
-// percent encode a single query string or path component value. covers reserved chars without
-// dragging in httplib::detail. used by the resumable stream routes to forward conversation_id
-// to children safely
+// percent encode one query or path component, covers reserved chars without pulling in
+// httplib::detail. used by the stream routes to forward conversation_id to children safely
 static std::string encode_qs(const std::string & in) {
     std::string out;
     out.reserve(in.size() * 3);
@@ -1674,9 +1673,8 @@ void server_models_routes::init_routes() {
         if (!router_validate_model(name, models, autoload, error_res)) {
             return error_res;
         }
-        // remember which child serves this conversation so the resumable stream routes can route
-        // straight to it without polling. key on the exact conv id from the header, the same value
-        // the GET and DELETE routes receive in their path, no parsing either side
+        // remember which child serves this conversation so the stream routes can route straight
+        // to it without polling, keyed on the exact conv id from the header
         std::string conv_id = stream_conv_id_from_headers(req.headers);
         if (!conv_id.empty()) {
             models.conv_models.remember(conv_id, name);
@@ -1884,8 +1882,7 @@ void server_models_routes::init_routes() {
 
     this->router_stream_get = [this](const server_http_req & req) {
         // GET /v1/stream/<conv_id>?from=N. resolve the owning child from the conv_id -> model
-        // map (no polling), 404 when nothing maps. a stale map entry just forwards to a child
-        // that answers not found, the client recovers
+        // map, 404 when nothing maps
         auto res = std::make_unique<server_http_res>();
         std::string conv_id = req.get_param("conv_id");
         if (conv_id.empty()) {
@@ -1981,8 +1978,7 @@ void server_models_routes::init_routes() {
 
     this->router_stream_delete = [this](const server_http_req & req) {
         // DELETE /v1/stream/<conv_id>. resolve the owning child via the map and forward only to
-        // it. evict_and_cancel is idempotent on the child, a stale map entry just hits a child
-        // that has nothing to cancel and returns 204
+        // it, evict_and_cancel is idempotent on the child
         auto res = std::make_unique<server_http_res>();
         std::string conv_id = req.get_param("conv_id");
         if (conv_id.empty()) {

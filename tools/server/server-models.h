@@ -313,10 +313,8 @@ struct server_models_routes {
     server_http_context::handler_t post_router_models;
     server_http_context::handler_t del_router_models;
 
-    // router side handlers for the resumable streaming routes. each conversation_id may carry
-    // an optional ::model suffix to enable direct routing without probing every child. when
-    // the suffix is absent the get/delete paths fall back to a loopback probe and a fan out
-    // respectively, the list path always fans out and aggregates
+    // router side handlers for the resumable streaming routes. each resolves the child that owns
+    // a conversation through the conv_id -> model map, no probing or fan out
     server_http_context::handler_t router_stream_get;
     server_http_context::handler_t router_streams_lookup;
     server_http_context::handler_t router_stream_delete;

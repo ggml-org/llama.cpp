@@ -455,10 +455,8 @@ server_http_context::handler_t make_stream_get_handler() {
 server_http_context::handler_t make_streams_lookup_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
         // POST /v1/streams/lookup with body {"conversation_ids": ["X", "Y", ...]} returns the
-        // matching sessions. you can only ask for ids you already know, the server never lists
-        // sessions it has not been asked about. for each requested id we match the exact key
-        // and any "<id>::<model>" variant, so a single lookup covers every per model session
-        // for that conv. used by the WebUI sidebar at mount and on visibilitychange
+        // matching sessions, only for ids the caller already knows. each id matches the exact key
+        // and any "<id>::<model>" variant, so one lookup covers every per model session for a conv
         std::vector<std::string> requested;
         try {
             json body = json::parse(req.body);

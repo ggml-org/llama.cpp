@@ -245,8 +245,8 @@ int llama_server(int argc, char ** argv) {
 
     // resumable streaming, the conversation_id is the session identity end to end. router and
     // child wire different handlers under the same paths: a child binds the local g_stream_sessions
-    // backed factories, the router binds proxies that route via the optional ::model suffix
-    // (direct) or fall back to loopback probe and fan out (suffixless conv ids)
+    // backed factories, the router binds proxies that resolve the owning child through the
+    // conv_id -> model map
     server_http_context::handler_t stream_get_h;
     server_http_context::handler_t streams_lookup_h;
     server_http_context::handler_t stream_delete_h;
@@ -316,8 +316,7 @@ int llama_server(int argc, char ** argv) {
 
         clean_up = [&models_routes]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
-            // stop the session GC first, this finalizes every live session and wakes any
-            // pending HTTP reader, the detached drains can then exit cleanly
+            // stop the session GC first, it finalizes live sessions and wakes pending readers
             g_stream_sessions.stop_gc();
             if (models_routes.has_value()) {
                 models_routes->stopping.store(true); // maybe redundant, but just to be safe
@@ -345,8 +344,7 @@ int llama_server(int argc, char ** argv) {
         // setup clean up function, to be called before exit
         clean_up = [&ctx_http, &ctx_server]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
-            // stop the session GC first, this finalizes every live session and wakes any
-            // pending HTTP reader, the detached drains can then exit cleanly
+            // stop the session GC first, it finalizes live sessions and wakes pending readers
             g_stream_sessions.stop_gc();
             ctx_http.stop();
             ctx_server.terminate();

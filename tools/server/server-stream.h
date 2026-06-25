@@ -20,11 +20,9 @@ enum class stream_read_status {
     OFFSET_LOST,
 };
 
-// streaming buffer for one generation, survives HTTP disconnect.
-// the producer side pushes raw SSE bytes via append. HTTP readers drain from
-// any offset via read_from. read_from blocks until new bytes arrive or the
-// session is finalized. identity of the session is the conversation_id, no
-// extra opaque token: one conv = at most one live session at a time
+// streaming buffer for one generation, survives HTTP disconnect. the producer appends raw SSE
+// bytes, readers drain from any offset via read_from and block until more bytes or finalize.
+// keyed by conversation_id: one conv = at most one live session
 struct stream_session {
     std::string conversation_id;
     int64_t     started_ts; // unix seconds at construction, used by /v1/streams listing
@@ -48,18 +46,15 @@ struct stream_session {
         const std::function<bool()> & should_stop);
 
     bool    is_done() const;
-    bool    is_cancelled() const;   // true when cancel() has been invoked
+    bool    is_cancelled() const;
     size_t  total_size() const;     // bytes that ever entered the session
     size_t  dropped_prefix() const; // bytes evicted from the front due to cap
     int64_t completed_at() const;   // 0 while alive, unix seconds after finalize
 
-    // attach a producer side stop hook, the drain sets this on startup so we can cancel its
-    // underlying reader. pass an empty function to detach (drain must clear before destroying
-    // its reader)
+    // attach the producer stop hook used to cancel its reader, pass an empty function to detach
     void set_stop_producer(std::function<void()> fn);
 
-    // invoke the stop hook if attached, signals the producer to abort its inference asap,
-    // idempotent
+    // signal the producer to abort its inference asap via the stop hook, idempotent
     void cancel();
 
 private:
@@ -103,14 +98,11 @@ struct stream_pipe_producer : stream_pipe {
     // append raw bytes to the session's ring buffer, returns false if already finalized
     bool write(const char * data, size_t len);
 
-    // record that the producer reached its natural end on the wire, so a later close() turns into
-    // a no-op. the http drain calls this right before it closes the stream cleanly
+    // mark the natural end on the wire so a later close() is a no-op
     void done();
 
-    // close the producer end. when the peer dropped before the producer finished, pump the
-    // response next() into the ring buffer until it reports done. runs on the http worker, from
-    // on_complete. no-op once done() has fired or the session is cancelled, only a DELETE flips
-    // is_cancelled and cuts the drain short
+    // on a peer drop, pump the response next() into the ring buffer until done. runs on the http
+    // worker from on_complete, no-op after done() or cancel
     void close();
 
     // disarm the stop hook and drop the alive guard, must run while the response the hook
@@ -186,33 +178,26 @@ private:
     std::condition_variable                             gc_wake_cv;
 };
 
-// the process wide stream session manager. defined in server-stream.cpp so the symbol
-// resolves through the server-context static lib, both llama-server and llama-cli link it.
-// start_gc() and stop_gc() are called explicitly from llama-server main(), llama-cli never
-// touches it and leaves it idle. the destructor calls stop_gc() unconditionally so the
-// process exit path is safe whether or not the GC thread was started
+// process wide manager, linked by both llama-server and llama-cli. llama-server main() drives
+// start_gc/stop_gc, llama-cli leaves it idle. the dtor calls stop_gc() unconditionally so exit
+// is safe whether or not the GC thread ran
 extern stream_session_manager g_stream_sessions;
 
-// route handler factories. each builds a server_http_context::handler_t that operates
-// directly on g_stream_sessions, server.cpp wires them under /v1/stream/* without going
-// through server-context's server_routes. keeps the resumable stream surface confined to
-// server-stream and server-http
+// route handler factories operating on g_stream_sessions, wired under /v1/stream/* by server.cpp.
+// keeps the resumable stream surface confined to server-stream
 server_http_context::handler_t make_stream_get_handler();
 server_http_context::handler_t make_streams_lookup_handler();
 server_http_context::handler_t make_stream_delete_handler();
 
-// extract the X-Conversation-Id header value (case-insensitive), empty when absent. exposed
-// so the router can read the conv id off a forwarded POST to track which child serves it
+// extract the X-Conversation-Id header value (case-insensitive), empty when absent. exposed so
+// the router can track which child serves a forwarded POST
 std::string stream_conv_id_from_headers(const std::map<std::string, std::string> & headers);
 
-// inspect request headers for X-Conversation-Id and, when present, create or replace a
-// session on the global manager then attach a producer pipe to res. the pipe's stop_fn
-// calls res.stop() (overridden by server_res_generator to stop its reader). no-op when
-// the header is absent. server-context calls this from the server_res_generator constructor.
+// on an X-Conversation-Id header, create or replace the session and attach a producer pipe to
+// res. no-op when absent, called from the server_res_generator constructor
 void stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers);
 
-// build a should_stop closure that suppresses peer-disconnect when a pipe is attached.
-// when spipe is set, only an explicit cancel (DELETE /v1/stream/<conv_id>) stops the
-// producer; peer disconnect is ignored so generation continues into the ring buffer.
-// without a pipe the closure delegates to fallback, preserving the legacy non-resumable flow.
+// should_stop closure that ignores peer disconnect when a pipe is attached, so only an explicit
+// DELETE stops the producer and generation keeps flowing into the ring buffer. without a pipe it
+// delegates to fallback, the legacy non-resumable flow
 std::function<bool()> stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback);

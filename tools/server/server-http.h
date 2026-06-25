@@ -25,10 +25,9 @@ struct server_http_res {
     std::string data;
     std::map<std::string, std::string> headers;
 
-    // if set, the stream survives a client disconnect: when the peer leaves before the producer is
-    // done, on_complete drains the rest of the generation into the ring buffer on the http worker.
-    // the producer pipe destructor finalizes the session so no explicit on_stream_end is needed.
-    // shared_ptr used (not unique_ptr) so the forward-declared type is safe to delete here.
+    // if set, the stream survives a client disconnect: the producer pipe keeps draining into the
+    // ring buffer and finalizes the session on destruction, so no explicit on_stream_end is needed.
+    // shared_ptr (not unique_ptr) so the forward-declared type is safe to delete here.
     std::shared_ptr<stream_pipe_producer> spipe;
 
     std::function<bool(std::string &)> next = nullptr;
