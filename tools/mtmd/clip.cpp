@@ -1210,6 +1210,9 @@ struct clip_model_loader {
             {
                 std::vector<int> pinpoints;
                 get_arr_int(KEY_IMAGE_GRID_PINPOINTS, pinpoints, false);
+                if (pinpoints.size() % 2 != 0) {
+                    throw std::runtime_error(string_format("%s: image_grid_pinpoints must have an even number of elements, got %zu\n", __func__, pinpoints.size()));
+                }
                 if (!pinpoints.empty()) {
                     for (size_t i = 0; i < pinpoints.size(); i += 2) {
                         hparams.image_res_candidates.push_back({
@@ -1256,6 +1259,11 @@ struct clip_model_loader {
                 int idx_std  = gguf_find_key(ctx_gguf.get(), KEY_IMAGE_STD);
                 GGML_ASSERT(idx_mean >= 0 && "image_mean not found");
                 GGML_ASSERT(idx_std >= 0  && "image_std not found");
+                const size_t n_mean = gguf_get_arr_n(ctx_gguf.get(), idx_mean);
+                const size_t n_std  = gguf_get_arr_n(ctx_gguf.get(), idx_std);
+                if (n_mean < 3 || n_std < 3) {
+                    throw std::runtime_error(string_format("%s: image_mean/image_std arrays must have at least 3 elements, got %zu and %zu\n", __func__, n_mean, n_std));
+                }
                 const float * mean_data = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_mean);
                 const float * std_data  = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_std);
                 for (int i = 0; i < 3; ++i) {
@@ -1686,14 +1694,17 @@ struct clip_model_loader {
                 if (hparams.image_size > 65536) {
                     throw std::runtime_error(string_format("%s: image_size (%d) is too large (max 65536)\n", __func__, hparams.image_size));
                 }
-                if (hparams.patch_size <= 0) {
-                    throw std::runtime_error(string_format("%s: patch_size (%d) must be greater than 0\n", __func__, hparams.patch_size));
+                if (0 <= hparams.patch_size && hparams.patch_size < 65536) {
+                    throw std::runtime_error(string_format("%s: patch_size (%d) must be greater than 0 and less than 65536\n", __func__, hparams.patch_size));
                 }
                 if (hparams.n_embd <= 0) {
                     throw std::runtime_error(string_format("%s: n_embd (%d) must be greater than 0\n", __func__, hparams.n_embd));
                 }
                 if (hparams.image_max_pixels < hparams.image_min_pixels) {
                     throw std::runtime_error(string_format("%s: image_max_pixels (%d) is less than image_min_pixels (%d)\n", __func__, hparams.image_max_pixels, hparams.image_min_pixels));
+                }
+                if (0 <= hparams.n_merge && hparams.n_merge < 65536) {
+                    throw std::runtime_error(string_format("%s: n_merge (%d) must be greater than 0 and less than 65536\n", __func__, hparams.n_merge));
                 }
             }
 
@@ -3086,11 +3097,14 @@ struct clip_model_loader {
             }
             return;
         }
-        int n = gguf_get_arr_n(ctx_gguf.get(), i);
+        const size_t n = gguf_get_arr_n(ctx_gguf.get(), i);
+        if (n > (size_t) std::numeric_limits<int>::max()) {
+            throw std::runtime_error(string_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
+        }
         output.resize(n);
         const int32_t * values = (const int32_t *)gguf_get_arr_data(ctx_gguf.get(), i);
-        for (int i = 0; i < n; ++i) {
-            output[i] = values[i];
+        for (size_t j = 0; j < n; ++j) {
+            output[j] = values[j];
         }
     }
 
@@ -3364,8 +3378,8 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
             {
                 // dynamic size
                 int n_merge = ctx->model.hparams.n_merge;
-                int n_patches_x = img->nx() / patch_size / (n_merge > 0 ? n_merge : 1);
-                int n_patches_y = img->ny() / patch_size / (n_merge > 0 ? n_merge : 1);
+                int n_patches_x = img->nx() / patch_size / n_merge;
+                int n_patches_y = img->ny() / patch_size / n_merge;
                 if (ctx->model.token_embd_img_break) {
                     n_patches = n_patches_y * n_patches_x + n_patches_y - 1; // + one [IMG_BREAK] per row, except the last row
                 } else {
