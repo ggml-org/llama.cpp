@@ -16201,8 +16201,8 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     // Estimate the amount of compute work using flops, and submit every 200 GFLOP
     // (and scaled down based on total graph flops, so smaller models submit earlier).
     // Also submit at least every 100 nodes, in case there are workloads without heavy compute.
-    int submitted_nodes = 0;
-    int submit_count = 0;
+    uint32_t submitted_nodes = 0;
+    uint32_t submit_count = 0;
     uint64_t batch_flops = 0;
     uint64_t total_flops = 0;
     uint64_t flops_per_submit = std::min(uint64_t(200'000'000'000), ctx->last_total_flops / 40u);
