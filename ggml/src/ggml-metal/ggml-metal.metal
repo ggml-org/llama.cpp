@@ -7042,6 +7042,11 @@ kernel void kernel_flash_attn_ext_vec(
                     }
                 } else {
                     FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
+#if GGML_METAL_FA_SKIP_V
+                        // skip V dequant / accumulation for negligible post-softmax weights
+                        const float attn_weight = float(ss[NE*cc + ty]);
+                        if (attn_weight < 1e-6f) continue;
+#endif
                         device const vd4_t * pv4 = (device const vd4_t *) (v + ((ic + NE*cc + ty)*args.nb21));
 
                         FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {

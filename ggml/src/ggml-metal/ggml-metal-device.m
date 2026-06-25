@@ -225,6 +225,16 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                 [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
 #endif
 
+                // opt-in Metal flash-attention optimization
+                // enable with GGML_METAL_FA_SKIP_V=1
+                {
+                    const char * env = getenv("GGML_METAL_FA_SKIP_V");
+                    if (env && env[0] == '1') {
+                        [prep setObject:@"1" forKey:@"GGML_METAL_FA_SKIP_V"];
+                        GGML_LOG_INFO("%s: GGML_METAL_FA_SKIP_V enabled\n", __func__);
+                    }
+                }
+
                 MTLCompileOptions * options = [MTLCompileOptions new];
                 options.preprocessorMacros = prep;
 
