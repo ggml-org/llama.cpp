@@ -13,6 +13,7 @@ void llama_model_lfm2::load_arch_hparams(llama_model_loader & ml) {
     hparams.n_layer_dense_lead = hparams.n_layer();
 
     switch (hparams.n_ff()) {
+        case  2560: type = LLM_TYPE_230M; break;
         case  4608: type = LLM_TYPE_350M; break;
         case  6912: type = LLM_TYPE_700M; break;
         case  8192: type = LLM_TYPE_1_2B; break;
