@@ -155,19 +155,17 @@
 
 	onMount(() => {
 		updateFavicon();
-		// global snapshot of backend running streams. populates the sidebar spinners so the user
-		// sees at a glance every conv that has a live inference, even ones not yet opened. snapshot
-		// only, no polling: refresh happens on mount and on visibilitychange via the effect below
+		// snapshot of every backend running stream on first load, populates the sidebar spinners
+		// so the user sees each conv that has a live inference, even ones not opened yet
 		void chatStore.syncRemoteRunningStreams();
-
-		if (typeof document === 'undefined') return;
-		const onVisibility = () => {
-			if (document.visibilityState !== 'visible') return;
-			void chatStore.syncRemoteRunningStreams();
-		};
-		document.addEventListener('visibilitychange', onVisibility);
-		return () => document.removeEventListener('visibilitychange', onVisibility);
 	});
+
+	// refresh that snapshot when the tab returns to the foreground, a stream may have advanced
+	// or ended while it was hidden. snapshot only, no polling
+	function handleVisibilityChange() {
+		if (document.visibilityState !== 'visible') return;
+		void chatStore.syncRemoteRunningStreams();
+	}
 
 	$effect(() => {
 		void theme.isSystemDark;
@@ -293,6 +291,7 @@
 </svelte:head>
 
 <svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<svelte:document onvisibilitychange={handleVisibilityChange} />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<div class="flex flex-col md:flex-row">
