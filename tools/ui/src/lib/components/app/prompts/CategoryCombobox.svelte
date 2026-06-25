@@ -10,9 +10,10 @@
 		value?: string;
 		categories: string[];
 		class?: string;
+		id?: string;
 	}
 
-	let { value = $bindable(''), categories = [], class: className }: Props = $props();
+	let { value = $bindable(''), categories = [], class: className, id }: Props = $props();
 
 	let open = $state(false);
 	let query = $state('');
@@ -62,6 +63,7 @@
 		{#snippet child({ props })}
 			<Button
 				{...props}
+				{id}
 				variant="outline"
 				role="combobox"
 				aria-expanded={open}

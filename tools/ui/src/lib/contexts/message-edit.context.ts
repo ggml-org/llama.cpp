@@ -14,14 +14,32 @@ export interface MessageEditState {
 	readonly shouldBranchAfterEdit: boolean;
 	readonly messageRole: MessageRole;
 	readonly rawEditContent?: string;
+
+	/**
+	 * System-message affordances surfaced to the edit form.
+	 * All default to false when messageRole !== SYSTEM.
+	 */
+	readonly isSystemMessage: boolean;
+	readonly isSystemPlaceholder: boolean;
+	/** Available when the user may attach the system message to a library prompt. */
+	readonly canAddToLibrary: boolean;
+	/** Available when the system message is already linked to an existing (non-MCP) library prompt. */
+	readonly canUpdateLibraryPrompt: boolean;
+	/** Title of the linked library prompt, surfaced to the form for labeling. */
+	readonly libraryPromptTitle?: string;
 }
 
 export interface MessageEditActions {
 	setContent: (content: string) => void;
 	setExtras: (extras: DatabaseMessageExtra[]) => void;
 	setUploadedFiles: (files: ChatUploadedFile[]) => void;
+	/** Save the edit and, for system messages, route through the "Add to Prompts library" dialog. */
 	save: () => void;
 	saveOnly: () => void;
+	/** For system messages: same effect as `save` plus opens the add-to-library dialog. */
+	saveAsLibrary: () => void;
+	/** For system messages linked to a library prompt: save and propagate new content to the prompt. */
+	updateLibraryPrompt: () => void;
 	cancel: () => void;
 	startEdit: () => void;
 }

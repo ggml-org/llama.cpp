@@ -1,13 +1,15 @@
 <script lang="ts">
-	import { ScanText, Check, X } from '@lucide/svelte';
-	import { ChatMessageActionIcons, MarkdownContent } from '$lib/components/app';
+	import { ScanText } from '@lucide/svelte';
+	import {
+		ChatMessageActionIcons,
+		ChatMessageEditForm,
+		MarkdownContent
+	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
-	import { INPUT_CLASSES } from '$lib/constants';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { KeyboardKey, MessageRole } from '$lib/enums';
+	import { MessageRole } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
-	import { isIMEComposing } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -26,10 +28,6 @@
 		onConfirmDelete: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
-		addToLibrary?: boolean;
-		onAddToLibraryChange?: (val: boolean) => void;
-		deferSystemPromptSave?: boolean;
-		textareaElement?: HTMLTextAreaElement;
 		instructionId?: string;
 		title?: string;
 		promptIsStale?: boolean;
@@ -48,10 +46,6 @@
 		onConfirmDelete,
 		onNavigateToSibling,
 		onShowDeleteDialogChange,
-		addToLibrary = false,
-		onAddToLibraryChange,
-		deferSystemPromptSave = false,
-		textareaElement = $bindable(),
 		instructionId,
 		title,
 		promptIsStale = false,
@@ -59,25 +53,6 @@
 	}: Props = $props();
 
 	const editCtx = getMessageEditContext();
-
-	function handleEditKeydown(event: KeyboardEvent) {
-		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
-			event.preventDefault();
-			handleSave();
-		} else if (event.key === KeyboardKey.ESCAPE) {
-			event.preventDefault();
-			handleCancel();
-		}
-	}
-
-	function handleSave() {
-		editCtx.save();
-	}
-
-	function handleCancel() {
-		editCtx.cancel();
-		onAddToLibraryChange?.(false);
-	}
 
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
@@ -124,49 +99,8 @@
 	role="group"
 >
 	{#if editCtx.isEditing}
-		<div class="w-full max-w-[80%]">
-			<textarea
-				bind:this={textareaElement}
-				value={editCtx.editedContent}
-				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
-				onkeydown={handleEditKeydown}
-				oninput={(e) => editCtx.setContent(e.currentTarget.value)}
-				placeholder="Edit system message..."
-			></textarea>
-
-			<div class="mt-2 flex flex-col items-end gap-2">
-				{#if !deferSystemPromptSave}
-					<label class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground mt-1 mb-2">
-						<input
-							type="checkbox"
-							class="h-4 w-4 rounded border-input"
-							checked={addToLibrary}
-							onchange={(e) => onAddToLibraryChange?.((e.target as HTMLInputElement).checked)}
-						/>
-
-						Add to Prompts library
-					</label>
-				{/if}
-
-				<div class="flex gap-2">
-					<Button class="h-8 px-3" onclick={handleCancel} size="sm" variant="outline">
-						<X class="mr-1 h-3 w-3" />
-
-						Cancel
-					</Button>
-
-					<Button
-						class="h-8 px-3"
-						onclick={handleSave}
-						disabled={!editCtx.editedContent.trim()}
-						size="sm"
-					>
-						<Check class="mr-1 h-3 w-3" />
-
-						Save
-					</Button>
-				</div>
-			</div>
+		<div class="flex w-full max-w-[80%] flex-col items-end gap-2">
+			<ChatMessageEditForm variant="system" />
 		</div>
 	{:else}
 		{#if message.content.trim()}
@@ -179,7 +113,7 @@
 					type="button"
 				>
 					<Card
-						class="overflow-y-auto rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
+						class="overflow-y-auto rounded-[1.125rem] border-2! border-dashed! border-border/50! bg-muted px-3.75 py-1.5 data-multiline:py-2.5"
 						data-multiline={isMultiline ? '' : undefined}
 						style="border: 2px dashed hsl(var(--border)); max-height: var(--max-message-height); overflow-wrap: anywhere; word-break: break-word;"
 					>
@@ -258,7 +192,7 @@
 						class="text-xs font-medium text-amber-600 hover:underline hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
 						onclick={onPromptUpdate}
 					>
-						Newer version available
+						Sync with library prompt
 					</button>
 				{/if}
 			</div>

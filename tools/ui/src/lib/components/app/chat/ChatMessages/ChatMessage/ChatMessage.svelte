@@ -109,13 +109,10 @@
 	let isEditing = $state(false);
 	let showDeleteDialog = $state(false);
 	let shouldBranchAfterEdit = $state(false);
-	let textareaElement: HTMLTextAreaElement | undefined = $state();
 	let promptDialogOpen = $state(false);
-	let addToLibrary = $state(false);
-	let deferSystemPromptSave = $state(false);
 
-	// Staleness: the message references a library prompt via CUSTOM_INSTRUCTION;
-	// surface an update affordance when the library content has since changed.
+	// Pull the referenced library prompt (if any). A null prompt means the
+	// CUSTOM_INSTRUCTION points at a prompt the user has since deleted.
 	let referencedPrompt = $derived(
 		customInstructionExtra
 			? promptsStore.getPrompt(customInstructionExtra.instructionId)
@@ -126,6 +123,26 @@
 		return hasContentDiff(message.content, referencedPrompt.content);
 	});
 	let showPromptSyncDialog = $state(false);
+
+	// System-message affordances surfaced to the edit form.
+	let isSystemMessage = $derived(message.role === MessageRole.SYSTEM);
+	let isSystemPlaceholder = $derived(
+		isSystemMessage && message.content === SYSTEM_MESSAGE_PLACEHOLDER
+	);
+	let canAddToLibrary = $derived.by(() => {
+		if (message.role !== MessageRole.SYSTEM) return false;
+		const custom = customInstructionExtra;
+		if (!custom) return true;
+		if (custom.instructionId.startsWith('mcp:')) return false;
+		return !referencedPrompt;
+	});
+	let canUpdateLibraryPrompt = $derived.by(() => {
+		if (message.role !== MessageRole.SYSTEM) return false;
+		const custom = customInstructionExtra;
+		if (!custom) return false;
+		if (custom.instructionId.startsWith('mcp:')) return false;
+		return !!referencedPrompt;
+	});
 
 	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
 	let showBranchAfterEditOption = $derived(message.role === MessageRole.ASSISTANT);
@@ -166,6 +183,21 @@
 		get rawEditContent() {
 			return rawEditContent;
 		},
+		get isSystemMessage() {
+			return isSystemMessage;
+		},
+		get isSystemPlaceholder() {
+			return isSystemPlaceholder;
+		},
+		get canAddToLibrary() {
+			return canAddToLibrary;
+		},
+		get canUpdateLibraryPrompt() {
+			return canUpdateLibraryPrompt;
+		},
+		get libraryPromptTitle() {
+			return referencedPrompt?.title;
+		},
 		setContent: (content: string) => {
 			editedContent = content;
 		},
@@ -180,6 +212,8 @@
 		},
 		save: handleSaveEdit,
 		saveOnly: handleSaveEditOnly,
+		saveAsLibrary: handleSaveAsLibrary,
+		updateLibraryPrompt: handleUpdateLibraryPrompt,
 		cancel: handleCancelEdit,
 		startEdit: handleEdit
 	});
@@ -292,19 +326,8 @@
 			editedContent = message.content;
 		}
 
-		textareaElement?.focus({ preventScroll: true });
 		editedExtras = message.extra ? [...message.extra] : [];
 		editedUploadedFiles = [];
-
-		setTimeout(() => {
-			if (textareaElement) {
-				textareaElement.focus();
-				textareaElement.setSelectionRange(
-					textareaElement.value.length,
-					textareaElement.value.length
-				);
-			}
-		}, 0);
 	}
 
 	function handleRegenerate(modelOverride?: string) {
@@ -325,53 +348,7 @@
 
 	async function handleSaveEdit() {
 		if (message.role === MessageRole.SYSTEM) {
-			// System messages: update in place without branching
-			const newContent = editedContent.trim();
-
-			// If content is empty, remove without deleting children
-			if (!newContent) {
-				const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
-				isEditing = false;
-				addToLibrary = false;
-				if (conversationDeleted) {
-					goto(ROUTES.START);
-				}
-				return;
-			}
-
-			// Defer save if "Add to library" is checked — dialog will trigger the save
-			if (addToLibrary) {
-				deferSystemPromptSave = true;
-				promptDialogOpen = true;
-				addToLibrary = false;
-				return;
-			}
-
-			// Preserve existing extras (including CUSTOM_INSTRUCTION)
-			const existingExtras = message.extra || [];
-			const extrasToSave = existingExtras.filter(
-				(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_INSTRUCTION
-			);
-
-			if (extrasToSave.length > 0) {
-				await DatabaseService.updateMessage(message.id, {
-					content: newContent,
-					extra: extrasToSave
-				});
-				const index = conversationsStore.findMessageIndex(message.id);
-				if (index !== -1) {
-					conversationsStore.updateMessageAtIndex(index, {
-						content: newContent,
-						extra: extrasToSave
-					});
-				}
-			} else {
-				await DatabaseService.updateMessage(message.id, { content: newContent });
-				const index = conversationsStore.findMessageIndex(message.id);
-				if (index !== -1) {
-					conversationsStore.updateMessageAtIndex(index, { content: newContent });
-				}
-			}
+			await persistSystemMessageEdit();
 		} else if (message.role === MessageRole.USER) {
 			const finalExtras = await getMergedExtras();
 			chatActions.editWithBranching(message, editedContent.trim(), finalExtras);
@@ -397,6 +374,77 @@
 		editedUploadedFiles = [];
 	}
 
+	async function handleSaveAsLibrary() {
+		if (message.role !== MessageRole.SYSTEM) return;
+
+		// Empty content falls back to the normal save flow (which removes the
+		// placeholder system message). We can't create a library prompt without
+		// content anyway.
+		if (!editedContent.trim()) {
+			await handleSaveEdit();
+			return;
+		}
+
+		promptDialogOpen = true;
+	}
+
+	async function handleUpdateLibraryPrompt() {
+		if (message.role !== MessageRole.SYSTEM) return;
+		if (!referencedPrompt) return;
+
+		const newContent = editedContent.trim();
+
+		// Empty content falls back to the normal save flow (which removes the
+		// placeholder system message). We can't push empty content to the
+		// library prompt either.
+		if (!newContent) {
+			await handleSaveEdit();
+			return;
+		}
+
+		await promptsStore.updatePrompt(referencedPrompt.id, { content: newContent });
+		await handleSaveEdit();
+	}
+
+	async function persistSystemMessageEdit() {
+		const newContent = editedContent.trim();
+
+		// If content is empty, remove without deleting children
+		if (!newContent) {
+			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
+			if (conversationDeleted) {
+				goto(ROUTES.START);
+			}
+			return;
+		}
+
+		// Preserve existing extras (drop stale CUSTOM_INSTRUCTION so we can re-add cleanly)
+		const existingExtras = message.extra || [];
+		const extrasToSave = existingExtras.filter(
+			(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_INSTRUCTION
+		);
+
+		if (extrasToSave.length > 0) {
+			await DatabaseService.updateMessage(message.id, {
+				content: newContent,
+				extra: extrasToSave
+			});
+			const index = conversationsStore.findMessageIndex(message.id);
+			if (index !== -1) {
+				conversationsStore.updateMessageAtIndex(index, {
+					content: newContent,
+					extra: extrasToSave
+				});
+			}
+		} else {
+			await DatabaseService.updateMessage(message.id, { content: newContent });
+			const index = conversationsStore.findMessageIndex(message.id);
+			if (index !== -1) {
+				conversationsStore.updateMessageAtIndex(index, { content: newContent });
+			}
+		}
+	}
+
 	async function saveSystemPromptWithPrompt(content: string, instructionId: string, title: string) {
 		// message.extra is a deep $state proxy; snapshot to plain values so
 		// Dexie/IndexedDB can structured-clone it (see getMergedExtras precedent)
@@ -404,7 +452,9 @@
 			message.extra ? $state.snapshot(message.extra) : []
 		) as DatabaseMessageExtra[];
 		const extras: DatabaseMessageExtra[] = [
-			...existingExtras,
+			...existingExtras.filter(
+				(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_INSTRUCTION
+			),
 			{
 				type: AttachmentType.CUSTOM_INSTRUCTION,
 				instructionId,
@@ -468,7 +518,6 @@
 		/>
 	{:else if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem
-			bind:textareaElement
 			class={className}
 			{deletionInfo}
 			{message}
@@ -484,21 +533,16 @@
 			onShowDeleteDialogChange={handleShowDeleteDialogChange}
 			{showDeleteDialog}
 			{siblingInfo}
-			{addToLibrary}
-			onAddToLibraryChange={(val: boolean) => (addToLibrary = val)}
-			{deferSystemPromptSave}
 		/>
 
 		{#if promptDialogOpen}
 			<DialogPromptAddNew
 				open={promptDialogOpen}
-				initialContent={editedContent}
+				initialContent={editedContent.trim()}
 				onAddToLibraryComplete={(id: string, title: string) => {
 					promptDialogOpen = false;
-					deferSystemPromptSave = false;
 					isEditing = false;
-					// Save the system message with prompt reference now that prompt is created
-					saveSystemPromptWithPrompt(editedContent, id, title);
+					saveSystemPromptWithPrompt(editedContent.trim(), id, title);
 				}}
 			/>
 		{/if}
@@ -529,7 +573,6 @@
 		/>
 	{:else}
 		<ChatMessageAssistant
-			bind:textareaElement
 			class={className}
 			{deletionInfo}
 			{isLastAssistantMessage}

@@ -28,6 +28,7 @@
 		isRecording?: boolean;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
+		showReasoningToggle?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
@@ -48,6 +49,7 @@
 		isRecording = false,
 		showAddButton = true,
 		showModelSelector = true,
+		showReasoningToggle = true,
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
@@ -122,7 +124,9 @@
 	{/if}
 
 	<div class="flex items-center gap-2">
-		<ChatFormReasoningToggle />
+		{#if showReasoningToggle}
+			<ChatFormReasoningToggle />
+		{/if}
 
 		{#if showModelSelector}
 			<ChatFormActionModels

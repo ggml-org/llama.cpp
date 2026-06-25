@@ -1,5 +1,13 @@
 <script lang="ts">
-	import { PencilRuler, ChevronDown, ChevronRight, Loader2, Info, Check, Plus } from '@lucide/svelte';
+	import {
+		PencilRuler,
+		ChevronDown,
+		ChevronRight,
+		Loader2,
+		Info,
+		Check,
+		Plus
+	} from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';

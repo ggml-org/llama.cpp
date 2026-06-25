@@ -172,7 +172,7 @@
 		>
 			<Plus class="h-4 w-4" />
 
-			<span>Add new prompt</span>
+			<span>Write new</span>
 		</DropdownMenu.Item>
 
 		{#if filteredLibraryPrompts.length > 0}
