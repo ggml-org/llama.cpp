@@ -174,7 +174,7 @@ class GraniteSwitchModel(GraniteMoeModel):
         self.gguf_writer.add_adapter_token_ids(self.hparams["adapter_token_ids"])
         self.gguf_writer.add_adapter_substitute_token_ids(self.hparams["adapter_substitute_token_ids"])
         logger.info(
-            "gguf: (granite-switch) num_adapters=%s max_lora_rank=%s n_slots=%s",
+            "gguf: (graniteswitch) num_adapters=%s max_lora_rank=%s n_slots=%s",
             self._n_adapters, self._max_lora_rank, self._n_slots,
         )
         # control_token_gain is intentionally not emitted; the runtime uses a fixed gain
@@ -218,19 +218,18 @@ class GraniteSwitchModel(GraniteMoeModel):
 
         # ---- Attention: fused QKV ----
         if "self_attn.qkv_proj" in name:
-            obid = bid
             if name.endswith("base_layer.weight"):
                 # Fused [q|k|v] rows. Permute the q and k row-blocks (split-half rope).
                 q, k, v = data_torch.split([self._q_size, self._kv_size, self._kv_size], dim=0)
                 q = self._permute_qk(q, self._n_head)
                 k = self._permute_qk(k, self._n_kv_head)
                 fused = torch.cat([q, k, v], dim=0)
-                yield (self.format_tensor_name(T.ATTN_QKV, obid), fused)
+                yield (self.format_tensor_name(T.ATTN_QKV, bid), fused)
                 return
             if "lora_A_slices." in name:
                 slot = int(name.rsplit(".", 1)[1])
                 key = {0: T.ATTN_QKV_LORA_A_Q, 1: T.ATTN_QKV_LORA_A_K, 2: T.ATTN_QKV_LORA_A_V}[slot]
-                yield (self.format_tensor_name(key, obid, suffix=""), self._lora_a(data_torch))
+                yield (self.format_tensor_name(key, bid, suffix=""), self._lora_a(data_torch))
                 return
             if "lora_B_slices." in name:
                 slot = int(name.rsplit(".", 1)[1])
@@ -239,56 +238,53 @@ class GraniteSwitchModel(GraniteMoeModel):
                     1: (T.ATTN_QKV_LORA_B_K, self._n_kv_head),
                     2: (T.ATTN_QKV_LORA_B_V, None),
                 }[slot]
-                yield (self.format_tensor_name(key, obid, suffix=""), self._lora_b(data_torch, ph))
+                yield (self.format_tensor_name(key, bid, suffix=""), self._lora_b(data_torch, ph))
                 return
             raise ValueError(f"Unexpected qkv_proj tensor: {name}")
 
         # ---- Attention: output projection ----
         if "self_attn.o_proj" in name:
-            obid = bid
             if name.endswith("base_layer.weight"):
-                yield (self.format_tensor_name(T.ATTN_OUT, obid), data_torch)
+                yield (self.format_tensor_name(T.ATTN_OUT, bid), data_torch)
                 return
             if name.endswith("lora_A"):
-                yield (self.format_tensor_name(T.ATTN_OUT_LORA_A, obid, suffix=""), self._lora_a(data_torch))
+                yield (self.format_tensor_name(T.ATTN_OUT_LORA_A, bid, suffix=""), self._lora_a(data_torch))
                 return
             if name.endswith("lora_B"):
-                yield (self.format_tensor_name(T.ATTN_OUT_LORA_B, obid, suffix=""), self._lora_b(data_torch))
+                yield (self.format_tensor_name(T.ATTN_OUT_LORA_B, bid, suffix=""), self._lora_b(data_torch))
                 return
             raise ValueError(f"Unexpected o_proj tensor: {name}")
 
         # ---- MLP: fused gate/up (shared_mlp.input_linear) ----
         if "shared_mlp.input_linear" in name:
-            obid = bid
             ffn = self.hparams["shared_intermediate_size"]
             if name.endswith("base_layer.weight"):
                 gate, up = data_torch.split([ffn, ffn], dim=0)
-                yield (self.format_tensor_name(T.FFN_GATE, obid), gate)
-                yield (self.format_tensor_name(T.FFN_UP, obid), up)
+                yield (self.format_tensor_name(T.FFN_GATE, bid), gate)
+                yield (self.format_tensor_name(T.FFN_UP, bid), up)
                 return
             if "lora_A_slices." in name:
                 slot = int(name.rsplit(".", 1)[1])
                 key = {0: T.FFN_GATE_LORA_A, 1: T.FFN_UP_LORA_A}[slot]
-                yield (self.format_tensor_name(key, obid, suffix=""), self._lora_a(data_torch))
+                yield (self.format_tensor_name(key, bid, suffix=""), self._lora_a(data_torch))
                 return
             if "lora_B_slices." in name:
                 slot = int(name.rsplit(".", 1)[1])
                 key = {0: T.FFN_GATE_LORA_B, 1: T.FFN_UP_LORA_B}[slot]
-                yield (self.format_tensor_name(key, obid, suffix=""), self._lora_b(data_torch))
+                yield (self.format_tensor_name(key, bid, suffix=""), self._lora_b(data_torch))
                 return
             raise ValueError(f"Unexpected shared_mlp.input_linear tensor: {name}")
 
         # ---- MLP: down (shared_mlp.output_linear) ----
         if "shared_mlp.output_linear" in name:
-            obid = bid
             if name.endswith("base_layer.weight"):
-                yield (self.format_tensor_name(T.FFN_DOWN, obid), data_torch)
+                yield (self.format_tensor_name(T.FFN_DOWN, bid), data_torch)
                 return
             if name.endswith("lora_A"):
-                yield (self.format_tensor_name(T.FFN_DOWN_LORA_A, obid, suffix=""), self._lora_a(data_torch))
+                yield (self.format_tensor_name(T.FFN_DOWN_LORA_A, bid, suffix=""), self._lora_a(data_torch))
                 return
             if name.endswith("lora_B"):
-                yield (self.format_tensor_name(T.FFN_DOWN_LORA_B, obid, suffix=""), self._lora_b(data_torch))
+                yield (self.format_tensor_name(T.FFN_DOWN_LORA_B, bid, suffix=""), self._lora_b(data_torch))
                 return
             raise ValueError(f"Unexpected shared_mlp.output_linear tensor: {name}")
 
@@ -296,9 +292,8 @@ class GraniteSwitchModel(GraniteMoeModel):
         if bid is not None and ".layers." in name and (
             "input_layernorm" in name or "post_attention_layernorm" in name
         ):
-            obid = bid
             key = T.ATTN_NORM if "input_layernorm" in name else T.FFN_NORM
-            yield (self.format_tensor_name(key, obid), data_torch)
+            yield (self.format_tensor_name(key, bid), data_torch)
             return
 
         # ---- Embeddings / final norm (lm_head is tied to token_embd) ----
@@ -311,7 +306,7 @@ class GraniteSwitchModel(GraniteMoeModel):
         if name == "lm_head.weight":
             return  # tied to token_embd
 
-        raise ValueError(f"granite-switch: unhandled tensor {name!r} (bid={bid})")
+        raise ValueError(f"graniteswitch: unhandled tensor {name!r} (bid={bid})")
 
 
 @ModelBase.register("GraniteMoeHybridForCausalLM", "BambaForCausalLM")
