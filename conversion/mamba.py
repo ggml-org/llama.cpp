@@ -114,7 +114,7 @@ class Mamba2Model(TextModel):
             hparams["text_config"] = hparams["llm_config"]
         super().__init__(dir_model, *args, hparams=hparams, **kwargs)
         self.d_model = self.find_hparam(["hidden_size", "d_model", "dim"])
-        self.expand = self.find_hparam(["expand"], optional=True) or 2
+        self.expand = self.find_hparam(["mamba_expand", "expand"], optional=True) or 2
         self.d_inner = self.find_hparam(["mamba_d_ssm", "intermediate_size", "d_inner"], optional=True) or self.expand * self.d_model
         self.n_group = self.find_hparam(["n_groups"], optional=True) or 1
 
