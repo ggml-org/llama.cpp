@@ -1,5 +1,8 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
 
+#ifndef GGML_OPENCL_NO_REQD_SUBGROUP_SIZE
+// Normal path: use subgroup operations for reduction
+
 #ifdef cl_intel_subgroups
 #pragma OPENCL EXTENSION cl_intel_subgroups : enable
 #else
@@ -188,3 +191,154 @@ kernel void kernel_rms_norm_mul(
         y[i00] = (x[i00] * scale) * f[i00%(ne10/4)];
     }
 }
+
+#else // GGML_OPENCL_NO_REQD_SUBGROUP_SIZE
+// Fallback path: pure local-memory tree reduction, no subgroup operations.
+// Used on Adreno drivers with a bug in QGPUPeepholeOptimizer that crashes
+// when compiling sub_group_reduce_add in this specific kernel.
+// Local memory size must be sizeof(float)*get_local_size(0) (one float per work-item).
+
+//------------------------------------------------------------------------------
+// rms_norm (fallback)
+//------------------------------------------------------------------------------
+kernel void kernel_rms_norm(
+        global void * src0,
+        ulong offset0,
+        global float * dst,
+        ulong offsetd,
+        int ne00,
+        int ne01,
+        int ne02,
+        int ne03,
+        ulong nb01,
+        ulong nb02,
+        ulong nb03,
+        float eps,
+        local float * sum
+) {
+    src0 = (global void*)((global char*)src0 + offset0);
+    dst = (global float*)((global char*)dst + offsetd);
+
+    int i03 = get_group_id(2);
+    int i02 = get_group_id(1);
+    int i01 = get_group_id(0);
+
+    int lid = get_local_id(0);
+    int lsize = get_local_size(0);
+
+    global float4 * x = (global float4 *) ((global char *) src0 + i03*nb03 + i02*nb02 + i01*nb01);
+    global float * x_scalar = (global float *) x;
+    float4 sumf = 0;
+
+    // parallel sum
+    for (int i00 = lid; i00 < ne00/4; i00 += lsize) {
+        sumf += x[i00] * x[i00];
+    }
+    float partial = sumf.s0 + sumf.s1 + sumf.s2 + sumf.s3;
+
+    // Tree reduction using local memory
+    sum[lid] = partial;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int s = lsize / 2; s > 0; s >>= 1) {
+        if (lid < s) {
+            sum[lid] += sum[lid + s];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    if (lid == 0) {
+        for (int i = 4 * (ne00 / 4); i < ne00; i++) {
+            sum[0] += x_scalar[i];
+        }
+        sum[0] /= ne00;
+    }
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    const float mean  = sum[0];
+    const float scale = 1.0f/sqrt(mean + eps);
+
+    global float4 * y = (global float4 *) (dst + i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00);
+    global float * y_scalar = (global float *) y;
+    for (int i00 = lid; i00 < ne00/4; i00 += lsize) {
+        y[i00] = x[i00] * scale;
+    }
+    if (lid == 0) {
+        for (int i00 = 4 * (ne00 / 4); i00 < ne00; i00++) {
+            y_scalar[i00] = x_scalar[i00] * scale;
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+// rms_norm_mul (fallback)
+//------------------------------------------------------------------------------
+kernel void kernel_rms_norm_mul(
+        global char * src0,
+        ulong offset0,
+        global char * src1,
+        ulong offset1,
+        global char * dst,
+        ulong offsetd,
+        int ne00,
+        int ne01,
+        int ne02,
+        int ne03,
+        ulong nb01,
+        ulong nb02,
+        ulong nb03,
+        int ne10,
+        int ne11,
+        int ne12,
+        int ne13,
+        ulong nb11,
+        ulong nb12,
+        ulong nb13,
+        ulong nb1,
+        ulong nb2,
+        ulong nb3,
+        float eps,
+        local float * sum
+) {
+    src0 = src0 + offset0;
+    src1 = src1 + offset1;
+    dst  = dst  + offsetd;
+
+    int lid = get_local_id(0);
+    int lsize = get_local_size(0);
+
+    int i03 = get_group_id(2);
+    int i02 = get_group_id(1);
+    int i01 = get_group_id(0);
+
+    global float4 * x = (global float4 *) (src0 + i03*nb03 + i02*nb02 + i01*nb01);
+    global float4 * f = (global float4 *) (src1 + (i03%ne13)*nb13 + (i02%ne12)*nb12 + (i01%ne11)*nb11);
+
+    float sumf = 0;
+
+    // parallel sum
+    for (int i00 = lid; i00 < ne00/4; i00 += lsize) {
+        sumf += dot(x[i00], x[i00]);
+    }
+
+    // Tree reduction using local memory
+    sum[lid] = sumf;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int s = lsize / 2; s > 0; s >>= 1) {
+        if (lid < s) {
+            sum[lid] += sum[lid + s];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    sumf = sum[0];
+
+    float mean  = sumf / ne00;
+    float scale = 1.0f/sqrt(mean + eps);
+
+    global float4 * y = (global float4 *) (dst + i03*nb3 + i02*nb2 + i01*nb1);
+    for (int i00 = lid; i00 < ne00/4; i00 += lsize) {
+        y[i00] = (x[i00] * scale) * f[i00%(ne10/4)];
+    }
+}
+
+#endif // GGML_OPENCL_NO_REQD_SUBGROUP_SIZE
