@@ -55,6 +55,7 @@
 		showMcpPromptButton?: boolean;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
+		showReasoningToggle?: boolean;
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
@@ -77,6 +78,7 @@
 		showMcpPromptButton = false,
 		showAddButton = true,
 		showModelSelector = true,
+		showReasoningToggle = true,
 		uploadedFiles = $bindable([]),
 		value = $bindable(''),
 		onAttachmentRemove,
@@ -554,6 +556,7 @@
 				{isRecording}
 				{showAddButton}
 				{showModelSelector}
+				{showReasoningToggle}
 				{uploadedFiles}
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}

@@ -73,6 +73,21 @@ export function useMessageEditContext(options: UseMessageEditContextOptions) {
 		get messageRole() {
 			return MessageRole.USER;
 		},
+		get isSystemMessage() {
+			return false;
+		},
+		get isSystemPlaceholder() {
+			return false;
+		},
+		get canAddToLibrary() {
+			return false;
+		},
+		get canUpdateLibraryPrompt() {
+			return false;
+		},
+		get libraryPromptTitle() {
+			return undefined;
+		},
 		setContent: (c: string) => {
 			editedContent = c;
 		},
@@ -84,6 +99,8 @@ export function useMessageEditContext(options: UseMessageEditContextOptions) {
 		},
 		save: handleSaveEdit,
 		saveOnly: handleSaveEdit,
+		saveAsLibrary: handleSaveEdit,
+		updateLibraryPrompt: handleSaveEdit,
 		cancel: handleCancelEdit,
 		startEdit: handleEdit
 	});

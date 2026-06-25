@@ -78,7 +78,11 @@
 
 	{#snippet actions()}
 		{#if hasAnyPrompts}
-			<Button variant="outline" size={isMobile.current ? 'lg' : 'default'} onclick={() => (isAdding = true)}>
+			<Button
+				variant="outline"
+				size={isMobile.current ? 'lg' : 'default'}
+				onclick={() => (isAdding = true)}
+			>
 				<Plus class="h-4 w-4" />
 				Add new prompt
 			</Button>
