@@ -78,6 +78,16 @@ if (LLAMA_STANDALONE)
     list(APPEND CMAKE_VS_GLOBALS EnforceProcessCountAcrossBuilds=true)
 endif()
 
+# Must be set before defining any targets.
+set(LLAMA_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
+set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
+set(LLAMA_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
+
+if (NOT LLAMA_LIB_INSTALL_DIR STREQUAL CMAKE_INSTALL_LIBDIR)
+    set(CMAKE_INSTALL_RPATH "${LLAMA_LIB_INSTALL_DIR}")
+    set(CMAKE_BUILD_RPATH "${CMAKE_BINARY_DIR}/bin")
+endif()
+
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(LLAMA_TOOLS_INSTALL_DEFAULT OFF)
 else()
@@ -239,9 +249,9 @@ endif()
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-set(LLAMA_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
-set(LLAMA_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
-set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
+if (NOT LLAMA_LIB_INSTALL_DIR STREQUAL CMAKE_INSTALL_LIBDIR)
+    set(CMAKE_INSTALL_RPATH "${LLAMA_LIB_INSTALL_DIR}")
+endif()
 
 set(LLAMA_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h
@@ -251,7 +261,7 @@ set_target_properties(llama
     PROPERTIES
         PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
 
-install(TARGETS llama LIBRARY PUBLIC_HEADER)
+install(TARGETS llama LIBRARY DESTINATION ${LLAMA_LIB_INSTALL_DIR} PUBLIC_HEADER)
 
 if (LLAMA_BUILD_COMMON)
     install(TARGETS llama-common LIBRARY)
