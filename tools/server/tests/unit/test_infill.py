@@ -57,6 +57,19 @@ def test_invalid_input_extra_req(input_extra):
     assert "error" in res.body
 
 
+@pytest.mark.parametrize("data,expected_msg", [
+    ({"input_suffix": "}\n"}, "input_prefix"),
+    ({"input_prefix": "#include <cstdio>\n"}, "input_suffix"),
+    ({"prompt": 123, "input_prefix": "a", "input_suffix": "b"}, "prompt"),
+])
+def test_infill_missing_required_field(data, expected_msg):
+    global server
+    server.start()
+    res = server.make_request("POST", "/infill", data=data)
+    assert res.status_code == 400
+    assert expected_msg in res.body["error"]["message"]
+
+
 @pytest.mark.skipif(not is_slow_test_allowed(), reason="skipping slow test")
 def test_with_qwen_model():
     global server
