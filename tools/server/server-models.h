@@ -40,6 +40,11 @@ enum server_model_source {
     SERVER_MODEL_SOURCE_CACHE,
 };
 
+enum server_child_mode {
+    SERVER_CHILD_MODE_NORMAL,   // load the model and run normally
+    SERVER_CHILD_MODE_DOWNLOAD, // download the model and exit
+};
+
 static std::string server_model_status_to_string(server_model_status status) {
     switch (status) {
         case SERVER_MODEL_STATUS_DOWNLOADING: return "downloading";
@@ -72,6 +77,7 @@ struct server_model_meta {
     int64_t last_used = 0; // for LRU unloading
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
     json loaded_info; // info to be reflected via /v1/models endpoint ; if in DOWNLOADING state, it should contain download progress info
+    json progress; // reflect load or download progress info, if any
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
@@ -104,7 +110,6 @@ private:
         std::shared_ptr<server_subproc> subproc; // shared between main thread and monitoring thread
         std::thread th;
         server_model_meta meta;
-        FILE * stdin_file = nullptr;
     };
 
     std::mutex mutex;
@@ -160,19 +165,28 @@ public:
     // return a copy of all model metadata (thread-safe)
     std::vector<server_model_meta> get_all_meta();
 
+    struct load_options {
+        server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
+        // used for spawning a downloading child process
+        std::optional<server_model_meta> custom_meta = std::nullopt;
+    };
+
     // load and unload model instances
     // these functions are thread-safe
     void load(const std::string & name);
+    void load(const std::string & name, const load_options & opts);
     void unload(const std::string & name);
     void unload_all();
 
-    // download a new model, progress is reported via SSE
-    // to stop the download, call unload()
-    void download(common_params_model && model, common_download_opts && opts);
-
+    struct update_status_args {
+        server_model_status status;
+        int exit_code = 0; // only valid if status == UNLOADED
+        json loaded_info = nullptr;
+        json progress = nullptr;
+    };
     // update the status of a model instance (thread-safe)
-    void update_status(const std::string & name, server_model_status status, int exit_code);
-    void update_loaded_info(const std::string & name, std::string & raw_info);
+    // also send SSE notification to /models/sse endpoint
+    void update_status(const std::string & name, const update_status_args & args);
     void update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok = true);
 
     // remove a cache model from disk and update the list (thread-safe)
@@ -193,34 +207,47 @@ public:
     // proxy an HTTP request to the model instance
     server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used);
 
+    // handle message sent from server_child::notify_to_router()
+    // raw input must starts with CMD_CHILD_TO_ROUTER_STATE, followed by a JSON string
+    // this function is not thread-safe, must be called from instance's monitoring thread
+    // payload per state:
+    //     state = loading     -> payload = {} (TODO: add progress info)
+    //     state = ready       -> payload = model_info (json), or {} if wakeup from sleeping
+    //     state = sleeping    -> payload = {}
+    void handle_child_state(const std::string & name, const std::string & raw_input);
+};
+
+struct server_child {
+    // serializes the notify_to_router writes
+    std::mutex mtx_stdout;
+    std::atomic<bool> is_finished_downloading = false; // set by run_download
+
     // return true if the current process is a child server instance
-    static bool is_child_server();
+    bool is_child();
+    server_child_mode get_mode();
+    int run_download(common_params & params);
 
-    // notify the router server that a model instance is ready
+    // register the shutdown_handler to be called by the router
     // return the monitoring thread (to be joined by the caller)
-    static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler, const json & model_info);
+    std::thread setup(const std::function<void(int)> & shutdown_handler);
 
-    // notify the router server that the sleeping state has changed
-    static void notify_router_sleeping_state(bool sleeping);
+    // notify router server for status changes (e.g. loading, downloading, sleeping, etc.)
+    // message will be handled by server_models::handle_child_state() on the router side
+    void notify_to_router(const std::string & state_name, const json & payload);
 };
 
 struct server_models_routes {
     common_params params;
     json ui_settings = json::object();     // Primary: new name
-    json webui_settings = json::object();  // Deprecated: use ui_settings (kept for compat)
     std::atomic<bool> stopping = false;    // for graceful disconnecting SSE clients during shutdown
     server_models models;
     server_models_routes(const common_params & params, int argc, char ** argv)
             : params(params), models(params, argc, argv) {
-        // Support both new ui_config_json and deprecated webui_config_json
-        const std::string & cfg = !this->params.ui_config_json.empty()
-            ? this->params.ui_config_json
-            : this->params.webui_config_json;
+        const std::string & cfg = this->params.ui_config_json;
         if (!cfg.empty()) {
             try {
                 json json_settings = json::parse(cfg);
                 ui_settings = json_settings;
-                webui_settings = json_settings;  // Deprecated: keep in sync
             } catch (const std::exception & e) {
                 LOG_ERR("%s: failed to parse UI config: %s\n", __func__, e.what());
                 throw;

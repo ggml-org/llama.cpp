@@ -359,6 +359,7 @@ class Keys:
         CHUNK_SIZE          = "clip.audio.chunk_size"
         CONV_KERNEL_SIZE    = "clip.audio.conv_kernel_size"
         MAX_POS_EMB         = "clip.audio.max_pos_emb"
+        FEATURE_LAYERS      = "clip.audio.feature_layer" # Granite Speech Plus
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"
