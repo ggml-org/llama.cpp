@@ -118,11 +118,14 @@
 			? promptsStore.getPrompt(customInstructionExtra.instructionId)
 			: undefined
 	);
+	let promptTitle = $derived(referencedPrompt?.title ?? customInstructionExtra?.title);
 	let promptIsStale = $derived.by(() => {
 		if (!customInstructionExtra || !referencedPrompt) return false;
 		return hasContentDiff(message.content, referencedPrompt.content);
 	});
 	let showPromptSyncDialog = $state(false);
+	let showUpdateLibraryDialog = $state(false);
+	let updatedTitle: string | undefined = $state(undefined);
 
 	// System-message affordances surfaced to the edit form.
 	let isSystemMessage = $derived(message.role === MessageRole.SYSTEM);
@@ -402,8 +405,23 @@
 			return;
 		}
 
-		await promptsStore.updatePrompt(referencedPrompt.id, { content: newContent });
+		showUpdateLibraryDialog = true;
+	}
+
+	async function handleUpdateLibraryConfirm(updatedTitle?: string) {
+		if (!referencedPrompt) return;
+
+		const newContent = editedContent.trim();
+		const newTitle = updatedTitle?.trim() ?? '';
+
+		const updates: Partial<{ content: string; title: string }> = { content: newContent };
+		if (newTitle && newTitle !== referencedPrompt.title) {
+			updates.title = newTitle;
+		}
+
+		await promptsStore.updatePrompt(referencedPrompt.id, updates);
 		await handleSaveEdit();
+		showUpdateLibraryDialog = false;
 	}
 
 	async function persistSystemMessageEdit() {
@@ -522,7 +540,7 @@
 			{deletionInfo}
 			{message}
 			instructionId={customInstructionExtra?.instructionId}
-			title={customInstructionExtra?.title}
+			title={promptTitle}
 			{promptIsStale}
 			onPromptUpdate={() => (showPromptSyncDialog = true)}
 			onConfirmDelete={handleConfirmDelete}
@@ -551,9 +569,23 @@
 			<DialogPromptSync
 				bind:open={showPromptSyncDialog}
 				promptTitle={referencedPrompt.title}
+				currentTitle={customInstructionExtra?.title}
 				currentContent={message.content}
 				updatedContent={referencedPrompt.content}
 				onUpdate={syncPromptFromLibrary}
+			/>
+		{/if}
+
+		{#if showUpdateLibraryDialog && referencedPrompt}
+			<DialogPromptSync
+				bind:open={showUpdateLibraryDialog}
+				promptTitle={referencedPrompt.title}
+				currentTitle={customInstructionExtra?.title}
+				currentContent={message.content}
+				updatedContent={editedContent.trim()}
+				bind:updatedTitle
+				editableTitle
+				onUpdate={handleUpdateLibraryConfirm}
 			/>
 		{/if}
 	{:else if message.role === MessageRole.USER}

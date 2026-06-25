@@ -15,7 +15,6 @@
 		onFileUpload?: () => void;
 		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
-		onMcpSettingsClick?: () => void;
 		onSystemPromptClick?: () => void;
 		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
 	}
@@ -30,7 +29,6 @@
 		onFileUpload,
 		onMcpPromptClick,
 		onMcpResourcesClick,
-		onMcpSettingsClick,
 		onSystemPromptClick,
 		onSystemPromptWithContent
 	}: Props = $props();
@@ -65,7 +63,6 @@
 		{onFileUpload}
 		{onMcpPromptClick}
 		{onMcpResourcesClick}
-		{onMcpSettingsClick}
 		{onSystemPromptClick}
 		{onSystemPromptWithContent}
 	/>
