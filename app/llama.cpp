@@ -19,6 +19,7 @@ int llama_batched_bench(int argc, char ** argv);
 int llama_fit_params(int argc, char ** argv);
 int llama_quantize(int argc, char ** argv);
 int llama_perplexity(int argc, char ** argv);
+int llama_download(int argc, char ** argv);
 
 // Self-update is only supported for binaries built with llama-install.sh
 static int llama_update(int argc, char ** argv) {
@@ -61,6 +62,7 @@ static const command cmds[] = {
     {"serve",         "HTTP API server",                                    {"server"},   false,         llama_server       },
     {"cli",           "Command-line interactive interface",                 {"client"},   false,         llama_cli          },
     {"update",        "Update llama to the latest release",                 {},           UPDATE_HIDDEN, llama_update       },
+    {"download",      "Download a model",                                   {"get"},      false,         llama_download     },
     {"completion",    "Text completion",                                    {"complete"}, true,          llama_completion   },
     {"bench",         "Benchmark prompt processing and text generation",    {},           true,          llama_bench        },
     {"batched-bench", "Benchmark batched decoding performance",             {},           true,          llama_batched_bench},

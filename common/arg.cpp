@@ -594,6 +594,8 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     const bool skip_model_download =
         // server will call common_params_handle_models() later, so we skip it here
         ctx_arg.ex == LLAMA_EXAMPLE_SERVER ||
+        // download calls common_params_handle_models() itself and prints the paths
+        ctx_arg.ex == LLAMA_EXAMPLE_DOWNLOAD ||
         // export_graph_ops loads only metadata
         ctx_arg.ex == LLAMA_EXAMPLE_EXPORT_GRAPH_OPS;
 
@@ -671,15 +673,19 @@ static void common_params_print_usage(common_params_context & ctx_arg) {
             common_options.push_back(&opt);
         }
     }
-    printf("----- common params -----\n\n");
-    print_options(common_options);
-    printf("\n\n----- sampling params -----\n\n");
-    print_options(sampling_options);
-    printf("\n\n----- speculative params -----\n\n");
-    print_options(spec_options);
-    // TODO: maybe convert enum llama_example to string
-    printf("\n\n----- example-specific params -----\n\n");
-    print_options(specific_options);
+    bool first = true;
+    auto print_section = [&](const char * header, std::vector<common_arg *> & options) {
+        if (options.empty()) {
+            return;
+        }
+        printf("%s----- %s -----\n\n", first ? "" : "\n\n", header);
+        first = false;
+        print_options(options);
+    };
+    print_section("common params",           common_options);
+    print_section("sampling params",         sampling_options);
+    print_section("speculative params",      spec_options);
+    print_section("example-specific params", specific_options);
 }
 
 static void common_params_print_completion(common_params_context & ctx_arg) {
@@ -1079,7 +1085,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
      * - if both {LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_*,} are set, we will prioritize the LLAMA_EXAMPLE_* matching current example
      */
     auto add_opt = [&](common_arg arg) {
-        if ((arg.in_example(ex) || arg.in_example(LLAMA_EXAMPLE_COMMON)) && !arg.is_exclude(ex)) {
+        // download only exposes the handful of args explicitly tagged for it
+        const bool inherit_common = ex != LLAMA_EXAMPLE_DOWNLOAD;
+        if ((arg.in_example(ex) || (inherit_common && arg.in_example(LLAMA_EXAMPLE_COMMON))) && !arg.is_exclude(ex)) {
             ctx_arg.options.push_back(std::move(arg));
         }
     };
@@ -1090,7 +1098,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.usage = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}));
     add_opt(common_arg(
         {"--version"},
         "show version and build info",
@@ -2212,7 +2220,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, bool value) {
             params.no_mmproj = !value;
         }
-    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_AUTO"));
+    ).set_examples({LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_MMPROJ_AUTO"));
     add_opt(common_arg(
         {"--mmproj-offload"},
         {"--no-mmproj-offload"},
@@ -2611,14 +2619,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.model.path = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}).set_env("LLAMA_ARG_MODEL"));
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_MODEL"));
     add_opt(common_arg(
         {"-mu", "--model-url"}, "MODEL_URL",
         "model download url (default: unused)",
         [](common_params & params, const std::string & value) {
             params.model.url = value;
         }
-    ).set_env("LLAMA_ARG_MODEL_URL"));
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_MODEL_URL"));
     add_opt(common_arg(
         { "-dr", "--docker-repo" }, "[<repo>/]<model>[:quant]",
         "Docker Hub model repository. repo is optional, default to ai/. quant is optional, default to :latest.\n"
@@ -2627,7 +2635,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.model.docker_repo = value;
         }
-    ).set_env("LLAMA_ARG_DOCKER_REPO"));
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_DOCKER_REPO"));
     add_opt(common_arg(
         {"-hf", "-hfr", "--hf-repo"}, "<user>/<model>[:quant]",
         "Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
@@ -2637,14 +2645,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.model.hf_repo = value;
         }
-    ).set_env("LLAMA_ARG_HF_REPO"));
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_HF_REPO"));
     add_opt(common_arg(
         {"-hff", "--hf-file"}, "FILE",
         "Hugging Face model file. If specified, it will override the quant in --hf-repo (default: unused)",
         [](common_params & params, const std::string & value) {
             params.model.hf_file = value;
         }
-    ).set_env("LLAMA_ARG_HF_FILE"));
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_HF_FILE"));
     add_opt(common_arg(
         {"-hfv", "-hfrv", "--hf-repo-v"}, "<user>/<model>[:quant]",
         "Hugging Face model repository for the vocoder model (default: unused)",
@@ -2665,7 +2673,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.hf_token = value;
         }
-    ).set_env("HF_TOKEN"));
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("HF_TOKEN"));
+    add_opt(common_arg(
+        {"--mtp"},
+        "also download the multi-token prediction (MTP) head, if available (default: unused)",
+        [](common_params & params) {
+            params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
+        }
+    ).set_examples({LLAMA_EXAMPLE_DOWNLOAD}));
     add_opt(common_arg(
         {"--context-file"}, "FNAME",
         "file to load context from (use comma-separated values to specify multiple files)",
