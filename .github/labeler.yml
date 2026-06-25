@@ -38,6 +38,17 @@ documentation:
             - **/*.md
             - docs/**
             - media/**
+examples:
+    - all:
+        - changed-files:
+            - any-glob-to-any-file:
+                - app/**
+                - examples/**
+                - tools/**
+            - all-globs-to-all-files:
+                - '!tools/server/**'
+                - '!tools/mtmd/**'
+                - '!tools/ui/**'
 testing:
     - changed-files:
         - any-glob-to-any-file:
@@ -66,6 +77,10 @@ server:
     - changed-files:
         - any-glob-to-any-file:
             - tools/server/**
+mtmd:
+    - changed-files:
+        - any-glob-to-any-file:
+            - tools/mtmd/**
 conversion:
     - changed-files:
         - any-glob-to-any-file:
