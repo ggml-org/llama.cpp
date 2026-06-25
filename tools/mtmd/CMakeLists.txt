@@ -115,22 +115,28 @@ if (TARGET mtmd)
     endif()
 endif()
 
-add_executable(llama-llava-cli    deprecation-warning.cpp)
-add_executable(llama-gemma3-cli   deprecation-warning.cpp)
-add_executable(llama-minicpmv-cli deprecation-warning.cpp)
-add_executable(llama-qwen2vl-cli  deprecation-warning.cpp)
+# Gate CLI binaries on LLAMA_BUILD_TOOLS so that standalone library-only
+# builds (LLAMA_BUILD_MTMD=ON with LLAMA_BUILD_TOOLS=OFF — e.g. Apple
+# XCFramework packaging) skip the executables entirely. LLAMA_BUILD_COMMON
+# defaults to ON in standalone builds, so we cannot rely on it for gating.
+if (LLAMA_BUILD_TOOLS)
+    add_executable(llama-llava-cli    deprecation-warning.cpp)
+    add_executable(llama-gemma3-cli   deprecation-warning.cpp)
+    add_executable(llama-minicpmv-cli deprecation-warning.cpp)
+    add_executable(llama-qwen2vl-cli  deprecation-warning.cpp)
 
-set(TARGET llama-mtmd-cli)
-add_executable         (${TARGET} mtmd-cli.cpp)
-set_target_properties  (${TARGET} PROPERTIES OUTPUT_NAME llama-mtmd-cli)
-if(LLAMA_TOOLS_INSTALL)
-    install(TARGETS ${TARGET} RUNTIME)
+    set(TARGET llama-mtmd-cli)
+    add_executable         (${TARGET} mtmd-cli.cpp)
+    set_target_properties  (${TARGET} PROPERTIES OUTPUT_NAME llama-mtmd-cli)
+    if(LLAMA_TOOLS_INSTALL)
+        install(TARGETS ${TARGET} RUNTIME)
+    endif()
+    target_link_libraries  (${TARGET} PRIVATE llama-common mtmd Threads::Threads)
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+    # mtmd-debug tool
+    add_executable(llama-mtmd-debug debug/mtmd-debug.cpp)
+    set_target_properties(llama-mtmd-debug PROPERTIES OUTPUT_NAME llama-mtmd-debug)
+    target_link_libraries(llama-mtmd-debug PRIVATE llama-common mtmd Threads::Threads)
+    target_compile_features(llama-mtmd-debug PRIVATE cxx_std_17)
 endif()
-target_link_libraries  (${TARGET} PRIVATE llama-common mtmd Threads::Threads)
-target_compile_features(${TARGET} PRIVATE cxx_std_17)
-
-# mtmd-debug tool
-add_executable(llama-mtmd-debug debug/mtmd-debug.cpp)
-set_target_properties(llama-mtmd-debug PROPERTIES OUTPUT_NAME llama-mtmd-debug)
-target_link_libraries(llama-mtmd-debug PRIVATE llama-common mtmd Threads::Threads)
-target_compile_features(llama-mtmd-debug PRIVATE cxx_std_17)
