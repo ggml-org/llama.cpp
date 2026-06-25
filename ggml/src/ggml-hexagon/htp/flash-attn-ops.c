@@ -1333,6 +1333,35 @@ static __attribute__((noinline)) void fa_compute_slopes(
     hvx_copy_f16_aa((uint8_t *)slopes, (const uint8_t *)local_slopes, n_rows_g);
 }
 
+static void fa_push_mask_dma_gqa(
+    dma_queue *               dma,
+    const struct htp_tensor * mask,
+    uint32_t                  q_start,
+    uint32_t                  im3,
+    uint32_t                  kv_start,
+    uint32_t                  kv_head,
+    uint32_t                  G,
+    uint32_t                  m_line_bytes,
+    uint32_t                  kv_rows,
+    uint32_t                  n_q_rows,
+    struct hmx_fa_context *   factx
+) {
+    for (uint32_t g = 0; g < G; ++g) {
+        const uint32_t h_idx = kv_head * G + g;
+        const uint32_t im2 = fastmodulo(h_idx, mask->ne[2], &factx->src3_div2);
+        const uint8_t * ms_src = (const uint8_t *) mask->data + q_start * mask->nb[1] +
+                                 im2 * mask->nb[2] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
+        uint8_t * ms_dst = (uint8_t *) factx->vtcm_mask_buf + g * m_line_bytes;
+        dma_queue_push(dma, dma_make_ptr(ms_dst, ms_src), G * m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_q_rows);
+    }
+}
+
+static void fa_pop_mask_dma_gqa(dma_queue * dma, uint32_t G) {
+    for (uint32_t g = 0; g < G; ++g) {
+        dma_queue_pop(dma);
+    }
+}
+
 // ============================================================================
 // Core HMX flash attention algorithm (GQA-merged)
 // ============================================================================
@@ -1577,18 +1606,11 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                         // Push mask DMA
                         if (mask) {
-                            if (factx.mask_broadcast) {
+                            if (__builtin_expect(factx.mask_broadcast, true)) {
                                 const uint8_t * ms_src = (const uint8_t *) mask->data + q_start * mask->nb[1] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
                                 dma_cache_push(dma, &factx.m_cache, ms_src, m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_q_rows);
                             } else {
-                                for (uint32_t g = 0; g < G; ++g) {
-                                    const uint32_t h_idx = kv_head * G + g;
-                                    const uint32_t im2 = fastmodulo(h_idx, mask->ne[2], &factx.src3_div2);
-                                    const uint8_t * ms_src = (const uint8_t *) mask->data + q_start * mask->nb[1] +
-                                                             im2 * mask->nb[2] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
-                                    uint8_t * ms_dst = (uint8_t *) factx.vtcm_mask_buf + g * m_line_bytes;
-                                    dma_queue_push(dma, dma_make_ptr(ms_dst, ms_src), G * m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_q_rows);
-                                }
+                                fa_push_mask_dma_gqa(dma, mask, q_start, im3, kv_start, kv_head, G, m_line_bytes, kv_rows, n_q_rows, &factx);
                             }
                         }
 
@@ -1641,12 +1663,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         // ---- Phase 3: softmax + build_D ----
                         __fp16 * current_mask_vtcm = NULL;
                         if (mask) {
-                            if (factx.mask_broadcast) {
+                            if (__builtin_expect(factx.mask_broadcast, true)) {
                                 current_mask_vtcm = (__fp16 *) dma_queue_pop(dma).dst;
                             } else {
-                                for (uint32_t g = 0; g < G; ++g) {
-                                    dma_queue_pop(dma);
-                                }
+                                fa_pop_mask_dma_gqa(dma, G);
                                 current_mask_vtcm = factx.vtcm_mask_buf;
                             }
                         }
@@ -1709,18 +1729,11 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         dma_queue_pop(dma);  // V
 
                         if (mask) {
-                            if (factx.mask_broadcast) {
+                            if (__builtin_expect(factx.mask_broadcast, true)) {
                                 const uint8_t * ms_src = (const uint8_t *) mask->data + q_start * mask->nb[1] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
                                 dma_cache_push(dma, &factx.m_cache, ms_src, m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_q_rows);
                             } else {
-                                for (uint32_t g = 0; g < G; ++g) {
-                                    const uint32_t h_idx = kv_head * G + g;
-                                    const uint32_t im2 = fastmodulo(h_idx, mask->ne[2], &factx.src3_div2);
-                                    const uint8_t * ms_src = (const uint8_t *) mask->data + q_start * mask->nb[1] +
-                                                             im2 * mask->nb[2] + im3 * mask->nb[3] + kv_start * sizeof(__fp16);
-                                    uint8_t * ms_dst = (uint8_t *) factx.vtcm_mask_buf + g * m_line_bytes;
-                                    dma_queue_push(dma, dma_make_ptr(ms_dst, ms_src), G * m_line_bytes, mask->nb[1], kv_rows * sizeof(__fp16), n_q_rows);
-                                }
+                                fa_push_mask_dma_gqa(dma, mask, q_start, im3, kv_start, kv_head, G, m_line_bytes, kv_rows, n_q_rows, &factx);
                             }
                         }
                         if (kv_blk + 1 < factx.n_kv_blocks) {
@@ -1757,14 +1770,13 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             htp_trace_event_stop(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
                         }
 
+                        // ---- Phase 3: softmax + build_D ----
                         __fp16 * current_mask_vtcm = NULL;
                         if (mask) {
-                            if (factx.mask_broadcast) {
+                            if (__builtin_expect(factx.mask_broadcast, true)) {
                                 current_mask_vtcm = (__fp16 *) dma_queue_pop(dma).dst;
                             } else {
-                                for (uint32_t g = 0; g < G; ++g) {
-                                    dma_queue_pop(dma);
-                                }
+                                fa_pop_mask_dma_gqa(dma, G);
                                 current_mask_vtcm = factx.vtcm_mask_buf;
                             }
                         }
