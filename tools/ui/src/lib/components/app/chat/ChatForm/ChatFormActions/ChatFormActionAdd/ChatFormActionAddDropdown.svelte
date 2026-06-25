@@ -155,6 +155,7 @@
 				{onSystemPromptClick}
 				{onSystemPromptWithContent}
 				{onMcpPromptClick}
+				preloadOnOpen={dropdownOpen}
 			/>
 
 			<ChatFormActionAddToolsSubmenu />

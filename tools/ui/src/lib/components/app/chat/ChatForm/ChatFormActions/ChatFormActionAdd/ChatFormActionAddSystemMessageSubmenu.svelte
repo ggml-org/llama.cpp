@@ -5,6 +5,7 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpLogo } from '$lib/components/app';
+	import SearchInputMini from '$lib/components/app/forms/SearchInputMini.svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { ContentPartType } from '$lib/enums';
 	import { PROMPT_CONTENT_SEPARATOR } from '$lib/constants';
@@ -15,14 +16,45 @@
 		onSystemPromptClick?: () => void;
 		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
 		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
+		// Preload MCP prompts when the surrounding dropdown is opened, so the
+		// items are already resolved by the time the user reaches this submenu
+		// (instead of appearing with a delay on first hover).
+		preloadOnOpen?: boolean;
 	}
 
-	let { onSystemPromptClick, onSystemPromptWithContent, onMcpPromptClick }: Props = $props();
+	let {
+		onSystemPromptClick,
+		onSystemPromptWithContent,
+		onMcpPromptClick,
+		preloadOnOpen = false
+	}: Props = $props();
 
 	let prompts = $derived(promptsStore.getPrompts());
 
+	// Single search field shared by both lists below. Matching is
+	// case-insensitive across title/name, content/description, and (for MCP)
+	// the server label.
+	let searchQuery = $state('');
+
+	let filteredLibraryPrompts = $derived.by(() => {
+		const q = searchQuery.trim().toLowerCase();
+		if (!q) return prompts;
+		return prompts.filter(
+			(p) => p.title.toLowerCase().includes(q) || p.content.toLowerCase().includes(q)
+		);
+	});
+
 	// Bind open state to load MCP prompts when the submenu opens
 	let subOpen = $state(false);
+
+	// As soon as the wrapping DropdownMenu becomes visible, kick off the MCP
+	// prompts fetch so the items are ready before the user hovers into this
+	// submenu. The fetch is deduped inside loadMcpPrompts().
+	$effect(() => {
+		if (preloadOnOpen) {
+			void loadMcpPrompts();
+		}
+	});
 
 	// MCP prompts as a flat list
 	let mcpPrompts = $state<
@@ -42,6 +74,17 @@
 			map.set(server.id, server);
 		}
 		return map;
+	});
+
+	let filteredMcpPrompts = $derived.by(() => {
+		const q = searchQuery.trim().toLowerCase();
+		if (!q) return mcpPrompts;
+		return mcpPrompts.filter((entry) => {
+			const name = (entry.prompt.title || entry.prompt.name || '').toLowerCase();
+			const description = (entry.prompt.description || '').toLowerCase();
+			const server = entry.serverLabel.toLowerCase();
+			return name.includes(q) || description.includes(q) || server.includes(q);
+		});
 	});
 
 	async function loadMcpPrompts() {
@@ -148,8 +191,17 @@
 	</DropdownMenu.SubTrigger>
 
 	<DropdownMenu.SubContent class="w-72">
+		{#if prompts.length > 0 || mcpPrompts.length > 0}
+			<div class="mb-1.5">
+				<SearchInputMini
+					bind:value={searchQuery}
+					placeholder="Search by name, content, or server..."
+				/>
+			</div>
+		{/if}
+
 		<DropdownMenu.Item
-			class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-left transition-colors hover:bg-accent"
+			class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-left transition-colors hover:bg-accent mt-2.5 mb-2"
 			onclick={handleAddPromptClick}
 		>
 			<Plus class="h-4 w-4" />
@@ -157,12 +209,12 @@
 			<span>Add new prompt</span>
 		</DropdownMenu.Item>
 
-		{#if prompts.length > 0}
+		{#if filteredLibraryPrompts.length > 0}
 			<DropdownMenu.Separator />
 
-			<DropdownMenu.Label class="mt-1.5 mb-1">Choose from library</DropdownMenu.Label>
+			<DropdownMenu.Label class="mt-1.5 mb-1">Your Prompts</DropdownMenu.Label>
 
-			{#each prompts as prompt (prompt.id)}
+			{#each filteredLibraryPrompts as prompt (prompt.id)}
 				<DropdownMenu.Item
 					class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-sm px-2 py-2 text-left transition-colors hover:bg-accent"
 					onclick={() => handlePromptClick(prompt.id)}
@@ -175,12 +227,12 @@
 			{/each}
 		{/if}
 
-		{#if mcpPrompts.length > 0}
+		{#if filteredMcpPrompts.length > 0}
 			<DropdownMenu.Separator />
 
 			<DropdownMenu.Label class="mt-1.5 mb-1">MCP Prompts</DropdownMenu.Label>
 
-			{#each mcpPrompts as entry (entry)}
+			{#each filteredMcpPrompts as entry (entry)}
 				<DropdownMenu.Item
 					class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-sm px-2 py-2 text-left transition-colors hover:bg-accent"
 					onclick={() => handleMcpPromptClick(entry)}
@@ -219,6 +271,10 @@
 					{/if}
 				</DropdownMenu.Item>
 			{/each}
+		{/if}
+
+		{#if searchQuery.trim() !== '' && (prompts.length > 0 || mcpPrompts.length > 0) && filteredLibraryPrompts.length === 0 && filteredMcpPrompts.length === 0}
+			<div class="px-2 py-2 text-xs text-muted-foreground">No matches</div>
 		{/if}
 	</DropdownMenu.SubContent>
 </DropdownMenu.Sub>

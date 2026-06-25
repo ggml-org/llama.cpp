@@ -137,7 +137,7 @@
 										<span
 											data-slot="checkbox"
 											data-state={enabled ? 'checked' : 'unchecked'}
-											class="flex size-4 shrink-0 items-center justify-center rounded-[4px] border border-input data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground"
+											class="flex size-4 shrink-0 items-center justify-center rounded-lg border border-input data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground"
 										>
 											{#if enabled}
 												<Check class="size-3.5" />
@@ -155,7 +155,7 @@
 				{/each}
 			</div>
 
-			<div class="flex flex-col gap-1">
+			<div class="flex flex-col gap-1 p-1.5 pt-0">
 				<DropdownMenu.Separator />
 
 				<DropdownMenu.Item
