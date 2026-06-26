@@ -1213,6 +1213,39 @@ struct test_case {
 
     virtual bool run_whole_graph() { return false; }
     virtual std::vector<ggml_tensor *> fusion_test_nodes() { return {}; }
+    virtual std::vector<ggml_tensor *> weight_tensors() { return {}; }
+
+    void free_weight_buffers(std::vector<ggml_backend_buffer_t> & buffers) {
+        for (ggml_backend_buffer_t buffer : buffers) {
+            ggml_backend_buffer_free(buffer);
+        }
+        buffers.clear();
+    }
+
+    bool allocate_weight_tensors(ggml_backend_t backend, std::vector<ggml_backend_buffer_t> & buffers) {
+        for (ggml_tensor * tensor : weight_tensors()) {
+            ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend);
+            const size_t size = ggml_backend_buft_get_alloc_size(buft, tensor);
+
+            ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, size);
+            if (buffer == nullptr) {
+                free_weight_buffers(buffers);
+                return false;
+            }
+            ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+            enum ggml_status status = ggml_backend_tensor_alloc(buffer, tensor, ggml_backend_buffer_get_base(buffer));
+            if (status != GGML_STATUS_SUCCESS) {
+                ggml_backend_buffer_free(buffer);
+                free_weight_buffers(buffers);
+                return false;
+            }
+
+            buffers.push_back(buffer);
+        }
+
+        return true;
+    }
 
     ggml_cgraph * gf = nullptr;
     ggml_cgraph * gb = nullptr;
@@ -1362,11 +1395,19 @@ struct test_case {
         // post-graph sentinel
         add_sentinel(ctx);
 
+        std::vector<ggml_backend_buffer_t> weight_buffers;
+        if (!allocate_weight_tensors(backend1, weight_buffers)) {
+            printf("failed to allocate weight tensors [%s] ", ggml_backend_name(backend1));
+            ggml_free(ctx);
+            return test_status_t::FAIL;
+        }
+
         // allocate
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend1);
 
         if (buf == NULL) {
             printf("failed to allocate tensors [%s] ", ggml_backend_name(backend1));
+            free_weight_buffers(weight_buffers);
             ggml_free(ctx);
             return test_status_t::FAIL;
         }
@@ -1466,6 +1507,7 @@ struct test_case {
                                                                fused_nodes_to_verify.size());
 
         ggml_backend_buffer_free(buf);
+        free_weight_buffers(weight_buffers);
 
         ggml_free(ctx);
 
@@ -1510,11 +1552,18 @@ struct test_case {
             return true;
         }
 
+        std::vector<ggml_backend_buffer_t> weight_buffers;
+        if (!allocate_weight_tensors(backend, weight_buffers)) {
+            printf("failed to allocate weight tensors\n");
+            return false;
+        }
+
         // allocate
         ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors(ctx.get(), backend)); // smart ptr
 
         if (buf == NULL) {
             printf("failed to allocate tensors\n");
+            free_weight_buffers(weight_buffers);
             return false;
         }
 
@@ -1584,6 +1633,7 @@ struct test_case {
             ggml_status status = ggml_backend_graph_compute(backend, gf);
             if (status != GGML_STATUS_SUCCESS) {
                 fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+                free_weight_buffers(weight_buffers);
                 return false;
             }
             int64_t end_time = ggml_time_us();
@@ -1592,6 +1642,8 @@ struct test_case {
             total_mem += mem;
             total_runs += n_runs;
         } while (total_time_us < 1000*1000); // run for at least 1 second
+
+        free_weight_buffers(weight_buffers);
 
         // Create test result
         double avg_time_us      = (double) total_time_us / total_runs;
@@ -5790,6 +5842,7 @@ struct test_mul_mat_vec_fusion : public test_case {
     const bool with_gate;
     const bool with_lane_scale;
     std::array<int64_t, 2> batch_dims;
+    std::vector<ggml_tensor *> lane_scale_weights;
 
     test_mul_mat_vec_fusion(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k,
                         bool use_id = false, int n_mats = 1, int n_used = 1, bool b = false, bool with_bias = false, bool with_gate = true,
@@ -5833,6 +5886,7 @@ struct test_mul_mat_vec_fusion : public test_case {
 
     ggml_tensor * build_lane_scale_id(ggml_context * ctx, ggml_tensor * out, ggml_tensor * ids) {
         ggml_tensor * scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_mats);
+        lane_scale_weights.push_back(scale);
         ggml_tensor * s = ggml_reshape_3d(ctx, scale, 1, n_mats, 1);
         s = ggml_repeat_4d(ctx, s, 1, n_mats, m, 1);
         s = ggml_get_rows(ctx, s, ids);
@@ -5840,6 +5894,8 @@ struct test_mul_mat_vec_fusion : public test_case {
     }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
+        lane_scale_weights.clear();
+
         if (!use_id) {
             const int              channels = batch_dims[0];
             const int              samples  = batch_dims[1];
@@ -5935,6 +5991,10 @@ struct test_mul_mat_vec_fusion : public test_case {
             ggml_set_name(out, "out");
             return out;
         }
+    }
+
+    std::vector<ggml_tensor *> weight_tensors() override {
+        return lane_scale_weights;
     }
 
     void initialize_tensors(ggml_context * ctx) override {
