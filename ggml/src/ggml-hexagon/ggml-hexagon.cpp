@@ -1912,10 +1912,6 @@ static bool ggml_hexagon_flash_attn_is_hmx_eligible(
         return false;
     }
 
-    if (sinks != nullptr) {
-        return false;
-    }
-
     // Fall back to HVX for small token counts if head dimension is small (DK <= 128)
     const uint32_t neq1 = q->ne[1];
     if (DK <= 128 && neq1 < 5) {

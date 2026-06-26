@@ -578,6 +578,7 @@ typedef struct {
     uint32_t                  ib3;
     size_t                    n_rows_g;
     size_t                    rows_per_t;
+    const struct htp_tensor * sinks;
 } fa_q_load_args_t;
 
 static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
@@ -606,12 +607,44 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
         const size_t d_tile_bytes  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);
         const size_t o_tile_bytes  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);
 
-        // 1. Initialize vtcm_l_vec to 0
+        // 1. Initialize vtcm_l_vec & 3. Initialize vtcm_m_vec
         const size_t l_bytes_per_t = hex_align_up(col_vec_bytes / n, 128);
         const size_t l_start       = i * l_bytes_per_t;
         const size_t l_end         = hex_smin(l_start + l_bytes_per_t, col_vec_bytes);
-        if (l_start < col_vec_bytes) {
-            hvx_splat_u8_a((char *) factx->vtcm_l_vec + l_start, 0, l_end - l_start);
+
+        const size_t m_bytes_per_t = hex_align_up(col_vec_bytes / n, 128);
+        const size_t m_start       = i * m_bytes_per_t;
+        const size_t m_end         = hex_smin(m_start + m_bytes_per_t, col_vec_bytes);
+
+        if (args->sinks) {
+            const float * sinks_data = (const float *) (uintptr_t) args->sinks->data;
+            __fp16 *      m_vec      = (__fp16 *) factx->vtcm_m_vec;
+            const size_t  r_start    = l_start / sizeof(__fp16);
+            const size_t  r_end      = l_end / sizeof(__fp16);
+#ifdef HMX_FA_USE_EXP2_HF
+            const float   scale_factor = 1.44269504f;
+#else
+            const float   scale_factor = 1.0f;
+#endif
+            for (size_t r = r_start; r < r_end; ++r) {
+                if (r < n_rows_g) {
+                    const size_t h_idx = fastmodulo(r, G, &factx->div_G);
+                    const size_t head  = args->kv_head * G + h_idx;
+                    m_vec[r] = (__fp16) (sinks_data[head] * scale_factor);
+                } else {
+                    m_vec[r] = (__fp16) -65504.0f;
+                }
+            }
+            if (l_start < col_vec_bytes) {
+                hvx_splat_u8_a((char *) factx->vtcm_l_vec + l_start, 0, l_end - l_start);
+            }
+        } else {
+            if (l_start < col_vec_bytes) {
+                hvx_splat_u8_a((char *) factx->vtcm_l_vec + l_start, 0, l_end - l_start);
+            }
+            if (m_start < col_vec_bytes) {
+                hvx_splat_u16_a((char *) factx->vtcm_m_vec + m_start, 0xfbff, (m_end - m_start) / 2);
+            }
         }
 
         // 2. Initialize vtcm_d_tiles to 0
@@ -620,14 +653,6 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
         const size_t d_end         = hex_smin(d_start + d_bytes_per_t, d_tile_bytes);
         if (d_start < d_tile_bytes) {
             hvx_splat_u8_a((char *) factx->vtcm_d_tiles + d_start, 0, d_end - d_start);
-        }
-
-        // 3. Initialize vtcm_m_vec to 0xfbff (-inf)
-        const size_t m_bytes_per_t = hex_align_up(col_vec_bytes / n, 128);
-        const size_t m_start       = i * m_bytes_per_t;
-        const size_t m_end         = hex_smin(m_start + m_bytes_per_t, col_vec_bytes);
-        if (m_start < col_vec_bytes) {
-            hvx_splat_u16_a((char *) factx->vtcm_m_vec + m_start, 0xfbff, (m_end - m_start) / 2);
         }
 
         // 4. Initialize vtcm_o_tiles[0] to 0
@@ -712,7 +737,8 @@ static void fa_phase_q_load(struct hmx_fa_context *   factx,
         n = factx->n_threads;
     }
     size_t rows_per_t = hex_align_up(hmx_ceil_div(factx->g_br, n), 2);
-    fa_q_load_args_t args = { factx, q, q_start, kv_head, ib3, n_rows_g, rows_per_t };
+    const struct htp_tensor * sinks = (factx->octx->src[4] && factx->octx->src[4]->data) ? factx->octx->src[4] : NULL;
+    fa_q_load_args_t args = { factx, q, q_start, kv_head, ib3, n_rows_g, rows_per_t, sinks };
     if (n > 1) {
         worker_pool_run_func(wp, fa_q_load_thread, &args, n);
     } else {
@@ -1149,8 +1175,13 @@ static inline void fa_softmax_impl(
         HVX_Vector     v_exp_m_diff  = hvx_vec_f32_to_f16_shuff(exp_lo, exp_hi);
 #endif
 
-        HVX_Vector v_l_curr = Q6_Vqf16_vmpy_Vqf16Vhf(factx->vtcm_l_vec[r_vec_idx], v_exp_m_diff);
-        v_l_curr            = Q6_Vqf16_vadd_Vqf16Vhf(v_l_curr, rowsum_acc_v);
+        HVX_Vector v_l_curr;
+        if (args->kv_start == 0 && factx->octx->src[4] != NULL) {
+            v_l_curr = Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(v_exp_m_diff, Q6_Vh_vsplat_R(0x3c00)), rowsum_acc_v);
+        } else {
+            v_l_curr = Q6_Vqf16_vmpy_Vqf16Vhf(factx->vtcm_l_vec[r_vec_idx], v_exp_m_diff);
+            v_l_curr = Q6_Vqf16_vadd_Vqf16Vhf(v_l_curr, rowsum_acc_v);
+        }
 
         factx->vtcm_m_vec[r_vec_idx] = v_m_curr;
         factx->vtcm_l_vec[r_vec_idx] = v_l_curr;
