@@ -217,6 +217,10 @@ static inline HVX_Vector hvx_vec_exp2_f16(HVX_Vector x_v) {
     const HVX_Vector zero_v    = Q6_V_vzero();
     const HVX_Vector half_hf_v = Q6_Vh_vsplat_R(0x3800);  // fp16 0.5
 
+    // Clamp input to prevent integer underflow in FP16-to-INT16 conversion
+    const HVX_Vector v_clamp_min = hvx_vec_splat_f16(-24.0f);
+    x_v = Q6_Vhf_vmax_VhfVhf(v_clamp_min, x_v);
+
     // k = round_toward_neg_inf(x);  f = (float)k;  frac = x - f
     HVX_Vector x_minus_half = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vsub_VhfVhf(x_v, half_hf_v));
     HVX_Vector k_v          = Q6_Vh_equals_Vhf(x_minus_half);  // truncate to int16

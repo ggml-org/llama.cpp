@@ -141,20 +141,30 @@ static inline void hvx_tanh_f32_aa(uint8_t * restrict dst, const uint8_t * restr
 }
 
 static inline HVX_Vector hvx_vec_fast_sigmoid_f16(HVX_Vector x_v) {
-    // sigmoid(x) = 1 / (1 + exp2(-x * log2(e)))
-    const HVX_Vector v_neg_log2e = hvx_vec_splat_f16(-1.44269504f);
     const HVX_Vector v_one       = hvx_vec_splat_f16(1.0f);
+    const HVX_Vector v_neg_log2e = hvx_vec_splat_f16(-1.44269504f);
+    const HVX_Vector em_mask     = Q6_Vh_vsplat_R(0x7FFF);
 
-    HVX_Vector u = hvx_vec_mul_f16_f16(x_v, v_neg_log2e);
+    // Compute absolute value of x_v
+    HVX_Vector abs_x = Q6_V_vand_VV(x_v, em_mask);
 
-    // clamp input to prevent overflow/underflow in exp2 (approx -14 to 15)
-    const HVX_Vector v_clamp_min = hvx_vec_splat_f16(-14.0f);
-    const HVX_Vector v_clamp_max = hvx_vec_splat_f16(15.0f);
-    u = Q6_Vhf_vmax_VhfVhf(v_clamp_min, Q6_Vhf_vmin_VhfVhf(u, v_clamp_max));
+    // Compute u = -abs_x * log2(e) <= 0.
+    HVX_Vector u = hvx_vec_mul_f16_f16(abs_x, v_neg_log2e);
+
+    // Clamp input to prevent underflow in exp2
+    const HVX_Vector v_clamp_min = hvx_vec_splat_f16(-24.0f);
+    u = Q6_Vhf_vmax_VhfVhf(v_clamp_min, u);
 
     HVX_Vector exp_val = hvx_vec_exp2_f16(u);
     HVX_Vector denom   = hvx_vec_add_f16_f16(v_one, exp_val);
-    return hvx_vec_inverse_f16(denom);
+    HVX_Vector sig_abs = hvx_vec_inverse_f16(denom);
+
+    // check if x_v < 0 (using integer comparison on absolute value)
+    HVX_VectorPred is_neg = Q6_Q_vcmp_gt_VhVh(abs_x, x_v);
+
+    // If x_v < 0, return 1.0f - sig_abs
+    HVX_Vector sig_neg = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vsub_VhfVhf(v_one, sig_abs));
+    return Q6_V_vmux_QVV(is_neg, sig_neg, sig_abs);
 }
 
 static inline HVX_Vector hvx_vec_tanh_f16(HVX_Vector x) {

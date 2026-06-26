@@ -218,8 +218,6 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
     uint8_t * spad_m = factx->spad_m + (mask ? factx->size_m_block * HVX_FA_DMA_CACHE_SIZE : 0) * ith;
     uint8_t * spad_a = factx->spad_a + factx->size_vkq_acc * ith;
 
-    const HVX_Vector logit_cap = hvx_vec_splat_f32(factx->logit_softcap);
-
     dma_cache m_cache;
     dma_cache_init(&m_cache, spad_m, factx->size_m_block, HVX_FA_DMA_CACHE_SIZE);
 
@@ -284,6 +282,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
         }
 
         const HVX_Vector slope_vec = hvx_vec_splat_f16(slope);
+        const HVX_Vector v_neg_inf = Q6_Vh_vsplat_R(0xfbff);
         for (uint32_t ib = 0; ib < factx->n_blocks; ++ib) {
             const uint32_t ic_start = ib * FLASH_ATTN_BLOCK_SIZE;
             const uint32_t current_block_size = MIN(FLASH_ATTN_BLOCK_SIZE, nek1 - ic_start);
@@ -296,54 +295,43 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_QK, ir);
 
             // Inner loop processing the block from VTCM
-            uint32_t ic = 0;
-
-            // Process in sub-blocks of 32 (VLEN_FP32)
-            HVX_Vector sb_scores[FLASH_ATTN_BLOCK_SIZE / VLEN_FP32];
-            HVX_Vector v_max = hvx_vec_splat_f32(-INFINITY);
-            for (uint32_t iv = 0; ic < current_block_size; ic += VLEN_FP32, ++iv) {
-                // 1. Compute scores
-                HVX_Vector scores = hvx_dot_f16_f16_aa_rx32(q_ptr_vtcm, k_base + ic * factx->size_k_row_padded, factx->size_k_row_padded, DK, factx->scale);
-
-                // 2. Softcap
-                if (factx->logit_softcap != 0.0f) {
-                    scores = hvx_vec_tanh_f32(scores);
-                    scores = HVX_OP_MUL_F32(scores, logit_cap);
-                }
-
-                // 3. Mask
-                if (mask) {
-                    const __fp16 * mp = m_base + ic;
-                    HVX_Vector m_vals_f16 = *(const HVX_UVector *) mp;
-
-                    // Multiplying -INFINITY (0xFC00) by a slope in VhfVhf instructions can incorrectly produce NaN on v79.
-                    // Clamp -INFINITY to the max negative fp16 finite value (-65504.0f).
-                    HVX_Vector vinf = Q6_Vh_vsplat_R(0xFC00);
-                    HVX_Vector vmin = Q6_Vh_vsplat_R(0xFBFF);
-                    HVX_VectorPred is_inf = Q6_Q_vcmp_eq_VhVh(m_vals_f16, vinf);
-                    m_vals_f16 = Q6_V_vmux_QVV(is_inf, vmin, m_vals_f16);
-
-                    #if __HVX_ARCH__ >= 79
-                        HVX_VectorPair m_vals_f32_pair = Q6_Wsf_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(m_vals_f16), slope_vec);
-                        HVX_Vector add_val = Q6_V_lo_W(m_vals_f32_pair);
-                        scores = Q6_Vsf_vadd_VsfVsf(add_val, scores);
-                    #else
-                        HVX_VectorPair m_vals_f32_pair = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(m_vals_f16), slope_vec);
-                        HVX_Vector add_val = Q6_V_lo_W(m_vals_f32_pair);
-                        scores = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(add_val, scores));
-                    #endif
-                }
-
-                // Mask out invalid lanes for leftover handling
-                uint32_t valid_lanes = current_block_size - ic;
-                if (valid_lanes < VLEN_FP32) {
-                    HVX_VectorPred valid_pred = Q6_Q_vsetq_R(valid_lanes * 4); // 4 bytes per fp32 lane
-                    scores = Q6_V_vmux_QVV(valid_pred, scores, hvx_vec_splat_f32(-INFINITY));
-                }
-
-                sb_scores[iv] = scores;
-                v_max = hvx_vec_reduce_max2_f32(scores, v_max); // All lanes have block max
+            // 1. Compute scores (64 elements FP16)
+            HVX_Vector scores_f16 = Q6_V_vzero();
+            if (current_block_size > 0) {
+                HVX_Vector scores0 = hvx_dot_f16_f16_aa_rx32(q_ptr_vtcm, k_base, factx->size_k_row_padded, DK, factx->scale);
+                HVX_Vector scores1 = (current_block_size > 32) ? hvx_dot_f16_f16_aa_rx32(q_ptr_vtcm, k_base + 32 * factx->size_k_row_padded, factx->size_k_row_padded, DK, factx->scale) : Q6_V_vzero();
+                scores_f16 = hvx_vec_f32_to_f16(scores0, scores1);
             }
+
+            // 2. Softcap (in FP16)
+            if (factx->logit_softcap != 0.0f) {
+                float cap = factx->logit_softcap;
+                const HVX_Vector v_cap = hvx_vec_splat_f16(cap);
+                scores_f16 = hvx_vec_tanh_f16(scores_f16);
+                scores_f16 = hvx_vec_mul_f16_f16(scores_f16, v_cap);
+            }
+
+            HVX_VectorPred q_tail_keep = Q6_Q_vsetq2_R(current_block_size * sizeof(__fp16));
+
+            // 3. Mask (in FP16)
+            if (mask) {
+                HVX_Vector m_vals_f16 = *(const HVX_UVector *) m_base;
+                HVX_Vector vinf = Q6_Vh_vsplat_R(0xFC00);
+                HVX_Vector vmin = Q6_Vh_vsplat_R(0xFBFF);
+                HVX_VectorPred is_inf = Q6_Q_vcmp_eq_VhVh(m_vals_f16, vinf);
+                m_vals_f16 = Q6_V_vmux_QVV(is_inf, vmin, m_vals_f16);
+
+                HVX_Vector v_slope = hvx_vec_splat_f16(slope);
+
+                HVX_Vector m_scaled = hvx_vec_mul_f16_f16(m_vals_f16, v_slope);
+                scores_f16 = Q6_V_vmux_QVV(q_tail_keep, hvx_vec_add_f16_f16(scores_f16, m_scaled), v_neg_inf);
+            } else {
+                scores_f16 = Q6_V_vmux_QVV(q_tail_keep, scores_f16, v_neg_inf);
+            }
+
+            // Compute block max in FP16
+            HVX_Vector v_max_f16 = hvx_vec_reduce_max_f16(scores_f16);
+            HVX_Vector v_max     = Q6_V_lo_W(hvx_vec_f16_to_f32(v_max_f16)); // splat block max in FP32
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_QK, ir);
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
@@ -351,54 +339,50 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 // 4. Online Softmax Update
                 HVX_Vector M_new_vec = Q6_Vsf_vmax_VsfVsf(v_max, M_vec);
                 HVX_Vector diff_vec  = HVX_OP_SUB_F32(M_vec, M_new_vec);
-                HVX_Vector ms_vec    = hvx_vec_exp_f32(diff_vec);
+                
+                HVX_Vector ms_vec = hvx_vec_exp_f32(diff_vec);
                 M_vec = M_new_vec;
 
                 hvx_scale_vec_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms_vec);
 
-                HVX_Vector p_sum_vec = hvx_vec_splat_f32(0.0f);
-                for (uint32_t ic2 = 0, iv = 0; ic2 < current_block_size; ic2 += VLEN_FP32, ++iv) {
-                    HVX_Vector scores = sb_scores[iv];
-                    HVX_Vector scores_shifted = HVX_OP_SUB_F32(scores, M_vec);
-                    HVX_Vector P = hvx_vec_exp_f32(scores_shifted);
+                // Compute P = exp2((S - M) * log2(e)) in FP16
+                HVX_Vector v_m_vec_f16 = hvx_vec_f32_to_f16(M_vec, M_vec);
+                HVX_Vector v_s_minus_m = Q6_Vqf16_vsub_VhfVhf(scores_f16, v_m_vec_f16);
+                
+                const HVX_Vector v_log2e = hvx_vec_splat_f16(1.44269504f);
+                HVX_Vector v_s_minus_m_base2 = hvx_vec_mul_f16_f16(Q6_Vhf_equals_Vqf16(v_s_minus_m), v_log2e);
+                
+                HVX_Vector P = hvx_vec_exp2_f16(v_s_minus_m_base2);
+                P = Q6_V_vmux_QVV(q_tail_keep, P, Q6_V_vzero());
 
-                    p_sum_vec = HVX_OP_ADD_F32(p_sum_vec, P);
+                // Convert P to FP32 to update the running sum S_vec
+                HVX_VectorPair P_pair = hvx_vec_f16_to_f32(P);
+                HVX_Vector P0 = Q6_V_lo_W(P_pair);
+                HVX_Vector P1 = Q6_V_hi_W(P_pair);
+                HVX_Vector p_sum_vec = hvx_vec_reduce_sum_f32(HVX_OP_ADD_F32(P0, P1));
 
-                    // 5. Accumulate V
-                    __fp16 __attribute__((aligned(VLEN))) p_arr[VLEN_FP16];
-                    hvx_vec_f32_to_f16_a(p_arr, P, hvx_vec_splat_f32(0));
-
-                    float __attribute__((aligned(128))) P_arr[VLEN_FP32];
-                    hvx_vec_store_a(P_arr, 128, P);
-
-                    for (uint32_t j = 0; j < VLEN_FP32; j += 2) {
-                        const uint32_t cur_ic = ic2 + j;
-                        if (cur_ic >= current_block_size) {
-                            break;
-                        }
-
-                        if (cur_ic + 1 == current_block_size) {
-                            // Odd leftover, process single row
-                            if (P_arr[j] != 0.0f) {
-                                const uint8_t * v_ptr = v_base + cur_ic * factx->size_v_row_padded;
-                                hvx_mad_f32_f16_aa(VKQ32, v_ptr, (p_arr + j), DV);
-                            }
-                            break;
-                        }
-
-                        // Avoid NaN * 0.0 = NaN for uninitialized V cache rows.
-                        // Check the f32 values to safely avoid strict aliasing violations.
-                        if (P_arr[j] == 0.0f && P_arr[j + 1] == 0.0f) {
-                            continue;
-                        }
-
-                        const uint8_t * v_ptr = v_base + cur_ic * factx->size_v_row_padded;
-                        hvx_mad_f32_f16_aa_rx2(VKQ32, v_ptr, v_ptr + factx->size_v_row_padded, (p_arr + j), (p_arr + j + 1), DV);
-                    }
-                }
-
-                p_sum_vec = hvx_vec_reduce_sum_f32(p_sum_vec);
                 S_vec = HVX_OP_ADD_F32(HVX_OP_MUL_F32(S_vec, ms_vec), p_sum_vec);
+
+                // 5. Accumulate V (F16 * F16 -> F32 accumulator)
+                __fp16 __attribute__((aligned(128))) p_arr[VLEN_FP16];
+                hvx_vec_store_a(p_arr, 128, P);
+
+                for (uint32_t j = 0; j < current_block_size; j += 2) {
+                    if (j + 1 == current_block_size) {
+                        if (p_arr[j] != 0.0f) {
+                            const uint8_t * v_ptr = v_base + j * factx->size_v_row_padded;
+                            hvx_mad_f32_f16_aa(VKQ32, v_ptr, (p_arr + j), DV);
+                        }
+                        break;
+                    }
+
+                    if (p_arr[j] == 0.0f && p_arr[j + 1] == 0.0f) {
+                        continue;
+                    }
+
+                    const uint8_t * v_ptr = v_base + j * factx->size_v_row_padded;
+                    hvx_mad_f32_f16_aa_rx2(VKQ32, v_ptr, v_ptr + factx->size_v_row_padded, (p_arr + j), (p_arr + j + 1), DV);
+                }
             }
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
 
@@ -1047,14 +1031,19 @@ static inline void fa_softmax_impl(
                     HVX_VectorPred q_keep0 = Q6_Q_and_QQ(Q6_Q_vcmp_gt_VhfVhf(v_mask0, v_threshold), q_tail_keep);
                     HVX_VectorPred q_keep1 = Q6_Q_and_QQ(Q6_Q_vcmp_gt_VhfVhf(v_mask1, v_threshold), q_tail_keep);
 
+                    // Scale mask values by log2(e) for base-2 calculations
+                    const HVX_Vector v_log2e = hvx_vec_splat_f16(1.44269504f);
+                    HVX_Vector v_mask0_scaled = hvx_vec_mul_f16_f16(v_mask0, v_log2e);
+                    HVX_Vector v_mask1_scaled = hvx_vec_mul_f16_f16(v_mask1, v_log2e);
+
                     if (has_alibi) {
-                        HVX_Vector v_sm0 = hvx_vec_mul_f16_f16(v_mask0, v_slope0);
-                        HVX_Vector v_sm1 = hvx_vec_mul_f16_f16(v_mask1, v_slope1);
+                        HVX_Vector v_sm0 = hvx_vec_mul_f16_f16(v_mask0_scaled, v_slope0);
+                        HVX_Vector v_sm1 = hvx_vec_mul_f16_f16(v_mask1_scaled, v_slope1);
                         my_row_buf0[ci]  = Q6_V_vmux_QVV(q_keep0, hvx_vec_add_f16_f16(my_row_buf0[ci], v_sm0), v_neg_inf);
                         my_row_buf1[ci]  = Q6_V_vmux_QVV(q_keep1, hvx_vec_add_f16_f16(my_row_buf1[ci], v_sm1), v_neg_inf);
                     } else {
-                        my_row_buf0[ci] = Q6_V_vmux_QVV(q_keep0, hvx_vec_add_f16_f16(my_row_buf0[ci], v_mask0), v_neg_inf);
-                        my_row_buf1[ci] = Q6_V_vmux_QVV(q_keep1, hvx_vec_add_f16_f16(my_row_buf1[ci], v_mask1), v_neg_inf);
+                        my_row_buf0[ci] = Q6_V_vmux_QVV(q_keep0, hvx_vec_add_f16_f16(my_row_buf0[ci], v_mask0_scaled), v_neg_inf);
+                        my_row_buf1[ci] = Q6_V_vmux_QVV(q_keep1, hvx_vec_add_f16_f16(my_row_buf1[ci], v_mask1_scaled), v_neg_inf);
                     }
                 } else {
                     if (ne < 64) {
