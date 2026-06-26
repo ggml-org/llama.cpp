@@ -53,27 +53,21 @@ extern char **environ;
 static constexpr int STREAM_LOOKUP_TIMEOUT_MS = 250;
 
 struct server_subproc {
-    std::optional<server_process> sproc; // empty while in DOWNLOADING state
+    server_process sproc; // pid == 0 until spawned
     std::atomic<bool> stopped{false}; // set to cancel a download or signal child process exit
 
     bool is_alive() const {
-        return sproc.has_value() && sproc->is_alive();
+        return sproc.is_alive();
     }
 
     void terminate() const {
-        if (!sproc.has_value()) {
-            return;
-        }
-
-        sproc->terminate();
+        sproc.terminate();
     }
 
     void request_exit() {
-        if (sproc.has_value()) {
-            if (FILE * stdin_file = sproc->get_stdin()) {
-                fprintf(stdin_file, "%s\n", CMD_ROUTER_TO_CHILD_EXIT);
-                fflush(stdin_file);
-            }
+        if (FILE * stdin_file = sproc.get_stdin()) {
+            fprintf(stdin_file, "%s\n", CMD_ROUTER_TO_CHILD_EXIT);
+            fflush(stdin_file);
         }
         stopped.store(true, std::memory_order_relaxed);
     }
@@ -835,8 +829,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
 
         // TODO @ngxson : maybe separate stdout and stderr in the future
         //                so that we can use stdout for commands and stderr for logging
-        inst.subproc->sproc.emplace();
-        if (inst.subproc->sproc->run(child_args, child_env) != 0) {
+        if (inst.subproc->sproc.run(child_args, child_env) != 0) {
             throw std::runtime_error("failed to spawn server instance");
         }
     }
@@ -850,8 +843,8 @@ void server_models::load(const std::string & name, const load_options & opts) {
         stop_timeout = inst.meta.stop_timeout,
         child_mode = opts.mode
     ]() {
-        FILE * stdin_file = child_proc->sproc->get_stdin();
-        FILE * stdout_file = child_proc->sproc->get_stdout(); // combined stdout/stderr
+        FILE * stdin_file = child_proc->sproc.get_stdin();
+        FILE * stdout_file = child_proc->sproc.get_stdout(); // combined stdout/stderr
 
         std::thread log_thread([&]() {
             // read stdout/stderr and forward to main server log
@@ -925,10 +918,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
         }
 
         // get the exit code
-        int exit_code = 0;
-        if (child_proc->sproc.has_value()) {
-            exit_code = child_proc->sproc->join();
-        }
+        int exit_code = child_proc->sproc.join();
 
         // update status and exit code
         if (child_mode == SERVER_CHILD_MODE_DOWNLOAD) {
