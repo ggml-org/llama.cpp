@@ -7,6 +7,7 @@
 #include "ggml-metal-impl.h"
 #include "ggml-metal-common.h"
 #include "ggml-metal-device.h"
+#include "ggml-metal-tuning.h"
 
 #include <cassert>
 #include <algorithm>
@@ -2889,12 +2890,17 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 #undef FATTN_SMEM
     } else {
         // half4x4 kernel
-        const int nqptg = OP_FLASH_ATTN_EXT_VEC_NQPSG; // queries per threadgroup
+        auto cfg = ggml_metal_tuning::fa_vec_pick(
+                props_dev->device_id,
+                (int) op->src[1]->type,
+                (int) ne00, (int) ne20,   // dk, dv (ne00 == dk for FA)
+                ne11, ne01);
+        int nqptg = cfg.Q;                             // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_VEC_NCPSG; // cache values per simdgroup !! sync with kernel template arguments !!
         const int nhptg = 1;                           // heads per threadgroup
 
         GGML_ASSERT(nqptg <= 32);
-        GGML_ASSERT(nqptg  % 1  == 0);
+        GGML_ASSERT(nqptg == 1 || nqptg == 2 || nqptg == 4);  // only instantiated Q values
         GGML_ASSERT(ncpsg  % 32 == 0);
 
         bool need_sync = false;
@@ -2953,7 +2959,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // ne20*(nsg)
         // each simdgroup has a full f32 head vector in shared mem to accumulate results
         //
-#define FATTN_SMEM(nsg) (GGML_PAD(((GGML_PAD(ne00, 128) + 4*ncpsg + 2*GGML_PAD(ne20, 128))*(nsg))*(sizeof(float)/2), 16))
+#define FATTN_SMEM(nsg) (GGML_PAD(((GGML_PAD(ne00, 128) + 4*ncpsg + 2*GGML_PAD(ne20, 128))*(nsg)*nqptg)*(sizeof(float)/2), 16))
 
         int64_t nsg = 1;
 
@@ -2971,6 +2977,12 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             while (2*nwg*nsg*ncpsg < ne11 && nsg < 4) {
                 nsg *= 2;
             }
+        }
+
+        // fall back to baseline (Q=1) if the tuned config exceeds threadgroup memory
+        if ((size_t) FATTN_SMEM(nsg) > props_dev->max_theadgroup_memory_size) {
+            cfg   = ggml_metal_tuning::fa_vec_baseline_cfg((int) ne00, (int) ne20);
+            nqptg = cfg.Q;  // = 1
         }
 
         ggml_metal_kargs_flash_attn_ext_vec args = {
@@ -3008,7 +3020,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             /*.logit_softcap =*/ logit_softcap,
         };
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg);
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nqptg, cfg.NE, nsg, nwg);
 
         GGML_ASSERT(nsg*32 <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 

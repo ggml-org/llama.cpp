@@ -6,6 +6,7 @@
 #include "ggml-metal-device.h"
 #include "ggml-metal-context.h"
 #include "ggml-metal-ops.h"
+#include "ggml-metal-tuning.h"
 
 #include <mutex>
 #include <string>
@@ -868,9 +869,23 @@ static ggml_backend_feature * ggml_backend_metal_get_features(ggml_backend_reg_t
     GGML_UNUSED(reg);
 }
 
+// test/tune-only override for the FA vec (Q, NE) selection, reached via proc_address.
+static void ggml_backend_metal_set_fa_vec_override(int Q, int NE) {
+    ggml_metal_tuning::fa_vec_set_override({ (int8_t) Q, (int8_t) NE });
+}
+static void ggml_backend_metal_clear_fa_vec_override(void) {
+    ggml_metal_tuning::fa_vec_clear_override();
+}
+
 static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_metal_get_features;
+    }
+    if (strcmp(name, "ggml_backend_metal_set_fa_vec_override") == 0) {
+        return (void *)ggml_backend_metal_set_fa_vec_override;
+    }
+    if (strcmp(name, "ggml_backend_metal_clear_fa_vec_override") == 0) {
+        return (void *)ggml_backend_metal_clear_fa_vec_override;
     }
 
     return NULL;

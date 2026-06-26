@@ -478,6 +478,7 @@ enum test_mode {
     MODE_PERF,
     MODE_GRAD,
     MODE_SUPPORT,
+    MODE_TUNE,
 };
 
 // Output format support similar to llama-bench
@@ -9789,8 +9790,128 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_from_file(const c
     return test_cases;
 }
 
+// ---- FA vec (Q,NE) tuning: numerical correctness check + drift guard ----
+// metal proc_address bridges (resolved by string, not symbol linkage)
+using set_fa_vec_override_t   = void (*)(int, int);
+using clear_fa_vec_override_t = void (*)(void);
+
+// legal NE for a (dk,dv): NL = 32/NE, require (dk/4)%NL==0 && (dv/4)%NL==0
+static std::vector<int> fa_vec_legal_ne(int dk, int dv) {
+    std::vector<int> r;
+    for (int ne : {1, 2, 4}) {
+        const int nl = 32 / ne;
+        if ((dk/4) % nl == 0 && (dv/4) % nl == 0) {
+            r.push_back(ne);
+        }
+    }
+    return r;
+}
+
+// Drift guard: with no override fa_vec_pick returns (1, baseline_ne) for each baseline
+// (dk,dv), so the dispatched host_name has no _q*_ne* suffix. If fa.metal's instantiated
+// NE drifts from fa_vec_baseline_ne, dispatch hits a missing kernel or wrong NE -> caught here.
+static bool run_fa_vec_drift_guard(ggml_backend_t backend_metal, ggml_backend_t backend_cpu) {
+    struct shape_t { int dk, dv, expect_ne; };
+    const shape_t shapes[] = { {32,32,4},{64,64,2},{96,96,4},{128,128,1},{192,192,2},
+                               {192,128,2},{256,256,1},{320,256,2},{512,512,1},{576,512,2} };
+    bool ok = true;
+    for (auto s : shapes) {
+        // no override -> baseline path; compare metal vs CPU-ref
+        test_flash_attn_ext tc(s.dk, s.dv, /*nh=*/4, {1,1}, /*kv=*/2048, /*nb=*/8,
+                               /*mask=*/true, /*sinks=*/false, 0.0f, 0.0f, GGML_PREC_F32,
+                               GGML_TYPE_F16, GGML_TYPE_F16);
+        auto st = tc.eval(backend_metal, backend_cpu, "FLASH_ATTN_EXT", nullptr);
+        if (st == test_status_t::FAIL) {
+            printf("DRIFT/baseline FAIL dk=%d dv=%d (expect_ne=%d)\n", s.dk, s.dv, s.expect_ne);
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+// Numerical gate: for each (dk,dv) x legal (Q,NE), force the override and compare metal
+// vs CPU-ref. The ne01/ne11/mask/sinks points exercise the rebased body's padded rows
+// (ne01 not a multiple of Q), per-qq sinks, skip-INF, kvpad, and the nsg-dependent shmem
+// offsets / parallel-reduce stride (ne11 -> nsg 1/2/4).
+static bool run_fa_vec_tune_check(ggml_backend_t backend_metal, ggml_backend_t backend_cpu) {
+    auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_metal));
+    auto set_ov   = (set_fa_vec_override_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_set_fa_vec_override");
+    auto clear_ov = (clear_fa_vec_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_clear_fa_vec_override");
+    if (!set_ov || !clear_ov) { printf("metal fa_vec override proc unavailable\n"); return false; }
+
+    struct shape_t { int dk, dv; };
+    const shape_t shapes[] = { {32,32},{64,64},{96,96},{128,128},{192,192},
+                               {192,128},{256,256},{320,256},{512,512},{576,512} };
+    const int  ne01_pts[]   = { 1, 2, 3, 8, 17 };       // 1, Q+/-1, 2Q-1, prime; vec upper bound < 20
+    const int  ne11_pts[]   = { 512, 4096, 8192 };      // drives adaptive nsg 1/2/4
+    const int  ne11_kvpad[] = { 4097, 8193 };           // has_kvpad (non-32-multiple kv)
+    const bool mask_pts[]   = { true, false };
+    const bool sinks_pts[]  = { false, true };
+
+    bool ok = true;
+    int n_run = 0, n_fail = 0;
+    for (auto s : shapes) {
+        for (int ne : fa_vec_legal_ne(s.dk, s.dv)) {
+            for (int Q : {1, 2, 4}) {
+                for (bool mask : mask_pts) {
+                    for (bool sinks : sinks_pts) {
+                        for (int ne01 : ne01_pts) {
+                            for (int ne11 : ne11_pts) {
+                                set_ov(Q, ne);
+                                test_flash_attn_ext tc(s.dk, s.dv, /*nh=*/4, {1,1}, /*kv=*/ne11, /*nb=*/ne01,
+                                                       mask, sinks, 0.0f, 0.0f, GGML_PREC_F32,
+                                                       GGML_TYPE_F16, GGML_TYPE_F16);
+                                auto st = tc.eval(backend_metal, backend_cpu, "FLASH_ATTN_EXT", nullptr);
+                                clear_ov();
+                                if (st == test_status_t::FAIL) {
+                                    printf("FAIL dk=%d dv=%d Q=%d ne=%d ne01=%d ne11=%d mask=%d sinks=%d\n",
+                                           s.dk, s.dv, Q, ne, ne01, ne11, (int) mask, (int) sinks);
+                                    ok = false; n_fail++;
+                                }
+                                n_run++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // kvpad pass (non-32-multiple kv); dk128/256 only to keep the case count down
+    for (auto s : shapes) {
+        if (!((s.dk == 128 && s.dv == 128) || (s.dk == 256 && s.dv == 256))) {
+            continue;
+        }
+        for (int ne : fa_vec_legal_ne(s.dk, s.dv)) {
+            for (int Q : {1, 2, 4}) {
+                for (int ne11 : ne11_kvpad) {
+                    set_ov(Q, ne);
+                    test_flash_attn_ext tc(s.dk, s.dv, /*nh=*/4, {1,1}, /*kv=*/ne11, /*nb=*/8,
+                                           /*mask=*/true, /*sinks=*/false, 0.0f, 0.0f, GGML_PREC_F32,
+                                           GGML_TYPE_F16, GGML_TYPE_F16);
+                    auto st = tc.eval(backend_metal, backend_cpu, "FLASH_ATTN_EXT", nullptr);
+                    clear_ov();
+                    if (st == test_status_t::FAIL) {
+                        printf("FAIL(kvpad) dk=%d dv=%d Q=%d ne=%d ne11=%d\n", s.dk, s.dv, Q, ne, ne11);
+                        ok = false; n_fail++;
+                    }
+                    n_run++;
+                }
+            }
+        }
+    }
+    printf("fa_vec tune-check: %d cases run, %d failed\n", n_run, n_fail);
+    return ok;
+}
+
+// Placeholder; the perf sweep implementation is added separately.
+static bool run_fa_vec_tune_perf(ggml_backend_t backend_metal) {
+    (void) backend_metal;
+    printf("fa_vec --tune-perf sweep is not available in this build\n");
+    return false;
+}
+
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
-                         printer * output_printer, const char * test_file_path, int parallel_workers) {
+                         printer * output_printer, const char * test_file_path, int parallel_workers, bool tune_perf = false) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
         if (params_filter == nullptr) {
             return;
@@ -9819,6 +9940,9 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
             break;
         case MODE_PERF:
             test_cases = make_test_cases_perf();
+            break;
+        case MODE_TUNE:
+            // MODE_TUNE routes to its own dispatch below; no generic test_cases needed
             break;
         }
     } else {
@@ -9955,6 +10079,29 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         return true;
     }
 
+    if (mode == MODE_TUNE) {
+        // self-create a CPU backend with the reference implementation as golden.
+        // (backend_cpu in the MODE_TEST block above is out of scope here.)
+        ggml_backend_t backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
+        GGML_ASSERT(backend_cpu != NULL);
+        {
+            using ggml_backend_cpu_set_use_ref_t = void (*)(ggml_backend_t, bool);
+            auto * cpu_reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_cpu));
+            auto * set_use_ref = (ggml_backend_cpu_set_use_ref_t) ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_cpu_set_use_ref");
+            if (set_use_ref) {
+                set_use_ref(backend_cpu, true);
+            }
+        }
+
+        // backend here is the MODE_TUNE-selected metal backend (-b MTL0)
+        const bool ok = tune_perf
+            ? run_fa_vec_tune_perf(backend)
+            : (run_fa_vec_drift_guard(backend, backend_cpu) && run_fa_vec_tune_check(backend, backend_cpu));
+
+        ggml_backend_free(backend_cpu);
+        return ok;
+    }
+
     if (mode == MODE_SUPPORT) {
         // Filter out fusion cases
         test_cases.erase(
@@ -10080,6 +10227,7 @@ static void usage(char ** argv) {
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
     printf("      - perf (performance evaluation)\n");
     printf("      - support (probe backend operation support)\n");
+    printf("      - tune (FA vec (Q,NE) numerical correctness check vs CPU reference)\n");
     printf("    op names for -o are as given by ggml_op_desc() (e.g. ADD, MUL_MAT, etc),\n");
     printf("        optionally including the full test case string (e.g. \"ADD(type=f16,ne=[1,1,8,1],nr=[1,1,1,1],nf=1)\")\n");
     printf("    --output specifies output format (default: console, options: console, sql, csv)\n");
@@ -10107,6 +10255,8 @@ int main(int argc, char ** argv) {
             mode = MODE_GRAD;
         } else if (strcmp(argv[i], "support") == 0) {
             mode = MODE_SUPPORT;
+        } else if (strcmp(argv[i], "tune") == 0) {
+            mode = MODE_TUNE;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 < argc) {
                 op_names_filter = argv[++i];
