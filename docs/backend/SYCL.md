@@ -719,6 +719,15 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
 
+### Intel Arc (A770 / DG2) flash-attention KV cache
+
+For flash attention (`-fa on`) with a quantized KV cache on Arc, use `q8_0`
+(`--cache-type-k q8_0 --cache-type-v q8_0`): it is near-lossless and runs at
+mainline parity. Both `GGML_SYCL_F16=ON` and `OFF` builds work; `F16=ON` gives
+faster prompt processing. TurboQuant KV cache types (`turbo2`/`turbo3`/`turbo4`)
+are not supported on the SYCL flash-attention path -- they are rejected and fall
+back to the non-FA attention path -- so use `q8_0` for `-fa on`.
+
 ## Compile-time Flags
 
 Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spot.

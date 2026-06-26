@@ -100,7 +100,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
     constexpr int nthreads_KQ_q = (D/4 < warp_size ? D/4 : warp_size);
     constexpr int nthreads_V_q  = (D/4 < warp_size ? D/4 : warp_size);
 
-    constexpr int nthreads    = (ggml_sycl_fattn_vec_get_nthreads_device() > D ? ggml_sycl_fattn_vec_get_nthreads_device() : D);
+    constexpr int nthreads    = ggml_sycl_fattn_vec_get_nthreads_device();
     constexpr int nthreads_KQ = type_K == GGML_TYPE_F16 ? 128 / cpy_nb : nthreads_KQ_q;
     constexpr int nthreads_V  = type_V == GGML_TYPE_F16 ? 128 / cpy_nb : nthreads_V_q;
 
@@ -437,7 +437,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
 #endif // GGML_SYCL_F16
         }
 
-        item_ct1.barrier(sycl::access::fence_space::local_space);
+        sycl::group_barrier(sycl::ext::oneapi::this_work_item::get_sub_group());
 
 #pragma unroll
         for (int k0 = 0; k0 < warp_size; k0 += V_cols_per_iter) {

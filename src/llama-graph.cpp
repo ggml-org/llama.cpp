@@ -2378,6 +2378,7 @@ ggml_tensor * llm_graph_context::build_attn(
     // TurboQuant pre-rotate-queries: O(d log d) WHT rotation via custom op
     // Q shape: (n_embd_head, n_head, n_tokens)
     // For zero-padded models (head_dim not 128-aligned), pad Q to match padded K dim first.
+    // Forward gates on k->type here; the inverse (output, below) gates on v->type for K=q8_0/V=turbo.
     if (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0) {
         // Pad Q per-head to next multiple of 128 if needed
         if (q->ne[0] % 128 != 0) {

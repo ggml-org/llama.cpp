@@ -250,8 +250,9 @@ static void probe_mul_mat(ggml_backend_t cpu, ggml_backend_t sycl,
 // reference run on CPU. The reference uses the same raw K/V values in F16, so a
 // correct turbo FA kernel should land within quantization error (high cosine);
 // genuine nonsense collapses the cosine.
-// n_q selects the kernel: n_q==1 (decode) routes to the VEC path, n_q>2 routes
-// to TILE. `path` is just a display hint.
+// For non-turbo KV (q8_0/f16) n_q selects the kernel: n_q==1 (decode) routes to
+// VEC, n_q>2 routes to TILE. Turbo KV always routes to TILE (fattn.cpp), never
+// VEC. `path` is just a display hint.
 static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
                              ggml_type kv_type, const char * name,
                              int64_t n_q, const char * path) {
@@ -423,15 +424,19 @@ int main() {
     probe_fa_f16(cpu, sycl, 8, "tile");
     probe_fa_f16(cpu, sycl, 1, "vec");
 
-    printf("\n[5] flash attention (turbo KV cache) - VEC path (n_q=1, decode)\n");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 1, "vec");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 1, "vec");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 1, "vec");
+    printf("\n[5] flash attention (turbo KV cache) - n_q=1 (decode; turbo routes TILE, never VEC)\n");
+    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 1, "tile");
+    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 1, "tile");
+    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 1, "tile");
 
     printf("\n[6] flash attention (turbo KV cache) - TILE path (n_q=8, prefill)\n");
     probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 8, "tile");
     probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 8, "tile");
     probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 8, "tile");
+
+    printf("\n[7] flash attention q8_0 KV (baseline quantized) - SYCL vs CPU\n");
+    probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", 8, "prefill");
+    probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", 1, "decode");
 
     printf("\n== summary: %d FAIL, %d SKIP ==\n", g_failures, g_skips);
 

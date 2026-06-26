@@ -286,6 +286,12 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst) {
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
+    // Turbo KV is disabled on the SYCL FA path: the turbo FA kernels are
+    // numerically broken on SYCL (garbage output; head_dim-128-locked design),
+    // and the model graph already applies the TurboQuant WHT around attention
+    // (forward on Q gated k->type, inverse on output gated v->type in
+    // llama-graph.cpp build_attn), so FA would double-apply it. Turbo KV runs
+    // the non-FA path (mul_mat+soft_max_ext+mul_mat). Do not relax this veto.
     if (K->type == GGML_TYPE_TURBO2_0 || K->type == GGML_TYPE_TURBO3_0 || K->type == GGML_TYPE_TURBO4_0 ||
         V->type == GGML_TYPE_TURBO2_0 || V->type == GGML_TYPE_TURBO3_0 || V->type == GGML_TYPE_TURBO4_0) {
         return false;
