@@ -55,12 +55,12 @@ struct htp_fa_context {
 
     float scale;
     float max_bias;
-    float logit_softcap;
+    __fp16 logit_softcap;
 
     uint32_t n_head_log2;
     float m0;
     float m1;
-    float slopes[512];
+    __fp16 slopes[512];
 
     uint32_t n_blocks;
 
@@ -95,9 +95,9 @@ struct hmx_fa_context {
     uint32_t     n_threads;
 
     // Op parameters
-    float        scale;
+    __fp16       scale;
     float        max_bias;
-    float        logit_softcap;
+    __fp16       logit_softcap;
     uint32_t     n_head_log2;
     float        m0, m1;
 
@@ -267,7 +267,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
         }
 
         const uint32_t h = iq2; // head index
-        const float slope = factx->slopes[h];
+        const __fp16 slope = factx->slopes[h];
 
         HVX_Vector S_vec = hvx_vec_splat_f32(0.0f);
         HVX_Vector M_vec = hvx_vec_splat_f32(-INFINITY);
@@ -305,8 +305,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
             // 2. Softcap (in FP16)
             if (factx->logit_softcap != 0.0f) {
-                float cap = factx->logit_softcap;
-                const HVX_Vector v_cap = hvx_vec_splat_f16(cap);
+                const HVX_Vector v_cap = hvx_vec_splat_f16(factx->logit_softcap);
                 scores_f16 = hvx_vec_tanh_f16(scores_f16);
                 scores_f16 = hvx_vec_mul_f16_f16(scores_f16, v_cap);
             }
@@ -321,9 +320,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 HVX_VectorPred is_inf = Q6_Q_vcmp_eq_VhVh(m_vals_f16, vinf);
                 m_vals_f16 = Q6_V_vmux_QVV(is_inf, vmin, m_vals_f16);
 
-                HVX_Vector v_slope = hvx_vec_splat_f16(slope);
-
-                HVX_Vector m_scaled = hvx_vec_mul_f16_f16(m_vals_f16, v_slope);
+                HVX_Vector m_scaled = hvx_vec_mul_f16_f16(m_vals_f16, slope_vec);
                 scores_f16 = Q6_V_vmux_QVV(q_tail_keep, hvx_vec_add_f16_f16(scores_f16, m_scaled), v_neg_inf);
             } else {
                 scores_f16 = Q6_V_vmux_QVV(q_tail_keep, scores_f16, v_neg_inf);
@@ -960,9 +957,7 @@ static inline void fa_softmax_impl(
 
             // Apply softcap if enabled (in FP16 precision)
             if (has_softcap) {
-                float cap = factx->logit_softcap;
-                cap *= 1.44269504f;  // log2(e)
-                const HVX_Vector v_cap = hvx_vec_splat_f16(cap);
+                const HVX_Vector v_cap = hvx_vec_splat_f16(factx->logit_softcap);
                 for (size_t c = 0; c < kv_rows; c += 64) {
                     size_t ci = c / 64;
 
@@ -1544,12 +1539,12 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     }
 
     if (kparams->logit_softcap == 0.0f) {
-        factx.scale = kparams->scale * 1.44269504f;  // log2(e)
+        factx.scale = (__fp16) (kparams->scale * 1.44269504f);  // log2(e)
     } else {
-        factx.scale = kparams->scale;
+        factx.scale = (__fp16) kparams->scale;
     }
     factx.max_bias      = kparams->max_bias;
-    factx.logit_softcap = kparams->logit_softcap;
+    factx.logit_softcap = (__fp16) (kparams->logit_softcap * 1.44269504f);
 
     factx.n_head_log2 = kparams->n_head_log2;
     factx.m0          = kparams->m0;
@@ -2048,7 +2043,7 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
 
     factx.scale = kparams->scale;
     factx.max_bias = kparams->max_bias;
-    factx.logit_softcap = kparams->logit_softcap;
+    factx.logit_softcap = (__fp16) kparams->logit_softcap;
 
     factx.n_head_log2 = kparams->n_head_log2;
     factx.m0          = kparams->m0;
@@ -2059,7 +2054,7 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
     for (uint32_t h = 0; h < n_head; ++h) {
-        factx.slopes[h] = (kparams->max_bias > 0.0f) ? alibi_slope(h, factx.n_head_log2, factx.m0, factx.m1) : 1.0f;
+        factx.slopes[h] = (__fp16) ((kparams->max_bias > 0.0f) ? alibi_slope(h, factx.n_head_log2, factx.m0, factx.m1) : 1.0f);
     }
 
     // total rows in q
