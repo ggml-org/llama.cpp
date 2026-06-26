@@ -510,7 +510,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                 const int64_t n_kv = kqm->ne[0];
                 
                 // --- DEFAULT: per-group decomposed (no head-amax) ---
-                GGML_ASSERT(n_kv0 % mm.msa_p.blk == 0 &&
+                GGML_ASSERT(n_kv % mm.msa_p.blk == 0 &&
                     "MSA: KV/mask n_kv must be a multiple of indexer.block_size (128); "
                     "the flash-attention KV padding must be a multiple of the block size. "
                     "A non-multiple would silently drop the partial tail block.");
