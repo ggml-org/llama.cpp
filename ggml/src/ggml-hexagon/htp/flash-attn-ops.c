@@ -815,6 +815,7 @@ typedef struct {
     const struct htp_tensor * mask;
     const __fp16 *            mask_vtcm;             // VTCM mask buffer base (NULL = DDR fallback)
     size_t                    mask_vtcm_row_stride;  // elements (__fp16) per row in VTCM mask buffer
+    struct fastdiv_values     thread_div;
 } fa_softmax_args_t;
 
 static inline void fa_softmax_impl(
@@ -836,9 +837,13 @@ static inline void fa_softmax_impl(
     const size_t n_row_vec_cnt  = hmx_ceil_div(n_rows_g, 64);
     const uint32_t im3          = has_mask ? fastmodulo(args->ib3, args->mask->ne[3], &factx->src3_div3) : 0;
 
-    const size_t vecs_per_t = hmx_ceil_div(n_row_vec_cnt, n);
-    const size_t vec_start  = i * vecs_per_t;
-    const size_t vec_end    = hex_smin(vec_start + vecs_per_t, n_row_vec_cnt);
+    size_t vec_start = 0;
+    size_t vec_end   = n_row_vec_cnt;
+    if (n > 1) {
+        const size_t vecs_per_t = fastdiv(n_row_vec_cnt + n - 1, &args->thread_div);
+        vec_start = i * vecs_per_t;
+        vec_end   = hex_smin(vec_start + vecs_per_t, n_row_vec_cnt);
+    }
 
     if (vec_start >= n_row_vec_cnt) {
         return;
@@ -1073,8 +1078,43 @@ static inline void fa_softmax_impl(
             }
         }
 
-        factx->vtcm_s_rowmax[r_vec_idx] = rowmax_acc_v;
-        factx->vtcm_p_rowsum[r_vec_idx] = rowsum_acc_v;
+        // Inline fa_ml_update_and_build_d for this vector (lock-free and in parallel)
+        HVX_Vector v_m_prev = factx->vtcm_m_vec[r_vec_idx];
+        HVX_Vector v_m_curr = Q6_Vhf_vmax_VhfVhf(v_m_prev, rowmax_acc_v);
+        HVX_Vector v_m_diff = Q6_Vqf16_vsub_VhfVhf(v_m_prev, v_m_curr);
+
+#ifdef HMX_FA_USE_EXP2_HF
+        HVX_Vector v_exp_m_diff      = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_m_diff));
+#else
+        HVX_VectorPair vp_diff       = hvx_vec_f16_to_f32_shuff(Q6_Vhf_equals_Vqf16(v_m_diff));
+        HVX_Vector     exp_lo        = hvx_vec_exp_f32(Q6_V_lo_W(vp_diff));
+        HVX_Vector     exp_hi        = hvx_vec_exp_f32(Q6_V_hi_W(vp_diff));
+        HVX_Vector     v_exp_m_diff  = hvx_vec_f32_to_f16_shuff(exp_lo, exp_hi);
+#endif
+
+        HVX_Vector v_l_curr = Q6_Vqf16_vmpy_Vqf16Vhf(factx->vtcm_l_vec[r_vec_idx], v_exp_m_diff);
+        v_l_curr            = Q6_Vqf16_vadd_Vqf16Vhf(v_l_curr, rowsum_acc_v);
+
+        factx->vtcm_m_vec[r_vec_idx] = v_m_curr;
+        factx->vtcm_l_vec[r_vec_idx] = v_l_curr;
+
+        // Build diagonal tile D = diag(exp(m_diff))
+        const HVX_Vector     v_offsets = *(const HVX_Vector *) d_tile_scatter_offsets;
+        const HVX_VectorPred q_32_mask = Q6_Q_vsetq_R(32 * sizeof(__fp16));
+
+        size_t t0 = r_vec_idx * 2;
+        if (t0 < args->n_row_tiles) {
+            const HVX_Vector v_content = v_exp_m_diff;
+            __fp16 *         out_base  = factx->vtcm_d_tiles + t0 * (args->n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+            Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
+        }
+
+        size_t t1 = r_vec_idx * 2 + 1;
+        if (t1 < args->n_row_tiles) {
+            const HVX_Vector v_content = Q6_V_vror_VR(v_exp_m_diff, 64);
+            __fp16 *         out_base  = factx->vtcm_d_tiles + t1 * (args->n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+            Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
+        }
     }
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, (uint16_t) (args->q_start * G + vec_start * 64));
 }
@@ -1119,48 +1159,6 @@ static void fa_softmax_thread(unsigned int n, unsigned int i, void * data) {
     fa_softmax_impl(n, i, data, has_mask, mask_broadcast, is_g1, has_alibi, has_softcap);
 }
 
-static __attribute__((noinline)) void fa_ml_update_and_build_d(struct hmx_fa_context * factx,
-                                                               size_t                  n_rows_g,
-                                                               size_t                  n_row_tiles,
-                                                               size_t                  n_row_tiles_g_br) {
-    // Reuse s_rowmax buffer for exp(m_diff) — safe because softmax is fully complete
-    HVX_Vector * const mvec_exp_m_diff = factx->vtcm_s_rowmax;
-
-    const size_t n_row_vec_cnt = hmx_ceil_div(n_rows_g, 64);
-    for (size_t i = 0; i < n_row_vec_cnt; ++i) {
-        HVX_Vector v_m_prev = factx->vtcm_m_vec[i];
-        HVX_Vector v_m_curr = Q6_Vhf_vmax_VhfVhf(v_m_prev, factx->vtcm_s_rowmax[i]);
-        HVX_Vector v_m_diff = Q6_Vqf16_vsub_VhfVhf(v_m_prev, v_m_curr);
-
-#ifdef HMX_FA_USE_EXP2_HF
-        HVX_Vector v_exp_m_diff      = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_m_diff));
-#else
-        HVX_VectorPair vp_diff       = hvx_vec_f16_to_f32_shuff(Q6_Vhf_equals_Vqf16(v_m_diff));
-        HVX_Vector     exp_lo        = hvx_vec_exp_f32(Q6_V_lo_W(vp_diff));
-        HVX_Vector     exp_hi        = hvx_vec_exp_f32(Q6_V_hi_W(vp_diff));
-        HVX_Vector     v_exp_m_diff  = hvx_vec_f32_to_f16_shuff(exp_lo, exp_hi);
-#endif
-
-        HVX_Vector v_l_curr = Q6_Vqf16_vmpy_Vqf16Vhf(factx->vtcm_l_vec[i], v_exp_m_diff);
-        v_l_curr            = Q6_Vqf16_vadd_Vqf16Vhf(v_l_curr, factx->vtcm_p_rowsum[i]);
-
-        factx->vtcm_m_vec[i] = v_m_curr;
-        factx->vtcm_l_vec[i] = v_l_curr;
-        mvec_exp_m_diff[i]   = v_exp_m_diff;
-    }
-
-    // Build diagonal tile D = diag(exp(m_diff))
-    const HVX_Vector     v_offsets = *(const HVX_Vector *) d_tile_scatter_offsets;
-    const HVX_VectorPred q_32_mask = Q6_Q_vsetq_R(32 * sizeof(__fp16));
-    for (size_t i = 0; i < n_row_tiles; ++i) {
-        const HVX_Vector v_content = Q6_V_vror_VR(mvec_exp_m_diff[i / 2], (i % 2) * 64);
-        __fp16 *         out_base  = factx->vtcm_d_tiles + i * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-        Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
-        __asm__ __volatile__("" ::: "memory");
-        (void) *(volatile HVX_Vector *) out_base;
-    }
-}
-
 static __attribute__((noinline)) void fa_build_d_diag_inv_l(struct hmx_fa_context * factx,
                                                             size_t                  n_row_tiles,
                                                             size_t                  n_row_tiles_g_br) {
@@ -1182,8 +1180,6 @@ static __attribute__((noinline)) void fa_build_d_diag_inv_l(struct hmx_fa_contex
 
         __fp16 * out_base = factx->vtcm_d_tiles + i * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
         Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
-        __asm__ __volatile__("" ::: "memory");
-        (void) *(volatile HVX_Vector *) out_base;
     }
 }
 
@@ -1207,15 +1203,12 @@ static void fa_phase_softmax_and_build_d(struct hmx_fa_context * factx,
 
     if (factx->n_threads > 1 && n_row_vec_cnt >= 2) {
         uint32_t n_use = (uint32_t) hex_smin((size_t) factx->n_threads, n_row_vec_cnt);
+        sargs->thread_div = init_fastdiv_values(n_use);
         worker_pool_run_func(wp, softmax_fn, sargs, n_use);
     } else {
         softmax_fn(1, 0, sargs);
     }
 
-    struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[0] : NULL;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, (uint16_t) sargs->q_start);
-    fa_ml_update_and_build_d(factx, sargs->n_rows_g, n_row_tiles, n_row_tiles_g_br);
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, (uint16_t) sargs->q_start);
 }
 
 // ============================================================================
