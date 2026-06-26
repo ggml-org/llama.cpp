@@ -48,14 +48,15 @@
 	}: Props = $props();
 
 	let dropdownOpen = $state(false);
+	let toolsSubOpen = $state(false);
 
 	registerMcpDialogReopen(() => {
 		dropdownOpen = true;
+		// Defer so the dropdown content mounts before the tools submenu tries
+		// to position itself via Floating UI.
 		setTimeout(() => {
-			const trigger = document.querySelector<HTMLElement>('[data-submenu="tools"]');
-			trigger?.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }));
-			trigger?.click();
-		}, 100);
+			toolsSubOpen = true;
+		}, 0);
 	});
 
 	const attachmentMenu = useAttachmentMenu(
@@ -151,7 +152,7 @@
 				preloadOnOpen={dropdownOpen}
 			/>
 
-			<ChatFormActionAddToolsSubmenu />
+			<ChatFormActionAddToolsSubmenu bind:open={toolsSubOpen} />
 
 			{#if hasMcpResourcesSupport}
 				<DropdownMenu.Item
