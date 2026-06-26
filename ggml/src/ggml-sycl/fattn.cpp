@@ -97,6 +97,7 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_NONE     =   0,
     BEST_FATTN_KERNEL_VEC      = 100,
     BEST_FATTN_KERNEL_TILE     = 200,
+    BEST_FATTN_KERNEL_MKL      = 300,
 };
 
 static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
@@ -121,6 +122,16 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     memcpy(&max_bias, (const float *) KQV->op_params + 1, sizeof(float));
 
     bool gqa_opt_applies = gqa_ratio >= 2 && mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
+
+    // MKL path: XMX-accelerated GEMM for prompt processing with quantized KV cache.
+    // Activates at n_kv >= 1024 (matching the --batch-size) to cover the full prompt.
+    // Each call takes ~13ms at 8K — GEMMs ~3ms, softmax kernel ~9ms.
+    // FIXME: MKL GEMM calls are incompatible with SYCL graph capture replay.
+    if (Q->ne[1] >= 128 && K->ne[1] >= 1024
+        && (ggml_is_quantized(K->type) || ggml_is_quantized(V->type))) {
+        return BEST_FATTN_KERNEL_MKL;
+    }
+
     for (const ggml_tensor * t : {Q, K, V, mask}) {
         if (t == nullptr || ggml_is_quantized(t->type)) {
             continue;
@@ -218,6 +229,9 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             break;
         case BEST_FATTN_KERNEL_VEC:
             ggml_sycl_flash_attn_ext_vec(ctx, dst);
+            break;
+        case BEST_FATTN_KERNEL_MKL:
+            ggml_sycl_flash_attn_ext_mkl(ctx, dst);
             break;
     }
 }
