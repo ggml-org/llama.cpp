@@ -59,7 +59,7 @@ private:
     mutable std::shared_mutex                           map_mu;
     std::unordered_map<std::string, stream_session_ptr> sessions; // key: conversation_id
     std::thread                                         gc_thread;
-    std::atomic<bool>                                   running;
+    bool                                                running;
     std::mutex                                          gc_wake_mu;
     std::condition_variable                             gc_wake_cv;
 };
@@ -115,10 +115,10 @@ private:
     std::vector<char>       buffer;
     size_t                  prefix_dropped;
     size_t                  cap_bytes;
-    std::atomic<bool>       done;
-    std::atomic<bool>       cancelled;
-    std::atomic<int64_t>    completed_ts;
-    std::function<void()>   stop_producer; // protected by mu
+    bool                    done;
+    std::atomic<bool>       cancelled; // polled lock-free by the should_stop closure, no mu
+    int64_t                 completed_ts;
+    std::function<void()>   stop_producer;
 };
 stream_session::stream_session(std::string conversation_id_, size_t max_bytes_)
     : conversation_id(std::move(conversation_id_))
@@ -137,7 +137,7 @@ bool stream_session::append(const char * data, size_t len) {
     }
     {
         std::lock_guard<std::mutex> lock(mu);
-        if (done.load(std::memory_order_relaxed)) {
+        if (done) {
             return false;
         }
         if (len >= cap_bytes) {
@@ -161,11 +161,14 @@ bool stream_session::append(const char * data, size_t len) {
 }
 
 void stream_session::finalize() {
-    bool was_done = done.exchange(true, std::memory_order_acq_rel);
-    if (was_done) {
-        return;
+    {
+        std::lock_guard<std::mutex> lock(mu);
+        if (done) {
+            return;
+        }
+        done         = true;
+        completed_ts = now_seconds();
     }
-    completed_ts.store(now_seconds(), std::memory_order_release);
     cv.notify_all();
 }
 
@@ -195,7 +198,7 @@ stream_read_status stream_session::read_from(size_t offset,
             lock.lock();
             continue;
         }
-        if (done.load(std::memory_order_acquire)) {
+        if (done) {
             return stream_read_status::OK;
         }
         // wait for new bytes, finalize, or a periodic wake to re check should_stop
@@ -204,7 +207,8 @@ stream_read_status stream_session::read_from(size_t offset,
 }
 
 bool stream_session::is_done() const {
-    return done.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(mu);
+    return done;
 }
 
 size_t stream_session::total_size() const {
@@ -218,7 +222,8 @@ size_t stream_session::dropped_prefix() const {
 }
 
 int64_t stream_session::completed_at() const {
-    return completed_ts.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(mu);
+    return completed_ts;
 }
 
 void stream_session::set_stop_producer(std::function<void()> fn) {
@@ -329,18 +334,24 @@ void stream_session_manager::evict_and_cancel(const std::string & conversation_i
 }
 
 void stream_session_manager::start_gc() {
-    if (running.exchange(true)) {
-        return;
+    {
+        std::lock_guard<std::mutex> lock(gc_wake_mu);
+        if (running) {
+            return;
+        }
+        running = true;
     }
     gc_thread = std::thread([this] { gc_loop(); });
 }
 
 void stream_session_manager::stop_gc() {
-    bool was_running = running.exchange(false);
+    bool was_running;
+    {
+        std::lock_guard<std::mutex> lock(gc_wake_mu);
+        was_running = running;
+        running = false;
+    }
     if (was_running) {
-        {
-            std::lock_guard<std::mutex> lock(gc_wake_mu);
-        }
         gc_wake_cv.notify_all();
         if (gc_thread.joinable()) {
             gc_thread.join();
@@ -362,15 +373,15 @@ void stream_session_manager::stop_gc() {
 }
 
 void stream_session_manager::gc_loop() {
-    while (running.load(std::memory_order_acquire)) {
+    while (true) {
         {
             std::unique_lock<std::mutex> lock(gc_wake_mu);
             gc_wake_cv.wait_for(lock,
                 std::chrono::seconds(STREAM_SESSION_GC_INTERVAL_SECONDS),
-                [this] { return !running.load(std::memory_order_acquire); });
-        }
-        if (!running.load(std::memory_order_acquire)) {
-            return;
+                [this] { return !running; });
+            if (!running) {
+                return;
+            }
         }
         int64_t cutoff = now_seconds() - STREAM_SESSION_TTL_SECONDS;
         std::vector<stream_session_ptr> to_drop;
