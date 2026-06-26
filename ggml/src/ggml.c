@@ -7371,7 +7371,7 @@ static int ggml_node_list_find_tensor(const struct ggml_cgraph * cgraph,
     return -1;
 }
 
-static bool ggml_is_constant_view_src(const struct ggml_tensor * tensor) {
+static bool ggml_is_constant(const struct ggml_tensor * tensor) {
     return tensor->buffer != NULL && ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 }
 
@@ -7424,7 +7424,7 @@ bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
         // external view sources are allowed only for weight tensors, which are constant for this graph execution.
         struct ggml_tensor * view_src = node->view_src;
         while (view_src) {
-            if (ggml_node_list_find_tensor(cgraph, node_idxs, count, view_src) == -1 && !ggml_is_constant_view_src(view_src)) {
+            if (ggml_node_list_find_tensor(cgraph, node_idxs, count, view_src) == -1 && !ggml_is_constant(view_src)) {
                 return false;
             }
             view_src = view_src->view_src;
