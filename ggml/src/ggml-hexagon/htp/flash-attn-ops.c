@@ -731,7 +731,7 @@ typedef struct {
     size_t                    rows_per_t;
 } fa_o_store_args_t;
 
-static void fa_o_store_thread(unsigned int n, unsigned int i, void * data) {
+static void fa_o_store_thread_f32(unsigned int n, unsigned int i, void * data) {
     fa_o_store_args_t *     args  = (fa_o_store_args_t *) data;
     struct hmx_fa_context * factx = args->factx;
 
@@ -760,38 +760,71 @@ static void fa_o_store_thread(unsigned int n, unsigned int i, void * data) {
         const size_t q_idx = fastdiv(r, &factx->div_G);
         const size_t h_idx = fastmodulo(r, G, &factx->div_G);
 
-        // dst is permuted: [DV, n_heads, n_tokens, n_seq]
-        // head stride is nb[1] and token stride is nb[2].
-        uint8_t * dst_row = (uint8_t *) dst->data + (kv_head * G + h_idx) * dst->nb[1] +
-                            (q_start + q_idx) * dst->nb[2] + ib3 * dst->nb[3];
+        float * out = (float *) ((uint8_t *) dst->data + (kv_head * G + h_idx) * dst->nb[1] +
+                                 (q_start + q_idx) * dst->nb[2] + ib3 * dst->nb[3]);
 
         size_t         r0            = r / HMX_FP16_TILE_N_ROWS;
         size_t         r1            = r % HMX_FP16_TILE_N_ROWS;
         const __fp16 * tile_row_base = o_tile_src + r0 * HMX_FP16_TILE_N_ROWS * DV;
 
-        if (factx->is_dst_fp32) {
-            float * out = (float *) dst_row;
-            for (uint32_t d = 0; d < DV / 32; ++d) {
-                const HVX_Vector * in_tile = (const HVX_Vector *) (tile_row_base + d * HMX_FP16_TILE_N_ELMS);
-                HVX_VectorPair     vp      = hvx_vec_f16_to_f32_shuff(in_tile[r1 / 2]);
-                if (r1 % 2 == 0) {
-                    *(HVX_UVector *) (out + d * 32) = Q6_V_lo_W(vp);
-                } else {
-                    *(HVX_UVector *) (out + d * 32) = Q6_V_hi_W(vp);
-                }
+        for (uint32_t d = 0; d < DV / 32; ++d) {
+            const HVX_Vector * in_tile = (const HVX_Vector *) (tile_row_base + d * HMX_FP16_TILE_N_ELMS);
+            HVX_VectorPair     vp      = hvx_vec_f16_to_f32_shuff(in_tile[r1 / 2]);
+            if (r1 % 2 == 0) {
+                *(HVX_UVector *) (out + d * 32) = Q6_V_lo_W(vp);
+            } else {
+                *(HVX_UVector *) (out + d * 32) = Q6_V_hi_W(vp);
             }
-        } else {
-            __fp16 * out = (__fp16 *) dst_row;
-            for (uint32_t d = 0; d < DV / 64; ++d) {
-                const __fp16 *     in_dual_tile = tile_row_base + d * HMX_FP16_TILE_N_ELMS * 2;
-                const HVX_Vector * pv_in0       = ((const HVX_Vector *) in_dual_tile) + r1 / 2;
-                const HVX_Vector * pv_in1       = pv_in0 + 16;
-                HVX_VectorPair     vp           = Q6_W_vdeal_VVR(*pv_in1, *pv_in0, -2);
-                if (r1 % 2 == 0) {
-                    *(HVX_UVector *) (out + d * 64) = Q6_V_lo_W(vp);
-                } else {
-                    *(HVX_UVector *) (out + d * 64) = Q6_V_hi_W(vp);
-                }
+        }
+    }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) (args->q_start * G + start));
+}
+
+static void fa_o_store_thread_f16(unsigned int n, unsigned int i, void * data) {
+    fa_o_store_args_t *     args  = (fa_o_store_args_t *) data;
+    struct hmx_fa_context * factx = args->factx;
+
+    const size_t n_rows_g = args->n_rows_g;
+    const size_t G        = factx->G;
+    const size_t DV       = factx->DV;
+
+    const size_t rows_per_t = args->rows_per_t;
+    const size_t start      = (size_t) i * rows_per_t;
+    const size_t end        = hex_smin(start + rows_per_t, n_rows_g);
+
+    if (start >= n_rows_g) {
+        return;
+    }
+
+    struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) (args->q_start * G + start));
+
+    const struct htp_tensor * dst        = args->dst;
+    const __fp16 *            o_tile_src = args->o_tile_src;
+    const uint32_t            q_start    = args->q_start;
+    const uint32_t            kv_head    = args->kv_head;
+    const uint32_t            ib3        = args->ib3;
+
+    for (size_t r = start; r < end; ++r) {
+        const size_t q_idx = fastdiv(r, &factx->div_G);
+        const size_t h_idx = fastmodulo(r, G, &factx->div_G);
+
+        __fp16 * out = (__fp16 *) ((uint8_t *) dst->data + (kv_head * G + h_idx) * dst->nb[1] +
+                                   (q_start + q_idx) * dst->nb[2] + ib3 * dst->nb[3]);
+
+        size_t         r0            = r / HMX_FP16_TILE_N_ROWS;
+        size_t         r1            = r % HMX_FP16_TILE_N_ROWS;
+        const __fp16 * tile_row_base = o_tile_src + r0 * HMX_FP16_TILE_N_ROWS * DV;
+
+        for (uint32_t d = 0; d < DV / 64; ++d) {
+            const __fp16 *     in_dual_tile = tile_row_base + d * HMX_FP16_TILE_N_ELMS * 2;
+            const HVX_Vector * pv_in0       = ((const HVX_Vector *) in_dual_tile) + r1 / 2;
+            const HVX_Vector * pv_in1       = pv_in0 + 16;
+            HVX_VectorPair     vp           = Q6_W_vdeal_VVR(*pv_in1, *pv_in0, -2);
+            if (r1 % 2 == 0) {
+                *(HVX_UVector *) (out + d * 64) = Q6_V_lo_W(vp);
+            } else {
+                *(HVX_UVector *) (out + d * 64) = Q6_V_hi_W(vp);
             }
         }
     }
@@ -812,10 +845,11 @@ static void fa_phase_o_store(struct hmx_fa_context *   factx,
     }
     size_t rows_per_t = hmx_ceil_div(n_rows_g, n);
     fa_o_store_args_t args = { factx, dst, o_tile_src, q_start, kv_head, ib3, n_rows_g, rows_per_t };
+    worker_callback_t store_fn = factx->is_dst_fp32 ? fa_o_store_thread_f32 : fa_o_store_thread_f16;
     if (n > 1) {
-        worker_pool_run_func(wp, fa_o_store_thread, &args, n);
+        worker_pool_run_func(wp, store_fn, &args, n);
     } else {
-        fa_o_store_thread(1, 0, &args);
+        store_fn(1, 0, &args);
     }
 }
 
@@ -1231,7 +1265,6 @@ static void fa_phase_softmax_and_build_d(struct hmx_fa_context * factx,
     } else {
         softmax_fn(1, 0, sargs);
     }
-
 }
 
 // ============================================================================

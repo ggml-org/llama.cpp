@@ -19,9 +19,9 @@ add_library(${HTP_LIB} SHARED
     htp_iface_skel.c
     worker-pool.c
     hex-dma.c
-    flash-attn-ops.c
     hmx-queue.c
     matmul-ops.c
+    flash-attn-ops.c
     binary-ops.c
     unary-ops.c
     sum-rows-ops.c
