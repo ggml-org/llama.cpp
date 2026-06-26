@@ -5853,7 +5853,7 @@ struct test_mul_mat_vec_fusion : public test_case {
             auto build_lane_up = [&]() {
                 ggml_tensor * ffn_up = ggml_mul_mat(ctx, up, cur);
                 if (with_lane_scale) {
-                    ffn_up = build_dense_lane_scale(ctx, ffn_up);
+                    ffn_up = build_lane_scale_dense(ctx, ffn_up);
                 }
                 if (with_bias) {
                     std::array<int64_t, 4> bias_ne = { ffn_up->ne[0], 1, channels, samples };
@@ -5866,7 +5866,7 @@ struct test_mul_mat_vec_fusion : public test_case {
             auto build_lane_gate = [&]() {
                 ggml_tensor * ffn_gate = ggml_mul_mat(ctx, gate, cur);
                 if (with_lane_scale) {
-                    ffn_gate = build_dense_lane_scale(ctx, ffn_gate);
+                    ffn_gate = build_lane_scale_dense(ctx, ffn_gate);
                 }
                 if (with_bias) {
                     std::array<int64_t, 4> bias_ne   = { ffn_gate->ne[0], 1, channels, samples };
@@ -5876,8 +5876,8 @@ struct test_mul_mat_vec_fusion : public test_case {
                 return ffn_gate;
             };
 
-            ggml_tensor * ffn_up = build_up_lane();
-            ggml_tensor * ffn_gate = with_gate ? build_gate_lane() : nullptr;
+            ggml_tensor * ffn_up = build_lane_up();
+            ggml_tensor * ffn_gate = with_gate ? build_lane_gate() : nullptr;
 
             ggml_tensor * out = with_gate ? build_gate(ctx, ffn_gate, ffn_up) : ffn_up;
 
@@ -5899,10 +5899,10 @@ struct test_mul_mat_vec_fusion : public test_case {
             ggml_tensor * cur = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, this->b ? 1 : n_used, m);
             ggml_set_name(cur, "cur");
 
-            auto build_up_lane = [&]() {
+            auto build_lane_up = [&]() {
                 ggml_tensor * ffn_up = ggml_mul_mat_id(ctx, ups, cur, ids);
                 if (with_lane_scale) {
-                    ffn_up = build_id_lane_scale(ctx, ffn_up, ids);
+                    ffn_up = build_lane_scale_id(ctx, ffn_up, ids);
                 }
                 if (with_bias) {
                     ggml_tensor * up_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_up->ne[0], n_mats);
@@ -5911,10 +5911,10 @@ struct test_mul_mat_vec_fusion : public test_case {
                 return ffn_up;
             };
 
-            auto build_gate_lane = [&]() {
+            auto build_lane_gate = [&]() {
                 ggml_tensor * ffn_gate = ggml_mul_mat_id(ctx, gates, cur, ids);
                 if (with_lane_scale) {
-                    ffn_gate = build_id_lane_scale(ctx, ffn_gate, ids);
+                    ffn_gate = build_lane_scale_id(ctx, ffn_gate, ids);
                 }
                 if (with_bias) {
                     ggml_tensor * gate_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_gate->ne[0], n_mats);
@@ -5923,8 +5923,8 @@ struct test_mul_mat_vec_fusion : public test_case {
                 return ffn_gate;
             };
 
-            ggml_tensor * ffn_up = build_up_lane();
-            ggml_tensor * ffn_gate = with_gate ? build_gate_lane() : nullptr;
+            ggml_tensor * ffn_up = build_lane_up();
+            ggml_tensor * ffn_gate = with_gate ? build_lane_gate() : nullptr;
 
             ggml_tensor * out = with_gate ? build_gate(ctx, ffn_gate, ffn_up) : ffn_up;
 
