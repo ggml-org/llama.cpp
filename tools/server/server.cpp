@@ -85,7 +85,7 @@ int llama_server(int argc, char ** argv) {
 
     // start the stream session manager GC right after common init, before any HTTP route can
     // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
-    g_stream_sessions.start_gc();
+    server_stream_session_manager_start();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
@@ -343,7 +343,7 @@ int llama_server(int argc, char ** argv) {
         clean_up = [&models_routes]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
             // stop the session GC first, it finalizes live sessions and wakes pending readers
-            g_stream_sessions.stop_gc();
+            server_stream_session_manager_stop();
             if (models_routes.has_value()) {
                 models_routes->stopping.store(true); // maybe redundant, but just to be safe
                 models_routes->models.unload_all();
@@ -371,7 +371,7 @@ int llama_server(int argc, char ** argv) {
         clean_up = [&ctx_http, &ctx_server]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
             // stop the session GC first, it finalizes live sessions and wakes pending readers
-            g_stream_sessions.stop_gc();
+            server_stream_session_manager_stop();
             ctx_http.stop();
             ctx_server.terminate();
             llama_backend_free();

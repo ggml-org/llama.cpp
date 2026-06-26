@@ -3,17 +3,10 @@
 #include "server-http.h"
 
 #include <atomic>
-#include <condition_variable>
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
-#include <shared_mutex>
 #include <string>
-#include <thread>
-#include <unordered_map>
-#include <vector>
 
 enum class stream_read_status {
     OK,
@@ -23,51 +16,8 @@ enum class stream_read_status {
 // streaming buffer for one generation, survives HTTP disconnect. the producer appends raw SSE
 // bytes, readers drain from any offset via read_from and block until more bytes or finalize.
 // keyed by conversation_id: one conv = at most one live session
-struct stream_session {
-    std::string conversation_id;
-    int64_t     started_ts; // unix seconds at construction, used by /v1/streams listing
 
-    stream_session(std::string conversation_id_, size_t max_bytes_);
-    stream_session(const stream_session &)             = delete;
-    stream_session & operator=(const stream_session &) = delete;
-
-    // append raw bytes, drops from the front if the cap is reached.
-    // returns false if the session is already finalized
-    bool append(const char * data, size_t len);
-
-    // mark the session as complete, wakes all pending readers
-    void finalize();
-
-    // drain bytes from offset, calling sink for each chunk. blocks until more
-    // bytes arrive or finalize is called. returns OK on clean exit, OFFSET_LOST
-    // if offset falls below the dropped prefix
-    stream_read_status read_from(size_t offset,
-        const std::function<bool(const char *, size_t)> & sink,
-        const std::function<bool()> & should_stop);
-
-    bool    is_done() const;
-    bool    is_cancelled() const;
-    size_t  total_size() const;     // bytes that ever entered the session
-    size_t  dropped_prefix() const; // bytes evicted from the front due to cap
-    int64_t completed_at() const;   // 0 while alive, unix seconds after finalize
-
-    // attach the producer stop hook used to cancel its reader, pass an empty function to detach
-    void set_stop_producer(std::function<void()> fn);
-
-    // signal the producer to abort its inference asap via the stop hook, idempotent
-    void cancel();
-
-private:
-    mutable std::mutex      mu;
-    std::condition_variable cv;
-    std::vector<char>       buffer;
-    size_t                  prefix_dropped;
-    size_t                  cap_bytes;
-    std::atomic<bool>       done;
-    std::atomic<bool>       cancelled;
-    std::atomic<int64_t>    completed_ts;
-    std::function<void()>   stop_producer; // protected by mu
-};
+struct stream_session;
 
 using stream_session_ptr = std::shared_ptr<stream_session>;
 
@@ -121,67 +71,8 @@ private:
     server_http_res *                   res_ = nullptr;
 };
 
-// consumer end: read-only replay of the ring buffer, the destructor does not finalize the session
-struct stream_pipe_consumer : stream_pipe {
-    // drain bytes from offset, calling sink for each available chunk. blocks until more data
-    // arrives or the session finalizes. should_stop is polled, returns OFFSET_LOST if offset
-    // fell below the dropped prefix
-    stream_read_status read(size_t & offset,
-        const std::function<bool(const char *, size_t)> & sink,
-        const std::function<bool()> & should_stop);
-
-    static std::shared_ptr<stream_pipe_consumer> create(stream_session_ptr session);
-
-private:
-    explicit stream_pipe_consumer(stream_session_ptr session);
-};
-
-// owns all live sessions, runs a periodic GC to evict expired ones.
-// the map is keyed by conversation_id, so the invariant "one conv = at most one
-// live session" is enforced at the type level
-class stream_session_manager {
-public:
-    stream_session_manager();
-    ~stream_session_manager();
-
-    stream_session_manager(const stream_session_manager &)             = delete;
-    stream_session_manager & operator=(const stream_session_manager &) = delete;
-
-    // install a new session for this conversation, evicting and cancelling any previous one.
-    // the conversation_id must be non empty, the caller is responsible for that check.
-    // returns the new session
-    stream_session_ptr create_or_replace(const std::string & conversation_id);
-
-    // lookup, returns null if unknown or already evicted
-    stream_session_ptr get(const std::string & conversation_id);
-
-    // list every live or recently completed session, used by GET /v1/streams without filter
-    std::vector<stream_session_ptr> list_all() const;
-
-    // remove from the map and finalize, wakes any pending readers
-    void evict(const std::string & conversation_id);
-
-    // signal the producer to cancel asap then evict, used by the explicit user Stop path
-    void evict_and_cancel(const std::string & conversation_id);
-
-    void start_gc();
-    void stop_gc();
-
-private:
-    void gc_loop();
-
-    mutable std::shared_mutex                           map_mu;
-    std::unordered_map<std::string, stream_session_ptr> sessions; // key: conversation_id
-    std::thread                                         gc_thread;
-    std::atomic<bool>                                   running;
-    std::mutex                                          gc_wake_mu;
-    std::condition_variable                             gc_wake_cv;
-};
-
-// process wide manager, linked by both llama-server and llama-cli. llama-server main() drives
-// start_gc/stop_gc, llama-cli leaves it idle. the dtor calls stop_gc() unconditionally so exit
-// is safe whether or not the GC thread ran
-extern stream_session_manager g_stream_sessions;
+void server_stream_session_manager_start();
+void server_stream_session_manager_stop();
 
 // route handler factories operating on g_stream_sessions, wired under /v1/stream/* by server.cpp.
 // keeps the resumable stream surface confined to server-stream
