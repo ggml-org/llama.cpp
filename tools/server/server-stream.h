@@ -13,21 +13,18 @@ enum class stream_read_status {
     OFFSET_LOST,
 };
 
-// streaming buffer for one generation, survives HTTP disconnect. the producer appends raw SSE
-// bytes, readers drain from any offset via read_from and block until more bytes or finalize.
-// keyed by conversation_id: one conv = at most one live session
+// streaming buffer for one generation, survives HTTP disconnect. the producer appends SSE bytes,
+// readers drain from any offset via read_from. keyed by conversation_id, one conv = one live session
 
 struct stream_session;
 
 using stream_session_ptr = std::shared_ptr<stream_session>;
 
-// one end of a stream_session pipe. the base holds the session and the shared query, the
-// producer and consumer ends derive from it. virtual dtor so each end runs its own teardown:
+// base of the producer/consumer pipe ends. virtual dtor so each runs its own teardown:
 // the producer finalizes the session, the consumer leaves it untouched
 struct stream_pipe {
     virtual ~stream_pipe() = default;
 
-    // true if the session was cancelled (e.g. via DELETE /v1/stream/<conv_id>)
     bool is_cancelled() const;
 
 protected:
@@ -45,7 +42,6 @@ protected:
 struct stream_pipe_producer : stream_pipe {
     ~stream_pipe_producer() override;
 
-    // append raw bytes to the session's ring buffer, returns false if already finalized
     bool write(const char * data, size_t len);
 
     // mark the natural end on the wire so a later close() is a no-op
@@ -74,18 +70,15 @@ private:
 void server_stream_session_manager_start();
 void server_stream_session_manager_stop();
 
-// route handler factories operating on g_stream_sessions, wired under /v1/stream/* by server.cpp.
-// keeps the resumable stream surface confined to server-stream
+// route handler factories wired under /v1/stream/* by server.cpp
 server_http_context::handler_t server_stream_make_get_handler();
 server_http_context::handler_t server_stream_make_lookup_handler();
 server_http_context::handler_t server_stream_make_delete_handler();
 
-// extract the X-Conversation-Id header value (case-insensitive), empty when absent. exposed so
-// the router can track which child serves a forwarded POST
+// extract the X-Conversation-Id header value (case-insensitive), empty when absent
 std::string server_stream_conv_id_from_headers(const std::map<std::string, std::string> & headers);
 
-// on an X-Conversation-Id header, create or replace the session and attach a producer pipe to
-// res. no-op when absent, called from the server_res_generator constructor
+// on an X-Conversation-Id header, create or replace the session and attach a producer pipe to res
 void server_stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers);
 
 // should_stop closure that ignores peer disconnect when a pipe is attached, so only an explicit

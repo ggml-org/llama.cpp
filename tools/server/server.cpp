@@ -245,8 +245,8 @@ int llama_server(int argc, char ** argv) {
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
 
     // resumable streaming, the conversation_id is the session identity end to end. router and
-    // child wire different handlers under the same paths: a child binds the local g_stream_sessions
-    // backed factories, the router binds proxies that resolve the owning child through the
+    // child wire different handlers under the same paths: a child binds the local session
+    // factories, the router binds proxies that resolve the owning child through the
     // conv_id -> model map
     server_http_context::handler_t stream_get_h;
     server_http_context::handler_t streams_lookup_h;

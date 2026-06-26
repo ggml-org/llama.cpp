@@ -14,7 +14,6 @@ constexpr size_t  STREAM_SESSION_MAX_BYTES           = 4 * 1024 * 1024;
 constexpr int64_t STREAM_SESSION_GC_INTERVAL_SECONDS = 60;
 constexpr int64_t STREAM_READ_WAKE_INTERVAL_MS       = 200;
 
-// returns unix time in seconds
 int64_t now_seconds() {
     return std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()
@@ -22,9 +21,8 @@ int64_t now_seconds() {
 }
 }
 
-// owns all live sessions, runs a periodic GC to evict expired ones.
-// the map is keyed by conversation_id, so the invariant "one conv = at most one
-// live session" is enforced at the type level
+// owns all live sessions keyed by conversation_id, one conv = at most one live session.
+// a periodic GC evicts expired ones
 class stream_session_manager {
 public:
     stream_session_manager();
@@ -33,21 +31,15 @@ public:
     stream_session_manager(const stream_session_manager &)             = delete;
     stream_session_manager & operator=(const stream_session_manager &) = delete;
 
-    // install a new session for this conversation, evicting and cancelling any previous one.
-    // the conversation_id must be non empty, the caller is responsible for that check.
-    // returns the new session
+    // install a new session, evicting and cancelling any previous one. conversation_id must be non empty
     stream_session_ptr create_or_replace(const std::string & conversation_id);
 
-    // lookup, returns null if unknown or already evicted
     stream_session_ptr get(const std::string & conversation_id);
 
-    // list every live or recently completed session, used by GET /v1/streams without filter
     std::vector<stream_session_ptr> list_all() const;
 
-    // remove from the map and finalize, wakes any pending readers
     void evict(const std::string & conversation_id);
 
-    // signal the producer to cancel asap then evict, used by the explicit user Stop path
     void evict_and_cancel(const std::string & conversation_id);
 
     void start_gc();
@@ -77,22 +69,18 @@ void server_stream_session_manager_stop() {
 
 struct stream_session {
     std::string conversation_id;
-    int64_t     started_ts; // unix seconds at construction, used by /v1/streams listing
+    int64_t     started_ts; // unix seconds at construction
 
     stream_session(std::string conversation_id_, size_t max_bytes_);
     stream_session(const stream_session &)             = delete;
     stream_session & operator=(const stream_session &) = delete;
 
-    // append raw bytes, drops from the front if the cap is reached.
-    // returns false if the session is already finalized
     bool append(const char * data, size_t len);
 
-    // mark the session as complete, wakes all pending readers
     void finalize();
 
-    // drain bytes from offset, calling sink for each chunk. blocks until more
-    // bytes arrive or finalize is called. returns OK on clean exit, OFFSET_LOST
-    // if offset falls below the dropped prefix
+    // drain from offset into sink, blocking for more bytes or finalize. OFFSET_LOST if offset
+    // fell below the dropped prefix
     stream_read_status read_from(size_t offset,
         const std::function<bool(const char *, size_t)> & sink,
         const std::function<bool()> & should_stop);
@@ -103,10 +91,8 @@ struct stream_session {
     size_t  dropped_prefix() const; // bytes evicted from the front due to cap
     int64_t completed_at() const;   // 0 while alive, unix seconds after finalize
 
-    // attach the producer stop hook used to cancel its reader, pass an empty function to detach
     void set_stop_producer(std::function<void()> fn);
 
-    // signal the producer to abort its inference asap via the stop hook, idempotent
     void cancel();
 
 private:
@@ -404,13 +390,10 @@ void stream_session_manager::gc_loop() {
     }
 }
 
-// stream_pipe ---------------------------------------------------------------------------------
+// stream_pipe
 
 // consumer end: read-only replay of the ring buffer, the destructor does not finalize the session
 struct stream_pipe_consumer : stream_pipe {
-    // drain bytes from offset, calling sink for each available chunk. blocks until more data
-    // arrives or the session finalizes. should_stop is polled, returns OFFSET_LOST if offset
-    // fell below the dropped prefix
     stream_read_status read(size_t & offset,
         const std::function<bool(const char *, size_t)> & sink,
         const std::function<bool()> & should_stop);
@@ -525,10 +508,8 @@ static server_http_res_ptr make_error_response(int status, const std::string & m
 
 server_http_context::handler_t server_stream_make_get_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
-        // GET /v1/stream/<conv_id>?from=N replays the SSE bytes already buffered for the
-        // session, blocks for more bytes when the session is still running, returns when
-        // the session is finalized. the body is streamed back as text/event-stream so the
-        // browser EventSource can attach to it like a fresh request
+        // GET /v1/stream/<conv_id>?from=N replays buffered SSE bytes then blocks for live
+        // bytes until the session finalizes, streamed as text/event-stream for EventSource
         std::string conv_id = req.get_param("conv_id");
         if (conv_id.empty()) {
             return make_error_response(400, "Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST);
@@ -576,9 +557,8 @@ server_http_context::handler_t server_stream_make_get_handler() {
 
 server_http_context::handler_t server_stream_make_lookup_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
-        // POST /v1/streams/lookup with body {"conversation_ids": ["X", "Y", ...]} returns the
-        // matching sessions, only for ids the caller already knows. each id matches the exact key
-        // and any "<id>::<model>" variant, so one lookup covers every per model session for a conv
+        // POST /v1/streams/lookup returns the matching sessions, only for ids the caller already
+        // knows. each id matches the exact key and any "<id>::<model>" per model variant
         std::vector<std::string> requested;
         try {
             json body = json::parse(req.body);
@@ -635,9 +615,8 @@ server_http_context::handler_t server_stream_make_lookup_handler() {
 
 server_http_context::handler_t server_stream_make_delete_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
-        // DELETE /v1/stream/<conv_id> is the explicit user Stop, cancels the producer hook
-        // wired by handle_completions_impl and evicts the buffer. idempotent, a session that
-        // already finalized or was never created returns 204 either way
+        // DELETE /v1/stream/<conv_id> is the explicit user Stop, cancels the producer and evicts
+        // the buffer. idempotent, returns 204 even if the session was already gone
         std::string conv_id = req.get_param("conv_id");
         if (conv_id.empty()) {
             return make_error_response(400, "Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST);
