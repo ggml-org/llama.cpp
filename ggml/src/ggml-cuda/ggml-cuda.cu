@@ -4725,12 +4725,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     }
                 }
 
-#ifdef GGML_CUDA_DEBUG
-                const int nodes_fused = i - prev_i - 1;
-                if (nodes_fused > 0) {
-                    GGML_LOG_INFO("nodes_fused: %d\n", nodes_fused);
-                }
-#endif
                 prev_i = i;
 
                 if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
@@ -4744,6 +4738,12 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
 
                 if (nodes_to_skip != 0) {
+#ifdef GGML_CUDA_DEBUG
+                    const int last_fused = i + nodes_to_skip;
+                    GGML_LOG_INFO("nodes_fused: %d, first: %s (%s), last: %s (%s)\n",
+                            nodes_to_skip + 1, ggml_op_name(node->op), node->name,
+                            ggml_op_name(cgraph->nodes[last_fused]->op), cgraph->nodes[last_fused]->name);
+#endif
                     i += nodes_to_skip;
                     continue;
                 }
