@@ -64,14 +64,17 @@
 Принимаем, что после merge с апстримом часть вернётся и потребует повторного удаления
 (список держим коротким).
 
-| Путь | Причина |
-|---|---|
-| `app/` (особенно `download.cpp`) | загрузка моделей из сети — нарушает offline |
-| `tools/ui/` (npm/PWA веб-фронт) | заменяется нашим gateway; тянет node-зависимости из сети |
-| сетевые скрипты в `scripts/` | скачивание моделей/хэшей — аудировать пофайлово и удалить сетевые |
-| `media/` | брендинг/логотипы апстрима |
-| `.github/`, `.devops/`, `.gemini/`, `.pi/`, `ci/`, `flake.nix` | CI/боты/Nix апстрима → заменить на GitLab CI/Jenkins РФ-контура |
-| `models/*.gguf` (vocab-фикстуры) | удалить вместе с соответствующими тестами апстрима, если тесты не сохраняем |
+**СТАТУС: ВЫПОЛНЕНО (143 файла удалено), сборка llama-server проверена.**
+
+| Путь | Причина | Статус |
+|---|---|---|
+| `app/` (с `download.cpp`) | загрузка моделей из сети — нарушает offline | ✅ удалён + `LLAMA_BUILD_APP=OFF` |
+| `tools/ui/` (npm/PWA веб-фронт) | заменяется нашим gateway; качает UI из HF | ⚠️ НЕ удалён физически (server-http.cpp жёстко `#include "ui.h"`). Нейтрализован: `LLAMA_BUILD_UI=OFF` + `LLAMA_USE_PREBUILT_UI=OFF` → пустой стаб, без HF-загрузки. Удаление потребовало бы правки сервера = потеря drop-in. |
+| сетевые скрипты `scripts/` | скачивание моделей/датасетов/SDK | ✅ удалены: `hf.sh`, `fetch_server_test_models.py`, `get-{hellaswag,pg,wikitext-2,winogrande}.sh`, `get_chat_template.py`, `bench-models.sh`, `snapdragon/`, `install-oneapi.bat`. Оставлены `ui-assets.cmake` (нужен сборке), `sync_vendor.py`/`pr2wt.sh` (dev/git). |
+| `media/` | брендинг/логотипы апстрима | ✅ удалён |
+| `.github/`, `.devops/`, `.gemini/`, `.pi/`, `ci/`, `flake.nix`, `build-xcframework.sh` | CI/боты/Nix/Apple апстрима → заменить на GitLab CI/Jenkins | ✅ удалены |
+| `models/*.gguf` (vocab-фикстуры) | удалить вместе с тестами, если тесты не сохраняем | ⬜ НЕ трогали (привязаны к тестам апстрима) |
+| платформенные `scripts/apple/`, `scripts/hip/` | не наше железо (не сетевые) | ⬜ оставлены (можно убрать отдельным platform-pass) |
 
 ---
 

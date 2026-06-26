@@ -31,4 +31,13 @@ set(LLAMA_BUILD_TOOLS    ON  CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 
+# Web UI: НЕ встраивать и НЕ качать из HuggingFace (offline + нет браузерного UI;
+# наружу работает наш gateway). Сервер собирается со стаб-ui.h, llama-ui пустой.
+# Каталог tools/ui НЕ удаляем физически: server-http.cpp жёстко #include "ui.h"
+# и зовёт llama_ui_*; удаление сломало бы сборку сервера и drop-in обновления.
+set(LLAMA_BUILD_UI        OFF CACHE BOOL "" FORCE)
+set(LLAMA_USE_PREBUILT_UI OFF CACHE BOOL "" FORCE)
+# Унифицированный desktop-бинарь (app/, содержал сетевой download.cpp) не собираем.
+set(LLAMA_BUILD_APP       OFF CACHE BOOL "" FORCE)
+
 set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
