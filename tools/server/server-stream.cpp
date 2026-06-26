@@ -227,7 +227,7 @@ void stream_session::set_stop_producer(std::function<void()> fn) {
 }
 
 void stream_session::cancel() {
-    // flip cancelled first so the producer-side stream_aware_should_stop can break out of the
+    // flip cancelled first so the producer-side server_stream_aware_should_stop can break out of the
     // recv() wait even if remove_waiting_task_ids does not notify the condvar (the cancel task
     // posted by rd.stop() will eventually notify, but we do not want to depend on that timing)
     cancelled.store(true, std::memory_order_release);
@@ -512,7 +512,7 @@ static server_http_res_ptr make_error_response(int status, const std::string & m
     return res;
 }
 
-server_http_context::handler_t make_stream_get_handler() {
+server_http_context::handler_t server_stream_make_get_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
         // GET /v1/stream/<conv_id>?from=N replays the SSE bytes already buffered for the
         // session, blocks for more bytes when the session is still running, returns when
@@ -563,7 +563,7 @@ server_http_context::handler_t make_stream_get_handler() {
     };
 }
 
-server_http_context::handler_t make_streams_lookup_handler() {
+server_http_context::handler_t server_stream_make_lookup_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
         // POST /v1/streams/lookup with body {"conversation_ids": ["X", "Y", ...]} returns the
         // matching sessions, only for ids the caller already knows. each id matches the exact key
@@ -622,7 +622,7 @@ server_http_context::handler_t make_streams_lookup_handler() {
     };
 }
 
-server_http_context::handler_t make_stream_delete_handler() {
+server_http_context::handler_t server_stream_make_delete_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
         // DELETE /v1/stream/<conv_id> is the explicit user Stop, cancels the producer hook
         // wired by handle_completions_impl and evicts the buffer. idempotent, a session that
@@ -640,7 +640,7 @@ server_http_context::handler_t make_stream_delete_handler() {
     };
 }
 
-std::string stream_conv_id_from_headers(const std::map<std::string, std::string> & headers) {
+std::string server_stream_conv_id_from_headers(const std::map<std::string, std::string> & headers) {
     // case-insensitive scan for x-conversation-id
     static constexpr char   target[]   = "x-conversation-id";
     static constexpr size_t target_len = sizeof(target) - 1;
@@ -659,9 +659,9 @@ std::string stream_conv_id_from_headers(const std::map<std::string, std::string>
     return std::string();
 }
 
-void stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers) {
-    std::string conversation_id = stream_conv_id_from_headers(headers);
-    SRV_INF("stream_session_attach_pipe: conv_id=%s (empty=%d)\n",
+void server_stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers) {
+    std::string conversation_id = server_stream_conv_id_from_headers(headers);
+    SRV_INF("server_stream_session_attach_pipe: conv_id=%s (empty=%d)\n",
             conversation_id.c_str(), conversation_id.empty() ? 1 : 0);
     if (conversation_id.empty()) {
         return;
@@ -670,7 +670,7 @@ void stream_session_attach_pipe(server_http_res & res, const std::map<std::strin
     res.spipe = stream_pipe_producer::create(session, res);
 }
 
-std::function<bool()> stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback) {
+std::function<bool()> server_stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback) {
     return [res, fallback = std::move(fallback)]() -> bool {
         if (res->spipe) {
             return res->spipe->is_cancelled();

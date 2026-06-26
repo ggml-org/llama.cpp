@@ -256,9 +256,9 @@ int llama_server(int argc, char ** argv) {
         streams_lookup_h = models_routes->router_streams_lookup;
         stream_delete_h  = models_routes->router_stream_delete;
     } else {
-        stream_get_h     = make_stream_get_handler();
-        streams_lookup_h = make_streams_lookup_handler();
-        stream_delete_h  = make_stream_delete_handler();
+        stream_get_h     = server_stream_make_get_handler();
+        streams_lookup_h = server_stream_make_lookup_handler();
+        stream_delete_h  = server_stream_make_delete_handler();
     }
     ctx_http.get ("/v1/stream/:conv_id",       ex_wrapper(stream_get_h));
     // POST /v1/streams/lookup with body {"conversation_ids": [...]}. you can only ask for ids
