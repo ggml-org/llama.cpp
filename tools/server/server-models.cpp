@@ -48,6 +48,10 @@ extern char **environ;
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
 #define CHILD_ADDR "127.0.0.1"
 
+// short loopback budget for the resumable stream router to child JSON calls (probe, lookup,
+// delete). distinct from params.timeout_read/write which only applies to the generation proxy
+static constexpr int STREAM_LOOKUP_TIMEOUT_MS = 250;
+
 struct server_subproc {
     std::optional<server_process> sproc; // empty while in DOWNLOADING state
     std::atomic<bool> stopped{false}; // set to cancel a download or signal child process exit
@@ -66,8 +70,7 @@ struct server_subproc {
 
     void request_exit() {
         if (sproc.has_value()) {
-            FILE * stdin_file = subprocess_stdin(&sproc.value());
-            if (stdin_file) {
+            if (FILE * stdin_file = sproc->get_stdin()) {
                 fprintf(stdin_file, "%s\n", CMD_ROUTER_TO_CHILD_EXIT);
                 fflush(stdin_file);
             }
@@ -847,8 +850,8 @@ void server_models::load(const std::string & name, const load_options & opts) {
         stop_timeout = inst.meta.stop_timeout,
         child_mode = opts.mode
     ]() {
-        FILE * stdin_file = subprocess_stdin(&child_proc->get());
-        FILE * stdout_file = subprocess_stdout(&child_proc->get()); // combined stdout/stderr
+        FILE * stdin_file = child_proc->sproc->get_stdin();
+        FILE * stdout_file = child_proc->sproc->get_stdout(); // combined stdout/stderr
 
         std::thread log_thread([&]() {
             // read stdout/stderr and forward to main server log
@@ -1240,13 +1243,12 @@ void server_models::handle_child_state(const std::string & name, const std::stri
     switch (state) {
         case SERVER_STATE_DOWNLOADING:
             {
-                std::string result = json_value(payload, "result", std::string());
-                std::string url    = json_value(payload, "url",    std::string());
+                const std::string result = json_value(payload, "result", std::string());
+                const std::string url    = json_value(payload, "url",    std::string());
                 auto request_exit = [&]() {
-                    std::lock_guard<std::mutex> lk(mutex);
-                    auto it = mapping.find(name);
-                    if (it != mapping.end()) {
-                        return it->second.subproc->request_exit();
+                    std::lock_guard lk(mutex);
+                    if (const auto it = mapping.find(name); it != mapping.end()) {
+                        it->second.subproc->request_exit();
                     }
                 };
                 if (result == "download_finished") {
