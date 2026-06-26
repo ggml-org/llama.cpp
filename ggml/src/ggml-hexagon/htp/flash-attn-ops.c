@@ -1591,19 +1591,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 const uint32_t iv2 = kv_head;
                 const uint32_t iv3 = ib3 / (neq3 / v->ne[3]);
 
-                // ---- Load Q block & Initialize per-block state ----
-                fa_phase_q_load(&factx, q, q_start, kv_head, ib3, n_rows_g);
-
-                __fp16 * o_tile_prev = factx.vtcm_o_tiles[0];
-                __fp16 * o_tile_curr = factx.vtcm_o_tiles[1];
-
-                // ---- KV block loop with DMA double-buffering ----
-                size_t buf_idx = 0;
-
-                htp_trace_event_start(tr_hvx, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) q_start);
-                fa_compute_slopes(&factx, kv_head, n_rows_g);
-                htp_trace_event_stop(tr_hvx, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) q_start);
-
                 // Prefetch first KV block
                 if (factx.n_kv_blocks > 0) {
                     const uint32_t kv_rows0 = hex_smin(Bc, nek1);
@@ -1616,6 +1603,19 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                     dma_queue_push(dma, dma_make_ptr(factx.vtcm_v_fp16[0], v_src), size_v_row_padded, v->nb[1],
                                    size_v_row, kv_rows0);
                 }
+
+                // ---- Load Q block & Initialize per-block state ----
+                fa_phase_q_load(&factx, q, q_start, kv_head, ib3, n_rows_g);
+
+                __fp16 * o_tile_prev = factx.vtcm_o_tiles[0];
+                __fp16 * o_tile_curr = factx.vtcm_o_tiles[1];
+
+                // ---- KV block loop with DMA double-buffering ----
+                size_t buf_idx = 0;
+
+                htp_trace_event_start(tr_hvx, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) q_start);
+                fa_compute_slopes(&factx, kv_head, n_rows_g);
+                htp_trace_event_stop(tr_hvx, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) q_start);
 
                 const size_t k_src_stride = size_k_row_padded / sizeof(__fp16);
                 const size_t v_src_stride = size_v_row_padded / sizeof(__fp16);
