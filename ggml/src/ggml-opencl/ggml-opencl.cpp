@@ -15,19 +15,19 @@
 
 #ifdef GGML_OPENCL_USE_ADRENO_BIN_KERNELS
 #include "libdl.h"
-typedef const void * (*get_adreno_bin_kernel_func_t)(
-    const char * name,
-    const char * gpu_name,
-    const char * compiler_ver,
-    size_t     * out_size
-);
-
 #ifdef _WIN32
 #define KERNEL_LIB_NAME "adreno-opencl-kernels.dll"
 #else
 #define KERNEL_LIB_NAME "libadreno-opencl-kernels.so"
 #endif // _WIN32
 #endif // GGML_OPENCL_USE_ADRENO_BIN_KERNELS
+
+typedef const void * (*get_adreno_bin_kernel_func_t)(
+    const char * name,
+    const char * gpu_name,
+    const char * compiler_ver,
+    size_t     * out_size
+);
 
 #include <CL/cl.h>
 
