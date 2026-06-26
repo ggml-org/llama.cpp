@@ -169,7 +169,7 @@
 	}
 
 	function mcpPromptId(prompt: MCPPromptInfo): string {
-		return `mcp:${prompt.serverName}:${prompt.name}`;
+		return buildMcpPromptId(prompt.serverName, prompt.name);
 	}
 
 	async function executeAndPostAsSystemPrompt(prompt: MCPPromptInfo) {

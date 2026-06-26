@@ -9,6 +9,7 @@
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { ContentPartType } from '$lib/enums';
 	import { PROMPT_CONTENT_SEPARATOR } from '$lib/constants';
+	import { buildMcpPromptId } from '$lib/utils';
 	import type { MCPPromptInfo, PromptMessage } from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
 
@@ -107,7 +108,7 @@
 	}
 
 	function mcpPromptId(prompt: MCPPromptInfo): string {
-		return `mcp:${prompt.serverName}:${prompt.name}`;
+		return buildMcpPromptId(prompt.serverName, prompt.name);
 	}
 
 	async function executeAndPostAsSystemPrompt(prompt: MCPPromptInfo) {
