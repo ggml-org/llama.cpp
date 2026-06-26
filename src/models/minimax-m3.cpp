@@ -70,10 +70,10 @@ void llama_model_minimax_m3::load_arch_tensors(llama_model_loader &) {
             layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
             
             // indexer
-            layer.index_q_proj = create_tensor(tn(LLM_TENSOR_INDEX_Q_PROJ, "weight", i), {n_embd, hparams.indexer_n_head * hparams.indexer_head_size}, 0);
-            layer.index_k_proj = create_tensor(tn(LLM_TENSOR_INDEX_K_PROJ, "weight", i), {n_embd, hparams.indexer_head_size}, 0);
-            layer.index_q_norm = create_tensor(tn(LLM_TENSOR_INDEX_Q_NORM, "weight", i), {hparams.indexer_head_size}, 0);
-            layer.index_k_norm = create_tensor(tn(LLM_TENSOR_INDEX_K_NORM, "weight", i), {hparams.indexer_head_size}, 0);
+            layer.index_q_proj = create_tensor(tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i), {n_embd, hparams.indexer_n_head * hparams.indexer_head_size}, 0);
+            layer.index_k_proj = create_tensor(tn(LLM_TENSOR_INDEXER_K_PROJ, "weight", i), {n_embd, hparams.indexer_head_size}, 0);
+            layer.index_q_norm = create_tensor(tn(LLM_TENSOR_INDEXER_Q_NORM, "weight", i), {hparams.indexer_head_size}, 0);
+            layer.index_k_norm = create_tensor(tn(LLM_TENSOR_INDEXER_K_NORM, "weight", i), {hparams.indexer_head_size}, 0);
         }
     }
 }

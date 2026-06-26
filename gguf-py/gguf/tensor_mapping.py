@@ -1263,7 +1263,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.INDEXER_K_NORM: (
-            "model.layers.{bid}.self_attn.indexer.k_norm", # DSA
+            "model.layers.{bid}.self_attn.indexer.k_norm",  # DSA
+            "model.layers.{bid}.self_attn.index_k_norm",    # MSA
         ),
 
         MODEL_TENSOR.INDEXER_PROJ: (
@@ -1278,22 +1279,17 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.indexer.wq_b", # DSA
         ),
         
-        MODEL_TENSOR.INDEX_Q_PROJ: (
+        MODEL_TENSOR.INDEXER_Q_PROJ: (
             "model.layers.{bid}.self_attn.index_q_proj", # MSA
         ),
         
-        MODEL_TENSOR.INDEX_K_PROJ: (
+        MODEL_TENSOR.INDEXER_K_PROJ: (
             "model.layers.{bid}.self_attn.index_k_proj", # MSA
         ),
         
-        MODEL_TENSOR.INDEX_Q_NORM: (
+        MODEL_TENSOR.INDEXER_Q_NORM: (
             "model.layers.{bid}.self_attn.index_q_norm", # MSA
-        ),
-        
-        MODEL_TENSOR.INDEX_K_NORM: (
-            "model.layers.{bid}.self_attn.index_k_norm", # MSA
-        ),
-        
+        ),     
         
 
         ############################################################################
