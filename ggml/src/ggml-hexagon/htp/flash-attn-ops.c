@@ -1631,10 +1631,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         const uint32_t kv_rows     = hex_smin(Bc, nek1 - kv_start);
                         const size_t   n_col_tiles = hmx_ceil_div(kv_rows, HMX_FP16_TILE_N_COLS);
 
-                        // Wait for current KV DMA
-                        dma_queue_pop(dma);  // K
-                        dma_queue_pop(dma);  // V
-
                         // Push mask DMA
                         if (mask) {
                             if (__builtin_expect(factx.mask_broadcast, true)) {
@@ -1644,6 +1640,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                                 fa_push_mask_dma_gqa(dma, mask, q_start, im3, kv_start, kv_head, G, m_line_bytes, kv_rows, n_q_rows, &factx);
                             }
                         }
+
+                        // Wait for current KV DMA
+                        dma_queue_pop(dma);  // K
+                        dma_queue_pop(dma);  // V
 
                         // ---- Phase 1: K_int ----
                         if (kv_blk > 0) {
