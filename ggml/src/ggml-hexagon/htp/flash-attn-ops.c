@@ -480,6 +480,7 @@ typedef struct {
     size_t                  src_stride;
     size_t                  buf_idx;
     uint32_t                kv_start;
+    uint32_t                rows_per_t;
 } fa_k_int_args_t;
 
 static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) {
@@ -487,7 +488,7 @@ static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) 
     struct hmx_fa_context * factx = args->factx;
 
     const uint32_t total_rows = args->kv_rows;
-    const uint32_t rows_per_t = hex_align_up(hmx_ceil_div(total_rows, n), 2);  // ensure even (row pairs)
+    const uint32_t rows_per_t = args->rows_per_t;
     const uint32_t start      = i * rows_per_t;
     const uint32_t end        = (uint32_t) hex_smin(start + rows_per_t, total_rows);
 
@@ -504,9 +505,14 @@ static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) 
 
 static void fa_phase_k_interleave(struct hmx_fa_context * factx, uint32_t kv_rows, size_t src_stride, size_t buf_idx, uint32_t kv_start) {
     worker_pool_context_t wp = factx->octx->ctx->worker_pool;
-    fa_k_int_args_t args = { factx, kv_rows, src_stride, buf_idx, kv_start };
+    uint32_t n = 1;
     if (factx->n_threads > 1 && kv_rows >= factx->n_threads * 2) {
-        worker_pool_run_func(wp, fa_k_interleave_thread, &args, factx->n_threads);
+        n = factx->n_threads;
+    }
+    uint32_t rows_per_t = hex_align_up(hmx_ceil_div(kv_rows, n), 2);
+    fa_k_int_args_t args = { factx, kv_rows, src_stride, buf_idx, kv_start, rows_per_t };
+    if (n > 1) {
+        worker_pool_run_func(wp, fa_k_interleave_thread, &args, n);
     } else {
         fa_k_interleave_thread(1, 0, &args);
     }
@@ -519,6 +525,7 @@ typedef struct {
     size_t                  buf_idx;
     size_t                  n_col_tiles;
     uint32_t                kv_start;
+    uint32_t                rows_per_t;
 } fa_v_int_args_t;
 
 static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) {
@@ -526,7 +533,7 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
     struct hmx_fa_context * factx = args->factx;
 
     const uint32_t total_rows = args->kv_rows;
-    const uint32_t rows_per_t = hex_align_up(hmx_ceil_div(total_rows, n), 2);
+    const uint32_t rows_per_t = args->rows_per_t;
     const uint32_t start      = i * rows_per_t;
     const uint32_t end        = (uint32_t) hex_smin(start + rows_per_t, total_rows);
 
@@ -550,9 +557,14 @@ static void fa_phase_v_interleave(struct hmx_fa_context * factx,
                                   size_t                  n_col_tiles,
                                   uint32_t                kv_start) {
     worker_pool_context_t wp = factx->octx->ctx->worker_pool;
-    fa_v_int_args_t args = { factx, kv_rows, src_stride, buf_idx, n_col_tiles, kv_start };
+    uint32_t n = 1;
     if (factx->n_threads > 1 && kv_rows >= factx->n_threads * 2) {
-        worker_pool_run_func(wp, fa_v_interleave_thread, &args, factx->n_threads);
+        n = factx->n_threads;
+    }
+    uint32_t rows_per_t = hex_align_up(hmx_ceil_div(kv_rows, n), 2);
+    fa_v_int_args_t args = { factx, kv_rows, src_stride, buf_idx, n_col_tiles, kv_start, rows_per_t };
+    if (n > 1) {
+        worker_pool_run_func(wp, fa_v_interleave_thread, &args, n);
     } else {
         fa_v_interleave_thread(1, 0, &args);
     }
@@ -565,6 +577,7 @@ typedef struct {
     uint32_t                  kv_head;
     uint32_t                  ib3;
     size_t                    n_rows_g;
+    size_t                    rows_per_t;
 } fa_q_load_args_t;
 
 static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
@@ -577,7 +590,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
 
     // Partition the padded Q rows (g_br) across threads.
     // Keep start/end even so r and r+1 are always in the same thread's range.
-    const size_t rows_per_t = hex_align_up(hmx_ceil_div(factx->g_br, n), 2);
+    const size_t rows_per_t = args->rows_per_t;
     const size_t start      = (size_t) i * rows_per_t;
     const size_t end        = hex_smin(start + rows_per_t, factx->g_br);
 
@@ -694,10 +707,14 @@ static void fa_phase_q_load(struct hmx_fa_context *   factx,
                             uint32_t                  ib3,
                             size_t                    n_rows_g) {
     worker_pool_context_t wp = factx->octx->ctx->worker_pool;
-    fa_q_load_args_t args = { factx, q, q_start, kv_head, ib3, n_rows_g };
-    // Require >= 2 row pairs per thread so partitioning is worthwhile.
+    uint32_t n = 1;
     if (factx->n_threads > 1 && n_rows_g >= (size_t) (factx->n_threads * 2)) {
-        worker_pool_run_func(wp, fa_q_load_thread, &args, factx->n_threads);
+        n = factx->n_threads;
+    }
+    size_t rows_per_t = hex_align_up(hmx_ceil_div(factx->g_br, n), 2);
+    fa_q_load_args_t args = { factx, q, q_start, kv_head, ib3, n_rows_g, rows_per_t };
+    if (n > 1) {
+        worker_pool_run_func(wp, fa_q_load_thread, &args, n);
     } else {
         fa_q_load_thread(1, 0, &args);
     }
@@ -711,6 +728,7 @@ typedef struct {
     uint32_t                  kv_head;
     uint32_t                  ib3;
     size_t                    n_rows_g;
+    size_t                    rows_per_t;
 } fa_o_store_args_t;
 
 static void fa_o_store_thread(unsigned int n, unsigned int i, void * data) {
@@ -721,7 +739,7 @@ static void fa_o_store_thread(unsigned int n, unsigned int i, void * data) {
     const size_t G        = factx->G;
     const size_t DV       = factx->DV;
 
-    const size_t rows_per_t = hmx_ceil_div(n_rows_g, n);
+    const size_t rows_per_t = args->rows_per_t;
     const size_t start      = (size_t) i * rows_per_t;
     const size_t end        = hex_smin(start + rows_per_t, n_rows_g);
 
@@ -788,9 +806,14 @@ static void fa_phase_o_store(struct hmx_fa_context *   factx,
                              uint32_t                  ib3,
                              size_t                    n_rows_g) {
     worker_pool_context_t wp = factx->octx->ctx->worker_pool;
-    fa_o_store_args_t args = { factx, dst, o_tile_src, q_start, kv_head, ib3, n_rows_g };
+    uint32_t n = 1;
     if (factx->n_threads > 1 && n_rows_g >= (size_t) (factx->n_threads * 2)) {
-        worker_pool_run_func(wp, fa_o_store_thread, &args, factx->n_threads);
+        n = factx->n_threads;
+    }
+    size_t rows_per_t = hmx_ceil_div(n_rows_g, n);
+    fa_o_store_args_t args = { factx, dst, o_tile_src, q_start, kv_head, ib3, n_rows_g, rows_per_t };
+    if (n > 1) {
+        worker_pool_run_func(wp, fa_o_store_thread, &args, n);
     } else {
         fa_o_store_thread(1, 0, &args);
     }
