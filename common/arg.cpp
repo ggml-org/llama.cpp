@@ -3748,6 +3748,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "draft model for speculative decoding (default: unused)",
         [](common_params & params, const std::string & value) {
             params.speculative.draft.mparams.path = value;
+            params.speculative.draft.mparams.hf_file = value; // will be used if --spec-draft-hf is set
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
     add_opt(common_arg(
