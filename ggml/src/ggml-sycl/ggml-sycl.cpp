@@ -2287,6 +2287,9 @@ static void argmax_f32_i32_sycl(const float *x, int *dst, const int ncols,
                         if (val2 > val1) {
                             shared_data[tid] = val2;
                             shared_indices[tid] = shared_indices[tid + stride];
+                        } else if (val2 == val1 && shared_indices[tid + stride] < shared_indices[tid]) {
+                            // keep the smallest index on ties (first-occurrence wins)
+                            shared_indices[tid] = shared_indices[tid + stride];
                         }
                     }
                     item_ct1.barrier(sycl::access::fence_space::local_space);
