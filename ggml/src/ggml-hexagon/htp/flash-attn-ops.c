@@ -333,11 +333,17 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
             {
+                const HVX_Vector v_log2e = hvx_vec_splat_f16(EXP_LOG2E_F);
+
                 // 4. Online Softmax Update
                 HVX_Vector M_new_vec = Q6_Vsf_vmax_VsfVsf(v_max, M_vec);
                 HVX_Vector diff_vec  = HVX_OP_SUB_F32(M_vec, M_new_vec);
-                
-                HVX_Vector ms_vec = hvx_vec_exp_f32(diff_vec);
+
+                HVX_Vector diff_f16   = hvx_vec_f32_to_f16(diff_vec, diff_vec);
+                HVX_Vector diff_base2 = hvx_vec_mul_f16_f16(diff_f16, v_log2e);
+                HVX_Vector ms_f16     = hvx_vec_exp2_f16(diff_base2);
+                HVX_Vector ms_vec     = Q6_V_lo_W(hvx_vec_f16_to_f32(ms_f16));
+
                 M_vec = M_new_vec;
 
                 hvx_scale_vec_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms_vec);
@@ -345,8 +351,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 // Compute P = exp2((S - M) * log2(e)) in FP16
                 HVX_Vector v_m_vec_f16 = hvx_vec_f32_to_f16(M_vec, M_vec);
                 HVX_Vector v_s_minus_m = Q6_Vqf16_vsub_VhfVhf(scores_f16, v_m_vec_f16);
-                
-                const HVX_Vector v_log2e = hvx_vec_splat_f16(1.44269504f);
+
                 HVX_Vector v_s_minus_m_base2 = hvx_vec_mul_f16_f16(Q6_Vhf_equals_Vqf16(v_s_minus_m), v_log2e);
                 
                 HVX_Vector P = hvx_vec_exp2_f16(v_s_minus_m_base2);
@@ -602,7 +607,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
             float *       m_vec      = (float *) factx->vtcm_m_vec;
             const size_t  r_start    = l_start / sizeof(float);
             const size_t  r_end      = l_end / sizeof(float);
-            const float   scale_factor = 1.44269504f;
+            const float   scale_factor = EXP_LOG2E_F;
             for (size_t r = r_start; r < r_end; ++r) {
                 if (r < n_rows_g) {
                     const size_t h_idx = fastmodulo(r, G, &factx->div_G);
@@ -1027,7 +1032,7 @@ static inline void fa_softmax_impl(
                     HVX_VectorPred q_keep1 = Q6_Q_and_QQ(Q6_Q_vcmp_gt_VhfVhf(v_mask1, v_threshold), q_tail_keep);
 
                     // Scale mask values by log2(e) for base-2 calculations
-                    const HVX_Vector v_log2e = hvx_vec_splat_f16(1.44269504f);
+                    const HVX_Vector v_log2e = hvx_vec_splat_f16(EXP_LOG2E_F);
                     HVX_Vector v_mask0_scaled = hvx_vec_mul_f16_f16(v_mask0, v_log2e);
                     HVX_Vector v_mask1_scaled = hvx_vec_mul_f16_f16(v_mask1, v_log2e);
 
@@ -1144,9 +1149,12 @@ static inline void fa_softmax_impl(
         HVX_Vector v_m_diff0 = HVX_OP_SUB_F32(m_prev_v0, v_m_curr0);
         HVX_Vector v_m_diff1 = HVX_OP_SUB_F32(m_prev_v1, v_m_curr1);
 
-        const HVX_Vector v_ln2 = Q6_V_vsplat_R(EXP_LOGN2);
-        HVX_Vector exp_m_diff0 = hvx_vec_exp_f32(HVX_OP_MUL_F32(v_m_diff0, v_ln2));
-        HVX_Vector exp_m_diff1 = hvx_vec_exp_f32(HVX_OP_MUL_F32(v_m_diff1, v_ln2));
+        HVX_Vector v_m_diff_f16 = hvx_vec_f32_to_f16(v_m_diff0, v_m_diff1);
+        HVX_Vector exp_m_diff_f16 = hvx_vec_exp2_f16(v_m_diff_f16);
+
+        HVX_VectorPair exp_m_diff_pair = hvx_vec_f16_to_f32(exp_m_diff_f16);
+        HVX_Vector exp_m_diff0 = Q6_V_lo_W(exp_m_diff_pair);
+        HVX_Vector exp_m_diff1 = Q6_V_hi_W(exp_m_diff_pair);
 
         HVX_VectorPair rowsum_acc_pair = hvx_vec_f16_to_f32(rowsum_acc_v);
         HVX_Vector     v_rowsum_acc_f32_0 = Q6_V_lo_W(rowsum_acc_pair);
@@ -1172,7 +1180,7 @@ static inline void fa_softmax_impl(
         // Build diagonal tile D = diag(exp(m_diff))
         const HVX_Vector     v_offsets = *(const HVX_Vector *) d_tile_scatter_offsets;
         const HVX_VectorPred q_32_mask = Q6_Q_vsetq_R(32 * sizeof(__fp16));
-        HVX_Vector           v_exp_m_diff = hvx_vec_f32_to_f16(exp_m_diff0, exp_m_diff1);
+        HVX_Vector           v_exp_m_diff = exp_m_diff_f16;
 
         size_t t0 = r_vec_idx * 2;
         if (t0 < args->n_row_tiles) {
@@ -1539,12 +1547,12 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     }
 
     if (kparams->logit_softcap == 0.0f) {
-        factx.scale = (__fp16) (kparams->scale * 1.44269504f);  // log2(e)
+        factx.scale = (__fp16) (kparams->scale * EXP_LOG2E_F);  // log2(e)
     } else {
         factx.scale = (__fp16) kparams->scale;
     }
     factx.max_bias      = kparams->max_bias;
-    factx.logit_softcap = (__fp16) (kparams->logit_softcap * 1.44269504f);
+    factx.logit_softcap = (__fp16) (kparams->logit_softcap * EXP_LOG2E_F);
 
     factx.n_head_log2 = kparams->n_head_log2;
     factx.m0          = kparams->m0;
@@ -1973,9 +1981,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                 // ---- Store O block ----
                 fa_phase_o_store(&factx, dst, o_tile_curr, q_start, kv_head, ib3, n_rows_g);
-
-
-
             }
         }
     }

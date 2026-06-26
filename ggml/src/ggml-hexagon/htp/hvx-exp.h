@@ -16,6 +16,7 @@
 #define EXP_COEFF_0 (0x3F000000)  // 0.5         = 1/(2!)
 #define EXP_LOGN2   (0x3F317218)  // ln(2)   = 0.6931471805
 #define EXP_LOG2E   (0x3FB8AA3B)  // log2(e) = 1/ln(2) = 1.4426950408
+#define EXP_LOG2E_F 1.44269504f
 #define EXP_ONE     (0x3f800000)  // 1.0
 #define EXP_RANGE_R (0x42B17218)  // ln(FLT_MAX) approx = 88.7228
 #define EXP_RANGE_L (0xC2B00000)  // -88.0 (approx log(FLT_MIN))

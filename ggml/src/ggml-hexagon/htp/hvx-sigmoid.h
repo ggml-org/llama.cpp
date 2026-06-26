@@ -142,7 +142,7 @@ static inline void hvx_tanh_f32_aa(uint8_t * restrict dst, const uint8_t * restr
 
 static inline HVX_Vector hvx_vec_fast_sigmoid_f16(HVX_Vector x_v) {
     const HVX_Vector v_one       = hvx_vec_splat_f16(1.0f);
-    const HVX_Vector v_neg_log2e = hvx_vec_splat_f16(-1.44269504f);
+    const HVX_Vector v_neg_log2e = hvx_vec_splat_f16(-EXP_LOG2E_F);
     const HVX_Vector em_mask     = Q6_Vh_vsplat_R(0x7FFF);
 
     // Compute absolute value of x_v
