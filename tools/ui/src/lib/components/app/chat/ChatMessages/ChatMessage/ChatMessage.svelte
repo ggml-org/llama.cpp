@@ -16,7 +16,7 @@
 	} from '$lib/components/app/chat';
 	import { DialogPromptAddNew, DialogPromptSync } from '$lib/components/app';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
-	import { deriveAgenticSections, hasContentDiff } from '$lib/utils';
+	import { deriveAgenticSections, hasContentDiff, parseMcpPromptId } from '$lib/utils';
 	import { promptsStore } from '$lib/stores/prompts.svelte';
 	import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraCustomPrompt } from '$lib/types';
 	import { ROUTES } from '$lib/constants/routes';
@@ -232,26 +232,20 @@
 
 		if (message.role === MessageRole.SYSTEM) {
 			// System messages created from an MCP prompt carry the server/prompt
-			// identity through their synthetic `mcp:<server>:<prompt>` promptId.
-			// Treat them as MCP-prompt messages so they render with the same styled
+			// identity through their synthetic `mcp:<server>:<prompt>` promptId;
+			// treat them as MCP-prompt messages so they render via the same
 			// surface instead of a plain system textarea.
 			const custom = customPromptExtra;
+			if (!custom) return null;
 
-			if (!custom?.promptId.startsWith('mcp:')) return null;
-
-			const stripped = custom.promptId.slice('mcp:'.length);
-			const sepIndex = stripped.indexOf(':');
-
-			if (sepIndex <= 0) return null;
-
-			const serverName = stripped.slice(0, sepIndex);
-			const promptName = stripped.slice(sepIndex + 1);
+			const parsed = parseMcpPromptId(custom.promptId);
+			if (!parsed) return null;
 
 			return {
 				type: AttachmentType.MCP_PROMPT,
-				name: promptName,
-				serverName,
-				promptName,
+				name: parsed.promptName,
+				serverName: parsed.serverName,
+				promptName: parsed.promptName,
 				content: message.content
 			};
 		}
