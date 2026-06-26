@@ -66,12 +66,13 @@ struct common_download_task {
     std::string local_path;
     std::function<void()> on_done;
     bool is_hf = false;
+    hf_cache::hf_file file; // stored hf_file for callbacks that need it after plan is destroyed
 
     common_download_task() = default;
     common_download_task(hf_cache::hf_file f,
             const common_download_opts & opts,
             std::function<void()> on_done = nullptr)
-        : opts(opts), url(f.url), local_path(f.local_path), on_done(on_done), is_hf(true) {}
+        : opts(opts), url(f.url), local_path(f.local_path), on_done(std::move(on_done)), is_hf(true), file(std::move(f)) {}
 };
 
 void common_download_run_tasks(const std::vector<common_download_task> & tasks);

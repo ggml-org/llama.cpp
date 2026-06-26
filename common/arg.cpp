@@ -8,7 +8,6 @@
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
-#include "preset.h"
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -286,17 +285,6 @@ static std::string clean_file_name(const std::string & fname) {
     return clean_fname;
 }
 
-struct handle_model_result {
-    bool found_mmproj = false;
-    common_params_model mmproj;
-
-    bool found_mtp = false;
-    common_params_model mtp;
-
-    bool found_preset = false;
-    std::string preset_path;
-};
-
 const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_F32,
     GGML_TYPE_F16,
@@ -384,7 +372,7 @@ bool common_models_handler_is_preset_repo(const common_models_handler & handler)
     return !handler.plan.preset.url.empty();
 }
 
-static std::vector<common_download_task> build_url_tasks(const common_params_model & model, common_download_opts opts) {
+static std::vector<common_download_task> build_url_tasks(const common_params_model & model, const common_download_opts & opts) {
     auto parts = common_download_get_all_parts(model.url);
     std::vector<common_download_task> tasks;
 
@@ -506,7 +494,8 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     if (!plan.mtp.local_path.empty()) {
         tasks.emplace_back(plan.mtp, opts, [&]() {
             // only fall back to the discovered MTP head when no draft was explicitly provided
-            if (params.speculative.draft.mparams.empty()) {
+            if (params.speculative.draft.mparams.path.empty() &&
+                params.speculative.draft.mparams.hf_repo.empty()) {
                 params.speculative.draft.mparams.path = hf_cache::finalize_file(plan.mtp);
             } else {
                 hf_cache::finalize_file(plan.mtp);
@@ -522,6 +511,43 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         });
     }
 
+    // handle sub-models that have their own HF repo specified (e.g. spec-draft-hf)
+    struct sub_model_hf_download {
+        hf_cache::hf_file file;
+        std::string & path_target; // reference to model.path to update
+    };
+    std::vector<sub_model_hf_download> sub_model_downloads;
+
+    auto add_sub_model_hf_tasks = [&](common_params_model & model) {
+        // If -m was used with -hf, treat the model "path" as the hf_file to download
+        if (model.hf_file.empty() && !model.path.empty()) {
+            model.hf_file = model.path;
+            model.path = "";
+        }
+
+        // sub-models: do not auto-discover mmproj/mtp siblings
+        common_download_opts sub_opts = opts;
+        sub_opts.download_mmproj = false;
+        sub_opts.download_mtp    = false;
+
+        auto sub_plan = common_download_get_hf_plan(model, sub_opts);
+        for (size_t i = 0; i < sub_plan.model_files.size(); ++i) {
+            tasks.emplace_back(sub_plan.model_files[i], sub_opts, nullptr);
+            if (i == 0) {
+                sub_model_downloads.push_back({sub_plan.model_files[i], model.path});
+            }
+        }
+    };
+    if (!params.speculative.draft.mparams.hf_repo.empty()) {
+        add_sub_model_hf_tasks(params.speculative.draft.mparams);
+    }
+    if (!params.mmproj.hf_repo.empty()) {
+        add_sub_model_hf_tasks(params.mmproj);
+    }
+    if (!params.vocoder.model.hf_repo.empty()) {
+        add_sub_model_hf_tasks(params.vocoder.model);
+    }
+
     // run all tasks in parallel
     if (!params.offline) {
         common_download_run_tasks(tasks);
@@ -532,6 +558,10 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         if (task.on_done) {
             task.on_done();
         }
+    }
+
+    for (auto & sub : sub_model_downloads) {
+        sub.path_target = hf_cache::finalize_file(sub.file);
     }
 }
 
