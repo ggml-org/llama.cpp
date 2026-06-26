@@ -64,10 +64,8 @@
 		// system-prompt request, even after the user submits the argument form.
 	}
 
-	// Prompts are eagerly fetched inside `MCPService.connect` and surfaced
-	// synchronously via `mcpStore.allPrompts`. Local `state($state)` is still
-	// needed for fields we mutate while the picker is open (selected prompt,
-	// arg form, etc.).
+	// Prompts come from `mcpStore.allPrompts` (eagerly populated on connect).
+	// Local `$state` is used for fields mutated while the picker is open.
 	let prompts = $derived(mcpStore.allPrompts);
 	let selectedPrompt = $state<MCPPromptInfo | null>(null);
 	let promptArgs = $state<Record<string, string>>({});
@@ -93,8 +91,7 @@
 	});
 
 	// Ensure MCP connections are established when the picker opens; this only
-	// kicks off initialization if it hasn't happened yet. Prompts become
-	// reactive automatically as they arrive from `mcpStore.allPrompts`.
+	// kicks off initialization if it hasn't happened yet.
 	$effect(() => {
 		if (isOpen) {
 			void mcpStore.ensureInitialized(conversationsStore.getAllMcpServerOverrides());
@@ -159,8 +156,8 @@
 		);
 		const argsToPass = Object.keys(nonEmptyArgs).length > 0 ? nonEmptyArgs : undefined;
 
-		// Submenu flow sets `pendingPromptKey` and posts the result as a system
-		// prompt; skipped here so we never leave a placeholder attachment behind.
+		// Submenu flow posts the result as a system prompt via `onMcpPromptSystemExecute`
+		// instead of a placeholder attachment.
 		const isSystemMode = !!pendingPromptKey;
 
 		if (!isSystemMode) {

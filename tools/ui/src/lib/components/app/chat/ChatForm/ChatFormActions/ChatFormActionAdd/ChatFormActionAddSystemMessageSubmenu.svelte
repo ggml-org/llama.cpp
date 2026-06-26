@@ -16,9 +16,6 @@
 		onSystemPromptClick?: () => void;
 		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
 		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
-		// Kick off MCP initialization when the wrapping dropdown opens so prompts
-		// are available by the time the user hovers into this submenu. The
-		// result comes from `mcpStore.allPrompts`, no fetch happens here.
 		preloadOnOpen?: boolean;
 	}
 
@@ -31,9 +28,6 @@
 
 	let prompts = $derived(promptsStore.getPrompts());
 
-	// Single search field shared by both lists below. Matching is
-	// case-insensitive across title/name, content/description, and (for MCP)
-	// the server label.
 	let searchQuery = $state('');
 
 	let filteredLibraryPrompts = $derived.by(() => {
@@ -46,10 +40,6 @@
 
 	let subOpen = $state(false);
 
-	// Trigger MCP connection establishment as the wrapping dropdown opens.
-	// Prompts are pulled eagerly inside `MCPService.connect` and surfaced
-	// synchronously via `mcpStore.allPrompts`, so the submenu renders
-	// without a fetch on open.
 	$effect(() => {
 		if (preloadOnOpen) {
 			void mcpStore.ensureInitialized(conversationsStore.getAllMcpServerOverrides());
@@ -108,9 +98,6 @@
 	}
 
 	async function handleMcpPromptClick(entry: (typeof filteredMcpPrompts)[number]) {
-		// Prompts with arguments need a picker detour (for the argument form);
-		// prompts without arguments post directly so the conversation gets the
-		// system prompt instantly, like the library prompt branch above.
 		if (entry.prompt.arguments?.length) {
 			onMcpPromptClick?.(entry.prompt);
 			return;
