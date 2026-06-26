@@ -929,7 +929,12 @@ static void flash_attn_tile(const char *  Q,
         }
     }
 
-    if constexpr (type_K) {
+    // BUG FIX: this gate must test turbo-ness, not enum truthiness. `if constexpr (type_K)`
+    // is true for every non-F32 type (GGML_TYPE_F16==1, GGML_TYPE_Q8_0==8), so the f16/q8_0
+    // TILE prefill kernel was applying the TurboQuant WHT rotation to Q while K was NOT
+    // rotated -> attention scores in a mismatched basis -> garbage prefill. Mirror the VEC
+    // kernel's K_is_turbo gate.
+    if constexpr (type_K == GGML_TYPE_TURBO2_0 || type_K == GGML_TYPE_TURBO3_0 || type_K == GGML_TYPE_TURBO4_0) {
         for (int jc = 0; jc < ncols; ++jc) {
             item_ct1.barrier(sycl::access::fence_space::local_space);
             dfloat val = 0.0f;
