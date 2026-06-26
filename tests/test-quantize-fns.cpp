@@ -102,32 +102,40 @@ static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_tr
     return fabsf(result - dot_ref) / test_size;
 }
 
-int main(int argc, char * argv[]) {
-    bool verbose = false;
-    const size_t test_size = 32 * 128;
+static int test_vec_dot_f32(bool verbose) {
+    const auto * f32 = ggml_get_type_traits_cpu(GGML_TYPE_F32);
+    int num_failed = 0;
+    for (int n : {1, 2, 3, 5, 7, 8, 15, 16, 17, 31, 33, 63, 67, 127, 129, 193, 255, 1023}) {
+        std::vector<float> a(n);
+        std::vector<float> b(n);
+        generate_data(0.0, n, a.data());
+        generate_data(1.0, n, b.data());
 
-    std::string arg;
-    for (int i = 1; i < argc; i++) {
-        arg = argv[i];
+        float result = 0.0f;
+        f32->vec_dot(n, &result, 0, a.data(), 0, b.data(), 0, 1);
+        const float ref = dot_product(a.data(), b.data(), n);
+        const float error = fabsf(result - ref) / n;
 
-        if (arg == "-v") {
-            verbose = true;
-        } else {
-            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
-            return 1;
+        const bool failed = !(error < MAX_QUANTIZATION_REFERENCE_ERROR);
+        num_failed += failed;
+        if (failed || verbose) {
+            printf(" f32 vec_dot n=%4d:                 %s (ref=%f got=%f err=%f)\n",
+                   n, RESULT_STR[failed], ref, result, error);
         }
     }
+    return num_failed;
+}
+
+static int test_vec_dot_q(bool verbose) {
+    int num_failed = 0;
+
+    const size_t test_size = 32 * 128;
 
     std::vector<float> test_data(test_size);
     std::vector<float> test_data2(test_size);
 
     generate_data(0.0, test_data.size(), test_data.data());
     generate_data(1.0, test_data2.size(), test_data2.data());
-
-    ggml_cpu_init();
-
-    int num_failed = 0;
-    bool failed = false;
 
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
         ggml_type type = (ggml_type) i;
@@ -156,7 +164,7 @@ int main(int argc, char * argv[]) {
                 type == GGML_TYPE_IQ3_S   ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS :
                 type == GGML_TYPE_IQ3_XXS ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS_XXS :
                 type == GGML_TYPE_NVFP4   ? MAX_QUANTIZATION_TOTAL_ERROR_FP4 : MAX_QUANTIZATION_TOTAL_ERROR;
-            failed = !(total_error < max_quantization_error);
+            bool failed = !(total_error < max_quantization_error);
             num_failed += failed;
             if (failed || verbose) {
                 printf("%5s absolute quantization error:    %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], total_error);
@@ -171,15 +179,15 @@ int main(int argc, char * argv[]) {
 
             const float vec_dot_error = dot_product_error(qfns, qfns_cpu, test_size, test_data.data(), test_data2.data());
             const float max_allowed_error = type == GGML_TYPE_Q2_K || type == GGML_TYPE_IQ2_XS || type == GGML_TYPE_IQ2_XXS ||
-                                            type == GGML_TYPE_IQ3_XXS || type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ2_S
-                                          ? MAX_DOT_PRODUCT_ERROR_LOWBIT
-                                          : type == GGML_TYPE_Q1_0
-                                          ? MAX_DOT_PRODUCT_ERROR_BINARY
-                                          : type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0
-                                          ? MAX_DOT_PRODUCT_ERROR_TERNARY
-                                          : type == GGML_TYPE_NVFP4
-                                          ? MAX_DOT_PRODUCT_ERROR_FP4
-                                          : MAX_DOT_PRODUCT_ERROR;
+                type == GGML_TYPE_IQ3_XXS || type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ2_S
+                ? MAX_DOT_PRODUCT_ERROR_LOWBIT
+                : type == GGML_TYPE_Q1_0
+                ? MAX_DOT_PRODUCT_ERROR_BINARY
+                : type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0
+                ? MAX_DOT_PRODUCT_ERROR_TERNARY
+                : type == GGML_TYPE_NVFP4
+                ? MAX_DOT_PRODUCT_ERROR_FP4
+                : MAX_DOT_PRODUCT_ERROR;
             failed = !(vec_dot_error < max_allowed_error);
             num_failed += failed;
             if (failed || verbose) {
@@ -187,6 +195,31 @@ int main(int argc, char * argv[]) {
             }
         }
     }
+
+    return num_failed;
+}
+
+int main(int argc, char * argv[]) {
+    bool verbose = false;
+
+    std::string arg;
+    for (int i = 1; i < argc; i++) {
+        arg = argv[i];
+
+        if (arg == "-v") {
+            verbose = true;
+        } else {
+            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
+            return 1;
+        }
+    }
+
+    ggml_cpu_init();
+
+    int num_failed = 0;
+
+    num_failed += test_vec_dot_f32(verbose);
+    num_failed += test_vec_dot_q(verbose);
 
     if (num_failed || verbose) {
         printf("%d tests failed\n", num_failed);
