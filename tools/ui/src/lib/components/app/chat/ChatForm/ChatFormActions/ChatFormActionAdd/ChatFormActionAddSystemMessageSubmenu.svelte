@@ -5,7 +5,7 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpLogo } from '$lib/components/app';
-	import SearchInputMini from '$lib/components/app/forms/SearchInputMini.svelte';
+	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { ContentPartType } from '$lib/enums';
 	import { PROMPT_CONTENT_SEPARATOR } from '$lib/constants';
@@ -159,8 +159,9 @@
 	<DropdownMenu.SubContent class="w-72">
 		{#if prompts.length > 0 || mcpStore.allPrompts.length > 0}
 			<div class="mb-1.5">
-				<SearchInputMini
+				<SearchInput
 					bind:value={searchQuery}
+					variant="sm"
 					placeholder="Search by name, content, or server..."
 				/>
 			</div>

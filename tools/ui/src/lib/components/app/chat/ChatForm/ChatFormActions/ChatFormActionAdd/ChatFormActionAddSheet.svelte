@@ -22,10 +22,11 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { promptsStore } from '$lib/stores/prompts.svelte';
 	import { McpLogo } from '$lib/components/app';
-	import SearchInputMini from '$lib/components/app/forms/SearchInputMini.svelte';
+	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import { ContentPartType } from '$lib/enums';
 	import { AttachmentAction } from '$lib/enums/attachment.enums';
 	import type { MCPPromptInfo, PromptMessage } from '$lib/types';
+	import { buildMcpPromptId } from '$lib/utils';
 	import { SvelteMap } from 'svelte/reactivity';
 
 	interface Props {
@@ -284,8 +285,9 @@
 						<div class="flex flex-col gap-0.5 pl-4">
 							{#if prompts.length > 0 || mcpStore.allPrompts.length > 0}
 								<div class="mb-1.5 mt-1">
-									<SearchInputMini
+									<SearchInput
 										bind:value={searchQuery}
+										variant="sm"
 										placeholder="Search by name, content, or server..."
 									/>
 								</div>
