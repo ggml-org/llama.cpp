@@ -1896,7 +1896,7 @@ void server_models_routes::init_routes() {
         if (!from.empty()) {
             child_path += "?from=" + from;
         }
-        SRV_INF("proxying stream resume to model %s on port %d, path=%s\n",
+        SRV_DBG("proxying stream resume to model %s on port %d, path=%s\n",
                 owner->name.c_str(), owner->port, child_path.c_str());
         auto proxy = std::make_unique<server_http_proxy>(
                 "GET",
