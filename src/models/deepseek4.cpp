@@ -288,9 +288,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
     ggml_tensor * pre = dsv4_view_2d(ctx0, mixes, hc, nt, 0);
     pre = dsv4_hc_affine(ctx0, pre, scale_pre, base_pre);
     pre = ggml_sigmoid(ctx0, pre);
-    ggml_tensor * eps = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
-    eps = ggml_fill(ctx0, eps, hparams.dsv4_hc_eps);
-    pre = ggml_add(ctx0, pre, eps);
+    pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
     cb(pre, "hc_pre", il);
 
     *post = dsv4_view_2d(ctx0, mixes, hc, nt, hc);
@@ -353,9 +351,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_head(
 
     ggml_tensor * pre = dsv4_hc_affine(ctx0, mixes, hc_scale, hc_base);
     pre = ggml_sigmoid(ctx0, pre);
-    ggml_tensor * eps = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
-    eps = ggml_fill(ctx0, eps, hparams.dsv4_hc_eps);
-    pre = ggml_add(ctx0, pre, eps);
+    pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
     cb(pre, "hc_head_pre", -1);
 
     return build_hc_weighted_sum(x, pre);
