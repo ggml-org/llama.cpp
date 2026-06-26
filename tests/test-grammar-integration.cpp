@@ -1476,6 +1476,14 @@ static void test_json_schema() {
     );
 }
 
+static void test_token_string_filter_failure_modes() {
+    fprintf(stderr, "Testing <{TEXT}> failure modes (no vocab in this test binary)\n");
+    assert(test_build_grammar_fails("root ::= <{Hello}>"));   // null vocab
+    assert(test_build_grammar_fails("root ::= <{abc"));       // unterminated
+    assert(test_build_grammar_fails("root ::= <{abc}"));      // missing '>'
+    assert(test_build_grammar_fails("root ::= <{a}b>"));      // characters between '}' and '>'
+}
+
 int main() {
     fprintf(stdout, "Running grammar integration tests...\n");
     test_simple_grammar();
@@ -1488,6 +1496,7 @@ int main() {
     test_failure_missing_root_symbol();
     test_custom_root_symbol_check();
     test_json_schema();
+    test_token_string_filter_failure_modes();
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }
