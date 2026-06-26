@@ -1,0 +1,38 @@
+test-results
+node_modules
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+dev-dist
+dist
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# PWA Artifacts
+apple-splash-*.png
+apple-touch-icon-*.png
+maskable-icon-*.png
+pwa-*.png
+static/favicon*
+
+# Storybook
+*storybook.log
+storybook-static
+*.code-workspace

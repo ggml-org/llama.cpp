@@ -1,0 +1,9 @@
+{
+  "name": "sha1",
+  "version": "0.0.1",
+  "repo": "clibs/sha1",
+  "description": "sha1 hash algorithm",
+  "keywords": ["sha1", "hash"],
+  "license": "public domain",
+  "src": ["sha1.c", "sha1.h"]
+}

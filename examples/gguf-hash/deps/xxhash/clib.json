@@ -1,0 +1,12 @@
+{
+  "name": "xxhash",
+  "version": "0.8.2",
+  "repo": "Cyan4973/xxhash",
+  "description": "Extremely fast non-cryptographic hash algorithm",
+  "keywords": ["xxhash", "hashing"],
+  "license": "BSD-2-Clause",
+  "src": [
+    "xxhash.c",
+    "xxhash.h"
+  ]
+}

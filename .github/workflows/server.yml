@@ -1,0 +1,181 @@
+name: Server
+
+on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      sha:
+        description: 'Commit SHA1 to build'
+        required: false
+        type: string
+      slow_tests:
+        description: 'Run slow tests'
+        required: true
+        type: boolean
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/server.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/server.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
+
+env:
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_VERBOSITY: 10
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install \
+            build-essential \
+            xxd \
+            git \
+            cmake \
+            curl \
+            wget \
+            language-pack-en \
+            libssl-dev
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: server-ubuntu-24.04-arm
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DGGML_SCHED_NO_REALLOC=ON
+          cmake --build build --config Release -j $(nproc) --target llama-server
+
+      - name: Python setup
+        id: setup_python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          pip-install: -r tools/server/tests/requirements.txt
+
+      - name: Tests
+        id: server_integration_tests
+        run: |
+          cd tools/server/tests
+          pytest -v -x -m "not slow"
+
+      - name: Slow tests
+        id: server_integration_tests_slow
+        if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
+        run: |
+          cd tools/server/tests
+          SLOW_TESTS=1 pytest -v -x
+
+      - name: Tests (Backend sampling)
+        id: server_integration_tests_backend_sampling
+        run: |
+          cd tools/server/tests
+          export LLAMA_ARG_BACKEND_SAMPLING=1
+          pytest -v -x -m "not slow"
+
+      - name: Slow tests (Backend sampling)
+        id: server_integration_tests_slow_backend_sampling
+        if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
+        run: |
+          cd tools/server/tests
+          export LLAMA_ARG_BACKEND_SAMPLING=1
+          SLOW_TESTS=1 pytest -v -x
+
+  windows:
+    runs-on: windows-2025
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: server-windows-2025-x64
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        run: |
+          cmake -B build -G "Ninja Multi-Config" ^
+            -DCMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_SCHED_NO_REALLOC=ON
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS% --target llama-server
+
+      - name: Python setup
+        id: setup_python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          pip-install: -r tools/server/tests/requirements.txt
+
+      - name: Tests
+        id: server_integration_tests
+        run: |
+          cd tools/server/tests
+          $env:PYTHONIOENCODING = ":replace"
+          pytest -v -x -m "not slow"
+
+      - name: Slow tests
+        id: server_integration_tests_slow
+        if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
+        run: |
+          cd tools/server/tests
+          $env:SLOW_TESTS = "1"
+          pytest -v -x
