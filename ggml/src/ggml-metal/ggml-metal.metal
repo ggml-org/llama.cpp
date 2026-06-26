@@ -2914,8 +2914,10 @@ kernel void kernel_argmax_f32(
     }
 
     // find the argmax value in the block
+    // keep the smallest index on ties: non-max threads get a sentinel so simd_min ignores them
+    constexpr int32_t ARGMAX_SENTINEL = numeric_limits<int32_t>::max();
     float max_val = simd_max(lmax);
-    int32_t arg_val = simd_max(select(-1, larg, lmax == max_val));
+    int32_t arg_val = simd_min(select(ARGMAX_SENTINEL, larg, lmax == max_val));
 
     device int32_t * dst_i32 = (device int32_t *) dst;
 
@@ -2941,7 +2943,7 @@ kernel void kernel_argmax_f32(
         arg_val = shared_argmax[tiisg];
 
         float max_val_reduced   = simd_max(max_val);
-        int32_t arg_val_reduced = simd_max(select(-1, arg_val, max_val == max_val_reduced));
+        int32_t arg_val_reduced = simd_min(select(ARGMAX_SENTINEL, arg_val, max_val == max_val_reduced));
 
         dst_i32[tgpig] = arg_val_reduced;
 
