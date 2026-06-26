@@ -4,11 +4,11 @@
 
 	interface Props {
 		class?: string;
-		instructionId: string;
+		promptId: string;
 		title: string;
 	}
 
-	let { class: className = '', instructionId, title }: Props = $props();
+	let { class: className = '', promptId, title }: Props = $props();
 </script>
 
 <div
@@ -29,6 +29,6 @@
 
 	<div class="flex gap-2">
 		<span class="text-xs text-muted-foreground">Custom Prompt</span>
-		<span class="text-xs text-muted-foreground">{instructionId.slice(0, 8)}</span>
+		<span class="text-xs text-muted-foreground">{promptId.slice(0, 8)}</span>
 	</div>
 </div>

@@ -97,9 +97,9 @@ export interface DatabaseMessageExtraMcpResource {
 	mimeType?: string;
 }
 
-export interface DatabaseMessageExtraCustomInstruction {
-	type: AttachmentType.CUSTOM_INSTRUCTION;
-	instructionId: string;
+export interface DatabaseMessageExtraCustomPrompt {
+	type: AttachmentType.CUSTOM_PROMPT;
+	promptId: string;
 	title: string;
 }
 
@@ -111,7 +111,7 @@ export type DatabaseMessageExtra =
 	| DatabaseMessageExtraPdfFile
 	| DatabaseMessageExtraMcpPrompt
 	| DatabaseMessageExtraMcpResource
-	| DatabaseMessageExtraCustomInstruction
+	| DatabaseMessageExtraCustomPrompt
 	| DatabaseMessageExtraLegacyContext;
 
 export interface DatabaseMessage {

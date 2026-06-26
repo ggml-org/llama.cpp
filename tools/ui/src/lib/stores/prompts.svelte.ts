@@ -1,6 +1,5 @@
 import { browser } from '$app/environment';
 import { DatabaseService } from '$lib/services/database.service';
-import { INSTRUCTIONS_LOCALSTORAGE_KEY, PROMPTS_LOCALSTORAGE_KEY } from '$lib/constants/storage';
 
 export type Prompt = DatabasePrompt;
 
@@ -15,45 +14,9 @@ class PromptsStore {
 	async #loadFromDb(): Promise<void> {
 		if (!browser) return;
 		try {
-			const items = await DatabaseService.getAllPrompts();
-			this.#items = await this.#migrateFromLocalStorage(items);
+			this.#items = await DatabaseService.getAllPrompts();
 		} catch (error) {
 			console.warn('[PromptsStore] Failed to load from IndexedDB:', error);
-		}
-	}
-
-	/** One-time migration from localStorage to IndexedDB (preserves IDs) */
-	async #migrateFromLocalStorage(existing: Prompt[]): Promise<Prompt[]> {
-		if (!browser) return existing;
-		try {
-			const raw =
-				localStorage.getItem(PROMPTS_LOCALSTORAGE_KEY) ??
-				localStorage.getItem(INSTRUCTIONS_LOCALSTORAGE_KEY);
-			if (!raw) return existing;
-
-			const parsed = JSON.parse(raw);
-			if (!Array.isArray(parsed)) return existing;
-
-			const existingIds = new Set(existing.map((i) => i.id));
-			const toMigrate = parsed.filter(
-				(i): i is Prompt =>
-					i &&
-					typeof i.id === 'string' &&
-					typeof i.title === 'string' &&
-					typeof i.content === 'string' &&
-					typeof i.lastModified === 'number' &&
-					!existingIds.has(i.id)
-			);
-
-			for (const prompt of toMigrate) {
-				await DatabaseService.addPrompt(prompt);
-			}
-
-			localStorage.removeItem(PROMPTS_LOCALSTORAGE_KEY);
-			localStorage.removeItem(INSTRUCTIONS_LOCALSTORAGE_KEY);
-			return [...existing, ...toMigrate];
-		} catch {
-			return existing;
 		}
 	}
 

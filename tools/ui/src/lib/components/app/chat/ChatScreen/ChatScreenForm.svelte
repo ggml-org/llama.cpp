@@ -16,7 +16,7 @@
 		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
 		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
-		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
+		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
 		uploadedFiles?: ChatUploadedFile[];
 	}
 

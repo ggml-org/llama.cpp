@@ -17,31 +17,12 @@ class LlamaUiDatabase extends Dexie {
 			[IDXDB_TABLES.conversations]: IDXDB_STORE_SCHEMAS.conversations,
 			[IDXDB_TABLES.messages]: IDXDB_STORE_SCHEMAS.messages
 		});
-		// v2: add instructions store
+		// v2: add prompts store
 		this.version(2).stores({
 			[IDXDB_TABLES.conversations]: IDXDB_STORE_SCHEMAS.conversations,
 			[IDXDB_TABLES.messages]: IDXDB_STORE_SCHEMAS.messages,
-			instructions: 'id, lastModified'
+			[IDXDB_TABLES.prompts]: IDXDB_STORE_SCHEMAS.prompts
 		});
-		// v3: rename instructions store to prompts
-		this.version(3)
-			.stores({
-				[IDXDB_TABLES.conversations]: IDXDB_STORE_SCHEMAS.conversations,
-				[IDXDB_TABLES.messages]: IDXDB_STORE_SCHEMAS.messages,
-				[IDXDB_TABLES.prompts]: IDXDB_STORE_SCHEMAS.prompts
-			})
-			.upgrade(async (trans) => {
-				try {
-					const oldTable = trans.db.table('instructions');
-					const newTable = trans.table(IDXDB_TABLES.prompts);
-					const items = await oldTable.toArray();
-					if (items.length > 0) {
-						await newTable.bulkAdd(items);
-					}
-				} catch (error) {
-					console.warn('[Database] Failed to migrate instructions to prompts:', error);
-				}
-			});
 	}
 }
 
