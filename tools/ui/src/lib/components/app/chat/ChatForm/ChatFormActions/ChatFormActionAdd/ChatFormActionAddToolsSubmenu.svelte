@@ -18,13 +18,19 @@
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 	import { getContext } from 'svelte';
 
+	interface Props {
+		open?: boolean;
+	}
+
+	let { open = $bindable(false) }: Props = $props();
+
 	const toolsPanel = useToolsPanel();
 	const hasMcpServersAvailable = $derived(mcpStore.getServersSorted().length > 0);
 	const mcpAddDialog = getContext<{ open: () => void }>(CONTEXT_KEY_MCP_ADD_SERVER_DIALOG);
 </script>
 
-<DropdownMenu.Sub onOpenChange={(open) => open && toolsPanel.handleOpen()}>
-	<DropdownMenu.SubTrigger data-submenu="tools" class="flex cursor-pointer items-center gap-2">
+<DropdownMenu.Sub bind:open onOpenChange={(isOpen) => isOpen && toolsPanel.handleOpen()}>
+	<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 		<PencilRuler class="h-4 w-4" />
 
 		<span>Tools</span>
