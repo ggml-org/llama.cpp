@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://infcore.local/schema/gateway.schema.json",
+  "title": "infcore gateway config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["server", "models"],
+  "properties": {
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "port"],
+      "properties": {
+        "host": { "type": "string", "default": "127.0.0.1" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "metrics_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "max_concurrent_requests": { "type": "integer", "minimum": 1, "default": 8 },
+        "request_timeout_ms": { "type": "integer", "minimum": 0, "default": 120000 }
+      }
+    },
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/model" }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "authn": { "enum": ["api_key", "mtls", "oidc"], "default": "api_key" },
+        "api_keys": { "type": "array", "items": { "type": "string" } },
+        "rbac_enabled": { "type": "boolean", "default": true },
+        "audit_sink": { "enum": ["file", "postgres"], "default": "file" }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metrics_enabled": { "type": "boolean", "default": true },
+        "metrics_path": { "type": "string", "default": "/metrics" }
+      }
+    },
+    "offline": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Жёсткий offline-режим: запрет любых исходящих соединений в рантайме.",
+      "properties": {
+        "enforce_no_egress": { "type": "boolean", "default": true }
+      }
+    }
+  },
+  "$defs": {
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logical_name", "gguf_path"],
+      "properties": {
+        "logical_name": { "type": "string", "pattern": "^[a-z0-9._-]+$" },
+        "gguf_path": { "type": "string", "description": "Локальный путь к GGUF (offline)" },
+        "arch": { "type": "string", "description": "general.architecture из метаданных GGUF" },
+        "modality": { "enum": ["text", "embedding", "vision", "audio"], "default": "text" },
+        "enabled": { "type": "boolean", "default": true },
+        "n_ctx": { "type": "integer", "minimum": 512, "default": 8192 },
+        "n_gpu_layers": { "type": "integer", "minimum": 0, "default": 0 },
+        "mmproj_path": { "type": "string", "description": "Проектор для vision/audio (mtmd), если применимо" }
+      }
+    }
+  }
+}

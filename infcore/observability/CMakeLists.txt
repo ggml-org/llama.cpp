@@ -1,0 +1,2 @@
+add_library(infcore_observability STATIC metrics.cpp)
+target_include_directories(infcore_observability PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

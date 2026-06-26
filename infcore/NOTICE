@@ -1,0 +1,15 @@
+infcore
+Copyright (c) 2026 <Организация>. Корпоративная лицензия (см. infcore/LICENSE).
+
+==============================================================================
+Продукт СОЗДАН НА БАЗЕ ПО с открытым исходным кодом и НЕ скрывает происхождение.
+==============================================================================
+
+Движок (весь форк вне каталога infcore/) — используется по лицензии:
+  llama.cpp / ggml — Copyright (c) 2023-2026 The ggml authors — MIT
+  Источник: https://github.com/ggml-org/llama.cpp
+  Зафиксированный коммит: см. UPSTREAM_COMMIT в корне форка.
+
+Бандл-зависимости движка (vendor/): cpp-httplib (MIT), nlohmann/json (MIT),
+stb (MIT/Public Domain), miniaudio (MIT/Public Domain), sheredom (Unlicense).
+Полные тексты: infcore/THIRD_PARTY_LICENSES/ и sbom.cdx.json.

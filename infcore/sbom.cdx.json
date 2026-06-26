@@ -1,0 +1,16 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": { "component": { "type": "application", "name": "infcore", "version": "0.1.0" } },
+  "components": [
+    { "type": "library", "name": "llama.cpp",
+      "version": "e8ecce53b872257e173d9d491a57e7a09c7cd8cb",
+      "licenses": [ { "license": { "id": "MIT" } } ],
+      "purl": "pkg:github/ggml-org/llama.cpp@e8ecce53b872257e173d9d491a57e7a09c7cd8cb" },
+    { "type": "library", "name": "cpp-httplib", "licenses": [ { "license": { "id": "MIT" } } ],
+      "purl": "pkg:github/yhirose/cpp-httplib" },
+    { "type": "library", "name": "nlohmann-json", "licenses": [ { "license": { "id": "MIT" } } ],
+      "purl": "pkg:github/nlohmann/json" }
+  ]
+}

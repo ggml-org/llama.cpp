@@ -1,0 +1,8 @@
+upstream:       https://github.com/ggml-org/llama.cpp
+fork:           https://github.com/Nasferatuss/llama.cpp
+branch:         infcore (своё), отслеживает upstream master/release-теги
+base_commit:    e8ecce53b872257e173d9d491a57e7a09c7cd8cb
+base_date:      2026-06-25
+license:        MIT (The ggml authors) — см. ./LICENSE
+# Модель «обернуть, не трогая ядро»: файлы вне infcore/ не редактируются,
+# обновление движка — слиянием release-тега (infcore/scripts/update-upstream.sh).

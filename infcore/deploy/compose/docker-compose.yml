@@ -1,0 +1,31 @@
+# infcore — локальный стек offline-контура. Образы из внутреннего реестра.
+# Сеть internal: true — без выхода в интернет (offline-инвариант).
+services:
+  gateway:
+    image: registry.internal/infcore/gateway:0.1.0
+    build:
+      context: ../../..          # корень форка
+      dockerfile: infcore/deploy/docker/Dockerfile
+    volumes:
+      - /opt/infcore/models:/opt/infcore/models:ro
+      - ./gateway.yaml:/opt/infcore/config/gateway.yaml:ro
+    ports: ["127.0.0.1:8080:8080", "127.0.0.1:9090:9090"]
+    networks: [internal]
+    deploy:
+      resources:
+        reservations:
+          devices: [{ capabilities: [gpu] }]   # NVIDIA при GGML_CUDA=ON
+  angie:
+    image: registry.internal/angie/angie:latest     # reverse-proxy РФ-контура
+    depends_on: [gateway]
+    ports: ["127.0.0.1:443:443"]
+    networks: [internal]
+  victoriametrics:
+    image: registry.internal/victoriametrics/victoria-metrics:latest
+    networks: [internal]
+  postgres:
+    image: registry.internal/postgrespro/std:16      # Postgres Pro + pgvector (RAG/аудит)
+    environment: { POSTGRES_DB: infcore }
+    networks: [internal]
+networks:
+  internal: { driver: bridge, internal: true }

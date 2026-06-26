@@ -1,0 +1,37 @@
+# infcore gateway — пример конфигурации (валидируется config/schema/gateway.schema.json).
+# Формат JSON (валиден и как YAML). Всё offline: веса локальные, egress запрещён.
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "metrics_port": 9090,
+    "max_concurrent_requests": 8,
+    "request_timeout_ms": 120000
+  },
+  "security": {
+    "authn": "api_key",
+    "api_keys": ["change-me"],
+    "rbac_enabled": true,
+    "audit_sink": "file"
+  },
+  "observability": { "metrics_enabled": true, "metrics_path": "/metrics" },
+  "offline": { "enforce_no_egress": true },
+  "models": [
+    {
+      "logical_name": "qwen3-moe-a3b",
+      "gguf_path": "/opt/infcore/models/qwen3-moe-a3b-Q4_K_M.gguf",
+      "arch": "qwen3moe",
+      "modality": "text",
+      "enabled": true,
+      "n_ctx": 8192,
+      "n_gpu_layers": 999
+    },
+    {
+      "logical_name": "bge-m3-embed",
+      "gguf_path": "/opt/infcore/models/bge-m3-Q8_0.gguf",
+      "modality": "embedding",
+      "enabled": false,
+      "n_ctx": 8192
+    }
+  ]
+}

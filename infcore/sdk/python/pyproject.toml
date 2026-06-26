@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "infcore-sdk"
+version = "0.1.0"
+description = "Клиентский SDK для внутреннего infcore gateway (offline LLM)"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+dependencies = []   # без внешних зависимостей; при необходимости — из внутреннего PyPI-зеркала
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["infcore*"]
