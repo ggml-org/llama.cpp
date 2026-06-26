@@ -854,8 +854,8 @@ class ChatStore {
 
 	async addSystemPromptWithContent(
 		content: string,
-		instructionId?: string,
-		instructionTitle?: string
+		promptId?: string,
+		promptTitle?: string
 	): Promise<void> {
 		const trimmedContent = content.trim();
 		if (!trimmedContent) return;
@@ -884,13 +884,13 @@ class ChatStore {
 			const am = conversationsStore.activeMessages;
 			const firstActiveMessage = am.find((m) => m.parent === rootId);
 
-			// Create CUSTOM_INSTRUCTION extra if instruction ID is provided
-			const extra: DatabaseMessageExtra[] | undefined = instructionId
+			// Create CUSTOM_PROMPT extra if prompt ID is provided
+			const extra: DatabaseMessageExtra[] | undefined = promptId
 				? [
 						{
-							type: AttachmentType.CUSTOM_INSTRUCTION,
-							instructionId,
-							title: instructionTitle ?? ''
+							type: AttachmentType.CUSTOM_PROMPT,
+							promptId,
+							title: promptTitle ?? ''
 						}
 					]
 				: undefined;
@@ -924,8 +924,8 @@ class ChatStore {
 					});
 			}
 			conversationsStore.activeMessages.unshift(systemMessage);
-			// Only enter edit mode for plain text inputs, not for saved custom instructions
-			if (!instructionId) {
+			// Only enter edit mode for plain text inputs, not for saved custom prompts
+			if (!promptId) {
 				this.pendingEditMessageId = systemMessage.id;
 			}
 			conversationsStore.updateConversationTimestamp();

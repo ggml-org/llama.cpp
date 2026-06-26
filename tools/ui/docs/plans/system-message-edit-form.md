@@ -4,8 +4,8 @@
 
 Extend the polished `ChatMessageEditForm.svelte` (currently used for user/assistant messages) so it also handles system messages. Today, system messages use a simpler inline edit UI inside `ChatMessageSystem.svelte` — basic textarea + "Add to Prompts library" checkbox + Cancel/Save. We want the same rich `ChatForm`-based editing experience for three "library" system-message cases:
 
-1. Started from `/prompts` route (clicking "New chat" on a `PromptsCard` creates a conversation with a system message that already has a `CUSTOM_INSTRUCTION` extra pointing at the library prompt).
-2. Existing library-referenced system message inside a conversation (message has a `CUSTOM_INSTRUCTION` extra whose referenced prompt still exists in `promptsStore`).
+1. Started from `/prompts` route (clicking "New chat" on a `PromptsCard` creates a conversation with a system message that already has a `CUSTOM_PROMPT` extra pointing at the library prompt).
+2. Existing library-referenced system message inside a conversation (message has a `CUSTOM_PROMPT` extra whose referenced prompt still exists in `promptsStore`).
 3. Fresh non-library system prompt used inside the conversation (plain system message that the user authored in-chat, no placeholder content, no `mcp:` instruction).
 
 MCP-derived system messages continue to flow through `ChatMessageMcpPrompt` (which already uses `ChatMessageEditForm`). Placeholder content (`SYSTEM_MESSAGE_PLACEHOLDER`) keeps the existing inline UI so we can keep the "Add to Prompts library" CTA visually prominent on first edit.
@@ -32,14 +32,14 @@ Add to `MessageEditState`:
 ```ts
 readonly isSystemMessage: boolean;       // true when messageRole === SYSTEM
 readonly isSystemPlaceholder: boolean;   // true when SYSTEM content === SYSTEM_MESSAGE_PLACEHOLDER
-readonly isLibraryReferenced: boolean;   // true when message has CUSTOM_INSTRUCTION extra
-                                        // whose instructionId is non-mcp AND the prompt still exists
+readonly isLibraryReferenced: boolean;   // true when message has CUSTOM_PROMPT extra
+                                        // whose promptId is non-mcp AND the prompt still exists
 readonly canAddToLibrary: boolean;       // true when user has not yet associated this with the library
                                         // i.e. !isLibraryReferenced && !placeholder
 readonly libraryReferencedPrompt?: Prompt; // the Prompt object when isLibraryReferenced
 ```
 
-Compute these in `ChatMessage.svelte`'s context `get` accessors using `customInstructionExtra`, `referencedPrompt`, and `message.content === SYSTEM_MESSAGE_PLACEHOLDER`.
+Compute these in `ChatMessage.svelte`'s context `get` accessors using `customPromptExtra`, `referencedPrompt`, and `message.content === SYSTEM_MESSAGE_PLACEHOLDER`.
 
 ### 2. `ChatMessageEditForm.svelte` — support system mode
 
@@ -67,7 +67,7 @@ Compute these in `ChatMessage.svelte`'s context `get` accessors using `customIns
 - When `editCtx.isEditing`:
   - If `editCtx.isSystemPlaceholder` -> still try to use `<ChatMessageEditForm />` for consistency (placeholder uses the same form; the "Add to library" toggle will be visible because `canAddToLibrary` is true).
   - Else -> `<ChatMessageEditForm />`.
-- Keep all existing display logic (dashed bubble, expand/collapse, instructionId title row, "Newer version available", action icons) — only the edit block is replaced.
+- Keep all existing display logic (dashed bubble, expand/collapse, promptId title row, "Newer version available", action icons) — only the edit block is replaced.
 - Drop the now-unused props (`addToLibrary`, `onAddToLibraryChange`, `deferSystemPromptSave`, `textareaElement` if no longer used). Re-add `textareaElement` only if needed for focus management that the form's `ChatFormTextarea` doesn't already expose (it does — via `focus()`).
 
 ### 4. `ChatMessage.svelte` — wire state into the form
@@ -76,8 +76,8 @@ Compute these in `ChatMessage.svelte`'s context `get` accessors using `customIns
 - In `handleSaveEdit` for `SYSTEM`:
   - Keep the existing "remove placeholder if empty" branch.
   - Keep the "open `DialogPromptAddNew` if `addToLibrary` is true" branch (now sourced from form's callback).
-  - Otherwise, update message in place preserving non-CUSTOM_INSTRUCTION extras.
-- `DialogPromptAddNew.onAddToLibraryComplete` callback stays the same (saves system message with new `CUSTOM_INSTRUCTION` extra pointing at the new prompt).
+  - Otherwise, update message in place preserving non-CUSTOM_PROMPT extras.
+- `DialogPromptAddNew.onAddToLibraryComplete` callback stays the same (saves system message with new `CUSTOM_PROMPT` extra pointing at the new prompt).
 - Add a `systemMessagePickAddToLibrary` callback on the form (via context or prop) so the form can ask the parent to open `DialogPromptAddNew`.
 
 ### 5. Optional polish — visual coherence
@@ -105,6 +105,6 @@ Compute these in `ChatMessage.svelte`'s context `get` accessors using `customIns
 
 3. **Visual variant.** Should `<ChatMessageEditForm />` render inside a dashed-bordered wrapper for `SYSTEM` to match the read view? (Recommended above.)
 
-4. **Orphaned references.** If the user deletes a library prompt whose `CUSTOM_INSTRUCTION` is still on a system message, `promptsStore.getPrompt(id)` returns `undefined`. The plan above treats that as `!isLibraryReferenced` (i.e., eligible for the new form, with `canAddToLibrary=true`). Confirm that is acceptable or specify what to surface instead.
+4. **Orphaned references.** If the user deletes a library prompt whose `CUSTOM_PROMPT` is still on a system message, `promptsStore.getPrompt(id)` returns `undefined`. The plan above treats that as `!isLibraryReferenced` (i.e., eligible for the new form, with `canAddToLibrary=true`). Confirm that is acceptable or specify what to surface instead.
 
 5. **Scope.** Anything else missing from the three cases in your original brief?

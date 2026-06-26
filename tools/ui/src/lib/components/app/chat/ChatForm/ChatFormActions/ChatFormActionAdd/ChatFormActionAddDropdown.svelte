@@ -27,7 +27,7 @@
 		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
-		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
+		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
 		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
 	}

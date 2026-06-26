@@ -28,7 +28,7 @@
 		onConfirmDelete: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
-		instructionId?: string;
+		promptId?: string;
 		title?: string;
 		promptIsStale?: boolean;
 		onPromptUpdate?: () => void;
@@ -46,7 +46,7 @@
 		onConfirmDelete,
 		onNavigateToSibling,
 		onShowDeleteDialogChange,
-		instructionId,
+		promptId,
 		title,
 		promptIsStale = false,
 		onPromptUpdate
@@ -180,7 +180,7 @@
 			</div>
 		{/if}
 
-		{#if instructionId && title}
+		{#if promptId && title}
 			<div class="max-w-[80%] flex items-center gap-2">
 				<ScanText class="h-3.5 w-3.5 text-muted-foreground" />
 

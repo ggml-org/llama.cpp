@@ -14,7 +14,7 @@
 
 	interface Props {
 		onSystemPromptClick?: () => void;
-		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
+		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
 		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 		// Kick off MCP initialization when the wrapping dropdown opens so prompts
 		// are available by the time the user hovers into this submenu. The
@@ -119,7 +119,7 @@
 		void executeAndPostAsSystemPrompt(entry.prompt);
 	}
 
-	function mcpPromptInstructionId(prompt: MCPPromptInfo): string {
+	function mcpPromptId(prompt: MCPPromptInfo): string {
 		return `mcp:${prompt.serverName}:${prompt.name}`;
 	}
 
@@ -142,7 +142,7 @@
 
 			if (!text) return;
 
-			onSystemPromptWithContent(text, mcpPromptInstructionId(prompt), prompt.title || prompt.name);
+			onSystemPromptWithContent(text, mcpPromptId(prompt), prompt.title || prompt.name);
 		} catch (error) {
 			console.warn('[ChatFormActionAddSystemMessageSubmenu] Failed to execute MCP prompt:', error);
 		}

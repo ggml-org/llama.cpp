@@ -46,12 +46,6 @@ export const DEPRECATED_USER_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME_DE
 /** Build version stored in localStorage for non-PWA update detection */
 export const BUILD_VERSION_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.buildVersion`;
 
-/** Legacy localStorage key - used only for one-time migration to IndexedDB */
-export const INSTRUCTIONS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.instructions`;
-
-/** localStorage key for the prompts library - used only for one-time migration to IndexedDB */
-export const PROMPTS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.prompts`;
-
 /** Maps new keys to their deprecated fallback keys */
 export const NEW_TO_DEPRECATED_MAP: Record<string, string> = {
 	[ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY]: DEPRECATED_ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY,

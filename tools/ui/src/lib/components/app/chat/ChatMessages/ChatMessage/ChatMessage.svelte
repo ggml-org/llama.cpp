@@ -18,10 +18,7 @@
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { deriveAgenticSections, hasContentDiff } from '$lib/utils';
 	import { promptsStore } from '$lib/stores/prompts.svelte';
-	import type {
-		DatabaseMessageExtraMcpPrompt,
-		DatabaseMessageExtraCustomInstruction
-	} from '$lib/types';
+	import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraCustomPrompt } from '$lib/types';
 	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
@@ -96,12 +93,12 @@
 
 	let editedExtras = $derived<DatabaseMessageExtra[]>(message.extra ? [...message.extra] : []);
 	let editedUploadedFiles = $state<ChatUploadedFile[]>([]);
-	let customInstructionExtra = $derived.by(() => {
+	let customPromptExtra = $derived.by(() => {
 		if (message.role !== MessageRole.SYSTEM) return null;
 		if (!message.extra || message.extra.length === 0) return null;
 		for (const extra of message.extra) {
-			if (extra.type === AttachmentType.CUSTOM_INSTRUCTION) {
-				return extra as DatabaseMessageExtraCustomInstruction;
+			if (extra.type === AttachmentType.CUSTOM_PROMPT) {
+				return extra as DatabaseMessageExtraCustomPrompt;
 			}
 		}
 		return null;
@@ -112,15 +109,13 @@
 	let promptDialogOpen = $state(false);
 
 	// Pull the referenced library prompt (if any). A null prompt means the
-	// CUSTOM_INSTRUCTION points at a prompt the user has since deleted.
+	// CUSTOM_PROMPT points at a prompt the user has since deleted.
 	let referencedPrompt = $derived(
-		customInstructionExtra
-			? promptsStore.getPrompt(customInstructionExtra.instructionId)
-			: undefined
+		customPromptExtra ? promptsStore.getPrompt(customPromptExtra.promptId) : undefined
 	);
-	let promptTitle = $derived(referencedPrompt?.title ?? customInstructionExtra?.title);
+	let promptTitle = $derived(referencedPrompt?.title ?? customPromptExtra?.title);
 	let promptIsStale = $derived.by(() => {
-		if (!customInstructionExtra || !referencedPrompt) return false;
+		if (!customPromptExtra || !referencedPrompt) return false;
 		return hasContentDiff(message.content, referencedPrompt.content);
 	});
 	let showPromptSyncDialog = $state(false);
@@ -134,16 +129,16 @@
 	);
 	let canAddToLibrary = $derived.by(() => {
 		if (message.role !== MessageRole.SYSTEM) return false;
-		const custom = customInstructionExtra;
+		const custom = customPromptExtra;
 		if (!custom) return true;
-		if (custom.instructionId.startsWith('mcp:')) return false;
+		if (custom.promptId.startsWith('mcp:')) return false;
 		return !referencedPrompt;
 	});
 	let canUpdateLibraryPrompt = $derived.by(() => {
 		if (message.role !== MessageRole.SYSTEM) return false;
-		const custom = customInstructionExtra;
+		const custom = customPromptExtra;
 		if (!custom) return false;
-		if (custom.instructionId.startsWith('mcp:')) return false;
+		if (custom.promptId.startsWith('mcp:')) return false;
 		return !!referencedPrompt;
 	});
 
@@ -237,14 +232,14 @@
 
 		if (message.role === MessageRole.SYSTEM) {
 			// System messages created from an MCP prompt carry the server/prompt
-			// identity through their synthetic `mcp:<server>:<prompt>` instructionId.
+			// identity through their synthetic `mcp:<server>:<prompt>` promptId.
 			// Treat them as MCP-prompt messages so they render with the same styled
 			// surface instead of a plain system textarea.
-			const custom = customInstructionExtra;
+			const custom = customPromptExtra;
 
-			if (!custom?.instructionId.startsWith('mcp:')) return null;
+			if (!custom?.promptId.startsWith('mcp:')) return null;
 
-			const stripped = custom.instructionId.slice('mcp:'.length);
+			const stripped = custom.promptId.slice('mcp:'.length);
 			const sepIndex = stripped.indexOf(':');
 
 			if (sepIndex <= 0) return null;
@@ -436,10 +431,10 @@
 			return;
 		}
 
-		// Preserve existing extras (drop stale CUSTOM_INSTRUCTION so we can re-add cleanly)
+		// Preserve existing extras (drop stale CUSTOM_PROMPT so we can re-add cleanly)
 		const existingExtras = message.extra || [];
 		const extrasToSave = existingExtras.filter(
-			(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_INSTRUCTION
+			(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_PROMPT
 		);
 
 		if (extrasToSave.length > 0) {
@@ -463,7 +458,7 @@
 		}
 	}
 
-	async function saveSystemPromptWithPrompt(content: string, instructionId: string, title: string) {
+	async function saveSystemPromptWithPrompt(content: string, promptId: string, title: string) {
 		// message.extra is a deep $state proxy; snapshot to plain values so
 		// Dexie/IndexedDB can structured-clone it (see getMergedExtras precedent)
 		const existingExtras = (
@@ -471,11 +466,11 @@
 		) as DatabaseMessageExtra[];
 		const extras: DatabaseMessageExtra[] = [
 			...existingExtras.filter(
-				(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_INSTRUCTION
+				(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_PROMPT
 			),
 			{
-				type: AttachmentType.CUSTOM_INSTRUCTION,
-				instructionId,
+				type: AttachmentType.CUSTOM_PROMPT,
+				promptId,
 				title
 			}
 		];
@@ -488,15 +483,11 @@
 	}
 
 	// Apply the latest library prompt content to this system message, keeping
-	// the CUSTOM_INSTRUCTION extra (title may also have changed in the library)
+	// the CUSTOM_PROMPT extra (title may also have changed in the library)
 	async function syncPromptFromLibrary() {
-		if (!customInstructionExtra || !referencedPrompt) return;
-		const { instructionId } = customInstructionExtra;
-		await saveSystemPromptWithPrompt(
-			referencedPrompt.content,
-			instructionId,
-			referencedPrompt.title
-		);
+		if (!customPromptExtra || !referencedPrompt) return;
+		const { promptId } = customPromptExtra;
+		await saveSystemPromptWithPrompt(referencedPrompt.content, promptId, referencedPrompt.title);
 		showPromptSyncDialog = false;
 	}
 
@@ -539,7 +530,7 @@
 			class={className}
 			{deletionInfo}
 			{message}
-			instructionId={customInstructionExtra?.instructionId}
+			promptId={customPromptExtra?.promptId}
 			title={promptTitle}
 			{promptIsStale}
 			onPromptUpdate={() => (showPromptSyncDialog = true)}
@@ -569,7 +560,7 @@
 			<DialogPromptSync
 				bind:open={showPromptSyncDialog}
 				promptTitle={referencedPrompt.title}
-				currentTitle={customInstructionExtra?.title}
+				currentTitle={customPromptExtra?.title}
 				currentContent={message.content}
 				updatedContent={referencedPrompt.content}
 				onUpdate={syncPromptFromLibrary}
@@ -580,7 +571,7 @@
 			<DialogPromptSync
 				bind:open={showUpdateLibraryDialog}
 				promptTitle={referencedPrompt.title}
-				currentTitle={customInstructionExtra?.title}
+				currentTitle={customPromptExtra?.title}
 				currentContent={message.content}
 				updatedContent={editedContent.trim()}
 				bind:updatedTitle

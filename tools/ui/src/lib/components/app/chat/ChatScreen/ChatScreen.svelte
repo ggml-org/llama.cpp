@@ -214,12 +214,8 @@
 		await chatStore.addSystemPrompt();
 	}
 
-	async function handleSystemPromptWithContent(
-		content: string,
-		instructionId?: string,
-		title?: string
-	) {
-		await chatStore.addSystemPromptWithContent(content, instructionId, title);
+	async function handleSystemPromptWithContent(content: string, promptId?: string, title?: string) {
+		await chatStore.addSystemPromptWithContent(content, promptId, title);
 	}
 
 	$effect(() => {

@@ -38,7 +38,7 @@
 		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
-		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
+		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
 		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
 		trigger: Snippet<[{ disabled: boolean; onclick?: () => void }]>;
@@ -176,7 +176,7 @@
 		void executeAndPostAsSystemPrompt(entry.prompt);
 	}
 
-	function mcpPromptInstructionId(prompt: MCPPromptInfo): string {
+	function mcpPromptId(prompt: MCPPromptInfo): string {
 		return `mcp:${prompt.serverName}:${prompt.name}`;
 	}
 
@@ -199,7 +199,7 @@
 
 			if (!text) return;
 
-			onSystemPromptWithContent(text, mcpPromptInstructionId(prompt), prompt.title || prompt.name);
+			onSystemPromptWithContent(text, mcpPromptId(prompt), prompt.title || prompt.name);
 		} catch (error) {
 			console.warn('[ChatFormActionAddSheet] Failed to execute MCP prompt:', error);
 		}

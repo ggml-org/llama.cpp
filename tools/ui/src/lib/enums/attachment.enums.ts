@@ -7,7 +7,7 @@ export enum AttachmentType {
 	VIDEO = 'VIDEO',
 	MCP_PROMPT = 'MCP_PROMPT',
 	MCP_RESOURCE = 'MCP_RESOURCE',
-	CUSTOM_INSTRUCTION = 'CUSTOM_INSTRUCTION',
+	CUSTOM_PROMPT = 'CUSTOM_PROMPT',
 	PDF = 'PDF',
 	TEXT = 'TEXT',
 	LEGACY_CONTEXT = 'context' // Legacy attachment type for backward compatibility

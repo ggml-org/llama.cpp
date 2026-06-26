@@ -63,7 +63,7 @@
 		onStop?: () => void;
 		onSubmit?: () => void;
 		onSystemPromptClick?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
-		onSystemPromptWithContent?: (content: string, instructionId?: string, title?: string) => void;
+		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
 		onUploadedFileRemove?: (fileId: string) => void;
 		onUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
 		onValueChange?: (value: string) => void;

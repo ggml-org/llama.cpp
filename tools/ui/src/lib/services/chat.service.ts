@@ -207,7 +207,7 @@ export class ChatService {
 				if (typeof msg.content === 'string') {
 					return msg.content.trim().length > 0;
 				}
-				// Multipart content (e.g., from custom instruction extras): check for text parts
+				// Multipart content (e.g., from custom prompt extras): check for text parts
 				return msg.content.some(
 					(part) =>
 						part.type === ContentPartType.TEXT &&
@@ -1183,12 +1183,11 @@ export class ChatService {
 			}
 		}
 
-		// CUSTOM_INSTRUCTION is metadata-only (text lives in message.content); exclude it
+		// CUSTOM_PROMPT is metadata-only (text lives in message.content); exclude it
 		// so it doesn't force multipart conversion and get dropped as array content.
 		const contentExtras =
-			message.extra?.filter(
-				(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_INSTRUCTION
-			) ?? [];
+			message.extra?.filter((e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_PROMPT) ??
+			[];
 
 		if (contentExtras.length === 0) {
 			const result: ApiChatMessageData = {
