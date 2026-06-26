@@ -1,12 +1,14 @@
 #include "server-common.h"
 #include "server-models.h"
 #include "server-context.h"
+#include "server-stream.h"
 
 #include "build-info.h"
 #include "preset.h"
 #include "download.h"
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
+#include <optional>
 #include <sheredom/subprocess.h>
 
 #include <functional>
@@ -92,6 +94,9 @@ struct server_subproc {
     }
 };
 
+// short loopback budget for the resumable stream router to child JSON calls (probe, lookup,
+// delete). distinct from params.timeout_read/write which only applies to the generation proxy
+static constexpr int STREAM_LOOKUP_TIMEOUT_MS = 250;
 
 static std::filesystem::path get_server_exec_path() {
 #if defined(_WIN32)
@@ -1580,6 +1585,45 @@ static bool is_autoload(const common_params & params, const server_http_req & re
     }
 }
 
+// percent encode one query or path component, covers reserved chars without pulling in
+// httplib::detail. used by the stream routes to forward conversation_id to children safely
+static std::string encode_qs(const std::string & in) {
+    std::string out;
+    out.reserve(in.size() * 3);
+    for (unsigned char c : in) {
+        bool safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                 || c == '-' || c == '_' || c == '.' || c == '~';
+        if (safe) {
+            out.push_back(char(c));
+        } else {
+            char buf[4];
+            std::snprintf(buf, sizeof(buf), "%%%02X", c);
+            out.append(buf, 3);
+        }
+    }
+    return out;
+}
+
+// resolve the child that owns a conversation's stream session via the conv_id -> model map
+// populated when the POST was routed. single map lookup then a meta lookup, no polling, no
+// parsing of the conv id. returns nullopt when nothing maps, the caller answers not found and
+// the client recovers
+static std::optional<server_model_meta> resolve_child_for_conv(
+        server_models & models, const std::string & conversation_id) {
+    if (conversation_id.empty()) {
+        return std::nullopt;
+    }
+    auto tracked = models.conv_models.lookup(conversation_id);
+    if (!tracked.has_value()) {
+        return std::nullopt;
+    }
+    auto meta = models.get_meta(*tracked);
+    if (meta.has_value() && meta->is_ready()) {
+        return meta;
+    }
+    return std::nullopt;
+}
+
 void server_models_routes::init_routes() {
     this->get_router_props = [this](const server_http_req & req) {
         std::string name = req.get_param("model");
@@ -1627,6 +1671,12 @@ void server_models_routes::init_routes() {
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
             return error_res;
+        }
+        // remember which child serves this conversation so the stream routes can route straight
+        // to it without polling, keyed on the exact conv id from the header
+        std::string conv_id = stream_conv_id_from_headers(req.headers);
+        if (!conv_id.empty()) {
+            models.conv_models.remember(conv_id, name);
         }
         return models.proxy_request(req, method, name, true); // update last usage for POST request only
     };
@@ -1817,6 +1867,128 @@ void server_models_routes::init_routes() {
         models.remove(name); // throws on error
 
         res_ok(res, {{"success", true}});
+        return res;
+    };
+
+    this->router_stream_get = [this](const server_http_req & req) {
+        // GET /v1/stream/<conv_id>?from=N. resolve the owning child from the conv_id -> model
+        // map, 404 when nothing maps
+        auto res = std::make_unique<server_http_res>();
+        std::string conv_id = req.get_param("conv_id");
+        if (conv_id.empty()) {
+            res_err(res, format_error_response("Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        std::optional<server_model_meta> owner = resolve_child_for_conv(models, conv_id);
+        if (!owner.has_value()) {
+            res_err(res, format_error_response("Stream not found or expired", ERROR_TYPE_NOT_FOUND));
+            return res;
+        }
+        std::string from = req.get_param("from");
+        std::string child_path = "/v1/stream/" + encode_qs(conv_id);
+        if (!from.empty()) {
+            child_path += "?from=" + from;
+        }
+        SRV_INF("proxying stream resume to model %s on port %d, path=%s\n",
+                owner->name.c_str(), owner->port, child_path.c_str());
+        auto proxy = std::make_unique<server_http_proxy>(
+                "GET",
+                "http",
+                CHILD_ADDR,
+                owner->port,
+                child_path,
+                req.headers,
+                req.body,
+                req.files,
+                req.should_stop,
+                params.timeout_read,
+                params.timeout_write);
+        return std::unique_ptr<server_http_res>(std::move(proxy));
+    };
+
+    this->router_streams_lookup = [this](const server_http_req & req) {
+        // POST /v1/streams/lookup. resolve each requested conv id to its owning child via the
+        // map, group the ids per child, and query only the children that actually own some of
+        // them instead of fanning out to every ready child. a child only answers for the ids
+        // it owns, never lists anything else
+        auto res = std::make_unique<server_http_res>();
+        std::vector<std::string> requested;
+        try {
+            json body = json::parse(req.body);
+            if (body.contains("conversation_ids") && body["conversation_ids"].is_array()) {
+                for (const auto & v : body["conversation_ids"]) {
+                    if (v.is_string() && !v.get<std::string>().empty()) {
+                        requested.push_back(v.get<std::string>());
+                    }
+                }
+            }
+        } catch (const std::exception &) {
+            res_ok(res, json::array());
+            return res;
+        }
+
+        // group requested ids by the child port that owns them, drop ids that map to nothing
+        std::unordered_map<int, json> per_child;
+        for (const auto & cid : requested) {
+            auto owner = resolve_child_for_conv(models, cid);
+            if (!owner.has_value()) {
+                continue;
+            }
+            per_child[owner->port].push_back(cid);
+        }
+
+        json aggregated = json::array();
+        for (auto & [port, ids] : per_child) {
+            json child_body = {{"conversation_ids", ids}};
+            httplib::Client cli(CHILD_ADDR, port);
+            cli.set_connection_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
+            cli.set_read_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
+            cli.set_write_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
+            auto resp = cli.Post("/v1/streams/lookup", child_body.dump(), "application/json");
+            if (!resp || resp->status != 200) {
+                continue;
+            }
+            try {
+                json child_arr = json::parse(resp->body);
+                if (!child_arr.is_array()) {
+                    continue;
+                }
+                for (auto & entry : child_arr) {
+                    if (entry.is_object()) {
+                        aggregated.push_back(entry);
+                    }
+                }
+            } catch (const std::exception &) {
+                continue;
+            }
+        }
+        res_ok(res, aggregated);
+        return res;
+    };
+
+    this->router_stream_delete = [this](const server_http_req & req) {
+        // DELETE /v1/stream/<conv_id>. resolve the owning child via the map and forward only to
+        // it, evict_and_cancel is idempotent on the child
+        auto res = std::make_unique<server_http_res>();
+        std::string conv_id = req.get_param("conv_id");
+        if (conv_id.empty()) {
+            res_err(res, format_error_response("Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        std::string child_path = "/v1/stream/" + encode_qs(conv_id);
+        auto owner = resolve_child_for_conv(models, conv_id);
+        if (owner.has_value()) {
+            httplib::Client cli(CHILD_ADDR, owner->port);
+            cli.set_connection_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
+            cli.set_read_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
+            cli.set_write_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
+            auto resp = cli.Delete(child_path.c_str());
+            (void) resp; // best effort, 404 and network errors are equivalent to no op
+        }
+        // drop the tracking entry, the session is being torn down
+        models.conv_models.forget(conv_id);
+        res->status = 204;
+        res->content_type = "application/json";
         return res;
     };
 }

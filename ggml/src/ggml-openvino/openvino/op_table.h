@@ -32,6 +32,7 @@ GGML_OP_CONVERTER(translate_soft_max);
 GGML_OP_CONVERTER(translate_transpose);
 GGML_OP_CONVERTER(translate_view);
 GGML_OP_CONVERTER(translate_glu_swiglu);
+GGML_OP_CONVERTER(translate_glu_swiglu_oai);
 GGML_OP_CONVERTER(translate_glu_geglu);
 GGML_OP_CONVERTER(translate_set_rows);
 GGML_OP_CONVERTER(translate_cpy);
