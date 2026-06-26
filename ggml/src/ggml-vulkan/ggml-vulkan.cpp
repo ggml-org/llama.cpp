@@ -676,6 +676,7 @@ struct vk_device_struct {
     uint64_t suballocation_block_size;
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
+    bool external_semaphore {};
     bool fp16;
     bool bf16;
     bool pipeline_robustness;
@@ -2077,6 +2078,13 @@ struct ggml_backend_vk_context {
     std::string name;
 
     vk_device device;
+
+    // Tensor-parallel collective (comm) chains the cross-device AllReduce into this device's
+    // compute queue via a monotonic timeline semaphore, so per-layer reductions are ordered on
+    // the GPU instead of by CPU barriers. Set up by ggml_backend_vk_comm_init while TP is active.
+    bool         comm_active = false;
+    vk::Semaphore comm_prog_sem = VK_NULL_HANDLE;
+    uint64_t     comm_prog_val  = 0;
 
     size_t semaphore_idx, event_idx;
     ggml_vk_garbage_collector gc;
@@ -5734,6 +5742,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->memory_priority = true;
             } else if (strcmp("VK_EXT_external_memory_host", properties.extensionName) == 0) {
                 device->external_memory_host = true;
+            } else if (strcmp("VK_KHR_external_semaphore_fd", properties.extensionName) == 0) {
+                device->external_semaphore = true;
 #if defined(VK_EXT_shader_64bit_indexing)
             } else if (strcmp("VK_EXT_shader_64bit_indexing", properties.extensionName) == 0) {
                 device->shader_64b_indexing = true;
@@ -6060,6 +6070,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         if (device->external_memory_host) {
             device_extensions.push_back("VK_EXT_external_memory_host");
+        }
+        if (device->external_semaphore) {
+            device_extensions.push_back("VK_KHR_external_semaphore");
+            device_extensions.push_back("VK_KHR_external_semaphore_fd");
         }
 
 #if defined(VK_EXT_shader_64bit_indexing)
@@ -14877,6 +14891,13 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     if (submit || last_node) {
         ggml_vk_ctx_end(compute_ctx);
 
+        // Tensor parallel: signal this subgraph's completion on the device progress timeline so
+        // the cross-device AllReduce can chain after it on the GPU (see ggml_backend_vk_comm_*).
+        if (last_node && ctx->comm_active && !compute_ctx->seqs.empty()) {
+            ctx->comm_prog_val++;
+            compute_ctx->seqs.back().back().signal_semaphores.push_back({ ctx->comm_prog_sem, ctx->comm_prog_val });
+        }
+
         // TODO probably it'd be better to pass a exit_node flag to ggml_vk_compute_forward
         if (last_node) {
             compute_ctx->exit_tensor_idx = node_idx_begin;
@@ -15472,9 +15493,17 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
     if (ggml_backend_buffer_is_vk(src->buffer)) {
         ggml_backend_vk_buffer_context * src_buf_ctx = (ggml_backend_vk_buffer_context *)src->buffer->context;
 
-        // Async copy only works within the same device
+        // Different devices have no peer-to-peer path, so stage through host memory.
+        // Flush the source backend so its data is ready, then run the blocking staged
+        // copy here and return true. This skips the scheduler's extra full synchronize
+        // of the destination backend (ggml_vk_buffer_copy already blocks until the write
+        // to the destination lands).
         if (src_buf_ctx->dev_buffer->device != dst_buf->device) {
-            return false;
+            ggml_backend_synchronize(backend_src);
+            ggml_vk_buffer_copy(dst_buf, vk_tensor_offset(dst) + dst->view_offs,
+                                src_buf_ctx->dev_buffer, vk_tensor_offset(src) + src->view_offs,
+                                ggml_nbytes(src));
+            return true;
         }
 
         vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
@@ -16185,6 +16214,13 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         // initialize partial sums to zero.
         ggml_vk_buffer_memset_async(compute_ctx, ctx->prealloc_add_rms_partials, 0, 0, ctx->prealloc_size_add_rms_partials);
         ggml_vk_sync_buffers(ctx, compute_ctx);
+    }
+
+    // Tensor parallel: make this subgraph's compute wait on the previous layer's reduction, ordered
+    // on the GPU via the device progress timeline instead of a CPU barrier.
+    if (ctx->comm_active) {
+        compute_ctx = ggml_vk_get_compute_ctx(ctx);
+        compute_ctx->s->wait_semaphores.push_back({ ctx->comm_prog_sem, ctx->comm_prog_val });
     }
 
     // Submit after enough work has accumulated, to overlap CPU cmdbuffer generation with GPU execution.
@@ -17803,11 +17839,641 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
     return devices[device];
 }
 
+// ---------------------------------------------------------------------------
+// Cross-device collective (AllReduce) for tensor parallelism (SPLIT_MODE_TENSOR).
+// The meta backend discovers these via get_proc_address and prefers them over its
+// generic host-staged butterfly fallback.
+// ---------------------------------------------------------------------------
+struct ggml_backend_vk_comm_context {
+    std::vector<ggml_backend_t>             backends;
+    std::vector<ggml_backend_vk_context*>   vkctx;
+    std::vector<vk_device>                  device;
+    size_t                                  align = 4096;
+    size_t                                  cap   = 0;
+    bool                                    fast  = false;
+    // Per device: an exportable monotonic timeline ("progress") semaphore. graph_compute and the
+    // gather/reduce steps wait the previous value and signal the next, so the per-layer AllReduce is
+    // ordered entirely on the GPU. prog[i] is also published in vkctx[i]->comm_prog_sem.
+    std::vector<vk::Semaphore>              prog;          // prog[i] lives on device i
+    std::vector<std::vector<vk::Semaphore>> peer_prog;     // peer_prog[i][j] = device i's import of prog[j]
+    std::vector<uint64_t>                   last_reduce;   // last reduce value signalled, per device
+    // Dedicated command pool per device; its buffers are recycled (not leaked into the shared queue
+    // pool) once the GPU has caught up, tracked by the highest reduce value recorded into it.
+    std::vector<vk_command_pool>            cmd_pool;
+    std::vector<uint64_t>                   pool_max_val;
+    PFN_vkGetSemaphoreFdKHR                 pGetSemFd  = nullptr;
+    PFN_vkImportSemaphoreFdKHR              pImportSemFd = nullptr;
+    // host_ptr[k]: shared CPU staging holding device k's gathered slice, imported on every device.
+    std::vector<void*>                      host_ptr;
+    std::vector<std::vector<vk_buffer>>     host_buf;      // host_buf[k][i] = device i's import of host_ptr[k]
+    std::vector<ggml_backend_buffer_t>      tmp_buffer;    // device-local scratch per device (peer data for the add)
+    std::vector<ggml_tensor*>               tmp_tensor;
+    ggml_context *                          tctx = nullptr;
+    // Chunked full-duplex pipeline (large tensors only): split each slice into chunks, stream the
+    // uploads (this device's slice -> host) on the dedicated TRANSFER queue while the COMPUTE queue
+    // pulls the peer's already-uploaded chunks back. Upload and download then run concurrently over
+    // the full-duplex PCIe link (~T instead of ~2T). up[i] is an exportable per-chunk progress
+    // timeline so the peer's download can wait on individual chunks; cmd_pool_xfer[i] feeds the
+    // transfer queue. pipeline_ok requires a transfer queue distinct from the compute queue.
+    bool                                    pipeline_ok = false;
+    std::vector<vk::Semaphore>              up;            // up[i]: exportable upload-progress timeline on device i
+    std::vector<std::vector<vk::Semaphore>> peer_up;       // peer_up[i][j] = device i's import of up[j]
+    std::vector<uint64_t>                   up_val;        // running upload-chunk counter, per device
+    std::vector<vk_command_pool>            cmd_pool_xfer; // dedicated transfer-queue pool per device
+    std::vector<uint64_t>                   xfer_pool_max_val;
+    uint64_t                                pipe_round = 0; // pipeline allreduce counter; its parity picks the host slot
+    // F16 staging (the lever NCCL uses -- bf16_RING_LL): cast each fp32 partial to F16 on-device before
+    // the host transfer, so only half the bytes cross the bandwidth-bound PCIe link. up16 holds the cast
+    // partial (upload source); dn16 receives the peer's F16 slice (then added straight into the fp32
+    // result via the mixed-type add pipeline). Pipeline path only; the single-shot/TG path stays fp32.
+    bool                                    use_f16 = false;
+    std::vector<ggml_backend_buffer_t>      up16_buffer;
+    std::vector<ggml_backend_buffer_t>      dn16_buffer;
+    std::vector<ggml_tensor*>               up16_tensor;
+    std::vector<ggml_tensor*>               dn16_tensor;
+};
+
+static vk::Semaphore ggml_vk_create_export_timeline(vk_device & device) {
+    vk::ExportSemaphoreCreateInfo esci{ vk::ExternalSemaphoreHandleTypeFlagBits::eOpaqueFd };
+    vk::SemaphoreTypeCreateInfo   stci{ vk::SemaphoreType::eTimeline, 0 };
+    stci.pNext = &esci;
+    vk::SemaphoreCreateInfo sci{};
+    sci.pNext = &stci;
+    return device->device.createSemaphore(sci);
+}
+
+// Export src_sem from src_dev via OPAQUE_FD and import it as a fresh timeline on dst_dev, so dst_dev's
+// queues can wait on src_dev's progress. A new fd is taken per import (the fd is consumed by import).
+static vk::Semaphore ggml_vk_import_timeline(ggml_backend_vk_comm_context * comm, vk_device & dst_dev,
+                                             vk_device & src_dev, vk::Semaphore src_sem) {
+    int fd = -1;
+    VkSemaphoreGetFdInfoKHR gi{};
+    gi.sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+    gi.semaphore  = src_sem;
+    gi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+    comm->pGetSemFd((VkDevice) src_dev->device, &gi, &fd);
+
+    vk::SemaphoreTypeCreateInfo stci{ vk::SemaphoreType::eTimeline, 0 };
+    vk::SemaphoreCreateInfo sci{};
+    sci.pNext = &stci;
+    vk::Semaphore dst = dst_dev->device.createSemaphore(sci);
+
+    VkImportSemaphoreFdInfoKHR isi{};
+    isi.sType      = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR;
+    isi.semaphore  = dst;
+    isi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+    isi.fd         = fd;
+    comm->pImportSemFd((VkDevice) dst_dev->device, &isi);
+    return dst;
+}
+
+static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_backends) {
+    ggml_backend_vk_comm_context * comm = new ggml_backend_vk_comm_context;
+    comm->backends.assign(backends, backends + n_backends);
+    comm->vkctx.resize(n_backends);
+    comm->device.resize(n_backends);
+    bool ok = (n_backends == 2);
+    for (size_t i = 0; i < n_backends; i++) {
+        comm->vkctx[i]  = (ggml_backend_vk_context *) backends[i]->context;
+        comm->device[i] = comm->vkctx[i]->device;
+        ok = ok && comm->device[i]->external_memory_host && comm->device[i]->external_semaphore;
+        comm->align = std::max(comm->align, (size_t) comm->device[i]->min_imported_host_pointer_alignment);
+    }
+    // The GPU-pipelined path stages through host memory shared (imported) across all devices, reduces
+    // on the GPU, and chains everything via exported timeline semaphores so there are no CPU barriers.
+    // It needs VK_EXT_external_memory_host + VK_KHR_external_semaphore_fd on every device.
+    comm->fast = ok;
+    comm->host_ptr.resize(n_backends, nullptr);
+    comm->host_buf.resize(n_backends);
+    comm->tmp_buffer.resize(n_backends, nullptr);
+    comm->tmp_tensor.resize(n_backends, nullptr);
+    for (size_t k = 0; k < n_backends; k++) {
+        comm->host_buf[k].resize(n_backends);
+    }
+    // F16 staging halves the host transfer (default on; GGML_VK_COMM_FP32 forces the old fp32 path).
+    comm->use_f16 = (getenv("GGML_VK_COMM_FP32") == nullptr);
+    comm->up16_buffer.resize(n_backends, nullptr);
+    comm->dn16_buffer.resize(n_backends, nullptr);
+    comm->up16_tensor.resize(n_backends, nullptr);
+    comm->dn16_tensor.resize(n_backends, nullptr);
+    const ggml_init_params ip = { ggml_tensor_overhead() * (n_backends + 8), nullptr, true };
+    comm->tctx = ggml_init(ip);
+
+    if (comm->fast) {
+        comm->pGetSemFd    = (PFN_vkGetSemaphoreFdKHR)    comm->device[0]->device.getProcAddr("vkGetSemaphoreFdKHR");
+        comm->pImportSemFd = (PFN_vkImportSemaphoreFdKHR) comm->device[0]->device.getProcAddr("vkImportSemaphoreFdKHR");
+        comm->fast = comm->pGetSemFd && comm->pImportSemFd;
+    }
+    if (comm->fast) {
+        comm->prog.resize(n_backends);
+        comm->peer_prog.assign(n_backends, std::vector<vk::Semaphore>(n_backends));
+        comm->last_reduce.assign(n_backends, 0);
+        comm->cmd_pool.resize(n_backends);
+        comm->pool_max_val.assign(n_backends, 0);
+        comm->up.resize(n_backends);
+        comm->peer_up.assign(n_backends, std::vector<vk::Semaphore>(n_backends));
+        comm->up_val.assign(n_backends, 0);
+        comm->cmd_pool_xfer.resize(n_backends);
+        comm->xfer_pool_max_val.assign(n_backends, 0);
+        // The full-duplex pipeline needs a transfer queue distinct from the compute queue (so uploads
+        // and downloads run on independent engines). NVIDIA exposes a dedicated transfer family; if a
+        // device has only one queue, fall back to the single-shot path for large tensors too.
+        comm->pipeline_ok = true;
+        for (size_t i = 0; i < n_backends; i++) {
+            comm->prog[i] = ggml_vk_create_export_timeline(comm->device[i]);
+            comm->up[i]   = ggml_vk_create_export_timeline(comm->device[i]);
+            comm->cmd_pool[i].init(comm->device[i], &comm->device[i]->compute_queue);
+            comm->cmd_pool_xfer[i].init(comm->device[i], &comm->device[i]->transfer_queue);
+            if (comm->device[i]->single_queue ||
+                comm->device[i]->transfer_queue.queue == comm->device[i]->compute_queue.queue) {
+                comm->pipeline_ok = false;
+            }
+        }
+        // import each device's progress + upload timelines into every peer (fresh OPAQUE_FD per import)
+        for (size_t j = 0; j < n_backends; j++) {
+            for (size_t i = 0; i < n_backends; i++) {
+                if (i == j) { continue; }
+                comm->peer_prog[i][j] = ggml_vk_import_timeline(comm, comm->device[i], comm->device[j], comm->prog[j]);
+                comm->peer_up[i][j]   = ggml_vk_import_timeline(comm, comm->device[i], comm->device[j], comm->up[j]);
+            }
+        }
+        for (size_t i = 0; i < n_backends; i++) {
+            comm->vkctx[i]->comm_prog_sem = comm->prog[i];
+            comm->vkctx[i]->comm_prog_val = 0;
+            comm->vkctx[i]->comm_active   = true;
+        }
+    }
+    return comm;
+}
+
+static void ggml_backend_vk_comm_free(void * comm_ctx) {
+    ggml_backend_vk_comm_context * comm = static_cast<ggml_backend_vk_comm_context *>(comm_ctx);
+    for (size_t i = 0; i < comm->vkctx.size(); i++) {
+        ggml_backend_synchronize(comm->backends[i]);
+        comm->vkctx[i]->comm_active   = false;
+        comm->vkctx[i]->comm_prog_sem = VK_NULL_HANDLE;
+    }
+    for (size_t i = 0; i < comm->prog.size(); i++) {
+        if (comm->prog[i]) {
+            comm->device[i]->device.destroySemaphore(comm->prog[i]);
+        }
+        if (i < comm->up.size() && comm->up[i]) {
+            comm->device[i]->device.destroySemaphore(comm->up[i]);
+        }
+        for (size_t j = 0; j < comm->peer_prog[i].size(); j++) {
+            if (comm->peer_prog[i][j]) {
+                comm->device[i]->device.destroySemaphore(comm->peer_prog[i][j]);
+            }
+            if (i < comm->peer_up.size() && j < comm->peer_up[i].size() && comm->peer_up[i][j]) {
+                comm->device[i]->device.destroySemaphore(comm->peer_up[i][j]);
+            }
+        }
+    }
+    for (size_t i = 0; i < comm->cmd_pool.size(); i++) {
+        comm->cmd_pool[i].destroy(comm->device[i]->device);
+    }
+    for (size_t i = 0; i < comm->cmd_pool_xfer.size(); i++) {
+        comm->cmd_pool_xfer[i].destroy(comm->device[i]->device);
+    }
+    for (auto & row : comm->host_buf) {
+        for (auto & b : row) {
+            b.reset();
+        }
+    }
+    for (void * p : comm->host_ptr) {
+        std::free(p);
+    }
+    for (ggml_backend_buffer_t b : comm->tmp_buffer) {
+        if (b) {
+            ggml_backend_buffer_free(b);
+        }
+    }
+    for (ggml_backend_buffer_t b : comm->up16_buffer) {
+        if (b) {
+            ggml_backend_buffer_free(b);
+        }
+    }
+    for (ggml_backend_buffer_t b : comm->dn16_buffer) {
+        if (b) {
+            ggml_backend_buffer_free(b);
+        }
+    }
+    if (comm->tctx) {
+        ggml_free(comm->tctx);
+    }
+    delete comm;
+}
+
+// (re)allocate the shared host staging and device scratch to hold nbytes per slice.
+static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, size_t nbytes) {
+    if (nbytes <= comm->cap) {
+        return true;
+    }
+    const size_t n      = comm->backends.size();
+    const size_t newcap = (nbytes + comm->align - 1) & ~(comm->align - 1);
+
+    for (size_t k = 0; k < n; k++) {
+        for (size_t i = 0; i < n; i++) {
+            comm->host_buf[k][i].reset();
+        }
+        std::free(comm->host_ptr[k]);
+        comm->host_ptr[k] = nullptr;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (comm->tmp_buffer[i]) {
+            ggml_backend_buffer_free(comm->tmp_buffer[i]);
+            comm->tmp_buffer[i] = nullptr;
+        }
+        if (comm->up16_buffer[i]) {
+            ggml_backend_buffer_free(comm->up16_buffer[i]);
+            comm->up16_buffer[i] = nullptr;
+        }
+        if (comm->dn16_buffer[i]) {
+            ggml_backend_buffer_free(comm->dn16_buffer[i]);
+            comm->dn16_buffer[i] = nullptr;
+        }
+    }
+
+    // Two slots per host buffer: the chunked pipeline ping-pongs between them by round parity so an
+    // upload never has to wait for the peer to finish reading the previous round's buffer (the
+    // single-shot path always uses slot 0). cap stays the per-slot size; the allocation is 2x.
+    const size_t slotcap = 2 * newcap;
+    // One host buffer per device, allocated on the host and imported into every device via
+    // VK_EXT_external_memory_host (which page-locks it for DMA). host_buf[k][i] = device i's import of
+    // host_ptr[k], holding device k's slice. (Driver-allocated shared memory via OPAQUE_FD was tried and
+    // gives no extra bandwidth here -- the import already gets full PCIe rate -- and can't cross mixed GPUs.)
+    for (size_t k = 0; k < n; k++) {
+        comm->host_ptr[k] = std::aligned_alloc(comm->align, slotcap);
+        if (!comm->host_ptr[k]) {
+            return false;
+        }
+        for (size_t i = 0; i < n; i++) {
+            comm->host_buf[k][i] = ggml_vk_buffer_from_host_ptr(comm->device[i], comm->host_ptr[k], slotcap);
+            if (!comm->host_buf[k][i]) {
+                return false;
+            }
+        }
+    }
+    for (size_t i = 0; i < n; i++) {
+        ggml_backend_buffer_type_t bt = ggml_backend_get_default_buffer_type(comm->backends[i]);
+        comm->tmp_buffer[i] = ggml_backend_buft_alloc_buffer(bt, newcap);
+        if (!comm->tmp_buffer[i]) {
+            return false;
+        }
+        if (!comm->tmp_tensor[i]) {
+            comm->tmp_tensor[i] = ggml_new_tensor_1d(comm->tctx, GGML_TYPE_F32, 1);
+        }
+        comm->tmp_tensor[i]->buffer = comm->tmp_buffer[i];
+        comm->tmp_tensor[i]->data   = ggml_backend_buffer_get_base(comm->tmp_buffer[i]);
+        // F16 device buffers for the cast partial (upload src) and the peer's F16 slice (download dst).
+        // newcap (fp32 cap) holds the F16 data (half the bytes) with room to spare.
+        comm->up16_buffer[i] = ggml_backend_buft_alloc_buffer(bt, newcap);
+        comm->dn16_buffer[i] = ggml_backend_buft_alloc_buffer(bt, newcap);
+        if (!comm->up16_buffer[i] || !comm->dn16_buffer[i]) {
+            return false;
+        }
+        if (!comm->up16_tensor[i]) {
+            comm->up16_tensor[i] = ggml_new_tensor_1d(comm->tctx, GGML_TYPE_F16, 1);
+        }
+        if (!comm->dn16_tensor[i]) {
+            comm->dn16_tensor[i] = ggml_new_tensor_1d(comm->tctx, GGML_TYPE_F16, 1);
+        }
+        comm->up16_tensor[i]->buffer = comm->up16_buffer[i];
+        comm->up16_tensor[i]->data   = ggml_backend_buffer_get_base(comm->up16_buffer[i]);
+        comm->dn16_tensor[i]->buffer = comm->dn16_buffer[i];
+        comm->dn16_tensor[i]->data   = ggml_backend_buffer_get_base(comm->dn16_buffer[i]);
+    }
+    comm->cap = newcap;
+    return true;
+}
+
+// Large-tensor AllReduce via a full-duplex chunked pipeline. Each device's slice is split into K
+// chunks. The dedicated TRANSFER queue streams this device's slice out to shared host memory chunk by
+// chunk (signalling up[i] after each), while the COMPUTE queue pulls each peer chunk back the moment
+// the peer has uploaded it (waiting peer_up) and finally adds the peer slices in. Because uploads and
+// downloads run on independent queues/engines, the two directions of the full-duplex PCIe link overlap,
+// so the reduction costs ~T (one slice transfer) instead of the single-shot path's ~2T (upload then
+// download). All tensors are assumed to carry a real partial (GGML_TENSOR_FLAG_COMPUTE); the caller
+// gates on that. Validated for n==2 (the only configuration the comm enables).
+static bool ggml_backend_vk_comm_allreduce_pipeline(ggml_backend_vk_comm_context * comm,
+                                                    ggml_tensor ** tensors, size_t nbytes) {
+    const size_t n = comm->backends.size();
+
+    // Chunking: aim for ~chunk_target bytes per chunk, with at least 2 chunks (one split is enough to
+    // overlap the two PCIe directions) and capped at kmax. Each extra chunk adds a submission and a
+    // cross-device semaphore wait whose latency outweighs the finer overlap, so over-splitting hurts --
+    // measured sweet spot is K=2..4. Align the chunk to 16B (F32 element-aligned).
+    constexpr size_t chunk_target = 4u << 20;
+    constexpr int    kmax         = 4;
+    // F16 staging: cast the fp32 partial to F16 on-device, transfer only half the bytes (the lever NCCL
+    // uses), then add the peer's F16 slice straight into the fp32 result. xbytes is what actually crosses
+    // the PCIe link; chunking is sized off it.
+    const bool   f16    = comm->use_f16;
+    const size_t xbytes = f16 ? (nbytes / 2) : nbytes;
+    int K = (int) ((xbytes + chunk_target - 1) / chunk_target);
+    K = std::max(2, std::min(K, kmax));
+    size_t chunk = (xbytes + K - 1) / K;
+    chunk = (chunk + 15) & ~((size_t) 15);
+    K = (int) ((xbytes + chunk - 1) / chunk); // alignment may drop the count of non-empty chunks
+
+    // Double-buffer the shared host staging: ping-pong between two slots by round parity so an upload
+    // never has to wait for the peer to finish reading last round's buffer. The slot's previous user was
+    // two rounds ago, which is already ordered before this round's compute (transitively via the per-round
+    // reduce->compute->upload chain), so no explicit reuse guard is needed.
+    const int    slot     = (int) (comm->pipe_round & 1);
+    const size_t slot_off = (size_t) slot * comm->cap;
+    comm->pipe_round++;
+
+    // Reserve timeline values up front for every device (so each knows its peers' per-chunk upload
+    // values): prog[i] advances by 1 fp32 (compute -> reduce), or 2 in F16 (compute -> cast -> reduce);
+    // up[i] advances by K (one per uploaded chunk).
+    std::vector<uint64_t> compute_val(n), cast_val(n), reduce_val(n), up_base(n);
+    for (size_t i = 0; i < n; i++) {
+        compute_val[i] = comm->vkctx[i]->comm_prog_val;
+        cast_val[i]    = compute_val[i] + 1;                  // F16: cast done (unused in fp32)
+        reduce_val[i]  = compute_val[i] + (f16 ? 2 : 1);
+        comm->vkctx[i]->comm_prog_val = reduce_val[i];
+        comm->last_reduce[i]          = reduce_val[i];
+        up_base[i]                    = comm->up_val[i];
+        comm->up_val[i]              += (uint64_t) K;
+    }
+
+    // Recycle both command pools once their queue caught up (non-blocking timeline query), with a
+    // bounded drain if a long prefill lets a pool grow too large (mirrors the single-shot policy).
+    auto recycle = [&](size_t i, vk_command_pool & pool, vk::Semaphore sem, uint64_t & pool_max, uint64_t target) {
+        uint64_t done = comm->device[i]->device.getSemaphoreCounterValue(sem);
+        if (done < pool_max && pool.buffers_in_use() >= 256) {
+            vk::SemaphoreWaitInfo wi;
+            wi.semaphoreCount = 1;
+            wi.pSemaphores    = &sem;
+            wi.pValues        = &pool_max;
+            (void) comm->device[i]->device.waitSemaphores(wi, UINT64_MAX);
+            done = pool_max;
+        }
+        if (done >= pool_max) {
+            ggml_vk_command_pool_cleanup(comm->device[i], pool);
+        }
+        pool_max = target;
+    };
+    for (size_t i = 0; i < n; i++) {
+        recycle(i, comm->cmd_pool[i],      comm->prog[i], comm->pool_max_val[i],      reduce_val[i]);
+        recycle(i, comm->cmd_pool_xfer[i], comm->up[i],   comm->xfer_pool_max_val[i], up_base[i] + (uint64_t) K);
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        ggml_backend_vk_buffer_context * bc   = (ggml_backend_vk_buffer_context *) tensors[i]->buffer->context;
+        ggml_backend_vk_buffer_context * tbc  = (ggml_backend_vk_buffer_context *) comm->tmp_buffer[i]->context;
+        ggml_backend_vk_buffer_context * upbc = (ggml_backend_vk_buffer_context *) comm->up16_buffer[i]->context;
+        ggml_backend_vk_buffer_context * dnbc = (ggml_backend_vk_buffer_context *) comm->dn16_buffer[i]->context;
+        const size_t src_off = vk_tensor_offset(tensors[i]) + tensors[i]->view_offs;
+
+        // the F16 scratch tensors mirror tensors[i]'s shape (same element count, 2-byte elements)
+        if (f16) {
+            for (ggml_tensor * t : { comm->up16_tensor[i], comm->dn16_tensor[i] }) {
+                for (int d = 0; d < GGML_MAX_DIMS; d++) { t->ne[d] = tensors[i]->ne[d]; }
+                t->nb[0] = ggml_type_size(GGML_TYPE_F16);
+                for (int d = 1; d < GGML_MAX_DIMS; d++) { t->nb[d] = t->nb[d - 1] * t->ne[d - 1]; }
+            }
+        }
+
+        vk_context cctx = ggml_vk_create_temporary_context(comm->cmd_pool[i]);
+
+        // ---- (F16) cast this device's fp32 partial -> up16 (F16) on the compute queue ----
+        if (f16) {
+            ggml_vk_ctx_begin(comm->device[i], cctx);
+            cctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] }); // own compute done (reads tensors[i])
+            cctx->s->wait_semaphores.push_back({ comm->up[i],   up_base[i] });      // prev round's uploads done (WAR on up16)
+            ggml_vk_cpy(comm->vkctx[i], cctx, tensors[i], comm->up16_tensor[i]);
+            ggml_vk_ctx_end(cctx);
+            cctx->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], cast_val[i] });
+        }
+
+        // ---- transfer queue: stream this device's slice out, one chunk per submission. Source is the
+        //      F16 cast (up16) or, in fp32 mode, tensors[i] directly. ----
+        const uint64_t up_ready    = f16 ? cast_val[i] : compute_val[i];
+        vk_buffer &    up_src       = f16 ? upbc->dev_buffer : bc->dev_buffer;
+        const size_t   up_src_off   = f16 ? 0 : src_off;
+        vk_context tctx = ggml_vk_create_temporary_context(comm->cmd_pool_xfer[i]);
+        for (int cI = 0; cI < K; cI++) {
+            const size_t off = (size_t) cI * chunk;
+            const size_t sz  = std::min(chunk, xbytes - off);
+            ggml_vk_ctx_begin(comm->device[i], tctx);
+            if (cI == 0) {
+                // gate on this device's slice being ready (cast in F16, or compute in fp32; cross-queue).
+                // Double-buffering makes a peer-reuse guard unnecessary (see slot logic above).
+                tctx->s->wait_semaphores.push_back({ comm->prog[i], up_ready });
+            }
+            ggml_vk_buffer_copy_async(tctx, comm->host_buf[i][i], slot_off + off, up_src, up_src_off + off, sz);
+            ggml_vk_ctx_end(tctx);
+            tctx->seqs.back().back().signal_semaphores.push_back({ comm->up[i], up_base[i] + (uint64_t) cI + 1 });
+        }
+        ggml_vk_submit(tctx, {});
+
+        // ---- compute queue: pull each peer chunk back as it lands, then add the peer slice into the
+        //      fp32 result (mixed F32 += F16 add in F16 mode, F32 += F32 in fp32 mode). ----
+        ggml_tensor * tmp = comm->tmp_tensor[i];
+        for (int d = 0; d < GGML_MAX_DIMS; d++) {
+            tmp->ne[d] = tensors[i]->ne[d];
+        }
+        tmp->nb[0] = ggml_type_size(GGML_TYPE_F32);
+        for (int d = 1; d < GGML_MAX_DIMS; d++) {
+            tmp->nb[d] = tmp->nb[d - 1] * tmp->ne[d - 1];
+        }
+        vk_buffer &    dn_dst      = f16 ? dnbc->dev_buffer : tbc->dev_buffer;
+        ggml_tensor *  add_src1    = f16 ? comm->dn16_tensor[i] : tmp;
+        for (size_t k = 0; k < n; k++) {
+            if (k == i) {
+                continue;
+            }
+            // one download submission per chunk, each waiting only on that peer's matching upload chunk,
+            // so a chunk's download begins as soon as the peer produced it -- this is what overlaps the
+            // upload and download directions.
+            for (int cI = 0; cI < K; cI++) {
+                const size_t off = (size_t) cI * chunk;
+                const size_t sz  = std::min(chunk, xbytes - off);
+                ggml_vk_ctx_begin(comm->device[i], cctx);
+                cctx->s->wait_semaphores.push_back({ comm->peer_up[i][k], up_base[k] + (uint64_t) cI + 1 });
+                ggml_vk_buffer_copy_async(cctx, dn_dst, off, comm->host_buf[k][i], slot_off + off, sz);
+                ggml_vk_ctx_end(cctx);
+            }
+            // add this peer's now-complete slice into the running sum. The leading barrier covers the
+            // download copies above (same queue, submission order). In fp32 mode the uploads read
+            // tensors[i], so wait on them first (WAR: the add overwrites tensors[i]); in F16 mode the
+            // uploads read up16, and the cast's read of tensors[i] is already ordered before the add's
+            // write by the barrier, so no up-wait is needed.
+            ggml_vk_ctx_begin(comm->device[i], cctx);
+            if (!f16) {
+                cctx->s->wait_semaphores.push_back({ comm->up[i], up_base[i] + (uint64_t) K });
+            }
+            ggml_vk_sync_buffers(comm->vkctx[i], cctx);
+            ggml_vk_add(comm->vkctx[i], cctx, tensors[i], add_src1, tensors[i]);
+            ggml_vk_sync_buffers(comm->vkctx[i], cctx);
+            ggml_vk_ctx_end(cctx);
+        }
+        cctx->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], reduce_val[i] });
+        ggml_vk_submit(cctx, {});
+    }
+    return true;
+}
+
+static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor ** tensors) {
+    ggml_backend_vk_comm_context * comm = static_cast<ggml_backend_vk_comm_context *>(comm_ctx);
+    const size_t n = comm->backends.size();
+
+    // Escape hatch: GGML_VK_COMM_OFF disables this custom AllReduce and lets the meta backend fall back
+    // to its CPU-barriered butterfly (slower, but a safe valve if the comm ever misbehaves).
+    static const bool off = getenv("GGML_VK_COMM_OFF") != nullptr;
+    if (off) {
+        return false;
+    }
+
+    if (!comm->fast || tensors[0]->type != GGML_TYPE_F32) {
+        return false; // -> meta backend butterfly fallback
+    }
+    const int64_t ne = ggml_nelements(tensors[0]);
+    if (ne == 0) {
+        return true;
+    }
+    const size_t nbytes = ggml_nbytes(tensors[0]);
+    for (size_t i = 0; i < n; i++) {
+        if (tensors[i]->type != GGML_TYPE_F32 || ggml_nelements(tensors[i]) != ne || !ggml_is_contiguous(tensors[i])) {
+            return false;
+        }
+    }
+    if (!ggml_backend_vk_comm_ensure(comm, nbytes)) {
+        return false;
+    }
+
+    // Large tensors (prefill activations) go through the full-duplex chunked pipeline, which overlaps
+    // the upload and download directions for ~2x. Small tensors (decode, one token) stay on the
+    // single-shot path below, where the fixed per-call overhead dominates and chunking would only add
+    // submissions. Gated on every slice carrying a real partial (the pipeline always uploads real data).
+    constexpr size_t pipeline_min = 2u << 20;
+    if (comm->pipeline_ok && n == 2 && nbytes >= pipeline_min) {
+        bool all_compute = true;
+        for (size_t i = 0; i < n; i++) {
+            all_compute = all_compute && (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE);
+        }
+        if (all_compute) {
+            return ggml_backend_vk_comm_allreduce_pipeline(comm, tensors, nbytes);
+        }
+    }
+
+    // Everything below is enqueued on the GPU and ordered via the per-device progress timeline; no
+    // CPU barrier is taken, so the next layer's compute can be submitted while this reduction runs.
+    //
+    // Gather: copy each device's slice into its shared host buffer. Ordered after this device's
+    // compute (prog[i] >= compute value, signalled by graph_compute) and after every peer finished
+    // reading this buffer last round (so the single host buffer is safe to overwrite). Signals the
+    // gather value on prog[i].
+
+    // Reserve the timeline values up front: each device advances by 2 (gather, then reduce).
+    std::vector<uint64_t> compute_val(n), gather_val(n), reduce_val(n), prev_reduce(n);
+    for (size_t i = 0; i < n; i++) {
+        prev_reduce[i] = comm->last_reduce[i];
+        compute_val[i] = comm->vkctx[i]->comm_prog_val;
+        gather_val[i]  = compute_val[i] + 1;
+        reduce_val[i]  = compute_val[i] + 2;
+        comm->vkctx[i]->comm_prog_val = reduce_val[i];
+        comm->last_reduce[i]          = reduce_val[i];
+        // Recycle the dedicated command pool once the GPU has finished everything recorded into it
+        // (non-blocking timeline query). During decode this happens every token; during a long
+        // prefill the GPU stays behind, so also cap the live command buffers and drain (bounded
+        // wait) when the pool grows too large -- otherwise it grows unbounded and command-buffer
+        // lookup goes quadratic.
+        uint64_t done = comm->device[i]->device.getSemaphoreCounterValue(comm->prog[i]);
+        if (done < comm->pool_max_val[i] && comm->cmd_pool[i].buffers_in_use() >= 256) {
+            vk::SemaphoreWaitInfo wi;
+            wi.semaphoreCount = 1;
+            wi.pSemaphores    = &comm->prog[i];
+            wi.pValues        = &comm->pool_max_val[i];
+            (void) comm->device[i]->device.waitSemaphores(wi, UINT64_MAX);
+            done = comm->pool_max_val[i];
+        }
+        if (done >= comm->pool_max_val[i]) {
+            ggml_vk_command_pool_cleanup(comm->device[i], comm->cmd_pool[i]);
+        }
+        comm->pool_max_val[i] = reduce_val[i];
+    }
+
+    // For each device, record the gather and reduce as two batches in one command context and issue
+    // them with a single vkQueueSubmit (the global queue mutex makes each submit the dominant cost).
+    for (size_t i = 0; i < n; i++) {
+        ggml_tensor * tmp = comm->tmp_tensor[i];
+        for (int d = 0; d < GGML_MAX_DIMS; d++) {
+            tmp->ne[d] = tensors[i]->ne[d];
+        }
+        tmp->nb[0] = ggml_type_size(GGML_TYPE_F32);
+        for (int d = 1; d < GGML_MAX_DIMS; d++) {
+            tmp->nb[d] = tmp->nb[d - 1] * tmp->ne[d - 1];
+        }
+        ggml_backend_vk_buffer_context * tbc = (ggml_backend_vk_buffer_context *) comm->tmp_buffer[i]->context;
+        vk_context c = ggml_vk_create_temporary_context(comm->cmd_pool[i]);
+
+        // gather batch: wait this device's compute and the peers' previous reduce (so the shared host
+        // buffer is safe to overwrite); copy this slice to host; signal the gather value.
+        ggml_vk_ctx_begin(comm->device[i], c);
+        c->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] });
+        for (size_t k = 0; k < n; k++) {
+            if (k != i) {
+                c->s->wait_semaphores.push_back({ comm->peer_prog[i][k], prev_reduce[k] });
+            }
+        }
+        if (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) {
+            ggml_backend_vk_buffer_context * bc = (ggml_backend_vk_buffer_context *) tensors[i]->buffer->context;
+            ggml_vk_buffer_copy_async(c, comm->host_buf[i][i], 0, bc->dev_buffer,
+                                      vk_tensor_offset(tensors[i]) + tensors[i]->view_offs, nbytes);
+        } else {
+            ggml_vk_buffer_memset_async(c, comm->host_buf[i][i], 0, 0, nbytes);
+        }
+        ggml_vk_ctx_end(c);
+        c->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], gather_val[i] });
+
+        // reduce batch: wait this device's gather (so it has finished reading this slice) and the
+        // peers' gather (cross-device); add each peer slice in; signal the reduce value.
+        ggml_vk_ctx_begin(comm->device[i], c);
+        c->s->wait_semaphores.push_back({ comm->prog[i], gather_val[i] });
+        for (size_t k = 0; k < n; k++) {
+            if (k != i) {
+                c->s->wait_semaphores.push_back({ comm->peer_prog[i][k], gather_val[k] });
+            }
+        }
+        for (size_t k = 0; k < n; k++) {
+            if (k == i) {
+                continue;
+            }
+            ggml_vk_buffer_copy_async(c, tbc->dev_buffer, 0, comm->host_buf[k][i], 0, nbytes);
+            ggml_vk_sync_buffers(comm->vkctx[i], c);
+            ggml_vk_add(comm->vkctx[i], c, tensors[i], tmp, tensors[i]);
+            ggml_vk_sync_buffers(comm->vkctx[i], c);
+        }
+        ggml_vk_ctx_end(c);
+        c->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], reduce_val[i] });
+
+        ggml_vk_submit(c, {});
+    }
+    return true;
+}
+
+static void * ggml_backend_vk_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    UNUSED(reg);
+    if (strcmp(name, "ggml_backend_comm_init") == 0) {
+        return (void *) ggml_backend_vk_comm_init;
+    }
+    if (strcmp(name, "ggml_backend_comm_free") == 0) {
+        return (void *) ggml_backend_vk_comm_free;
+    }
+    if (strcmp(name, "ggml_backend_comm_allreduce_tensor") == 0) {
+        return (void *) ggml_backend_vk_comm_allreduce_tensor;
+    }
+    return nullptr;
+}
+
 static const struct ggml_backend_reg_i ggml_backend_vk_reg_i = {
     /* .get_name         = */ ggml_backend_vk_reg_get_name,
     /* .get_device_count = */ ggml_backend_vk_reg_get_device_count,
     /* .get_device       = */ ggml_backend_vk_reg_get_device,
-    /* .get_proc_address = */ NULL,
+    /* .get_proc_address = */ ggml_backend_vk_reg_get_proc_address,
 };
 
 ggml_backend_reg_t ggml_backend_vk_reg() {
