@@ -1681,7 +1681,7 @@ void server_models_routes::init_routes() {
         }
         // remember which child serves this conversation so the stream routes can route straight
         // to it without polling, keyed on the exact conv id from the header
-        std::string conv_id = stream_conv_id_from_headers(req.headers);
+        std::string conv_id = server_stream_conv_id_from_headers(req.headers);
         if (!conv_id.empty()) {
             models.conv_models.remember(conv_id, name);
         }

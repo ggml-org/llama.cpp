@@ -76,19 +76,19 @@ void server_stream_session_manager_stop();
 
 // route handler factories operating on g_stream_sessions, wired under /v1/stream/* by server.cpp.
 // keeps the resumable stream surface confined to server-stream
-server_http_context::handler_t make_stream_get_handler();
-server_http_context::handler_t make_streams_lookup_handler();
-server_http_context::handler_t make_stream_delete_handler();
+server_http_context::handler_t server_stream_make_get_handler();
+server_http_context::handler_t server_stream_make_lookup_handler();
+server_http_context::handler_t server_stream_make_delete_handler();
 
 // extract the X-Conversation-Id header value (case-insensitive), empty when absent. exposed so
 // the router can track which child serves a forwarded POST
-std::string stream_conv_id_from_headers(const std::map<std::string, std::string> & headers);
+std::string server_stream_conv_id_from_headers(const std::map<std::string, std::string> & headers);
 
 // on an X-Conversation-Id header, create or replace the session and attach a producer pipe to
 // res. no-op when absent, called from the server_res_generator constructor
-void stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers);
+void server_stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers);
 
 // should_stop closure that ignores peer disconnect when a pipe is attached, so only an explicit
 // DELETE stops the producer and generation keeps flowing into the ring buffer. without a pipe it
 // delegates to fallback, the legacy non-resumable flow
-std::function<bool()> stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback);
+std::function<bool()> server_stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback);
