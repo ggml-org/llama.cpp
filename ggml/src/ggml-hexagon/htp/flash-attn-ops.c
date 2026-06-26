@@ -593,7 +593,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
         const size_t d_tile_bytes  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);
         const size_t o_tile_bytes  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);
 
-        // 1. Initialize vtcm_l_vec & 3. Initialize vtcm_m_vec
+        // 1. Initialize vtcm_l_vec & vtcm_m_vec
         const size_t l_bytes_per_t = hex_align_up(col_vec_bytes / n, 128);
         const size_t l_start       = i * l_bytes_per_t;
         const size_t l_end         = hex_smin(l_start + l_bytes_per_t, col_vec_bytes);
@@ -608,14 +608,24 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
             const size_t  r_start    = l_start / sizeof(float);
             const size_t  r_end      = l_end / sizeof(float);
             const float   scale_factor = EXP_LOG2E_F;
-            for (size_t r = r_start; r < r_end; ++r) {
-                if (r < n_rows_g) {
-                    const size_t h_idx = fastmodulo(r, G, &factx->div_G);
-                    const size_t head  = args->kv_head * G + h_idx;
-                    m_vec[r] = (float) (sinks_data[head] * scale_factor);
-                } else {
-                    m_vec[r] = -INFINITY;
+
+            const HVX_Vector v_scale = hvx_vec_splat_f32(scale_factor);
+
+            for (size_t r = r_start; r < r_end; r += 32) {
+                float local_m[32] __attribute__((aligned(128)));
+                for (size_t j = 0; j < 32; ++j) {
+                    size_t curr_r = r + j;
+                    if (curr_r < n_rows_g) {
+                        const size_t h_idx = fastmodulo(curr_r, G, &factx->div_G);
+                        const size_t head  = args->kv_head * G + h_idx;
+                        local_m[j] = sinks_data[head];
+                    } else {
+                        local_m[j] = -INFINITY;
+                    }
                 }
+                HVX_Vector v_val = *(const HVX_Vector *) local_m;
+                HVX_Vector v_scaled = HVX_OP_MUL_F32(v_val, v_scale);
+                *(HVX_Vector *) (m_vec + r) = v_scaled;
             }
             if (l_start < col_vec_bytes) {
                 hvx_splat_u8_a((char *) factx->vtcm_l_vec + l_start, 0, l_end - l_start);
