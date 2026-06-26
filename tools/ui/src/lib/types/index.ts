@@ -34,7 +34,8 @@ export type {
 	ApiRouterModelsListResponse,
 	ApiRouterModelsUnloadRequest,
 	ApiRouterModelsUnloadResponse,
-	AudioInputFormat
+	AudioInputFormat,
+	ApiStreamSession
 } from './api';
 
 // Chat types

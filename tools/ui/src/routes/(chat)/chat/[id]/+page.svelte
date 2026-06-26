@@ -4,7 +4,7 @@
 	import { afterNavigate } from '$app/navigation';
 	import { DialogModelNotAvailable } from '$lib/components/app';
 	import { APP_NAME, ROUTES } from '$lib/constants';
-	import { chatStore, isLoading } from '$lib/stores/chat.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 
@@ -83,7 +83,7 @@
 
 			// Skip loading if this conversation is already active (e.g., just created)
 			if (activeConversation()?.id === chatId) {
-				// Still handle URL params even if conversation is active
+				void chatStore.discoverActiveStream(chatId);
 				if ((qParam !== null || modelParam !== null) && !urlParamsProcessed) {
 					handleUrlParams();
 				}
@@ -92,35 +92,33 @@
 
 			(async () => {
 				const success = await conversationsStore.loadConversation(chatId);
-				if (success) {
-					chatStore.syncLoadingStateForChat(chatId);
-
-					// Handle URL params after conversation is loaded
-					if ((qParam !== null || modelParam !== null) && !urlParamsProcessed) {
-						await handleUrlParams();
-					}
-				} else {
+				if (!success) {
 					await goto(ROUTES.START);
+					return;
+				}
+				chatStore.syncLoadingStateForChat(chatId);
+				// server probe (with localStorage fallback) and attach
+				await chatStore.discoverActiveStream(chatId);
+
+				if ((qParam !== null || modelParam !== null) && !urlParamsProcessed) {
+					await handleUrlParams();
 				}
 			})();
 		}
 	});
 
 	$effect(() => {
-		if (typeof window !== 'undefined') {
-			const handleBeforeUnload = () => {
-				if (isLoading()) {
-					console.log('Page unload detected while streaming - aborting stream');
-					chatStore.stopGeneration();
-				}
-			};
+		if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-			window.addEventListener('beforeunload', handleBeforeUnload);
-
-			return () => {
-				window.removeEventListener('beforeunload', handleBeforeUnload);
-			};
-		}
+		// when the tab comes back to the foreground, re-run discovery to catch any race
+		// where the initial mount probe missed an active session
+		const onVisibility = () => {
+			if (document.visibilityState !== 'visible') return;
+			if (!chatId) return;
+			void chatStore.discoverActiveStream(chatId);
+		};
+		document.addEventListener('visibilitychange', onVisibility);
+		return () => document.removeEventListener('visibilitychange', onVisibility);
 	});
 </script>
 

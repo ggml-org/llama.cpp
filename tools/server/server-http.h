@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -10,6 +11,7 @@
 #include <unordered_map>
 
 struct common_params;
+struct stream_pipe_producer; // defined in server-stream.h
 
 // generator-like API for HTTP response generation
 // this object response with one of the 2 modes:
@@ -23,11 +25,19 @@ struct server_http_res {
     std::string data;
     std::map<std::string, std::string> headers;
 
-    // TODO: move this to a virtual function once we have proper polymorphism support
+    // if set, the stream survives a client disconnect: the producer pipe keeps draining into the
+    // ring buffer and finalizes the session on destruction, so no explicit on_stream_end is needed.
+    // shared_ptr (not unique_ptr) so the forward-declared type is safe to delete here.
+    std::shared_ptr<stream_pipe_producer> spipe;
+
     std::function<bool(std::string &)> next = nullptr;
     bool is_stream() const {
         return next != nullptr;
     }
+
+    // called when the session is cancelled (e.g. DELETE /v1/stream/<conv_id>).
+    // server_res_generator overrides this to stop its reader; the default is a no-op.
+    virtual void stop() {}
 
     virtual ~server_http_res() = default;
 };

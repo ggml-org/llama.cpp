@@ -512,3 +512,18 @@ export interface ApiRouterModelsUnloadResponse {
 	success: boolean;
 	error?: string;
 }
+
+/**
+ * Entry returned by POST /v1/streams/lookup. The client passes the conv ids it owns in the body
+ * and the server returns one entry per matching live or recently completed background streaming
+ * session, keyed by conversation_id. The WebUI uses this at mount and on visibilitychange to
+ * populate sidebar spinners and to reattach to an ongoing inference for the active conversation.
+ * The server never lists ids the client did not ask about, so foreign random UUIDs stay private.
+ */
+export interface ApiStreamSession {
+	conversation_id: string;
+	is_done: boolean;
+	total_bytes: number;
+	started_at: number;
+	completed_at: number;
+}

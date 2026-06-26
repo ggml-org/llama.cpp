@@ -614,7 +614,7 @@ class AgenticStore {
 							throw error;
 						}
 					},
-					undefined,
+					conversationId,
 					signal
 				);
 

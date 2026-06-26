@@ -683,3 +683,11 @@ export { default as ChatScreenProcessingInfo } from './ChatScreen/ChatScreenProc
  * Rendered inside ChatScreen when `serverError` store has a value.
  */
 export { default as ChatScreenServerError } from './ChatScreen/ChatScreenServerError.svelte';
+
+/**
+ * Stream resume status indicator. Shows a small "Reconnecting to the stream..."
+ * banner with a spinner while `chatStore.streamConnectionState` is `resuming`,
+ * i.e. after a dropped connection is reattaching to the live SSE replay buffer.
+ * Renders nothing otherwise. Shown inside ChatScreen only on an active conversation route.
+ */
+export { default as ChatScreenStreamResumeStatus } from './ChatScreen/ChatScreenStreamResumeStatus.svelte';

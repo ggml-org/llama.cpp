@@ -4,9 +4,10 @@ import type { OpenAIToolDefinition } from './mcp';
 import type { DatabaseMessageExtra } from './database';
 import type {
 	ParameterSource,
-	ReasoningEffort,
 	SyncableParameterType,
-	SettingsFieldType
+	SettingsFieldType,
+	StreamConnectionState,
+	ReasoningEffort
 } from '$lib/enums';
 import type { Icon } from '@lucide/svelte';
 import type { Component } from 'svelte';
@@ -119,6 +120,7 @@ export interface SettingsChatServiceOptions {
 		toolCalls?: string
 	) => void;
 	onError?: (error: Error) => void;
+	onConnectionState?: (state: StreamConnectionState) => void;
 }
 
 export type SettingsConfigType = typeof SETTING_CONFIG_DEFAULT & {
