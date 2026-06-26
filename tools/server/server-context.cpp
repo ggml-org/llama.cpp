@@ -1188,6 +1188,8 @@ private:
             params_dft.n_gpu_layers = params_spec.n_gpu_layers;
             params_dft.cache_type_k = params_spec.cache_type_k;
             params_dft.cache_type_v = params_spec.cache_type_v;
+            
+            params_dft.n_outputs_max = params_base.n_parallel;
 
             if (params_spec.cpuparams.n_threads > 0) {
                 params_dft.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
