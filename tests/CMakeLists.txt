@@ -218,6 +218,11 @@ if (GGML_SYCL)
     add_executable(test-sycl-stress-deep test-sycl-stress-deep.cpp)
     target_link_libraries(test-sycl-stress-deep PRIVATE llama-common ggml-sycl)
     add_test(NAME test-sycl-stress-deep COMMAND test-sycl-stress-deep)
+
+    # CPU-vs-SYCL numerical correctness harness for the TurboQuant kernels.
+    add_executable(test-sycl-turbo-correctness test-sycl-turbo-correctness.cpp)
+    target_link_libraries(test-sycl-turbo-correctness PRIVATE llama llama-common ggml-cpu ggml-sycl)
+    add_test(NAME test-sycl-turbo-correctness COMMAND test-sycl-turbo-correctness)
 endif()
 llama_build_and_test(
     test-peg-parser.cpp
