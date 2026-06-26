@@ -250,10 +250,12 @@ static void probe_mul_mat(ggml_backend_t cpu, ggml_backend_t sycl,
 // reference run on CPU. The reference uses the same raw K/V values in F16, so a
 // correct turbo FA kernel should land within quantization error (high cosine);
 // genuine nonsense collapses the cosine.
+// n_q selects the kernel: n_q==1 (decode) routes to the VEC path, n_q>2 routes
+// to TILE. `path` is just a display hint.
 static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
-                             ggml_type kv_type, const char * name) {
+                             ggml_type kv_type, const char * name,
+                             int64_t n_q, const char * path) {
     const int64_t d    = 128;   // head dim
-    const int64_t n_q  = 8;     // query tokens
     const int64_t n_kv = 256;   // cached tokens (multiple of FATTN_KQ_STRIDE)
     const int64_t nh   = 1;     // heads
     const int64_t pad  = 64;    // GGML_KQ_MASK_PAD
@@ -288,7 +290,7 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
     };
 
     char label[64];
-    snprintf(label, sizeof(label), "flash_attn %s (forced)", name);
+    snprintf(label, sizeof(label), "flash_attn %s [%s nq=%d]", name, path, (int) n_q);
 
     // Reference: F16 K/V on CPU.
     bool cpu_ok = true;
@@ -333,9 +335,57 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
            tag, label, s.nmse, s.max_abs, s.cosine);
 }
 
+// (5) Baseline: standard f16 KV flash attention, SYCL vs CPU. This is NOT a
+// turbo path -- it tests whether the merged SYCL FA kernels are correct at all.
+// If this fails, the FellypeMelo FA header changes regressed the whole FA path
+// (not just turbo); if it passes, only the turbo FA fusion is broken.
+static void probe_fa_f16(ggml_backend_t cpu, ggml_backend_t sycl,
+                         int64_t n_q, const char * path) {
+    const int64_t d = 128, n_kv = 256, nh = 1, pad = 64;
+    const int64_t n_q_pad = ((n_q + pad - 1) / pad) * pad;
+
+    auto q_f32 = gen_normal(d * n_q * nh, 0xF16Au);
+    auto k_f32 = gen_normal(d * n_kv * nh, 0xF16Bu);
+    auto v_f32 = gen_normal(d * n_kv * nh, 0xF16Cu);
+    std::vector<ggml_fp16_t> k_f16(k_f32.size()), v_f16(v_f32.size());
+    ggml_fp32_to_fp16_row(k_f32.data(), k_f16.data(), k_f32.size());
+    ggml_fp32_to_fp16_row(v_f32.data(), v_f16.data(), v_f32.size());
+    std::vector<ggml_fp16_t> mask(n_kv * n_q_pad, ggml_fp32_to_fp16(0.0f));
+    const float scale = 1.0f / std::sqrt((float) d);
+
+    auto build = [=](ggml_context * ctx) -> ggml_tensor * {
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d, n_q, nh, 1); ggml_set_name(q, "q");
+        ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, n_kv, nh, 1); ggml_set_name(k, "k");
+        ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, n_kv, nh, 1); ggml_set_name(v, "v");
+        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv, n_q_pad, 1, 1); ggml_set_name(m, "m");
+        return ggml_flash_attn_ext(ctx, q, k, v, m, scale, 0.0f, 0.0f);
+    };
+    auto set = [=](ggml_context * ctx) {
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_f16.data(), 0, k_f16.size() * sizeof(ggml_fp16_t));
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_f16.data(), 0, v_f16.size() * sizeof(ggml_fp16_t));
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "m"), mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
+    };
+
+    char label[64];
+    snprintf(label, sizeof(label), "flash_attn f16 [%s nq=%d]", path, (int) n_q);
+
+    bool cok = true, sok = true;
+    auto ref = run_on_backend(cpu, build, set, &cok);
+    if (!cok) { skip(label, "CPU lacks f16 FA"); return; }
+    auto test = run_on_backend(sycl, build, set, &sok);
+    if (!sok) { skip(label, "SYCL reports f16 FA unsupported"); return; }
+    if (test.size() != ref.size() || ref.empty()) {
+        printf("  [FAIL] %-28s size mismatch\n", label); g_failures++; return;
+    }
+    verdict(label, compare(test, ref));
+}
+
 // ---------------------------------------------------------------------------
 
 int main() {
+    setvbuf(stdout, nullptr, _IONBF, 0); // unbuffered: partial results survive a hang/kill
+
     ggml_backend_t cpu = ggml_backend_cpu_init();
     if (!cpu) {
         fprintf(stderr, "failed to init CPU backend\n");
@@ -367,10 +417,21 @@ int main() {
     probe_mul_mat(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, 64);
     probe_mul_mat(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, 64);
 
-    printf("\n[4] flash attention (turbo KV cache)\n");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0");
+    // Baseline FIRST: standard f16 FA. TILE (n_q=8) before VEC (n_q=1): if VEC
+    // crashes it std::exit()s the process, so test the tile path first.
+    printf("\n[4] flash attention f16 KV (baseline, non-turbo) - SYCL vs CPU\n");
+    probe_fa_f16(cpu, sycl, 8, "tile");
+    probe_fa_f16(cpu, sycl, 1, "vec");
+
+    printf("\n[5] flash attention (turbo KV cache) - VEC path (n_q=1, decode)\n");
+    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 1, "vec");
+    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 1, "vec");
+    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 1, "vec");
+
+    printf("\n[6] flash attention (turbo KV cache) - TILE path (n_q=8, prefill)\n");
+    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 8, "tile");
+    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 8, "tile");
+    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 8, "tile");
 
     printf("\n== summary: %d FAIL, %d SKIP ==\n", g_failures, g_skips);
 
