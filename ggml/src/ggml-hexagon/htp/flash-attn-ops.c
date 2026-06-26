@@ -453,9 +453,9 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
         // Store result
         // dst indices
-        const int i1 = iq1;
-        const int i2 = iq2;
-        const int i3 = iq3;
+        const uint32_t i1 = iq1;
+        const uint32_t i2 = iq2;
+        const uint32_t i3 = iq3;
 
         // dst is permuted: [DV, n_heads, n_tokens, n_seq]
         // head stride is nb[1], token stride is nb[2], batch stride is nb[3]
@@ -476,7 +476,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
 typedef struct {
     struct hmx_fa_context * factx;
-    int                     kv_rows;
+    uint32_t                kv_rows;
     size_t                  src_stride;
     size_t                  buf_idx;
     uint32_t                kv_start;
@@ -486,10 +486,10 @@ static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) 
     fa_k_int_args_t *       args  = (fa_k_int_args_t *) data;
     struct hmx_fa_context * factx = args->factx;
 
-    const int total_rows = args->kv_rows;
-    const int rows_per_t = hex_align_up(hmx_ceil_div(total_rows, n), 2);  // ensure even (row pairs)
-    const int start      = i * rows_per_t;
-    const int end        = hex_smin(start + rows_per_t, total_rows);
+    const uint32_t total_rows = args->kv_rows;
+    const uint32_t rows_per_t = hex_align_up(hmx_ceil_div(total_rows, n), 2);  // ensure even (row pairs)
+    const uint32_t start      = i * rows_per_t;
+    const uint32_t end        = (uint32_t) hex_smin(start + rows_per_t, total_rows);
 
     if (start >= total_rows) {
         return;
@@ -497,15 +497,15 @@ static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) 
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_K_PREP, (uint16_t) (args->kv_start + start));
-    hmx_interleave_rows_to_tiles(factx->vtcm_k_tiles, factx->vtcm_k_fp16[args->buf_idx], total_rows, (int) factx->DK,
-                             (int) args->src_stride, start, end);
+    hmx_interleave_rows_to_tiles(factx->vtcm_k_tiles, factx->vtcm_k_fp16[args->buf_idx], (int) total_rows, (int) factx->DK,
+                             (int) args->src_stride, (int) start, (int) end);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_K_PREP, (uint16_t) (args->kv_start + start));
 }
 
-static void fa_phase_k_interleave(struct hmx_fa_context * factx, int kv_rows, size_t src_stride, size_t buf_idx, uint32_t kv_start) {
+static void fa_phase_k_interleave(struct hmx_fa_context * factx, uint32_t kv_rows, size_t src_stride, size_t buf_idx, uint32_t kv_start) {
     worker_pool_context_t wp = factx->octx->ctx->worker_pool;
     fa_k_int_args_t args = { factx, kv_rows, src_stride, buf_idx, kv_start };
-    if (factx->n_threads > 1 && kv_rows >= (int) (factx->n_threads * 2)) {
+    if (factx->n_threads > 1 && kv_rows >= factx->n_threads * 2) {
         worker_pool_run_func(wp, fa_k_interleave_thread, &args, factx->n_threads);
     } else {
         fa_k_interleave_thread(1, 0, &args);
@@ -514,7 +514,7 @@ static void fa_phase_k_interleave(struct hmx_fa_context * factx, int kv_rows, si
 
 typedef struct {
     struct hmx_fa_context * factx;
-    int                     kv_rows;
+    uint32_t                kv_rows;
     size_t                  src_stride;
     size_t                  buf_idx;
     size_t                  n_col_tiles;
@@ -525,10 +525,10 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
     fa_v_int_args_t *       args  = (fa_v_int_args_t *) data;
     struct hmx_fa_context * factx = args->factx;
 
-    const int total_rows = args->kv_rows;
-    const int rows_per_t = hex_align_up(hmx_ceil_div(total_rows, n), 2);
-    const int start      = i * rows_per_t;
-    const int end        = hex_smin(start + rows_per_t, total_rows);
+    const uint32_t total_rows = args->kv_rows;
+    const uint32_t rows_per_t = hex_align_up(hmx_ceil_div(total_rows, n), 2);
+    const uint32_t start      = i * rows_per_t;
+    const uint32_t end        = (uint32_t) hex_smin(start + rows_per_t, total_rows);
 
     if (start >= total_rows) {
         return;
@@ -538,20 +538,20 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, (uint16_t) (args->kv_start + start));
-    hmx_interleave_cols_to_tiles(v_tiles_dest, factx->vtcm_v_fp16[args->buf_idx], total_rows, (int) factx->DV,
-                             (int) args->src_stride, (int) args->n_col_tiles, start, end);
+    hmx_interleave_cols_to_tiles(v_tiles_dest, factx->vtcm_v_fp16[args->buf_idx], (int) total_rows, (int) factx->DV,
+                             (int) args->src_stride, (int) args->n_col_tiles, (int) start, (int) end);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, (uint16_t) (args->kv_start + start));
 }
 
 static void fa_phase_v_interleave(struct hmx_fa_context * factx,
-                                  int                     kv_rows,
+                                  uint32_t                kv_rows,
                                   size_t                  src_stride,
                                   size_t                  buf_idx,
                                   size_t                  n_col_tiles,
                                   uint32_t                kv_start) {
     worker_pool_context_t wp = factx->octx->ctx->worker_pool;
     fa_v_int_args_t args = { factx, kv_rows, src_stride, buf_idx, n_col_tiles, kv_start };
-    if (factx->n_threads > 1 && kv_rows >= (int) (factx->n_threads * 2)) {
+    if (factx->n_threads > 1 && kv_rows >= factx->n_threads * 2) {
         worker_pool_run_func(wp, fa_v_interleave_thread, &args, factx->n_threads);
     } else {
         fa_v_interleave_thread(1, 0, &args);
@@ -821,14 +821,14 @@ static inline void fa_softmax_impl(
             v_slopes = hvx_vmem(args->slopes + r_vec_idx * 64);
         }
 
-        for (int r_vec_off = 0; r_vec_off < 64; r_vec_off += 2) {
-            int r = r_vec_idx * 64 + r_vec_off;
-            if (r >= (int) hex_align_up(n_rows_g, 2)) {
+        for (uint32_t r_vec_off = 0; r_vec_off < 64; r_vec_off += 2) {
+            uint32_t r = r_vec_idx * 64 + r_vec_off;
+            if (r >= hex_align_up(n_rows_g, 2)) {
                 break;
             }
 
-            int r0 = r / HMX_FP16_TILE_N_ROWS;
-            int r1 = r % HMX_FP16_TILE_N_ROWS;
+            uint32_t r0 = r / HMX_FP16_TILE_N_ROWS;
+            uint32_t r1 = r % HMX_FP16_TILE_N_ROWS;
 
             const __fp16 * s_ld_base = factx->vtcm_s_tiles + r0 * HMX_FP16_TILE_N_ROWS * Bc;
             __fp16 *       p_st_base = factx->vtcm_p_tiles + r0 * HMX_FP16_TILE_N_ROWS * Bc;
@@ -877,7 +877,7 @@ static inline void fa_softmax_impl(
             HVX_Vector v_slope1 = Q6_V_vzero();
             if (has_alibi) {
                 v_slope0 = hvx_vec_repl_f16(Q6_V_vror_VR(v_slopes, r_vec_off * 2));
-                v_slope1 = (r + 1 < (int) n_rows_g) ? hvx_vec_repl_f16(Q6_V_vror_VR(v_slopes, (r_vec_off + 1) * 2)) : Q6_V_vzero();
+                v_slope1 = (r + 1 < n_rows_g) ? hvx_vec_repl_f16(Q6_V_vror_VR(v_slopes, (r_vec_off + 1) * 2)) : Q6_V_vzero();
             }
 
             const HVX_Vector v_threshold = Q6_Vh_vsplat_R(0xcc00);  // fp16 -16.0
@@ -897,7 +897,7 @@ static inline void fa_softmax_impl(
                             const size_t qi0 = r + 0;
                             v_mask0 = *(const HVX_Vector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
                             v_mask1 = v_neg_inf;
-                            if (r + 1 < (int) n_rows_g) {
+                            if (r + 1 < n_rows_g) {
                                 const size_t qi1 = r + 1;
                                 v_mask1 = *(const HVX_Vector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
                             }
@@ -905,7 +905,7 @@ static inline void fa_softmax_impl(
                             const size_t qi0 = fastdiv(r + 0, &factx->div_G);
                             v_mask0 = *(const HVX_Vector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
                             v_mask1 = v_neg_inf;
-                            if (r + 1 < (int) n_rows_g) {
+                            if (r + 1 < n_rows_g) {
                                 const size_t qi1 = fastdiv(r + 1, &factx->div_G);
                                 if (qi1 == qi0) {
                                     v_mask1 = v_mask0;
@@ -919,7 +919,7 @@ static inline void fa_softmax_impl(
                         const size_t r0 = r + 0;
                         v_mask0 = *(const HVX_Vector *) (args->mask_vtcm + r0 * args->mask_vtcm_row_stride + c);
                         v_mask1 = v_neg_inf;
-                        if (r + 1 < (int) n_rows_g) {
+                        if (r + 1 < n_rows_g) {
                             const size_t r1 = r + 1;
                             v_mask1 = *(const HVX_Vector *) (args->mask_vtcm + r1 * args->mask_vtcm_row_stride + c);
                         }
