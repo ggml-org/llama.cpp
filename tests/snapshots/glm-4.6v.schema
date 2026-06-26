@@ -1,3 +1,4 @@
+# Snapshot version: 1
 # Model: GLM-4.6V
 # n_embd=4096, n_ff=10944, n_vocab=151552, n_layer=46, n_head=96, n_head_kv=8, n_expert=128
 

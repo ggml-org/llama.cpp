@@ -1,3 +1,4 @@
+# Snapshot version: 1
 # Model: Meta-Llama-3.1-70B-Instruct
 # n_embd=8192, n_ff=28672, n_vocab=128256, n_layer=80, n_head=64, n_head_kv=8
 

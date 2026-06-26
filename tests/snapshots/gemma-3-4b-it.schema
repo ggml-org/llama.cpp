@@ -1,3 +1,4 @@
+# Snapshot version: 1
 # Model: gemma-3-4b-it
 # n_embd=2560, n_ff=10240, n_vocab=262144, n_layer=34, n_head=8, n_head_kv=4
 

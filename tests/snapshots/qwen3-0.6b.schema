@@ -1,3 +1,4 @@
+# Snapshot version: 1
 # Model: Qwen3-0.6B
 # n_embd=1024, n_ff=3072, n_vocab=151936, n_layer=28, n_head=16, n_head_kv=8
 

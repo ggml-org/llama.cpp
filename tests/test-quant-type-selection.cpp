@@ -14,6 +14,11 @@
 #include <vector>
 
 // ---------------------------------------------------------------------------
+// Snapshot versioning: bump this when quantization behavior changes
+// ---------------------------------------------------------------------------
+static const int SNAPSHOT_VERSION = 1;
+
+// ---------------------------------------------------------------------------
 // ftype name <-> enum mapping
 // ---------------------------------------------------------------------------
 
@@ -101,9 +106,37 @@ struct snapshot_section {
     std::vector<std::pair<std::string, ggml_type>> overrides;
 };
 
+// Check if snapshot file has correct version
+static bool check_snapshot_version(const std::string & path) {
+    std::ifstream f(path);
+    if (!f.good()) {
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] != '#') {
+            continue;
+        }
+        if (line.find("# Snapshot version:") == 0) {
+            int version = 0;
+            if (sscanf(line.c_str(), "# Snapshot version: %d", &version) == 1) {
+                return version == SNAPSHOT_VERSION;
+            }
+            return false;
+        }
+    }
+    return false;
+}
+
 // This function is pretty ugly, but it's a trade-off of readable snapshot files
 // versus readable parsing code
 static bool parse_snapshot_file(const std::string & path, std::vector<snapshot_section> & sections) {
+    if (!check_snapshot_version(path)) {
+        fprintf(stderr, "ERROR: snapshot file %s has wrong version or is corrupted\n", path.c_str());
+        return false;
+    }
+
     std::ifstream f(path);
     if (!f.good()) {
         return false;
@@ -292,6 +325,7 @@ static std::string generate_snapshot(const std::string &       name,
                                      mock_tensors &            mt) {
     std::ostringstream out;
 
+    out << "# Snapshot version: " << SNAPSHOT_VERSION << "\n";
     out << "# Model: " << name << "\n";
     out << "# n_embd=" << remote.n_embd << ", n_ff=" << remote.n_ff << ", n_vocab=" << remote.n_vocab
         << ", n_layer=" << remote.n_layer << ", n_head=" << remote.n_head << ", n_head_kv=" << remote.n_head_kv;

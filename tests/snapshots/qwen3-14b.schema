@@ -1,3 +1,4 @@
+# Snapshot version: 1
 # Model: Qwen3-14B
 # n_embd=5120, n_ff=17408, n_vocab=151936, n_layer=40, n_head=40, n_head_kv=8
 

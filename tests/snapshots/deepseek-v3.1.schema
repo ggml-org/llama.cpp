@@ -1,3 +1,4 @@
+# Snapshot version: 1
 # Model: DeepSeek-V3.1
 # n_embd=7168, n_ff=18432, n_vocab=129280, n_layer=61, n_head=128, n_head_kv=1, n_expert=256
 

@@ -1,3 +1,4 @@
+# Snapshot version: 1
 # Model: Qwen3-Coder-Next
 # n_embd=2048, n_ff=5120, n_vocab=151936, n_layer=48, n_head=16, n_head_kv=2, n_expert=512
 

@@ -1,5 +1,6 @@
+# Snapshot version: 1
 # Model: Qwen3.5-397B-A17B
-# n_embd=4096, n_ff=0, n_vocab=248320, n_layer=60, n_head=32, n_head_kv=2, n_expert=512
+# n_embd=4096, n_ff=0, n_vocab=248320, n_layer=61, n_head=32, n_head_kv=2, n_expert=512
 
 [F32] f32
 
@@ -216,6 +217,10 @@ blk.59.attn_output.weight q3_K
 blk.59.attn_v.weight q4_K
 blk.59.ffn_down_exps.weight q3_K
 blk.59.ffn_down_shexp.weight q3_K
+blk.60.attn_output.weight q3_K
+blk.60.attn_v.weight q4_K
+blk.60.ffn_down_exps.weight q3_K
+blk.60.ffn_down_shexp.weight q3_K
 
 [Q3_K_S] q3_K
 output.weight q6_K
@@ -417,6 +422,10 @@ blk.59.attn_output.weight q4_K
 blk.59.attn_v.weight q4_K
 blk.59.ffn_down_exps.weight q4_K
 blk.59.ffn_down_shexp.weight q4_K
+blk.60.attn_output.weight q4_K
+blk.60.attn_v.weight q4_K
+blk.60.ffn_down_exps.weight q4_K
+blk.60.ffn_down_shexp.weight q4_K
 
 [Q3_K_L] q3_K
 output.weight q6_K
@@ -615,6 +624,10 @@ blk.59.attn_output.weight q5_K
 blk.59.attn_v.weight q5_K
 blk.59.ffn_down_exps.weight q5_K
 blk.59.ffn_down_shexp.weight q5_K
+blk.60.attn_output.weight q5_K
+blk.60.attn_v.weight q5_K
+blk.60.ffn_down_exps.weight q5_K
+blk.60.ffn_down_shexp.weight q5_K
 
 [Q4_K_S] q4_K
 output.weight q6_K
@@ -705,9 +718,6 @@ blk.48.ffn_down_shexp.weight q6_K
 blk.51.attn_v.weight q6_K
 blk.51.ffn_down_exps.weight q6_K
 blk.51.ffn_down_shexp.weight q6_K
-blk.52.attn_qkv.weight q6_K
-blk.52.ffn_down_exps.weight q6_K
-blk.52.ffn_down_shexp.weight q6_K
 blk.53.attn_qkv.weight q6_K
 blk.53.ffn_down_exps.weight q6_K
 blk.53.ffn_down_shexp.weight q6_K
@@ -729,6 +739,9 @@ blk.58.ffn_down_shexp.weight q6_K
 blk.59.attn_v.weight q6_K
 blk.59.ffn_down_exps.weight q6_K
 blk.59.ffn_down_shexp.weight q6_K
+blk.60.attn_v.weight q6_K
+blk.60.ffn_down_exps.weight q6_K
+blk.60.ffn_down_shexp.weight q6_K
 
 [Q5_K_S] q5_K
 output.weight q6_K
@@ -801,9 +814,6 @@ blk.48.ffn_down_shexp.weight q6_K
 blk.51.attn_v.weight q6_K
 blk.51.ffn_down_exps.weight q6_K
 blk.51.ffn_down_shexp.weight q6_K
-blk.52.attn_qkv.weight q6_K
-blk.52.ffn_down_exps.weight q6_K
-blk.52.ffn_down_shexp.weight q6_K
 blk.53.attn_qkv.weight q6_K
 blk.53.ffn_down_exps.weight q6_K
 blk.53.ffn_down_shexp.weight q6_K
@@ -825,6 +835,9 @@ blk.58.ffn_down_shexp.weight q6_K
 blk.59.attn_v.weight q6_K
 blk.59.ffn_down_exps.weight q6_K
 blk.59.ffn_down_shexp.weight q6_K
+blk.60.attn_v.weight q6_K
+blk.60.ffn_down_exps.weight q6_K
+blk.60.ffn_down_shexp.weight q6_K
 
 [Q6_K] q6_K
 
@@ -898,6 +911,7 @@ blk.56.attn_qkv.weight q4_K
 blk.57.attn_qkv.weight q4_K
 blk.58.attn_qkv.weight q4_K
 blk.59.attn_v.weight q4_K
+blk.60.attn_v.weight q4_K
 
 [IQ2_XS] iq2_xs
 output.weight q5_K
@@ -969,6 +983,7 @@ blk.56.attn_qkv.weight q4_K
 blk.57.attn_qkv.weight q4_K
 blk.58.attn_qkv.weight q4_K
 blk.59.attn_v.weight q4_K
+blk.60.attn_v.weight q4_K
 
 [Q2_K_S] q2_K
 output.weight q6_K
@@ -1046,6 +1061,7 @@ blk.56.attn_qkv.weight q4_K
 blk.57.attn_qkv.weight q4_K
 blk.58.attn_qkv.weight q4_K
 blk.59.attn_v.weight q4_K
+blk.60.attn_v.weight q4_K
 
 [IQ3_XS] iq3_s
 output.weight q6_K
@@ -1308,6 +1324,10 @@ blk.51.ffn_gate_shexp.weight iq3_xxs
 blk.51.ffn_up_exps.weight iq3_xxs
 blk.51.ffn_up_shexp.weight iq3_xxs
 blk.52.attn_qkv.weight q4_K
+blk.52.ffn_gate_exps.weight iq3_xxs
+blk.52.ffn_gate_shexp.weight iq3_xxs
+blk.52.ffn_up_exps.weight iq3_xxs
+blk.52.ffn_up_shexp.weight iq3_xxs
 blk.53.attn_qkv.weight q4_K
 blk.54.attn_qkv.weight q4_K
 blk.55.attn_k.weight iq3_xxs
@@ -1319,6 +1339,9 @@ blk.58.attn_qkv.weight q4_K
 blk.59.attn_k.weight iq3_xxs
 blk.59.attn_q.weight iq3_xxs
 blk.59.attn_v.weight q4_K
+blk.60.attn_k.weight iq3_xxs
+blk.60.attn_q.weight iq3_xxs
+blk.60.attn_v.weight q4_K
 
 [IQ3_XXS] iq3_xxs
 output.weight q5_K
@@ -1548,6 +1571,12 @@ blk.59.attn_q.weight iq2_s
 blk.59.attn_v.weight q4_K
 blk.59.ffn_down_exps.weight q3_K
 blk.59.ffn_down_shexp.weight q3_K
+blk.60.attn_k.weight iq2_s
+blk.60.attn_output.weight iq3_s
+blk.60.attn_q.weight iq2_s
+blk.60.attn_v.weight q4_K
+blk.60.ffn_down_exps.weight q3_K
+blk.60.ffn_down_shexp.weight q3_K
 
 [IQ1_S] iq1_s
 output.weight q5_K
@@ -1634,6 +1663,8 @@ blk.57.attn_qkv.weight q4_K
 blk.58.attn_qkv.weight q4_K
 blk.59.attn_output.weight iq2_xxs
 blk.59.attn_v.weight q4_K
+blk.60.attn_output.weight iq2_xxs
+blk.60.attn_v.weight q4_K
 
 [IQ4_NL] iq4_nl
 output.weight q6_K
@@ -1711,6 +1742,7 @@ blk.56.attn_qkv.weight q5_K
 blk.57.attn_qkv.weight q5_K
 blk.58.attn_qkv.weight q5_K
 blk.59.attn_v.weight q5_K
+blk.60.attn_v.weight q5_K
 
 [IQ3_S] iq3_s
 output.weight q6_K
@@ -1774,6 +1806,7 @@ blk.56.attn_qkv.weight q4_K
 blk.57.attn_qkv.weight q4_K
 blk.58.attn_qkv.weight q4_K
 blk.59.attn_v.weight q4_K
+blk.60.attn_v.weight q4_K
 
 [IQ3_M] iq3_s
 output.weight q6_K
@@ -1866,6 +1899,8 @@ blk.57.attn_qkv.weight q4_K
 blk.58.attn_qkv.weight q4_K
 blk.59.attn_output.weight q4_K
 blk.59.attn_v.weight q4_K
+blk.60.attn_output.weight q4_K
+blk.60.attn_v.weight q4_K
 
 [IQ2_S] iq2_xs
 output.weight q5_K
@@ -1952,6 +1987,8 @@ blk.57.attn_qkv.weight q4_K
 blk.58.attn_qkv.weight q4_K
 blk.59.attn_output.weight iq3_s
 blk.59.attn_v.weight q4_K
+blk.60.attn_output.weight iq3_s
+blk.60.attn_v.weight q4_K
 
 [IQ2_M] iq2_s
 output.weight q5_K
@@ -2038,6 +2075,8 @@ blk.57.attn_qkv.weight q4_K
 blk.58.attn_qkv.weight q4_K
 blk.59.attn_output.weight iq3_s
 blk.59.attn_v.weight q4_K
+blk.60.attn_output.weight iq3_s
+blk.60.attn_v.weight q4_K
 
 [IQ4_XS] iq4_xs
 output.weight q6_K
@@ -2115,6 +2154,7 @@ blk.56.attn_qkv.weight q5_K
 blk.57.attn_qkv.weight q5_K
 blk.58.attn_qkv.weight q5_K
 blk.59.attn_v.weight q5_K
+blk.60.attn_v.weight q5_K
 
 [IQ1_M] iq1_m
 output.weight q5_K
@@ -2201,6 +2241,8 @@ blk.57.attn_qkv.weight q4_K
 blk.58.attn_qkv.weight q4_K
 blk.59.attn_output.weight iq2_xxs
 blk.59.attn_v.weight q4_K
+blk.60.attn_output.weight iq2_xxs
+blk.60.attn_v.weight q4_K
 
 [BF16] bf16
 
@@ -2680,3 +2722,11 @@ blk.59.attn_v.weight q8_0
 blk.59.ffn_down_shexp.weight q8_0
 blk.59.ffn_gate_shexp.weight q8_0
 blk.59.ffn_up_shexp.weight q8_0
+blk.60.attn_k.weight q8_0
+blk.60.attn_output.weight q8_0
+blk.60.attn_q.weight q8_0
+blk.60.attn_v.weight q8_0
+blk.60.ffn_down_shexp.weight q8_0
+blk.60.ffn_gate_shexp.weight q8_0
+blk.60.ffn_up_shexp.weight q8_0
+blk.60.nextn.eh_proj.weight q8_0
