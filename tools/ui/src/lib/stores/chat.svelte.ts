@@ -56,7 +56,7 @@ import type {
 	DatabaseMessageExtra
 } from '$lib/types';
 import {
-    AttachmentType,
+	AttachmentType,
 	ContinueIntentKind,
 	ErrorDialogType,
 	MessageRole,
