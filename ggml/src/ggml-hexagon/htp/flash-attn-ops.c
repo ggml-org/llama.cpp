@@ -603,7 +603,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
         const uint32_t g_br = factx->g_br;
         const uint32_t DV   = factx->DV;
 
-        const size_t col_vec_bytes = hex_align_up(g_br * sizeof(__fp16), 256);
+        const size_t col_vec_bytes = hex_align_up(g_br * sizeof(float), 256);
         const size_t d_tile_bytes  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);
         const size_t o_tile_bytes  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);
 
@@ -618,9 +618,9 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
 
         if (args->sinks) {
             const float * sinks_data = (const float *) (uintptr_t) args->sinks->data;
-            __fp16 *      m_vec      = (__fp16 *) factx->vtcm_m_vec;
-            const size_t  r_start    = l_start / sizeof(__fp16);
-            const size_t  r_end      = l_end / sizeof(__fp16);
+            float *       m_vec      = (float *) factx->vtcm_m_vec;
+            const size_t  r_start    = l_start / sizeof(float);
+            const size_t  r_end      = l_end / sizeof(float);
 #ifdef HMX_FA_USE_EXP2_HF
             const float   scale_factor = 1.44269504f;
 #else
@@ -630,9 +630,9 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
                 if (r < n_rows_g) {
                     const size_t h_idx = fastmodulo(r, G, &factx->div_G);
                     const size_t head  = args->kv_head * G + h_idx;
-                    m_vec[r] = (__fp16) (sinks_data[head] * scale_factor);
+                    m_vec[r] = (float) (sinks_data[head] * scale_factor);
                 } else {
-                    m_vec[r] = (__fp16) -65504.0f;
+                    m_vec[r] = -INFINITY;
                 }
             }
             if (l_start < col_vec_bytes) {
@@ -643,7 +643,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
                 hvx_splat_u8_a((char *) factx->vtcm_l_vec + l_start, 0, l_end - l_start);
             }
             if (m_start < col_vec_bytes) {
-                hvx_splat_u16_a((char *) factx->vtcm_m_vec + m_start, 0xfbff, (m_end - m_start) / 2);
+                hvx_splat_f32_a((char *) factx->vtcm_m_vec + m_start, -INFINITY, (m_end - m_start) / sizeof(float));
             }
         }
 
@@ -945,7 +945,8 @@ static inline void fa_softmax_impl(
     for (size_t r_vec_idx = vec_start; r_vec_idx < vec_end; ++r_vec_idx) {
         HVX_Vector rowmax_acc_v = v_neg_inf;
         HVX_Vector rowsum_acc_v = Q6_V_vzero();
-        HVX_Vector m_prev_v     = factx->vtcm_m_vec[r_vec_idx];
+        HVX_Vector m_prev_v0    = factx->vtcm_m_vec[r_vec_idx * 2 + 0];
+        HVX_Vector m_prev_v1    = factx->vtcm_m_vec[r_vec_idx * 2 + 1];
 
         HVX_Vector v_slopes = Q6_V_vzero();
         if (has_alibi) {
@@ -1083,9 +1084,27 @@ static inline void fa_softmax_impl(
             v_s_rowmax0 = hvx_vec_reduce_max_f16(v_s_rowmax0);
             v_s_rowmax1 = hvx_vec_reduce_max_f16(v_s_rowmax1);
 
-            // Splat m_prev[r], m_prev[r+1] from the per-row accumulator.
-            HVX_Vector v_m_prev0 = hvx_vec_repl_f16(Q6_V_vror_VR(m_prev_v, r_vec_off * 2));
-            HVX_Vector v_m_prev1 = hvx_vec_repl_f16(Q6_V_vror_VR(m_prev_v, (r_vec_off + 1) * 2));
+            // Splat m_prev[r], m_prev[r+1] from the float per-row accumulators and convert to fp16 vectors
+            HVX_Vector v_m_prev0, v_m_prev1;
+            if (r_vec_off < 32) {
+                HVX_Vector v0 = hvx_vec_repl_f32(Q6_V_vror_VR(m_prev_v0, r_vec_off * 4));
+                v_m_prev0 = hvx_vec_f32_to_f16(v0, v0);
+                if (r + 1 < n_rows_g) {
+                    HVX_Vector v1 = hvx_vec_repl_f32(Q6_V_vror_VR(m_prev_v0, (r_vec_off + 1) * 4));
+                    v_m_prev1 = hvx_vec_f32_to_f16(v1, v1);
+                } else {
+                    v_m_prev1 = Q6_V_vzero();
+                }
+            } else {
+                HVX_Vector v0 = hvx_vec_repl_f32(Q6_V_vror_VR(m_prev_v1, (r_vec_off - 32) * 4));
+                v_m_prev0 = hvx_vec_f32_to_f16(v0, v0);
+                if (r + 1 < n_rows_g) {
+                    HVX_Vector v1 = hvx_vec_repl_f32(Q6_V_vror_VR(m_prev_v1, (r_vec_off + 1 - 32) * 4));
+                    v_m_prev1 = hvx_vec_f32_to_f16(v1, v1);
+                } else {
+                    v_m_prev1 = Q6_V_vzero();
+                }
+            }
 
             HVX_Vector v_dup_m0 = Q6_Vhf_vmax_VhfVhf(v_m_prev0, v_s_rowmax0);
             HVX_Vector v_dup_m1 = Q6_Vhf_vmax_VhfVhf(v_m_prev1, v_s_rowmax1);
@@ -1162,33 +1181,50 @@ static inline void fa_softmax_impl(
         }
 
         // Inline fa_ml_update_and_build_d for this vector (lock-free and in parallel)
-        HVX_Vector v_m_prev = factx->vtcm_m_vec[r_vec_idx];
-        HVX_Vector v_m_curr = Q6_Vhf_vmax_VhfVhf(v_m_prev, rowmax_acc_v);
-        HVX_Vector v_m_diff = Q6_Vqf16_vsub_VhfVhf(v_m_prev, v_m_curr);
+        HVX_VectorPair rowmax_acc_pair = hvx_vec_f16_to_f32(rowmax_acc_v);
+        HVX_Vector     v_rowmax_acc_f32_0 = Q6_V_lo_W(rowmax_acc_pair);
+        HVX_Vector     v_rowmax_acc_f32_1 = Q6_V_hi_W(rowmax_acc_pair);
+
+        HVX_Vector v_m_curr0 = Q6_Vsf_vmax_VsfVsf(m_prev_v0, v_rowmax_acc_f32_0);
+        HVX_Vector v_m_curr1 = Q6_Vsf_vmax_VsfVsf(m_prev_v1, v_rowmax_acc_f32_1);
+
+        HVX_Vector v_m_diff0 = HVX_OP_SUB_F32(m_prev_v0, v_m_curr0);
+        HVX_Vector v_m_diff1 = HVX_OP_SUB_F32(m_prev_v1, v_m_curr1);
 
 #ifdef HMX_FA_USE_EXP2_HF
-        HVX_Vector v_exp_m_diff      = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_m_diff));
+        const HVX_Vector v_ln2 = Q6_V_vsplat_R(EXP_LOGN2);
+        HVX_Vector exp_m_diff0 = hvx_vec_exp_f32(HVX_OP_MUL_F32(v_m_diff0, v_ln2));
+        HVX_Vector exp_m_diff1 = hvx_vec_exp_f32(HVX_OP_MUL_F32(v_m_diff1, v_ln2));
 #else
-        HVX_VectorPair vp_diff       = hvx_vec_f16_to_f32_shuff(Q6_Vhf_equals_Vqf16(v_m_diff));
-        HVX_Vector     exp_lo        = hvx_vec_exp_f32(Q6_V_lo_W(vp_diff));
-        HVX_Vector     exp_hi        = hvx_vec_exp_f32(Q6_V_hi_W(vp_diff));
-        HVX_Vector     v_exp_m_diff  = hvx_vec_f32_to_f16_shuff(exp_lo, exp_hi);
+        HVX_Vector exp_m_diff0 = hvx_vec_exp_f32(v_m_diff0);
+        HVX_Vector exp_m_diff1 = hvx_vec_exp_f32(v_m_diff1);
 #endif
 
-        HVX_Vector v_l_curr;
+        HVX_VectorPair rowsum_acc_pair = hvx_vec_f16_to_f32(rowsum_acc_v);
+        HVX_Vector     v_rowsum_acc_f32_0 = Q6_V_lo_W(rowsum_acc_pair);
+        HVX_Vector     v_rowsum_acc_f32_1 = Q6_V_hi_W(rowsum_acc_pair);
+
+        HVX_Vector v_l_curr0;
+        HVX_Vector v_l_curr1;
         if (args->kv_start == 0 && factx->octx->src[4] != NULL) {
-            v_l_curr = Q6_Vqf16_vadd_Vqf16Vhf(Q6_Vqf16_vmpy_VhfVhf(v_exp_m_diff, Q6_Vh_vsplat_R(0x3c00)), rowsum_acc_v);
+            v_l_curr0 = HVX_OP_ADD_F32(exp_m_diff0, v_rowsum_acc_f32_0);
+            v_l_curr1 = HVX_OP_ADD_F32(exp_m_diff1, v_rowsum_acc_f32_1);
         } else {
-            v_l_curr = Q6_Vqf16_vmpy_Vqf16Vhf(factx->vtcm_l_vec[r_vec_idx], v_exp_m_diff);
-            v_l_curr = Q6_Vqf16_vadd_Vqf16Vhf(v_l_curr, rowsum_acc_v);
+            HVX_Vector l_prev_v0 = factx->vtcm_l_vec[r_vec_idx * 2 + 0];
+            HVX_Vector l_prev_v1 = factx->vtcm_l_vec[r_vec_idx * 2 + 1];
+            v_l_curr0 = HVX_OP_ADD_F32(HVX_OP_MUL_F32(l_prev_v0, exp_m_diff0), v_rowsum_acc_f32_0);
+            v_l_curr1 = HVX_OP_ADD_F32(HVX_OP_MUL_F32(l_prev_v1, exp_m_diff1), v_rowsum_acc_f32_1);
         }
 
-        factx->vtcm_m_vec[r_vec_idx] = v_m_curr;
-        factx->vtcm_l_vec[r_vec_idx] = v_l_curr;
+        factx->vtcm_m_vec[r_vec_idx * 2 + 0] = v_m_curr0;
+        factx->vtcm_m_vec[r_vec_idx * 2 + 1] = v_m_curr1;
+        factx->vtcm_l_vec[r_vec_idx * 2 + 0] = v_l_curr0;
+        factx->vtcm_l_vec[r_vec_idx * 2 + 1] = v_l_curr1;
 
         // Build diagonal tile D = diag(exp(m_diff))
         const HVX_Vector     v_offsets = *(const HVX_Vector *) d_tile_scatter_offsets;
         const HVX_VectorPred q_32_mask = Q6_Q_vsetq_R(32 * sizeof(__fp16));
+        HVX_Vector           v_exp_m_diff = hvx_vec_f32_to_f16(exp_m_diff0, exp_m_diff1);
 
         size_t t0 = r_vec_idx * 2;
         if (t0 < args->n_row_tiles) {
@@ -1257,11 +1293,9 @@ static __attribute__((noinline)) void fa_build_d_diag_inv_l(struct hmx_fa_contex
     HVX_Vector v_content = Q6_V_vzero();
     for (size_t i = 0; i < n_row_tiles; ++i) {
         if ((i % 2) == 0) {
-            HVX_Vector     v_l_hf = Q6_Vhf_equals_Vqf16(factx->vtcm_l_vec[i / 2]);
-            HVX_VectorPair vp_l   = hvx_vec_f16_to_f32_shuff(v_l_hf);
-            HVX_Vector     inv_lo = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_lo_W(vp_l))));
-            HVX_Vector     inv_hi = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(one, hvx_vec_inverse_f32(Q6_V_hi_W(vp_l))));
-            v_content = hvx_vec_f32_to_f16_shuff(inv_lo, inv_hi);
+            HVX_Vector inv_lo = HVX_OP_MUL_F32(one, hvx_vec_inverse_f32(factx->vtcm_l_vec[i]));
+            HVX_Vector inv_hi = (i + 1 < n_row_tiles) ? HVX_OP_MUL_F32(one, hvx_vec_inverse_f32(factx->vtcm_l_vec[i + 1])) : Q6_V_vzero();
+            v_content = hvx_vec_f32_to_f16(inv_lo, inv_hi);
         } else {
             v_content = Q6_V_vror_VR(v_content, 64);
         }
@@ -1593,7 +1627,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const size_t v_tile_bytes  = hex_align_up(Bc * DV * sizeof(__fp16), 4096);
     const size_t s_tile_bytes  = hex_align_up(g_br * Bc * sizeof(__fp16), 4096);
     const size_t d_tile_bytes  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);
-    const size_t col_vec_bytes = hex_align_up(g_br * sizeof(__fp16), 256);
+    const size_t col_vec_bytes = hex_align_up(g_br * sizeof(float), 256);
     const size_t row_vec_bytes = hex_align_up(Bc * sizeof(__fp16), 256);
     const size_t m_line_bytes  = hex_align_up(Bc * sizeof(__fp16), 128);
     const size_t m_buf_bytes   = hex_align_up(Br * m_line_bytes, 4096) * HMX_FA_DMA_CACHE_SIZE;
