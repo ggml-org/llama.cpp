@@ -229,42 +229,4 @@ static inline void hvx_scale_vec_f32_aa(uint8_t * restrict dst, const uint8_t * 
     }
 }
 
-// 5th-order Horner polynomial for exp2(x) in qf16/hf16 domain.  Input must be
-// <= 0 (safe softmax invariant - overflow handling omitted).  ~18 ALU ops per
-// 64 fp16 lanes, fully parallel across HVX threads (no scatter/gather engine).
-// Replaces the F32 round-trip (qf16->f32->exp->f32->f16, ~44 ops for 2x32 lanes).
-static inline HVX_Vector hvx_exp2_hf(HVX_Vector x_v) {
-    const HVX_Vector zero_v    = Q6_V_vzero();
-    const HVX_Vector half_hf_v = Q6_Vh_vsplat_R(0x3800);  // fp16 0.5
-
-    // k = round_toward_neg_inf(x);  f = (float)k;  frac = x - f
-    HVX_Vector x_minus_half = Q6_Vhf_equals_Vqf16(Q6_Vqf16_vsub_VhfVhf(x_v, half_hf_v));
-    HVX_Vector k_v          = Q6_Vh_equals_Vhf(x_minus_half);  // truncate to int16
-    HVX_Vector f_v          = Q6_Vhf_equals_Vh(k_v);           // back to fp16
-
-    HVX_Vector x_qf16 = Q6_Vqf16_vsub_VhfVhf(x_v, f_v);        // fractional part in qf16
-
-    // Horner: y = ((((E5*x + E4)*x + E3)*x + E2)*x + E1)*x + E0
-    HVX_Vector y = Q6_Vqf16_vmpy_Vqf16Vqf16(Q6_Vh_vsplat_R(0x5082), x_qf16); // E5*x
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x157d));        // + E4
-    y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x20ed));        // + E3
-    y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x2b1b));        // + E2
-    y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x33b0));        // + E1
-    y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x398c));        // + E0
-    y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);                      // y = y * x
-    y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x3c00));        // + 1.0
-
-    // Combine polynomial (mantissa) with integer part (exponent): result = y * 2^k
-    y                          = Q6_Vhf_equals_Vqf16(y);
-    HVX_Vector y_exp           = Q6_Vuh_vlsr_VuhR(Q6_Vh_vasl_VhR(y, 1), 11);
-    y_exp                      = Q6_Vh_vadd_VhVh(k_v, y_exp);
-    HVX_VectorPred q_underflow = Q6_Q_vcmp_gt_VhVh(zero_v, y_exp);
-    y                          = Q6_Vh_vaslacc_VhVhR(y, k_v, 10);
-    return Q6_V_vmux_QVV(q_underflow, zero_v, y);
-}
-
 #endif /* HVX_FA_KERNELS_H */

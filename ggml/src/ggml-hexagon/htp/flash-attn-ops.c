@@ -621,11 +621,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
             float *       m_vec      = (float *) factx->vtcm_m_vec;
             const size_t  r_start    = l_start / sizeof(float);
             const size_t  r_end      = l_end / sizeof(float);
-#ifdef HMX_FA_USE_EXP2_HF
             const float   scale_factor = 1.44269504f;
-#else
-            const float   scale_factor = 1.0f;
-#endif
             for (size_t r = r_start; r < r_end; ++r) {
                 if (r < n_rows_g) {
                     const size_t h_idx = fastmodulo(r, G, &factx->div_G);
@@ -978,29 +974,19 @@ static inline void fa_softmax_impl(
                 *pv_row_buf1++               = Q6_V_hi_W(vp_s_dual_row);
             }
 
-            // Apply softcap if enabled (in F32 precision)
+            // Apply softcap if enabled (in FP16 precision)
             if (has_softcap) {
                 float cap = factx->logit_softcap;
-#ifdef HMX_FA_USE_EXP2_HF
                 cap *= 1.44269504f;  // log2(e)
-#endif
-                const HVX_Vector v_cap = hvx_vec_splat_f32(cap);
+                const HVX_Vector v_cap = hvx_vec_splat_f16(cap);
                 for (size_t c = 0; c < kv_rows; c += 64) {
                     size_t ci = c / 64;
 
-                    HVX_VectorPair r0_f32 = hvx_vec_f16_to_f32(my_row_buf0[ci]);
-                    HVX_Vector     t0_lo  = hvx_vec_tanh_f32(Q6_V_lo_W(r0_f32));
-                    HVX_Vector     t0_hi  = hvx_vec_tanh_f32(Q6_V_hi_W(r0_f32));
-                    t0_lo                 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(t0_lo, v_cap));
-                    t0_hi                 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(t0_hi, v_cap));
-                    my_row_buf0[ci]       = hvx_vec_f32_to_f16(t0_lo, t0_hi);
+                    HVX_Vector t0 = hvx_vec_tanh_f16(my_row_buf0[ci]);
+                    my_row_buf0[ci] = hvx_vec_mul_f16_f16(t0, v_cap);
 
-                    HVX_VectorPair r1_f32 = hvx_vec_f16_to_f32(my_row_buf1[ci]);
-                    HVX_Vector     t1_lo  = hvx_vec_tanh_f32(Q6_V_lo_W(r1_f32));
-                    HVX_Vector     t1_hi  = hvx_vec_tanh_f32(Q6_V_hi_W(r1_f32));
-                    t1_lo                 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(t1_lo, v_cap));
-                    t1_hi                 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(t1_hi, v_cap));
-                    my_row_buf1[ci]       = hvx_vec_f32_to_f16(t1_lo, t1_hi);
+                    HVX_Vector t1 = hvx_vec_tanh_f16(my_row_buf1[ci]);
+                    my_row_buf1[ci] = hvx_vec_mul_f16_f16(t1, v_cap);
                 }
             }
 
@@ -1125,30 +1111,13 @@ static inline void fa_softmax_impl(
             HVX_Vector       v_p_rowsum0 = v_zero;
             HVX_Vector       v_p_rowsum1 = v_zero;
 
-#ifdef HMX_FA_USE_EXP2_HF
             for (size_t c = 0; c < kv_rows; c += 64) {
                 size_t     ci           = c / 64;
                 HVX_Vector v_s_minus_m0 = Q6_Vqf16_vsub_VhfVhf(my_row_buf0[ci], v_dup_m0);
                 HVX_Vector v_s_minus_m1 = Q6_Vqf16_vsub_VhfVhf(my_row_buf1[ci], v_dup_m1);
 
-                HVX_Vector v_p_row0_hf  = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_s_minus_m0));
-                HVX_Vector v_p_row1_hf  = hvx_exp2_hf(Q6_Vhf_equals_Vqf16(v_s_minus_m1));
-#else
-            for (size_t c = 0; c < kv_rows; c += 64) {
-                size_t     ci           = c / 64;
-                HVX_Vector v_s_minus_m0 = Q6_Vqf16_vsub_VhfVhf(my_row_buf0[ci], v_dup_m0);
-                HVX_Vector v_s_minus_m1 = Q6_Vqf16_vsub_VhfVhf(my_row_buf1[ci], v_dup_m1);
-
-                HVX_VectorPair vp0         = hvx_vec_f16_to_f32_shuff(Q6_Vhf_equals_Vqf16(v_s_minus_m0));
-                HVX_Vector     p0_lo       = hvx_vec_exp_f32(Q6_V_lo_W(vp0));
-                HVX_Vector     p0_hi       = hvx_vec_exp_f32(Q6_V_hi_W(vp0));
-                HVX_Vector     v_p_row0_hf = hvx_vec_f32_to_f16_shuff(p0_lo, p0_hi);
-
-                HVX_VectorPair vp1         = hvx_vec_f16_to_f32_shuff(Q6_Vhf_equals_Vqf16(v_s_minus_m1));
-                HVX_Vector     p1_lo       = hvx_vec_exp_f32(Q6_V_lo_W(vp1));
-                HVX_Vector     p1_hi       = hvx_vec_exp_f32(Q6_V_hi_W(vp1));
-                HVX_Vector     v_p_row1_hf = hvx_vec_f32_to_f16_shuff(p1_lo, p1_hi);
-#endif
+                HVX_Vector v_p_row0_hf  = hvx_vec_exp2_f16(Q6_Vhf_equals_Vqf16(v_s_minus_m0));
+                HVX_Vector v_p_row1_hf  = hvx_vec_exp2_f16(Q6_Vhf_equals_Vqf16(v_s_minus_m1));
                 __fp16 *     out_dual_tile = p_st_base + (c / 64) * HMX_FP16_TILE_N_ELMS * 2;
                 HVX_Vector * pv_p_out0     = ((HVX_Vector *) out_dual_tile) + r1 / 2;
                 HVX_Vector * pv_p_out1     = pv_p_out0 + 16;
@@ -1191,14 +1160,9 @@ static inline void fa_softmax_impl(
         HVX_Vector v_m_diff0 = HVX_OP_SUB_F32(m_prev_v0, v_m_curr0);
         HVX_Vector v_m_diff1 = HVX_OP_SUB_F32(m_prev_v1, v_m_curr1);
 
-#ifdef HMX_FA_USE_EXP2_HF
         const HVX_Vector v_ln2 = Q6_V_vsplat_R(EXP_LOGN2);
         HVX_Vector exp_m_diff0 = hvx_vec_exp_f32(HVX_OP_MUL_F32(v_m_diff0, v_ln2));
         HVX_Vector exp_m_diff1 = hvx_vec_exp_f32(HVX_OP_MUL_F32(v_m_diff1, v_ln2));
-#else
-        HVX_Vector exp_m_diff0 = hvx_vec_exp_f32(v_m_diff0);
-        HVX_Vector exp_m_diff1 = hvx_vec_exp_f32(v_m_diff1);
-#endif
 
         HVX_VectorPair rowsum_acc_pair = hvx_vec_f16_to_f32(rowsum_acc_v);
         HVX_Vector     v_rowsum_acc_f32_0 = Q6_V_lo_W(rowsum_acc_pair);
@@ -1590,15 +1554,11 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
         factx.src3_div3  = kparams->src3_div3;
     }
 
-#ifdef HMX_FA_USE_EXP2_HF
     if (kparams->logit_softcap == 0.0f) {
         factx.scale = kparams->scale * 1.44269504f;  // log2(e)
     } else {
         factx.scale = kparams->scale;
     }
-#else
-    factx.scale         = kparams->scale;
-#endif
     factx.max_bias      = kparams->max_bias;
     factx.logit_softcap = kparams->logit_softcap;
 

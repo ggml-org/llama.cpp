@@ -3,6 +3,7 @@
 
 #include "hvx-base.h"
 #include "hvx-inverse.h"
+#include "hvx-exp.h"
 
 #define FAST_SIGMOID_LOG2F (0x3fb8aa3b)  // 1.442695022
 #define FAST_SIGMOID_C1    (0x3d009076)  // 0.03138777
@@ -137,6 +138,34 @@ static inline void hvx_tanh_f32_aa(uint8_t * restrict dst, const uint8_t * restr
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src % 128 == 0);
     hvx_tanh_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+static inline HVX_Vector hvx_vec_fast_sigmoid_f16(HVX_Vector x_v) {
+    // sigmoid(x) = 1 / (1 + exp2(-x * log2(e)))
+    const HVX_Vector v_neg_log2e = hvx_vec_splat_f16(-1.44269504f);
+    const HVX_Vector v_one       = hvx_vec_splat_f16(1.0f);
+
+    HVX_Vector u = hvx_vec_mul_f16_f16(x_v, v_neg_log2e);
+
+    // clamp input to prevent overflow/underflow in exp2 (approx -14 to 15)
+    const HVX_Vector v_clamp_min = hvx_vec_splat_f16(-14.0f);
+    const HVX_Vector v_clamp_max = hvx_vec_splat_f16(15.0f);
+    u = Q6_Vhf_vmax_VhfVhf(v_clamp_min, Q6_Vhf_vmin_VhfVhf(u, v_clamp_max));
+
+    HVX_Vector exp_val = hvx_vec_exp2_f16(u);
+    HVX_Vector denom   = hvx_vec_add_f16_f16(v_one, exp_val);
+    return hvx_vec_inverse_f16(denom);
+}
+
+static inline HVX_Vector hvx_vec_tanh_f16(HVX_Vector x) {
+    // tanh(x) = 2 * sigmoid(2x) - 1
+    const HVX_Vector v_two = hvx_vec_splat_f16(2.0f);
+
+    HVX_Vector x2 = hvx_vec_mul_f16_f16(x, v_two);
+    HVX_Vector sig2x = hvx_vec_fast_sigmoid_f16(x2);
+
+    const HVX_Vector v_neg_one = hvx_vec_splat_f16(-1.0f);
+    return hvx_vec_add_f16_f16(hvx_vec_mul_f16_f16(sig2x, v_two), v_neg_one);
 }
 
 #endif /* HVX_SIGMOID_H */
