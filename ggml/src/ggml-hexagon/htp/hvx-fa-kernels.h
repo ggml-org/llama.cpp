@@ -131,7 +131,7 @@ static inline HVX_Vector hvx_dot_f16_f16_aa_rx32(const void * restrict y,
 }
 
 // MAD: y (F32) += x (F16) * s (F16)
-static inline void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict x, const __fp16 * restrict s, int n) {
+static inline void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict x, const __fp16 * restrict s, uint32_t n) {
     const HVX_Vector * restrict vx0 = (const HVX_Vector *) x;
 
     HVX_VectorPair * restrict vy_p = (HVX_VectorPair *) y;
@@ -169,7 +169,7 @@ static inline void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict 
 
 // MAD: y (F32) += x0 (F16) * s0 (F16) + x1 (F16) * s1 (F16)
 static inline void hvx_mad_f32_f16_aa_rx2(float * restrict y, const void * restrict x0, const void * restrict x1,
-                                          const __fp16 * restrict s0, const __fp16 * restrict s1, int n) {
+                                          const __fp16 * restrict s0, const __fp16 * restrict s1, uint32_t n) {
     const HVX_Vector * restrict vx0 = (const HVX_Vector *) x0;
     const HVX_Vector * restrict vx1 = (const HVX_Vector *) x1;
 
@@ -209,7 +209,7 @@ static inline void hvx_mad_f32_f16_aa_rx2(float * restrict y, const void * restr
     }
 }
 
-static inline void hvx_scale_vec_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const int n, HVX_Vector vs) {
+static inline void hvx_scale_vec_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const uint32_t n, HVX_Vector vs) {
     assert((size_t) dst % 128 == 0);
     assert((size_t) src % 128 == 0);
 
