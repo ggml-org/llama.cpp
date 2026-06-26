@@ -377,6 +377,104 @@ static void dequantize_mul_mat_vec_q2_k(const void *__restrict__ vx,
     }
 }
 
+static void dequantize_mul_mat_vec_q2_k_reorder(const void *__restrict__ vx,
+                                                const float *__restrict__ yy,
+                                                float *__restrict__ dst,
+                                                const int ncols, int nrows,
+                                                const sycl::nd_item<3> &item_ct1) {
+
+    static_assert(16%K_QUANTS_PER_ITERATION == 0, "16 must be divisible by K_QUANTS_PER_ITERATION");
+
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row > nrows) return;
+
+    const int num_blocks_per_row = ncols / QK_K;
+    const int ib0 = row*num_blocks_per_row;
+
+    // SOA base pointers for the reordered layout:
+    //   [qs: nb * (QK_K/4)] [scales: nb * (QK_K/16)] [dm: nb * sizeof(half2)]
+    const int nb = nrows * num_blocks_per_row;
+    const uint8_t     * qs_base     = (const uint8_t *)vx;
+    const uint8_t     * scales_base = qs_base + (size_t)nb * (QK_K / 4);
+    const sycl::half2 * dm_base     = (const sycl::half2 *)(scales_base + (size_t)nb * (QK_K / 16));
+
+    float tmp = 0; // partial sum for thread in warp
+
+#if QK_K == 256
+    const int tid =
+        item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION; // 0...7 or 0...15
+    const int ix =
+        item_ct1.get_local_id(2) % K_QUANTS_PER_ITERATION; // 0 or 0,1
+
+    const int step = 16/K_QUANTS_PER_ITERATION;
+
+    const int in = tid % step;                           // 0...15 or 0...7
+
+    const int l0 = K_QUANTS_PER_ITERATION*in;            // 0...15 or 0...14 in steps of 2
+
+    uint32_t aux[4];
+    const uint8_t * d = (const uint8_t *)aux;
+    const uint8_t * m = (const uint8_t *)(aux + 2);
+
+    for (int i = ix; i < num_blocks_per_row; i += K_QUANTS_PER_ITERATION) {
+        const int bi = ib0 + i;
+
+        const sycl::half2 dm_val = dm_base[bi];
+        const float dall = dm_val[0];
+        const float dmin = dm_val[1];
+
+        for (int im = 0; im < 2; ++im) {
+            const int q_offset = 32*im + l0;
+            const int s_offset = 8*im;
+            const int y_offset = 128*im + l0;
+
+            const float   * y = yy + i * QK_K + y_offset;
+            const uint8_t * q = qs_base + bi * (QK_K / 4) + q_offset;
+
+            const uint32_t * a = (const uint32_t *)(scales_base + bi * (QK_K / 16) + s_offset);
+            aux[0] = a[0] & 0x0f0f0f0f;
+            aux[1] = a[1] & 0x0f0f0f0f;
+            aux[2] = (a[0] >> 4) & 0x0f0f0f0f;
+            aux[3] = (a[1] >> 4) & 0x0f0f0f0f;
+
+            float sum1 = 0, sum2 = 0;
+            for (int l = 0; l < K_QUANTS_PER_ITERATION; ++l) {
+                sum1 += y[l+ 0] * d[0] * ((q[l+ 0] >> 0) & 3)
+                      + y[l+32] * d[2] * ((q[l+ 0] >> 2) & 3)
+                      + y[l+64] * d[4] * ((q[l+ 0] >> 4) & 3)
+                      + y[l+96] * d[6] * ((q[l+ 0] >> 6) & 3)
+                      + y[l+16] * d[1] * ((q[l+16] >> 0) & 3)
+                      + y[l+48] * d[3] * ((q[l+16] >> 2) & 3)
+                      + y[l+80] * d[5] * ((q[l+16] >> 4) & 3)
+                      +y[l+112] * d[7] * ((q[l+16] >> 6) & 3);
+                sum2 += y[l+ 0] * m[0] + y[l+32] * m[2] + y[l+64] * m[4] + y[ l+96] * m[6]
+                      + y[l+16] * m[1] + y[l+48] * m[3] + y[l+80] * m[5] + y[l+112] * m[7];
+
+            }
+            tmp += dall * sum1 - dmin * sum2;
+        }
+    }
+#else
+    GGML_UNUSED(vx);
+    GGML_UNUSED(yy);
+    GGML_UNUSED(ncols);
+    GGML_UNUSED(item_ct1);
+    GGML_ABORT("Q2_K reorder DMMV not supported for QK_K != 256");
+#endif
+
+    // sum up partial sums and write back result
+#pragma unroll
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        tmp +=
+            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (item_ct1.get_local_id(2) == 0) {
+        dst[row] = tmp;
+    }
+}
+
 static void dequantize_mul_mat_vec_q3_k(const void *__restrict__ vx,
                                         const float *__restrict__ yy,
                                         float *__restrict__ dst,
@@ -1664,6 +1762,22 @@ static void dequantize_mul_mat_vec_q2_K_sycl(const void *vx, const float *y,
         });
 }
 
+static void dequantize_mul_mat_vec_q2_K_sycl_reorder(const void *vx, const float *y,
+                                                     float *dst, const int ncols,
+                                                     const int nrows,
+                                                     dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    const int ny = 2 / K_QUANTS_PER_ITERATION;
+    const int block_num_y = (nrows + ny - 1) / ny;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
+    stream->parallel_for(
+        sycl::nd_range<3>(block_nums * block_dims, block_dims),
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            dequantize_mul_mat_vec_q2_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
+        });
+}
+
 static void dequantize_mul_mat_vec_q3_K_sycl(const void *vx, const float *y,
                                              float *dst, const int ncols,
                                              const int nrows,
@@ -1859,7 +1973,12 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             }
             break;
         case GGML_TYPE_Q2_K:
-            dequantize_mul_mat_vec_q2_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
+                ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+                dequantize_mul_mat_vec_q2_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            } else {
+                dequantize_mul_mat_vec_q2_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            }
             break;
         case GGML_TYPE_Q3_K:
             if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
