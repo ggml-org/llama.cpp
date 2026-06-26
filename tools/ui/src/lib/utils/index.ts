@@ -138,7 +138,9 @@ export {
 	getResourceIcon,
 	getResourceTextContent,
 	getResourceBlobContent,
-	downloadResourceContent
+	downloadResourceContent,
+	buildMcpPromptId,
+	parseMcpPromptId
 } from './mcp';
 
 // URI Template utilities

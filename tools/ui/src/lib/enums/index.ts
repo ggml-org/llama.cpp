@@ -51,7 +51,8 @@ export {
 	HealthCheckStatus,
 	MCPContentType,
 	MCPRefType,
-	JsonSchemaType
+	JsonSchemaType,
+	MCPPromptIdPrefix
 } from './mcp.enums';
 
 export { ModelModality } from './model.enums';

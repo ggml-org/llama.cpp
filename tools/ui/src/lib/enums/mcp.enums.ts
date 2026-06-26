@@ -66,3 +66,13 @@ export enum MCPRefType {
 	PROMPT = 'ref/prompt',
 	RESOURCE = 'ref/resource'
 }
+
+/**
+ * Prefix used to encode MCP prompt identity inside a CUSTOM_PROMPT
+ * extra's promptId (`mcp:<serverName>:<promptName>`). System messages
+ * created from MCP prompts carry this so the renderer can recover the
+ * original MCP server/prompt without an extra attachment.
+ */
+export enum MCPPromptIdPrefix {
+	PROMPT = 'mcp:'
+}
