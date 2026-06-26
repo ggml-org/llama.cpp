@@ -850,6 +850,7 @@ struct ggml_backend_opencl_context {
         ref_count--;
         if (ref_count == 0) {
 #ifdef GGML_OPENCL_PROFILING
+            flush_profiling_batch();
             write_profiling_info();
             profiling_results.clear();
 #endif
