@@ -575,18 +575,62 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
     const size_t G        = factx->G;
     const size_t DK       = factx->DK;
 
-    // Partition row pairs across threads.  Keep each thread's start even so r/r+1
-    // are always in the same thread's range.
-    const size_t rows_per_t = hex_align_up(hmx_ceil_div(n_rows_g, n), 2);
+    // Partition the padded Q rows (g_br) across threads.
+    // Keep start/end even so r and r+1 are always in the same thread's range.
+    const size_t rows_per_t = hex_align_up(hmx_ceil_div(factx->g_br, n), 2);
     const size_t start      = (size_t) i * rows_per_t;
-    const size_t end        = hex_smin(start + rows_per_t, n_rows_g);
-
-    if (start >= n_rows_g) {
-        return;
-    }
+    const size_t end        = hex_smin(start + rows_per_t, factx->g_br);
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_Q_PREP, (uint16_t) (args->q_start * G + start));
+
+    // Parallel initialization of per-block state
+    {
+        const uint32_t g_br = factx->g_br;
+        const uint32_t DV   = factx->DV;
+
+        const size_t col_vec_bytes = hex_align_up(g_br * sizeof(__fp16), 256);
+        const size_t d_tile_bytes  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);
+        const size_t o_tile_bytes  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);
+
+        // 1. Initialize vtcm_l_vec to 0
+        const size_t l_bytes_per_t = hex_align_up(col_vec_bytes / n, 128);
+        const size_t l_start       = i * l_bytes_per_t;
+        const size_t l_end         = hex_smin(l_start + l_bytes_per_t, col_vec_bytes);
+        if (l_start < col_vec_bytes) {
+            hvx_splat_u8_a((char *) factx->vtcm_l_vec + l_start, 0, l_end - l_start);
+        }
+
+        // 2. Initialize vtcm_d_tiles to 0
+        const size_t d_bytes_per_t = hex_align_up(d_tile_bytes / n, 128);
+        const size_t d_start       = i * d_bytes_per_t;
+        const size_t d_end         = hex_smin(d_start + d_bytes_per_t, d_tile_bytes);
+        if (d_start < d_tile_bytes) {
+            hvx_splat_u8_a((char *) factx->vtcm_d_tiles + d_start, 0, d_end - d_start);
+        }
+
+        // 3. Initialize vtcm_m_vec to 0xfbff (-inf)
+        const size_t m_bytes_per_t = hex_align_up(col_vec_bytes / n, 128);
+        const size_t m_start       = i * m_bytes_per_t;
+        const size_t m_end         = hex_smin(m_start + m_bytes_per_t, col_vec_bytes);
+        if (m_start < col_vec_bytes) {
+            hvx_splat_u16_a((char *) factx->vtcm_m_vec + m_start, 0xfbff, (m_end - m_start) / 2);
+        }
+
+        // 4. Initialize vtcm_o_tiles[0] to 0
+        __fp16 * o_tile_prev       = factx->vtcm_o_tiles[0];
+        const size_t o_bytes_per_t = hex_align_up(o_tile_bytes / n, 128);
+        const size_t o_start       = i * o_bytes_per_t;
+        const size_t o_end         = hex_smin(o_start + o_bytes_per_t, o_tile_bytes);
+        if (o_start < o_tile_bytes) {
+            hvx_splat_u8_a((char *) o_tile_prev + o_start, 0, o_end - o_start);
+        }
+    }
+
+    if (start >= factx->g_br) {
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_Q_PREP, (uint16_t) (args->q_start * G + start));
+        return;
+    }
 
     const struct htp_tensor * q       = args->q;
     const uint32_t            q_start = args->q_start;
@@ -594,29 +638,28 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
     const uint32_t            ib3     = args->ib3;
 
     for (size_t r = start; r < end; r += 2) {
-        const bool next_row_valid = (r + 1) < n_rows_g;
-
         const size_t q_idx0 = fastdiv(r + 0, &factx->div_G);
         const size_t h_idx0 = fastmodulo(r + 0, G, &factx->div_G);
         const size_t q_idx1 = fastdiv(r + 1, &factx->div_G);
         const size_t h_idx1 = fastmodulo(r + 1, G, &factx->div_G);
 
-        const uint8_t * q_ptr0 = (const uint8_t *) q->data + (q_start + q_idx0) * q->nb[1] +
-                                                  (kv_head * G + h_idx0) * q->nb[2] + ib3 * q->nb[3];
-        const uint8_t * q_ptr1 = next_row_valid ? ((const uint8_t *) q->data + (q_start + q_idx1) * q->nb[1] +
-                                                  (kv_head * G + h_idx1) * q->nb[2] + ib3 * q->nb[3]) :
-                                                  NULL;
+        const uint8_t * q_ptr0 = (r + 0 < n_rows_g) ? ((const uint8_t *) q->data + (q_start + q_idx0) * q->nb[1] +
+                                                      (kv_head * G + h_idx0) * q->nb[2] + ib3 * q->nb[3]) :
+                                                      NULL;
+        const uint8_t * q_ptr1 = (r + 1 < n_rows_g) ? ((const uint8_t *) q->data + (q_start + q_idx1) * q->nb[1] +
+                                                      (kv_head * G + h_idx1) * q->nb[2] + ib3 * q->nb[3]) :
+                                                      NULL;
 
         size_t   r0       = r / HMX_FP16_TILE_N_ROWS;
         size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
         __fp16 * out_base = factx->vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * DK;
 
         if (factx->is_q_fp32) {
-            const HVX_Vector * pv_in0 = (const HVX_Vector *) q_ptr0;
+            const HVX_Vector * pv_in0 = q_ptr0 ? (const HVX_Vector *) q_ptr0 : NULL;
             const HVX_Vector * pv_in1 = q_ptr1 ? (const HVX_Vector *) q_ptr1 : NULL;
 
             for (uint32_t d = 0; d < DK / 32; ++d) {
-                HVX_Vector v0   = pv_in0[d];
+                HVX_Vector v0   = pv_in0 ? pv_in0[d] : Q6_V_vzero();
                 HVX_Vector v1   = pv_in1 ? pv_in1[d] : Q6_V_vzero();
                 HVX_Vector v_hf = hvx_vec_f32_to_f16_shuff(v0, v1);
 
@@ -624,11 +667,11 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
                 out_tile[r1 / 2]      = v_hf;
             }
         } else {
-            const HVX_Vector * pv_in0 = (const HVX_Vector *) q_ptr0;
+            const HVX_Vector * pv_in0 = q_ptr0 ? (const HVX_Vector *) q_ptr0 : NULL;
             const HVX_Vector * pv_in1 = q_ptr1 ? (const HVX_Vector *) q_ptr1 : NULL;
 
             for (uint32_t d = 0; d < DK / 64; ++d) {
-                HVX_Vector     v0 = pv_in0[d];
+                HVX_Vector     v0 = pv_in0 ? pv_in0[d] : Q6_V_vzero();
                 HVX_Vector     v1 = pv_in1 ? pv_in1[d] : Q6_V_vzero();
                 HVX_VectorPair vp = Q6_W_vshuff_VVR(v1, v0, -2);
 
@@ -1555,20 +1598,11 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 const uint32_t iv2 = kv_head;
                 const uint32_t iv3 = ib3 / (neq3 / v->ne[3]);
 
-                // ---- Load Q block ----
-                if (n_rows_g < g_br) {
-                    hvx_splat_u8_a(factx.vtcm_q_tiles, 0, q_tile_bytes);
-                }
+                // ---- Load Q block & Initialize per-block state ----
                 fa_phase_q_load(&factx, q, q_start, kv_head, ib3, n_rows_g);
-
-                // ---- Initialize per-block state ----
-                hvx_splat_u8_a(factx.vtcm_l_vec,   0,      col_vec_bytes);
-                hvx_splat_u8_a(factx.vtcm_d_tiles, 0,      d_tile_bytes);
-                hvx_splat_u16_a(factx.vtcm_m_vec,  0xfbff, col_vec_bytes/2);
 
                 __fp16 * o_tile_prev = factx.vtcm_o_tiles[0];
                 __fp16 * o_tile_curr = factx.vtcm_o_tiles[1];
-                hvx_splat_u8_a(o_tile_prev, 0, o_tile_bytes);
 
                 // ---- KV block loop with DMA double-buffering ----
                 size_t buf_idx = 0;
