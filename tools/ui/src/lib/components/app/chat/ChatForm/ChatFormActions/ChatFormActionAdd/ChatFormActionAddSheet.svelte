@@ -91,9 +91,6 @@
 
 	let prompts = $derived(promptsStore.getPrompts());
 
-	// Single search field shared by both lists below. Matching is
-	// case-insensitive across title/name, content/description, and (for MCP)
-	// the server label.
 	let filteredLibraryPrompts = $derived.by(() => {
 		const q = searchQuery.trim().toLowerCase();
 		if (!q) return prompts;
@@ -102,9 +99,6 @@
 		);
 	});
 
-	// Trigger MCP connection establishment as the sheet opens. Prompts are
-	// pulled eagerly inside `MCPService.connect` and surfaced synchronously via
-	// `mcpStore.allPrompts`, so the listing renders without a fetch on open.
 	$effect(() => {
 		if (sheetOpen) {
 			void mcpStore.ensureInitialized(conversationsStore.getAllMcpServerOverrides());
@@ -166,9 +160,6 @@
 	async function handleMcpPromptClick(entry: (typeof filteredMcpPrompts)[number]) {
 		sheetOpen = false;
 
-		// Prompts with arguments need a picker detour (for the argument form);
-		// prompts without arguments post directly so the conversation gets the
-		// system prompt instantly, like the library prompt branch above.
 		if (entry.prompt.arguments?.length) {
 			onMcpPromptClick?.(entry.prompt);
 			return;
