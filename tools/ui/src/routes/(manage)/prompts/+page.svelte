@@ -4,7 +4,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 	import { ManageLayout, PromptsCard } from '$lib/components/app';
+	import { ROUTES } from '$lib/constants';
 	import { SIDEBAR_ACTIONS_ITEMS } from '$lib/constants/ui';
+	import { PROMPT_CATEGORY } from '$lib/constants/prompts';
 	import { DialogPromptAddNew, DialogConfirmation } from '$lib/components/app/dialogs';
 
 	import { promptsStore } from '$lib/stores/prompts.svelte';
@@ -12,36 +14,34 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 
-	const ALL = 'all';
-	const OTHER = '__other__';
-
 	let isAdding = $state(false);
 	let showDeleteDialog = $state(false);
 	let deleteTarget = $state<{ id: string; title: string } | null>(null);
-	let selectedCategory = $state<string>(ALL);
+	let selectedCategory = $state<string>(PROMPT_CATEGORY.ALL);
 
 	let categories = $derived(promptsStore.getCategories());
 	let hasUncategorized = $derived(promptsStore.hasUncategorized());
 	let showOther = $derived(categories.length > 0 && hasUncategorized);
 	let prompts = $derived.by(() => {
-		if (!selectedCategory || selectedCategory === ALL) return promptsStore.getPrompts();
-		if (selectedCategory === OTHER) return promptsStore.getUncategorizedPrompts();
+		if (!selectedCategory || selectedCategory === PROMPT_CATEGORY.ALL)
+			return promptsStore.getPrompts();
+		if (selectedCategory === PROMPT_CATEGORY.OTHER) return promptsStore.getUncategorizedPrompts();
 		return promptsStore.getPrompts(selectedCategory);
 	});
 	let hasAnyPrompts = $derived(promptsStore.getPrompts().length > 0);
 
 	// Drop the selection if its category no longer exists
 	$effect(() => {
-		if (selectedCategory === OTHER && !hasUncategorized) {
-			selectedCategory = ALL;
+		if (selectedCategory === PROMPT_CATEGORY.OTHER && !hasUncategorized) {
+			selectedCategory = PROMPT_CATEGORY.ALL;
 			return;
 		}
 		if (
-			selectedCategory !== ALL &&
-			selectedCategory !== OTHER &&
+			selectedCategory !== PROMPT_CATEGORY.ALL &&
+			selectedCategory !== PROMPT_CATEGORY.OTHER &&
 			!categories.includes(selectedCategory)
 		) {
-			selectedCategory = ALL;
+			selectedCategory = PROMPT_CATEGORY.ALL;
 		}
 	});
 
@@ -70,7 +70,7 @@
 
 <ManageLayout title="Prompts">
 	{#snippet icon()}
-		{@const Icon = SIDEBAR_ACTIONS_ITEMS.find((i) => i.tooltip === 'Prompts')?.icon}
+		{@const Icon = SIDEBAR_ACTIONS_ITEMS.find((i) => i.route === ROUTES.PROMPTS)?.icon}
 		{#if Icon}
 			<Icon class="h-5 w-5 md:h-6 md:w-6" />
 		{/if}
@@ -125,14 +125,16 @@
 				spacing={1}
 				class="mb-6 w-full flex-wrap"
 			>
-				<ToggleGroup.Item value={ALL} aria-label="Show all prompts">All</ToggleGroup.Item>
+				<ToggleGroup.Item value={PROMPT_CATEGORY.ALL} aria-label="Show all prompts">
+					All
+				</ToggleGroup.Item>
 				{#each categories as category (category)}
 					<ToggleGroup.Item value={category} aria-label={`Filter by ${category}`}>
 						{category}
 					</ToggleGroup.Item>
 				{/each}
 				{#if showOther}
-					<ToggleGroup.Item value={OTHER} aria-label="Show uncategorized prompts">
+					<ToggleGroup.Item value={PROMPT_CATEGORY.OTHER} aria-label="Show uncategorized prompts">
 						Other
 					</ToggleGroup.Item>
 				{/if}
