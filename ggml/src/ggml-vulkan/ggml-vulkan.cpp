@@ -72,6 +72,7 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #if defined(_MSC_VER)
 # define NOMINMAX 1
 # include <windows.h>
+# include <malloc.h> // _aligned_malloc / _aligned_free
 # define YIELD() YieldProcessor()
 #elif defined(__clang__) || defined(__GNUC__)
 # if defined(__x86_64__) ||defined(__i386__)
@@ -18086,6 +18087,25 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
     return comm;
 }
 
+// std::aligned_alloc is not available with MSVC/MinGW; use the Win32 equivalents there.
+// The alignment is a runtime value (VK_EXT_external_memory_host minImportedHostPointerAlignment),
+// so the fixed-alignment ggml_aligned_malloc cannot be used here.
+static void * ggml_vk_comm_aligned_alloc(size_t alignment, size_t size) {
+#if defined(_MSC_VER) || defined(__MINGW32__)
+    return _aligned_malloc(size, alignment);
+#else
+    return std::aligned_alloc(alignment, size);
+#endif
+}
+
+static void ggml_vk_comm_aligned_free(void * ptr) {
+#if defined(_MSC_VER) || defined(__MINGW32__)
+    _aligned_free(ptr);
+#else
+    std::free(ptr);
+#endif
+}
+
 static void ggml_backend_vk_comm_free(void * comm_ctx) {
     ggml_backend_vk_comm_context * comm = static_cast<ggml_backend_vk_comm_context *>(comm_ctx);
     for (size_t i = 0; i < comm->vkctx.size(); i++) {
@@ -18130,7 +18150,7 @@ static void ggml_backend_vk_comm_free(void * comm_ctx) {
         }
     }
     for (void * p : comm->host_ptr) {
-        std::free(p);
+        ggml_vk_comm_aligned_free(p);
     }
     for (ggml_backend_buffer_t b : comm->tmp_buffer) {
         if (b) {
@@ -18165,7 +18185,7 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
         for (size_t i = 0; i < n; i++) {
             comm->host_buf[k][i].reset();
         }
-        std::free(comm->host_ptr[k]);
+        ggml_vk_comm_aligned_free(comm->host_ptr[k]);
         comm->host_ptr[k] = nullptr;
     }
     for (size_t i = 0; i < n; i++) {
@@ -18190,7 +18210,7 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
     // for DMA). host_buf[k][i] = device i's import of host_ptr[k]. (Driver-allocated OPAQUE_FD shared
     // memory gave no extra bandwidth here and can't cross mixed GPUs.)
     for (size_t k = 0; k < n; k++) {
-        comm->host_ptr[k] = std::aligned_alloc(comm->align, slotcap);
+        comm->host_ptr[k] = ggml_vk_comm_aligned_alloc(comm->align, slotcap);
         if (!comm->host_ptr[k]) {
             return false;
         }
