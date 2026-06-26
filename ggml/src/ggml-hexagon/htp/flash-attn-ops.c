@@ -593,7 +593,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
         const size_t d_tile_bytes  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);
         const size_t o_tile_bytes  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);
 
-        // 1. Initialize vtcm_l_vec & vtcm_m_vec
+        // Initialize vtcm_l_vec & vtcm_m_vec
         const size_t l_bytes_per_t = hex_align_up(col_vec_bytes / n, 128);
         const size_t l_start       = i * l_bytes_per_t;
         const size_t l_end         = hex_smin(l_start + l_bytes_per_t, col_vec_bytes);
@@ -639,7 +639,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
             }
         }
 
-        // 2. Initialize vtcm_d_tiles to 0
+        // Initialize vtcm_d_tiles to 0
         const size_t d_bytes_per_t = hex_align_up(d_tile_bytes / n, 128);
         const size_t d_start       = i * d_bytes_per_t;
         const size_t d_end         = hex_smin(d_start + d_bytes_per_t, d_tile_bytes);
@@ -647,7 +647,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
             hvx_splat_u8_a((char *) factx->vtcm_d_tiles + d_start, 0, d_end - d_start);
         }
 
-        // 4. Initialize vtcm_o_tiles[0] to 0
+        // Initialize vtcm_o_tiles[0] to 0
         __fp16 * o_tile_prev       = factx->vtcm_o_tiles[0];
         const size_t o_bytes_per_t = hex_align_up(o_tile_bytes / n, 128);
         const size_t o_start       = i * o_bytes_per_t;
@@ -976,10 +976,10 @@ static inline void fa_softmax_impl(
                 for (size_t c = 0; c < kv_rows; c += 64) {
                     size_t ci = c / 64;
 
-                    HVX_Vector t0 = hvx_vec_tanh_f16(my_row_buf0[ci]);
+                    HVX_Vector t0   = hvx_vec_tanh_f16(my_row_buf0[ci]);
                     my_row_buf0[ci] = hvx_vec_mul_f16_f16(t0, v_cap);
 
-                    HVX_Vector t1 = hvx_vec_tanh_f16(my_row_buf1[ci]);
+                    HVX_Vector t1   = hvx_vec_tanh_f16(my_row_buf1[ci]);
                     my_row_buf1[ci] = hvx_vec_mul_f16_f16(t1, v_cap);
                 }
             }
