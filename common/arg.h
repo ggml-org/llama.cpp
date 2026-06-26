@@ -133,6 +133,8 @@ void common_params_add_preset_options(std::vector<common_arg> & args);
 
 struct common_models_handler {
     common_download_hf_plan plan;
+    common_download_hf_plan plan_spec;
+    common_download_hf_plan plan_voc;
     common_download_opts opts;
 };
 
