@@ -337,8 +337,8 @@ static const struct ggml_backend_buffer_type_i ggml_backend_meta_buffer_type_ifa
     /* .is_host          = */ ggml_backend_meta_buffer_type_is_host,
 };
 
-bool ggml_backend_buft_is_meta(ggml_backend_buffer_type_t buft) {
-    return buft != nullptr && buft->iface.get_name == ggml_backend_meta_buffer_type_iface.get_name;
+int ggml_backend_buft_is_meta(ggml_backend_buffer_type_t buft) {
+    return (buft != nullptr && buft->iface.get_name == ggml_backend_meta_buffer_type_iface.get_name) ? 1 : 0;
 }
 
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_backend_dev_t dev) {
@@ -1488,8 +1488,8 @@ static const ggml_backend_buffer_i ggml_backend_meta_buffer_iface = {
     /* .reset           = */ ggml_backend_meta_buffer_reset,
 };
 
-bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf) {
-    return buf != nullptr && buf->iface.free_buffer == ggml_backend_meta_buffer_iface.free_buffer;
+int ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf) {
+    return (buf != nullptr && buf->iface.free_buffer == ggml_backend_meta_buffer_iface.free_buffer) ? 1 : 0;
 }
 
 static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
@@ -2235,8 +2235,8 @@ static const ggml_backend_i ggml_backend_meta_i = {
     /* .graph_optimize          = */ nullptr,
 };
 
-bool ggml_backend_is_meta(ggml_backend_t backend) {
-    return backend != nullptr && backend->iface.get_name == ggml_backend_meta_i.get_name;
+int ggml_backend_is_meta(ggml_backend_t backend) {
+    return (backend != nullptr && backend->iface.get_name == ggml_backend_meta_i.get_name) ? 1 : 0;
 }
 
 static ggml_backend_t ggml_backend_meta_device_init_backend(ggml_backend_dev_t dev, const char * params) {
