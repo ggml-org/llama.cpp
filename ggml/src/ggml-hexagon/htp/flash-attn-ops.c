@@ -816,6 +816,11 @@ static inline void fa_softmax_impl(
         HVX_Vector rowsum_acc_v = Q6_V_vzero();
         HVX_Vector m_prev_v     = factx->vtcm_m_vec[r_vec_idx];
 
+        HVX_Vector v_slopes = Q6_V_vzero();
+        if (has_alibi) {
+            v_slopes = hvx_vmem(args->slopes + r_vec_idx * 64);
+        }
+
         for (int r_vec_off = 0; r_vec_off < 64; r_vec_off += 2) {
             int r = r_vec_idx * 64 + r_vec_off;
             if (r >= (int) hex_align_up(n_rows_g, 2)) {
@@ -871,9 +876,8 @@ static inline void fa_softmax_impl(
             HVX_Vector v_slope0 = Q6_V_vzero();
             HVX_Vector v_slope1 = Q6_V_vzero();
             if (has_alibi) {
-                HVX_Vector v_s = hvx_vmemu(args->slopes + r);
-                v_slope0 = hvx_vec_repl_f16(v_s);
-                v_slope1 = (r + 1 < (int) n_rows_g) ? hvx_vec_repl_f16(Q6_V_vror_VR(v_s, 2)) : Q6_V_vzero();
+                v_slope0 = hvx_vec_repl_f16(Q6_V_vror_VR(v_slopes, r_vec_off * 2));
+                v_slope1 = (r + 1 < (int) n_rows_g) ? hvx_vec_repl_f16(Q6_V_vror_VR(v_slopes, (r_vec_off + 1) * 2)) : Q6_V_vzero();
             }
 
             const HVX_Vector v_threshold = Q6_Vh_vsplat_R(0xcc00);  // fp16 -16.0
@@ -891,33 +895,33 @@ static inline void fa_softmax_impl(
                     if (mask_broadcast) {
                         if (is_g1) {
                             const size_t qi0 = r + 0;
-                            v_mask0 = *(const HVX_UVector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
+                            v_mask0 = *(const HVX_Vector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
                             v_mask1 = v_neg_inf;
                             if (r + 1 < (int) n_rows_g) {
                                 const size_t qi1 = r + 1;
-                                v_mask1 = *(const HVX_UVector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
+                                v_mask1 = *(const HVX_Vector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
                             }
                         } else {
                             const size_t qi0 = fastdiv(r + 0, &factx->div_G);
-                            v_mask0 = *(const HVX_UVector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
+                            v_mask0 = *(const HVX_Vector *) (args->mask_vtcm + qi0 * args->mask_vtcm_row_stride + c);
                             v_mask1 = v_neg_inf;
                             if (r + 1 < (int) n_rows_g) {
                                 const size_t qi1 = fastdiv(r + 1, &factx->div_G);
                                 if (qi1 == qi0) {
                                     v_mask1 = v_mask0;
                                 } else {
-                                    v_mask1 = *(const HVX_UVector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
+                                    v_mask1 = *(const HVX_Vector *) (args->mask_vtcm + qi1 * args->mask_vtcm_row_stride + c);
                                 }
                             }
                         }
                     } else {
                         // Head-dependent mask: pre-interleaved per row r.
                         const size_t r0 = r + 0;
-                        v_mask0 = *(const HVX_UVector *) (args->mask_vtcm + r0 * args->mask_vtcm_row_stride + c);
+                        v_mask0 = *(const HVX_Vector *) (args->mask_vtcm + r0 * args->mask_vtcm_row_stride + c);
                         v_mask1 = v_neg_inf;
                         if (r + 1 < (int) n_rows_g) {
                             const size_t r1 = r + 1;
-                            v_mask1 = *(const HVX_UVector *) (args->mask_vtcm + r1 * args->mask_vtcm_row_stride + c);
+                            v_mask1 = *(const HVX_Vector *) (args->mask_vtcm + r1 * args->mask_vtcm_row_stride + c);
                         }
                     }
 
