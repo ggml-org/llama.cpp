@@ -958,29 +958,34 @@ static inline void fa_softmax_impl(
             __fp16 *       p_st_base = factx->vtcm_p_tiles + r0 * HMX_FP16_TILE_N_ROWS * Bc;
 
             // Decode 2 rows from S tiles into per-thread row buffers
-            HVX_Vector * pv_row_buf0 = my_row_buf0;
-            HVX_Vector * pv_row_buf1 = my_row_buf1;
-            for (size_t c = 0; c < kv_rows; c += 64) {
-                const __fp16 *     in_dual_tile = s_ld_base + (c / 64) * HMX_FP16_TILE_N_ELMS * 2;
-                const HVX_Vector * pv_s_in0     = ((const HVX_Vector *) in_dual_tile) + r1 / 2;
-                const HVX_Vector * pv_s_in1     = pv_s_in0 + 16;
-
-                HVX_VectorPair vp_s_dual_row = Q6_W_vdeal_VVR(*pv_s_in1, *pv_s_in0, -2);
-                *pv_row_buf0++               = Q6_V_lo_W(vp_s_dual_row);
-                *pv_row_buf1++               = Q6_V_hi_W(vp_s_dual_row);
-            }
-
-            // Apply softcap if enabled (in FP16 precision)
             if (has_softcap) {
                 const HVX_Vector v_cap = hvx_vec_splat_f16(factx->logit_softcap);
                 for (size_t c = 0; c < kv_rows; c += 64) {
-                    size_t ci = c / 64;
+                    size_t             ci           = c / 64;
+                    const __fp16 *     in_dual_tile = s_ld_base + ci * HMX_FP16_TILE_N_ELMS * 2;
+                    const HVX_Vector * pv_s_in0     = ((const HVX_Vector *) in_dual_tile) + r1 / 2;
+                    const HVX_Vector * pv_s_in1     = pv_s_in0 + 16;
 
-                    HVX_Vector t0   = hvx_vec_tanh_f16(my_row_buf0[ci]);
+                    HVX_VectorPair vp_s_dual_row = Q6_W_vdeal_VVR(*pv_s_in1, *pv_s_in0, -2);
+                    HVX_Vector     v_s_row0      = Q6_V_lo_W(vp_s_dual_row);
+                    HVX_Vector     v_s_row1      = Q6_V_hi_W(vp_s_dual_row);
+
+                    HVX_Vector t0   = hvx_vec_tanh_f16(v_s_row0);
                     my_row_buf0[ci] = hvx_vec_mul_f16_f16(t0, v_cap);
 
-                    HVX_Vector t1   = hvx_vec_tanh_f16(my_row_buf1[ci]);
+                    HVX_Vector t1   = hvx_vec_tanh_f16(v_s_row1);
                     my_row_buf1[ci] = hvx_vec_mul_f16_f16(t1, v_cap);
+                }
+            } else {
+                for (size_t c = 0; c < kv_rows; c += 64) {
+                    size_t             ci           = c / 64;
+                    const __fp16 *     in_dual_tile = s_ld_base + ci * HMX_FP16_TILE_N_ELMS * 2;
+                    const HVX_Vector * pv_s_in0     = ((const HVX_Vector *) in_dual_tile) + r1 / 2;
+                    const HVX_Vector * pv_s_in1     = pv_s_in0 + 16;
+
+                    HVX_VectorPair vp_s_dual_row = Q6_W_vdeal_VVR(*pv_s_in1, *pv_s_in0, -2);
+                    my_row_buf0[ci]              = Q6_V_lo_W(vp_s_dual_row);
+                    my_row_buf1[ci]              = Q6_V_hi_W(vp_s_dual_row);
                 }
             }
 
