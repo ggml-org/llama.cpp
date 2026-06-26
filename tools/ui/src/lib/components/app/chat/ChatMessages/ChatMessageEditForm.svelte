@@ -4,17 +4,15 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { ChatForm, DialogConfirmation } from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { KeyboardKey, MessageRole } from '$lib/enums';
+	import { ChatMessageEditFormVariant, KeyboardKey, MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
 
-	type Variant = 'default' | 'system';
-
 	interface Props {
-		variant?: Variant;
+		variant?: ChatMessageEditFormVariant;
 	}
 
-	let { variant = 'default' }: Props = $props();
+	let { variant = ChatMessageEditFormVariant.DEFAULT }: Props = $props();
 
 	const editCtx = getMessageEditContext();
 
@@ -113,7 +111,7 @@
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
-{#if variant === 'system'}
+{#if variant === ChatMessageEditFormVariant.SYSTEM}
 	<ChatForm
 		class="w-full **:data-[slot=input-area]:border-2! **:data-[slot=input-area]:border-dashed! **:data-[slot=input-area]:border-border/50! **:data-[slot=input-area]:bg-muted!"
 		value={editCtx.editedContent}

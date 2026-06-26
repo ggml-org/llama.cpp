@@ -72,3 +72,11 @@ export enum PdfViewMode {
 	TEXT = 'text',
 	PAGES = 'pages'
 }
+
+/**
+ * Visual variant for the chat message edit form.
+ */
+export enum ChatMessageEditFormVariant {
+	DEFAULT = 'default',
+	SYSTEM = 'system'
+}

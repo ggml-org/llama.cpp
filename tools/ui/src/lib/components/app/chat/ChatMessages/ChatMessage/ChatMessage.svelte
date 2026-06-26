@@ -6,7 +6,7 @@
 	import { DatabaseService } from '$lib/services/database.service';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
 	import { REASONING_TAGS } from '$lib/constants/agentic';
-	import { MessageRole, AttachmentType, AgenticSectionType } from '$lib/enums';
+	import { MessageRole, AttachmentType, AgenticSectionType, MCPPromptIdPrefix } from '$lib/enums';
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import {
 		ChatMessageAssistant,
@@ -131,14 +131,14 @@
 		if (message.role !== MessageRole.SYSTEM) return false;
 		const custom = customPromptExtra;
 		if (!custom) return true;
-		if (custom.promptId.startsWith('mcp:')) return false;
+		if (custom.promptId.startsWith(MCPPromptIdPrefix.PROMPT)) return false;
 		return !referencedPrompt;
 	});
 	let canUpdateLibraryPrompt = $derived.by(() => {
 		if (message.role !== MessageRole.SYSTEM) return false;
 		const custom = customPromptExtra;
 		if (!custom) return false;
-		if (custom.promptId.startsWith('mcp:')) return false;
+		if (custom.promptId.startsWith(MCPPromptIdPrefix.PROMPT)) return false;
 		return !!referencedPrompt;
 	});
 

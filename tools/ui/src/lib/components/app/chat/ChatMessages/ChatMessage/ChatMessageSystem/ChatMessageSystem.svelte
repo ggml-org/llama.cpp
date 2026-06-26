@@ -8,7 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { MessageRole } from '$lib/enums';
+	import { ChatMessageEditFormVariant, MessageRole } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
@@ -100,7 +100,7 @@
 >
 	{#if editCtx.isEditing}
 		<div class="flex w-full max-w-[80%] flex-col items-end gap-2">
-			<ChatMessageEditForm variant="system" />
+			<ChatMessageEditForm variant={ChatMessageEditFormVariant.SYSTEM} />
 		</div>
 	{:else}
 		{#if message.content.trim()}

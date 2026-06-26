@@ -29,6 +29,7 @@ import type { McpServerOverride } from '$lib/types/database';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import {
 	MessageRole,
+	MessageType,
 	HtmlInputType,
 	FileExtensionText,
 	MimeTypeText,
@@ -350,7 +351,7 @@ class ConversationsStore {
 				this.activeMessages = filteredMessages;
 			} else {
 				const messages = await DatabaseService.getConversationMessages(convId);
-				this.activeMessages = messages.filter((m) => m.type !== 'root');
+				this.activeMessages = messages.filter((m) => m.type !== MessageType.ROOT);
 			}
 
 			return true;
@@ -618,7 +619,7 @@ class ConversationsStore {
 		if (!this.activeConversation) return;
 
 		const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-		const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+		const rootMessage = allMessages.find((m) => m.type === MessageType.ROOT && m.parent === null);
 		const currentFirstUserMessage = this.activeMessages.find(
 			(m) => m.role === MessageRole.USER && m.parent === rootMessage?.id
 		);

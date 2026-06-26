@@ -2,16 +2,20 @@
  * Line-based unified diff helper.
  *
  * Produces output in the unified-diff text format that highlight.js's
- * built-in `diff` language understands (`hljs-addition` / `hljs-deletion`
+ * `diff` language understands (`hljs-addition` / `hljs-deletion`
  * spans). Reused by CodeDiff; kept dependency-free to avoid adding a
  * third-party diff library.
  */
+
+import { DIFF_CONTEXT_WINDOW, DIFF_LINE_PREFIX, DIFF_HEADER_MARKER } from '$lib/constants';
 
 export interface DiffHunk {
 	oldStart: number;
 	newStart: number;
 	lines: string[];
 }
+
+type Record = { type: 'context' | 'add' | 'del'; line: string };
 
 /**
  * Computes a unified diff between two strings at line granularity using
@@ -22,7 +26,7 @@ export function computeLineDiff(oldText: string, newText: string): DiffHunk[] {
 	const oldLines = oldText.length === 0 ? [] : oldText.split('\n');
 	const newLines = newText.length === 0 ? [] : newText.split('\n');
 
-	// LCS length table (dp[i+1][j+1] = lcs of oldLines[0..i] and newLines[0..j])
+	// dp[i+1][j+1] = LCS length of oldLines[0..i] and newLines[0..j]
 	const dp: number[][] = Array.from({ length: oldLines.length + 1 }, () =>
 		new Array(newLines.length + 1).fill(0)
 	);
@@ -37,8 +41,6 @@ export function computeLineDiff(oldText: string, newText: string): DiffHunk[] {
 		}
 	}
 
-	// Walk the table to recover the edit script as { type, line } records
-	type Record = { type: 'context' | 'add' | 'del'; line: string };
 	const records: Record[] = [];
 	let i = 0;
 	let j = 0;
@@ -58,9 +60,6 @@ export function computeLineDiff(oldText: string, newText: string): DiffHunk[] {
 	while (i < oldLines.length) records.push({ type: 'del', line: oldLines[i++] });
 	while (j < newLines.length) records.push({ type: 'add', line: newLines[j++] });
 
-	// Group records into hunks with a shared context window so the diff
-	// stays readable without dumping the whole file in one block.
-	const CONTEXT = 3;
 	const hunks: DiffHunk[] = [];
 	let oldLine = 1;
 	let newLine = 1;
@@ -75,12 +74,11 @@ export function computeLineDiff(oldText: string, newText: string): DiffHunk[] {
 			pending = [];
 			return;
 		}
-		// Trim trailing context beyond the window
 		let end = pending.length;
 		let extra = 0;
-		while (end > 0 && pending[end - 1].startsWith(' ')) {
+		while (end > 0 && pending[end - 1].startsWith(DIFF_LINE_PREFIX.CONTEXT)) {
 			extra++;
-			if (extra > CONTEXT) {
+			if (extra > DIFF_CONTEXT_WINDOW) {
 				pending.pop();
 				end--;
 			} else {
@@ -99,23 +97,22 @@ export function computeLineDiff(oldText: string, newText: string): DiffHunk[] {
 
 	for (const r of records) {
 		if (r.type === 'context') {
-			// Start a fresh hunk window if we've drifted past the context limit
-			if (hasChange && contextRun >= CONTEXT) {
+			if (hasChange && contextRun >= DIFF_CONTEXT_WINDOW) {
 				flush();
 				hunkOldStart = oldLine;
 				hunkNewStart = newLine;
 			}
-			pending.push(' ' + r.line);
+			pending.push(DIFF_LINE_PREFIX.CONTEXT + r.line);
 			contextRun++;
 			oldLine++;
 			newLine++;
 		} else if (r.type === 'del') {
-			pending.push('-' + r.line);
+			pending.push(DIFF_LINE_PREFIX.DEL + r.line);
 			hasChange = true;
 			contextRun = 0;
 			oldLine++;
 		} else {
-			pending.push('+' + r.line);
+			pending.push(DIFF_LINE_PREFIX.ADD + r.line);
 			hasChange = true;
 			contextRun = 0;
 			newLine++;
@@ -133,9 +130,13 @@ export function computeLineDiff(oldText: string, newText: string): DiffHunk[] {
 export function formatUnifiedDiff(hunks: DiffHunk[]): string {
 	return hunks
 		.map((h) => {
-			const oldLen = h.lines.filter((l) => l.startsWith('-') && !l.startsWith('---')).length;
-			const newLen = h.lines.filter((l) => l.startsWith('+') && !l.startsWith('+++')).length;
-			const header = `@@ -${h.oldStart},${oldLen} +${h.newStart},${newLen} @@`;
+			const oldLen = h.lines.filter(
+				(l) => l.startsWith(DIFF_LINE_PREFIX.DEL) && !l.startsWith(DIFF_HEADER_MARKER.DEL)
+			).length;
+			const newLen = h.lines.filter(
+				(l) => l.startsWith(DIFF_LINE_PREFIX.ADD) && !l.startsWith(DIFF_HEADER_MARKER.ADD)
+			).length;
+			const header = `${DIFF_HEADER_MARKER.HUNK} -${h.oldStart},${oldLen} +${h.newStart},${newLen} ${DIFF_HEADER_MARKER.HUNK}`;
 			return header + '\n' + h.lines.join('\n');
 		})
 		.join('\n');

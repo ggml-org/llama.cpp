@@ -255,10 +255,9 @@
 		!!selectedTemplate && !!templatePreviewContent && !!templatePreviewUri
 	);
 
-	// Mobile shows the tree (with search) OR the content of one resource/template.
 	// Single resource selection or any active template jumps to content view;
 	// multi-selection via checkboxes stays on the tree so the user can attach
-	// N at once via the footer.
+	// multiple resources at once via the footer.
 	const mobileContentMode = $derived(selectedTemplate !== null || selectedResources.size === 1);
 
 	const selectedSingleResource = $derived.by(() => {

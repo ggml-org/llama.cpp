@@ -10,6 +10,7 @@ export { AgenticSectionType, ContinueIntentKind, ToolCallType } from './agentic.
 
 export {
 	ChatMessageStatsView,
+	ChatMessageEditFormVariant,
 	StreamConnectionState,
 	ContentPartType,
 	ConversationSelectionMode,
