@@ -4844,7 +4844,7 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
         if (kernel_lib_handle) {
             backend_ctx->get_adreno_bin_kernel_func = (get_adreno_bin_kernel_func_t)dl_get_sym(kernel_lib_handle, "get_adreno_kernels");
             if (backend_ctx->get_adreno_bin_kernel_func) {
-                GGML_LOG_INFO("ggml_opencl: using binary kernels from %s\n", KERNEL_LIB_NAME);
+                GGML_LOG_INFO("ggml_opencl: loaded bin kernel library %s\n", KERNEL_LIB_NAME);
                 backend_ctx->adreno_use_bin_kernels = true;
             } else {
                 GGML_LOG_INFO("ggml_opencl: bin kernel library %s is invalid, will use builtin kernels\n", KERNEL_LIB_NAME);
