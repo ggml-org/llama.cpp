@@ -189,12 +189,12 @@ struct llama_mmproj_pool * llama_mmproj_pool_init(
 
 
 
-// 辅助函数：根据分配的 gpu_data 物理地址，反推它映射到了哪一个 evicted_tensor (LLM层) 中
+// Helper: Given the physical address of allocated gpu_data, deduce which evicted tensor (LLM layer) it maps to
 static int find_evicted_idx(void * gpu_data, const std::vector<ggml_tensor*> & ev_tensors) {
     for (size_t i = 0; i < ev_tensors.size(); ++i) {
         char * base = (char *)ev_tensors[i]->data;
         size_t size = ggml_nbytes(ev_tensors[i]);
-        // 如果 Vision 数据落在这个被驱逐的 LLM 张量地址区间内
+        // If the vision data falls within this evicted LLM tensor's address range
         if ((char *)gpu_data >= base && (char *)gpu_data < base + size) {
             return (int)i;
         }
