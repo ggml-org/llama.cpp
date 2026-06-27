@@ -341,7 +341,12 @@ MTMD_API mtmd_input_chunks * mtmd_test_create_input_chunks(void);
 MTMD_API std::map<ggml_backend_dev_t, size_t> mtmd_get_memory_usage(
     const char * mmproj_fname,
     struct mtmd_context_params ctx_params);
+
+// return all vision encoder tensors of the multimodal model.
+// used by the mmproj swap pool to relocate them between GPU and host.
+MTMD_API std::vector<ggml_tensor *> mtmd_get_vision_tensors(mtmd_context * mctx);
 #endif
+MTMD_API void mtmd_free_vision_buffer(mtmd_context * mctx);
 
 //
 // C++ wrappers
