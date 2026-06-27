@@ -465,6 +465,16 @@ struct server_task_result_cmpl_partial : server_task_result {
     json to_json_oaicompat_asr();
 
     json to_json_anthropic();
+
+    // Usage helper for OpenAI-compatible usage object
+    json usage_json_oaicompat() const {
+        return json {
+            {"completion_tokens", n_decoded},
+            {"prompt_tokens",     n_prompt_tokens},
+            {"total_tokens",      n_decoded + n_prompt_tokens},
+            {"prompt_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
+        };
+    }
 };
 
 struct server_task_result_embd : server_task_result {
