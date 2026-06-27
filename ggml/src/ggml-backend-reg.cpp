@@ -30,13 +30,6 @@
 #include "ggml-cpu.h"
 #endif
 
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef GGML_USE_METAL
-#include "ggml-metal.h"
-#endif
 
 #ifdef GGML_USE_SYCL
 #include "ggml-sycl.h"
@@ -46,41 +39,14 @@
 #include "ggml-vulkan.h"
 #endif
 
-#ifdef GGML_USE_WEBGPU
-#include "ggml-webgpu.h"
-#endif
-
-#ifdef GGML_USE_ZDNN
-#include "ggml-zdnn.h"
-#endif
-
-#ifdef GGML_USE_OPENCL
-#include "ggml-opencl.h"
-#endif
-
-#ifdef GGML_USE_HEXAGON
-#include "ggml-hexagon.h"
-#endif
 
 #ifdef GGML_USE_BLAS
 #include "ggml-blas.h"
 #endif
 
-#ifdef GGML_USE_RPC
-#include "ggml-rpc.h"
-#endif
 
-#ifdef GGML_USE_VIRTGPU_FRONTEND
-#include "ggml-virtgpu.h"
-#endif
 
-#ifdef GGML_USE_CANN
-#include "ggml-cann.h"
-#endif
 
-#ifdef GGML_USE_ZENDNN
-#include "ggml-zendnn.h"
-#endif
 
 #ifdef GGML_USE_OPENVINO
 #include "ggml-openvino.h"
@@ -92,9 +58,6 @@ static std::string path_str(const fs::path & path) {
     try {
 #if defined(__cpp_lib_char8_t)
         // C++20 and later: u8string() returns std::u8string
-        const std::u8string u8str = path.u8string();
-        return std::string(reinterpret_cast<const char *>(u8str.data()), u8str.size());
-#else
         // C++17: u8string() returns std::string
         return path.u8string();
 #endif
@@ -113,12 +76,6 @@ struct ggml_backend_registry {
     std::vector<ggml_backend_dev_t> devices;
 
     ggml_backend_registry() {
-#ifdef GGML_USE_CUDA
-        register_backend(ggml_backend_cuda_reg());
-#endif
-#ifdef GGML_USE_METAL
-        register_backend(ggml_backend_metal_reg());
-#endif
 #ifdef GGML_USE_SYCL
         register_backend(ggml_backend_sycl_reg());
 #endif
@@ -130,33 +87,8 @@ struct ggml_backend_registry {
         GGML_LOG_DEBUG("Vulkan backend disabled by GGML_DISABLE_VULKAN environment variable\n");
     }
 #endif
-#ifdef GGML_USE_WEBGPU
-        register_backend(ggml_backend_webgpu_reg());
-#endif
-#ifdef GGML_USE_ZDNN
-        register_backend(ggml_backend_zdnn_reg());
-#endif
-#ifdef GGML_USE_VIRTGPU_FRONTEND
-        register_backend(ggml_backend_virtgpu_reg());
-#endif
-
-#ifdef GGML_USE_OPENCL
-        register_backend(ggml_backend_opencl_reg());
-#endif
-#ifdef GGML_USE_ZENDNN
-        register_backend(ggml_backend_zendnn_reg());
-#endif
-#ifdef GGML_USE_HEXAGON
-        register_backend(ggml_backend_hexagon_reg());
-#endif
-#ifdef GGML_USE_CANN
-        register_backend(ggml_backend_cann_reg());
-#endif
 #ifdef GGML_USE_BLAS
         register_backend(ggml_backend_blas_reg());
-#endif
-#ifdef GGML_USE_RPC
-        register_backend(ggml_backend_rpc_reg());
 #endif
 #ifdef GGML_USE_OPENVINO
         register_backend(ggml_backend_openvino_reg());

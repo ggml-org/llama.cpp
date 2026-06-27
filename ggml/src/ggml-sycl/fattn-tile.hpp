@@ -395,19 +395,8 @@ static __dpct_inline__ void flash_attn_tile_iter_KQ(T_vec_dot * const Q_tmp,
     constexpr int cpw   = ncols > nwarps ? ncols/nwarps : 1; // Q columns per warp
     constexpr int np    = nwarps > ncols ? nwarps/ncols : 1; // number of parallel warps per Q column
 
-    if constexpr (type_K == GGML_TYPE_TURBO2_0) {
-        flash_attn_tile_load_tile_turbo_generic<warp_size, nwarps, nbatch_fa, nbatch_K, cpy_ne, oob_check, block_turbo2_0, dequantize_turbo2_0>
-            ((const block_turbo2_0 *)(K_h2 + int64_t(k_VKQ_0)*stride_K2), KV_tmp, stride_K2, k_VKQ_sup, k_KQ_0);
-    } else if constexpr (type_K == GGML_TYPE_TURBO3_0) {
-        flash_attn_tile_load_tile_turbo_generic<warp_size, nwarps, nbatch_fa, nbatch_K, cpy_ne, oob_check, block_turbo3_0, dequantize_turbo3_0>
-            ((const block_turbo3_0 *)(K_h2 + int64_t(k_VKQ_0)*stride_K2), KV_tmp, stride_K2, k_VKQ_sup, k_KQ_0);
-    } else if constexpr (type_K == GGML_TYPE_TURBO4_0) {
-        flash_attn_tile_load_tile_turbo_generic<warp_size, nwarps, nbatch_fa, nbatch_K, cpy_ne, oob_check, block_turbo4_0, dequantize_turbo4_0>
-            ((const block_turbo4_0 *)(K_h2 + int64_t(k_VKQ_0)*stride_K2), KV_tmp, stride_K2, k_VKQ_sup, k_KQ_0);
-    } else {
-        flash_attn_tile_load_tile<warp_size, nwarps, nbatch_fa, nbatch_K, cpy_ne, oob_check>
-            (K_h2 + int64_t(k_VKQ_0)*stride_K2 + k_KQ_0/2, KV_tmp, stride_K2, k_VKQ_sup);
-    }
+    flash_attn_tile_load_tile<warp_size, nwarps, nbatch_fa, nbatch_K, cpy_ne, oob_check>
+        (K_h2 + int64_t(k_VKQ_0)*stride_K2 + k_KQ_0/2, KV_tmp, stride_K2, k_VKQ_sup);
     item_ct1.barrier(sycl::access::fence_space::local_space);
 
 #ifdef SYCL_FAST_FP16
@@ -767,7 +756,6 @@ static void flash_attn_tile(const char *  Q,
 #ifdef SYCL_FLASH_ATTN
     // Skip unused kernel variants for faster compilation:
     auto item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
-    const int tid = item_ct1.get_local_id(1) * warp_size + item_ct1.get_local_id(2);
     if ((use_logit_softcap && !(DV == 128 || DV == 256))) {
         GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
             max_bias, m0, m1, n_head_log2, logit_softcap,
@@ -829,7 +817,6 @@ static void flash_attn_tile(const char *  Q,
 
 
 #ifdef SYCL_FAST_FP16
-    using dfloat = sycl::half;
     constexpr size_t lsm_size1 = ncols * DKQ/2 ;
     constexpr size_t lsm_size2 = nbatch_fa * (nbatch_K/2 + cpy_ne) + DVp-DV ;
     constexpr size_t lsm_size3 = ncols * nbatch_fa;
@@ -851,7 +838,6 @@ static void flash_attn_tile(const char *  Q,
         { 0.0f, 0.0f }
     };
 #else
-    using dfloat = float;
     constexpr size_t lsm_size1 = ncols * DKQ ;
     constexpr size_t lsm_size2 = nbatch_fa * (nbatch_K + cpy_ne) + DVp-DV;
     constexpr size_t lsm_size3 = ncols * nbatch_fa;
@@ -927,34 +913,6 @@ static void flash_attn_tile(const char *  Q,
 #endif // SYCL_FAST_FP16
             }
         }
-    }
-
-    // BUG FIX: this gate must test turbo-ness, not enum truthiness. `if constexpr (type_K)`
-    // is true for every non-F32 type (GGML_TYPE_F16==1, GGML_TYPE_Q8_0==8), so the f16/q8_0
-    // TILE prefill kernel was applying the TurboQuant WHT rotation to Q while K was NOT
-    // rotated -> attention scores in a mismatched basis -> garbage prefill. Mirror the VEC
-    // kernel's K_is_turbo gate.
-    if constexpr (type_K == GGML_TYPE_TURBO2_0 || type_K == GGML_TYPE_TURBO3_0 || type_K == GGML_TYPE_TURBO4_0) {
-        for (int jc = 0; jc < ncols; ++jc) {
-            item_ct1.barrier(sycl::access::fence_space::local_space);
-            dfloat val = 0.0f;
-            if (tid < DKQ) {
-                val = ((dfloat *)Q_tmp)[jc * DKQ + tid];
-                if constexpr (DKQ == 64) val *= (dfloat)TURBO_WHT_SIGNS1_64[tid];
-                else                  val *= (dfloat)TURBO_WHT_SIGNS1[tid];
-            }
-            
-            turbo_wht<DKQ, dfloat, 32, 3>(val, item_ct1, (dfloat *)Q_tmp + jc * DKQ);
-            
-            if (tid < DKQ) {
-                if constexpr (DKQ == 64) val *= (dfloat)TURBO_WHT_SIGNS2_64[tid];
-                else                  val *= (dfloat)TURBO_WHT_SIGNS2[tid];
-                val *= (dfloat)(1.0f / sqrtf((float)DKQ));
-                
-                ((dfloat *)Q_tmp)[jc * DKQ + tid] = val;
-            }
-        }
-        item_ct1.barrier(sycl::access::fence_space::local_space);
     }
 
     item_ct1.barrier(sycl::access::fence_space::local_space);

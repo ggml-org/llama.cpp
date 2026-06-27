@@ -9,6 +9,7 @@
 #include "ggml-quants.h"
 #include "ggml-common.h"
 #include "ggml-impl.h"
+#include "ggml-turbo-wht-signs.h"
 
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -199,27 +200,11 @@ static int nearest_centroid_4bit(float val) {
     return 15;
 }
 
-/* ---------- WHT sign arrays (must match CUDA/Metal, seed=42) ---------- */
-
-static const float turbo_cpu_s1[128] = {
-    -1,1,1,-1,-1,1,-1,1,-1,-1,1,1,1,1,1,1,1,-1,1,-1,1,-1,-1,1,1,1,-1,1,1,-1,-1,-1,
-    -1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,1,1,1,-1,-1,-1,-1,-1,1,-1,1,1,1,1,-1,1,
-    -1,-1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,1,1,-1,-1,1,1,-1,1,1,-1,1,-1,
-    -1,1,1,-1,1,-1,1,-1,1,1,1,1,-1,1,-1,1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1
-};
-
-static const float turbo_cpu_s2[128] = {
-    1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,-1,1,1,1,
-    1,1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,
-    1,-1,1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,
-    1,-1,1,1,1,-1,-1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,-1
-};
-
 /* ---------- CPU forward WHT (in-place, group_size elements) ---------- */
 
 static void turbo_cpu_fwht(float * x, int group_size) {
-    const float * s1 = turbo_cpu_s1;
-    const float * s2 = turbo_cpu_s2;
+    const float * s1 = TURBO_WHT_SIGNS1;
+    const float * s2 = TURBO_WHT_SIGNS2;
     const float inv_sqrt = (group_size == 128) ? 0.08838834764831845f : 0.125f;
 
     // signs1
@@ -249,8 +234,8 @@ static void turbo_cpu_fwht(float * x, int group_size) {
  *     x = D(s1) * N * H * D(s2) * y
  */
 GGML_API void turbo_cpu_fwht_inverse(float * x, int group_size) {
-    const float * s1 = turbo_cpu_s1;
-    const float * s2 = turbo_cpu_s2;
+    const float * s1 = TURBO_WHT_SIGNS1;
+    const float * s2 = TURBO_WHT_SIGNS2;
     const float inv_sqrt = (group_size == 128) ? 0.08838834764831845f : 0.125f;
 
     // signs2 (undoes the s2 that was applied last in the forward pass)

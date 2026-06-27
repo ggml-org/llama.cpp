@@ -64,39 +64,8 @@ if [ ! -z "${GG_BUILD_NINJA}" ]; then
     CMAKE_GENERATOR="Ninja"
 fi
 
-if [ ! -z ${GG_BUILD_METAL} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
-else
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF"
-fi
 
-if [ ! -z ${GG_BUILD_CUDA} ]; then
-    # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUDA=ON -DGGML_CUDA_CUB_3DOT2=ON"
 
-    if command -v nvidia-smi >/dev/null 2>&1; then
-        CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d '.')
-        if [[ -n "$CUDA_ARCH" && "$CUDA_ARCH" =~ ^[0-9]+$ ]]; then
-            CMAKE_EXTRA="${CMAKE_EXTRA} -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH}"
-        else
-            echo "Warning: Using fallback CUDA architectures"
-            CMAKE_EXTRA="${CMAKE_EXTRA} -DCMAKE_CUDA_ARCHITECTURES=61;70;75;80;86;89"
-        fi
-    else
-        echo "Error: nvidia-smi not found, cannot build with CUDA"
-        exit 1
-    fi
-fi
-
-if [ ! -z ${GG_BUILD_ROCM} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_HIP=ON"
-    if [ -z ${GG_BUILD_AMDGPU_TARGETS} ]; then
-        echo "Missing GG_BUILD_AMDGPU_TARGETS, please set it to your GPU architecture (e.g. gfx90a, gfx1100, etc.)"
-        exit 1
-    fi
-
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGPU_TARGETS=${GG_BUILD_AMDGPU_TARGETS}"
-fi
 
 if [ ! -z ${GG_BUILD_SYCL} ]; then
     if [ -z ${ONEAPI_ROOT} ]; then
@@ -131,28 +100,7 @@ if [ ! -z ${GG_BUILD_VULKAN} ]; then
     fi
 fi
 
-if [ ! -z ${GG_BUILD_WEBGPU} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1"
 
-    if [ ! -z "${GG_BUILD_WEBGPU_DAWN_PREFIX}" ]; then
-        if [ -z "${CMAKE_PREFIX_PATH}" ]; then
-            export CMAKE_PREFIX_PATH="${GG_BUILD_WEBGPU_DAWN_PREFIX}"
-        else
-            export CMAKE_PREFIX_PATH="${GG_BUILD_WEBGPU_DAWN_PREFIX}:${CMAKE_PREFIX_PATH}"
-        fi
-    fi
-
-    # For some systems, Dawn_DIR needs to be set explicitly, e.g., the lib64 path
-    if [ ! -z "${GG_BUILD_WEBGPU_DAWN_DIR}" ]; then
-        CMAKE_EXTRA="${CMAKE_EXTRA} -DDawn_DIR=${GG_BUILD_WEBGPU_DAWN_DIR}"
-    fi
-fi
-
-if [ ! -z ${GG_BUILD_MUSA} ]; then
-    # Use qy1 by default (MTT S80)
-    MUSA_ARCH=${MUSA_ARCH:-21}
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
-fi
 
 if [ ! -z ${GG_BUILD_NO_SVE} ]; then
     # arm 9 and newer enables sve by default, adjust these flags depending on the cpu used

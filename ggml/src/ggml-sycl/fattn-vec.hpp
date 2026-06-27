@@ -246,111 +246,42 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
         const sycl::half2 scale_h2 = sycl::half2(scale, scale);
 #pragma unroll
         for (int j = 0; j < ncols; ++j) {
-            if constexpr (K_is_turbo) {
+            const sycl::float2 * Q_j = (const sycl::float2 *) (Q + j * nb01);
 #pragma unroll
-                for (int i = tid; i < D; i += nthreads) {
-                    float val = (ncols == 1 || ic0 + j < int(ne01.z())) ? ((const float *)(Q + j*nb01))[i] : 0.0f;
-                    if constexpr (D == 64) val *= TURBO_WHT_SIGNS1_64[i];
-                    else                  val *= TURBO_WHT_SIGNS1[i];
-                    KQ[j*D + i] = (dfloat)val;
-                }
-            } else {
-                const sycl::float2 * Q_j = (const sycl::float2 *) (Q + j * nb01);
-#pragma unroll
-                for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ*cpy_ne) {
-                    const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) :
-                                                                   item_ct1.get_local_id(2) % nthreads_KQ) *
-                                           cpy_ne;
+            for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ*cpy_ne) {
+                const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) :
+                                                               item_ct1.get_local_id(2) % nthreads_KQ) *
+                                       cpy_ne;
 
-                    sycl::float2 tmp[cpy_ne] = {
-                        { 0.0f, 0.0f }
-                    };
-                    if (ncols == 1 || ic0 + j < int(ne01.z())) {
-                        ggml_sycl_memcpy_1<cpy_nb>(tmp,            &Q_j[i]);
-                        ggml_sycl_memcpy_1<cpy_nb>(tmp + cpy_ne/2, &Q_j[i + cpy_ne/2]);
-                    }
-#pragma unroll
-                    for (int i1 = 0; i1 < cpy_ne; ++i1) {
-                        Q_reg[j][i0 / nthreads_KQ + i1] = sycl::half2(tmp[i1].x(), tmp[i1].y()) * scale_h2;
-                    }
+                sycl::float2 tmp[cpy_ne] = {
+                    { 0.0f, 0.0f }
+                };
+                if (ncols == 1 || ic0 + j < int(ne01.z())) {
+                    ggml_sycl_memcpy_1<cpy_nb>(tmp,            &Q_j[i]);
+                    ggml_sycl_memcpy_1<cpy_nb>(tmp + cpy_ne/2, &Q_j[i + cpy_ne/2]);
                 }
-            }
-        }
-
-        if constexpr (K_is_turbo) {
-            item_ct1.barrier(sycl::access::fence_space::local_space);
-            for (int j = 0; j < ncols; ++j) {
-                if (tid < D) {
-                    dfloat val = KQ[j*D + tid];
-                    turbo_wht<D>(val, item_ct1, (dfloat*)KQ + j*D);
-                    if constexpr (D == 64) val *= (dfloat)TURBO_WHT_SIGNS2_64[tid];
-                    else                  val *= (dfloat)TURBO_WHT_SIGNS2[tid];
-                    val *= (dfloat)(1.0f / sqrtf((float)D));
-                    KQ[j*D + tid] = val;
-                }
-            }
-            item_ct1.barrier(sycl::access::fence_space::local_space);
-            for (int j = 0; j < ncols; ++j) {
-                const sycl::half2 * Q_rotated = (const sycl::half2 *) &KQ[j * D];
 #pragma unroll
-                for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ) {
-                    const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) :
-                                                                   item_ct1.get_local_id(2) % nthreads_KQ);
-                    Q_reg[j][i0 / nthreads_KQ] = Q_rotated[i] * scale_h2;
+                for (int i1 = 0; i1 < cpy_ne; ++i1) {
+                    Q_reg[j][i0 / nthreads_KQ + i1] = sycl::half2(tmp[i1].x(), tmp[i1].y()) * scale_h2;
                 }
             }
         }
 #else
 #pragma unroll
         for (int j = 0; j < ncols; ++j) {
-            if constexpr (K_is_turbo) {
-                for (int i = tid; i < D; i += nthreads) {
-                    float val = (ncols == 1 || ic0 + j < int(ne01.z())) ? ((const float *)(Q + j*nb01))[i] : 0.0f;
-                    if constexpr (D == 64) val *= TURBO_WHT_SIGNS1_64[i];
-                    else                  val *= TURBO_WHT_SIGNS1[i];
-                    KQ[j*D + i] = (dfloat)val;
-                }
-            } else {
-                const sycl::float2 * Q_j = (const sycl::float2 *) (Q + j*nb01);
+            const sycl::float2 * Q_j = (const sycl::float2 *) (Q + j*nb01);
 #pragma unroll
-                for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ*cpy_ne) {
-                    const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) : item_ct1.get_local_id(2) % nthreads_KQ)*cpy_ne;
-                    if (ncols == 1 || ic0 + j < int(ne01.z())) {
-                        ggml_sycl_memcpy_1<cpy_nb>(&Q_reg[j][i0/nthreads_KQ],            &Q_j[i]);
-                        ggml_sycl_memcpy_1<cpy_nb>(&Q_reg[j][i0/nthreads_KQ + cpy_ne/2], &Q_j[i + cpy_ne/2]);
-                    }
-                }
-#pragma unroll
-                for (int k = 0; k < (D/2)/nthreads_KQ; ++k) {
-                    Q_reg[j][k].x() *= scale;
-                    Q_reg[j][k].y() *= scale;
+            for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ*cpy_ne) {
+                const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) : item_ct1.get_local_id(2) % nthreads_KQ)*cpy_ne;
+                if (ncols == 1 || ic0 + j < int(ne01.z())) {
+                    ggml_sycl_memcpy_1<cpy_nb>(&Q_reg[j][i0/nthreads_KQ],            &Q_j[i]);
+                    ggml_sycl_memcpy_1<cpy_nb>(&Q_reg[j][i0/nthreads_KQ + cpy_ne/2], &Q_j[i + cpy_ne/2]);
                 }
             }
-        }
-
-        if constexpr (K_is_turbo) {
-            item_ct1.barrier(sycl::access::fence_space::local_space);
-            for (int j = 0; j < ncols; ++j) {
-                if (tid < D) {
-                    dfloat val = KQ[j*D + tid];
-                    turbo_wht<D>(val, item_ct1, (dfloat*)KQ + j*D);
-                    if constexpr (D == 64) val *= (dfloat)TURBO_WHT_SIGNS2_64[tid];
-                    else                  val *= (dfloat)TURBO_WHT_SIGNS2[tid];
-                    val *= (dfloat)(1.0f / sqrtf((float)D));
-                    KQ[j*D + tid] = val;
-                }
-            }
-            item_ct1.barrier(sycl::access::fence_space::local_space);
-            for (int j = 0; j < ncols; ++j) {
-                const sycl::float2 * Q_rotated = (const sycl::float2 *) &KQ[j * D];
 #pragma unroll
-                for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ) {
-                    const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) :
-                                                                   item_ct1.get_local_id(2) % nthreads_KQ);
-                    Q_reg[j][i0 / nthreads_KQ] = Q_rotated[i];
-                    Q_reg[j][i0 / nthreads_KQ].x() *= scale;
-                    Q_reg[j][i0 / nthreads_KQ].y() *= scale;
-                }
+            for (int k = 0; k < (D/2)/nthreads_KQ; ++k) {
+                Q_reg[j][k].x() *= scale;
+                Q_reg[j][k].y() *= scale;
             }
         }
 #endif // GGML_SYCL_F16

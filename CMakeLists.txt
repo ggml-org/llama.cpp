@@ -141,9 +141,6 @@ if (NOT DEFINED GGML_LLAMAFILE)
     set(GGML_LLAMAFILE_DEFAULT ON)
 endif()
 
-if (NOT DEFINED GGML_CUDA_GRAPHS)
-    set(GGML_CUDA_GRAPHS_DEFAULT ON)
-endif()
 
 # transition helpers
 function (llama_option_depr TYPE OLD)
@@ -158,15 +155,9 @@ function (llama_option_depr TYPE OLD)
     endif()
 endfunction()
 
-llama_option_depr(FATAL_ERROR LLAMA_CUBLAS              GGML_CUDA)
-llama_option_depr(WARNING     LLAMA_CUDA                GGML_CUDA)
-llama_option_depr(WARNING     LLAMA_METAL               GGML_METAL)
-llama_option_depr(WARNING     LLAMA_METAL_EMBED_LIBRARY GGML_METAL_EMBED_LIBRARY)
 llama_option_depr(WARNING     LLAMA_NATIVE              GGML_NATIVE)
-llama_option_depr(WARNING     LLAMA_RPC                 GGML_RPC)
 llama_option_depr(WARNING     LLAMA_SYCL                GGML_SYCL)
 llama_option_depr(WARNING     LLAMA_SYCL_F16            GGML_SYCL_F16)
-llama_option_depr(WARNING     LLAMA_CANN                GGML_CANN)
 llama_option_depr(WARNING     LLAMA_CURL)
 
 include("cmake/license.cmake")

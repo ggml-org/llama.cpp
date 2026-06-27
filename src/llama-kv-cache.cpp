@@ -73,9 +73,9 @@ static ggml_tensor * ggml_mul_mat_aux(
     return res;
 }
 
-// InnerQ: cross-TU shared state for CUDA per-channel equalization.
-// These are defined in ggml-cuda/turbo-innerq.cu (when CUDA is enabled).
-// When CUDA is not available, we provide stub implementations.
+// InnerQ: cross-TU shared state for CUDA per-channel equalization. CUDA was
+// pruned from this fork, so only the no-op stub below is built. The pre-prune
+// implementation lived in ggml-cuda/turbo-innerq.cu.
 #ifndef INNERQ_MAX_CHANNELS
 #define INNERQ_MAX_CHANNELS 128
 #endif

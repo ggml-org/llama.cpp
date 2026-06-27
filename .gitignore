@@ -54,6 +54,20 @@
 /tmp/
 /autogen-*.md
 /common/build-info.cpp
+# In-source cmake leaks (cmake -B . or -S . run from repo root)
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/CTestTestfile.cmake
+/DartConfiguration.tcl
+/compile_commands.json
+/Makefile
+/license.cpp
+/llama.pc
+/**/CMakeFiles/
+/**/cmake_install.cmake
+/**/CTestTestfile.cmake
+/**/Makefile
 
 # Deprecated
 

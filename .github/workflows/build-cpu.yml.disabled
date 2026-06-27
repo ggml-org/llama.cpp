@@ -1,0 +1,215 @@
+name: CI (cpu)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/build-cpu.yml',
+      '.github/workflows/build-cmake-pkg.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-cpu.yml',
+      '.github/workflows/build-cmake-pkg.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp'
+    ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+
+jobs:
+  build-cmake-pkg:
+    uses: ./.github/workflows/build-cmake-pkg.yml
+
+  ubuntu:
+    strategy:
+      matrix:
+        include:
+          - build: 'x64'
+            os: ubuntu-22.04
+          - build: 'arm64'
+            os: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: cpu-${{ matrix.os }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Build Dependencies
+        id: build_depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3 python3-pip python3-dev python3-wheel \
+            libjpeg-dev build-essential libssl-dev \
+            git-lfs
+
+      - name: Toolchain workaround (GCC 14)
+        if: ${{ contains(matrix.os, 'ubuntu-24.04') }}
+        run: |
+          sudo apt-get install -y gcc-14 g++-14
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
+
+      - name: Python Dependencies
+        id: python_depends
+        run: |
+          export PIP_BREAK_SYSTEM_PACKAGES="1"
+          python3 -m pip install --upgrade pip setuptools
+          pip3 install ./gguf-py
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_BUILD_SERVER=ON
+          time cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900
+
+      - name: Test llama2c conversion
+        id: llama2c_test
+        run: |
+          cd build
+          echo "Fetch tokenizer"
+          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/tok512.bin
+          echo "Fetch llama2c model"
+          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
+          ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
+          ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+
+  windows:
+    runs-on: windows-2025
+
+    env:
+      OPENBLAS_VERSION: 0.3.23
+      SDE_VERSION: 9.33.0-2024-01-07
+      VULKAN_VERSION: 1.4.313.2
+
+    strategy:
+      matrix:
+        include:
+          - build: 'x64-cpu-static'
+            arch: 'x64'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=OFF'
+          - build: 'x64-openblas'
+            arch: 'x64'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
+          - build: 'x64-vulkan'
+            arch: 'x64'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
+          - build: 'arm64'
+            arch: 'arm64'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: cpu-windows-2025-${{ matrix.build }}
+          variant: ccache
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Download OpenBLAS
+        id: get_openblas
+        if: ${{ matrix.build == 'x64-openblas' }}
+        run: |
+          curl.exe -o $env:RUNNER_TEMP/openblas.zip -L "https://github.com/xianyi/OpenBLAS/releases/download/v${env:OPENBLAS_VERSION}/OpenBLAS-${env:OPENBLAS_VERSION}-x64.zip"
+          curl.exe -o $env:RUNNER_TEMP/OpenBLAS.LICENSE.txt -L "https://github.com/xianyi/OpenBLAS/raw/v${env:OPENBLAS_VERSION}/LICENSE"
+          mkdir $env:RUNNER_TEMP/openblas
+          tar.exe -xvf $env:RUNNER_TEMP/openblas.zip -C $env:RUNNER_TEMP/openblas
+          $vcdir = $(vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
+          $msvc = $(join-path $vcdir $('VC\Tools\MSVC\'+$(gc -raw $(join-path $vcdir 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()))
+          $lib =  $(join-path $msvc 'bin\Hostx64\x64\lib.exe')
+          & $lib /machine:x64 "/def:${env:RUNNER_TEMP}/openblas/lib/libopenblas.def" "/out:${env:RUNNER_TEMP}/openblas/lib/openblas.lib" /name:openblas.dll
+
+      - name: Install Vulkan SDK
+        id: get_vulkan
+        if: ${{ matrix.build == 'x64-vulkan' }}
+        run: |
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+
+      - name: Install Ninja
+        id: install_ninja
+        run: |
+          choco install ninja
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -S . -B build ${{ matrix.defines }} `
+            -DLLAMA_BUILD_BORINGSSL=ON
+          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
+
+      - name: Add libopenblas.dll
+        id: add_libopenblas_dll
+        if: ${{ matrix.build == 'x64-openblas' }}
+        run: |
+          cp $env:RUNNER_TEMP/openblas/bin/libopenblas.dll ./build/bin/Release/openblas.dll
+          cp $env:RUNNER_TEMP/OpenBLAS.LICENSE.txt ./build/bin/Release/OpenBLAS-${env:OPENBLAS_VERSION}.txt
+
+      - name: Test
+        id: cmake_test
+        if: ${{ matrix.arch == 'x64' }}
+        run: |
+          cd build
+          ctest -L main -C Release --verbose --timeout 900
+
+      # TODO: disabled for now, consider adding tests for all CPU variants instead
+      # - name: Test (Intel SDE)
+      #   id: cmake_test_sde
+      #   if: ${{ matrix.build == 'avx512-x64' && env.HAS_AVX512F == '0' }} # use Intel SDE for AVX-512 emulation
+      #   run: |
+      #     curl.exe -o $env:RUNNER_TEMP/sde.tar.xz -L "https://downloadmirror.intel.com/813591/sde-external-${env:SDE_VERSION}-win.tar.xz"
+      #     # for some weird reason windows tar doesn't like sde tar.xz
+      #     7z x "-o${env:RUNNER_TEMP}" $env:RUNNER_TEMP/sde.tar.xz
+      #     7z x "-o${env:RUNNER_TEMP}" $env:RUNNER_TEMP/sde.tar
+      #     $sde = $(join-path $env:RUNNER_TEMP sde-external-${env:SDE_VERSION}-win/sde.exe)
+      #     cd build
+      #     $env:LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR = 1
+      #     & $sde -future -- ctest -L main -C Release --verbose --timeout 900

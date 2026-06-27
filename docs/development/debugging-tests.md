@@ -51,7 +51,7 @@ rm -rf build-ci-debug && mkdir build-ci-debug && cd build-ci-debug
 Setup and trigger a build under debug mode. You may adapt the arguments as needed, but in this case these are sane defaults.
 
 ```bash
-cmake -DCMAKE_BUILD_TYPE=Debug -DLLAMA_CUDA=1 -DLLAMA_FATAL_WARNINGS=ON ..
+cmake -DCMAKE_BUILD_TYPE=Debug -DLLAMA_FATAL_WARNINGS=ON ..
 make -j
 ```
 

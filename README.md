@@ -58,11 +58,9 @@ All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantiz
 
 | Backend | Quant kernels | Flash Attention | Notes |
 |---|---|---|---|
-| **Metal** (Apple Silicon) | TQ V2.1 fused, TurboFlash | Yes — sparse V across the family; `dk=512` FA kernels for Gemma 4 | TurboFlash off by default on Apple10 (corruption regression under investigation). [m5-max-stress-test](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/m5-max-stress-test.md) |
-| **CUDA** (NVIDIA) | `dp4a` for `TQ4_1S`, warp-cooperative dequant (16× less compute per block), multi-token / multi-GPU | Yes — turbo VEC FA (+9% decode); mixed `f16/bf16 + q8_0` without `GGML_CUDA_FA_ALL_QUANTS` | Load-time `TQ4_1S → q8_0` conversion path |
-| **HIP / ROCm** (AMD) | Portable `ggml_cuda_dp4a`; scalar half path for `TQ4_1S` on AMD | Yes — VEC FA forced for quantized KV; pool bypass for FA f16 temp buffers | RDNA3 (gfx1100), RDNA4, CDNA3 (MI300X / gfx942), CDNA4 (MI355X / gfx950). [cross-engine-mi300x](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/cross-engine-mi300x.md) |
 | **Vulkan** | `TQ4_1S` weights, `SET_ROWS` for `turbo2`/`turbo4` | coopmat flash attention with `turbo3` KV | Compute-shader path; nix-buildable |
 | **SYCL** (Intel Arc / oneAPI) | turbo `mmvq` + WHT custom op | `q8_0` / `f16` KV at mainline parity; turbo KV is rejected on the FA path (numerically broken) and falls back to the non-FA attention path | A770 (DG2) verified; builds with `GGML_SYCL_F16=ON` or `OFF`; use `q8_0` KV with `-fa on`, not turbo |
+
 
 ### Model-family support
 
@@ -74,8 +72,6 @@ All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantiz
 ### Operational fixes carried by this fork
 
 - CPU `vec_dot` heap-allocation fix for turbo / TQ types at `n > 4096`
-- Apple Silicon unified-memory explosion fix
-- RPC `GGML_OP_COUNT` assertion fix
 - Cross-vendor `-Werror` build fixes
 - Defensive `xxd.cmake` handling for missing input files
 
@@ -86,17 +82,11 @@ All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantiz
 Standard llama.cpp build flags. TurboQuant types become available automatically once the matching backend is compiled in.
 
 ```bash
-# Apple Silicon (Metal)
-cmake -B build -DGGML_METAL=ON && cmake --build build -j
-
-# NVIDIA CUDA
-cmake -B build -DGGML_CUDA=ON && cmake --build build -j
-
-# AMD HIP / ROCm (multi-arch fat binary)
-cmake -B build -DGGML_HIP=ON -DCMAKE_HIP_ARCHITECTURES="gfx1100;gfx942;gfx950" && cmake --build build -j
-
 # Vulkan
 cmake -B build -DGGML_VULKAN=ON && cmake --build build -j
+
+# SYCL (Intel Arc / oneAPI)
+cmake -B build -DGGML_SYCL=ON -DGGML_VULKAN=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx && cmake --build build -j
 ```
 
 ## Usage

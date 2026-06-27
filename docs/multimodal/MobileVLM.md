@@ -191,13 +191,6 @@ llama_print_timings:        eval time =   14497.49 ms /   186 runs   (   77.94 m
 llama_print_timings:       total time =   44411.01 ms /   377 tokens
 ```
 
-## Orin compile and run
-### compile
-```sh
-make GGML_CUDA=1 CUDA_DOCKER_ARCH=sm_87 -j 32
-```
-### run on Orin
-### case 1
 **input**
 ```sh
 ./llama-mtmd-cli \

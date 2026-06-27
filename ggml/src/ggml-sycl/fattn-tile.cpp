@@ -12,6 +12,10 @@ void ggml_sycl_flash_attn_ext_tile(ggml_backend_sycl_context & ctx, ggml_tensor 
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
+    GGML_ASSERT(K->type != GGML_TYPE_TURBO2_0 && K->type != GGML_TYPE_TURBO3_0 && K->type != GGML_TYPE_TURBO4_0 &&
+                V->type != GGML_TYPE_TURBO2_0 && V->type != GGML_TYPE_TURBO3_0 && V->type != GGML_TYPE_TURBO4_0 &&
+                "turbo KV must route to VEC");
+
     const int type_K = K->type;
 
     switch (K->ne[0]) {
