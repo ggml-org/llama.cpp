@@ -7,6 +7,9 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-hybrid-iswa.h"
+#include "llama-memory-recurrent.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
@@ -1183,6 +1186,40 @@ void llama_context::set_warmup(bool value) {
 
     // warmups are usually with small batches, so no need to reserve
     //sched_need_reserve = true;
+}
+
+bool llama_context::resize_recurrent_memory(uint32_t new_n_seq_max, bool expand) {
+    if (!memory) {
+        return false;
+    }
+
+    auto * recr = dynamic_cast<llama_memory_recurrent *>(memory.get());
+    if (!recr) {
+        auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory.get());
+        if (hybrid) {
+            recr = hybrid->get_mem_recr();
+        } else {
+            auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(memory.get());
+            if (hybrid_iswa) {
+                recr = hybrid_iswa->get_mem_recr();
+            }
+        }
+    }
+    if (!recr) {
+        return true; // no recurrent component — nothing to resize
+    }
+
+    synchronize();
+
+    const bool ok = expand ? recr->expand(new_n_seq_max) : recr->shrink(new_n_seq_max);
+    if (ok) {
+        sched_need_reserve = true;
+        if (gf_res_prev) {
+            gf_res_prev->reset();
+        }
+    }
+
+    return ok;
 }
 
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
@@ -3919,6 +3956,42 @@ bool llama_memory_can_shift(llama_memory_t mem) {
     }
 
     return mem->get_can_shift();
+}
+
+bool llama_memory_recurrent_expand(llama_memory_t mem, uint32_t new_n_seq_max) {
+    if (!mem) return false;
+    auto * recr = dynamic_cast<llama_memory_recurrent *>(mem);
+    if (!recr) {
+        auto * hybrid = dynamic_cast<llama_memory_hybrid *>(mem);
+        if (hybrid) recr = hybrid->get_mem_recr();
+        else {
+            auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(mem);
+            if (hybrid_iswa) recr = hybrid_iswa->get_mem_recr();
+        }
+    }
+    return recr ? recr->expand(new_n_seq_max) : true;
+}
+
+bool llama_memory_recurrent_shrink(llama_memory_t mem, uint32_t new_n_seq_max) {
+    if (!mem) return false;
+    auto * recr = dynamic_cast<llama_memory_recurrent *>(mem);
+    if (!recr) {
+        auto * hybrid = dynamic_cast<llama_memory_hybrid *>(mem);
+        if (hybrid) recr = hybrid->get_mem_recr();
+        else {
+            auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(mem);
+            if (hybrid_iswa) recr = hybrid_iswa->get_mem_recr();
+        }
+    }
+    return recr ? recr->shrink(new_n_seq_max) : true;
+}
+
+bool llama_context_recurrent_expand(llama_context * ctx, uint32_t new_n_seq_max) {
+    return ctx ? ctx->resize_recurrent_memory(new_n_seq_max, true) : false;
+}
+
+bool llama_context_recurrent_shrink(llama_context * ctx, uint32_t new_n_seq_max) {
+    return ctx ? ctx->resize_recurrent_memory(new_n_seq_max, false) : false;
 }
 
 // llama state API

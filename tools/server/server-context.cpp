@@ -928,6 +928,11 @@ private:
     // Necessary similarity of prompt for slot selection
     float slot_prompt_similarity = 0.0f;
 
+    // hybrid/recurrent models need re-evaluation of accepted tokens after
+    // rejecting draft tokens, because the recurrent state cannot be rolled back
+    bool needs_reeval = false;
+    int  n_parallel_user = 0;
+
     std::string model_name; // name of the loaded model, to be used by API
     std::set<std::string> model_aliases; // additional names for the model
     std::set<std::string> model_tags;    // informational tags
@@ -1169,6 +1174,9 @@ private:
 
         vocab = llama_model_get_vocab(model_tgt);
 
+        needs_reeval = llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt);
+        n_parallel_user = params_base.n_parallel;
+
         n_ctx = llama_n_ctx(ctx_tgt);
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
@@ -1409,6 +1417,32 @@ private:
         }
         SRV_INF("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
+        // Auto-disable context checkpoints on AMD GPUs (issue #20176),
+        // unless the model is recurrent/hybrid — those need checkpoints
+        // to avoid forced full prompt re-processing on every turn.
+        if (params_base.n_ctx_checkpoints > 0) {
+            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+                    continue;
+                }
+                std::string name = ggml_backend_dev_name(dev);
+                if (name.find("AMD") != std::string::npos ||
+                    name.find("Radeon") != std::string::npos ||
+                    name.find("ROCm") != std::string::npos) {
+                    if (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt)) {
+                        SRV_WRN("AMD GPU detected (%s) — keeping checkpoints enabled for recurrent model\n",
+                                name.c_str());
+                    } else {
+                        SRV_WRN("AMD GPU detected (%s) — disabling context checkpoints (issue #20176)\n",
+                                name.c_str());
+                        params_base.n_ctx_checkpoints = 0;
+                    }
+                    break;
+                }
+            }
+        }
+
         if (params_base.n_ctx_checkpoints > 0) {
             SRV_INF("context checkpoints enabled, max = %d, min spacing = %d\n",
                     params_base.n_ctx_checkpoints, params_base.checkpoint_min_step);
@@ -1567,6 +1601,39 @@ private:
         return nullptr;
     }
 
+    // Shrink recurrent state to 1 cell before saving/loading prompt cache.
+    // This frees GPU memory for the cache and ensures a clean recurrent state
+    // that matches the loaded KV cache. The subsequent expand restores capacity.
+    bool recurrent_shrink_for_prompt_cache() {
+        if (!needs_reeval) {
+            return true;
+        }
+
+        if (llama_context_recurrent_shrink(ctx_tgt, 1)) {
+            SRV_INF("%s", "shrunk recurrent state to 1 cell for prompt cache\n");
+            return true;
+        }
+
+        SRV_ERR("failed to shrink recurrent state (%s)\n", "prompt cache");
+        return false;
+    }
+
+    // Expand recurrent state back after prompt cache save/load completes.
+    void recurrent_expand_after_prompt_cache() {
+        if (!needs_reeval) {
+            return;
+        }
+
+        // Expand to n_parallel_user cells (the original allocation from model init).
+        // Context checkpoints will be re-created after this, referencing the new cells.
+        if (llama_context_recurrent_expand(ctx_tgt, n_parallel_user)) {
+            SRV_INF("expanded recurrent state to %d cells after prompt cache\n", n_parallel_user);
+            return;
+        }
+
+        SRV_ERR("failed to expand recurrent state (%s)\n", "prompt cache");
+    }
+
     server_slot * get_available_slot(const server_task & task) {
         server_slot * ret = nullptr;
 
@@ -1652,12 +1719,19 @@ private:
         }
 
         if (ret) {
+            // Force prompt cache update for recurrent models to shrink/restore
+            // the recurrent state and avoid forced re-processing (issue #22746).
+            if (needs_reeval && prompt_cache) {
+                update_cache = true;
+            }
+
             update_cache = update_cache && prompt_cache;
 
             // cache prompts only for completion tasks
             update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
 
             if (update_cache) {
+                recurrent_shrink_for_prompt_cache();
                 SRV_INF("%s", "updating prompt cache\n");
 
                 const int64_t t_start = ggml_time_us();
@@ -1669,6 +1743,7 @@ private:
                 }
 
                 prompt_cache->update();
+                recurrent_expand_after_prompt_cache();
 
                 SRV_INF("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
