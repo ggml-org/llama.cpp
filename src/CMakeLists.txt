@@ -17,6 +17,7 @@ add_library(llama
             llama-chat.cpp
             llama-context.cpp
             llama-cparams.cpp
+            llama-deterministic-draft-serviceloader.cpp
             llama-grammar.cpp
             llama-graph.cpp
             llama-hparams.cpp
@@ -53,6 +54,8 @@ set_target_properties(llama PROPERTIES
 target_include_directories(llama PRIVATE .)
 target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
+
+target_compile_definitions(llama PRIVATE LLAMA_DETERMINISTIC_DRAFT_INTERNAL)
 
 target_link_libraries(llama PUBLIC ggml)
 

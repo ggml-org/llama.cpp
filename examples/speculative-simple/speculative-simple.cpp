@@ -255,11 +255,21 @@ int main(int argc, char ** argv) {
         // available logits from the batch and sample the next token until we run out of logits or the sampler
         // disagrees with the draft
         //
-        auto ids = common_sampler_sample_and_accept_n(smpl.get(), ctx_tgt, draft);
+        // route through the speculative layer: with an active det filter this
+        // constrains the final token and reconciles filter state, otherwise it
+        // behaves like common_sampler_sample_and_accept_n
+        std::vector<int> idxs(draft.size() + 1);
+        for (size_t i = 0; i < idxs.size(); ++i) {
+            idxs[i] = (int) i;
+        }
+        auto ids = common_speculative_sample_and_accept(spec, smpl.get(), ctx_tgt, idxs, draft, seq_id);
 
         //LOG_DBG("ids: %s\n", string_from(ctx_tgt, ids).c_str());
 
-        GGML_ASSERT(ids.size() > 0); // there will always be at least one accepted token
+        if (ids.empty()) {
+            // det filter reached a terminal state - no valid token remains
+            break;
+        }
 
         // check for partial draft acceptance:
         // if the context doesn't support partial sequence removal, restore the checkpoint

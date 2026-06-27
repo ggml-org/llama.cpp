@@ -179,6 +179,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
     COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
+    COMMON_SPECULATIVE_TYPE_DRAFT_DETERMINISTIC, // deterministic draft filter (plugin-based validation)
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
 
@@ -218,6 +219,14 @@ inline bool common_grammar_needs_prefill(const common_grammar & g) {
     return g.type == COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT
         || g.type == COMMON_GRAMMAR_TYPE_TOOL_CALLS;
 }
+
+// deterministic draft (pluggable grammar-constrained validation) parameters
+struct common_params_deterministic_draft {
+    std::string plugin_path;  // path to the plugin shared library (.so/.dylib/.dll)
+    int32_t n_max = -1;       // max tokens to validate per draft (-1=all, 0=disabled)
+    bool enabled = false;     // whether deterministic draft is enabled
+    bool det_accept_all = false; // accept all filter-passed tokens without target verification
+};
 
 // sampling parameters
 struct common_params_sampling {
@@ -371,6 +380,9 @@ struct common_params_speculative {
 
     // used by Simple, MTP, Eagle3, etc. - all methods that require some kind of draft model
     common_params_speculative_draft draft;
+
+    // deterministic draft (grammar-constrained decoder) parameters
+    common_params_deterministic_draft deterministic_draft;
 
     common_params_speculative_ngram_mod ngram_mod;
     common_params_speculative_ngram_map ngram_simple;

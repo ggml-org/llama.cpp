@@ -1,9 +1,10 @@
 #pragma once
 
-#include "llama.h"
 #include "common.h"
+#include "llama.h"
 
 struct common_speculative;
+struct llama_deterministic_draft;
 
 // comma separated list the provided types
 std::string common_speculative_type_name_str(const std::vector<enum common_speculative_type> & types);
@@ -79,6 +80,46 @@ void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id
 
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
+
+// true if the deterministic draft filter is active
+bool common_speculative_has_det_filter(const common_speculative * spec);
+
+// get the deterministic draft plugin handle (for direct API calls)
+// returns nullptr if no filter is active
+struct llama_deterministic_draft * common_speculative_get_det_filter_plugin(const common_speculative * spec);
+
+// true if accept-all mode is active (filter is sole verifier, target skip)
+bool common_speculative_get_det_accept_all(const common_speculative * spec);
+
+// true if the deterministic draft filter's constraint for seq_id has reached
+// a complete, terminal state and will reject any further tokens - callers
+// should treat this like end-of-sequence for that sequence rather than
+// continuing to request more drafts that the filter will just reject.
+bool common_speculative_is_terminated(const common_speculative * spec, llama_seq_id seq_id);
+
+// deterministic draft filter diagnostics (per-seq)
+struct common_det_filter_result {
+    bool        truncated      = false;
+    int         valid_count    = 0;
+    int         reject_pos     = -1;
+    llama_token rejected_token = LLAMA_TOKEN_NULL;
+};
+
+// get the last filter result for a given sequence
+const common_det_filter_result & common_speculative_get_det_filter_result(const common_speculative * spec,
+                                                                          llama_seq_id               seq_id);
+
+// sample from target model and accept tokens based on draft
+// if accept-all mode is active (deterministic filter is sole verifier), skip target verification
+// and accept all draft tokens + sample bonus token
+// otherwise use standard speculative verification via common_sampler_sample_and_accept_n
+llama_tokens common_speculative_sample_and_accept(
+        common_speculative * spec,
+        struct common_sampler * smpl,
+        struct llama_context * ctx,
+        const std::vector<int> & idxs,
+        const llama_tokens & draft,
+        llama_seq_id seq_id);
 
 struct common_speculative_deleter {
     void operator()(common_speculative * s) { common_speculative_free(s); }

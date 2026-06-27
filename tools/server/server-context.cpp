@@ -3808,14 +3808,34 @@ private:
             const int tok_idx = slot.i_batch - off;
 
             llama_token id;
+            bool        committed_by_filter = false;
             {
                 scoped_timer timer(t_sampl, n_sampl);
-                id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+                if (slot.can_speculate() && spec && common_speculative_has_det_filter(spec.get())) {
+                    // the det filter emptied the draft - the single emitted
+                    // token must still be filter-constrained
+                    const llama_tokens acc = common_speculative_sample_and_accept(
+                            spec.get(), slot.smpl.get(), slot.ctx_tgt, { tok_idx }, {}, slot.id);
+                    if (acc.empty()) {
+                        // filter reached a terminal state - end this slot
+                        slot.print_timings();
+                        send_final_response(slot);
+                        metrics.on_prediction(slot);
+                        slot.release();
+                        return;
+                    }
+                    id = acc[0];
+                    committed_by_filter = true; // sample_and_accept commits to the sampler itself
+                } else {
+                    id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+                }
             }
 
             slot.i_batch = -1;
 
-            common_sampler_accept(slot.smpl.get(), id, true);
+            if (!committed_by_filter) {
+                common_sampler_accept(slot.smpl.get(), id, true);
+            }
 
             // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement
             const int64_t t_now = ggml_time_us();
@@ -3871,10 +3891,17 @@ private:
                 common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
-                auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
+                auto accepted = common_speculative_sample_and_accept(spec.get(), slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft, slot.id);
                 slot.spec_i_batch.clear();
 
-                GGML_ASSERT(accepted.size() >= 1);
+                if (accepted.empty()) {
+                    // det filter reached a terminal state - end this slot
+                    slot.print_timings();
+                    send_final_response(slot);
+                    metrics.on_prediction(slot);
+                    slot.release();
+                    return;
+                }
 
                 const uint32_t n_rollback = slot.spec_draft.size() + 1 - accepted.size();
 

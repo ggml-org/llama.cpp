@@ -10,7 +10,7 @@ function(llama_build source)
     endif()
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
-    target_link_libraries(${TEST_TARGET} PRIVATE llama llama-common)
+    target_link_libraries(${TEST_TARGET} PRIVATE llama-common llama)
     if (LLAMA_TESTS_INSTALL)
         install(TARGETS ${TEST_TARGET} RUNTIME)
     endif()
@@ -153,6 +153,12 @@ llama_build(test-recurrent-state-rollback.cpp)
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
     llama_build_and_test(test-sampling.cpp)
+
+    # Deterministic draft tests
+    # Requires DETERMINISTIC_SPEC_ENABLED=ON for the spec loader library and headers
+    if (DETERMINISTIC_SPEC_ENABLED)
+        llama_build_and_test(test-deterministic-draft.cpp)
+    endif()
     llama_build_and_test(test-reasoning-budget.cpp)
     llama_build_and_test(test-grammar-parser.cpp)
     llama_build_and_test(test-grammar-integration.cpp)
