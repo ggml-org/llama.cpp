@@ -1,0 +1,12 @@
+﻿whisper-cli.exe : whisper_init_from_file_with_params_no_state: loading model 
+from 'models/ggml-base.en.bin'
+At line:1 char:1
++ & 'C:\Users\Pc\Kellen.cpp\whisper.cpp\build\bin\Release\whisper-cli.e ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (whisper_init_fr...ml-base.en.bin' 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+whisper_init_from_file_with_params_no_state: failed to open 
+'models/ggml-base.en.bin'
+error: failed to initialize whisper context
