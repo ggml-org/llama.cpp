@@ -1620,7 +1620,11 @@ size_t server_prompt_cache::n_tokens() const {
     return res;
 }
 
-server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
+server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft, size_t state_size_ckpt) {
+    // account for checkpoint data to match the actual entry size
+
+    const size_t new_alloc_size = state_size_tgt + state_size_dft + state_size_ckpt;
+
     // first check if the current state is contained fully in the cache
     for (auto it = states.begin(); it != states.end(); ++it) {
         const int cur_lcp_len = it->tokens.get_common_prefix(prompt.tokens);
@@ -1647,19 +1651,25 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
     std::vector<uint8_t> state_data_tgt;
     std::vector<uint8_t> state_data_dft;
 
-    // check if we can allocate enough memory for the new state
+    // if a single state exceeds the limit, skip caching to avoid OOM
+    if (limit_size > 0 && new_alloc_size > limit_size) {
+        SRV_WRN(" - single state (%.3f MiB) exceeds cache limit (%.3f MiB), skipping cache\n",
+                new_alloc_size / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0));
+        return nullptr;
+    }
+
+    // evict old entries before allocating to avoid exceeding the limit
+    if (limit_size > 0 && (size() + new_alloc_size > limit_size)) {
+        update(new_alloc_size, prompt.tokens.size());
+    }
+
+
+    // allocate memory for the new state; catch system-level OOM
     try {
         state_data_tgt.resize(state_size_tgt);
         state_data_dft.resize(state_size_dft);
     } catch (const std::bad_alloc & e) {
         SRV_ERR("failed to allocate memory for prompt cache state: %s\n", e.what());
-
-        limit_size = std::max<size_t>(1, 0.4*size());
-
-        SRV_WRN(" - cache size limit reduced to %.3f MiB\n", limit_size / (1024.0 * 1024.0));
-
-        update();
-
         return nullptr;
     }
 
@@ -1750,16 +1760,11 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     return true;
 }
 
-void server_prompt_cache::update() {
+void server_prompt_cache::update(size_t new_alloc_size, int new_alloc_tokens) {
     if (limit_size > 0) {
-        // always keep at least one state, regardless of the limits
-        while (states.size() > 1 && size() > limit_size) {
-            if (states.empty()) {
-                break;
-            }
-
+        // evict until new prompt fits; it will be allocated immediately, so clearing is safe
+        while ((size() + new_alloc_size) > limit_size) {
             SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
-
             states.pop_front();
         }
     }
@@ -1771,11 +1776,7 @@ void server_prompt_cache::update() {
     const size_t limit_tokens_cur = limit_size > 0 ? std::max<size_t>(limit_tokens, limit_size/size_per_token) : limit_tokens;
 
     if (limit_tokens > 0) {
-        while (states.size() > 1 && n_tokens() > limit_tokens_cur) {
-            if (states.empty()) {
-                break;
-            }
-
+        while ((n_tokens() + new_alloc_tokens) > limit_tokens_cur) {
             SRV_WRN(" - cache token limit (%zu, est: %zu) reached, removing oldest entry (size = %.3f MiB)\n",
                     limit_tokens, limit_tokens_cur, states.front().size() / (1024.0 * 1024.0));
 

@@ -226,12 +226,14 @@ struct server_slot {
         const size_t cur_size_tgt =           llama_state_seq_get_size_ext(ctx_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         const size_t cur_size_dft = ctx_dft ? llama_state_seq_get_size_ext(ctx_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE) : 0;
 
-        const size_t cur_size = cur_size_tgt + cur_size_dft;
+        const size_t cur_size_ckpt = prompt.size();
+        const size_t cur_size = cur_size_tgt + cur_size_dft + cur_size_ckpt;
 
-        SRV_WRN(" - saving prompt with length %d, total state size = %.3f MiB (draft: %.3f MiB)\n",
-                (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0), cur_size_dft / (1024.0 * 1024.0));
+        SRV_WRN(" - saving prompt with length %d, total state size = %.3f MiB (kv: %.3f MiB, draft: %.3f MiB, ckpt: %.3f MiB)\n",
+                (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0),
+                cur_size_tgt / (1024.0 * 1024.0), cur_size_dft / (1024.0 * 1024.0), cur_size_ckpt / (1024.0 * 1024.0));
 
-        auto * cur = prompt_cache.alloc(prompt, cur_size_tgt, cur_size_dft);
+        auto * cur = prompt_cache.alloc(prompt, cur_size_tgt, cur_size_dft, cur_size_ckpt);
         if (cur == nullptr) {
             return false;
         }
