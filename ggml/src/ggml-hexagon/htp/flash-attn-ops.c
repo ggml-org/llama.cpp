@@ -728,7 +728,7 @@ static void fa_phase_q_load(struct hmx_fa_context *   factx,
         n = factx->n_threads;
     }
     size_t rows_per_t = hex_align_up(hmx_ceil_div(factx->g_br, n), 2);
-    const struct htp_tensor * sinks = (factx->octx->src[4] && factx->octx->src[4]->data) ? factx->octx->src[4] : NULL;
+    const struct htp_tensor * sinks = factx->octx->src[4] ? factx->octx->src[4] : NULL;
     fa_q_load_args_t args = { factx, q, q_start, kv_head, ib3, n_rows_g, rows_per_t, sinks };
     if (n > 1) {
         worker_pool_run_func(wp, fa_q_load_thread, &args, n);
