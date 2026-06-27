@@ -185,7 +185,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
 #else
-        LOG_ERR("export-graph-ops compiled without HF fetch support\n");
+        LOG_ERR("test-export-graph-ops compiled without HF fetch support\n");
         return 1;
 #endif
     }
