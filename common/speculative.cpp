@@ -2034,7 +2034,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     }
 
     if (impls.empty()) {
-        LOG_WRN("%s: no implementations specified for speculative decoding\n", __func__);
+        LOG_TRC("%s: no implementations specified for speculative decoding\n", __func__);
         return nullptr;
     }
 
