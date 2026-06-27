@@ -18371,8 +18371,8 @@ static bool ggml_backend_vk_comm_allreduce_pipeline(ggml_backend_vk_comm_context
 // Ring AllReduce: reduce-scatter then all-gather around a ring, O(n) host traffic vs the pipeline's O(n^2).
 // The output is split into n chunks; each of 2*(n-1) steps a device sends one chunk to its next neighbor's
 // host buffer and pulls the matching chunk from its prev neighbor (accumulating in reduce-scatter, copying
-// in all-gather). tensors[i] is the in-place working buffer. fp32 + native-import only for now (the proof
-// of the algorithm); F16 staging and the proxy bridge are follow-ups. GGML_VK_COMM_RING selects this path.
+// in all-gather). tensors[i] is the in-place working buffer. Supports native peer-import and the CPU-proxy
+// bridge (for RADV/cross-vendor); fp32 staging only for now (F16 is a follow-up). GGML_VK_COMM_RING selects it.
 static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * comm,
                                                 ggml_tensor ** tensors, size_t nbytes) {
     const size_t   n    = comm->backends.size();
@@ -18384,7 +18384,7 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
     const uint64_t round    = comm->ring_round++;
     const size_t   slot_off = (size_t) (round & 1) * 2 * comm->cap; // round-slot holds this round's 2(n-1) chunks
 
-    std::vector<uint64_t> compute_val(n), reduce_val(n), prev_reduce(n), up_base(n);
+    std::vector<uint64_t> compute_val(n), reduce_val(n), prev_reduce(n), up_base(n), pxy_base(n);
     for (size_t i = 0; i < n; i++) {
         prev_reduce[i] = comm->last_reduce[i];
         compute_val[i] = comm->vkctx[i]->comm_prog_val;
@@ -18393,6 +18393,10 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
         comm->last_reduce[i]          = reduce_val[i];
         up_base[i]      = comm->up_val[i];
         comm->up_val[i] += nsteps;
+        if (comm->proxy) {
+            pxy_base[i]       = comm->pxy_val[i];
+            comm->pxy_val[i] += nsteps + 1; // nsteps recv bridges + 1 cross-round WAR bridge
+        }
         uint64_t done = comm->device[i]->device.getSemaphoreCounterValue(comm->prog[i]);
         if (done >= comm->pool_max_val[i]) { ggml_vk_command_pool_cleanup(comm->device[i], comm->cmd_pool[i]); }
         comm->pool_max_val[i] = reduce_val[i];
@@ -18428,7 +18432,15 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
             if (t == 0) {
                 tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] });
                 if (round >= 2) { // WAR: next device finished reading our send buffer in the round that reused this slot
-                    tctx->s->wait_semaphores.push_back({ comm->peer_prog[i][nextd], prev_reduce[nextd] });
+                    if (comm->proxy) {
+                        const uint64_t pv = pxy_base[i] + 1;
+                        tctx->s->wait_semaphores.push_back({ comm->pxy[i], pv });
+                        std::lock_guard<std::mutex> lk(comm->bridge_mtx);
+                        comm->bridge_q[i].push_back({ comm->device[nextd]->device, comm->prog[nextd], prev_reduce[nextd],
+                                                      comm->device[i]->device, comm->pxy[i], pv });
+                    } else {
+                        tctx->s->wait_semaphores.push_back({ comm->peer_prog[i][nextd], prev_reduce[nextd] });
+                    }
                 }
             } else {
                 tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] + t }); // prev recv updated c_send
@@ -18440,7 +18452,15 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
             tctx->seqs.back().back().signal_semaphores.push_back({ comm->up[i], up_base[i] + t + 1 });
 
             ggml_vk_ctx_begin(comm->device[i], cctx);
-            cctx->s->wait_semaphores.push_back({ comm->peer_up[i][prevd], up_base[prevd] + t + 1 });
+            if (comm->proxy) {
+                const uint64_t pv = pxy_base[i] + 2 + t;
+                cctx->s->wait_semaphores.push_back({ comm->pxy[i], pv });
+                std::lock_guard<std::mutex> lk(comm->bridge_mtx);
+                comm->bridge_q[i].push_back({ comm->device[prevd]->device, comm->up[prevd], up_base[prevd] + t + 1,
+                                              comm->device[i]->device, comm->pxy[i], pv });
+            } else {
+                cctx->s->wait_semaphores.push_back({ comm->peer_up[i][prevd], up_base[prevd] + t + 1 });
+            }
             if (recv_sz) {
                 ggml_vk_buffer_copy_async(cctx, tbc->dev_buffer, 0, comm->host_buf[prevd][i], hoff, recv_sz);
                 ggml_vk_sync_buffers(comm->vkctx[i], cctx);
@@ -18497,7 +18517,7 @@ static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor *
             all_compute = all_compute && (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE);
         }
         if (all_compute) {
-            if (comm->ring && !comm->proxy) { // ring is native-import + fp32 only for now
+            if (comm->ring) { // ring supports native-import and CPU-proxy; fp32 staging only for now
                 return ggml_backend_vk_comm_allreduce_ring(comm, tensors, nbytes);
             }
             return ggml_backend_vk_comm_allreduce_pipeline(comm, tensors, nbytes);
