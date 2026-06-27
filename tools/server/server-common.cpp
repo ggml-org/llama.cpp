@@ -1519,7 +1519,6 @@ llama_tokens format_prompt_infill(
     tokens_suffix.resize(n_suffix_take);
 
     tokens_prefix.insert(tokens_prefix.begin(), llama_vocab_fim_pre(vocab));
-    tokens_prefix.insert(tokens_prefix.end(),   tokens_prompt.begin(), tokens_prompt.end());
     tokens_suffix.insert(tokens_suffix.begin(), llama_vocab_fim_suf(vocab));
 
     auto embd_inp = spm_infill ? tokens_suffix : tokens_prefix;
@@ -1529,13 +1528,19 @@ llama_tokens format_prompt_infill(
         embd_inp.insert(embd_inp.begin(), llama_vocab_bos(vocab));
     }
 
-    SRV_DBG("extra: n_ctx = %d, n_extra_take = %d, n_extra = %d\n", n_ctx, n_extra_take, (int) extra_tokens.size());
+    //Insert extra context (Repo-level tokens) at the very beginning
+    if (n_extra_take > 0) {
+        embd_inp.insert(embd_inp.begin(), extra_tokens.end() - n_extra_take, extra_tokens.end());
+    }
 
-    // put the extra context before the FIM prefix
-    embd_inp.insert(embd_inp.begin(), extra_tokens.end() - n_extra_take, extra_tokens.end());
+    SRV_DBG("extra: n_ctx = %d, n_extra_take = %d, n_extra = %d\n", n_ctx, n_extra_take, (int) extra_tokens.size());
 
     embd_inp.insert(embd_inp.end(), embd_end.begin(), embd_end.end());
     embd_inp.push_back(llama_vocab_fim_mid(vocab));
+
+    if (!tokens_prompt.empty()) {
+        embd_inp.insert(embd_inp.end(), tokens_prompt.begin(), tokens_prompt.end());
+    }
 
     return embd_inp;
 }
