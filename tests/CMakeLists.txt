@@ -223,6 +223,11 @@ if (GGML_SYCL)
     add_executable(test-sycl-turbo-correctness test-sycl-turbo-correctness.cpp)
     target_link_libraries(test-sycl-turbo-correctness PRIVATE llama llama-common ggml-cpu ggml-sycl)
     add_test(NAME test-sycl-turbo-correctness COMMAND test-sycl-turbo-correctness)
+    # TIMEOUT: an A770 SYCL FA device-lost can manifest as a non-terminating
+    # compute (see the harness's head-dim note). Cap it so a hang fails fast
+    # (deterministic red) instead of stalling ctest/CI forever.
+    set_property(TEST test-sycl-turbo-correctness PROPERTY LABELS sycl)
+    set_property(TEST test-sycl-turbo-correctness PROPERTY TIMEOUT 180)
 endif()
 llama_build_and_test(
     test-peg-parser.cpp

@@ -18,13 +18,30 @@ fi
 
 FAIL=0
 
+# --- Test 0: kernel correctness (fast CPU-vs-SYCL unit oracle) ---
+CORRECTNESS_BIN=${CORRECTNESS_BIN:-$HOME/projects/trb/llama-cpp-turboquant-correctness-gate/build-sycl-fp32/bin/test-sycl-turbo-correctness}
+echo "[0/3] Running CPU-vs-SYCL kernel correctness..."
+if [ -x "$CORRECTNESS_BIN" ]; then
+    # timeout: an A770 SYCL FA device-lost can hang the compute indefinitely;
+    # cap it so the push gate fails fast (124) instead of stalling forever.
+    if timeout 180 env ONEAPI_DEVICE_SELECTOR=level_zero:0 "$CORRECTNESS_BIN"; then
+        echo "  PASS: kernel correctness gate green"
+    else
+        echo "  FAIL: kernel correctness gate (GATE regression or turbo XPASS — see output)"
+        FAIL=1
+    fi
+else
+    echo "  SKIP: set CORRECTNESS_BIN to the built harness"
+fi
+echo ""
+
 echo "========================================"
 echo "  TurboQuant Quality + Speed Gate"
 echo "========================================"
 echo ""
 
 # --- Test 1: Perplexity ---
-echo "[1/2] Running perplexity check (8 chunks)..."
+echo "[1/3] Running perplexity check (8 chunks)..."
 PPL_TURBO=$($LLAMA/llama-perplexity -m $MODEL -f $WIKI -c 512 -ctk turbo3 -ctv turbo3 -fa on --chunks 8 -ngl 99 2>&1 | grep "Final" | grep -oE 'PPL = [0-9.]+' | grep -oE '[0-9.]+')
 
 if [ -z "$PPL_TURBO" ]; then
@@ -44,7 +61,7 @@ fi
 echo ""
 
 # --- Test 2: Context Scaling ---
-echo "[2/2] Running context scaling check (4K prefill)..."
+echo "[2/3] Running context scaling check (4K prefill)..."
 TURBO_TPS=$($LLAMA/llama-perplexity -m $MODEL -f $WIKI -c 4096 -ctk turbo3 -ctv turbo3 -fa on --chunks 4 -ngl 99 2>&1 | grep "prompt eval" | grep -oE '[0-9.]+ tokens per second' | grep -oE '[0-9.]+')
 Q8_TPS=$($LLAMA/llama-perplexity -m $MODEL -f $WIKI -c 4096 -ctk q8_0 -ctv q8_0 -fa on --chunks 4 -ngl 99 2>&1 | grep "prompt eval" | grep -oE '[0-9.]+ tokens per second' | grep -oE '[0-9.]+')
 
