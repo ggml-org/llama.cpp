@@ -32,7 +32,7 @@
 
 #include <sycl/sycl.hpp>
 #include <sycl/backend.hpp>
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
 #include <level_zero/ze_api.h>
 #endif
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
@@ -62,6 +62,9 @@
 #include "ggml-sycl/repeat_back.hpp"
 #include "ggml-sycl/set_rows.hpp"
 #include "ggml-sycl/set.hpp"
+#include "ggml-sycl/conv2d.hpp"
+#include "ggml-sycl/conv2d-dw.hpp"
+#include "ggml-sycl/conv2d-transpose.hpp"
 #include "ggml-sycl/ssm_conv.hpp"
 #include "ggml-sycl/sycl_hw.hpp"
 #include "ggml-sycl/ssm_scan.hpp"
@@ -84,8 +87,9 @@ int g_ggml_sycl_enable_vmm = 1;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_async_mem_op_requested = 1;
-int g_ggml_sycl_enable_level_zero = 0;
+int g_ggml_sycl_use_level_zero_api = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
+int g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
 int g_ggml_sycl_usm_system = 0;
 
 static ggml_sycl_device_info ggml_sycl_init() {
@@ -153,7 +157,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
             info.ext_oneapi_level_zero = false;
         }
 
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
         if (info.ext_oneapi_level_zero && device.is_gpu() && device.default_queue().get_backend() == sycl::backend::ext_oneapi_level_zero) {
             ze_device_handle_t ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(device.default_queue().get_device());
             ze_device_properties_t props = {};
@@ -168,13 +172,13 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.default_tensor_split[id] /= total_vram;
     }
 
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
     // Large buffers can be allocated before ggml_check_sycl() initializes other
     // g_ggml_sycl_enable_* globals, so initialize this one as early as we can.
-    g_ggml_sycl_enable_level_zero =
-        info.ext_oneapi_level_zero && ggml_sycl_get_env("GGML_SYCL_ENABLE_LEVEL_ZERO", 1);
+    g_ggml_sycl_use_level_zero_api =
+        info.ext_oneapi_level_zero && ggml_sycl_get_env("GGML_SYCL_USE_LEVEL_ZERO_API", 1);
 #else
-    g_ggml_sycl_enable_level_zero = 0;
+    g_ggml_sycl_use_level_zero_api = 0;
 #endif
 
     return info;
@@ -272,6 +276,11 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
 
+        g_ggml_sycl_dev2dev_memcpy = ggml_sycl_get_env("GGML_SYCL_DEV2DEV_MEMCPY", DEV2DEV_MEMCPY_SYCL);
+        if (g_ggml_sycl_use_level_zero_api == 0) {
+            g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
+        }
+
 #ifdef SYCL_FLASH_ATTN
         g_ggml_sycl_enable_flash_attention = ggml_sycl_get_env("GGML_SYCL_ENABLE_FLASH_ATTN", 1);
 #else
@@ -303,10 +312,10 @@ static void ggml_check_sycl() try {
 #else
         GGML_LOG_INFO("  GGML_SYCL_DNNL: no\n");
 #endif
-#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO)
-        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO: yes\n");
+#if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes\n");
 #else
-        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO: no\n");
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: no\n");
 #endif
 #if defined(GGML_SYCL_USE_VMM)
         GGML_LOG_INFO("  GGML_SYCL_USE_VMM: yes\n");
@@ -322,10 +331,13 @@ static void ggml_check_sycl() try {
 #else
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: graph disabled by compile flag\n");
 #endif
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: %d\n", g_ggml_sycl_enable_level_zero);
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+        GGML_LOG_INFO("  GGML_SYCL_USE_LEVEL_ZERO_API: %d\n", g_ggml_sycl_use_level_zero_api);
+        GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d\n", g_ggml_sycl_dev2dev_memcpy);
 #else
-        GGML_LOG_INFO("  GGML_SYCL_ENABLE_LEVEL_ZERO: Level Zero disabled by compile flag\n");
+        GGML_LOG_INFO("  GGML_SYCL_USE_LEVEL_ZERO_API: Disable Level Zero API usage by compile flag\n");
+        GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d, enable to SYCL API since missing GGML_SYCL_SUPPORT_LEVEL_ZERO_API\n",
+                      g_ggml_sycl_dev2dev_memcpy);
 #endif
 #if GGML_SYCL_DNNL
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: %d\n", g_ggml_sycl_disable_dnn);
@@ -590,7 +602,7 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
 static bool ggml_sycl_is_l0_discrete_gpu(int device) {
     return ggml_sycl_info().devices[device].l0_discrete_gpu;
 }
@@ -598,27 +610,42 @@ static bool ggml_sycl_is_l0_discrete_gpu(int device) {
 
 static void dev2dev_memcpy(int device_dst, sycl::queue &q_dst, int device_src, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
-#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
-    // Use Level Zero direct copy for dGPU-to-dGPU transfers.
-    const bool l0_copy_supported = g_ggml_sycl_enable_level_zero &&
-        ggml_sycl_is_l0_discrete_gpu(device_dst) && ggml_sycl_is_l0_discrete_gpu(device_src);
-    if (l0_copy_supported) {
-        auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_context());
-        auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_device());
-        ze_command_queue_desc_t cq_desc = {ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC, nullptr, 0, 0,
-                                           0, ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS, ZE_COMMAND_QUEUE_PRIORITY_NORMAL};
-        ze_command_list_handle_t cl;
-        ze_result_t r = zeCommandListCreateImmediate(ze_ctx, ze_dev, &cq_desc, &cl);
-        if (r == ZE_RESULT_SUCCESS) {
-            r = zeCommandListAppendMemoryCopy(cl, ptr_dst, ptr_src, size, nullptr, 0, nullptr);
-            zeCommandListDestroy(cl);
+
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+    if (g_ggml_sycl_dev2dev_memcpy == DEV2DEV_MEMCPY_L0) {
+        // Use Level Zero direct copy for dGPU-to-dGPU transfers.
+        const bool l0_copy_supported =
+            ggml_sycl_is_l0_discrete_gpu(device_dst) && ggml_sycl_is_l0_discrete_gpu(device_src);
+        if (g_ggml_sycl_use_level_zero_api && l0_copy_supported) {
+            auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_context());
+            auto ze_dev = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q_dst.get_device());
+            ze_command_queue_desc_t cq_desc = {ZE_STRUCTURE_TYPE_COMMAND_QUEUE_DESC, nullptr, 0, 0,
+                                            0, ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS, ZE_COMMAND_QUEUE_PRIORITY_NORMAL};
+            ze_command_list_handle_t cl;
+            ze_result_t r = zeCommandListCreateImmediate(ze_ctx, ze_dev, &cq_desc, &cl);
             if (r == ZE_RESULT_SUCCESS) {
-                return;
+                GGML_SYCL_DEBUG("[SYCL] dev2dev memcpy by L0\n");
+                r = zeCommandListAppendMemoryCopy(cl, ptr_dst, ptr_src, size, nullptr, 0, nullptr);
+                zeCommandListDestroy(cl);
+                if (r == ZE_RESULT_SUCCESS) {
+                    return;
+                }
             }
         }
     }
 #endif
+
+    if (g_ggml_sycl_dev2dev_memcpy == DEV2DEV_MEMCPY_SYCL) {
+        if (q_dst.get_device().ext_oneapi_can_access_peer(q_src.get_device(),
+                                                          sycl::ext::oneapi::peer_access::access_supported)) {
+            GGML_SYCL_DEBUG("[SYCL] dev2dev memcpy by SYCL\n");
+            SYCL_CHECK(CHECK_TRY_ERROR(q_dst.memcpy(ptr_dst, ptr_src, size).wait()));
+            return;
+        }
+    }
+
     // Host-staged copy
+    GGML_SYCL_DEBUG("[SYCL] dev2dev memcpy by host forward\n");
     char *host_buf = (char *)malloc(size);
     q_src.memcpy(host_buf, (const char *)ptr_src, size).wait();
     q_dst.memcpy((char *)ptr_dst, host_buf, size).wait();
@@ -949,6 +976,7 @@ static int64_t get_row_rounding(ggml_type type, const std::array<float, GGML_SYC
     }
 
     switch(type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
             return max_compute_capability >= VER_GEN9 ? 128 : 64;
@@ -3480,6 +3508,7 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
             return true;
@@ -3495,6 +3524,7 @@ inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
             return true;
@@ -3505,6 +3535,7 @@ inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
 
 inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q3_K:
@@ -3519,6 +3550,7 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
 
 static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -4572,6 +4604,11 @@ static void ggml_sycl_im2col_3d(ggml_backend_sycl_context & ctx, ggml_tensor * d
     ggml_sycl_op_im2col_3d(ctx, dst);
 }
 
+static void ggml_sycl_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    ggml_sycl_op_conv_3d(ctx, dst);
+}
+
 static void ggml_sycl_sum(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     GGML_ASSERT(ggml_is_contiguous(dst->src[0]));
@@ -4635,8 +4672,20 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_ARGMAX:
             ggml_sycl_argmax(ctx, dst);
             break;
+        case GGML_OP_CONV_2D:
+            ggml_sycl_op_conv2d(ctx, dst);
+            break;
+        case GGML_OP_CONV_2D_DW:
+            ggml_sycl_op_conv2d_dw(ctx, dst);
+            break;
+        case GGML_OP_CONV_3D:
+            ggml_sycl_conv_3d(ctx, dst);
+            break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             ggml_sycl_op_conv_transpose_1d(ctx, dst);
+            break;
+        case GGML_OP_CONV_TRANSPOSE_2D:
+            ggml_sycl_op_conv2d_transpose(ctx, dst);
             break;
         case GGML_OP_REPEAT:
             ggml_sycl_repeat(ctx, dst);
@@ -5341,7 +5390,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_device_buffer_from_host_ptr(ggml_
     return nullptr;
 }
 
-static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_sycl_device_context *sycl_ctx =
         (ggml_backend_sycl_device_context *)dev->context;
     int device = sycl_ctx->device;
@@ -5355,6 +5404,10 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 }
                 return false;
             }
+        case GGML_OP_CONV_2D:
+        case GGML_OP_CONV_2D_DW:
+        case GGML_OP_CONV_TRANSPOSE_2D:
+            return true;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {
                 case GGML_UNARY_OP_SGN:
@@ -5402,18 +5455,11 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 struct ggml_tensor * a = op->src[0];
                 struct ggml_tensor * b = op->src[1];
 
-                // disable Q1_0 until implementation
-                if (a->type == GGML_TYPE_Q1_0 || b->type == GGML_TYPE_Q1_0) {
-                    return false;
-                }
-
                 if (a->ne[3] != b->ne[3]) {
                     return false;
                 }
 
                 ggml_type src0_type = op->src[0]->type;
-
-
 
                 // TODO: The configuration below needs more work to be supported with oneDNN
                 if (ggml_is_permuted(a) && !ggml_is_contiguous(a) &&
@@ -5424,12 +5470,17 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 // TODO: This specific configuration can fail with oneDNN and needs more debugging
                 if (!ggml_is_permuted(a) && ggml_is_permuted(b) && b->ne[2] > 1 && b->ne[3] > 1 &&
                     a->ne[0] > 128 && a->ne[2] == 1 && src0_type == GGML_TYPE_F16) {
+                        printf("zjy 2\n");
                     return false;
                 }
                 return true;
             }
         case GGML_OP_OUT_PROD:
-            return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->ne[2] == 1 && op->ne[3] == 1;
+            return op->type == GGML_TYPE_F32 &&
+                   (op->src[0]->type == GGML_TYPE_F32 ||
+                    (op->src[0]->type == GGML_TYPE_Q1_0 && op->src[0]->ne[2] == op->src[1]->ne[2] &&
+                     op->src[0]->ne[3] == op->src[1]->ne[3])) &&
+                   op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_GET_ROWS:
             {
                 switch (op->src[0]->type) {
@@ -5615,6 +5666,12 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_IM2COL_3D:
         case GGML_OP_UPSCALE:
             return true;
+        case GGML_OP_CONV_3D:
+            return op->type == GGML_TYPE_F32 &&
+                   (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   ggml_is_contiguous(op->src[0]) &&
+                   ggml_is_contiguous(op->src[1]);
         case GGML_OP_SUM:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:
@@ -5678,6 +5735,13 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
     }
 
     GGML_UNUSED(dev);
+}
+
+static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    bool res = do_ggml_backend_sycl_device_supports_op(dev, op);
+    GGML_SYCL_DEBUG("[SYCL] call %s op->op=%s op->type=%s -> %s\n", __func__, ggml_op_name(op->op),
+                    ggml_type_name(op->type), res ? "true" : "false");
+    return res;
 }
 
 static bool ggml_backend_sycl_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
@@ -5795,11 +5859,266 @@ static ggml_backend_dev_t ggml_backend_sycl_reg_get_device(ggml_backend_reg_t re
     return ctx->devices[index];
 }
 
+// ==========================================================================
+// Tensor parallelism (--split-mode tensor) for the SYCL backend.
+//
+// The meta-backend invokes these three entry points via get_proc_address:
+//   * ggml_backend_sycl_comm_init             - one-time per-graph setup
+//   * ggml_backend_sycl_comm_allreduce_tensor - per-allreduce step
+//   * ggml_backend_sycl_comm_free             - tear-down
+//
+// For N=2 (dual-GPU), this is a degenerate ring allreduce with dual paths
+// chosen by tensor size:
+//
+//   * Small (nelem < 32K): FP32 direct memcpy + per-device ADD
+//     kernel. The kernel depends_on() its corresponding memcpy event
+//     so it doesn't read partial data. Both devices run in parallel.
+//
+//   * Large (nelem >= 32K): BF16-compressed. Each device compresses
+//     its FP32 partial to BF16 locally, cross-device memcpys
+//     to the peer (half the PCI bandwidth), where it is decompressed
+//     and added into the local FP32 partial. 6 SYCL submissions per
+//     allreduce (2 compress + 2 memcpy + 2 decompress-add) vs the
+//     4 for the small path, but the bandwidth saving > 6 GB/s PCIe x 2
+//     dominates for larger tensors.
+//
+// Storage: A persistent uint8_t buffer per device, sized to
+// 4 * nelem bytes. Both paths reinterpret the same bytes (small path
+// as nelem floats; large path as outbox + inbox = 2*nelem uint16_t
+// each, using the full 4*nelem byte budget either way). Single
+// alloc+free per device keeps the SYCL pool's strict-LIFO invariant
+// trivial.
+//
+// For non-(N=2 FP32 contiguous) cases, comm_init or comm_allreduce_tensor
+// returns null/false, causing the meta-backend to use its generic
+// butterfly all-reduce fallback.
+// ==========================================================================
+
+struct ggml_backend_sycl_comm_context {
+    std::vector<ggml_backend_t> backends;
+    // ONE persistent per-device byte buffer, 4*nelem bytes.  Both the
+    // FP32 small-tensor path and the BF16 large-tensor path share it
+    // by reinterpreting.
+    std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>> buf0;
+    std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>> buf1;
+    int64_t buf_nelem = 0;
+};
+
+void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends) try {
+    for (size_t i = 0; i < n_backends; ++i) {
+        if (!ggml_backend_is_sycl(backends[i])) {
+            return nullptr;
+        }
+    }
+
+    // Initial version: N=2 only. For N!=2, returning null makes the
+    // meta-backend skip this backend-specific allreduce entirely.
+    if (n_backends != 2) {
+        return nullptr;
+    }
+
+    auto * ctx = new ggml_backend_sycl_comm_context;
+    ctx->backends.assign(backends, backends + n_backends);
+    auto * sctx0 = (ggml_backend_sycl_context *) backends[0]->context;
+    auto * sctx1 = (ggml_backend_sycl_context *) backends[1]->context;
+    ctx->buf0 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx0->pool());
+    ctx->buf1 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx1->pool());
+    return ctx;
+}
+catch (const sycl::exception &) { return nullptr; }
+catch (...)                     { return nullptr; }
+
+void ggml_backend_sycl_comm_free(void * comm_ctx_v) {
+    auto * comm_ctx = static_cast<ggml_backend_sycl_comm_context *>(comm_ctx_v);
+    if (comm_ctx == nullptr) {
+        return;
+    }
+
+    // Sync both per-device queues so the pool_alloc destructors don't
+    // return memory still in use by the last kernel.
+    if (comm_ctx->backends.size() == 2) {
+        auto * sctx0 = (ggml_backend_sycl_context *) comm_ctx->backends[0]->context;
+        auto * sctx1 = (ggml_backend_sycl_context *) comm_ctx->backends[1]->context;
+        try {
+            sctx0->stream()->wait();
+            sctx1->stream()->wait();
+        } catch (...) { /* best effort during shutdown */ }
+    }
+
+    delete comm_ctx;
+}
+
+bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tensor ** tensors) try {
+    if (comm_ctx_v == nullptr) {
+        return false;
+    }
+
+    auto * comm_ctx = static_cast<ggml_backend_sycl_comm_context *>(comm_ctx_v);
+    const size_t n_backends = comm_ctx->backends.size();
+
+    // Fast path: N=2, F32/F16, contiguous, matching shapes.
+    if (n_backends != 2) {
+        return false;
+    }
+    // Accept F32 or F16 inputs natively (types must match). F16 takes the
+    // direct 2-byte memcpy + add path below; other types return false so the
+    // meta-backend uses its generic all-reduce.
+    if (tensors[0]->type != tensors[1]->type) {
+        return false;
+    }
+    if (tensors[0]->type != GGML_TYPE_F32 && tensors[0]->type != GGML_TYPE_F16) {
+        return false;
+    }
+    if (!ggml_is_contiguous(tensors[0]) || !ggml_is_contiguous(tensors[1])) {
+        return false;
+    }
+    if (ggml_nelements(tensors[0]) != ggml_nelements(tensors[1])) {
+        return false;
+    }
+
+    const int64_t nelem  = ggml_nelements(tensors[0]);
+    const size_t  nbytes = ggml_nbytes(tensors[0]);
+    if (nelem == 0) {
+        return true;
+    }
+
+    auto * ctx0 = (ggml_backend_sycl_context *) comm_ctx->backends[0]->context;
+    auto * ctx1 = (ggml_backend_sycl_context *) comm_ctx->backends[1]->context;
+    queue_ptr q0 = ctx0->stream();
+    queue_ptr q1 = ctx1->stream();
+
+    // Grow per-device byte buffers if needed (4 * nelem bytes each).
+    if (comm_ctx->buf_nelem < nelem) {
+        comm_ctx->buf0->realloc(nelem * 4);
+        comm_ctx->buf1->realloc(nelem * 4);
+        comm_ctx->buf_nelem = nelem;
+    }
+    uint8_t * buf0 = comm_ctx->buf0->get();
+    uint8_t * buf1 = comm_ctx->buf1->get();
+
+    // F16 native path: direct 2-byte cross-device copy + add, skipping the
+    // F32 round-trip the meta-backend fallback would force. Cross-device copies
+    // go through dev2dev_memcpy because the two devices are in separate SYCL
+    // contexts (a raw peer-USM q->memcpy would be a silent no-op).
+    if (tensors[0]->type == GGML_TYPE_F16) {
+        sycl::half * f16_out0 = (sycl::half *) tensors[0]->data;
+        sycl::half * f16_out1 = (sycl::half *) tensors[1]->data;
+        sycl::half * f16_tmp0 = (sycl::half *) buf0;
+        sycl::half * f16_tmp1 = (sycl::half *) buf1;
+
+        q0->wait();
+        q1->wait();
+        dev2dev_memcpy(ctx0->device, *q0, ctx1->device, *q1, f16_tmp0, tensors[1]->data, nbytes);
+        dev2dev_memcpy(ctx1->device, *q1, ctx0->device, *q0, f16_tmp1, tensors[0]->data, nbytes);
+
+        q0->submit([&](sycl::handler & h) {
+            h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+                f16_out0[i] = (sycl::half) ((float) f16_out0[i] + (float) f16_tmp0[i]);
+            });
+        });
+        q1->submit([&](sycl::handler & h) {
+            h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+                f16_out1[i] = (sycl::half) ((float) f16_out1[i] + (float) f16_tmp1[i]);
+            });
+        });
+        return true;
+    }
+
+    float * out0 = (float *) tensors[0]->data;
+    float * out1 = (float *) tensors[1]->data;
+
+    // BF16 threshold: above this, the PCIe savings from halving the
+    // cross-device bytes outweigh the 2 extra compress kernels.
+    // Below: stay on the FP32 fast path.  Threshold mirrors the CUDA
+    // NCCL allreduce pattern for n_backends=2.
+    static constexpr int64_t BF16_THRESHOLD = 32768;
+
+    if (nelem < BF16_THRESHOLD) {
+        // FP32 small path: 4 SYCL submissions per allreduce.
+        float * tmp0 = (float *) buf0;
+        float * tmp1 = (float *) buf1;
+
+        // COMM-D2D-FIX: the two devices are in SEPARATE SYCL contexts, so a raw
+        // q->memcpy of a peer USM pointer is a silent no-op. Route cross-device
+        // copies through dev2dev_memcpy (L0 direct copy / host staging). It is
+        // synchronous, so wait for the local partials to be produced first.
+        q0->wait();
+        q1->wait();
+        dev2dev_memcpy(ctx0->device, *q0, ctx1->device, *q1, tmp0, tensors[1]->data, nbytes);
+        dev2dev_memcpy(ctx1->device, *q1, ctx0->device, *q0, tmp1, tensors[0]->data, nbytes);
+
+        q0->submit([&](sycl::handler & h) {
+            h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+                out0[i] += tmp0[i];
+            });
+        });
+        q1->submit([&](sycl::handler & h) {
+            h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+                out1[i] += tmp1[i];
+            });
+        });
+        return true;
+    }
+
+    // BF16 large path: 6 SYCL submissions per allreduce, but the
+    // cross-device memcpy is HALF the bytes. Pure bit-shift
+    // conversion (no rounding) — matches ggml's truncating fp32->bf16.
+    uint16_t * outbox0 = (uint16_t *) buf0;
+    uint16_t * inbox0  = outbox0 + nelem;
+    uint16_t * outbox1 = (uint16_t *) buf1;
+    uint16_t * inbox1  = outbox1 + nelem;
+
+    // Phase A: compress each device's local partial in parallel.
+    sycl::event c0 = q0->parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+        outbox0[i] = (uint16_t) (sycl::bit_cast<uint32_t>(out0[i]) >> 16);
+    });
+
+    sycl::event c1 = q1->parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+        outbox1[i] = (uint16_t) (sycl::bit_cast<uint32_t>(out1[i]) >> 16);
+    });
+
+    // Phase B: COMM-D2D-FIX-BF16 cross-device copy of compressed bytes via
+    // dev2dev_memcpy (separate SYCL contexts; sync copy after compress).
+    const size_t bf16_bytes = nelem * sizeof(uint16_t);
+    c0.wait();
+    c1.wait();
+    dev2dev_memcpy(ctx0->device, *q0, ctx1->device, *q1, inbox0, outbox1, bf16_bytes);
+    dev2dev_memcpy(ctx1->device, *q1, ctx0->device, *q0, inbox1, outbox0, bf16_bytes);
+
+    // Phase C: decompress + add into local FP32 partial.
+    q0->submit([&](sycl::handler & h) {
+        h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+            out0[i] += sycl::bit_cast<float>(((uint32_t) inbox0[i]) << 16);
+        });
+    });
+
+    q1->submit([&](sycl::handler & h) {
+        h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
+            out1[i] += sycl::bit_cast<float>(((uint32_t) inbox1[i]) << 16);
+        });
+    });
+
+    return true;
+}
+catch (const sycl::exception &) { return false; }
+catch (...)                     { return false; }
+
 static void *ggml_backend_sycl_reg_get_proc_address(ggml_backend_reg_t reg, const char *name) {
     GGML_UNUSED(reg);
 
     if (strcmp(name, "ggml_backend_split_buffer_type") == 0) {
         return (void *)ggml_backend_sycl_split_buffer_type;
+    }
+
+    // Tensor parallelism (--split-mode tensor) entry points.
+    if (strcmp(name, "ggml_backend_comm_init") == 0) {
+        return (void *)ggml_backend_sycl_comm_init;
+    }
+    if (strcmp(name, "ggml_backend_comm_free") == 0) {
+        return (void *)ggml_backend_sycl_comm_free;
+    }
+    if (strcmp(name, "ggml_backend_comm_allreduce_tensor") == 0) {
+        return (void *)ggml_backend_sycl_comm_allreduce_tensor;
     }
 
     // SYCL doesn't support registering host memory, left here for reference

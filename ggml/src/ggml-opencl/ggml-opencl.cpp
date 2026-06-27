@@ -850,6 +850,7 @@ struct ggml_backend_opencl_context {
         ref_count--;
         if (ref_count == 0) {
 #ifdef GGML_OPENCL_PROFILING
+            flush_profiling_batch();
             write_profiling_info();
             profiling_results.clear();
 #endif
@@ -10152,14 +10153,8 @@ static void ggml_cl_norm(ggml_backend_t backend, const ggml_tensor * src0, const
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
 
-    const int ne00 = src0 ? src0->ne[0] : 0;
-    const int ne01 = src0 ? src0->ne[1] : 0;
-    const int ne02 = src0 ? src0->ne[2] : 0;
-    const int ne03 = src0 ? src0->ne[3] : 0;
-
-    const cl_ulong nb01 = src0 ? src0->nb[1] : 0;
-    const cl_ulong nb02 = src0 ? src0->nb[2] : 0;
-    const cl_ulong nb03 = src0 ? src0->nb[3] : 0;
+    GGML_TENSOR_LOCALS(int,      ne0, src0, ne);
+    GGML_TENSOR_LOCALS(cl_ulong, nb0, src0, nb);
 
     const int nth = MIN(64, ne00);
 
@@ -10173,11 +10168,12 @@ static void ggml_cl_norm(ggml_backend_t backend, const ggml_tensor * src0, const
     CL_CHECK(clSetKernelArg(kernel,  5, sizeof(int),       &ne01));
     CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),       &ne02));
     CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),       &ne03));
-    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong),  &nb01));
-    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong),  &nb02));
-    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong),  &nb03));
-    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(float),     &eps));
-    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(float)*nth, NULL));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong),  &nb00));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong),  &nb01));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong),  &nb02));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong),  &nb03));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(float),     &eps));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(float)*nth, NULL));
 
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = {(size_t)nth, 1, 1};

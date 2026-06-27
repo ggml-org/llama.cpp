@@ -1,5 +1,6 @@
 #include "common.h"
 #include "server-http.h"
+#include "server-stream.h"
 #include "server-common.h"
 #include "ui.h"
 
@@ -456,13 +457,40 @@ static void set_headers(httplib::Response & res, const std::map<std::string, std
     }
 }
 
+// percent-decode a path component (%XX). path params arrive raw from httplib, unlike query
+// params, so a conv id like "conv::model" sent as "conv%3A%3Amodel" must be decoded here to
+// match the value the client put in the X-Conversation-Id header
+static std::string decode_path_component(const std::string & in) {
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); i++) {
+        if (in[i] == '%' && i + 2 < in.size()) {
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            int hi = hex(in[i + 1]);
+            int lo = hex(in[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(char((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(in[i]);
+    }
+    return out;
+}
+
 static std::map<std::string, std::string> get_params(const httplib::Request & req) {
     std::map<std::string, std::string> params;
     for (const auto & [key, value] : req.params) {
         params[key] = value;
     }
     for (const auto & [key, value] : req.path_params) {
-        params[key] = value;
+        params[key] = decode_path_component(value);
     }
     return params;
 }
@@ -492,29 +520,46 @@ using server_http_req_ptr = std::unique_ptr<server_http_req>;
 static void process_handler_response(server_http_req_ptr && request, server_http_res_ptr & response, httplib::Response & res) {
     if (response->is_stream()) {
         res.status = response->status;
+        // Tell Nginx to not buffer any streamed response
+        response->headers["X-Accel-Buffering"] = "no";
         set_headers(res, response->headers);
         const std::string content_type = response->content_type;
         // convert to shared_ptr as both chunked_content_provider() and on_complete() need to use it
-        std::shared_ptr q_ptr = std::move(request);
-        std::shared_ptr r_ptr = std::move(response);
-        const auto chunked_content_provider = [response = r_ptr](size_t, const httplib::DataSink & sink) -> bool {
+        std::shared_ptr<server_http_req> q_ptr = std::move(request);
+        std::shared_ptr<server_http_res> r_ptr = std::move(response);
+
+        const auto chunked_content_provider = [response = r_ptr](size_t, httplib::DataSink & sink) -> bool {
             std::string chunk;
             const bool has_next = response->next(chunk);
             if (!chunk.empty()) {
+                // mirror into the ring buffer first, the session must reflect every SSE chunk
+                // whether or not the wire write below succeeds
+                if (response->spipe) {
+                    response->spipe->write(chunk.data(), chunk.size());
+                }
                 if (!sink.write(chunk.data(), chunk.size())) {
+                    // peer is gone, stop the wire path here
                     return false;
                 }
                 SRV_DBG("http: streamed chunk: %s\n", chunk.c_str());
             }
             if (!has_next) {
+                // producer reached its natural end on the wire, a later close() skips the drain
+                if (response->spipe) {
+                    response->spipe->done();
+                }
                 sink.done();
                 SRV_DBG("%s", "http: stream ended\n");
             }
             return has_next;
         };
         const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
-            response.reset(); // trigger the destruction of the response object
-            request.reset();  // trigger the destruction of the request object
+            // on a dropped peer, close() drains the rest of the generation into the ring buffer
+            if (response->spipe) {
+                response->spipe->close();
+            }
+            response.reset(); // spipe destructor finalizes the session if attached
+            request.reset();
         };
         res.set_chunked_content_provider(content_type, chunked_content_provider, on_complete);
     } else {
@@ -581,6 +626,23 @@ void server_http_context::post(const std::string & path, const server_http_conte
             build_query_string(req),
             body,
             std::move(files),
+            req.is_connection_closed
+        });
+        server_http_res_ptr response = handler(*request);
+        process_handler_response(std::move(request), response, res);
+    });
+}
+
+void server_http_context::del(const std::string & path, const server_http_context::handler_t & handler) const {
+    handlers.emplace(path, handler);
+    pimpl->srv->Delete(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+        server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
+            get_params(req),
+            get_headers(req),
+            req.path,
+            build_query_string(req),
+            req.body,
+            {},
             req.is_connection_closed
         });
         server_http_res_ptr response = handler(*request);

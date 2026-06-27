@@ -62,6 +62,7 @@ extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_disable_optimize;
 extern int g_ggml_sycl_prioritize_dmmv;
 extern int g_ggml_sycl_enable_flash_attention;
+extern int g_ggml_sycl_dev2dev_memcpy;
 
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
@@ -124,6 +125,11 @@ enum ggml_sycl_backend_gpu_mode {
   SYCL_UNSET_GPU_MODE = -1,
   SYCL_SINGLE_GPU_MODE = 0,
   SYCL_MUL_GPU_MODE
+};
+
+enum ggml_sycl_dev2dev_memcpy_mode {
+  DEV2DEV_MEMCPY_SYCL = 0,
+  DEV2DEV_MEMCPY_L0 = 1,
 };
 
 static_assert(sizeof(sycl::half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -318,7 +324,7 @@ struct ggml_tensor_extra_gpu {
   optimize_feature optimized_feature;
 };
 
-extern int g_ggml_sycl_enable_level_zero;
+extern int g_ggml_sycl_use_level_zero_api;
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
 
