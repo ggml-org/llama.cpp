@@ -1,0 +1,4 @@
+// TEST: c
+// DESC: include missing brackets must be rejected
+// EXPECT: reject_any
+#include stdio.h

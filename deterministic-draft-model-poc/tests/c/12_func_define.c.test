@@ -1,0 +1,4 @@
+// TEST: c
+// DESC: function-like define
+// EXPECT: accept_all
+#define SQ(x) ((x)*(x))

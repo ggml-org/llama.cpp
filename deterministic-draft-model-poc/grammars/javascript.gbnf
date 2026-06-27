@@ -1,0 +1,90 @@
+# JavaScript Grammar (simplified EBNF for XGrammar)
+# Whitespace-aware: BPE tokenizers glue leading spaces onto the next token,
+# so "ws" (optional whitespace) must be threaded between adjacent elements.
+
+root ::= ws program
+
+program ::= ((statement | declaration | module_declaration) ws)*
+
+module_declaration ::= import_declaration | export_declaration
+import_declaration ::= "import" ws (identifier ws "from" ws)? string_literal ws ";" | "import" ws "{" ws (import_specifier (ws "," ws import_specifier)*)? ws "}" ws "from" ws string_literal ws ";" | "import" ws "*" ws "as" ws identifier ws "from" ws string_literal ws ";"
+import_specifier ::= identifier (ws "as" ws identifier)?
+export_declaration ::= "export" ws ("default" ws)? (declaration | statement) | "export" ws "{" ws (export_specifier (ws "," ws export_specifier)*)? ws "}" ws ";" | "export" ws "*" ws "from" ws string_literal ws ";"
+export_specifier ::= identifier (ws "as" ws identifier)?
+
+declaration ::= function_declaration | class_declaration | variable_declaration
+function_declaration ::= ("async" ws)? "function" ws ("*" ws)? identifier ws "(" ws parameter_list? ws ")" ws block
+class_declaration ::= "class" ws identifier (ws "extends" ws expression)? ws class_body
+variable_declaration ::= ("var" | "let" | "const") ws variable_declarator (ws "," ws variable_declarator)* ws ";"
+
+variable_declarator ::= (identifier | destructuring_pattern) (ws "=" ws expression)?
+destructuring_pattern ::= "{" ws (identifier (ws "," ws identifier)*)? ws "}" | "[" ws (identifier (ws "," ws identifier)*)? ws "]"
+
+statement ::= block | variable_declaration | expression_statement | if_statement | while_statement | for_statement | do_while_statement | switch_statement | try_statement | return_statement | throw_statement | break_statement | continue_statement | empty_statement
+
+block ::= "{" ws (statement ws)* "}"
+expression_statement ::= expression ws ";"
+if_statement ::= "if" ws "(" ws expression ws ")" ws statement (ws "else" ws statement)?
+while_statement ::= "while" ws "(" ws expression ws ")" ws statement
+for_statement ::= "for" ws "(" ws for_binding ws ("of" | "in") ws expression ws ")" ws statement | "for" ws "(" ws (variable_declaration | expression? ws ";" | ";") ws expression? ws ";" ws expression? ws ")" ws statement
+for_binding ::= ("var" | "let" | "const") ws variable_declarator
+do_while_statement ::= "do" ws statement ws "while" ws "(" ws expression ws ")" ws ";"
+switch_statement ::= "switch" ws "(" ws expression ws ")" ws "{" ws (switch_case ws)* "}"
+switch_case ::= ("case" ws expression | "default") ws ":" (ws statement)*
+try_statement ::= "try" ws block (ws catch_clause)? (ws finally_clause)?
+catch_clause ::= "catch" ws ("(" ws identifier ws ")" ws)? block
+finally_clause ::= "finally" ws block
+return_statement ::= "return" (ws expression)? ws ";"
+throw_statement ::= "throw" ws expression ws ";"
+break_statement ::= "break" (ws identifier)? ws ";"
+continue_statement ::= "continue" (ws identifier)? ws ";"
+empty_statement ::= ";"
+
+class_body ::= "{" ws (class_member ws)* "}"
+class_member ::= method_definition | "static" ws method_definition | field_definition | ";"
+
+method_definition ::= ("async" ws)? ("*" ws)? identifier ws "(" ws parameter_list? ws ")" ws block | "get" ws identifier ws "(" ws ")" ws block | "set" ws identifier ws "(" ws parameter ws ")" ws block
+field_definition ::= identifier (ws "=" ws expression)? ws ";"
+
+parameter_list ::= parameter (ws "," ws parameter)*
+parameter ::= identifier (ws "=" ws expression)? | "..." ws identifier
+
+expression ::= assignment_expression
+assignment_expression ::= conditional_expression (ws assignment_operator ws assignment_expression)?
+assignment_operator ::= "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "<<=" | ">>=" | ">>>=" | "&=" | "^=" | "|=" | "&&=" | "||=" | "??="
+conditional_expression ::= logical_or_expression (ws "?" ws expression ws ":" ws assignment_expression)?
+logical_or_expression ::= logical_and_expression (ws "||" ws logical_and_expression)* | logical_and_expression (ws "??" ws logical_and_expression)*
+logical_and_expression ::= bitwise_or_expression (ws "&&" ws bitwise_or_expression)*
+bitwise_or_expression ::= bitwise_xor_expression (ws "|" ws bitwise_xor_expression)*
+bitwise_xor_expression ::= bitwise_and_expression (ws "^" ws bitwise_and_expression)*
+bitwise_and_expression ::= equality_expression (ws "&" ws equality_expression)*
+equality_expression ::= relational_expression (ws ("===" | "!==" | "==" | "!=") ws relational_expression)*
+relational_expression ::= shift_expression (ws ("<=" | ">=" | "instanceof" | "in" | "<" | ">") ws shift_expression)*
+shift_expression ::= additive_expression (ws (">>>" | "<<" | ">>") ws additive_expression)*
+additive_expression ::= multiplicative_expression (ws ("+" | "-") ws multiplicative_expression)*
+multiplicative_expression ::= unary_expression (ws ("*" | "/" | "%") ws unary_expression)*
+unary_expression ::= ("+" | "-" | "!" | "~" | "typeof" | "void" | "delete" | "++" | "--" | "await") ws unary_expression | postfix_expression
+postfix_expression ::= primary_expression (ws ("++" | "--") | ws postfix_op)*
+postfix_op ::= "." ws identifier | "[" ws expression ws "]" | "(" ws argument_list? ws ")" | "?." ws identifier | "?." ws "(" ws argument_list? ws ")" | "?." ws "[" ws expression ws "]"
+
+argument_list ::= expression (ws "," ws expression)*
+primary_expression ::= literal | identifier | "this" | "super" | array_literal | object_literal | function_expression | arrow_function | template_literal | "new" ws primary_expression (ws "(" ws argument_list? ws ")")? | "(" ws expression ws ")"
+
+function_expression ::= ("async" ws)? "function" ws ("*" ws)? identifier? ws "(" ws parameter_list? ws ")" ws block
+arrow_function ::= ("async" ws)? (identifier | "(" ws parameter_list? ws ")") ws "=>" ws (expression | block)
+
+array_literal ::= "[" ws (expression (ws "," ws expression)* (ws ",")?)? ws "]"
+object_literal ::= "{" ws (property (ws "," ws property)*)? ws "}"
+property ::= identifier (ws ":" ws expression)? | "[" ws expression ws "]" ws ":" ws expression | "..." ws expression | method_definition
+template_literal ::= "`" (template_chars | "${" ws expression ws "}")* "`"
+
+literal ::= number_literal | string_literal | boolean_literal | "null" | "undefined"
+number_literal ::= [0-9]+ ("." [0-9]+)? ([eE] [+-]? [0-9]+)? | "0x" [0-9a-fA-F]+ | "0b" [01]+ | "0o" [0-7]+
+string_literal ::= "\"" ([^"\\] | "\\" [\x00-\xFF])* "\"" | "'" ([^'\\] | "\\" [\x00-\xFF])* "'"
+boolean_literal ::= "true" | "false"
+
+identifier ::= [a-zA-Z_$][a-zA-Z0-9_$]*
+template_chars ::= [^`$\\]+ | "\\" [\x00-\xFF]
+
+ws ::= ([ \t\n\r] | comment)*
+comment ::= "//" [^\n]* "\n" | "/*" ([^*] | "*" [^/])* "*/"

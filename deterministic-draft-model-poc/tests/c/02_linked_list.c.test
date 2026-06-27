@@ -1,0 +1,59 @@
+// TEST: c
+// DESC: linked list with insert, delete, and traverse
+// EXPECT: accept_all
+#include <stdlib.h>
+#include <stdio.h>
+
+struct Node {
+    int data;
+    struct Node *next;
+};
+
+struct Node *create_node(int data) {
+    struct Node *node = (struct Node *)malloc(sizeof(struct Node));
+    node->data = data;
+    node->next = NULL;
+    return node;
+}
+
+void insert_head(struct Node **head, int data) {
+    struct Node *new_node = create_node(data);
+    new_node->next = *head;
+    *head = new_node;
+}
+
+void delete_node(struct Node **head, int key) {
+    struct Node *temp = *head;
+    struct Node *prev = NULL;
+    while (temp != NULL && temp->data != key) {
+        prev = temp;
+        temp = temp->next;
+    }
+    if (temp == NULL) return;
+    if (prev == NULL) {
+        *head = temp->next;
+    } else {
+        prev->next = temp->next;
+    }
+    free(temp);
+}
+
+void print_list(struct Node *head) {
+    struct Node *current = head;
+    while (current != NULL) {
+        printf("%d -> ", current->data);
+        current = current->next;
+    }
+    printf("NULL\n");
+}
+
+int main() {
+    struct Node *head = NULL;
+    insert_head(&head, 3);
+    insert_head(&head, 7);
+    insert_head(&head, 1);
+    print_list(head);
+    delete_node(&head, 7);
+    print_list(head);
+    return 0;
+}

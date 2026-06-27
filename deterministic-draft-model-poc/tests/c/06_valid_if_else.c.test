@@ -1,0 +1,7 @@
+// TEST: c
+// DESC: valid if-else with properly terminated statements
+// EXPECT: accept_all
+void quicksort(int lo) {
+    int hi = 1;
+    if (lo) hi = -1;
+}

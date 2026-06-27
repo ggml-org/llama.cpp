@@ -1,0 +1,4 @@
+// TEST: c
+// DESC: garbage preprocessor line must be rejected
+// EXPECT: reject_any
+#include <ctype backing in to include <stdlib.h>

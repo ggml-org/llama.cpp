@@ -1,0 +1,6 @@
+// TEST: c
+// DESC: ifdef/ifndef/endif block
+// EXPECT: accept_all
+#ifndef HEADER_H
+#define HEADER_H
+#endif

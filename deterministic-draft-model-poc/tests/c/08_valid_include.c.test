@@ -1,0 +1,4 @@
+// TEST: c
+// DESC: valid angle-bracket include must be accepted
+// EXPECT: accept_all
+#include <stdio.h>

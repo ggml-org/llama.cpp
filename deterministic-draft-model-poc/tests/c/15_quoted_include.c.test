@@ -1,0 +1,4 @@
+// TEST: c
+// DESC: quoted include with space after hash
+// EXPECT: accept_all
+# include "my header.h"

@@ -1,0 +1,4 @@
+// TEST: c
+// DESC: pragma once
+// EXPECT: accept_all
+#pragma once

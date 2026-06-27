@@ -1,0 +1,4 @@
+// TEST: c
+// DESC: N100 2B garbage line must be rejected
+// EXPECT: reject_any
+fxd = 0x 1000000000000

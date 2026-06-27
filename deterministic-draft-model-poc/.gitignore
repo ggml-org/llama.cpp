@@ -1,0 +1,25 @@
+# Deterministic draft benchmarks
+
+/bench-extensive-raw-*/
+/bench-extensive-results.csv
+/bench-final-*/
+/run-bench-*.sh
+/run-extensive-bench*.sh
+/extract_json.py
+
+# Build outputs
+/build/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Compiled objects / stray debug binaries (no extension = suspicious in this tree)
+*.o
+*.a
+
+# SDK artifacts symlinked from external/ by link-sdk.sh
+/lib/deterministic_draft_capabilities.h
+/lib/libdeterministic_draft_spec.so
+/lib/*.dylib
+/lib/*.dll

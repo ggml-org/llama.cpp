@@ -246,7 +246,9 @@ int main(int argc, char ** argv) {
         // available logits from the batch and sample the next token until we run out of logits or the sampler
         // disagrees with the draft
         //
-        auto ids = common_sampler_sample_and_accept_n(smpl.get(), ctx_tgt, draft);
+        std::vector<int> empty_idxs;
+        llama_tokens ids = common_speculative_sample_and_accept(
+            spec, smpl.get(), ctx_tgt, empty_idxs, draft, seq_id);
 
         //LOG_DBG("ids: %s\n", string_from(ctx_tgt, ids).c_str());
 

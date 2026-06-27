@@ -1,0 +1,7 @@
+// TEST: c
+// DESC: valid C code followed by garbage tokens - verify_draft should
+//       report valid_count matching the valid prefix length
+// EXPECT: accept_all
+int x = 42;
+int y = x + 1;
+return y;

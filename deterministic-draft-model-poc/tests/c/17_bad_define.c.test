@@ -1,0 +1,4 @@
+// TEST: c
+// DESC: define with numeric name must be rejected
+// EXPECT: reject_any
+#define 123abc 1

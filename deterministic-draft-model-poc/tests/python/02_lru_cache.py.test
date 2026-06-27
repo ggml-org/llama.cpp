@@ -1,0 +1,45 @@
+# TEST: python
+# DESC: LRU cache implementation with OrderedDict
+# EXPECT: accept_all
+from collections import OrderedDict
+
+
+class LRUCache:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.cache = OrderedDict()
+
+    def get(self, key):
+        if key not in self.cache:
+            return -1
+        self.cache.move_to_end(key)
+        return self.cache[key]
+
+    def put(self, key, value):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        self.cache[key] = value
+        if len(self.cache) > self.capacity:
+            self.cache.popitem(last=False)
+
+    def __contains__(self, key):
+        return key in self.cache
+
+    def __len__(self):
+        return len(self.cache)
+
+    def __repr__(self):
+        return f"LRUCache({list(self.cache.items())})"
+
+
+if __name__ == "__main__":
+    cache = LRUCache(3)
+    cache.put(1, "a")
+    cache.put(2, "b")
+    cache.put(3, "c")
+    print(cache)
+    cache.get(1)
+    cache.put(4, "d")
+    print(cache)
+    print("cache hit 2:", 2 in cache)
+    print("cache hit 1:", 1 in cache)

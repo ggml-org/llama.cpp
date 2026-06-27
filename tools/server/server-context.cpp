@@ -330,6 +330,14 @@ struct server_slot {
     int32_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
     std::vector<int32_t> n_accepted_per_pos; // Accepted tokens per draft position
 
+    // Deterministic draft diagnostics - captures grammar rejection context
+    struct det_draft_diag {
+        bool     triggered      = false;
+        int      position       = -1;
+        std::string token_text;
+        int32_t  context_used   = 0;
+    } det_diag;
+
     void reset() {
         SLT_DBG(*this, "%s", "\n");
 
@@ -367,6 +375,8 @@ struct server_slot {
 
         // clear alora start
         alora_invocation_start = -1;
+
+        det_diag = det_draft_diag{};
 
         // clear multimodal state
         mbatch.reset();
@@ -709,9 +719,20 @@ struct server_slot {
             }
         }
 
+        // Include deterministic draft diagnostics if triggered
+        if (det_diag.triggered) {
+            json diag = json::object();
+            diag["triggered"]  = true;
+            diag["position"]   = det_diag.position;
+            diag["token_text"] = det_diag.token_text;
+            diag["context_used"] = det_diag.context_used;
+            res["deterministic_draft"] = diag;
+        }
+
         return res;
     }
 
+    /// Copy slot state to another slot (used for child slot initialization).
     void copy_state_to(server_slot & other) const {
         GGML_ASSERT(state == SLOT_STATE_DONE_PROMPT);
 
@@ -2970,6 +2991,13 @@ private:
                     slot.prompt.tokens.insert(new_tokens);
                 }
 
+                slot.spec_draft.clear();
+                slot.spec_i_batch.clear();
+
+                if (spec && common_speculative_has_det_filter(spec.get())) {
+                    common_speculative_begin(spec.get(), slot.id, slot.prompt.tokens.get_text_tokens());
+                }
+
                 slot.truncated = true;
             }
         });
@@ -3879,13 +3907,52 @@ private:
                 // save the sampler sampler state in case we need to restore it
                 common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
-                GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
-                auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
+                    // the draft has already been filtered by common_speculative_draft()
+                    // (deterministic filter truncates at first structural error if active)
+                    const auto & draft_to_verify = slot.spec_draft;
+
+                    // capture deterministic filter diagnostics for JSON response
+                    if (spec && common_speculative_has_det_filter(spec.get())) {
+                        const auto & fr = common_speculative_get_det_filter_result(spec.get(), slot.id);
+                        if (fr.truncated) {
+                            slot.det_diag.triggered    = true;
+                            slot.det_diag.position     = fr.reject_pos;
+                            slot.det_diag.token_text   = common_token_to_piece(slot.ctx_tgt, fr.rejected_token,
+                                    accept_special_token(slot, fr.rejected_token));
+                            slot.det_diag.context_used = slot.prompt.n_tokens();
+
+                            SLT_INF(slot,
+                                "det filter truncated at pos %d/%zu: rejected token '%s'\n",
+                                fr.reject_pos,
+                                slot.spec_draft.size(),
+                                slot.det_diag.token_text.c_str());
+                        } else {
+                            slot.det_diag.triggered = false;
+                        }
+                    }
+
+                    // rebuild batch indices to match the (potentially truncated) draft size
+                    // preserve the original absolute base index - relative [0,1,2,...] would
+                    // point to wrong logits when multiple slots share a batch
+                    const int base_idx = slot.spec_i_batch.empty() ? 0 : slot.spec_i_batch[0];
+                    slot.spec_i_batch.clear();
+                    slot.spec_i_batch.reserve(draft_to_verify.size() + 1);
+                    for (size_t ii = 0; ii <= draft_to_verify.size(); ii++) {
+                        slot.spec_i_batch.push_back(base_idx + (int) ii);
+                    }
+
+                    GGML_ASSERT(slot.spec_i_batch.size() == draft_to_verify.size() + 1);
+                    llama_tokens accepted = common_speculative_sample_and_accept(
+                        spec.get(), slot.smpl.get(), slot.ctx_tgt,
+                        slot.spec_i_batch, draft_to_verify, slot.id);
                 slot.spec_i_batch.clear();
 
                 GGML_ASSERT(accepted.size() >= 1);
 
                 const uint32_t n_rollback = slot.spec_draft.size() + 1 - accepted.size();
+
+                    // accept-all mode always accepts the full draft plus the bonus token
+                    GGML_ASSERT(!common_speculative_get_det_accept_all(spec.get()) || n_rollback == 0);
 
                 const bool use_ckpt_tgt =
                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
@@ -3925,7 +3992,7 @@ private:
                     SLT_INF(slot, "accepted %2zu/%2zu draft tokens\n", accepted.size() - 1, n_draft);
                 }
 
-                common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
+                    common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
 
                 slot.spec_draft = std::move(accepted);
             }
