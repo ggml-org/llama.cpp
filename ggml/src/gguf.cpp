@@ -668,9 +668,9 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                     ok = ok && gr.read(info.t.ne[j]);
                 }
 
-                // check that all ne are non-negative
-                if (info.t.ne[j] < 0) {
-                    GGML_LOG_ERROR("%s: tensor '%s' dimension %" PRIu32 " has invalid number of elements: %" PRIi64 " < 0\n",
+                // check that all ne are positive
+                if (info.t.ne[j] <= 0) {
+                    GGML_LOG_ERROR("%s: tensor '%s' dimension %" PRIu32 " has invalid number of elements: %" PRIi64 " <= 0\n",
                         __func__, info.t.name, j, info.t.ne[j]);
                     ok = false;
                     break;
