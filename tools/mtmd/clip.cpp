@@ -4134,7 +4134,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                     //   144 for 768 tile views
                     const int   num_image_tokens = num_patches / 16;
                     const int   seq_len          = num_image_tokens * 2;
-                    std::vector qwen2_mask(static_cast<size_t>(seq_len) * seq_len, 0.0f);
+                    std::vector<float> qwen2_mask(static_cast<size_t>(seq_len) * seq_len, 0.0f);
 
                     // attention mask layout
                     //  +--------------+---------------+
@@ -4660,10 +4660,28 @@ std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * 
     return result;
 }
 
+std::vector<ggml_tensor *> clip_get_all_tensors(const struct clip_ctx * ctx) {
+    std::vector<ggml_tensor *> result;
+    if (!ctx || !ctx->ctx_data.get()) return result;
+
+    ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get());
+    while (t) {
+        result.push_back(t);
+        t = ggml_get_next_tensor(ctx->ctx_data.get(), t);
+    }
+    return result;
+}
+
 //
 // API for debugging
 //
 
 void clip_set_debug_output_embeddings(clip_ctx * ctx, bool enable) {
     ctx->debug_output_embeddings = enable;
+}
+
+void clip_free_buffer(clip_ctx * ctx) {
+    if (ctx) {
+        ctx->buf.reset(); // Safely frees the underlying memory and unbinds the smart pointer
+    }
 }
