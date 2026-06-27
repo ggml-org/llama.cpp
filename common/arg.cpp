@@ -889,6 +889,54 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.mmproj_use_gpu = params.mmproj_device != nullptr;
     }
 
+    // validate deterministic draft flag combinations
+    if (params.speculative.deterministic_draft.det_intercept_all && !params.speculative.deterministic_draft.enabled) {
+        throw std::invalid_argument(
+            "--det-draft-intercept-all requires --deterministic-draft-model (plugin not loaded)");
+    }
+    if (params.speculative.deterministic_draft.enabled) {
+        bool has_shared_kv_draft = std::any_of(
+            params.speculative.types.begin(), params.speculative.types.end(),
+            [](auto t) {
+                return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP ||
+                       t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||
+                       t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK ||
+                       t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
+            });
+        if (!has_shared_kv_draft) {
+            throw std::invalid_argument(
+                "--det-draft-model requires a compatible drafter type (--spec-type draft-mtp, draft-eagle3, draft-dspark, or draft-dflash)");
+        }
+    }
+
+    if (params.speculative.deterministic_draft.enabled && params.speculative.deterministic_draft.det_intercept_all) {
+        // find the first selected draft type name for the log message
+        const char * type_name = "unknown";
+        for (auto t : params.speculative.types) {
+            if (t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP)    { type_name = "draft-mtp"; break; }
+            if (t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3)  { type_name = "draft-eagle3"; break; }
+            if (t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)  { type_name = "draft-dspark"; break; }
+            if (t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)  { type_name = "draft-dflash"; break; }
+        }
+        if (std::any_of(params.speculative.types.begin(), params.speculative.types.end(),
+                         [](auto t) { return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP; })) {
+            LOG_INF("--det-draft-intercept-all is enabled for %s\n", type_name);
+        } else {
+            LOG_WRN("--det-draft-intercept-all requires the standard autoregressive MTP flow. Falling back to default mode with the bonus token also filtered (target still verifies, so performance may degrade)\n");
+            params.speculative.deterministic_draft.det_intercept_all = false;
+            params.speculative.deterministic_draft.det_filter_bonus = true;
+        }
+    }
+
+    // warn if n_max is 0 while filter is enabled
+    if (params.speculative.deterministic_draft.enabled && params.speculative.deterministic_draft.n_max == 0) {
+        LOG_WRN("--det-draft-n-max is 0, deterministic draft filter is effectively disabled\n");
+    }
+
+    if (params.speculative.deterministic_draft.enabled && params.speculative.deterministic_draft.n_max > 0) {
+        params.speculative.draft.n_max = params.speculative.deterministic_draft.n_max;
+    }
+
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
@@ -4363,6 +4411,44 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 throw std::invalid_argument("ngram min hits must be at least 1");
             }
             params.speculative.ngram_map_k4v.min_hits = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    //
+    // deterministic draft filter parameters
+    //
+
+    add_opt(common_arg(
+        {"--det-draft-model", "--deterministic-draft-model"}, "FNAME",
+        "path to the deterministic draft filter plugin (.so/.dylib/.dll)\n"
+        " (default: unused)\n"
+        "requires a compatible drafter (--spec-type draft-mtp, draft-eagle3, draft-dspark, or draft-dflash)",
+        [](common_params & params, const std::string & value) {
+            params.speculative.deterministic_draft.plugin_path = value;
+            params.speculative.deterministic_draft.enabled = true;
+
+            auto & types = params.speculative.types;
+            if (std::find(types.begin(), types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_DETERMINISTIC) == types.end()) {
+                types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_DETERMINISTIC);
+            }
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--det-draft-n-max", "--deterministic-draft-n-max"}, "N",
+        string_format("max tokens to validate per deterministic draft (-1=all, 0=disabled, default: %d)",
+            params.speculative.deterministic_draft.n_max),
+        [](common_params & params, int value) {
+            params.speculative.deterministic_draft.n_max = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--det-draft-intercept-all"},
+        "intercept all filter-passed tokens without target model verification (default: false)\n"
+        "WARNING: output follows the filter-constrained draft distribution, not the target\n"
+        "model's - the filter verifies structure only, not semantics\n"
+        "MTP only; non-MTP draft types fall back to default mode with the bonus token filtered",
+        [](common_params & params) {
+            params.speculative.deterministic_draft.det_intercept_all = true;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
