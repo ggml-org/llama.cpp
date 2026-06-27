@@ -24,7 +24,6 @@
             "GGML_LLAMAFILE":   "OFF",
             "GGML_OPENCL":      "ON",
             "GGML_HEXAGON":     "ON",
-            "GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE": "128",
             "LLAMA_OPENSSL":    "OFF"
         }
     },
@@ -47,7 +46,6 @@
             "GGML_LLAMAFILE":   "OFF",
             "GGML_OPENCL":      "ON",
             "GGML_HEXAGON":     "ON",
-            "GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE": "128",
             "LLAMA_OPENSSL":    "OFF"
         }
     },
@@ -73,7 +71,6 @@
             "GGML_LLAMAFILE":   "OFF",
             "GGML_OPENCL":      "OFF",
             "GGML_HEXAGON":     "ON",
-            "GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE": "128",
             "LLAMA_OPENSSL":    "OFF"
         }
     },

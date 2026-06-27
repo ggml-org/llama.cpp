@@ -2,6 +2,7 @@
 #include "server-http.h"
 #include "server-models.h"
 #include "server-cors-proxy.h"
+#include "server-stream.h"
 #include "server-tools.h"
 
 #include "arg.h"
@@ -82,12 +83,28 @@ int llama_server(int argc, char ** argv) {
 
     common_init();
 
+    // start the stream session manager GC right after common init, before any HTTP route can
+    // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
+    g_stream_sessions.start_gc();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
 
     llama_backend_init();
     llama_numa_init(params.numa);
+
+    common_models_handler models_handler;
+    try {
+        models_handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
+        if (common_models_handler_is_preset_repo(models_handler)) {
+            // apply the preset and start the server in router mode
+            common_models_handler_apply(models_handler, params);
+        }
+    } catch (const std::exception & e) {
+        SRV_ERR("failed to fetch model metadata: %s\n", e.what());
+        return 1;
+    }
 
     // router server never loads a model and must not touch the GPU
     const bool is_router_server = params.model.path.empty()
@@ -134,6 +151,7 @@ int llama_server(int argc, char ** argv) {
     //
 
     // register API routes
+    server_child child; // only used in non-router mode
     server_routes routes(params, ctx_server);
     server_tools tools;
 
@@ -226,8 +244,44 @@ int llama_server(int argc, char ** argv) {
     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
 
+    // resumable streaming, the conversation_id is the session identity end to end. router and
+    // child wire different handlers under the same paths: a child binds the local g_stream_sessions
+    // backed factories, the router binds proxies that resolve the owning child through the
+    // conv_id -> model map
+    server_http_context::handler_t stream_get_h;
+    server_http_context::handler_t streams_lookup_h;
+    server_http_context::handler_t stream_delete_h;
+    if (is_router_server) {
+        stream_get_h     = models_routes->router_stream_get;
+        streams_lookup_h = models_routes->router_streams_lookup;
+        stream_delete_h  = models_routes->router_stream_delete;
+    } else {
+        stream_get_h     = make_stream_get_handler();
+        streams_lookup_h = make_streams_lookup_handler();
+        stream_delete_h  = make_stream_delete_handler();
+    }
+    ctx_http.get ("/v1/stream/:conv_id",       ex_wrapper(stream_get_h));
+    // POST /v1/streams/lookup with body {"conversation_ids": [...]}. you can only ask for ids
+    // you already own (the WebUI passes the convs visible in its sidebar). the server never
+    // lists ids it has not been asked about, so a random caller cannot enumerate live sessions
+    ctx_http.post("/v1/streams/lookup",        ex_wrapper(streams_lookup_h));
+    ctx_http.del ("/v1/stream/:conv_id",       ex_wrapper(stream_delete_h));
+
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();
+
+    // return 403 for disabled features
+    server_http_context::handler_t res_403 = [](const server_http_req &) {
+        auto res = std::make_unique<server_http_res>();
+        res->status = 403;
+        res->data = safe_json_to_str({
+            {"error", {
+                {"message", "this feature is disabled"},
+                {"type", "feature_disabled"},
+            }}
+        });
+        return res;
+    };
 
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
     if (params.ui_mcp_proxy) {
@@ -237,7 +291,11 @@ int llama_server(int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
         ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+    } else {
+        ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
+        ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
     }
+
     // EXPERIMENTAL built-in tools
     if (!params.server_tools.empty()) {
         try {
@@ -252,13 +310,31 @@ int llama_server(int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
+    } else {
+        ctx_http.get ("/tools",           ex_wrapper(res_403));
+        ctx_http.post("/tools",           ex_wrapper(res_403));
+    }
+
+    //
+    // Handle downloading model
+    //
+
+    if (child.is_child() && child.get_mode() == SERVER_CHILD_MODE_DOWNLOAD) {
+        return child.run_download(params);
+    } else if (!is_router_server) {
+        // single-model mode (NOT spawned by router)
+        try {
+            common_models_handler_apply(models_handler, params);
+        } catch (const std::exception & e) {
+            SRV_ERR("failed to download model: %s\n", e.what());
+            return 1;
+        }
     }
 
     //
     // Start the server
     //
 
-    server_child child; // only used in non-router mode
     std::function<void()> clean_up;
 
     if (is_router_server) {
@@ -266,6 +342,8 @@ int llama_server(int argc, char ** argv) {
 
         clean_up = [&models_routes]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
+            // stop the session GC first, it finalizes live sessions and wakes pending readers
+            g_stream_sessions.stop_gc();
             if (models_routes.has_value()) {
                 models_routes->stopping.store(true); // maybe redundant, but just to be safe
                 models_routes->models.unload_all();
@@ -292,6 +370,8 @@ int llama_server(int argc, char ** argv) {
         // setup clean up function, to be called before exit
         clean_up = [&ctx_http, &ctx_server]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
+            // stop the session GC first, it finalizes live sessions and wakes pending readers
+            g_stream_sessions.stop_gc();
             ctx_http.stop();
             ctx_server.terminate();
             llama_backend_free();
