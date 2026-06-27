@@ -1,3 +1,15 @@
+// Must be defined before any include that may pull in windows.h (e.g. through
+// ggml-backend.h / CUDA or clip-impl.h), otherwise winsock.h pollutes the
+// namespace and cascades syntax errors later in the file.
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#endif
+
 #include "server-context.h"
 #include "server-chat.h"
 #include "server-common.h"
@@ -16,6 +28,7 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "llama_mmproj_pool.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -25,15 +38,15 @@
 #include <filesystem>
 #include <utility>
 #include <fstream>
-
+#include <iomanip>
+#include <ctime>
 // fix problem with std::min and std::max
 #if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#ifndef NOMINMAX
-#   define NOMINMAX
+#undef min
+#undef max
 #endif
-#include <windows.h>
-#endif
+
+using json = nlohmann::ordered_json;
 
 using json = nlohmann::ordered_json;
 
@@ -168,6 +181,9 @@ struct server_slot {
     // multimodal
     mtmd_context * mctx = nullptr;
     mtmd::batch_ptr mbatch = nullptr;
+
+    // mmproj swap pool: evicts LLM layers to host RAM during vision encode.
+    struct llama_mmproj_pool * mmproj_pool = nullptr;
 
     // speculative decoding
     common_speculative * spec;
@@ -773,7 +789,29 @@ struct server_slot {
         // TODO @ngxson : move this log line to debug when it become more stable
         SLT_INF(*this, "encoding mtmd batch from idx = %zu, n_chunks = %d\n", idx, n_added);
 
+        // ── mmproj swap in/out RAII guard ──
+        struct MmprojSwapGuard {
+            llama_mmproj_pool * pool;
+            llama_context * ctx;
+            bool swapped;
+            MmprojSwapGuard(llama_mmproj_pool * p, llama_context * c) : pool(p), ctx(c), swapped(false) {}
+            bool swap_in() {
+                if (pool) swapped = llama_mmproj_pool_swap_in(pool, ctx);
+                return !pool || swapped;
+            }
+            ~MmprojSwapGuard() {
+                if (pool && swapped) llama_mmproj_pool_swap_back(pool, ctx);
+            }
+        } guard(mmproj_pool, ctx_tgt);
+
+        if (!guard.swap_in()) {
+            SLT_ERR(*this, "%s", "mmproj swap_in failed; insufficient VRAM\n");
+            return -1;
+        }
+
         res = mtmd_batch_encode(mbatch.get());
+        // guard destruction handles swap_back unconditionally, even if mtmd_batch_encode throws exception
+
         if (res != 0) {
             SLT_ERR(*this, "failed to encode mtmd batch for chunk idx = %zu, res = %d\n", idx, res);
             return -1;
@@ -861,6 +899,10 @@ public:
     llama_model * model_tgt = nullptr;
 
     mtmd_context * mctx = nullptr;
+
+    // mmproj swap pool: evicts LLM layers to host RAM when vision encoder runs.
+    struct llama_mmproj_pool * mmproj_pool = nullptr;
+
     const llama_vocab * vocab = nullptr;
 
     server_queue    queue_tasks;
@@ -941,13 +983,18 @@ private:
         ctx_dft.reset();
         model_dft.reset();
 
+        // pool must be freed before its owners: it holds pointers into
+        // the LLM model tensors and mmproj tensors.
+        llama_mmproj_pool_free(mmproj_pool);
+        mmproj_pool = nullptr;
+
+        mtmd_free(mctx);
+        mctx = nullptr;
+
         llama_init.reset();
 
         ctx_tgt = nullptr;
         model_tgt = nullptr;
-
-        mtmd_free(mctx);
-        mctx = nullptr;
     }
 
     void handle_sleeping_state(bool new_state) {
@@ -1051,10 +1098,11 @@ private:
             mparams.progress_callback_user_data = &load_progress_mmproj;
         }
 
-        // optionally get the memory usage of mmproj
-        if (has_mmproj && params_base.fit_params) {
+        std::map<ggml_backend_dev_t, size_t> mmproj_mem;
+        // get the memory usage of mmproj for fit_params OR auto swap calculation
+        if (has_mmproj && (params_base.fit_params || params_base.n_mmproj_swap < 0)) {
             int64_t t_start = ggml_time_us();
-            auto mmproj_mem = mtmd_get_memory_usage(mmproj_path.c_str(), mparams);
+            mmproj_mem = mtmd_get_memory_usage(mmproj_path.c_str(), mparams);
             int64_t t_elapsed = ggml_time_us() - t_start;
             if (!mmproj_mem.empty()) {
                 size_t total = 0;
@@ -1062,15 +1110,18 @@ private:
                     total += size;
                 }
                 SRV_INF("[mtmd] estimated worst-case memory usage of mmproj is %.2f MiB (took %.2f ms)\n", total / (1024.0 * 1024.0), t_elapsed / 1000.0);
-                GGML_ASSERT(!params_base.fit_params_target.empty());
-                for (auto & [dev, size] : mmproj_mem) {
-                    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
-                        if (ggml_backend_dev_get(i) == dev) {
-                            if (i < params_base.fit_params_target.size()) {
-                                SRV_DBG("[mtmd] adding %.2f MiB to fit_params_target for device %s\n", size / (1024.0 * 1024.0), ggml_backend_dev_name(dev));
-                                params_base.fit_params_target[i] += size;
+                
+                if (params_base.fit_params) {
+                    GGML_ASSERT(!params_base.fit_params_target.empty());
+                    for (auto & [dev, size] : mmproj_mem) {
+                        for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                            if (ggml_backend_dev_get(i) == dev) {
+                                if (i < params_base.fit_params_target.size()) {
+                                    SRV_DBG("[mtmd] adding %.2f MiB to fit_params_target for device %s\n", size / (1024.0 * 1024.0), ggml_backend_dev_name(dev));
+                                    params_base.fit_params_target[i] += size;
+                                }
+                                break;
                             }
-                            break;
                         }
                     }
                 }
@@ -1277,6 +1328,61 @@ private:
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
             }
+
+            // 优先处理参数冲突：如果用户禁用了视觉GPU加速，则强制关闭Swap机制
+            if (params_base.n_mmproj_swap != 0 && !params_base.mmproj_use_gpu) {
+                SRV_WRN("%s\n", "Conflict detected: --mmproj-swap-layers is ignored because --no-mmproj-offload is active.");
+                params_base.n_mmproj_swap = 0; // 强制禁用 Swap
+            }
+
+            // ── mmproj swap pool: evict LLM layers to host RAM when vision runs ──
+            if (params_base.n_mmproj_swap != 0) {
+                if (mctx) {
+                    auto mmproj_tensors = mtmd_get_vision_tensors(mctx);
+                    
+                    size_t mtmd_total_mem = 0;
+                    if (!mmproj_mem.empty()) {
+                        for (auto & [dev, size] : mmproj_mem) {
+                            mtmd_total_mem += size;
+                        }
+                    }
+
+                    size_t mtmd_weight_mem = 0;
+                    for (auto * t : mmproj_tensors) {
+                        mtmd_weight_mem += ggml_nbytes(t);
+                    }
+
+                    size_t mtmd_compute_overhead = 0;
+                    if (mtmd_total_mem > mtmd_weight_mem) {
+                        mtmd_compute_overhead = mtmd_total_mem - mtmd_weight_mem;
+                    }
+
+                    // 注: llama.cpp内部会在上下文中预先分配KV缓存池，所以无需将图片Token的KV算入视觉阶段的动态膨胀空间。
+                    // 因此动态开销仅需关注视觉自身前向传播所需的 Compute Buffer。
+                    size_t dynamic_overhead_bytes = mtmd_compute_overhead;
+
+                    // 为了充分保障，如果算出来的 overhead 是 0 (探测失败)，提供一个回退的安全垫
+                    if (dynamic_overhead_bytes == 0) {
+                        dynamic_overhead_bytes = 300 * 1024 * 1024;
+                        SRV_WRN("mmproj compute overhead detection failed or zero, using fallback %zu MB\n", dynamic_overhead_bytes / 1024 / 1024);
+                    } else {
+                        SRV_INF("mmproj dynamic overhead evaluated: Compute Buffer=%zu MB\n", mtmd_compute_overhead / 1024 / 1024);
+                    }
+
+                    mmproj_pool = llama_mmproj_pool_init(
+                        model_tgt,
+                        params_base.n_mmproj_swap,
+                        mmproj_tensors,
+                        dynamic_overhead_bytes
+                    );
+                    if (mmproj_pool) {
+                        mtmd_free_vision_buffer(mctx); // 彻底释放视觉模型的原始显存！
+                        SRV_INF("%s", "mmproj swap pool initialized, vision VRAM freed.\n");
+                    } else {
+                        SRV_WRN("%s\n", "mmproj swap pool not created; vision will run without LLM layer eviction\n");
+                    }
+                }
+            }
         }
 
         if (!llama_memory_can_shift(llama_get_memory(ctx_tgt))) {
@@ -1359,6 +1465,7 @@ private:
             slot.n_ctx   = n_ctx_slot;
 
             slot.mctx                   = mctx;
+            slot.mmproj_pool           = mmproj_pool;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
             SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
