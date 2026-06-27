@@ -612,19 +612,18 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
             const HVX_Vector v_scale = hvx_vec_splat_f32(scale_factor);
 
             for (size_t r = r_start; r < r_end; r += 32) {
-                float local_m[32] __attribute__((aligned(128)));
+                HVX_VectorAlias local_m;
                 for (size_t j = 0; j < 32; ++j) {
                     size_t curr_r = r + j;
                     if (curr_r < n_rows_g) {
                         const size_t h_idx = fastmodulo(curr_r, G, &factx->div_G);
                         const size_t head  = args->kv_head * G + h_idx;
-                        local_m[j] = sinks_data[head];
+                        local_m.fp32[j] = sinks_data[head];
                     } else {
-                        local_m[j] = -INFINITY;
+                        local_m.fp32[j] = -INFINITY;
                     }
                 }
-                HVX_Vector v_val = *(const HVX_Vector *) local_m;
-                HVX_Vector v_scaled = HVX_OP_MUL_F32(v_val, v_scale);
+                HVX_Vector v_scaled = HVX_OP_MUL_F32(local_m.v, v_scale);
                 *(HVX_Vector *) (m_vec + r) = v_scaled;
             }
             if (l_start < col_vec_bytes) {
