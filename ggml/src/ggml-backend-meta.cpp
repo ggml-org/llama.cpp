@@ -1193,8 +1193,6 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
         }
         if (t_ij->view_src != nullptr) {
             t_ij->data = (char *) t_ij->view_src->data + t_ij->view_offs;
-            // A view aliases its source's storage and must reference the source's buffer:
-            // simple_buf (bufs[j]) may be a multi-buffer the backend cannot resolve here.
             if (t_ij->view_src->buffer != nullptr) {
                 t_ij->buffer = t_ij->view_src->buffer;
             }
