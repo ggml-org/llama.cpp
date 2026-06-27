@@ -16,6 +16,7 @@ set(LLAMA_CORE_SOURCES
     llama-chat.cpp
     llama-context.cpp
     llama-cparams.cpp
+    llama-deterministic-draft-serviceloader.cpp
     llama-grammar.cpp
     llama-graph.cpp
     llama-hparams.cpp
@@ -71,6 +72,8 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 find_package(Threads REQUIRED)
 target_link_libraries(llama PUBLIC ggml PRIVATE Threads::Threads)
+
+target_compile_definitions(llama PRIVATE LLAMA_DETERMINISTIC_DRAFT_INTERNAL)
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
