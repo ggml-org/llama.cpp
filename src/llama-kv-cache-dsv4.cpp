@@ -20,6 +20,8 @@ static constexpr uint32_t DSV4_HCA_RATIO = 128;
 
 static constexpr uint32_t DSV4_STATE_MAGIC         = 0x34565344; // DSV4
 static constexpr uint32_t DSV4_STATE_VERSION       = 1;
+static constexpr uint32_t DSV4_STATE_MODE_FULL     = 0;
+static constexpr uint32_t DSV4_STATE_MODE_PARTIAL  = 1;
 static constexpr uint32_t DSV4_K_CACHE_STATE_VER   = 1;
 static constexpr uint32_t DSV4_COMP_STATE_VER      = 1;
 
@@ -1001,17 +1003,23 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache_dsv4::memory_breakdo
 }
 
 void llama_kv_cache_dsv4::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    const bool partial_only = flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
+
     const uint32_t magic   = DSV4_STATE_MAGIC;
     const uint32_t version = DSV4_STATE_VERSION;
+    const uint32_t mode    = partial_only ? DSV4_STATE_MODE_PARTIAL : DSV4_STATE_MODE_FULL;
 
     io.write(&magic,   sizeof(magic));
     io.write(&version, sizeof(version));
+    io.write(&mode,    sizeof(mode));
 
     kv_raw->state_write(io, seq_id, flags);
 
-    dsv4_state_write_k_cache(io, kv_csa.get(), seq_id, flags);
-    dsv4_state_write_k_cache(io, kv_hca.get(), seq_id, flags);
-    dsv4_state_write_k_cache(io, kv_lid.get(), seq_id, flags);
+    if (!partial_only) {
+        dsv4_state_write_k_cache(io, kv_csa.get(), seq_id, flags);
+        dsv4_state_write_k_cache(io, kv_hca.get(), seq_id, flags);
+        dsv4_state_write_k_cache(io, kv_lid.get(), seq_id, flags);
+    }
 
     csa_state->state_write(io, seq_id, flags);
     hca_state->state_write(io, seq_id, flags);
@@ -1021,6 +1029,7 @@ void llama_kv_cache_dsv4::state_write(llama_io_write_i & io, llama_seq_id seq_id
 void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     uint32_t magic;
     uint32_t version;
+    uint32_t mode = DSV4_STATE_MODE_FULL;
 
     io.read(&magic,   sizeof(magic));
     io.read(&version, sizeof(version));
@@ -1032,13 +1041,25 @@ void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
         throw std::runtime_error("DSV4 state version mismatch");
     }
 
+    io.read(&mode, sizeof(mode));
+    if (mode != DSV4_STATE_MODE_FULL && mode != DSV4_STATE_MODE_PARTIAL) {
+        throw std::runtime_error("DSV4 state mode mismatch");
+    }
+
+    const bool partial_only = mode == DSV4_STATE_MODE_PARTIAL;
+    if (partial_only != !!(flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY)) {
+        throw std::runtime_error("DSV4 state flags mismatch");
+    }
+
     restored_trim_pos.clear();
 
     kv_raw->state_read(io, seq_id, flags);
 
-    dsv4_state_read_k_cache(io, kv_csa.get(), seq_id, flags);
-    dsv4_state_read_k_cache(io, kv_hca.get(), seq_id, flags);
-    dsv4_state_read_k_cache(io, kv_lid.get(), seq_id, flags);
+    if (!partial_only) {
+        dsv4_state_read_k_cache(io, kv_csa.get(), seq_id, flags);
+        dsv4_state_read_k_cache(io, kv_hca.get(), seq_id, flags);
+        dsv4_state_read_k_cache(io, kv_lid.get(), seq_id, flags);
+    }
 
     csa_state->state_read(io, seq_id, flags);
     hca_state->state_read(io, seq_id, flags);
