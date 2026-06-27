@@ -3,8 +3,6 @@
 #include "dpct/helper.hpp"
 #include "common.hpp"
 #include "fattn-common.hpp"
-#include "turbo-quants.hpp"
-#include "turbo-wht.hpp"
 
 #include <cmath>
 #include <float.h>
@@ -311,60 +309,6 @@ static __dpct_inline__ void flash_attn_tile_load_tile(const sycl::half2 * const 
     static_assert(J % 8 == 0, "bad J");
     static_assert(J % cpy_ne == 0, "bad J");
     ggml_sycl_unroll<5>{}(load);
-}
-
-template <int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check, typename block_t, float (*dequantize_fn)(const block_t *, int, float)>
-static __dpct_inline__ void flash_attn_tile_load_tile_turbo_generic(const block_t * const __restrict__ K_turbo,
-                                                                    sycl::half2 * const __restrict__ tile_K,
-                                                                    const int stride_K,
-                                                                    const int i_sup,
-                                                                    const int k_KQ_0) {
-    auto item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
-    auto sg = item_ct1.get_sub_group();
-    const int sg_size = sg.get_local_range()[0];
-    const int tid = item_ct1.get_local_id(1) * sg_size + item_ct1.get_local_id(2);
-    const int nthreads = nwarps * sg_size;
-
-#pragma unroll
-    for (int i = (J > 0 ? tid / (J/2) : 0); (J > 0 && i < I); i += (J > 0 ? nthreads/(J/2) : 1)) {
-        if (!oob_check || i < i_sup) {
-            const int j_pair = (J > 0 ? tid % (J/2) : 0);
-            const block_t * x = K_turbo + i * stride_K;
-            float norm = (float)x->norm;
-            float v0 = dequantize_fn(x, k_KQ_0 + j_pair * 2 + 0, norm);
-            float v1 = dequantize_fn(x, k_KQ_0 + j_pair * 2 + 1, norm);
-            tile_K[i * (J/2 + J_padding) + j_pair] = make_half2(v0, v1);
-        } else {
-            const int j_pair = (J > 0 ? tid % (J/2) : 0);
-            tile_K[i * (J/2 + J_padding) + j_pair] = {0.0f, 0.0f};
-        }
-    }
-}
-
-template <int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check, typename block_t, float (*dequantize_fn)(const block_t *, int, float)>
-static __dpct_inline__ void flash_attn_tile_load_tile_turbo_generic(const block_t * const __restrict__ K_turbo,
-                                                                    float * const __restrict__ tile_K,
-                                                                    const int stride_K,
-                                                                    const int i_sup,
-                                                                    const int k_KQ_0) {
-    auto item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
-    auto sg = item_ct1.get_sub_group();
-    const int sg_size = sg.get_local_range()[0];
-    const int tid = item_ct1.get_local_id(1) * sg_size + item_ct1.get_local_id(2);
-    const int nthreads = nwarps * sg_size;
-
-#pragma unroll
-    for (int i = (J > 0 ? tid / J : 0); (J > 0 && i < I); i += (J > 0 ? nthreads/J : 1)) {
-        if (!oob_check || i < i_sup) {
-            const int j = (J > 0 ? tid % J : 0);
-            const block_t * x = K_turbo + i * stride_K;
-            float norm = (float)x->norm;
-            tile_K[i * (J + J_padding) + j] = dequantize_fn(x, k_KQ_0 + j, norm);
-        } else {
-            const int j = (J > 0 ? tid % J : 0);
-            tile_K[i * (J + J_padding) + j] = 0.0f;
-        }
-    }
 }
 
 // Function that performs a single iteration in for the KQ matrix multiplication:
@@ -1293,24 +1237,12 @@ void ggml_sycl_flash_attn_ext_tile(ggml_backend_sycl_context & ctx, ggml_tensor 
 
 extern DECL_FATTN_TILE_CASE( 40,  40, GGML_TYPE_F16);
 extern DECL_FATTN_TILE_CASE( 64,  64, GGML_TYPE_F16);
-extern DECL_FATTN_TILE_CASE( 64,  64, GGML_TYPE_TURBO2_0);
-extern DECL_FATTN_TILE_CASE( 64,  64, GGML_TYPE_TURBO3_0);
-extern DECL_FATTN_TILE_CASE( 64,  64, GGML_TYPE_TURBO4_0);
 extern DECL_FATTN_TILE_CASE( 72,  72, GGML_TYPE_F16);
 extern DECL_FATTN_TILE_CASE( 80,  80, GGML_TYPE_F16);
 extern DECL_FATTN_TILE_CASE( 96,  96, GGML_TYPE_F16);
 extern DECL_FATTN_TILE_CASE(112, 112, GGML_TYPE_F16);
 extern DECL_FATTN_TILE_CASE(128, 128, GGML_TYPE_F16);
-extern DECL_FATTN_TILE_CASE(128, 128, GGML_TYPE_TURBO2_0);
-extern DECL_FATTN_TILE_CASE(128, 128, GGML_TYPE_TURBO3_0);
-extern DECL_FATTN_TILE_CASE(128, 128, GGML_TYPE_TURBO4_0);
 extern DECL_FATTN_TILE_CASE(256, 256, GGML_TYPE_F16);
-extern DECL_FATTN_TILE_CASE(256, 256, GGML_TYPE_TURBO2_0);
-extern DECL_FATTN_TILE_CASE(256, 256, GGML_TYPE_TURBO3_0);
-extern DECL_FATTN_TILE_CASE(256, 256, GGML_TYPE_TURBO4_0);
 extern DECL_FATTN_TILE_CASE(512, 512, GGML_TYPE_F16);
-extern DECL_FATTN_TILE_CASE(512, 512, GGML_TYPE_TURBO2_0);
-extern DECL_FATTN_TILE_CASE(512, 512, GGML_TYPE_TURBO3_0);
-extern DECL_FATTN_TILE_CASE(512, 512, GGML_TYPE_TURBO4_0);
 extern DECL_FATTN_TILE_CASE(576, 512, GGML_TYPE_F16);
 

@@ -12,10 +12,6 @@ void ggml_sycl_flash_attn_ext_tile(ggml_backend_sycl_context & ctx, ggml_tensor 
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
-    GGML_ASSERT(K->type != GGML_TYPE_TURBO2_0 && K->type != GGML_TYPE_TURBO3_0 && K->type != GGML_TYPE_TURBO4_0 &&
-                V->type != GGML_TYPE_TURBO2_0 && V->type != GGML_TYPE_TURBO3_0 && V->type != GGML_TYPE_TURBO4_0 &&
-                "turbo KV must route to VEC");
-
     const int type_K = K->type;
 
     switch (K->ne[0]) {
@@ -29,15 +25,7 @@ void ggml_sycl_flash_attn_ext_tile(ggml_backend_sycl_context & ctx, ggml_tensor 
         } break;
         case  64: {
             GGML_ASSERT(V->ne[0] == K->ne[0]);
-            if (type_K == GGML_TYPE_TURBO2_0) {
-                 ggml_sycl_flash_attn_ext_tile_case< 64,  64, GGML_TYPE_TURBO2_0>(ctx, dst);
-            } else if (type_K == GGML_TYPE_TURBO3_0) {
-                 ggml_sycl_flash_attn_ext_tile_case< 64,  64, GGML_TYPE_TURBO3_0>(ctx, dst);
-            } else if (type_K == GGML_TYPE_TURBO4_0) {
-                 ggml_sycl_flash_attn_ext_tile_case< 64,  64, GGML_TYPE_TURBO4_0>(ctx, dst);
-            } else {
-                 ggml_sycl_flash_attn_ext_tile_case< 64,  64, GGML_TYPE_F16>(ctx, dst);
-            }
+            ggml_sycl_flash_attn_ext_tile_case< 64,  64, GGML_TYPE_F16>(ctx, dst);
         } break;
         case  72: {
             GGML_ASSERT(V->ne[0] == K->ne[0]);
@@ -57,39 +45,15 @@ void ggml_sycl_flash_attn_ext_tile(ggml_backend_sycl_context & ctx, ggml_tensor 
         } break;
         case 128: {
             GGML_ASSERT(V->ne[0] == K->ne[0]);
-            if (type_K == GGML_TYPE_TURBO2_0) {
-                 ggml_sycl_flash_attn_ext_tile_case<128, 128, GGML_TYPE_TURBO2_0>(ctx, dst);
-            } else if (type_K == GGML_TYPE_TURBO3_0) {
-                 ggml_sycl_flash_attn_ext_tile_case<128, 128, GGML_TYPE_TURBO3_0>(ctx, dst);
-            } else if (type_K == GGML_TYPE_TURBO4_0) {
-                 ggml_sycl_flash_attn_ext_tile_case<128, 128, GGML_TYPE_TURBO4_0>(ctx, dst);
-            } else {
-                 ggml_sycl_flash_attn_ext_tile_case<128, 128, GGML_TYPE_F16>(ctx, dst);
-            }
+            ggml_sycl_flash_attn_ext_tile_case<128, 128, GGML_TYPE_F16>(ctx, dst);
         } break;
         case 256: {
             GGML_ASSERT(V->ne[0] == K->ne[0]);
-            if (type_K == GGML_TYPE_TURBO2_0) {
-                 ggml_sycl_flash_attn_ext_tile_case<256, 256, GGML_TYPE_TURBO2_0>(ctx, dst);
-            } else if (type_K == GGML_TYPE_TURBO3_0) {
-                 ggml_sycl_flash_attn_ext_tile_case<256, 256, GGML_TYPE_TURBO3_0>(ctx, dst);
-            } else if (type_K == GGML_TYPE_TURBO4_0) {
-                 ggml_sycl_flash_attn_ext_tile_case<256, 256, GGML_TYPE_TURBO4_0>(ctx, dst);
-            } else {
-                 ggml_sycl_flash_attn_ext_tile_case<256, 256, GGML_TYPE_F16>(ctx, dst);
-            }
+            ggml_sycl_flash_attn_ext_tile_case<256, 256, GGML_TYPE_F16>(ctx, dst);
         } break;
         case 512: {
             GGML_ASSERT(V->ne[0] == K->ne[0]);
-            if (type_K == GGML_TYPE_TURBO2_0) {
-                 ggml_sycl_flash_attn_ext_tile_case<512, 512, GGML_TYPE_TURBO2_0>(ctx, dst);
-            } else if (type_K == GGML_TYPE_TURBO3_0) {
-                 ggml_sycl_flash_attn_ext_tile_case<512, 512, GGML_TYPE_TURBO3_0>(ctx, dst);
-            } else if (type_K == GGML_TYPE_TURBO4_0) {
-                 ggml_sycl_flash_attn_ext_tile_case<512, 512, GGML_TYPE_TURBO4_0>(ctx, dst);
-            } else {
-                 ggml_sycl_flash_attn_ext_tile_case<512, 512, GGML_TYPE_F16>(ctx, dst);
-            }
+            ggml_sycl_flash_attn_ext_tile_case<512, 512, GGML_TYPE_F16>(ctx, dst);
         } break;
         case 576: {
             GGML_ASSERT(V->ne[0] == 512);

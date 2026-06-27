@@ -393,6 +393,15 @@ void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
+    // TurboQuant KV cache is unsupported on the SYCL backend: the turbo store and
+    // attention kernels miscompile / fault on Intel Arc. This SET_ROWS store is the
+    // first turbo op submitted for a turbo KV graph, so abort here on the host before
+    // any broken turbo kernel reaches the GPU queue (the GGML_OP_TURBO_WHT executor
+    // aborts too, as a backstop).
+    if (dst->type == GGML_TYPE_TURBO2_0 || dst->type == GGML_TYPE_TURBO3_0 || dst->type == GGML_TYPE_TURBO4_0) {
+        GGML_ABORT("ggml_sycl: TurboQuant KV cache (turbo2/turbo3/turbo4) is not supported on the SYCL backend - it miscompiles / produces incorrect output on Intel Arc. Use --cache-type-k/v q8_0 (or f16), or run turbo KV on CPU with -ngl 0.");
+    }
+
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->src[1]->type == GGML_TYPE_I64 || dst->src[1]->type == GGML_TYPE_I32);
 

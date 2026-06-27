@@ -293,40 +293,6 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q8_0(const char * __restrict__
     return sum;
 }
 
-#include "turbo-quants.hpp"
-
-template <int D, int nthreads, typename block_t, int QK, float (*dequantize_fn)(const block_t *, int, float)>
-static __dpct_inline__ float vec_dot_fattn_vec_KQ_turbo_generic(const char * __restrict__ K_c,
-                                                                const void * __restrict__ Q_v,
-                                                                const int * __restrict__ Q_q8,
-                                                                const void * __restrict__ Q_ds_v) {
-    const block_t * K_turbo = (const block_t *) K_c;
-    GGML_UNUSED(Q_q8);
-    GGML_UNUSED(Q_ds_v);
-
-    float sum = 0.0f;
-
-    auto item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
-    const int tid = item_ct1.get_local_id(2) % nthreads;
-
-#pragma unroll
-    for (int i = tid; i < D; i += nthreads) {
-        const int   ib   = i / QK;
-        const int   iqs  = i % QK;
-        const float norm = __half2float(K_turbo[ib].norm);
-        float k = dequantize_fn(&K_turbo[ib], iqs, norm);
-#ifdef GGML_SYCL_F16
-        sycl::half q = ((const sycl::half *) Q_v)[i];
-        sum += k * (float)q;
-#else
-        float q = ((const float *) Q_v)[i];
-        sum += k * q;
-#endif
-    }
-
-    return sum;
-}
-
 template <typename Tds, int ni, int warp_size>
 static __dpct_inline__ void quantize_q8_1_to_shared(const float * __restrict__ x,
                                                     const float scale,
@@ -608,30 +574,6 @@ static __dpct_inline__ void dequantize_V_q8_0(const void * __restrict__ vx, void
     }
 }
 
-template <typename T, int ne, typename block_t, int QK, float (*dequantize_fn)(const block_t *, int, float)>
-static __dpct_inline__ void dequantize_V_turbo_generic(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
-    const block_t * x = (const block_t *) vx;
-
-    const int64_t ib    =  i0 / QK;
-    const int     idq   =  i0 % QK;
-
-    const float norm = __half2float(x[ib].norm);
-
-    if constexpr (std::is_same_v<T, sycl::half>) {
-#pragma unroll
-        for (int l = 0; l < ne; ++l) {
-            ((sycl::half *) dst)[l] = (sycl::half)(dequantize_fn(&x[ib], idq + l, norm));
-        }
-    } else if constexpr (std::is_same_v<T, float>) {
-#pragma unroll
-        for (int l = 0; l < ne; ++l) {
-            ((float *) dst)[l] = dequantize_fn(&x[ib], idq + l, norm);
-        }
-    } else {
-        static_assert(std::is_same_v<T, void>, "bad type");
-    }
-}
-
 template <int type_K, int D, int nthreads, int warp_size>
 constexpr vec_dot_KQ_t get_vec_dot_KQ() {
     if constexpr (type_K == GGML_TYPE_F16) {
@@ -646,12 +588,6 @@ constexpr vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_q5_1<D, nthreads, warp_size>;
     } else if constexpr (type_K == GGML_TYPE_Q8_0) {
         return vec_dot_fattn_vec_KQ_q8_0<D, nthreads, warp_size>;
-    } else if constexpr (type_K == GGML_TYPE_TURBO2_0) {
-        return vec_dot_fattn_vec_KQ_turbo_generic<D, nthreads, block_turbo2_0, QK_TURBO2, dequantize_turbo2_0>;
-    } else if constexpr (type_K == GGML_TYPE_TURBO3_0) {
-        return vec_dot_fattn_vec_KQ_turbo_generic<D, nthreads, block_turbo3_0, QK_TURBO3, dequantize_turbo3_0>;
-    } else if constexpr (type_K == GGML_TYPE_TURBO4_0) {
-        return vec_dot_fattn_vec_KQ_turbo_generic<D, nthreads, block_turbo4_0, QK_TURBO4, dequantize_turbo4_0>;
     } else {
         static_assert(type_K == -1, "bad type");
         return nullptr;
@@ -672,12 +608,6 @@ constexpr dequantize_V_t get_dequantize_V() {
         return dequantize_V_q5_1<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_Q8_0) {
         return dequantize_V_q8_0<T, ne>;
-    } else if constexpr (type_V == GGML_TYPE_TURBO2_0) {
-        return dequantize_V_turbo_generic<T, ne, block_turbo2_0, QK_TURBO2, dequantize_turbo2_0>;
-    } else if constexpr (type_V == GGML_TYPE_TURBO3_0) {
-        return dequantize_V_turbo_generic<T, ne, block_turbo3_0, QK_TURBO3, dequantize_turbo3_0>;
-    } else if constexpr (type_V == GGML_TYPE_TURBO4_0) {
-        return dequantize_V_turbo_generic<T, ne, block_turbo4_0, QK_TURBO4, dequantize_turbo4_0>;
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;
