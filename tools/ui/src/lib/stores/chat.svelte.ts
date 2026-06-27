@@ -1103,7 +1103,7 @@ class ChatStore {
 		};
 
 		const updateStreamingUI = () => {
-			this.setChatStreaming(convId, streamedContent, currentMessageId);
+			this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
 			const idx = conversationsStore.findMessageIndex(currentMessageId);
 			conversationsStore.updateMessageAtIndex(idx, { content: streamedContent });
 		};
@@ -1128,7 +1128,7 @@ class ChatStore {
 			onReasoningChunk: (chunk: string) => {
 				streamedReasoningContent += chunk;
 				// mark streaming state so a stop mid-thinking can persist the partial reasoning
-				this.setChatStreaming(convId, streamedContent, currentMessageId);
+				this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
 				const idx = conversationsStore.findMessageIndex(currentMessageId);
 				conversationsStore.updateMessageAtIndex(idx, {
 					reasoningContent: streamedReasoningContent
@@ -1405,7 +1405,8 @@ class ChatStore {
 		// detached drain keeps producing tokens until eos or max_tokens. use the frozen identity
 		// captured when the session started, not the live dropdown
 		const streamStateForStop = this.chatStreamingStates.get(convId);
-		const modelForStop = streamStateForStop?.model ?? selectedModelName();
+		const modelForStop =
+			streamStateForStop?.model ?? (isRouterMode() ? selectedModelName() : undefined);
 		void ChatService.cancelServerStream(convId, modelForStop);
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
@@ -1845,6 +1846,14 @@ class ChatStore {
 						hasReceivedContent = true;
 						updateStreamingContent(originalContent + appendedContent);
 						this.setChatReasoning(msg.convId, false);
+					},
+					onCompletionId: (id: string) => {
+						if (!id) return;
+						// refresh the message id so a later skip targets the live slot after a continue
+						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
+							completionId: id
+						});
+						DatabaseService.updateMessage(msg.id, { completionId: id }).catch(() => {});
 					},
 					onReasoningChunk: (chunk: string) => {
 						appendedReasoning += chunk;
