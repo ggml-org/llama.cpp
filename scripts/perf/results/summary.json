@@ -1,0 +1,937 @@
+{
+  "mode": "baseline",
+  "model": "/home/svnbjrn/models/llama31-8b-heretic/Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf",
+  "server_bin": "/home/svnbjrn/projects/trb/llama-cpp-turboquant-perf/build/bin/llama-server",
+  "ctx": 16384,
+  "threads": 12,
+  "repeats": 3,
+  "prompt_ids": [
+    "code_edit",
+    "multi_turn",
+    "free_prose"
+  ],
+  "arms": [
+    {
+      "arm": {
+        "name": "none-q8_0",
+        "kv": "q8_0",
+        "spec_label": "none",
+        "extra": [
+          "--spec-type",
+          "none"
+        ]
+      },
+      "error": null,
+      "prompts": [
+        {
+          "id": "code_edit",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 37.987254371699855,
+              "pp": 537.3376025909978,
+              "elapsed_s": 4.280513374003931,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 37.91382162552802,
+              "pp": 538.3917574434504,
+              "elapsed_s": 4.28740770398872,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 37.957739350659274,
+              "pp": 538.4711844153162,
+              "elapsed_s": 4.28289208599017,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            }
+          ],
+          "tg_median": 37.957739350659274,
+          "pp_median": 538.3917574434504,
+          "accept_rate_median": null,
+          "completion_tokens": 147,
+          "text_preview": "```python def process_orders(orders, tax_rate):     grand_total = 0.0     receipts = []     for order in orders:         subtotal = 0.0         for item in orde"
+        },
+        {
+          "id": "multi_turn",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 38.929901294639954,
+              "pp": 327.2857756870044,
+              "elapsed_s": 3.0211547979997704,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 38.97914816496618,
+              "pp": 443.8087344767201,
+              "elapsed_s": 2.866248391001136,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 38.98082424751939,
+              "pp": 443.72331979888105,
+              "elapsed_s": 2.8661816870007897,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            }
+          ],
+          "tg_median": 38.97914816496618,
+          "pp_median": 443.72331979888105,
+          "accept_rate_median": null,
+          "completion_tokens": 97,
+          "text_preview": "```python def fib(n):     \"\"\"Returns the nth Fibonacci number iteratively.\"\"\"     if n < 2:         return n     a, b = 0, 1     for _ in range(n - 1):         "
+        },
+        {
+          "id": "free_prose",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 38.50333911184227,
+              "pp": 186.48929462644418,
+              "elapsed_s": 7.004143568003201,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 38.40952748329223,
+              "pp": 186.35138772624683,
+              "elapsed_s": 7.01829936899594,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 38.472601646567234,
+              "pp": 187.1368653683923,
+              "elapsed_s": 6.993952913006069,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            }
+          ],
+          "tg_median": 38.472601646567234,
+          "pp_median": 186.48929462644418,
+          "accept_rate_median": null,
+          "completion_tokens": 256,
+          "text_preview": "Curiosity is the catalyst that ignites the spark of scientific discovery. It is the driving force behind the relentless pursuit of knowledge, fueling the minds "
+        }
+      ],
+      "log_scan": {
+        "fa_lines": [],
+        "acceptance_lines": []
+      }
+    },
+    {
+      "arm": {
+        "name": "ngrammod-q8_0",
+        "kv": "q8_0",
+        "spec_label": "ngram-mod",
+        "extra": [
+          "--spec-type",
+          "ngram-mod",
+          "--spec-ngram-mod-n-match",
+          "24",
+          "--spec-ngram-mod-n-min",
+          "48",
+          "--spec-ngram-mod-n-max",
+          "64"
+        ]
+      },
+      "error": null,
+      "prompts": [
+        {
+          "id": "code_edit",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 120.61568151552372,
+              "pp": 539.1897381605997,
+              "elapsed_s": 1.6284191049926449,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 192,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.640625
+            },
+            {
+              "tg": 120.40702488985215,
+              "pp": 538.3838160349875,
+              "elapsed_s": 1.6309879009932047,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 192,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.640625
+            },
+            {
+              "tg": 120.65904462660951,
+              "pp": 538.1351038551605,
+              "elapsed_s": 1.62871988400002,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 192,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.640625
+            }
+          ],
+          "tg_median": 120.61568151552372,
+          "pp_median": 538.3838160349875,
+          "accept_rate_median": 0.640625,
+          "completion_tokens": 147,
+          "text_preview": "```python def process_orders(orders, tax_rate):     grand_total = 0.0     receipts = []     for order in orders:         subtotal = 0.0         for item in orde"
+        },
+        {
+          "id": "multi_turn",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 45.63898340811225,
+              "pp": 434.6118601911245,
+              "elapsed_s": 2.5257759189989883,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 22,
+              "accept_rate": 0.34375
+            },
+            {
+              "tg": 89.65667041006374,
+              "pp": 443.83127994524295,
+              "elapsed_s": 1.4596598600037396,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 62,
+              "accept_rate": 0.96875
+            },
+            {
+              "tg": 89.83278137108903,
+              "pp": 444.1946964223596,
+              "elapsed_s": 1.45733119599754,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 62,
+              "accept_rate": 0.96875
+            }
+          ],
+          "tg_median": 89.65667041006374,
+          "pp_median": 443.83127994524295,
+          "accept_rate_median": 0.96875,
+          "completion_tokens": 97,
+          "text_preview": "```python def fib(n):     \"\"\"Returns the nth Fibonacci number iteratively.\"\"\"     if n < 2:         return n     a, b = 0, 1     for _ in range(n - 1):         "
+        },
+        {
+          "id": "free_prose",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 38.49625217932396,
+              "pp": 186.0261854001925,
+              "elapsed_s": 7.0032943389960565,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 54.19852241278272,
+              "pp": 186.1201627221994,
+              "elapsed_s": 5.082742318001692,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": 128,
+              "draft_n_accepted": 90,
+              "accept_rate": 0.703125
+            },
+            {
+              "tg": 80.93878877631933,
+              "pp": 186.04815989510428,
+              "elapsed_s": 3.5221414919942617,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": 192,
+              "draft_n_accepted": 161,
+              "accept_rate": 0.8385416666666666
+            }
+          ],
+          "tg_median": 54.19852241278272,
+          "pp_median": 186.04815989510428,
+          "accept_rate_median": 0.7708333333333333,
+          "completion_tokens": 256,
+          "text_preview": "Curiosity is the catalyst that ignites the spark of scientific discovery. It is the driving force behind the relentless pursuit of knowledge, fueling the minds "
+        }
+      ],
+      "log_scan": {
+        "fa_lines": [],
+        "acceptance_lines": [
+          "0.11.581.157 I statistics        ngram-mod: #calls(b,g,a) =    4    154     11, #gen drafts =     11, #acc drafts =    11, #gen tokens =    704, #acc tokens =   430, dur(b,g,a) = 0.122, 0.528, 0.004 ms",
+          "0.14.106.984 I slot print_timing: id  0 | task 166 | draft acceptance = 0.34375 (   22 accepted /    64 generated)",
+          "0.14.106.994 I statistics        ngram-mod: #calls(b,g,a) =    5    228     12, #gen drafts =     12, #acc drafts =    12, #gen tokens =    768, #acc tokens =   452, dur(b,g,a) = 0.151, 0.761, 0.005 ms",
+          "0.15.566.589 I slot print_timing: id  0 | task 243 | draft acceptance = 0.96875 (   62 accepted /    64 generated)",
+          "0.15.566.600 I statistics        ngram-mod: #calls(b,g,a) =    6    262     13, #gen drafts =     13, #acc drafts =    13, #gen tokens =    832, #acc tokens =   514, dur(b,g,a) = 0.176, 0.899, 0.005 ms",
+          "0.17.024.022 I slot print_timing: id  0 | task 280 | draft acceptance = 0.96875 (   62 accepted /    64 generated)",
+          "0.17.024.032 I statistics        ngram-mod: #calls(b,g,a) =    7    296     14, #gen drafts =     14, #acc drafts =    14, #gen tokens =    896, #acc tokens =   576, dur(b,g,a) = 0.201, 1.042, 0.006 ms",
+          "0.24.027.233 I statistics        ngram-mod: #calls(b,g,a) =    8    550     14, #gen drafts =     14, #acc drafts =    14, #gen tokens =    896, #acc tokens =   576, dur(b,g,a) = 0.213, 1.500, 0.006 ms",
+          "0.29.110.061 I slot print_timing: id  0 | task 575 | draft acceptance = 0.70312 (   90 accepted /   128 generated)",
+          "0.29.110.071 I statistics        ngram-mod: #calls(b,g,a) =    9    714     16, #gen drafts =     16, #acc drafts =    16, #gen tokens =   1024, #acc tokens =   666, dur(b,g,a) = 0.226, 1.816, 0.008 ms",
+          "0.32.632.239 I slot print_timing: id  0 | task 743 | draft acceptance = 0.83854 (  161 accepted /   192 generated)",
+          "0.32.632.249 I statistics        ngram-mod: #calls(b,g,a) =   10    807     19, #gen drafts =     19, #acc drafts =    19, #gen tokens =   1216, #acc tokens =   827, dur(b,g,a) = 0.239, 2.020, 0.011 ms"
+        ]
+      }
+    },
+    {
+      "arm": {
+        "name": "ngrammod+mapk4v-q8_0",
+        "kv": "q8_0",
+        "spec_label": "ngram-mod,ngram-map-k4v",
+        "extra": [
+          "--spec-type",
+          "ngram-mod,ngram-map-k4v",
+          "--spec-ngram-mod-n-match",
+          "24",
+          "--spec-ngram-mod-n-min",
+          "48",
+          "--spec-ngram-mod-n-max",
+          "64"
+        ]
+      },
+      "error": null,
+      "prompts": [
+        {
+          "id": "code_edit",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 110.66518811952743,
+              "pp": 536.4898863082392,
+              "elapsed_s": 1.7400606510054786,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 176,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.6988636363636364
+            },
+            {
+              "tg": 124.76182797295976,
+              "pp": 536.2954473659078,
+              "elapsed_s": 1.589810966004734,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 137,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.8978102189781022
+            },
+            {
+              "tg": 124.90292408791127,
+              "pp": 536.4583460915702,
+              "elapsed_s": 1.5887095470097847,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 137,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.8978102189781022
+            }
+          ],
+          "tg_median": 124.76182797295976,
+          "pp_median": 536.4583460915702,
+          "accept_rate_median": 0.8978102189781022,
+          "completion_tokens": 147,
+          "text_preview": "```python def process_orders(orders, tax_rate):     grand_total = 0.0     receipts = []     for order in orders:         subtotal = 0.0         for item in orde"
+        },
+        {
+          "id": "multi_turn",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 45.267430177322325,
+              "pp": 441.07409513383675,
+              "elapsed_s": 2.535893168009352,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 22,
+              "accept_rate": 0.34375
+            },
+            {
+              "tg": 89.61450979015423,
+              "pp": 442.82844665917946,
+              "elapsed_s": 1.460703385004308,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 62,
+              "accept_rate": 0.96875
+            },
+            {
+              "tg": 88.95149117546187,
+              "pp": 441.52224101794815,
+              "elapsed_s": 1.4698112140031299,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 62,
+              "accept_rate": 0.96875
+            }
+          ],
+          "tg_median": 88.95149117546187,
+          "pp_median": 441.52224101794815,
+          "accept_rate_median": 0.96875,
+          "completion_tokens": 97,
+          "text_preview": "```python def fib(n):     \"\"\"Returns the nth Fibonacci number iteratively.\"\"\"     if n < 2:         return n     a, b = 0, 1     for _ in range(n - 1):         "
+        },
+        {
+          "id": "free_prose",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 38.3121808191264,
+              "pp": 184.9677040516735,
+              "elapsed_s": 7.041076101988438,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 54.250666901752886,
+              "pp": 184.99975039716216,
+              "elapsed_s": 5.078348053008085,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": 128,
+              "draft_n_accepted": 90,
+              "accept_rate": 0.703125
+            },
+            {
+              "tg": 82.88233686748798,
+              "pp": 185.26959667102884,
+              "elapsed_s": 3.447344198997598,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": 192,
+              "draft_n_accepted": 161,
+              "accept_rate": 0.8385416666666666
+            }
+          ],
+          "tg_median": 54.250666901752886,
+          "pp_median": 184.99975039716216,
+          "accept_rate_median": 0.7708333333333333,
+          "completion_tokens": 256,
+          "text_preview": "Curiosity is the catalyst that ignites the spark of scientific discovery. It is the driving force behind the relentless pursuit of knowledge, fueling the minds "
+        }
+      ],
+      "log_scan": {
+        "fa_lines": [],
+        "acceptance_lines": [
+          "0.14.938.249 I statistics        ngram-mod: #calls(b,g,a) =    6    231      8, #gen drafts =      8, #acc drafts =     8, #gen tokens =    512, #acc tokens =   426, dur(b,g,a) = 0.153, 0.678, 0.004 ms",
+          "0.16.408.072 I slot print_timing: id  0 | task 255 | draft acceptance = 0.96875 (   62 accepted /    64 generated)",
+          "0.16.408.082 I statistics    ngram-map-k4v: #calls(b,g,a) =    7    271      6, #gen drafts =      6, #acc drafts =     6, #gen tokens =    210, #acc tokens =   113, dur(b,g,a) = 0.466, 0.451, 0.010 ms",
+          "0.16.408.083 I statistics        ngram-mod: #calls(b,g,a) =    7    265      9, #gen drafts =      9, #acc drafts =     9, #gen tokens =    576, #acc tokens =   488, dur(b,g,a) = 0.464, 0.809, 0.005 ms",
+          "0.23.449.194 I statistics    ngram-map-k4v: #calls(b,g,a) =    8    525      6, #gen drafts =      6, #acc drafts =     6, #gen tokens =    210, #acc tokens =   113, dur(b,g,a) = 0.550, 0.847, 0.010 ms",
+          "0.23.449.195 I statistics        ngram-mod: #calls(b,g,a) =    8    519      9, #gen drafts =      9, #acc drafts =     9, #gen tokens =    576, #acc tokens =   488, dur(b,g,a) = 0.472, 1.206, 0.005 ms",
+          "0.28.527.534 I slot print_timing: id  0 | task 550 | draft acceptance = 0.70312 (   90 accepted /   128 generated)",
+          "0.28.527.545 I statistics    ngram-map-k4v: #calls(b,g,a) =    9    689      6, #gen drafts =      6, #acc drafts =     6, #gen tokens =    210, #acc tokens =   113, dur(b,g,a) = 0.614, 1.094, 0.010 ms",
+          "0.28.527.547 I statistics        ngram-mod: #calls(b,g,a) =    9    683     11, #gen drafts =     11, #acc drafts =    11, #gen tokens =    704, #acc tokens =   578, dur(b,g,a) = 0.484, 1.512, 0.006 ms",
+          "0.31.974.888 I slot print_timing: id  0 | task 718 | draft acceptance = 0.83854 (  161 accepted /   192 generated)",
+          "0.31.974.898 I statistics    ngram-map-k4v: #calls(b,g,a) =   10    782      6, #gen drafts =      6, #acc drafts =     6, #gen tokens =    210, #acc tokens =   113, dur(b,g,a) = 0.678, 1.237, 0.010 ms",
+          "0.31.974.899 I statistics        ngram-mod: #calls(b,g,a) =   10    776     14, #gen drafts =     14, #acc drafts =    14, #gen tokens =    896, #acc tokens =   739, dur(b,g,a) = 0.496, 1.706, 0.008 ms"
+        ]
+      }
+    },
+    {
+      "arm": {
+        "name": "none-f16",
+        "kv": "f16",
+        "spec_label": "none",
+        "extra": [
+          "--spec-type",
+          "none"
+        ]
+      },
+      "error": null,
+      "prompts": [
+        {
+          "id": "code_edit",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 36.55467012021264,
+              "pp": 540.128594999741,
+              "elapsed_s": 4.430302412991296,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 36.739290496820175,
+              "pp": 540.1619005806124,
+              "elapsed_s": 4.410600086004706,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 36.74404746431078,
+              "pp": 540.1232664879409,
+              "elapsed_s": 4.40962875301193,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            }
+          ],
+          "tg_median": 36.739290496820175,
+          "pp_median": 540.128594999741,
+          "accept_rate_median": null,
+          "completion_tokens": 147,
+          "text_preview": "```python def process_orders(orders, tax_rate):     grand_total = 0.0     receipts = []     for order in orders:         subtotal = 0.0         for item in orde"
+        },
+        {
+          "id": "multi_turn",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 37.125818633869386,
+              "pp": 320.98880019800754,
+              "elapsed_s": 3.1635253800050123,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 36.98257282040157,
+              "pp": 447.74348074703033,
+              "elapsed_s": 2.9970377159916097,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 37.13093477702491,
+              "pp": 448.1943975700304,
+              "elapsed_s": 2.986707569012651,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            }
+          ],
+          "tg_median": 37.125818633869386,
+          "pp_median": 447.74348074703033,
+          "accept_rate_median": null,
+          "completion_tokens": 97,
+          "text_preview": "```python def fib(n):     \"\"\"Returns the nth Fibonacci number iteratively.\"\"\"     if n < 2:         return n     a, b = 0, 1     for _ in range(n - 1):         "
+        },
+        {
+          "id": "free_prose",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 36.82592199665546,
+              "pp": 187.54967833741676,
+              "elapsed_s": 7.30725549600902,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 36.83138978213801,
+              "pp": 187.4637346941812,
+              "elapsed_s": 7.314739573004772,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 36.86988502356792,
+              "pp": 187.13797712758054,
+              "elapsed_s": 7.283671944998787,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            }
+          ],
+          "tg_median": 36.83138978213801,
+          "pp_median": 187.4637346941812,
+          "accept_rate_median": null,
+          "completion_tokens": 256,
+          "text_preview": "Curiosity is the catalyst that ignites the spark of scientific discovery. It is the driving force behind the relentless pursuit of knowledge, fueling the minds "
+        }
+      ],
+      "log_scan": {
+        "fa_lines": [],
+        "acceptance_lines": []
+      }
+    },
+    {
+      "arm": {
+        "name": "ngrammod-f16",
+        "kv": "f16",
+        "spec_label": "ngram-mod",
+        "extra": [
+          "--spec-type",
+          "ngram-mod",
+          "--spec-ngram-mod-n-match",
+          "24",
+          "--spec-ngram-mod-n-min",
+          "48",
+          "--spec-ngram-mod-n-max",
+          "64"
+        ]
+      },
+      "error": null,
+      "prompts": [
+        {
+          "id": "code_edit",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 119.81494703690299,
+              "pp": 541.411824038685,
+              "elapsed_s": 1.6345192789885914,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 192,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.640625
+            },
+            {
+              "tg": 119.84962540877282,
+              "pp": 540.4778416424604,
+              "elapsed_s": 1.6350438899971778,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 192,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.640625
+            },
+            {
+              "tg": 119.64166101692156,
+              "pp": 540.3338226767496,
+              "elapsed_s": 1.6378803030092968,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 192,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.640625
+            }
+          ],
+          "tg_median": 119.81494703690299,
+          "pp_median": 540.4778416424604,
+          "accept_rate_median": 0.640625,
+          "completion_tokens": 147,
+          "text_preview": "```python def process_orders(orders, tax_rate):     grand_total = 0.0     receipts = []     for order in orders:         subtotal = 0.0         for item in orde"
+        },
+        {
+          "id": "multi_turn",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 43.89634850261409,
+              "pp": 437.5710064396745,
+              "elapsed_s": 2.6198205260006944,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 22,
+              "accept_rate": 0.34375
+            },
+            {
+              "tg": 86.54046034171883,
+              "pp": 448.5286369322803,
+              "elapsed_s": 1.4944090210046852,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 62,
+              "accept_rate": 0.96875
+            },
+            {
+              "tg": 86.89358134135024,
+              "pp": 447.87998974732557,
+              "elapsed_s": 1.4902621839864878,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 62,
+              "accept_rate": 0.96875
+            }
+          ],
+          "tg_median": 86.54046034171883,
+          "pp_median": 447.87998974732557,
+          "accept_rate_median": 0.96875,
+          "completion_tokens": 97,
+          "text_preview": "```python def fib(n):     \"\"\"Returns the nth Fibonacci number iteratively.\"\"\"     if n < 2:         return n     a, b = 0, 1     for _ in range(n - 1):         "
+        },
+        {
+          "id": "free_prose",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 36.762884421655926,
+              "pp": 187.25144599727741,
+              "elapsed_s": 7.324542305999785,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 63.66379151699873,
+              "pp": 187.28595890410958,
+              "elapsed_s": 4.386329395012581,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": 192,
+              "draft_n_accepted": 129,
+              "accept_rate": 0.671875
+            },
+            {
+              "tg": 114.30903537016256,
+              "pp": 187.152987169623,
+              "elapsed_s": 2.6048412040108815,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": 243,
+              "draft_n_accepted": 201,
+              "accept_rate": 0.8271604938271605
+            }
+          ],
+          "tg_median": 63.66379151699873,
+          "pp_median": 187.25144599727741,
+          "accept_rate_median": 0.7495177469135803,
+          "completion_tokens": 256,
+          "text_preview": "Curiosity is the catalyst that ignites the spark of scientific discovery. It is the driving force behind the relentless pursuit of knowledge, fueling the minds "
+        }
+      ],
+      "log_scan": {
+        "fa_lines": [],
+        "acceptance_lines": [
+          "0.11.611.345 I statistics        ngram-mod: #calls(b,g,a) =    4    154     11, #gen drafts =     11, #acc drafts =    11, #gen tokens =    704, #acc tokens =   430, dur(b,g,a) = 0.130, 0.541, 0.009 ms",
+          "0.14.231.247 I slot print_timing: id  0 | task 166 | draft acceptance = 0.34375 (   22 accepted /    64 generated)",
+          "0.14.231.256 I statistics        ngram-mod: #calls(b,g,a) =    5    228     12, #gen drafts =     12, #acc drafts =    12, #gen tokens =    768, #acc tokens =   452, dur(b,g,a) = 0.154, 0.689, 0.009 ms",
+          "0.15.725.695 I slot print_timing: id  0 | task 243 | draft acceptance = 0.96875 (   62 accepted /    64 generated)",
+          "0.15.725.705 I statistics        ngram-mod: #calls(b,g,a) =    6    262     13, #gen drafts =     13, #acc drafts =    13, #gen tokens =    832, #acc tokens =   514, dur(b,g,a) = 0.179, 0.836, 0.010 ms",
+          "0.17.215.986 I slot print_timing: id  0 | task 280 | draft acceptance = 0.96875 (   62 accepted /    64 generated)",
+          "0.17.215.997 I statistics        ngram-mod: #calls(b,g,a) =    7    296     14, #gen drafts =     14, #acc drafts =    14, #gen tokens =    896, #acc tokens =   576, dur(b,g,a) = 0.204, 0.971, 0.011 ms",
+          "0.24.540.553 I statistics        ngram-mod: #calls(b,g,a) =    8    550     14, #gen drafts =     14, #acc drafts =    14, #gen tokens =    896, #acc tokens =   576, dur(b,g,a) = 0.217, 1.400, 0.011 ms",
+          "0.28.926.870 I slot print_timing: id  0 | task 575 | draft acceptance = 0.67188 (  129 accepted /   192 generated)",
+          "0.28.926.878 I statistics        ngram-mod: #calls(b,g,a) =    9    675     17, #gen drafts =     17, #acc drafts =    17, #gen tokens =   1088, #acc tokens =   705, dur(b,g,a) = 0.230, 1.663, 0.012 ms",
+          "0.31.531.703 I slot print_timing: id  0 | task 704 | draft acceptance = 0.82716 (  201 accepted /   243 generated)",
+          "0.31.531.713 I statistics        ngram-mod: #calls(b,g,a) =   10    728     21, #gen drafts =     21, #acc drafts =    21, #gen tokens =   1331, #acc tokens =   906, dur(b,g,a) = 0.245, 1.816, 0.016 ms"
+        ]
+      }
+    },
+    {
+      "arm": {
+        "name": "ngrammod+mapk4v-f16",
+        "kv": "f16",
+        "spec_label": "ngram-mod,ngram-map-k4v",
+        "extra": [
+          "--spec-type",
+          "ngram-mod,ngram-map-k4v",
+          "--spec-ngram-mod-n-match",
+          "24",
+          "--spec-ngram-mod-n-min",
+          "48",
+          "--spec-ngram-mod-n-max",
+          "64"
+        ]
+      },
+      "error": null,
+      "prompts": [
+        {
+          "id": "code_edit",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 109.38549905459675,
+              "pp": 539.9954137375819,
+              "elapsed_s": 1.752698895012145,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 176,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.6988636363636364
+            },
+            {
+              "tg": 124.09482533020199,
+              "pp": 540.2605091770278,
+              "elapsed_s": 1.5933448449941352,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 137,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.8978102189781022
+            },
+            {
+              "tg": 123.92012462823962,
+              "pp": 541.2566050606256,
+              "elapsed_s": 1.5942610149941174,
+              "completion_tokens": 147,
+              "prompt_tokens": 219,
+              "draft_n": 137,
+              "draft_n_accepted": 123,
+              "accept_rate": 0.8978102189781022
+            }
+          ],
+          "tg_median": 123.92012462823962,
+          "pp_median": 540.2605091770278,
+          "accept_rate_median": 0.8978102189781022,
+          "completion_tokens": 147,
+          "text_preview": "```python def process_orders(orders, tax_rate):     grand_total = 0.0     receipts = []     for order in orders:         subtotal = 0.0         for item in orde"
+        },
+        {
+          "id": "multi_turn",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 43.867662568130555,
+              "pp": 448.5916653830459,
+              "elapsed_s": 2.6117253770062234,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 22,
+              "accept_rate": 0.34375
+            },
+            {
+              "tg": 86.6909699289581,
+              "pp": 447.9150364538081,
+              "elapsed_s": 1.493283004994737,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 62,
+              "accept_rate": 0.96875
+            },
+            {
+              "tg": 86.6021168414333,
+              "pp": 448.2803318354649,
+              "elapsed_s": 1.4939197980129393,
+              "completion_tokens": 97,
+              "prompt_tokens": 166,
+              "draft_n": 64,
+              "draft_n_accepted": 62,
+              "accept_rate": 0.96875
+            }
+          ],
+          "tg_median": 86.6021168414333,
+          "pp_median": 448.2803318354649,
+          "accept_rate_median": 0.96875,
+          "completion_tokens": 97,
+          "text_preview": "```python def fib(n):     \"\"\"Returns the nth Fibonacci number iteratively.\"\"\"     if n < 2:         return n     a, b = 0, 1     for _ in range(n - 1):         "
+        },
+        {
+          "id": "free_prose",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 36.747174558553034,
+              "pp": 187.67203269663858,
+              "elapsed_s": 7.327392223000061,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": null,
+              "draft_n_accepted": null,
+              "accept_rate": null
+            },
+            {
+              "tg": 63.58198027071021,
+              "pp": 186.6240887264239,
+              "elapsed_s": 4.39359073099331,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": 192,
+              "draft_n_accepted": 129,
+              "accept_rate": 0.671875
+            },
+            {
+              "tg": 114.15000827141661,
+              "pp": 187.2436545205968,
+              "elapsed_s": 2.607645776006393,
+              "completion_tokens": 256,
+              "prompt_tokens": 63,
+              "draft_n": 243,
+              "draft_n_accepted": 201,
+              "accept_rate": 0.8271604938271605
+            }
+          ],
+          "tg_median": 63.58198027071021,
+          "pp_median": 187.2436545205968,
+          "accept_rate_median": 0.7495177469135803,
+          "completion_tokens": 256,
+          "text_preview": "Curiosity is the catalyst that ignites the spark of scientific discovery. It is the driving force behind the relentless pursuit of knowledge, fueling the minds "
+        }
+      ],
+      "log_scan": {
+        "fa_lines": [],
+        "acceptance_lines": [
+          "0.14.970.991 I statistics        ngram-mod: #calls(b,g,a) =    6    231      8, #gen drafts =      8, #acc drafts =     8, #gen tokens =    512, #acc tokens =   426, dur(b,g,a) = 0.142, 0.713, 0.006 ms",
+          "0.16.464.817 I slot print_timing: id  0 | task 255 | draft acceptance = 0.96875 (   62 accepted /    64 generated)",
+          "0.16.464.828 I statistics    ngram-map-k4v: #calls(b,g,a) =    7    271      6, #gen drafts =      6, #acc drafts =     6, #gen tokens =    210, #acc tokens =   113, dur(b,g,a) = 0.426, 0.445, 0.011 ms",
+          "0.16.464.829 I statistics        ngram-mod: #calls(b,g,a) =    7    265      9, #gen drafts =      9, #acc drafts =     9, #gen tokens =    576, #acc tokens =   488, dur(b,g,a) = 0.162, 0.851, 0.006 ms",
+          "0.23.792.355 I statistics    ngram-map-k4v: #calls(b,g,a) =    8    525      6, #gen drafts =      6, #acc drafts =     6, #gen tokens =    210, #acc tokens =   113, dur(b,g,a) = 0.496, 0.864, 0.011 ms",
+          "0.23.792.356 I statistics        ngram-mod: #calls(b,g,a) =    8    519      9, #gen drafts =      9, #acc drafts =     9, #gen tokens =    576, #acc tokens =   488, dur(b,g,a) = 0.170, 1.287, 0.006 ms",
+          "0.28.185.878 I slot print_timing: id  0 | task 550 | draft acceptance = 0.67188 (  129 accepted /   192 generated)",
+          "0.28.185.889 I statistics    ngram-map-k4v: #calls(b,g,a) =    9    650      6, #gen drafts =      6, #acc drafts =     6, #gen tokens =    210, #acc tokens =   113, dur(b,g,a) = 0.562, 1.073, 0.011 ms",
+          "0.28.185.890 I statistics        ngram-mod: #calls(b,g,a) =    9    644     12, #gen drafts =     12, #acc drafts =    12, #gen tokens =    768, #acc tokens =   617, dur(b,g,a) = 0.180, 1.558, 0.009 ms",
+          "0.30.793.543 I slot print_timing: id  0 | task 679 | draft acceptance = 0.82716 (  201 accepted /   243 generated)",
+          "0.30.793.554 I statistics    ngram-map-k4v: #calls(b,g,a) =   10    703      6, #gen drafts =      6, #acc drafts =     6, #gen tokens =    210, #acc tokens =   113, dur(b,g,a) = 0.628, 1.162, 0.011 ms",
+          "0.30.793.555 I statistics        ngram-mod: #calls(b,g,a) =   10    697     16, #gen drafts =     16, #acc drafts =    16, #gen tokens =   1011, #acc tokens =   818, dur(b,g,a) = 0.193, 1.721, 0.011 ms"
+        ]
+      }
+    }
+  ]
+}
