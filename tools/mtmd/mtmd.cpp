@@ -2128,6 +2128,13 @@ void mtmd_debug_preprocess_audio(mtmd_context * ctx, const std::vector<float> & 
     }
 }
 
+// return all vision encoder tensors of the multimodal model.
+// used by the mmproj swap pool to relocate them between GPU and host.
+std::vector<ggml_tensor *> mtmd_get_vision_tensors(mtmd_context * mctx) {
+    if (!mctx || !mctx->ctx_v) return {};
+    return clip_get_all_tensors(mctx->ctx_v);
+}
+
 static void stub_log_callback(enum ggml_log_level, const char *, void *) {
     // do nothing
 }
@@ -2161,5 +2168,10 @@ std::map<ggml_backend_dev_t, size_t> mtmd_get_memory_usage(const char * mmproj_f
         mtmd_log_set(saved_log_callback, saved_log_user_data); // restore log callback
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return {};
+    }
+}
+void mtmd_free_vision_buffer(mtmd_context * mctx) {
+    if (mctx && mctx->ctx_v) {
+        clip_free_buffer(mctx->ctx_v);
     }
 }
