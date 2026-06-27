@@ -50,14 +50,14 @@ struct llama_mmproj_pool * llama_mmproj_pool_init(
     size_t align = 256;
     size_t mmproj_host_size = calc_aligned_size(mmproj_tensors, align);
 
-    // 1. 自动计算 (-1) 逻辑，结合精确探测出的动态开销
+    // 1. Auto-calculation (-1) logic, combining precisely probed dynamic overhead
     if (n_swap_layers < 0) {
         int n_layer = llama_model_n_layer(model);
         size_t accumulated_size = 0;
         int calculated_layers = 0;
         
-        // 目标腾空大小 = 视觉权重大小 + 计算图临时缓冲大小 (Compute Buffer)
-        // 预留 5% 的碎片安全空间
+        // Target eviction size = Vision Weights + Compute Buffer
+        // Reserve a 5% safety margin for VRAM fragmentation
         size_t target_eviction_size = (mmproj_host_size + dynamic_overhead_bytes) * 1.05;
 
         for (int il = n_layer - 1; il >= 0; --il) {
