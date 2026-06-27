@@ -89,7 +89,7 @@ struct llama_mmproj_pool * llama_mmproj_pool_init(
         return nullptr;
     }
 
-    // 获取实际的 GPU Backend Dev，为 Pinned Memory 做准备
+    // Get the actual GPU Backend Dev to prepare for pinned memory
     ggml_backend_dev_t dev = nullptr;
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
         ggml_backend_dev_t d = ggml_backend_dev_get(i);
@@ -99,7 +99,7 @@ struct llama_mmproj_pool * llama_mmproj_pool_init(
         }
     }
 
-    // 建立 Host Buffer
+    // Allocate Host buffer
     size_t evicted_total_bytes = 0;
     for (auto * t : pool->evicted_tensors) {
         pool->evicted_offsets.push_back(evicted_total_bytes);
@@ -118,7 +118,7 @@ struct llama_mmproj_pool * llama_mmproj_pool_init(
     pool->host_ptr = ggml_backend_buffer_get_base(pool->host_buf);
     char * host_mm = (char *)pool->host_ptr + evicted_total_bytes;
 
-    // 2. 恢复绝无乱码风险的“碎片装箱法(Bin-Packing)”
+    // 2.Restore the robust "Bin-Packing" method to prevent any risk of data corruption
     struct Block {
         ggml_tensor * t;
         size_t used;
@@ -145,7 +145,7 @@ struct llama_mmproj_pool * llama_mmproj_pool_init(
         char * host_data = host_mm + current_host_offset;
         
         if (vt->data) {
-            ggml_backend_tensor_get(vt, host_data, 0, vsize); // 备份视觉模型到Host
+            ggml_backend_tensor_get(vt, host_data, 0, vsize); // Backup vision model to host
         }
         current_host_offset += vsize;
 
@@ -172,7 +172,7 @@ struct llama_mmproj_pool * llama_mmproj_pool_init(
         return nullptr;
     }
 
-    // 重定向指针，准备战斗
+    // Redirect pointers, ready for execution
     for (const auto & m : pool->mappings) {
         m.vision_t->data   = m.host_data;
         m.vision_t->buffer = pool->host_buf;
@@ -195,7 +195,7 @@ bool llama_mmproj_pool_swap_in(struct llama_mmproj_pool * pool, struct llama_con
     double t0 = now_ms();
     pool->state = llama_pool_state::SWAPPING_OUT;
 
-    // 3. 移除存在隐患的单次拷贝优化，恢复最纯净安全的机制，杜绝脏数据
+    // 3. Remove the risky single-copy optimization, restoring a pure and safe mechanism to prevent dirty data
     char * host_llm = (char *)pool->host_ptr;
     for (size_t i = 0; i < pool->evicted_tensors.size(); ++i) {
         ggml_backend_tensor_get(pool->evicted_tensors[i], host_llm + pool->evicted_offsets[i], 0, ggml_nbytes(pool->evicted_tensors[i]));
@@ -206,7 +206,7 @@ bool llama_mmproj_pool_swap_in(struct llama_mmproj_pool * pool, struct llama_con
     for (const auto & m : pool->mappings) {
         m.vision_t->data   = m.gpu_data;
         m.vision_t->buffer = m.gpu_buffer;
-        ggml_backend_tensor_set(m.vision_t, m.host_data, 0, m.size); // 推入显存
+        ggml_backend_tensor_set(m.vision_t, m.host_data, 0, m.size); // Push to VRAM
     }
 
     if (ctx) llama_synchronize(ctx);
@@ -223,13 +223,13 @@ void llama_mmproj_pool_swap_back(struct llama_mmproj_pool * pool, struct llama_c
     if (ctx) llama_synchronize(ctx);
     pool->state = llama_pool_state::SWAPPING_IN;
 
-    // Vision -> Host (仅调整指针，无需拷贝)
+    // Vision -> Host (Adjust pointers only, no copy needed)
     for (const auto & m : pool->mappings) {
         m.vision_t->data   = m.host_data;
         m.vision_t->buffer = pool->host_buf;
     }
 
-    // LLM -> GPU (还原 LLM)
+    // LLM -> GPU (Restore LLM)
     char * host_llm = (char *)pool->host_ptr;
     for (size_t i = 0; i < pool->evicted_tensors.size(); ++i) {
         ggml_backend_tensor_set(pool->evicted_tensors[i], host_llm + pool->evicted_offsets[i], 0, ggml_nbytes(pool->evicted_tensors[i]));
