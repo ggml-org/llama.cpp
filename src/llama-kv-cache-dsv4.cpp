@@ -214,7 +214,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         uint32_t kv_size,
         uint32_t n_stream) {
     llama_kv_cache_dsv4_context::comp_plan plan;
-    plan.ratio = ratio;
     plan.n_visible.resize(ubatch.n_tokens);
 
     const int64_t state_rows = (int64_t) state_size*n_stream;
@@ -275,7 +274,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
         const int32_t state_idx = (int32_t) (stream_off + pos%state_size);
 
-        plan.state_idxs.push_back(state_idx);
         plan.state_pos .push_back((int32_t) (pos%ratio));
 
         const auto it = std::find_if(persist_rows.begin(), persist_rows.end(),
@@ -303,7 +301,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
         plan.state_write_idxs.push_back(cache_off + pos/ratio);
         plan.state_write_pos .push_back((int32_t) source_start);
-        plan.state_write_end .push_back((int32_t) pos);
 
         if (overlap) {
             const llama_pos prev_start = source_start - ratio;
@@ -321,7 +318,7 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         }
     }
 
-    if (ratio == DSV4_CSA_RATIO && plan.state_write_idxs.empty() && !plan.state_idxs.empty()) {
+    if (ratio == DSV4_CSA_RATIO && plan.state_write_idxs.empty() && !plan.state_pos.empty()) {
         assert(kv_size > 0);
 
         uint32_t i = 0;
@@ -337,7 +334,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
         plan.state_write_idxs.push_back(cache_off + kv_size - 1);
         plan.state_write_pos .push_back(0);
-        plan.state_write_end .push_back(-1);
 
         if (overlap) {
             for (uint32_t j = 0; j < ratio; ++j) {
@@ -378,10 +374,10 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
     }();
 
     if (debug) {
-        LLAMA_LOG_INFO("%s: ratio=%u, n_tokens=%u, state_persist_dst=%s, state_write_end=%s\n",
+        LLAMA_LOG_INFO("%s: ratio=%u, n_tokens=%u, state_persist_dst=%s, state_write_pos=%s\n",
                 __func__, ratio, ubatch.n_tokens,
                 dsv4_plan_positions(plan.state_persist_dst_idxs).c_str(),
-                dsv4_plan_positions(plan.state_write_end).c_str());
+                dsv4_plan_positions(plan.state_write_pos).c_str());
     }
 
     return plan;
@@ -412,7 +408,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_reserve_comp_plan(
         uint32_t kv_size,
         uint32_t n_stream) {
     llama_kv_cache_dsv4_context::comp_plan plan;
-    plan.ratio = ratio;
     plan.n_visible.resize(ubatch.n_tokens);
     plan.n_kv = kv_size;
 
@@ -429,14 +424,12 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_reserve_comp_plan(
     const uint64_t state_rows = (uint64_t) state_size*n_stream;
     const size_t n_persist = (size_t) std::min<uint64_t>(ubatch.n_tokens, state_rows);
 
-    plan.state_idxs.resize(ubatch.n_tokens);
     plan.state_pos .resize(ubatch.n_tokens);
     plan.state_persist_src_idxs.resize(n_persist);
     plan.state_persist_dst_idxs.resize(n_persist);
     plan.state_read_idxs .resize((overlap ? 2u : 1u)*ratio*n_blocks);
     plan.state_write_idxs.resize(n_blocks);
     plan.state_write_pos .resize(n_blocks);
-    plan.state_write_end .resize(n_blocks);
 
     return plan;
 }

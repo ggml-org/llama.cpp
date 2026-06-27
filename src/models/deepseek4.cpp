@@ -844,7 +844,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
 
     ggml_tensor * hca_state_kv    = nullptr;
     ggml_tensor * hca_state_score = nullptr;
-    if (ratio == DSV4_HCA_RATIO && inp_dsv4->get_hca().state_idxs) {
+    if (ratio == DSV4_HCA_RATIO && inp_dsv4->get_hca().state_pos) {
         hca_state_kv = build_lora_mm(layer.attn_comp_wkv, cur);
         cb(hca_state_kv, "hca_state_kv", il);
 
@@ -859,7 +859,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
 
     }
 
-    if (ratio == DSV4_CSA_RATIO && inp_dsv4->get_csa().state_idxs) {
+    if (ratio == DSV4_CSA_RATIO && inp_dsv4->get_csa().state_pos) {
         ggml_tensor * csa_state_kv = build_lora_mm(layer.attn_comp_wkv, cur);
         cb(csa_state_kv, "csa_state_kv", il);
 
@@ -985,7 +985,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
         hca_state_dep = kv_comp_hca;
     }
 
-    if (ratio == DSV4_HCA_RATIO && inp_dsv4->get_hca().state_idxs) {
+    if (ratio == DSV4_HCA_RATIO && inp_dsv4->get_hca().state_pos) {
         GGML_ASSERT(hca_state_kv);
         GGML_ASSERT(hca_state_score);
 

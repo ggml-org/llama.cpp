@@ -154,11 +154,6 @@ public:
     using slot_info_vec_t = llama_kv_cache::slot_info_vec_t;
 
     struct comp_plan {
-        uint32_t ratio = 0;
-
-        // Compressor-state row ids updated by the current graph.
-        std::vector<int32_t> state_idxs;
-
         // APE row ids, i.e. pos % ratio, for the compressor-state updates.
         std::vector<int32_t> state_pos;
 
@@ -180,9 +175,6 @@ public:
 
         // RoPE positions for state-backed commits.
         std::vector<int32_t> state_write_pos;
-
-        // End positions for state-backed commits.
-        std::vector<int32_t> state_write_end;
 
         // Number of completed compressed rows visible for each query token.
         std::vector<int32_t> n_visible;

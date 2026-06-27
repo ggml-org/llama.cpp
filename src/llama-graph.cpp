@@ -712,22 +712,19 @@ static void dsv4_set_comp_inputs(
         const char * name,
         bool debug,
         uint32_t n_tokens) {
-    dsv4_set_i32(inp.state_idxs, plan.state_idxs);
     dsv4_set_i32(inp.state_pos, plan.state_pos);
     dsv4_set_i32(inp.state_persist_src_idxs, plan.state_persist_src_idxs);
     dsv4_set_i32(inp.state_persist_dst_idxs, plan.state_persist_dst_idxs);
     dsv4_set_i32(inp.state_read_idxs, plan.state_read_idxs);
     dsv4_set_i64(inp.state_write_idxs, plan.state_write_idxs);
     dsv4_set_i32(inp.state_write_pos, plan.state_write_pos);
-    dsv4_set_i32(inp.state_write_end, plan.state_write_end);
-    dsv4_set_i32(inp.n_visible,  plan.n_visible);
     dsv4_set_kq_mask(inp.kq_mask, plan, n_tokens);
 
     if (debug || dsv4_compress_debug()) {
-        LLAMA_LOG_INFO("%s: %s ratio=%u, n_tokens=%u, state_persist_dst=%s, state_write_end=%s\n",
-                __func__, name, plan.ratio, n_tokens,
+        LLAMA_LOG_INFO("%s: %s n_tokens=%u, state_persist_dst=%s, state_write_pos=%s\n",
+                __func__, name, n_tokens,
                 dsv4_plan_positions(plan.state_persist_dst_idxs).c_str(),
-                dsv4_plan_positions(plan.state_write_end).c_str());
+                dsv4_plan_positions(plan.state_write_pos).c_str());
     }
 }
 
@@ -755,15 +752,12 @@ static bool dsv4_can_reuse_comp_input(
         const llama_kv_cache_dsv4_context::comp_plan & plan,
         uint32_t n_tokens) {
     bool res = true;
-    res &= dsv4_can_reuse_tensor_1d(inp.state_idxs, plan.state_idxs.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_pos, plan.state_pos.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_persist_src_idxs, plan.state_persist_src_idxs.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_persist_dst_idxs, plan.state_persist_dst_idxs.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_read_idxs, plan.state_read_idxs.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_write_idxs, plan.state_write_idxs.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_write_pos, plan.state_write_pos.size());
-    res &= dsv4_can_reuse_tensor_1d(inp.state_write_end, plan.state_write_end.size());
-    res &= dsv4_can_reuse_tensor_1d(inp.n_visible,  plan.n_visible.size());
     res &= dsv4_can_reuse_kq_mask(inp.kq_mask, plan, n_tokens);
 
     return res;
@@ -790,15 +784,12 @@ static void dsv4_build_comp_inputs(
         llm_graph_input_dsv4::comp_input & inp,
         const llama_kv_cache_dsv4_context::comp_plan & plan,
         const char * name) {
-    inp.state_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_idxs.size(), std::string("dsv4_") + name + "_state_idxs");
     inp.state_pos = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_pos.size(), std::string("dsv4_") + name + "_state_pos");
     inp.state_persist_src_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_persist_src_idxs.size(), std::string("dsv4_") + name + "_state_persist_src_idxs");
     inp.state_persist_dst_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_persist_dst_idxs.size(), std::string("dsv4_") + name + "_state_persist_dst_idxs");
     inp.state_read_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_read_idxs.size(), std::string("dsv4_") + name + "_state_read_idxs");
     inp.state_write_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I64, plan.state_write_idxs.size(), std::string("dsv4_") + name + "_state_write_idxs");
     inp.state_write_pos = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_write_pos.size(), std::string("dsv4_") + name + "_state_write_pos");
-    inp.state_write_end = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_write_end.size(), std::string("dsv4_") + name + "_state_write_end");
-    inp.n_visible  = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.n_visible.size(), std::string("dsv4_") + name + "_n_visible");
 
     if (plan.n_kv > 0) {
         inp.kq_mask = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, plan.n_kv, plan.n_visible.size(), 1, 1);
