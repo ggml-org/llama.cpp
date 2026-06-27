@@ -111,3 +111,86 @@ MODE=baseline REPEATS=3 REQ_TIMEOUT=600 \
   python scripts/perf/bench_spec.py
 # -> scripts/perf/results/summary.json + printed tables
 ```
+
+---
+
+# R2 — ngram-mod hard-off latch
+
+A per-sequence latch that disables ngram-mod drafting after
+`--spec-ngram-mod-dead-off` consecutive **zero-accept** drafts, re-armed each
+generation (`begin()`). Bounds the worst case where ngram-mod fires repeatedly
+but predicts nothing — each fired draft costs a wasted batched verify.
+
+Implementation (`common/`): `n_dead_off` param (`common.h`, default 3), the
+`--spec-ngram-mod-dead-off` flag (`arg.cpp`), and the latch in
+`common_speculative_impl_ngram_mod` (`speculative.cpp`): `seq_info.{n_dead,off}`,
+re-arm in `begin()`, an early-return guard in `draft_one()` placed *after* the
+`n_draft_last = 0` reset (so a disabled seq leaves `n_draft_last == 0` and
+`accept()` skips the streak logic on a phantom draft), and the consecutive-zero
+counter in `accept()` (any partial accept resets `n_dead`).
+
+## B4a — Harmlessness (default n_min=48, real workload)
+
+`MODE=deadoff KV=q8_0 REPEATS=3`, dead-off 0 vs 3 on the suite:
+
+| prompt | dead-off=0 | dead-off=3 | ratio | accept (both) |
+|---|---|---|---|---|
+| code_edit | 120.81 | 120.51 | 0.998 | 0.641 |
+| multi_turn | 89.78 | 88.60 | 0.987 | 0.969 |
+| free_prose | 54.46 | 54.42 | 0.999 | 0.771 |
+
+dead-off=3 holds **≥0.987×** everywhere (free_prose 0.999), and acceptance is
+**identical** between arms → at the production n_min=48 the latch never trips on
+normal text (3 consecutive zero-accept 48-token drafts do not occur when
+acceptance is 0.64–0.97). The latch is a true no-op on the proven 2–3× win.
+**R2 harmlessness criterion CONFIRMED** (≥0.98× on free_prose; code_edit within
+noise).
+
+> Phase A showed even `free_prose` benefits from ngram (1.4×) — it is not a pure
+> worst case. The concern that a productive generation could trip the latch and
+> forfeit that win did **not** materialize at n_min=48 (identical acceptance,
+> 0.999× tg).
+
+## B4b — Mechanism + value (stress: n_match=4, n_min=4)
+
+To exercise the pathological regime the latch guards, ngram was made hyper-eager
+(`NMATCH=4 NMIN=4 NMAX=64`) on an adversarial divergent prompt
+(`prompts_adversarial.jsonl`), dead-off 0 vs 3, `LLAMA_TRACE=1`:
+
+| | dead-off=0 | dead-off=3 |
+|---|---|---|
+| tg (t/s) | **22.49** | **39.22** |
+| draft acceptance | 0.020 (≈3 / 1264 per gen) | latch trips |
+| `disabling for seq` trips | 0 | 3 (one per generation) |
+| draft tokens / gen | ~1000–1264 (unbounded) | ~97–156 (capped at trip) |
+
+- **Mechanism:** `accept: 3 dead ngram-mod fires - disabling for seq 0` fires
+  exactly when 3 consecutive zero-accept drafts occur, and never at dead-off=0.
+- **Value:** without the latch, constant fire-and-fail drags tg to **22.49 —
+  41% below the ~38 t/s no-spec base**. The latch trips early, stops the waste,
+  and recovers tg to **39.22 (~base): a 1.74× recovery**, capping wasted drafts
+  from ~1264 to ~156 tokens.
+
+## R2 verdict
+
+**CONFIRMED.** The hard-off latch is harmless on real workloads (≥0.999× on
+free_prose, identical acceptance, never trips at n_min=48) and bounds the hostile
+worst case (1.74× tg recovery, draft waste capped). Default
+`--spec-ngram-mod-dead-off 3` ships safely: dormant insurance at the production
+n_min=48, active only under sustained zero-accept drafting. Because 3 is the
+default, the R1 recommended config already carries the latch — no extra flag
+needed; set `--spec-ngram-mod-dead-off 0` only to opt out.
+
+## Reproduce R2
+
+```bash
+# harmlessness (default n_min) -> results/summary_deadoff.json
+MODE=deadoff KV=q8_0 REPEATS=3 SERVER_BIN=$PWD/build/bin/llama-server \
+  python scripts/perf/bench_spec.py
+# mechanism + value (stress) -> results/summary_deadoff_stress.json
+MODE=deadoff KV=q8_0 REPEATS=2 NMATCH=4 NMIN=4 NMAX=64 LLAMA_TRACE=1 \
+  PROMPTS=$PWD/scripts/perf/prompts_adversarial.jsonl \
+  SERVER_BIN=$PWD/build/bin/llama-server \
+  python scripts/perf/bench_spec.py
+# then: grep 'disabling for seq' scripts/perf/results/deadoff3-q8_0.log
+```

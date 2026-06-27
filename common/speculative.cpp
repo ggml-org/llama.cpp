@@ -1318,6 +1318,12 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         // consecutive accept rounds with low acceptance fraction (< 0.5)
         int n_low = 0;
+
+        // hard-off latch (R2): consecutive zero-accept drafts; once n_dead
+        // reaches params.n_dead_off the sequence stops drafting for the rest
+        // of this generation (re-armed in begin()).
+        int  n_dead = 0;
+        bool off    = false;
     };
 
     std::vector<seq_info> sinfos;
@@ -1351,6 +1357,9 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         sinfo.i_last = 0;
         sinfo.n_draft_last = 0;
 
+        sinfo.n_dead = 0;       // re-arm the hard-off latch for the new generation
+        sinfo.off    = false;
+
         const size_t n = mod.get_n();
         if (prompt.size() < n) {
             return;
@@ -1382,6 +1391,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         const auto & prompt = *dparams.prompt;
 
         sinfo.n_draft_last = 0;
+        if (sinfo.off) { return; }  // hard-off latch (R2): skip drafting; n_draft_last stays 0
 
         const size_t cur_len = prompt.size();
         if (cur_len < mod.get_n()) {
@@ -1470,6 +1480,22 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
                 }
             } else {
                 sinfo.n_low = 0;
+            }
+
+            // hard-off latch (R2): count consecutive zero-accept fires; once
+            // we hit params.n_dead_off, stop drafting for this sequence until
+            // the next generation (begin() re-arms). Any partial accept resets.
+            if (params.n_dead_off > 0) {
+                if (n_accepted == 0) {
+                    if (++sinfo.n_dead >= params.n_dead_off) {
+                        if (verbose) {
+                            LOG_WRN("%s: %d dead ngram-mod fires - disabling for seq %d\n", __func__, sinfo.n_dead, seq_id);
+                        }
+                        sinfo.off = true;
+                    }
+                } else {
+                    sinfo.n_dead = 0;
+                }
             }
         }
     }

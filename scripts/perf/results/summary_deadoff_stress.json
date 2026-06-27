@@ -1,0 +1,141 @@
+{
+  "mode": "deadoff",
+  "model": "/home/svnbjrn/models/llama31-8b-heretic/Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf",
+  "server_bin": "/home/svnbjrn/projects/trb/llama-cpp-turboquant-perf/build/bin/llama-server",
+  "ctx": 16384,
+  "threads": 12,
+  "repeats": 2,
+  "prompt_ids": [
+    "adversarial_divergent"
+  ],
+  "arms": [
+    {
+      "arm": {
+        "name": "deadoff0-q8_0",
+        "kv": "q8_0",
+        "spec_label": "ngram-mod (dead-off 0)",
+        "extra": [
+          "--spec-type",
+          "ngram-mod",
+          "--spec-ngram-mod-n-match",
+          "4",
+          "--spec-ngram-mod-n-min",
+          "4",
+          "--spec-ngram-mod-n-max",
+          "64",
+          "--spec-ngram-mod-dead-off",
+          "0"
+        ]
+      },
+      "error": null,
+      "prompts": [
+        {
+          "id": "adversarial_divergent",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 22.100806473314766,
+              "pp": 283.8590639747365,
+              "elapsed_s": 9.115576216005138,
+              "completion_tokens": 193,
+              "prompt_tokens": 104,
+              "draft_n": 1263,
+              "draft_n_accepted": 18,
+              "accept_rate": 0.014251781472684086
+            },
+            {
+              "tg": 22.878085541907865,
+              "pp": 284.91277285877095,
+              "elapsed_s": 8.426758791989414,
+              "completion_tokens": 184,
+              "prompt_tokens": 104,
+              "draft_n": 991,
+              "draft_n_accepted": 25,
+              "accept_rate": 0.025227043390514632
+            }
+          ],
+          "tg_median": 22.489446007611313,
+          "pp_median": 284.3859184167537,
+          "accept_rate_median": 0.01973941243159936,
+          "completion_tokens": 184,
+          "text_preview": "1. Mango 2. Harmonica 3. Glacier 4. Perfume 5. Compass 6. Llama 7. Banjo 8. Perfume 9. Cactus 10. Harmonica 11. Glacier 12. Perfume 13. Compass 14. Llama 15. Ba"
+        }
+      ],
+      "log_scan": {
+        "fa_lines": [],
+        "acceptance_lines": [
+          "0.13.436.942 I slot print_timing: id  0 | task 0 | draft acceptance = 0.00237 (    3 accepted /  1264 generated)",
+          "0.13.436.959 I statistics        ngram-mod: #calls(b,g,a) =    1    193     23, #gen drafts =     23, #acc drafts =     3, #gen tokens =   1264, #acc tokens =     3, dur(b,g,a) = 0.017, 0.652, 2.357 ms",
+          "0.22.552.716 I slot print_timing: id  0 | task 196 | draft acceptance = 0.01425 (   18 accepted /  1263 generated)",
+          "0.22.552.725 I statistics        ngram-mod: #calls(b,g,a) =    2    367     46, #gen drafts =     46, #acc drafts =     7, #gen tokens =   2527, #acc tokens =    21, dur(b,g,a) = 0.034, 1.129, 5.093 ms",
+          "0.30.979.448 I slot print_timing: id  0 | task 373 | draft acceptance = 0.02523 (   25 accepted /   991 generated)",
+          "0.30.979.461 I statistics        ngram-mod: #calls(b,g,a) =    3    525     68, #gen drafts =     68, #acc drafts =    11, #gen tokens =   3518, #acc tokens =    46, dur(b,g,a) = 0.047, 1.505, 7.246 ms"
+        ]
+      }
+    },
+    {
+      "arm": {
+        "name": "deadoff3-q8_0",
+        "kv": "q8_0",
+        "spec_label": "ngram-mod (dead-off 3)",
+        "extra": [
+          "--spec-type",
+          "ngram-mod",
+          "--spec-ngram-mod-n-match",
+          "4",
+          "--spec-ngram-mod-n-min",
+          "4",
+          "--spec-ngram-mod-n-max",
+          "64",
+          "--spec-ngram-mod-dead-off",
+          "3"
+        ]
+      },
+      "error": null,
+      "prompts": [
+        {
+          "id": "adversarial_divergent",
+          "n_predict": 256,
+          "runs": [
+            {
+              "tg": 39.17458301956409,
+              "pp": 284.9229201311741,
+              "elapsed_s": 5.081888884000364,
+              "completion_tokens": 184,
+              "prompt_tokens": 104,
+              "draft_n": 156,
+              "draft_n_accepted": 28,
+              "accept_rate": 0.1794871794871795
+            },
+            {
+              "tg": 39.2626139682724,
+              "pp": 284.05599180607715,
+              "elapsed_s": 5.067304347001482,
+              "completion_tokens": 184,
+              "prompt_tokens": 104,
+              "draft_n": 156,
+              "draft_n_accepted": 28,
+              "accept_rate": 0.1794871794871795
+            }
+          ],
+          "tg_median": 39.21859849391824,
+          "pp_median": 284.48945596862563,
+          "accept_rate_median": 0.1794871794871795,
+          "completion_tokens": 184,
+          "text_preview": "1. Mango 2. Harmonica 3. Glacier 4. Perfume 5. Compass 6. Llama 7. Banjo 8. Perfume 9. Cactus 10. Harmonica 11. Glacier 12. Perfume 13. Compass 14. Llama 15. Ba"
+        }
+      ],
+      "log_scan": {
+        "fa_lines": [],
+        "acceptance_lines": [
+          "0.09.505.139 I slot print_timing: id  0 | task 0 | draft acceptance = 0.00000 (    0 accepted /    97 generated)",
+          "0.09.505.154 I statistics        ngram-mod: #calls(b,g,a) =    1    196      3, #gen drafts =      3, #acc drafts =     0, #gen tokens =     97, #acc tokens =     0, dur(b,g,a) = 0.016, 0.205, 0.002 ms",
+          "0.14.587.057 I slot print_timing: id  0 | task 199 | draft acceptance = 0.17949 (   28 accepted /   156 generated)",
+          "0.14.587.070 I statistics        ngram-mod: #calls(b,g,a) =    2    351      7, #gen drafts =      7, #acc drafts =     1, #gen tokens =    253, #acc tokens =    28, dur(b,g,a) = 0.029, 0.330, 0.006 ms",
+          "0.19.654.444 I slot print_timing: id  0 | task 357 | draft acceptance = 0.17949 (   28 accepted /   156 generated)",
+          "0.19.654.454 I statistics        ngram-mod: #calls(b,g,a) =    3    506     11, #gen drafts =     11, #acc drafts =     2, #gen tokens =    409, #acc tokens =    56, dur(b,g,a) = 0.042, 0.474, 0.010 ms"
+        ]
+      }
+    }
+  ]
+}

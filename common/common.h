@@ -331,6 +331,7 @@ struct common_params_speculative_ngram_mod {
 
     int32_t n_max = 64;
     int32_t n_min = 48;
+    int32_t n_dead_off = 3;  // consecutive zero-accept ngram-mod drafts before disabling it for a sequence (0 = never)
 };
 
 struct common_params_speculative_ngram_map {
