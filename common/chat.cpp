@@ -2533,6 +2533,191 @@ static json common_chat_extra_context() {
     return ctx;
 }
 
+// Laguna (poolside) — GLM-4-MoE-style tool calls + <think> reasoning.
+// Tool call wire format:
+//   <tool_call>{name}
+//   <arg_key>{k}</arg_key>
+//   <arg_value>{v}</arg_value>
+//   ...
+//   </tool_call>
+// String-typed args are emitted raw between <arg_value>...</arg_value>; all other
+// args are JSON literals. Reasoning is <think>...</think>; the turn ends with
+// </assistant>. Both Laguna-XS.2 and Laguna-M.1 share this format.
+static common_chat_params common_chat_params_init_laguna(const common_chat_template &    tmpl,
+                                                         const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs);
+    data.generation_prompt  = common_chat_template_generation_prompt_impl(tmpl, inputs);
+    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.supports_thinking  = true;
+    data.thinking_start_tag = "<think>";
+    data.thinking_end_tag   = "</think>";
+    data.preserved_tokens   = {
+        "<tool_call>", "</tool_call>",
+        "<arg_key>",   "</arg_key>",
+        "<arg_value>", "</arg_value>",
+        "<think>",     "</think>",
+        "<assistant>", "</assistant>",
+    };
+
+    // </assistant> ends the assistant turn. The single eot token (24) handles
+    // this when sampled directly, but the model occasionally emits the
+    // multi-token spelling; register it as a stop so generation always halts.
+    data.additional_stops.push_back("</assistant>");
+
+    const std::string THINK_START = "<think>";
+    const std::string THINK_END   = "</think>";
+    const std::string CALL_START  = "<tool_call>";
+    const std::string CALL_END    = "</tool_call>";
+    const std::string KEY_START   = "<arg_key>";
+    const std::string KEY_END     = "</arg_key>";
+    const std::string VAL_START   = "<arg_value>";
+    const std::string VAL_END     = "</arg_value>";
+
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto end = p.end();
+
+        // The framework prepends data.generation_prompt to the parsed output:
+        // "<assistant>\n" followed by the opening <think> (thinking enabled) or
+        // </think> (disabled). Consume it, then capture reasoning. The model's
+        // output therefore starts with the reasoning text (no leading <think>).
+        const std::string GEN_PROMPT = "<assistant>\n";
+        auto head = p.eps();
+        if (extract_reasoning && inputs.enable_thinking) {
+            // The model normally closes reasoning with </think> before a tool
+            // call, but sometimes emits <tool_call> directly without it.
+            // Terminate reasoning on whichever marker comes first so the call is
+            // not swallowed into reasoning_content; consume </think> if present.
+            head = p.literal(GEN_PROMPT + THINK_START) +
+                   p.reasoning(p.until_one_of({ THINK_END, CALL_START })) +
+                   p.optional(p.literal(THINK_END));
+        } else if (extract_reasoning) {
+            head = p.literal(GEN_PROMPT + THINK_END);
+        } else {
+            head = p.literal(GEN_PROMPT) +
+                   p.optional(p.literal(THINK_START)) + p.optional(p.literal(THINK_END));
+        }
+
+        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            return head + p.content(p.until_one_of({ "</assistant>" })) +
+                   p.optional(p.literal("</assistant>")) + p.space() + end;
+        }
+
+        auto tool_choice = p.choice();
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            std::string  name     = function.at("name");
+            auto         params   = function.contains("parameters") ? function.at("parameters") : json::object();
+            const auto & props    = params.contains("properties") ? params.at("properties") : json::object();
+
+            std::set<std::string> required;
+            if (params.contains("required")) {
+                params.at("required").get_to(required);
+            }
+            auto schema_info = common_schema_info();
+            schema_info.resolve_refs(params);
+
+            std::vector<common_peg_parser> required_parsers;
+            std::vector<common_peg_parser> optional_parsers;
+            for (const auto & [param_name, param_schema] : props.items()) {
+                bool is_required = required.find(param_name) != required.end();
+                bool is_string   = schema_info.resolves_to_string(param_schema);
+
+                // <arg_key>name</arg_key>\n<arg_value>VALUE</arg_value>
+                auto arg = p.tool_arg(
+                    p.tool_arg_open(
+                        p.literal(KEY_START) + p.tool_arg_name(p.literal(param_name)) + p.literal(KEY_END) +
+                        p.space() + p.literal(VAL_START)) +
+                    (is_string
+                         ? p.tool_arg_string_value(p.until(VAL_END))
+                         : p.tool_arg_json_value(p.schema(p.json(),
+                                                          "tool-" + name + "-arg-" + param_name + "-schema",
+                                                          param_schema, false))) +
+                    p.tool_arg_close(p.literal(VAL_END)));
+
+                auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
+                if (is_required) {
+                    required_parsers.push_back(named_arg);
+                } else {
+                    optional_parsers.push_back(named_arg);
+                }
+            }
+
+            common_peg_parser args_seq = p.eps();
+            for (size_t i = 0; i < required_parsers.size(); i++) {
+                if (i > 0) {
+                    args_seq = args_seq + p.space();
+                }
+                args_seq = args_seq + required_parsers[i];
+            }
+            if (!optional_parsers.empty()) {
+                common_peg_parser any_opt = p.choice();
+                for (const auto & opt : optional_parsers) {
+                    any_opt |= opt;
+                }
+                args_seq = args_seq + p.repeat(p.space() + any_opt, 0, -1);
+            }
+
+            // <tool_call>name\n {args} </tool_call>
+            auto func_parser = p.tool(
+                p.tool_open(p.literal(CALL_START) + p.tool_name(p.literal(name)) + p.literal("\n")) +
+                args_seq + p.space() +
+                p.tool_close(p.literal(CALL_END)));
+
+            tool_choice |= p.rule("tool-" + name, func_parser);
+        });
+
+        auto min_calls  = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
+        auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
+        // Mirror the kimi_k2 structure: each tool is followed by optional
+        // whitespace, and the trigger rule ends with an optional </assistant>
+        // exit marker. This lets the (lazy) trigger rule COMPLETE once the model
+        // emits the turn-end, so the grammar disengages instead of offering
+        // another <tool_call> indefinitely (the parallel=true / max_calls=-1
+        // loop). Space is a suffix (not prefix) to avoid ambiguity with the exit.
+        auto tool_calls = p.rule("tool-calls",
+            p.trigger_rule("tool-call",
+                p.repeat(tool_choice + p.space(), min_calls, max_calls) +
+                p.optional(p.literal("</assistant>"))));
+
+        auto content_before_tools = p.content(p.until(CALL_START));
+
+        // After the tool call(s) the model may emit trailing text (Laguna is
+        // wrapper-less, so a repetitive model can ramble past the final call).
+        // Absorb anything up to the turn-end as content so a stray trailing
+        // fragment does not fail the whole parse — mirrors the reference
+        // implementation, which extracts the calls and ignores the remainder.
+        auto trailing = p.content(p.until_one_of({ "</assistant>" }));
+
+        return head + content_before_tools + tool_calls + trailing +
+               p.optional(p.literal("</assistant>")) + p.space() + end;
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>" }
+        };
+    }
+
+    return data;
+}
+
 std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
@@ -2543,6 +2728,16 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         src.find("[ARGS]") != std::string::npos && src.find("[CALL_ID]") == std::string::npos) {
         LOG_DBG("Using specialized template: Ministral/Magistral Large 3\n");
         return common_chat_params_init_ministral_3(tmpl, params);
+    }
+
+    // Laguna (poolside) — GLM-4-MoE-style tool calls with <arg_key>/<arg_value>
+    // pairs, plus <assistant>/</assistant> role tags (distinct from GLM's
+    // <|assistant|>). Covers both Laguna-XS.2 and Laguna-M.1.
+    if (src.find("<arg_key>") != std::string::npos &&
+        src.find("<arg_value>") != std::string::npos &&
+        src.find("</assistant>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Laguna\n");
+        return common_chat_params_init_laguna(tmpl, params);
     }
 
     // GPT-OSS - has unique channel-based structure that needs dedicated handler
