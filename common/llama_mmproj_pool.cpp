@@ -3,6 +3,7 @@
 #include "../src/llama-model.h"
 #include <algorithm>
 #include <chrono>
+#include <thread>
 
 static double now_ms() {
     using namespace std::chrono;
@@ -185,6 +186,22 @@ struct llama_mmproj_pool * llama_mmproj_pool_init(
     return pool;
 }
 
+
+
+
+// 辅助函数：根据分配的 gpu_data 物理地址，反推它映射到了哪一个 evicted_tensor (LLM层) 中
+static int find_evicted_idx(void * gpu_data, const std::vector<ggml_tensor*> & ev_tensors) {
+    for (size_t i = 0; i < ev_tensors.size(); ++i) {
+        char * base = (char *)ev_tensors[i]->data;
+        size_t size = ggml_nbytes(ev_tensors[i]);
+        // 如果 Vision 数据落在这个被驱逐的 LLM 张量地址区间内
+        if ((char *)gpu_data >= base && (char *)gpu_data < base + size) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
 bool llama_mmproj_pool_swap_in(struct llama_mmproj_pool * pool, struct llama_context * ctx) {
     if (!pool) return false;
     std::lock_guard<std::mutex> guard(pool->mutex);
@@ -195,25 +212,64 @@ bool llama_mmproj_pool_swap_in(struct llama_mmproj_pool * pool, struct llama_con
     double t0 = now_ms();
     pool->state = llama_pool_state::SWAPPING_OUT;
 
-    // 3. Remove the risky single-copy optimization, restoring a pure and safe mechanism to prevent dirty data
     char * host_llm = (char *)pool->host_ptr;
-    for (size_t i = 0; i < pool->evicted_tensors.size(); ++i) {
-        ggml_backend_tensor_get(pool->evicted_tensors[i], host_llm + pool->evicted_offsets[i], 0, ggml_nbytes(pool->evicted_tensors[i]));
+
+    // 3. Use pipelining strategy to achieve PCIe full-duplex parallelism, completely preventing VRAM read/write pollution
+    // First group vision tensors by the evicted LLM tensor they occupy
+    std::vector<std::vector<llama_mmproj_pool::tensor_mapping>> grouped_mappings(pool->evicted_tensors.size());
+    for (const auto & m : pool->mappings) {
+        int idx = find_evicted_idx(m.gpu_data, pool->evicted_tensors);
+        if (idx >= 0) {
+            grouped_mappings[idx].push_back(m);
+        }
     }
 
-    // Vision -> GPU
-    pool->state = llama_pool_state::MMPROJ_RESIDENT;
-    for (const auto & m : pool->mappings) {
-        m.vision_t->data   = m.gpu_data;
-        m.vision_t->buffer = m.gpu_buffer;
-        ggml_backend_tensor_set(m.vision_t, m.host_data, 0, m.size); // Push to VRAM
+    std::thread prev_load_thread;
+
+    for (size_t i = 0; i < pool->evicted_tensors.size(); ++i) {
+        // Step A: Read the LLM weights of the current layer back to host (Device-to-Host)
+        // This DMA copy is blocking in the main thread
+        ggml_backend_tensor_get(
+            pool->evicted_tensors[i], 
+            host_llm + pool->evicted_offsets[i], 
+            0, 
+            ggml_nbytes(pool->evicted_tensors[i])
+        );
+
+        // Wait for the previous block's asynchronous write (H2D) to complete, preventing thread backlog
+        if (prev_load_thread.joinable()) {
+            prev_load_thread.join();
+        }
+
+        // Step B: Since the current layer (i-th) has been safely moved to host, its VRAM space can now be safely overwritten
+        // Launch a background thread to write the corresponding vision tensors to that VRAM (Host-to-Device)
+        // Key advantage: when the loop next executes D2H for layer i+1, it can run in full-duplex parallel with this H2D!
+        prev_load_thread = std::thread([pool, i, &grouped_mappings]() {
+            for (const auto & m : grouped_mappings[i]) {
+                m.vision_t->data   = m.gpu_data;
+                m.vision_t->buffer = m.gpu_buffer;
+                ggml_backend_tensor_set(m.vision_t, m.host_data, 0, m.size); // Push to VRAM
+            }
+        });
     }
+
+    // After the loop, ensure the final background write task has completed
+    if (prev_load_thread.joinable()) {
+        prev_load_thread.join();
+    }
+
+    pool->state = llama_pool_state::MMPROJ_RESIDENT;
 
     if (ctx) llama_synchronize(ctx);
     pool->total_swap_ms += (now_ms() - t0);
     ++pool->n_swaps;
     return true;
 }
+
+
+
+
+
 
 void llama_mmproj_pool_swap_back(struct llama_mmproj_pool * pool, struct llama_context * ctx) {
     if (!pool) return;
