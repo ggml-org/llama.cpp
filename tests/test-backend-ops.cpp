@@ -9903,11 +9903,183 @@ static bool run_fa_vec_tune_check(ggml_backend_t backend_metal, ggml_backend_t b
     return ok;
 }
 
-// Placeholder; the perf sweep implementation is added separately.
+// A prebuilt FA op graph for one (dk,dv,ne01,ne11) cell. The op is replicated n_runs
+// times so a single graph_compute amortizes dispatch/sync overhead. The graph is reused
+// across (Q,NE) overrides (the override only changes the pipeline picked at encode time),
+// which avoids re-allocating/re-initializing the (large) K/V tensors per candidate.
+struct fa_perf_cell {
+    ggml_context_ptr        ctx;
+    ggml_backend_buffer_ptr buf;
+    ggml_cgraph *           gf     = nullptr;
+    int                     n_runs = 0;
+    bool                    ok     = false;
+};
+
+static fa_perf_cell fa_build_perf_cell(ggml_backend_t backend, int dk, int dv, int ne01, int ne11) {
+    fa_perf_cell cell;
+
+    // GQA shape (nr23=[8,1]) matching real spec-decode / verify workloads: enough query
+    // heads to keep the GPU busy so the Q>1 K/V-reuse benefit is visible (and comparable
+    // to the documented #23114 numbers). nh here is the number of KV heads.
+    test_flash_attn_ext tc(dk, dv, /*nh=*/4, { 8, 1 }, /*kv=*/ne11, /*nb=*/ne01,
+                           /*mask=*/true, /*sinks=*/false, 0.0f, 0.0f, GGML_PREC_F32,
+                           GGML_TYPE_F16, GGML_TYPE_F16);
+
+    const size_t graph_nodes = 1024;
+    ggml_init_params params = {
+        /* .mem_size  = */ ggml_tensor_overhead() * 128 + ggml_graph_overhead_custom(graph_nodes, false),
+        /* .mem_base  = */ NULL,
+        /* .no_alloc  = */ true,
+    };
+    cell.ctx.reset(ggml_init(params));
+    GGML_ASSERT(cell.ctx);
+
+    ggml_tensor * out = tc.build_graph(cell.ctx.get());
+    if (!ggml_backend_supports_op(backend, out)) {
+        return cell;
+    }
+
+    cell.buf.reset(ggml_backend_alloc_ctx_tensors(cell.ctx.get(), backend));
+    if (cell.buf == NULL) {
+        return cell;
+    }
+
+    tc.initialize_tensors(cell.ctx.get());
+
+    cell.gf = ggml_new_graph_custom(cell.ctx.get(), graph_nodes, false);
+    ggml_build_forward_expand(cell.gf, out);
+
+    // replicate the op to amortize overhead (target ~50 GFLOP/compute, capped to bound graph size)
+    cell.n_runs = 1;
+    if (tc.op_flops(out) > 0) {
+        const uint64_t target_flops = 50ULL * 1000 * 1000 * 1000;
+        const int      cap          = 512;
+        const int      by_flops     = (int) std::min<int64_t>(cap, (int64_t) (target_flops / tc.op_flops(out)));
+        cell.n_runs = std::max(1, std::min<int>(by_flops, (int) (ggml_graph_size(cell.gf) - ggml_graph_n_nodes(cell.gf))));
+    }
+    for (int i = 1; i < cell.n_runs; ++i) {
+        ggml_graph_add_node(cell.gf, out);
+    }
+    cell.ok = true;
+    return cell;
+}
+
+// Median per-op GPU time (us) for the currently-set override over the prebuilt cell graph.
+static double time_fa_cell_median(ggml_backend_t backend, const fa_perf_cell & cell, int reps) {
+    if (!cell.ok) {
+        return -1.0;
+    }
+    ggml_backend_graph_compute(backend, cell.gf);  // warmup (compiles the pipeline for the override)
+    ggml_backend_synchronize(backend);
+
+    std::vector<double> samples;
+    samples.reserve(reps);
+    for (int r = 0; r < reps; ++r) {
+        const int64_t t0 = ggml_time_us();
+        ggml_backend_graph_compute(backend, cell.gf);
+        ggml_backend_synchronize(backend);
+        samples.push_back((double) (ggml_time_us() - t0));
+    }
+    std::nth_element(samples.begin(), samples.begin() + samples.size() / 2, samples.end());
+    return samples[samples.size() / 2] / cell.n_runs;
+}
+
+// Perf sweep over the (Q,NE) grid, emitting pasteable fa_vec_tuned_table rows.
+// nsg/nwg are left to the ops.cpp adaptive heuristic (not part of the table).
 static bool run_fa_vec_tune_perf(ggml_backend_t backend_metal) {
-    (void) backend_metal;
-    printf("fa_vec --tune-perf sweep is not available in this build\n");
-    return false;
+    auto * reg    = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_metal));
+    auto   set_ov = (set_fa_vec_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_set_fa_vec_override");
+    auto   clr_ov = (clear_fa_vec_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_clear_fa_vec_override");
+    if (!set_ov || !clr_ov) {
+        printf("metal fa_vec override proc unavailable\n");
+        return false;
+    }
+
+    struct shape_t { int dk, dv; };
+    const shape_t shapes[] = { { 32, 32 }, { 64, 64 }, { 96, 96 }, { 128, 128 }, { 192, 192 },
+                               { 192, 128 }, { 256, 256 }, { 320, 256 }, { 512, 512 }, { 576, 512 } };
+    const int ne11_rep[] = { 512, 2048, 8192, 32768 };  // ne11 bucket representatives
+    const int ne01_rep[] = { 1, 2, 3, 8 };              // ne01 bucket representatives
+    const int REPS = 7;                                 // odd -> exact median
+
+    // Bucket boundaries; keep in sync with ggml-metal-tuning.h.
+    const int ne11_bounds[] = { 1024, 4096, 16384 };
+    const int ne01_bounds[] = { 2, 3, 5 };
+    auto bucket = [](int v, const int * b, int n) {
+        for (int i = 0; i < n; ++i) {
+            if (v < b[i]) {
+                return i;
+            }
+        }
+        return n;
+    };
+
+    printf("# fa_vec perf sweep (replace GGML_METAL_DEVICE_M4_MAX with this machine's device)\n");
+    printf("# paste rows that beat baseline into fa_vec_tuned_table / fa_vec_family_table\n");
+
+    for (auto s : shapes) {
+        const std::vector<int> legal = fa_vec_legal_ne(s.dk, s.dv);
+        for (int ne11 : ne11_rep) {
+            for (int ne01 : ne01_rep) {
+                fa_perf_cell cell = fa_build_perf_cell(backend_metal, s.dk, s.dv, ne01, ne11);
+                if (!cell.ok) {
+                    continue;
+                }
+
+                struct cand_t { int Q, NE; double t; };
+                std::vector<cand_t> cs;
+                for (int ne : legal) {
+                    for (int Q : { 1, 2, 4 }) {
+                        cs.push_back({ Q, ne, 0.0 });
+                    }
+                }
+                // randomize config order to decorrelate thermal throttling across the cell
+                std::shuffle(cs.begin(), cs.end(), std::mt19937(1234));
+
+                double anchor = 0.0;  // periodic baseline re-measure -> throttling detection
+                for (size_t i = 0; i < cs.size(); ++i) {
+                    set_ov(cs[i].Q, cs[i].NE);
+                    cs[i].t = time_fa_cell_median(backend_metal, cell, REPS);
+                    clr_ov();
+
+                    if (i % 4 == 0) {
+                        const double a = time_fa_cell_median(backend_metal, cell, REPS);  // baseline (override cleared)
+                        if (anchor > 0.0) {
+                            double drift = (a - anchor) / anchor;
+                            if (drift < 0) {
+                                drift = -drift;
+                            }
+                            if (drift > 0.10) {
+                                printf("# WARN throttling? anchor drift %.1f%% dk=%d ne11=%d\n", 100.0 * drift, s.dk, ne11);
+                            }
+                        }
+                        anchor = (anchor > 0.0) ? std::min(anchor, a) : a;
+                    }
+                }
+
+                std::sort(cs.begin(), cs.end(), [](const cand_t & a, const cand_t & b) {
+                    return a.Q != b.Q ? a.Q < b.Q : a.NE < b.NE;
+                });
+                cand_t best = cs[0];
+                for (const auto & c : cs) {
+                    if (c.t > 0.0 && (best.t <= 0.0 || c.t < best.t)) {
+                        best = c;
+                    }
+                }
+                printf("# dk=%d dv=%d ne11=%d ne01=%d:", s.dk, s.dv, ne11, ne01);
+                for (const auto & c : cs) {
+                    printf("  Q%dNE%d=%.1f%s", c.Q, c.NE, c.t, (c.Q == best.Q && c.NE == best.NE) ? "*" : "");
+                }
+                printf("\n");
+                printf("    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, %d, %d, %d, %d }, { %d, %d } }, // %.1fus\n",
+                       s.dk, s.dv,
+                       bucket(ne11, ne11_bounds, (int) std::size(ne11_bounds)),
+                       bucket(ne01, ne01_bounds, (int) std::size(ne01_bounds)),
+                       best.Q, best.NE, best.t);
+            }
+        }
+    }
+    return true;
 }
 
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
@@ -10227,7 +10399,7 @@ static void usage(char ** argv) {
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
     printf("      - perf (performance evaluation)\n");
     printf("      - support (probe backend operation support)\n");
-    printf("      - tune (FA vec (Q,NE) numerical correctness check vs CPU reference)\n");
+    printf("      - tune (FA vec (Q,NE) numerical correctness check vs CPU reference; --tune-perf for the perf sweep)\n");
     printf("    op names for -o are as given by ggml_op_desc() (e.g. ADD, MUL_MAT, etc),\n");
     printf("        optionally including the full test case string (e.g. \"ADD(type=f16,ne=[1,1,8,1],nr=[1,1,1,1],nf=1)\")\n");
     printf("    --output specifies output format (default: console, options: console, sql, csv)\n");
@@ -10245,6 +10417,7 @@ int main(int argc, char ** argv) {
     const char * params_filter = nullptr;
     const char * test_file_path = nullptr;
     int parallel_workers = 1;
+    bool tune_perf = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "test") == 0) {
@@ -10257,6 +10430,8 @@ int main(int argc, char ** argv) {
             mode = MODE_SUPPORT;
         } else if (strcmp(argv[i], "tune") == 0) {
             mode = MODE_TUNE;
+        } else if (strcmp(argv[i], "--tune-perf") == 0) {
+            tune_perf = true;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 < argc) {
                 op_names_filter = argv[++i];
@@ -10364,7 +10539,7 @@ int main(int argc, char ** argv) {
                                                              false, "", ggml_backend_dev_description(dev),
                                                              total / 1024 / 1024, free / 1024 / 1024, true));
 
-        bool ok = test_backend(backend.get(), dev, mode, op_names_filter, params_filter, output_printer.get(), test_file_path, parallel_workers);
+        bool ok = test_backend(backend.get(), dev, mode, op_names_filter, params_filter, output_printer.get(), test_file_path, parallel_workers, tune_perf);
 
         if (ok) {
             n_ok++;
