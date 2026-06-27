@@ -124,7 +124,7 @@ WORKDIR /llama.cpp/bin
 
 # Copy llama.cpp binaries and libraries
 COPY --from=collector /llama.cpp/bin/*.so /llama.cpp/bin
-COPY --from=collector /llama.cpp/bin/llama-cli /llama.cpp/bin/llama-completion /llama.cpp/bin
+COPY --from=collector /llama.cpp/bin/llama /llama.cpp/bin/llama-cli /llama.cpp/bin/llama-completion /llama.cpp/bin
 
 ENTRYPOINT [ "/llama.cpp/bin/llama-cli" ]
 
@@ -138,7 +138,7 @@ WORKDIR /llama.cpp/bin
 
 # Copy llama.cpp binaries and libraries
 COPY --from=collector /llama.cpp/bin/*.so /llama.cpp/bin
-COPY --from=collector /llama.cpp/bin/llama-server /llama.cpp/bin
+COPY --from=collector /llama.cpp/bin/llama /llama.cpp/bin/llama-server /llama.cpp/bin
 
 EXPOSE 8080
 
