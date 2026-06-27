@@ -33,12 +33,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shlex
 import signal
 import statistics
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -133,7 +131,7 @@ def server_command(arm: dict[str, Any]) -> str:
         *arm["extra"],
     ]
     quoted = " ".join(shlex.quote(a) for a in args)
-    return f"source {shlex.quote(SETVARS)} >/dev/null 2>&1 && exec {quoted}"
+    return f"source {shlex.quote(SETVARS)} >/dev/null && exec {quoted}"
 
 
 def wait_health(timeout: float) -> bool:

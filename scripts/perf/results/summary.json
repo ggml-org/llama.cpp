@@ -1,7 +1,7 @@
 {
   "mode": "baseline",
-  "model": "/home/svnbjrn/models/llama31-8b-heretic/Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf",
-  "server_bin": "/home/svnbjrn/projects/trb/llama-cpp-turboquant-perf/build/bin/llama-server",
+  "model": "Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf",
+  "server_bin": "build/bin/llama-server",
   "ctx": 16384,
   "threads": 12,
   "repeats": 3,

@@ -1338,8 +1338,8 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         static_assert(sizeof(llama_token) == sizeof(common_ngram_mod::entry_t));
 
         LOG_INF("%s: adding speculative implementation 'ngram-mod'\n", __func__);
-        LOG_INF("%s: - n_match=%d, n_max=%d, n_min=%d\n", __func__,
-                this->params.n_match, this->params.n_max, this->params.n_min);
+        LOG_INF("%s: - n_match=%d, n_max=%d, n_min=%d, n_dead_off=%d\n", __func__,
+                this->params.n_match, this->params.n_max, this->params.n_min, this->params.n_dead_off);
         LOG_INF("%s: - mod size=%zu (%.3f MB)\n", __func__,
                 mod.size(), (float)(mod.size_bytes())/1024/1024);
 
