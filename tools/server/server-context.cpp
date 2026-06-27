@@ -1524,7 +1524,7 @@ private:
             if (params_base.use_jinja && common_chat_templates_support_preserve_thinking(chat_templates.get())) {
                 auto it = params_base.default_template_kwargs.find("preserve_thinking");
                 if (it == params_base.default_template_kwargs.end()) {
-                    SRV_WRN("%s\n", "chat template supports 'preserve_thinking' - consider using --chat-template-kwargs \"{\\\"preserve_thinking\\\": true}\"");
+                    SRV_WRN("%s\n", "chat template supports 'preserve_thinking' - consider using --chat-template-kwargs \"{\\\"preserve_thinking\\\": true}\" (ref: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking)");
                 }
             }
 
