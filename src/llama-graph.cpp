@@ -828,7 +828,9 @@ bool llm_graph_input_dsv4::can_reuse(const llm_graph_params & params) {
 
     bool res = true;
 
-    res &= inp_raw->can_reuse(params);
+    llm_graph_params raw_params = params;
+    raw_params.mctx = mctx->get_raw();
+    res &= inp_raw->can_reuse(raw_params);
 
     res &= dsv4_can_reuse_comp_input(inp_csa, mctx->get_csa_plan(params.ubatch), params.ubatch.n_tokens);
     res &= dsv4_can_reuse_comp_input(inp_hca, mctx->get_hca_plan(params.ubatch), params.ubatch.n_tokens);
