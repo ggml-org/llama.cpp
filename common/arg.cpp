@@ -29,6 +29,7 @@
 #include <cstdarg>
 #include <fstream>
 #include <list>
+#include <numeric>
 #include <regex>
 #include <set>
 #include <string>
@@ -2457,6 +2458,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_N_GPU_LAYERS"));
+    add_opt(common_arg(
+        {"--mmproj-swap-layers"}, "N",
+        "number of LLM layers to evict to host RAM when mmproj is active;\n"
+        "0 = disabled (default), -1 = auto-detect based on free VRAM;\n"
+        "requires CUDA backend and a loaded --mmproj model",
+        [](common_params & params, int value) {
+            params.n_mmproj_swap = value;
+        }
+    ).set_env("LLAMA_ARG_MMPROJ_SWAP_LAYERS"));
     add_opt(common_arg(
         {"-sm", "--split-mode"}, "{none,layer,row,tensor}",
         "how to split the model across multiple GPUs, one of:\n"
