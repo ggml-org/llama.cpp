@@ -1329,10 +1329,10 @@ private:
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
             }
 
-            // 优先处理参数冲突：如果用户禁用了视觉GPU加速，则强制关闭Swap机制
+            // Resolve parameter conflicts: forcefully disable Swap if vision GPU acceleration is disabled
             if (params_base.n_mmproj_swap != 0 && !params_base.mmproj_use_gpu) {
                 SRV_WRN("%s\n", "Conflict detected: --mmproj-swap-layers is ignored because --no-mmproj-offload is active.");
-                params_base.n_mmproj_swap = 0; // 强制禁用 Swap
+                params_base.n_mmproj_swap = 0; // Forcefully disable Swap
             }
 
             // ── mmproj swap pool: evict LLM layers to host RAM when vision runs ──
@@ -1357,11 +1357,11 @@ private:
                         mtmd_compute_overhead = mtmd_total_mem - mtmd_weight_mem;
                     }
 
-                    // 注: llama.cpp内部会在上下文中预先分配KV缓存池，所以无需将图片Token的KV算入视觉阶段的动态膨胀空间。
-                    // 因此动态开销仅需关注视觉自身前向传播所需的 Compute Buffer。
+                    // Note: llama.cpp pre-allocates the KV cache pool in the context, so image tokens' KV doesn't need to be added to the dynamic overhead
+                    //  Thus, dynamic overhead only accounts for the Compute Buffer required by the vision forward pass
                     size_t dynamic_overhead_bytes = mtmd_compute_overhead;
 
-                    // 为了充分保障，如果算出来的 overhead 是 0 (探测失败)，提供一个回退的安全垫
+                    // As a safeguard, if the calculated overhead is 0 (profiling failed), provide a fallback safety margin
                     if (dynamic_overhead_bytes == 0) {
                         dynamic_overhead_bytes = 300 * 1024 * 1024;
                         SRV_WRN("mmproj compute overhead detection failed or zero, using fallback %zu MB\n", dynamic_overhead_bytes / 1024 / 1024);
@@ -1376,7 +1376,7 @@ private:
                         dynamic_overhead_bytes
                     );
                     if (mmproj_pool) {
-                        mtmd_free_vision_buffer(mctx); // 彻底释放视觉模型的原始显存！
+                        mtmd_free_vision_buffer(mctx); // Completely free the original VRAM of the vision model!`
                         SRV_INF("%s", "mmproj swap pool initialized, vision VRAM freed.\n");
                     } else {
                         SRV_WRN("%s\n", "mmproj swap pool not created; vision will run without LLM layer eviction\n");
