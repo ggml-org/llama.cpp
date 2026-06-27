@@ -367,8 +367,6 @@ bool common_chat_templates_support_enable_thinking(const common_chat_templates *
     return params.supports_thinking;
 }
 
-// Check if the template source contains the preserve_thinking kwarg.
-// This is useful for printing a hint to the user to enable it.
 bool common_chat_templates_support_preserve_thinking(const common_chat_templates * chat_templates) {
     std::string src = common_chat_templates_source(chat_templates);
     return src.find("preserve_thinking") != std::string::npos;
