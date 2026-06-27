@@ -217,6 +217,7 @@ def run_prompt(prompt: dict[str, Any]) -> dict[str, Any]:
         "tg_median": statistics.median(tgs) if tgs else None,
         "pp_median": statistics.median(pps) if pps else None,
         "accept_rate_median": statistics.median(accs) if accs else None,
+        "draft_reported": any(r["draft_n"] is not None for r in runs),
         "completion_tokens": runs[-1]["completion_tokens"],
         "text_preview": last_text[:160].replace("\n", " "),
     }
@@ -246,14 +247,14 @@ def start_server(arm: dict[str, Any], logpath: Path) -> subprocess.Popen:
     env = dict(os.environ)
     env["ZES_ENABLE_SYSMAN"] = "1"
     env["UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS"] = "1"
-    logf = logpath.open("w", encoding="utf-8")
-    return subprocess.Popen(
-        ["bash", "-c", server_command(arm)],
-        stdout=logf,
-        stderr=subprocess.STDOUT,
-        env=env,
-        start_new_session=True,
-    )
+    with logpath.open("w", encoding="utf-8") as logf:
+        return subprocess.Popen(
+            ["bash", "-c", server_command(arm)],
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
 
 
 def stop_server(proc: subprocess.Popen) -> None:
@@ -302,12 +303,17 @@ def run_arm(arm: dict[str, Any], prompts: list[dict[str, Any]]) -> dict[str, Any
             r = run_prompt(p)
             tg = r["tg_median"]
             acc = r["accept_rate_median"]
-            print(f"  {r['id']:<12} tg={tg:.2f} t/s" if tg else f"  {r['id']:<12} tg=n/a",
+            print(f"  {r['id']:<12} tg={tg:.2f} t/s" if tg is not None else f"  {r['id']:<12} tg=n/a",
                   (f"  accept={acc:.3f}" if acc is not None else "  accept=n/a"),
                   f"  ctok={r['completion_tokens']}", flush=True)
             results.append(r)
         log_scan = scan_log(logpath)
-        return {"arm": arm, "error": None, "prompts": results, "log_scan": log_scan}
+        spec_missing = arm["spec_label"] != "none" and not any(r.get("draft_reported") for r in results)
+        if spec_missing:
+            print(f"  !! WARNING: arm '{arm['name']}' expects spec ({arm['spec_label']}) "
+                  f"but server reported no draft stats - spec may be disabled", flush=True)
+        return {"arm": arm, "error": None, "prompts": results, "log_scan": log_scan,
+                "spec_stats_missing": spec_missing}
     finally:
         stop_server(proc)
         time.sleep(2.0)  # let the GPU/Level-Zero context fully release before next arm
