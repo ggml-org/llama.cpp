@@ -590,6 +590,9 @@ struct common_params {
     int image_max_tokens = -1;
     int mtmd_batch_max_tokens = 1024;
 
+    // mmproj swap pool (see common/llama_mmproj_pool.h)
+    int n_mmproj_swap = 0; // --mmproj-swap-layers: LLM layers evicted per vision step
+
     // finetune
     struct lr_opt lr;
     enum ggml_opt_optimizer_type optimizer = GGML_OPT_OPTIMIZER_TYPE_ADAMW;
