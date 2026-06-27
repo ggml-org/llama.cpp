@@ -17865,6 +17865,11 @@ struct ggml_backend_vk_comm_context {
     std::vector<vk_command_pool>            cmd_pool_xfer;
     std::vector<uint64_t>                   xfer_pool_max_val;
     uint64_t                                pipe_round = 0;
+    // Ring AllReduce (reduce-scatter + all-gather), O(n) host traffic vs the all-to-all pipeline's O(n^2).
+    // GGML_VK_COMM_RING selects it for large tensors. ring_view[i] is a chunk-sized view of tensors[i].
+    bool                                    ring = false;
+    uint64_t                                ring_round = 0;
+    std::vector<ggml_tensor*>               ring_view;
     bool                                    use_f16 = false;
     std::vector<ggml_backend_buffer_t>      up16_buffer;
     std::vector<ggml_backend_buffer_t>      dn16_buffer;
@@ -17982,11 +17987,13 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
         comm->host_buf[k].resize(n_backends);
     }
     comm->use_f16 = (getenv("GGML_VK_COMM_FP32") == nullptr);
+    comm->ring    = (getenv("GGML_VK_COMM_RING") != nullptr);
     comm->up16_buffer.resize(n_backends, nullptr);
     comm->dn16_buffer.resize(n_backends, nullptr);
     comm->up16_tensor.resize(n_backends, nullptr);
     comm->dn16_tensor.resize(n_backends, nullptr);
-    const ggml_init_params ip = { ggml_tensor_overhead() * (3 * n_backends + 8), nullptr, true };
+    comm->ring_view.resize(n_backends, nullptr);
+    const ggml_init_params ip = { ggml_tensor_overhead() * (4 * n_backends + 8), nullptr, true };
     comm->tctx = ggml_init(ip);
 
     if (comm->fast) {
@@ -18171,7 +18178,8 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
         }
     }
 
-    const size_t slotcap = 2 * newcap;
+    // ring mode needs 2*(n-1) per-step chunks per round (~2x the tensor), double-buffered by round -> 4x.
+    const size_t slotcap = (comm->ring ? 4 : 2) * newcap;
     for (size_t k = 0; k < n; k++) {
         comm->host_ptr[k] = ggml_vk_comm_aligned_alloc(comm->align, slotcap);
         if (!comm->host_ptr[k]) {
@@ -18210,6 +18218,9 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
         comm->up16_tensor[i]->data   = ggml_backend_buffer_get_base(comm->up16_buffer[i]);
         comm->dn16_tensor[i]->buffer = comm->dn16_buffer[i];
         comm->dn16_tensor[i]->data   = ggml_backend_buffer_get_base(comm->dn16_buffer[i]);
+        if (!comm->ring_view[i]) {
+            comm->ring_view[i] = ggml_new_tensor_1d(comm->tctx, GGML_TYPE_F32, 1); // view into tensors[i], set per use
+        }
     }
     comm->cap = newcap;
     return true;
@@ -18357,6 +18368,102 @@ static bool ggml_backend_vk_comm_allreduce_pipeline(ggml_backend_vk_comm_context
     return true;
 }
 
+// Ring AllReduce: reduce-scatter then all-gather around a ring, O(n) host traffic vs the pipeline's O(n^2).
+// The output is split into n chunks; each of 2*(n-1) steps a device sends one chunk to its next neighbor's
+// host buffer and pulls the matching chunk from its prev neighbor (accumulating in reduce-scatter, copying
+// in all-gather). tensors[i] is the in-place working buffer. fp32 + native-import only for now (the proof
+// of the algorithm); F16 staging and the proxy bridge are follow-ups. GGML_VK_COMM_RING selects this path.
+static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * comm,
+                                                ggml_tensor ** tensors, size_t nbytes) {
+    const size_t   n    = comm->backends.size();
+    const size_t   esz  = ggml_type_size(GGML_TYPE_F32);
+    const int64_t  cels = (ggml_nelements(tensors[0]) + (int64_t) n - 1) / (int64_t) n;
+    const size_t   csz  = (size_t) cels * esz;          // bytes per chunk (last chunk may be shorter)
+    const uint64_t nsteps = 2 * (uint64_t) (n - 1);
+
+    const uint64_t round    = comm->ring_round++;
+    const size_t   slot_off = (size_t) (round & 1) * 2 * comm->cap; // round-slot holds this round's 2(n-1) chunks
+
+    std::vector<uint64_t> compute_val(n), reduce_val(n), prev_reduce(n), up_base(n);
+    for (size_t i = 0; i < n; i++) {
+        prev_reduce[i] = comm->last_reduce[i];
+        compute_val[i] = comm->vkctx[i]->comm_prog_val;
+        reduce_val[i]  = compute_val[i] + nsteps;
+        comm->vkctx[i]->comm_prog_val = reduce_val[i];
+        comm->last_reduce[i]          = reduce_val[i];
+        up_base[i]      = comm->up_val[i];
+        comm->up_val[i] += nsteps;
+        uint64_t done = comm->device[i]->device.getSemaphoreCounterValue(comm->prog[i]);
+        if (done >= comm->pool_max_val[i]) { ggml_vk_command_pool_cleanup(comm->device[i], comm->cmd_pool[i]); }
+        comm->pool_max_val[i] = reduce_val[i];
+        uint64_t xdone = comm->device[i]->device.getSemaphoreCounterValue(comm->up[i]);
+        if (xdone >= comm->xfer_pool_max_val[i]) { ggml_vk_command_pool_cleanup(comm->device[i], comm->cmd_pool_xfer[i]); }
+        comm->xfer_pool_max_val[i] = up_base[i] + nsteps;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        const size_t nextd = (i + 1) % n;
+        const size_t prevd = (i + n - 1) % n;
+        ggml_backend_vk_buffer_context * bc  = (ggml_backend_vk_buffer_context *) tensors[i]->buffer->context;
+        ggml_backend_vk_buffer_context * tbc = (ggml_backend_vk_buffer_context *) comm->tmp_buffer[i]->context;
+        const size_t  base_off = vk_tensor_offset(tensors[i]) + tensors[i]->view_offs;
+        ggml_tensor * rtmp     = comm->tmp_tensor[i];
+        ggml_tensor * rview    = comm->ring_view[i];
+        char *        tmpbase  = (char *) ggml_backend_buffer_get_base(comm->tmp_buffer[i]);
+
+        vk_context cctx = ggml_vk_create_temporary_context(comm->cmd_pool[i]);      // compute queue: recv + reduce
+        vk_context tctx = ggml_vk_create_temporary_context(comm->cmd_pool_xfer[i]); // transfer queue: send
+
+        for (uint64_t t = 0; t < nsteps; t++) {
+            const bool     rs = (t < (uint64_t) (n - 1));
+            const size_t   s  = (size_t) (rs ? t : t - (n - 1));
+            const size_t   c_send = rs ? (i + n - s) % n : (i + n + 1 - s) % n;
+            const size_t   c_recv = rs ? (i + n - s - 1) % n : (i + n - s) % n;
+            const size_t   send_off = c_send * csz, recv_off = c_recv * csz;
+            const size_t   send_sz = send_off >= nbytes ? 0 : std::min(csz, nbytes - send_off);
+            const size_t   recv_sz = recv_off >= nbytes ? 0 : std::min(csz, nbytes - recv_off);
+            const size_t   hoff = slot_off + (size_t) t * csz;
+
+            ggml_vk_ctx_begin(comm->device[i], tctx);
+            if (t == 0) {
+                tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] });
+                if (round >= 2) { // WAR: next device finished reading our send buffer in the round that reused this slot
+                    tctx->s->wait_semaphores.push_back({ comm->peer_prog[i][nextd], prev_reduce[nextd] });
+                }
+            } else {
+                tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] + t }); // prev recv updated c_send
+            }
+            if (send_sz) {
+                ggml_vk_buffer_copy_async(tctx, comm->host_buf[i][i], hoff, bc->dev_buffer, base_off + send_off, send_sz);
+            }
+            ggml_vk_ctx_end(tctx);
+            tctx->seqs.back().back().signal_semaphores.push_back({ comm->up[i], up_base[i] + t + 1 });
+
+            ggml_vk_ctx_begin(comm->device[i], cctx);
+            cctx->s->wait_semaphores.push_back({ comm->peer_up[i][prevd], up_base[prevd] + t + 1 });
+            if (recv_sz) {
+                ggml_vk_buffer_copy_async(cctx, tbc->dev_buffer, 0, comm->host_buf[prevd][i], hoff, recv_sz);
+                ggml_vk_sync_buffers(comm->vkctx[i], cctx);
+                const int64_t rc = (int64_t) (recv_sz / esz);
+                for (ggml_tensor * tt : { rtmp, rview }) {
+                    tt->ne[0] = rc; tt->ne[1] = tt->ne[2] = tt->ne[3] = 1;
+                    tt->nb[0] = esz; tt->nb[1] = tt->nb[2] = tt->nb[3] = (size_t) rc * esz;
+                }
+                rtmp->buffer  = comm->tmp_buffer[i]; rtmp->data  = tmpbase;
+                rview->buffer = tensors[i]->buffer;  rview->data = (char *) tensors[i]->data + recv_off; rview->view_offs = 0;
+                if (rs) { ggml_vk_add(comm->vkctx[i], cctx, rview, rtmp, rview); }
+                else    { ggml_vk_cpy(comm->vkctx[i], cctx, rtmp, rview); }
+                ggml_vk_sync_buffers(comm->vkctx[i], cctx);
+            }
+            ggml_vk_ctx_end(cctx);
+            cctx->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], compute_val[i] + t + 1 });
+        }
+        ggml_vk_submit(tctx, {});
+        ggml_vk_submit(cctx, {});
+    }
+    return true;
+}
+
 static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor ** tensors) {
     ggml_backend_vk_comm_context * comm = static_cast<ggml_backend_vk_comm_context *>(comm_ctx);
     const size_t n = comm->backends.size();
@@ -18390,6 +18497,9 @@ static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor *
             all_compute = all_compute && (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE);
         }
         if (all_compute) {
+            if (comm->ring && !comm->proxy) { // ring is native-import + fp32 only for now
+                return ggml_backend_vk_comm_allreduce_ring(comm, tensors, nbytes);
+            }
             return ggml_backend_vk_comm_allreduce_pipeline(comm, tensors, nbytes);
         }
     }
