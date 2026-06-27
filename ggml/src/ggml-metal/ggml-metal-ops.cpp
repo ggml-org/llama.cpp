@@ -3806,11 +3806,15 @@ int ggml_metal_op_conv_2d_dw(ggml_metal_op_t ctx, int idx) {
     nth = std::min(nth, 256);
     nth = std::max(nth, 1);
 
-    const uint64_t n_out = ggml_nelements(op);
+    // 3D grid: x = OW (tiled by nth), y = OH, z = C * N
+    const int32_t OW = ne0;
+    const int32_t OH = ne1;
+    const int32_t C  = ne12;
+    const int32_t N  = ne13;
 
-    uint64_t tg = (n_out + nth - 1)/nth;
-    tg = std::max<uint64_t>(tg, 1);
-    tg = std::min<uint64_t>(tg, (uint64_t) std::numeric_limits<int>::max());
+    const int tg_x = (OW + nth - 1) / nth;
+    const int tg_y = OH;
+    const int tg_z = C * N;
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -3818,7 +3822,7 @@ int ggml_metal_op_conv_2d_dw(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, tg, 1, 1, nth, 1, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, tg_x, tg_y, tg_z, nth, 1, 1);
 
     return 1;
 }
