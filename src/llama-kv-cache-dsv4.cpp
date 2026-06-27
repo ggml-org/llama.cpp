@@ -17,7 +17,6 @@
 
 static constexpr uint32_t DSV4_CSA_RATIO = 4;
 static constexpr uint32_t DSV4_HCA_RATIO = 128;
-static constexpr uint32_t DSV4_CSA_GRAPH_RAW_BUCKET = DSV4_HCA_RATIO;
 
 static constexpr uint32_t DSV4_STATE_MAGIC         = 0x34565344; // DSV4
 static constexpr uint32_t DSV4_STATE_VERSION       = 1;
@@ -233,9 +232,7 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
     // state_read_idxs as two contiguous halves: the first ratio*n_blocks entries are
     // the "previous-window" gather indices for every block, followed by the
     // "current-window" indices for every block. Collect them separately here and
-    // append cur after prev once the loop has visited all completed blocks, instead
-    // of interleaving [prev, cur] per block (which corrupted every block but the
-    // last in multi-block ubatches / long-context prefill).
+    // append cur after prev once the loop has visited all completed blocks
     std::vector<int32_t> overlap_prev_reads;
     std::vector<int32_t> overlap_cur_reads;
 
@@ -363,19 +360,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
                 overlap_prev_reads.begin(), overlap_prev_reads.end());
         plan.state_read_idxs.insert(plan.state_read_idxs.end(),
                 overlap_cur_reads.begin(), overlap_cur_reads.end());
-    }
-
-    if (ratio == DSV4_CSA_RATIO && max_pos >= 0) {
-        const int64_t raw_bucket = DSV4_CSA_GRAPH_RAW_BUCKET;
-        const int64_t pos_p1     = max_pos + 1;
-        int64_t n_raw_buckets    = (pos_p1 + raw_bucket - 1)/raw_bucket;
-        if (pos_p1 % raw_bucket == 0) {
-            ++n_raw_buckets;
-        }
-
-        const int64_t bucketed_tokens = n_raw_buckets * raw_bucket;
-        const int64_t bucketed_n_kv   = (bucketed_tokens + ratio - 1)/ratio;
-        plan.n_kv = std::min<int64_t>(kv_size, std::max<int64_t>(plan.n_kv, bucketed_n_kv));
     }
 
     plan.n_kv = GGML_PAD(plan.n_kv, 256u);
