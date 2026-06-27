@@ -226,7 +226,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
     };
 
     std::vector<persist_row> persist_rows;
-    llama_pos max_pos = -1;
 
     // For the overlap compressor, build_overlap_compressed_kv_from_state() consumes
     // state_read_idxs as two contiguous halves: the first ratio*n_blocks entries are
@@ -271,7 +270,6 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         }
 
         const llama_seq_id seq_id = ubatch.seq_id[i][0];
-        max_pos = std::max(max_pos, pos);
 
         const int64_t stream_off = n_stream > 1 ? (int64_t) seq_id*state_size : 0;
 
