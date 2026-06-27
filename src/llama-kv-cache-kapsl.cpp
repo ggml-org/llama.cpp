@@ -286,8 +286,37 @@ private:
 #endif
     }
 
+    // Reset the per-graph tensor cache whenever a new compute graph is built.
+    //
+    // llm_graph_result::reset() allocates the next ggml_context before freeing
+    // the previous one, so two consecutive graph builds can never share an
+    // address.  cached_graph_ctx == ctx therefore holds only within a single
+    // build, which means the cached tensors are guaranteed to belong to the
+    // live context and can never dangle.
+    void reset_graph_cache(ggml_context * ctx) const {
+        if (cached_graph_ctx == ctx) {
+            return;
+        }
+        cached_graph_ctx          = ctx;
+        cached_pool_tensor[0]     = nullptr;
+        cached_pool_tensor[1]     = nullptr;
+        cached_pool_base_tensor   = nullptr;
+        cached_block_table_tensor = nullptr;
+    }
+
     ggml_tensor * make_pool_tensor(ggml_context * ctx, uint32_t kv_type) const {
         GGML_ASSERT(kv_type < 2);
+
+        // The K/V pool view spans every block and is identical for all layers
+        // (the layer is selected inside the Kapsl kernels via the block table),
+        // so build it once per graph and reuse it across layers.  Emitting a
+        // fresh leaf per layer needlessly inflates the graph and the scheduler's
+        // split-input accounting.
+        reset_graph_cache(ctx);
+        if (cached_pool_tensor[kv_type] != nullptr) {
+            return cached_pool_tensor[kv_type];
+        }
+
         ggml_backend_buffer_t buffer = ensure_pool_buffer();
 
         ggml_tensor * tensor = ggml_new_tensor_4d(
@@ -308,10 +337,16 @@ private:
             GGML_ABORT("failed to allocate Kapsl external KV tensor");
         }
 
+        cached_pool_tensor[kv_type] = tensor;
         return tensor;
     }
 
     ggml_tensor * make_pool_base_tensor(ggml_context * ctx) const {
+        reset_graph_cache(ctx);
+        if (cached_pool_base_tensor != nullptr) {
+            return cached_pool_base_tensor;
+        }
+
         ggml_backend_buffer_t buffer = ensure_pool_buffer();
 
         const int64_t n_elements =
@@ -326,10 +361,23 @@ private:
             GGML_ABORT("failed to allocate Kapsl external base KV tensor");
         }
 
+        cached_pool_base_tensor = tensor;
         return tensor;
     }
 
     ggml_tensor * make_block_table_tensor(ggml_context * ctx) const {
+        // The block table covers every layer ([stride, n_layers]) and is shared
+        // by cpy_k, cpy_v and paged_attn across all layers.  Building one leaf
+        // per call previously produced 3 * n_layers distinct tensors per graph;
+        // when the table lives on a host buffer (graph-reserve / CPU-evicted
+        // fallback) each one becomes its own scheduler split input on a discrete
+        // CUDA device and quickly overflows GGML_SCHED_MAX_SPLIT_INPUTS.  Reuse a
+        // single tensor per graph so the split-input count stays flat.
+        reset_graph_cache(ctx);
+        if (cached_block_table_tensor != nullptr) {
+            return cached_block_table_tensor;
+        }
+
         ggml_backend_buffer_t buffer = ensure_block_table_buffer();
         GGML_ASSERT(block_table_buffer_ptr != nullptr);
 
@@ -343,6 +391,7 @@ private:
             GGML_ABORT("failed to allocate Kapsl external block table tensor");
         }
 
+        cached_block_table_tensor = tensor;
         return tensor;
     }
 
@@ -397,6 +446,15 @@ private:
     mutable void * block_table_buffer_ptr = nullptr;
     mutable void * dummy_block_table = nullptr;
     mutable size_t dummy_block_table_bytes = 0;
+
+    // Per-graph cache of the layer-invariant external tensors (pool K/V views,
+    // pool base view and block table).  Keyed on the ggml_context of the current
+    // graph build via reset_graph_cache(); see make_block_table_tensor() for why
+    // sharing these across layers is required, not just an optimisation.
+    mutable ggml_context * cached_graph_ctx = nullptr;
+    mutable ggml_tensor * cached_pool_tensor[2] = { nullptr, nullptr };
+    mutable ggml_tensor * cached_pool_base_tensor = nullptr;
+    mutable ggml_tensor * cached_block_table_tensor = nullptr;
 };
 
 } // namespace
