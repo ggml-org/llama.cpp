@@ -462,9 +462,10 @@ int main() {
     // "promote to GATE"): flip those probes' Exp::XFAIL -> Exp::GATE then.
     printf("\n[5] flash attention turbo KV - XFAIL (SKIP while vetoed; d=128 only)\n");
     for (int64_t n_q : {8, 1}) {
-        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, "vec", Exp::XFAIL, /*force=*/false);
-        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, "vec", Exp::XFAIL, /*force=*/false);
-        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, "vec", Exp::XFAIL, /*force=*/false);
+        const char * path = (n_q == 8) ? "tile" : "vec"; // label matches the kernel n_q routes to
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, path, Exp::XFAIL, /*force=*/false);
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::XFAIL, /*force=*/false);
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::XFAIL, /*force=*/false);
     }
 
     printf("\n[6] flash attention VEC (n_q=1, decode) - GATE, standard KV across head dims [crash-prone: LAST]\n");

@@ -19,19 +19,28 @@ fi
 FAIL=0
 
 # --- Test 0: kernel correctness (fast CPU-vs-SYCL unit oracle) ---
-CORRECTNESS_BIN=${CORRECTNESS_BIN:-$HOME/projects/trb/llama-cpp-turboquant-correctness-gate/build-sycl-fp32/bin/test-sycl-turbo-correctness}
+# Default to the harness in this repo's SYCL build tree (portable across clones);
+# override CORRECTNESS_BIN to point elsewhere, or set it to "skip" to bypass.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CORRECTNESS_BIN=${CORRECTNESS_BIN:-$SCRIPT_DIR/../build-sycl-fp32/bin/test-sycl-turbo-correctness}
 echo "[0/3] Running CPU-vs-SYCL kernel correctness..."
-if [ -x "$CORRECTNESS_BIN" ]; then
+if [ "$CORRECTNESS_BIN" = "skip" ]; then
+    echo "  SKIP: correctness gate explicitly bypassed (CORRECTNESS_BIN=skip)"
+elif [ -x "$CORRECTNESS_BIN" ]; then
     # timeout: an A770 SYCL FA device-lost can hang the compute indefinitely;
     # cap it so the push gate fails fast (124) instead of stalling forever.
-    if timeout 180 env ONEAPI_DEVICE_SELECTOR=level_zero:0 "$CORRECTNESS_BIN"; then
+    if timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" "$CORRECTNESS_BIN"; then
         echo "  PASS: kernel correctness gate green"
     else
         echo "  FAIL: kernel correctness gate (GATE regression or turbo XPASS — see output)"
         FAIL=1
     fi
 else
-    echo "  SKIP: set CORRECTNESS_BIN to the built harness"
+    # Fail closed: a missing harness must not silently bypass the gate. Build it
+    # (cmake --build <dir> --target test-sycl-turbo-correctness), point
+    # CORRECTNESS_BIN at it, or set CORRECTNESS_BIN=skip to bypass deliberately.
+    echo "  FAIL: correctness harness not found/executable: $CORRECTNESS_BIN"
+    FAIL=1
 fi
 echo ""
 
