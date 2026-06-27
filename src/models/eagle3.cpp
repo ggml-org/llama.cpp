@@ -53,6 +53,20 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
     // Feature fusion layer: projects 3 target layers to draft hidden size
     fc = create_tensor(tn(LLM_TENSOR_FC, "weight"), {n_embd_inp, n_embd}, 0);
 
+    // Per-layer input norms applied before FC (fc_norm.0, fc_norm.1, ...)
+    const int64_t n_target_layers = (int64_t) target_layer_ids.size();
+    const int64_t n_embd_tgt = n_embd_inp / n_target_layers;
+    for (int64_t i = 0; i < n_target_layers; ++i) {
+        std::string suffix = std::to_string(i) + ".weight";
+        const struct ggml_tensor * fc_norm_meta = ml->get_tensor_meta(tn(LLM_TENSOR_FC_NORM, suffix.c_str()).str().c_str());
+        if (fc_norm_meta) {
+            fc_norms.push_back(create_tensor(tn(LLM_TENSOR_FC_NORM, suffix.c_str()), {n_embd_tgt}, 0));
+        }
+    }
+    if (!fc_norms.empty()) {
+        GGML_ASSERT((int64_t) fc_norms.size() == n_target_layers);
+    }
+
     // Output layer (uses draft vocab size)
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_draft_vocab}, TENSOR_NOT_REQUIRED);
@@ -129,6 +143,23 @@ llama_model_eagle3::graph<true>::graph(const llama_model & model, const llm_grap
     ggml_tensor * cur = nullptr;
 
     cur = build_inp_embd_enc();
+
+    // Per-layer input norms before FC (if present)
+    const int64_t n_fc_norms = (int64_t) model.fc_norms.size();
+    if (n_fc_norms > 0) {
+        const int64_t n_embd_tgt = hparams.n_embd_inp_enc() / n_fc_norms;
+        std::vector<ggml_tensor *> chunks(n_fc_norms);
+        for (int64_t i = 0; i < n_fc_norms; ++i) {
+            chunks[i] = ggml_view_2d(ctx0, cur, n_embd_tgt, n_tokens,
+                cur->nb[1], i * n_embd_tgt * sizeof(float));
+            chunks[i] = build_norm(chunks[i], model.fc_norms[i], nullptr, LLM_NORM_RMS, -1);
+            cb(chunks[i], "fc_norm", i);
+        }
+        cur = chunks[0];
+        for (int64_t i = 1; i < n_fc_norms; ++i) {
+            cur = ggml_concat(ctx0, cur, chunks[i], 0);
+        }
+    }
 
     // Feature fusion layer
     cur = build_lora_mm(model.fc, cur);

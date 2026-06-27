@@ -222,6 +222,9 @@ class LlamaModel(TextModel):
             if name == "fc.weight":
                 yield (name, data_torch)
                 return
+            if name.startswith("fc_norm."):
+                yield (name, data_torch)
+                return
             if name == "d2t":
                 # store for manual int64 handling in prepare_tensors (avoid F32 conversion)
                 if not hasattr(self, '_eagle3_int_tensors'):

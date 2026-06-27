@@ -124,6 +124,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GROVEMOE,         "grovemoe"         },
     { LLM_ARCH_APERTUS,          "apertus"          },
     { LLM_ARCH_MINIMAX_M2,       "minimax-m2"       },
+    { LLM_ARCH_MINIMAX_M3,       "minimax-m3"       },
     { LLM_ARCH_COGVLM,           "cogvlm"           },
     { LLM_ARCH_RND1,             "rnd1"             },
     { LLM_ARCH_PANGU_EMBED,      "pangu-embedded"   },
@@ -568,6 +569,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_MASKED_EMBD_CENTROIDS,                  "masked_embd_centroids" },
     { LLM_TENSOR_MASKED_EMBD_ORDERING,                   "masked_embd_ordering" },
     { LLM_TENSOR_FC,                                     "fc" },
+    { LLM_TENSOR_FC_NORM,                                "fc_norm" },
     { LLM_TENSOR_D2T,                                    "d2t" },
 };
 
@@ -797,6 +799,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_MASKED_EMBD_ORDERING,       {LLM_TENSOR_LAYER_INPUT,     GGML_OP_NONE}},
     // eagle3
     {LLM_TENSOR_FC,                         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_FC_NORM,                    {LLM_TENSOR_LAYER_INPUT,     GGML_OP_MUL}},
     {LLM_TENSOR_D2T,                        {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
 };
 
@@ -941,6 +944,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_MINIMAX_M2:
+        case LLM_ARCH_MINIMAX_M3:
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_KIMI_LINEAR:
             return false;
