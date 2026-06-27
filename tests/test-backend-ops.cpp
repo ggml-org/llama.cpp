@@ -2890,12 +2890,17 @@ struct test_cpy : public test_case {
     const std::array<int64_t, 4> ne_dst;
     const std::array<int64_t, 4> permute_src;
     const std::array<int64_t, 4> permute_dst;
+    const std::array<int64_t, 4> dst_alloc; // if set, dst is a view into a larger buffer (strided)
     bool _src_use_permute;
     bool _dst_use_permute;
     bool _src_transpose;
     bool _use_dst_shape;
+    bool _use_dst_alloc;
 
     std::string vars() override {
+        if (_use_dst_alloc) {
+            return VARS_TO_STR8(type_src, type_dst, ne_src, ne_dst, permute_src, permute_dst, _src_transpose, dst_alloc);
+        }
         if (_use_dst_shape) {
             return VARS_TO_STR7(type_src, type_dst, ne_src, ne_dst, permute_src, permute_dst, _src_transpose);
         }
@@ -2943,12 +2948,15 @@ struct test_cpy : public test_case {
             std::array<int64_t, 4> ne_dst = {-1, -1, -1, -1},
             std::array<int64_t, 4> permute_src = {0, 0, 0, 0},
             std::array<int64_t, 4> permute_dst = {0, 0, 0, 0},
-            bool transpose_src = false)
+            bool transpose_src = false,
+            std::array<int64_t, 4> dst_alloc = {0, 0, 0, 0})
         : type_src(type_src), type_dst(type_dst), ne_src(ne_src), ne_dst(ne_dst), permute_src(permute_src), permute_dst(permute_dst),
+          dst_alloc(dst_alloc),
           _src_use_permute(permute_src[0] + permute_src[1] + permute_src[2] + permute_src[3] > 0),
           _dst_use_permute(permute_dst[0] + permute_dst[1] + permute_dst[2] + permute_dst[3] > 0),
           _src_transpose(transpose_src),
-          _use_dst_shape(ne_dst[0] >= 0 && ne_dst[1] >= 0 && ne_dst[2] >= 0 && ne_dst[3] >= 0){}
+          _use_dst_shape(ne_dst[0] >= 0 && ne_dst[1] >= 0 && ne_dst[2] >= 0 && ne_dst[3] >= 0),
+          _use_dst_alloc(dst_alloc[0] > 0){}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type_src, 4, ne_src.data());
@@ -2966,12 +2974,23 @@ struct test_cpy : public test_case {
         }
 
         std::array<int64_t, 4> dst_ne = _use_dst_shape ? ne_dst : std::array<int64_t, 4>{src->ne[0], src->ne[1], src->ne[2], src->ne[3]};
-        ggml_tensor * dst = ggml_new_tensor(ctx, type_dst, 4, dst_ne.data());
-        ggml_set_name(dst, "dst");
+        ggml_tensor * dst;
 
-        if (_dst_use_permute) {
-            dst = ggml_permute(ctx, dst, permute_dst[0], permute_dst[1], permute_dst[2], permute_dst[3]);
-            ggml_set_name(dst, "dst_permuted");
+        if (_use_dst_alloc) {
+            // view a sub-block of a larger buffer -> strided dst
+            ggml_tensor * dst_buf = ggml_new_tensor(ctx, type_dst, 4, dst_alloc.data());
+            ggml_set_name(dst_buf, "dst_buf");
+            dst = ggml_view_4d(ctx, dst_buf, dst_ne[0], dst_ne[1], dst_ne[2], dst_ne[3],
+                dst_buf->nb[1], dst_buf->nb[2], dst_buf->nb[3], 0);
+            ggml_set_name(dst, "dst_view");
+        } else {
+            dst = ggml_new_tensor(ctx, type_dst, 4, dst_ne.data());
+            ggml_set_name(dst, "dst");
+
+            if (_dst_use_permute) {
+                dst = ggml_permute(ctx, dst, permute_dst[0], permute_dst[1], permute_dst[2], permute_dst[3]);
+                ggml_set_name(dst, "dst_permuted");
+            }
         }
 
         ggml_tensor * out = ggml_cpy(ctx, src, dst);
@@ -8181,6 +8200,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 1, 4, 1}, {-1,-1,-1,-1}, {1, 2, 0, 3}, {0, 0, 0, 0}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2, 2097121, 1, 1}, {-1,-1,-1,-1}, {1, 0, 2, 3}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2, 2, 524281, 1}, {-1,-1,-1,-1}, {1, 0, 2, 3}));
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {128, 2, 3, 1}, {128, 2, 3, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, false, {128, 4, 3, 1})); // strided dst
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F16, GGML_TYPE_F16, {128, 2, 3, 1}, {128, 2, 3, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, false, {128, 4, 3, 1})); // strided dst
 
     // CPY - different src/dst shapes (reshaping via CPY)
     // Use permutations of {3, 5, 7, 32}. Total elements: 3*5*7*32 = 3360.
