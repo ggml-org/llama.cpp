@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
+	import { serverStore } from '$lib/stores/server.svelte';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
+	import { CHAT_FORM_PLACEHOLDER } from '$lib/constants';
 
 	interface Props {
 		class?: string;
@@ -151,5 +153,6 @@
 		onSystemPromptClick={handleSystemPromptClick}
 		{onSystemPromptWithContent}
 		onUploadedFileRemove={handleUploadedFileRemove}
+		placeholder={serverStore.props?.modalities?.audio ? CHAT_FORM_PLACEHOLDER.VOICE_MODE_AVAILABLE : CHAT_FORM_PLACEHOLDER.DEFAULT}
 	/>
 </div>

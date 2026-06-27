@@ -41,3 +41,12 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		activeUrlIncludes: '#/settings'
 	}
 ];
+
+export const CHAT_FORM_PLACEHOLDER_GREETING = 'Hello there!';
+
+export const CHAT_FORM_PLACEHOLDER = {
+  DEFAULT: 'Type a message',
+  VOICE_MODE_AVAILABLE: 'Type a message or use your voice',
+  PROMPTS: 'Use / to attach a prompt',
+  RESOURCES: 'Use @ to attach resources'
+}

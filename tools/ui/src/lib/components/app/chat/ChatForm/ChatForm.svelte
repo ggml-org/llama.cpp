@@ -9,6 +9,7 @@
 		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
 	import {
+       	CHAT_FORM_PLACEHOLDER,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		INPUT_CLASSES,
 		SETTING_CONFIG_DEFAULT,
@@ -74,7 +75,7 @@
 		class: className = '',
 		disabled = false,
 		isLoading = false,
-		placeholder = 'Type a message...',
+		placeholder = CHAT_FORM_PLACEHOLDER.DEFAULT,
 		showMcpPromptButton = false,
 		showAddButton = true,
 		showModelSelector = true,
