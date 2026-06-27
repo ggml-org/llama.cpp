@@ -60,6 +60,7 @@ enum htp_op_code {
     HTP_OP_MUL_MAT_ID,
     HTP_OP_MUL_MAT_QKV,
     HTP_OP_MUL_MAT_FFN,
+    HTP_OP_MUL_MAT_ADD,
     HTP_OP_RMS_NORM,
     HTP_OP_RMS_NORM_MUL,
     HTP_OP_UNARY_SILU,

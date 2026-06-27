@@ -3351,6 +3351,26 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
         }
     }
 
+    if (n->op == GGML_OP_MUL_MAT && next_node) {
+        if (next_node->op == GGML_OP_ADD && op_is_compute(next_node) && ggml_can_fuse(graph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD })) {
+            if (next_node->src[0] == n || next_node->src[1] == n) {
+                struct htp_mm_kernel_params kparams;
+                ggml_hexagon_precompute_matmul_params(sess, n->src[0], n->src[1], next_node, &kparams);
+                if ((size_t)kparams.vtcm_size <= sess->vtcm_size) {
+                    htp_opnode node(n, {}, HTP_OP_MUL_MAT_ADD);
+                    node.add_fused(next_node);
+                    memcpy(node.kernel_params, &kparams, sizeof(kparams));
+                    nodes.push_back(std::move(node));
+                    i += 1;
+                    return true;
+                } else {
+                    HEX_VERBOSE("ggml-hex: skip MUL_MAT_ADD fusion because VTCM needed (%d) > budget (%zu)\n",
+                                kparams.vtcm_size, sess->vtcm_size);
+                }
+            }
+        }
+    }
+
     return false;
 }
 

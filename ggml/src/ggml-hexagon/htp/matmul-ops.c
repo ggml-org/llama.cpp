@@ -22,8 +22,18 @@
 #include "matmul-ops.h"
 #include "vtcm-utils.h"
 
+static void hvx_tensor_add_f32_grid(
+    const struct htp_tensor * restrict dst,
+    const struct htp_tensor * restrict src2,
+    uint32_t start_row,
+    uint32_t end_row,
+    uint32_t start_col,
+    uint32_t end_col
+);
+
 typedef struct {
     float        *dst;
+    const float  *src2;
     const float  *activation;
     const __fp16 *weight;
     int           m;
@@ -32,6 +42,7 @@ typedef struct {
     int           act_stride;
     int           weight_stride;
     int           dst_stride;
+    uint32_t      src2_stride;
     int           ne02;
     int           ne03;
     int           ne12;
@@ -42,6 +53,8 @@ typedef struct {
     size_t        src1_nb3;
     size_t        dst_nb2;
     size_t        dst_nb3;
+    size_t        src2_nb2;
+    size_t        src2_nb3;
 } hmx_mm_f16_f32_batched_params_t;
 
 struct htp_mm_context {
@@ -62,7 +75,8 @@ struct htp_mm_context {
 
     void (*vec_dot_32x1)(const uint32_t n, float * restrict s,
          const void * restrict vx,
-         const void * restrict vy, uint32_t valid_rows);
+         const void * restrict vy, uint32_t valid_rows,
+         const float * restrict sz);
 
     // Precomputed values
     uint32_t src0_nrows_per_thread;
@@ -156,10 +170,10 @@ static const uint8_t __attribute__((aligned(VLEN))) kvalues_mxfp4_lut[] = {
     const uint32_t ne12 = src1->ne[2];                              \
     const uint32_t ne13 = src1->ne[3];                              \
                                                                     \
-    const uint32_t ne20 = src2->ne[0];                              \
-    const uint32_t ne21 = src2->ne[1];                              \
-    const uint32_t ne22 = src2->ne[2];                              \
-    const uint32_t ne23 = src2->ne[3];                              \
+    const uint32_t ne20 = src2 ? src2->ne[0] : 0;                   \
+    const uint32_t ne21 = src2 ? src2->ne[1] : 0;                   \
+    const uint32_t ne22 = src2 ? src2->ne[2] : 0;                   \
+    const uint32_t ne23 = src2 ? src2->ne[3] : 0;                   \
                                                                     \
     const uint32_t ne0 = dst->ne[0];                                \
     const uint32_t ne1 = dst->ne[1];                                \
@@ -273,6 +287,9 @@ static void hvx_mm_4d(unsigned int nth, unsigned int ith, void * data) {
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0_start);
+    if (src2) {
+        hvx_tensor_add_f32_grid(dst, src2, ir1_start, ir1_end, ir0_start, ir0_end);
+    }
 }
 
 #include "hmx-mm-kernels-tiled.h"
@@ -348,7 +365,15 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
             float * dst_ptr0 = &dst_row0[ct * 32];                                                                                \
             float * dst_ptr1 = &dst_row1[ct * 32];                                                                                \
                                                                                                                                   \
-            DOT_2X2(ne10, dst_ptr0, dst_ptr1, w_tile, src1_col0, src1_col1, valid_rows);                                          \
+            const float * src2_ptr0 = NULL;                                                                                       \
+            const float * src2_ptr1 = NULL;                                                                                       \
+            if (src2) {                                                                                                           \
+                const float * restrict src2_row0 = (const float *) ((const uint8_t *) src2->data + ((ir1+0) * nb1));              \
+                const float * restrict src2_row1 = (const float *) ((const uint8_t *) src2->data + ((ir1+1) * nb1));              \
+                src2_ptr0 = &src2_row0[ct * 32];                                                                                  \
+                src2_ptr1 = &src2_row1[ct * 32];                                                                                  \
+            }                                                                                                                     \
+            DOT_2X2(ne10, dst_ptr0, dst_ptr1, w_tile, src1_col0, src1_col1, valid_rows, src2_ptr0, src2_ptr1);                    \
         }                                                                                                                         \
                                                                                                                                   \
         for (; ir1 < src1_nrows; ++ir1) {                                                                                         \
@@ -356,7 +381,12 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
             float * restrict dst_row          = (float *) (dst->data + (ir1 * dst_row_size));                                     \
             float * dst_ptr = &dst_row[ct * 32];                                                                                  \
                                                                                                                                   \
-            DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows);                                                                 \
+            const float * src2_ptr = NULL;                                                                                        \
+            if (src2) {                                                                                                           \
+                const float * restrict src2_row = (const float *) ((const uint8_t *) src2->data + (ir1 * nb1));                   \
+                src2_ptr = &src2_row[ct * 32];                                                                                    \
+            }                                                                                                                     \
+            DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows, src2_ptr);                                                       \
         }                                                                                                                         \
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                     \
                                                                                                                                   \
@@ -431,7 +461,7 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
         valid_rows = MIN(32, MAX(0, valid_rows));                                                                                 \
                                                                                                                                   \
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                    \
-        DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows);                                                                     \
+        DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows, NULL);                                                               \
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                     \
                                                                                                                                   \
         if (push_ct < ct_end) {                                                                                                   \
@@ -443,7 +473,24 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                   \
     int copy_cnt = (int)MIN(src0_end_row, ne0) - (int)src0_start_row;                                                             \
     if (copy_cnt > 0) {                                                                                                           \
-        hvx_copy_f32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, copy_cnt);                                         \
+        if (src2) {                                                                                                               \
+            float * dst_ptr = &dst_col[src0_start_row];                                                                           \
+            const float * src2_ptr = (const float *) src2->data + src0_start_row;                                                 \
+            float * tmp_ptr = tmp;                                                                                                \
+            int remaining = copy_cnt;                                                                                             \
+            while (remaining > 0) {                                                                                               \
+                int n = MIN(remaining, 32);                                                                                       \
+                HVX_Vector v_out = hvx_vmemu(tmp_ptr);                                                                            \
+                HVX_Vector v_z   = hvx_vmemu(src2_ptr);                                                                           \
+                hvx_vec_store_u(dst_ptr, n * sizeof(float), hvx_vec_add_f32_f32(v_out, v_z));                                     \
+                dst_ptr += n;                                                                                                     \
+                src2_ptr += n;                                                                                                    \
+                tmp_ptr += n;                                                                                                     \
+                remaining -= n;                                                                                                   \
+            }                                                                                                                     \
+        } else {                                                                                                                  \
+            hvx_copy_f32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, copy_cnt);                                     \
+        }                                                                                                                         \
     }                                                                                                                             \
 }
 
@@ -541,8 +588,8 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                 float * dst_ptr0_v = &dst_row0_v[ct * 32];                                                                        \
                 float * dst_ptr1_v = &dst_row1_v[ct * 32];                                                                        \
                                                                                                                                   \
-                DOT_2X2(ne10, dst_ptr0_k, dst_ptr1_k, w_tile_k, src1_col0, src1_col1, valid_rows);                                \
-                DOT_2X2(ne10, dst_ptr0_v, dst_ptr1_v, w_tile_v, src1_col0, src1_col1, valid_rows);                                \
+                DOT_2X2(ne10, dst_ptr0_k, dst_ptr1_k, w_tile_k, src1_col0, src1_col1, valid_rows, NULL, NULL);                    \
+                DOT_2X2(ne10, dst_ptr0_v, dst_ptr1_v, w_tile_v, src1_col0, src1_col1, valid_rows, NULL, NULL);                    \
             }                                                                                                                     \
                                                                                                                                   \
             for (; ir1 < src1_nrows; ++ir1) {                                                                                     \
@@ -554,8 +601,8 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                 float * restrict dst_row_v = (float *) (dst_v->data + (ir1 * dst_k_row_size));                                    \
                 float * dst_ptr_v = &dst_row_v[ct * 32];                                                                          \
                                                                                                                                   \
-                DOT_2X1(ne10, dst_ptr_k, w_tile_k, src1_col, valid_rows);                                                         \
-                DOT_2X1(ne10, dst_ptr_v, w_tile_v, src1_col, valid_rows);                                                         \
+                DOT_2X1(ne10, dst_ptr_k, w_tile_k, src1_col, valid_rows, NULL);                                                   \
+                DOT_2X1(ne10, dst_ptr_v, w_tile_v, src1_col, valid_rows, NULL);                                                   \
             }                                                                                                                     \
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                \
                                                                                                                                   \
@@ -604,7 +651,7 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                 float * dst_ptr0_q = &dst_row0_q[ct * 32];                                                                        \
                 float * dst_ptr1_q = &dst_row1_q[ct * 32];                                                                        \
                                                                                                                                   \
-                DOT_2X2(ne10, dst_ptr0_q, dst_ptr1_q, w_tile_q, src1_col0, src1_col1, valid_rows);                                \
+                DOT_2X2(ne10, dst_ptr0_q, dst_ptr1_q, w_tile_q, src1_col0, src1_col1, valid_rows, NULL, NULL);                    \
             }                                                                                                                     \
                                                                                                                                   \
             for (; ir1 < src1_nrows; ++ir1) {                                                                                     \
@@ -613,7 +660,7 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                 float * restrict dst_row_q = (float *) (dst_q->data + (ir1 * dst_q_row_size));                                    \
                 float * dst_ptr_q = &dst_row_q[ct * 32];                                                                          \
                                                                                                                                   \
-                DOT_2X1(ne10, dst_ptr_q, w_tile_q, src1_col, valid_rows);                                                         \
+                DOT_2X1(ne10, dst_ptr_q, w_tile_q, src1_col, valid_rows, NULL);                                                   \
             }                                                                                                                     \
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                 \
                                                                                                                                   \
@@ -713,8 +760,8 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             float * dst_ptr0_up = &dst_row0_up[ct * 32];                                                                          \
             float * dst_ptr1_up = &dst_row1_up[ct * 32];                                                                          \
                                                                                                                                   \
-            DOT_2X2(ne10, dst_ptr0_gate, dst_ptr1_gate, w_tile_gate, src1_col0, src1_col1, valid_rows);                           \
-            DOT_2X2(ne10, dst_ptr0_up, dst_ptr1_up, w_tile_up, src1_col0, src1_col1, valid_rows);                                 \
+            DOT_2X2(ne10, dst_ptr0_gate, dst_ptr1_gate, w_tile_gate, src1_col0, src1_col1, valid_rows, NULL, NULL);               \
+            DOT_2X2(ne10, dst_ptr0_up, dst_ptr1_up, w_tile_up, src1_col0, src1_col1, valid_rows, NULL, NULL);                     \
         }                                                                                                                         \
                                                                                                                                   \
         for (; ir1 < src1_nrows; ++ir1) {                                                                                         \
@@ -726,8 +773,8 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             float * restrict dst_row_up = (float *) (dst_up->data + (ir1 * dst_row_size));                                        \
             float * dst_ptr_up = &dst_row_up[ct * 32];                                                                            \
                                                                                                                                   \
-            DOT_2X1(ne10, dst_ptr_gate, w_tile_gate, src1_col, valid_rows);                                                       \
-            DOT_2X1(ne10, dst_ptr_up, w_tile_up, src1_col, valid_rows);                                                           \
+            DOT_2X1(ne10, dst_ptr_gate, w_tile_gate, src1_col, valid_rows, NULL);                                                 \
+            DOT_2X1(ne10, dst_ptr_up, w_tile_up, src1_col, valid_rows, NULL);                                                     \
         }                                                                                                                         \
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                     \
                                                                                                                                   \
@@ -977,6 +1024,9 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
     }
+    if (src2) {
+        hvx_tensor_add_f32_grid(dst, src2, 0, src1_nrows, src0_start_row, src0_end_row);
+    }
 }
 
 static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
@@ -1060,7 +1110,25 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
     }
 
-    hvx_copy_f32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, src0_end_row - src0_start_row);
+    int copy_cnt = src0_end_row - src0_start_row;
+    if (src2) {
+        float * dst_ptr = &dst_col[src0_start_row];
+        const float * src2_ptr = (const float *) src2->data + src0_start_row;
+        float * tmp_ptr = tmp;
+        int remaining = copy_cnt;
+        while (remaining > 0) {
+            int n = MIN(remaining, 32);
+            HVX_Vector v_out = hvx_vmemu(tmp_ptr);
+            HVX_Vector v_z   = hvx_vmemu(src2_ptr);
+            hvx_vec_store_u(dst_ptr, n * sizeof(float), hvx_vec_add_f32_f32(v_out, v_z));
+            dst_ptr += n;
+            src2_ptr += n;
+            tmp_ptr += n;
+            remaining -= n;
+        }
+    } else {
+        hvx_copy_f32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, copy_cnt);
+    }
 }
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id) * ids->ne[0] * ids->ne[1] + (i1)]
@@ -1145,7 +1213,7 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
                 const uint8_t * restrict src1_col = (const uint8_t *) (src1_data + (ir1 + rm2 * ne11 + 0) * src1_stride);
                 float * restrict dst_row = (float *) (dst->data + (rm1 * nb1 + rm2 * nb2 + 0));
 
-                mmctx->vec_dot_32x1(ne10, &dst_row[ct * 32], w_tile, src1_col, valid_rows);
+                mmctx->vec_dot_32x1(ne10, &dst_row[ct * 32], w_tile, src1_col, valid_rows, NULL);
             }
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
@@ -1225,7 +1293,7 @@ static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
             valid_rows = MIN(32, MAX(0, valid_rows));
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);
-            mmctx->vec_dot_32x1(ne10, &dst_row[ct * 32], w_tile, src1_col, valid_rows);
+            mmctx->vec_dot_32x1(ne10, &dst_row[ct * 32], w_tile, src1_col, valid_rows, NULL);
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
             if (push_ct < ct_end) {
@@ -1870,7 +1938,8 @@ static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void
         size_t chunk_size = hex_smin(st->n_tot_chunks - chunk_idx, st->n_chunks_per_task);
 
         float        *dst      = st->dst      + chunk_idx * st->dst_stride;
-        transfer_output_chunk_fp16_to_fp32(dst, st->vtcm_src, chunk_idx, chunk_size, st->n_cols, st->dst_stride, st->dst_cols);
+        const float  *src2     = st->src2     ? (st->src2     + chunk_idx * st->src2_stride) : NULL;
+        transfer_output_chunk_fp16_to_fp32(dst, src2, st->vtcm_src, chunk_idx, chunk_size, st->n_cols, st->dst_stride, st->src2_stride, st->dst_cols);
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, start_chunk_idx);
@@ -1999,8 +2068,8 @@ static void dequantize_tiled_weight_chunk_to_fp16_tiles(
     }
 }
 
-static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, const __fp16 *vtcm_src,
-                                              int n_rows, int n_cols, int dst_stride, int dst_cols, int n_threads) {
+static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, const float *src2, const __fp16 *vtcm_src,
+                                              int n_rows, int n_cols, int dst_stride, uint32_t src2_stride, int dst_cols, int n_threads) {
     assert(n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
 
     if (n_rows <= 0) return;
@@ -2016,9 +2085,11 @@ static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, 
     state.n_tot_chunks      = n_tot_chunks;
     state.n_chunks_per_task = n_chunks_per_task;
     state.dst               = dst;
+    state.src2              = src2;
     state.vtcm_src          = vtcm_src;
     state.n_cols            = n_cols;
     state.dst_stride        = dst_stride;
+    state.src2_stride       = src2_stride;
     state.dst_cols          = dst_cols;
     state.traces            = ctx->trace;
 
@@ -2067,6 +2138,7 @@ static void transfer_activation_chunk_threaded(
 
 static int hmx_mm_2d_f32(struct htp_context *ctx,
                                   float *restrict dst,
+                                  const float *restrict src2,
                                   const float *activation,
                                   const uint8_t *weight,
                                   int m, int k, int n,
@@ -2075,6 +2147,7 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                                   int weight_type,
                                   int k_valid,
                                   int dst_stride,
+                                  uint32_t src2_stride,
                                   int dst_cols,
                                   int m_chunk,
                                   int n_chunk,
@@ -2244,9 +2317,10 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                 // 4. wait C_i and store D_i (multi-thread HVX, parallel with C_{i+1})
                 hmx_queue_pop(ctx->hmx_queue);
                 float *output_chunk = dst + (mr * dst_stride + nc);
+                const float *src2_chunk = src2 ? (src2 + mr * src2_stride + nc) : NULL;
                 int chunk_dst_cols = dst_cols - (int)nc;
                 if (chunk_dst_cols > 0) {
-                    transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output_bufs[i % 2], n_rows, n_cols, dst_stride, chunk_dst_cols, n_threads);
+                    transfer_output_chunk_threaded(ctx, output_chunk, src2_chunk, vtcm_output_bufs[i % 2], n_rows, n_cols, dst_stride, src2_stride, chunk_dst_cols, n_threads);
                 }
             }
         }
@@ -2281,9 +2355,10 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
 
                 // D: Output Store
                 float *output_chunk = dst + (mr * dst_stride + nc);
+                const float *src2_chunk = src2 ? (src2 + mr * src2_stride + nc) : NULL;
                 int chunk_dst_cols = dst_cols - (int)nc;
                 if (chunk_dst_cols > 0) {
-                    transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output, n_rows, n_cols, dst_stride, chunk_dst_cols, n_threads);
+                    transfer_output_chunk_threaded(ctx, output_chunk, src2_chunk, vtcm_output, n_rows, n_cols, dst_stride, src2_stride, chunk_dst_cols, n_threads);
                 }
             }
         }
@@ -2324,6 +2399,13 @@ static inline float *hmx_mm_dst_batch_ptr(const hmx_mm_f16_f32_batched_params_t 
                       (size_t) dst_b3 * params->dst_nb3);
 }
 
+static inline const float *hmx_mm_src2_batch_ptr(const hmx_mm_f16_f32_batched_params_t *params,
+                                               int src2_b2, int src2_b3) {
+    return params->src2 ? (const float *) ((const uint8_t *) params->src2 +
+                      (size_t) src2_b2 * params->src2_nb2 +
+                      (size_t) src2_b3 * params->src2_nb3) : NULL;
+}
+
 static int hmx_mm_f16_f32_batched_simple(struct htp_context *ctx,
                                                         const hmx_mm_f16_f32_batched_params_t *params,
                                                         int m_chunk, int n_chunk, int pipeline, int n_threads, int act_threads, int vtcm_size) {
@@ -2331,11 +2413,12 @@ static int hmx_mm_f16_f32_batched_simple(struct htp_context *ctx,
     for (int b3 = 0; b3 < params->ne13 && ret == 0; ++b3) {
         for (int b2 = 0; b2 < params->ne12 && ret == 0; ++b2) {
             ret = hmx_mm_2d_f32(ctx, hmx_mm_dst_batch_ptr(params, b2, b3),
+                                           hmx_mm_src2_batch_ptr(params, b2, b3),
                                            hmx_mm_activation_batch_ptr(params, b2, b3),
                                            (const uint8_t *)hmx_mm_weight_batch_ptr(params, b2, b3),
                                            params->m, params->k, params->n,
                                            params->act_stride, params->weight_stride * (int)sizeof(__fp16),
-                                           HTP_TYPE_F16, params->k, params->n, params->n,
+                                           HTP_TYPE_F16, params->k, params->dst_stride, params->src2_stride, params->n,
                                            m_chunk, n_chunk, pipeline, n_threads, act_threads,
                                            0, 0, vtcm_size);
         }
@@ -2467,9 +2550,10 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
 
                         {
                             float *output = hmx_mm_dst_batch_ptr(params, b2_base + g, b3) + mr * params->dst_stride + nc;
+                            const float *src2_chunk = params->src2 ? (hmx_mm_src2_batch_ptr(params, b2_base + g, b3) + mr * params->src2_stride + nc) : NULL;
                             int chunk_dst_cols = params->n - (int)nc;
                             if (chunk_dst_cols > 0) {
-                                transfer_output_chunk_threaded(ctx, output, vtcm_output, (int) n_rows, (int) n_cols, params->dst_stride, chunk_dst_cols, ctx->n_threads);
+                                transfer_output_chunk_threaded(ctx, output, src2_chunk, vtcm_output, (int) n_rows, (int) n_cols, params->dst_stride, params->src2_stride, chunk_dst_cols, ctx->n_threads);
                             }
                         }
                     }
@@ -2727,11 +2811,23 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
         return HTP_STATUS_OK;
     }
 
+    const float * src2_ptr = NULL;
+    uint32_t src2_stride = 0;
+    size_t src2_nb2 = 0;
+    size_t src2_nb3 = 0;
+    if (src2) {
+        src2_ptr = (const float *) src2->data;
+        src2_stride = (uint32_t) (src2->nb[1] / sizeof(float));
+        src2_nb2 = src2->nb[2];
+        src2_nb3 = src2->nb[3];
+    }
+
     int ret = -1;
     const int n_threads = MIN(kparams->n_threads, (int) octx->n_threads);
     if (kparams->kernel_type == HTP_MM_KERNEL_HMX_F16_BATCHED) {
         hmx_mm_f16_f32_batched_params_t batch_params = {
             .dst             = (float *) dst->data,
+            .src2            = src2_ptr,
             .activation      = (float *) src1->data,
             .weight          = (const __fp16 *) src0->data,
             .m               = m_total,
@@ -2740,6 +2836,7 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
             .act_stride      = act_stride,
             .weight_stride   = wgt_stride,
             .dst_stride      = (int) (dst->nb[1] / sizeof(float)),
+            .src2_stride     = src2_stride,
             .ne02            = ne02,
             .ne03            = ne03,
             .ne12            = ne12,
@@ -2750,6 +2847,8 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
             .src1_nb3        = src1->nb[3],
             .dst_nb2         = dst->nb[2],
             .dst_nb3         = dst->nb[3],
+            .src2_nb2        = src2_nb2,
+            .src2_nb3        = src2_nb3,
         };
         ret = hmx_mm_f16_f32_batched(octx->ctx, &batch_params,
                                      kparams->m_chunk, kparams->n_chunk,
@@ -2758,9 +2857,9 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
                                      kparams->vtcm_size);
     } else {
         ret = hmx_mm_2d_f32(
-            octx->ctx, (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
+            octx->ctx, (float*) dst->data, src2_ptr, (float*) src1->data, (const uint8_t *) src0->data,
             m_total, k, n, act_stride, (int) src0->nb[1], (int) src0->type, (int) src1->ne[0],
-            (int)(dst->nb[1] / sizeof(float)), (int)dst->ne[0],
+            (int)(dst->nb[1] / sizeof(float)), src2_stride, (int)dst->ne[0],
             kparams->m_chunk, kparams->n_chunk, kparams->pipeline, n_threads,
             kparams->n_act_threads,
             kparams->tile_size, kparams->aligned_tile_size, kparams->vtcm_size
