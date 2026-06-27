@@ -2027,11 +2027,20 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             {
                 // R-SWA runs on one full cache - the REFERENCE mask keeps the
                 // prefix visible, so no eviction and no iswa.
+                //
+                // The V cache must be F32. This OCR decoder reads dense layout
+                // (e.g. tables) by attending over the always-visible visual
+                // prefix; an F16 V cache truncates those value vectors enough to
+                // garble the output (table headers come out as "&quot;"). The HF
+                // reference accumulates attention in F32, so match it here. We
+                // promote the F16 default to F32 by default while still honoring
+                // an explicit lower-precision -ctv (e.g. q8_0). See PR #24975.
+                const ggml_type type_v = params.type_v == GGML_TYPE_F16 ? GGML_TYPE_F32 : params.type_v;
                 res = new llama_kv_cache(
                         *this,
                         hparams,
                         params.type_k,
-                        params.type_v,
+                        type_v,
                         !cparams.flash_attn,
                         cparams.offload_kqv,
                         cparams.kv_unified,
