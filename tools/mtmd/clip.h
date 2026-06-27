@@ -97,8 +97,13 @@ int clip_model_n_temporal_merge(const struct clip_ctx * ctx); // TODO @ngxson : 
 
 std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * ctx);
 
+// return all tensors of the vision encoder model.
+// used by the mmproj swap pool to relocate them between GPU and host.
+std::vector<ggml_tensor *> clip_get_all_tensors(const struct clip_ctx * ctx);
+
 struct clip_cap {
     bool has_vision;
     bool has_audio;
 };
+MTMD_API void clip_free_buffer(struct clip_ctx * ctx);
 struct clip_cap clip_get_cap(const char * fname);
