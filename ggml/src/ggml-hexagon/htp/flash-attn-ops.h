@@ -93,7 +93,7 @@ static inline size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, siz
     const size_t v_tile_size  = hex_align_up(Bc * DV * sizeof(__fp16), 4096);      // V tiles: [Bc, DV] interleaved
     const size_t s_tile_size  = hex_align_up(g_br * Bc * sizeof(__fp16), 4096);    // S/P:[g_br, Bc]
     const size_t d_tile_size  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);  // D:  [g_br, g_br]
-    const size_t col_vec_size = hex_align_up(g_br * sizeof(__fp16), 256);          // m, l, etc.
+    const size_t col_vec_size = hex_align_up(g_br * sizeof(float), 256);          // m, l, etc.
     const size_t row_vec_size = hex_align_up(Bc * sizeof(__fp16), 256);
     const size_t m_line_size  = hex_align_up(Bc * sizeof(__fp16), 128);
     const size_t m_buf_size   = hex_align_up(Br * m_line_size, 4096) * HMX_FA_DMA_CACHE_SIZE;
@@ -155,7 +155,7 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
     const bool   can_pipeline = (kv_len >= FA_MIN_KV_BLOCKS * bc_unit && n_threads >= 2);
 
     // Approximate per-unit VTCM costs (without per-buffer alignment padding).
-    const size_t per_gbr  = (DK + 2 * DV) * fp16 + 4 * fp16;  // Q + O*2 + 4 col vectors
+    const size_t per_gbr  = (DK + 2 * DV) * fp16 + 4 * sizeof(float);  // Q + O*2 + 4 col vectors
     const size_t per_gbr2 = fp16;                             // D diagonal matrix
     const size_t per_bc =
         3 * DK * fp16 + (can_pipeline ? 4 : 3) * DV * fp16 + 2 * n_threads * fp16;          // K/V DMA x2 + tiles + row bufs
