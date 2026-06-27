@@ -143,7 +143,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 					'[data-slot="chat-form"] textarea'
 				);
 
-				textarea?.focus();
+				textarea?.focus({ preventScroll: true });
 			});
 		}
 
