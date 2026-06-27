@@ -552,6 +552,9 @@ jobs:
           name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
 
   windows-openvino:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
     runs-on: windows-2022
 
     outputs:
