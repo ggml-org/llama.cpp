@@ -98,16 +98,75 @@ int fa_vec_device_family(enum ggml_metal_device_id device_id) {
     }
 }
 
-// Per-device tuned configs (filled by `test-backend-ops tune --tune-perf`).
-// The dk=0 row is a placeholder that never matches a real key (real dk >= 32).
+// Per-device tuned configs measured by `test-backend-ops tune --tune-perf`.
+// key = { device_id, dtype, dk, dv, ne11_b, ne01_b }; cfg = { Q, NE }.
+// ne01_b: 0 = single query row, 1 = >=2 rows. ne11_b: 0..3 over FA_VEC_NE11_BUCKETS.
+// Only configs that beat baseline are listed; unlisted buckets fall back to baseline.
+// Measured on Apple M4 Max (Apple9). f16 K/V; GQA spec-decode/verify shapes.
 constexpr fa_vec_entry_t fa_vec_tuned_table[] = {
-    { { GGML_METAL_DEVICE_GENERIC, GGML_TYPE_F16, 0, 0, 0, 0 }, { 1, 4 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 64, 64, 1, 1 },   { 2, 4 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 64, 64, 2, 1 },   { 2, 4 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 64, 64, 3, 1 },   { 2, 4 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 96, 96, 1, 1 },   { 2, 4 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 96, 96, 2, 1 },   { 2, 4 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 96, 96, 3, 1 },   { 2, 4 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 128, 128, 1, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 128, 128, 2, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 128, 128, 3, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 192, 192, 0, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 192, 192, 1, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 192, 192, 2, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 192, 192, 3, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 192, 128, 1, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 192, 128, 2, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 192, 128, 3, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 256, 256, 0, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 256, 256, 1, 0 }, { 1, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 256, 256, 1, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 256, 256, 2, 0 }, { 1, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 256, 256, 2, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 256, 256, 3, 0 }, { 1, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 256, 256, 3, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 320, 256, 0, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 320, 256, 1, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 320, 256, 2, 1 }, { 2, 2 } },
+    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 320, 256, 3, 1 }, { 2, 2 } },
 };
 
-// Per-family tuned configs, keyed by family value in key.device_id. Apple9+
-// devices reuse the Apple9 (family=9) rows via the superset fallback in fa_vec_pick.
+// Per-family configs, keyed by Apple GPU family in key.device_id (here 9 = Apple9).
+// Apple9+ devices (M3/M4/M5) reuse these via the family fallback in fa_vec_pick.
+// The 9 is the family value, not a device_id, although it happens to equal the
+// GGML_METAL_DEVICE_M3 enumerator; it is only ever matched in this family table.
+// Mirrors the M4 Max data as the Apple9 representative (M4 Max is the only Apple9
+// device measured here; M3/M5 inherit by family, see PR notes).
 constexpr fa_vec_entry_t fa_vec_family_table[] = {
-    { { 0, GGML_TYPE_F16, 0, 0, 0, 0 }, { 1, 4 } },
+    { { 9, GGML_TYPE_F16, 64, 64, 1, 1 },   { 2, 4 } },
+    { { 9, GGML_TYPE_F16, 64, 64, 2, 1 },   { 2, 4 } },
+    { { 9, GGML_TYPE_F16, 64, 64, 3, 1 },   { 2, 4 } },
+    { { 9, GGML_TYPE_F16, 96, 96, 1, 1 },   { 2, 4 } },
+    { { 9, GGML_TYPE_F16, 96, 96, 2, 1 },   { 2, 4 } },
+    { { 9, GGML_TYPE_F16, 96, 96, 3, 1 },   { 2, 4 } },
+    { { 9, GGML_TYPE_F16, 128, 128, 1, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 128, 128, 2, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 128, 128, 3, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 192, 192, 0, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 192, 192, 1, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 192, 192, 2, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 192, 192, 3, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 192, 128, 1, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 192, 128, 2, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 192, 128, 3, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 256, 256, 0, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 256, 256, 1, 0 }, { 1, 2 } },
+    { { 9, GGML_TYPE_F16, 256, 256, 1, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 256, 256, 2, 0 }, { 1, 2 } },
+    { { 9, GGML_TYPE_F16, 256, 256, 2, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 256, 256, 3, 0 }, { 1, 2 } },
+    { { 9, GGML_TYPE_F16, 256, 256, 3, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 320, 256, 0, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 320, 256, 1, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 320, 256, 2, 1 }, { 2, 2 } },
+    { { 9, GGML_TYPE_F16, 320, 256, 3, 1 }, { 2, 2 } },
 };
 
 static bool         g_override_set = false;

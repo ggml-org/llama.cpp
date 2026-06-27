@@ -10004,7 +10004,7 @@ static bool run_fa_vec_tune_perf(ggml_backend_t backend_metal) {
 
     // Bucket boundaries; keep in sync with ggml-metal-tuning.h.
     const int ne11_bounds[] = { 1024, 4096, 16384 };
-    const int ne01_bounds[] = { 2, 3, 5 };
+    const int ne01_bounds[] = { 2 };
     auto bucket = [](int v, const int * b, int n) {
         for (int i = 0; i < n; ++i) {
             if (v < b[i]) {

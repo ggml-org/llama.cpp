@@ -8,8 +8,12 @@
 namespace ggml_metal_tuning {
 
 // FA vec selection key buckets: ne11 = KV length, ne01 = query rows.
+// ne01 only needs the 1 vs >=2 split: Q>1 reuses one K/V tile load across query
+// rows, so the optimum flips to Q>1 exactly when there are >=2 rows to share it.
+// ne11 keeps a finer split: the baseline->Q>1 crossover by KV length is head-size
+// dependent (small dk crosses late, large dk wins even at short KV).
 constexpr int FA_VEC_NE11_BUCKETS[] = { 1024, 4096, 16384 };
-constexpr int FA_VEC_NE01_BUCKETS[] = { 2, 3, 5 };
+constexpr int FA_VEC_NE01_BUCKETS[] = { 2 };
 
 int fa_vec_ne11_bucket(int64_t ne11);
 int fa_vec_ne01_bucket(int64_t ne01);
