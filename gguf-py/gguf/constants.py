@@ -818,8 +818,6 @@ class MODEL_TENSOR(IntEnum):
     V_MM_UP              = auto() # cogvlm
     V_MM_DOWN            = auto() # cogvlm
     V_MM_GATE            = auto() # cogvlm
-    V_MM_MERGE_FC1       = auto() # minimax-m3 (patch-merge MLP)
-    V_MM_MERGE_FC2       = auto() # minimax-m3 (patch-merge MLP)
     V_TOK_BOI            = auto() # cogvlm
     V_TOK_EOI            = auto() # cogvlm
     V_TOK_IMG_BEGIN      = auto() # hunyuanvl
@@ -1378,8 +1376,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MM_UP:                   "mm.up",
     MODEL_TENSOR.V_MM_DOWN:                 "mm.down",
     MODEL_TENSOR.V_MM_GATE:                 "mm.gate",
-    MODEL_TENSOR.V_MM_MERGE_FC1:            "mm.merge.fc1",
-    MODEL_TENSOR.V_MM_MERGE_FC2:            "mm.merge.fc2",
     MODEL_TENSOR.V_TOK_BOI:                 "v.boi",
     MODEL_TENSOR.V_TOK_EOI:                 "v.eoi",
     MODEL_TENSOR.V_MM_PRE_NORM:             "mm.pre_norm",
@@ -1576,8 +1572,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_RESMPL_QUERY,
         MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK,
         MODEL_TENSOR.V_MM_PATCH_MERGER,
-        MODEL_TENSOR.V_MM_MERGE_FC1,
-        MODEL_TENSOR.V_MM_MERGE_FC2,
         MODEL_TENSOR.V_DS_NORM,
         MODEL_TENSOR.V_DS_FC1,
         MODEL_TENSOR.V_DS_FC2,
@@ -4594,7 +4588,6 @@ class VisionProjectorType:
     YOUTUVL = "youtuvl"
     NEMOTRON_V2_VL = "nemotron_v2_vl"
     HUNYUANVL      = "hunyuanvl"
-    MINIMAXM3      = "minimax_m3"
     MINICPMV4_6    = "minicpmv4_6"
     GRANITE_SPEECH = "granite_speech"  # audio
     MIMOVL         = "mimovl"

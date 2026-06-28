@@ -1278,19 +1278,19 @@ class TensorNameMap:
         MODEL_TENSOR.INDEXER_ATTN_Q_B: (
             "model.layers.{bid}.self_attn.indexer.wq_b", # DSA
         ),
-
+        
         MODEL_TENSOR.INDEXER_Q_PROJ: (
             "model.layers.{bid}.self_attn.index_q_proj", # MSA
         ),
-
+        
         MODEL_TENSOR.INDEXER_K_PROJ: (
             "model.layers.{bid}.self_attn.index_k_proj", # MSA
         ),
-
+        
         MODEL_TENSOR.INDEXER_Q_NORM: (
             "model.layers.{bid}.self_attn.index_q_norm", # MSA
         ),     
-
+        
 
         ############################################################################
         # TODO: these do not belong to block_mappings_cfg - move them to mappings_cfg
@@ -1831,14 +1831,6 @@ class TensorNameMap:
             "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1 - hf
             "patch_merger.merging_layer", # mistral
             "visual.downsample", # glm4v
-        ),
-
-        MODEL_TENSOR.V_MM_MERGE_FC1: (
-            "patch_merge_mlp.linear_1", # minimax-m3
-        ),
-
-        MODEL_TENSOR.V_MM_MERGE_FC2: (
-            "patch_merge_mlp.linear_2", # minimax-m3
         ),
 
         MODEL_TENSOR.V_DS_NORM: (

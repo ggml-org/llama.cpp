@@ -7,7 +7,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, MmprojModel, gguf
+from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("MiniMaxM2ForCausalLM")
@@ -85,52 +85,4 @@ class MiniMaxM3Model(MiniMaxM2Model):
         if name.endswith("norm.weight"):
             data_torch = data_torch + 1.0
 
-        yield from super().modify_tensors(data_torch, name, bid)
-
-
-@ModelBase.register("MiniMaxM3SparseForConditionalGeneration", "MiniMaxM3VLForConditionalGeneration")
-class MiniMaxM3VisionModel(MmprojModel):
-    @classmethod
-    def filter_tensors(cls, item):
-        name, gen = item
-        # keep only the vision-side tensors; text / mtp / sparse-index are dropped
-        if not name.startswith(("vision_tower.", "multi_modal_projector.", "patch_merge_mlp.")):
-            return None
-        return super().filter_tensors((name, gen))
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-        assert self.hparams_vision is not None
-
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MINIMAXM3)
-        self.gguf_writer.add_vision_use_gelu(True)
-
-        # the ViT carries its own LayerNorm eps (text tower uses a different one)
-        self.gguf_writer.add_vision_attention_layernorm_eps(
-            self.hparams_vision.get("layer_norm_eps", 1e-5)
-        )
-
-        comp = self.hparams_vision.get("img_token_compression_config", {})
-        merge_size = comp.get("spatial_merge_size", 2)
-        self.gguf_writer.add_vision_spatial_merge_size(int(merge_size))
-
-    def modify_tensors(self, data_torch, name, bid):
-        assert self.hparams_vision is not None
-
-        # Conv3d patch embed -> split into temporal_patch_size Conv2d slices, summed in C++.
-        # MiniMax-M3 has no patch-embed bias.
-        if name == "vision_tower.vision_model.embeddings.patch_embedding.weight":
-            if data_torch.ndim != 5:
-                raise ValueError(f"unexpected patch_embedding rank {data_torch.ndim} for {name}")
-            kt = data_torch.shape[2]  # temporal_patch_size
-            base = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH]
-            for t in range(kt):
-                suffix = ".weight" if t == 0 else f".weight.{t}"
-                yield (base + suffix, data_torch[:, :, t, ...])
-            return
-
-        # everything else resolves through the precomputed MMPROJ name map:
-        #   vision_tower.vision_model.*        -> v.* (auto, shared CLIP mapping)
-        #   multi_modal_projector.linear_{bid} -> mm.{bid}
-        #   patch_merge_mlp.linear_{1,2}       -> mm.merge.fc{1,2}
         yield from super().modify_tensors(data_torch, name, bid)

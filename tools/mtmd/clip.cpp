@@ -915,10 +915,6 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_mimovl>(ctx, img);
             } break;
-        case PROJECTOR_TYPE_MINIMAX_M3:
-            {
-                builder = std::make_unique<clip_graph_minimax_m3>(ctx, img);
-            } break;
         case PROJECTOR_TYPE_STEP3VL:
             {
                 builder = std::make_unique<clip_graph_step3vl>(ctx, img);
@@ -1468,16 +1464,6 @@ struct clip_model_loader {
                             LOG_WRN("%s: if you encounter problems with accuracy, try adding --image-min-tokens 1024\n", __func__);
                             LOG_WRN("%s: more info: https://github.com/ggml-org/llama.cpp/issues/16842\n\n", __func__);
                         }
-                    } break;
-                case PROJECTOR_TYPE_MINIMAX_M3:
-                    {
-                        hparams.n_merge = 2; // spatial_merge_size
-                        hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
-                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
-                        hparams.rope_theta = 10000.0f; // vision_config.rope_theta
-                        // MiniMax-M3: max_pixels 451584 (=672^2) -> 576 merged tokens (image_seq_length)
-                        hparams.set_limit_image_tokens(8, 576);
-                        hparams.set_warmup_n_tokens(16*16);
                     } break;
                 case PROJECTOR_TYPE_MIMOVL:
                     {
@@ -2085,19 +2071,6 @@ struct clip_model_loader {
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"), false);
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
-                } break;
-            case PROJECTOR_TYPE_MINIMAX_M3:
-                {
-                    // per-patch MLP: mm.1 -> gelu -> mm.2
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
-                    // 2x2 merge MLP: mm.merge.fc1 -> gelu -> mm.merge.fc2
-                    model.mm_merge_fc1_w = get_tensor(string_format(TN_MM_MERGE_FC1, "weight"));
-                    model.mm_merge_fc1_b = get_tensor(string_format(TN_MM_MERGE_FC1, "bias"));
-                    model.mm_merge_fc2_w = get_tensor(string_format(TN_MM_MERGE_FC2, "weight"));
-                    model.mm_merge_fc2_b = get_tensor(string_format(TN_MM_MERGE_FC2, "bias"));
                 } break;
             case PROJECTOR_TYPE_STEP3VL:
                 {
@@ -3235,7 +3208,6 @@ int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
-        case PROJECTOR_TYPE_MINIMAX_M3:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_HUNYUANVL:
@@ -3258,7 +3230,6 @@ int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
-        case PROJECTOR_TYPE_MINIMAX_M3:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_HUNYUANVL:
@@ -3339,7 +3310,6 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
-        case PROJECTOR_TYPE_MINIMAX_M3:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_YOUTUVL:
             {
@@ -3838,42 +3808,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                 }
 
                 set_input_i32("positions", positions);
-            } break;
-        case PROJECTOR_TYPE_MINIMAX_M3:
-            {
-                // 3D RoPE cos/sin, host port of MiniMaxM3VL3DRotaryEmbedding.
-                // Block (2x2-merge) order, per-axis frequency denominator = axis_dim.
-                const int gh = image_size_height / patch_size;
-                const int gw = image_size_width  / patch_size;
-                const int n_pos    = gh * gw;
-                const int axis_dim = 26, nf = axis_dim / 2;   // 13 freqs/axis
-                const int rope_dim = 3 * axis_dim;            // 78
-                const float theta  = hparams.rope_theta;       // vision_config.rope_theta (10000)
-                std::vector<float> inv(nf);
-                for (int k = 0; k < nf; k++) {
-                    inv[k] = 1.0f / std::pow(theta, (2.0f * k) / axis_dim);
-                }
-                std::vector<float> cosb(rope_dim * n_pos), sinb(rope_dim * n_pos);
-                int p = 0;
-                for (int bh = 0; bh < gh / 2; bh++)
-                for (int bw = 0; bw < gw / 2; bw++)
-                for (int mh = 0; mh < 2; mh++)
-                for (int mw = 0; mw < 2; mw++) {
-                    const int coord[3] = { 0, bh * 2 + mh, bw * 2 + mw }; // t,h,w
-                    for (int axis = 0; axis < 3; axis++) {
-                        for (int k = 0; k < nf; k++) {
-                            const float ang = coord[axis] * inv[k];
-                            const int d0 = axis * nf + k;          // 0..38
-                            cosb[p*rope_dim + d0]      = std::cos(ang);
-                            sinb[p*rope_dim + d0]      = std::sin(ang);
-                            cosb[p*rope_dim + d0 + 39] = std::cos(ang); // emb = cat([f,f])
-                            sinb[p*rope_dim + d0 + 39] = std::sin(ang);
-                        }
-                    }
-                    p++;
-                }
-                set_input_f32("minimax_cos", cosb);
-                set_input_f32("minimax_sin", sinb);
             } break;
         case PROJECTOR_TYPE_DOTS_OCR:
             {
@@ -4549,17 +4483,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
         float variance = (sum_sq / emb_data.size()) - (mean * mean);
         LOG_INF("Stats: mean=%.6f, std=%.6f, min=%.6f, max=%.6f, sum=%.6f\n",
                 mean, sqrtf(variance), min_val, max_val, sum);
-
-        // Dump raw float32 [n_tokens, n_embd] (token-major) for numerical parity checks.
-        const char * dump_path = std::getenv("MTMD_DEBUG_EMBEDDINGS_FILE");
-        if (dump_path == nullptr) dump_path = "clip_proj_out.bin";
-        FILE * df = fopen(dump_path, "wb");
-        if (df) {
-            fwrite(emb_data.data(), sizeof(float), emb_data.size(), df);
-            fclose(df);
-            LOG_INF("dumped embeddings -> %s [%lld tokens x %lld embd]\n",
-                    dump_path, (long long)n_tokens, (long long)n_embd);
-        }
         LOG_INF("=== END MTMD_DEBUG_EMBEDDINGS ===\n\n");
     }
 
@@ -4586,8 +4509,6 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_ffn_down_w->ne[1];
         case PROJECTOR_TYPE_GLM_EDGE:
             return ctx->model.mm_model_mlp_3_w->ne[1];
-        case PROJECTOR_TYPE_MINIMAX_M3:
-            return ctx->model.mm_merge_fc2_b->ne[0];
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_EXAONE4_5:

@@ -40,12 +40,6 @@ struct clip_graph_qwen3vl : clip_graph_qwen2vl {
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_minimax_m3 : clip_graph {
-    clip_graph_minimax_m3(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
-    ggml_cgraph * build() override;
-    ggml_tensor * apply_rope(ggml_tensor * x, ggml_tensor * rope_cos, ggml_tensor * rope_sin);
-};
-
 struct clip_graph_mimovl : clip_graph {
     clip_graph_mimovl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
