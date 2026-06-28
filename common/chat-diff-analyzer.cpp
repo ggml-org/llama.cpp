@@ -173,6 +173,46 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               LOG_DBG(ANSI_ORANGE "[Patch: JSON name/parameters tool instruction]\n" ANSI_RESET);
           }
       },
+      // MiniCPM5 - tagged XML tool calls: <function name="NAME"><param name="KEY">VALUE</param>...</function>
+      // The differential analyzer mis-infers this attribute-keyed format (function name and
+      // parameter names live inside the tag as quoted attributes), so pin it explicitly.
+      // Trigger is anchored to the updated MiniCPM5 template's <tool_def_sep> system
+      // placeholder so other tag-attribute templates don't get hijacked. Multi-line param
+      // values are wrapped in <![CDATA[...]]> by the template, so the CDATA delimiters
+      // are also preserved and stripped from the final argument value by the parser
+      // (see chat-auto-parser-generator.cpp build_tool_parser_tag_tagged).
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("<function name=\"") != std::string::npos &&
+              tmpl.src.find("<param name=\"") != std::string::npos &&
+              tmpl.src.find("</function>") != std::string::npos &&
+              tmpl.src.find("<tool_def_sep>") != std::string::npos) {
+              analysis.tools.format.mode            = tool_format::TAG_WITH_TAGGED;
+              analysis.tools.format.section_start   = "";
+              analysis.tools.format.section_end     = "";
+              analysis.tools.format.per_call_start  = "<function name=\"";
+              analysis.tools.format.per_call_end    = "</function>";
+              analysis.tools.function.name_prefix   = "";
+              analysis.tools.function.name_suffix   = "\">";
+              analysis.tools.function.close         = "";
+              analysis.tools.arguments.start        = "";
+              analysis.tools.arguments.end          = "";
+              analysis.tools.arguments.name_prefix  = "<param name=\"";
+              analysis.tools.arguments.name_suffix  = "\">";
+              analysis.tools.arguments.value_prefix = "";
+              analysis.tools.arguments.value_suffix = "</param>";
+              analysis.tools.arguments.separator    = "";
+              // The tool delimiters are special tokens; preserve them so they survive
+              // detokenization and reach the tool-call parser. CDATA delimiters wrap
+              // multi-line / special-char param values in the updated template.
+              analysis.preserved_tokens.push_back("<function");
+              analysis.preserved_tokens.push_back("</function>");
+              analysis.preserved_tokens.push_back("<param");
+              analysis.preserved_tokens.push_back("</param>");
+              analysis.preserved_tokens.push_back("<![CDATA[");
+              analysis.preserved_tokens.push_back("]]>");
+              LOG_DBG(ANSI_ORANGE "[Patch: MiniCPM5 tagged tool calls]\n" ANSI_RESET);
+          }
+      }
 
     });
 

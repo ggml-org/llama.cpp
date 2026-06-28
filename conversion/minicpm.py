@@ -45,7 +45,12 @@ class MiniCPMModel(TextModel):
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_SHORT), torch.tensor(short_factors, dtype=torch.float32))
 
     def set_vocab(self):
-        self._set_vocab_sentencepiece()
+        # MiniCPM variants ship either a sentencepiece tokenizer.model or a BPE
+        # tokenizer.json (e.g. MiniCPM5). Prefer sentencepiece, fall back to BPE.
+        try:
+            self._set_vocab_sentencepiece()
+        except FileNotFoundError:
+            self._set_vocab_gpt2()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.hparams["num_attention_heads"]
@@ -98,7 +103,12 @@ class MiniCPM3Model(TextModel):
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_SHORT), torch.tensor(short_factors, dtype=torch.float32))
 
     def set_vocab(self):
-        self._set_vocab_sentencepiece()
+        # MiniCPM variants ship either a sentencepiece tokenizer.model or a BPE
+        # tokenizer.json (e.g. MiniCPM5). Prefer sentencepiece, fall back to BPE.
+        try:
+            self._set_vocab_sentencepiece()
+        except FileNotFoundError:
+            self._set_vocab_gpt2()
 
     def _reverse_hf_permute(self, weights: Tensor, n_head: int, n_kv_head: int | None = None) -> Tensor:
         if n_kv_head is not None and n_head != n_kv_head:

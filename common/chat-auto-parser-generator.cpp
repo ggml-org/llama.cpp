@@ -367,6 +367,12 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     const auto & inputs      = ctx.inputs;
 
     auto until_suffix = p.rule("until-suffix", p.until(arguments.value_suffix));
+    // CDATA-aware string value: MiniCPM5 (and other CDATA-XML-style templates) wrap
+    // multi-line / special-char string values in <![CDATA[...]]>. Capture only the
+    // inner bytes as the string value so the delimiters do not leak into the
+    // OpenAI-style tool_call arguments. Plain values fall through to until_suffix.
+    auto cdata_string_value =
+        p.atomic(p.literal("<![CDATA[") + p.tool_arg_string_value(p.until("]]>")) + p.literal("]]>"));
 
     common_peg_parser tool_choice = p.choice();
 
@@ -390,12 +396,17 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         for (const auto & [param_name, param_schema] : properties.items()) {
             bool is_required = required.find(param_name) != required.end();
 
+            // CDATA-first string value: prefer the CDATA-wrapped form, fall back to plain.
+            // Kept inside p.ac(...) so the upstream stricter end-anchor on value_suffix
+            // still applies.
+            auto string_value_parser = p.choice({ cdata_string_value, p.tool_arg_string_value(until_suffix) });
+
             auto arg =
                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
                                            arguments.name_suffix) +
                            arguments.value_prefix +
                            (schema_info.resolves_to_string(param_schema) ?
-                                p.ac(p.tool_arg_string_value(until_suffix) +
+                                p.ac(string_value_parser +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)), arguments.value_suffix) :
                                 (p.tool_arg_json_value(p.schema(
                                     p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +

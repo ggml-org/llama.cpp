@@ -1108,6 +1108,80 @@ const func_builtins & value_array_t::get_builtins() const {
             std::reverse(arr.begin(), arr.end());
             return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
         }},
+        {"min", [](const func_args & args) -> value {
+            args.ensure_count(1, 3);
+            value val       = args.get_pos(0);
+            value val_case  = args.get_kwarg_or_pos("case_sensitive", 1);
+            value attribute = args.get_kwarg_or_pos("attribute",      2);
+            if (!is_val<value_array>(val)) {
+                throw raised_exception("min: first argument must be an array");
+            }
+            const auto & arr = val->as_array();
+            if (arr.empty()) {
+                return mk_val<value_undefined>();
+            }
+            const bool attr_is_int = is_val<value_int>(attribute);
+            const int64_t attr_int = attr_is_int ? attribute->as_int() : 0;
+            auto key_of = [&](const value & v) -> value {
+                if (attribute->is_undefined()) {
+                    return v;
+                }
+                if (attr_is_int && is_val<value_array>(v)) {
+                    return v->at(attr_int);
+                }
+                if (!attr_is_int && is_val<value_object>(v)) {
+                    return v->at(attribute);
+                }
+                throw raised_exception("min: unsupported attribute lookup on " + v->type());
+            };
+            value best = arr[0];
+            value best_key = key_of(best);
+            for (size_t i = 1; i < arr.size(); ++i) {
+                value k = key_of(arr[i]);
+                if (value_compare(k, best_key, value_compare_op::lt)) {
+                    best     = arr[i];
+                    best_key = k;
+                }
+            }
+            return best;
+        }},
+        {"max", [](const func_args & args) -> value {
+            args.ensure_count(1, 3);
+            value val       = args.get_pos(0);
+            value val_case  = args.get_kwarg_or_pos("case_sensitive", 1);
+            value attribute = args.get_kwarg_or_pos("attribute",      2);
+            if (!is_val<value_array>(val)) {
+                throw raised_exception("max: first argument must be an array");
+            }
+            const auto & arr = val->as_array();
+            if (arr.empty()) {
+                return mk_val<value_undefined>();
+            }
+            const bool attr_is_int = is_val<value_int>(attribute);
+            const int64_t attr_int = attr_is_int ? attribute->as_int() : 0;
+            auto key_of = [&](const value & v) -> value {
+                if (attribute->is_undefined()) {
+                    return v;
+                }
+                if (attr_is_int && is_val<value_array>(v)) {
+                    return v->at(attr_int);
+                }
+                if (!attr_is_int && is_val<value_object>(v)) {
+                    return v->at(attribute);
+                }
+                throw raised_exception("max: unsupported attribute lookup on " + v->type());
+            };
+            value best = arr[0];
+            value best_key = key_of(best);
+            for (size_t i = 1; i < arr.size(); ++i) {
+                value k = key_of(arr[i]);
+                if (value_compare(k, best_key, value_compare_op::gt)) {
+                    best     = arr[i];
+                    best_key = k;
+                }
+            }
+            return best;
+        }},
         {"unique", array_unique_not_implemented},
     };
     return builtins;
