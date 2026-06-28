@@ -255,7 +255,7 @@ llama_kv_cache::llama_kv_cache(
             k_stream.push_back(has_k ? ggml_view_2d(ctx, k, n_embd_k_gqa, kv_size, k->nb[1], s*k->nb[2]) : nullptr);
             v_stream.push_back(has_v ? ggml_view_2d(ctx, v, n_embd_v_gqa, kv_size, v->nb[1], s*v->nb[2]) : nullptr);
         }
-        
+
         const uint32_t n_embd_k_idx = hparams.n_embd_k_idx(il);
         // Indexer keys share the SAME buffer as k/v for this layer.
         ggml_tensor * k_idx = n_embd_k_idx > 0
