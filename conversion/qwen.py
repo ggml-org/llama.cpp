@@ -643,21 +643,21 @@ class DFlashModel(Qwen3Model):
         super().set_vocab()
         self.dir_model = original_dir
 
+        mask_token_id = self.hparams.get("dflash_config", {}).get("mask_token_id")
+        if mask_token_id is not None:
+            self.gguf_writer.add_mask_token_id(mask_token_id)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
         block_size = self.hparams.get("block_size", 16)
-        self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.block_size", block_size)
+        self.gguf_writer.add_block_size(block_size)
         dflash_config = self.hparams.get("dflash_config", {})
 
         target_layer_ids = dflash_config.get("target_layer_ids", [])
         if target_layer_ids:
             extract_layer_ids = [i + 1 for i in target_layer_ids]
-            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", extract_layer_ids)
-
-        mask_token_id = dflash_config.get("mask_token_id", None)
-        if mask_token_id is not None:
-            self.gguf_writer.add_mask_token_id(mask_token_id)
+            self.gguf_writer.add_target_layers(extract_layer_ids)
 
         use_sliding_window = self.hparams.get("use_sliding_window", False)
         sliding_window = self.hparams.get("sliding_window")
@@ -667,13 +667,9 @@ class DFlashModel(Qwen3Model):
             self.gguf_writer.add_sliding_window(sliding_window)
             self.gguf_writer.add_sliding_window_pattern(is_swa)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name == "fc.weight":
-            yield (name, data_torch)
-            return
-        if name == "hidden_norm.weight":
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.ENC_OUTPUT_NORM), data_torch)
-            return
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
         if not name.startswith("model."):
             name = "model." + name
-        yield from super().modify_tensors(data_torch, name, bid)
+        return super().filter_tensors((name, gen))
