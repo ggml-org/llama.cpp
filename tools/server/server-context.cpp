@@ -3968,6 +3968,14 @@ server_response_reader server_context::get_response_reader() {
     return impl->get_response_reader();
 }
 
+float server_context::get_slot_prompt_similarity() const {
+    return impl->slot_prompt_similarity;
+}
+
+void server_context::set_slot_prompt_similarity(float value) {
+    impl->slot_prompt_similarity = value;
+}
+
 server_context_meta server_context::get_meta() const {
     auto bos_id = llama_vocab_bos(impl->vocab);
     auto eos_id = llama_vocab_eos(impl->vocab);

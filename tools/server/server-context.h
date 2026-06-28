@@ -106,6 +106,11 @@ struct server_context {
     // not thread-safe, should only be used from the main thread
     server_context_meta get_meta() const;
 
+    // get/set the slot-prompt-similarity threshold for slot selection
+    // not thread-safe, should only be used from the main thread
+    float get_slot_prompt_similarity() const;
+    void  set_slot_prompt_similarity(float value);
+
     // note: must be set before load_model() is called
     void set_state_callback(server_state_callback_t callback);
 };
