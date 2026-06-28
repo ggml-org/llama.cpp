@@ -65,12 +65,11 @@ class MiniMaxM3Model(MiniMaxM2Model):
         self.gguf_writer.add_expert_weights_norm(True)
         
         sac = self.find_hparam(["sparse_attention_config"])
-        arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
-        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.HEAD_COUNT.format(arch=arch),   sac["sparse_num_index_heads"])
-        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.KEY_LENGTH.format(arch=arch),   sac["sparse_index_dim"])
-        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.TOP_K.format(arch=arch),        sac["sparse_topk_blocks"])
-        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.BLOCK_SIZE.format(arch=arch),   sac["sparse_block_size"])
-        self.gguf_writer.add_uint32(gguf.Keys.Attention.Indexer.LOCAL_BLOCKS.format(arch=arch), sac["sparse_local_block"])
+        self.gguf_writer.add_indexer_head_count(sac["sparse_num_index_heads"])
+        self.gguf_writer.add_indexer_key_length(sac["sparse_index_dim"])
+        self.gguf_writer.add_indexer_top_k(sac["sparse_topk_blocks"])
+        self.gguf_writer.add_indexer_block_size(sac["sparse_block_size"])
+        self.gguf_writer.add_indexer_local_blocks(sac["sparse_local_block"])
         
         moe_layer_freq = self.find_hparam(["moe_layer_freq"])
         n_dense = 0
