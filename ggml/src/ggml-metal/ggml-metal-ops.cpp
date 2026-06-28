@@ -3800,9 +3800,7 @@ int ggml_metal_op_conv_2d_dw(ggml_metal_op_t ctx, int idx) {
 
     const bool use_tiled = (nb12 < nb10);
 
-    auto pipeline = use_tiled
-        ? ggml_metal_library_get_pipeline_conv_2d_dw_tiled(lib, op)
-        : ggml_metal_library_get_pipeline_conv_2d_dw(lib, op);
+    auto pipeline = ggml_metal_library_get_pipeline_conv_2d_dw(lib, op, use_tiled);
 
     int nth = ggml_metal_pipeline_max_theads_per_threadgroup(pipeline);
     nth = std::min(nth, 256);
