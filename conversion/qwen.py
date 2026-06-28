@@ -530,6 +530,8 @@ class _Qwen35MRopeMixin:
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        if self._mtp_layers > 0:
+            self.gguf_writer.add_nextn_predict_layers(self._mtp_layers)
         if "mrope_section" not in self.rope_parameters:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
@@ -548,13 +550,28 @@ class _Qwen35MtpMixin:
     tensor_map: gguf.TensorNameMap
     no_mtp: bool
     mtp_only: bool
+    model_tensors: dict[str, Callable[[], Tensor]]
+    _mtp_layers: int = 0
     _original_block_count: int | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.block_count = self.hparams["num_hidden_layers"]
-        if not self.no_mtp:
-            self.block_count += self.hparams.get("mtp_num_hidden_layers", 0)
+        # Removed for #24737 Fix by CryptoJones
+        # self.block_count = self.hparams["num_hidden_layers"]
+        # if not self.no_mtp:
+        #     self.block_count += self.hparams.get("mtp_num_hidden_layers", 0)
+        
+        n_layers = self.hparams["num_hidden_layers"]
+        self._mtp_layers = 0 if self.no_mtp else self.hparams.get("mtp_num_hidden_layers", 0)
+        if self._mtp_layers > 0:
+        
+        mtp_prefixes = tuple(f"model.layers.{n_layers + i}." for i in range(self._mtp_layers))
+        if not any(name.startswith(mtp_prefixes) for name in self.model_tensors):
+            logger.warning("config declares mtp_num_hidden_layers=%d but the checkpoint ships no MTP tensors; not reserving MTP block(s) (see ggml-org/llama.cpp#24737)",
+            self._mtp_layers,)
+
+        self._mtp_layers = 0
+        self.block_count = n_layers + self._mtp_layers
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
@@ -598,10 +615,13 @@ class _Qwen35MtpMixin:
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
-        if self.no_mtp:
-            return
-        if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
-            self.gguf_writer.add_nextn_predict_layers(n)
+        #//removed for #24737
+        #if self.no_mtp:
+        #    return
+        #if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
+        #    self.gguf_writer.add_nextn_predict_layers(n)
+        if self._mtp_layers > 0:
+            self.gguf_writer.add_nextn_predict_layers(self._mtp_layers)
 
     def prepare_metadata(self, vocab_only: bool):
         from_dir = self.fname_out.is_dir()
