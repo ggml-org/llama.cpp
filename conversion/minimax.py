@@ -62,14 +62,9 @@ class MiniMaxM3Model(TextModel):
     _experts_cache: dict[int, dict[str, Tensor]] = {}
 
     def set_gguf_parameters(self):
-        # dense layers use dense_intermediate_size, experts use intermediate_size. Base
-        # writes feed_forward_length from intermediate_size, so swap in the dense width
-        # and emit the expert width separately.
-        expert_ff = self.find_hparam(["intermediate_size"])
-        self.hparams["intermediate_size"] = self.find_hparam(["dense_intermediate_size"])
         super().set_gguf_parameters()
 
-        self.gguf_writer.add_expert_feed_forward_length(expert_ff)
+        self.gguf_writer.add_expert_feed_forward_length(self.find_hparam(["intermediate_size"]))
         self.gguf_writer.add_rope_dimension_count(self.find_hparam(["rotary_dim"]))
         self.gguf_writer.add_expert_shared_count(self.find_hparam(["n_shared_experts"]))
         self.gguf_writer.add_expert_weights_scale(self.find_hparam(["routed_scaling_factor"]))
@@ -105,14 +100,6 @@ class MiniMaxM3Model(TextModel):
         self.gguf_writer.add_leading_dense_block_count(n_dense)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        # text-only: drop vision, projector, patch-merge tensors
-        if name.startswith(("vision_tower", "multi_modal_projector", "patch_merge_mlp")):
-            return
-
-        # strip VL wrapper prefix to match tensor_mapping names
-        if name.startswith("language_model."):
-            name = name[len("language_model."):]
-
         # Gemma-style (1 + w) RMSNorm: bake the +1 in so llama.cpp can use plain RMSNorm
         if name.endswith("norm.weight"):
             data_torch = data_torch + 1.0

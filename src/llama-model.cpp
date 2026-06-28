@@ -799,6 +799,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_122B_A10B:     return "122B.A10B";
         case LLM_TYPE_196B_A11B:     return "196B.A11B";
         case LLM_TYPE_230B_A10B:     return "230B.A10B";
+        case LLM_TYPE_428B_A23B:     return "428B.A23B";
         case LLM_TYPE_235B_A22B:     return "235B.A22B";
         case LLM_TYPE_300B_A47B:     return "300B.A47B";
         case LLM_TYPE_310B_A15B:     return "310B.A15B";

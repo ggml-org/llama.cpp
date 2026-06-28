@@ -133,6 +133,7 @@ enum llm_type {
     LLM_TYPE_122B_A10B, // Qwen3.5
     LLM_TYPE_196B_A11B, // Step3.5-Flash
     LLM_TYPE_230B_A10B, // Minimax M2
+    LLM_TYPE_428B_A23B, // Minimax M3
     LLM_TYPE_235B_A22B,
     LLM_TYPE_300B_A47B, // Ernie MoE big
     LLM_TYPE_310B_A15B, // /MiMo-V2-Flash

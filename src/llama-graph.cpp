@@ -1408,6 +1408,17 @@ ggml_tensor * llm_graph_context::build_ffn(
                 cur = ggml_swiglu(ctx0, cur);
                 cb(cur, "ffn_swiglu", il);
             } break;
+        case LLM_FFN_SWIGLU_OAI:
+            if (gate && type_gate == LLM_FFN_PAR) {
+                //Same constants as LLM_FFN_SWIGLU_OAI_MOE
+                const float alpha = 1.702f;
+                const float limit = 7.0f;
+                cur = ggml_swiglu_oai(ctx0, cur, tmp, alpha, limit);
+                cb(cur, "ffn_swiglu_oai", il);
+                type_gate = LLM_FFN_SEQ;
+            } else {
+                GGML_ABORT("LLM_FFN_SWIGLU_OAI requires a parallel gate");
+            } break;
         case LLM_FFN_GEGLU:
             {
                 cur = ggml_geglu(ctx0, cur);
