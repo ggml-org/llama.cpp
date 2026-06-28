@@ -1468,6 +1468,16 @@ static void ggml_metal_buffer_rset_free(ggml_metal_buffer_t buf) {
         if (buf->rset) {
             [buf->rset endResidency];
             [buf->rset removeAllAllocations];
+            // Symmetric pairing for ggml_metal_device_rsets_add (called from
+            // ggml_metal_buffer_rset_init): the device-side collection holds
+            // a reference to this rset so the keep-alive heartbeat thread can
+            // requestResidency on it. Without removing it here, the device's
+            // rsets->data array retains a (about-to-be-released) reference,
+            // and ggml_metal_rsets_free on device shutdown asserts
+            // [rsets->data count] == 0 deterministically. (Issue: assertion
+            // fires on macOS 15+ for any consumer that allocates buffers
+            // and then tears down the device.)
+            ggml_metal_device_rsets_rm(buf->dev, buf->rset);
             [buf->rset release];
         }
     }
