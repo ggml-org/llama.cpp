@@ -4906,10 +4906,7 @@ kernel void kernel_conv_2d<half>(
         uint3   tpitg[[thread_position_in_threadgroup]],
         uint3     ntg[[threads_per_threadgroup]]);
 
-// Channel-tiled kernel for non-contiguous spatial layouts (e.g. CWHN).
-// Adjacent threads process adjacent channels (which are contiguous in memory)
-// instead of adjacent OW positions, giving coalesced reads.
-// Grid: x = C tile (nth channels), y = OH, z = OW * N
+// grid: x = C tile, y = OH, z = OW * N (for channel-contiguous layouts)
 template <typename TK>
 kernel void kernel_conv_2d_dw_tiled(
         constant ggml_metal_kargs_conv_2d_dw & args,
@@ -4987,7 +4984,7 @@ kernel void kernel_conv_2d_dw_tiled(
     *(device float *)(dst + dst_offs) = acc;
 }
 
-// Direct kernel for contiguous (WHCN) layouts — no shared memory needed.
+// grid: x = OW tile, y = OH, z = C * N (for spatially-contiguous layouts)
 template <typename TK>
 kernel void kernel_conv_2d_dw(
         constant ggml_metal_kargs_conv_2d_dw & args,
@@ -4998,13 +4995,11 @@ kernel void kernel_conv_2d_dw(
         uint3   tpitg[[thread_position_in_threadgroup]],
         uint3     ntg[[threads_per_threadgroup]]) {
 
-    // 3D grid: x = OW tile, y = OH, z = C * N
     const int32_t oh = tgpig.y;
     const int32_t cn = tgpig.z;
     const int32_t c  = cn % args.C;
     const int32_t n  = cn / args.C;
 
-    // Precompute vertical bounds (shared by all threads in this row)
     const int32_t base_y = oh*args.s1 - args.p1;
 
     int32_t ky_start = 0;
@@ -5022,7 +5017,6 @@ kernel void kernel_conv_2d_dw(
     const uint64_t w_base   = (uint64_t) c * args.nb02;
     const uint64_t src_base = (uint64_t) n * args.nb13 + (uint64_t) c * args.nb12;
 
-    // Each thread handles one OW position
     const int32_t ow = (int32_t)(tgpig.x * ntg.x + tpitg.x);
     if (ow >= args.OW) {
         return;
