@@ -236,15 +236,11 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
     std::vector<int32_t> overlap_prev_reads;
     std::vector<int32_t> overlap_cur_reads;
 
-    const auto current_token_idx = [&](llama_seq_id seq_id, llama_pos pos) -> int64_t {
-        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-            if (ubatch.pos[i] == pos && ubatch.seq_id[i][0] == seq_id) {
-                return i;
-            }
-        }
+    std::map<std::pair<llama_seq_id, llama_pos>, int64_t> curr_token_idx_map;
 
-        return -1;
-    };
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        curr_token_idx_map.emplace(std::make_pair(ubatch.seq_id[i][0], ubatch.pos[i]), i);
+    }
 
     const auto state_source_idx = [&](llama_seq_id seq_id, llama_pos pos) -> int32_t {
         if (pos < 0) {
@@ -254,9 +250,9 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
             return (int32_t) (state_rows + ubatch.n_tokens);
         }
 
-        const int64_t tok_idx = current_token_idx(seq_id, pos);
-        if (tok_idx >= 0) {
-            return (int32_t) (state_rows + tok_idx);
+        const auto key = std::make_pair(seq_id, pos);
+        if (curr_token_idx_map.find(key) != curr_token_idx_map.end()) {
+            return (int32_t) (state_rows + curr_token_idx_map.at(key));
         }
 
         const int64_t stream_off = n_stream > 1 ? (int64_t) seq_id*state_size : 0;
@@ -321,6 +317,8 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
     }
 
     if (ratio == DSV4_CSA_RATIO && plan.state_write_idxs.empty() && !plan.state_pos.empty()) {
+        // Non-boundary CSA steps still need a write op so their graph matches
+        // boundary steps. Use a padded scratch row that is masked from attention.
         assert(kv_size > 0);
 
         uint32_t i = 0;
