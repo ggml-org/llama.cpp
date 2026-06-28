@@ -12,8 +12,11 @@
 #include "llama-memory-hybrid-iswa.h"
 #include "llama-memory-recurrent.h"
 
+#include "../ggml/src/ggml-impl.h"
+
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <numeric>
 #include <sstream>
@@ -84,8 +87,16 @@ static ggml_tensor * ggml_mul_mat_aux(
 void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     if (ubatch->token) {
         const int64_t n_tokens = ubatch->n_tokens;
+        const size_t n_bytes = n_tokens*ggml_element_size(tokens);
 
-        ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
+        const bool have_device = diffusion
+            && diffusion->canvas_tokens_device_ready
+            && diffusion->canvas_tokens_device_data  == tokens->data
+            && diffusion->canvas_tokens_device_bytes == n_bytes;
+
+        if (!have_device) {
+            ggml_backend_tensor_set(tokens, ubatch->token, 0, n_bytes);
+        }
     }
 
     if (ubatch->embd) {
@@ -216,26 +227,25 @@ void llm_graph_input_out_ids::set_input(const llama_ubatch * ubatch) {
 
     const int64_t n_tokens = ubatch->n_tokens;
 
-    GGML_ASSERT(ggml_backend_buffer_is_host(out_ids->buffer));
-    int32_t * data = (int32_t *) out_ids->data;
+    std::vector<int32_t> data(n_outputs);
 
     if (n_outputs == n_tokens) {
         for (int i = 0; i < n_tokens; ++i) {
             data[i] = i;
         }
+    } else {
+        GGML_ASSERT(ubatch->output);
 
-        return;
-    }
+        int n_outputs = 0;
 
-    GGML_ASSERT(ubatch->output);
-
-    int n_outputs = 0;
-
-    for (int i = 0; i < n_tokens; ++i) {
-        if (ubatch->output[i]) {
-            data[n_outputs++] = i;
+        for (int i = 0; i < n_tokens; ++i) {
+            if (ubatch->output[i]) {
+                data[n_outputs++] = i;
+            }
         }
     }
+
+    ggml_backend_tensor_set(out_ids, data.data(), 0, data.size()*ggml_element_size(out_ids));
 }
 
 bool llm_graph_input_out_ids::can_reuse(const llm_graph_params & params) {
@@ -385,6 +395,88 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_diffusion_self_cond::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (!probs) {
+        return;
+    }
+    assert(probs->type == GGML_TYPE_F32);
+
+    const size_t n_bytes = ggml_nbytes(probs);
+    if (diffusion && diffusion->probs.size() * sizeof(float) == n_bytes) {
+        ggml_backend_tensor_set(probs, diffusion->probs.data(), 0, n_bytes);
+    } else {
+        // no self-conditioning this step (e.g. first denoising step) -> zeros
+        std::vector<uint8_t> zeros(n_bytes, 0);
+        ggml_backend_tensor_set(probs, zeros.data(), 0, n_bytes);
+    }
+}
+
+void llm_graph_input_diffusion_self_cond_topk::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (!ids || !probs) {
+        return;
+    }
+    assert(ids->type   == GGML_TYPE_I32);
+    assert(probs->type == GGML_TYPE_F32);
+
+    const size_t n_id_bytes = ggml_nbytes(ids);
+    const size_t n_pr_bytes = ggml_nbytes(probs);
+
+    const bool have_device = diffusion
+        && diffusion->sc_topk > 0
+        && diffusion->sc_topk_device_ready
+        && diffusion->sc_topk_device_ids_data    == ids->data
+        && diffusion->sc_topk_device_probs_data  == probs->data
+        && diffusion->sc_topk_device_ids_bytes   == n_id_bytes
+        && diffusion->sc_topk_device_probs_bytes == n_pr_bytes;
+
+    if (have_device) {
+        return;
+    }
+
+    const bool have = diffusion
+        && diffusion->sc_topk > 0
+        && diffusion->sc_topk_ids.size()   * sizeof(int32_t) == n_id_bytes
+        && diffusion->sc_topk_probs.size() * sizeof(float)   == n_pr_bytes;
+
+    if (have) {
+        ggml_backend_tensor_set(ids,   diffusion->sc_topk_ids.data(),   0, n_id_bytes);
+        ggml_backend_tensor_set(probs, diffusion->sc_topk_probs.data(), 0, n_pr_bytes);
+    } else {
+        // no self-conditioning this step (e.g. first denoising step):
+        // ids -> 0 (any valid row), probs -> 0 so the gathered embeddings contribute nothing
+        std::vector<uint8_t> zeros_id(n_id_bytes, 0);
+        std::vector<uint8_t> zeros_pr(n_pr_bytes, 0);
+        ggml_backend_tensor_set(ids,   zeros_id.data(), 0, n_id_bytes);
+        ggml_backend_tensor_set(probs, zeros_pr.data(), 0, n_pr_bytes);
+    }
+}
+
+void llm_graph_input_diffusion_self_cond_embd::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (!embd) {
+        return;
+    }
+    assert(embd->type == GGML_TYPE_F32);
+
+    const size_t n_bytes = ggml_nbytes(embd);
+    const bool have_device = diffusion
+        && diffusion->sc_embd_device_ready
+        && diffusion->sc_embd_device_data  == embd->data
+        && diffusion->sc_embd_device_bytes == n_bytes;
+
+    if (have_device) {
+        return;
+    }
+
+    std::vector<uint8_t> zeros(n_bytes, 0);
+    ggml_backend_tensor_set(embd, zeros.data(), 0, n_bytes);
+}
+
 template <typename T>
 static void print_mask(const T * data, int64_t n_tokens, int64_t n_kv, int64_t n_swa, llama_swa_type swa_type) {
     LLAMA_LOG_DEBUG("%s: === Attention mask ===\n", __func__);
@@ -464,21 +556,70 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     };
 
     GGML_ASSERT(self_kq_mask);
-    GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask->buffer));
     if (self_kq_mask->type == GGML_TYPE_F16) {
-        fill_mask((ggml_fp16_t *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+        std::vector<ggml_fp16_t> data(ggml_nelements(self_kq_mask));
+        fill_mask(data.data(), ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+        ggml_backend_tensor_set(self_kq_mask, data.data(), 0, ggml_nbytes(self_kq_mask));
     } else {
-        fill_mask((float       *) self_kq_mask->data, ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+        std::vector<float> data(ggml_nelements(self_kq_mask));
+        fill_mask(data.data(), ggml_nelements(self_kq_mask), 0, LLAMA_SWA_TYPE_NONE);
+        ggml_backend_tensor_set(self_kq_mask, data.data(), 0, ggml_nbytes(self_kq_mask));
     }
 
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
         GGML_ASSERT(self_kq_mask_swa);
-        GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_mask_swa->buffer));
         if (self_kq_mask_swa->type == GGML_TYPE_F16) {
-            fill_mask((ggml_fp16_t *) self_kq_mask_swa->data, ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type);
+            std::vector<ggml_fp16_t> data(ggml_nelements(self_kq_mask_swa));
+            fill_mask(data.data(), ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type);
+            ggml_backend_tensor_set(self_kq_mask_swa, data.data(), 0, ggml_nbytes(self_kq_mask_swa));
         } else {
-            fill_mask((float       *) self_kq_mask_swa->data, ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type);
+            std::vector<float> data(ggml_nelements(self_kq_mask_swa));
+            fill_mask(data.data(), ggml_nelements(self_kq_mask_swa), hparams.n_swa, hparams.swa_type);
+            ggml_backend_tensor_set(self_kq_mask_swa, data.data(), 0, ggml_nbytes(self_kq_mask_swa));
         }
+    }
+}
+
+void llm_graph_input_attn_no_cache_prefix::set_input(const llama_ubatch * ubatch) {
+    const int64_t n_kv     = ubatch->n_tokens;
+    const int64_t n_tokens = ubatch->n_tokens;
+    const int64_t P        = n_prompt; // causal prompt prefix length
+
+    const auto fill_mask = [&](auto * data, int64_t ne) {
+        using T = std::remove_reference_t<decltype(*data)>;
+        std::fill(data, data + ne, llama_cast<T>(-INFINITY));
+
+        for (int64_t i1 = 0; i1 < n_tokens; ++i1) {          // query
+            const llama_seq_id s1 = ubatch->seq_id[i1][0];
+            const uint64_t idst = i1*n_kv;
+            for (int64_t i0 = 0; i0 < n_tokens; ++i0) {      // key
+                if (ubatch->seq_id[i0][0] != s1) {
+                    continue;
+                }
+                bool allow;
+                if (i1 < P) {
+                    // prompt query: causal, prompt keys only (no canvas)
+                    allow = (i0 < P) && (i0 <= i1);
+                } else {
+                    // canvas query: attend to everything (bidirectional + cross to prompt)
+                    allow = true;
+                }
+                if (allow) {
+                    data[idst + i0] = llama_cast<T>(0.0f);
+                }
+            }
+        }
+    };
+
+    GGML_ASSERT(self_kq_mask);
+    if (self_kq_mask->type == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> data(ggml_nelements(self_kq_mask));
+        fill_mask(data.data(), ggml_nelements(self_kq_mask));
+        ggml_backend_tensor_set(self_kq_mask, data.data(), 0, ggml_nbytes(self_kq_mask));
+    } else {
+        std::vector<float> data(ggml_nelements(self_kq_mask));
+        fill_mask(data.data(), ggml_nelements(self_kq_mask));
+        ggml_backend_tensor_set(self_kq_mask, data.data(), 0, ggml_nbytes(self_kq_mask));
     }
 }
 
@@ -904,6 +1045,9 @@ void llm_graph_result::reset() {
     t_logits      = nullptr;
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
+    t_h_nextn     = nullptr;
+    t_h_pre_norm  = nullptr;
+    t_diffusion_token_embd = nullptr;
 
     t_layer_inp.resize(LLAMA_MAX_LAYERS);
     std::fill(t_layer_inp.begin(), t_layer_inp.end(), nullptr);
@@ -936,6 +1080,26 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
     }
 }
 
+llm_graph_input_diffusion_self_cond_topk * llm_graph_result::get_inp_diffusion_self_cond_topk() const {
+    for (auto & input : inputs) {
+        if (auto * topk = dynamic_cast<llm_graph_input_diffusion_self_cond_topk *>(input.get())) {
+            return topk;
+        }
+    }
+
+    return nullptr;
+}
+
+llm_graph_input_diffusion_self_cond_embd * llm_graph_result::get_inp_diffusion_self_cond_embd() const {
+    for (auto & input : inputs) {
+        if (auto * embd = dynamic_cast<llm_graph_input_diffusion_self_cond_embd *>(input.get())) {
+            return embd;
+        }
+    }
+
+    return nullptr;
+}
+
 void llm_graph_result::set_outputs(const llm_graph_params & params) {
     if (t_logits != nullptr) {
         ggml_set_output(t_logits);
@@ -957,6 +1121,9 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
                 ggml_set_output(t_layer_inp[il]);
             }
         }
+    }
+    if (t_h_pre_norm != nullptr) {
+        ggml_set_output(t_h_pre_norm);
     }
     for (auto & [seq_id, t] : t_sampled) {
         if (t != nullptr) {
@@ -1062,17 +1229,46 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     loras            (params.loras),
     mctx             (params.mctx),
     cross            (params.cross),
+    diffusion        (params.diffusion),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
     ctx0             (res->get_ctx()),
     gf               (res->get_gf()) {
         res->set_params(params);
+        ggml_graph_set_flag(gf, GGML_CGRAPH_FLAG_DIFFUSION_DECODER,
+                arch == LLM_ARCH_DIFFUSION_GEMMA && diffusion && diffusion->decoder_phase);
     }
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     if (cb_func) {
         cb_func(ubatch, cur, name, il);
+    }
+}
+
+void llm_graph_context::set_diffusion_input_backend(ggml_tensor * tensor, uint32_t group) const {
+    if (arch != LLM_ARCH_DIFFUSION_GEMMA || !diffusion || !diffusion->decoder_phase || !sched || !tensor) {
+        return;
+    }
+
+    // Keep the default to inputs used by the fixed diffusion decoder graph:
+    // canvas/self-cond, positions, attention scale, KV indices, masks and
+    // rotary helpers. Mark them as outputs too, matching ggml-backend's
+    // existing copy-tensor convention, so the allocator will not overwrite
+    // them between denoising replays.
+    const uint32_t enabled_groups = diffusion->input_gpu_groups;
+    if ((enabled_groups & group) == 0) {
+        return;
+    }
+
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
+        ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
+        if (backend && backend != backend_cpu &&
+            ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+            ggml_set_output(tensor);
+            ggml_backend_sched_set_tensor_backend(sched, tensor, backend);
+            break;
+        }
     }
 }
 
@@ -1836,12 +2032,13 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 
     assert(n_embd_inp >= n_embd);
 
-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
+    auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp, diffusion);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
     cb(inp->tokens, "inp_tokens", -1);
     ggml_set_input(inp->tokens);
     res->t_inp_tokens = inp->tokens;
+    set_diffusion_input_backend(inp->tokens);
 
     inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, ubatch.n_tokens);
     cb(inp->embd, "inp_embd", -1);
@@ -1926,6 +2123,7 @@ ggml_tensor * llm_graph_context::build_inp_pos() const {
 
     cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, (int64_t)n_tokens*hparams.n_pos_per_embd());
     ggml_set_input(cur);
+    set_diffusion_input_backend(cur, 2);
 
     res->add_input(std::move(inp));
 
@@ -1940,6 +2138,7 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
     // this need to be 1x1xN for broadcasting
     cur = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, 1, n_tokens);
     ggml_set_input(cur);
+    set_diffusion_input_backend(cur, 4);
     ggml_set_name(cur, "attn_scale");
 
     res->add_input(std::move(inp));
@@ -1948,6 +2147,10 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_out_ids() const {
+    if (arch == LLM_ARCH_DIFFUSION_GEMMA && diffusion && diffusion->decoder_phase && n_outputs == n_tokens) {
+        return nullptr;
+    }
+
     // note: when all tokens are output, we could skip this optimization to spare the ggml_get_rows() calls,
     //       but this would make the graph topology depend on the number of output tokens, which can interfere with
     //       features that require constant topology such as pipeline parallelism
@@ -1962,6 +2165,7 @@ ggml_tensor * llm_graph_context::build_inp_out_ids() const {
 
     cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_outputs);
     ggml_set_input(cur);
+    set_diffusion_input_backend(cur, 64);
 
     res->add_input(std::move(inp));
 
@@ -2012,6 +2216,53 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
 
     cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_enc);
     ggml_set_input(cur);
+
+    res->add_input(std::move(inp));
+
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_inp_diffusion_self_cond(int64_t n_vocab) const {
+    auto inp = std::make_unique<llm_graph_input_diffusion_self_cond>(diffusion);
+
+    auto & cur = inp->probs;
+
+    cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_vocab, n_tokens);
+    ggml_set_input(cur);
+    set_diffusion_input_backend(cur);
+
+    res->add_input(std::move(inp));
+
+    return cur;
+}
+
+llm_graph_input_diffusion_self_cond_topk * llm_graph_context::build_inp_diffusion_self_cond_topk(int64_t k) const {
+    auto inp = std::make_unique<llm_graph_input_diffusion_self_cond_topk>(diffusion);
+
+    // ids are flat [k*n_tokens] (ggml_get_rows treats higher dims of the index tensor as batch
+    // dims that must match the data tensor; a flat index list gathers into [n_embd, k*n_tokens]).
+    inp->ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, k * n_tokens);
+    ggml_set_input(inp->ids);
+    set_diffusion_input_backend(inp->ids);
+
+    inp->probs = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, k, n_tokens);
+    ggml_set_input(inp->probs);
+    set_diffusion_input_backend(inp->probs);
+
+    auto * ptr = inp.get();
+    res->add_input(std::move(inp));
+
+    return ptr;
+}
+
+ggml_tensor * llm_graph_context::build_inp_diffusion_self_cond_embd(int64_t n_embd) const {
+    auto inp = std::make_unique<llm_graph_input_diffusion_self_cond_embd>(diffusion);
+
+    auto & cur = inp->embd;
+
+    cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
+    ggml_set_input(cur);
+    set_diffusion_input_backend(cur);
 
     res->add_input(std::move(inp));
 
@@ -2207,12 +2458,14 @@ llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() con
     // note: there is no KV cache, so the number of KV values is equal to the number of tokens in the batch
     inp->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
     ggml_set_input(inp->self_kq_mask);
+    set_diffusion_input_backend(inp->self_kq_mask, 128);
 
     inp->self_kq_mask_cnv = inp->self_kq_mask;
 
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
         inp->self_kq_mask_swa = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
         ggml_set_input(inp->self_kq_mask_swa);
+        set_diffusion_input_backend(inp->self_kq_mask_swa, 128);
 
         inp->self_kq_mask_swa_cnv = inp->self_kq_mask_swa;
     } else {
@@ -2221,6 +2474,23 @@ llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() con
     }
 
     return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
+}
+
+llm_graph_input_attn_no_cache_prefix * llm_graph_context::build_attn_inp_no_cache_prefix(int64_t n_prompt) const {
+    auto inp = std::make_unique<llm_graph_input_attn_no_cache_prefix>(hparams, cparams, n_prompt);
+
+    const auto type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+
+    inp->self_kq_mask = ggml_new_tensor_4d(ctx0, type_mask, n_tokens, n_tokens, 1, 1);
+    ggml_set_input(inp->self_kq_mask);
+    set_diffusion_input_backend(inp->self_kq_mask, 128);
+    inp->self_kq_mask_cnv = inp->self_kq_mask;
+
+    // sliding-window layers reuse the same prefix mask (valid while n_tokens <= sliding_window)
+    inp->self_kq_mask_swa     = inp->self_kq_mask;
+    inp->self_kq_mask_swa_cnv = inp->self_kq_mask;
+
+    return (llm_graph_input_attn_no_cache_prefix *) res->add_input(std::move(inp));
 }
 
 ggml_tensor * llm_graph_context::build_attn(
@@ -2304,6 +2574,11 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
 
     auto inp = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur);
+    set_diffusion_input_backend(inp->self_k_idxs, 8);
+    set_diffusion_input_backend(inp->self_v_idxs, 8);
+    set_diffusion_input_backend(inp->self_kq_mask, 16);
+    set_diffusion_input_backend(inp->self_k_rot, 32);
+    set_diffusion_input_backend(inp->self_v_rot, 32);
 
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
@@ -2408,6 +2683,8 @@ llm_graph_input_attn_k * llm_graph_context::build_attn_inp_k() const {
     const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
 
     auto inp = build_attn_inp_k_impl(ctx0, ubatch, hparams, cparams, mctx_cur);
+    set_diffusion_input_backend(inp->self_k_idxs, 8);
+    set_diffusion_input_backend(inp->self_kq_mask, 16);
 
     return (llm_graph_input_attn_k *) res->add_input(std::move(inp));
 }
@@ -2717,6 +2994,12 @@ llm_graph_input_attn_k_dsa * llm_graph_context::build_attn_inp_k_dsa() const {
         inp->self_k_rot_lid = mctx_cur->get_lid()->build_input_k_rot(ctx0);
     }
 
+    set_diffusion_input_backend(inp->self_k_idxs_mla, 8);
+    set_diffusion_input_backend(inp->self_kq_mask_mla, 16);
+    set_diffusion_input_backend(inp->self_k_idxs_lid, 8);
+    set_diffusion_input_backend(inp->self_kq_mask_lid, 16);
+    set_diffusion_input_backend(inp->self_k_rot_lid, 32);
+
     return (llm_graph_input_attn_k_dsa *) res->add_input(std::move(inp));
 }
 
@@ -2751,6 +3034,17 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
 
     inp->self_k_rot_swa = mctx_cur->get_swa()->build_input_k_rot(ctx0);
     inp->self_v_rot_swa = mctx_cur->get_swa()->build_input_v_rot(ctx0);
+
+    set_diffusion_input_backend(inp->self_k_idxs, 8);
+    set_diffusion_input_backend(inp->self_v_idxs, 8);
+    set_diffusion_input_backend(inp->self_kq_mask, 16);
+    set_diffusion_input_backend(inp->self_k_idxs_swa, 8);
+    set_diffusion_input_backend(inp->self_v_idxs_swa, 8);
+    set_diffusion_input_backend(inp->self_kq_mask_swa, 16);
+    set_diffusion_input_backend(inp->self_k_rot, 32);
+    set_diffusion_input_backend(inp->self_v_rot, 32);
+    set_diffusion_input_backend(inp->self_k_rot_swa, 32);
+    set_diffusion_input_backend(inp->self_v_rot_swa, 32);
 
     return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
 }

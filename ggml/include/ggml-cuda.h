@@ -43,6 +43,52 @@ GGML_BACKEND_API void ggml_backend_cuda_get_device_memory(int device, size_t * f
 GGML_BACKEND_API bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_BACKEND_API void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
+struct ggml_cuda_diffusion_sample_params {
+    int32_t  n_vocab;
+    int32_t  n_tokens;
+    int32_t  top_k;
+    int32_t  self_cond_top_k;
+    float    temperature;
+    uint32_t seed;
+    uint32_t step;
+    bool     top_k_tail_correction;
+    float    logit_softcap;
+    bool     fast_top_k;
+    bool     direct_self_cond;
+    bool     final_tokens_on_stop;
+    bool     fused_top_k_sample;
+    bool     parallel_full_softmax;
+    bool     fused_full_softmax;
+};
+
+struct ggml_cuda_diffusion_sample_result {
+    int32_t * sampled;
+    int32_t * argmax;
+    float   * entropy;
+    int32_t * self_cond_ids;
+    float   * self_cond_probs;
+    struct ggml_tensor * self_cond_ids_tensor;
+    struct ggml_tensor * self_cond_probs_tensor;
+    struct ggml_tensor * self_cond_embd_tensor;
+    const struct ggml_tensor * token_embd_tensor;
+    struct ggml_tensor * canvas_tokens_tensor;
+    int32_t * final_tokens;
+    int32_t * stop;
+    float entropy_bound;
+    float confidence_threshold;
+    int32_t stability_threshold;
+    bool update_canvas_on_device;
+    bool update_stop_state_on_device;
+    bool check_stop_on_device;
+    bool reset_stop_state;
+};
+
+typedef bool (*ggml_backend_cuda_diffusion_sample_topk_t)(
+        ggml_backend_t backend,
+        const struct ggml_tensor * logits,
+        const struct ggml_cuda_diffusion_sample_params * params,
+        struct ggml_cuda_diffusion_sample_result * result);
+
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_cuda_reg(void);
 
 #ifdef  __cplusplus

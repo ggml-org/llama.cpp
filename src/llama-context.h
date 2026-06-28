@@ -119,6 +119,25 @@ struct llama_context {
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
+    // diffusion self-conditioning: set the previous denoising step's per-token probs
+    // ([n_vocab * n_tokens], row-major). Pass data=nullptr / n_tokens=0 to clear (-> zeros).
+    void set_diffusion_self_cond(const float * probs, int64_t n_vocab, int64_t n_tokens);
+
+    // diffusion: length of the causal prompt prefix in the [prompt; canvas] sequence (0 = unconditioned)
+    void set_diffusion_prompt_len(int64_t n_prompt);
+
+    // diffusion: select the KV-cache reuse phase (false = encoder/commit, true = decoder/denoise)
+    void set_diffusion_decoder_phase(bool decoder_phase);
+
+    // diffusion: sparse (top-k) self-conditioning (top-k token ids + probs per position)
+    void set_diffusion_self_cond_topk(const int32_t * ids, const float * probs, int64_t k, int64_t n_tokens);
+
+    bool diffusion_sample_topk_supported() const;
+    void set_diffusion_gpu_sampling(bool enabled);
+    bool diffusion_sample_topk(
+            const llama_diffusion_sample_params * params,
+                  llama_diffusion_sample_result * result);
+
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
     bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
@@ -281,6 +300,9 @@ private:
     llama_adapter_loras_ptr loras;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
+
+    llama_diffusion_cond diffusion_cond; // diffusion self-conditioning (set per-decode by the sampler)
+    bool diffusion_gpu_sampling = false; // skip dense logits D2H; sampled via CUDA backend proc
 
     llama_memory_ptr memory;
 

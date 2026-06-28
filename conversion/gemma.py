@@ -655,7 +655,7 @@ class Gemma4Model(Gemma3Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-        num_kv_shared_layers = self.hparams["num_kv_shared_layers"]
+        num_kv_shared_layers = self.hparams.get("num_kv_shared_layers", 0)
         self.gguf_writer.add_shared_kv_layers(num_kv_shared_layers)
 
         # per-layer embedding is optional
@@ -805,6 +805,32 @@ class Gemma4AssistantModel(Gemma4Model):
         self.gguf_writer.add_nextn_predict_layers(self.block_count)
 
 
+@ModelBase.register("DiffusionGemmaForBlockDiffusion")
+class DiffusionGemmaModel(Gemma4Model):
+    # Block-diffusion variant of Gemma 4. Reuses the gemma4 decoder block; adds the
+    # self-conditioning MLP and nests the language model under `model.decoder.`.
+    model_arch = gguf.MODEL_ARCH.DIFFUSION_GEMMA
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        # The text encoder shares every weight with the decoder except its own
+        # per-layer `layer_scalar`. The single-stack graph uses the decoder scalars,
+        # so the encoder-only tensors are dropped here.
+        if name.startswith("model.encoder."):
+            return None
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # diffusion_gemma nests the language model under `model.decoder.`; strip it so
+        # the shared gemma4 tensor mappings apply. `model.decoder.self_conditioning.*`
+        # then maps to the SELF_COND_* tensors.
+        if name.startswith("model.decoder."):
+            name = "model." + name[len("model.decoder."):]
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Gemma4ForConditionalGeneration")
 class Gemma4VisionAudioModel(MmprojModel):
     has_audio_encoder = True
@@ -945,3 +971,36 @@ class Gemma4UnifiedVisionAudioModel(Gemma4VisionAudioModel):
             perm = row * p * 3 + col * 3 + ch
             data_torch = data_torch[perm]
         return super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("DiffusionGemmaForBlockDiffusion")
+class DiffusionGemmaVisionModel(Gemma4VisionAudioModel):
+    # mmproj (vision) export for the v7 diffusion_gemma multimodal model. Reuses the gemma4
+    # vision tower (GEMMA4V); the v7 checkpoint nests it under `model.encoder.*` and has no
+    # audio encoder, so only the vision tower + vision projector are exported.
+    has_audio_encoder = False
+    has_vision_encoder = True
+
+    def set_gguf_parameters(self):
+        # MmprojModel base writes the generic vision params; do NOT call the gemma4
+        # vision+audio set_gguf_parameters (it asserts an audio config, which v7 lacks).
+        MmprojModel.set_gguf_parameters(self)
+        assert self.hparams_vision is not None
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GEMMA4V)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("layer_norm_eps", 1e-6))
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        # keep only the vision tower + vision projector; drop the diffusion decoder
+        # (the text-encoder language_model.* tensors are dropped by MmprojModel.filter_tensors)
+        if name.startswith("model.decoder."):
+            return None
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # v7 nests the vision tower / projector under `model.encoder.`; strip it so the gemma4
+        # vision tensor mappings (model.vision_tower.* / model.embed_vision.*) apply.
+        if name.startswith("model.encoder."):
+            name = "model." + name[len("model.encoder."):]
+        yield from super().modify_tensors(data_torch, name, bid)

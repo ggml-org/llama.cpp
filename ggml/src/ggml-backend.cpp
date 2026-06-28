@@ -1405,6 +1405,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     }
     sched->graph.n_nodes = 0;
     sched->graph.n_leafs = 0;
+    sched->graph.flags = graph->flags;
 
     struct ggml_cgraph * graph_copy = &sched->graph;
 
@@ -2138,6 +2139,7 @@ struct ggml_backend_graph_copy ggml_backend_graph_copy(ggml_backend_t backend, s
         graph_copy->nodes[i] = node_copy;
     }
     graph_copy->n_nodes = graph->n_nodes;
+    graph_copy->flags = graph->flags;
 
     ggml_hash_set_free(&hash_set);
     free(node_copies);

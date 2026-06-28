@@ -1,6 +1,7 @@
 #include "llama-context.h"
 
 #include "ggml.h"
+#include "ggml-cuda.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
 #include "llama-impl.h"
@@ -207,6 +208,12 @@ llama_context::llama_context(
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
+
+    diffusion_cond.self_cond_top_k = params.diffusion_self_cond_top_k > 0 ? params.diffusion_self_cond_top_k : 256;
+    diffusion_cond.input_gpu_groups = params.diffusion_input_gpu_groups;
+    diffusion_cond.fused_self_cond_embd = params.diffusion_fused_self_cond_embd;
+    diffusion_cond.fuse_final_logit_softcap = params.diffusion_fuse_final_logit_softcap;
+    diffusion_cond.separate_encoder_decoder = params.diffusion_separate_encoder_decoder;
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
@@ -1160,6 +1167,265 @@ void llama_context::set_nextn_layer_offset(int32_t offset) {
     cparams.nextn_layer_offset = offset;
 }
 
+void llama_context::set_diffusion_self_cond(const float * probs, int64_t n_vocab, int64_t n_tokens) {
+    diffusion_cond.sc_topk_device_ready       = false;
+    diffusion_cond.sc_topk_device_ids_data    = nullptr;
+    diffusion_cond.sc_topk_device_probs_data  = nullptr;
+    diffusion_cond.sc_topk_device_ids_bytes   = 0;
+    diffusion_cond.sc_topk_device_probs_bytes = 0;
+    diffusion_cond.sc_embd_device_ready       = false;
+    diffusion_cond.sc_embd_device_data        = nullptr;
+    diffusion_cond.sc_embd_device_bytes       = 0;
+    diffusion_cond.canvas_tokens_device_ready = false;
+    diffusion_cond.canvas_tokens_device_data  = nullptr;
+    diffusion_cond.canvas_tokens_device_bytes = 0;
+
+    if (probs == nullptr || n_vocab <= 0 || n_tokens <= 0) {
+        diffusion_cond.probs.clear();
+        diffusion_cond.n_vocab  = 0;
+        diffusion_cond.n_tokens = 0;
+        return;
+    }
+
+    const size_t n = (size_t) n_vocab * (size_t) n_tokens;
+    diffusion_cond.probs.assign(probs, probs + n);
+    diffusion_cond.n_vocab  = n_vocab;
+    diffusion_cond.n_tokens = n_tokens;
+}
+
+void llama_context::set_diffusion_prompt_len(int64_t n_prompt) {
+    diffusion_cond.n_prompt = n_prompt;
+}
+
+void llama_context::set_diffusion_decoder_phase(bool decoder_phase) {
+    diffusion_cond.decoder_phase = decoder_phase;
+}
+
+void llama_context::set_diffusion_self_cond_topk(const int32_t * ids, const float * probs, int64_t k, int64_t n_tokens) {
+    diffusion_cond.sc_topk_device_ready       = false;
+    diffusion_cond.sc_topk_device_ids_data    = nullptr;
+    diffusion_cond.sc_topk_device_probs_data  = nullptr;
+    diffusion_cond.sc_topk_device_ids_bytes   = 0;
+    diffusion_cond.sc_topk_device_probs_bytes = 0;
+    diffusion_cond.sc_embd_device_ready       = false;
+    diffusion_cond.sc_embd_device_data        = nullptr;
+    diffusion_cond.sc_embd_device_bytes       = 0;
+    diffusion_cond.canvas_tokens_device_ready = false;
+    diffusion_cond.canvas_tokens_device_data  = nullptr;
+    diffusion_cond.canvas_tokens_device_bytes = 0;
+
+    if (ids == nullptr || probs == nullptr || k <= 0 || n_tokens <= 0) {
+        diffusion_cond.sc_topk = 0;
+        diffusion_cond.sc_topk_ids.clear();
+        diffusion_cond.sc_topk_probs.clear();
+        return;
+    }
+    const size_t n = (size_t) k * (size_t) n_tokens;
+    diffusion_cond.sc_topk = k;
+    diffusion_cond.sc_topk_ids.assign(ids, ids + n);
+    diffusion_cond.sc_topk_probs.assign(probs, probs + n);
+}
+
+static ggml_backend_cuda_diffusion_sample_topk_t get_cuda_diffusion_sample_topk_proc(ggml_backend_t backend) {
+    if (!backend) {
+        return nullptr;
+    }
+
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    if (!dev) {
+        return nullptr;
+    }
+
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    if (!reg) {
+        return nullptr;
+    }
+
+    return (ggml_backend_cuda_diffusion_sample_topk_t)
+        ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_diffusion_sample_topk");
+}
+
+static bool diffusion_decoder_inputs_device_ready(
+        const llama_diffusion_cond & diffusion_cond,
+        const llm_graph_result * res) {
+    if (!diffusion_cond.decoder_phase ||
+        !diffusion_cond.canvas_tokens_device_ready ||
+        !res) {
+        return false;
+    }
+
+    ggml_tensor * t_tokens = res->get_inp_tokens();
+    if (!t_tokens ||
+        diffusion_cond.canvas_tokens_device_data  != t_tokens->data ||
+            diffusion_cond.canvas_tokens_device_bytes != ggml_nbytes(t_tokens)) {
+        return false;
+    }
+
+    auto * inp_sc_embd = res->get_inp_diffusion_self_cond_embd();
+    if (inp_sc_embd) {
+        return inp_sc_embd->embd &&
+            diffusion_cond.sc_embd_device_ready &&
+            diffusion_cond.sc_embd_device_data  == inp_sc_embd->embd->data &&
+            diffusion_cond.sc_embd_device_bytes == ggml_nbytes(inp_sc_embd->embd);
+    }
+
+    auto * inp_sc = res->get_inp_diffusion_self_cond_topk();
+    if (!inp_sc || !inp_sc->ids || !inp_sc->probs ||
+        !diffusion_cond.sc_topk_device_ready ||
+        diffusion_cond.sc_topk_device_ids_data    != inp_sc->ids->data ||
+        diffusion_cond.sc_topk_device_probs_data  != inp_sc->probs->data ||
+        diffusion_cond.sc_topk_device_ids_bytes   != ggml_nbytes(inp_sc->ids) ||
+        diffusion_cond.sc_topk_device_probs_bytes != ggml_nbytes(inp_sc->probs)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool llama_context::diffusion_sample_topk_supported() const {
+    for (ggml_backend_t backend : backend_ptrs) {
+        if (get_cuda_diffusion_sample_topk_proc(backend)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void llama_context::set_diffusion_gpu_sampling(bool enabled) {
+    diffusion_gpu_sampling = enabled;
+}
+
+bool llama_context::diffusion_sample_topk(
+        const llama_diffusion_sample_params * params,
+              llama_diffusion_sample_result * result) {
+    if (!params || !result || !gf_res_prev) {
+        return false;
+    }
+
+    static_assert(sizeof(llama_token) == sizeof(int32_t), "llama_token must be int32_t for CUDA diffusion sampling");
+
+    ggml_tensor * t_logits = gf_res_prev->get_logits();
+    if (!t_logits) {
+        return false;
+    }
+
+    ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
+    auto sample_proc = get_cuda_diffusion_sample_topk_proc(backend);
+    if (!sample_proc) {
+        return false;
+    }
+
+    ggml_tensor * t_self_cond_ids   = nullptr;
+    ggml_tensor * t_self_cond_probs = nullptr;
+    ggml_tensor * t_self_cond_embd  = nullptr;
+    const ggml_tensor * t_token_embd = nullptr;
+    ggml_tensor * t_canvas_tokens   = nullptr;
+    const bool device_self_cond = result->self_cond_ids == nullptr && result->self_cond_probs == nullptr;
+    if (device_self_cond) {
+        auto * inp_embd = gf_res_prev->get_inp_diffusion_self_cond_embd();
+        if (inp_embd && diffusion_cond.fused_self_cond_embd) {
+            t_self_cond_embd = inp_embd->embd;
+            t_token_embd = gf_res_prev->get_diffusion_token_embd();
+            if (!t_self_cond_embd || !t_token_embd) {
+                return false;
+            }
+        } else {
+            auto * inp = gf_res_prev->get_inp_diffusion_self_cond_topk();
+            if (!inp || !inp->ids || !inp->probs) {
+                return false;
+            }
+            t_self_cond_ids   = inp->ids;
+            t_self_cond_probs = inp->probs;
+        }
+    } else if (result->self_cond_ids == nullptr || result->self_cond_probs == nullptr) {
+        return false;
+    }
+
+    if (result->update_canvas_on_device) {
+        t_canvas_tokens = gf_res_prev->get_inp_tokens();
+        if (!t_canvas_tokens) {
+            return false;
+        }
+    }
+
+    const float fused_logit_softcap = diffusion_cond.fuse_final_logit_softcap
+        ? model.hparams.f_final_logit_softcapping
+        : 0.0f;
+
+    ggml_cuda_diffusion_sample_params cuda_params = {
+        /* .n_vocab               = */ (int32_t) model.vocab.n_tokens(),
+        /* .n_tokens              = */ params->n_tokens,
+        /* .top_k                 = */ params->top_k,
+        /* .self_cond_top_k       = */ params->self_cond_top_k,
+        /* .temperature           = */ params->temperature,
+        /* .seed                  = */ params->seed,
+        /* .step                  = */ params->step,
+        /* .top_k_tail_correction = */ params->top_k_tail_correction,
+        /* .logit_softcap         = */ fused_logit_softcap,
+        /* .fast_top_k            = */ params->cuda_fast_top_k,
+        /* .direct_self_cond      = */ params->cuda_direct_self_cond,
+        /* .final_tokens_on_stop  = */ params->cuda_final_tokens_on_stop,
+        /* .fused_top_k_sample    = */ params->cuda_fused_top_k_sample,
+        /* .parallel_full_softmax = */ params->cuda_parallel_full_softmax,
+        /* .fused_full_softmax    = */ params->cuda_fused_full_softmax,
+    };
+
+    ggml_cuda_diffusion_sample_result cuda_result = {
+        /* .sampled         = */ (int32_t *) result->sampled,
+        /* .argmax          = */ (int32_t *) result->argmax,
+        /* .entropy         = */ result->entropy,
+        /* .self_cond_ids   = */ result->self_cond_ids,
+        /* .self_cond_probs = */ result->self_cond_probs,
+        /* .self_cond_ids_tensor   = */ t_self_cond_ids,
+        /* .self_cond_probs_tensor = */ t_self_cond_probs,
+        /* .self_cond_embd_tensor  = */ t_self_cond_embd,
+        /* .token_embd_tensor      = */ t_token_embd,
+        /* .canvas_tokens_tensor   = */ t_canvas_tokens,
+        /* .final_tokens           = */ (int32_t *) result->final_tokens,
+        /* .stop                   = */ result->stop,
+        /* .entropy_bound          = */ result->entropy_bound,
+        /* .confidence_threshold   = */ result->confidence_threshold,
+        /* .stability_threshold    = */ result->stability_threshold,
+        /* .update_canvas_on_device = */ result->update_canvas_on_device,
+        /* .update_stop_state_on_device = */ result->update_stop_state_on_device,
+        /* .check_stop_on_device   = */ result->check_stop_on_device,
+        /* .reset_stop_state       = */ result->reset_stop_state,
+    };
+
+    const bool ok = sample_proc(backend, t_logits, &cuda_params, &cuda_result);
+    if (ok && device_self_cond) {
+        diffusion_cond.sc_topk = params->self_cond_top_k;
+        diffusion_cond.sc_topk_ids.clear();
+        diffusion_cond.sc_topk_probs.clear();
+        diffusion_cond.sc_topk_device_ready       = false;
+        diffusion_cond.sc_topk_device_ids_data    = nullptr;
+        diffusion_cond.sc_topk_device_probs_data  = nullptr;
+        diffusion_cond.sc_topk_device_ids_bytes   = 0;
+        diffusion_cond.sc_topk_device_probs_bytes = 0;
+        diffusion_cond.sc_embd_device_ready       = false;
+        diffusion_cond.sc_embd_device_data        = nullptr;
+        diffusion_cond.sc_embd_device_bytes       = 0;
+        if (t_self_cond_embd) {
+            diffusion_cond.sc_embd_device_ready = true;
+            diffusion_cond.sc_embd_device_data  = t_self_cond_embd->data;
+            diffusion_cond.sc_embd_device_bytes = ggml_nbytes(t_self_cond_embd);
+        } else {
+            diffusion_cond.sc_topk_device_ready       = true;
+            diffusion_cond.sc_topk_device_ids_data    = t_self_cond_ids->data;
+            diffusion_cond.sc_topk_device_probs_data  = t_self_cond_probs->data;
+            diffusion_cond.sc_topk_device_ids_bytes   = ggml_nbytes(t_self_cond_ids);
+            diffusion_cond.sc_topk_device_probs_bytes = ggml_nbytes(t_self_cond_probs);
+        }
+    }
+    if (ok && result->update_canvas_on_device) {
+        diffusion_cond.canvas_tokens_device_ready = true;
+        diffusion_cond.canvas_tokens_device_data  = t_canvas_tokens->data;
+        diffusion_cond.canvas_tokens_device_bytes = ggml_nbytes(t_canvas_tokens);
+    }
+
+    return ok;
+}
+
 void llama_context::set_causal_attn(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -1356,7 +1622,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //const auto t_start_us = ggml_time_us();
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
-        res->set_inputs(&ubatch);
+        const bool diffusion_inputs_ready = model.arch == LLM_ARCH_DIFFUSION_GEMMA &&
+            diffusion_decoder_inputs_device_ready(diffusion_cond, res);
+        if (!diffusion_inputs_ready) {
+            res->set_inputs(&ubatch);
+        }
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
@@ -1660,7 +1930,11 @@ static void copy_tensor_async_candidates(
     }
 }
 
-static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_seq_id, llama_sampler *> & samplers) {
+static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_seq_id, llama_sampler *> & samplers, bool skip_raw_logits) {
+    if (skip_raw_logits) {
+        return false;
+    }
+
     for (uint32_t i = 0; i < ubatch.n_tokens; i++) {
         if (!ubatch.output[i]) {
             continue;
@@ -1887,7 +2161,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         // extract logits
-        if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
+        if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers, diffusion_gpu_sampling)) {
             ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
             GGML_ASSERT(backend_res != nullptr);
             GGML_ASSERT(logits.data != nullptr);
@@ -2411,6 +2685,7 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        /*.diffusion   =*/ &diffusion_cond,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -3452,6 +3727,8 @@ llama_context_params llama_context_default_params() {
         /*.n_seq_max                   =*/ 1,
         /*.n_rs_seq                    =*/ 0,
         /*.n_outputs_max               =*/ 0,
+        /*.diffusion_self_cond_top_k   =*/ 256,
+        /*.diffusion_input_gpu_groups  =*/ 63,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
         /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
@@ -3479,6 +3756,9 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.diffusion_fused_self_cond_embd =*/ false,
+        /*.diffusion_fuse_final_logit_softcap =*/ false,
+        /*.diffusion_separate_encoder_decoder =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,
@@ -3647,6 +3927,37 @@ void llama_set_embeddings(llama_context * ctx, bool embeddings) {
 
 void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
     ctx->set_causal_attn(causal_attn);
+}
+
+void llama_set_diffusion_self_cond(llama_context * ctx, const float * probs, int64_t n_vocab, int64_t n_tokens) {
+    ctx->set_diffusion_self_cond(probs, n_vocab, n_tokens);
+}
+
+void llama_set_diffusion_prompt_len(llama_context * ctx, int64_t n_prompt) {
+    ctx->set_diffusion_prompt_len(n_prompt);
+}
+
+void llama_set_diffusion_decoder_phase(llama_context * ctx, bool decoder_phase) {
+    ctx->set_diffusion_decoder_phase(decoder_phase);
+}
+
+void llama_set_diffusion_self_cond_topk(llama_context * ctx, const int32_t * ids, const float * probs, int64_t k, int64_t n_tokens) {
+    ctx->set_diffusion_self_cond_topk(ids, probs, k, n_tokens);
+}
+
+bool llama_diffusion_sample_topk_supported(llama_context * ctx) {
+    return ctx->diffusion_sample_topk_supported();
+}
+
+void llama_set_diffusion_gpu_sampling(llama_context * ctx, bool enabled) {
+    ctx->set_diffusion_gpu_sampling(enabled);
+}
+
+bool llama_diffusion_sample_topk(
+        llama_context * ctx,
+        const llama_diffusion_sample_params * params,
+        llama_diffusion_sample_result * result) {
+    return ctx->diffusion_sample_topk(params, result);
 }
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {

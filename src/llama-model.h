@@ -655,6 +655,10 @@ struct llama_model {
     virtual void load_arch_tensors(llama_model_loader & ml) = 0;
     virtual std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const = 0;
 
+    // optional per-arch hook run after all tensor data has been loaded; use to precompute
+    // derived tensors that are not stored in the GGUF (e.g. a transposed embedding).
+    virtual void load_arch_post(llama_model_loader & ml) { GGML_UNUSED(ml); }
+
 protected:
     llama_model_params params;
 

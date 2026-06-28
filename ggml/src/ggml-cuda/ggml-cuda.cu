@@ -24,6 +24,7 @@
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/diagmask.cuh"
 #include "ggml-cuda/diag.cuh"
+#include "ggml-cuda/diffusion-sampling.cuh"
 #include "ggml-cuda/fattn.cuh"
 #include "ggml-cuda/fwht.cuh"
 #include "ggml-cuda/getrows.cuh"
@@ -3271,6 +3272,12 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 
     bool use_cuda_graph = true;
+    static const bool log_graph_incompat = [] {
+        const char * env = getenv("GGML_CUDA_GRAPH_DIAG");
+        return env != nullptr && atoi(env) != 0;
+    }();
+    const bool is_diffusion_decoder_graph = ggml_graph_has_flag(cgraph, GGML_CGRAPH_FLAG_DIFFUSION_DECODER);
+
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -3282,6 +3289,10 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 
         if (node->src[0] && node->src[0]->buffer && ggml_backend_buft_is_cuda_split(node->src[0]->buffer->buft)) {
             use_cuda_graph = false; // Split buffers are not supported by CUDA graph capture
+            if (log_graph_incompat) {
+                GGML_LOG_INFO("%s: disabling CUDA graphs due to split buffer at node %d %s (%s)\n",
+                        __func__, i, node->name, ggml_op_name(node->op));
+            }
 #ifndef NDEBUG
             GGML_LOG_DEBUG("%s: disabling CUDA graphs due to split buffer\n", __func__);
 #endif
@@ -3290,12 +3301,23 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
         // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
         if (node->op == GGML_OP_MUL_MAT_ID) {
             const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-            const int mmvq_mmid_max = get_mmvq_mmid_max_batch(node->src[0]->type, cc);
-            if (!ggml_is_quantized(node->src[0]->type) || node->ne[2] > mmvq_mmid_max) {
+            const ggml_tensor * src0 = node->src[0];
+            const ggml_tensor * src1 = node->src[1];
+            const int mmvq_mmid_max = get_mmvq_mmid_max_batch(src0->type, cc);
+            const bool use_mmvq = ggml_is_quantized(src0->type) && node->ne[2] <= mmvq_mmid_max;
+            const bool use_mmq  = is_diffusion_decoder_graph && ggml_is_quantized(src0->type) && ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[2], /*n_experts=*/src0->ne[2]);
+            const bool use_mmf  = is_diffusion_decoder_graph && ggml_cuda_should_use_mmf(src0->type, cc, WARP_SIZE, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true);
+            if (!use_mmvq && !use_mmq && !use_mmf) {
                 // under these conditions, the mul_mat_id operation will need to synchronize the stream, so we cannot use CUDA graphs
                 // TODO: figure out a way to enable for larger batch sizes, without hurting performance
                 // ref: https://github.com/ggml-org/llama.cpp/pull/18958
                 use_cuda_graph = false;
+                if (log_graph_incompat) {
+                    GGML_LOG_INFO("%s: disabling CUDA graphs due to MUL_MAT_ID at node %d %s: src0=%s ne2=%lld src1_ne2=%lld n_experts=%lld mmvq_mmid_max=%d quantized=%d diffusion_decoder=%d mmq=%d mmf=%d\n",
+                            __func__, i, node->name, ggml_type_name(src0->type),
+                            (long long) node->ne[2], (long long) src1->ne[2], (long long) src0->ne[2],
+                            mmvq_mmid_max, (int) ggml_is_quantized(src0->type), (int) is_diffusion_decoder_graph, (int) use_mmq, (int) use_mmf);
+                }
 #ifndef NDEBUG
                 GGML_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported node type\n", __func__);
 #endif
@@ -5651,6 +5673,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     }
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_cuda_get_features;
+    }
+    if (strcmp(name, "ggml_backend_cuda_diffusion_sample_topk") == 0) {
+        return (void *)ggml_cuda_diffusion_sample_topk;
     }
     return nullptr;
 }
