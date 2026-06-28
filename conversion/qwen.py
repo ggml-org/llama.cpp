@@ -530,8 +530,6 @@ class _Qwen35MRopeMixin:
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
-        if self._mtp_layers > 0:
-            self.gguf_writer.add_nextn_predict_layers(self._mtp_layers)
         if "mrope_section" not in self.rope_parameters:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
@@ -564,13 +562,11 @@ class _Qwen35MtpMixin:
         n_layers = self.hparams["num_hidden_layers"]
         self._mtp_layers = 0 if self.no_mtp else self.hparams.get("mtp_num_hidden_layers", 0)
         if self._mtp_layers > 0:
-        
-        mtp_prefixes = tuple(f"model.layers.{n_layers + i}." for i in range(self._mtp_layers))
-        if not any(name.startswith(mtp_prefixes) for name in self.model_tensors):
-            logger.warning("config declares mtp_num_hidden_layers=%d but the checkpoint ships no MTP tensors; not reserving MTP block(s) (see ggml-org/llama.cpp#24737)",
-            self._mtp_layers,)
-
-        self._mtp_layers = 0
+            mtp_prefixes = tuple(f"model.layers.{n_layers + i}." for i in range(self._mtp_layers))
+            if not any(name.startswith(mtp_prefixes) for name in self.model_tensors):
+                logger.warning("config declares mtp_num_hidden_layers=%d but the checkpoint ships no MTP tensors; not reserving MTP block(s) (see ggml-org/llama.cpp#24737)",
+                self._mtp_layers,)
+                self._mtp_layers = 0
         self.block_count = n_layers + self._mtp_layers
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
