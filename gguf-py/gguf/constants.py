@@ -159,7 +159,6 @@ class Keys:
         TARGET_HIDDEN_SIZE                = "{arch}.target_hidden_size"
         BLOCK_SIZE                        = "{arch}.block_size"
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
-        # Granite Switch: per-token embedded LoRA adapters
         NUM_ADAPTERS                      = "{arch}.num_adapters"
         ADAPTER_TOKEN_IDS                 = "{arch}.adapter_token_ids"
         ADAPTER_SUBSTITUTE_TOKEN_IDS      = "{arch}.adapter_substitute_token_ids"
@@ -989,7 +988,6 @@ class MODEL_TENSOR(IntEnum):
     A_QF_FFN_UP            = auto()
     A_QF_FFN_DOWN          = auto()
     A_QF_FFN_NORM          = auto()
-    # Granite Switch: per-token embedded LoRA adapters (stacked over N = num_adapters + 1)
     ATTN_QKV_LORA_A_Q      = auto()
     ATTN_QKV_LORA_B_Q      = auto()
     ATTN_QKV_LORA_A_K      = auto()
@@ -1582,7 +1580,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
     MODEL_TENSOR.FC:                        "fc",
     MODEL_TENSOR.D2T:                       "d2t",
-    # Granite Switch: per-token embedded LoRA adapters
     MODEL_TENSOR.ATTN_QKV_LORA_A_Q:         "blk.{bid}.attn_qkv.lora_a_q",
     MODEL_TENSOR.ATTN_QKV_LORA_B_Q:         "blk.{bid}.attn_qkv.lora_b_q",
     MODEL_TENSOR.ATTN_QKV_LORA_A_K:         "blk.{bid}.attn_qkv.lora_a_k",
@@ -3717,7 +3714,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
-        # Per-token embedded LoRA adapters
         MODEL_TENSOR.ATTN_QKV_LORA_A_Q,
         MODEL_TENSOR.ATTN_QKV_LORA_B_Q,
         MODEL_TENSOR.ATTN_QKV_LORA_A_K,
