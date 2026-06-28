@@ -56,8 +56,6 @@ class MiniMaxM2Model(TextModel):
 
 @ModelBase.register("MiniMaxM3SparseForCausalLM", "MiniMaxM3SparseForConditionalGeneration")
 class MiniMaxM3Model(TextModel):
-    # Text-only MiniMax-M3 (minimax_m3_vl): MiniMax-M2 style GQA (per-head QK-norm, partial
-    # rotary) + DeepSeek-V3 shared experts / leading dense, swigluoai activation and Minimax Sparse Attention. MTP heads are dropped.
     model_arch = gguf.MODEL_ARCH.MINIMAXM3
     _experts_cache: dict[int, dict[str, Tensor]] = {}
 
