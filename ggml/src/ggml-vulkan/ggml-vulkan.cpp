@@ -679,8 +679,8 @@ struct vk_device_struct {
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
     bool external_semaphore {};
-    bool external_memory_fd {};      // VK_KHR_external_memory_fd: fd-based memory export/import
-    bool external_memory_dma_buf {}; // VK_EXT_external_memory_dma_buf: cross-device DMA_BUF handle for D2D peer P2P
+    bool external_memory_fd {};
+    bool external_memory_dma_buf {};
     bool fp16;
     bool bf16;
     bool pipeline_robustness;
@@ -17847,11 +17847,6 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
     return devices[device];
 }
 
-// ---------------------------------------------------------------------------
-// Cross-device collective (AllReduce) for tensor parallelism (SPLIT_MODE_TENSOR).
-// The meta backend discovers these via get_proc_address and prefers them over its
-// generic host-staged butterfly fallback.
-// ---------------------------------------------------------------------------
 struct ggml_backend_vk_comm_context {
     std::vector<ggml_backend_t>             backends;
     std::vector<ggml_backend_vk_context*>   vkctx;
@@ -17866,10 +17861,10 @@ struct ggml_backend_vk_comm_context {
     std::vector<uint64_t>                   pool_max_val;
     PFN_vkGetSemaphoreFdKHR                 pGetSemFd  = nullptr;
     PFN_vkImportSemaphoreFdKHR              pImportSemFd = nullptr;
-    bool                                    d2d = false; // GGML_VK_COMM_D2D: peer device buffers over PCIe P2P, not host staging
+    bool                                    d2d = false;
     PFN_vkGetMemoryFdKHR                    pGetMemFd      = nullptr;
     PFN_vkGetMemoryFdPropertiesKHR         pGetMemFdProps = nullptr;
-    std::vector<vk_buffer>                  d2d_own; // d2d_own[k] = device k's exportable buffer (== host_buf[k][k])
+    std::vector<vk_buffer>                  d2d_own;
     std::vector<void*>                      host_ptr;
     std::vector<std::vector<vk_buffer>>     host_buf;
     std::vector<ggml_backend_buffer_t>      tmp_buffer;
@@ -17882,8 +17877,6 @@ struct ggml_backend_vk_comm_context {
     std::vector<vk_command_pool>            cmd_pool_xfer;
     std::vector<uint64_t>                   xfer_pool_max_val;
     uint64_t                                pipe_round = 0;
-    // Ring AllReduce (reduce-scatter + all-gather), O(n) host traffic vs the all-to-all pipeline's O(n^2).
-    // GGML_VK_COMM_RING selects it for large tensors. ring_view[i] is a chunk-sized view of tensors[i].
     bool                                    ring = false;
     uint64_t                                ring_round = 0;
     std::vector<ggml_tensor*>               ring_view;
@@ -17956,8 +17949,6 @@ static vk::Semaphore ggml_vk_import_timeline(ggml_backend_vk_comm_context * comm
     return dst;
 }
 
-// D2D: a device-local buffer whose memory is exportable via OPAQUE_FD, so a peer GPU can import and read
-// it directly over PCIe P2P -- replacing the host-memory staging on P2P-capable topologies.
 static vk_buffer ggml_vk_comm_create_exportable(vk_device & device, size_t size) {
     vk_buffer buf = std::make_shared<vk_buffer_struct>();
     buf->size   = size;
@@ -17990,8 +17981,6 @@ static vk_buffer ggml_vk_comm_create_exportable(vk_device & device, size_t size)
     return buf;
 }
 
-// D2D: import a peer device's exported buffer memory (OPAQUE_FD) as a local buffer handle on dst_dev.
-// Copies recorded on dst_dev that read this buffer fetch from src_dev's VRAM over PCIe P2P.
 static vk_buffer ggml_vk_comm_import_buffer(ggml_backend_vk_comm_context * comm, vk_device & dst_dev,
                                             vk_device & src_dev, vk_buffer & src_buf, size_t size) {
     int fd = -1;
@@ -18188,9 +18177,6 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
     return comm;
 }
 
-// std::aligned_alloc is not available with MSVC/MinGW; use the Win32 equivalents there.
-// The alignment is a runtime value (VK_EXT_external_memory_host minImportedHostPointerAlignment),
-// so the fixed-alignment ggml_aligned_malloc cannot be used here.
 static void * ggml_vk_comm_aligned_alloc(size_t alignment, size_t size) {
 #if defined(_MSC_VER) || defined(__MINGW32__)
     return _aligned_malloc(size, alignment);
@@ -18304,10 +18290,8 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
         }
     }
 
-    // ring mode needs 2*(n-1) per-step chunks per round (~2x the tensor), double-buffered by round -> 4x.
     const size_t slotcap = (comm->ring ? 4 : 2) * newcap;
     if (comm->d2d) {
-        // D2D: device k's partials live in an exportable device buffer; peers import it and read over PCIe P2P.
         bool ok = true;
         for (size_t k = 0; k < n && ok; k++) {
             comm->d2d_own[k] = ggml_vk_comm_create_exportable(comm->device[k], slotcap);
@@ -18326,9 +18310,6 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
             GGML_LOG_INFO("ggml_vulkan: comm D2D peer buffers active (%zu devices, %zu KiB/slot over PCIe P2P)\n",
                           n, slotcap / 1024);
         } else {
-            // Peer import unsupported on this driver/topology (e.g. NVIDIA rejects cross-device fd import):
-            // drop the partial D2D buffers, disable D2D, and fall through to host staging -- NOT the slow
-            // meta-backend butterfly. One-time: comm->d2d stays false so later ensure() growths skip D2D.
             for (size_t k = 0; k < n; k++) {
                 for (size_t i = 0; i < n; i++) {
                     comm->host_buf[k][i].reset();
@@ -18380,7 +18361,7 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
         comm->dn16_tensor[i]->buffer = comm->dn16_buffer[i];
         comm->dn16_tensor[i]->data   = ggml_backend_buffer_get_base(comm->dn16_buffer[i]);
         if (!comm->ring_view[i]) {
-            comm->ring_view[i] = ggml_new_tensor_1d(comm->tctx, GGML_TYPE_F32, 1); // view into tensors[i], set per use
+            comm->ring_view[i] = ggml_new_tensor_1d(comm->tctx, GGML_TYPE_F32, 1);
         }
     }
     comm->cap = newcap;
@@ -18529,25 +18510,20 @@ static bool ggml_backend_vk_comm_allreduce_pipeline(ggml_backend_vk_comm_context
     return true;
 }
 
-// Ring AllReduce: reduce-scatter then all-gather around a ring, O(n) host traffic vs the pipeline's O(n^2).
-// The output is split into n chunks; each of 2*(n-1) steps a device sends one chunk to its next neighbor's
-// host buffer and pulls the matching chunk from its prev neighbor (accumulating in reduce-scatter, copying
-// in all-gather). tensors[i] is the in-place working buffer. Supports native peer-import and the CPU-proxy
-// bridge (for RADV/cross-vendor); fp32 staging only for now (F16 is a follow-up). GGML_VK_COMM_RING selects it.
 static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * comm,
                                                 ggml_tensor ** tensors, size_t nbytes) {
     const size_t   n    = comm->backends.size();
-    const bool     f16  = comm->use_f16;                          // F16 staging: cast each chunk before transport
-    const size_t   esz  = ggml_type_size(GGML_TYPE_F32);          // tensors[i] (the accumulator) is fp32
-    const size_t   xsz  = f16 ? sizeof(uint16_t) : esz;           // transported element size
+    const bool     f16  = comm->use_f16;
+    const size_t   esz  = ggml_type_size(GGML_TYPE_F32);
+    const size_t   xsz  = f16 ? sizeof(uint16_t) : esz;
     const int64_t  nel  = ggml_nelements(tensors[0]);
-    const int64_t  cels = (nel + (int64_t) n - 1) / (int64_t) n;  // elements per chunk (last chunk may be shorter)
-    const size_t   xcsz = (size_t) cels * xsz;                    // transported bytes per chunk
+    const int64_t  cels = (nel + (int64_t) n - 1) / (int64_t) n;
+    const size_t   xcsz = (size_t) cels * xsz;
     const uint64_t nsteps = 2 * (uint64_t) (n - 1);
-    const uint64_t nprog  = nsteps + (f16 ? 1 : 0);               // f16 adds one pre-cast prog step
+    const uint64_t nprog  = nsteps + (f16 ? 1 : 0);
 
     const uint64_t round    = comm->ring_round++;
-    const size_t   slot_off = (size_t) (round & 1) * 2 * comm->cap; // round-slot holds this round's 2(n-1) chunks
+    const size_t   slot_off = (size_t) (round & 1) * 2 * comm->cap;
 
     std::vector<uint64_t> compute_val(n), reduce_val(n), prev_reduce(n), up_base(n), pxy_base(n);
     for (size_t i = 0; i < n; i++) {
@@ -18560,7 +18536,7 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
         comm->up_val[i] += nsteps;
         if (comm->proxy) {
             pxy_base[i]       = comm->pxy_val[i];
-            comm->pxy_val[i] += nsteps + 1; // nsteps recv bridges + 1 cross-round WAR bridge
+            comm->pxy_val[i] += nsteps + 1;
         }
         uint64_t done = comm->device[i]->device.getSemaphoreCounterValue(comm->prog[i]);
         if (done >= comm->pool_max_val[i]) { ggml_vk_command_pool_cleanup(comm->device[i], comm->cmd_pool[i]); }
@@ -18576,8 +18552,8 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
         ggml_tensor * rview = comm->ring_view[i];
         char *        tbase = (char *) tensors[i]->data;
 
-        vk_context cctx = ggml_vk_create_temporary_context(comm->cmd_pool[i]);      // compute queue: recv + reduce
-        vk_context tctx = ggml_vk_create_temporary_context(comm->cmd_pool_xfer[i]); // transfer queue: send
+        vk_context cctx = ggml_vk_create_temporary_context(comm->cmd_pool[i]);
+        vk_context tctx = ggml_vk_create_temporary_context(comm->cmd_pool_xfer[i]);
 
         auto chunk_cels = [&](size_t c) -> int64_t {
             const int64_t off = (int64_t) c * cels;
@@ -18590,8 +18566,6 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
         };
 
         if (f16) {
-            // fp32 accumulator (tensors[i]) + F16 transport: each reduced chunk is cast to F16 (folded into the
-            // recv step, so just one extra pre-cast prog value). Per-step up16 slots avoid a send-buffer WAR.
             ggml_backend_vk_buffer_context * ubc = (ggml_backend_vk_buffer_context *) comm->up16_buffer[i]->context;
             ggml_backend_vk_buffer_context * dbc = (ggml_backend_vk_buffer_context *) comm->dn16_buffer[i]->context;
             ggml_tensor * up16t = comm->up16_tensor[i];
@@ -18599,10 +18573,10 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
             char *        ubase = (char *) ggml_backend_buffer_get_base(comm->up16_buffer[i]);
             char *        dbase = (char *) ggml_backend_buffer_get_base(comm->dn16_buffer[i]);
 
-            const int64_t cels0 = chunk_cels(i); // chunk i is the first send (t==0)
+            const int64_t cels0 = chunk_cels(i);
             ggml_vk_ctx_begin(comm->device[i], cctx);
             cctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] });
-            cctx->s->wait_semaphores.push_back({ comm->up[i],   up_base[i] }); // up16 free of the previous round's sends
+            cctx->s->wait_semaphores.push_back({ comm->up[i],   up_base[i] });
             if (cels0) {
                 set_view(rview, tensors[i]->buffer,  tbase + (size_t) i * cels * esz, cels0, esz);
                 set_view(up16t, comm->up16_buffer[i], ubase,                          cels0, xsz);
@@ -18617,7 +18591,7 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
                 const size_t  c_send = rs ? (i + n - s) % n : (i + n + 1 - s) % n;
                 const size_t  c_recv = rs ? (i + n - s - 1) % n : (i + n - s) % n;
                 const int64_t scels = chunk_cels(c_send), rcels = chunk_cels(c_recv);
-                const size_t  uoff = (size_t) t * (size_t) cels * xsz; // per-step up16 slot
+                const size_t  uoff = (size_t) t * (size_t) cels * xsz;
                 const size_t  hoff = slot_off + uoff;
 
                 ggml_vk_ctx_begin(comm->device[i], tctx);
@@ -18635,7 +18609,7 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
                         }
                     }
                 } else {
-                    tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] + t + 1 }); // cast for c_send done
+                    tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] + t + 1 });
                 }
                 if (scels) {
                     ggml_vk_buffer_copy_async(tctx, comm->host_buf[i][i], hoff, ubc->dev_buffer, uoff, (size_t) scels * xsz);
@@ -18658,10 +18632,10 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
                     ggml_vk_sync_buffers(comm->vkctx[i], cctx);
                     set_view(dn16t, comm->dn16_buffer[i], dbase,                                 rcels, xsz);
                     set_view(rview, tensors[i]->buffer,   tbase + (size_t) c_recv * cels * esz,  rcels, esz);
-                    if (rs) { ggml_vk_add(comm->vkctx[i], cctx, rview, dn16t, rview); } // fp32 += F16
-                    else    { ggml_vk_cpy(comm->vkctx[i], cctx, dn16t, rview); }        // F16 -> fp32
+                    if (rs) { ggml_vk_add(comm->vkctx[i], cctx, rview, dn16t, rview); }
+                    else    { ggml_vk_cpy(comm->vkctx[i], cctx, dn16t, rview); }
                     ggml_vk_sync_buffers(comm->vkctx[i], cctx);
-                    if (t + 1 < nsteps) { // cast the just-reduced chunk (== next step's send) to F16
+                    if (t + 1 < nsteps) {
                         set_view(up16t, comm->up16_buffer[i], ubase + (size_t) (t + 1) * cels * xsz, rcels, xsz);
                         ggml_vk_cpy(comm->vkctx[i], cctx, rview, up16t);
                         ggml_vk_sync_buffers(comm->vkctx[i], cctx);
@@ -18773,7 +18747,7 @@ static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor *
             all_compute = all_compute && (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE);
         }
         if (all_compute) {
-            if (comm->ring) { // ring supports native-import and CPU-proxy; fp32 staging only for now
+            if (comm->ring) {
                 return ggml_backend_vk_comm_allreduce_ring(comm, tensors, nbytes);
             }
             return ggml_backend_vk_comm_allreduce_pipeline(comm, tensors, nbytes);
