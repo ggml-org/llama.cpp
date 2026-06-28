@@ -170,6 +170,9 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
         // ws ::= [ \t]*
         auto ws = p.rule("ws", p.chars("[ \t]", 0, -1));
 
+        // ws-required ::= [ \t]+
+        auto ws_required = p.rule("ws-required", p.chars("[ \t]", 1, -1));
+
         // comment ::= [;#] (!newline .)*
         auto comment = p.rule("comment", p.chars("[;#]", 1, 1) + p.zero_or_more(p.negate(newline) + p.any()));
 
@@ -180,7 +183,7 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
         auto ident = p.rule("ident", p.chars("[a-zA-Z_]", 1, 1) + p.chars("[a-zA-Z0-9_.-]", 0, -1));
 
         // value ::= (!eol-start .)*
-        auto eol_start = p.rule("eol-start", ws + (p.chars("[;#]", 1, 1) | newline | p.end()));
+        auto eol_start = p.rule("eol-start", (ws_required + p.chars("[;#]", 1, 1)) | (ws + (newline | p.end())));
         auto value = p.rule("value", p.zero_or_more(p.negate(eol_start) + p.any()));
 
         // header-line ::= "[" ws ident ws "]" eol
