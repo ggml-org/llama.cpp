@@ -3299,7 +3299,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--reasoning-preserve"},
         {"--no-reasoning-preserve"},
-        "preserve reasoning trace in the full history, not just the last assistant message ('on', 'off', or 'auto', default: 'auto' (template default))\n"
+        "preserve reasoning trace in the full history, not just the last assistant message (default: template default)\n"
         "compatible with certain templates having 'supports_preserve_reasoning' capability\n"
         "example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking",
         [](common_params & params, bool value) {
