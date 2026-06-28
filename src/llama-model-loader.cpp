@@ -1261,7 +1261,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         ggml_set_name(&t_meta, tn.str().c_str());
 
         ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
-        GGML_ASSERT(buft != nullptr);
+        if (buft == nullptr) {
+            return nullptr; // return type is ggml_tensor *
+        }
         ggml_context * ctx = ctx_for_buft(buft);
 
         if (flags & TENSOR_DUPLICATED) {
