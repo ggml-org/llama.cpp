@@ -660,22 +660,25 @@ static void dsv4_set_i32(ggml_tensor * dst, const std::vector<int32_t> & src) {
 static void dsv4_set_kq_mask(
         ggml_tensor * dst,
         const llama_kv_cache_dsv4_context::comp_plan & plan,
-        uint32_t n_tokens) {
+        uint32_t n_tokens,
+        int64_t n_stream) {
     if (!dst || !dst->buffer) {
         return;
     }
 
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(n_stream > 0);
+    GGML_ASSERT(n_tokens%n_stream == 0);
     GGML_ASSERT(dst->ne[0] == plan.n_kv);
-    GGML_ASSERT(dst->ne[1] == (int64_t) n_tokens);
+    GGML_ASSERT(dst->ne[1] == (int64_t) n_tokens/n_stream);
     GGML_ASSERT(dst->ne[2] == 1);
-    GGML_ASSERT(dst->ne[3] == 1);
-    GGML_ASSERT((int64_t) plan.n_visible.size() == dst->ne[1]);
+    GGML_ASSERT(dst->ne[3] == n_stream);
+    GGML_ASSERT((int64_t) plan.n_visible.size() == (int64_t) n_tokens);
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
 
     float * data = (float *) dst->data;
 
-    for (int64_t i = 0; i < dst->ne[1]; ++i) {
+    for (int64_t i = 0; i < (int64_t) n_tokens; ++i) {
         const int32_t n_visible = plan.n_visible[i];
 
         for (int64_t j = 0; j < dst->ne[0]; ++j) {
@@ -711,18 +714,19 @@ static void dsv4_set_comp_inputs(
         const llama_kv_cache_dsv4_context::comp_plan & plan,
         const char * name,
         bool debug,
-        uint32_t n_tokens) {
+        uint32_t n_tokens,
+        int64_t n_stream) {
     dsv4_set_i32(inp.state_pos, plan.state_pos);
     dsv4_set_i32(inp.state_persist_src_idxs, plan.state_persist_src_idxs);
     dsv4_set_i32(inp.state_persist_dst_idxs, plan.state_persist_dst_idxs);
     dsv4_set_i32(inp.state_read_idxs, plan.state_read_idxs);
     dsv4_set_i64(inp.state_write_idxs, plan.state_write_idxs);
     dsv4_set_i32(inp.state_write_pos, plan.state_write_pos);
-    dsv4_set_kq_mask(inp.kq_mask, plan, n_tokens);
+    dsv4_set_kq_mask(inp.kq_mask, plan, n_tokens, n_stream);
 
     if (debug || dsv4_compress_debug()) {
-        LLAMA_LOG_INFO("%s: %s n_tokens=%u, state_persist_dst=%s, state_write_pos=%s\n",
-                __func__, name, n_tokens,
+        LLAMA_LOG_INFO("%s: %s n_tokens=%u, n_stream=%d, state_persist_dst=%s, state_write_pos=%s\n",
+                __func__, name, n_tokens, (int) n_stream,
                 dsv4_plan_positions(plan.state_persist_dst_idxs).c_str(),
                 dsv4_plan_positions(plan.state_write_pos).c_str());
     }
@@ -735,22 +739,26 @@ static bool dsv4_can_reuse_tensor_1d(ggml_tensor * t, int64_t ne0) {
 static bool dsv4_can_reuse_kq_mask(
         ggml_tensor * t,
         const llama_kv_cache_dsv4_context::comp_plan & plan,
-        uint32_t n_tokens) {
+        uint32_t n_tokens,
+        int64_t n_stream) {
     if (plan.n_kv == 0) {
         return t == nullptr;
     }
 
+    GGML_ASSERT(n_stream > 0);
+
     return t != nullptr &&
            t->ne[0] == plan.n_kv &&
-           t->ne[1] == (int64_t) n_tokens &&
+           t->ne[1] == (int64_t) n_tokens/n_stream &&
            t->ne[2] == 1 &&
-           t->ne[3] == 1;
+           t->ne[3] == n_stream;
 }
 
 static bool dsv4_can_reuse_comp_input(
         const llm_graph_input_dsv4::comp_input & inp,
         const llama_kv_cache_dsv4_context::comp_plan & plan,
-        uint32_t n_tokens) {
+        uint32_t n_tokens,
+        int64_t n_stream) {
     bool res = true;
     res &= dsv4_can_reuse_tensor_1d(inp.state_pos, plan.state_pos.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_persist_src_idxs, plan.state_persist_src_idxs.size());
@@ -758,7 +766,7 @@ static bool dsv4_can_reuse_comp_input(
     res &= dsv4_can_reuse_tensor_1d(inp.state_read_idxs, plan.state_read_idxs.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_write_idxs, plan.state_write_idxs.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_write_pos, plan.state_write_pos.size());
-    res &= dsv4_can_reuse_kq_mask(inp.kq_mask, plan, n_tokens);
+    res &= dsv4_can_reuse_kq_mask(inp.kq_mask, plan, n_tokens, n_stream);
 
     return res;
 }
@@ -783,7 +791,8 @@ static void dsv4_build_comp_inputs(
         ggml_context * ctx,
         llm_graph_input_dsv4::comp_input & inp,
         const llama_kv_cache_dsv4_context::comp_plan & plan,
-        const char * name) {
+        const char * name,
+        int64_t n_stream) {
     inp.state_pos = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_pos.size(), std::string("dsv4_") + name + "_state_pos");
     inp.state_persist_src_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_persist_src_idxs.size(), std::string("dsv4_") + name + "_state_persist_src_idxs");
     inp.state_persist_dst_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_persist_dst_idxs.size(), std::string("dsv4_") + name + "_state_persist_dst_idxs");
@@ -792,7 +801,12 @@ static void dsv4_build_comp_inputs(
     inp.state_write_pos = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_write_pos.size(), std::string("dsv4_") + name + "_state_write_pos");
 
     if (plan.n_kv > 0) {
-        inp.kq_mask = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, plan.n_kv, plan.n_visible.size(), 1, 1);
+        const int64_t n_tokens = (int64_t) plan.n_visible.size();
+
+        GGML_ASSERT(n_stream > 0);
+        GGML_ASSERT(n_tokens%n_stream == 0);
+
+        inp.kq_mask = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, plan.n_kv, n_tokens/n_stream, 1, n_stream);
         ggml_set_input(inp.kq_mask);
         ggml_set_name(inp.kq_mask, (std::string("dsv4_") + name + "_kq_mask").c_str());
     }
@@ -802,9 +816,11 @@ void llm_graph_input_dsv4::set_input(const llama_ubatch * ubatch) {
     inp_raw->mctx = mctx->get_raw();
     inp_raw->set_input(ubatch);
 
-    dsv4_set_comp_inputs(inp_csa, mctx->get_csa_plan(*ubatch), "csa", debug > 0, ubatch->n_tokens);
-    dsv4_set_comp_inputs(inp_hca, mctx->get_hca_plan(*ubatch), "hca", debug > 0, ubatch->n_tokens);
-    dsv4_set_comp_inputs(inp_lid, mctx->get_lid_plan(*ubatch), "lid", debug > 0, ubatch->n_tokens);
+    const int64_t n_stream = cparams.kv_unified ? 1 : ubatch->n_seqs_unq;
+
+    dsv4_set_comp_inputs(inp_csa, mctx->get_csa_plan(*ubatch), "csa", debug > 0, ubatch->n_tokens, n_stream);
+    dsv4_set_comp_inputs(inp_hca, mctx->get_hca_plan(*ubatch), "hca", debug > 0, ubatch->n_tokens, n_stream);
+    dsv4_set_comp_inputs(inp_lid, mctx->get_lid_plan(*ubatch), "lid", debug > 0, ubatch->n_tokens, n_stream);
 
     if (inp_lid.k_rot && inp_lid.k_rot->buffer) {
         mctx->get_lid()->set_input_k_rot(inp_lid.k_rot);
@@ -823,9 +839,11 @@ bool llm_graph_input_dsv4::can_reuse(const llm_graph_params & params) {
     raw_params.mctx = mctx->get_raw();
     res &= inp_raw->can_reuse(raw_params);
 
-    res &= dsv4_can_reuse_comp_input(inp_csa, mctx->get_csa_plan(params.ubatch), params.ubatch.n_tokens);
-    res &= dsv4_can_reuse_comp_input(inp_hca, mctx->get_hca_plan(params.ubatch), params.ubatch.n_tokens);
-    res &= dsv4_can_reuse_comp_input(inp_lid, mctx->get_lid_plan(params.ubatch), params.ubatch.n_tokens);
+    const int64_t n_stream = params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq;
+
+    res &= dsv4_can_reuse_comp_input(inp_csa, mctx->get_csa_plan(params.ubatch), params.ubatch.n_tokens, n_stream);
+    res &= dsv4_can_reuse_comp_input(inp_hca, mctx->get_hca_plan(params.ubatch), params.ubatch.n_tokens, n_stream);
+    res &= dsv4_can_reuse_comp_input(inp_lid, mctx->get_lid_plan(params.ubatch), params.ubatch.n_tokens, n_stream);
 
     return res;
 }
@@ -3002,9 +3020,11 @@ llm_graph_input_dsv4 * llm_graph_context::build_inp_dsv4() const {
     inp_raw->self_k_rot_swa = raw_ctx->get_swa()->build_input_k_rot(ctx0);
     auto inp = std::make_unique<llm_graph_input_dsv4>(cparams, std::move(inp_raw), mctx_cur);
 
-    dsv4_build_comp_inputs(ctx0, inp->inp_csa, mctx_cur->get_csa_plan(ubatch), "csa");
-    dsv4_build_comp_inputs(ctx0, inp->inp_hca, mctx_cur->get_hca_plan(ubatch), "hca");
-    dsv4_build_comp_inputs(ctx0, inp->inp_lid, mctx_cur->get_lid_plan(ubatch), "lid");
+    const int64_t n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+
+    dsv4_build_comp_inputs(ctx0, inp->inp_csa, mctx_cur->get_csa_plan(ubatch), "csa", n_stream);
+    dsv4_build_comp_inputs(ctx0, inp->inp_hca, mctx_cur->get_hca_plan(ubatch), "hca", n_stream);
+    dsv4_build_comp_inputs(ctx0, inp->inp_lid, mctx_cur->get_lid_plan(ubatch), "lid", n_stream);
     inp->inp_lid.k_rot = mctx_cur->get_lid()->build_input_k_rot(ctx0);
 
     return (llm_graph_input_dsv4 *) res->add_input(std::move(inp));

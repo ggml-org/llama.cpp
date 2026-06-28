@@ -3312,12 +3312,7 @@ private:
                                             if (cur.pos_max > pos_next) {
                                                 return false;
                                             }
-                                            const bool can_replay_from_exact =
-                                                cur.pos_min == cur.pos_max &&
-                                                cur.n_tokens < slot.task->n_tokens();
-                                            return cur.pos_min < pos_min_thold ||
-                                                cur.pos_min == 0 ||
-                                                can_replay_from_exact;
+                                            return cur.pos_min < pos_min_thold || cur.pos_min == 0;
                                         }
                                     );
 
