@@ -12,13 +12,13 @@
 		ChatMessageAssistant,
 		ChatMessageUser,
 		ChatMessageSystem,
-		ChatMessageMcpPrompt
+		ChatMessageCustomPrompt
 	} from '$lib/components/app/chat';
 	import { DialogPromptAddNew, DialogPromptSync } from '$lib/components/app';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
-	import { deriveAgenticSections, hasContentDiff, parseMcpPromptId } from '$lib/utils';
+	import { deriveAgenticSections, hasContentDiff } from '$lib/utils';
 	import { promptsStore } from '$lib/stores/prompts.svelte';
-	import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraCustomPrompt } from '$lib/types';
+	import type { DatabaseMessageExtraCustomPrompt } from '$lib/types';
 	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
@@ -216,42 +216,6 @@
 		startEdit: handleEdit
 	});
 
-	let mcpPromptExtra = $derived.by((): DatabaseMessageExtraMcpPrompt | null => {
-		if (message.role === MessageRole.USER) {
-			if (message.content.trim()) return null;
-			if (!message.extra || message.extra.length !== 1) return null;
-
-			const extra = message.extra[0];
-
-			if (extra.type === AttachmentType.MCP_PROMPT) {
-				return extra as DatabaseMessageExtraMcpPrompt;
-			}
-
-			return null;
-		}
-
-		if (message.role === MessageRole.SYSTEM) {
-			// System messages created from an MCP prompt carry the server/prompt
-			// identity through their synthetic `mcp:<server>:<prompt>` promptId;
-			// treat them as MCP-prompt messages so they render via the same
-			// surface instead of a plain system textarea.
-			const custom = customPromptExtra;
-			if (!custom) return null;
-
-			const parsed = parseMcpPromptId(custom.promptId);
-			if (!parsed) return null;
-
-			return {
-				type: AttachmentType.MCP_PROMPT,
-				name: parsed.promptName,
-				serverName: parsed.serverName,
-				promptName: parsed.promptName,
-				content: message.content
-			};
-		}
-
-		return null;
-	});
 
 	$effect(() => {
 		const pendingId = pendingEditMessageId();
@@ -503,77 +467,82 @@
 </script>
 
 <div use:fadeInView class="chat-message">
-	{#if mcpPromptExtra}
-		<ChatMessageMcpPrompt
-			class={className}
-			{deletionInfo}
-			{message}
-			role={message.role}
-			mcpPrompt={mcpPromptExtra}
-			onConfirmDelete={handleConfirmDelete}
-			onCopy={handleCopy}
-			onDelete={handleDelete}
-			onEdit={handleEdit}
-			onNavigateToSibling={handleNavigateToSibling}
-			onShowDeleteDialogChange={handleShowDeleteDialogChange}
-			{showDeleteDialog}
-			{siblingInfo}
-		/>
-	{:else if message.role === MessageRole.SYSTEM}
-		<ChatMessageSystem
-			class={className}
-			{deletionInfo}
-			{message}
-			promptId={customPromptExtra?.promptId}
-			title={promptTitle}
-			{promptIsStale}
-			onPromptUpdate={() => (showPromptSyncDialog = true)}
-			onConfirmDelete={handleConfirmDelete}
-			onCopy={handleCopy}
-			onDelete={handleDelete}
-			onEdit={handleEdit}
-			onNavigateToSibling={handleNavigateToSibling}
-			onShowDeleteDialogChange={handleShowDeleteDialogChange}
-			{showDeleteDialog}
-			{siblingInfo}
-		/>
-
-		{#if promptDialogOpen}
-			<DialogPromptAddNew
-				open={promptDialogOpen}
-				initialContent={editedContent.trim()}
-				onAddToLibraryComplete={(id: string, title: string) => {
-					promptDialogOpen = false;
-					isEditing = false;
-					saveSystemPromptWithPrompt(editedContent.trim(), id, title);
-				}}
+	{#if message.role === MessageRole.SYSTEM}
+		{#if customPromptExtra}
+			<ChatMessageCustomPrompt
+				class={className}
+				{message}
+				customPromptExtra={customPromptExtra}
+				messageRole={message.role}
+				promptTitle={promptTitle}
+				{promptIsStale}
+				{deletionInfo}
+				onPromptUpdate={() => (showPromptSyncDialog = true)}
+				onConfirmDelete={handleConfirmDelete}
+				onCopy={handleCopy}
+				onDelete={handleDelete}
+				onEdit={handleEdit}
+				onNavigateToSibling={handleNavigateToSibling}
+				onShowDeleteDialogChange={handleShowDeleteDialogChange}
+				{showDeleteDialog}
+				{siblingInfo}
 			/>
-		{/if}
-
-		{#if showPromptSyncDialog && referencedPrompt}
-			<DialogPromptSync
-				bind:open={showPromptSyncDialog}
-				promptTitle={referencedPrompt.title}
-				currentTitle={customPromptExtra?.title}
-				currentContent={message.content}
-				updatedContent={referencedPrompt.content}
-				onUpdate={syncPromptFromLibrary}
+		{:else}
+			<ChatMessageSystem
+				class={className}
+				{deletionInfo}
+				{message}
+				promptId={undefined}
+				title={undefined}
+				{promptIsStale}
+				onPromptUpdate={() => (showPromptSyncDialog = true)}
+				onConfirmDelete={handleConfirmDelete}
+				onCopy={handleCopy}
+				onDelete={handleDelete}
+				onEdit={handleEdit}
+				onNavigateToSibling={handleNavigateToSibling}
+				onShowDeleteDialogChange={handleShowDeleteDialogChange}
+				{showDeleteDialog}
+				{siblingInfo}
 			/>
-		{/if}
 
-		{#if showUpdateLibraryDialog && referencedPrompt}
-			<DialogPromptSync
-				bind:open={showUpdateLibraryDialog}
-				promptTitle={referencedPrompt.title}
-				currentTitle={customPromptExtra?.title}
-				currentContent={message.content}
-				updatedContent={editedContent.trim()}
-				bind:updatedTitle
-				editableTitle
-				onUpdate={handleUpdateLibraryConfirm}
-			/>
+			{#if promptDialogOpen}
+				<DialogPromptAddNew
+					open={promptDialogOpen}
+					initialContent={editedContent.trim()}
+					onAddToLibraryComplete={(id: string, title: string) => {
+						promptDialogOpen = false;
+						isEditing = false;
+						saveSystemPromptWithPrompt(editedContent.trim(), id, title);
+					}}
+				/>
+			{/if}
+
+			{#if showPromptSyncDialog && referencedPrompt}
+				<DialogPromptSync
+					bind:open={showPromptSyncDialog}
+					promptTitle={referencedPrompt.title}
+					currentTitle={undefined}
+					currentContent={message.content}
+					updatedContent={referencedPrompt.content}
+					onUpdate={syncPromptFromLibrary}
+				/>
+			{/if}
+
+			{#if showUpdateLibraryDialog && referencedPrompt}
+				<DialogPromptSync
+					bind:open={showUpdateLibraryDialog}
+					promptTitle={referencedPrompt.title}
+					currentTitle={undefined}
+					currentContent={message.content}
+					updatedContent={editedContent.trim()}
+					bind:updatedTitle
+					editableTitle
+					onUpdate={handleUpdateLibraryConfirm}
+				/>
+			{/if}
 		{/if}
-	{:else if message.role === MessageRole.USER}
+{:else if message.role === MessageRole.USER}
 		<ChatMessageUser
 			class={className}
 			{deletionInfo}
