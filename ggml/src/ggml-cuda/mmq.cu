@@ -3,7 +3,8 @@
 #include "quantize.cuh"
 #include "mmid.cuh"
 
-static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream,
+                                             [[maybe_unused]] bool force_w4a8 = false) {
     switch (args.type_x) {
         case GGML_TYPE_Q1_0:
             mul_mat_q_case<GGML_TYPE_Q1_0>(ctx, args, stream);
@@ -27,6 +28,13 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
             mul_mat_q_case<GGML_TYPE_MXFP4>(ctx, args, stream);
             break;
         case GGML_TYPE_NVFP4:
+#ifdef GGML_CUDA_HAS_BLACKWELL_TARGET
+            // W4A16 NVFP4: dispatch the W4A8 instantiation so activations stay at higher precision even on Blackwell.
+            if (force_w4a8) {
+                mul_mat_q_case<GGML_TYPE_NVFP4, true>(ctx, args, stream);
+                break;
+            }
+#endif // GGML_CUDA_HAS_BLACKWELL_TARGET
             mul_mat_q_case<GGML_TYPE_NVFP4>(ctx, args, stream);
             break;
         case GGML_TYPE_Q2_K:
@@ -72,6 +80,18 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
             GGML_ABORT("fatal error");
             break;
     }
+}
+
+// True iff src0 is NVFP4 and dst carries the no-quant-src1 hint: gates the W4A8 mmq path.
+// GGML_CUDA_DISABLE_FORCE_W4A8 overrides the GGUF intent and keeps the native W4A4 path.
+static inline bool ggml_cuda_mmq_force_w4a8(const ggml_tensor * src0, const ggml_tensor * dst) {
+    static const bool disable = []() {
+        const char * env = getenv("GGML_CUDA_DISABLE_FORCE_W4A8");
+        return env != nullptr && std::atoi(env) != 0;
+    }();
+    return !disable &&
+           src0->type == GGML_TYPE_NVFP4 &&
+           ggml_get_op_params_i32(dst, 1) == GGML_HINT_NO_QUANT_SRC1;
 }
 
 void ggml_cuda_mul_mat_q(
@@ -121,8 +141,12 @@ void ggml_cuda_mul_mat_q(
     const bool use_stream_k = (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA)
                             || GGML_CUDA_CC_IS_CDNA(cc);
 
+    // W4A16 NVFP4: keep src1 at Q8_1 precision (W4A8 mmq path) even on Blackwell.
+    const bool force_w4a8 = ggml_cuda_mmq_force_w4a8(src0, dst);
+
     // TODO: tighter pool buffer size vs q8 path
-    const bool use_native_fp4 = blackwell_mma_available(cc) && (src0->type == GGML_TYPE_MXFP4 || src0->type == GGML_TYPE_NVFP4);
+    const bool use_native_fp4 = !force_w4a8 && blackwell_mma_available(cc) &&
+                                (src0->type == GGML_TYPE_MXFP4 || src0->type == GGML_TYPE_NVFP4);
 
     if (!ids) {
         const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1 +
@@ -157,7 +181,7 @@ void ggml_cuda_mul_mat_q(
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
             use_stream_k, ne1};
-        ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
+        ggml_cuda_mul_mat_q_switch_type(ctx, args, stream, force_w4a8);
         return;
     }
 
@@ -219,7 +243,7 @@ void ggml_cuda_mul_mat_q(
         ne03, ne13, s03, s13, s3,
         use_stream_k, ne12};
 
-    ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
+    ggml_cuda_mul_mat_q_switch_type(ctx, args, stream, force_w4a8);
 }
 
 void ggml_cuda_op_mul_mat_q(
@@ -252,6 +276,10 @@ void ggml_cuda_op_mul_mat_q(
     const bool use_stream_k = ((GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA)
                             || GGML_CUDA_CC_IS_CDNA(cc))
                             && src1_ncols == ne11;
+
+    // W4A16 NVFP4: dispatch the W4A8 instantiation even on Blackwell.
+    const bool force_w4a8 = ggml_cuda_mmq_force_w4a8(src0, dst);
+
     const mmq_args args = {
         src0_dd_i, src0->type, (const int *) src1_ddq_i, nullptr, nullptr, dst_dd_i,
         ne00, row_diff, src1_ncols, stride01, ne11, nrows_dst,
@@ -259,7 +287,7 @@ void ggml_cuda_op_mul_mat_q(
         1, 1, 0, 0, 0,
         use_stream_k, src1_ncols};
 
-    ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
+    ggml_cuda_mul_mat_q_switch_type(ctx, args, stream, force_w4a8);
 
     GGML_UNUSED_VARS(src1, dst, src1_ddf_i, src1_padded_row_size);
 }

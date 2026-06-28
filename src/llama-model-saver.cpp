@@ -193,6 +193,20 @@ void llama_model_saver::add_kv_from_model() {
     // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT_TAU,     ???);
     // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT_ETA,     ???);
     add_kv(LLM_KV_GENERAL_NAME,                      model->name);
+
+    // NVFP4 W4A16 flags: a packed array of layer indices + LM head flag.
+    std::vector<uint32_t> nvfp4_w4a16_blocks;
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        if (hparams.nvfp4_w4a16_layer_arr[il]) {
+            nvfp4_w4a16_blocks.push_back(il);
+        }
+    }
+    if (!nvfp4_w4a16_blocks.empty()) {
+        add_kv(LLM_KV_GENERAL_NVFP4_W4A16_BLOCKS, nvfp4_w4a16_blocks);
+    }
+    if (hparams.nvfp4_w4a16_output) {
+        add_kv(LLM_KV_GENERAL_NVFP4_W4A16_OUTPUT, true);
+    }
     // add_kv(LLM_KV_GENERAL_AUTHOR,                    ???);
     // add_kv(LLM_KV_GENERAL_VERSION,                   ???);
     // add_kv(LLM_KV_GENERAL_URL,                       ???);

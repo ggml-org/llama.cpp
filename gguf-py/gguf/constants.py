@@ -25,6 +25,10 @@ class Keys:
         ALIGNMENT                  = "general.alignment"
         FILE_TYPE                  = "general.file_type"
 
+        # NVFP4 W4A16: Layer indices for which activations were not quantized.
+        NVFP4_W4A16_BLOCKS         = "general.nvfp4.w4a16_blocks"
+        NVFP4_W4A16_OUTPUT         = "general.nvfp4.w4a16_output"
+
         # Recommended Sampler Parameters
         SAMPLING_SEQUENCE           = "general.sampling.sequence"
         SAMPLING_TOP_K              = "general.sampling.top_k"
