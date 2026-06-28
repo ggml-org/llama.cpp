@@ -1061,11 +1061,14 @@ class ChatStore {
 		modelOverride?: string | null,
 		firstUserMessageContent?: string
 	): Promise<void> {
-		let effectiveModel = modelOverride;
+		// the ::model suffix in the stream identity is only for router mode, where it routes to the
+		// owning child. in single-model mode the identity stays the bare conv id so that attach, stop
+		// and reattach all agree, regardless of fresh send vs regenerate passing a resolved model
+		let effectiveModel: string | null | undefined = undefined;
 
-		if (isRouterMode() && !effectiveModel) {
+		if (isRouterMode()) {
 			const conversationModel = this.getConversationModel(allMessages);
-			effectiveModel = selectedModelName() || conversationModel;
+			effectiveModel = modelOverride || selectedModelName() || conversationModel;
 		}
 
 		if (isRouterMode() && effectiveModel) {
