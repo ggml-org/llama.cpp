@@ -17853,17 +17853,14 @@ struct ggml_backend_vk_comm_context {
     std::vector<ggml_backend_buffer_t>      tmp_buffer;
     std::vector<ggml_tensor*>               tmp_tensor;
     ggml_context *                          tctx = nullptr;
-    bool                                    pipeline_ok = false;
+    bool                                    ring_ok = false;
     std::vector<vk::Semaphore>              up;
     std::vector<std::vector<vk::Semaphore>> peer_up;
     std::vector<uint64_t>                   up_val;
     std::vector<vk_command_pool>            cmd_pool_xfer;
     std::vector<uint64_t>                   xfer_pool_max_val;
-    uint64_t                                pipe_round = 0;
-    bool                                    ring = false;
     uint64_t                                ring_round = 0;
     std::vector<ggml_tensor*>               ring_view;
-    bool                                    use_f16 = false;
     std::vector<ggml_backend_buffer_t>      up16_buffer;
     std::vector<ggml_backend_buffer_t>      dn16_buffer;
     std::vector<ggml_tensor*>               up16_tensor;
@@ -17979,8 +17976,6 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
     for (size_t k = 0; k < n_backends; k++) {
         comm->host_buf[k].resize(n_backends);
     }
-    comm->use_f16 = (getenv("GGML_VK_COMM_FP32") == nullptr);
-    comm->ring    = (getenv("GGML_VK_COMM_PIPELINE") == nullptr);
     comm->up16_buffer.resize(n_backends, nullptr);
     comm->dn16_buffer.resize(n_backends, nullptr);
     comm->up16_tensor.resize(n_backends, nullptr);
@@ -18005,7 +18000,7 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
         comm->up_val.assign(n_backends, 0);
         comm->cmd_pool_xfer.resize(n_backends);
         comm->xfer_pool_max_val.assign(n_backends, 0);
-        comm->pipeline_ok = true;
+        comm->ring_ok = true;
         for (size_t i = 0; i < n_backends; i++) {
             comm->prog[i] = ggml_vk_create_export_timeline(comm->device[i]);
             comm->up[i]   = ggml_vk_create_export_timeline(comm->device[i]);
@@ -18013,7 +18008,7 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
             comm->cmd_pool_xfer[i].init(comm->device[i], &comm->device[i]->transfer_queue);
             if (comm->device[i]->single_queue ||
                 comm->device[i]->transfer_queue.queue == comm->device[i]->compute_queue.queue) {
-                comm->pipeline_ok = false;
+                comm->ring_ok = false;
             }
         }
         comm->proxy = getenv("GGML_VK_COMM_PROXY") != nullptr;
@@ -18168,7 +18163,7 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
         }
     }
 
-    const size_t slotcap = (comm->ring ? 4 : 2) * newcap;
+    const size_t slotcap = 4 * newcap;
     for (size_t k = 0; k < n; k++) {
         comm->host_ptr[k] = ggml_vk_comm_aligned_alloc(comm->align, slotcap);
         if (!comm->host_ptr[k]) {
@@ -18215,159 +18210,15 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
     return true;
 }
 
-static bool ggml_backend_vk_comm_allreduce_pipeline(ggml_backend_vk_comm_context * comm,
-                                                    ggml_tensor ** tensors, size_t nbytes) {
-    const size_t n = comm->backends.size();
-
-    constexpr size_t chunk_target = 4u << 20;
-    constexpr int    kmax         = 4;
-    const bool   f16    = comm->use_f16;
-    const size_t xbytes = f16 ? (nbytes / 2) : nbytes;
-    int K = (int) ((xbytes + chunk_target - 1) / chunk_target);
-    K = std::max(2, std::min(K, kmax));
-    size_t chunk = (xbytes + K - 1) / K;
-    chunk = (chunk + 15) & ~((size_t) 15);
-    K = (int) ((xbytes + chunk - 1) / chunk);
-
-    const int    slot     = (int) (comm->pipe_round & 1);
-    const size_t slot_off = (size_t) slot * comm->cap;
-    comm->pipe_round++;
-
-    std::vector<uint64_t> compute_val(n), cast_val(n), reduce_val(n), up_base(n), pxy_base(n);
-    for (size_t i = 0; i < n; i++) {
-        compute_val[i] = comm->vkctx[i]->comm_prog_val;
-        cast_val[i]    = compute_val[i] + 1;
-        reduce_val[i]  = compute_val[i] + (f16 ? 2 : 1);
-        comm->vkctx[i]->comm_prog_val = reduce_val[i];
-        comm->last_reduce[i]          = reduce_val[i];
-        up_base[i]                    = comm->up_val[i];
-        comm->up_val[i]              += (uint64_t) K;
-        if (comm->proxy) {
-            pxy_base[i]               = comm->pxy_val[i];
-            comm->pxy_val[i]         += (uint64_t) (n - 1) * K;
-        }
-    }
-
-    auto recycle = [&](size_t i, vk_command_pool & pool, vk::Semaphore sem, uint64_t & pool_max, uint64_t target) {
-        uint64_t done = comm->device[i]->device.getSemaphoreCounterValue(sem);
-        if (done < pool_max && pool.buffers_in_use() >= 256) {
-            vk::SemaphoreWaitInfo wi;
-            wi.semaphoreCount = 1;
-            wi.pSemaphores    = &sem;
-            wi.pValues        = &pool_max;
-            (void) comm->device[i]->device.waitSemaphores(wi, UINT64_MAX);
-            done = pool_max;
-        }
-        if (done >= pool_max) {
-            ggml_vk_command_pool_cleanup(comm->device[i], pool);
-        }
-        pool_max = target;
-    };
-    for (size_t i = 0; i < n; i++) {
-        recycle(i, comm->cmd_pool[i],      comm->prog[i], comm->pool_max_val[i],      reduce_val[i]);
-        recycle(i, comm->cmd_pool_xfer[i], comm->up[i],   comm->xfer_pool_max_val[i], up_base[i] + (uint64_t) K);
-    }
-
-    for (size_t i = 0; i < n; i++) {
-        ggml_backend_vk_buffer_context * bc   = (ggml_backend_vk_buffer_context *) tensors[i]->buffer->context;
-        ggml_backend_vk_buffer_context * tbc  = (ggml_backend_vk_buffer_context *) comm->tmp_buffer[i]->context;
-        ggml_backend_vk_buffer_context * upbc = (ggml_backend_vk_buffer_context *) comm->up16_buffer[i]->context;
-        ggml_backend_vk_buffer_context * dnbc = (ggml_backend_vk_buffer_context *) comm->dn16_buffer[i]->context;
-        const size_t src_off = vk_tensor_offset(tensors[i]) + tensors[i]->view_offs;
-
-        if (f16) {
-            for (ggml_tensor * t : { comm->up16_tensor[i], comm->dn16_tensor[i] }) {
-                for (int d = 0; d < GGML_MAX_DIMS; d++) { t->ne[d] = tensors[i]->ne[d]; }
-                t->nb[0] = ggml_type_size(GGML_TYPE_F16);
-                for (int d = 1; d < GGML_MAX_DIMS; d++) { t->nb[d] = t->nb[d - 1] * t->ne[d - 1]; }
-            }
-        }
-
-        vk_context cctx = ggml_vk_create_temporary_context(comm->cmd_pool[i]);
-
-        if (f16) {
-            ggml_vk_ctx_begin(comm->device[i], cctx);
-            cctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] });
-            cctx->s->wait_semaphores.push_back({ comm->up[i],   up_base[i] });
-            ggml_vk_cpy(comm->vkctx[i], cctx, tensors[i], comm->up16_tensor[i]);
-            ggml_vk_ctx_end(cctx);
-            cctx->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], cast_val[i] });
-        }
-
-        const uint64_t up_ready    = f16 ? cast_val[i] : compute_val[i];
-        vk_buffer &    up_src       = f16 ? upbc->dev_buffer : bc->dev_buffer;
-        const size_t   up_src_off   = f16 ? 0 : src_off;
-        vk_context tctx = ggml_vk_create_temporary_context(comm->cmd_pool_xfer[i]);
-        for (int cI = 0; cI < K; cI++) {
-            const size_t off = (size_t) cI * chunk;
-            const size_t sz  = std::min(chunk, xbytes - off);
-            ggml_vk_ctx_begin(comm->device[i], tctx);
-            if (cI == 0) {
-                tctx->s->wait_semaphores.push_back({ comm->prog[i], up_ready });
-            }
-            ggml_vk_buffer_copy_async(tctx, comm->host_buf[i][i], slot_off + off, up_src, up_src_off + off, sz);
-            ggml_vk_ctx_end(tctx);
-            tctx->seqs.back().back().signal_semaphores.push_back({ comm->up[i], up_base[i] + (uint64_t) cI + 1 });
-        }
-        ggml_vk_submit(tctx, {});
-
-        ggml_tensor * tmp = comm->tmp_tensor[i];
-        for (int d = 0; d < GGML_MAX_DIMS; d++) {
-            tmp->ne[d] = tensors[i]->ne[d];
-        }
-        tmp->nb[0] = ggml_type_size(GGML_TYPE_F32);
-        for (int d = 1; d < GGML_MAX_DIMS; d++) {
-            tmp->nb[d] = tmp->nb[d - 1] * tmp->ne[d - 1];
-        }
-        vk_buffer &    dn_dst      = f16 ? dnbc->dev_buffer : tbc->dev_buffer;
-        ggml_tensor *  add_src1    = f16 ? comm->dn16_tensor[i] : tmp;
-        for (size_t k = 0; k < n; k++) {
-            if (k == i) {
-                continue;
-            }
-            const size_t p = (k < i) ? k : k - 1;
-            for (int cI = 0; cI < K; cI++) {
-                const size_t off = (size_t) cI * chunk;
-                const size_t sz  = std::min(chunk, xbytes - off);
-                ggml_vk_ctx_begin(comm->device[i], cctx);
-                if (comm->proxy) {
-                    const uint64_t pv = pxy_base[i] + (uint64_t) p * K + (uint64_t) cI + 1;
-                    cctx->s->wait_semaphores.push_back({ comm->pxy[i], pv });
-                    std::lock_guard<std::mutex> lk(comm->bridge_mtx);
-                    comm->bridge_q[i].push_back({ comm->device[k]->device, comm->up[k], up_base[k] + (uint64_t) cI + 1,
-                                                  comm->device[i]->device, comm->pxy[i], pv });
-                } else {
-                    cctx->s->wait_semaphores.push_back({ comm->peer_up[i][k], up_base[k] + (uint64_t) cI + 1 });
-                }
-                ggml_vk_buffer_copy_async(cctx, dn_dst, off, comm->host_buf[k][i], slot_off + off, sz);
-                ggml_vk_ctx_end(cctx);
-            }
-            ggml_vk_ctx_begin(comm->device[i], cctx);
-            if (!f16) {
-                cctx->s->wait_semaphores.push_back({ comm->up[i], up_base[i] + (uint64_t) K });
-            }
-            ggml_vk_sync_buffers(comm->vkctx[i], cctx);
-            ggml_vk_add(comm->vkctx[i], cctx, tensors[i], add_src1, tensors[i]);
-            ggml_vk_sync_buffers(comm->vkctx[i], cctx);
-            ggml_vk_ctx_end(cctx);
-        }
-        cctx->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], reduce_val[i] });
-        ggml_vk_submit(cctx, {});
-    }
-    return true;
-}
-
 static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * comm,
-                                                ggml_tensor ** tensors, size_t nbytes) {
+                                                ggml_tensor ** tensors) {
     const size_t   n    = comm->backends.size();
-    const bool     f16  = comm->use_f16;
     const size_t   esz  = ggml_type_size(GGML_TYPE_F32);
-    const size_t   xsz  = f16 ? sizeof(uint16_t) : esz;
+    const size_t   xsz  = sizeof(uint16_t);
     const int64_t  nel  = ggml_nelements(tensors[0]);
     const int64_t  cels = (nel + (int64_t) n - 1) / (int64_t) n;
-    const size_t   xcsz = (size_t) cels * xsz;
     const uint64_t nsteps = 2 * (uint64_t) (n - 1);
-    const uint64_t nprog  = nsteps + (f16 ? 1 : 0);
+    const uint64_t nprog  = nsteps + 1;
 
     const uint64_t round    = comm->ring_round++;
     const size_t   slot_off = (size_t) (round & 1) * 2 * comm->cap;
@@ -18412,7 +18263,7 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
             tt->buffer = buf; tt->data = data; tt->view_offs = 0;
         };
 
-        if (f16) {
+        {
             ggml_backend_vk_buffer_context * ubc = (ggml_backend_vk_buffer_context *) comm->up16_buffer[i]->context;
             ggml_backend_vk_buffer_context * dbc = (ggml_backend_vk_buffer_context *) comm->dn16_buffer[i]->context;
             ggml_tensor * up16t = comm->up16_tensor[i];
@@ -18491,69 +18342,6 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
                 ggml_vk_ctx_end(cctx);
                 cctx->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], compute_val[i] + t + 2 });
             }
-        } else {
-            ggml_backend_vk_buffer_context * bc  = (ggml_backend_vk_buffer_context *) tensors[i]->buffer->context;
-            ggml_backend_vk_buffer_context * tbc = (ggml_backend_vk_buffer_context *) comm->tmp_buffer[i]->context;
-            const size_t  base_off = vk_tensor_offset(tensors[i]) + tensors[i]->view_offs;
-            ggml_tensor * rtmp     = comm->tmp_tensor[i];
-            char *        tmpbase  = (char *) ggml_backend_buffer_get_base(comm->tmp_buffer[i]);
-
-            for (uint64_t t = 0; t < nsteps; t++) {
-                const bool     rs = (t < (uint64_t) (n - 1));
-                const size_t   s  = (size_t) (rs ? t : t - (n - 1));
-                const size_t   c_send = rs ? (i + n - s) % n : (i + n + 1 - s) % n;
-                const size_t   c_recv = rs ? (i + n - s - 1) % n : (i + n - s) % n;
-                const size_t   send_off = c_send * xcsz, recv_off = c_recv * xcsz;
-                const size_t   send_sz = send_off >= nbytes ? 0 : std::min(xcsz, nbytes - send_off);
-                const size_t   recv_sz = recv_off >= nbytes ? 0 : std::min(xcsz, nbytes - recv_off);
-                const size_t   hoff = slot_off + (size_t) t * xcsz;
-
-                ggml_vk_ctx_begin(comm->device[i], tctx);
-                if (t == 0) {
-                    tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] });
-                    if (round >= 2) {
-                        if (comm->proxy) {
-                            const uint64_t pv = pxy_base[i] + 1;
-                            tctx->s->wait_semaphores.push_back({ comm->pxy[i], pv });
-                            std::lock_guard<std::mutex> lk(comm->bridge_mtx);
-                            comm->bridge_q[i].push_back({ comm->device[nextd]->device, comm->prog[nextd], prev_reduce[nextd],
-                                                          comm->device[i]->device, comm->pxy[i], pv });
-                        } else {
-                            tctx->s->wait_semaphores.push_back({ comm->peer_prog[i][nextd], prev_reduce[nextd] });
-                        }
-                    }
-                } else {
-                    tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] + t });
-                }
-                if (send_sz) {
-                    ggml_vk_buffer_copy_async(tctx, comm->host_buf[i][i], hoff, bc->dev_buffer, base_off + send_off, send_sz);
-                }
-                ggml_vk_ctx_end(tctx);
-                tctx->seqs.back().back().signal_semaphores.push_back({ comm->up[i], up_base[i] + t + 1 });
-
-                ggml_vk_ctx_begin(comm->device[i], cctx);
-                if (comm->proxy) {
-                    const uint64_t pv = pxy_base[i] + 2 + t;
-                    cctx->s->wait_semaphores.push_back({ comm->pxy[i], pv });
-                    std::lock_guard<std::mutex> lk(comm->bridge_mtx);
-                    comm->bridge_q[i].push_back({ comm->device[prevd]->device, comm->up[prevd], up_base[prevd] + t + 1,
-                                                  comm->device[i]->device, comm->pxy[i], pv });
-                } else {
-                    cctx->s->wait_semaphores.push_back({ comm->peer_up[i][prevd], up_base[prevd] + t + 1 });
-                }
-                if (recv_sz) {
-                    ggml_vk_buffer_copy_async(cctx, tbc->dev_buffer, 0, comm->host_buf[prevd][i], hoff, recv_sz);
-                    ggml_vk_sync_buffers(comm->vkctx[i], cctx);
-                    const int64_t rc = (int64_t) (recv_sz / esz);
-                    set_view(rtmp, comm->tmp_buffer[i], tmpbase,                                 rc, esz);
-                    set_view(rview, tensors[i]->buffer, tbase + recv_off,                        rc, esz);
-                    if (rs) { ggml_vk_add(comm->vkctx[i], cctx, rview, rtmp, rview); }
-                    else    { ggml_vk_cpy(comm->vkctx[i], cctx, rtmp, rview); }
-                    ggml_vk_sync_buffers(comm->vkctx[i], cctx);
-                }
-                ggml_vk_ctx_end(cctx);
-                cctx->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], compute_val[i] + t + 1 });
-            }
         }
         ggml_vk_submit(tctx, {});
         ggml_vk_submit(cctx, {});
@@ -18582,17 +18370,14 @@ static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor *
         return false;
     }
 
-    constexpr size_t pipeline_min = 2u << 20;
-    if (comm->pipeline_ok && n >= 2 && nbytes >= pipeline_min) {
+    constexpr size_t ring_min = 2u << 20;
+    if (comm->ring_ok && n >= 2 && nbytes >= ring_min) {
         bool all_compute = true;
         for (size_t i = 0; i < n; i++) {
             all_compute = all_compute && (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE);
         }
         if (all_compute) {
-            if (comm->ring) {
-                return ggml_backend_vk_comm_allreduce_ring(comm, tensors, nbytes);
-            }
-            return ggml_backend_vk_comm_allreduce_pipeline(comm, tensors, nbytes);
+            return ggml_backend_vk_comm_allreduce_ring(comm, tensors);
         }
     }
 
