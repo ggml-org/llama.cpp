@@ -849,7 +849,7 @@ class GGUFWriter:
 
     def add_expert_weights_norm(self, value: bool) -> None:
         self.add_bool(Keys.LLM.EXPERT_WEIGHTS_NORM.format(arch=self.arch), value)
-        
+
     def add_expert_gating_func(self, value: ExpertGatingFuncType) -> None:
         self.add_uint32(Keys.LLM.EXPERT_GATING_FUNC.format(arch=self.arch), value.value)
 
