@@ -1160,7 +1160,7 @@ struct llama_model_deepseek4 : public llama_model_base {
         ggml_tensor * build_csa_lid_attention(
                 const llama_model & model,
                 llm_graph_input_dsv4 * inp_dsv4,
-                llm_graph_input_attn_kv_iswa * inp_attn,
+                llm_graph_input_dsv4_raw * inp_attn,
                 ggml_tensor * q,
                 ggml_tensor * kv,
                 ggml_tensor * qr,
@@ -1172,7 +1172,7 @@ struct llama_model_deepseek4 : public llama_model_base {
 
         ggml_tensor * build_hca_attention(
                 llm_graph_input_dsv4 * inp_dsv4,
-                llm_graph_input_attn_kv_iswa * inp_attn,
+                llm_graph_input_dsv4_raw * inp_attn,
                 ggml_tensor * q,
                 ggml_tensor * kv,
                 ggml_tensor * sinks,
@@ -1180,7 +1180,7 @@ struct llama_model_deepseek4 : public llama_model_base {
                 int il) const;
 
         ggml_tensor * build_raw_attention(
-                llm_graph_input_attn_kv_iswa * inp_attn,
+                llm_graph_input_dsv4_raw * inp_attn,
                 ggml_tensor * q,
                 ggml_tensor * kv,
                 ggml_tensor * sinks,

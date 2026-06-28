@@ -136,6 +136,8 @@ private:
     llama_hparams hparams_hca;
     llama_hparams hparams_lid;
 
+    const uint32_t n_seq_max;
+
     std::unique_ptr<llama_kv_cache_iswa> kv_raw;
     std::unique_ptr<llama_kv_cache>      kv_csa;
     std::unique_ptr<llama_kv_cache>      kv_hca;
@@ -149,11 +151,105 @@ private:
     void clear_compressed(bool data);
 };
 
+// DSV4 raw attention only uses the SWA half of kv_raw. The base half is kept
+// for generic ISWA bookkeeping, but it has no DSV4 layers to expose here.
+class llama_kv_cache_dsv4_raw_context : public llama_memory_context_i {
+public:
+    using slot_info_vec_t = llama_kv_cache::slot_info_vec_t;
+
+    llama_kv_cache_dsv4_raw_context(llama_kv_cache_iswa * kv);
+
+    llama_kv_cache_dsv4_raw_context(
+            llama_kv_cache_iswa * kv,
+            llama_context * lctx,
+            bool optimize);
+
+    llama_kv_cache_dsv4_raw_context(
+            llama_kv_cache_iswa * kv,
+            slot_info_vec_t sinfos_base_write,
+            slot_info_vec_t sinfos_swa_write,
+            slot_info_vec_t sinfos_swa_read,
+            std::vector<llama_ubatch> ubatches,
+            std::vector<llama_ubatch> ubatches_write);
+
+    bool next() override;
+    bool apply() override;
+
+    llama_memory_status get_status() const override;
+    const llama_ubatch & get_ubatch() const override;
+
+    uint32_t get_n_kv() const;
+    uint32_t get_n_write() const;
+
+    ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
+
+    ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+    ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
+
+    void set_input_k_idxs(ggml_tensor * dst) const;
+    void set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_k_rot(ggml_tensor * dst) const;
+
+private:
+    size_t i_next = 0;
+
+    llama_kv_cache * kv_swa = nullptr;
+
+    slot_info_vec_t sinfos_write;
+    slot_info_vec_t sinfos_read;
+    std::vector<llama_ubatch> ubatches;
+    std::vector<llama_ubatch> ubatches_write;
+
+    const llama_memory_context_ptr ctx_base_mem;
+    const llama_memory_context_ptr ctx_swa_mem;
+
+    uint32_t n_kv = 0;
+
+    const llama_memory_status status;
+};
+
+// DSV4 compressed KV rows are graph outputs, not normal token KV writes.
+// Keep a small context that exposes K tensors without generic apply() semantics.
+class llama_kv_cache_dsv4_comp_context {
+public:
+    using slot_info_vec_t = llama_kv_cache::slot_info_vec_t;
+
+    llama_kv_cache_dsv4_comp_context(llama_kv_cache * kv);
+
+    llama_kv_cache_dsv4_comp_context(
+            llama_kv_cache * kv,
+            slot_info_vec_t sinfos,
+            std::vector<llama_ubatch> ubatches);
+
+    bool next();
+
+    uint32_t get_n_kv() const;
+
+    ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
+
+    ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
+    void set_input_k_rot(ggml_tensor * dst) const;
+
+private:
+    llama_kv_cache * kv;
+
+    size_t i_cur = 0;
+    slot_info_vec_t sinfos;
+    std::vector<llama_ubatch> ubatches;
+
+    uint32_t n_kv;
+};
+
 class llama_kv_cache_dsv4_context : public llama_memory_context_i {
 public:
     using slot_info_vec_t = llama_kv_cache::slot_info_vec_t;
 
     struct comp_plan {
+        // Per-ubatch recipe for updating compressor state, committing completed
+        // compressed rows, and masking the compressed attention source.
+
         // APE row ids, i.e. pos % ratio, for the compressor-state updates.
         std::vector<int32_t> state_pos;
 
@@ -179,6 +275,9 @@ public:
         // Number of completed compressed rows visible for each query token.
         std::vector<int32_t> n_visible;
 
+        // Number of streams used by the attention graph for this ubatch.
+        int64_t n_stream = 1;
+
         // Graph-width for compressed rows. This can be larger than n_visible
         // so masked padding rows do not force a new graph at every CSA block.
         int64_t n_kv = 0;
@@ -196,9 +295,11 @@ public:
 
     llama_kv_cache_dsv4_context(
             llama_kv_cache_dsv4 * kv,
-            slot_info_vec_t sinfos_raw_base,
-            slot_info_vec_t sinfos_raw_swa,
-            std::vector<llama_ubatch> ubatches);
+            slot_info_vec_t sinfos_raw_base_write,
+            slot_info_vec_t sinfos_raw_swa_write,
+            slot_info_vec_t sinfos_raw_swa_read,
+            std::vector<llama_ubatch> ubatches,
+            std::vector<llama_ubatch> ubatches_raw);
 
     virtual ~llama_kv_cache_dsv4_context();
 
@@ -216,10 +317,10 @@ public:
     // llama_kv_cache_dsv4_context specific API
     //
 
-    const llama_kv_cache_iswa_context * get_raw() const;
-    const llama_kv_cache_context      * get_csa() const;
-    const llama_kv_cache_context      * get_hca() const;
-    const llama_kv_cache_context      * get_lid() const;
+    const llama_kv_cache_dsv4_raw_context * get_raw() const;
+    const llama_kv_cache_dsv4_comp_context * get_csa() const;
+    const llama_kv_cache_dsv4_comp_context * get_hca() const;
+    const llama_kv_cache_dsv4_comp_context * get_lid() const;
     const llama_dsv4_comp_state       * get_csa_state() const;
     const llama_dsv4_comp_state       * get_hca_state() const;
     const llama_dsv4_comp_state       * get_lid_state() const;
@@ -241,10 +342,14 @@ private:
     std::vector<comp_plan> plans_hca;
     std::vector<comp_plan> plans_lid;
 
-    const llama_memory_context_ptr ctx_raw;
-    const llama_memory_context_ptr ctx_csa;
-    const llama_memory_context_ptr ctx_hca;
-    const llama_memory_context_ptr ctx_lid;
+    const std::unique_ptr<llama_kv_cache_dsv4_raw_context> ctx_raw;
+    const llama_memory_context_ptr ctx_csa_mem;
+    const llama_memory_context_ptr ctx_hca_mem;
+    const llama_memory_context_ptr ctx_lid_mem;
+
+    const std::unique_ptr<llama_kv_cache_dsv4_comp_context> ctx_csa;
+    const std::unique_ptr<llama_kv_cache_dsv4_comp_context> ctx_hca;
+    const std::unique_ptr<llama_kv_cache_dsv4_comp_context> ctx_lid;
 
     const llama_dsv4_comp_state * csa_state = nullptr;
     const llama_dsv4_comp_state * hca_state = nullptr;

@@ -23,6 +23,7 @@ struct llama_memory_context_i;
 
 class llama_kv_cache_context;
 class llama_kv_cache_dsa_context;
+class llama_kv_cache_dsv4_raw_context;
 class llama_kv_cache_dsv4_context;
 class llama_kv_cache_iswa_context;
 class llama_memory_recurrent_context;
@@ -460,6 +461,34 @@ public:
     const llama_kv_cache_iswa_context * mctx;
 };
 
+// DSV4 raw graph inputs are SWA-only, but their mask may be stream-shaped
+// so raw K can be concatenated with DSV4 compressed K in one attention op.
+class llm_graph_input_dsv4_raw {
+public:
+    llm_graph_input_dsv4_raw(
+            const llama_cparams & cparams,
+            const llama_kv_cache_dsv4_raw_context * mctx) :
+        cparams(cparams),
+        mctx(mctx) {
+    }
+
+    void set_input(const llama_ubatch * ubatch);
+
+    ggml_tensor * get_k_idxs() const { return self_k_idxs; }
+    ggml_tensor * get_kq_mask() const { return self_kq_mask_cnv; }
+
+    ggml_tensor * self_k_idxs = nullptr; // I64 [n_batch]
+
+    ggml_tensor * self_kq_mask     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]
+    ggml_tensor * self_kq_mask_cnv = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
+
+    ggml_tensor * self_k_rot = nullptr;
+
+    const llama_cparams cparams;
+
+    const llama_kv_cache_dsv4_raw_context * mctx;
+};
+
 class llm_graph_input_dsv4 : public llm_graph_input_i {
 public:
     struct comp_input {
@@ -477,7 +506,7 @@ public:
 
     llm_graph_input_dsv4(
             const llama_cparams & cparams,
-            std::unique_ptr<llm_graph_input_attn_kv_iswa> inp_raw,
+            std::unique_ptr<llm_graph_input_dsv4_raw> inp_raw,
             const llama_kv_cache_dsv4_context * mctx) :
         inp_raw(std::move(inp_raw)),
         cparams(cparams),
@@ -489,12 +518,12 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override;
 
-    llm_graph_input_attn_kv_iswa * get_raw() const { return inp_raw.get(); }
+    llm_graph_input_dsv4_raw * get_raw() const { return inp_raw.get(); }
     const comp_input & get_csa() const { return inp_csa; }
     const comp_input & get_hca() const { return inp_hca; }
     const comp_input & get_lid() const { return inp_lid; }
 
-    std::unique_ptr<llm_graph_input_attn_kv_iswa> inp_raw;
+    std::unique_ptr<llm_graph_input_dsv4_raw> inp_raw;
 
     comp_input inp_csa;
     comp_input inp_hca;
