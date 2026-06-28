@@ -34,34 +34,45 @@ using oneapi::mkl::blas::column_major::gemm;
 // ---------------------------------------------------------------------------
 
 // Pack all GQA Q heads for one KV head into fp16, applying q_scale.
-// One ND-range over gqa * n_queries * DKQ elements — each work-item
-// computes its GQA group from the global index.
+// Launches one kernel per GQA group — each kernel copies exactly
+// n_queries * DKQ elements using the per-group dst offset and
+// per-head source stride.
 static void mkl_fa_pack_q_fp16(
     dpct::queue_ptr stream,
     sycl::half * __restrict dst,
     const float * __restrict q_src,
     int n_queries, int n_query_rows, int DKQ,
     int gqa_ratio, int kvh_base_head,
-    float q_scale, int64_t wg_size) {
+    float q_scale, int64_t q_row_stride, int64_t q_head_stride,
+    int64_t wg_size) {
 
-    const int64_t q_per_head = (int64_t)n_queries * DKQ;
-    const int64_t total      = (int64_t)n_query_rows * DKQ;
-    const int64_t wg = ((total + wg_size - 1) / wg_size) * wg_size;
+    for (int iqg = 0; iqg < gqa_ratio; iqg++) {
+        int     iqh       = kvh_base_head + iqg;
+        sycl::half * dst_g = dst + (int64_t)iqg * n_queries * DKQ;
 
-    stream->submit([&](sycl::handler & cgh) {
-        cgh.parallel_for(sycl::nd_range<1>(wg, wg_size),
-            [=](sycl::nd_item<1> item) {
-                int64_t e = item.get_global_id(0);
-                if (e >= total) return;
+        const int64_t n_elem = (int64_t)n_queries * DKQ;
+        const int64_t wg = ((n_elem + wg_size - 1) / wg_size) * wg_size;
 
-                int     iqg = (int)(e / q_per_head);
-                int64_t off = e - (int64_t)iqg * q_per_head;
-                int     iqh = kvh_base_head + iqg;
+        stream->submit([&](sycl::handler & cgh) {
+            cgh.parallel_for(sycl::nd_range<1>(wg, wg_size),
+                [=](sycl::nd_item<1> item) {
+                    int64_t e = item.get_global_id(0);
+                    if (e >= n_elem) return;
 
-                dst[e] = sycl::half(
-                    q_src[(int64_t)iqh * q_per_head + off] * q_scale);
-            });
-    });
+                    int64_t q = e / DKQ;
+                    int64_t d = e - q * DKQ;
+
+                    // Stride-aware source offset: handles permuted,
+                    // sliced, or contiguous Q tensor layouts.
+                    int64_t src_off = d
+                        + q * q_row_stride
+                        + (int64_t)iqh * q_head_stride;
+
+                    dst_g[e] = sycl::half(
+                        q_src[src_off] * q_scale);
+                });
+        });
+    }
 }
 
 // Zero-initialize the online softmax state arrays.
@@ -96,7 +107,6 @@ static void mkl_fa_init_softmax_state(
 // Online softmax over one KV chunk for all GQA query rows.
 // For each row: find local max → rescale previous VKQ_accum →
 // compute exp(s - max) → write S_f16 → update running max/sum.
-// Runs per-row independently (rows don't interact).
 static void mkl_fa_online_softmax_chunk(
     dpct::queue_ptr stream,
     float * __restrict KQ_f32,
@@ -127,7 +137,6 @@ static void mkl_fa_online_softmax_chunk(
                 float * __restrict vkq = VKQ_accum
                     + jc * (int64_t)DV;
 
-                // Per-GQA-group mask resolution
                 const sycl::half * mask_h = nullptr;
                 int64_t m_stride = 0;
                 if (mask_data) {
@@ -137,10 +146,13 @@ static void mkl_fa_online_softmax_chunk(
                     m_stride = mask_row_stride;
                 }
 
-                // Row-wise local maximum
+                // Row-wise local maximum (softcap before mask)
                 float local_max = -1e30f;
                 for (int i = 0; i < chunk_size; i++) {
                     float s = KQ_row[i];
+                    if (logit_softcap != 0.0f) {
+                        s = logit_softcap * sycl::tanh(s);
+                    }
                     if (mask_h) {
                         s += (float)mask_h[q_row * m_stride
                             + (chunk_start + i)];
@@ -165,12 +177,12 @@ static void mkl_fa_online_softmax_chunk(
 
                 for (int i = 0; i < chunk_size; i++) {
                     float s = KQ_row[i];
+                    if (logit_softcap != 0.0f) {
+                        s = logit_softcap * sycl::tanh(s);
+                    }
                     if (mask_h) {
                         s += (float)mask_h[q_row * m_stride
                             + (chunk_start + i)];
-                    }
-                    if (logit_softcap != 0.0f) {
-                        s = logit_softcap * sycl::tanh(s);
                     }
                     float val = sycl::native::exp(s - new_max);
                     S_row[i] = sycl::half(val);
@@ -189,9 +201,8 @@ static void mkl_fa_normalize_head(
     float * __restrict dst_batch,
     const float * __restrict VKQ_accum,
     const float * __restrict KQ_sum,
-    int iqh, int n_queries, int DV,
-    int64_t src_offset, int64_t dst_row_stride,
-    int64_t wg_size) {
+    int iqh, int n_queries, int DV, int n_q_heads,
+    int64_t src_offset, int64_t wg_size) {
 
     const int64_t wg = ((n_queries + wg_size - 1) / wg_size) * wg_size;
 
@@ -205,9 +216,11 @@ static void mkl_fa_normalize_head(
                 float   inv_sum  = 1.0f / KQ_sum[ksum_idx];
                 const float * __restrict src = VKQ_accum
                     + src_offset + jc * (int64_t)DV;
+                // Interleaved dst layout (matching TILE):
+                // rows alternate between heads, then increment query.
+                // offset = (query * n_q_heads + head) * DV
                 float * __restrict dst_row = dst_batch
-                    + iqh * n_queries * (int64_t)dst_row_stride
-                    + jc * dst_row_stride;
+                    + ((int64_t)jc * n_q_heads + iqh) * (int64_t)DV;
 
                 for (int v = 0; v < DV; v++) {
                     dst_row[v] = src[v] * inv_sum;
@@ -229,7 +242,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * V    = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
-    // dst->src[4] = sinks (not yet supported)
     ggml_tensor * KQV = dst;
 
     GGML_ASSERT(Q->type == GGML_TYPE_F32);
@@ -241,8 +253,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     memcpy(&max_bias,      (const float *)KQV->op_params + 1, sizeof(float));
     memcpy(&logit_softcap, (const float *)KQV->op_params + 2, sizeof(float));
 
-    const bool use_logit_softcap = (logit_softcap != 0.0f);
-    const float q_scale = use_logit_softcap ? (scale / logit_softcap) : scale;
+    const float q_scale = scale;
 
     // --- Dimensions ---
     const int DKQ        = (int)K->ne[0];
@@ -272,27 +283,48 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     }
     const bool do_print = (mkl_debug == 1);
 
+    const int64_t q_row_stride  = Q->nb[1] / sizeof(float);
+    const int64_t q_head_stride = Q->nb[2] / sizeof(float);
+
+    const bool V_is_K_view = V->view_src
+        && (V->view_src == K || (V->view_src == K->view_src
+            && V->view_offs == K->view_offs));
+
+    // Early interleaved detection for debug output.
+    // True interleaved detection happens after dequant (nb12_fp16 == nb11_fp16),
+    // but we can pre-detect on the original tensor strides.
+    const bool k_early_interleaved =
+        ((int64_t)K->ne[1] * K->nb[1] != K->nb[2]);
+    const bool v_early_interleaved =
+        !V_is_K_view && ((int64_t)V->ne[1] * V->nb[1] != V->nb[2]);
+
     if (do_print) {
         fprintf(stderr, "[MKL-FA] #%d D=%d DV=%d n_q=%d n_kv=%d "
                 "n_qh=%d n_kvh=%d gqa=%d batch=%d K=%s V=%s "
-                "chunk=%d KQ_buf=%.1fMB\n",
+                "chunk=%d buf=%.1fMB%s%s\n",
                 mkl_call_count, DKQ, DV, n_queries, n_kv,
                 n_q_heads, n_kv_heads, gqa_ratio, n_batch,
                 ggml_type_name(K->type), ggml_type_name(V->type),
                 chunk_size,
                 (double)((int64_t)n_query_rows * chunk_size * sizeof(float))
-                    / (1024.0 * 1024.0));
+                    / (1024.0 * 1024.0),
+                k_early_interleaved ? " K_ILV" : "",
+                v_early_interleaved ? " V_ILV" : "");
+        fprintf(stderr, "[MKL-FA] #%d Q-nb1=%lld Q-nb2=%lld "
+                "q_rs=%lld q_hs=%lld dst_rs=%lld dst_hs=%lld\n",
+                mkl_call_count,
+                (long long)Q->nb[1], (long long)Q->nb[2],
+                (long long)q_row_stride, (long long)q_head_stride,
+                (long long)(KQV->nb[1] / sizeof(float)),
+                (long long)(KQV->nb[2] / sizeof(float)));
         fflush(stderr);
     }
 
     // --- Stream and allocators ---
     dpct::queue_ptr stream = ctx.stream();
-    stream->wait();  // drain pending work before MKL operations
 
-    ggml_sycl_pool & pool = ctx.pool();
     ggml_sycl_fattn_kv_buffers & fbuf = ctx.fattn_buffers();
 
-    // Timing helpers (local to this function)
 #define MKL_TAKE_TIME(t0)  auto t0 = std::chrono::steady_clock::now()
 #define MKL_ACCUM(acc, t0) acc += (int64_t)std::chrono::duration_cast \
     <std::chrono::microseconds>(std::chrono::steady_clock::now() - (t0)).count()
@@ -305,90 +337,152 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     MKL_TAKE_TIME(t_deq);
 
     // --- Dequantize K, V to fp16 ---
+    //
+    // Output is ALWAYS dense row-major (contiguous rows per head).
+    // For interleaved source layouts (Gemma: nb[2]==nb[1], heads
+    // interleave at the row level), we reconstruct the PHYSICAL
+    // source strides so to_fp16_nc writes the correct data into a
+    // dense buffer.  The logical view strides (nb##/ts) are wrong
+    // for interleaved layouts — e.g. s01=8 aliases Row1/Head0 to
+    // the same blocks as Row0/Head1.
+    //
+    // Detection: ne[1]*nb[1] != nb[2] means heads are interleaved.
     ggml_sycl_fattn_alloc K_f16(fbuf.K);
     ggml_sycl_fattn_alloc V_f16(fbuf.V);
 
     const char * K_data = (const char *)K->data;
+    size_t nb11 = K->nb[1];
+    size_t nb12 = K->nb[2];
+    size_t nb13 = K->nb[3];
+
     const char * V_data = (const char *)V->data;
+    size_t nb21 = V->nb[1];
+    size_t nb22 = V->nb[2];
+    size_t nb23 = V->nb[3];
 
-    // Strides in the fp16 dequant buffer (row-major within each head)
-    size_t k_row_stride  = DKQ * sizeof(sycl::half);
-    size_t k_head_stride = (size_t)n_kv * k_row_stride;
-    size_t v_row_stride  = DV * sizeof(sycl::half);
-    size_t v_head_stride = (size_t)n_kv * v_row_stride;
-
-    const bool V_is_K_view = V->view_src
-        && (V->view_src == K || (V->view_src == K->view_src
-            && V->view_offs == K->view_offs));
+    const bool k_interleaved =
+        ((int64_t)K->ne[1] * K->nb[1] != K->nb[2]) && K->ne[2] > 1;
+    const bool v_interleaved =
+        ((int64_t)V->ne[1] * V->nb[1] != V->nb[2]) && V->ne[2] > 1;
 
     if (K->type != GGML_TYPE_F16) {
+        const size_t bs = ggml_blck_size(K->type);
+        const size_t ts = ggml_type_size(K->type);
+
         K_f16.alloc(ggml_nelements(K));
-        if (ggml_is_contiguously_allocated(K)) {
+
+        if (ggml_is_contiguously_allocated(K) && !k_interleaved) {
+            // Dense source — flat to_fp16 preserves layout
             to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, dst);
-            to_fp16(K->data, K_f16.ptr, ggml_nelements(K), stream);
+            to_fp16(K_data, K_f16.ptr, ggml_nelements(K), stream);
+
+            nb11 = nb11 * bs * sizeof(sycl::half) / ts;
+            nb12 = nb12 * bs * sizeof(sycl::half) / ts;
+            nb13 = nb13 * bs * sizeof(sycl::half) / ts;
         } else {
+            // Interleaved or non-contiguous source — use to_fp16_nc
+            // with PHYSICAL source strides so the output is dense.
             to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type);
-            const int64_t s01 = K->nb[1] / ggml_type_size(K->type);
-            const int64_t s02 = K->nb[2] / ggml_type_size(K->type);
-            const int64_t s03 = K->nb[3] / ggml_type_size(K->type);
-            to_fp16(K->data, K_f16.ptr,
+
+            int64_t s01, s02, s03;
+            if (k_interleaved) {
+                // Interleaved: heads alternate at the row level.
+                // Row r of head h starts at block
+                //   h * blk_per_row + r * n_kv_heads * blk_per_row.
+                const int64_t blk_per_row = (int64_t)K->ne[0] / bs;
+                s01 = (int64_t)n_kv_heads * blk_per_row; // row stride
+                s02 = blk_per_row;                       // head stride
+                s03 = (int64_t)K->ne[1] * s01;           // batch stride
+            } else {
+                s01 = nb11 / ts;
+                s02 = nb12 / ts;
+                s03 = nb13 / ts;
+            }
+
+            to_fp16(K_data, K_f16.ptr,
                     K->ne[0], K->ne[1], K->ne[2], K->ne[3],
                     s01, s02, s03, stream);
+
+            // Output is dense row-major
+            nb11 = K->ne[0] * sizeof(sycl::half);
+            nb12 = K->ne[1] * nb11;
+            nb13 = K->ne[2] * nb12;
         }
-        K_data = (char *)K_f16.ptr;
-    } else {
-        k_row_stride  = K->nb[1];
-        k_head_stride = K->nb[2];
+        K_data = (char *) K_f16.ptr;
     }
 
     if (V->type != GGML_TYPE_F16) {
         if (V_is_K_view) {
-            V_data        = K_data;
-            v_row_stride  = k_row_stride;
-            v_head_stride = k_head_stride;
+            V_data = K_data;
+            nb21   = nb11;
+            nb22   = nb12;
+            nb23   = nb13;
         } else {
+            const size_t bs = ggml_blck_size(V->type);
+            const size_t ts = ggml_type_size(V->type);
+
             V_f16.alloc(ggml_nelements(V));
-            if (ggml_is_contiguously_allocated(V)) {
+
+            if (ggml_is_contiguously_allocated(V) && !v_interleaved) {
                 to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, dst);
-                to_fp16(V->data, V_f16.ptr, ggml_nelements(V), stream);
+                to_fp16(V_data, V_f16.ptr, ggml_nelements(V), stream);
+                V_data = (char *) V_f16.ptr;
+
+                nb21 = nb21 * bs * sizeof(sycl::half) / ts;
+                nb22 = nb22 * bs * sizeof(sycl::half) / ts;
+                nb23 = nb23 * bs * sizeof(sycl::half) / ts;
             } else {
                 to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type);
-                const int64_t s01 = V->nb[1] / ggml_type_size(V->type);
-                const int64_t s02 = V->nb[2] / ggml_type_size(V->type);
-                const int64_t s03 = V->nb[3] / ggml_type_size(V->type);
-                to_fp16(V->data, V_f16.ptr,
+
+                int64_t s01, s02, s03;
+                if (v_interleaved) {
+                    const int64_t blk_per_row = (int64_t)V->ne[0] / bs;
+                    s01 = (int64_t)V->ne[2] * blk_per_row;
+                    s02 = blk_per_row;
+                    s03 = (int64_t)V->ne[1] * s01;
+                } else {
+                    s01 = nb21 / ts;
+                    s02 = nb22 / ts;
+                    s03 = nb23 / ts;
+                }
+
+                to_fp16(V_data, V_f16.ptr,
                         V->ne[0], V->ne[1], V->ne[2], V->ne[3],
                         s01, s02, s03, stream);
+
+                nb21 = V->ne[0] * sizeof(sycl::half);
+                nb22 = V->ne[1] * nb21;
+                nb23 = V->ne[2] * nb22;
+
+                V_data = (char *) V_f16.ptr;
             }
-            V_data = (char *)V_f16.ptr;
-        }
-    } else {
-        if (V_is_K_view) {
-            V_data        = K_data;
-            v_row_stride  = k_row_stride;
-            v_head_stride = k_head_stride;
-        } else {
-            v_row_stride  = V->nb[1];
-            v_head_stride = V->nb[2];
         }
     }
 
-    stream->wait();  // dequant complete
     MKL_ACCUM(dequant_time_us, t_deq);
 
-    // --- Resolve mask pointers once (valid for all chunks) ---
+    // All paths produce dense row-major fp16 — GEMM lda = D.
+    // Head pointers use dense strides (nb12 = ne[1]*ne[0]*sizeof(half)).
+    const int64_t nb12_fp16 = nb12 / sizeof(sycl::half);
+    const int64_t nb22_fp16 = nb22 / sizeof(sycl::half);
+
+    // --- Resolve mask pointers ---
     const sycl::half * mask_data = nullptr;
     int64_t mask_head_stride = 0;
     int64_t mask_row_stride  = 0;
     int     mask_n_heads     = 0;
+
     if (mask) {
-        // Mask is resolved per-batch below; store strides here
-        mask_head_stride = mask->nb[2] / sizeof(sycl::half);
-        mask_row_stride  = mask->nb[1] / sizeof(sycl::half);
+        // Use actual fp16 device size (2 bytes), NOT sizeof(sycl::half)
+        // which may be 4 on the host in oneAPI.
+        mask_head_stride = mask->nb[2] / 2;
+        mask_row_stride  = mask->nb[1] / 2;
         mask_n_heads     = (int)mask->ne[2];
     }
 
-    // --- Allocate intermediates (sized for all GQA query rows) ---
+    // --- Allocate intermediates from pool ---
+    ggml_sycl_pool & pool = ctx.pool();
+
     ggml_sycl_pool_alloc<float>      KQ_f32(pool);
     ggml_sycl_pool_alloc<sycl::half> S_f16(pool);
     ggml_sycl_pool_alloc<float>      VKQ_chunk(pool);
@@ -405,7 +499,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     KQ_sum.alloc(n_query_rows);
     Q_head_f16.alloc((size_t)n_query_rows * DKQ);
 
-    // Extract raw pointers — ggml_sycl_pool_alloc is not device-copyable
     sycl::half * Q_head_f16_ptr = Q_head_f16.ptr;
     float      * KQ_f32_ptr     = KQ_f32.ptr;
     sycl::half * S_f16_ptr      = S_f16.ptr;
@@ -413,8 +506,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     float      * VKQ_accum_ptr  = VKQ_accum.ptr;
     float      * KQ_max_ptr     = KQ_max.ptr;
     float      * KQ_sum_ptr     = KQ_sum.ptr;
-
-    const int64_t dst_row_stride = KQV->nb[1] / sizeof(float);
 
     const float alpha = 1.0f;
     const float beta  = 0.0f;
@@ -425,12 +516,11 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
         float * dst_batch = (float *)KQV->data
             + ib * (KQV->nb[3] / sizeof(float));
 
-        // Per-batch mask base
         const sycl::half * mask_batch = nullptr;
         if (mask) {
             int m_batch = (mask->ne[3] > 1) ? ib : 0;
             mask_batch = (const sycl::half *)mask->data
-                + m_batch * (mask->nb[3] / sizeof(sycl::half));
+                + m_batch * (mask->nb[3] / 2);  // 2 = actual fp16 device size
         }
 
         for (int ikvh = 0; ikvh < n_kv_heads; ikvh++) {
@@ -441,7 +531,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 Q_head_f16_ptr, Q_batch,
                 n_queries, n_query_rows, DKQ,
                 gqa_ratio, kvh_base_head,
-                q_scale, wg_size);
+                q_scale, q_row_stride, q_head_stride, wg_size);
 
             // 2. Initialize softmax state
             mkl_fa_init_softmax_state(stream,
@@ -451,11 +541,12 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
             // Sync before MKL GEMM (MKL may use an internal queue)
             stream->wait();
 
-            // K/V base for this KV head
+            // K/V base for this KV head.
+            // Dense row-major: nb12_fp16 = n_kv * DKQ (head stride in half-elements).
             const sycl::half * K_head = (const sycl::half *)K_data
-                + ikvh * (k_head_stride / sizeof(sycl::half));
+                + ikvh * nb12_fp16;
             const sycl::half * V_head = (const sycl::half *)V_data
-                + ikvh * (v_head_stride / sizeof(sycl::half));
+                + ikvh * nb22_fp16;
 
             // 3. Chunked KV loop
             for (int chunk_start = 0; chunk_start < n_kv; chunk_start += chunk_size) {
@@ -483,7 +574,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                     }
                     MKL_ACCUM(gemm_kq_time_us, t0);
                 }
-
                 // 3b. Online softmax over this chunk
                 {
                     MKL_TAKE_TIME(t0);
@@ -518,7 +608,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                     }
                     MKL_ACCUM(gemm_vkq_time_us, t0);
                 }
-
                 // 3d. VKQ_accum += VKQ_chunk
                 {
                     const int64_t n_total = (int64_t)n_query_rows * DV;
@@ -533,8 +622,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                                 }
                             });
                     });
-                    // In-order queue: accumulate finishes before next
-                    // chunk's GEMM or final normalize.
                 }
             }
 
@@ -544,10 +631,9 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 int64_t src_offset = (int64_t)iqg * n_queries * DV;
                 mkl_fa_normalize_head(stream,
                     dst_batch, VKQ_accum_ptr, KQ_sum_ptr,
-                    iqh, n_queries, DV,
-                    src_offset, dst_row_stride, wg_size);
+                    iqh, n_queries, DV, n_q_heads,
+                    src_offset, wg_size);
             }
-            // In-order queue: normalize writes ordered before next KV head.
         }
     }
 
@@ -555,13 +641,24 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
 #undef MKL_ACCUM
 
     if (do_print) {
+        double total_mb = (double)(
+            (int64_t)n_query_rows * chunk_size * sizeof(float)
+          + (int64_t)n_query_rows * chunk_size * sizeof(sycl::half)
+          + (int64_t)n_query_rows * DV * sizeof(float)
+          + (int64_t)n_query_rows * DV * sizeof(float)
+          + (int64_t)n_query_rows * sizeof(float)
+          + (int64_t)n_query_rows * sizeof(float)
+          + (int64_t)n_query_rows * DKQ * sizeof(sycl::half)
+        ) / (1024.0 * 1024.0);
         fprintf(stderr, "[MKL-FA] #%d n_kv=%d n_q=%d time_us: "
-                "dequant=%lld GEMM_KQ=%lld softmax=%lld GEMM_VKQ=%lld\n",
+                "dequant=%lld GEMM_KQ=%lld softmax=%lld GEMM_VKQ=%lld "
+                "buf_mb=%.1f\n",
                 mkl_call_count, n_kv, n_queries,
                 (long long)dequant_time_us,
                 (long long)gemm_kq_time_us,
                 (long long)softmax_time_us,
-                (long long)gemm_vkq_time_us);
+                (long long)gemm_vkq_time_us,
+                total_mb);
         fflush(stderr);
     }
 }
