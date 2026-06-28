@@ -26,6 +26,7 @@
 #include "fit.h"
 #include "ggml.h"
 #include "llama.h"
+#include "log.h"
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -339,14 +340,14 @@ struct cmd_params {
     std::vector<int>                 n_gpu_layers;
     std::vector<int>                 n_cpu_moe;
     std::vector<llama_split_mode>    split_mode;
+    std::vector<llama_load_mode>     load_mode;
+    std::vector<llama_load_modifier> load_modifier;
     std::vector<int>                 main_gpu;
     std::vector<bool>                no_kv_offload;
     std::vector<llama_flash_attn_type> flash_attn;
     std::vector<std::vector<ggml_backend_dev_t>> devices;
     std::vector<std::vector<float>>  tensor_split;
     std::vector<std::vector<llama_model_tensor_buft_override>> tensor_buft_overrides;
-    std::vector<bool>                use_mmap;
-    std::vector<bool>                use_direct_io;
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
     std::vector<bool>                no_host;
@@ -384,14 +385,14 @@ static const cmd_params cmd_params_defaults = {
     /* n_gpu_layers         */ { -1 },
     /* n_cpu_moe            */ { 0 },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
+    /* load_mode            */ { LLAMA_LOAD_MODE_MMAP },
+    /* load_modifier        */ { LLAMA_LOAD_MODIFIER_NONE },
     /* main_gpu             */ { 0 },
     /* no_kv_offload        */ { false },
     /* flash_attn           */ { LLAMA_FLASH_ATTN_TYPE_AUTO },
     /* devices              */ { {} },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
     /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
-    /* use_mmap             */ { true },
-    /* use_direct_io        */ { false },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
     /* no_host              */ { false },
@@ -460,8 +461,9 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -nkvo, --no-kv-offload <0|1>                (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <on|off|auto>             (default: %s)\n", join(transform_to_str(cmd_params_defaults.flash_attn, llama_flash_attn_type_name), ",").c_str());
     printf("  -dev, --device <dev0/dev1/...>              (default: auto)\n");
-    printf("  -mmp, --mmap <0|1>                          (default: %s)\n", join(cmd_params_defaults.use_mmap, ",").c_str());
-    printf("  -dio, --direct-io <0|1>                     (default: %s)\n", join(cmd_params_defaults.use_direct_io, ",").c_str());
+    printf("  -lm, --load-mode <none|mmap|dio>            (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
+    printf("  -mmp, --mmap <0|1>                          (DEPRECATED IN FAVOUR OF --load-mode)\n");
+    printf("  -dio, --direct-io <0|1>                     (DEPRECATED IN FAVOUR OF --load-mode)\n");
     printf("  -embd, --embeddings <0|1>                   (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>            (default: 0)\n");
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
@@ -768,6 +770,37 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.split_mode.insert(params.split_mode.end(), modes.begin(), modes.end());
+            } else if (arg == "-lm" || arg == "--load-mode") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+
+                for (const auto & m : p) {
+                    try {
+                        const std::vector<std::string> parts = string_split<std::string>(m, '+');
+                        params.load_mode.push_back(llama_load_mode_from_str(parts[0].c_str()));
+
+                        llama_load_modifier modifier = LLAMA_LOAD_MODIFIER_NONE;
+                        for (size_t j = 1; j < parts.size(); ++j) {
+                            modifier = (llama_load_modifier)(modifier | llama_load_modifier_from_str(parts[j].c_str()));
+                        }
+
+                        // prevents -lm none+mlock or similar combinations that don't make sense
+                        if (params.load_mode.back() == LLAMA_LOAD_MODE_NONE) {
+                            modifier = LLAMA_LOAD_MODIFIER_NONE;
+                        }
+
+                        params.load_modifier.push_back(modifier);
+                    } catch (const std::invalid_argument &) {
+                        invalid_param = true;
+                        break;
+                    }
+                }
+                if (invalid_param) {
+                    break;
+                }
             } else if (arg == "-mg" || arg == "--main-gpu") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -828,15 +861,51 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     invalid_param = true;
                     break;
                 }
+                LOG_WRN("DEPRECATED: -mmp and --mmap are deprecated in favour of --load-mode. Please use --load-mode mmap instead.");
                 auto p = string_split<bool>(argv[i], split_delim);
-                params.use_mmap.insert(params.use_mmap.end(), p.begin(), p.end());
+
+                std::vector<llama_load_mode> modes;
+                std::vector<llama_load_modifier> modifiers;
+                for (const auto & m : p) {
+                    llama_load_mode mode;
+                    llama_load_modifier modifier;
+                    if (m) {
+                        mode     = LLAMA_LOAD_MODE_MMAP;
+                        modifier = LLAMA_LOAD_MODIFIER_NONE;
+                    } else {
+                        mode     = LLAMA_LOAD_MODE_NONE;
+                        modifier = LLAMA_LOAD_MODIFIER_NONE;
+                    }
+                    modes.push_back(mode);
+                    modifiers.push_back(modifier);
+                }
+                params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
+                params.load_modifier.insert(params.load_modifier.end(), modifiers.begin(), modifiers.end());
             } else if (arg == "-dio" || arg == "--direct-io") {
                 if (++i >= argc) {
                     invalid_param = true;
                     break;
                 }
+                LOG_WRN("DEPRECATED: -dio and --direct-io are deprecated in favour of --load-mode. Please use --load-mode dio instead.");
                 auto p = string_split<bool>(argv[i], split_delim);
-                params.use_direct_io.insert(params.use_direct_io.end(), p.begin(), p.end());
+
+                std::vector<llama_load_mode> modes;
+                std::vector<llama_load_modifier> modifiers;
+                for (const auto & m : p) {
+                    llama_load_mode mode;
+                    llama_load_modifier modifier;
+                    if (m) {
+                        mode     = LLAMA_LOAD_MODE_DIRECT_IO;
+                        modifier = LLAMA_LOAD_MODIFIER_NONE;
+                    } else {
+                        mode     = LLAMA_LOAD_MODE_NONE;
+                        modifier = LLAMA_LOAD_MODIFIER_NONE;
+                    }
+                    modes.push_back(mode);
+                    modifiers.push_back(modifier);
+                }
+                params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
+                params.load_modifier.insert(params.load_modifier.end(), modifiers.begin(), modifiers.end());
             } else if (arg == "-embd" || arg == "--embeddings") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1092,6 +1161,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.split_mode.empty()) {
         params.split_mode = cmd_params_defaults.split_mode;
     }
+    if (params.load_mode.empty()) {
+        params.load_mode = cmd_params_defaults.load_mode;
+    }
+    if (params.load_modifier.empty()) {
+        params.load_modifier = cmd_params_defaults.load_modifier;
+    }
     if (params.main_gpu.empty()) {
         params.main_gpu = cmd_params_defaults.main_gpu;
     }
@@ -1109,12 +1184,6 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     }
     if (params.tensor_buft_overrides.empty()) {
         params.tensor_buft_overrides = cmd_params_defaults.tensor_buft_overrides;
-    }
-    if (params.use_mmap.empty()) {
-        params.use_mmap = cmd_params_defaults.use_mmap;
-    }
-    if (params.use_direct_io.empty()) {
-        params.use_direct_io = cmd_params_defaults.use_direct_io;
     }
     if (params.embeddings.empty()) {
         params.embeddings = cmd_params_defaults.embeddings;
@@ -1148,34 +1217,34 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
 }
 
 struct cmd_params_instance {
-    std::string        model;
-    int                n_prompt;
-    int                n_gen;
-    int                n_depth;
-    int                n_batch;
-    int                n_ubatch;
-    ggml_type          type_k;
-    ggml_type          type_v;
-    int                n_threads;
-    std::string        cpu_mask;
-    bool               cpu_strict;
-    int                poll;
-    int                n_gpu_layers;
-    int                n_cpu_moe;
-    llama_split_mode   split_mode;
-    int                main_gpu;
-    bool               no_kv_offload;
+    std::string         model;
+    int                 n_prompt;
+    int                 n_gen;
+    int                 n_depth;
+    int                 n_batch;
+    int                 n_ubatch;
+    ggml_type           type_k;
+    ggml_type           type_v;
+    int                 n_threads;
+    std::string         cpu_mask;
+    bool                cpu_strict;
+    int                 poll;
+    int                 n_gpu_layers;
+    int                 n_cpu_moe;
+    llama_split_mode    split_mode;
+    llama_load_mode     load_mode;
+    llama_load_modifier load_modifier;
+    int                 main_gpu;
+    bool                no_kv_offload;
     llama_flash_attn_type flash_attn;
     std::vector<ggml_backend_dev_t> devices;
-    std::vector<float> tensor_split;
+    std::vector<float>  tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
-    bool               use_mmap;
-    bool               use_direct_io;
-    bool               embeddings;
-    bool               no_op_offload;
-    bool               no_host;
-    size_t             fit_target;
-    uint32_t           fit_min_ctx;
+    bool                embeddings;
+    bool                no_op_offload;
+    bool                no_host;
+    size_t              fit_target;
+    uint32_t            fit_min_ctx;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1185,10 +1254,10 @@ struct cmd_params_instance {
             mparams.devices = const_cast<ggml_backend_dev_t *>(devices.data());
         }
         mparams.split_mode    = split_mode;
+        mparams.load_mode     = load_mode;
+        mparams.load_modifier = load_modifier;
         mparams.main_gpu      = main_gpu;
         mparams.tensor_split  = tensor_split.data();
-        mparams.use_mmap      = use_mmap;
-        mparams.use_direct_io = use_direct_io;
         mparams.no_host       = no_host;
 
         if (n_cpu_moe <= 0) {
@@ -1234,9 +1303,8 @@ struct cmd_params_instance {
         return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu && tensor_split == other.tensor_split &&
-               use_mmap == other.use_mmap && use_direct_io == other.use_direct_io &&
-               devices == other.devices &&
-               no_host == other.no_host &&
+               load_mode == other.load_mode && load_modifier == other.load_modifier &&
+               devices == other.devices && no_host == other.no_host &&
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
@@ -1269,12 +1337,12 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & nl : params.n_gpu_layers)
     for (const auto & ncmoe : params.n_cpu_moe)
     for (const auto & sm : params.split_mode)
+    for (const auto & lm : params.load_mode)
+    for (const auto & lmod : params.load_modifier)
     for (const auto & mg : params.main_gpu)
     for (const auto & devs : params.devices)
     for (const auto & ts : params.tensor_split)
     for (const auto & ot : params.tensor_buft_overrides)
-    for (const auto & mmp : params.use_mmap)
-    for (const auto & dio : params.use_direct_io)
     for (const auto & noh : params.no_host)
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
@@ -1294,34 +1362,34 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 continue;
             }
             cmd_params_instance instance = {
-                /* .model        = */ m,
-                /* .n_prompt     = */ n_prompt,
-                /* .n_gen        = */ 0,
-                /* .n_depth      = */ nd,
-                /* .n_batch      = */ nb,
-                /* .n_ubatch     = */ nub,
-                /* .type_k       = */ tk,
-                /* .type_v       = */ tv,
-                /* .n_threads    = */ nt,
-                /* .cpu_mask     = */ cm,
-                /* .cpu_strict   = */ cs,
-                /* .poll         = */ pl,
-                /* .n_gpu_layers = */ nl,
-                /* .n_cpu_moe    = */ ncmoe,
-                /* .split_mode   = */ sm,
-                /* .main_gpu     = */ mg,
-                /* .no_kv_offload= */ nkvo,
-                /* .flash_attn   = */ fa,
-                /* .devices      = */ devs,
-                /* .tensor_split = */ ts,
+                /* .model                 = */ m,
+                /* .n_prompt              = */ n_prompt,
+                /* .n_gen                 = */ 0,
+                /* .n_depth               = */ nd,
+                /* .n_batch               = */ nb,
+                /* .n_ubatch              = */ nub,
+                /* .type_k                = */ tk,
+                /* .type_v                = */ tv,
+                /* .n_threads             = */ nt,
+                /* .cpu_mask              = */ cm,
+                /* .cpu_strict            = */ cs,
+                /* .poll                  = */ pl,
+                /* .n_gpu_layers          = */ nl,
+                /* .n_cpu_moe             = */ ncmoe,
+                /* .split_mode            = */ sm,
+                /* .load_mode             = */ lm,
+                /* .load_modifier         = */ lmod,
+                /* .main_gpu              = */ mg,
+                /* .no_kv_offload         = */ nkvo,
+                /* .flash_attn            = */ fa,
+                /* .devices               = */ devs,
+                /* .tensor_split          = */ ts,
                 /* .tensor_buft_overrides = */ ot,
-                /* .use_mmap     = */ mmp,
-                /* .use_direct_io= */ dio,
-                /* .embeddings   = */ embd,
-                /* .no_op_offload= */ nopo,
-                /* .no_host      = */ noh,
-                /* .fit_target   = */ fpt,
-                /* .fit_min_ctx  = */ fpc,
+                /* .embeddings            = */ embd,
+                /* .no_op_offload         = */ nopo,
+                /* .no_host               = */ noh,
+                /* .fit_target            = */ fpt,
+                /* .fit_min_ctx           = */ fpc,
             };
             instances.push_back(instance);
         }
@@ -1331,34 +1399,34 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 continue;
             }
             cmd_params_instance instance = {
-                /* .model        = */ m,
-                /* .n_prompt     = */ 0,
-                /* .n_gen        = */ n_gen,
-                /* .n_depth      = */ nd,
-                /* .n_batch      = */ nb,
-                /* .n_ubatch     = */ nub,
-                /* .type_k       = */ tk,
-                /* .type_v       = */ tv,
-                /* .n_threads    = */ nt,
-                /* .cpu_mask     = */ cm,
-                /* .cpu_strict   = */ cs,
-                /* .poll         = */ pl,
-                /* .n_gpu_layers = */ nl,
-                /* .n_cpu_moe    = */ ncmoe,
-                /* .split_mode   = */ sm,
-                /* .main_gpu     = */ mg,
-                /* .no_kv_offload= */ nkvo,
-                /* .flash_attn   = */ fa,
-                /* .devices      = */ devs,
-                /* .tensor_split = */ ts,
+                /* .model                 = */ m,
+                /* .n_prompt              = */ 0,
+                /* .n_gen                 = */ n_gen,
+                /* .n_depth               = */ nd,
+                /* .n_batch               = */ nb,
+                /* .n_ubatch              = */ nub,
+                /* .type_k                = */ tk,
+                /* .type_v                = */ tv,
+                /* .n_threads             = */ nt,
+                /* .cpu_mask              = */ cm,
+                /* .cpu_strict            = */ cs,
+                /* .poll                  = */ pl,
+                /* .n_gpu_layers          = */ nl,
+                /* .n_cpu_moe             = */ ncmoe,
+                /* .split_mode            = */ sm,
+                /* .load_mode             = */ lm,
+                /* .load_modifier         = */ lmod,
+                /* .main_gpu              = */ mg,
+                /* .no_kv_offload         = */ nkvo,
+                /* .flash_attn            = */ fa,
+                /* .devices               = */ devs,
+                /* .tensor_split          = */ ts,
                 /* .tensor_buft_overrides = */ ot,
-                /* .use_mmap     = */ mmp,
-                /* .use_direct_io= */ dio,
-                /* .embeddings   = */ embd,
-                /* .no_op_offload= */ nopo,
-                /* .no_host      = */ noh,
-                /* .fit_target   = */ fpt,
-                /* .fit_min_ctx  = */ fpc,
+                /* .embeddings            = */ embd,
+                /* .no_op_offload         = */ nopo,
+                /* .no_host               = */ noh,
+                /* .fit_target            = */ fpt,
+                /* .fit_min_ctx           = */ fpc,
             };
             instances.push_back(instance);
         }
@@ -1368,34 +1436,34 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 continue;
             }
             cmd_params_instance instance = {
-                /* .model        = */ m,
-                /* .n_prompt     = */ n_pg.first,
-                /* .n_gen        = */ n_pg.second,
-                /* .n_depth      = */ nd,
-                /* .n_batch      = */ nb,
-                /* .n_ubatch     = */ nub,
-                /* .type_k       = */ tk,
-                /* .type_v       = */ tv,
-                /* .n_threads    = */ nt,
-                /* .cpu_mask     = */ cm,
-                /* .cpu_strict   = */ cs,
-                /* .poll         = */ pl,
-                /* .n_gpu_layers = */ nl,
-                /* .n_cpu_moe    = */ ncmoe,
-                /* .split_mode   = */ sm,
-                /* .main_gpu     = */ mg,
-                /* .no_kv_offload= */ nkvo,
-                /* .flash_attn   = */ fa,
-                /* .devices      = */ devs,
-                /* .tensor_split = */ ts,
+                /* .model                 = */ m,
+                /* .n_prompt              = */ n_pg.first,
+                /* .n_gen                 = */ n_pg.second,
+                /* .n_depth               = */ nd,
+                /* .n_batch               = */ nb,
+                /* .n_ubatch              = */ nub,
+                /* .type_k                = */ tk,
+                /* .type_v                = */ tv,
+                /* .n_threads             = */ nt,
+                /* .cpu_mask              = */ cm,
+                /* .cpu_strict            = */ cs,
+                /* .poll                  = */ pl,
+                /* .n_gpu_layers          = */ nl,
+                /* .n_cpu_moe             = */ ncmoe,
+                /* .split_mode            = */ sm,
+                /* .load_mode             = */ lm,
+                /* .load_modifier         = */ lmod,
+                /* .main_gpu              = */ mg,
+                /* .no_kv_offload         = */ nkvo,
+                /* .flash_attn            = */ fa,
+                /* .devices               = */ devs,
+                /* .tensor_split          = */ ts,
                 /* .tensor_buft_overrides = */ ot,
-                /* .use_mmap     = */ mmp,
-                /* .use_direct_io= */ dio,
-                /* .embeddings   = */ embd,
-                /* .no_op_offload= */ nopo,
-                /* .no_host      = */ noh,
-                /* .fit_target   = */ fpt,
-                /* .fit_min_ctx  = */ fpc,
+                /* .embeddings            = */ embd,
+                /* .no_op_offload         = */ nopo,
+                /* .no_host               = */ noh,
+                /* .fit_target            = */ fpt,
+                /* .fit_min_ctx           = */ fpc,
             };
             instances.push_back(instance);
         }
@@ -1425,14 +1493,14 @@ struct test {
     int                      n_gpu_layers;
     int                      n_cpu_moe;
     llama_split_mode         split_mode;
+    llama_load_mode          load_mode;
+    llama_load_modifier      load_modifier;
     int                      main_gpu;
     bool                     no_kv_offload;
     llama_flash_attn_type    flash_attn;
     std::vector<ggml_backend_dev_t> devices;
     std::vector<float>       tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
-    bool                     use_mmap;
-    bool                     use_direct_io;
     bool                     embeddings;
     bool                     no_op_offload;
     bool                     no_host;
@@ -1465,14 +1533,14 @@ struct test {
         n_gpu_layers   = inst.n_gpu_layers;
         n_cpu_moe      = inst.n_cpu_moe;
         split_mode     = inst.split_mode;
+        load_mode      = inst.load_mode;
+        load_modifier  = inst.load_modifier;
         main_gpu       = inst.main_gpu;
         no_kv_offload  = inst.no_kv_offload;
         flash_attn     = inst.flash_attn;
         devices        = inst.devices;
         tensor_split   = inst.tensor_split;
         tensor_buft_overrides = inst.tensor_buft_overrides;
-        use_mmap       = inst.use_mmap;
-        use_direct_io  = inst.use_direct_io;
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
         no_host        = inst.no_host;
@@ -1534,8 +1602,8 @@ struct test {
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
-            "tensor_buft_overrides",            "use_mmap",      "use_direct_io",  "embeddings",
-            "no_op_offload",  "no_host",        "fit_target",     "fit_min_ctx",
+            "tensor_buft_overrides",            "load_mode",     "embeddings",
+            "no_op_offload",  "no_host",        "fit_target",    "fit_min_ctx",
             "n_prompt",       "n_gen",          "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
         };
@@ -1553,11 +1621,14 @@ struct test {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" ||
-            field == "use_mmap" || field == "use_direct_io" || field == "embeddings" || field == "no_host") {
+            field == "embeddings" || field == "no_host") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
             return FLOAT;
+        }
+        if (field == "load_mode") {
+            return STRING;
         }
         return STRING;
     }
@@ -1625,8 +1696,9 @@ struct test {
                                             devices_to_string(devices),
                                             tensor_split_str,
                                             tensor_buft_overrides_str,
-                                            std::to_string(use_mmap),
-                                            std::to_string(use_direct_io),
+                                            std::strcmp(llama_load_modifier_name(load_modifier), "none") == 0
+                                                ? llama_load_mode_name(load_mode)
+                                                : std::string(llama_load_mode_name(load_mode)) + "+" + llama_load_modifier_name(load_modifier),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
                                             std::to_string(no_host),
@@ -1805,6 +1877,9 @@ struct markdown_printer : public printer {
         if (field == "split_mode") {
             return 6;
         }
+        if (field == "load_mode") {
+            return 10;
+        }
         if (field == "flash_attn") {
             return 3;
         }
@@ -1851,11 +1926,8 @@ struct markdown_printer : public printer {
         if (field == "flash_attn") {
             return "fa";
         }
-        if (field == "use_mmap") {
-            return "mmap";
-        }
-        if (field == "use_direct_io") {
-            return "dio";
+        if (field == "load_mode") {
+            return "lm";
         }
         if (field == "embeddings") {
             return "embd";
@@ -1944,11 +2016,9 @@ struct markdown_printer : public printer {
         if (params.tensor_buft_overrides.size() > 1 || !vec_vec_tensor_buft_override_equal(params.tensor_buft_overrides, cmd_params_defaults.tensor_buft_overrides)) {
             fields.emplace_back("tensor_buft_overrides");
         }
-        if (params.use_mmap.size() > 1 || params.use_mmap != cmd_params_defaults.use_mmap) {
-            fields.emplace_back("use_mmap");
-        }
-        if (params.use_direct_io.size() > 1 || params.use_direct_io != cmd_params_defaults.use_direct_io) {
-            fields.emplace_back("use_direct_io");
+        if (params.load_mode.size() > 1 || params.load_mode != cmd_params_defaults.load_mode
+            || params.load_modifier.size() > 1 || params.load_modifier != cmd_params_defaults.load_modifier) {
+            fields.emplace_back("load_mode");
         }
         if (params.embeddings.size() > 1 || params.embeddings != cmd_params_defaults.embeddings) {
             fields.emplace_back("embeddings");
