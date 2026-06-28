@@ -912,6 +912,10 @@ static std::string common_chat_template_direct_apply_impl(
     if (inputs.add_generation_prompt) {
         inp["add_generation_prompt"] = true;
     }
+    if (inp.contains("preserve_reasoning") && inp["preserve_reasoning"].is_boolean()) {
+        bool enabled = inp["preserve_reasoning"].get<bool>();
+        jinja::caps_apply_preserve_reasoning(ctx, enabled);
+    }
 
     jinja::global_from_json(ctx, inp, inputs.mark_input);
 

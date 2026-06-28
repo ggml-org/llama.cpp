@@ -3297,6 +3297,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_MESSAGE"));
     add_opt(common_arg(
+        {"--reasoning-preserve"},
+        {"--no-reasoning-preserve"},
+        "preserve reasoning trace in the full history, not just the last assistant message (default: template default)\n"
+        "compatible with certain templates having 'supports_preserve_reasoning' capability\n"
+        "example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking",
+        [](common_params & params, bool value) {
+            if (value) {
+                params.default_template_kwargs["preserve_reasoning"] = "true";
+            } else {
+                params.default_template_kwargs["preserve_reasoning"] = "false";
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING_PRESERVE"));
+    add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
             "set custom jinja chat template (default: template taken from model's metadata)\n"
