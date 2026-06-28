@@ -7759,6 +7759,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     test_cases.emplace_back(new test_get_rows_back(GGML_TYPE_F32, 1, 8, 2, 1, false));
+    test_cases.emplace_back(new test_get_rows_back(GGML_TYPE_F32, 1, 70000, 4, 1, false)); // row count > CUDA grid-y limit (65535)
     for (ggml_type type : all_types) {
         for (bool v : {false, true}) {
             test_cases.emplace_back(new test_get_rows_back(type, 256, 5, 4, 1, v));
