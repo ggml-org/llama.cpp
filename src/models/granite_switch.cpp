@@ -48,8 +48,9 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
     }
 
     // append one extra single-head attention layer at index R = n_real to hold
-    // the router K/V; bump n_layer_all so the KV cache allocates it, and set
-    // n_layer_nextn = 1 so n_layer() stays n_real (decoder loop unchanged)
+    // the router K/V; bump n_layer_all so the KV cache allocates it. reuse
+    // n_layer_nextn (the trailing-layers count; no MTP here) = 1 so n_layer()
+    // stays n_real and the decoder loop is unchanged
     const uint32_t n_real = hparams.n_layer();
     hparams.router_layer  = (int32_t) n_real;
     hparams.n_layer_all   = n_real + 1;
