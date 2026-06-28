@@ -988,6 +988,7 @@ class MODEL_TENSOR(IntEnum):
     A_QF_FFN_UP            = auto()
     A_QF_FFN_DOWN          = auto()
     A_QF_FFN_NORM          = auto()
+    # per-token embedded LoRA adapters - Granite Switch
     ATTN_QKV_LORA_A_Q      = auto()
     ATTN_QKV_LORA_B_Q      = auto()
     ATTN_QKV_LORA_A_K      = auto()
@@ -1580,6 +1581,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
     MODEL_TENSOR.FC:                        "fc",
     MODEL_TENSOR.D2T:                       "d2t",
+    # per-token embedded LoRA adapters - Granite Switch
     MODEL_TENSOR.ATTN_QKV_LORA_A_Q:         "blk.{bid}.attn_qkv.lora_a_q",
     MODEL_TENSOR.ATTN_QKV_LORA_B_Q:         "blk.{bid}.attn_qkv.lora_b_q",
     MODEL_TENSOR.ATTN_QKV_LORA_A_K:         "blk.{bid}.attn_qkv.lora_a_k",
