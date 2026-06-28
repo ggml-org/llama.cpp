@@ -18,6 +18,13 @@
 #include <map>
 #include <cinttypes>
 
+#define SPC_DBG(fmt, ...) LOG_DBG("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SPC_TRC(fmt, ...) LOG_TRC("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SPC_INF(fmt, ...) LOG_INF("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SPC_WRN(fmt, ...) LOG_WRN("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SPC_ERR(fmt, ...) LOG_ERR("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SPC_CNT(fmt, ...) LOG_CNT(""              fmt,               __VA_ARGS__)
+
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
@@ -60,21 +67,20 @@ static bool common_speculative_are_compatible(
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
 
     const auto vocab_type_tgt = llama_vocab_type(vocab_tgt);
-    LOG_DBG("%s: vocab_type tgt: %d\n", __func__, vocab_type_tgt);
+    SPC_DBG("vocab_type tgt: %d\n", vocab_type_tgt);
 
     const auto vocab_type_dft = llama_vocab_type(vocab_dft);
-    LOG_DBG("%s: vocab_type dft: %d\n", __func__, vocab_type_dft);
+    SPC_DBG("vocab_type dft: %d\n", vocab_type_dft);
 
     if (vocab_type_tgt != vocab_type_dft) {
-        LOG_WRN("%s: draft model vocab type must match target model to use speculation but "
-                "vocab_type_dft = %d while vocab_type_tgt = %d\n", __func__, vocab_type_dft, vocab_type_tgt);
+        SPC_WRN("draft model vocab type must match target model to use speculation but "
+                "vocab_type_dft = %d while vocab_type_tgt = %d\n", vocab_type_dft, vocab_type_tgt);
         return false;
     }
 
     if (llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
         (llama_vocab_get_add_bos(vocab_tgt) && llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft))) {
-        LOG_WRN("%s: draft model bos tokens must match target model to use speculation. add: %d - %d, id: %d - %d)\n",
-                __func__,
+        SPC_WRN("draft model bos tokens must match target model to use speculation. add: %d - %d, id: %d - %d)\n",
                 llama_vocab_get_add_bos(vocab_tgt), llama_vocab_get_add_bos(vocab_dft),
                 llama_vocab_bos(vocab_tgt), llama_vocab_bos(vocab_dft));
         return false;
@@ -82,8 +88,7 @@ static bool common_speculative_are_compatible(
 
     if (llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
         (llama_vocab_get_add_eos(vocab_tgt) && llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft))) {
-        LOG_WRN("%s: draft model eos tokens must match target model to use speculation. add: %d - %d, id: %d - %d)\n",
-                __func__,
+        SPC_WRN("draft model eos tokens must match target model to use speculation. add: %d - %d, id: %d - %d)\n",
                 llama_vocab_get_add_eos(vocab_tgt), llama_vocab_get_add_eos(vocab_dft),
                 llama_vocab_eos(vocab_tgt), llama_vocab_eos(vocab_dft));
         return false;
@@ -97,8 +102,8 @@ static bool common_speculative_are_compatible(
             : n_vocab_dft - n_vocab_tgt;
 
         if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
-            LOG_DBG("%s: draft model vocab must closely match target model to use speculation but ", __func__);
-            LOG_DBG("target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
+            SPC_DBG("draft model vocab must closely match target model to use speculation but "
+                    "target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
                     n_vocab_tgt, llama_vocab_n_tokens(vocab_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
             return false;
         }
@@ -108,8 +113,8 @@ static bool common_speculative_are_compatible(
             const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
 
             if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
-                LOG_DBG("%s: draft model vocab must match target model to use speculation but ", __func__);
-                LOG_DBG("token %d content differs - target '%s', draft '%s'\n", i,
+                SPC_DBG("draft model vocab must match target model to use speculation but "
+                        "token %d content differs - target '%s', draft '%s'\n", i,
                         common_token_to_piece(vocab_tgt, i).c_str(),
                         common_token_to_piece(vocab_dft, i).c_str());
                 return false;
@@ -186,9 +191,9 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
         auto * ctx_tgt = this->params.ctx_tgt;
 
-        LOG_INF("%s: adding speculative implementation 'draft-simple'\n", __func__);
-        LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%f\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min);
-        LOG_INF("%s: - gpu_layers=%d, cache_k=%s, cache_v=%s, ctx_tgt=%s, ctx_dft=%s, devices=[%s]\n", __func__,
+        SPC_TRC("%s", "adding speculative implementation 'draft-simple'\n");
+        SPC_TRC("- n_max=%d, n_min=%d, p_min=%f\n", this->params.n_max, this->params.n_min, this->params.p_min);
+        SPC_TRC("- gpu_layers=%d, cache_k=%s, cache_v=%s, ctx_tgt=%s, ctx_dft=%s, devices=[%s]\n",
                 this->params.n_gpu_layers,
                 ggml_type_name(this->params.cache_type_k),
                 ggml_type_name(this->params.cache_type_v),
@@ -228,16 +233,16 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         }
 
         const bool vocab_cmpt = common_speculative_are_compatible(llama_get_model(ctx_tgt), llama_get_model(ctx_dft));
-        LOG_DBG("%s: vocab_cmpt = %d\n", __func__, vocab_cmpt);
+        SPC_DBG("vocab_cmpt = %d\n", vocab_cmpt);
 
         if (!vocab_cmpt) {
-            LOG_ERR("%s: the target and draft vocabs are not compatible\n", __func__);
+            SPC_ERR("%s", "the target and draft vocabs are not compatible\n");
 
             throw std::runtime_error("draft model vocab type must match target model to use speculation");
         }
 
         if (n_seq != llama_n_seq_max(ctx_dft)) {
-            LOG_ERR("%s: n_seq mismatch: %d != %d\n", __func__, n_seq, llama_n_seq_max(ctx_dft));
+            SPC_ERR("n_seq mismatch: %d != %d\n", n_seq, llama_n_seq_max(ctx_dft));
 
             throw std::runtime_error("the draft model number of sequences is incompatible with the speculative n_seq");
         }
@@ -257,7 +262,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         const int ret = llama_decode(ctx_dft, batch);
 
         if (ret != 0) {
-            LOG_ERR("%s: failed to decode draft batch, ret = %d\n", __func__, ret);
+            SPC_ERR("failed to decode draft batch, ret = %d\n", ret);
 
             return false;
         }
@@ -290,7 +295,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
         int ret = llama_decode(ctx_dft, batch);
         if (ret != 0) {
-            LOG_WRN("%s: llama_decode returned %d\n", __func__, ret);
+            SPC_ERR("llama_decode returned %d\n", ret);
             return;
         }
 
@@ -314,7 +319,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
                 for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
-                    LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                    SPC_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
                             seq_id, k, i, cur_p->data[k].id, cur_p->data[k].p,
                             common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
                 }
@@ -354,7 +359,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
             // evaluate the drafted tokens on the draft model
             ret = llama_decode(ctx_dft, batch);
             if (ret != 0) {
-                LOG_WRN("%s: llama_decode[%d] returned %d\n", __func__, i, ret);
+                SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
                 break;
             }
 
@@ -449,8 +454,8 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, n_seq)
         , params(params.draft)
     {
-        LOG_INF("%s: adding speculative implementation 'draft-eagle3'\n", __func__);
-        LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%f, backend_sampling=%d\n", __func__, params.draft.n_max, params.draft.n_min, params.draft.p_min, (int) params.draft.backend_sampling);
+        SPC_TRC("%s", "adding speculative implementation 'draft-eagle3'\n");
+        SPC_TRC("- n_max=%d, n_min=%d, p_min=%f, backend_sampling=%d\n", params.draft.n_max, params.draft.n_min, params.draft.p_min, (int) params.draft.backend_sampling);
 
         auto * ctx_tgt = this->params.ctx_tgt;
         auto * ctx_dft = this->params.ctx_dft;
@@ -493,7 +498,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                 llama_sampler_chain_add(chain, llama_sampler_init_top_k(10));
 
                 if (!llama_set_sampler(ctx_dft, seq_id, chain)) {
-                    LOG_WRN("%s: backend offload failed for seq_id=%d; using CPU sampler\n", __func__, (int) seq_id);
+                    SPC_WRN("backend offload failed for seq_id=%d; using CPU sampler\n", (int) seq_id);
                     llama_sampler_free(chain);
                     chain = nullptr;
                 }
@@ -548,9 +553,9 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
         if (pos_max < N - 2) {
-            LOG_WRN("%s: ctx_dft pos_max=%d < N-2=%d — process() did not run on every prefill ubatch. "
+            SPC_WRN("ctx_dft pos_max=%d < N-2=%d — process() did not run on every prefill ubatch. "
                     "Drafts may degrade.\n",
-                    __func__, (int) pos_max, N - 2);
+                    (int) pos_max, N - 2);
         }
     }
 
@@ -621,8 +626,8 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             };
             const int32_t rc = llama_encode(ctx_dft, enc_batch);
             if (rc != 0) {
-                LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
-                        __func__, rc, (int) n_chunk, (int) i);
+                SPC_ERR("llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
+                        rc, (int) n_chunk, (int) i);
                 return false;
             }
 
@@ -692,8 +697,8 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         if (batch.n_tokens > 0) {
             const int32_t rc = llama_decode(ctx_dft, batch);
             if (rc != 0) {
-                LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (n_tokens=%d, ubatch_pos[0]=%d)\n",
-                        __func__, rc, (int) batch.n_tokens, (int) batch_in.pos[0]);
+                SPC_ERR("llama_decode(ctx_dft) failed rc=%d (n_tokens=%d, ubatch_pos[0]=%d)\n",
+                        rc, (int) batch.n_tokens, (int) batch_in.pos[0]);
                 return false;
             }
         }
@@ -744,7 +749,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 
         int ret = llama_decode(ctx_dft, batch);
         if (ret != 0) {
-            LOG_WRN("%s: llama_decode returned %d\n", __func__, ret);
+            SPC_ERR("llama_decode returned %d\n", ret);
             return;
         }
 
@@ -770,7 +775,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
                 for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
-                    LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                    SPC_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
                             seq_id, k, i, cur_p->data[k].id, cur_p->data[k].p,
                             common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
                 }
@@ -809,7 +814,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 
             ret = llama_decode(ctx_dft, batch);
             if (ret != 0) {
-                LOG_WRN("%s: llama_decode[%d] returned %d\n", __func__, i, ret);
+                SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
                 break;
             }
 
@@ -942,9 +947,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 "MTP input row width must match the target h_nextn width");
         n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
 
-        LOG_INF("%s: adding speculative implementation 'draft-mtp'\n", __func__);
-        LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
-        LOG_INF("%s: - gpu_layers=%d, cache_k=%s, cache_v=%s, ctx_tgt=%s, ctx_dft=%s, devices=[%s]\n", __func__,
+        SPC_TRC("%s", "adding speculative implementation 'draft-mtp'\n");
+        SPC_TRC("- n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
+        SPC_TRC("- gpu_layers=%d, cache_k=%s, cache_v=%s, ctx_tgt=%s, ctx_dft=%s, devices=[%s]\n",
                 this->params.n_gpu_layers,
                 ggml_type_name(this->params.cache_type_k),
                 ggml_type_name(this->params.cache_type_v),
@@ -975,7 +980,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 llama_sampler_chain_add(chain, llama_sampler_init_top_k(10));
 
                 if (!llama_set_sampler(ctx_dft, seq_id, chain)) {
-                    LOG_WRN("%s: backend offload failed for seq_id=%d; using CPU sampler\n", __func__, (int) seq_id);
+                    SPC_WRN("backend offload failed for seq_id=%d; using CPU sampler\n", (int) seq_id);
                     llama_sampler_free(chain);
                     chain = nullptr;
                 }
@@ -1038,11 +1043,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
 
         if (pos_max < N - 1 && !is_mem_shared) {
-            LOG_WRN("%s: ctx_dft pos_max=%d < N-1=%d - "
+            SPC_WRN("ctx_dft pos_max=%d < N-1=%d - "
                     "process() hook may not have run on every prefill ubatch "
                     "(need_embd / logits=1 on every prompt position?). "
                     "Drafts may degrade.\n",
-                    __func__, (int) pos_max, N - 1);
+                    (int) pos_max, N - 1);
         }
     }
 
@@ -1128,8 +1133,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 const int32_t rc = llama_decode(ctx_dft, batch);
                 if (rc != 0) {
-                    LOG_ERR("%s: llama_decode(ctx_dft) head=%d failed rc=%d (pos=%d)\n",
-                            __func__, head, (int) rc, (int) batch_in.pos[0]);
+                    SPC_ERR("llama_decode(ctx_dft) head=%d failed rc=%d (pos=%d)\n",
+                            head, (int) rc, (int) batch_in.pos[0]);
                     ok = false;
                     break;
                 }
@@ -1217,7 +1222,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             int ret = llama_decode(ctx_dft, batch);
             if (ret != 0) {
-                LOG_WRN("%s: llama_decode[%d] returned %d\n", __func__, i, ret);
+                SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
                 break;
             }
 
@@ -1239,7 +1244,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
                 for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
-                    LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                    SPC_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
                             seq_id, k, i, cur_p->data[k].id, cur_p->data[k].p,
                             common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
                 }
@@ -1353,8 +1358,8 @@ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
         , params(params.ngram_simple)
         , config(config)
     {
-        LOG_INF("%s: adding speculative implementation 'ngram-simple'\n", __func__);
-        LOG_INF("%s: - size_n=%d, size_m=%d, min_hits=%d\n", __func__,
+        SPC_TRC("%s", "adding speculative implementation 'ngram-simple'\n");
+        SPC_TRC("- size_n=%d, size_m=%d, min_hits=%d\n",
                 this->params.size_n, this->params.size_m, this->params.min_hits);
     }
 
@@ -1403,8 +1408,8 @@ struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
             this->config.push_back(config);
         }
 
-        LOG_INF("%s: adding speculative implementation '%s'\n", __func__, common_speculative_type_to_str(this->type).c_str());
-        LOG_INF("%s: - size_key=%d, size_value=%d, key_only=%d, min_hits=%d\n", __func__,
+        SPC_TRC("adding speculative implementation '%s'\n", common_speculative_type_to_str(this->type).c_str());
+        SPC_TRC("- size_key=%d, size_value=%d, key_only=%d, min_hits=%d\n",
                 config.size_key, config.size_value, config.key_only, config.min_hits);
     }
 
@@ -1478,15 +1483,15 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         , verbose(std::getenv("LLAMA_TRACE") != nullptr) {
         static_assert(sizeof(llama_token) == sizeof(common_ngram_mod::entry_t));
 
-        LOG_INF("%s: adding speculative implementation 'ngram-mod'\n", __func__);
-        LOG_INF("%s: - n_match=%d, n_max=%d, n_min=%d\n", __func__,
+        SPC_TRC("%s", "adding speculative implementation 'ngram-mod'\n");
+        SPC_TRC("- n_match=%d, n_max=%d, n_min=%d\n",
                 this->params.n_match, this->params.n_max, this->params.n_min);
-        LOG_INF("%s: - mod size=%zu (%.3f MB)\n", __func__,
+        SPC_TRC("- mod size=%zu (%.3f MB)\n",
                 mod.size(), (float)(mod.size_bytes())/1024/1024);
 
         if (this->params.n_match < 16) {
-            LOG_WRN("%s: ngram_mod n_match=%d is too small - poor quality is possible, "
-                    "see: https://github.com/ggml-org/llama.cpp/pull/19164\n", __func__, this->params.n_match);
+            SPC_WRN("ngram_mod n_match=%d is too small - poor quality is possible, "
+                    "see: https://github.com/ggml-org/llama.cpp/pull/19164\n", this->params.n_match);
         }
 
         sinfos.resize(n_seq);
@@ -1510,11 +1515,11 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         sinfo.i_last = prompt.size() - n;
 
         const double f = (double)mod.get_used() / (double)mod.size();
-        LOG_INF("%s: ngram_mod occupancy = %zu/%zu (%.2f)\n", __func__, mod.get_used(), mod.size(), f);
+        SPC_TRC("ngram_mod occupancy = %zu/%zu (%.2f)\n", mod.get_used(), mod.size(), f);
 
         constexpr double f_thold = 0.25;
         if (f > f_thold) {
-            LOG_WRN("%s: ngram_mod occupancy %.2f exceeds threshold (%.2f) - resetting\n", __func__, f, f_thold);
+            SPC_WRN("ngram_mod occupancy %.2f exceeds threshold (%.2f) - resetting\n", f, f_thold);
 
             mod.reset();
         }
@@ -1608,7 +1613,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
                 sinfo.n_low++;
                 if (sinfo.n_low >= 5) {
                     if (verbose) {
-                        LOG_WRN("%s: low acceptance streak (%d) - resetting ngram_mod\n", __func__, sinfo.n_low);
+                        SPC_TRC("low acceptance streak (%d) - resetting ngram_mod\n", sinfo.n_low);
                     }
 
                     mod.reset();
@@ -1658,8 +1663,8 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
         , save_dynamic(save_dynamic)
         , save_static(save_static)
     {
-        LOG_INF("%s: adding speculative implementation 'ngram-cache'\n", __func__);
-        LOG_INF("%s: - n_draft=%d, cache_static=%s, cache_dynamic=%s\n", __func__,
+        SPC_TRC("%s", "adding speculative implementation 'ngram-cache'\n");
+        SPC_TRC("- n_draft=%d, cache_static=%s, cache_dynamic=%s\n",
                 n_draft,
                 path_static.empty() ? "none" : path_static.c_str(),
                 path_dynamic.empty() ? "none" : path_dynamic.c_str());
@@ -1674,7 +1679,7 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
                     sinfo.ngram_cache_static = ngram_cache_static;
                 }
             } catch (...) {
-                LOG_ERR("failed to open static lookup cache: %s", path_static.c_str());
+                SPC_ERR("failed to open static lookup cache: %s", path_static.c_str());
                 GGML_ABORT("Couldn't read static lookup cache");
             }
         }
@@ -1687,7 +1692,7 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
                     sinfo.ngram_cache_dynamic = ngram_cache_dynamic;
                 }
             } catch (...) {
-                LOG_ERR("failed to open dynamic lookup cache: %s", path_dynamic.c_str());
+                SPC_ERR("failed to open dynamic lookup cache: %s", path_dynamic.c_str());
                 GGML_ABORT("Couldn't read dynamic lookup cache");
             }
         }
@@ -2034,7 +2039,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     }
 
     if (impls.empty()) {
-        LOG_WRN("%s: no implementations specified for speculative decoding\n", __func__);
+        SPC_TRC("%s", "no implementations specified for speculative decoding\n");
         return nullptr;
     }
 
@@ -2161,13 +2166,13 @@ void common_speculative_draft(common_speculative * spec) {
 
                 if (dp.n_max > 0) {
                     if (!result.empty() && (int) result.size() > dp.n_max) {
-                        LOG_DBG("%s: truncating draft to %d tokens\n", __func__, dp.n_max);
+                        SPC_DBG("truncating draft to %d tokens\n", dp.n_max);
                         result.resize(dp.n_max);
                     }
                 }
 
                 if (!result.empty()) {
-                    LOG_DBG("%s: called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
+                    SPC_DBG("called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n",
                             common_speculative_type_to_str(impl.get()->type).c_str(), dp.prompt->size(),
                             impl.get()->n_call_draft, result.size());
 
@@ -2291,7 +2296,7 @@ void common_speculative_print_stats(const common_speculative * spec) {
             str_stats = ", #mean acc len = " + oss.str() + ", #acc rate/pos = (" + tmp.str() + ")";
         }
 
-        LOG_INF("statistics %16s: #calls(b,g,a) = %4zu %6zu %6zu, #gen drafts = %6zu, #acc drafts = %5zu, #gen tokens = %6zu, #acc tokens = %5zu%s%s\n",
+        SPC_TRC("statistics %16s: #calls(b,g,a) = %4zu %6zu %6zu, #gen drafts = %6zu, #acc drafts = %5zu, #gen tokens = %6zu, #acc tokens = %5zu%s%s\n",
                 common_speculative_type_to_str(impl->type).c_str(),
                 impl->n_call_begin, impl->n_call_draft, impl->n_call_accept,
                 impl->n_gen_drafts,

@@ -14,7 +14,7 @@ from .base import MmprojModel, ModelBase, TextModel, gguf, logger
 from .qwen import QwenModel
 
 
-@ModelBase.register("DeepseekOCRForCausalLM")
+@ModelBase.register("DeepseekOCRForCausalLM", "UnlimitedOCRForCausalLM")
 class DeepseekOCRVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -205,6 +205,8 @@ class DeepseekModel(TextModel):
 @ModelBase.register(
     "DeepseekV2ForCausalLM",
     "DeepseekV3ForCausalLM",
+    "DeepseekOCRForCausalLM",
+    "UnlimitedOCRForCausalLM",
     "KimiVLForConditionalGeneration",
     "KimiK25ForConditionalGeneration",
     "YoutuForCausalLM",
@@ -224,7 +226,7 @@ class DeepseekV2Model(TextModel):
         self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
         # special handling for Deepseek OCR
-        if self.origin_hf_arch in ("DeepseekOCRForCausalLM", "DeepseekOCR2ForCausalLM"):
+        if self.origin_hf_arch in ("DeepseekOCRForCausalLM", "DeepseekOCR2ForCausalLM", "UnlimitedOCRForCausalLM"):
             self.model_arch = gguf.MODEL_ARCH.DEEPSEEK2OCR
             self.gguf_writer.arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
             self.gguf_writer.add_architecture()
@@ -349,6 +351,12 @@ class DeepseekV2Model(TextModel):
             self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
 
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
+
+        # Unlimited-OCR sliding window; written for metadata, the decoder ignores it (full MHA)
+        if is_ocr:
+            sliding_window = hparams.get("sliding_window_size") or hparams.get("sliding_window")
+            if sliding_window:
+                self.gguf_writer.add_sliding_window(sliding_window)
 
         if (rope_mscale_all := self.rope_parameters.get("mscale_all_dim")) is not None:
             # [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]

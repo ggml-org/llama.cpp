@@ -218,6 +218,9 @@ public:
 
     size_t get_common_prefix(const server_tokens & b) const;
 
+    // split the tokens into message spans, skipping over media chunks
+    common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
+
     // make sure all text tokens are within the vocab range
     bool validate(const struct llama_context * ctx) const;
 
