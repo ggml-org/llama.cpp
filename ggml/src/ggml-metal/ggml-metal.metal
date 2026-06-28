@@ -5404,6 +5404,9 @@ typedef decltype(kernel_pad_impl<float>) kernel_pad_t;
 template [[host_name("kernel_pad_f32")]]   kernel kernel_pad_t kernel_pad_impl<float>;
 template [[host_name("kernel_pad_f32_4")]] kernel kernel_pad_t kernel_pad_impl<float4>;
 
+// set when row bases and p0 offset are 16-byte aligned, enabling float4 loads/stores
+constant bool FC_pad_reflect_1d_use_f4 [[function_constant(FC_PAD_REFLECT_1D + 0)]];
+
 kernel void kernel_pad_reflect_1d_f32(
     constant   ggml_metal_kargs_pad_reflect_1d & args,
     device  const char * src0,
@@ -5431,19 +5434,15 @@ kernel void kernel_pad_reflect_1d_f32(
 
         const int ne00 = args.ne0 - args.p0 - args.p1;
 
-        // require 16-byte aligned row bases and p0 offset for float4 loads/stores
-        if (args.p0 % 4 == 0 && args.nb01 % 16 == 0 && args.nb1 % 16 == 0) {
+        // float4 path is selected via function constant; the alignment guard that sets it
+        // also guarantees ne00 % 4 == 0, so no scalar tail is needed here
+        if (FC_pad_reflect_1d_use_f4) {
             device float4 * dst4 = (device float4*)(dst_ptr + args.p0);
             device const float4 * src4 = (device const float4*)src0_ptr;
             const int num_float4 = ne00 / 4;
 
             for (int j = tpitg.x; j < num_float4; j += ntg.x) {
                 dst4[j] = src4[j];
-            }
-
-            const int tail_start = num_float4 * 4;
-            for (int j = tail_start + tpitg.x; j < ne00; j += ntg.x) {
-                dst_ptr[args.p0 + j] = src0_ptr[j];
             }
         } else {
             for (int j = tpitg.x; j < ne00; j += ntg.x) {

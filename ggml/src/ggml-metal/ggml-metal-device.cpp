@@ -1928,12 +1928,22 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_pad_reflect_1d(g
     char base[256];
     char name[256];
 
+    // require 16-byte aligned row bases and p0 offset to enable float4 loads/stores
+    const int32_t p0 = ((const int32_t *) op->op_params)[0];
+    const bool use_f4 = (p0 % 4 == 0) && (op->src[0]->nb[1] % 16 == 0) && (op->nb[1] % 16 == 0);
+
     snprintf(base, 256, "kernel_pad_reflect_1d_%s", ggml_type_name(op->src[0]->type));
-    snprintf(name, 256, "%s", base);
+    snprintf(name, 256, "%s_f4=%d", base, use_f4);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
-        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+
+        ggml_metal_cv_set_bool(cv, use_f4, FC_PAD_REFLECT_1D + 0);
+
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+
+        ggml_metal_cv_free(cv);
     }
 
     return res;
