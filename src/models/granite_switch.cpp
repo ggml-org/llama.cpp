@@ -21,8 +21,10 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, /* required */ false);
 
-    // the per-token LoRA tensors use MUL_MAT_ID with n_expert_used = 1; the model
-    // is otherwise dense, so set it after the generic loader's n_expert checks
+    // per-token LoRA selection runs through MUL_MAT_ID, which needs n_expert_used == 1.
+    // the GGUF carries expert_count = 0 (dense model), so the generic loader's
+    // n_expert == 0 => n_expert_used == 0 assertion has already passed by the time
+    // load_arch_hparams runs; force it to 1 here for the mul_mat_id path.
     hparams.n_expert_used = 1;
 
     ml.get_key(LLM_KV_NUM_ADAPTERS,  n_adapters);
