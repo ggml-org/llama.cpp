@@ -2447,19 +2447,8 @@ private:
 
                     server_slot * slot = get_slot_by_cmpl_id(task.params.control_cmpl_id);
                     if (slot == nullptr) {
-                        std::string live;
-                        size_t n_live = 0;
-                        for (const server_slot & s : slots) {
-                            if (!s.is_processing() || !s.task) continue;
-                            n_live++;
-                            if (!s.task->params.oaicompat_cmpl_id.empty()) {
-                                if (!live.empty()) live += ", ";
-                                live += s.task->params.oaicompat_cmpl_id;
-                            }
-                        }
-                        SRV_WRN("control %s on unknown completion id=%s, no live slot, %zu processing: [%s]\n",
-                                task.params.control_action.c_str(), task.params.control_cmpl_id.c_str(),
-                                n_live, live.c_str());
+                        SRV_WRN("control %s on unknown completion id=%s, no live slot\n",
+                                task.params.control_action.c_str(), task.params.control_cmpl_id.c_str());
                         res->success = false;
                         res->message = "no active completion for this id";
                         queue_results.send(std::move(res));
@@ -2469,8 +2458,6 @@ private:
                     if (task.params.control_action == "reasoning_end") {
                         // the budget sampler only exists when reasoning control was armed
                         if (!slot->task->params.sampling.reasoning_control) {
-                            SRV_WRN("control reasoning_end on completion id=%s but reasoning control was not armed\n",
-                                    task.params.control_cmpl_id.c_str());
                             res->success = false;
                             res->message = "reasoning control not enabled for this completion";
                             queue_results.send(std::move(res));
@@ -2478,8 +2465,6 @@ private:
                         }
                         // act on the live slot mid generation, never defer
                         common_sampler_reasoning_budget_force(slot->smpl.get());
-                        SRV_INF("control reasoning_end accepted for completion id=%s\n",
-                                task.params.control_cmpl_id.c_str());
                         res->success = true;
                     } else {
                         res->success = false;

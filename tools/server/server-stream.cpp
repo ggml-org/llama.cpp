@@ -230,7 +230,6 @@ void stream_session_manager::evict_and_cancel(const std::string & conversation_i
         s = it->second;
         sessions.erase(it);
     }
-    SRV_INF("stop accepted, cancelling stream session conv_id=%s\n", conversation_id.c_str());
     // signal the producer side first so the inference is cancelled at the queue level,
     // then finalize, which wakes any pending HTTP reader and lets the drain exit naturally
     s->cancel();
