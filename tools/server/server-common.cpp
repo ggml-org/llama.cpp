@@ -702,10 +702,32 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & promp
         }
     }
     // process prompt
+    std::string prompt_adj;
+
+    const std::string marker = mtmd_get_marker(mctx);
+    const size_t marker_len  = marker.size();
+
+    // count existing media markers in the prompt
+    size_t n_markers = 0;
+    size_t pos = 0;
+    while ((pos = prompt.find(marker, pos)) != std::string::npos) {
+        n_markers++;
+        pos += marker_len;
+    }
+
+    // prepend missing markers so the count matches the number of files
+    // this mirrors the behavior in mtmd-cli.cpp but also handles partial matches
+    if (n_markers < files.size()) {
+        for (size_t i = 0; i < files.size() - n_markers; i++) {
+            prompt_adj += marker;
+        }
+    }
+    prompt_adj += prompt;
+
     std::vector<server_tokens> inputs;
     // multimodal
     mtmd_input_text inp_txt = {
-        prompt.c_str(),
+        prompt_adj.c_str(),
         /* add_special */   true,
         /* parse_special */ true,
     };
