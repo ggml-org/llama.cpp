@@ -1,4 +1,5 @@
 import os
+import socket
 import tempfile
 import pytest
 from utils import *
@@ -22,10 +23,18 @@ class LogReader:
 def do_something():
     yield
 
+
+def pick_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
 @pytest.fixture(autouse=True)
 def create_server():
     global server
     server = ServerPreset.tinyllama2()
+    os.makedirs("./tmp", exist_ok=True)
     server.model_file = download_file(TINYLLAMA_MODEL_URL)
     server.model_hf_repo = None
     server.model_hf_file = None
