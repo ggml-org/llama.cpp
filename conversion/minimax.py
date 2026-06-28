@@ -135,15 +135,6 @@ class MiniMaxM3Model(TextModel):
 
 @ModelBase.register("MiniMaxM3SparseForConditionalGeneration", "MiniMaxM3VLForConditionalGeneration")
 class MiniMaxM3VisionModel(MmprojModel):
-    # Vision tower for MiniMax-M3 (minimax_m3_vl). CLIP-style ViT (separate biased
-    # q/k/v/out, LayerNorm, gelu fc1/fc2, a pre_layrnorm and no post_layernorm / class
-    # token / abs-pos table) with a Conv3d patch embed and 3D (T/H/W) RoPE. The text
-    # tower is handled by MiniMaxM3Model; here we keep only the vision-side tensors.
-    #
-    # Projector is two modules:
-    #   multi_modal_projector.linear_{1,2}  -> per-patch MLP   (V_MMPROJ -> mm.1, mm.2)
-    #   patch_merge_mlp.linear_{1,2}        -> 2x2 merge MLP    (V_MM_MERGE_FC1/FC2)
-
     @classmethod
     def filter_tensors(cls, item):
         name, gen = item
