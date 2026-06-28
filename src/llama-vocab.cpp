@@ -77,6 +77,23 @@ struct llm_tokenizer {
     virtual ~llm_tokenizer() = default;
 };
 
+static void check_gguf_array_type(
+        const struct gguf_context * ctx,
+        const int                   key_idx,
+        const char *                key,
+        const enum gguf_type        type_expected) {
+    if (gguf_get_kv_type(ctx, key_idx) != GGUF_TYPE_ARRAY) {
+        throw std::runtime_error(format("%s is not an array", key));
+    }
+
+    const enum gguf_type type = gguf_get_arr_type(ctx, key_idx);
+    if (type != type_expected) {
+        throw std::runtime_error(format(
+            "%s has invalid array type: expected %s, got %s",
+            key, gguf_type_name(type_expected), gguf_type_name(type)));
+    }
+}
+
 struct llm_symbol {
     using index = int;
     index prev;
@@ -881,13 +898,18 @@ private:
 struct llm_tokenizer_ugm : llm_tokenizer {
     llm_tokenizer_ugm(const llama_vocab & vocab, const std::vector<char> & precompiled_charsmap) {
         if (precompiled_charsmap.size() > 0) {
+            if (precompiled_charsmap.size() < sizeof(uint32_t)) {
+                throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
+            }
+
             size_t charsmap_offset = 0;
 
             // First four bytes of precompiled_charsmap contains length of binary
             // blob containing XOR-compressed compact double array (XCDA) entries
-            uint32_t xcda_blob_size = *(const uint32_t *) &precompiled_charsmap[0];
+            uint32_t xcda_blob_size;
+            memcpy(&xcda_blob_size, precompiled_charsmap.data(), sizeof(xcda_blob_size));
             charsmap_offset += sizeof(xcda_blob_size);
-            if (xcda_blob_size + charsmap_offset >= precompiled_charsmap.size()) {
+            if (xcda_blob_size >= precompiled_charsmap.size() - charsmap_offset) {
                 throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
             }
 
@@ -2012,21 +2034,39 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
             const int precompiled_charsmap_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str());
             if (precompiled_charsmap_keyidx != -1) {
+                if (gguf_get_kv_type(ctx, precompiled_charsmap_keyidx) != GGUF_TYPE_ARRAY) {
+                    throw std::runtime_error(format(
+                        "%s is not an array",
+                        kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str()));
+                }
+
                 const gguf_type pc_type = gguf_get_arr_type(ctx, precompiled_charsmap_keyidx);
-                GGML_ASSERT(pc_type == GGUF_TYPE_INT8 || pc_type == GGUF_TYPE_UINT8);
+                if (pc_type != GGUF_TYPE_INT8 && pc_type != GGUF_TYPE_UINT8) {
+                    throw std::runtime_error(format(
+                        "%s has invalid array type: expected i8 or u8, got %s",
+                        kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str(), gguf_type_name(pc_type)));
+                }
 
                 const size_t n_precompiled_charsmap = gguf_get_arr_n(ctx, precompiled_charsmap_keyidx);
-                const char * pc = (const char *) gguf_get_arr_data(ctx, precompiled_charsmap_keyidx);
-                precompiled_charsmap.assign(pc, pc + n_precompiled_charsmap);
+                precompiled_charsmap.clear();
+                if (n_precompiled_charsmap > 0) {
+                    const char * pc = (const char *) gguf_get_arr_data(ctx, precompiled_charsmap_keyidx);
+                    precompiled_charsmap.assign(pc, pc + n_precompiled_charsmap);
+                    if (precompiled_charsmap.size() < sizeof(uint32_t)) {
+                        throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
+                    }
+                }
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
                 // correct endianness of data in precompiled_charsmap binary blob
-                uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
-                *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
-                assert(*xcda_blob_size + sizeof(uint32_t) < n_precompiled_charsmap);
-                size_t xcda_array_size = *xcda_blob_size / sizeof(uint32_t);
-                uint32_t * xcda_array = (uint32_t *) &precompiled_charsmap[sizeof(uint32_t)];
-                for (size_t i = 0; i < xcda_array_size; ++i) {
-                    xcda_array[i] = __builtin_bswap32(xcda_array[i]);
+                if (!precompiled_charsmap.empty()) {
+                    uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
+                    *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
+                    assert(*xcda_blob_size + sizeof(uint32_t) < n_precompiled_charsmap);
+                    size_t xcda_array_size = *xcda_blob_size / sizeof(uint32_t);
+                    uint32_t * xcda_array = (uint32_t *) &precompiled_charsmap[sizeof(uint32_t)];
+                    for (size_t i = 0; i < xcda_array_size; ++i) {
+                        xcda_array[i] = __builtin_bswap32(xcda_array[i]);
+                    }
                 }
 #endif
             }
@@ -2385,6 +2425,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     const float * scores = nullptr;
     const int score_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SCORES).c_str());
     if (score_idx != -1) {
+        check_gguf_array_type(
+                ctx, score_idx, kv(LLM_KV_TOKENIZER_SCORES).c_str(), GGUF_TYPE_FLOAT32);
         const uint32_t n_scores = gguf_get_arr_n(ctx, score_idx);
         if (n_scores < n_tokens) {
             throw std::runtime_error("Index out of array bounds for scores (" + std::to_string(n_scores) + " < " + std::to_string(n_tokens) + ")\n");
@@ -2392,14 +2434,16 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
     }
 
-    const int * toktypes = nullptr;
+    const int32_t * toktypes = nullptr;
     const int toktype_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_TOKEN_TYPE).c_str());
     if (toktype_idx != -1) {
+        check_gguf_array_type(
+                ctx, toktype_idx, kv(LLM_KV_TOKENIZER_TOKEN_TYPE).c_str(), GGUF_TYPE_INT32);
         const uint32_t n_toktypes = gguf_get_arr_n(ctx, toktype_idx);
         if (n_toktypes < n_tokens) {
             throw std::runtime_error("Index out of array bounds for toktypes (" + std::to_string(n_toktypes) + " < " + std::to_string(n_tokens) + ")\n");
         }
-        toktypes = (const int * ) gguf_get_arr_data(ctx, toktype_idx);
+        toktypes = (const int32_t * ) gguf_get_arr_data(ctx, toktype_idx);
     }
 
     id_to_token.resize(n_tokens);
@@ -2551,7 +2595,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         {
             const int suppress_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SUPPRESS_TOKENS).c_str());
             if (suppress_idx != -1) {
-                const int n = gguf_get_arr_n(ctx, suppress_idx);
+                check_gguf_array_type(
+                        ctx, suppress_idx, kv(LLM_KV_TOKENIZER_SUPPRESS_TOKENS).c_str(), GGUF_TYPE_INT32);
+                const size_t n = gguf_get_arr_n(ctx, suppress_idx);
                 const int32_t * data = (const int32_t *) gguf_get_arr_data(ctx, suppress_idx);
                 suppress_tokens.assign(data, data + n);
             }
