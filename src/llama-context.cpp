@@ -12,6 +12,10 @@
 #include "llama-ext.h"
 #include "llama.h"
 
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+#include "ggml-cuda.h"
+#endif
+
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -713,6 +717,25 @@ void llama_context::synchronize() {
 
     n_queued_tokens = 0;
     t_compute_start_us = 0;
+}
+
+void llama_context::trim_graph_caches() {
+    if (!sched) {
+        return;
+    }
+
+    synchronize();
+
+#if defined(GGML_USE_CUDA) || defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+    const int n_backends = ggml_backend_sched_get_n_backends(sched.get());
+
+    for (int i = 0; i < n_backends; ++i) {
+        ggml_backend_t backend = ggml_backend_sched_get_backend(sched.get(), i);
+        if (ggml_backend_is_cuda(backend)) {
+            ggml_backend_cuda_trim_graph_cache(backend);
+        }
+    }
+#endif
 }
 
 const llama_model & llama_context::get_model() const {

@@ -5,6 +5,7 @@
 
 import subprocess
 import os
+import socket
 
 TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
 import re
@@ -30,6 +31,11 @@ import wget
 
 
 DEFAULT_HTTP_TIMEOUT = 60
+
+def pick_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 class ServerResponse:
@@ -290,7 +296,11 @@ class ServerProcess:
                 response = self.make_request("GET", "/health", headers={
                     "Authorization": f"Bearer {self.api_key}" if self.api_key else None
                 })
-                if response.status_code == 200:
+                if (
+                    response.status_code == 200
+                    and isinstance(response.body, dict)
+                    and response.body.get("status") == "ok"
+                ):
                     self.ready = True
                     return  # server is ready
             except Exception as e:
@@ -489,6 +499,7 @@ class ServerPreset:
         ]
         for server in servers:
             server.offline = False
+            server.server_port = pick_free_port()
             server.start()
             server.stop()
 
@@ -496,8 +507,8 @@ class ServerPreset:
     def tinyllama2() -> ServerProcess:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()
-        server.model_hf_repo = "ggml-org/test-model-stories260K"
-        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org/models"
+        server.model_hf_file = "tinyllamas/stories260K.gguf"
         server.model_alias = "tinyllama-2"
         server.n_ctx = 512
         server.n_batch = 32
@@ -672,6 +683,7 @@ def download_file(url: str, output_file_path: str | None = None) -> str:
     """
     file_name = url.split('/').pop()
     output_file = f'./tmp/{file_name}' if output_file_path is None else output_file_path
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
     if not os.path.exists(output_file):
         print(f"Downloading {url} to {output_file}")
         wget.download(url, out=output_file)

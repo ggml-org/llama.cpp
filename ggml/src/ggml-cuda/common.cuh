@@ -1428,6 +1428,11 @@ struct ggml_backend_cuda_context {
         return it->second.get();
     }
 
+    void trim_cuda_graphs() {
+        cuda_graphs.clear();
+        last_graph_eviction_sweep = 0;
+    }
+
     // Check if any CUDA graph is enabled for this context (used by kernels that need to know
     // if graphs are in use without having access to the specific graph key)
     bool any_cuda_graph_enabled() const {

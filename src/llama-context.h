@@ -56,6 +56,7 @@ struct llama_context {
     void sched_reserve();
 
     void synchronize();
+    LLAMA_API void trim_graph_caches();
 
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;

@@ -4,6 +4,7 @@ import pytest
 from utils import *
 
 server = ServerPreset.tinyllama2()
+TINYLLAMA_MODEL_URL = "https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K.gguf"
 
 class LogReader:
     def __init__(self, path):
@@ -16,10 +17,20 @@ class LogReader:
             self.pos = f.tell()
         return content
 
+
+@pytest.fixture(scope="module", autouse=True)
+def do_something():
+    yield
+
 @pytest.fixture(autouse=True)
 def create_server():
     global server
     server = ServerPreset.tinyllama2()
+    server.model_file = download_file(TINYLLAMA_MODEL_URL)
+    server.model_hf_repo = None
+    server.model_hf_file = None
+    server.offline = False
+    server.server_port = pick_free_port()
     server.n_slots = 2
     server.n_predict = 4
     server.temperature = 0.0

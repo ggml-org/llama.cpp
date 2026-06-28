@@ -11,6 +11,7 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#include "src/llama-context.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -919,6 +920,7 @@ private:
     int trace = 0;
     int slots_debug = 0;
     int n_empty_consecutive = 0;
+    bool graph_caches_trimmed_for_current_idle = false;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
@@ -2765,8 +2767,10 @@ private:
         // check if all slots are idle
         {
             bool all_idle = true;
+            bool any_slot_activity = false;
 
             for (auto & slot : slots) {
+                any_slot_activity = any_slot_activity || slot.is_processing() || slot.t_last_used >= 0;
                 if (slot.is_processing()) {
                     all_idle = false;
                     break;
@@ -2774,10 +2778,22 @@ private:
             }
 
             if (all_idle) {
-                SRV_TRC("%s", "all slots are idle\n");
+                SRV_INF("%s", "all slots are idle\n");
+                if (any_slot_activity && !graph_caches_trimmed_for_current_idle) {
+                    if (ctx_tgt) {
+                        llama_trim_graph_caches(ctx_tgt);
+                    }
+                    if (ctx_dft) {
+                        llama_trim_graph_caches(ctx_dft.get());
+                        SRV_DBG("%s", "__TEST_TAG_CUDA_GRAPH_TRIM_DRAFT__\n");
+                    }
+                    graph_caches_trimmed_for_current_idle = true;
+                    SRV_DBG("%s", "__TEST_TAG_CUDA_GRAPH_TRIM__\n");
+                }
                 return; // skip further processing
 
             } else {
+                graph_caches_trimmed_for_current_idle = false;
                 SRV_DBG("%s", "posting NEXT_RESPONSE\n");
 
                 server_task task(SERVER_TASK_TYPE_NEXT_RESPONSE);
