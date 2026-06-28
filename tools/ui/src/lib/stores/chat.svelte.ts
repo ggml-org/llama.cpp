@@ -154,7 +154,13 @@ class ChatStore {
 		});
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = response;
 	}
-	private clearChatStreaming(convId: string): void {
+	private clearChatStreaming(convId: string, messageId?: string): void {
+		// session aware: a stale generation must not wipe a newer one's streaming state on the
+		// same conversation, that would drop the frozen stop identity and stop the wrong session
+		if (messageId !== undefined) {
+			const cur = this.chatStreamingStates.get(convId);
+			if (cur && cur.messageId !== messageId) return;
+		}
 		this.chatStreamingStates.delete(convId);
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = '';
 	}
@@ -1114,7 +1120,7 @@ class ChatStore {
 		const cleanupStreamingState = () => {
 			this.setStreamingActive(false);
 			this.setChatLoading(convId, false);
-			this.clearChatStreaming(convId);
+			this.clearChatStreaming(convId, currentMessageId);
 			this.setProcessingState(convId, null);
 		};
 
