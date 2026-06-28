@@ -467,7 +467,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         // the first part is what gets loaded, so point params.model.path at it
         if (!url_tasks.empty()) {
             std::string first_path = url_tasks.front().local_path;
-            url_tasks.front().on_done = [&]() { params.model.path = first_path; };
+            url_tasks.front().on_done = [&, first_path]() { params.model.path = first_path; };
         }
         for (auto & task : url_tasks) {
             tasks.push_back(std::move(task));
@@ -3471,7 +3471,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.offline = true;
         }
-    ).set_env("LLAMA_ARG_OFFLINE"));
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_OFFLINE"));
     add_opt(common_arg(
         {"-lv", "--verbosity", "--log-verbosity"}, "N",
         string_format("Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:\n"
