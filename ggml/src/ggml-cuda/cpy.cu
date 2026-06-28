@@ -386,6 +386,46 @@ static void ggml_cpy_f32_iq4_nl_cuda(
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
 }
 
+// check if a same-type copy reduces to a 2D strided copy (height rows of width
+// contiguous bytes), so it can use cudaMemcpy2DAsync instead of the scalar kernel
+static bool ggml_cuda_cpy_as_memcpy_2d(const ggml_tensor * src0, const ggml_tensor * src1,
+        size_t & width, size_t & height, size_t & spitch, size_t & dpitch) {
+    // require matching shape: a reshaped copy maps elements by flat order, which the
+    // prefix walk below does not handle
+    if (src0->type != src1->type || !ggml_are_same_shape(src0, src1)) {
+        return false;
+    }
+
+    // grow the contiguous prefix block shared by both tensors
+    size_t block_nb = ggml_element_size(src0);
+    int d = 0;
+    for (; d < GGML_MAX_DIMS; ++d) {
+        if (src0->nb[d] != block_nb || src1->nb[d] != block_nb) {
+            break;
+        }
+        block_nb *= src0->ne[d];
+    }
+
+    // d == 0: nothing contiguous; d == GGML_MAX_DIMS: fully contiguous (handled by memcpy)
+    if (d == 0 || d == GGML_MAX_DIMS) {
+        return false;
+    }
+
+    // dim d carries the rows; everything above it must be a single element
+    for (int i = d + 1; i < GGML_MAX_DIMS; ++i) {
+        if (src0->ne[i] != 1) {
+            return false;
+        }
+    }
+
+    width  = block_nb;
+    height = src0->ne[d];
+    spitch = src0->nb[d];
+    dpitch = src1->nb[d];
+
+    return spitch >= width && dpitch >= width;
+}
+
 void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * src1) {
     const int64_t ne = ggml_nelements(src0);
     GGML_ASSERT(ne == ggml_nelements(src1));
@@ -421,6 +461,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     const bool can_be_transposed = nb01 == (int64_t)ggml_element_size(src0) &&
         src0->ne[3] == 1 && nb02 == ne00 * ne01 * (int64_t)ggml_element_size(src0);
 
+    size_t mc_width = 0, mc_height = 0, mc_spitch = 0, mc_dpitch = 0;
+
     if (src0->type == src1->type && contiguous_srcs) {
         GGML_ASSERT(ggml_nbytes(src0) == ggml_nbytes(src1));
 #if defined(GGML_USE_MUSA) && defined(GGML_MUSA_MUDNN_COPY)
@@ -431,6 +473,9 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
         {
             CUDA_CHECK(cudaMemcpyAsync(src1_ddc, src0_ddc, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, main_stream));
         }
+    } else if (ggml_cuda_cpy_as_memcpy_2d(src0, src1, mc_width, mc_height, mc_spitch, mc_dpitch)) {
+        CUDA_CHECK(cudaMemcpy2DAsync(src1_ddc, mc_dpitch, src0_ddc, mc_spitch,
+                                     mc_width, mc_height, cudaMemcpyDeviceToDevice, main_stream));
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) {
         if (can_be_transposed) {
             ggml_cpy_scalar_cuda<float, float, true>
