@@ -679,6 +679,8 @@ struct vk_device_struct {
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
     bool external_semaphore {};
+    bool external_memory_fd {};      // VK_KHR_external_memory_fd: fd-based memory export/import
+    bool external_memory_dma_buf {}; // VK_EXT_external_memory_dma_buf: cross-device DMA_BUF handle for D2D peer P2P
     bool fp16;
     bool bf16;
     bool pipeline_robustness;
@@ -5743,6 +5745,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->external_memory_host = true;
             } else if (strcmp("VK_KHR_external_semaphore_fd", properties.extensionName) == 0) {
                 device->external_semaphore = true;
+            } else if (strcmp("VK_KHR_external_memory_fd", properties.extensionName) == 0) {
+                device->external_memory_fd = true;
+            } else if (strcmp("VK_EXT_external_memory_dma_buf", properties.extensionName) == 0) {
+                device->external_memory_dma_buf = true;
 #if defined(VK_EXT_shader_64bit_indexing)
             } else if (strcmp("VK_EXT_shader_64bit_indexing", properties.extensionName) == 0) {
                 device->shader_64b_indexing = true;
@@ -6073,6 +6079,13 @@ static vk_device ggml_vk_get_device(size_t idx) {
         if (device->external_semaphore) {
             device_extensions.push_back("VK_KHR_external_semaphore");
             device_extensions.push_back("VK_KHR_external_semaphore_fd");
+        }
+        if (device->external_memory_fd) {
+            device_extensions.push_back("VK_KHR_external_memory");
+            device_extensions.push_back("VK_KHR_external_memory_fd");
+        }
+        if (device->external_memory_dma_buf) {
+            device_extensions.push_back("VK_EXT_external_memory_dma_buf");
         }
 
 #if defined(VK_EXT_shader_64bit_indexing)
@@ -17853,6 +17866,10 @@ struct ggml_backend_vk_comm_context {
     std::vector<uint64_t>                   pool_max_val;
     PFN_vkGetSemaphoreFdKHR                 pGetSemFd  = nullptr;
     PFN_vkImportSemaphoreFdKHR              pImportSemFd = nullptr;
+    bool                                    d2d = false; // GGML_VK_COMM_D2D: peer device buffers over PCIe P2P, not host staging
+    PFN_vkGetMemoryFdKHR                    pGetMemFd      = nullptr;
+    PFN_vkGetMemoryFdPropertiesKHR         pGetMemFdProps = nullptr;
+    std::vector<vk_buffer>                  d2d_own; // d2d_own[k] = device k's exportable buffer (== host_buf[k][k])
     std::vector<void*>                      host_ptr;
     std::vector<std::vector<vk_buffer>>     host_buf;
     std::vector<ggml_backend_buffer_t>      tmp_buffer;
@@ -17939,6 +17956,100 @@ static vk::Semaphore ggml_vk_import_timeline(ggml_backend_vk_comm_context * comm
     return dst;
 }
 
+// D2D: a device-local buffer whose memory is exportable via OPAQUE_FD, so a peer GPU can import and read
+// it directly over PCIe P2P -- replacing the host-memory staging on P2P-capable topologies.
+static vk_buffer ggml_vk_comm_create_exportable(vk_device & device, size_t size) {
+    vk_buffer buf = std::make_shared<vk_buffer_struct>();
+    buf->size   = size;
+    buf->device = device;
+    buf->ptr    = nullptr;
+    vk::ExternalMemoryBufferCreateInfo ext_bci{ vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT };
+    vk::BufferCreateInfo bci{ {}, size,
+        vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst, vk::SharingMode::eExclusive };
+    bci.pNext = &ext_bci;
+    buf->buffer = device->device.createBuffer(bci);
+    vk::MemoryRequirements             mem_req   = device->device.getBufferMemoryRequirements(buf->buffer);
+    vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
+    uint32_t mtype = UINT32_MAX;
+    for (uint32_t t = 0; t < mem_props.memoryTypeCount; t++) {
+        if (!(mem_req.memoryTypeBits & (1u << t))) { continue; }
+        if (mem_props.memoryTypes[t].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal) { mtype = t; break; }
+    }
+    if (mtype == UINT32_MAX) { GGML_LOG_WARN("ggml_vulkan: D2D export: no device-local memory type\n"); return {}; }
+    vk::ExportMemoryAllocateInfo emai{ vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT };
+    vk::MemoryAllocateInfo       mai{ mem_req.size, mtype };
+    mai.pNext = &emai;
+    try {
+        buf->device_memory = device->device.allocateMemory(mai);
+    } catch (const vk::SystemError & e) {
+        GGML_LOG_WARN("ggml_vulkan: D2D export: allocateMemory(exportable) failed: %s\n", e.what());
+        return {};
+    }
+    buf->memory_property_flags = mem_props.memoryTypes[mtype].propertyFlags;
+    device->device.bindBufferMemory(buf->buffer, buf->device_memory, 0);
+    return buf;
+}
+
+// D2D: import a peer device's exported buffer memory (OPAQUE_FD) as a local buffer handle on dst_dev.
+// Copies recorded on dst_dev that read this buffer fetch from src_dev's VRAM over PCIe P2P.
+static vk_buffer ggml_vk_comm_import_buffer(ggml_backend_vk_comm_context * comm, vk_device & dst_dev,
+                                            vk_device & src_dev, vk_buffer & src_buf, size_t size) {
+    int fd = -1;
+    VkMemoryGetFdInfoKHR gfi{};
+    gfi.sType      = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
+    gfi.memory     = (VkDeviceMemory) src_buf->device_memory;
+    gfi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    if (comm->pGetMemFd((VkDevice) src_dev->device, &gfi, &fd) != VK_SUCCESS || fd < 0) {
+        GGML_LOG_WARN("ggml_vulkan: D2D import: vkGetMemoryFdKHR failed (fd=%d)\n", fd);
+        return {};
+    }
+
+    vk_buffer buf = std::make_shared<vk_buffer_struct>();
+    buf->size   = size;
+    buf->device = dst_dev;
+    buf->ptr    = nullptr;
+    vk::ExternalMemoryBufferCreateInfo ext_bci{ vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT };
+    vk::BufferCreateInfo bci{ {}, size,
+        vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst, vk::SharingMode::eExclusive };
+    bci.pNext = &ext_bci;
+    buf->buffer = dst_dev->device.createBuffer(bci);
+    vk::MemoryRequirements mem_req = dst_dev->device.getBufferMemoryRequirements(buf->buffer);
+
+    VkMemoryFdPropertiesKHR fdProps{};
+    fdProps.sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR;
+    comm->pGetMemFdProps((VkDevice) dst_dev->device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps);
+
+    vk::PhysicalDeviceMemoryProperties mem_props = dst_dev->physical_device.getMemoryProperties();
+    uint32_t mtype = UINT32_MAX;
+    for (uint32_t t = 0; t < mem_props.memoryTypeCount; t++) {
+        if (!(mem_req.memoryTypeBits  & (1u << t))) { continue; }
+        if (!(fdProps.memoryTypeBits  & (1u << t))) { continue; }
+        mtype = t;
+        if (mem_props.memoryTypes[t].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal) { break; }
+    }
+    if (mtype == UINT32_MAX) {
+        GGML_LOG_WARN("ggml_vulkan: D2D import: no compatible memory type (fdBits=0x%x reqBits=0x%x)\n",
+                      fdProps.memoryTypeBits, mem_req.memoryTypeBits);
+        return {};
+    }
+
+    VkImportMemoryFdInfoKHR imfi{};
+    imfi.sType      = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
+    imfi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    imfi.fd         = fd;
+    vk::MemoryAllocateInfo mai{ mem_req.size, mtype };
+    mai.pNext = &imfi;
+    try {
+        buf->device_memory = dst_dev->device.allocateMemory(mai);
+    } catch (const vk::SystemError & e) {
+        GGML_LOG_WARN("ggml_vulkan: D2D import: allocateMemory(import) failed: %s\n", e.what());
+        return {};
+    }
+    buf->memory_property_flags = mem_props.memoryTypes[mtype].propertyFlags;
+    dst_dev->device.bindBufferMemory(buf->buffer, buf->device_memory, 0);
+    return buf;
+}
+
 static bool ggml_vk_comm_opaque_fd_supported(ggml_backend_vk_comm_context * comm) {
     const size_t n = comm->device.size();
     uint8_t driver_uuid[VK_UUID_SIZE];
@@ -17988,6 +18099,8 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
     }
     comm->use_f16 = (getenv("GGML_VK_COMM_FP32") == nullptr);
     comm->ring    = (getenv("GGML_VK_COMM_RING") != nullptr);
+    comm->d2d     = (getenv("GGML_VK_COMM_D2D") != nullptr);
+    comm->d2d_own.resize(n_backends, nullptr);
     comm->up16_buffer.resize(n_backends, nullptr);
     comm->dn16_buffer.resize(n_backends, nullptr);
     comm->up16_tensor.resize(n_backends, nullptr);
@@ -18000,6 +18113,18 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
         comm->pGetSemFd    = (PFN_vkGetSemaphoreFdKHR)    comm->device[0]->device.getProcAddr("vkGetSemaphoreFdKHR");
         comm->pImportSemFd = (PFN_vkImportSemaphoreFdKHR) comm->device[0]->device.getProcAddr("vkImportSemaphoreFdKHR");
         comm->fast = comm->pGetSemFd && comm->pImportSemFd;
+    }
+    if (comm->fast && comm->d2d) {
+        bool dmabuf = true;
+        for (size_t i = 0; i < n_backends; i++) {
+            dmabuf = dmabuf && comm->device[i]->external_memory_fd && comm->device[i]->external_memory_dma_buf;
+        }
+        comm->pGetMemFd      = (PFN_vkGetMemoryFdKHR)           comm->device[0]->device.getProcAddr("vkGetMemoryFdKHR");
+        comm->pGetMemFdProps = (PFN_vkGetMemoryFdPropertiesKHR) comm->device[0]->device.getProcAddr("vkGetMemoryFdPropertiesKHR");
+        comm->d2d = dmabuf && comm->pGetMemFd && comm->pGetMemFdProps;
+        if (!comm->d2d) {
+            GGML_LOG_INFO("ggml_vulkan: comm D2D requested but VK_EXT_external_memory_dma_buf unavailable; using host staging\n");
+        }
     }
     if (comm->fast) {
         comm->prog.resize(n_backends);
@@ -18160,6 +18285,7 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
         for (size_t i = 0; i < n; i++) {
             comm->host_buf[k][i].reset();
         }
+        comm->d2d_own[k].reset();
         ggml_vk_comm_aligned_free(comm->host_ptr[k]);
         comm->host_ptr[k] = nullptr;
     }
@@ -18180,15 +18306,50 @@ static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, siz
 
     // ring mode needs 2*(n-1) per-step chunks per round (~2x the tensor), double-buffered by round -> 4x.
     const size_t slotcap = (comm->ring ? 4 : 2) * newcap;
-    for (size_t k = 0; k < n; k++) {
-        comm->host_ptr[k] = ggml_vk_comm_aligned_alloc(comm->align, slotcap);
-        if (!comm->host_ptr[k]) {
-            return false;
+    if (comm->d2d) {
+        // D2D: device k's partials live in an exportable device buffer; peers import it and read over PCIe P2P.
+        bool ok = true;
+        for (size_t k = 0; k < n && ok; k++) {
+            comm->d2d_own[k] = ggml_vk_comm_create_exportable(comm->device[k], slotcap);
+            if (!comm->d2d_own[k]) { ok = false; break; }
+            comm->host_buf[k][k] = comm->d2d_own[k];
+            for (size_t i = 0; i < n; i++) {
+                if (i == k) {
+                    continue;
+                }
+                comm->host_buf[k][i] = ggml_vk_comm_import_buffer(comm, comm->device[i], comm->device[k],
+                                                                  comm->d2d_own[k], slotcap);
+                if (!comm->host_buf[k][i]) { ok = false; break; }
+            }
         }
-        for (size_t i = 0; i < n; i++) {
-            comm->host_buf[k][i] = ggml_vk_buffer_from_host_ptr(comm->device[i], comm->host_ptr[k], slotcap);
-            if (!comm->host_buf[k][i]) {
+        if (ok) {
+            GGML_LOG_INFO("ggml_vulkan: comm D2D peer buffers active (%zu devices, %zu KiB/slot over PCIe P2P)\n",
+                          n, slotcap / 1024);
+        } else {
+            // Peer import unsupported on this driver/topology (e.g. NVIDIA rejects cross-device fd import):
+            // drop the partial D2D buffers, disable D2D, and fall through to host staging -- NOT the slow
+            // meta-backend butterfly. One-time: comm->d2d stays false so later ensure() growths skip D2D.
+            for (size_t k = 0; k < n; k++) {
+                for (size_t i = 0; i < n; i++) {
+                    comm->host_buf[k][i].reset();
+                }
+                comm->d2d_own[k].reset();
+            }
+            comm->d2d = false;
+            GGML_LOG_WARN("ggml_vulkan: comm D2D peer import unsupported here; falling back to host staging\n");
+        }
+    }
+    if (!comm->d2d) {
+        for (size_t k = 0; k < n; k++) {
+            comm->host_ptr[k] = ggml_vk_comm_aligned_alloc(comm->align, slotcap);
+            if (!comm->host_ptr[k]) {
                 return false;
+            }
+            for (size_t i = 0; i < n; i++) {
+                comm->host_buf[k][i] = ggml_vk_buffer_from_host_ptr(comm->device[i], comm->host_ptr[k], slotcap);
+                if (!comm->host_buf[k][i]) {
+                    return false;
+                }
             }
         }
     }
