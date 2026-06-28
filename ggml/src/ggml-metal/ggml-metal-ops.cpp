@@ -3796,29 +3796,58 @@ int ggml_metal_op_conv_2d_dw(ggml_metal_op_t ctx, int idx) {
         /*.d1   =*/ d1,
     };
 
-    auto pipeline = ggml_metal_library_get_pipeline_conv_2d_dw(lib, op);
+    // Use channel-tiled kernel when input has non-contiguous spatial layout (e.g. CWHN)
+    const bool use_tiled = (nb12 < nb10);
 
-    int nth = ggml_metal_pipeline_max_theads_per_threadgroup(pipeline);
-    nth = std::min(nth, 256);
-    nth = std::max(nth, 1);
+    if (use_tiled) {
+        auto pipeline = ggml_metal_library_get_pipeline_conv_2d_dw_tiled(lib, op);
 
-    // 3D grid: x = OW (tiled by nth), y = OH, z = C * N
-    const int32_t OW = ne0;
-    const int32_t OH = ne1;
-    const int32_t C  = ne12;
-    const int32_t N  = ne13;
+        int nth = ggml_metal_pipeline_max_theads_per_threadgroup(pipeline);
+        nth = std::min(nth, 256);
+        nth = std::max(nth, 1);
 
-    const int tg_x = (OW + nth - 1) / nth;
-    const int tg_y = OH;
-    const int tg_z = C * N;
+        const int32_t OW = ne0;
+        const int32_t OH = ne1;
+        const int32_t C  = ne12;
+        const int32_t N  = ne13;
 
-    ggml_metal_encoder_set_pipeline(enc, pipeline);
-    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+        // Grid: x = C (tiled by nth), y = OH, z = OW * N
+        const int tg_x = (C + nth - 1) / nth;
+        const int tg_y = OH;
+        const int tg_z = OW * N;
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, tg_x, tg_y, tg_z, nth, 1, 1);
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, tg_x, tg_y, tg_z, nth, 1, 1);
+    } else {
+        auto pipeline = ggml_metal_library_get_pipeline_conv_2d_dw(lib, op);
+
+        int nth = ggml_metal_pipeline_max_theads_per_threadgroup(pipeline);
+        nth = std::min(nth, 256);
+        nth = std::max(nth, 1);
+
+        const int32_t OW = ne0;
+        const int32_t OH = ne1;
+        const int32_t C  = ne12;
+        const int32_t N  = ne13;
+
+        // Grid: x = OW (tiled by nth), y = OH, z = C * N
+        const int tg_x = (OW + nth - 1) / nth;
+        const int tg_y = OH;
+        const int tg_z = C * N;
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, tg_x, tg_y, tg_z, nth, 1, 1);
+    }
 
     return 1;
 }
