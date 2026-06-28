@@ -3770,12 +3770,10 @@ int ggml_metal_op_conv_2d_dw(ggml_metal_op_t ctx, int idx) {
     const int32_t d0 = ((const int32_t *) op->op_params)[4];
     const int32_t d1 = ((const int32_t *) op->op_params)[5];
 
-    // Kernel shape: [KW, KH, 1, C] — nb03 is the per-channel stride
-    // Since ne02 == 1, nb03 == nb02, but we use nb03 explicitly for clarity
     ggml_metal_kargs_conv_2d_dw args = {
         /*.nb00 =*/ nb00,
         /*.nb01 =*/ nb01,
-        /*.nb02 =*/ nb03,  // per-channel kernel stride (dim 3, since dim 2 == 1)
+        /*.nb02 =*/ nb03,
         /*.nb10 =*/ nb10,
         /*.nb11 =*/ nb11,
         /*.nb12 =*/ nb12,
@@ -3788,7 +3786,7 @@ int ggml_metal_op_conv_2d_dw(ggml_metal_op_t ctx, int idx) {
         /*.IH   =*/ ne11,
         /*.KW   =*/ ne00,
         /*.KH   =*/ ne01,
-        /*.C    =*/ ne12,  // input channels == output channels for depthwise
+        /*.C    =*/ ne12,
         /*.OW   =*/ ne0,
         /*.OH   =*/ ne1,
         /*.N    =*/ ne13,
@@ -3800,58 +3798,32 @@ int ggml_metal_op_conv_2d_dw(ggml_metal_op_t ctx, int idx) {
         /*.d1   =*/ d1,
     };
 
-    // Use channel-tiled kernel when input has non-contiguous spatial layout (e.g. CWHN)
     const bool use_tiled = (nb12 < nb10);
 
-    if (use_tiled) {
-        auto pipeline = ggml_metal_library_get_pipeline_conv_2d_dw_tiled(lib, op);
+    auto pipeline = use_tiled
+        ? ggml_metal_library_get_pipeline_conv_2d_dw_tiled(lib, op)
+        : ggml_metal_library_get_pipeline_conv_2d_dw(lib, op);
 
-        int nth = ggml_metal_pipeline_max_theads_per_threadgroup(pipeline);
-        nth = std::min(nth, 256);
-        nth = std::max(nth, 1);
+    int nth = ggml_metal_pipeline_max_theads_per_threadgroup(pipeline);
+    nth = std::min(nth, 256);
+    nth = std::max(nth, 1);
 
-        const int32_t OW = ne0;
-        const int32_t OH = ne1;
-        const int32_t C  = ne12;
-        const int32_t N  = ne13;
+    const int32_t OW = ne0;
+    const int32_t OH = ne1;
+    const int32_t C  = ne12;
+    const int32_t N  = ne13;
 
-        // Grid: x = C (tiled by nth), y = OH, z = OW * N
-        const int tg_x = (C + nth - 1) / nth;
-        const int tg_y = OH;
-        const int tg_z = OW * N;
+    const int tg_x = use_tiled ? (C + nth - 1) / nth : (OW + nth - 1) / nth;
+    const int tg_y = OH;
+    const int tg_z = use_tiled ? OW * N : C * N;
 
-        ggml_metal_encoder_set_pipeline(enc, pipeline);
-        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, tg_x, tg_y, tg_z, nth, 1, 1);
-    } else {
-        auto pipeline = ggml_metal_library_get_pipeline_conv_2d_dw(lib, op);
-
-        int nth = ggml_metal_pipeline_max_theads_per_threadgroup(pipeline);
-        nth = std::min(nth, 256);
-        nth = std::max(nth, 1);
-
-        const int32_t OW = ne0;
-        const int32_t OH = ne1;
-        const int32_t C  = ne12;
-        const int32_t N  = ne13;
-
-        // Grid: x = OW (tiled by nth), y = OH, z = C * N
-        const int tg_x = (OW + nth - 1) / nth;
-        const int tg_y = OH;
-        const int tg_z = C * N;
-
-        ggml_metal_encoder_set_pipeline(enc, pipeline);
-        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
-
-        ggml_metal_encoder_dispatch_threadgroups(enc, tg_x, tg_y, tg_z, nth, 1, 1);
-    }
+    ggml_metal_encoder_dispatch_threadgroups(enc, tg_x, tg_y, tg_z, nth, 1, 1);
 
     return 1;
 }
