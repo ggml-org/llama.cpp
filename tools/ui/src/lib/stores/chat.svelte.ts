@@ -154,7 +154,13 @@ class ChatStore {
 		});
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = response;
 	}
-	private clearChatStreaming(convId: string): void {
+	private clearChatStreaming(convId: string, messageId?: string): void {
+		// session aware: a stale generation must not wipe a newer one's streaming state on the
+		// same conversation, that would drop the frozen stop identity and stop the wrong session
+		if (messageId !== undefined) {
+			const cur = this.chatStreamingStates.get(convId);
+			if (cur && cur.messageId !== messageId) return;
+		}
 		this.chatStreamingStates.delete(convId);
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = '';
 	}
@@ -1055,11 +1061,14 @@ class ChatStore {
 		modelOverride?: string | null,
 		firstUserMessageContent?: string
 	): Promise<void> {
-		let effectiveModel = modelOverride;
+		// the ::model suffix in the stream identity is only for router mode, where it routes to the
+		// owning child. in single-model mode the identity stays the bare conv id so that attach, stop
+		// and reattach all agree, regardless of fresh send vs regenerate passing a resolved model
+		let effectiveModel: string | null | undefined = undefined;
 
-		if (isRouterMode() && !effectiveModel) {
+		if (isRouterMode()) {
 			const conversationModel = this.getConversationModel(allMessages);
-			effectiveModel = selectedModelName() || conversationModel;
+			effectiveModel = modelOverride || selectedModelName() || conversationModel;
 		}
 
 		if (isRouterMode() && effectiveModel) {
@@ -1074,6 +1083,9 @@ class ChatStore {
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
 		const convId = assistantMessage.convId;
+		// freeze the POST identity from t0 so a stop cancels with the exact session key,
+		// never a stale or empty model resolved later
+		this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
 
 		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
 			if (!modelName) return;
@@ -1103,7 +1115,7 @@ class ChatStore {
 		};
 
 		const updateStreamingUI = () => {
-			this.setChatStreaming(convId, streamedContent, currentMessageId);
+			this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
 			const idx = conversationsStore.findMessageIndex(currentMessageId);
 			conversationsStore.updateMessageAtIndex(idx, { content: streamedContent });
 		};
@@ -1111,7 +1123,7 @@ class ChatStore {
 		const cleanupStreamingState = () => {
 			this.setStreamingActive(false);
 			this.setChatLoading(convId, false);
-			this.clearChatStreaming(convId);
+			this.clearChatStreaming(convId, currentMessageId);
 			this.setProcessingState(convId, null);
 		};
 
@@ -1128,7 +1140,7 @@ class ChatStore {
 			onReasoningChunk: (chunk: string) => {
 				streamedReasoningContent += chunk;
 				// mark streaming state so a stop mid-thinking can persist the partial reasoning
-				this.setChatStreaming(convId, streamedContent, currentMessageId);
+				this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
 				const idx = conversationsStore.findMessageIndex(currentMessageId);
 				conversationsStore.updateMessageAtIndex(idx, {
 					reasoningContent: streamedReasoningContent
@@ -1405,7 +1417,7 @@ class ChatStore {
 		// detached drain keeps producing tokens until eos or max_tokens. use the frozen identity
 		// captured when the session started, not the live dropdown
 		const streamStateForStop = this.chatStreamingStates.get(convId);
-		const modelForStop = streamStateForStop?.model ?? selectedModelName();
+		const modelForStop = streamStateForStop?.model;
 		void ChatService.cancelServerStream(convId, modelForStop);
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
@@ -1845,6 +1857,14 @@ class ChatStore {
 						hasReceivedContent = true;
 						updateStreamingContent(originalContent + appendedContent);
 						this.setChatReasoning(msg.convId, false);
+					},
+					onCompletionId: (id: string) => {
+						if (!id) return;
+						// refresh the message id so a later skip targets the live slot after a continue
+						conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(msg.id), {
+							completionId: id
+						});
+						DatabaseService.updateMessage(msg.id, { completionId: id }).catch(() => {});
 					},
 					onReasoningChunk: (chunk: string) => {
 						appendedReasoning += chunk;

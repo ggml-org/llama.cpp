@@ -218,6 +218,13 @@ void stream_session_manager::evict_and_cancel(const std::string & conversation_i
         std::unique_lock<std::shared_mutex> lock(map_mu);
         auto it = sessions.find(conversation_id);
         if (it == sessions.end()) {
+            std::string live;
+            for (const auto & kv : sessions) {
+                if (!live.empty()) live += ", ";
+                live += kv.first;
+            }
+            SRV_WRN("stop on unknown stream session, conv_id=%s matched nothing, %zu live: [%s]\n",
+                    conversation_id.c_str(), sessions.size(), live.c_str());
             return;
         }
         s = it->second;

@@ -2450,6 +2450,8 @@ private:
 
                     server_slot * slot = get_slot_by_cmpl_id(task.params.control_cmpl_id);
                     if (slot == nullptr) {
+                        SRV_WRN("control %s on unknown completion id=%s, no live slot\n",
+                                task.params.control_action.c_str(), task.params.control_cmpl_id.c_str());
                         res->success = false;
                         res->message = "no active completion for this id";
                         queue_results.send(std::move(res));
