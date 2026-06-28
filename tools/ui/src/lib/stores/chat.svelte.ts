@@ -1074,6 +1074,9 @@ class ChatStore {
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
 		const convId = assistantMessage.convId;
+		// freeze the POST identity from t0 so a stop cancels with the exact session key,
+		// never a stale or empty model resolved later
+		this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
 
 		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
 			if (!modelName) return;
@@ -1405,8 +1408,7 @@ class ChatStore {
 		// detached drain keeps producing tokens until eos or max_tokens. use the frozen identity
 		// captured when the session started, not the live dropdown
 		const streamStateForStop = this.chatStreamingStates.get(convId);
-		const modelForStop =
-			streamStateForStop?.model ?? (isRouterMode() ? selectedModelName() : undefined);
+		const modelForStop = streamStateForStop?.model;
 		void ChatService.cancelServerStream(convId, modelForStop);
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
