@@ -940,6 +940,18 @@ class GGUFWriter:
     def add_sliding_window(self, value: int) -> None:
         self.add_uint32(Keys.Attention.SLIDING_WINDOW.format(arch=self.arch), value)
 
+    def add_block_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.BLOCK_SIZE.format(arch=self.arch), value)
+
+    def add_target_layers(self, value: Sequence[int]) -> None:
+        self.add_array(Keys.LLM.TARGET_LAYERS.format(arch=self.arch), value)
+
+    def add_target_hidden_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.TARGET_HIDDEN_SIZE.format(arch=self.arch), value)
+
+    def add_norm_before_residual(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.NORM_BEFORE_RESIDUAL.format(arch=self.arch), value)
+
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)
 
