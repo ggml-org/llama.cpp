@@ -198,19 +198,9 @@ struct quantize_state_impl {
 
 // extract the block index from a tensor name like "blk.N.foo.weight", or -1 if not a block tensor
 static int tensor_block_index(const std::string & name) {
-    const size_t pos = name.find("blk.");
-    if (pos == std::string::npos) {
-        return -1;
-    }
-    size_t i = pos + 4;
-    if (i >= name.size() || !std::isdigit((unsigned char) name[i])) {
-        return -1;
-    }
-    int idx = 0;
-    for (; i < name.size() && std::isdigit((unsigned char) name[i]); ++i) {
-        idx = idx * 10 + (name[i] - '0');
-    }
-    return idx;
+    int i_layer = -1;
+    sscanf(name.data(), "blk.%d.", &i_layer);
+    return i_layer;
 }
 
 // check whether a manual --tensor-type override applies to this tensor.
@@ -457,9 +447,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             // sprinkled in the model. Hence, simply dividing i_ffn_down by n_expert does not work
             // for getting the current layer as I initially thought, and we need to resort to parsing the
             // tensor name.
-            if (sscanf(name, "blk.%d.", &i_layer) != 1) {
-                throw std::runtime_error(format("Failed to determine layer for tensor %s", name));
-            }
+            i_layer = tensor_block_index(name);
             if (i_layer < 0 || i_layer >= n_layer) {
                 throw std::runtime_error(format("Bad layer %d for tensor %s. Must be in [0, %d)", i_layer, name, n_layer));
             }
