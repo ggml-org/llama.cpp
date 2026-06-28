@@ -353,7 +353,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 HVX_Vector v_s_minus_m = Q6_Vqf16_vsub_VhfVhf(scores_f16, v_m_vec_f16);
 
                 HVX_Vector v_s_minus_m_base2 = hvx_vec_mul_f16_f16(Q6_Vhf_equals_Vqf16(v_s_minus_m), v_log2e);
-                
+
                 HVX_Vector P = hvx_vec_exp2_f16(v_s_minus_m_base2);
                 P = Q6_V_vmux_QVV(q_tail_keep, P, Q6_V_vzero());
 

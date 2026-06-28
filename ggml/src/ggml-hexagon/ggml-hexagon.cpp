@@ -1987,7 +1987,7 @@ static bool ggml_hexagon_precompute_flash_attn_params(
             kparams->Bc = Bc;
             kparams->n_kv_blocks = (nek1 + Bc - 1) / Bc;
             kparams->n_threads = (kparams->n_kv_blocks >= 3 && sess->n_threads >= 2) ? sess->n_threads : 1;
-            
+
             kparams->u.hmx.g_br = hex_align_up(G * Br, 32);
             kparams->u.hmx.pipeline = (kparams->n_kv_blocks >= 3 && sess->n_threads >= 2) ? 1 : 0;
             kparams->vtcm_size = hmx_fa_compute_vtcm_usage(G, DK, DV, Br, Bc, kparams->n_threads, kparams->u.hmx.pipeline != 0);

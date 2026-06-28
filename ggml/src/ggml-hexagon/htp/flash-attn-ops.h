@@ -31,18 +31,18 @@ struct htp_fa_kernel_params {
     uint8_t  is_q_fp32;          // 1 = Q type is F32, 0 = F16
     uint8_t  is_dst_fp32;        // 1 = dst type is F32, 0 = F16
     uint8_t  n_threads;          // Number of threads to run
-    
+
     // Common parameters
     uint16_t Br;
     uint16_t Bc;
     uint16_t n_kv_blocks;        // also HVX's n_blocks
     uint16_t G;                  // GQA factor (n_heads / n_kv_heads)
-    
+
     float    scale;
     float    max_bias;
     float    logit_softcap;
     uint32_t vtcm_size;
-    
+
     uint32_t qrows;
     uint32_t qrows_per_thread;
     float    m0;
