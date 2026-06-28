@@ -1180,8 +1180,6 @@ bool llama_kv_cache_dsv4::get_can_shift() const {
 }
 
 void llama_kv_cache_dsv4::clear(bool data) {
-    restored_trim_pos.clear();
-
     kv_raw->clear(data);
     clear_compressed(true); // DSV4 compressed buffers must never expose stale/uninit rows
 }
@@ -1192,20 +1190,6 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
     }
 
     if (p0 > 0) {
-        if (seq_id >= 0) {
-            auto it = restored_trim_pos.find(seq_id);
-            if (it != restored_trim_pos.end()) {
-                const llama_pos pos_max = it->second;
-                restored_trim_pos.erase(it);
-
-                if (p0 >= pos_max) {
-                    return kv_raw->seq_rm(seq_id, p0, p1);
-                }
-
-                return false;
-            }
-        }
-
         // DSV4 compressed cache rows are derived from running compressor state,
         // so arbitrary rollback is not reconstructible from the raw cache alone.
         // Allow the common prompt-cache cleanup no-op: remove [end, infinity).
@@ -1219,12 +1203,6 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
     const bool res = kv_raw->seq_rm(seq_id, p0, p1);
 
     if (res) {
-        if (seq_id >= 0) {
-            restored_trim_pos.erase(seq_id);
-        } else {
-            restored_trim_pos.clear();
-        }
-
         clear_compressed(true);
     }
 
@@ -1232,29 +1210,21 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
 }
 
 void llama_kv_cache_dsv4::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
-    restored_trim_pos.clear();
-
     kv_raw->seq_cp(seq_id_src, seq_id_dst, p0, p1);
     clear_compressed(true);
 }
 
 void llama_kv_cache_dsv4::seq_keep(llama_seq_id seq_id) {
-    restored_trim_pos.clear();
-
     kv_raw->seq_keep(seq_id);
     clear_compressed(true);
 }
 
 void llama_kv_cache_dsv4::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
-    restored_trim_pos.clear();
-
     kv_raw->seq_add(seq_id, p0, p1, shift);
     clear_compressed(true);
 }
 
 void llama_kv_cache_dsv4::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
-    restored_trim_pos.clear();
-
     kv_raw->seq_div(seq_id, p0, p1, d);
     clear_compressed(true);
 }
@@ -1265,8 +1235,8 @@ llama_pos llama_kv_cache_dsv4::seq_pos_min(llama_seq_id seq_id) const {
     }
 
     // The raw SWA cache may contain a wider window, but the compressed DSV4
-    // state cannot be rolled back to the beginning of that window. Report the
-    // exact restored boundary so server-context prefers checkpoints.
+    // state cannot be rolled back within that window. Report only the current
+    // boundary so server-context uses checkpoints for rollback.
     return kv_raw->seq_pos_max(seq_id);
 }
 
@@ -1350,8 +1320,6 @@ void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
         throw std::runtime_error("DSV4 state flags mismatch");
     }
 
-    restored_trim_pos.clear();
-
     kv_raw->state_read(io, seq_id, flags);
 
     if (!partial_only) {
@@ -1364,12 +1332,6 @@ void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
     hca_state->state_read(io, seq_id, flags);
     lid_state->state_read(io, seq_id, flags);
 
-    if (seq_id >= 0) {
-        const llama_pos pos_max = kv_raw->seq_pos_max(seq_id);
-        if (pos_max >= 0) {
-            restored_trim_pos[seq_id] = pos_max;
-        }
-    }
 }
 
 llama_kv_cache_iswa * llama_kv_cache_dsv4::get_raw() const {

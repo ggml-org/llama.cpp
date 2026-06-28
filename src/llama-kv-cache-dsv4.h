@@ -146,8 +146,6 @@ private:
     std::unique_ptr<llama_dsv4_comp_state> hca_state;
     std::unique_ptr<llama_dsv4_comp_state> lid_state;
 
-    std::unordered_map<llama_seq_id, llama_pos> restored_trim_pos;
-
     void clear_compressed(bool data);
 };
 
