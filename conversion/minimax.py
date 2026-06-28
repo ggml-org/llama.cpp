@@ -63,14 +63,14 @@ class MiniMaxM3Model(MiniMaxM2Model):
         self.gguf_writer.add_expert_shared_count(self.find_hparam(["n_shared_experts"]))
         self.gguf_writer.add_expert_weights_scale(self.find_hparam(["routed_scaling_factor"]))
         self.gguf_writer.add_expert_weights_norm(True)
-        
+
         sac = self.find_hparam(["sparse_attention_config"])
         self.gguf_writer.add_indexer_head_count(sac["sparse_num_index_heads"])
         self.gguf_writer.add_indexer_key_length(sac["sparse_index_dim"])
         self.gguf_writer.add_indexer_top_k(sac["sparse_topk_blocks"])
         self.gguf_writer.add_indexer_block_size(sac["sparse_block_size"])
         self.gguf_writer.add_indexer_local_blocks(sac["sparse_local_block"])
-        
+
         moe_layer_freq = self.find_hparam(["moe_layer_freq"])
         n_dense = 0
         for v in moe_layer_freq:
