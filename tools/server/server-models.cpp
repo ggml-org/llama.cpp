@@ -1983,7 +1983,13 @@ void server_models_routes::init_routes() {
             cli.set_read_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
             cli.set_write_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
             auto resp = cli.Delete(child_path.c_str());
-            (void) resp; // best effort, 404 and network errors are equivalent to no op
+            if (!resp || resp->status != 204) {
+                SRV_WRN("router stop forwarded for conv_id=%s but child reported no live session (status=%d)\n",
+                        conv_id.c_str(), resp ? resp->status : -1);
+            }
+        } else {
+            SRV_WRN("router stop for unknown conv_id=%s, no owning child in the conv map\n",
+                    conv_id.c_str());
         }
         // drop the tracking entry, the session is being torn down
         models.conv_models.forget(conv_id);
