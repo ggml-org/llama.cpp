@@ -570,7 +570,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                     model.layers[il].ffn_gate, NULL, NULL,
                     model.layers[il].ffn_down, NULL, NULL,
                     NULL,
-                    LLM_FFN_SWIGLU_OAI, LLM_FFN_PAR, il);
+                    LLM_FFN_SWIGLU_OAI_MOE, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         } else {
             // routed experts (swigluoai MoE)
@@ -593,7 +593,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                     model.layers[il].ffn_gate_shexp, NULL, NULL,
                     model.layers[il].ffn_down_shexp, NULL, NULL,
                     NULL,
-                    LLM_FFN_SWIGLU_OAI, LLM_FFN_PAR, il);
+                    LLM_FFN_SWIGLU_OAI_MOE, LLM_FFN_PAR, il);
             cb(ffn_shexp, "ffn_shexp", il);
 
             cur = ggml_add(ctx0, moe_out, ffn_shexp);
