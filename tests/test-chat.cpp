@@ -3070,6 +3070,14 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_with_tool_calls("amount", R"({"orig": 1.5e10})"))
             .run();
 
+        // Tool call with trailing <|channel> fragment (#25072)
+        tst.test(
+                "<|tool_call>call:get_time{city:<|\"|>London<|\"|>}<tool_call|><|channel> ")
+            .tools({ get_time_tool })
+            .is_partial(true)
+            .expect(message_with_tool_calls("get_time", R"({"city": "London"})"))
+            .run();
+
         // Edge cases
         tst.test(
                 "<|channel>thought\n<channel|>Hello, world!\nWhat's up?<channel|>")
