@@ -3680,6 +3680,10 @@ void llama_synchronize(llama_context * ctx) {
     ctx->synchronize();
 }
 
+void llama_trim_graph_caches(llama_context * ctx) {
+    ctx->trim_graph_caches();
+}
+
 float * llama_get_logits(llama_context * ctx) {
     ctx->synchronize();
 

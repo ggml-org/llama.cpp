@@ -56,7 +56,7 @@ struct llama_context {
     void sched_reserve();
 
     void synchronize();
-    LLAMA_API void trim_graph_caches();
+    void trim_graph_caches();
 
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
@@ -389,3 +389,5 @@ private:
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
 };
+
+LLAMA_API void llama_trim_graph_caches(struct llama_context * ctx);
