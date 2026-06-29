@@ -125,13 +125,15 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     bool gqa_opt_applies = gqa_ratio >= 2 && mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
     // MKL path: XMX-accelerated GEMM for prompt processing with quantized KV cache.
-    // Activates at n_kv >= 1024 (matching the --batch-size) to cover the full prompt.
-    // FIXME: MKL GEMM calls are incompatible with SYCL graph capture replay.
-    // Set MKL_FA_DISABLE=1 to force TILE/VEC path for A/B testing.
+    // Activates automatically when flash-attn is enabled (--flash-attn on or -fa),
+    // KV cache is quantized (--cache-type-k/q *_0/*_1), batch size >= 1024, and
+    // n_kv >= 1024. Set GGML_SYCL_ENABLE_MKL_FA=0 to force TILE/VEC path for A/B
+    // testing. Example: GGML_SYCL_ENABLE_MKL_FA=0 llama-cli -m model.gguf -fa -ngl 99 ...
+    // Note: MKL GEMM calls are incompatible with SYCL graph capture replay.
     static int mkl_disable = -1;
     if (mkl_disable < 0) {
-        const char * e = getenv("MKL_FA_DISABLE");
-        mkl_disable = (e && e[0] == '1') ? 1 : 0;
+        const char * e = getenv("GGML_SYCL_ENABLE_MKL_FA");
+        mkl_disable = (e && e[0] == '0') ? 1 : 0;
     }
     if (mkl_disable == 0 && Q->ne[1] >= 128 && K->ne[1] >= 1024
         && (ggml_is_quantized(K->type) || ggml_is_quantized(V->type))) {
@@ -232,7 +234,7 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     // the same D — helps detect cache-truncation issues.
     static int nkv_debug = -1;
     if (nkv_debug < 0) {
-        const char * e = getenv("MKL_FA_DEBUG");
+        const char * e = getenv("GGML_SYCL_MKL_FA_DEBUG");
         nkv_debug = (e && e[0] == '1') ? 1 : 0;
     }
     if (nkv_debug == 1) {
@@ -255,12 +257,11 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             delta = cur_nkv - last_nkv_d512;
             last_nkv_d512 = cur_nkv;
         }
-        fprintf(stderr, "[FA-DISP] #%d %s D=%d n_kv=%lld delta=%lld "
+        GGML_LOG_INFO("[FA-DISP] #%d %s D=%d n_kv=%lld delta=%lld "
                 "V_ne1=%lld\n",
                 fa_call_seq, kname, Dk,
                 (long long)cur_nkv, (long long)delta,
                 (long long)V_dbg->ne[1]);
-        fflush(stderr);
     }
 
     switch (ggml_sycl_get_best_fattn_kernel(ggml_sycl_get_device(), dst)) {
@@ -277,14 +278,14 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             break;
     }
 
-    // --- Output fingerprint (MKL_FA_DIAG=1) ---
+    // --- Output fingerprint (GGML_SYCL_MKL_FA_DIAG=1) ---
     // Copy first 64 float output values to host for fingerprinting.
-    // Compare MKL vs TILE (MKL_FA_DISABLE=1) to detect divergence.
-    // Only fingerprints the first 3 FA calls with n_kv >= 1024.
+    // Compare MKL vs TILE (GGML_SYCL_ENABLE_MKL_FA=0) to detect divergence.
+    // Only fingerprints the first 6 FA calls with n_kv >= 1024.
     static int fa_diag = -1;
     static int fa_diag_count = 0;
     if (fa_diag < 0) {
-        const char * e = getenv("MKL_FA_DIAG");
+        const char * e = getenv("GGML_SYCL_MKL_FA_DIAG");
         fa_diag = (e && e[0] == '1') ? 1 : 0;
     }
     if (fa_diag == 1 && fa_diag_count < 6) {
@@ -302,7 +303,7 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             if (kb == BEST_FATTN_KERNEL_MKL) kname = "MKL";
             if (kb == BEST_FATTN_KERNEL_TILE) kname = "TILE";
             if (kb == BEST_FATTN_KERNEL_VEC) kname = "VEC";
-            fprintf(stderr, "[FA-DIAG] #%d %s D=%d n_kv=%lld n_q=%lld "
+            GGML_LOG_INFO("[FA-DIAG] #%d %s D=%d n_kv=%lld n_q=%lld "
                     "n_qh=%lld n_kvh=%lld K=%s V=%s "
                     "nb1=%zu nb2=%zu first 64 floats:\n",
                     fa_diag_count, kname,
@@ -313,14 +314,13 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
                     ggml_type_name(V_diag->type),
                     K_diag->nb[1], K_diag->nb[2]);
             for (int i = 0; i < 64; i += 8) {
-                fprintf(stderr, "  [%2d] %08x %08x %08x %08x %08x %08x %08x %08x\n",
+                GGML_LOG_INFO("  [%2d] %08x %08x %08x %08x %08x %08x %08x %08x\n",
                         i,
                         *(unsigned *)&diag_buf[i+0], *(unsigned *)&diag_buf[i+1],
                         *(unsigned *)&diag_buf[i+2], *(unsigned *)&diag_buf[i+3],
                         *(unsigned *)&diag_buf[i+4], *(unsigned *)&diag_buf[i+5],
                         *(unsigned *)&diag_buf[i+6], *(unsigned *)&diag_buf[i+7]);
             }
-            fflush(stderr);
         }
     }
 }

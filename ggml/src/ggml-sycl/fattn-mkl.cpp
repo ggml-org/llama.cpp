@@ -273,12 +273,12 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     const int chunk_size = std::min(MKL_FA_CHUNK_SIZE_KV, n_kv);
     const int64_t wg_size = 256;
 
-    // --- Debug output (gated by MKL_FA_DEBUG=1) ---
+    // --- Debug output (gated by GGML_SYCL_MKL_FA_DEBUG=1) ---
     static int mkl_call_count = 0;
     mkl_call_count++;
     static int mkl_debug = -1;
     if (mkl_debug < 0) {
-        const char * e = getenv("MKL_FA_DEBUG");
+        const char * e = getenv("GGML_SYCL_MKL_FA_DEBUG");
         mkl_debug = (e && e[0] == '1') ? 1 : 0;
     }
     const bool do_print = (mkl_debug == 1);
@@ -299,7 +299,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
         !V_is_K_view && ((int64_t)V->ne[1] * V->nb[1] != V->nb[2]);
 
     if (do_print) {
-        fprintf(stderr, "[MKL-FA] #%d D=%d DV=%d n_q=%d n_kv=%d "
+        GGML_LOG_INFO("[MKL-FA] #%d D=%d DV=%d n_q=%d n_kv=%d "
                 "n_qh=%d n_kvh=%d gqa=%d batch=%d K=%s V=%s "
                 "chunk=%d buf=%.1fMB%s%s\n",
                 mkl_call_count, DKQ, DV, n_queries, n_kv,
@@ -310,14 +310,13 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                     / (1024.0 * 1024.0),
                 k_early_interleaved ? " K_ILV" : "",
                 v_early_interleaved ? " V_ILV" : "");
-        fprintf(stderr, "[MKL-FA] #%d Q-nb1=%lld Q-nb2=%lld "
+        GGML_LOG_INFO("[MKL-FA] #%d Q-nb1=%lld Q-nb2=%lld "
                 "q_rs=%lld q_hs=%lld dst_rs=%lld dst_hs=%lld\n",
                 mkl_call_count,
                 (long long)Q->nb[1], (long long)Q->nb[2],
                 (long long)q_row_stride, (long long)q_head_stride,
                 (long long)(KQV->nb[1] / sizeof(float)),
                 (long long)(KQV->nb[2] / sizeof(float)));
-        fflush(stderr);
     }
 
     // --- Stream and allocators ---
@@ -569,7 +568,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                         KQ_f32_ptr, this_chunk);
                     stream->wait();
                     try { ev.wait_and_throw(); } catch (sycl::exception & e) {
-                        fprintf(stderr, "[MKL-FA] GEMM KQ: %s\n", e.what());
+                        GGML_LOG_INFO("[MKL-FA] GEMM KQ: %s\n", e.what());
                         GGML_ABORT("MKL GEMM KQ failed");
                     }
                     MKL_ACCUM(gemm_kq_time_us, t0);
@@ -603,7 +602,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                         VKQ_chunk_ptr, DV);
                     stream->wait();
                     try { ev.wait_and_throw(); } catch (sycl::exception & e) {
-                        fprintf(stderr, "[MKL-FA] GEMM VKQ: %s\n", e.what());
+                        GGML_LOG_INFO("[MKL-FA] GEMM VKQ: %s\n", e.what());
                         GGML_ABORT("MKL GEMM VKQ failed");
                     }
                     MKL_ACCUM(gemm_vkq_time_us, t0);
@@ -650,7 +649,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
           + (int64_t)n_query_rows * sizeof(float)
           + (int64_t)n_query_rows * DKQ * sizeof(sycl::half)
         ) / (1024.0 * 1024.0);
-        fprintf(stderr, "[MKL-FA] #%d n_kv=%d n_q=%d time_us: "
+        GGML_LOG_INFO("[MKL-FA] #%d n_kv=%d n_q=%d time_us: "
                 "dequant=%lld GEMM_KQ=%lld softmax=%lld GEMM_VKQ=%lld "
                 "buf_mb=%.1f\n",
                 mkl_call_count, n_kv, n_queries,
@@ -659,6 +658,5 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 (long long)softmax_time_us,
                 (long long)gemm_vkq_time_us,
                 total_mb);
-        fflush(stderr);
     }
 }
