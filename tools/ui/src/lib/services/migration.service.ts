@@ -551,13 +551,49 @@ const mcpDefaultEnabledMigration: Migration = {
 	}
 };
 
+const CONFIG_TYPES_MIGRATION_ID = 'config-type-normalization-v1';
+
+const configTypesMigration: Migration = {
+	id: CONFIG_TYPES_MIGRATION_ID,
+	description: 'Coerce legacy string-encoded booleans in persisted config to real booleans',
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+		let changed = false;
+
+		// Pre-schema configs persisted booleans as the strings "true"/"false", which the
+		// strict server schema now rejects. Coerce those back to real booleans. No config
+		// string field holds exactly "true"/"false", so the match is unambiguous.
+		for (const key of Object.keys(config)) {
+			if (config[key] === 'true') {
+				config[key] = true;
+				changed = true;
+			} else if (config[key] === 'false') {
+				config[key] = false;
+				changed = true;
+			}
+		}
+
+		if (changed) {
+			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(`[Migration] Config types: coerced string booleans (changed=${changed})`);
+	}
+};
+
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
 	legacyMessageMigration,
 	themeMigration,
 	customJsonKeyMigration,
-	mcpDefaultEnabledMigration
+	mcpDefaultEnabledMigration,
+	configTypesMigration
 ];
 
 export const MigrationService = {
