@@ -94,10 +94,8 @@ add_library(${TARGET}
     peg-parser.h
     preset.cpp
     preset.h
-    regex-partial.cpp
     reasoning-budget.cpp
     reasoning-budget.h
-    regex-partial.h
     sampling.cpp
     sampling.h
     speculative.cpp
