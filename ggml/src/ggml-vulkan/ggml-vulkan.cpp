@@ -14890,6 +14890,8 @@ static void ggml_vk_bench_pair(
                 std::cerr << "  dmabuf_p2p            : SKIPPED (src alloc: " << e.what() << ")" << std::endl;
                 if (exp_buffer) dev0->device.destroyBuffer(exp_buffer);
                 if (exp_mem) dev0->device.freeMemory(exp_mem);
+                exp_buffer = vk::Buffer{};
+                exp_mem = vk::DeviceMemory{};
                 setup_ok = false;
             }
 
@@ -15431,6 +15433,8 @@ static void ggml_vk_bench_pair(
                 std::cerr << "  dmabuf_p2p_rev        : SKIPPED (dst alloc: " << e.what() << ")" << std::endl;
                 if (exp_buffer) dev1->device.destroyBuffer(exp_buffer);
                 if (exp_mem) dev1->device.freeMemory(exp_mem);
+                exp_buffer = vk::Buffer{};
+                exp_mem = vk::DeviceMemory{};
                 setup_ok = false;
             }
 
