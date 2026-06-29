@@ -47,6 +47,35 @@ GatewayConfig load_config(const std::string& path) {
         cfg.rbac_enabled = s.value("rbac_enabled", cfg.rbac_enabled);
         if (s.contains("api_keys"))
             for (const auto& k : s.at("api_keys")) cfg.api_keys.push_back(k.get<std::string>());
+        if (s.contains("principals")) {
+            for (const auto& p : s.at("principals")) {
+                ApiKeyPrincipal ap;
+                ap.api_key           = p.value("api_key", std::string());
+                ap.principal.subject = p.value("subject", std::string());
+                ap.principal.role    = p.value("role", std::string());
+                if (ap.api_key.empty())
+                    throw std::runtime_error("infcore: principal без api_key");
+                cfg.principals.push_back(std::move(ap));
+            }
+        }
+        if (s.contains("roles")) {
+            for (const auto& r : s.at("roles")) {
+                Role role;
+                role.name = r.value("name", std::string());
+                if (role.name.empty())
+                    throw std::runtime_error("infcore: role без name");
+                if (r.contains("allow_models"))
+                    for (const auto& m : r.at("allow_models")) role.allow_models.push_back(m.get<std::string>());
+                if (r.contains("allow_endpoints"))
+                    for (const auto& ep : r.at("allow_endpoints")) role.allow_endpoints.push_back(ep.get<std::string>());
+                cfg.roles.push_back(std::move(role));
+            }
+        }
+        if (s.contains("audit")) {
+            const auto& a = s.at("audit");
+            cfg.audit_sink = a.value("sink", cfg.audit_sink);
+            cfg.audit_path = a.value("path", cfg.audit_path);
+        }
     }
     if (j.contains("offline"))
         cfg.enforce_no_egress = j.at("offline").value("enforce_no_egress", true);
@@ -77,10 +106,21 @@ GatewayConfig load_config(const std::string& path) {
         }
     }
 
-    if (cfg.api_keys.empty())
-        throw std::runtime_error("infcore: security.api_keys пуст — нужен хотя бы один ключ");
+    if (cfg.api_keys.empty() && cfg.principals.empty())
+        throw std::runtime_error("infcore: нет ни security.api_keys, ни security.principals — нужен хотя бы один ключ");
     if (cfg.models.empty())
         throw std::runtime_error("infcore: models пуст");
+
+    // При включённом RBAC роль каждого principal должна быть объявлена в security.roles.
+    if (cfg.rbac_enabled) {
+        for (const auto& ap : cfg.principals) {
+            bool found = false;
+            for (const auto& r : cfg.roles) if (r.name == ap.principal.role) { found = true; break; }
+            if (!found)
+                throw std::runtime_error("infcore: роль '" + ap.principal.role +
+                    "' principal'а '" + ap.principal.subject + "' не объявлена в security.roles");
+        }
+    }
 
     // Управляемая модель (без backend_url) требует runtime.llama_server_bin и gguf_path.
     for (const auto& m : cfg.models) {

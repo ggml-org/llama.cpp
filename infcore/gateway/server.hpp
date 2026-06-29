@@ -12,6 +12,9 @@
 #include "config.hpp"
 #include "registry/model_registry.h"
 #include "runtime/backend_supervisor.h"
+#include "security/audit/audit.h"
+#include "security/authn/authn.h"
+#include "security/rbac/rbac.h"
 
 namespace infcore {
 
@@ -25,6 +28,11 @@ private:
     ModelRegistry registry_;
     std::unique_ptr<BackendSupervisor> supervisor_;
 
+    // security
+    Authenticator authn_;
+    Authorizer    rbac_;
+    AuditLog      audit_;
+
     // примитивные метрики (pull, /metrics)
     std::mutex                                metrics_mu_;
     std::map<std::string, std::atomic<long>>  counters_;
@@ -32,6 +40,10 @@ private:
     void   inc(const std::string& key);
     long   get_counter(const std::string& key);
     std::string render_metrics();
+
+    void   audit_event(const Principal& pr, const std::string& client_ip,
+                       const std::string& endpoint, const std::string& model,
+                       const char* decision, const std::string& reason, int status);
 };
 
 }  // namespace infcore

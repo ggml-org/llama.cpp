@@ -10,9 +10,17 @@
   },
   "security": {
     "authn": "api_key",
-    "api_keys": ["change-me"],
     "rbac_enabled": true,
-    "audit_sink": "file"
+    "principals": [
+      { "api_key": "change-me-admin", "subject": "alice", "role": "admin" },
+      { "api_key": "change-me-rag",   "subject": "svc-rag", "role": "embeddings-only" }
+    ],
+    "roles": [
+      { "name": "admin",           "allow_models": ["*"], "allow_endpoints": ["*"] },
+      { "name": "embeddings-only", "allow_models": ["bge-m3-embed"],
+        "allow_endpoints": ["/v1/embeddings", "/v1/models"] }
+    ],
+    "audit": { "sink": "file", "path": "/var/log/infcore/audit.log" }
   },
   "observability": { "metrics_enabled": true, "metrics_path": "/metrics" },
   "offline": { "enforce_no_egress": true },

@@ -28,9 +28,44 @@
       "additionalProperties": false,
       "properties": {
         "authn": { "enum": ["api_key", "mtls", "oidc"], "default": "api_key" },
-        "api_keys": { "type": "array", "items": { "type": "string" } },
+        "api_keys": { "type": "array", "items": { "type": "string" }, "description": "legacy: плоский список ключей (роль admin)" },
         "rbac_enabled": { "type": "boolean", "default": true },
-        "audit_sink": { "enum": ["file", "postgres"], "default": "file" }
+        "principals": {
+          "type": "array",
+          "description": "API-ключ -> кто (subject) и роль (role)",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["api_key", "role"],
+            "properties": {
+              "api_key": { "type": "string" },
+              "subject": { "type": "string" },
+              "role": { "type": "string" }
+            }
+          }
+        },
+        "roles": {
+          "type": "array",
+          "description": "Роль -> allowlists моделей и эндпоинтов ('*' = любые)",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "allow_models": { "type": "array", "items": { "type": "string" } },
+              "allow_endpoints": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sink": { "enum": ["file", "none"], "default": "file" },
+            "path": { "type": "string", "description": "Путь к append-only JSONL-журналу" }
+          }
+        }
       }
     },
     "observability": {

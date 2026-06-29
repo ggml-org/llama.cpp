@@ -22,6 +22,40 @@ GatewayServer::GatewayServer(GatewayConfig cfg) : cfg_(std::move(cfg)) {
     opt.idle_timeout_ms    = cfg_.idle_timeout_ms;
     opt.startup_timeout_ms = cfg_.startup_timeout_ms;
     supervisor_ = std::make_unique<BackendSupervisor>(opt);
+
+    // RBAC: роли из конфига; principals -> ключи.
+    rbac_.set_enabled(cfg_.rbac_enabled);
+    bool has_admin_role = false;
+    for (const auto& r : cfg_.roles) { rbac_.add_role(r); if (r.name == "admin") has_admin_role = true; }
+    for (const auto& ap : cfg_.principals) authn_.add_key(ap.api_key, ap.principal);
+
+    // Обратная совместимость: плоские api_keys = principal'ы с ролью admin.
+    if (!cfg_.api_keys.empty()) {
+        if (!has_admin_role) {
+            Role admin; admin.name = "admin";
+            admin.allow_models = {"*"}; admin.allow_endpoints = {"*"};
+            rbac_.add_role(admin);
+        }
+        for (const auto& k : cfg_.api_keys) authn_.add_key(k, Principal{"legacy", "admin"});
+    }
+
+    if (cfg_.audit_sink == "file" && !audit_.open(cfg_.audit_path))
+        std::fprintf(stderr, "infcore: не удалось открыть audit-журнал: %s\n", cfg_.audit_path.c_str());
+}
+
+void GatewayServer::audit_event(const Principal& pr, const std::string& client_ip,
+                                const std::string& endpoint, const std::string& model,
+                                const char* decision, const std::string& reason, int status) {
+    AuditEvent ev;
+    ev.subject = pr.subject;
+    ev.role = pr.role;
+    ev.endpoint = endpoint;
+    ev.model = model;
+    ev.client_ip = client_ip;
+    ev.decision = decision;
+    ev.reason = reason;
+    ev.status = status;
+    audit_.log(ev);
 }
 
 void GatewayServer::inc(const std::string& key) {
@@ -44,22 +78,17 @@ std::string GatewayServer::render_metrics() {
 // --- helpers -----------------------------------------------------------------
 namespace {
 
-bool bearer_ok(const httplib::Request& req, const std::vector<std::string>& keys) {
-    auto it = req.headers.find("Authorization");
-    if (it == req.headers.end()) return false;
-    const std::string& v = it->second;
-    const std::string pfx = "Bearer ";
-    if (v.size() <= pfx.size() || v.compare(0, pfx.size(), pfx) != 0) return false;
-    std::string tok = v.substr(pfx.size());
-    for (const auto& k : keys) if (k == tok) return true;
-    return false;
-}
-
 void error_json(httplib::Response& res, int status, const std::string& type,
                 const std::string& msg) {
     json e = {{"error", {{"type", type}, {"message", msg}, {"code", status}}}};
     res.status = status;
     res.set_content(e.dump(), "application/json");
+}
+
+std::string auth_token(const httplib::Request& req) {
+    auto it = req.headers.find("Authorization");
+    if (it == req.headers.end()) return std::string();
+    return parse_bearer(it->second);
 }
 
 // Штатная остановка по сигналу: на гибель от сигнала C++ деструкторы не вызываются,
@@ -90,17 +119,21 @@ int GatewayServer::run() {
         res.set_content(render_metrics(), "text/plain; version=0.0.4");
     });
 
-    // /v1/models — OpenAI-совместимый список
+    // /v1/models — OpenAI-совместимый список (только модели, разрешённые роли)
     svr.Get("/v1/models", [this](const httplib::Request& req, httplib::Response& res) {
-        if (!bearer_ok(req, cfg_.api_keys)) { inc("errors_total{type=\"unauthorized\"}");
+        Principal pr;
+        if (!authn_.verify(auth_token(req), pr)) { inc("errors_total{type=\"unauthorized\"}");
+            audit_event({}, req.remote_addr, "/v1/models", "", "deny", "unauthorized", 401);
             return error_json(res, 401, "invalid_request_error", "unauthorized"); }
         json data = json::array();
         for (const auto& m : registry_.list()) {
             if (!m.enabled) continue;
+            if (!rbac_.model_allowed(pr.role, m.logical_name)) continue;
             data.push_back({{"id", m.logical_name}, {"object", "model"},
                             {"owned_by", "infcore"},
                             {"modality", modality_to_string(m.modality)}});
         }
+        audit_event(pr, req.remote_addr, "/v1/models", "", "allow", "", 200);
         res.set_content(json{{"object", "list"}, {"data", data}}.dump(), "application/json");
     });
 
@@ -109,7 +142,9 @@ int GatewayServer::run() {
         return [this, upstream_path, allow_stream](const httplib::Request& req,
                                                    httplib::Response& res) {
             inc(std::string("requests_total{path=\"") + upstream_path + "\"}");
-            if (!bearer_ok(req, cfg_.api_keys)) { inc("errors_total{type=\"unauthorized\"}");
+            Principal pr;
+            if (!authn_.verify(auth_token(req), pr)) { inc("errors_total{type=\"unauthorized\"}");
+                audit_event({}, req.remote_addr, upstream_path, "", "deny", "unauthorized", 401);
                 return error_json(res, 401, "invalid_request_error", "unauthorized"); }
 
             json body;
@@ -123,6 +158,14 @@ int GatewayServer::run() {
                 return error_json(res, 404, "invalid_request_error", "model not found: " + model); }
             if (!e.enabled) { inc("errors_total{type=\"model_disabled\"}");
                 return error_json(res, 409, "invalid_request_error", "model disabled: " + model); }
+
+            // RBAC: роль должна допускать и endpoint, и модель (default-deny).
+            std::string reason;
+            if (!rbac_.allow(pr.role, upstream_path, model, reason)) {
+                inc("errors_total{type=\"forbidden\"}");
+                audit_event(pr, req.remote_addr, upstream_path, model, "deny", reason, 403);
+                return error_json(res, 403, "invalid_request_error", "forbidden: " + reason);
+            }
 
             // backend_url пуст -> модель управляемая: поднимаем процесс по требованию.
             std::string backend = e.backend_url;
@@ -150,17 +193,20 @@ int GatewayServer::run() {
                 auto up = cli.Post(upstream_path, fwd, out_body, "application/json");
                 if (managed) supervisor_->release(e.logical_name);
                 if (!up) { inc("errors_total{type=\"backend_unreachable\"}");
+                    audit_event(pr, req.remote_addr, upstream_path, model, "allow", "backend unreachable", 502);
                     return error_json(res, 502, "api_error", "бэкенд недоступен: " + backend); }
                 res.status = up->status;
                 res.set_content(up->body, "application/json");
+                audit_event(pr, req.remote_addr, upstream_path, model, "allow", "", up->status);
                 return;
             }
 
             // SSE passthrough: тянем поток из бэкенда и пишем в sink целиком за один вызов.
             const std::string logical = e.logical_name;
+            const std::string client_ip = req.remote_addr;
             res.set_chunked_content_provider(
                 "text/event-stream",
-                [this, backend, managed, logical, upstream_path, fwd, out_body](
+                [this, backend, managed, logical, pr, model, client_ip, upstream_path, fwd, out_body](
                     size_t /*offset*/, httplib::DataSink& sink) {
                     httplib::Client up(backend);
                     up.set_read_timeout(cfg_.request_timeout_ms / 1000, 0);
@@ -175,6 +221,8 @@ int GatewayServer::run() {
                     }
                     sink.done();
                     if (managed) supervisor_->release(logical);
+                    audit_event(pr, client_ip, upstream_path, model, "allow",
+                                r ? "" : "backend unreachable", 200);
                     return true;
                 });
         };
