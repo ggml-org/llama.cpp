@@ -1,14 +1,8 @@
 #include "models.h"
 
-// MiniMax-M3 vision tower: CLIP-style blocks (separate biased q/k/v/out, LayerNorm,
-// gelu fc1/fc2, a pre_layrnorm, no post-LN / class token / abs-pos) over a Conv3D
-// (temporal-split) patch embed, with a custom 3D (T/H/W) RoPE and a two-stage
-// projector. Image-only (n_batch == 1); video is out of scope for now.
+// MiniMax-M3 vision tower: a Qwen2.5-VL style Vision tower (shared via build_vit) that differs in
+// the rotary, a gate-less GELU-erf FFN, and a two stage projector.
 
-// Apply MiniMax-M3 3D RoPE using host-precomputed cos/sin (filled in set_input).
-//   x        : [d_head, n_head, n_pos]
-//   rope_cos : [rope_dim, 1, n_pos]   (rope_dim = 3*axis_dim = 78, broadcasts over heads)
-// First rope_dim dims are rotated (HF block rotate_half); the tail passes through.
 ggml_tensor * clip_graph_minimax_m3::apply_rope(
         ggml_tensor * x, ggml_tensor * rope_cos, ggml_tensor * rope_sin) {
     const int64_t d    = x->ne[0];          // 80
@@ -56,14 +50,7 @@ ggml_cgraph * clip_graph_minimax_m3::build() {
         inp = ggml_cont_3d(ctx0, inp, n_embd, n_patches_x * n_patches_y, batch_size);
     }
 
-    ggml_tensor * inpL = inp;
-
-    // pre-layernorm
-    if (model.pre_ln_w) {
-        inpL = build_norm(inpL, model.pre_ln_w, model.pre_ln_b, NORM_TYPE_NORMAL, eps, -1);
-    }
-
-    // ---- 3D RoPE cos/sin inputs (host-filled in set_input) ----
+    // ---- 3D RoPE cos/sin inputs (host-filled in set_input), apply_rope via add_pos ----
     const int axis_dim = 2 * ((2 * (d_head / 2) / 3) / 2);   // 26
     const int rope_dim = 3 * axis_dim;                        // 78
     ggml_tensor * rope_cos = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, rope_dim, 1, n_pos);
@@ -71,46 +58,15 @@ ggml_cgraph * clip_graph_minimax_m3::build() {
     ggml_tensor * rope_sin = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, rope_dim, 1, n_pos);
     ggml_set_name(rope_sin, "minimax_sin"); ggml_set_input(rope_sin);
 
-    // ---- encoder ----
-    for (int il = 0; il < n_layer; il++) {
-        const auto & layer = model.layers[il];
-        ggml_tensor * cur = inpL;
-
-        cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, eps, il);
-        cb(cur, "ln1", il);
-
-        ggml_tensor * Q = ggml_add(ctx0, build_mm(layer.q_w, cur), layer.q_b);
-        ggml_tensor * K = ggml_add(ctx0, build_mm(layer.k_w, cur), layer.k_b);
-        ggml_tensor * V = ggml_add(ctx0, build_mm(layer.v_w, cur), layer.v_b);
-
-        Q = ggml_reshape_3d(ctx0, Q, d_head, n_head, n_pos);
-        K = ggml_reshape_3d(ctx0, K, d_head, n_head, n_pos);
-        V = ggml_reshape_3d(ctx0, V, d_head, n_head, n_pos);
-
-        Q = apply_rope(Q, rope_cos, rope_sin);
-        K = apply_rope(K, rope_cos, rope_sin);
-        cb(Q, "Qcur_rope", il);
-        cb(K, "Kcur_rope", il);
-
-        // full bidirectional attention (no mask, no windowing)
-        cur = build_attn(layer.o_w, layer.o_b, Q, K, V, nullptr, kq_scale, il);
-        cb(cur, "attn_out", il);
-
-        cur  = ggml_add(ctx0, cur, inpL);   // residual 1
-        inpL = cur;
-
-        cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, eps, il);
-        cur = build_ffn(cur,
-            layer.ff_up_w,   layer.ff_up_b,
-            nullptr,         nullptr,
-            layer.ff_down_w, layer.ff_down_b,
-            FFN_GELU_ERF, il);
-        cb(cur, "ffn_out", il);
-
-        cur  = ggml_add(ctx0, inpL, cur);   // residual 2
-        inpL = cur;
-    }
-    // NOTE: MiniMax-M3 has no post-layernorm.
+    // ---- shared ViT encoder, but M3 3D rope overrides via add_pos ----
+    ggml_tensor * inpL = build_vit(
+        inp, n_pos,
+        NORM_TYPE_NORMAL,
+        FFN_GELU_ERF,
+        nullptr,
+        [&](ggml_tensor * c, const clip_layer &) {
+            return apply_rope(c, rope_cos, rope_sin);
+        });
 
     // ---- projector: per-patch MLP -> group-4 -> merge MLP ----
     ggml_tensor * emb = inpL;                                   // [n_embd, n_pos]
