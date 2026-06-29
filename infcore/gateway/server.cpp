@@ -137,6 +137,48 @@ int GatewayServer::run() {
         res.set_content(json{{"object", "list"}, {"data", data}}.dump(), "application/json");
     });
 
+    // --- admin: управление моделями без перезапуска (доступ по RBAC: endpoint /admin/models) ---
+
+    // GET /admin/models — полный список со статусом (включая выключенные).
+    svr.Get("/admin/models", [this](const httplib::Request& req, httplib::Response& res) {
+        Principal pr;
+        if (!authn_.verify(auth_token(req), pr)) { inc("errors_total{type=\"unauthorized\"}");
+            audit_event({}, req.remote_addr, "/admin/models", "", "deny", "unauthorized", 401);
+            return error_json(res, 401, "invalid_request_error", "unauthorized"); }
+        std::string reason;
+        if (!rbac_.allow(pr.role, "/admin/models", "", reason)) { inc("errors_total{type=\"forbidden\"}");
+            audit_event(pr, req.remote_addr, "/admin/models", "", "deny", reason, 403);
+            return error_json(res, 403, "invalid_request_error", "forbidden: " + reason); }
+        json data = json::array();
+        for (const auto& m : registry_.list())
+            data.push_back({{"id", m.logical_name}, {"modality", modality_to_string(m.modality)},
+                            {"enabled", m.enabled}, {"managed", m.backend_url.empty()},
+                            {"backend_url", m.backend_url}, {"arch", m.arch}});
+        audit_event(pr, req.remote_addr, "/admin/models", "", "allow", "", 200);
+        res.set_content(json{{"object", "list"}, {"data", data}}.dump(), "application/json");
+    });
+
+    // POST /admin/models/<name>/<enable|disable> — переключение в рантайме.
+    svr.Post(R"(/admin/models/([^/]+)/(enable|disable))",
+             [this](const httplib::Request& req, httplib::Response& res) {
+        Principal pr;
+        if (!authn_.verify(auth_token(req), pr)) { inc("errors_total{type=\"unauthorized\"}");
+            audit_event({}, req.remote_addr, "/admin/models", "", "deny", "unauthorized", 401);
+            return error_json(res, 401, "invalid_request_error", "unauthorized"); }
+        std::string reason;
+        if (!rbac_.allow(pr.role, "/admin/models", "", reason)) { inc("errors_total{type=\"forbidden\"}");
+            audit_event(pr, req.remote_addr, "/admin/models", "", "deny", reason, 403);
+            return error_json(res, 403, "invalid_request_error", "forbidden: " + reason); }
+        const std::string name   = req.matches[1];
+        const bool        enable = (req.matches[2] == "enable");
+        if (!registry_.set_enabled(name, enable)) { inc("errors_total{type=\"model_not_found\"}");
+            audit_event(pr, req.remote_addr, "/admin/models", name, "deny", "model not found", 404);
+            return error_json(res, 404, "invalid_request_error", "model not found: " + name); }
+        audit_event(pr, req.remote_addr, "/admin/models", name, "allow",
+                    enable ? "enabled" : "disabled", 200);
+        res.set_content(json{{"id", name}, {"enabled", enable}}.dump(), "application/json");
+    });
+
     // общий прокси на бэкенд llama-server (chat/completions, completions, embeddings)
     auto proxy = [this](const char* upstream_path, bool allow_stream) {
         return [this, upstream_path, allow_stream](const httplib::Request& req,

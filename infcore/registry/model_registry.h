@@ -33,6 +33,7 @@ class ModelRegistry {
 public:
     void add(const ModelEntry& e);
     bool get(const std::string& logical_name, ModelEntry& out) const;
+    bool set_enabled(const std::string& logical_name, bool enabled);  // false если модели нет
     std::vector<ModelEntry> list() const;
 
 private:

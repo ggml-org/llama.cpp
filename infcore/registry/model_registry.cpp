@@ -26,6 +26,14 @@ bool ModelRegistry::get(const std::string& logical_name, ModelEntry& out) const 
     return true;
 }
 
+bool ModelRegistry::set_enabled(const std::string& logical_name, bool enabled) {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = models_.find(logical_name);
+    if (it == models_.end()) return false;
+    it->second.enabled = enabled;
+    return true;
+}
+
 std::vector<ModelEntry> ModelRegistry::list() const {
     std::lock_guard<std::mutex> lock(mu_);
     std::vector<ModelEntry> out;

@@ -31,5 +31,6 @@ add_subdirectory(observability)
 add_subdirectory(registry)
 add_subdirectory(runtime)
 add_subdirectory(gateway)
+add_subdirectory(cli)
 
 message(STATUS "infcore: движок встроен из ${INFCORE_LLAMA_ROOT}")
