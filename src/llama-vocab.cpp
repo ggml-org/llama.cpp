@@ -2327,7 +2327,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GROK_2;
                 clean_spaces = false;
             } else if (
-                tokenizer_pre == "afmoe") {
+                tokenizer_pre == "afmoe" ||
+                tokenizer_pre == "laguna") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_AFMOE;
                 clean_spaces = false;
             } else if (
