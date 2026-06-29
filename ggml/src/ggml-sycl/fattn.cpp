@@ -124,18 +124,19 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
 
     bool gqa_opt_applies = gqa_ratio >= 2 && mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
-    // MKL path: XMX-accelerated GEMM for prompt processing with quantized KV cache.
+    // MKL path: XMX-accelerated GEMM for prompt processing (all KV cache types).
+    // The MKL kernel converts non-F16 K/V to F16 via to_fp16_sycl before GEMM,
+    // so quantized, F16, BF16, and F32 caches all benefit from XMX acceleration.
     // Activates automatically when flash-attn is enabled (--flash-attn on or -fa),
-    // KV cache is quantized (--cache-type-k/q *_0/*_1), batch size >= 1024, and
-    // n_kv >= 1024. Set GGML_SYCL_ENABLE_MKL_FA=0 to force TILE/VEC path for A/B
-    // testing. Example: GGML_SYCL_ENABLE_MKL_FA=0 llama-cli -m model.gguf -fa -ngl 99 ...
+    // batch size >= 1024, and n_kv >= 1024.
+    // Set GGML_SYCL_ENABLE_MKL_FA=0 to force TILE/VEC path for A/B testing.
+    // Example: GGML_SYCL_ENABLE_MKL_FA=0 llama-cli -m model.gguf -fa -ngl 99 ...
     // Note: MKL GEMM calls are incompatible with SYCL graph capture replay.
     static int mkl_disable = -1;
     if (mkl_disable < 0) {
         mkl_disable = !ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
     }
-    if (mkl_disable == 0 && Q->ne[1] >= 128 && K->ne[1] >= 1024
-        && (ggml_is_quantized(K->type) || ggml_is_quantized(V->type))) {
+    if (mkl_disable == 0 && Q->ne[1] >= 128 && K->ne[1] >= 1024) {
         return BEST_FATTN_KERNEL_MKL;
     }
 
@@ -186,6 +187,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     switch (K->type) {
         case GGML_TYPE_F32:
         case GGML_TYPE_F16:
+        case GGML_TYPE_BF16:
             break;
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
