@@ -184,7 +184,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				isExperimental: true
+				isExperimental: true,
+				sync: {
+					serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.TITLE_GENERATION_PROMPT,
@@ -192,7 +196,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Optional template for the title generation prompt. Use {{USER}} for the user message and {{ASSISTANT}} for the assistant message.',
 				defaultValue: TITLE_GENERATION.DEFAULT_PROMPT,
 				type: SettingsFieldType.TEXTAREA,
-				section: SETTINGS_SECTION_SLUGS.GENERAL
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.TITLE_GENERATION_PROMPT,
+					paramType: SyncableParameterType.STRING
+				}
 			},
 			{
 				key: SETTINGS_KEYS.MAX_IMAGE_RESOLUTION,
@@ -200,7 +208,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Images larger than this will be resized before sending to server. Set to 0 to disable.',
 				defaultValue: 0,
 				type: SettingsFieldType.INPUT,
-				section: SETTINGS_SECTION_SLUGS.GENERAL
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.MAX_IMAGE_RESOLUTION,
+					paramType: SyncableParameterType.NUMBER
+				}
 			}
 		]
 	},
@@ -384,7 +396,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Display the current build version in the bottom-right corner of the interface.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				sync: {
+					serverKey: SETTINGS_KEYS.SHOW_BUILD_VERSION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			}
 		]
 	},
@@ -668,7 +684,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'After each response, re-submit the conversation to pre-fill the server KV cache. Makes the next turn faster since the prompt is already encoded while you read the response.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				sync: {
+					serverKey: SETTINGS_KEYS.PRE_ENCODE_CONVERSATION,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
@@ -676,7 +696,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Send reasoning_format=none so the server returns thinking tokens inline instead of extracting them into a separate field.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				sync: {
+					serverKey: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
@@ -716,7 +740,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Expose a run_javascript tool to the model. Code runs in a Web Worker inside a sandboxed iframe with an opaque origin, isolated from the WebUI and its API, with a hard timeout.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				sync: {
+					serverKey: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
+					paramType: SyncableParameterType.BOOLEAN
+				}
 			},
 			{
 				key: SETTINGS_KEYS.CUSTOM_JSON,
@@ -752,7 +780,11 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.MCP,
-				isPositiveInteger: true
+				isPositiveInteger: true,
+				sync: {
+					serverKey: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
+					paramType: SyncableParameterType.NUMBER
+				}
 			}
 		]
 	}
