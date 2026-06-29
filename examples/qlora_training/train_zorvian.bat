@@ -8,7 +8,7 @@ set EXE=build-cuda\bin\llama-finetune-qlora.exe
 set MODEL=examples\qlora_training\Qwen3-1.7B.Q4_K_M.gguf
 if not defined TRAIN_FILE set TRAIN_FILE=examples\qlora_training\zorvian_training_data.jsonl
 if not defined LORA_OUT set LORA_OUT=examples\qlora_training\zorvian_train_adapter.gguf
-if not defined EPOCHS set EPOCHS=200
+if not defined EPOCHS set EPOCHS=300
 if not defined LR set LR=5e-5
 if not defined LORA_RANK set LORA_RANK=16
 if not defined LORA_ALPHA set LORA_ALPHA=16
@@ -44,12 +44,18 @@ if "%RESUME%"=="1" if exist "%LORA_OUT%" (
 if not defined RESUME_ARGS echo Starting fresh adapter
 if not "%RESUME_ARGS%"=="" copy /Y "%LORA_OUT%" "%LORA_OUT%.before_train.gguf" >nul
 
+@REM n_batch/n_ubatch are clamped to n_ctx, so set all three equal.
+@REM n_ctx = tokens processed per forward/backward pass = the GPU-utilization knob.
+@REM Flash-attn is disabled for training, so attn activations cost O(n_ctx^2):
+@REM 2048 ~= 21GB on a 24GB card (near the ceiling). To go higher (4096) you MUST
+@REM add --grad-checkpoint 1, which recomputes activations in backward to cut memory.
+
 "%EXE%" ^
   --model "%MODEL%" ^
   %RESUME_ARGS% ^
   --train-file "%TRAIN_FILE%" ^
   --lora-rank %LORA_RANK% --lora-alpha %LORA_ALPHA% ^
-  -c 128 -b 512 -ub 512 ^
+  -c 2048 -b 2048 -ub 2048 ^
   --epochs %EPOCHS% ^
   --seed 42 ^
   -lr %LR% ^
