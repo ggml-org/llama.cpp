@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import struct
 from collections import OrderedDict
 from typing import Any, Literal, NamedTuple, TypeVar, Union
 
@@ -130,11 +131,15 @@ class GGUFReader:
     }
 
     def __init__(self, path: os.PathLike[str] | str, mode: Literal['r', 'r+', 'c'] = 'r'):
-        self.data = np.memmap(path, mode = mode)
+        file_mode = "rb+" if mode == 'r+' else 'rb'
+        self.mode = mode
+        self.data = open(path, mode=file_mode)
+        self.mmap = np.memmap(self.data, mode = mode)
         offs = 0
 
         # Check for GGUF magic
-        if self._get(offs, np.uint32, override_order = '<')[0] != GGUF_MAGIC:
+        self.data.seek(offs)
+        if struct.unpack("<I", self.data.read(4))[0] != GGUF_MAGIC:
             raise ValueError('GGUF magic invalid')
         offs += 4
 
@@ -195,13 +200,22 @@ class GGUFReader:
         return self.tensors[idx]
 
     def _get(
-        self, offset: int, dtype: npt.DTypeLike, count: int = 1, override_order: None | Literal['I', 'S', '<'] = None,
+        self, offset: int, dtype: npt.DTypeLike, count: int = 1, override_order: None | Literal['I', 'S', '<'] = None, use_mmap: bool = False
     ) -> npt.NDArray[Any]:
         count = int(count)
-        itemsize = int(np.empty([], dtype = dtype).itemsize)
+        dtype = np.dtype(dtype).newbyteorder(override_order or self.byte_order)
+        itemsize = dtype.itemsize
         end_offs = offset + itemsize * count
-        arr = self.data[offset:end_offs].view(dtype=dtype)[:count]
-        return arr.view(arr.dtype.newbyteorder(self.byte_order if override_order is None else override_order))
+        if self.mode != "r" or use_mmap:
+            data = (
+                self.mmap[offset:end_offs]
+                .view(dtype)[:count]
+            )
+            self.data.seek(end_offs)
+        else:
+            self.data.seek(offset)
+            data = np.frombuffer(self.data.read(itemsize * count), dtype = dtype)
+        return data
 
     def _push_field(self, field: ReaderField, skip_sum: bool = False) -> int:
         if field.name in self.fields:
@@ -215,8 +229,17 @@ class GGUFReader:
         return 0 if skip_sum else sum(int(part.nbytes) for part in field.parts)
 
     def _get_str(self, offset: int) -> tuple[npt.NDArray[np.uint64], npt.NDArray[np.uint8]]:
-        slen = self._get(offset, np.uint64)
-        return slen, self._get(offset + 8, np.uint8, slen[0])
+        if self.mode != "r":
+            slen = self._get(offset, np.uint64)
+            sdata = self._get(offset + 8, np.uint8, slen.item())
+        else:
+            # This is faster to return a read-only str structure with less seek calling.
+            self.data.seek(offset)
+            u64 = np.dtype(np.uint64).newbyteorder(self.byte_order)
+            u8 = np.dtype(np.uint8).newbyteorder(self.byte_order)
+            slen = np.frombuffer(self.data.read(8), dtype=u64)
+            sdata = np.frombuffer(self.data.read(slen.item()), dtype=u8)
+        return slen, sdata
 
     def _get_field_parts(
         self, orig_offs: int, raw_type: int,
@@ -228,7 +251,7 @@ class GGUFReader:
         # Handle strings.
         if gtype == GGUFValueType.STRING:
             sparts: list[npt.NDArray[Any]] = list(self._get_str(offs))
-            size = sum(int(part.nbytes) for part in sparts)
+            size = 8 + sparts[0].item()
             return size, sparts, [1], types
         # Check if it's a simple scalar type.
         nptype = self.gguf_scalar_to_np.get(gtype)
@@ -238,9 +261,9 @@ class GGUFReader:
         # Handle arrays.
         if gtype == GGUFValueType.ARRAY:
             raw_itype = self._get(offs, np.uint32)
-            offs += int(raw_itype.nbytes)
+            offs = self.data.tell()
             alen = self._get(offs, np.uint64)
-            offs += int(alen.nbytes)
+            offs = self.data.tell()
             aparts: list[npt.NDArray[Any]] = [raw_itype, alen]
             data_idxs: list[int] = []
             # FIXME: Handle multi-dimensional arrays properly instead of flattening
@@ -261,23 +284,23 @@ class GGUFReader:
 
         # Get Tensor Name
         name_len, name_data = self._get_str(offs)
-        offs += int(name_len.nbytes + name_data.nbytes)
+        offs = self.data.tell()
 
         # Get Tensor Dimensions Count
         n_dims = self._get(offs, np.uint32)
-        offs += int(n_dims.nbytes)
+        offs = self.data.tell()
 
         # Get Tensor Dimension Array
         dims = self._get(offs, np.uint64, n_dims[0])
-        offs += int(dims.nbytes)
+        offs = self.data.tell()
 
         # Get Tensor Encoding Scheme Type
         raw_dtype = self._get(offs, np.uint32)
-        offs += int(raw_dtype.nbytes)
+        offs = self.data.tell()
 
         # Get Tensor Offset
         offset_tensor = self._get(offs, np.uint64)
-        offs += int(offset_tensor.nbytes)
+        offs = self.data.tell()
 
         return ReaderField(
             orig_offs,
@@ -290,9 +313,9 @@ class GGUFReader:
         for _ in range(count):
             orig_offs = offs
             kv_klen, kv_kdata = self._get_str(offs)
-            offs += int(kv_klen.nbytes + kv_kdata.nbytes)
+            offs = self.data.tell()
             raw_kv_type = self._get(offs, np.uint32)
-            offs += int(raw_kv_type.nbytes)
+            offs = self.data.tell()
             parts: list[npt.NDArray[Any]] = [kv_klen, kv_kdata, raw_kv_type]
             idxs_offs = len(parts)
             field_size, field_parts, field_idxs, field_types = self._get_field_parts(offs, raw_kv_type[0])
@@ -311,7 +334,7 @@ class GGUFReader:
         tensor_fields = []
         for _ in range(count):
             field = self._get_tensor_info_field(offs)
-            offs += sum(int(part.nbytes) for part in field.parts)
+            offs = self.data.tell()
             tensor_fields.append(field)
         return offs, tensor_fields
 
@@ -364,7 +387,7 @@ class GGUFReader:
                 n_elements = n_elems,
                 n_bytes = n_bytes,
                 data_offset = data_offs,
-                data = self._get(data_offs, item_type, item_count).reshape(np_dims),
+                data = self._get(data_offs, item_type, item_count, use_mmap=True).reshape(np_dims),
                 field = field,
             ))
         self.tensors = tensors
