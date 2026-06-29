@@ -378,6 +378,84 @@ void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RE
     }
 }
 
+// Importance-aware NVFP4: instead of fixing the per-sub-block scale at amax/6, search a
+// small window of UE4M3 scale codes around it and keep the one minimizing the (optionally
+// importance-weighted) reconstruction error of the sub-block. With quant_weights == NULL this
+// reduces to an unweighted scale search (still better than amax/6); with an imatrix it spends
+// precision on the columns whose activations matter. Output format is unchanged, so the result
+// runs on stock NVFP4 kernels.
+#define NVFP4_SCALE_SEARCH 12  // +/- codes searched around the amax/6 starting scale
+
+static void quantize_row_nvfp4_impl(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y,
+                                    int64_t k, const float * GGML_RESTRICT quant_weights) {
+    static const int qk = QK_NVFP4;
+    static const int qk_sub = QK_NVFP4_SUB;
+    static const int n_sub = QK_NVFP4 / QK_NVFP4_SUB;
+
+    assert(k % qk == 0);
+    const int nb = k / qk;
+
+    // NVFP4_NO_SEARCH=1 forces the legacy amax/6 scale (search window 0) for A/B testing.
+    const int search = getenv("NVFP4_NO_SEARCH") ? 0 : NVFP4_SCALE_SEARCH;
+
+    for (int i = 0; i < nb; i++) {
+        for (int s = 0; s < n_sub; s++) {
+            const float * xb = x + i*qk + s*qk_sub;
+            const float * wb = quant_weights ? quant_weights + i*qk + s*qk_sub : NULL;
+
+            float amax = 0.0f;
+            for (int j = 0; j < qk_sub; j++) {
+                if (amax < fabsf(xb[j])) {
+                    amax = fabsf(xb[j]);
+                }
+            }
+            if (amax == 0.0f) {
+                y[i].d[s] = 0;
+                for (int j = 0; j < qk_sub/2; ++j) {
+                    y[i].qs[s*(qk_sub/2) + j] = 0;
+                }
+                continue;
+            }
+
+            const uint8_t base = ggml_fp32_to_ue4m3(amax / 6.0f);
+
+            // search UE4M3 scale codes in [base-search, base+search], pick min (weighted) error
+            uint8_t best_code = base;
+            float   best_cost = INFINITY;
+            const int lo = (int) base - search;
+            const int hi = (int) base + search;
+            for (int c = lo; c <= hi; ++c) {
+                if (c < 1 || c > 0x7E) {
+                    continue;
+                }
+                const float d = ggml_ue4m3_to_fp32((uint8_t) c);
+                if (d <= 0.0f) {
+                    continue;
+                }
+                float cost = 0.0f;
+                for (int j = 0; j < qk_sub; ++j) {
+                    const int idx = best_index_mxfp4(xb[j], d);
+                    const float r = kvalues_mxfp4[idx] * d - xb[j];
+                    const float w = wb ? wb[j] : 1.0f;
+                    cost += w * r * r;
+                }
+                if (cost < best_cost) {
+                    best_cost = cost;
+                    best_code = (uint8_t) c;
+                }
+            }
+
+            y[i].d[s] = best_code;
+            const float d = ggml_ue4m3_to_fp32(best_code);
+            for (int j = 0; j < qk_sub/2; ++j) {
+                const uint8_t x0 = best_index_mxfp4(xb[0        + j], d);
+                const uint8_t x1 = best_index_mxfp4(xb[qk_sub/2 + j], d);
+                y[i].qs[s*(qk_sub/2) + j] = x0 | (x1 << 4);
+            }
+        }
+    }
+}
+
 void dequantize_row_q1_0(const block_q1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK1_0;
 
@@ -2234,9 +2312,15 @@ size_t quantize_mxfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
 }
 
 size_t quantize_nvfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    GGML_UNUSED(quant_weights);
-    quantize_row_nvfp4_ref(src, dst, (int64_t)nrow*n_per_row);
-    return nrow * ggml_row_size(GGML_TYPE_NVFP4, n_per_row);
+    const size_t row_size = ggml_row_size(GGML_TYPE_NVFP4, n_per_row);
+    char * qrow = (char *) dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        // quant_weights (imatrix) is one value per input column, length n_per_row, shared
+        // across all rows of this tensor — indexed by column only, NOT offset per row.
+        quantize_row_nvfp4_impl(src + row * n_per_row, (block_nvfp4 *) qrow, n_per_row, quant_weights);
+        qrow += row_size;
+    }
+    return nrow * row_size;
 }
 
 // ====================== Ternary (de)-quantization (BitNet b1.58 and TriLMs)
