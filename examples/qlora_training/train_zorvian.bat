@@ -8,13 +8,13 @@ set EXE=build-cuda\bin\llama-finetune-qlora.exe
 set MODEL=examples\qlora_training\Qwen3-1.7B.Q4_K_M.gguf
 if not defined TRAIN_FILE set TRAIN_FILE=examples\qlora_training\zorvian_training_data.jsonl
 if not defined LORA_OUT set LORA_OUT=examples\qlora_training\zorvian_train_adapter.gguf
-if not defined EPOCHS set EPOCHS=30
-if not defined LR set LR=1e-4
+if not defined EPOCHS set EPOCHS=100
+if not defined LR set LR=5e-5
 if not defined LORA_RANK set LORA_RANK=16
 if not defined LORA_ALPHA set LORA_ALPHA=16
-@REM This larger mixed dataset benefits from some Adam history, unlike the micro repro.
-@REM Restarting periodically still drops stale optimizer state while preserving adapter weights.
-if not defined OPT_RESTART_EVERY set OPT_RESTART_EVERY=5
+@REM Reset every epoch because this dataset still shows stale Adam state within a window.
+@REM This keeps adapter weights and drops only optimizer state between epochs.
+if not defined OPT_RESTART_EVERY set OPT_RESTART_EVERY=1
 if not defined RESUME set RESUME=0
 if not defined SHUFFLE set SHUFFLE=1
 
