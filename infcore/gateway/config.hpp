@@ -17,6 +17,12 @@ struct GatewayConfig {
     bool        rbac_enabled = true;
     bool        enforce_no_egress = true;
 
+    // runtime: lazy-подъём управляемых бэкендов (модели с пустым backend_url)
+    std::string llama_server_bin;            // путь к нашему llama-server (из сборки)
+    int         port_range_start   = 8100;
+    int         idle_timeout_ms    = 300000;
+    int         startup_timeout_ms = 120000;
+
     std::vector<std::string> api_keys;
     std::vector<ModelEntry>  models;
 };

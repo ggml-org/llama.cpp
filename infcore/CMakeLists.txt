@@ -29,6 +29,7 @@ endif()
 add_subdirectory(security)
 add_subdirectory(observability)
 add_subdirectory(registry)
+add_subdirectory(runtime)
 add_subdirectory(gateway)
 
 message(STATUS "infcore: движок встроен из ${INFCORE_LLAMA_ROOT}")

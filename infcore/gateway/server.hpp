@@ -5,11 +5,13 @@
 
 #include <atomic>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 
 #include "config.hpp"
 #include "registry/model_registry.h"
+#include "runtime/backend_supervisor.h"
 
 namespace infcore {
 
@@ -21,6 +23,7 @@ public:
 private:
     GatewayConfig cfg_;
     ModelRegistry registry_;
+    std::unique_ptr<BackendSupervisor> supervisor_;
 
     // примитивные метрики (pull, /metrics)
     std::mutex                                metrics_mu_;

@@ -48,6 +48,17 @@
       "properties": {
         "enforce_no_egress": { "type": "boolean", "default": true }
       }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Lazy-подъём управляемых бэкендов (моделей без backend_url).",
+      "properties": {
+        "llama_server_bin": { "type": "string", "description": "Путь к llama-server из нашей сборки" },
+        "port_range_start": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8100 },
+        "idle_timeout_ms": { "type": "integer", "minimum": 0, "default": 300000 },
+        "startup_timeout_ms": { "type": "integer", "minimum": 0, "default": 120000 }
+      }
     }
   },
   "$defs": {
@@ -59,6 +70,8 @@
         "logical_name": { "type": "string", "pattern": "^[a-z0-9._-]+$" },
         "gguf_path": { "type": "string", "description": "Локальный путь к GGUF (offline)" },
         "arch": { "type": "string", "description": "general.architecture из метаданных GGUF" },
+        "backend_url": { "type": "string", "description": "Внешний llama-server; если пусто - бэкенд управляется runtime-supervisor" },
+        "upstream_model": { "type": "string", "description": "Имя модели на бэкенде, если отличается от logical_name" },
         "modality": { "enum": ["text", "embedding", "vision", "audio"], "default": "text" },
         "enabled": { "type": "boolean", "default": true },
         "n_ctx": { "type": "integer", "minimum": 512, "default": 8192 },

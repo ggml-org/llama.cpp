@@ -1,6 +1,7 @@
 // infcore gateway — корпоративная лицензия.
 #include "server.hpp"
 
+#include <csignal>
 #include <cstdio>
 #include <sstream>
 
@@ -13,6 +14,14 @@ namespace infcore {
 
 GatewayServer::GatewayServer(GatewayConfig cfg) : cfg_(std::move(cfg)) {
     for (const auto& m : cfg_.models) registry_.add(m);
+
+    BackendSupervisor::Options opt;
+    opt.llama_server_bin   = cfg_.llama_server_bin;
+    opt.host               = cfg_.host;
+    opt.port_range_start   = cfg_.port_range_start;
+    opt.idle_timeout_ms    = cfg_.idle_timeout_ms;
+    opt.startup_timeout_ms = cfg_.startup_timeout_ms;
+    supervisor_ = std::make_unique<BackendSupervisor>(opt);
 }
 
 void GatewayServer::inc(const std::string& key) {
@@ -53,11 +62,22 @@ void error_json(httplib::Response& res, int status, const std::string& type,
     res.set_content(e.dump(), "application/json");
 }
 
+// Штатная остановка по сигналу: на гибель от сигнала C++ деструкторы не вызываются,
+// поэтому ловим SIGINT/SIGTERM и просим listen() вернуться -> отработает
+// ~BackendSupervisor и погасит дочерние llama-server (без осиротевших процессов).
+httplib::Server* g_active_srv = nullptr;
+void on_term(int) { if (g_active_srv) g_active_srv->stop(); }
+
 }  // namespace
 
 // --- server ------------------------------------------------------------------
 int GatewayServer::run() {
     httplib::Server svr;
+
+    g_active_srv = &svr;
+    std::signal(SIGINT, on_term);
+    std::signal(SIGTERM, on_term);
+    std::signal(SIGPIPE, SIG_IGN);   // оборванный клиент при SSE не должен ронять gateway
 
     // health (без авторизации)
     svr.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
@@ -103,8 +123,17 @@ int GatewayServer::run() {
                 return error_json(res, 404, "invalid_request_error", "model not found: " + model); }
             if (!e.enabled) { inc("errors_total{type=\"model_disabled\"}");
                 return error_json(res, 409, "invalid_request_error", "model disabled: " + model); }
-            if (e.backend_url.empty()) { inc("errors_total{type=\"no_backend\"}");
-                return error_json(res, 502, "api_error", "у модели нет backend_url: " + model); }
+
+            // backend_url пуст -> модель управляемая: поднимаем процесс по требованию.
+            std::string backend = e.backend_url;
+            const bool managed = backend.empty();
+            if (managed) {
+                std::string serr;
+                backend = supervisor_->ensure_ready(e, serr);
+                if (backend.empty()) { inc("errors_total{type=\"backend_start_failed\"}");
+                    return error_json(res, 502, "api_error", "не удалось поднять бэкенд: " + serr); }
+                supervisor_->acquire(e.logical_name);
+            }
 
             // подмена имени модели на имя бэкенда, если задано
             if (!e.upstream_model.empty()) body["model"] = e.upstream_model;
@@ -112,26 +141,28 @@ int GatewayServer::run() {
 
             const bool stream = allow_stream && body.value("stream", false);
 
-            httplib::Client cli(e.backend_url);
+            httplib::Client cli(backend);
             cli.set_read_timeout(cfg_.request_timeout_ms / 1000, 0);
             cli.set_write_timeout(cfg_.request_timeout_ms / 1000, 0);
             httplib::Headers fwd = {{"Content-Type", "application/json"}};
 
             if (!stream) {
                 auto up = cli.Post(upstream_path, fwd, out_body, "application/json");
+                if (managed) supervisor_->release(e.logical_name);
                 if (!up) { inc("errors_total{type=\"backend_unreachable\"}");
-                    return error_json(res, 502, "api_error", "бэкенд недоступен: " + e.backend_url); }
+                    return error_json(res, 502, "api_error", "бэкенд недоступен: " + backend); }
                 res.status = up->status;
                 res.set_content(up->body, "application/json");
                 return;
             }
 
             // SSE passthrough: тянем поток из бэкенда и пишем в sink целиком за один вызов.
+            const std::string logical = e.logical_name;
             res.set_chunked_content_provider(
                 "text/event-stream",
-                [this, e, upstream_path, fwd, out_body](size_t /*offset*/,
-                                                        httplib::DataSink& sink) {
-                    httplib::Client up(e.backend_url);
+                [this, backend, managed, logical, upstream_path, fwd, out_body](
+                    size_t /*offset*/, httplib::DataSink& sink) {
+                    httplib::Client up(backend);
                     up.set_read_timeout(cfg_.request_timeout_ms / 1000, 0);
                     auto r = up.Post(upstream_path, fwd, out_body, "application/json",
                                      [&sink](const char* data, size_t len) {
@@ -143,6 +174,7 @@ int GatewayServer::run() {
                         sink.write(msg, std::char_traits<char>::length(msg));
                     }
                     sink.done();
+                    if (managed) supervisor_->release(logical);
                     return true;
                 });
         };
@@ -154,7 +186,9 @@ int GatewayServer::run() {
 
     std::printf("infcore gateway слушает http://%s:%d (моделей: %zu)\n",
                 cfg_.host.c_str(), cfg_.port, cfg_.models.size());
-    if (!svr.listen(cfg_.host, cfg_.port)) {
+    bool ok = svr.listen(cfg_.host, cfg_.port);
+    g_active_srv = nullptr;
+    if (!ok) {
         std::fprintf(stderr, "infcore: не удалось слушать %s:%d\n",
                      cfg_.host.c_str(), cfg_.port);
         return 1;

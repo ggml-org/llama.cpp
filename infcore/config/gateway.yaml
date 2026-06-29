@@ -16,6 +16,12 @@
   },
   "observability": { "metrics_enabled": true, "metrics_path": "/metrics" },
   "offline": { "enforce_no_egress": true },
+  "runtime": {
+    "llama_server_bin": "/opt/infcore/bin/llama-server",
+    "port_range_start": 8100,
+    "idle_timeout_ms": 300000,
+    "startup_timeout_ms": 120000
+  },
   "models": [
     {
       "logical_name": "qwen3-moe-a3b",

@@ -51,6 +51,14 @@ GatewayConfig load_config(const std::string& path) {
     if (j.contains("offline"))
         cfg.enforce_no_egress = j.at("offline").value("enforce_no_egress", true);
 
+    if (j.contains("runtime")) {
+        const auto& r = j.at("runtime");
+        cfg.llama_server_bin   = r.value("llama_server_bin", cfg.llama_server_bin);
+        cfg.port_range_start   = r.value("port_range_start", cfg.port_range_start);
+        cfg.idle_timeout_ms    = r.value("idle_timeout_ms", cfg.idle_timeout_ms);
+        cfg.startup_timeout_ms = r.value("startup_timeout_ms", cfg.startup_timeout_ms);
+    }
+
     if (j.contains("models")) {
         for (const auto& m : j.at("models")) {
             ModelEntry e;
@@ -73,6 +81,17 @@ GatewayConfig load_config(const std::string& path) {
         throw std::runtime_error("infcore: security.api_keys пуст — нужен хотя бы один ключ");
     if (cfg.models.empty())
         throw std::runtime_error("infcore: models пуст");
+
+    // Управляемая модель (без backend_url) требует runtime.llama_server_bin и gguf_path.
+    for (const auto& m : cfg.models) {
+        if (!m.backend_url.empty()) continue;
+        if (cfg.llama_server_bin.empty())
+            throw std::runtime_error("infcore: модель '" + m.logical_name +
+                "' без backend_url требует runtime.llama_server_bin");
+        if (m.gguf_path.empty())
+            throw std::runtime_error("infcore: управляемая модель '" + m.logical_name +
+                "' требует gguf_path");
+    }
 
     return cfg;
 }
