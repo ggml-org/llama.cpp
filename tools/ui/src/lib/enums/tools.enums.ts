@@ -1,7 +1,8 @@
 export enum ToolSource {
 	BUILTIN = 'builtin',
 	MCP = 'mcp',
-	CUSTOM = 'custom'
+	CUSTOM = 'custom',
+	FRONTEND = 'frontend'
 }
 
 export enum ToolPermissionDecision {

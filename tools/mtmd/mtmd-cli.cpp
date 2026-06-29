@@ -32,9 +32,9 @@ static volatile bool g_is_generating = false;
 static volatile bool g_is_interrupted = false;
 
 /**
- * Please note that this is NOT a production-ready stuff.
+ * Please note that this is NOT a production-ready binary.
  * It is a playground for trying multimodal support in llama.cpp.
- * For contributors: please keep this code simple and easy to understand.
+ * For contributors: please keep this code simple and easy to understand. Do not add unnecessary complexity. The goal is to have a simple CLI for testing multimodal support.
  */
 
 static void show_additional_info(int /*argc*/, char ** argv) {
@@ -65,6 +65,14 @@ static void sigint_handler(int signo) {
 }
 #endif
 
+// this is only used by tests.sh to capture the response ; it's not meant to be used in production
+static void inject_test_response_marker() {
+    const char * env = std::getenv("MTMD_TEST_RESPONSE_MARKER");
+    if (env) {
+        LOG("%s\n", env);
+    }
+}
+
 struct mtmd_cli_context {
     mtmd::context_ptr ctx_vision;
     common_init_result_ptr llama_init;
@@ -77,6 +85,9 @@ struct mtmd_cli_context {
     int                 n_batch;
 
     mtmd::bitmaps bitmaps;
+    std::vector<mtmd_helper::video_ptr> videos;
+
+    mtmd::batch_ptr mbatch;
 
     // chat template
     common_chat_templates_ptr tmpls;
@@ -166,11 +177,14 @@ struct mtmd_cli_context {
     }
 
     bool load_media(const std::string & fname) {
-        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str()));
-        if (!bmp.ptr) {
+        auto res = mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str(), false);
+        if (!res.bitmap) {
             return false;
         }
-        bitmaps.entries.push_back(std::move(bmp));
+        bitmaps.entries.emplace_back(res.bitmap);
+        if (res.video_ctx) {
+            videos.emplace_back(res.video_ctx);
+        }
         return true;
     }
 };
@@ -229,6 +243,8 @@ static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg &
 }
 
 static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
+    inject_test_response_marker();
+
     bool add_bos = ctx.chat_history.empty();
     auto formatted_chat = chat_add_and_format(ctx, msg);
     LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
@@ -253,21 +269,97 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     }
 
     ctx.bitmaps.entries.clear();
+    ctx.videos.clear();
 
-    llama_pos new_n_past;
-    if (mtmd_helper_eval_chunks(ctx.ctx_vision.get(),
-                ctx.lctx, // lctx
-                chunks.ptr.get(), // chunks
-                ctx.n_past, // n_past
-                0, // seq_id
-                ctx.n_batch, // n_batch
-                true, // logits_last
-                &new_n_past)) {
-        LOG_ERR("Unable to eval prompt\n");
-        return 1;
+    // batch encode all media chunks, then decode each
+    size_t n_chunks = mtmd_input_chunks_size(chunks.ptr.get());
+    for (size_t i = 0; i < n_chunks; i++) {
+        auto chunk = mtmd_input_chunks_get(chunks.ptr.get(), i);
+        auto chunk_type = mtmd_input_chunk_get_type(chunk);
+
+        if (chunk_type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+            // decode text chunk
+            llama_pos new_n_past = ctx.n_past;
+            res = mtmd_helper_eval_chunk_single(ctx.ctx_vision.get(),
+                        ctx.lctx,
+                        chunk,
+                        ctx.n_past,
+                        0, // seq_id
+                        ctx.n_batch,
+                        i == n_chunks - 1, // logits_last
+                        &new_n_past);
+            if (res != 0) {
+                LOG_ERR("Unable to eval text chunk %zu\n", i);
+                return 1;
+            }
+            ctx.n_past = new_n_past;
+        } else {
+            // media chunk: try to get embd from existing batch, or create a new batch
+            float * embd = nullptr;
+            if (ctx.mbatch) {
+                embd = mtmd_batch_get_output_embd(ctx.mbatch.get(), chunk);
+
+                if (embd) {
+                    LOG_DBG("found embd for media chunk %zu in existing batch\n", i);
+                } else {
+                    LOG_DBG("media chunk %zu not found in existing batch, creating new batch\n", i);
+                }
+            }
+
+            if (!embd) {
+                // create and encode a new batch with as many media chunks as possible
+                ctx.mbatch.reset(mtmd_batch_init(ctx.ctx_vision.get()));
+                res = mtmd_batch_add_chunk(ctx.mbatch.get(), chunk);
+                GGML_ASSERT(res == 0); // first chunk must always succeed
+
+                int n_added = 1;
+                // add as many subsequent media chunks as possible
+                for (size_t j = i + 1; j < n_chunks; j++) {
+                    auto next_chunk = mtmd_input_chunks_get(chunks.ptr.get(), j);
+                    auto next_type = mtmd_input_chunk_get_type(next_chunk);
+                    if (next_type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                        break; // text chunk splits the batch
+                    }
+                    res = mtmd_batch_add_chunk(ctx.mbatch.get(), next_chunk);
+                    if (res != 0) {
+                        break; // batch full or incompatible
+                    }
+                    n_added++;
+                }
+
+                int64_t time_start = ggml_time_ms();
+                LOG_INF("encoding mtmd batch, n_chunks = %d (done = %zu, total = %zu)\n", n_added, i, n_chunks);
+                res = mtmd_batch_encode(ctx.mbatch.get());
+                if (res != 0) {
+                    LOG_ERR("Failed to encode mtmd batch, res = %d\n", res);
+                    return 1;
+                }
+                LOG_INF("mtmd batch encoding done in %d ms\n", (int)(ggml_time_ms() - time_start));
+
+                embd = mtmd_batch_get_output_embd(ctx.mbatch.get(), chunk);
+            }
+
+            GGML_ASSERT(embd != nullptr);
+
+            llama_pos new_n_past = ctx.n_past;
+            res = mtmd_helper_decode_image_chunk(ctx.ctx_vision.get(),
+                        ctx.lctx,
+                        chunk,
+                        embd,
+                        ctx.n_past,
+                        0, // seq_id
+                        ctx.n_batch,
+                        &new_n_past,
+                        nullptr, // callback
+                        nullptr  // user_data
+                    );
+            if (res != 0) {
+                LOG_ERR("Unable to decode media chunk %zu\n", i);
+                return 1;
+            }
+            ctx.n_past = new_n_past;
+        }
     }
-
-    ctx.n_past = new_n_past;
 
     LOG("\n");
 
@@ -303,6 +395,9 @@ int main(int argc, char ** argv) {
     bool is_single_turn = !params.prompt.empty() && !params.image.empty();
 
     int n_predict = params.n_predict < 0 ? INT_MAX : params.n_predict;
+
+    console::init(params.simple_io, params.use_color);
+    atexit([]() { console::cleanup(); });
 
     // Ctrl+C handling
     {
@@ -373,6 +468,9 @@ int main(int argc, char ** argv) {
         if (mtmd_support_audio(ctx.ctx_vision.get())) {
             LOG("\n   /audio <path>    load an audio");
         }
+        if (mtmd_helper_support_video(ctx.ctx_vision.get())) {
+            LOG("\n   /video <path>    load a video");
+        }
         LOG("\n   /clear           clear the chat history");
         LOG("\n   /quit or /exit   exit the program");
         LOG("\n");
@@ -407,14 +505,15 @@ int main(int argc, char ** argv) {
             g_is_generating = true;
             bool is_image = line == "/image" || line.find("/image ") == 0;
             bool is_audio = line == "/audio" || line.find("/audio ") == 0;
-            if (is_image || is_audio) {
+            bool is_video = line == "/video" || line.find("/video ") == 0;
+            if (is_image || is_audio || is_video) {
                 if (line.size() < 8) {
                     LOG_ERR("ERR: Missing media filename\n");
                     continue;
                 }
                 std::string media_path = line.substr(7);
                 if (ctx.load_media(media_path)) {
-                    LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
+                    LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : is_audio ? "audio" : "video");
                     content += mtmd_default_marker();
                 }
                 // else, error is already printed by libmtmd

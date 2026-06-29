@@ -6,7 +6,9 @@
 		Download,
 		Loader2,
 		Square,
-		GitBranch
+		GitBranch,
+		Pin,
+		PinOff
 	} from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -55,6 +57,10 @@
 	function handleStop(event: Event) {
 		event.stopPropagation();
 		onStop?.(conversation.id);
+	}
+
+	function handleTogglePin() {
+		conversationsStore.toggleConversationPin(conversation.id);
 	}
 
 	function handleGlobalEditEvent(event: Event) {
@@ -170,6 +176,14 @@
 				triggerTooltip="More actions"
 				bind:open={dropdownOpen}
 				actions={[
+					{
+						icon: conversation.pinned ? PinOff : Pin,
+						label: conversation.pinned ? 'Unpin' : 'Pin',
+						onclick: (e: Event) => {
+							e.stopPropagation();
+							handleTogglePin();
+						}
+					},
 					{
 						icon: Pencil,
 						label: 'Edit',

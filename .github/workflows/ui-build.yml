@@ -2,6 +2,11 @@ name: UI Build
 
 on:
   workflow_call:
+    inputs:
+      hf_ui_version:
+        description: 'Version string for version.json (e.g. 12345)'
+        required: false
+        type: string
 
 jobs:
   build:
@@ -25,15 +30,15 @@ jobs:
         working-directory: tools/ui
 
       - name: Build application
+        env:
+          HF_UI_VERSION: ${{ inputs.hf_ui_version || '' }}
+          LLAMA_BUILD_NUMBER: ${{ inputs.hf_ui_version || 'b0000' }}
         run: npm run build
         working-directory: tools/ui
 
-      - name: Generate checksums
-        run: |
-          cd tools/ui/dist
-          for f in *; do
-            sha256sum "$f" | awk '{print $1, $2}' >> checksums.txt
-          done
+      - name: Run PWA unit tests (versioned build output)
+        run: npx vitest --project=unit --run tests/unit/pwa.spec.ts
+        working-directory: tools/ui
 
       - name: Upload built UI
         uses: actions/upload-artifact@v6

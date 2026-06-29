@@ -98,7 +98,7 @@ public:
     //       likely through `struct llama_memory_params`
     llama_kv_cache(
             const llama_model & model,
-            const llama_hparams & hparams,
+          const llama_hparams & hparams,
                     ggml_type   type_k,
                     ggml_type   type_v,
                          bool   v_trans,
@@ -109,8 +109,10 @@ public:
                      uint32_t   n_pad,
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
+               llama_memory_t   mem_other,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+        const  layer_reuse_cb & reuse,
+        const  layer_share_cb & share);
 
     ~llama_kv_cache() = default;
 
@@ -158,6 +160,9 @@ public:
 
     ggml_type type_k() const;
     ggml_type type_v() const;
+
+    std::vector<uint32_t> get_layer_ids() const;
+    ggml_tensor * get_k_storage(int32_t il) const;
 
     //
     // graph_build API
@@ -264,7 +269,12 @@ private:
     // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
     std::vector<uint32_t> v_heads;
 
-    std::vector<llama_kv_cells> v_cells;
+    // TODO: temporary until we refactor to be able to share the same cells between 2 kv caches [TAG_KV_CACHE_SHARE_CELLS]
+    llama_kv_cache * other;
+
+    std::shared_ptr<llama_kv_cells_vec> v_cells_impl;
+
+    llama_kv_cells_vec & v_cells;
 
     // maps from a sequence id to a stream id
     std::vector<uint32_t> seq_to_stream;

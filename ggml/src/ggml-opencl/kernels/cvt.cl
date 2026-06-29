@@ -584,6 +584,60 @@ kernel void kernel_restore_block_q5_0(
     }
 }
 
+kernel void kernel_convert_block_q5_0_noshuffle(
+    global struct block_q5_0 * src0,
+    global uchar * dst_q,
+    global uint  * dst_qh,
+    global half  * dst_d
+) {
+    global struct block_q5_0 * b = (global struct block_q5_0 *) src0 + get_global_id(0);
+    global uchar * q  = (global uchar *) dst_q + QK5_0/2*get_global_id(0);
+    global uint  * qh = (global uint  *) dst_qh + get_global_id(0);
+    global half  * d  = (global half  *) dst_d  + get_global_id(0);
+
+    *d = b->d;
+    *qh = *((global uint *)(b->qh));
+
+    for (int i = 0; i < QK5_0/4; ++i) {
+        uchar x0 = b->qs[2*i + 0];
+        uchar x1 = b->qs[2*i + 1];
+
+        q[i + 0      ] = convert_uchar(x0 & 0x0F) | convert_uchar((x1 & 0x0F) << 4);
+        q[i + QK5_0/4] = convert_uchar((x0 & 0xF0) >> 4) | convert_uchar(x1 & 0xF0);
+
+#ifdef ADRENO_GPU
+        if (get_global_id(0) == 65536*4096) {
+            printf("%04x - %02x\n", *(global ushort*)d, ((x0 & 0xF0) >> 4) | (x1 & 0xF0));
+        }
+#endif
+    }
+}
+
+kernel void kernel_restore_block_q5_0_noshuffle(
+    global uchar * src_q,
+    global uint  * src_qh,
+    global half  * src_d,
+    global struct block_q5_0 * dst,
+    uchar mask_0F,
+    uchar mask_F0
+) {
+    global struct block_q5_0 * b = (global struct block_q5_0 *) dst + get_global_id(0);
+    global uchar * q  = (global uchar *) src_q + QK5_0/2*get_global_id(0);
+    global uint  * qh = (global uint  *) src_qh + get_global_id(0);
+    global half  * d  = (global half  *) src_d  + get_global_id(0);
+
+    b->d = *d;
+    *((global uint *)(b->qh)) = *qh;
+
+    for (int i = 0; i < QK5_0/4; ++i) {
+        uchar x0 = q[i + 0      ];
+        uchar x1 = q[i + QK5_0/4];
+
+        b->qs[2*i + 0] = convert_uchar((x0 & mask_0F) | ((x1 & mask_0F) << 4));
+        b->qs[2*i + 1] = convert_uchar(((x0 & mask_F0) >> 4) | (x1 & mask_F0));
+    }
+}
+
 kernel void kernel_convert_block_q5_0_trans4_ns(
     __global struct block_q5_0 * src0,
     __global uint * dst_qs,
@@ -733,6 +787,66 @@ kernel void kernel_restore_block_q5_1(
     *((global uint *)(b->qh)) = *qh;
     for (int i = 0; i < QK5_1/2; ++i) {
         b->qs[i] = qs[i];
+    }
+}
+
+kernel void kernel_convert_block_q5_1_noshuffle(
+    global struct block_q5_1 * src0,
+    global uchar * dst_q,
+    global uint  * dst_qh,
+    global half  * dst_d,
+    global half  * dst_m
+) {
+    global struct block_q5_1 * b = (global struct block_q5_1 *) src0 + get_global_id(0);
+    global uchar * q  = (global uchar *) dst_q + QK5_1/2*get_global_id(0);
+    global uint  * qh = (global uint  *) dst_qh + get_global_id(0);
+    global half  * d  = (global half  *) dst_d  + get_global_id(0);
+    global half  * m  = (global half  *) dst_m  + get_global_id(0);
+
+    *d = b->d;
+    *m = b->m;
+    *qh = *((global uint *)(b->qh));
+
+    for (int i = 0; i < QK5_1/4; ++i) {
+        uchar x0 = b->qs[2*i + 0];
+        uchar x1 = b->qs[2*i + 1];
+
+        q[i + 0      ] = convert_uchar(x0 & 0x0F) | convert_uchar((x1 & 0x0F) << 4);
+        q[i + QK5_1/4] = convert_uchar((x0 & 0xF0) >> 4) | convert_uchar(x1 & 0xF0);
+
+#ifdef ADRENO_GPU
+        if (get_global_id(0) == 65536*4096) {
+            printf("%04x - %02x\n", *(global ushort*)d, ((x0 & 0xF0) >> 4) | (x1 & 0xF0));
+        }
+#endif
+    }
+}
+
+kernel void kernel_restore_block_q5_1_noshuffle(
+    global uchar * src_q,
+    global uint  * src_qh,
+    global half  * src_d,
+    global half  * src_m,
+    global struct block_q5_1 * dst,
+    uchar mask_0F,
+    uchar mask_F0
+) {
+    global struct block_q5_1 * b = (global struct block_q5_1 *) dst + get_global_id(0);
+    global uchar * q  = (global uchar *) src_q + QK5_1/2*get_global_id(0);
+    global uint  * qh = (global uint  *) src_qh + get_global_id(0);
+    global half  * d  = (global half  *) src_d  + get_global_id(0);
+    global half  * m  = (global half  *) src_m  + get_global_id(0);
+
+    b->d = *d;
+    b->m = *m;
+    *((global uint *)(b->qh)) = *qh;
+
+    for (int i = 0; i < QK5_1/4; ++i) {
+        uchar x0 = q[i + 0      ];
+        uchar x1 = q[i + QK5_1/4];
+
+        b->qs[2*i + 0] = convert_uchar((x0 & mask_0F) | ((x1 & mask_0F) << 4));
+        b->qs[2*i + 1] = convert_uchar(((x0 & mask_F0) >> 4) | (x1 & mask_F0));
     }
 }
 
@@ -1465,6 +1579,158 @@ kernel void kernel_restore_block_q8_0(
     b->d = *d;
     for (int i = 0; i < QK8_0; ++i) {
         b->qs[i] = q[i];
+    }
+}
+
+// View-aware AoS q8_0 -> f32 dequant (f32/f32 FA path).
+kernel void kernel_dequant_q8_0_f32_view_aos(
+    global char * src,
+    ulong         src_offset,
+    ulong         src_nb1,
+    ulong         src_nb2,
+    ulong         src_nb3,
+    int           nblk0,
+    int           ne1,
+    int           ne2,
+    int           ne3,
+    global float * dst
+) {
+    int blk_i0 = get_global_id(0);
+    int i1     = get_global_id(1);
+    int batch  = get_global_id(2);
+
+    if (blk_i0 >= nblk0) return;
+    if (i1     >= ne1)   return;
+
+    int i2 = batch % ne2;
+    int i3 = batch / ne2;
+    if (i3 >= ne3) return;
+
+    global char * block = src + src_offset + (ulong)i3*src_nb3 + (ulong)i2*src_nb2 + (ulong)i1*src_nb1 + (ulong)blk_i0 * (2 + QK8_0);
+    float d = vload_half(0, (global half *)block);
+    global char * qs = block + 2;
+
+    ulong dst_row_base = ((ulong)i3 * ne2 * ne1 + (ulong)i2 * ne1 + (ulong)i1) * nblk0;
+    global float * out = dst + (dst_row_base + blk_i0) * QK8_0;
+
+    for (int i = 0; i < QK8_0; ++i) {
+        out[i] = d * (float)qs[i];
+    }
+}
+
+// View-aware AoS q8_0 -> f16 dequant. Rows tight, batch strides may be gapped.
+kernel void kernel_dequant_q8_0_f16_view_aos(
+    global char * src,
+    ulong         src_offset,
+    ulong         src_nb1,
+    ulong         src_nb2,
+    ulong         src_nb3,
+    int           nblk0,
+    int           ne1,
+    int           ne2,
+    int           ne3,
+    global half * dst
+) {
+    int blk_i0 = get_global_id(0);
+    int i1     = get_global_id(1);
+    int batch  = get_global_id(2);
+
+    if (blk_i0 >= nblk0) return;
+    if (i1     >= ne1)   return;
+
+    int i2 = batch % ne2;
+    int i3 = batch / ne2;
+    if (i3 >= ne3) return;
+
+    global char * block = src + src_offset + (ulong)i3*src_nb3 + (ulong)i2*src_nb2 + (ulong)i1*src_nb1 + (ulong)blk_i0 * (2 + QK8_0);
+    float d = vload_half(0, (global half *)block);
+    global char * qs = block + 2;
+
+    ulong dst_row_base = ((ulong)i3 * ne2 * ne1 + (ulong)i2 * ne1 + (ulong)i1) * nblk0;
+    global half * out = dst + (dst_row_base + blk_i0) * QK8_0;
+
+    for (int i = 0; i < QK8_0; ++i) {
+        out[i] = (half)(d * (float)qs[i]);
+    }
+}
+
+// View-aware AoS q4_0 -> f32 dequant (mirrors the q8_0 view variant).
+kernel void kernel_dequant_q4_0_f32_view_aos(
+    global char * src,
+    ulong         src_offset,
+    ulong         src_nb1,
+    ulong         src_nb2,
+    ulong         src_nb3,
+    int           nblk0,
+    int           ne1,
+    int           ne2,
+    int           ne3,
+    global float * dst
+) {
+    int blk_i0 = get_global_id(0);
+    int i1     = get_global_id(1);
+    int batch  = get_global_id(2);
+
+    if (blk_i0 >= nblk0) return;
+    if (i1     >= ne1)   return;
+
+    int i2 = batch % ne2;
+    int i3 = batch / ne2;
+    if (i3 >= ne3) return;
+
+    global char * block = src + src_offset + (ulong)i3*src_nb3 + (ulong)i2*src_nb2 + (ulong)i1*src_nb1 + (ulong)blk_i0 * (2 + QK4_0/2);
+    float d = vload_half(0, (global half *)block);
+    global uchar * qs = (global uchar *)(block + 2);
+
+    ulong dst_row_base = ((ulong)i3 * ne2 * ne1 + (ulong)i2 * ne1 + (ulong)i1) * nblk0;
+    global float * out = dst + (dst_row_base + blk_i0) * QK4_0;
+
+    for (int i = 0; i < QK4_0/2; ++i) {
+        uchar byte = qs[i];
+        int q0 = (int)(byte & 0x0F) - 8;
+        int q1 = (int)(byte >> 4)   - 8;
+        out[i]            = d * (float)q0;
+        out[i + QK4_0/2]  = d * (float)q1;
+    }
+}
+
+// View-aware AoS q4_0 -> f16 dequant (mirrors the q8_0 view variant).
+kernel void kernel_dequant_q4_0_f16_view_aos(
+    global char * src,
+    ulong         src_offset,
+    ulong         src_nb1,
+    ulong         src_nb2,
+    ulong         src_nb3,
+    int           nblk0,
+    int           ne1,
+    int           ne2,
+    int           ne3,
+    global half * dst
+) {
+    int blk_i0 = get_global_id(0);
+    int i1     = get_global_id(1);
+    int batch  = get_global_id(2);
+
+    if (blk_i0 >= nblk0) return;
+    if (i1     >= ne1)   return;
+
+    int i2 = batch % ne2;
+    int i3 = batch / ne2;
+    if (i3 >= ne3) return;
+
+    global char * block = src + src_offset + (ulong)i3*src_nb3 + (ulong)i2*src_nb2 + (ulong)i1*src_nb1 + (ulong)blk_i0 * (2 + QK4_0/2);
+    float d = vload_half(0, (global half *)block);
+    global uchar * qs = (global uchar *)(block + 2);
+
+    ulong dst_row_base = ((ulong)i3 * ne2 * ne1 + (ulong)i2 * ne1 + (ulong)i1) * nblk0;
+    global half * out = dst + (dst_row_base + blk_i0) * QK4_0;
+
+    for (int i = 0; i < QK4_0/2; ++i) {
+        uchar byte = qs[i];
+        int q0 = (int)(byte & 0x0F) - 8;
+        int q1 = (int)(byte >> 4)   - 8;
+        out[i]          = (half)(d * (float)q0);
+        out[i + QK4_0/2] = (half)(d * (float)q1);
     }
 }
 

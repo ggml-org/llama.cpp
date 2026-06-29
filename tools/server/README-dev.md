@@ -57,6 +57,7 @@ The core architecture consists of the following components:
 - `server_tokens`: Unified representation of token sequences (supports both text and multimodal tokens); used by `server_task` and `server_slot`.
 - `server_prompt_checkpoint`: For recurrent (e.g., RWKV) and SWA models, stores snapshots of KV cache state. Enables reuse when subsequent requests share the same prompt prefix, saving redundant computation.
 - `server_models`: Standalone component for managing multiple backend instances (used in router mode). It is completely independent of `server_context`.
+- `stream_session_manager`: Process wide owner of resumable SSE stream sessions (`g_stream_sessions`), keyed by conversation id. Backs the replay buffer that lets a client reattach to a generation after an HTTP disconnect. See the "Resumable streaming" section below.
 
 ```mermaid
 graph TD
@@ -116,6 +117,58 @@ Here is an example trace of an API request for text completion:
 - At the same time, `server_res_generator` listens to the response queue and retrieves this response.
 - As the response is stateless, `server_res_generator` calls `response->update()` to update the response with the current state.
 - `server_res_generator` then calls `response->to_json()` and passes the response to the HTTP layer.
+
+### Resumable streaming (SSE replay buffer)
+
+By default a streaming generation is bound to its HTTP socket: when the socket drops (refresh, tab close, mobile background, transient network) the generation aborts and the live stream is lost. This feature keeps the generation running server side and lets a client reattach.
+
+It is opt in via the `X-Conversation-Id` header on `POST /v1/chat/completions`. Without the header the OAI strict path is unchanged. The conversation id is the only identity end to end (server map key, client localStorage key, route path), with an optional `::model` suffix for direct routing in router mode.
+
+The feature lives entirely in `server-stream.{h,cpp}` and rests on three types:
+
+- `stream_session`: a bounded ring buffer (4 MiB cap, oldest bytes drop first) plus a condvar. `append` pushes raw SSE bytes, `read_from` drains from any offset and blocks for live bytes or finalize, `finalize` wakes readers, `cancel` stops the producer. One conv maps to at most one live session.
+- `stream_session_manager` (`g_stream_sessions`): owns all sessions keyed by conv id, enforces the one conv one session invariant via `create_or_replace`, and runs a GC thread that drops completed sessions past their TTL.
+- `stream_pipe_producer` / `stream_pipe_consumer`: the write and read ends. The producer owns the session lifetime and finalizes it on destruction; the consumer is read only and never finalizes, so a reader detaching cannot kill a running generation.
+
+Producer side: `server_res_generator` attaches a producer pipe when the header is present. The HTTP content provider mirrors every chunk into the ring before writing it to the socket. While a pipe is attached, `stream_aware_should_stop` ignores peer disconnect, so a dropped socket does not stop generation: only an explicit `DELETE` does. When the peer leaves early, `on_complete` calls `close()`, which drains the rest of the generation into the ring on the http worker.
+
+Lifetime safety: the producer pipe holds a shared `alive` flag also captured by the session cancel hook. `~server_res_generator` calls `cleanup()` to clear that hook while the reader is still alive, so a `cancel` arriving during teardown can never call `stop()` on a freed response. This ordering is the most fragile part of the feature: finalizing or destroying the producer before `cleanup()` runs reintroduces a use after free.
+
+Consumer side: `GET /v1/stream/<conv_id>?from=N` opens a `text/event-stream` that replays buffered bytes from offset `N` and blocks for live bytes, so the browser reattaches like a fresh EventSource. An offset below the dropped prefix returns 400.
+
+Routes:
+
+- `GET /v1/stream/:conv_id?from=N`: replay or live reattach.
+- `POST /v1/streams/lookup` with `{"conversation_ids": [...]}`: returns session status only for ids the caller already owns. There is no listing route, so live sessions cannot be enumerated (an earlier `GET /v1/streams` was removed for exactly this reason).
+- `DELETE /v1/stream/:conv_id`: explicit Stop, idempotent (`evict_and_cancel`).
+
+Router mode binds the same paths to proxy handlers. A `conv_id -> child` map (`conv_models`), populated when a POST is routed, resolves the owning child in one lookup with no polling. The lookup groups ids per child; GET and DELETE proxy straight to the owner. This loopback REST hop is expected to move to a websocket IPC later, swapping only the transport.
+
+Lifecycle: `g_stream_sessions.start_gc()` runs in main after common init, `stop_gc()` runs first in `clean_up()` and finalizes every live session so no reader hangs. Reader blocking and the post drop drain both run on httplib worker threads, which block on a condvar rather than spin.
+
+| Constant | Value | Role |
+| --- | --- | --- |
+| `STREAM_SESSION_TTL_SECONDS` | 300 | retention of a completed session before GC |
+| `STREAM_SESSION_MAX_BYTES` | 4 MiB | ring cap per session |
+| `STREAM_SESSION_GC_INTERVAL_SECONDS` | 60 | GC tick |
+| `STREAM_READ_WAKE_INTERVAL_MS` | 200 | read_from wake to recheck should_stop |
+| `STREAM_LOOKUP_TIMEOUT_MS` | 250 | router to child loopback budget |
+
+```mermaid
+graph TD
+    Client -- "POST + X-Conversation-Id" --> RG[server_res_generator]
+    RG -- attach --> Prod[stream_pipe_producer]
+    Prod -- "write, drain on peer drop" --> Sess
+    subgraph g_stream_sessions
+        Sess[stream_session: ring buffer, 4 MiB]
+        GC[GC thread] -- drop after TTL --> Sess
+    end
+    Sess -- read_from offset --> Cons[stream_pipe_consumer]
+    Cons -- "GET /v1/stream/:id?from=N" --> Client
+    DEL[DELETE /v1/stream/:id] -- evict_and_cancel --> Sess
+```
+
+The diagram shows the buffer touch points. The live wire (chunks streamed to the original client during a normal generation) is the producer's default output, described under "Producer side" above.
 
 ### Testing
 
@@ -180,6 +233,35 @@ That requires `JSON.stringify` when formatted to message content:
 }
 ```
 
+### Router mode: how child <--> router communicates
+
+Upon spawning a new child process using `subprocess`, both child and router listen to the stdout/stderr (combined)
+
+For the direction from child to router:
+- Generic messages are logs, it will be forwarded to router's stdout
+- Special state update messages are prefixed by `cmd_child_to_router:state:`, followed by a JSON. See `server_models::handle_child_state` for more
+
+For the direction from router to child:
+- When server sends `cmd_router_to_child:exit`, the child should exit gracefully --> if after `DEFAULT_STOP_TIMEOUT` and the child is still running, force-kill it
+
+### Model management API (router mode)
+
+Model management API was added via PR [#23976](https://github.com/ggml-org/llama.cpp/pull/23976)
+
+The main goal of this API is to allow downloading models and/or removing models from the web UI. It relies on the model cache infrastructure under the hood to manage the list of models dynamically.
+
+Instead of building everything from the ground up (like what most AI agents will do when you ask them to implement a similar feature), we built on top of existing, already well-engineered components inside the codebase:
+- Model cache infrastructure as mentioned above (`common/download.h`)
+- Server response queue (`server-queue.h`). We use this feature to broadcast events to SSE clients.
+- Server router thread management (`server-models.h`). We re-use the same thread model that is used for managing subprocess life cycle, except that we don't create a new subprocess, but launch the download right inside the thread.
+
+The flow for downloading a new model:
+- POST request comes in --> `post_router_models` --> validation
+- A new `llama-server` subprocess will be spawned with special `SERVER_CHILD_MODE_DOWNLOAD`
+- Child process runs the download and report status back to router via stdin/out
+- If a stop request comes in, the router asks the child process to stop (same mechanism as running a model in child process)
+- Otherwise, upon completion, we call `load_models()` to refresh the list of models
+
 ### Notable Related PRs
 
 - Initial server implementation: https://github.com/ggml-org/llama.cpp/pull/1443
@@ -194,6 +276,7 @@ That requires `JSON.stringify` when formatted to message content:
 - Speculative decoding: https://github.com/ggml-org/llama.cpp/pull/17808 and rework in https://github.com/ggml-org/llama.cpp/pull/17808
 - INI presets: https://github.com/ggml-org/llama.cpp/pull/17859 (+ refactoring: https://github.com/ggml-org/llama.cpp/pull/18169)
 - Sleeping mode: https://github.com/ggml-org/llama.cpp/pull/18228
+- Resumable streaming (SSE replay buffer): https://github.com/ggml-org/llama.cpp/pull/23226
 
 
 
