@@ -33,20 +33,20 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
 
-    ml.get_key("deepseek4.attention.output_group_count",         hparams.dsv4_o_group_count);
-    ml.get_key("deepseek4.attention.output_lora_rank",           hparams.dsv4_o_lora_rank);
-    ml.get_key("deepseek4.attention.compress_rope_freq_base",    hparams.dsv4_compress_rope_base);
-    ml.get_key("deepseek4.hyper_connection.count",               hparams.dsv4_hc_mult);
-    ml.get_key("deepseek4.hyper_connection.sinkhorn_iterations", hparams.dsv4_hc_sinkhorn_iters);
-    ml.get_key("deepseek4.hyper_connection.epsilon",             hparams.dsv4_hc_eps);
-    ml.get_key("deepseek4.hash_layer_count",                     hparams.dsv4_hash_layer_count);
+    ml.get_key(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,         hparams.dsv4_o_group_count);
+    ml.get_key(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,           hparams.dsv4_o_lora_rank);
+    ml.get_key(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE,    hparams.dsv4_compress_rope_base);
+    ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.dsv4_hc_mult);
+    ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
+    ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
+    ml.get_key(LLM_KV_HASH_LAYER_COUNT,                     hparams.dsv4_hash_layer_count);
 
     uint32_t n_compress_ratios = 0;
-    ml.get_arr_n("deepseek4.attention.compress_ratios", n_compress_ratios);
+    ml.get_arr_n(LLM_KV_ATTENTION_COMPRESS_RATIOS, n_compress_ratios);
     if (n_compress_ratios < hparams.n_layer()) {
         throw std::runtime_error("DeepSeek-V4 compress_ratios is shorter than block_count");
     }
-    ml.get_arr("deepseek4.attention.compress_ratios", hparams.dsv4_compress_ratios);
+    ml.get_arr(LLM_KV_ATTENTION_COMPRESS_RATIOS, hparams.dsv4_compress_ratios);
 
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func);
     if (hparams.expert_gating_func != LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
