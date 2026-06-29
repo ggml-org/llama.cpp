@@ -1,0 +1,17 @@
+[[docs:funcstructs:common.cpp]]
+== common.cpp
+
+
+[[docs:funcstructs:common.cpp:common_init_from_params]]
+=== common_init_from_params
+
+Signature:
+[.codebit]#`struct common_init_result common_init_from_params(common_params & params)`#
+
+Firstly, the function loads the model ([.codebit]#`struct llama_model`#). Depending on the parameters and the build, this can go through one of three branches, calling [.codebit]#`common_load_model_from_hf(...)`# to load from a HuggingFace repository, [.codebit]#`common_load_model_from_url(...)`# to load from an URL or [.codebit]#`llama_model_load_from_file(...)`# to load from a local file. The first two branches also end up indirectly calling [.codebit]#`llama_model_load_from_file(...)`#. 
+
+Secondly, it passes the loaded model to [.codebit]#`llama_init_from_model(...)`# to generate the corresponding [.codebit]#`llama_context`#.
+
+Thirdly, it loads the control vectors, then the lora adapters ([.codebit]#`struct llama_adapter_lora`#) indicated by the parameters through calls to [.codebit]#`llama_adapter_lora_init(...)`#. It also performs a warmup run of the model if so indicated by [.codebit]#`params.warmup`#.
+
+Lastly, it bundles and returns the [.codebit]#`llama_model`#, [.codebit]#`llama_context`# and lora adapters in a [.codebit]#`struct common_init_result`#.
