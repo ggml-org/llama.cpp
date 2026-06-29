@@ -4841,6 +4841,36 @@ struct test_soft_max : public test_case {
     }
 };
 
+// GGML_OP_LOG_SOFT_MAX
+struct test_log_soft_max : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    const bool inplace;
+
+    std::string vars() override {
+        return VARS_TO_STR3(type, ne, inplace);
+    }
+
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+
+    test_log_soft_max(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {10, 5, 4, 3},
+            bool inplace = false)
+        : type(type), ne(ne), inplace(inplace) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = inplace ? ggml_log_soft_max_inplace(ctx, a) : ggml_log_soft_max(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_SOFT_MAX_BACK
 struct test_soft_max_back : public test_case {
     const ggml_type type;
@@ -8825,6 +8855,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                     test_cases.emplace_back(new test_soft_max_back(GGML_TYPE_F32, {ne0-1, ne1-1, 1, 1}, scale, max_bias));
                     test_cases.emplace_back(new test_soft_max_back(GGML_TYPE_F32, {ne0,   ne1,   2, 3}, scale, max_bias));
                 }
+            }
+        }
+    }
+
+    for (bool inplace : {false, true}) {
+        for (int64_t ne0 : {16, 1023, 1024}) {       // exercise both the _4 (multiple of 4) and scalar kernels
+            for (std::array<int64_t, 4> ne : { std::array<int64_t, 4>{ne0, 5, 1, 1},
+                                               std::array<int64_t, 4>{ne0, 3, 2, 2} }) {
+                test_cases.emplace_back(new test_log_soft_max(GGML_TYPE_F32, ne, inplace));
             }
         }
     }

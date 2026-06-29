@@ -528,6 +528,7 @@ extern "C" {
         GGML_OP_DIAG_MASK_ZERO,
         GGML_OP_SOFT_MAX,
         GGML_OP_SOFT_MAX_BACK,
+        GGML_OP_LOG_SOFT_MAX,
         GGML_OP_ROPE,
         GGML_OP_ROPE_BACK,
         GGML_OP_CLAMP,
@@ -1720,6 +1721,18 @@ extern "C" {
 
     // in-place, returns view(a)
     GGML_API struct ggml_tensor * ggml_soft_max_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    // log(soft_max(a)) along ne[0]; numerically stable and aligned with PyTorch
+    // float32 log_softmax: out = (x - max) - log(sum(exp(x - max))), computed per
+    // row over ne[0] with the running sum accumulated entirely in FP32.
+    GGML_API struct ggml_tensor * ggml_log_soft_max(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    // in-place, returns view(a)
+    GGML_API struct ggml_tensor * ggml_log_soft_max_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 

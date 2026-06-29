@@ -913,7 +913,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
                 split_state = handle_generic(src_ss, /*scalar_only =*/ true);
             } break;
             case GGML_OP_SOFT_MAX:
-            case GGML_OP_SOFT_MAX_BACK: {
+            case GGML_OP_SOFT_MAX_BACK:
+            case GGML_OP_LOG_SOFT_MAX: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ false);
             } break;
             case GGML_OP_ROPE: {

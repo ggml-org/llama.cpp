@@ -2112,6 +2112,163 @@ template [[host_name("kernel_soft_max_f32")]]   kernel kernel_soft_max_t   kerne
 template [[host_name("kernel_soft_max_f16_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<half4>;
 template [[host_name("kernel_soft_max_f32_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<float4>;
 
+// log_softmax over ne00, aligned with PyTorch float32 log_softmax:
+//   out = (x - max) - log(sum(exp(x - max)))
+// src0 is always F32; no mask/scale/ALiBi (unlike soft_max).
+kernel void kernel_log_soft_max_f32(
+        constant ggml_metal_kargs_log_soft_max & args,
+        device const  char * src0,
+        device        char * dst,
+        threadgroup  float * buf [[threadgroup(0)]],
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint3  tptg[[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+    const int32_t i01 = tgpig.x;
+
+    device const float * psrc0 = (device const float *) (src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+    device       float * pdst  = (device       float *) (dst  + i01*args.nb1  + i02*args.nb2  + i03*args.nb3);
+
+    // parallel max
+    float lmax = -INFINITY;
+    for (int i00 = tpitg.x; i00 < args.ne00; i00 += tptg.x) {
+        lmax = MAX(lmax, psrc0[i00]);
+    }
+
+    float max_val = simd_max(lmax);
+    if (tptg.x > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = -INFINITY;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = max_val;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        max_val = buf[tiisg];
+        max_val = simd_max(max_val);
+    }
+
+    // parallel sum of exp(x - max)
+    float lsum = 0.0f;
+    for (int i00 = tpitg.x; i00 < args.ne00; i00 += tptg.x) {
+        lsum += exp(psrc0[i00] - max_val);
+    }
+
+    threadgroup_barrier(mem_flags::mem_none);
+
+    float sum = simd_sum(lsum);
+
+    if (tptg.x > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = 0.0f;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = sum;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        sum = buf[tiisg];
+        sum = simd_sum(sum);
+    }
+
+    const float log_sum = log(sum);
+
+    for (int i00 = tpitg.x; i00 < args.ne00; i00 += tptg.x) {
+        pdst[i00] = (psrc0[i00] - max_val) - log_sum;
+    }
+}
+
+kernel void kernel_log_soft_max_f32_4(
+        constant ggml_metal_kargs_log_soft_max & args,
+        device const  char * src0,
+        device        char * dst,
+        threadgroup  float * buf [[threadgroup(0)]],
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint3  tptg[[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+    const int32_t i01 = tgpig.x;
+
+    device const float4 * psrc4 = (device const float4 *) (src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+    device       float4 * pdst4 = (device       float4 *) (dst  + i01*args.nb1  + i02*args.nb2  + i03*args.nb3);
+
+    // parallel max
+    float4 lmax4 = -INFINITY;
+    for (int i00 = tpitg.x; i00 < args.ne00/4; i00 += tptg.x) {
+        lmax4 = fmax(lmax4, psrc4[i00]);
+    }
+
+    const float lmax = MAX(MAX(lmax4[0], lmax4[1]), MAX(lmax4[2], lmax4[3]));
+
+    float max_val = simd_max(lmax);
+    if (tptg.x > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = -INFINITY;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = max_val;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        max_val = buf[tiisg];
+        max_val = simd_max(max_val);
+    }
+
+    // parallel sum of exp(x - max)
+    float4 lsum4 = 0.0f;
+    for (int i00 = tpitg.x; i00 < args.ne00/4; i00 += tptg.x) {
+        lsum4 += exp(psrc4[i00] - max_val);
+    }
+
+    const float lsum = lsum4[0] + lsum4[1] + lsum4[2] + lsum4[3];
+
+    threadgroup_barrier(mem_flags::mem_none);
+
+    float sum = simd_sum(lsum);
+
+    if (tptg.x > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = 0.0f;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = sum;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        sum = buf[tiisg];
+        sum = simd_sum(sum);
+    }
+
+    const float log_sum = log(sum);
+
+    for (int i00 = tpitg.x; i00 < args.ne00/4; i00 += tptg.x) {
+        pdst4[i00] = (psrc4[i00] - max_val) - log_sum;
+    }
+}
+
 // ref: ggml.c:ggml_compute_forward_ssm_conv_f32
 kernel void kernel_ssm_conv_f32_f32(
         constant ggml_metal_kargs_ssm_conv & args,

@@ -5472,6 +5472,78 @@ void ggml_compute_forward_soft_max(
 }
 
 
+// ggml_compute_forward_log_soft_max
+
+static void ggml_compute_forward_log_soft_max_f32(
+        const ggml_compute_params * params,
+              ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    assert(ggml_is_contiguous(dst));
+    assert(ggml_are_same_shape(src0, dst));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    // log_softmax per row over ne[0], rows distributed across threads (ith/nth over ne01).
+    // Aligned with PyTorch float32 log_softmax: out = (x - max) - log(sum(exp(x - max))).
+    // The sum is accumulated entirely in FP32 (not double); empirically this tracks the
+    // torch float32 reference more closely than double accumulation.
+    // In-place safe (src0 == dst): max/sum are computed before any store, and the final
+    // pass reads and writes the same index element-wise.
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const float * sp = (const float *)((const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                float       * dp = (float       *)((char       *)  dst->data + i01*nb1  + i02*nb2  + i03*nb3);
+
+                float max = -INFINITY;
+                ggml_vec_max_f32(ne00, &max, sp);
+
+                // sum = sum(exp(x - max)) >= exp(0) = 1, so logsum is finite and, for finite
+                // inputs, every output is finite as well.
+                float sum = 0.0f;
+                for (int64_t i = 0; i < ne00; ++i) {
+                    sum += expf(sp[i] - max);
+                }
+                const float logsum = logf(sum);
+
+                for (int64_t i = 0; i < ne00; ++i) {
+                    dp[i] = (sp[i] - max) - logsum;
+                }
+
+#ifndef NDEBUG
+                for (int64_t i = 0; i < ne00; ++i) {
+                    assert(!isnan(dp[i]));
+                }
+#endif
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_log_soft_max(
+        const ggml_compute_params * params,
+              ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_log_soft_max_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+
 // ggml_compute_forward_soft_max_ext_back
 
 static void ggml_compute_forward_soft_max_ext_back_f32(

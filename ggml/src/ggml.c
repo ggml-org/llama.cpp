@@ -1021,6 +1021,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DIAG_MASK_ZERO",
     "SOFT_MAX",
     "SOFT_MAX_BACK",
+    "LOG_SOFT_MAX",
     "ROPE",
     "ROPE_BACK",
     "CLAMP",
@@ -1078,7 +1079,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
+static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1132,6 +1133,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "diag_mask_zero(x)",
     "soft_max(x)",
     "soft_max_back(x)",
+    "log_soft_max(x)",
     "rope(x)",
     "rope_back(x)",
     "clamp(x)",
@@ -1189,7 +1191,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
+static_assert(GGML_OP_COUNT == 98, "GGML_OP_COUNT != 98");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4051,6 +4053,35 @@ struct ggml_tensor * ggml_soft_max_inplace(
     return ggml_soft_max_impl(ctx, a, NULL, 1.0f, 0.0f, true);
 }
 
+// ggml_log_soft_max
+
+static struct ggml_tensor * ggml_log_soft_max_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        bool                  inplace) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32); // only F32 is implemented (CPU + Metal)
+    GGML_ASSERT(ggml_is_contiguous(a));
+
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+
+    result->op     = GGML_OP_LOG_SOFT_MAX;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_log_soft_max(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_log_soft_max_impl(ctx, a, false);
+}
+
+struct ggml_tensor * ggml_log_soft_max_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_log_soft_max_impl(ctx, a, true);
+}
+
 struct ggml_tensor * ggml_soft_max_ext(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -6751,6 +6782,9 @@ static void ggml_compute_backward(
                 ggml_add_or_set(ctx, cgraph, isrc0, ggml_soft_max_ext_back(ctx, grad, tensor, scale, max_bias));
             }
             GGML_ASSERT((!src1 || !src1_needs_grads) && "backward pass for softmax mask not implemented");
+        } break;
+        case GGML_OP_LOG_SOFT_MAX: {
+            GGML_ASSERT(!src0_needs_grads && "backward pass for log_soft_max not implemented");
         } break;
         case GGML_OP_ROPE: {
             if (src0_needs_grads) {
