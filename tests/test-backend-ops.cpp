@@ -8866,6 +8866,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_log_soft_max(GGML_TYPE_F32, ne, inplace));
             }
         }
+        // irregular ncols (ne0) to stress block-reduce boundary / grid-stride edge cases:
+        //   - not a multiple of WARP_SIZE (32): 1, 2, 7, 31, 33, 63, 65, 127, 129, 255, 257
+        //   - not a power of two and spanning several grid-stride passes (> 1024):
+        //         1000, 1025, 1500, 2047, 2049, 4095, 4097, 5000
+        //   - ne0 == 1 (degenerate single-element row)
+        for (int64_t ne0 : {1, 2, 7, 31, 33, 63, 65, 127, 129, 255, 257,
+                            1000, 1025, 1500, 2047, 2049, 4095, 4097, 5000}) {
+            test_cases.emplace_back(new test_log_soft_max(GGML_TYPE_F32, {ne0, 5, 1, 1}, inplace));
+        }
+        // multi-dimensional nrows combinations to check the rowx index across all grid dims
+        for (std::array<int64_t, 4> ne : { std::array<int64_t, 4>{  33, 7, 3, 2},
+                                           std::array<int64_t, 4>{1025, 2, 3, 1},
+                                           std::array<int64_t, 4>{2047, 1, 1, 1},
+                                           std::array<int64_t, 4>{   7, 17, 1, 1},
+                                           std::array<int64_t, 4>{   1, 13, 5, 3} }) {
+            test_cases.emplace_back(new test_log_soft_max(GGML_TYPE_F32, ne, inplace));
+        }
     }
 
     for (bool fw : {true, false}) { // fw == forward
