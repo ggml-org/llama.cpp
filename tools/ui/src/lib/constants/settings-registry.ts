@@ -715,14 +715,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.ENABLE_THINKING,
-				label: 'Enable thinking',
-				help: 'Enable model thinking/reasoning for each request. When off, the model will skip the thinking phase and go straight to the response.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER
-			},
-			{
 				key: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
 				label: 'Enable raw output toggle',
 				help: 'Show toggle button to display messages as plain text instead of Markdown-formatted content',
