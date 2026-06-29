@@ -44,6 +44,9 @@ export { buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
 // URL utilities
 export { extractRootDomain, sanitizeExternalUrl } from './url';
 
+// Progress helpers
+export { modelLoadFraction, modelLoadProgressText } from './progress';
+
 // Conversation utilities
 export { createMessageCountMap, getMessageCount } from './conversation-utils';
 
@@ -76,7 +79,8 @@ export {
 	formatJsonPretty,
 	formatTime,
 	formatPerformanceTime,
-	formatAttachmentText
+	formatAttachmentText,
+	formatReasoningPreview
 } from './formatters';
 
 // IME utilities

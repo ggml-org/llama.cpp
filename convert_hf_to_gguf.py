@@ -156,6 +156,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fuse-qkv", action="store_true",
         help="Fuse separate Q, K, V weight tensors into a single QKV tensor.",
+        "--target-model-dir", type=str, default=None,
+        help=(
+            "path to the target model directory; required when converting a standalone draft model "
+            "(e.g. EAGLE3 / DFlash) that needs target-model metadata such as tokenizer, hidden size, and "
+            "layer count to populate its GGUF."
+        ),
     )
 
     args = parser.parse_args()
@@ -243,7 +249,7 @@ def main() -> None:
             assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
             from conversion.pixtral import PixtralModel
             model_class = PixtralModel
-        elif "moe" in hparams:
+        elif hparams.get("moe") is not None:
             from conversion.mistral import MistralMoeModel
             model_class = MistralMoeModel
         else:
@@ -256,8 +262,9 @@ def main() -> None:
 
         if args.mtp or args.no_mtp:
             from conversion.qwen import _Qwen35MtpMixin
-            if not issubclass(model_class, _Qwen35MtpMixin):
-                logger.error("--mtp / --no-mtp are only supported for Qwen3.5/3.6 text variants today")
+            from conversion.step3 import Step35Model
+            if not (issubclass(model_class, _Qwen35MtpMixin) or issubclass(model_class, Step35Model)):
+                logger.error("--mtp / --no-mtp are only supported for Qwen3.5/3.6 and Step3.5 text variants today")
                 sys.exit(1)
             if args.no_mtp:
                 model_class.no_mtp = True
@@ -273,6 +280,7 @@ def main() -> None:
                                      small_first_shard=args.no_tensor_first_split,
                                      remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template,
                                      sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
+                                     target_model_dir=Path(args.target_model_dir) if args.target_model_dir else None,
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
                                      fuse_qkv=args.fuse_qkv,

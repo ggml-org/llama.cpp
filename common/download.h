@@ -1,7 +1,10 @@
 #pragma once
 
+#include "hf-cache.h"
+
 #include <string>
 #include <vector>
+#include <functional>
 
 struct common_params_model;
 
@@ -47,52 +50,34 @@ struct common_cached_model_info {
     }
 };
 
-// Options for common_download_model and common_download_file_single
+// Options for common_download_file_single
 struct common_download_opts {
     std::string bearer_token;
     common_header_list headers;
     bool offline = false;
+    bool download_mmproj = false;
+    bool download_mtp = false;
     common_download_callback * callback = nullptr;
 };
 
-// Result of common_download_model
-struct common_download_model_result {
-    std::string model_path;
-    std::string mmproj_path;
-    std::string mtp_path;
+struct common_download_task {
+    common_download_opts opts;
+    std::string url;
+    std::string local_path;
+    std::function<void()> on_done;
+    bool is_hf = false;
+
+    common_download_task() = default;
+    common_download_task(hf_cache::hf_file f,
+            const common_download_opts & opts,
+            std::function<void()> on_done = nullptr)
+        : opts(opts), url(f.url), local_path(f.local_path), on_done(on_done), is_hf(true) {}
 };
 
-// Download model from HuggingFace repo or URL
-//
-// input (via model struct):
-// - model.hf_repo: HF repo with optional tag, see common_download_split_repo_tag
-// - model.hf_file: specific file in the repo (requires hf_repo)
-// - model.url: simple download (used if hf_repo is empty)
-// - model.path: local file path
-//
-// tag matching (for HF repos without model.hf_file):
-// - if tag is specified, searches for GGUF matching that quantization
-// - if no tag, searches for Q4_K_M, then Q4_0, then first available GGUF
-//
-// split GGUF: multi-part files like "model-00001-of-00003.gguf" are automatically
-// detected and all parts are downloaded
-//
-// caching:
-// - HF repos: uses HuggingFace cache
-// - URLs: uses ETag-based caching
-//
-// when opts.offline=true, no network requests are made
-// when download_mmproj=true, searches for mmproj in same directory as model or any parent directory
-// then with the closest quantization bits
-// when download_mtp=true, applies the same sibling search for an MTP-head GGUF
-//
-// returns result with model_path, mmproj_path and mtp_path (empty when not found / on failure)
-common_download_model_result common_download_model(
-    const common_params_model & model,
-    const common_download_opts & opts = {},
-    bool download_mmproj = false,
-    bool download_mtp    = false
-);
+void common_download_run_tasks(const std::vector<common_download_task> & tasks);
+
+// if url is a multi-part GGUF file, returns all parts, otherwise returns the single file
+std::vector<std::string> common_download_get_all_parts(const std::string & url);
 
 // returns list of cached models
 std::vector<common_cached_model_info> common_list_cached_models();
@@ -108,3 +93,19 @@ int common_download_file_single(const std::string & url,
 // resolve and download model from Docker registry
 // return local path to downloaded model file
 std::string common_docker_resolve_model(const std::string & docker);
+
+// Remove a cached model from disk
+// input format: "user/model" or "user/model:tag"
+// - if tag is omitted, removes the entire repo cache directory
+// - if tag is present, removes only files matching that tag (and orphaned blobs)
+// returns true if anything was removed
+bool common_download_remove(const std::string & hf_repo_with_tag);
+
+struct common_download_hf_plan {
+    hf_cache::hf_file primary;
+    hf_cache::hf_files model_files;
+    hf_cache::hf_file mmproj;
+    hf_cache::hf_file mtp;
+    hf_cache::hf_file preset; // if set, only this file is downloaded
+};
+common_download_hf_plan common_download_get_hf_plan(const common_params_model & model, const common_download_opts & opts);

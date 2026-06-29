@@ -26,7 +26,15 @@ import { MigrationService } from '$lib/services/migration.service';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
-import { MessageRole, HtmlInputType, FileExtensionText } from '$lib/enums';
+import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
+import {
+	MessageRole,
+	HtmlInputType,
+	FileExtensionText,
+	MimeTypeText,
+	MimeTypeApplication,
+	ReasoningEffort
+} from '$lib/enums';
 import {
 	ISO_DATE_TIME_SEPARATOR,
 	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
@@ -38,7 +46,9 @@ import {
 	ISO_TIME_SEPARATOR_REPLACEMENT,
 	NON_ALPHANUMERIC_REGEX,
 	MULTIPLE_UNDERSCORE_REGEX,
-	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY
+	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY,
+	THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY,
+	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY
 } from '$lib/constants';
 
 import { ROUTES } from '$lib/constants/routes';
@@ -74,6 +84,12 @@ class ConversationsStore {
 	/** Pending MCP server overrides for new conversations (before first message) */
 	pendingMcpServerOverrides = $state<McpServerOverride[]>(ConversationsStore.loadMcpDefaults());
 
+	/** Global (non-conversation-specific) thinking toggle default */
+	pendingThinkingEnabled = $state(ConversationsStore.loadThinkingDefaults());
+
+	/** Global (non-conversation-specific) reasoning effort default */
+	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
+
 	/** Load MCP default overrides from localStorage */
 	private static loadMcpDefaults(): McpServerOverride[] {
 		if (typeof globalThis.localStorage === 'undefined') return [];
@@ -102,6 +118,45 @@ class ConversationsStore {
 		} else {
 			localStorage.removeItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
 		}
+	}
+
+	/** Load thinking-enabled default from localStorage */
+	private static loadThinkingDefaults(): boolean {
+		if (typeof globalThis.localStorage === 'undefined') return false;
+		try {
+			const raw = localStorage.getItem(THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY);
+			if (!raw) return false;
+			const parsed = raw === 'true';
+			return typeof parsed === 'boolean' ? parsed : false;
+		} catch {
+			return false;
+		}
+	}
+
+	/** Persist thinking-enabled default to localStorage */
+	private saveThinkingDefaults(): void {
+		if (typeof globalThis.localStorage === 'undefined') return;
+		localStorage.setItem(
+			THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY,
+			this.pendingThinkingEnabled ? 'true' : 'false'
+		);
+	}
+
+	/** Load reasoning effort default from localStorage */
+	private static loadReasoningEffortDefault(): ReasoningEffort {
+		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.MEDIUM;
+		try {
+			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
+			return (raw as ReasoningEffort) || ReasoningEffort.MEDIUM;
+		} catch {
+			return ReasoningEffort.MEDIUM;
+		}
+	}
+
+	/** Persist reasoning effort default to localStorage */
+	private saveReasoningEffortDefaults(): void {
+		if (typeof globalThis.localStorage === 'undefined') return;
+		localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, this.pendingReasoningEffort);
 	}
 
 	/** Callback for title update confirmation dialog */
@@ -253,6 +308,12 @@ class ConversationsStore {
 			this.pendingMcpServerOverrides = [];
 		}
 
+		// Inherit global thinking default into the new conversation
+		conversation.thinkingEnabled = this.pendingThinkingEnabled;
+		await DatabaseService.updateConversation(conversation.id, {
+			thinkingEnabled: this.pendingThinkingEnabled
+		});
+
 		this.conversations = [conversation, ...this.conversations];
 		this.activeConversation = conversation;
 		this.activeMessages = [];
@@ -276,6 +337,7 @@ class ConversationsStore {
 			}
 
 			this.pendingMcpServerOverrides = [];
+			this.pendingThinkingEnabled = false;
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
@@ -304,8 +366,9 @@ class ConversationsStore {
 	clearActiveConversation(): void {
 		this.activeConversation = null;
 		this.activeMessages = [];
-		// reload MCP defaults so new chats inherit persisted state
+		// reload defaults so new chats inherit persisted state
 		this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
+		this.pendingThinkingEnabled = ConversationsStore.loadThinkingDefaults();
 	}
 
 	/**
@@ -448,6 +511,33 @@ class ConversationsStore {
 			}
 		} catch (error) {
 			console.error('Failed to update conversation name:', error);
+		}
+	}
+
+	/**
+	 * Toggles the pinned status of a conversation.
+	 * @param convId - The conversation ID to toggle
+	 * @returns The new pinned status
+	 */
+	async toggleConversationPin(convId: string): Promise<boolean> {
+		try {
+			const newPinnedState = await DatabaseService.toggleConversationPin(convId);
+
+			const convIndex = this.conversations.findIndex((c) => c.id === convId);
+
+			if (convIndex !== -1) {
+				this.conversations[convIndex].pinned = newPinnedState;
+				this.conversations = [...this.conversations];
+			}
+
+			if (this.activeConversation?.id === convId) {
+				this.activeConversation = { ...this.activeConversation, pinned: newPinnedState };
+			}
+
+			return newPinnedState;
+		} catch (error) {
+			console.error('Failed to toggle conversation pin:', error);
+			return false;
 		}
 	}
 
@@ -704,6 +794,84 @@ class ConversationsStore {
 	}
 
 	/**
+	 * Gets the effective thinking-enabled state for the active conversation.
+	 * Returns the conversation override if set, otherwise the global default.
+	 */
+	getThinkingEnabled(): boolean {
+		if (this.activeConversation) {
+			return this.activeConversation.thinkingEnabled ?? this.pendingThinkingEnabled;
+		}
+		return this.pendingThinkingEnabled;
+	}
+
+	/**
+	 * Sets the thinking-enabled state for the active conversation.
+	 * If no conversation exists, stores the global default.
+	 * @param enabled - The enabled state
+	 */
+	async setThinkingEnabled(enabled: boolean): Promise<void> {
+		if (!this.activeConversation) {
+			this.pendingThinkingEnabled = enabled;
+			this.saveThinkingDefaults();
+			return;
+		}
+
+		this.activeConversation = {
+			...this.activeConversation,
+			thinkingEnabled: enabled
+		};
+
+		await DatabaseService.updateConversation(this.activeConversation.id, {
+			thinkingEnabled: enabled
+		});
+
+		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		if (convIndex !== -1) {
+			this.conversations[convIndex].thinkingEnabled = enabled;
+			this.conversations = [...this.conversations];
+		}
+	}
+
+	/**
+	 * Gets the effective reasoning effort for the active conversation.
+	 * Returns the conversation override if set, otherwise the global default.
+	 */
+	getReasoningEffort(): ReasoningEffort {
+		if (this.activeConversation) {
+			return this.activeConversation.reasoningEffort ?? this.pendingReasoningEffort;
+		}
+		return this.pendingReasoningEffort;
+	}
+
+	/**
+	 * Sets the reasoning effort for the active conversation.
+	 * If no conversation exists, stores the global default.
+	 * @param effort - The effort level ('low' | 'medium' | 'high' | 'max')
+	 */
+	async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
+		if (!this.activeConversation) {
+			this.pendingReasoningEffort = effort;
+			this.saveReasoningEffortDefaults();
+			return;
+		}
+
+		this.activeConversation = {
+			...this.activeConversation,
+			reasoningEffort: effort
+		};
+
+		await DatabaseService.updateConversation(this.activeConversation.id, {
+			reasoningEffort: effort
+		});
+
+		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		if (convIndex !== -1) {
+			this.conversations[convIndex].reasoningEffort = effort;
+			this.conversations = [...this.conversations];
+		}
+	}
+
+	/**
 	 * Forks a conversation at a specific message, creating a new conversation
 	 * containing messages from root up to the target message, then navigates to it.
 	 *
@@ -774,41 +942,177 @@ class ConversationsStore {
 			.replace(ISO_DATE_TIME_SEPARATOR, ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
 			.replaceAll(ISO_TIME_SEPARATOR, ISO_TIME_SEPARATOR_REPLACEMENT);
 		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV_ID_TRIM_LENGTH) ?? '';
-		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}.json`;
+		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}${FileExtensionText.JSONL}`;
+	}
+
+	/**
+	 * Serializes a session (a conversation with its messages) as JSONL.
+	 * The first line is the session header (a `type: 'session'` record carrying the
+	 * conversation properties); each subsequent line is a single message.
+	 * @param data - The exported conversation payload
+	 * @returns The JSONL string (one record per line)
+	 */
+	serializeSessionToJsonl(data: ExportedConversation): string {
+		const { conv, messages } = data;
+
+		const sessionLine = JSON.stringify({ type: 'session', harness: 'llama.app', ...conv });
+		const messageLines = messages.map((message: DatabaseMessage) => {
+			// `toolCalls` is stored as a JSON string; drop it when empty, otherwise parse it.
+			const { toolCalls, ...rest } = message;
+			const normalized = toolCalls ? { ...rest, toolCalls: JSON.parse(toolCalls) } : rest;
+
+			return JSON.stringify({ type: 'message', message: normalized });
+		});
+
+		return [sessionLine, ...messageLines].join('\n');
+	}
+
+	/**
+	 * Parses the JSONL session format produced by {@link serializeSessionToJsonl}.
+	 * A `type: 'session'` line starts a new session; following `type: 'message'`
+	 * lines are appended to it. Supports multiple sessions in a single file.
+	 * @param text - The JSONL file contents
+	 * @returns The parsed conversations with their messages
+	 */
+	parseSessionsJsonl(text: string): ExportedConversation[] {
+		const sessions: ExportedConversation[] = [];
+		let current: ExportedConversation | null = null;
+
+		for (const line of text.split('\n')) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+
+			const record = JSON.parse(trimmed);
+
+			if (record.type === 'session') {
+				// Drop the discriminator and harness marker; the rest is the conversation.
+				const conv = { ...record };
+				delete conv.type;
+				delete conv.harness;
+				current = { conv: conv as DatabaseConversation, messages: [] };
+				sessions.push(current);
+			} else if (record.type === 'message') {
+				if (!current) {
+					throw new Error('Invalid JSONL: message record before any session record');
+				}
+
+				const message = record.message as DatabaseMessage;
+				// `toolCalls` is parsed to an array on export; the DB stores it as a string.
+				if (message.toolCalls !== undefined && typeof message.toolCalls !== 'string') {
+					message.toolCalls = JSON.stringify(message.toolCalls);
+				}
+				current.messages.push(message);
+			}
+			// Ignore unknown record types for forward compatibility.
+		}
+
+		return sessions;
+	}
+
+	/**
+	 * Parses an import file into conversations, accepting the current `.jsonl` and
+	 * `.zip` formats as well as the legacy `.json` format.
+	 * @param file - The user-selected file
+	 * @returns The parsed conversations with their messages
+	 */
+	async parseImportFile(file: File): Promise<ExportedConversation[]> {
+		const name = file.name.toLowerCase();
+
+		if (name.endsWith(FileExtensionText.ZIP)) {
+			const entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
+			const sessions: ExportedConversation[] = [];
+			for (const [entryName, bytes] of Object.entries(entries)) {
+				if (!entryName.toLowerCase().endsWith(FileExtensionText.JSONL)) continue;
+				sessions.push(...this.parseSessionsJsonl(strFromU8(bytes)));
+			}
+			return sessions;
+		}
+
+		const text = await file.text();
+
+		if (name.endsWith(FileExtensionText.JSONL)) {
+			return this.parseSessionsJsonl(text);
+		}
+
+		// Legacy JSON format: an array of conversations or a single conversation object.
+		const parsed = JSON.parse(text);
+		if (Array.isArray(parsed)) {
+			return parsed;
+		}
+		if (parsed && typeof parsed === 'object' && 'conv' in parsed && 'messages' in parsed) {
+			return [parsed];
+		}
+		throw new Error(
+			'Invalid file format: expected array of conversations or single conversation object'
+		);
 	}
 
 	/**
 	 * Triggers a browser download of the provided exported conversation data
-	 * @param data - The exported conversation payload (either a single conversation or array of them)
+	 * @param data - The exported conversation payload (a single conversation with its messages)
 	 * @param filename - Filename; if omitted, a deterministic name is generated
 	 */
-	downloadConversationFile(data: ExportedConversations, filename?: string): void {
-		// Choose the first conversation or message
-		const conversation =
-			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
-		const msgs =
-			'messages' in data ? data.messages : Array.isArray(data) ? data[0]?.messages : undefined;
+	downloadConversationFile(data: ExportedConversation, filename?: string): void {
+		const { conv: conversation, messages: msgs } = data;
 
 		if (!conversation) {
 			console.error('Invalid data: missing conversation');
 			return;
 		}
 
-		let downloadFilename: string;
+		const downloadFilename = filename ?? this.generateConversationFilename(conversation, msgs);
 
-		if (filename) {
-			downloadFilename = filename;
-		} else if (Array.isArray(data) && data.length > 1) {
-			downloadFilename = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations.json`;
-		} else {
-			downloadFilename = this.generateConversationFilename(conversation, msgs);
+		const jsonl = this.serializeSessionToJsonl(data);
+		const blob = new Blob([jsonl], { type: MimeTypeText.JSONL });
+		this.triggerDownload(blob, downloadFilename);
+	}
+
+	/**
+	 * Triggers a browser download of multiple conversations as a `.zip`, one
+	 * `.jsonl` file per conversation.
+	 * @param data - The conversations to export
+	 */
+	downloadConversationsArchive(data: ExportedConversation[]): void {
+		if (data.length === 0) {
+			console.error('Invalid data: no conversations to export');
+			return;
 		}
 
-		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+		const usedNames = new SvelteSet<string>();
+		const files: Record<string, Uint8Array> = {};
+
+		for (const session of data) {
+			const baseName = this.generateConversationFilename(session.conv, session.messages);
+
+			// Disambiguate any duplicate filenames within the archive.
+			let entryName = baseName;
+			let suffix = 1;
+			while (usedNames.has(entryName)) {
+				entryName = baseName.replace(
+					new RegExp(`${FileExtensionText.JSONL}$`),
+					`_${suffix++}${FileExtensionText.JSONL}`
+				);
+			}
+			usedNames.add(entryName);
+
+			files[entryName] = strToU8(this.serializeSessionToJsonl(session));
+		}
+
+		const archiveName = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
+
+		const zipped = zipSync(files);
+		const blob = new Blob([zipped], { type: MimeTypeApplication.ZIP });
+		this.triggerDownload(blob, archiveName);
+	}
+
+	/**
+	 * Triggers a browser download of a blob under the given filename.
+	 */
+	private triggerDownload(blob: Blob, filename: string): void {
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = downloadFilename;
+		a.download = filename;
 		document.body.appendChild(a);
 		a.click();
 		document.body.removeChild(a);
@@ -924,6 +1228,14 @@ export const isConversationsInitialized = () => conversationsStore.isInitialized
  * Builds a flat tree of conversations with depth levels for nested forks.
  * Accepts a pre-filtered list so search filtering stays in the component.
  */
+
+// Pinned conversations first, then by lastModified descending
+const comparePinnedThenRecent = (a: DatabaseConversation, b: DatabaseConversation) => {
+	if (a.pinned && !b.pinned) return -1;
+	if (!a.pinned && b.pinned) return 1;
+	return b.lastModified - a.lastModified;
+};
+
 export function buildConversationTree(convs: DatabaseConversation[]): ConversationTreeItem[] {
 	const childrenByParent = new SvelteMap<string, DatabaseConversation[]>();
 	const forkIds = new SvelteSet<string>();
@@ -948,7 +1260,7 @@ export function buildConversationTree(convs: DatabaseConversation[]): Conversati
 
 		const children = childrenByParent.get(conv.id);
 		if (children) {
-			children.sort((a, b) => b.lastModified - a.lastModified);
+			children.sort(comparePinnedThenRecent);
 
 			for (const child of children) {
 				walk(child, depth + 1);
@@ -956,7 +1268,7 @@ export function buildConversationTree(convs: DatabaseConversation[]): Conversati
 		}
 	}
 
-	const roots = convs.filter((c) => !forkIds.has(c.id));
+	const roots = convs.filter((c) => !forkIds.has(c.id)).sort(comparePinnedThenRecent);
 	for (const root of roots) {
 		walk(root, 0);
 	}

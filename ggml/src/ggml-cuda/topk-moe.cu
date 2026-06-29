@@ -134,7 +134,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
 
     // selection_wt is only needed when bias is present (selection uses wt + bias)
     // when no bias, we use wt directly for both selection and weight values
-    float selection_wt[has_bias ? experts_per_thread : 1];
+    [[maybe_unused]] float selection_wt[has_bias ? experts_per_thread : 1];
 
     if constexpr (has_bias) {
 #pragma unroll

@@ -1,40 +1,76 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Trash2, Pencil, X } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { DialogConfirmation } from '$lib/components/app';
-	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
-	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import Label from '$lib/components/ui/label/label.svelte';
-	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
-	import * as Sidebar from '$lib/components/ui/sidebar';
-	import Input from '$lib/components/ui/input/input.svelte';
-	import { ROUTES } from '$lib/constants/routes';
-	import { RouterService } from '$lib/services/router.service';
+	import { PanelLeftClose, PanelLeftOpen, X } from '@lucide/svelte';
 	import {
-		conversationsStore,
-		conversations,
-		buildConversationTree
-	} from '$lib/stores/conversations.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { getPreviewText } from '$lib/utils';
-	import { APP_NAME } from '$lib/constants';
+		ActionIcon,
+		Logo,
+		SidebarNavigationConversationList,
+		SidebarNavigationActions
+	} from '$lib/components/app';
+	import { ROUTES } from '$lib/constants';
+	import { fade } from 'svelte/transition';
 
-	const sidebar = Sidebar.useSidebar();
+	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
+	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { config } from '$lib/stores/settings.svelte';
+	import { RouterService } from '$lib/services/router.service';
+	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { TooltipSide } from '$lib/enums';
+	import { device } from '$lib/stores/device.svelte';
+	import { circIn } from 'svelte/easing';
+
+	interface Props {
+		onSearchClick?: () => void;
+	}
+
+	let { onSearchClick = () => {} }: Props = $props();
+
+	const { handleKeydown } = useKeyboardShortcuts({ activateSearchMode: () => onSearchClick() });
+
+	let isExpandedMode = $state(false);
+	let hoveredTooltip = $state<string | null>(null);
+	let logoHovered = $state(false);
+
+	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
+	const isOnMobile = $derived(isMobile.current);
+	const alwaysShowOnDesktop = $derived(config().alwaysShowSidebarOnDesktop as boolean);
+
+	// Keep the sidebar expanded on desktop when the user pins it open
+	$effect(() => {
+		if (alwaysShowOnDesktop && !isOnMobile) {
+			isExpandedMode = true;
+		}
+	});
+
+	function toggleExpandedMode() {
+		isExpandedMode = !isExpandedMode;
+		if (!isExpandedMode) {
+			hoveredTooltip = null;
+		}
+	}
+
+	$effect(() => {
+		if (!isExpandedMode) {
+			isSearchModeActive = false;
+			searchQuery = '';
+			cancelMobileCollapse();
+		}
+	});
+
+	// On mobile the dedicated /search route hides the sidebar (see the aside
+	// render guard below). Collapse it as we enter /search so it doesn't
+	// reappear expanded when the user navigates back via the back button.
+	$effect(() => {
+		if (isMobile.current && page.url.hash.includes(ROUTES.SEARCH)) {
+			isExpandedMode = false;
+		}
+	});
 
 	let currentChatId = $derived(page.params.id);
 	let isSearchModeActive = $state(false);
 	let searchQuery = $state('');
-	let showDeleteDialog = $state(false);
-	let deleteWithForks = $state(false);
-	let showEditDialog = $state(false);
-	let selectedConversation = $state<DatabaseConversation | null>(null);
-	let editedName = $state('');
-	let selectedConversationNamePreview = $derived.by(() =>
-		selectedConversation ? getPreviewText(selectedConversation.name) : ''
-	);
 
 	let filteredConversations = $derived.by(() => {
 		if (isSearchModeActive) {
@@ -50,250 +86,206 @@
 		return conversations();
 	});
 
-	let conversationTree = $derived(buildConversationTree(filteredConversations));
-
-	let selectedConversationHasDescendants = $derived.by(() => {
-		if (!selectedConversation) return false;
-
-		const allConvs = conversations();
-		const queue = [selectedConversation.id];
-
-		while (queue.length > 0) {
-			const parentId = queue.pop()!;
-
-			for (const c of allConvs) {
-				if (c.forkedFromConversationId === parentId) return true;
-			}
+	async function selectConversation(id: string) {
+		if (isMobile.current) {
+			scheduleMobileCollapse();
 		}
-
-		return false;
-	});
-
-	async function handleDeleteConversation(id: string) {
-		const conversation = conversations().find((conv) => conv.id === id);
-		if (conversation) {
-			selectedConversation = conversation;
-			deleteWithForks = false;
-			showDeleteDialog = true;
-		}
+		await goto(RouterService.chat(id));
 	}
 
 	async function handleEditConversation(id: string) {
 		const conversation = conversations().find((conv) => conv.id === id);
-		if (conversation) {
-			selectedConversation = conversation;
-			editedName = conversation.name;
-			showEditDialog = true;
+		if (!conversation) return;
+
+		const newName = window.prompt('Rename conversation', conversation.name);
+		if (newName && newName.trim()) {
+			await conversationsStore.updateConversationName(id, newName.trim());
 		}
 	}
 
-	function handleConfirmDelete() {
-		if (selectedConversation) {
-			const convId = selectedConversation.id;
-			const withForks = deleteWithForks;
-			showDeleteDialog = false;
+	async function handleDeleteConversation(id: string) {
+		const conversation = conversations().find((conv) => conv.id === id);
+		if (!conversation) return;
 
-			setTimeout(() => {
-				conversationsStore.deleteConversation(convId, {
-					deleteWithForks: withForks
-				});
-			}, 100); // Wait for animation to finish
-		}
-	}
+		const confirmed = window.confirm(
+			`Delete "${conversation.name}"? This action cannot be undone.`
+		);
+		if (!confirmed) return;
 
-	function handleConfirmEdit() {
-		if (!editedName.trim() || !selectedConversation) return;
-
-		showEditDialog = false;
-
-		conversationsStore.updateConversationName(selectedConversation.id, editedName);
-		selectedConversation = null;
-	}
-
-	export function handleMobileSidebarItemClick() {
-		if (sidebar.isMobile) {
-			sidebar.toggle();
-		}
-	}
-
-	let chatSidebarActions: { activateSearch?: () => void } | undefined = $state();
-	let openedForSearch = $state(false);
-
-	export function activateSearchMode() {
-		if (!sidebar.open) {
-			openedForSearch = true;
-		}
-		chatSidebarActions?.activateSearch?.();
-	}
-
-	function handleSearchDeactivated() {
-		if (openedForSearch) {
-			openedForSearch = false;
-			sidebar.toggle();
-		}
-	}
-
-	$effect(() => {
-		if (!sidebar.open) {
-			isSearchModeActive = false;
-			searchQuery = '';
-			openedForSearch = false;
-		}
-	});
-
-	export function editActiveConversation() {
-		if (currentChatId) {
-			const activeConversation = filteredConversations.find((conv) => conv.id === currentChatId);
-
-			if (activeConversation) {
-				const event = new CustomEvent('edit-active-conversation', {
-					detail: { conversationId: currentChatId }
-				});
-				document.dispatchEvent(event);
-			}
-		}
-	}
-
-	async function selectConversation(id: string) {
-		if (isSearchModeActive) {
-			isSearchModeActive = false;
-			searchQuery = '';
-		}
-
-		handleMobileSidebarItemClick();
-		await goto(RouterService.chat(id));
+		await conversationsStore.deleteConversation(id, { deleteWithForks: false });
 	}
 
 	function handleStopGeneration(id: string) {
 		chatStore.stopGenerationForChat(id);
 	}
+
+	let innerWidth = $state(0);
+	let pendingCollapse = $state<ReturnType<typeof setTimeout> | null>(null);
+
+	function scheduleMobileCollapse() {
+		if (pendingCollapse) {
+			clearTimeout(pendingCollapse);
+		}
+		pendingCollapse = setTimeout(() => {
+			isExpandedMode = false;
+			pendingCollapse = null;
+		}, 100);
+	}
+
+	function cancelMobileCollapse() {
+		if (pendingCollapse) {
+			clearTimeout(pendingCollapse);
+			pendingCollapse = null;
+		}
+	}
 </script>
 
-<div class="flex h-full flex-col">
-	<ScrollArea class="h-full flex-1">
-		<Sidebar.Header class="gap-4 bg-sidebar/50 p-3 backdrop-blur-lg md:pt-4 md:pb-2">
-			<div class="flex items-center justify-between">
-				<a href={ROUTES.START} onclick={handleMobileSidebarItemClick}>
-					<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">
-						{APP_NAME}
-					</h1>
-				</a>
+<svelte:window onkeydown={handleKeydown} bind:innerWidth />
 
-				<Button
-					class="rounded-full md:hidden"
-					variant="ghost"
-					size="icon"
-					onclick={() => sidebar.toggle()}
-				>
-					<X class="h-4 w-4" />
-					<span class="sr-only">Close sidebar</span>
-				</Button>
+{#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.SEARCH))}
+	<aside
+		class={[
+			// Layout & positioning
+			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 w-[calc(100dvw-1rem)]',
+			// Dimensions & overflow
+			'md:h-[calc(100dvh-1.125rem)]',
+			isExpandedMode &&
+				(device.isStandalone
+					? 'h-[calc(100dvh-2rem)]'
+					: device.isIOSDevice
+						? 'h-[calc(100dvh-0.5rem)]'
+						: 'h-[calc(100dvh-1rem)]'),
+			// Shape & depth
+			'rounded-3xl md:rounded-2xl',
+			// Flex layout
+			'flex flex-col justify-between',
+			// Transition
+			'md:transition-[width,padding] duration-200 ease-out',
+			// Expanded state: width, surface, depth
+			isStripExpanded && 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl border-border shadow-md',
+			// Collapsed state
+			!isStripExpanded && 'md:w-12',
+			// Expanded mode flag (for mobile ::before overlay)
+			isExpandedMode && 'is-expanded'
+		]}
+	>
+		<div class="px-2 flex items-center justify-between">
+			<div
+				role="button"
+				tabindex="0"
+				class="relative"
+				onmouseenter={() => (logoHovered = true)}
+				onmouseleave={() => (logoHovered = false)}
+			>
+				<ActionIcon
+					icon={!isExpandedMode && logoHovered && innerWidth > 768 ? PanelLeftOpen : Logo}
+					size="lg"
+					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+					class="{isExpandedMode
+						? 'bg-muted! md:bg-foreground/5!'
+						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
+					href={isExpandedMode ? ROUTES.START : undefined}
+					onclick={isExpandedMode ? undefined : toggleExpandedMode}
+					tooltip={isExpandedMode ? undefined : 'Open Sidebar'}
+					tooltipSide={TooltipSide.RIGHT}
+					ariaLabel={isExpandedMode ? 'Go to start' : 'Expand navigation'}
+				/>
 			</div>
 
-			<SidebarNavigationActions
-				bind:this={chatSidebarActions}
-				{handleMobileSidebarItemClick}
-				bind:isSearchModeActive
-				bind:searchQuery
-				onSearchDeactivated={handleSearchDeactivated}
-			/>
-		</Sidebar.Header>
-
-		<Sidebar.Group class="mt-2 h-[calc(100vh-21rem)] space-y-2 p-0 px-3">
-			{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
-				<Sidebar.GroupLabel>
-					{isSearchModeActive ? 'Search results' : 'Recent conversations'}
-				</Sidebar.GroupLabel>
+			{#if isOnMobile || (isExpandedMode && !alwaysShowOnDesktop)}
+				<div
+					class="flex items-center transition-all duration-150 ease-out {isMobile.current &&
+					!isExpandedMode
+						? 'opacity-0 h-0!'
+						: ''}"
+					in:fade={{ duration: 150, easing: circIn, delay: 50 }}
+					out:fade={{ duration: 100 }}
+				>
+					<ActionIcon
+						icon={isMobile.current ? X : PanelLeftClose}
+						size="lg"
+						iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 hover:bg-accent!"
+						onclick={toggleExpandedMode}
+						tooltip="Close Sidebar"
+						tooltipSide={TooltipSide.LEFT}
+						ariaLabel="Collapse navigation"
+					/>
+				</div>
 			{/if}
-
-			<Sidebar.GroupContent>
-				<Sidebar.Menu>
-					{#each conversationTree as { conversation, depth } (conversation.id)}
-						<Sidebar.MenuItem class="mb-1 p-0">
-							<SidebarNavigationConversationItem
-								conversation={{
-									id: conversation.id,
-									name: conversation.name,
-									lastModified: conversation.lastModified,
-									currNode: conversation.currNode,
-									forkedFromConversationId: conversation.forkedFromConversationId
-								}}
-								{depth}
-								isActive={currentChatId === conversation.id}
-								onSelect={selectConversation}
-								onEdit={handleEditConversation}
-								onDelete={handleDeleteConversation}
-								onStop={handleStopGeneration}
-							/>
-						</Sidebar.MenuItem>
-					{/each}
-
-					{#if conversationTree.length === 0}
-						<div class="px-2 py-4 text-center">
-							<p class="mb-4 p-4 text-sm text-muted-foreground">
-								{searchQuery.length > 0
-									? 'No results found'
-									: isSearchModeActive
-										? 'Start typing to see results'
-										: 'No conversations yet'}
-							</p>
-						</div>
-					{/if}
-				</Sidebar.Menu>
-			</Sidebar.GroupContent>
-		</Sidebar.Group>
-	</ScrollArea>
-</div>
-
-<DialogConfirmation
-	bind:open={showDeleteDialog}
-	title="Delete Conversation"
-	description={selectedConversation
-		? `Are you sure you want to delete "${selectedConversationNamePreview}"? This action cannot be undone and will permanently remove all messages in this conversation.`
-		: ''}
-	confirmText="Delete"
-	cancelText="Cancel"
-	variant="destructive"
-	icon={Trash2}
-	onConfirm={handleConfirmDelete}
-	onCancel={() => {
-		showDeleteDialog = false;
-		selectedConversation = null;
-	}}
->
-	{#if selectedConversationHasDescendants}
-		<div class="flex items-center gap-2 py-2">
-			<Checkbox id="delete-with-forks" bind:checked={deleteWithForks} />
-
-			<Label for="delete-with-forks" class="text-sm">Also delete all forked conversations</Label>
 		</div>
-	{/if}
-</DialogConfirmation>
 
-<DialogConfirmation
-	bind:open={showEditDialog}
-	title="Edit Conversation Name"
-	description=""
-	confirmText="Save"
-	cancelText="Cancel"
-	icon={Pencil}
-	onConfirm={handleConfirmEdit}
-	onCancel={() => {
-		showEditDialog = false;
-		selectedConversation = null;
-	}}
-	onKeydown={(event) => {
-		if (event.key === 'Enter') {
-			event.preventDefault();
-			event.stopImmediatePropagation();
-			handleConfirmEdit();
+		<div class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 overflow-y-auto">
+			<div
+				class="flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {isMobile.current
+					? 'transition-[opacity,height] duration-200 ease-out'
+					: ''} {isMobile.current && !isExpandedMode ? 'opacity-0 !h-0' : ''}"
+				in:fade={{ duration: 200 }}
+				out:fade={{ duration: 200 }}
+			>
+				<SidebarNavigationActions
+					isExpandedMode={innerWidth > 768 ? isExpandedMode : true}
+					class="px-2"
+					bind:isSearchModeActive
+					bind:searchQuery
+					onSearchDeactivated={() => {
+						isSearchModeActive = false;
+						searchQuery = '';
+					}}
+					onSearchClick={() => {
+						isExpandedMode = true;
+						isSearchModeActive = true;
+					}}
+					onNewChat={() => {
+						if (isMobile.current) {
+							scheduleMobileCollapse();
+						}
+					}}
+				/>
+
+				{#if isExpandedMode || isOnMobile}
+					<SidebarNavigationConversationList
+						class="px-2"
+						{filteredConversations}
+						{currentChatId}
+						{isSearchModeActive}
+						{searchQuery}
+						onSelect={selectConversation}
+						onEdit={handleEditConversation}
+						onDelete={handleDeleteConversation}
+						onStop={handleStopGeneration}
+					/>
+				{/if}
+			</div>
+		</div>
+	</aside>
+{/if}
+
+<style>
+	aside {
+		@media (max-width: 768px) {
+			--size: 1.125rem;
 		}
-	}}
->
-	<Input
-		class="text-foreground"
-		placeholder="Enter a new name"
-		type="text"
-		bind:value={editedName}
-	/>
-</DialogConfirmation>
+	}
+
+	@media (max-width: 768px) {
+		aside {
+			&:not(.is-expanded) {
+				pointer-events: none;
+			}
+		}
+
+		aside.is-expanded::before {
+			content: '';
+			position: fixed;
+			top: -0.5rem;
+			bottom: -0.25rem;
+			left: -0.5rem;
+			right: -0.5rem;
+			z-index: -1;
+			background: var(--background);
+			backdrop-filter: blur(1rem);
+			pointer-events: none;
+		}
+	}
+</style>

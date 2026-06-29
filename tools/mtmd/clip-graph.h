@@ -37,6 +37,9 @@ struct clip_graph {
     float kq_scale; // TODO: maybe move this to hparams
     const clip_flash_attn_type flash_attn_type;
 
+    // TODO [QWEN_VIDEO]: improve this in the future
+    int n_batch = 1;
+
     ggml_context_ptr ctx0_ptr;
     ggml_context * ctx0;
     ggml_cgraph * gf;
@@ -50,6 +53,10 @@ struct clip_graph {
     // tensor w should be the weight matrix, and tensor x should be the input
     virtual ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const;
     // TODO: build_mm(w, b, x) to support bias
+
+    virtual bool support_batch() const {
+        return false;
+    }
 
     //
     // utility functions

@@ -4,6 +4,7 @@
 #include "clip.h"
 #include "clip-impl.h"
 
+#include <algorithm>
 #include <array>
 #include <vector>
 #include <unordered_set>
@@ -54,8 +55,7 @@ struct clip_hparams {
     int32_t n_head = 0;
     int32_t n_head_kv = 0;
     int32_t n_layer = 0;
-    // idefics3
-    int32_t n_merge = 0; // number of patch merges **per-side**
+    int32_t n_merge = 1; // number of patch merges **per-side**
 
     // for preprocessor
     int32_t image_longest_edge = 0;
@@ -90,7 +90,7 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
-    std::unordered_set<int32_t> vision_feature_layer;
+    std::vector<int32_t> feature_layers;
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
     std::unordered_set<int32_t> wa_layer_indexes; // explicit layer indexes that use full attention (for irregular patterns like YoutuVL)
@@ -100,6 +100,11 @@ struct clip_hparams {
     int32_t sam_n_layer = 0;
     int32_t sam_n_head  = 0;
     int32_t sam_n_embd  = 0;
+
+    // Granite4 Vision
+    std::vector<int32_t> proj_spatial_offsets;
+    int32_t downsample_query_side;
+    int32_t downsample_window_side;
 
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
@@ -129,8 +134,7 @@ struct clip_hparams {
     int32_t custom_image_max_tokens = -1;
 
     void set_limit_image_tokens(int n_tokens_min, int n_tokens_max) {
-        const int cur_merge = n_merge == 0 ? 1 : n_merge;
-        const int patch_area = patch_size * patch_size * cur_merge * cur_merge;
+        const int patch_area = patch_size * patch_size * n_merge * n_merge;
         image_min_pixels = (custom_image_min_tokens > 0 ? custom_image_min_tokens : n_tokens_min) * patch_area;
         image_max_pixels = (custom_image_max_tokens > 0 ? custom_image_max_tokens : n_tokens_max) * patch_area;
         warmup_image_size = static_cast<int>(std::sqrt(image_max_pixels));
@@ -139,8 +143,7 @@ struct clip_hparams {
     void set_warmup_n_tokens(int n_tokens) {
         int n_tok_per_side = static_cast<int>(std::sqrt(n_tokens));
         GGML_ASSERT(n_tok_per_side * n_tok_per_side == n_tokens && "n_tokens must be n*n");
-        const int cur_merge = n_merge == 0 ? 1 : n_merge;
-        warmup_image_size = n_tok_per_side * patch_size * cur_merge;
+        warmup_image_size = n_tok_per_side * patch_size * n_merge;
         // TODO: support warmup size for custom token numbers
     }
     // sam vit deepseek-ocr
@@ -157,6 +160,10 @@ struct clip_hparams {
         }
 
         return false;
+    }
+
+    bool is_feature_layer(int32_t layer) const {
+        return std::find(feature_layers.begin(), feature_layers.end(), layer) != feature_layers.end();
     }
 };
 
@@ -325,6 +332,20 @@ struct yasa2_stage {
     std::vector<yasa2_block> blocks;
 };
 
+// QFormer projector block for models with 1 (or more) QFormer projectors
+// Granite Speech, Granite4 Vision
+struct qf_block {
+    ggml_tensor * qf_proj_query       = nullptr;
+    ggml_tensor * qf_proj_norm_w      = nullptr;
+    ggml_tensor * qf_proj_norm_b      = nullptr;
+    ggml_tensor * qf_proj_linear_w    = nullptr;
+    ggml_tensor * qf_proj_linear_b    = nullptr;
+    ggml_tensor * qf_proj_post_norm_w = nullptr;
+    ggml_tensor * qf_proj_post_norm_b = nullptr;
+    ggml_tensor * qf_proj_img_pos     = nullptr; // Vision only
+    std::vector<clip_layer> qf_proj_layers;
+};
+
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
@@ -338,6 +359,14 @@ struct clip_model {
     ggml_tensor * position_embeddings = nullptr;
     ggml_tensor * norm_embd_w = nullptr;
     ggml_tensor * norm_embd_b = nullptr;
+
+    // "indexed" patch embedding norms
+    ggml_tensor * patch_norm_1_w = nullptr;
+    ggml_tensor * patch_norm_1_b = nullptr;
+    ggml_tensor * patch_norm_2_w = nullptr;
+    ggml_tensor * patch_norm_2_b = nullptr;
+    ggml_tensor * patch_norm_3_w = nullptr;
+    ggml_tensor * patch_norm_3_b = nullptr;
 
     ggml_tensor * pre_ln_w = nullptr;
     ggml_tensor * pre_ln_b = nullptr;
@@ -542,6 +571,11 @@ struct clip_model {
     int32_t n_sam_layers = 12; // used by deepseek-ocr sam encoder
 
     std::vector<clip_layer> sam_layers;
+
+    // deepseek-ocr-2
+    ggml_tensor * resample_query_768 = nullptr;
+    ggml_tensor * resample_query_1024 = nullptr;
+
     // lfm2 audio
     std::array<ggml_tensor *, 7> pre_encode_conv_X_w = {nullptr};
     std::array<ggml_tensor *, 7> pre_encode_conv_X_b = {nullptr};
@@ -576,13 +610,8 @@ struct clip_model {
     ggml_tensor * ctc_out_b     = nullptr;
     ggml_tensor * ctc_out_mid_w = nullptr;
     ggml_tensor * ctc_out_mid_b = nullptr;
-    // qformer projector
-    ggml_tensor * qf_proj_query    = nullptr;
-    ggml_tensor * qf_proj_norm_w   = nullptr;
-    ggml_tensor * qf_proj_norm_b   = nullptr;
-    ggml_tensor * qf_proj_linear_w = nullptr;
-    ggml_tensor * qf_proj_linear_b = nullptr;
-    std::vector<clip_layer> qf_proj_layers;
+    // qformer projector(s)
+    std::vector<qf_block> qf_proj_blocks;
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A

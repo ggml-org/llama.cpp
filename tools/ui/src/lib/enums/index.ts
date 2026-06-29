@@ -10,6 +10,7 @@ export { AgenticSectionType, ContinueIntentKind, ToolCallType } from './agentic.
 
 export {
 	ChatMessageStatsView,
+	StreamConnectionState,
 	ContentPartType,
 	ConversationSelectionMode,
 	ErrorDialogType,
@@ -18,6 +19,8 @@ export {
 	PdfViewMode,
 	ReasoningFormat
 } from './chat.enums';
+
+export { ReasoningEffort } from './reasoning-effort.enums';
 
 export {
 	FileTypeCategory,
@@ -52,7 +55,7 @@ export {
 
 export { ModelModality } from './model.enums';
 
-export { ServerRole, ServerModelStatus } from './server.enums';
+export { ServerRole, ServerModelStatus, ServerModelsSseEventType } from './server.enums';
 
 export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings.enums';
 
@@ -61,3 +64,5 @@ export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } 
 export { KeyboardKey } from './keyboard.enums';
 
 export { ToolSource, ToolPermissionDecision, ToolResponseField } from './tools.enums';
+
+export { SplashOrientation } from './splash.enums';

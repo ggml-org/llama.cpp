@@ -15,7 +15,7 @@ from .base import MmprojModel, ModelBase, TextModel, _MISTRAL_COMMON_DATASET_MEA
 from .qwen import Qwen3Model
 
 
-@ModelBase.register("StepVLForConditionalGeneration")
+@ModelBase.register("StepVLForConditionalGeneration", "Step3p7ForConditionalGeneration")
 class Step3VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -95,9 +95,37 @@ class Step3VLTextModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
 
 
-@ModelBase.register("Step3p5ForCausalLM")
+@ModelBase.register("Step3p5ForCausalLM", "Step3p7ForConditionalGeneration")
 class Step35Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STEP35
+
+    # The --mtp / --no-mtp toggles are ModelBase.mtp_only / no_mtp (set in
+    # convert_hf_to_gguf.py main()). Unlike Qwen3.5, which stores MTP under a
+    # `mtp.*` namespace, Step3.5 appends MTP layers at
+    # `model.layers.{num_hidden_layers + i}`, so we filter them by layer index.
+    # The trunk layer count is captured before indexing so the classmethod
+    # filter_tensors can tell the appended MTP block(s) apart from the trunk.
+    _n_main_layers: int | None = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # NextN/MTP layers are appended past num_hidden_layers; extend the
+        # tensor map to cover them so the MTP block's tensors get correctly
+        # indexed names. When --no-mtp drops the MTP blocks, fall back to the
+        # base num_hidden_layers so we don't reserve unused slots.
+        n_nextn = int(self.hparams.get("num_nextn_predict_layers", 0))
+        if n_nextn > 0 and not self.no_mtp:
+            self.block_count += n_nextn
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        # filter_tensors is a classmethod and can't reach self.hparams; stash
+        # the trunk layer count here (before indexing runs) so it can detect
+        # the appended MTP layers by index.
+        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
+        key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
+        type(self)._n_main_layers = hparams.get(key)
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
 
     def set_gguf_parameters(self):
         rope_theta = self.hparams.get("rope_theta")
@@ -119,8 +147,25 @@ class Step35Model(TextModel):
         n_head_swa = attn_other.get("num_attention_heads", n_head_base)
         n_kv_swa = attn_other.get("num_attention_groups", n_kv_base)
 
-        layer_types = layer_types[: self.block_count]
-        partial_rotary_factors = partial_rotary_factors[: self.block_count]
+        n_nextn = int(self.hparams.get("num_nextn_predict_layers", 0))
+
+        # The Step3p5 HF checkpoint stores layer_types/partial_rotary_factors
+        # entries for the MTP blocks past num_hidden_layers; preserve them so
+        # the MTP layer's attention shape, SWA flag, and partial RoPE dim are
+        # set correctly. Pad with full-attention defaults if the checkpoint
+        # truncated them.
+        def _pad(arr, n, default):
+            arr = list(arr)
+            if len(arr) < n:
+                arr = arr + [default] * (n - len(arr))
+            return arr[:n]
+
+        layer_types = _pad(layer_types, self.block_count, "full_attention")
+        partial_rotary_factors = _pad(
+            partial_rotary_factors,
+            self.block_count,
+            0.5,  # full_attention default for Step3p5
+        )
         assert [1.0 if lt == "sliding_attention" else 0.5 for lt in layer_types] == partial_rotary_factors
         head_arr = [n_head_swa if lt == "sliding_attention" else n_head_base for lt in layer_types]
         kv_arr = [n_kv_swa if lt == "sliding_attention" else n_kv_base for lt in layer_types]
@@ -157,31 +202,61 @@ class Step35Model(TextModel):
 
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("rms_norm_eps", 1e-5))
 
-        # Optional per-layer SwiGLU clamps.
+        # Optional per-layer SwiGLU clamps. MTP layers default to no clamping (0.0).
         if (limits := self.hparams.get("swiglu_limits")) is not None:
-            limits_f = [0.0 if v is None else float(v) for v in limits[: self.block_count]]
+            limits_f = _pad(
+                [0.0 if v is None else float(v) for v in limits],
+                self.block_count,
+                0.0,
+            )
             self.gguf_writer.add_swiglu_clamp_exp(limits_f)
         if (limits_shared := self.hparams.get("swiglu_limits_shared")) is not None:
-            limits_shared_f = [0.0 if v is None else float(v) for v in limits_shared[: self.block_count]]
+            limits_shared_f = _pad(
+                [0.0 if v is None else float(v) for v in limits_shared],
+                self.block_count,
+                0.0,
+            )
             self.gguf_writer.add_swiglu_clamp_shexp(limits_shared_f)
+
+        if n_nextn > 0 and not self.no_mtp:
+            self.gguf_writer.add_nextn_predict_layers(n_nextn)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
 
         # Map router bias (expert selection bias) to a GGUF bias tensor
         if name.endswith(".moe.router_bias"):
             name += ".bias"
 
-        return super().filter_tensors((name, gen))
+        # Step3.5 appends the MTP block(s) past num_hidden_layers.
+        assert cls._n_main_layers is not None
+        is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
+
+        # --no-mtp: drop the appended MTP block(s) entirely.
+        if is_mtp and cls.no_mtp:
+            return None
+        # --mtp: keep ONLY MTP-block tensors plus the shared embeddings/norm/
+        # lm_head (so the resulting GGUF carries just the draft head).
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
+
+        # The checkpoint nests the per-MTP-layer shared head under
+        # `model.layers.{N+i}.transformer.shared_head.{norm,output}.weight`;
+        # strip the `transformer.` infix and rename `output` → `head` so the
+        # existing NEXTN_SHARED_HEAD_{NORM,HEAD} tensor mapping picks them up.
+        # Mirrors vllm's `_rewrite_spec_layer_name` (step3p5_mtp.py).
+        if is_mtp:
+            name = name.replace(".transformer.", ".")
+            name = name.replace("shared_head.output", "shared_head.head")
+
+        return name, gen
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        # remove mtp layers
-        if (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None:
-            il = int(m.group(1))
-            n_main = int(self.hparams.get("num_hidden_layers", self.block_count))
-            if il >= n_main:
-                return
         if name.endswith("norm.weight"):
             data_torch += 1.0
 
@@ -189,6 +264,21 @@ class Step35Model(TextModel):
             data_torch = data_torch.squeeze().contiguous()
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)
+
+        # Mirror Qwen3.5's behavior: when emitting a draft-only file into a
+        # directory, prefix with "mtp-" so it doesn't collide with the trunk.
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         # Step35 can optionally use Llama-3 style RoPE scaling (HF: rope_scaling.rope_type == "llama3").
@@ -203,16 +293,28 @@ class Step35Model(TextModel):
         if isinstance(rope_theta, list):
             rope_theta = rope_theta[0]
         base = float(rope_theta)
-        if (dim := self.hparams.get("head_dim")) is None:
-            dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
-        dim = int(dim)
 
-        freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+        if (storage_dim := self.hparams.get("head_dim")) is None:
+            storage_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+        storage_dim = int(storage_dim)
+
+        # Llama 3 factors apply only to the rotary dims used by full_attention layers
+        # (partial_rotary_factor * head_dim). Remaining slots are padded with 1.0 so
+        # sliding_attention layers remain unaffected. set_gguf_parameters already
+        # guarantees at least one full_attention layer.
+        layer_types = (self.hparams.get("layer_types") or [])[: self.block_count]
+        partial_rotary_factors = (self.hparams.get("partial_rotary_factors") or [])[: self.block_count]
+        full_attention_factor = next(
+            float(f) for lt, f in zip(layer_types, partial_rotary_factors) if lt == "full_attention"
+        )
+        rotary_dim = int(storage_dim * full_attention_factor)
+
+        freqs = 1.0 / (base ** (torch.arange(0, rotary_dim, 2, dtype=torch.float32) / rotary_dim))
 
         factor = float(rope_params.get("factor", 8.0))
         low_freq_factor = float(rope_params.get("low_freq_factor", 1.0))
         high_freq_factor = float(rope_params.get("high_freq_factor", 4.0))
-        old_context_len = int(rope_params.get("original_max_position_embeddings", self.hparams.get("original_max_position_embeddings", 8192)))
+        old_context_len = int(rope_params.get("original_max_position_embeddings", 8192))
 
         low_freq_wavelen = old_context_len / low_freq_factor
         high_freq_wavelen = old_context_len / high_freq_factor
@@ -227,5 +329,9 @@ class Step35Model(TextModel):
             else:
                 smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
                 rope_factors.append(1.0 / ((1.0 - smooth) / factor + smooth))
+
+        # Pad to head_dim/2 with 1.0 so non-scaled layers remain neutral.
+        if len(rope_factors) < storage_dim // 2:
+            rope_factors.extend([1.0] * (storage_dim // 2 - len(rope_factors)))
 
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))

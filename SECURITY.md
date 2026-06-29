@@ -12,16 +12,16 @@
 
 ## Reporting a vulnerability
 
+> [!IMPORTANT]
+> The private security disclosure program is disabled until further notice. Please submit patches with fixes directly to the repo as public PRs. Emails will be ignored.
+
 If you have discovered a security vulnerability in this project that falls inside the [covered topics](#covered-topics), please report it privately. **Do not disclose it as a public issue.** This gives us time to work with you to fix the issue before public exposure, reducing the chance that the exploit will be used before a patch is released.
 
 Please disclose it as a private [security advisory](https://github.com/ggml-org/llama.cpp/security/advisories/new).
 
 A team of volunteers on a reasonable-effort basis maintains this project. As such, please give us at least 90 days to work on a fix before public exposure.
 
-> [!IMPORTANT]
-> For collaborators: if you are interested in helping out with reviewing private security disclosures, please see: https://github.com/ggml-org/llama.cpp/discussions/18080
-
-## Requirements
+### Requirements
 
 Before submitting your report, ensure you meet the following requirements:
 
@@ -31,7 +31,7 @@ Before submitting your report, ensure you meet the following requirements:
 
 Maintainers reserve the right to close the report if these requirements are not fulfilled.
 
-## Covered Topics
+### Covered Topics
 
 Only vulnerabilities that fall within these parts of the project are considered valid. For problems falling outside of this list, please report them as issues.
 
@@ -80,7 +80,7 @@ To protect sensitive data from potential leaks or unauthorized access, it is cru
 ### Untrusted environments or networks
 
 If you can't run your models in a secure and isolated environment or if it must be exposed to an untrusted network, make sure to take the following security precautions:
-* Do not use the RPC backend, [rpc-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) and [llama-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server) functionality (see https://github.com/ggml-org/llama.cpp/pull/13061).
+* Do not use the RPC backend, [ggml-rpc-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) and [llama-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server) functionality (see https://github.com/ggml-org/llama.cpp/pull/13061).
 * Confirm the hash of any downloaded artifact (e.g. pre-trained model weights) matches a known-good value.
 * Encrypt your data if sending it over the network.
 

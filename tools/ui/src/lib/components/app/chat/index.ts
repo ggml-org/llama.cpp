@@ -241,6 +241,15 @@ export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormAct
 export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddMcpServersSubmenu.svelte';
 
 /**
+ * **ChatFormReasoningToggle** - Thinking toggle button with effort dropdown
+ *
+ * A toggle button with lightbulb icon that indicates thinking status.
+ * Shows the reasoning effort dropdown when clicked.
+ * Only visible when the current model supports thinking.
+ */
+export { default as ChatFormReasoningToggle } from './ChatForm/ChatFormActions/ChatFormReasoningToggle.svelte';
+
+/**
  * Hidden file input element for programmatic file selection.
  */
 export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileInputInvisible.svelte';
@@ -669,15 +678,16 @@ export { default as ChatScreenForm } from './ChatScreen/ChatScreenForm.svelte';
 export { default as ChatScreenProcessingInfo } from './ChatScreen/ChatScreenProcessingInfo.svelte';
 
 /**
- * Scroll-to-bottom action button. Displays a floating button when the user
- * has scrolled up more than half a viewport height from the bottom.
- * Takes the chat container element as a prop to manage scroll state internally.
- */
-export { default as ChatScreenActionScrollDown } from './ChatScreen/ChatScreenActionScrollDown.svelte';
-
-/**
  * Server error alert displayed when the server is unreachable.
  * Shows the error message with a retry button.
  * Rendered inside ChatScreen when `serverError` store has a value.
  */
 export { default as ChatScreenServerError } from './ChatScreen/ChatScreenServerError.svelte';
+
+/**
+ * Stream resume status indicator. Shows a small "Reconnecting to the stream..."
+ * banner with a spinner while `chatStore.streamConnectionState` is `resuming`,
+ * i.e. after a dropped connection is reattaching to the live SSE replay buffer.
+ * Renders nothing otherwise. Shown inside ChatScreen only on an active conversation route.
+ */
+export { default as ChatScreenStreamResumeStatus } from './ChatScreen/ChatScreenStreamResumeStatus.svelte';

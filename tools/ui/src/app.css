@@ -48,6 +48,7 @@
 
 	--chat-form-area-height: 8rem;
 	--chat-form-area-offset: 2rem;
+	--chat-form-padding-top: 6rem;
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
 }
 
@@ -55,6 +56,7 @@
 	:root {
 		--chat-form-area-height: 24rem;
 		--chat-form-area-offset: 12rem;
+		--chat-form-padding-top: 6rem;
 	}
 }
 
@@ -147,7 +149,6 @@
 	* {
 		scrollbar-width: thin;
 		scrollbar-color: transparent transparent;
-		transition: scrollbar-color 0.2s ease;
 	}
 
 	*:hover {
@@ -192,4 +193,8 @@
 		-ms-overflow-style: none;
 		scrollbar-width: none;
 	}
+}
+
+.mermaidTooltip {
+	display: none !important;
 }

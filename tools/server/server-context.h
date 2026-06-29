@@ -21,8 +21,8 @@ struct server_context_meta {
     bool has_mtmd;
     bool has_inp_image;
     bool has_inp_audio;
-    json json_ui_settings;            // Primary: new name
-    json json_webui_settings;            // Deprecated: use json_ui_settings instead (kept for backward compat)
+    bool has_inp_video;
+    json json_ui_settings;
     int slot_n_ctx;
     enum llama_pooling_type pooling_type;
 
@@ -52,6 +52,33 @@ struct server_context_meta {
     uint64_t model_size;
 };
 
+enum server_state {
+    SERVER_STATE_DOWNLOADING,
+    SERVER_STATE_LOADING,
+    SERVER_STATE_READY,
+    SERVER_STATE_SLEEPING,
+};
+
+static std::string server_state_to_str(server_state state) {
+    switch (state) {
+        case SERVER_STATE_DOWNLOADING: return "downloading";
+        case SERVER_STATE_LOADING:     return "loading";
+        case SERVER_STATE_READY:       return "ready";
+        case SERVER_STATE_SLEEPING:    return "sleeping";
+        default: GGML_ASSERT(false && "invalid server_state");
+    }
+}
+
+static server_state server_state_from_str(const std::string & str) {
+    if (str == "downloading") return SERVER_STATE_DOWNLOADING;
+    if (str == "loading")     return SERVER_STATE_LOADING;
+    if (str == "ready")       return SERVER_STATE_READY;
+    if (str == "sleeping")    return SERVER_STATE_SLEEPING;
+    GGML_ASSERT(false && "invalid server_state string");
+}
+
+using server_state_callback_t = std::function<void(server_state, json /* payload */)>;
+
 struct server_context {
     std::unique_ptr<server_context_impl> impl;
 
@@ -79,9 +106,8 @@ struct server_context {
     // not thread-safe, should only be used from the main thread
     server_context_meta get_meta() const;
 
-    // register a callback to be called when sleeping state changes
-    // must be set before load_model() is called
-    void on_sleeping_changed(std::function<void(bool)> callback);
+    // note: must be set before load_model() is called
+    void set_state_callback(server_state_callback_t callback);
 };
 
 
@@ -110,7 +136,10 @@ struct server_routes {
     server_http_context::handler_t post_completions;
     server_http_context::handler_t post_completions_oai;
     server_http_context::handler_t post_chat_completions;
+    server_http_context::handler_t post_chat_completions_tok;
+    server_http_context::handler_t post_control;
     server_http_context::handler_t post_responses_oai;
+    server_http_context::handler_t post_responses_tok_oai;
     server_http_context::handler_t post_transcriptions_oai;
     server_http_context::handler_t post_anthropic_messages;
     server_http_context::handler_t post_anthropic_count_tokens;
@@ -138,6 +167,7 @@ private:
     std::unique_ptr<server_res_generator> handle_slots_restore(const server_http_req & req, int id_slot);
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
     std::unique_ptr<server_res_generator> handle_embeddings_impl(const server_http_req & req, task_response_type res_type);
+    std::unique_ptr<server_res_generator> handle_count_tokens(const llama_vocab * vocab, mtmd_context * mctx, const server_http_req & req, task_response_type res_type);
 
     // using unique_ptr to allow late initialization of const
     std::unique_ptr<const server_context_meta> meta;

@@ -331,6 +331,17 @@ void server_response::send(server_task_result_ptr && result) {
     }
 }
 
+void server_response::broadcast(server_task_result_ptr && result) {
+    std::unique_lock<std::mutex> lock(mutex_results);
+    for (const auto & id_task : waiting_task_ids) {
+        RES_DBG("task id = %d pushed to result queue\n", id_task);
+        server_task_result_ptr res_copy(result->clone());
+        res_copy->id = id_task; // override id with target task id
+        queue_results.emplace_back(std::move(res_copy));
+    }
+    condition_results.notify_all();
+}
+
 void server_response::terminate() {
     running = false;
     condition_results.notify_all();
@@ -381,10 +392,6 @@ server_task_result_ptr server_response_reader::next(const std::function<bool()> 
         if (result == nullptr) {
             // timeout, check stop condition
             if (should_stop()) {
-                const int64_t time_elapsed_ms = ggml_time_ms() - time_start_ms;
-                if (time_elapsed_ms > 30000) {
-                    SRV_WRN("%s", "request cancelled after 30s, potentially a client-side timeout; please check your client's code\n");
-                }
                 return nullptr;
             }
         } else {

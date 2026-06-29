@@ -20,6 +20,8 @@
 	import { ColorMode } from '$lib/enums/ui.enums';
 	import { fade } from 'svelte/transition';
 	import { goto } from '$app/navigation';
+	import { Button } from '$lib/components/ui/button';
+	import { RefreshCw } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { setChatSettingsConfigContext } from '$lib/contexts';
 	import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
@@ -75,9 +77,13 @@
 	}
 
 	function handleSave() {
-		if (localConfig.custom && typeof localConfig.custom === 'string' && localConfig.custom.trim()) {
+		if (
+			localConfig.customJson &&
+			typeof localConfig.customJson === 'string' &&
+			localConfig.customJson.trim()
+		) {
 			try {
-				JSON.parse(localConfig.custom);
+				JSON.parse(localConfig.customJson);
 			} catch (error) {
 				alert('Invalid JSON in custom parameters. Please check the format and try again.');
 				console.error(error);
@@ -120,10 +126,7 @@
 	});
 </script>
 
-<div
-	class="mx-auto flex h-full max-h-[100dvh] w-full flex-col overflow-y-auto md:pl-8"
-	in:fade={{ duration: 150 }}
->
+<div class="mx-auto flex h-full w-full flex-col md:pl-8" in:fade={{ duration: 150 }}>
 	<div class="flex flex-1 flex-col gap-4 md:flex-row">
 		<SettingsChatDesktopSidebar
 			sections={SETTINGS_CHAT_SECTIONS}
@@ -160,6 +163,15 @@
 								onConfigChange={handleConfigChange}
 								onThemeChange={handleThemeChange}
 							/>
+
+							{#if currentSection.title === SETTINGS_SECTION_TITLES.GENERAL}
+								<div class="flex justify-end">
+									<Button variant="outline" onclick={() => window.location.reload()}>
+										<RefreshCw class="h-3 w-3" />
+										Reload app
+									</Button>
+								</div>
+							{/if}
 						</div>
 					{/if}
 				</div>
