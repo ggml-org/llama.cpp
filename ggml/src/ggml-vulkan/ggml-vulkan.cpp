@@ -17906,6 +17906,13 @@ static vk::Semaphore ggml_vk_create_export_timeline(vk_device & device) {
     return device->device.createSemaphore(sci);
 }
 
+static vk::Semaphore ggml_vk_create_plain_timeline(vk_device & device) {
+    vk::SemaphoreTypeCreateInfo stci{ vk::SemaphoreType::eTimeline, 0 };
+    vk::SemaphoreCreateInfo sci{};
+    sci.pNext = &stci;
+    return device->device.createSemaphore(sci);
+}
+
 static vk::Semaphore ggml_vk_import_timeline(ggml_backend_vk_comm_context * comm, vk_device & dst_dev,
                                              vk_device & src_dev, vk::Semaphore src_sem) {
     int fd = -1;
@@ -18002,8 +18009,6 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
         comm->xfer_pool_max_val.assign(n_backends, 0);
         comm->ring_ok = true;
         for (size_t i = 0; i < n_backends; i++) {
-            comm->prog[i] = ggml_vk_create_export_timeline(comm->device[i]);
-            comm->up[i]   = ggml_vk_create_export_timeline(comm->device[i]);
             comm->cmd_pool[i].init(comm->device[i], &comm->device[i]->compute_queue);
             comm->cmd_pool_xfer[i].init(comm->device[i], &comm->device[i]->transfer_queue);
             if (comm->device[i]->single_queue ||
@@ -18011,10 +18016,20 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
                 comm->ring_ok = false;
             }
         }
+        // Decide proxy vs native cross-device sync before creating the progress timelines: the proxy path only
+        // signals/reads them locally, so it must not request exportable handles. Some devices (e.g. llvmpipe, or
+        // RADV on older Mesa) cannot create exportable timeline semaphores at all, which would otherwise abort
+        // init here instead of falling back to the proxy.
         comm->proxy = getenv("GGML_VK_COMM_PROXY") != nullptr;
         if (!comm->proxy && !ggml_vk_comm_opaque_fd_supported(comm)) {
             comm->proxy = true;
             GGML_LOG_INFO("ggml_vulkan: cross-device OPAQUE_FD timeline import unsupported; using portable CPU-proxy sync\n");
+        }
+        for (size_t i = 0; i < n_backends; i++) {
+            comm->prog[i] = comm->proxy ? ggml_vk_create_plain_timeline(comm->device[i])
+                                        : ggml_vk_create_export_timeline(comm->device[i]);
+            comm->up[i]   = comm->proxy ? ggml_vk_create_plain_timeline(comm->device[i])
+                                        : ggml_vk_create_export_timeline(comm->device[i]);
         }
         if (!comm->proxy) {
             try {
@@ -18135,11 +18150,28 @@ static void ggml_backend_vk_comm_free(void * comm_ctx) {
 }
 
 static bool ggml_backend_vk_comm_ensure(ggml_backend_vk_comm_context * comm, size_t nbytes) {
-    if (nbytes <= comm->cap) {
+    // Reuse the current buffers when they fit and are not grossly oversized. We deliberately SHRINK when the
+    // request is much smaller than the current cap (e.g. the prefill->decode transition): the imported external
+    // host buffers are made visible across devices on every timeline-semaphore signal, so an oversized `cap`
+    // left over from a large prefill stalls every small (decode) all-reduce in proportion to its size.
+    constexpr size_t shrink_slack = 4;
+    if (nbytes <= comm->cap && comm->cap <= nbytes * shrink_slack) {
         return true;
     }
     const size_t n      = comm->backends.size();
     const size_t newcap = (nbytes + comm->align - 1) & ~(comm->align - 1);
+
+    // Buffers may still be referenced by the previous (async) all-reduce; wait for it before freeing them.
+    for (size_t i = 0; i < n; i++) {
+        if (comm->last_reduce[i] == 0) {
+            continue;
+        }
+        vk::SemaphoreWaitInfo wi;
+        wi.semaphoreCount = 1;
+        wi.pSemaphores    = &comm->prog[i];
+        wi.pValues        = &comm->last_reduce[i];
+        (void) comm->device[i]->device.waitSemaphores(wi, UINT64_MAX);
+    }
 
     for (size_t k = 0; k < n; k++) {
         for (size_t i = 0; i < n; i++) {
@@ -18349,6 +18381,179 @@ static bool ggml_backend_vk_comm_allreduce_ring(ggml_backend_vk_comm_context * c
     return true;
 }
 
+// Recursive halving/doubling all-reduce for a power-of-two device count. Bandwidth-optimal like the ring but
+// uses 2*log2(n) cross-device steps instead of 2*(n-1), so its latency scales far better for n>=4. The per-device
+// step schedule (peer, send/recv ranges, reduce-vs-copy) is built exactly as in the reference simulation
+// scratchpad/tree_sim.py; the GPU plumbing (F16 host staging, F32 accumulate, timeline-semaphore / CPU-proxy
+// sync) mirrors ggml_backend_vk_comm_allreduce_ring. Opt-in via GGML_VK_COMM_TREE; the ring stays the default.
+// NOTE: only n=2 (and n=2 with forced proxy) is runnable on a 2-GPU box; the multi-step path is exercised by the
+// reference simulation and the n=2 plumbing test, not directly at n>=4.
+static bool ggml_backend_vk_comm_allreduce_tree(ggml_backend_vk_comm_context * comm, ggml_tensor ** tensors) {
+    const size_t  n   = comm->backends.size();
+    const size_t  esz = ggml_type_size(GGML_TYPE_F32);
+    const size_t  xsz = sizeof(uint16_t);
+    const int64_t nel = ggml_nelements(tensors[0]);
+
+    int logn = 0;
+    while (((size_t) 1 << (logn + 1)) <= n) { logn++; }   // n is a power of two (checked by caller)
+    const uint64_t nsteps = 2u * (uint64_t) logn;
+    const uint64_t nprog  = 2u * nsteps;                  // two compute signals (prep-send, reduce) per step
+
+    // Per-step host stride: the largest single send is ceil(nel/2) F16 elements. A distinct offset per step keeps
+    // a step's staged data alive until the peer has read it. Double-buffered by round like the ring.
+    const size_t   stride   = (size_t) ((nel + 1) / 2) * xsz;
+    const uint64_t round    = comm->ring_round++;
+    const size_t   slot_off = (size_t) (round & 1) * 2 * comm->cap;
+
+    // Build each device's schedule, mirroring tree_sim.py (validated for n=2..8).
+    struct step_t { size_t peer; int64_t soff, slen, roff, rlen; bool add; };
+    std::vector<std::vector<step_t>> sched(n);
+    std::vector<std::vector<size_t>> reuse_peers(n);   // distinct peers that read host[i] (for cross-call reuse wait)
+    {
+        std::vector<int64_t> coff(n, 0), clen(n, nel);
+        for (size_t dist = n / 2; dist >= 1; dist /= 2) {              // reduce-scatter (recursive halving)
+            for (size_t i = 0; i < n; i++) {
+                const size_t  p    = i ^ dist;
+                const int64_t off  = coff[i], len = clen[i];
+                const int64_t half = len / 2;
+                step_t st; st.peer = p; st.add = true;
+                if (i < p) { st.soff = off + half; st.slen = len - half; st.roff = off;        st.rlen = half;        coff[i] = off;        clen[i] = half; }
+                else       { st.soff = off;        st.slen = half;       st.roff = off + half; st.rlen = len - half; coff[i] = off + half; clen[i] = len - half; }
+                sched[i].push_back(st);
+            }
+        }
+        for (size_t dist = 1; dist < n; dist *= 2) {                   // all-gather (recursive doubling)
+            std::vector<int64_t> noff(n), nlen(n);
+            for (size_t i = 0; i < n; i++) {
+                const size_t p = i ^ dist;
+                step_t st; st.peer = p; st.add = false;
+                st.soff = coff[i]; st.slen = clen[i];
+                st.roff = coff[p]; st.rlen = clen[p];
+                sched[i].push_back(st);
+                noff[i] = std::min(coff[i], coff[p]);
+                nlen[i] = std::max(coff[i] + clen[i], coff[p] + clen[p]) - noff[i];
+            }
+            coff = noff; clen = nlen;
+        }
+        for (size_t i = 0; i < n; i++) {
+            for (const auto & st : sched[i]) {
+                if (std::find(reuse_peers[i].begin(), reuse_peers[i].end(), st.peer) == reuse_peers[i].end()) {
+                    reuse_peers[i].push_back(st.peer);
+                }
+            }
+        }
+    }
+
+    std::vector<uint64_t> compute_val(n), reduce_val(n), prev_reduce(n), up_base(n), pxy_base(n);
+    for (size_t i = 0; i < n; i++) {
+        prev_reduce[i] = comm->last_reduce[i];
+        compute_val[i] = comm->vkctx[i]->comm_prog_val;
+        reduce_val[i]  = compute_val[i] + nprog;
+        comm->vkctx[i]->comm_prog_val = reduce_val[i];
+        comm->last_reduce[i]          = reduce_val[i];
+        up_base[i]      = comm->up_val[i];
+        comm->up_val[i] += nsteps;
+        if (comm->proxy) {
+            pxy_base[i]       = comm->pxy_val[i];
+            comm->pxy_val[i] += nsteps + (uint64_t) reuse_peers[i].size();
+        }
+        uint64_t done = comm->device[i]->device.getSemaphoreCounterValue(comm->prog[i]);
+        if (done >= comm->pool_max_val[i]) { ggml_vk_command_pool_cleanup(comm->device[i], comm->cmd_pool[i]); }
+        comm->pool_max_val[i] = reduce_val[i];
+        uint64_t xdone = comm->device[i]->device.getSemaphoreCounterValue(comm->up[i]);
+        if (xdone >= comm->xfer_pool_max_val[i]) { ggml_vk_command_pool_cleanup(comm->device[i], comm->cmd_pool_xfer[i]); }
+        comm->xfer_pool_max_val[i] = up_base[i] + nsteps;
+    }
+
+    auto set_view = [](ggml_tensor * tt, ggml_backend_buffer_t buf, char * data, int64_t ne0, size_t es) {
+        tt->ne[0] = ne0; tt->ne[1] = tt->ne[2] = tt->ne[3] = 1;
+        tt->nb[0] = es;  tt->nb[1] = tt->nb[2] = tt->nb[3] = (size_t) ne0 * es;
+        tt->buffer = buf; tt->data = data; tt->view_offs = 0;
+    };
+
+    for (size_t i = 0; i < n; i++) {
+        ggml_backend_vk_buffer_context * ubc = (ggml_backend_vk_buffer_context *) comm->up16_buffer[i]->context;
+        ggml_backend_vk_buffer_context * dbc = (ggml_backend_vk_buffer_context *) comm->dn16_buffer[i]->context;
+        ggml_tensor * up16t = comm->up16_tensor[i];
+        ggml_tensor * dn16t = comm->dn16_tensor[i];
+        ggml_tensor * rview = comm->ring_view[i];
+        char *        ubase = (char *) ggml_backend_buffer_get_base(comm->up16_buffer[i]);
+        char *        dbase = (char *) ggml_backend_buffer_get_base(comm->dn16_buffer[i]);
+        char *        tbase = (char *) tensors[i]->data;
+
+        vk_context cctx = ggml_vk_create_temporary_context(comm->cmd_pool[i]);
+        vk_context tctx = ggml_vk_create_temporary_context(comm->cmd_pool_xfer[i]);
+
+        for (uint64_t t = 0; t < nsteps; t++) {
+            const step_t & st  = sched[i][t];
+            const size_t   peer = st.peer;
+            const size_t   hoff = slot_off + (size_t) t * stride;
+
+            // compute-A: copy this step's send range to the F16 staging buffer.
+            ggml_vk_ctx_begin(comm->device[i], cctx);
+            cctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] + 2 * t });
+            if (st.slen) {
+                set_view(rview, tensors[i]->buffer,  tbase + (size_t) st.soff * esz, st.slen, esz);
+                set_view(up16t, comm->up16_buffer[i], ubase,                          st.slen, xsz);
+                ggml_vk_cpy(comm->vkctx[i], cctx, rview, up16t);
+            }
+            ggml_vk_ctx_end(cctx);
+            cctx->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], compute_val[i] + 2 * t + 1 });
+
+            // transfer: stage F16 send to this device's host buffer at the step offset.
+            ggml_vk_ctx_begin(comm->device[i], tctx);
+            tctx->s->wait_semaphores.push_back({ comm->prog[i], compute_val[i] + 2 * t + 1 });
+            if (t == 0 && round >= 2) {
+                // The round-1-ago call wrote/read the same host slot; ensure those peer reads are done before reuse.
+                for (size_t pi = 0; pi < reuse_peers[i].size(); pi++) {
+                    const size_t rp = reuse_peers[i][pi];
+                    if (comm->proxy) {
+                        const uint64_t pv = pxy_base[i] + 1 + pi;
+                        tctx->s->wait_semaphores.push_back({ comm->pxy[i], pv });
+                        std::lock_guard<std::mutex> lk(comm->bridge_mtx);
+                        comm->bridge_q[i].push_back({ comm->device[rp]->device, comm->prog[rp], prev_reduce[rp],
+                                                      comm->device[i]->device, comm->pxy[i], pv });
+                    } else {
+                        tctx->s->wait_semaphores.push_back({ comm->peer_prog[i][rp], prev_reduce[rp] });
+                    }
+                }
+            }
+            if (st.slen) {
+                ggml_vk_buffer_copy_async(tctx, comm->host_buf[i][i], hoff, ubc->dev_buffer, 0, (size_t) st.slen * xsz);
+            }
+            ggml_vk_ctx_end(tctx);
+            tctx->seqs.back().back().signal_semaphores.push_back({ comm->up[i], up_base[i] + t + 1 });
+
+            // compute-B: wait our own + the peer's transfer, read the peer's staged data, reduce/copy it in.
+            ggml_vk_ctx_begin(comm->device[i], cctx);
+            cctx->s->wait_semaphores.push_back({ comm->up[i], up_base[i] + t + 1 });
+            if (comm->proxy) {
+                const uint64_t pv = pxy_base[i] + (uint64_t) reuse_peers[i].size() + 1 + t;
+                cctx->s->wait_semaphores.push_back({ comm->pxy[i], pv });
+                std::lock_guard<std::mutex> lk(comm->bridge_mtx);
+                comm->bridge_q[i].push_back({ comm->device[peer]->device, comm->up[peer], up_base[peer] + t + 1,
+                                              comm->device[i]->device, comm->pxy[i], pv });
+            } else {
+                cctx->s->wait_semaphores.push_back({ comm->peer_up[i][peer], up_base[peer] + t + 1 });
+            }
+            if (st.rlen) {
+                ggml_vk_buffer_copy_async(cctx, dbc->dev_buffer, 0, comm->host_buf[peer][i], hoff, (size_t) st.rlen * xsz);
+                ggml_vk_sync_buffers(comm->vkctx[i], cctx);
+                set_view(dn16t, comm->dn16_buffer[i], dbase,                           st.rlen, xsz);
+                set_view(rview, tensors[i]->buffer,   tbase + (size_t) st.roff * esz,  st.rlen, esz);
+                if (st.add) { ggml_vk_add(comm->vkctx[i], cctx, rview, dn16t, rview); }
+                else        { ggml_vk_cpy(comm->vkctx[i], cctx, dn16t, rview); }
+                ggml_vk_sync_buffers(comm->vkctx[i], cctx);
+            }
+            ggml_vk_ctx_end(cctx);
+            cctx->seqs.back().back().signal_semaphores.push_back({ comm->prog[i], compute_val[i] + 2 * t + 2 });
+        }
+        ggml_vk_submit(tctx, {});
+        ggml_vk_submit(cctx, {});
+    }
+    return true;
+}
+
 static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor ** tensors) {
     ggml_backend_vk_comm_context * comm = static_cast<ggml_backend_vk_comm_context *>(comm_ctx);
     const size_t n = comm->backends.size();
@@ -18377,6 +18582,12 @@ static bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor *
             all_compute = all_compute && (tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE);
         }
         if (all_compute) {
+            // Opt-in recursive halving/doubling for power-of-two device counts (fewer cross-device steps than the
+            // ring at n>=4); the ring remains the default and handles non-power-of-two counts.
+            static const bool use_tree = getenv("GGML_VK_COMM_TREE") != nullptr;
+            if (use_tree && (n & (n - 1)) == 0) {
+                return ggml_backend_vk_comm_allreduce_tree(comm, tensors);
+            }
             return ggml_backend_vk_comm_allreduce_ring(comm, tensors);
         }
     }
