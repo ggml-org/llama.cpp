@@ -4378,6 +4378,7 @@ void server_routes::init_routes() {
         {
             server_task task(SERVER_TASK_TYPE_METRICS);
             task.id = res->rd.get_new_id();
+            task.metrics_reset_bucket = true; // reset per-interval buckets on each scrape
             res->rd.post_task(std::move(task), true); // high-priority task
         }
 
