@@ -890,6 +890,11 @@ private:
 
     common_params params_base;
 
+    // Pristine per-device fit-params target captured on the FIRST load, so
+    // resuming from sleep does not re-add mmproj/draft sizes cumulatively (#24475).
+    std::vector<size_t> fit_params_target_base;
+    bool fit_params_target_base_set = false;
+
     // note: keep these alive - they determine the lifetime of the model, context, etc.
     common_init_result_ptr llama_init;
 
@@ -1008,6 +1013,14 @@ private:
 
         params_base = params;
         params_base.n_outputs_max = server_n_outputs_max(params_base);
+
+        // #24475: restore fit-params target to first-load baseline before mmproj/draft sizes add below
+        if (!fit_params_target_base_set) {
+            fit_params_target_base     = params_base.fit_params_target;
+            fit_params_target_base_set = true;
+        } else {
+            params_base.fit_params_target = fit_params_target_base;
+        }
 
         const bool has_mmproj = !params.mmproj.path.empty();
         const bool has_draft = params.speculative.has_dft();
