@@ -132,8 +132,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // Note: MKL GEMM calls are incompatible with SYCL graph capture replay.
     static int mkl_disable = -1;
     if (mkl_disable < 0) {
-        const char * e = getenv("GGML_SYCL_ENABLE_MKL_FA");
-        mkl_disable = (e && e[0] == '0') ? 1 : 0;
+        mkl_disable = !ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
     }
     if (mkl_disable == 0 && Q->ne[1] >= 128 && K->ne[1] >= 1024
         && (ggml_is_quantized(K->type) || ggml_is_quantized(V->type))) {
@@ -234,8 +233,7 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     // the same D — helps detect cache-truncation issues.
     static int nkv_debug = -1;
     if (nkv_debug < 0) {
-        const char * e = getenv("GGML_SYCL_MKL_FA_DEBUG");
-        nkv_debug = (e && e[0] == '1') ? 1 : 0;
+        nkv_debug = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DEBUG", 0);
     }
     if (nkv_debug == 1) {
         const ggml_tensor * K_dbg = dst->src[1];
@@ -285,8 +283,7 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     static int fa_diag = -1;
     static int fa_diag_count = 0;
     if (fa_diag < 0) {
-        const char * e = getenv("GGML_SYCL_MKL_FA_DIAG");
-        fa_diag = (e && e[0] == '1') ? 1 : 0;
+        fa_diag = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DIAG", 0);
     }
     if (fa_diag == 1 && fa_diag_count < 6) {
         const ggml_tensor * K_diag = dst->src[1];

@@ -1,10 +1,3 @@
-//
-// MIT license
-// Copyright (C) 2025 Intel Corporation
-// SPDX-License-Identifier: MIT
-//
-
-//
 // Flash attention via oneMKL GEMM (XMX-accelerated).
 // Uses column_major::gemm for Q*K^T and S*V matmuls
 // with an online softmax SYCL kernel.
@@ -21,7 +14,6 @@
 
 #include <oneapi/mkl.hpp>
 #include <cstdio>
-#include <cfloat>
 #include <chrono>
 
 #define MKL_FA_CHUNK_SIZE_KV 8192
@@ -278,8 +270,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     mkl_call_count++;
     static int mkl_debug = -1;
     if (mkl_debug < 0) {
-        const char * e = getenv("GGML_SYCL_MKL_FA_DEBUG");
-        mkl_debug = (e && e[0] == '1') ? 1 : 0;
+        mkl_debug = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DEBUG", 0);
     }
     const bool do_print = (mkl_debug == 1);
 
@@ -325,8 +316,10 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     ggml_sycl_fattn_kv_buffers & fbuf = ctx.fattn_buffers();
 
 #define MKL_TAKE_TIME(t0)  auto t0 = std::chrono::steady_clock::now()
-#define MKL_ACCUM(acc, t0) acc += (int64_t)std::chrono::duration_cast \
-    <std::chrono::microseconds>(std::chrono::steady_clock::now() - (t0)).count()
+#define MKL_ACCUM(acc, t0) do { if (do_print) { \
+    acc += (int64_t)std::chrono::duration_cast \
+    <std::chrono::microseconds>(std::chrono::steady_clock::now() - (t0)).count(); \
+} } while(0)
 
     int64_t gemm_kq_time_us  = 0;
     int64_t gemm_vkq_time_us = 0;
@@ -566,7 +559,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                         Q_head_f16_ptr, DKQ,
                         beta,
                         KQ_f32_ptr, this_chunk);
-                    stream->wait();
                     try { ev.wait_and_throw(); } catch (sycl::exception & e) {
                         GGML_LOG_INFO("[MKL-FA] GEMM KQ: %s\n", e.what());
                         GGML_ABORT("MKL GEMM KQ failed");
@@ -600,7 +592,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                         S_f16_ptr, this_chunk,
                         beta,
                         VKQ_chunk_ptr, DV);
-                    stream->wait();
                     try { ev.wait_and_throw(); } catch (sycl::exception & e) {
                         GGML_LOG_INFO("[MKL-FA] GEMM VKQ: %s\n", e.what());
                         GGML_ABORT("MKL GEMM VKQ failed");
