@@ -4847,10 +4847,38 @@ void ggml_backend_cuda_get_device_description(int device, char * description, si
     snprintf(description, description_size, "%s", prop.name);
 }
 
+#if defined(GGML_USE_HIP) && defined(__linux__)
+#include <dirent.h>
+// hipMemGetInfo only counts ROCm/KFD allocations and ignores DRM graphics (Vulkan/GL/
+// compositor), over-reporting free VRAM. Read true usage from sysfs (mem_info_vram_*),
+// matched to the device by PCI bus id like rocm-smi.
+static bool ggml_hip_vram_from_sysfs(const char * pci_bus_id, size_t * free, size_t * total) {
+    if (!pci_bus_id || !*pci_bus_id) return false;
+    DIR * d = opendir("/sys/class/drm"); if (!d) return false;
+    struct dirent * e; bool ok = false;
+    while ((e = readdir(d))) {
+        if (strncmp(e->d_name, "card", 4) != 0) continue;
+        char lp[256], rp[256]; snprintf(lp, sizeof(lp), "/sys/class/drm/%s/device", e->d_name);
+        if (!realpath(lp, rp) || !strstr(rp, pci_bus_id)) continue;
+        char tp[300], up[300]; snprintf(tp, sizeof(tp), "%s/mem_info_vram_total", lp); snprintf(up, sizeof(up), "%s/mem_info_vram_used", lp);
+        FILE * ft = fopen(tp, "r"); FILE * fu = fopen(up, "r");
+        unsigned long long tt = 0, uu = 0;
+        if (ft && fu && fscanf(ft, "%llu", &tt) == 1 && fscanf(fu, "%llu", &uu) == 1 && tt > 0) { *total = tt; *free = tt > uu ? tt - uu : 0; ok = true; }
+        if (ft) fclose(ft); if (fu) fclose(fu); break;
+    }
+    closedir(d); return ok;
+}
+#endif
+
 void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total) {
     ggml_cuda_set_device(device);
 
     CUDA_CHECK(cudaMemGetInfo(free, total));
+#if defined(GGML_USE_HIP) && defined(__linux__)
+    char pci[32] = {}; cudaDeviceGetPCIBusId(pci, sizeof(pci), device);
+    for (char & c : pci) { c = (char)tolower(c); }
+    { size_t f, t; if (ggml_hip_vram_from_sysfs(pci, &f, &t)) { if (f < *free) *free = f; *total = t; } }
+#endif
 }
 
 bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
@@ -5011,6 +5039,11 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
             GGML_LOG_ERROR("%s: /proc/meminfo reading failed, using cudaMemGetInfo\n", __func__);
         }
     }
+#if defined(GGML_USE_HIP)
+    else {
+        size_t f, t; if (ggml_hip_vram_from_sysfs(ctx->pci_bus_id.c_str(), &f, &t)) { if (f < *free) *free = f; *total = t; }
+    }
+#endif
 #endif // defined(__linux__)
 
 }
