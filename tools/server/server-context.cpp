@@ -3989,7 +3989,7 @@ server_context_meta server_context::get_meta() const {
     auto bos_token_str = bos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx_tgt, bos_id, true) : "";
     auto eos_token_str = eos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx_tgt, eos_id, true) : "";
 
-    const char * ftype_name = llama_model_ftype_name(impl->model_tgt);
+    const char * ftype_name = llama_model_ftype_name(llama_model_ftype(impl->model_tgt));
 
     return server_context_meta {
         /* build_info             */ std::string(llama_build_info()),
@@ -4025,7 +4025,7 @@ server_context_meta server_context::get_meta() const {
         /* model_n_embd_inp       */ llama_model_n_embd(impl->model_tgt),
         /* model_n_params         */ llama_model_n_params(impl->model_tgt),
         /* model_size             */ llama_model_size(impl->model_tgt),
-        /* model_ftype            */ ftype_name ? std::string(ftype_name) : std::string(),
+        /* model_ftype            */ ftype_name,
     };
 }
 
