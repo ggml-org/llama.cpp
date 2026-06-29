@@ -3240,6 +3240,8 @@ static void llama_set_param(struct ggml_tensor * tensor, llama_opt_param_filter 
 
 void llama_context::opt_init(struct llama_model * model, struct llama_opt_params lopt_params) {
     GGML_ASSERT(!opt_ctx);
+    opt_model  = model;
+    opt_params = lopt_params;
     model->hparams.n_ctx_train = lopt_params.n_ctx_train > 0 ? lopt_params.n_ctx_train : n_ctx();
     const uint32_t n_batch     = std::min(this->n_batch(),  model->hparams.n_ctx_train);
     const uint32_t n_ubatch    = std::min(this->n_ubatch(), n_batch);
@@ -3339,9 +3341,16 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
     }
 }
 
-void llama_context::opt_reset(bool optimizer) {
+void llama_context::opt_reset(bool recreate) {
     GGML_ASSERT(opt_ctx);
-    ggml_opt_reset(opt_ctx, optimizer);
+    if (recreate) {
+        GGML_ASSERT(opt_model);
+        ggml_opt_free(opt_ctx);
+        opt_ctx = nullptr;
+        opt_init(opt_model, opt_params);
+    } else {
+        ggml_opt_reset(opt_ctx, recreate);
+    }
 }
 
 void llama_context::opt_epoch_iter(
@@ -4218,8 +4227,8 @@ void llama_opt_init(struct llama_context * ctx, struct llama_model * model, stru
     ctx->opt_init(model, lopt_params);
 }
 
-void llama_opt_reset(struct llama_context * ctx, bool optimizer) {
-    ctx->opt_reset(optimizer);
+void llama_opt_reset(struct llama_context * ctx, bool recreate) {
+    ctx->opt_reset(recreate);
 }
 
 void llama_opt_epoch(

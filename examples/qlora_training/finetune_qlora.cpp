@@ -664,19 +664,41 @@ static void save_adapter(
     LOG_INF("%s: adapter saved to %s\n", __func__, real_path.c_str());
 }
 
-static double adapter_l2_norm(const lora_tensors & lt) {
-    double sum_sq = 0.0;
-    for (const auto & kv : lt.ab) {
-        for (ggml_tensor * t : {kv.second.first, kv.second.second}) {
-            const size_t nb = ggml_nbytes(t);
-            std::vector<float> buf(nb / sizeof(float));
-            ggml_backend_tensor_get(t, buf.data(), 0, nb);
-            for (float v : buf) {
-                sum_sq += (double) v * (double) v;
-            }
-        }
+struct adapter_stats {
+    double a_l2      = 0.0;
+    double b_l2      = 0.0;
+    double total_l2  = 0.0;
+    double a_max_abs = 0.0;
+    double b_max_abs = 0.0;
+};
+
+static void adapter_stats_accum(ggml_tensor * t, double & sum_sq, double & max_abs) {
+    const size_t nb = ggml_nbytes(t);
+    std::vector<float> buf(nb / sizeof(float));
+    ggml_backend_tensor_get(t, buf.data(), 0, nb);
+
+    for (float v : buf) {
+        const double vd = (double) v;
+        const double av = std::abs(vd);
+        sum_sq += vd * vd;
+        max_abs = std::max(max_abs, av);
     }
-    return std::sqrt(sum_sq);
+}
+
+static adapter_stats adapter_get_stats(const lora_tensors & lt) {
+    adapter_stats stats;
+    double a_sum_sq = 0.0;
+    double b_sum_sq = 0.0;
+
+    for (const auto & kv : lt.ab) {
+        adapter_stats_accum(kv.second.first,  a_sum_sq, stats.a_max_abs);
+        adapter_stats_accum(kv.second.second, b_sum_sq, stats.b_max_abs);
+    }
+
+    stats.a_l2     = std::sqrt(a_sum_sq);
+    stats.b_l2     = std::sqrt(b_sum_sq);
+    stats.total_l2 = std::sqrt(a_sum_sq + b_sum_sq);
+    return stats;
 }
 
 // ---------------------------------------------------------------------------
@@ -1259,8 +1281,11 @@ int main(int argc, char ** argv) {
     LOG_INF("%s: starting QLoRA training — rank=%d alpha=%.1f epochs=%d loss=%s\n",
             __func__, params.lora_rank, lora_alpha, params.lr.epochs,
             params.train_on_prompt ? "prompt+response" : "response-only");
-    const double adapter_norm_start = adapter_l2_norm(lt);
-    LOG_INF("%s: adapter_l2_start=%.6f\n", __func__, adapter_norm_start);
+    llama_synchronize(ctx);
+    const adapter_stats adapter_start = adapter_get_stats(lt);
+    LOG_INF("%s: adapter_start: total_l2=%.9f a_l2=%.9f b_l2=%.9f a_max=%.9f b_max=%.9f\n",
+            __func__, adapter_start.total_l2, adapter_start.a_l2, adapter_start.b_l2,
+            adapter_start.a_max_abs, adapter_start.b_max_abs);
     LOG_INF("%s: dataset: %ld windows × %d ubatches = %ld steps per epoch  (n_ctx=%d n_ubatch=%d stride=%d)\n",
             __func__, (long)total_windows, ubatch_per_ctx, (long)(idata_split * ubatch_per_ctx),
             n_ctx, n_ubatch, n_ctx / 2);
@@ -1295,9 +1320,13 @@ int main(int argc, char ** argv) {
                 LOG_INF("epoch %d/%d: train_loss=%.4f ± %.4f\n",
                         params.lr.epoch + 1, params.lr.epochs, train_loss, train_unc);
             }
-            const double adapter_norm = adapter_l2_norm(lt);
-            LOG_INF("epoch %d/%d: adapter_l2=%.6f delta=%.6f\n",
-                    params.lr.epoch + 1, params.lr.epochs, adapter_norm, adapter_norm - adapter_norm_start);
+            llama_synchronize(ctx);
+            const adapter_stats adapter_cur = adapter_get_stats(lt);
+            LOG_INF("epoch %d/%d: adapter: total_l2=%.9f delta=%.9f a_l2=%.9f b_l2=%.9f a_max=%.9f b_max=%.9f\n",
+                    params.lr.epoch + 1, params.lr.epochs,
+                    adapter_cur.total_l2, adapter_cur.total_l2 - adapter_start.total_l2,
+                    adapter_cur.a_l2, adapter_cur.b_l2,
+                    adapter_cur.a_max_abs, adapter_cur.b_max_abs);
         }
 
         ggml_opt_result_reset(result_train);

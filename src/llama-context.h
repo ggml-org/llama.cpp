@@ -193,7 +193,7 @@ struct llama_context {
     //
 
     void opt_init(struct llama_model * model, struct llama_opt_params lopt_params);
-    void opt_reset(bool optimizer);
+    void opt_reset(bool recreate);
 
     // TODO: more flexible combinations of logical/physical batch size and context size
     void opt_epoch(
@@ -348,6 +348,9 @@ private:
 
     // training
     ggml_opt_context_t opt_ctx = nullptr;
+    // Saved init arguments used to recreate opt_ctx on optimizer reset.
+    struct llama_model * opt_model = nullptr;
+    struct llama_opt_params opt_params {};
 
     ggml_threadpool_t threadpool       = nullptr;
     ggml_threadpool_t threadpool_batch = nullptr;

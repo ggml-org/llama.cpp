@@ -1577,7 +1577,8 @@ extern "C" {
     };
 
     LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);
-    LLAMA_API void llama_opt_reset(struct llama_context * lctx, bool optimizer);
+    // When recreate is true, drop optimizer state while preserving model weights.
+    LLAMA_API void llama_opt_reset(struct llama_context * lctx, bool recreate);
 
     // weights: array of floats, one per dataset window (indexed by idata), already normalized to [0,1].
     // n_weights: length of the array.
