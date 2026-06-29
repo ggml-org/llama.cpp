@@ -8,7 +8,7 @@ set EXE=build-cuda\bin\llama-finetune-qlora.exe
 set MODEL=examples\qlora_training\Qwen3-1.7B.Q4_K_M.gguf
 if not defined TRAIN_FILE set TRAIN_FILE=examples\qlora_training\zorvian_training_data.jsonl
 if not defined LORA_OUT set LORA_OUT=examples\qlora_training\zorvian_train_adapter.gguf
-if not defined EPOCHS set EPOCHS=100
+if not defined EPOCHS set EPOCHS=200
 if not defined LR set LR=5e-5
 if not defined LORA_RANK set LORA_RANK=16
 if not defined LORA_ALPHA set LORA_ALPHA=16
@@ -56,7 +56,7 @@ if not "%RESUME_ARGS%"=="" copy /Y "%LORA_OUT%" "%LORA_OUT%.before_train.gguf" >
   -val-split 0 ^
   --optimizer-restart-every %OPT_RESTART_EVERY% ^
   %SHUFFLE_ARGS% ^
-  --save-every 100 ^
+  --save-every 50 ^
   --lora-out "%LORA_OUT%" ^
   -ngl 99
 
