@@ -558,6 +558,55 @@ extern "C" {
     LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
     LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);
 
+    // DiffusionGemma self-conditioning: set per-request state for the next llama_decode. sc_logits is
+    // [n_vocab * canvas_length] host floats (previous step's raw logits; NULL when !enabled). use_sc is a
+    // {0,1} gate; temp_inv = 1/temperature. !enabled = byte-identical to zero-SC; no-op for other models.
+    LLAMA_API void llama_diffusion_set_sc(
+            struct llama_model * model,
+                   const float * sc_logits,
+                         float   use_sc,
+                         float   temp_inv,
+                          bool   enabled);
+
+    // DiffusionGemma device-resident self-conditioning: when enabled, the SC input is read from a persistent
+    // device buffer (written in-graph from the previous step's logits) instead of a per-step host upload. The
+    // SC math is unchanged/bit-identical; single-device only. No-op for other models. Caller restores false.
+    LLAMA_API void llama_diffusion_set_device_sc(
+            struct llama_model * model,
+                          bool   enabled);
+
+    // DiffusionGemma Stage-1 device sampling: argmax/entropy/one multinomial draw per canvas position read
+    // directly from the device SC buffer (sc_dev), removing the per-step full-canvas logits download + host
+    // reductions. u is [n_tokens] host pre-drawn uniforms (the host RNG stream, for reproducibility); argmax,
+    // entropy, sampled are [n_tokens] host outputs. Caller MUST llama_synchronize(ctx) first. Requires a
+    // single CUDA device + device-resident SC on. Returns false (caller falls back to the host path) when
+    // unavailable. argmax matches the host bit-for-bit; entropy/sampled differ only by FP reduction order.
+    LLAMA_API bool llama_diffusion_device_sample(
+            const struct llama_model * model,
+                       const float   * u,
+                               int   * argmax,
+                             float   * entropy,
+                               int   * sampled,
+                               int     n_tokens,
+                             float     inv_temp);
+
+    // DiffusionGemma prompt KV caching: select the forward phase for the next llama_decode (P = block
+    // prompt length, used to size the store; no-op otherwise).  0 = UNIFIED (no-cache [prompt|canvas]),
+    // 1 = PREFILL (forward the prompt chunk starting at off, writing the K,V store causally),  2 = DECODE
+    // (forward the canvas, read the cached prompt K,V).  off is the chunk's global start (PREFILL only;
+    // pass 0 for an unchunked single-shot prefill).
+    LLAMA_API void llama_diffusion_set_phase(
+            struct llama_model * model,
+                           int   phase,
+                       int32_t   P,
+                       int32_t   off);
+
+    // DiffusionGemma prompt-KV store bytes per prompt token (0 for other models). Pass use_f16 = whether
+    // flash attention is enabled (the store is F16 under FA, F32 otherwise). Sizes context against the store.
+    LLAMA_API size_t llama_diffusion_pkv_bytes_per_token(
+            const struct llama_model * model,
+                              bool      use_f16);
+
     LLAMA_API int32_t llama_model_n_ctx_train  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);
