@@ -279,6 +279,21 @@ static void test_regex_to_reversed_partial_regex() {
     assert_equals<std::string>(
         "^((?:(?:(?:(?:(?:c)?b?)?b?)?b)?b)?a)",
         regex_to_reversed_partial_regex("ab{2,4}c"));
+    assert_equals<std::string>(
+        "^()",
+        regex_to_reversed_partial_regex(""));
+    assert_equals<std::string>(
+        "^(a|)",
+        regex_to_reversed_partial_regex("a|"));
+    assert_equals<std::string>(
+        "^(|a)",
+        regex_to_reversed_partial_regex("|a"));
+    assert_equals<std::string>(
+        "^(a||b)",
+        regex_to_reversed_partial_regex("a||b"));
+    assert_equals<std::string>(
+        "^((?:a|))",
+        regex_to_reversed_partial_regex("(a|)"));
 }
 
 int main() {

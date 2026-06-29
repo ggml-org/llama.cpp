@@ -183,7 +183,7 @@ std::string regex_to_reversed_partial_regex(const std::string & pattern) {
         std::vector<std::string> res_alts;
         for (const auto & parts : alternatives) {
             auto & res = res_alts.emplace_back();
-            for (size_t i = 0; i < parts.size() - 1; i++) {
+            for (size_t i = 0; i + 1 < parts.size(); i++) {
                 res += "(?:";
             }
             for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
