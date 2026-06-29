@@ -174,35 +174,6 @@ static bool dsv4_batch_has_coupled(const llama_batch & batch) {
     return false;
 }
 
-static bool dsv4_batch_same_seq_set(const llama_batch & batch) {
-    if (!batch.n_seq_id || !batch.seq_id || batch.n_tokens <= 1) {
-        return true;
-    }
-
-    const int32_t n_seq_id_ref = batch.n_seq_id[0];
-
-    for (int32_t i = 1; i < batch.n_tokens; ++i) {
-        if (batch.n_seq_id[i] != n_seq_id_ref) {
-            return false;
-        }
-
-        for (int32_t r = 0; r < n_seq_id_ref; ++r) {
-            bool found = false;
-            for (int32_t s = 0; s < batch.n_seq_id[i]; ++s) {
-                if (batch.seq_id[0][r] == batch.seq_id[i][s]) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                return false;
-            }
-        }
-    }
-
-    return true;
-}
-
 static int64_t dsv4_comp_graph_n_stream(const llama_ubatch & ubatch, uint32_t n_stream) {
     // Coupled sequence sets must stay in one graph stream because their
     // compressed state is shared. Independent per-seq state can fan out.
@@ -1074,8 +1045,7 @@ llama_memory_context_ptr llama_kv_cache_dsv4::init_batch(
 
     const bool raw_per_seq  = kv_raw->get_base()->get_n_stream() != 1;
     const bool comp_per_seq = csa_state->get_n_stream() > 1;
-    const bool comp_coupled = comp_per_seq && !raw_per_seq && dsv4_batch_has_coupled(balloc.get_batch());
-    const bool comp_coupled_same_set = comp_coupled && dsv4_batch_same_seq_set(balloc.get_batch());
+    const bool has_coupled = dsv4_batch_has_coupled(balloc.get_batch());
 
     const auto make_context = [&](std::vector<llama_ubatch> ubatches) -> llama_memory_context_ptr {
         auto ubatches_raw = dsv4_build_raw_write_ubatches(ubatches);
@@ -1128,23 +1098,19 @@ llama_memory_context_ptr llama_kv_cache_dsv4::init_batch(
         }
     } while (false);
 
-    // When either raw or compressed state is per-sequence, split ubatches so
-    // every token maps cleanly to its stream. This may serialize independent
-    // non-unified sequences, but keeps compressed state ownership explicit.
+    // When raw or compressed state is per-sequence, independent sequences can
+    // share an equal-length ubatch. Coupled sequence sets still serialize until
+    // DSV4 has explicit shared-state handling for compressed streams.
     do {
         balloc.split_reset();
 
         std::vector<llama_ubatch> ubatches;
         while (true) {
             llama_ubatch ubatch;
-            if (comp_coupled_same_set) {
-                ubatch = balloc.split_equal(n_ubatch, false);
-            } else if (comp_coupled) {
-                ubatch = balloc.split_seq(1);
-            } else if (comp_per_seq) {
+            if (has_coupled) {
                 ubatch = balloc.split_seq(n_ubatch);
             } else {
-                ubatch = balloc.split_equal(n_ubatch, raw_per_seq);
+                ubatch = balloc.split_equal(n_ubatch, raw_per_seq || comp_per_seq);
             }
 
             if (ubatch.n_tokens == 0) {
