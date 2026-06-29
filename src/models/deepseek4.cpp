@@ -7,10 +7,6 @@
 #include <stdexcept>
 #include <string>
 
-static std::string dsv4_kv(const char * suffix) {
-    return std::string("deepseek4.") + suffix;
-}
-
 static float dsv4_rope_attn_factor(float freq_scale, float ext_factor) {
     if (ext_factor == 0.0f) {
         return 1.0f;
@@ -37,20 +33,20 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
 
-    ml.get_key(dsv4_kv("attention.output_group_count"),         hparams.dsv4_o_group_count);
-    ml.get_key(dsv4_kv("attention.output_lora_rank"),           hparams.dsv4_o_lora_rank);
-    ml.get_key(dsv4_kv("attention.compress_rope_freq_base"),    hparams.dsv4_compress_rope_base);
-    ml.get_key(dsv4_kv("hyper_connection.count"),               hparams.dsv4_hc_mult);
-    ml.get_key(dsv4_kv("hyper_connection.sinkhorn_iterations"), hparams.dsv4_hc_sinkhorn_iters);
-    ml.get_key(dsv4_kv("hyper_connection.epsilon"),             hparams.dsv4_hc_eps);
-    ml.get_key(dsv4_kv("hash_layer_count"),                     hparams.dsv4_hash_layer_count);
+    ml.get_key("deepseek4.attention.output_group_count",         hparams.dsv4_o_group_count);
+    ml.get_key("deepseek4.attention.output_lora_rank",           hparams.dsv4_o_lora_rank);
+    ml.get_key("deepseek4.attention.compress_rope_freq_base",    hparams.dsv4_compress_rope_base);
+    ml.get_key("deepseek4.hyper_connection.count",               hparams.dsv4_hc_mult);
+    ml.get_key("deepseek4.hyper_connection.sinkhorn_iterations", hparams.dsv4_hc_sinkhorn_iters);
+    ml.get_key("deepseek4.hyper_connection.epsilon",             hparams.dsv4_hc_eps);
+    ml.get_key("deepseek4.hash_layer_count",                     hparams.dsv4_hash_layer_count);
 
     uint32_t n_compress_ratios = 0;
-    ml.get_arr_n(dsv4_kv("attention.compress_ratios"), n_compress_ratios);
+    ml.get_arr_n("deepseek4.attention.compress_ratios", n_compress_ratios);
     if (n_compress_ratios < hparams.n_layer()) {
         throw std::runtime_error("DeepSeek-V4 compress_ratios is shorter than block_count");
     }
-    ml.get_arr(dsv4_kv("attention.compress_ratios"), hparams.dsv4_compress_ratios);
+    ml.get_arr("deepseek4.attention.compress_ratios", hparams.dsv4_compress_ratios);
 
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func);
     if (hparams.expert_gating_func != LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {

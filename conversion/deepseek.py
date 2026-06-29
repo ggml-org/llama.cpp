@@ -512,9 +512,6 @@ class DeepseekV4Model(TextModel):
             return None
         return super().filter_tensors(item)
 
-    def set_vocab(self):
-        self._set_vocab_gpt2()
-
     @staticmethod
     def _float8_dtypes() -> tuple[torch.dtype, ...]:
         return tuple(
