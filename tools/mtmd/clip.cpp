@@ -4549,17 +4549,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
         float variance = (sum_sq / emb_data.size()) - (mean * mean);
         LOG_INF("Stats: mean=%.6f, std=%.6f, min=%.6f, max=%.6f, sum=%.6f\n",
                 mean, sqrtf(variance), min_val, max_val, sum);
-
-        // Dump raw float32 [n_tokens, n_embd] (token-major) for numerical parity checks.
-        const char * dump_path = std::getenv("MTMD_DEBUG_EMBEDDINGS_FILE");
-        if (dump_path == nullptr) dump_path = "clip_proj_out.bin";
-        FILE * df = fopen(dump_path, "wb");
-        if (df) {
-            fwrite(emb_data.data(), sizeof(float), emb_data.size(), df);
-            fclose(df);
-            LOG_INF("dumped embeddings -> %s [%lld tokens x %lld embd]\n",
-                    dump_path, (long long)n_tokens, (long long)n_embd);
-        }
         LOG_INF("=== END MTMD_DEBUG_EMBEDDINGS ===\n\n");
     }
 
