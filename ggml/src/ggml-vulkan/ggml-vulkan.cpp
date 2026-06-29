@@ -14460,6 +14460,41 @@ static void ggml_vk_bench_pair(
         results[method].push_back({ method, median, bw });
     };
 
+    // Check whether exporting dma-buf from one device and importing on
+    // another is supported for the given buffer usage flags.
+    auto check_dmabuf_caps = [](vk_device & exp_dev, vk::BufferUsageFlags exp_usage,
+                                vk_device & imp_dev, vk::BufferUsageFlags imp_usage,
+                                const char * label) -> bool {
+        vk::PhysicalDeviceExternalBufferInfo info{};
+        info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
+
+        info.usage = exp_usage;
+        auto exp_caps = exp_dev->physical_device.getExternalBufferProperties(info);
+        if (!(exp_caps.externalMemoryProperties.externalMemoryFeatures & vk::ExternalMemoryFeatureFlagBits::eExportable)) {
+            std::cerr << "  " << std::left << std::setw(24) << label << ": SKIPPED (export not supported)" << std::endl;
+            return false;
+        }
+
+        info.usage = imp_usage;
+        auto imp_caps = imp_dev->physical_device.getExternalBufferProperties(info);
+        if (!(imp_caps.externalMemoryProperties.externalMemoryFeatures & vk::ExternalMemoryFeatureFlagBits::eImportable)) {
+            std::cerr << "  " << std::left << std::setw(24) << label << ": SKIPPED (import not supported)" << std::endl;
+            return false;
+        }
+        return true;
+    };
+
+    const auto transfer_src_dst = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
+
+    const bool has_dmabuf_p2p = dev0->external_memory_dma_buf && dev1->external_memory_dma_buf &&
+        check_dmabuf_caps(dev0, transfer_src_dst, dev1, vk::BufferUsageFlagBits::eTransferSrc, "dmabuf_p2p");
+    const bool has_dmabuf_gtt = dev0->external_memory_dma_buf && dev1->external_memory_dma_buf &&
+        check_dmabuf_caps(dev0, transfer_src_dst, dev1, transfer_src_dst, "dmabuf_gtt");
+    const bool has_dmabuf_gtt_rev = dev0->external_memory_dma_buf && dev1->external_memory_dma_buf &&
+        check_dmabuf_caps(dev1, transfer_src_dst, dev0, transfer_src_dst, "dmabuf_gtt_rev");
+    const bool has_dmabuf_p2p_rev = dev0->external_memory_dma_buf && dev1->external_memory_dma_buf &&
+        check_dmabuf_caps(dev1, transfer_src_dst, dev0, vk::BufferUsageFlagBits::eTransferDst, "dmabuf_p2p_rev");
+
     for (size_t size : test_sizes) {
 
         // =================================================================
@@ -14804,41 +14839,13 @@ static void ggml_vk_bench_pair(
             stg.free_resources();
         }
 
-        // Check whether exporting dma-buf from one device and importing on
-        // another is supported for the given buffer usage flags.
-        auto check_dmabuf_caps = [](vk_device & exp_dev, vk::BufferUsageFlags exp_usage,
-                                    vk_device & imp_dev, vk::BufferUsageFlags imp_usage,
-                                    const char * label) -> bool {
-            vk::PhysicalDeviceExternalBufferInfo info{};
-            info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
-
-            info.usage = exp_usage;
-            auto exp_caps = exp_dev->physical_device.getExternalBufferProperties(info);
-            if (!(exp_caps.externalMemoryProperties.externalMemoryFeatures & vk::ExternalMemoryFeatureFlagBits::eExportable)) {
-                std::cerr << "  " << std::left << std::setw(24) << label << ": SKIPPED (export not supported)" << std::endl;
-                return false;
-            }
-
-            info.usage = imp_usage;
-            auto imp_caps = imp_dev->physical_device.getExternalBufferProperties(info);
-            if (!(imp_caps.externalMemoryProperties.externalMemoryFeatures & vk::ExternalMemoryFeatureFlagBits::eImportable)) {
-                std::cerr << "  " << std::left << std::setw(24) << label << ": SKIPPED (import not supported)" << std::endl;
-                return false;
-            }
-            return true;
-        };
-
-        const auto transfer_src_dst = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
-
         // =================================================================
         // 6. DMA-BUF P2P: import source device memory directly on dest
         //    device via dma-buf fd — true zero-copy if PCIe P2P works.
         //    Setup (export/import) is outside the timing loop.
         // =================================================================
-        if (dev0->external_memory_dma_buf && dev1->external_memory_dma_buf) {
-            bool setup_ok = check_dmabuf_caps(dev0, transfer_src_dst,
-                                              dev1, vk::BufferUsageFlagBits::eTransferSrc,
-                                              "dmabuf_p2p");
+        if (has_dmabuf_p2p) {
+            bool setup_ok = true;
 
             // Create exportable source buffer on dev0
             vk::Buffer exp_buffer{};
@@ -15006,10 +15013,8 @@ static void ggml_vk_bench_pair(
         // 6b. DMA-BUF GTT: export a host-visible (GTT) buffer via dma-buf,
         //     import on both devices, two-hop GPU copy through shared GTT.
         // =================================================================
-        if (dev0->external_memory_dma_buf && dev1->external_memory_dma_buf) {
-            bool setup_ok = check_dmabuf_caps(dev0, transfer_src_dst,
-                                              dev1, transfer_src_dst,
-                                              "dmabuf_gtt");
+        if (has_dmabuf_gtt) {
+            bool setup_ok = true;
 
             vk::Buffer gtt_buffer{};
             vk::DeviceMemory gtt_mem{};
@@ -15198,10 +15203,8 @@ static void ggml_vk_bench_pair(
         //     imported by dev0 (source). Covers cases where dev1's exports
         //     are importable but dev0's are not.
         // =================================================================
-        if (dev0->external_memory_dma_buf && dev1->external_memory_dma_buf) {
-            bool setup_ok = check_dmabuf_caps(dev1, transfer_src_dst,
-                                              dev0, transfer_src_dst,
-                                              "dmabuf_gtt_rev");
+        if (has_dmabuf_gtt_rev) {
+            bool setup_ok = true;
 
             vk::Buffer gtt_buffer{};
             vk::DeviceMemory gtt_mem{};
@@ -15388,10 +15391,8 @@ static void ggml_vk_bench_pair(
         // 6d. DMA-BUF P2P (reversed): dest device exports VRAM, source
         //     device imports and writes into it via P2P.
         // =================================================================
-        if (dev0->external_memory_dma_buf && dev1->external_memory_dma_buf) {
-            bool setup_ok = check_dmabuf_caps(dev1, transfer_src_dst,
-                                              dev0, vk::BufferUsageFlagBits::eTransferDst,
-                                              "dmabuf_p2p_rev");
+        if (has_dmabuf_p2p_rev) {
+            bool setup_ok = true;
 
             // Create exportable VRAM buffer on dev1 (destination)
             vk::Buffer exp_buffer{};
