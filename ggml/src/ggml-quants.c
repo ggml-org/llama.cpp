@@ -384,7 +384,16 @@ void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RE
 // reduces to an unweighted scale search (still better than amax/6); with an imatrix it spends
 // precision on the columns whose activations matter. Output format is unchanged, so the result
 // runs on stock NVFP4 kernels.
-#define NVFP4_SCALE_SEARCH 12  // +/- codes searched around the amax/6 starting scale
+//
+// Window width: the optimal UE4M3 code sits a few codes around amax/6, skewed positive (the
+// non-uniform E2M1 codes {..6,8,12} make scaling UP to clamp an outlier and fit the bulk often
+// optimal). +/-12 is comfortably wide. Narrowing to +/-8 measurably regresses search-only PPL on
+// real weights (Qwen3.5-9B wiki: 8.240 -> 8.287) even though a synthetic-weight proxy showed
+// saturation -- real weight tails are heavier than the proxy, so keep the margin.
+// An iterative coordinate-descent solve (make_qkx-style) was prototyped and is WORSE here: it
+// gets stuck in local minima that the dense brute-force window avoids. A fixed window is both
+// better and simpler than an iterative solver for NVFP4's discrete non-uniform codes.
+#define NVFP4_SCALE_SEARCH 12  // +/- codes around amax/6 (brute force; iterative solve is worse)
 
 static void quantize_row_nvfp4_impl(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y,
                                     int64_t k, const float * GGML_RESTRICT quant_weights) {
