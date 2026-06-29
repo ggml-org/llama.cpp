@@ -5489,9 +5489,12 @@ static void ggml_compute_forward_log_soft_max_f32(
     GGML_TENSOR_UNARY_OP_LOCALS
 
     // log_softmax per row over ne[0], rows distributed across threads (ith/nth over ne01).
-    // Aligned with PyTorch float32 log_softmax: out = (x - max) - log(sum(exp(x - max))).
-    // The sum is accumulated entirely in FP32 (not double); empirically this tracks the
-    // torch float32 reference more closely than double accumulation.
+    // Matches PyTorch float32 log_softmax: out = (x - max) - log(sum(exp(x - max))).
+    // The exp-sum uses a plain sequential FP32 scalar loop - portable across x86/ARM/etc.
+    // with no SIMD assumptions. PyTorch's default last-dim (and CUDA) f32 path also
+    // accumulates this sum in float, not double, so keeping it in FP32 tracks the torch
+    // f32 reference more closely than double would; torch uses a blocked SIMD sum while
+    // this stays sequential, so outputs agree to f32 tolerance, not bit-for-bit.
     // In-place safe (src0 == dst): max/sum are computed before any store, and the final
     // pass reads and writes the same index element-wise.
     for (int64_t i03 = 0; i03 < ne03; i03++) {
