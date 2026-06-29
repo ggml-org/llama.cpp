@@ -6494,6 +6494,12 @@ static void ggml_compute_backward(
                 ggml_add_or_set(ctx, cgraph, isrc1, tmp);
             }
         } break;
+        case GGML_OP_ADD_ID: {
+            if (src0_needs_grads) {
+                ggml_add_or_set(ctx, cgraph, isrc0, grad);
+            }
+            GGML_ASSERT(!src1_needs_grads && "backward pass for ADD_ID bias not implemented");
+        } break;
         case GGML_OP_ADD1: {
             if (src0_needs_grads) {
                 ggml_add_or_set(ctx, cgraph, isrc0, grad);
@@ -6524,7 +6530,11 @@ static void ggml_compute_backward(
                 ggml_add_or_set(ctx, cgraph, isrc0, grad);
             }
             if (src1_needs_grads) {
-                ggml_sub_or_set(ctx, cgraph, isrc1, grad);
+                struct ggml_tensor * tmp = grad;
+                if (!ggml_are_same_shape(src0, src1)) {
+                    tmp = ggml_repeat_back(ctx, tmp, src1);
+                }
+                ggml_sub_or_set(ctx, cgraph, isrc1, tmp);
             }
         } break;
         case GGML_OP_MUL: {
@@ -6544,7 +6554,11 @@ static void ggml_compute_backward(
                 ggml_add_or_set(ctx, cgraph, isrc0, ggml_div(ctx, grad, src1));
             }
             if (src1_needs_grads) {
-                ggml_sub_or_set(ctx, cgraph, isrc1, ggml_mul(ctx, grad, ggml_div(ctx, tensor, src1)));
+                struct ggml_tensor * tmp = ggml_mul(ctx, grad, ggml_div(ctx, tensor, src1));
+                if (!ggml_are_same_shape(tensor, src1)) {
+                    tmp = ggml_repeat_back(ctx, tmp, src1);
+                }
+                ggml_sub_or_set(ctx, cgraph, isrc1, tmp);
             }
         } break;
         case GGML_OP_SQR: {
@@ -6856,6 +6870,18 @@ static void ggml_compute_backward(
             }
             GGML_ASSERT((!src2 || !src2_needs_grads) && "gradients for freq factors not implemented");
         } break;
+        case GGML_OP_CLAMP: {
+            if (src0_needs_grads) {
+                float min;
+                float max;
+                memcpy(&min, (const float *) tensor->op_params + 0, sizeof(float));
+                memcpy(&max, (const float *) tensor->op_params + 1, sizeof(float));
+
+                struct ggml_tensor * mask_min = ggml_step(ctx, ggml_scale_bias(ctx, src0,  1.0f, -min));
+                struct ggml_tensor * mask_max = ggml_step(ctx, ggml_scale_bias(ctx, src0, -1.0f,  max));
+                ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_mul(ctx, mask_min, mask_max)));
+            }
+        } break;
         case GGML_OP_IM2COL: {
             if (src1_needs_grads) {
                 const int32_t s0    = ggml_get_op_params_i32(tensor, 0);
@@ -6902,6 +6928,12 @@ static void ggml_compute_backward(
                 case GGML_UNARY_OP_STEP: {
                     // noop
                 } break;
+                case GGML_UNARY_OP_TANH: {
+                    if (src0_needs_grads) {
+                        struct ggml_tensor * dtanh = ggml_scale_bias(ctx, ggml_sqr(ctx, tensor), -1.0f, 1.0f);
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, dtanh));
+                    }
+                } break;
                 case GGML_UNARY_OP_RELU: {
                     if (src0_needs_grads) {
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, ggml_step(ctx, src0), grad));
@@ -6932,6 +6964,32 @@ static void ggml_compute_backward(
                 case GGML_UNARY_OP_SOFTPLUS: {
                     if (src0_needs_grads) {
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_sigmoid(ctx, src0)));
+                    }
+                } break;
+                case GGML_UNARY_OP_GELU: {
+                    if (src0_needs_grads) {
+                        const float gelu_coef_a    = 0.044715f;
+                        const float sqrt_2_over_pi = 0.79788456080286535587989211986876f;
+
+                        struct ggml_tensor * x2    = ggml_sqr(ctx, src0);
+                        struct ggml_tensor * inner = ggml_mul(ctx, src0, ggml_scale_bias(ctx, x2, gelu_coef_a, 1.0f));
+                        struct ggml_tensor * t     = ggml_tanh(ctx, ggml_scale(ctx, inner, sqrt_2_over_pi));
+                        struct ggml_tensor * dt    = ggml_scale_bias(ctx, ggml_sqr(ctx, t), -1.0f, 1.0f);
+                        struct ggml_tensor * poly  = ggml_scale_bias(ctx, x2, 3.0f*gelu_coef_a, 1.0f);
+                        struct ggml_tensor * dgelu = ggml_add(ctx,
+                                ggml_scale_bias(ctx, t, 0.5f, 0.5f),
+                                ggml_mul(ctx, ggml_scale(ctx, src0, 0.5f*sqrt_2_over_pi), ggml_mul(ctx, dt, poly)));
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, dgelu));
+                    }
+                } break;
+                case GGML_UNARY_OP_GELU_QUICK: {
+                    if (src0_needs_grads) {
+                        const float gelu_quick_coef = 1.702f;
+
+                        struct ggml_tensor * sig    = ggml_sigmoid(ctx, ggml_scale(ctx, src0, gelu_quick_coef));
+                        struct ggml_tensor * dsig   = ggml_sub(ctx, sig, ggml_sqr(ctx, sig));
+                        struct ggml_tensor * dgelu  = ggml_add(ctx, sig, ggml_mul(ctx, ggml_scale(ctx, src0, gelu_quick_coef), dsig));
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, dgelu));
                     }
                 } break;
                 default: {
@@ -7138,6 +7196,9 @@ void ggml_build_backward_expand(
             case GGML_OP_ROPE:          // positions not differentiable
                 ignore_src[1] = true;
                 break;
+            case GGML_OP_ADD_ID:
+                ignore_src[2] = true;
+                break;
 
             // MUL_MAT_ID: expert dispatch indices (src2) are integer — no gradient.
             // When src0 is quantized the expert weights are frozen, so stop gradient through
@@ -7185,7 +7246,8 @@ void ggml_build_backward_expand(
 
         // inplace operations are currently not supported — warn and skip instead of crashing
         if (node->view_src && node->op != GGML_OP_CPY && node->op != GGML_OP_VIEW &&
-            node->op != GGML_OP_RESHAPE && node->op != GGML_OP_PERMUTE && node->op != GGML_OP_TRANSPOSE) {
+            node->op != GGML_OP_RESHAPE && node->op != GGML_OP_PERMUTE && node->op != GGML_OP_TRANSPOSE &&
+            node->op != GGML_OP_CLAMP) {
             GGML_LOG_WARN("%s: skipping unsupported inplace op '%s' in backward graph\n", __func__, ggml_op_name(node->op));
             continue;
         }

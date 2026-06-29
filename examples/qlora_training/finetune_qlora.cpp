@@ -93,6 +93,27 @@ static std::vector<std::string> split_csv(const std::string & s) {
     return out;
 }
 
+static std::string preview_text(const std::string & s, size_t max_len = 240) {
+    std::string out;
+    out.reserve(std::min(s.size(), max_len));
+    for (char c : s) {
+        if (out.size() >= max_len) {
+            out += "...";
+            break;
+        }
+        if (c == '\n') {
+            out += "\\n";
+        } else if (c == '\r') {
+            out += "\\r";
+        } else if (c == '\t') {
+            out += "\\t";
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
 // Tensors whose names contain these substrings use MUL_MAT_ID (sparse MoE expert dispatch)
 // which has no backward implementation — exclude them from LoRA targets unconditionally.
 static const std::vector<std::string> EXCLUDED_SUBSTRINGS = {
@@ -174,6 +195,7 @@ static std::vector<training_sample> load_jsonl(
     std::vector<training_sample> samples;
     std::string line;
     int lineno = 0;
+    bool logged_preview = false;
 
     while (std::getline(f, line)) {
         ++lineno;
@@ -206,31 +228,11 @@ static std::vector<training_sample> load_jsonl(
                 msgs.push_back(msg);
             }
 
-            // Skip samples where the last assistant turn contains an error marker.
-            // These are malformed/failed generations that should not be trained on.
-            {
-                std::string last_assistant_content;
-                for (int mi = (int)msgs.size() - 1; mi >= 0; --mi) {
-                    if (msgs[mi].role == "assistant") {
-                        last_assistant_content = msgs[mi].content_parts.empty()
-                            ? "" : msgs[mi].content_parts[0].text;
-                        break;
-                    }
-                }
-                // // this should be done on the python side...
-                // if (last_assistant_content.find("Error:") != std::string::npos ||
-                //     last_assistant_content.find("error:") != std::string::npos) {
-                //     LOG_DBG("%s: skipping line %d — assistant response contains error marker\n", __func__, lineno);
-                //     continue;
-                // }
-            }
-
             // Split into prompt (no loss) + last assistant response (loss).
             // Render all messages except the last assistant turn as the prompt
             // (with add_generation_prompt=true so the template adds the assistant
-            // prefix), then use the raw last assistant content as response_text.
-            // This ensures only the assistant's response tokens get loss, not the
-            // user turns or system prompt.
+            // prefix). Then render the full chat and train on the suffix, including
+            // the template's end-of-turn marker when it has one.
             if (msgs.empty()) continue;
             std::string last_assistant_content;
             std::vector<common_chat_msg> prompt_msgs;
@@ -240,8 +242,8 @@ static std::vector<training_sample> load_jsonl(
                 if (msgs[mi].role == "assistant") { last_asst_idx = mi; break; }
             }
             if (last_asst_idx < 0) {
-                // No assistant turn — skip; nothing to train on
-                LOG_DBG("%s: skipping line %d — no assistant turn\n", __func__, lineno);
+                // No assistant turn: nothing to train on.
+                LOG_DBG("%s: skipping line %d: no assistant turn\n", __func__, lineno);
                 continue;
             }
             last_assistant_content = msgs[last_asst_idx].content_parts.empty()
@@ -252,8 +254,59 @@ static std::vector<training_sample> load_jsonl(
                 common_chat_templates_inputs inp;
                 inp.messages = prompt_msgs;
                 inp.add_generation_prompt = true;
+                inp.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+                inp.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+                inp.enable_thinking = false;
                 prompt_text   = common_chat_templates_apply(tmpls, inp).prompt;
-                response_text = last_assistant_content;
+
+                std::vector<common_chat_msg> all_msgs = prompt_msgs;
+                all_msgs.push_back(msgs[last_asst_idx]);
+
+                common_chat_templates_inputs full_inp;
+                full_inp.messages = all_msgs;
+                full_inp.add_generation_prompt = false;
+                full_inp.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+                full_inp.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+                full_inp.enable_thinking = false;
+                const std::string full_text = common_chat_templates_apply(tmpls, full_inp).prompt;
+
+                if (full_text.rfind(prompt_text, 0) == 0) {
+                    response_text = full_text.substr(prompt_text.size());
+                } else {
+                    std::string marker = "__LLAMA_QLORA_RESPONSE_MARKER__";
+                    while (last_assistant_content.find(marker) != std::string::npos) {
+                        marker += "_";
+                    }
+
+                    common_chat_msg marked_msg = msgs[last_asst_idx];
+                    marked_msg.content_parts.clear();
+                    common_chat_msg_content_part marker_part;
+                    marker_part.type = "text";
+                    marker_part.text = marker;
+                    marked_msg.content_parts.push_back(marker_part);
+
+                    std::vector<common_chat_msg> marked_msgs = prompt_msgs;
+                    marked_msgs.push_back(marked_msg);
+
+                    common_chat_templates_inputs marker_inp;
+                    marker_inp.messages = marked_msgs;
+                    marker_inp.add_generation_prompt = false;
+                    marker_inp.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+                    marker_inp.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+                    marker_inp.enable_thinking = false;
+
+                    const std::string marked_text = common_chat_templates_apply(tmpls, marker_inp).prompt;
+                    const size_t marker_pos = marked_text.find(marker);
+                    if (marker_pos != std::string::npos) {
+                        response_text = last_assistant_content + marked_text.substr(marker_pos + marker.size());
+                        LOG_WRN("%s: line %d full chat render is not prefixed by prompt render; using marker-derived response suffix\n",
+                                __func__, lineno);
+                    } else {
+                        LOG_WRN("%s: line %d could not derive template response suffix; using raw assistant content\n",
+                                __func__, lineno);
+                        response_text = last_assistant_content;
+                    }
+                }
             } else {
                 // Fallback: render everything as ChatML, use full text as response
                 std::vector<common_chat_msg> all_msgs = prompt_msgs;
@@ -263,12 +316,6 @@ static std::vector<training_sample> load_jsonl(
             }
         } else if (j.contains("prompt") && j.contains("response")) {
             response_text = j["response"].get<std::string>();
-            // // this should be done on the python side...
-            // if (response_text.find("Error:") != std::string::npos ||
-            //     response_text.find("error:") != std::string::npos) {
-            //     LOG_DBG("%s: skipping line %d — response contains error marker\n", __func__, lineno);
-            //     continue;
-            // }
             prompt_text = j["prompt"].get<std::string>();
         } else if (j.contains("text")) {
             response_text = j["text"].get<std::string>();
@@ -277,11 +324,19 @@ static std::vector<training_sample> load_jsonl(
             continue;
         }
 
-        // Tokenize: prompt (no loss) + response (loss)
-        auto tok_prompt   = common_tokenize(ctx, prompt_text,   /*add_special=*/true);
-        auto tok_response = common_tokenize(ctx, response_text, /*add_special=*/false);
+        // Tokenize template-rendered text with special parsing so chat markers
+        // match the inference path used by llama-cli --jinja.
+        auto tok_prompt   = common_tokenize(ctx, prompt_text,   /*add_special=*/true,  /*parse_special=*/true);
+        auto tok_response = common_tokenize(ctx, response_text, /*add_special=*/false, /*parse_special=*/true);
 
         if (tok_prompt.empty() && tok_response.empty()) continue;
+
+        if (!logged_preview) {
+            logged_preview = true;
+            LOG_INF("%s: first prompt preview: \"%s\"\n", __func__, preview_text(prompt_text).c_str());
+            LOG_INF("%s: first response preview: \"%s\"\n", __func__, preview_text(response_text).c_str());
+            LOG_INF("%s: first sample tokens: prompt=%zu response=%zu\n", __func__, tok_prompt.size(), tok_response.size());
+        }
 
         training_sample s;
         s.reward = reward;
@@ -344,15 +399,17 @@ static ggml_opt_dataset_t build_dataset(
         }
     }
 
-    if ((int64_t)flat_tokens.size() < n_ctx) {
-        LOG_ERR("%s: dataset too small (%zu tokens) for context %d\n",
-                __func__, flat_tokens.size(), n_ctx);
+    if (flat_tokens.empty()) {
+        LOG_ERR("%s: dataset has no tokens\n", __func__);
         return nullptr;
     }
 
     const int64_t stride = n_ctx / 2;
-    int64_t ndata  = ((int64_t)flat_tokens.size() - n_ctx) / stride;
-    if (ndata < 1) ndata = 1;  // at least one window when flat_tokens >= n_ctx
+    const int64_t n_tokens = (int64_t) flat_tokens.size();
+    int64_t ndata = 1;
+    if (n_tokens > n_ctx) {
+        ndata += (n_tokens - n_ctx + stride - 1) / stride;
+    }
 
     window_rewards.resize(ndata);
 
@@ -361,22 +418,38 @@ static ggml_opt_dataset_t build_dataset(
 
     int32_t * data   = (int32_t *) ggml_opt_dataset_data  (dataset)->data;
     int32_t * labels = (int32_t *) ggml_opt_dataset_labels(dataset)->data;
+    int64_t n_labels = 0;
+    int64_t n_padded = 0;
 
     for (int64_t i = 0; i < ndata; ++i) {
         const int64_t off = i * stride;
         float reward_sum = 0.0f;
         for (int32_t j = 0; j < n_ctx; ++j) {
-            data  [i * n_ctx + j] = flat_tokens[off + j];
+            const int64_t idx = off + j;
+            if (idx >= n_tokens) {
+                data  [i * n_ctx + j] = bos_token >= 0 ? bos_token : flat_tokens.back();
+                labels[i * n_ctx + j] = -1;
+                reward_sum += 1.0f;
+                ++n_padded;
+                continue;
+            }
+
+            data  [i * n_ctx + j] = flat_tokens[idx];
             // Pass -1 sentinel through unchanged for masked (prompt) positions.
             // opt_epoch_iter skips these positions (no label tensor write → zero
             // cross-entropy contribution).  Do NOT substitute the current token
             // here — that trains the model to predict itself (off-by-one) and
             // causes repetition degeneration.
-            labels[i * n_ctx + j] = flat_labels[off + j];
-            reward_sum += flat_rewards[off + j];
+            labels[i * n_ctx + j] = flat_labels[idx];
+            if (flat_labels[idx] >= 0) {
+                ++n_labels;
+            }
+            reward_sum += flat_rewards[idx];
         }
         window_rewards[i] = reward_sum / n_ctx;
     }
+    LOG_INF("%s: packed %ld tokens into %ld windows (ctx=%d stride=%ld, supervised labels=%ld, padded=%ld)\n",
+            __func__, (long)n_tokens, (long)ndata, n_ctx, (long)stride, (long)n_labels, (long)n_padded);
 
     // Normalize window rewards to [0, 1].
     // Step 1: clip to [-1, 1] — outliers like 1.3/1.4 would otherwise compress the
@@ -591,6 +664,21 @@ static void save_adapter(
     LOG_INF("%s: adapter saved to %s\n", __func__, real_path.c_str());
 }
 
+static double adapter_l2_norm(const lora_tensors & lt) {
+    double sum_sq = 0.0;
+    for (const auto & kv : lt.ab) {
+        for (ggml_tensor * t : {kv.second.first, kv.second.second}) {
+            const size_t nb = ggml_nbytes(t);
+            std::vector<float> buf(nb / sizeof(float));
+            ggml_backend_tensor_get(t, buf.data(), 0, nb);
+            for (float v : buf) {
+                sum_sq += (double) v * (double) v;
+            }
+        }
+    }
+    return std::sqrt(sum_sq);
+}
+
 // ---------------------------------------------------------------------------
 // Periodic checkpoint callback
 // ---------------------------------------------------------------------------
@@ -604,6 +692,7 @@ struct save_ctx {
     int32_t              save_every;     // 0 = disabled
     int32_t              ubatch_per_ctx;
     int64_t              last_saved;     // last window index at which we saved
+    int32_t              epoch;
 };
 
 // TLS pointer set before each epoch so the static callback can access it.
@@ -634,7 +723,9 @@ static void save_every_callback(
     const int64_t window = ibatch / g_save_ctx->ubatch_per_ctx;
     if (window > 0 && window != g_save_ctx->last_saved && window % g_save_ctx->save_every == 0) {
         g_save_ctx->last_saved = window;
-        const std::string ckpt = *g_save_ctx->lora_out + ".ckpt" + std::to_string(window) + ".gguf";
+        const std::string ckpt = *g_save_ctx->lora_out
+            + ".epoch" + std::to_string(g_save_ctx->epoch)
+            + ".ckpt" + std::to_string(window) + ".gguf";
         save_adapter(*g_save_ctx->lt, ckpt, *g_save_ctx->arch, g_save_ctx->lora_alpha, *g_save_ctx->base_model_path);
         fprintf(stderr, "\n");
         LOG_INF("save_every_callback: checkpoint saved -> %s (window %ld)\n", ckpt.c_str(), (long)window);
@@ -698,7 +789,7 @@ static std::string generate_response(
         std::mt19937       & rng) {
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    auto tokens = common_tokenize(ctx, prompt, /*add_special=*/true);
+    auto tokens = common_tokenize(ctx, prompt, /*add_special=*/true, /*parse_special=*/true);
     if (tokens.empty()) return "";
 
     // Clear KV cache before each generation (don't carry over previous prompt state)
@@ -900,8 +991,8 @@ static int run_grpo_mode(
             training_sample s;
             s.reward = rewards[k];
 
-            auto tok_prompt = common_tokenize(ctx, prompt,         /*add_special=*/true);
-            auto tok_gen    = common_tokenize(ctx, generations[k], /*add_special=*/false);
+            auto tok_prompt = common_tokenize(ctx, prompt,         /*add_special=*/true,  /*parse_special=*/true);
+            auto tok_gen    = common_tokenize(ctx, generations[k], /*add_special=*/false, /*parse_special=*/true);
 
             s.tokens.insert(s.tokens.end(), tok_prompt.begin(), tok_prompt.end());
             s.tokens.insert(s.tokens.end(), tok_gen.begin(),    tok_gen.end());
@@ -1149,6 +1240,11 @@ int main(int argc, char ** argv) {
     llama_opt_init(ctx, model, lopt_params);
 
     const int64_t idata_split = ggml_opt_dataset_ndata(dataset) * (1.0f - params.val_split);
+    if (idata_split <= 0) {
+        LOG_ERR("%s: no training windows after val split (ndata=%ld val_split=%.3f)\n",
+                __func__, (long) ggml_opt_dataset_ndata(dataset), (double) params.val_split);
+        return 1;
+    }
 
     ggml_opt_result_t result_train = ggml_opt_result_init();
     ggml_opt_result_t result_eval  = ggml_opt_result_init();
@@ -1156,13 +1252,15 @@ int main(int argc, char ** argv) {
     const int32_t n_ubatch       = llama_n_ubatch(ctx);
     const int32_t ubatch_per_ctx = (n_ubatch > 0) ? (n_ctx / n_ubatch) : 1;
 
-    save_ctx sctx { &lt, &params.lora_out, &arch, &params.model.path, lora_alpha, params.save_every, ubatch_per_ctx, 0 };
+    save_ctx sctx { &lt, &params.lora_out, &arch, &params.model.path, lora_alpha, params.save_every, ubatch_per_ctx, 0, 0 };
     g_save_ctx = &sctx;
 
     const int64_t total_windows = ggml_opt_dataset_ndata(dataset);
     LOG_INF("%s: starting QLoRA training — rank=%d alpha=%.1f epochs=%d loss=%s\n",
             __func__, params.lora_rank, lora_alpha, params.lr.epochs,
             params.train_on_prompt ? "prompt+response" : "response-only");
+    const double adapter_norm_start = adapter_l2_norm(lt);
+    LOG_INF("%s: adapter_l2_start=%.6f\n", __func__, adapter_norm_start);
     LOG_INF("%s: dataset: %ld windows × %d ubatches = %ld steps per epoch  (n_ctx=%d n_ubatch=%d stride=%d)\n",
             __func__, (long)total_windows, ubatch_per_ctx, (long)(idata_split * ubatch_per_ctx),
             n_ctx, n_ubatch, n_ctx / 2);
@@ -1177,6 +1275,7 @@ int main(int argc, char ** argv) {
 
     for (params.lr.epoch = 0; params.lr.epoch < params.lr.epochs; ++params.lr.epoch) {
         sctx.last_saved = 0;  // reset per-epoch window counter
+        sctx.epoch = params.lr.epoch + 1;
         llama_opt_epoch(ctx, dataset, result_train, result_eval, idata_split,
                         cb_train,
                         ggml_opt_epoch_callback_progress_bar,
@@ -1196,10 +1295,20 @@ int main(int argc, char ** argv) {
                 LOG_INF("epoch %d/%d: train_loss=%.4f ± %.4f\n",
                         params.lr.epoch + 1, params.lr.epochs, train_loss, train_unc);
             }
+            const double adapter_norm = adapter_l2_norm(lt);
+            LOG_INF("epoch %d/%d: adapter_l2=%.6f delta=%.6f\n",
+                    params.lr.epoch + 1, params.lr.epochs, adapter_norm, adapter_norm - adapter_norm_start);
         }
 
         ggml_opt_result_reset(result_train);
         ggml_opt_result_reset(result_eval);
+
+        if (params.optimizer_restart_every > 0 &&
+            params.lr.epoch + 1 < params.lr.epochs &&
+            (params.lr.epoch + 1) % params.optimizer_restart_every == 0) {
+            LOG_INF("%s: resetting optimizer state after epoch %d\n", __func__, params.lr.epoch + 1);
+            llama_opt_reset(ctx, true);
+        }
     }
 
     ggml_opt_result_free(result_train);

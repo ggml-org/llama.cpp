@@ -3927,6 +3927,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) { params.grad_checkpoint_interval = value; }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
+        {"--optimizer-restart-every"}, "N",
+        "reset optimizer state every N epochs, matching repeated resume runs (0 = disabled)",
+        [](common_params & params, int value) { params.optimizer_restart_every = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
         {"--train-on-prompt"},
         "compute loss on prompt tokens too, not just the response (default: response-only loss)",
         [](common_params & params) { params.train_on_prompt = true; }

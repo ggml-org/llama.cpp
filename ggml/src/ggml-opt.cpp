@@ -648,6 +648,9 @@ void ggml_opt_free(ggml_opt_context_t opt_ctx) {
 void ggml_opt_reset(ggml_opt_context_t opt_ctx, bool optimizer) {
     if (optimizer) {
         ggml_graph_reset(opt_ctx->gb_opt);
+        for (ggml_backend_buffer_t buf : opt_ctx->bufs_momenta) {
+            ggml_backend_buffer_clear(buf, 0);
+        }
         opt_ctx->iter = 1;
     } else {
         ggml_graph_reset(opt_ctx->gb_grad);
