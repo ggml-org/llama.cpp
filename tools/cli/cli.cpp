@@ -60,6 +60,8 @@ struct cli_context {
     task_params defaults;
     bool verbose_prompt;
 
+    bool enable_thinking;
+
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
 
@@ -73,6 +75,7 @@ struct cli_context {
         defaults.stream = true; // make sure we always use streaming mode
         defaults.timings_per_token = true; // in order to get timings even when we cancel mid-way
         // defaults.return_progress = true; // TODO: show progress
+        enable_thinking = true;
 
         verbose_prompt = params.verbose_prompt;
     }
@@ -234,7 +237,7 @@ struct cli_context {
         inputs.add_generation_prompt = true;
         inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
         inputs.force_pure_content    = chat_params.force_pure_content;
-        inputs.enable_thinking       = chat_params.enable_thinking ? common_chat_templates_support_enable_thinking(chat_params.tmpls.get()) : false;
+        inputs.enable_thinking       = enable_thinking && chat_params.enable_thinking ? common_chat_templates_support_enable_thinking(chat_params.tmpls.get()) : false;
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
@@ -459,6 +462,9 @@ int llama_cli(int argc, char ** argv) {
     console::log("  /clear              clear the chat history\n");
     console::log("  /read <file>        add a text file\n");
     console::log("  /glob <pattern>     add text files using globbing pattern\n");
+    if (inf.chat_params.enable_thinking) {
+        console::log("  /think [on/off]     toggle think on supported model\n");
+    }
     if (inf.has_inp_image) {
         console::log("  /image <file>       add an image file\n");
     }
@@ -546,6 +552,13 @@ int llama_cli(int argc, char ** argv) {
         // process commands
         if (string_starts_with(buffer, "/exit")) {
             break;
+        } else if (string_starts_with(buffer, "/think") && inf.chat_params.enable_thinking) {
+            std::string think_str = string_strip(buffer.substr(6));
+            if (think_str != "") {
+                ctx_cli.enable_thinking = think_str == "on";
+            }
+            console::log("Thinking is %s now.\n", ctx_cli.enable_thinking ? "on" : "off");
+            continue;
         } else if (string_starts_with(buffer, "/regen")) {
             if (ctx_cli.messages.size() >= 2) {
                 size_t last_idx = ctx_cli.messages.size() - 1;
