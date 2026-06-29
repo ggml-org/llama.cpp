@@ -361,7 +361,7 @@ static void vtcm_free(struct htp_context * ctx) {
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
 
-AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_queue_id, uint32 n_hvx, uint32 use_hmx, uint64_t max_vmem) {
+AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp_queue_id, uint32_t n_hvx, uint32_t n_hmx, uint64_t max_vmem) {
     struct htp_context * ctx = (struct htp_context *) handle;
 
     if (!ctx) {
@@ -395,18 +395,18 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
         return AEE_ENOMEMORY;
     }
 
-#ifdef HTP_HAS_HMX
-    ctx->hmx_enabled = use_hmx;
+    ctx->hmx_enabled = n_hmx;
     ctx->hmx_queue   = NULL;
-    if (use_hmx) {
+    if (n_hmx) {
         ctx->hmx_queue = hmx_queue_create(16, ctx->vtcm_rctx);
-        if (!ctx->hmx_queue) {
+        if (ctx->hmx_queue) {
+            ctx->hmx_queue->trace = &ctx->trace[HTP_MAX_NTHREADS];
+        } else {
             FARF(ERROR, "hmx-queue-create failed");
             ctx->hmx_enabled = false;
         }
     }
-    FARF(HIGH, "HMX %s (use_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", use_hmx);
-#endif
+    FARF(HIGH, "HMX %s (n_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", n_hmx);
 
     qurt_sysenv_max_hthreads_t hw_threads;
     qurt_sysenv_get_max_hw_threads(&hw_threads);
@@ -425,6 +425,9 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
     ctx->n_threads = n_hvx;
     for (int i = 0; i < ctx->n_threads; i++) {
         ctx->dma[i] = dma_queue_create(256); // queue depth
+        if (ctx->dma[i]) {
+            ctx->dma[i]->trace = &ctx->trace[i];
+        }
     }
 
     ctx->ddr_spad_size = 512 * 1024; // 512 KB
@@ -476,13 +479,11 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
         dma_queue_delete(ctx->dma[i]);
     }
 
-#ifdef HTP_HAS_HMX
     if (ctx->hmx_queue) {
         hmx_queue_delete(ctx->hmx_queue);
         ctx->hmx_queue = NULL;
     }
     ctx->hmx_enabled = false;
-#endif
 
     vtcm_free(ctx);
 
@@ -495,6 +496,36 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     return AEE_SUCCESS;
 }
 
+AEEResult htp_iface_hwinfo(remote_handle64 handle, uint32_t * n_threads, uint32_t * n_hvx, uint32_t * n_hmx, uint64_t * vtcm_size) {
+    (void)handle;
+    if (!n_threads || !n_hvx || !n_hmx || !vtcm_size) {
+        return AEE_EBADPARM;
+    }
+
+    qurt_sysenv_max_hthreads_t hw_threads;
+    qurt_sysenv_get_max_hw_threads(&hw_threads);
+    uint32_t hw_nhvx = (qurt_hvx_get_units() >> 8) & 0xFF;
+
+    uint32_t n_hvx_val = hw_nhvx;
+    if (n_hvx_val > hw_threads.max_hthreads) {
+        n_hvx_val = hw_threads.max_hthreads;
+    }
+    if (n_hvx_val > HTP_MAX_NTHREADS) {
+        n_hvx_val = HTP_MAX_NTHREADS;
+    }
+
+    // for now we force n_threads == n_hvx
+    *n_threads = n_hvx_val;
+    *n_hvx     = n_hvx_val;
+    *n_hmx     = 1;
+
+    uint32_t vtcm_sz = 8 * 1024 * 1024; // 8MB default fallback
+    HAP_compute_res_query_VTCM(0, (unsigned int *)&vtcm_sz, NULL, NULL, NULL);
+    *vtcm_size = vtcm_sz;
+
+    return AEE_SUCCESS;
+}
+
 static void htp_error_callback(dspqueue_t queue, int error, void * context) {
     // No errors expected on the DSP.
     FARF(ERROR, "Error callback: 0x%08x", (unsigned) error);
@@ -502,7 +533,8 @@ static void htp_error_callback(dspqueue_t queue, int error, void * context) {
 
 struct profile_data {
     uint64_t usecs;
-    uint64_t cycles;
+    uint64_t cycles_start;
+    uint64_t cycles_stop;
     uint32_t pmu_counters[HEX_NUM_PMU_COUNTERS];
 };
 
@@ -512,8 +544,9 @@ static inline void profile_start(uint32_t mode, struct profile_data * d) {
             hex_get_pmu(d->pmu_counters);
             // fallthrough
         case HTP_PROF_BASIC:
+        case HTP_PROF_TRACE:
             d->usecs  = HAP_perf_get_qtimer_count();
-            d->cycles = hex_get_cycles();
+            d->cycles_start = hex_get_cycles();
             break;
         default:
             break;
@@ -530,8 +563,9 @@ static inline void profile_stop(uint32_t mode, struct profile_data * d) {
             }
             // fallthrough
         case HTP_PROF_BASIC:
+        case HTP_PROF_TRACE:
             d->usecs  = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - d->usecs);
-            d->cycles = hex_get_cycles() - d->cycles;
+            d->cycles_stop = hex_get_cycles();
             break;
         default:
             break;
@@ -545,6 +579,12 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_MUL_MAT_ID:
             return op_matmul_id(octx);
+
+        case HTP_OP_MUL_MAT_QKV:
+            return op_matmul_qkv(octx);
+
+        case HTP_OP_MUL_MAT_FFN:
+            return op_matmul_ffn(octx);
 
         case HTP_OP_MUL:
         case HTP_OP_ADD:
@@ -754,8 +794,9 @@ static void prep_tensors(struct htp_context *ctx, struct htp_buf_desc *bufs, str
     }
 }
 
-static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
+static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
     memcpy(octx->op_params, op->params, sizeof(octx->op_params));
+    memcpy(octx->kernel_params, op->kernel_params, sizeof(octx->kernel_params));
     octx->flags = op->flags;
     octx->op    = op->opcode;
 
@@ -777,22 +818,41 @@ static void proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, 
             src->ne[0], src->ne[1], src->ne[3], src->ne[3]);
     }
 
-    // Prep output tensor
-    struct htp_tensor *dst = tens + op->dst;
+    // Prep output tensors
+    for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
+        uint16_t dst_idx = op->dst[i];
+        if (dst_idx == 0xffff) {
+            octx->dsts[i] = NULL;
+            continue;
+        }
+        struct htp_tensor *dst = tens + dst_idx;
+        octx->dsts[i] = dst;
 
-    octx->dst = dst;
+        FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
+            dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+    }
 
-    FARF(HIGH, "prep-dst #%u: data %p size %u : %u:%u:%u:%u", op->dst, (void*) dst->data, dst->size,
-        dst->ne[0], dst->ne[1], dst->ne[3], dst->ne[3]);
+    int status = execute_op(octx);
 
-    (void) execute_op(octx);
+    octx->src0_spad.src = NULL;
+    octx->src1_spad.src = NULL;
+    octx->src2_spad.src = NULL;
+    octx->src3_spad.src = NULL;
+    octx->dst_spad.src  = NULL;
 
     // flush buffers on output
-    hex_l2flush((void *) dst->data, dst->size);
-    dst->flags |= HTP_TENSOR_FLUSHED;
+    for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
+        if (octx->dsts[i]) {
+            struct htp_tensor *dst = (struct htp_tensor *)octx->dsts[i];
+            hex_l2flush((void *) dst->data, dst->size);
+            dst->flags |= HTP_TENSOR_FLUSHED;
 
-    FARF(HIGH, "post-dst #%u: data %p size %u : %u:%u:%u:%u", op->dst, (void*) dst->data, dst->size,
-        dst->ne[0], dst->ne[1], dst->ne[3], dst->ne[3]);
+            FARF(HIGH, "post-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, op->dst[i], (void*) dst->data, dst->size,
+                dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+        }
+    }
+
+    return status;
 }
 
 #define DSPQUEUE_POLL_TIMEOUT_USEC 100
@@ -845,14 +905,15 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         const uint32_t t_size = sizeof(struct htp_tensor)    * n_tens;
         const uint32_t o_size = sizeof(struct htp_op_desc)   * n_ops;
         const uint32_t p_size = sizeof(struct htp_prof_desc) * n_ops;
+        const uint32_t tr_size = (HTP_MAX_NTHREADS + 1) * req.n_traces * sizeof(struct htp_trace_desc);
 
-        if (dbuf.size < b_size + t_size + o_size + p_size) {
-            FARF(ERROR, "invalid opbatch memory block size %u", dbuf.size);
+        if (dbuf.size < b_size + t_size + o_size + p_size + tr_size) {
+            FARF(ERROR, "invalid opbatch memory block size %u (req %u)", dbuf.size, b_size + t_size + o_size + p_size + tr_size);
             break;
         }
 
-        FARF(HIGH, "processing opbatch #%u: n-bufs %u n-tensors %u n-ops %u : m-size %u b-size %u t-size %u o-size %u", req.id,
-                n_bufs, n_tens, n_ops, dbuf.size, b_size, t_size, o_size);
+        FARF(HIGH, "processing opbatch #%u: n-bufs %u n-tensors %u n-ops %u n-traces %u : m-size %u b-size %u t-size %u o-size %u", req.id,
+                n_bufs, n_tens, n_ops, req.n_traces, dbuf.size, b_size, t_size, o_size);
 
         // Setup descriptor pointers
         uint8_t * m_ptr = dbuf.ptr;
@@ -869,24 +930,45 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         octx->n_threads = ctx->n_threads;
         octx->ctx       = ctx;
 
+        if (ctx->profiler == HTP_PROF_TRACE) {
+            memset(ctx->trace, 0, sizeof(ctx->trace));
+            struct htp_trace_desc * trace_events = (struct htp_trace_desc *) (m_ptr + p_size);
+            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+                ctx->trace[t].events = &trace_events[t * req.n_traces];
+                ctx->trace[t].max_events = req.n_traces;
+            }
+        } else {
+            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+                ctx->trace[t].events = NULL;
+                ctx->trace[t].max_events = 0;
+            }
+        }
+
+        int      op_status = HTP_STATUS_OK;
+        uint32_t op_wakeup = n_ops / 2; // half-way throgh the batch
+
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
 
-            if (i == (n_ops-1)) {
-                // wake up the host before starting the last op
+            if (i == op_wakeup) {
                 dspqueue_write_early_wakeup_noblock(queue, 0, 0);
             }
 
             profile_start(ctx->profiler, &prof);
 
-            proc_op_req(octx, tens, i, &ops[i]);
+            op_status = proc_op_req(octx, tens, i, &ops[i]);
 
             profile_stop(ctx->profiler, &prof);
+
+            if (op_status != HTP_STATUS_OK) {
+                break;
+            }
 
             if (ctx->profiler) {
                 pds[i].opcode = ops[i].opcode;
                 pds[i].usecs  = prof.usecs;
-                pds[i].cycles = prof.cycles;
+                pds[i].cycles_start = prof.cycles_start;
+                pds[i].cycles_stop = prof.cycles_stop;
                 for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
                     pds[i].pmu[j] = prof.pmu_counters[j];
                 }
@@ -895,10 +977,18 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
         struct htp_opbatch_rsp rsp;
         rsp.id        = req.id;
-        rsp.status    = HTP_STATUS_OK;
+        rsp.status    = op_status;
         rsp.n_bufs    = n_bufs;
         rsp.n_tensors = n_tens;
         rsp.n_ops     = n_ops;
+        memset(rsp.pad, 0, sizeof(rsp.pad));
+        if (ctx->profiler == HTP_PROF_TRACE) {
+            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+                rsp.n_traces[t] = ctx->trace[t].count;
+            }
+        } else {
+            memset(rsp.n_traces, 0, sizeof(rsp.n_traces));
+        }
 
         dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
 

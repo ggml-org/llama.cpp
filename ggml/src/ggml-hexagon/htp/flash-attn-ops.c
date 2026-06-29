@@ -18,7 +18,8 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-ops.h"
-#include "hmx-ops.h"
+
+int hmx_flash_attn_ext(struct htp_ops_context * octx);
 
 // Must be multiple of 32
 #define FLASH_ATTN_BLOCK_SIZE (32 * 2)
@@ -339,6 +340,9 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
     if (ir0 >= ir1) return;
 
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
+
     dma_queue * dma = octx->ctx->dma[ith];
 
     const uint32_t DK = nek0;
@@ -615,6 +619,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             hvx_copy_f16_f32_ua(dst_ptr, (uint8_t *) VKQ32, DV);
         }
     }
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
 }
 
 int op_flash_attn_ext(struct htp_ops_context * octx) {
@@ -629,7 +634,6 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-#ifdef HTP_HAS_HMX
     // HMX path: head_dim multiple of 64, F16 KV, and no sinks
     if (k->type == HTP_TYPE_F16 && v->type == HTP_TYPE_F16 && k->ne[0] % 64 == 0 && v->ne[0] % 64 == 0 && octx->src[4] == NULL) {
         int ret = hmx_flash_attn_ext(octx);
@@ -638,7 +642,6 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         }
         // VTCM too small or other failure -> fall through to HVX path
     }
-#endif
 
     struct htp_fa_context factx;
     factx.octx = octx;

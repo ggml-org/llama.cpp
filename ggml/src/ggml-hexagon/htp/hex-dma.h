@@ -5,6 +5,9 @@
 #include <hexagon_types.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include "hex-utils.h"
+
+#include "hex-profile.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -88,6 +91,7 @@ typedef struct {
     uint32_t            pop_idx;
     uint32_t            capacity;
     uint32_t            idx_mask;
+    struct htp_thread_trace * trace;
 } dma_queue;
 
 dma_queue * dma_queue_create(size_t capacity);
@@ -124,13 +128,8 @@ static inline dma_ptr dma_make_ptr(void *dst, const void *src)
     return p;
 }
 
-#if __HVX_ARCH__ < 73
-static const uint32_t dma_src_l2_bypass_on = 1;
-static const uint32_t dma_dst_l2_bypass_on = 0;
-#else
 static const uint32_t dma_src_l2_bypass_on = 1;
 static const uint32_t dma_dst_l2_bypass_on = 1;
-#endif
 
 static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t size) {
     if (((q->push_idx + 1) & q->idx_mask) == q->pop_idx) {
@@ -152,6 +151,7 @@ static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t 
     q->dptr[q->push_idx] = dptr;
 
     if (size) {
+        htp_trace_event_start(q->trace, HTP_TRACE_EVT_DMA, q->push_idx);
         dmlink(q->tail, desc);
         q->tail = (dma_descriptor_2d *) desc;
     } else {
@@ -202,6 +202,7 @@ static inline bool dma_queue_push_single_2d(dma_queue * q, dma_ptr dptr, size_t 
     q->dptr[q->push_idx] = dptr;
 
     if (nrows) {
+        htp_trace_event_start(q->trace, HTP_TRACE_EVT_DMA, q->push_idx);
         dmlink(q->tail, desc);
         q->tail = desc;
     } else {
@@ -223,10 +224,12 @@ static inline dma_ptr dma_queue_pop(dma_queue * q) {
     dma_descriptor_2d * desc = &q->desc[q->pop_idx];
 
     // Wait for desc to complete
-    while (!desc->done) {
-        // FARF(ERROR, "dma-pop: waiting for DMA : %u\n", q->pop_idx);
-        dmpoll();
+    if (!desc->done) {
+        while (!desc->done) {
+            dmpoll();
+        }
     }
+    htp_trace_event_stop(q->trace, HTP_TRACE_EVT_DMA, q->pop_idx);
 
     dptr = q->dptr[q->pop_idx];
 

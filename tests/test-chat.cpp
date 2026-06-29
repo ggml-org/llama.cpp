@@ -1562,37 +1562,112 @@ static void test_msgs_oaicompat_json_conversion() {
     }
 }
 
-static void test_split_by_role() {
+static void test_msg_token_delimiters_split() {
     LOG_DBG("%s\n", __func__);
 
+    // Delimiters that share a leading token, distinguished by the second token,
+    // to exercise the per-position token matching.
+    const common_chat_msg_delimiters delims = {
+        { { COMMON_CHAT_ROLE_USER,      "", { 10, 11 } },
+          { COMMON_CHAT_ROLE_ASSISTANT, "", { 10, 12 } } }
+    };
+
     // Empty inputs
-    assert_equals<size_t>(0, common_chat_split_by_role("", {}).size());
-    assert_equals<size_t>(0, common_chat_split_by_role("hello", {}).size());
-    assert_equals<size_t>(0, common_chat_split_by_role("", { { "user", "<|user|>" } }).size());
+    assert_equals<size_t>(0, common_chat_msg_delimiters{}.split({}).spans.size());
+    assert_equals<size_t>(0, common_chat_msg_delimiters{}.split({ 10, 11 }).spans.size());
+    assert_equals<size_t>(0, delims.split({}).spans.size());
 
-    // Multi-role conversation, no leading/trailing content
+    // No delimiters match -> no spans
+    assert_equals<size_t>(0, delims.split({ 100, 101, 102 }).spans.size());
+
+    // Multi-role conversation: <user>Hi<assistant>Hello<user>Bye
     {
-        const std::string prompt = "<|user|>Hi<|assistant|>Hello<|user|>Bye";
-        const auto splits = common_chat_split_by_role(prompt, {
-            { "user",      "<|user|>"      },
-            { "assistant", "<|assistant|>" },
-        });
-        assert_equals<size_t>(3, splits.size());
+        const llama_tokens tokens = {
+            10, 11,            // <user>
+            100, 101,          // Hi
+            10, 12,            // <assistant>
+            200, 201, 202,     // Hello
+            10, 11,            // <user>
+            300, 301,          // Bye
+        };
 
-        assert_equals<std::string>("user", splits[0].role);
-        assert_equals<size_t>(0, splits[0].pos);
-        assert_equals<size_t>(10, splits[0].len);
-        assert_equals<std::string>("<|user|>Hi", prompt.substr(splits[0].pos, splits[0].len));
+        const auto result = delims.split(tokens);
+        const auto & spans = result.spans;
+        assert_equals<size_t>(3, spans.size());
 
-        assert_equals<std::string>("assistant", splits[1].role);
-        assert_equals<size_t>(10, splits[1].pos);
-        assert_equals<size_t>(18, splits[1].len);
-        assert_equals<std::string>("<|assistant|>Hello", prompt.substr(splits[1].pos, splits[1].len));
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(4, spans[0].len);
 
-        assert_equals<std::string>("user", splits[2].role);
-        assert_equals<size_t>(28, splits[2].pos);
-        assert_equals<size_t>(11, splits[2].len);
-        assert_equals<std::string>("<|user|>Bye", prompt.substr(splits[2].pos, splits[2].len));
+        assert_equals(COMMON_CHAT_ROLE_ASSISTANT, spans[1].role);
+        assert_equals<size_t>(4, spans[1].pos);
+        assert_equals<size_t>(5, spans[1].len);
+
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[2].role);
+        assert_equals<size_t>(9, spans[2].pos);
+        assert_equals<size_t>(4, spans[2].len);
+
+        // is_user_start() is true at the token position where a user span begins
+        assert_equals(true,  result.is_user_start(0));
+        assert_equals(false, result.is_user_start(4));  // assistant span
+        assert_equals(true,  result.is_user_start(9));
+    }
+
+    // Content before the first delimiter is not captured as a span
+    {
+        const llama_tokens tokens = {
+            500, 501,    // leading content (dropped)
+            10, 11,      // <user>
+            100,         // Hi
+        };
+
+        const auto spans = delims.split(tokens).spans;
+        assert_equals<size_t>(1, spans.size());
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(2, spans[0].pos);
+        assert_equals<size_t>(3, spans[0].len);
+    }
+
+    // Skipped regions (media chunks) are jumped over but still count as span content
+    {
+        const llama_tokens tokens = {
+            10, 11,             // <user>
+            LLAMA_TOKEN_NULL,   // media chunk (3 tokens)
+            LLAMA_TOKEN_NULL,
+            LLAMA_TOKEN_NULL,
+            100,                // Hi
+            10, 12,             // <assistant>
+        };
+
+        const std::map<size_t, size_t> skips = { { 2, 3 } };
+
+        const auto spans = delims.split(tokens, skips).spans;
+        assert_equals<size_t>(2, spans.size());
+
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(6, spans[0].len);
+
+        assert_equals(COMMON_CHAT_ROLE_ASSISTANT, spans[1].role);
+        assert_equals<size_t>(6, spans[1].pos);
+        assert_equals<size_t>(2, spans[1].len);
+    }
+
+    // A delimiter sequence inside a skipped region is not matched
+    {
+        const llama_tokens tokens = {
+            10, 11,      // <user>
+            10, 12,      // skipped region that happens to contain delimiter tokens
+            100,         // Hi
+        };
+
+        const std::map<size_t, size_t> skips = { { 2, 2 } };
+
+        const auto spans = delims.split(tokens, skips).spans;
+        assert_equals<size_t>(1, spans.size());
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(5, spans[0].len);
     }
 }
 
@@ -5022,14 +5097,14 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         tst.test("Hello, world!\nWhat's up?").tools({ special_function_tool }).expect(message_assist).expect_reconstruction().run();
 
         tst.test(
-             "```json\n\"42\" \n```")
+             "```json\n\"42\"\n```")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .json_schema(const_schema)
             .expect_content(R"("42")")
             .run();
 
         tst.test(
-             "\"42\" \n")
+             "\"42\"\n")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .json_schema(const_schema)
             .expect_content(R"("42")")
@@ -5518,6 +5593,77 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("Hello, world!\nWhat's up?")
             .run();
     }
+
+    // MiniCPM5 - XML tool calls with <function name="..."><param name="...">...</param></function>
+    {
+        auto tst = peg_tester("models/templates/openbmb-MiniCPM5-1B.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('Hello, World!')</param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ python_tool })
+            .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
+            .run();
+
+        tst.test(R"(<function name="empty_args"></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ empty_args_tool })
+            .expect(simple_assist_msg("", "", "empty_args", "{}"))
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('x')</param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ python_tool })
+            .expect_tool_calls({ { "python", R"#({"code": "print('x')"})#", {} } })
+            .run();
+
+        // CDATA lets a string value carry characters that would otherwise close the tag.
+        tst.test(R"(<function name="html"><param name="markup"><![CDATA[<a href="/x">hi</a> </param>]]></param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ html_tool })
+            .expect_tool_calls({ { "html", R"#({"markup": "<a href=\"/x\">hi</a> </param>"})#", {} } })
+            .run();
+
+        tst.test(R"(I'm thinking</think><function name="python"><param name="code">print('hey')</param></function>)")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ python_tool })
+            .expect_reasoning("I'm thinking")
+            .expect_tool_calls({ { "python", R"#({"code": "print('hey')"})#", {} } })
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('x')</param></function>
+<function name="python"><param name="code">print('y')</param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ python_tool })
+            .expect_tool_calls({
+                { "python", R"#({"code": "print('x')"})#", {} },
+                { "python", R"#({"code": "print('y')"})#", {} },
+            })
+            .run();
+
+        tst.test(" thinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
 }
 
 static void test_template_generation_prompt() {
@@ -5664,6 +5810,13 @@ static void test_template_generation_prompt() {
         check(tmpls, basic(),                  "<｜Assistant｜><think>");
         check(tmpls, continuation_content(),   "<｜Assistant｜><think>I'm thinking</think>Hello, ");
         check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
+    }
+
+    {
+        auto tmpls = read_templates("models/templates/openbmb-MiniCPM5-1B.jinja");
+        check(tmpls, basic(),                  "<|im_start|>assistant\n<think>\n");
+        check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
+        check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
     }
 }
 
@@ -5857,7 +6010,7 @@ int main(int argc, char ** argv) {
     {
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
-        test_split_by_role();
+        test_msg_token_delimiters_split();
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();

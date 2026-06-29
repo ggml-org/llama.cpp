@@ -10,9 +10,9 @@ import { isElementInViewport } from '$lib/utils/viewport';
  */
 export function fadeInView(
 	node: HTMLElement,
-	options: { duration?: number; y?: number; skipIfVisible?: boolean } = {}
+	options: { duration?: number; y?: number; delay?: number; skipIfVisible?: boolean } = {}
 ) {
-	const { duration = 300, y = 0, skipIfVisible = false } = options;
+	const { duration = 300, y = 0, delay = 0, skipIfVisible = false } = options;
 
 	if (skipIfVisible && isElementInViewport(node)) {
 		return;
@@ -27,10 +27,12 @@ export function fadeInView(
 			(entries) => {
 				for (const entry of entries) {
 					if (entry.isIntersecting) {
-						requestAnimationFrame(() => {
-							node.style.opacity = '1';
-							node.style.transform = 'translateY(0)';
-						});
+						setTimeout(() => {
+							requestAnimationFrame(() => {
+								node.style.opacity = '1';
+								node.style.transform = 'translateY(0)';
+							});
+						}, delay);
 						observer.disconnect();
 					}
 				}
