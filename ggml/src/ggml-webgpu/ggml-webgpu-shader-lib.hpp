@@ -1105,6 +1105,22 @@ struct ggml_webgpu_soft_max_pipeline_key_hash {
     }
 };
 
+/** LogSoftMax **/
+
+struct ggml_webgpu_log_soft_max_pipeline_key {
+    bool inplace;
+
+    bool operator==(const ggml_webgpu_log_soft_max_pipeline_key & other) const { return inplace == other.inplace; }
+};
+
+struct ggml_webgpu_log_soft_max_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_log_soft_max_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.inplace);
+        return seed;
+    }
+};
+
 /** MMVQ **/
 
 inline bool ggml_webgpu_can_use_mmvq(const ggml_tensor * src0,
@@ -1208,6 +1224,10 @@ class ggml_webgpu_shader_lib {
         rope_pipelines;
     std::unordered_map<ggml_webgpu_soft_max_pipeline_key, webgpu_pipeline, ggml_webgpu_soft_max_pipeline_key_hash>
         soft_max_pipelines;
+    std::unordered_map<ggml_webgpu_log_soft_max_pipeline_key,
+                       webgpu_pipeline,
+                       ggml_webgpu_log_soft_max_pipeline_key_hash>
+        log_soft_max_pipelines;  // inplace
     std::unordered_map<ggml_webgpu_conv2d_pipeline_key, webgpu_pipeline, ggml_webgpu_conv2d_pipeline_key_hash>
         conv2d_pipelines;
     std::unordered_map<ggml_webgpu_im2col_pipeline_key, webgpu_pipeline, ggml_webgpu_im2col_pipeline_key_hash>
@@ -3130,6 +3150,35 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         soft_max_pipelines[key]  = pipeline;
         return soft_max_pipelines[key];
+    }
+
+    webgpu_pipeline get_log_soft_max_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_log_soft_max_pipeline_key key = {};
+        key.inplace                               = ggml_webgpu_tensor_equal(context.src0, context.dst);
+
+        auto it = log_soft_max_pipelines.find(key);
+        if (it != log_soft_max_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "log_soft_max";
+
+        if (key.inplace) {
+            defines.push_back("INPLACE");
+            variant += "_inplace";
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed              = preprocessor.preprocess(wgsl_log_soft_max, defines);
+        auto decisions              = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size          = context.max_wg_size;
+        decisions->inplace          = key.inplace;
+        webgpu_pipeline pipeline    = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context            = decisions;
+        log_soft_max_pipelines[key] = pipeline;
+        return log_soft_max_pipelines[key];
     }
 
     webgpu_pipeline get_conv2d_pipeline(const ggml_webgpu_shader_lib_context & context) {

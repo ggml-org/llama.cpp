@@ -2774,6 +2774,42 @@ static webgpu_encoded_op ggml_webgpu_soft_max(webgpu_context & ctx,
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, ggml_nrows(dst));
 }
 
+static webgpu_encoded_op ggml_webgpu_log_soft_max(webgpu_context & ctx, ggml_tensor * src0, ggml_tensor * dst) {
+    ggml_webgpu_shader_lib_context shader_lib_ctx = {};
+    shader_lib_ctx.src0                           = src0;
+    shader_lib_ctx.dst                            = dst;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+
+    webgpu_pipeline pipeline  = ctx->shader_lib->get_log_soft_max_pipeline(shader_lib_ctx);
+    auto *          decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
+
+    const bool inplace = decisions->inplace;
+
+    std::vector<uint32_t> params = {
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
+        (uint32_t) (src0->nb[1] / ggml_type_size(src0->type)),
+        (uint32_t) (src0->nb[2] / ggml_type_size(src0->type)),
+        (uint32_t) (src0->nb[3] / ggml_type_size(src0->type)),
+        (uint32_t) (dst->nb[1] / ggml_type_size(dst->type)),
+        (uint32_t) (dst->nb[2] / ggml_type_size(dst->type)),
+        (uint32_t) (dst->nb[3] / ggml_type_size(dst->type)),
+        (uint32_t) ggml_nelements(dst),
+        (uint32_t) src0->ne[0],
+        (uint32_t) src0->ne[1],
+        (uint32_t) src0->ne[2]
+    };
+
+    std::vector<wgpu::BindGroupEntry> entries = { ggml_webgpu_make_bind_group_entry(
+        0, ggml_webgpu_tensor_buf(src0), ggml_webgpu_tensor_align_offset(ctx, src0),
+        ggml_webgpu_tensor_binding_size(ctx, src0)) };
+    if (!inplace) {
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst));
+    }
+
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, ggml_nrows(dst));
+}
+
 static webgpu_encoded_op ggml_webgpu_argmax(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
     std::vector<uint32_t> params = { (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
                                      (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
@@ -3129,6 +3165,8 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             return ggml_webgpu_scale(ctx, src0, node);
         case GGML_OP_SOFT_MAX:
             return ggml_webgpu_soft_max(ctx, src0, src1, src2, node);
+        case GGML_OP_LOG_SOFT_MAX:
+            return ggml_webgpu_log_soft_max(ctx, src0, node);
         case GGML_OP_UNARY:
         case GGML_OP_CLAMP:
         case GGML_OP_FILL:
@@ -4296,6 +4334,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             break;
         case GGML_OP_SOFT_MAX:
             supports_op = op->type == GGML_TYPE_F32;
+            break;
+        case GGML_OP_LOG_SOFT_MAX:
+            supports_op = op->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]);
             break;
         case GGML_OP_UNARY:
             {
