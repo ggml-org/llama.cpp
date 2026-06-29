@@ -7,6 +7,9 @@
 
 #include "nlohmann/json.hpp"
 
+#include "json_schema.hpp"
+#include "schema_embedded.h"   // сгенерировано CMake: kGatewaySchemaJson
+
 using json = nlohmann::json;
 
 namespace infcore {
@@ -31,6 +34,17 @@ GatewayConfig load_config(const std::string& path) {
                         /*ignore_comments*/ true);
     } catch (const std::exception& e) {
         throw std::runtime_error(std::string("infcore: ошибка разбора конфига: ") + e.what());
+    }
+
+    // Формальная валидация по встроенной JSON-Schema (fail-fast при старте).
+    {
+        json schema = json::parse(kGatewaySchemaJson, nullptr, true, true);
+        auto errs = json_schema_validate(j, schema);
+        if (!errs.empty()) {
+            std::string msg = "infcore: конфиг не соответствует JSON-Schema:";
+            for (const auto& e : errs) msg += "\n  - " + e;
+            throw std::runtime_error(msg);
+        }
     }
 
     GatewayConfig cfg;

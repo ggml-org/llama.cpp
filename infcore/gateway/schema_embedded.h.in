@@ -1,0 +1,9 @@
+// infcore gateway — корпоративная лицензия. СГЕНЕРИРОВАНО CMake из
+// config/schema/gateway.schema.json. Не редактировать вручную.
+#pragma once
+
+namespace infcore {
+
+inline const char* kGatewaySchemaJson = R"INFCORE_SCHEMA(@INFCORE_SCHEMA_JSON@)INFCORE_SCHEMA";
+
+}  // namespace infcore
