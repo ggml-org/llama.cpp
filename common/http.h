@@ -11,6 +11,11 @@ struct common_http_url {
     std::string path;
 };
 
+// bracket an IPv6 literal host for a URL authority (RFC 3986)
+static std::string common_http_format_host(const std::string & host) {
+    return host.find(':') != std::string::npos ? "[" + host + "]" : host;
+}
+
 static common_http_url common_http_parse_url(const std::string & url) {
     common_http_url parts;
     auto scheme_end = url.find("://");
@@ -49,17 +54,32 @@ static common_http_url common_http_parse_url(const std::string & url) {
         parts.path = "/";
     }
 
-    auto colon_pos = parts.host.find(':');
+    // split the authority into host and optional port, a bracketed IPv6 literal keeps its inner colons (RFC 3986)
+    std::string port_str;
+    if (!parts.host.empty() && parts.host.front() == '[') {
+        auto close = parts.host.find(']');
+        if (close == std::string::npos) {
+            throw std::runtime_error("invalid IPv6 URL authority: " + parts.host);
+        }
+        auto after = parts.host.substr(close + 1);
+        if (!after.empty() && after.front() == ':') {
+            port_str = after.substr(1);
+        }
+        parts.host = parts.host.substr(1, close - 1);
+    } else {
+        auto colon_pos = parts.host.find(':');
+        if (colon_pos != std::string::npos) {
+            port_str = parts.host.substr(colon_pos + 1);
+            parts.host = parts.host.substr(0, colon_pos);
+        }
+    }
 
-    if (colon_pos != std::string::npos) {
-        parts.port = std::stoi(parts.host.substr(colon_pos + 1));
-        parts.host = parts.host.substr(0, colon_pos);
-    } else if (parts.scheme == "http") {
-        parts.port = 80;
+    if (!port_str.empty()) {
+        parts.port = std::stoi(port_str);
     } else if (parts.scheme == "https") {
         parts.port = 443;
     } else {
-        throw std::runtime_error("unsupported URL scheme: " + parts.scheme);
+        parts.port = 80;
     }
 
     return parts;
@@ -83,7 +103,7 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
     }
 #endif
 
-    httplib::Client cli(parts.scheme + "://" + parts.host + ":" + std::to_string(parts.port));
+    httplib::Client cli(parts.scheme + "://" + common_http_format_host(parts.host) + ":" + std::to_string(parts.port));
 
     if (!parts.user.empty()) {
         cli.set_basic_auth(parts.user, parts.password);
@@ -95,5 +115,5 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
 }
 
 static std::string common_http_show_masked_url(const common_http_url & parts) {
-    return parts.scheme + "://" + (parts.user.empty() ? "" : "****:****@") + parts.host + parts.path;
+    return parts.scheme + "://" + (parts.user.empty() ? "" : "****:****@") + common_http_format_host(parts.host) + parts.path;
 }
