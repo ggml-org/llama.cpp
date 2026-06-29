@@ -676,7 +676,14 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                     break;
                 }
             }
-
+            
+            // check for zero dimensions
+            if (ok && (info.t.ne[1] == 0 || info.t.ne[2] == 0 || info.t.ne[3] == 0)) {
+                GGML_LOG_ERROR("%s: tensor '%s' has zero dimension in shape "
+                    "(%" PRIi64 ", %" PRIi64 ", %" PRIi64 ", %" PRIi64 ")\n",
+                    __func__, info.t.name, info.t.ne[0], info.t.ne[1], info.t.ne[2], info.t.ne[3]);
+                ok = false;
+            }
             // check that the total number of elements is representable
             if (ok && ((INT64_MAX/info.t.ne[1] <= info.t.ne[0]) ||
                        (INT64_MAX/info.t.ne[2] <= info.t.ne[0]*info.t.ne[1]) ||
