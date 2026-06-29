@@ -152,6 +152,7 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
         preset.unset_option("LLAMA_ARG_MMPROJ");
         preset.unset_option("LLAMA_ARG_ALIAS");
         preset.unset_option("LLAMA_ARG_HF_REPO");
+        preset.unset_option("LLAMA_ARG_HF_FILE");
     }
 }
 
@@ -225,7 +226,7 @@ void server_model_meta::update_caps() {
             "LLAMA_ARG_MMPROJ",
             "LLAMA_ARG_MMPROJ_URL",
             "LLAMA_ARG_HF_REPO",
-            "LLAMA_ARG_HF_REPO_FILE",
+            "LLAMA_ARG_HF_FILE",
         });
         params.offline = true;
         common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
