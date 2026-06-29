@@ -606,6 +606,11 @@ extern "C" {
     // Get a string describing the model type
     LLAMA_API int32_t llama_model_desc(const struct llama_model * model, char * buf, size_t buf_size);
 
+    // Get the model file type (quantization) as a string, e.g. "Q8_0" or "Q4_K - Medium"
+    // Returns nullptr if the model is invalid or the file type is unknown
+    // The returned pointer is valid as long as the model is not freed
+    LLAMA_API const char * llama_model_ftype_name(const struct llama_model * model);
+
     // Returns the total size of all the tensors in the model in bytes
     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
 
