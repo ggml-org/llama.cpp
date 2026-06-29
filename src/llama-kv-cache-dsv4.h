@@ -12,8 +12,8 @@ class llama_dsv4_comp_state {
 public:
     llama_dsv4_comp_state(
             const llama_model & model,
-                    bool        offload,
-                bool        unified,
+            bool            offload,
+            bool            unified,
             uint32_t        n_seq_max,
             uint32_t        ratio,
             uint32_t        state_size,
