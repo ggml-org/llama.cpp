@@ -470,3 +470,65 @@ void ggml_cuda_op_soft_max_back(ggml_backend_cuda_context & ctx, ggml_tensor * d
 
     soft_max_back_f32_cuda(src0_d, src1_d, dst_d, ncols, nrows, scale, stream);
 }
+
+// log_softmax over ne[0], aligned with PyTorch float32 log_softmax:
+//   out = (x - max) - log(sum(exp(x - max)))
+// src0 is always F32; no mask/scale/sinks (unlike soft_max). One block per row.
+static __global__ void log_soft_max_f32(const float * x, float * dst, const int ncols) {
+    const int tid  = threadIdx.x;
+    const int rowx = blockIdx.x + blockIdx.y*gridDim.x + blockIdx.z*gridDim.x*gridDim.y;
+
+    x   += int64_t(rowx)*ncols;
+    dst += int64_t(rowx)*ncols;
+
+    __shared__ float buf_iw[WARP_SIZE]; // inter-warp communication for block_reduce
+
+    // parallel max
+    float max_val = -INFINITY;
+    for (int col = tid; col < ncols; col += blockDim.x) {
+        max_val = max(max_val, x[col]);
+    }
+    max_val = block_reduce<block_reduce_method::MAX>(max_val, buf_iw);
+    __syncthreads(); // buf_iw is reused for the sum reduction below
+
+    // parallel sum of exp(x - max)
+    float sum = 0.0f;
+    for (int col = tid; col < ncols; col += blockDim.x) {
+        sum += expf(x[col] - max_val);
+    }
+    sum = block_reduce<block_reduce_method::SUM>(sum, buf_iw);
+
+    const float log_sum = logf(sum);
+
+    for (int col = tid; col < ncols; col += blockDim.x) {
+        dst[col] = (x[col] - max_val) - log_sum;
+    }
+}
+
+static void log_soft_max_f32_cuda(
+        const float * x, float * dst, const int ncols_x, const int nrows_x, cudaStream_t stream) {
+    int nth = WARP_SIZE;
+    while (nth < ncols_x && nth < CUDA_SOFT_MAX_BLOCK_SIZE) nth *= 2;
+    const dim3 block_dims(nth,     1, 1);
+    const dim3 block_nums(nrows_x, 1, 1);
+
+    log_soft_max_f32<<<block_nums, block_dims, 0, stream>>>(x, dst, ncols_x);
+}
+
+void ggml_cuda_op_log_soft_max(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    const float * src0_d = (const float *) src0->data;
+    float       *  dst_d = (float *) dst->data;
+
+    cudaStream_t stream = ctx.stream();
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+
+    const int64_t ncols = src0->ne[0];
+    const int64_t nrows = ggml_nrows(src0);
+
+    log_soft_max_f32_cuda(src0_d, dst_d, ncols, nrows, stream);
+}
