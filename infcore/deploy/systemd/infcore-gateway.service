@@ -1,0 +1,35 @@
+# infcore gateway - systemd unit для offline РФ-контура.
+# Установка: cp в /etc/systemd/system/, затем systemctl daemon-reload && enable --now.
+[Unit]
+Description=infcore gateway (OpenAI-совместимый шлюз к локальным LLM)
+After=network.target
+Documentation=file:/opt/infcore/docs/DEPLOY.md
+
+[Service]
+Type=simple
+User=infcore
+Group=infcore
+
+# Секреты (API-ключи через env:VAR в конфиге) подхватываются отсюда; файл опционален.
+EnvironmentFile=-/etc/infcore/gateway.env
+
+ExecStart=/opt/infcore/bin/infcore_gateway /opt/infcore/config/gateway.yaml
+
+# Gateway сам поднимает дочерние llama-server. control-group гарантирует, что при
+# остановке/перезапуске юнита будут убиты ВСЕ процессы (включая модели), без сирот.
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=on-failure
+RestartSec=2
+
+# Базовое усиление. /dev оставлен доступным для GPU (NVIDIA); audit-журнал - на запись.
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/var/log/infcore
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

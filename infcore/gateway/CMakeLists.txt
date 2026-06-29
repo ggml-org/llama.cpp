@@ -4,6 +4,9 @@
 # nlohmann/json из дерева движка; с ядром общается через C-API llama.h.
 # Встраиваем JSON-Schema в бинарь: единый источник истины - файл схемы,
 # заголовок генерируется на этапе конфигурации (config валидируется по нему при старте).
+# Правка схемы должна пере-встраивать заголовок (иначе file(READ) кэшируется).
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/../config/schema/gateway.schema.json)
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/../config/schema/gateway.schema.json INFCORE_SCHEMA_JSON)
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/schema_embedded.h.in
@@ -16,6 +19,11 @@ add_executable(infcore_gateway
     json_schema.cpp
     server.cpp
 )
+
+# Складываем бинарь в общий build/bin (туда же движок кладёт llama-server) -
+# чтобы Dockerfile/деплой копировали всё из одного каталога.
+set_target_properties(infcore_gateway PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 target_include_directories(infcore_gateway PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/..          # registry/model_registry.h, gateway/*.hpp

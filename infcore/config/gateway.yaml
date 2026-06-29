@@ -11,6 +11,8 @@
   "security": {
     "authn": "api_key",
     "rbac_enabled": true,
+    // api_key поддерживает инъекцию секретов: "env:VAR" или "file:/path"
+    // (см. DEPLOY.md), чтобы не хранить ключи открытым текстом в конфиге.
     "principals": [
       { "api_key": "change-me-admin", "subject": "alice", "role": "admin" },
       { "api_key": "change-me-rag",   "subject": "svc-rag", "role": "embeddings-only" }

@@ -9,6 +9,10 @@ services:
     volumes:
       - /opt/infcore/models:/opt/infcore/models:ro
       - ./gateway.yaml:/opt/infcore/config/gateway.yaml:ro
+      - /var/log/infcore:/var/log/infcore          # append-only audit-журнал (на запись)
+    env_file:
+      - path: ./gateway.env                        # секреты для env:VAR в конфиге
+        required: false
     ports: ["127.0.0.1:8080:8080", "127.0.0.1:9090:9090"]
     networks: [internal]
     deploy:

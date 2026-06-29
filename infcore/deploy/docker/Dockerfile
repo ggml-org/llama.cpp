@@ -15,10 +15,17 @@ RUN cmake -S infcore -B build -C infcore/cmake/profile-rf.cmake \
 ARG BASE_RUNTIME=registry.internal/astra/base:1.7
 FROM ${BASE_RUNTIME}
 WORKDIR /opt/infcore
+# build/bin содержит infcore_gateway, infcore-cli И llama-server (единый output-каталог).
 COPY --from=build /src/build/bin/ /opt/infcore/bin/
 COPY infcore/config/gateway.yaml /opt/infcore/config/gateway.yaml
+COPY infcore/docs/DEPLOY.md /opt/infcore/docs/DEPLOY.md
 COPY infcore/NOTICE infcore/sbom.cdx.json /opt/infcore/
-# Модели монтируются томом, в образ не зашиваются.
+# Непривилегированный пользователь + каталог под append-only audit-журнал.
+RUN useradd -r -s /usr/sbin/nologin infcore \
+ && mkdir -p /var/log/infcore \
+ && chown infcore:infcore /var/log/infcore
+USER infcore
+# Модели монтируются томом, в образ не зашиваются. Управляемые llama-server gateway
+# поднимает сам (config.runtime.llama_server_bin=/opt/infcore/bin/llama-server).
 EXPOSE 8080 9090
-# Запускается gateway; движок-сервер (llama-server) поднимается gateway или отдельным юнитом.
 ENTRYPOINT ["/opt/infcore/bin/infcore_gateway", "/opt/infcore/config/gateway.yaml"]

@@ -1,6 +1,7 @@
 // infcore gateway — корпоративная лицензия.
 #include "config.hpp"
 
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -19,6 +20,28 @@ static Modality parse_modality(const std::string& s) {
     if (s == "vision")    return Modality::Vision;
     if (s == "audio")     return Modality::Audio;
     return Modality::Text;
+}
+
+// Разрешает секрет, не зашивая его в конфиг/образ:
+//   "env:VAR"   -> значение переменной окружения VAR
+//   "file:/p"   -> содержимое файла /p (обрезаются хвостовые переводы строк)
+//   иначе       -> строка как есть (literal)
+static std::string resolve_secret(const std::string& v) {
+    if (v.rfind("env:", 0) == 0) {
+        const char* e = std::getenv(v.c_str() + 4);
+        if (!e || !*e)
+            throw std::runtime_error("infcore: переменная окружения не задана: " + v.substr(4));
+        return e;
+    }
+    if (v.rfind("file:", 0) == 0) {
+        std::ifstream f(v.substr(5));
+        if (!f) throw std::runtime_error("infcore: не удалось прочитать файл секрета: " + v.substr(5));
+        std::stringstream ss; ss << f.rdbuf();
+        std::string s = ss.str();
+        while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+        return s;
+    }
+    return v;
 }
 
 GatewayConfig load_config(const std::string& path) {
@@ -60,11 +83,11 @@ GatewayConfig load_config(const std::string& path) {
         const auto& s = j.at("security");
         cfg.rbac_enabled = s.value("rbac_enabled", cfg.rbac_enabled);
         if (s.contains("api_keys"))
-            for (const auto& k : s.at("api_keys")) cfg.api_keys.push_back(k.get<std::string>());
+            for (const auto& k : s.at("api_keys")) cfg.api_keys.push_back(resolve_secret(k.get<std::string>()));
         if (s.contains("principals")) {
             for (const auto& p : s.at("principals")) {
                 ApiKeyPrincipal ap;
-                ap.api_key           = p.value("api_key", std::string());
+                ap.api_key           = resolve_secret(p.value("api_key", std::string()));
                 ap.principal.subject = p.value("subject", std::string());
                 ap.principal.role    = p.value("role", std::string());
                 if (ap.api_key.empty())

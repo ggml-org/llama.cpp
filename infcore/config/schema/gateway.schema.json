@@ -100,7 +100,7 @@
     "model": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["logical_name", "gguf_path"],
+      "required": ["logical_name"],
       "properties": {
         "logical_name": { "type": "string", "pattern": "^[a-z0-9._-]+$" },
         "gguf_path": { "type": "string", "description": "Локальный путь к GGUF (offline)" },
