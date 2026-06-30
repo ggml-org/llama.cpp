@@ -224,7 +224,6 @@ struct llama_layer_nextn {
 // granite-switch: per-token embedded LoRA adapters, stacked across N = num_adapters + 1
 // slots in dim 2 (slot 0 is zero-filled so base tokens add an exact-zero delta).
 // A: {n_embd_in, max_lora_rank, N}   B: {max_lora_rank, n_embd_out, N}
-// 7 injection sites (q, k, v, o, gate, up, down), each with an A and a B = 14 tensors.
 struct llama_layer_switch_lora {
     // attention: q/k/v are separate slices of the fused qkv projection (different out dims)
     struct ggml_tensor * a_q    = nullptr;
