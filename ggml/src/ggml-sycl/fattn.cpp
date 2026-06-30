@@ -127,8 +127,8 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // MKL path: XMX-accelerated GEMM for prompt processing (all KV cache types).
     // The MKL kernel converts non-F16 K/V to F16 via to_fp16_sycl before GEMM,
     // so quantized, F16, BF16, and F32 caches all benefit from XMX acceleration.
-    // Activates automatically when flash-attn is enabled (--flash-attn on or -fa),
-    // batch size >= 1024, and n_kv >= 1024.
+    // Activates automatically when flash-attn is enabled (--flash-attn on or -fa)
+    // and n_kv >= 1024.
     // Set GGML_SYCL_ENABLE_MKL_FA=0 to force TILE/VEC path for A/B testing.
     // Example: GGML_SYCL_ENABLE_MKL_FA=0 llama-cli -m model.gguf -fa -ngl 99 ...
     // Note: MKL GEMM calls are incompatible with SYCL graph capture replay.
@@ -136,7 +136,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     if (mkl_enable < 0) {
         mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
     }
-    if (mkl_enable == 1 && Q->ne[1] >= 128 && K->ne[1] >= 1024) {
+    if (mkl_enable == 1 && Q->ne[1] >= 32 && K->ne[1] >= 1024) {
         return BEST_FATTN_KERNEL_MKL;
     }
 
