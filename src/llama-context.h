@@ -90,6 +90,9 @@ struct llama_context {
 
     float * get_embeddings_layer_inp(uint32_t lid);
 
+    // DSpark: compute the per-step Markov logit bias on-device (out_bias holds n*n_vocab floats)
+    void dspark_markov_bias(const llama_token * prev, int32_t n, float * out_bias);
+
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 

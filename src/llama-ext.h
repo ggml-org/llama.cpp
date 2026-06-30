@@ -124,3 +124,15 @@ LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 LLAMA_API const int32_t * llama_model_target_layer_ids  (const struct llama_model * model);
 // returns the number of extracted layers from target model
 LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_model * model);
+
+// DSpark: low-rank dimension of the Markov head (0 if the model has no Markov head)
+LLAMA_API int32_t llama_model_dspark_markov_rank(const struct llama_model * model);
+
+// DSpark: compute the per-step Markov logit bias on-device for `n` previous tokens:
+//   out_bias[i*n_vocab + v] = sum_r markov_w2[v, r] * markov_w1[prev[i], r]
+// out_bias must have room for n * n_vocab floats. Computed via ctx's scheduler.
+LLAMA_API void llama_dspark_markov_bias(
+        struct llama_context * ctx,
+         const llama_token   * prev,
+                   int32_t     n,
+                     float   * out_bias);
