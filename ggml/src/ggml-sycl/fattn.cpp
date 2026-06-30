@@ -132,11 +132,11 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // Set GGML_SYCL_ENABLE_MKL_FA=0 to force TILE/VEC path for A/B testing.
     // Example: GGML_SYCL_ENABLE_MKL_FA=0 llama-cli -m model.gguf -fa -ngl 99 ...
     // Note: MKL GEMM calls are incompatible with SYCL graph capture replay.
-    static int mkl_disable = -1;
-    if (mkl_disable < 0) {
-        mkl_disable = !ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
+    static int mkl_enable = -1;
+    if (mkl_enable < 0) {
+        mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
     }
-    if (mkl_disable == 0 && Q->ne[1] >= 128 && K->ne[1] >= 1024) {
+    if (mkl_enable == 1 && Q->ne[1] >= 128 && K->ne[1] >= 1024) {
         return BEST_FATTN_KERNEL_MKL;
     }
 
