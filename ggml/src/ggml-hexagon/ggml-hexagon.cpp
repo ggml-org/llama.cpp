@@ -60,6 +60,7 @@ static int    opt_etm     = 0;
 static int    opt_verbose = 0;
 static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
 static int    opt_hostbuf = 1; // hostbuf ON by default
+static int    opt_lm_head = 0; // allow large output projection matmuls
 
 static int    opt_mm_select = 3; // 3 = HMX -> Tiled -> Flat -> CPU, 2 = Tiled -> Flat -> CPU, 1 = Flat -> CPU
 
@@ -2626,7 +2627,7 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
             }
 
             // hardcoded limit to refuse the lm-head for now
-            if (src0->ne[1] > 32768) {
+            if (!opt_lm_head && src0->ne[1] > 32768) {
                 return false;
             }
 
@@ -4084,6 +4085,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_vmem     = getenv("GGML_HEXAGON_VMEM");
     const char * str_mbuf     = getenv("GGML_HEXAGON_MBUF");
     const char * str_optrace  = getenv("GGML_HEXAGON_OPTRACE");
+    const char * str_lm_head  = getenv("GGML_HEXAGON_LM_HEAD");
 
     // Init Arch first since it affects other defaults
     if (!str_arch) {
@@ -4113,6 +4115,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_opbatch   = str_opbatch  ? strtoul(str_opbatch, NULL, 0)          : opt_opbatch;
     opt_opqueue   = str_opqueue  ? strtoul(str_opqueue, NULL, 0)          : opt_opqueue;
     opt_optrace   = str_optrace  ? strtoul(str_optrace, NULL, 0)          : (opt_opbatch * 128);
+    opt_lm_head   = str_lm_head  ? atoi(str_lm_head)                      : opt_lm_head;
     opt_oppoll    = str_oppoll   ? strtoul(str_oppoll,  NULL, 0)          : opt_oppoll;
     opt_opfusion  = str_opfusion ? atoi(str_opfusion)                     : opt_opfusion;
     opt_profile   = str_profile  ? atoi(str_profile)                      : 0;
