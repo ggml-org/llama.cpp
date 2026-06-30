@@ -155,6 +155,14 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_MXFP4_MOE     = 38, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q3_PT        =  41, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q3_KPT        = 42, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q4_DPT        = 43, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q2_KPT        = 44, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_TQ        = 45, // except 1d tensors, trellis quantized with RNG codebook
+        LLAMA_FTYPE_MOSTLY_IQ3_TQ        = 46, // except 1d tensors, 3-bit with per-tensor trained grid
+        LLAMA_FTYPE_MOSTLY_IQ1_BN        = 47, // except 1d tensors, 8D vector quantized with trained codebook
+
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };

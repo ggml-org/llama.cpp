@@ -3,6 +3,7 @@
 
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
+#include "ggml-quants.h"
 #include "traits.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
@@ -397,6 +398,52 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_TQ2_0] = {
         .from_float               = quantize_row_tq2_0,
         .vec_dot                  = ggml_vec_dot_tq2_0_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q3_PT] = {
+        // from_float not set — requires codebook initialization via q3pt_set_codebook()
+        .vec_dot                  = ggml_vec_dot_q3_pt_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q3_KPT] = {
+        // from_float not set — requires level initialization via q3kpt_set_levels()
+        .vec_dot                  = ggml_vec_dot_q3_kpt_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q4_DPT] = {
+        // from_float not set — requires level initialization via q4dpt_set_levels()
+        .vec_dot                  = ggml_vec_dot_q4_dpt_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q2_DPT] = {
+        // from_float not set — requires level initialization via q2dpt_set_levels()
+        .vec_dot                  = ggml_vec_dot_q2_dpt_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q2_KPT] = {
+        // from_float not set — requires level initialization via q2kpt_set_levels()
+        .vec_dot                  = ggml_vec_dot_q2_kpt_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+        .levels_row_stride        = 0,  // computed dynamically: (ne0/QK_K)*Q2KPT_N_LEVELS*sizeof(float)
+    },
+    [GGML_TYPE_IQ2_TQ] = {
+        .vec_dot                  = ggml_vec_dot_iq2_tq_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_IQ3_TQ] = {
+        .vec_dot                  = ggml_vec_dot_iq3_tq_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_IQ1_BN] = {
+        .vec_dot                  = ggml_vec_dot_iq1_bn_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
     },
@@ -1169,8 +1216,15 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
     const bool src1_cont = ggml_is_contiguous(src1);
 
-    ggml_vec_dot_t const vec_dot      = type_traits_cpu[type].vec_dot;
-    enum ggml_type const vec_dot_type = type_traits_cpu[type].vec_dot_type;
+    ggml_vec_dot_t const vec_dot           = type_traits_cpu[type].vec_dot;
+    enum ggml_type const vec_dot_type      = type_traits_cpu[type].vec_dot_type;
+    // For Q2_KPT, levels are per-block: stride = (ne00 / QK_K) * Q2KPT_N_LEVELS * sizeof(float)
+    // ne00 is the number of elements per row in src0 (input dimension), NOT ne0 (= ne01 = output rows).
+    // For non-square matrices (e.g. ffn_up: [hidden, intermediate]) ne00 != ne01, so ne00 is correct.
+    // For other types, use the static stride from type_traits_cpu
+    const size_t levels_row_stride = (type == GGML_TYPE_Q2_KPT)
+        ? (ne00 / QK_K) * Q2KPT_N_LEVELS * sizeof(float)
+        : type_traits_cpu[type].levels_row_stride;
 
     // broadcast factors
     const int64_t r2 = ne12 / ne02;
@@ -1231,7 +1285,11 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                 //}
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
-                    vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
+                    // For Q2_KPT, levels are stored per-expert: [expert0_rows, expert1_rows, ...]
+                    // So for 3D tensors we need to index by (i03 * ne01 + ir0)
+                    const size_t levels_row_idx = (type == GGML_TYPE_Q2_KPT && ne03 > 1) ? (i03 * ne01 + ir0) : ir0;
+                    const void * row_levels = (const char*)src0->quant_levels + levels_row_idx * levels_row_stride;
+                    vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot, row_levels);
                 }
 
                 for (int cn = 0; cn < num_rows_per_vec_dot; ++cn) {
@@ -1303,7 +1361,8 @@ void ggml_compute_forward_mul_mat(
                                      nb1/ggml_type_size(dst->type),
                                      src0->type,
                                      src1->type,
-                                     dst->type))
+                                     dst->type,
+                                     src0->quant_levels))
                     goto UseGgmlGemm1;
         return;
     }
@@ -1371,7 +1430,8 @@ UseGgmlGemm1:;
                                      nb1/ggml_type_size(dst->type),
                                      src0->type,
                                      vec_dot_type,
-                                     dst->type))
+                                     dst->type,
+                                     src0->quant_levels))
                     goto UseGgmlGemm2;
         return;
     }
@@ -1471,8 +1531,14 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
 
     const enum ggml_type type = src0->type;
 
-    ggml_vec_dot_t    const vec_dot      = type_traits_cpu[type].vec_dot;
-    enum ggml_type    const vec_dot_type = type_traits_cpu[type].vec_dot_type;
+    ggml_vec_dot_t    const vec_dot           = type_traits_cpu[type].vec_dot;
+    enum ggml_type    const vec_dot_type      = type_traits_cpu[type].vec_dot_type;
+    // For Q2_KPT, levels are per-block: stride = (ne00 / QK_K) * Q2KPT_N_LEVELS * sizeof(float)
+    // ne00 is the input dimension (elements per row in src0), NOT ne0 (= ne01 = output rows).
+    // For other types, use the static stride from type_traits_cpu
+    const size_t      levels_row_stride = (type == GGML_TYPE_Q2_KPT)
+        ? (ne00 / QK_K) * Q2KPT_N_LEVELS * sizeof(float)
+        : type_traits_cpu[type].levels_row_stride;
 
     const int64_t blck_0 = 16;
     const int64_t blck_1 = 16;
@@ -1505,7 +1571,8 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                 float * dst_col = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2));
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
-                    vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1);
+                    const void * row_levels = (const char*)src0->quant_levels + (cur_a * ne01 + ir0) * levels_row_stride;
+                    vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1, row_levels);
                 }
 
                 memcpy(&dst_col[iir0], tmp, (MIN(iir0 + blck_0, ir0_end) - iir0)*sizeof(float));
@@ -3415,12 +3482,15 @@ void ggml_cpu_fp32_to_fp16(const float * x, ggml_fp16_t * y, int64_t n) {
         _mm_storel_epi64((__m128i *)(y + i), y_vec);
     }
 #elif defined(__riscv_zvfh)
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wpedantic"
     for (int vl; i < n; i += vl) {
         vl = __riscv_vsetvl_e32m2(n - i);
         vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
         vfloat16m1_t vy = __riscv_vfncvt_f_f_w_f16m1(vx, vl);
         __riscv_vse16_v_f16m1((_Float16 *)&y[i], vy, vl);
     }
+    #pragma GCC diagnostic pop
 #endif
     for (; i < n; ++i) {
         y[i] = GGML_CPU_FP32_TO_FP16(x[i]);

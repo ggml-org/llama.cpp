@@ -94,7 +94,6 @@ void ggml_quantize_mat_q8_K_4x1_generic(const float * GGML_RESTRICT x, void * GG
 
     block_q8_Kx4 * GGML_RESTRICT y = (block_q8_Kx4 *) vy;
 
-    const int blck_size_interleave = 1;
     float srcv[4][QK_K];
     float iscale[4];
 

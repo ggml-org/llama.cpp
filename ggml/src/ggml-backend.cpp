@@ -2023,6 +2023,7 @@ static struct ggml_tensor * graph_copy_dup_tensor(struct ggml_hash_set hash_set,
     dst->op = src->op;
     dst->flags = src->flags;
     memcpy(dst->op_params, src->op_params, sizeof(dst->op_params));
+    dst->quant_levels = src->quant_levels;
     ggml_set_name(dst, src->name);
 
     // copy src

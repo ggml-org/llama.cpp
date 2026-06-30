@@ -8,6 +8,19 @@
 #include "unary-ops.h"
 #include "vec.h"
 
+// Helper: compute quant_levels stride for a given row.
+// For most types this is the constant levels_row_stride from type_traits.
+// For Q2_KPT (per-block levels), stride depends on tensor width (ne[0]).
+static inline size_t ggml_quant_levels_stride(ggml_type type, size_t constant_stride, int64_t ne0) {
+    if (type == GGML_TYPE_Q2_KPT) {
+        // Q2_KPT has Q2KPT_N_LEVELS floats per 256-element block
+        // Stride = (ne0 / 256) * Q2KPT_N_LEVELS * sizeof(float)
+        return (size_t)(ne0 / 256) * 4 * sizeof(float);
+    }
+    return constant_stride;
+}
+
+
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -517,9 +530,11 @@ static void ggml_compute_forward_dup_from_q(
         const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
         const int64_t dst_offset = i10*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
 
+        const size_t q_lrs0 = ggml_quant_levels_stride(src0->type, ggml_get_type_traits_cpu(src0->type)->levels_row_stride, src0->ne[0]);
         dequantize_row_q(
                 (const void *) ((char *) src0->data + x_offset),
-                     (float *) ((char *)  dst->data + dst_offset), qk);
+                     (float *) ((char *)  dst->data + dst_offset), qk,
+                (const char*)src0->quant_levels + i01 * q_lrs0);
     }
 }
 
@@ -639,7 +654,8 @@ static void ggml_compute_forward_add_q_f32(
         assert(ne00 % 32 == 0);
 
         // unquantize row from src0 to temp buffer
-        dequantize_row_q(src0_row, wdata, ne00);
+        const size_t q_lrs_add = ggml_quant_levels_stride(src0->type, ggml_get_type_traits_cpu(src0->type)->levels_row_stride, src0->ne[0]);
+        dequantize_row_q(src0_row, wdata, ne00, (const char*)src0->quant_levels + i1 * q_lrs_add);
         // add src1
         ggml_vec_acc_f32(ne00, wdata, src1_row);
         // quantize row to dst
@@ -688,6 +704,9 @@ void ggml_compute_forward_add(
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ2_TQ:
+        case GGML_TYPE_IQ3_TQ:
+        case GGML_TYPE_IQ1_BN:
             {
                 ggml_compute_forward_add_q_f32(params, dst);
             } break;
@@ -974,7 +993,8 @@ static void ggml_compute_forward_add1_q_f32(
         assert(ne0 % 32 == 0);
 
         // unquantize row from src0 to temp buffer
-        dequantize_row_q(src0_row, wdata, ne0);
+        const size_t q_lrs_add = ggml_quant_levels_stride(src0->type, ggml_get_type_traits_cpu(src0->type)->levels_row_stride, src0->ne[0]);
+        dequantize_row_q(src0_row, wdata, ne00, (const char*)src0->quant_levels + i1 * q_lrs_add);
         // add src1
         ggml_vec_acc1_f32(ne0, wdata, v);
         // quantize row to dst
@@ -1139,6 +1159,9 @@ void ggml_compute_forward_add1(
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ2_TQ:
+        case GGML_TYPE_IQ3_TQ:
+        case GGML_TYPE_IQ1_BN:
             {
                 ggml_compute_forward_add1_q_f32(params, dst);
             } break;
@@ -1269,6 +1292,9 @@ void ggml_compute_forward_acc(
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ2_TQ:
+        case GGML_TYPE_IQ3_TQ:
+        case GGML_TYPE_IQ1_BN:
         default:
             {
                 GGML_ABORT("fatal error");
@@ -4428,7 +4454,8 @@ static void ggml_compute_forward_out_prod_q_f32(
             float * s1 = (float *) ((char *) src1->data + (i1*nb10 + i11*nb11 + i12*nb12 + i13*nb13));
             float * d  = (float *) ((char *)  dst->data + (          i1*nb1 + i2*nb2 + i3*nb3));
 
-            dequantize_row_q(s0, wdata, ne0);
+            const size_t q_lrs_op = ggml_quant_levels_stride(src0->type, ggml_get_type_traits_cpu(src0->type)->levels_row_stride, src0->ne[0]);
+            dequantize_row_q(s0, wdata, ne0, (const char*)src0->quant_levels + i01 * q_lrs_op);
             ggml_vec_mad_f32(ne0, d, wdata, *s1);
         }
     }
@@ -4465,6 +4492,9 @@ void ggml_compute_forward_out_prod(
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ2_TQ:
+        case GGML_TYPE_IQ3_TQ:
+        case GGML_TYPE_IQ1_BN:
             {
                 ggml_compute_forward_out_prod_q_f32(params, dst);
             } break;
@@ -4742,6 +4772,9 @@ void ggml_compute_forward_set(
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ2_TQ:
+        case GGML_TYPE_IQ3_TQ:
+        case GGML_TYPE_IQ1_BN:
         default:
             {
                 GGML_ABORT("fatal error");
@@ -4805,9 +4838,21 @@ static void ggml_compute_forward_get_rows_q(
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
+        const size_t q_lrs_gr = ggml_quant_levels_stride(src0->type, ggml_get_type_traits_cpu(src0->type)->levels_row_stride, src0->ne[0]);
+        // For Q2_KPT with 3D tensors, levels are indexed by [i12 * ne02 * ne01 + i11 * ne01 + i01]
+        // For 2D tensors, levels are indexed by [i11 * ne01 + i01] (or just [i01] if ne02 == 1)
+        size_t levels_row_idx;
+        if (type == GGML_TYPE_Q2_KPT && ne03 > 1) {
+            levels_row_idx = (i12 * ne02 + i11) * ne01 + i01;
+        } else if (type == GGML_TYPE_Q2_KPT) {
+            levels_row_idx = i11 * ne01 + i01;
+        } else {
+            levels_row_idx = i01;
+        }
         dequantize_row_q(
                 (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
-                     (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
+                     (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc,
+                (const char*)src0->quant_levels + levels_row_idx * q_lrs_gr);
     }
 }
 
@@ -4966,6 +5011,9 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ2_TQ:
+        case GGML_TYPE_IQ3_TQ:
+        case GGML_TYPE_IQ1_BN:
             {
                 ggml_compute_forward_get_rows_q(params, dst);
             } break;
@@ -5543,7 +5591,7 @@ static void ggml_compute_forward_soft_max_ext_back_f32(
 
         // linear runtime, no additional memory
         float dot_y_dy = 0;
-        ggml_vec_dot_f32  (nc, &dot_y_dy, 0, y, 0, dy, 0, 1);
+        ggml_vec_dot_f32  (nc, &dot_y_dy, 0, y, 0, dy, 0, 1, nullptr);
         ggml_vec_cpy_f32  (nc, dx, dy);
         ggml_vec_acc1_f32 (nc, dx, -dot_y_dy);
         ggml_vec_mul_f32  (nc, dx, dx, y);
@@ -5678,6 +5726,8 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_NVFP4:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q3_KPT:
+        case GGML_TYPE_Q4_DPT:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
@@ -5690,6 +5740,12 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_IQ1_M:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_Q3_PT:
+        case GGML_TYPE_Q2_KPT:
+        case GGML_TYPE_Q2_DPT:
+        case GGML_TYPE_IQ2_TQ:
+        case GGML_TYPE_IQ3_TQ:
+        case GGML_TYPE_IQ1_BN:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_Q8_K:
@@ -6114,7 +6170,7 @@ static void ggml_compute_forward_conv_transpose_1d_f16_f32(
                 float v = 0;
                 ggml_vec_dot_f16(ne02, &v, 0,
                         (ggml_fp16_t *)    wdata_src + i1n, 0,
-                        (ggml_fp16_t *) wdata_kernel + i00*ne02, 0, 1);
+                        (ggml_fp16_t *) wdata_kernel + i00*ne02, 0, 1, nullptr);
                 dst_data[i10*s0 + i00] += v;
             }
         }
@@ -6202,7 +6258,7 @@ static void ggml_compute_forward_conv_transpose_1d_f32(
                 float v = 0;
                 ggml_vec_dot_f32(ne02, &v, 0,
                         wdata_src + i1n, 0,
-                        wdata_kernel + i00*ne02, 0, 1);
+                        wdata_kernel + i00*ne02, 0, 1, nullptr);
                 dst_data[i10*s0 + i00] += v;
             }
         }
@@ -7200,11 +7256,11 @@ static void ggml_compute_forward_conv_transpose_2d_impl(
                         if constexpr (std::is_same_v<kernel_t, ggml_fp16_t>) {
                             ggml_vec_dot_f16(ne03, &v, 0,
                                     wdata_src + i1n, 0,
-                                    wdata_kernel + i01*ne00*ne03 + i00*ne03, 0, 1);
+                                    wdata_kernel + i01*ne00*ne03 + i00*ne03, 0, 1, nullptr);
                         } else {
                             ggml_vec_dot_f32(ne03, &v, 0,
                                     wdata_src + i1n, 0,
-                                    wdata_kernel + i01*ne00*ne03 + i00*ne03, 0, 1);
+                                    wdata_kernel + i01*ne00*ne03 + i00*ne03, 0, 1, nullptr);
                         }
                         dst_data[(i11*stride + i01)*ne0 + i10*stride + i00] += v;
                     }
@@ -8477,7 +8533,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
             float s; // KQ value
 
             const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
-            kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
+            kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1, k->quant_levels);
 
             s = s*scale; // scale KQ value
 
@@ -8524,7 +8580,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
                 // V += v*expf(s - M)
                 if (v_to_float) {
-                    v_to_float(v_data, V32, DV);
+                    v_to_float(v_data, V32, DV, v->quant_levels);
                     ggml_vec_mad_f32(DV, VKQ32, V32, vs);
                 } else {
                     // V is F32
@@ -9242,7 +9298,7 @@ static void ggml_compute_forward_flash_attn_back_f32(
                     ggml_vec_dot_f32(neq0,
                             S + i1, 0,
                             (float *) ((char *) k->data + (ik1*nbk1 + ik2*nbk2 + ik3*nbk3)), 0,
-                            (float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3)), 0, 1);
+                            (float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3)), 0, 1, nullptr);
                 }
 
                 // scale
@@ -9356,7 +9412,7 @@ static void ggml_compute_forward_flash_attn_back_f32(
 
                 // S = SM * (S - dot(SM, S))
                 float dot_SM_gradSM = 0;
-                ggml_vec_dot_f32 (masked_begin, &dot_SM_gradSM, 0, SM, 0, S, 0, 1);
+                ggml_vec_dot_f32 (masked_begin, &dot_SM_gradSM, 0, SM, 0, S, 0, 1, nullptr);
                 ggml_vec_acc1_f32(M, S, -dot_SM_gradSM);
                 ggml_vec_mul_f32 (masked_begin, S, S, SM);
 
@@ -10734,7 +10790,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             // delta[j] = sum_i S[i][j] * k[i] = dot(row j of M, k)
             for (int64_t j = 0; j < S_v; ++j) {
                 float sum = 0.0f;
-                ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1);
+                ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1, nullptr);
                 delta[j] = (v_d[j] - sum) * beta_val;
             }
 
@@ -10746,7 +10802,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             // attn_out[j] = sum_i S[i][j] * q[i] = dot(row j of M, q)
             for (int64_t j = 0; j < S_v; ++j) {
                 float sum = 0.0f;
-                ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, q_d, 0, 1);
+                ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, q_d, 0, 1, nullptr);
                 attn_data[j] = sum * scale;
             }
 
