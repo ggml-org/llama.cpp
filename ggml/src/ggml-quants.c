@@ -343,69 +343,29 @@ void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 * GGML_RE
     }
 }
 
-void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y, int64_t k) {
-    static const int qk = QK_NVFP4;
-    static const int qk_sub = QK_NVFP4_SUB;
-    static const int n_sub = QK_NVFP4 / QK_NVFP4_SUB;
-
-    assert(k % qk == 0);
-
-    const int nb = k / qk;
-
-    for (int i = 0; i < nb; i++) {
-        for (int s = 0; s < n_sub; s++) {
-            const float * xb = x + i*qk + s*qk_sub;
-
-            float amax = 0.0f;
-            for (int j = 0; j < qk_sub; j++) {
-                if (amax < fabsf(xb[j])) {
-                    amax = fabsf(xb[j]);
-                }
-            }
-
-            // UE4M3 scale: amax / 6.0 maps the max E2M1 value (6.0) to amax
-            const uint8_t ue = ggml_fp32_to_ue4m3(amax / 6.0f);
-            y[i].d[s] = ue;
-            const float d = ggml_ue4m3_to_fp32(ue);
-
-            for (int j = 0; j < qk_sub/2; ++j) {
-                const uint8_t x0 = best_index_mxfp4(xb[0        + j], d);
-                const uint8_t x1 = best_index_mxfp4(xb[qk_sub/2 + j], d);
-
-                y[i].qs[s*(qk_sub/2) + j] = x0 | (x1 << 4);
-            }
-        }
-    }
-}
-
-// Importance-aware NVFP4: instead of fixing the per-sub-block scale at amax/6, search a
-// small window of UE4M3 scale codes around it and keep the one minimizing the (optionally
-// importance-weighted) reconstruction error of the sub-block. With quant_weights == NULL this
-// reduces to an unweighted scale search (still better than amax/6); with an imatrix it spends
-// precision on the columns whose activations matter. Output format is unchanged, so the result
-// runs on stock NVFP4 kernels.
+// Core NVFP4 encoder, shared by the reference path and the importance-aware path.
 //
-// Window width: the optimal UE4M3 code sits a few codes around amax/6, skewed positive (the
-// non-uniform E2M1 codes {..6,8,12} make scaling UP to clamp an outlier and fit the bulk often
-// optimal). +/-12 is comfortably wide. Narrowing to +/-8 measurably regresses search-only PPL on
-// real weights (Qwen3.5-9B wiki: 8.240 -> 8.287) even though a synthetic-weight proxy showed
-// saturation -- real weight tails are heavier than the proxy, so keep the margin.
-// An iterative coordinate-descent solve (make_qkx-style) was prototyped and is WORSE here: it
-// gets stuck in local minima that the dense brute-force window avoids. A fixed window is both
-// better and simpler than an iterative solver for NVFP4's discrete non-uniform codes.
-#define NVFP4_SCALE_SEARCH 12  // +/- codes around amax/6 (brute force; iterative solve is worse)
-
-static void quantize_row_nvfp4_impl(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y,
-                                    int64_t k, const float * GGML_RESTRICT quant_weights) {
+// Each 16-element sub-block gets a UE4M3 scale. The baseline scale amax/6 maps the max
+// |x| to the top E2M1 magnitude (6). With `search > 0` we also try UE4M3 codes in
+// [base-search, base+search] and keep the one minimizing the (optionally importance-
+// weighted) reconstruction error; the winning E2M1 nibbles are cached during the search so
+// the final packing reuses them instead of recomputing. The output is ordinary NVFP4, so
+// the result runs unmodified on stock NVFP4 kernels.
+//
+//   search == 0, quant_weights == NULL  -> identical to the legacy amax/6 reference.
+//   search  > 0, quant_weights == NULL  -> unweighted scale search (better than amax/6).
+//   search  > 0, quant_weights != NULL  -> importance-weighted scale search (imatrix).
+//
+// quant_weights, when present, is one value per input column (length k, shared across rows
+// by the caller) and is indexed by column only.
+static void quantize_row_nvfp4_core(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y,
+                                    int64_t k, const float * GGML_RESTRICT quant_weights, int search) {
     static const int qk = QK_NVFP4;
     static const int qk_sub = QK_NVFP4_SUB;
     static const int n_sub = QK_NVFP4 / QK_NVFP4_SUB;
 
     assert(k % qk == 0);
     const int nb = k / qk;
-
-    // NVFP4_NO_SEARCH=1 forces the legacy amax/6 scale (search window 0) for A/B testing.
-    const int search = getenv("NVFP4_NO_SEARCH") ? 0 : NVFP4_SCALE_SEARCH;
 
     for (int i = 0; i < nb; i++) {
         for (int s = 0; s < n_sub; s++) {
@@ -426,11 +386,12 @@ static void quantize_row_nvfp4_impl(const float * GGML_RESTRICT x, block_nvfp4 *
                 continue;
             }
 
+            // amax / 6.0 maps the max E2M1 value (6.0) to amax
             const uint8_t base = ggml_fp32_to_ue4m3(amax / 6.0f);
 
-            // search UE4M3 scale codes in [base-search, base+search], pick min (weighted) error
             uint8_t best_code = base;
             float   best_cost = INFINITY;
+            uint8_t best_idx[QK_NVFP4_SUB];
             const int lo = (int) base - search;
             const int hi = (int) base + search;
             for (int c = lo; c <= hi; ++c) {
@@ -441,29 +402,51 @@ static void quantize_row_nvfp4_impl(const float * GGML_RESTRICT x, block_nvfp4 *
                 if (d <= 0.0f) {
                     continue;
                 }
-                float cost = 0.0f;
+                float   cost = 0.0f;
+                uint8_t idx[QK_NVFP4_SUB];
                 for (int j = 0; j < qk_sub; ++j) {
-                    const int idx = best_index_mxfp4(xb[j], d);
-                    const float r = kvalues_mxfp4[idx] * d - xb[j];
+                    idx[j] = best_index_mxfp4(xb[j], d);
+                    const float r = kvalues_mxfp4[idx[j]] * d - xb[j];
                     const float w = wb ? wb[j] : 1.0f;
                     cost += w * r * r;
                 }
                 if (cost < best_cost) {
                     best_cost = cost;
                     best_code = (uint8_t) c;
+                    memcpy(best_idx, idx, sizeof(best_idx));
                 }
             }
 
+            // best_cost stays INFINITY only when no code in the window was valid, i.e.
+            // base == 0 (sub-normal underflow of amax/6); encode that as a zero block,
+            // matching the legacy reference.
+            if (best_cost == INFINITY) {
+                y[i].d[s] = 0;
+                for (int j = 0; j < qk_sub/2; ++j) {
+                    y[i].qs[s*(qk_sub/2) + j] = 0;
+                }
+                continue;
+            }
+
             y[i].d[s] = best_code;
-            const float d = ggml_ue4m3_to_fp32(best_code);
             for (int j = 0; j < qk_sub/2; ++j) {
-                const uint8_t x0 = best_index_mxfp4(xb[0        + j], d);
-                const uint8_t x1 = best_index_mxfp4(xb[qk_sub/2 + j], d);
-                y[i].qs[s*(qk_sub/2) + j] = x0 | (x1 << 4);
+                y[i].qs[s*(qk_sub/2) + j] = best_idx[j] | (best_idx[qk_sub/2 + j] << 4);
             }
         }
     }
 }
+
+void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y, int64_t k) {
+    quantize_row_nvfp4_core(x, y, k, NULL, 0);
+}
+
+// Scale-search half-window for the importance-aware path. The optimal UE4M3 code sits a few
+// codes around amax/6, skewed positive (the non-uniform E2M1 codes {..6,8,12} make scaling UP
+// to clamp an outlier and fit the bulk often optimal). +/-12 is comfortably wide; narrowing to
+// +/-8 measurably regresses real-weight PPL, so keep the margin. A brute-force window beats an
+// iterative coordinate-descent solve here, which gets stuck in local minima created by the
+// non-uniform code spacing.
+#define NVFP4_SCALE_SEARCH 12
 
 void dequantize_row_q1_0(const block_q1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK1_0;
@@ -2325,8 +2308,8 @@ size_t quantize_nvfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     char * qrow = (char *) dst;
     for (int64_t row = 0; row < nrow; ++row) {
         // quant_weights (imatrix) is one value per input column, length n_per_row, shared
-        // across all rows of this tensor — indexed by column only, NOT offset per row.
-        quantize_row_nvfp4_impl(src + row * n_per_row, (block_nvfp4 *) qrow, n_per_row, quant_weights);
+        // across all rows of this tensor -- indexed by column only, NOT offset per row.
+        quantize_row_nvfp4_core(src + row * n_per_row, (block_nvfp4 *) qrow, n_per_row, quant_weights, NVFP4_SCALE_SEARCH);
         qrow += row_size;
     }
     return nrow * row_size;

@@ -387,6 +387,7 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
             case GGML_TYPE_Q4_K:    return_type = GGML_TYPE_Q5_0;   break;
             case GGML_TYPE_Q5_K:    return_type = GGML_TYPE_Q5_1;   break;
             case GGML_TYPE_Q6_K:    return_type = GGML_TYPE_Q8_0;   break;
+            case GGML_TYPE_NVFP4:   return_type = GGML_TYPE_Q8_0;   break;
             default:
                 throw std::runtime_error(format("no tensor type fallback is defined for type %s",
                                                 ggml_type_name(target_type)));
@@ -467,8 +468,8 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             new_type = GGML_TYPE_Q8_0;
         }
     } else if (ftype == LLAMA_FTYPE_MOSTLY_NVFP4) {
-        // 2D weight tensors -> NVFP4 (the block-size guard falls back odd shapes to Q8_0);
-        // 1D / tiny tensors -> Q8_0
+        // 2D weight tensors -> NVFP4. Shapes whose ne[0] is not a multiple of the NVFP4 block
+        // size fall back to Q8_0 in tensor_type_fallback(); 1D / tiny tensors are skipped earlier.
         new_type = GGML_TYPE_NVFP4;
     } else if (category == tensor_category::TOKEN_EMBD) {
         if (qs.params->token_embedding_type < GGML_TYPE_COUNT) {
