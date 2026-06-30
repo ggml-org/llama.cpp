@@ -21,10 +21,7 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, /* required */ false);
 
-    // per-token LoRA selection runs through MUL_MAT_ID, which needs n_expert_used == 1.
-    // the GGUF carries expert_count = 0 (dense model), so the generic loader's
-    // n_expert == 0 => n_expert_used == 0 assertion has already passed by the time
-    // load_arch_hparams runs; force it to 1 here for the mul_mat_id path.
+    // mul_mat_id needs n_expert_used == 1; the GGUF is dense (expert_count = 0)
     hparams.n_expert_used = 1;
 
     ml.get_key(LLM_KV_NUM_ADAPTERS,  n_adapters);
@@ -47,12 +44,9 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
         control_token_to_substitute[token_ids[i]] = substitute_ids[i];
     }
 
-    // append one extra single-head attention layer at index R = n_real to hold
-    // the router K/V; bump n_layer_all so the KV cache allocates it. reuse
-    // n_layer_nextn (the trailing-layers count; no MTP here) = 1 so n_layer()
-    // stays n_real and the decoder loop is unchanged. note the router layer lives
-    // at the END (index n_real), not the start, so the regular layers keep their
-    // indices and the KV cache shift/defrag can skip it without renumbering
+    // extra single-head attention layer at the END (index n_real) holds the router
+    // K/V. reusing n_layer_nextn keeps n_layer() == n_real, so the regular layers
+    // keep their indices and the KV cache shift/defrag skips the router layer.
     const uint32_t n_real = hparams.n_layer();
     hparams.router_layer  = (int32_t) n_real;
     hparams.n_layer_all   = n_real + 1;
@@ -73,7 +67,6 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
-    // output
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
     if (output == NULL) {
@@ -85,7 +78,6 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-        // fused qkv base + separate o
         layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd_q + 2*n_embd_kv}, 0);
         layer.wo   = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_q, n_embd}, 0);
 
@@ -95,7 +87,6 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
 
-        // stacked per-token LoRA tensors: A {n_in, max_rank, N}, B {max_rank, n_out, N}
         auto & sl = layer.switch_lora;
 
         sl.a_q = create_tensor(tn(LLM_TENSOR_ATTN_QKV_LORA_A_Q, i), {n_embd,  n_rank, n_slots_i64}, 0);
@@ -117,8 +108,6 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-// graph input for the per-token switch: fills the substituted ids and the
-// router Q/K/V signals consumed by the in-graph router attention
 class llm_graph_input_switch : public llm_graph_input_i {
 public:
     llm_graph_input_switch(const llama_model_granite_switch & smodel) : smodel(smodel) {}
@@ -134,10 +123,8 @@ public:
     const llama_model_granite_switch & smodel;
 };
 
-// router K dim-0 is +gain for a control token and -gain otherwise; in the causal
-// softmax a single visible control token then dominates, so the readback recovers
-// its adapter slot. The gain (smodel.router_gain) comes from the GGUF, defaulting to 15.0.
-
+// K dim-0 is +gain for a control token, -gain otherwise; the causal softmax then
+// lets a single visible control token dominate so the readback recovers its slot.
 void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
     if (!ubatch->token) {
         return;
@@ -153,7 +140,6 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
     for (int64_t i = 0; i < n_tokens; ++i) {
         const llama_token tok = ubatch->token[i];
 
-        // router K/V signals: control token -> (+gain, slot); else -> (-gain, 0)
         const auto it = smodel.control_token_to_index.find(tok);
         if (it != smodel.control_token_to_index.end()) {
             ksig[i] = +smodel.router_gain;
@@ -199,7 +185,6 @@ ggml_tensor * llama_model_granite_switch::graph::build_switched_lora_delta(
     return ggml_reshape_2d(ctx0, d, d->ne[0], n_tokens);
 }
 
-// per-token switched matmul: base 2D weight + selected LoRA delta
 ggml_tensor * llama_model_granite_switch::graph::build_switched_lora_mm(
           ggml_tensor * w,
           ggml_tensor * lora_a,
@@ -222,7 +207,6 @@ llama_model_granite_switch::graph::graph(
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
     GGML_ASSERT(n_embd_head == n_rot);
 
-    // switch input: substituted ids + per-token router K/V/Q signals
     auto inp_switch = std::make_unique<llm_graph_input_switch>(smodel);
     inp_switch->sub_tokens  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     inp_switch->router_ksig = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
@@ -238,8 +222,7 @@ llama_model_granite_switch::graph::graph(
     ggml_tensor * router_q    = inp_switch->router_q;
     res->add_input(std::move(inp_switch));
 
-    // embed the token-exchanged ids (cannot use build_inp_embd, which embeds the
-    // raw ubatch tokens), then apply Granite embedding scale
+    // embed the substituted ids directly: build_inp_embd would embed the raw tokens
     ggml_tensor * inpL = ggml_get_rows(ctx0, model.tok_embd, sub_tokens);
     if (hparams.f_embedding_scale != 0.0f) {
         inpL = ggml_scale(ctx0, inpL, hparams.f_embedding_scale);
@@ -252,10 +235,8 @@ llama_model_granite_switch::graph::graph(
     }
     auto * inp_attn = build_attn_inp_kv();
 
-    // router attention: a single causal head whose K/V live in the KV cache at
-    // layer R, recovering the per-token adapter index in-graph. Only dim 0 carries
-    // signal (Q[0]=1, K[0]=+/-gain, V[0]=slot/0), rest zero-padded; no RoPE. State is
-    // isolated per-sequence because the K/V stay in the per-sequence KV cache.
+    // single causal head at layer R recovers the adapter index in-graph: only dim 0
+    // carries signal (Q[0]=1, K[0]=+/-gain, V[0]=slot/0), the rest is zero-padded.
     const int R = hparams.router_layer;
     GGML_ASSERT(R >= 0);
     auto router_lane = [&](ggml_tensor * sig1d) {
@@ -271,8 +252,7 @@ llama_model_granite_switch::graph::graph(
             Qr, Kr, Vr, nullptr, nullptr, nullptr, /*kq_scale=*/1.0f, /*il=*/R);
     cb(router_out, "router_out", R);
 
-    // readback: row 0 of router_out is the attended slot; adapter_index =
-    // clamp(round(row0), 0, n_adapters) as I32 for mul_mat_id (round before cast)
+    // row 0 of router_out is the attended slot; clamp+round to an I32 index
     ggml_tensor * slot_f = ggml_cont(ctx0,
         ggml_view_2d(ctx0, router_out, 1, n_tokens, router_out->nb[1], 0));
     slot_f = ggml_reshape_1d(ctx0, slot_f, n_tokens);
@@ -288,25 +268,21 @@ llama_model_granite_switch::graph::graph(
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
-        // norm
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        // self-attention
         cur = build_attention_layer(cur, inp_pos, adapter_ids, inp_attn, model, n_embd_head, il);
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur,   inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-            // reshape adapter_ids to {1, n_tokens} so get_rows selects per-token
-            // columns, then flatten back to 1D {n_out}
+            // select the same out rows from adapter_ids (2D round-trip for get_rows)
             const int64_t n_out = inp_out_ids->ne[0];
             adapter_ids = ggml_get_rows(ctx0,
                 ggml_reshape_2d(ctx0, adapter_ids, 1, adapter_ids->ne[0]), inp_out_ids);
             adapter_ids = ggml_reshape_1d(ctx0, adapter_ids, n_out);
         }
 
-        // ffn
         cur = build_layer_ffn(cur, inpSA, adapter_ids, model, il);
 
         inpL = cur;
@@ -318,7 +294,6 @@ llama_model_granite_switch::graph::graph(
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    // lm_head
     cur = build_lora_mm(model.output, cur, model.output_s);
 
     // For Granite architectures - scale logits
@@ -379,8 +354,7 @@ ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(
     const float kq_scale = hparams.f_attention_scale == 0.0f
         ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
-    // wo = nullptr: build_attn returns the concatenated heads, then apply the
-    // switched o-proj manually
+    // wo = nullptr so build_attn returns concatenated heads; o-proj is switched below
     ggml_tensor * attn = build_attn(inp_attn,
             nullptr, nullptr, nullptr,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
@@ -411,7 +385,6 @@ ggml_tensor * llama_model_granite_switch::graph::build_layer_ffn(
     cur = build_norm(ffn_inp, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
     cb(cur, "ffn_norm", il);
 
-    // gated SILU FFN with per-token switched LoRA on gate / up / down
     ggml_tensor * g = build_switched_lora_mm(layer.ffn_gate, sl.a_gate, sl.b_gate, cur, adapter_ids);
     ggml_tensor * u = build_switched_lora_mm(layer.ffn_up,   sl.a_up,   sl.b_up,   cur, adapter_ids);
     g = ggml_silu(ctx0, g);
