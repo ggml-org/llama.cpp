@@ -1544,15 +1544,15 @@ struct llama_model_granite_switch : public llama_model_base {
     // per-token switch metadata (read from GGUF in load_arch_hparams)
     uint32_t n_adapters    = 0;  // number of real adapters (excludes the zero slot)
     uint32_t max_lora_rank = 0;
-    float    router_gain   = 15.0f;  // control-token softmax bias magnitude (see set_input)
+    float    router_gain   = 15.0f;  // routing-token softmax bias magnitude (see set_input)
 
     // stacked-adapter slots: n_adapters + 1 (slot 0 = base/zero delta)
     uint32_t n_slots() const { return n_adapters + 1; }
 
     // token id -> adapter slot (1 + adapter, so slot 0 stays "base")
-    std::unordered_map<llama_token, int32_t> control_token_to_index;
-    // control token id -> substitute token id (token-exchange before embedding)
-    std::unordered_map<llama_token, llama_token> control_token_to_substitute;
+    std::unordered_map<llama_token, int32_t> adapter_token_to_slot;
+    // token id -> substitute token id (token-exchange before embedding)
+    std::unordered_map<llama_token, llama_token> adapter_token_to_substitute;
 
     // the per-token adapter selection is recovered in-graph by a single-head
     // causal router attention whose K/V live in the KV cache at hparams.router_layer
