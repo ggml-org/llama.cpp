@@ -196,7 +196,6 @@ class GraniteSwitchModel(GraniteMoeModel):
         ):
             return
 
-        # ---- Attention: fused QKV ----
         if "self_attn.qkv_proj" in name:
             if name.endswith("base_layer.weight"):
                 # fused [q|k|v] rows: permute q/k row-blocks for ggml's NORM-rope layout
@@ -222,7 +221,6 @@ class GraniteSwitchModel(GraniteMoeModel):
                 return
             raise ValueError(f"Unexpected qkv_proj tensor: {name}")
 
-        # ---- Attention: output projection ----
         if "self_attn.o_proj" in name:
             if name.endswith("base_layer.weight"):
                 yield (self.format_tensor_name(T.ATTN_OUT, bid), data_torch)
@@ -235,7 +233,6 @@ class GraniteSwitchModel(GraniteMoeModel):
                 return
             raise ValueError(f"Unexpected o_proj tensor: {name}")
 
-        # ---- MLP: fused gate/up (shared_mlp.input_linear) ----
         if "shared_mlp.input_linear" in name:
             ffn = self.hparams["shared_intermediate_size"]
             if name.endswith("base_layer.weight"):
@@ -255,7 +252,6 @@ class GraniteSwitchModel(GraniteMoeModel):
                 return
             raise ValueError(f"Unexpected shared_mlp.input_linear tensor: {name}")
 
-        # ---- MLP: down (shared_mlp.output_linear) ----
         if "shared_mlp.output_linear" in name:
             if name.endswith("base_layer.weight"):
                 yield (self.format_tensor_name(T.FFN_DOWN, bid), data_torch)
@@ -268,7 +264,6 @@ class GraniteSwitchModel(GraniteMoeModel):
                 return
             raise ValueError(f"Unexpected shared_mlp.output_linear tensor: {name}")
 
-        # ---- Per-layer norms (input_layernorm / post_attention_layernorm) ----
         if bid is not None and ".layers." in name and (
             "input_layernorm" in name or "post_attention_layernorm" in name
         ):
@@ -276,7 +271,6 @@ class GraniteSwitchModel(GraniteMoeModel):
             yield (self.format_tensor_name(key, bid), data_torch)
             return
 
-        # ---- Embeddings / final norm (lm_head is tied to token_embd) ----
         if name in ("model.embed_tokens.weight", "embed_tokens.weight"):
             yield (self.format_tensor_name(T.TOKEN_EMBD), data_torch)
             return
