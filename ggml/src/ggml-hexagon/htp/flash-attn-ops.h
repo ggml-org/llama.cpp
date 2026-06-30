@@ -13,13 +13,14 @@ extern "C" {
 #endif
 
 // Tile constants (mirrored from hmx-utils.h for use on host side if needed)
-#define HMX_FP16_TILE_N_ROWS  32
-#define HMX_FP16_TILE_N_COLS  32
-#define HMX_FP16_TILE_N_ELMS  1024
-#define HMX_FP16_TILE_SIZE    2048
-#define HVX_FA_DMA_CACHE_SIZE    128
-#define HMX_FA_DMA_CACHE_SIZE    4
-#define HMX_FA_M_INITIAL_VAL     -10000.0f
+#define HMX_FP16_TILE_N_ROWS   32
+#define HMX_FP16_TILE_N_COLS   32
+#define HMX_FP16_TILE_N_ELMS   1024
+#define HMX_FP16_TILE_SIZE     2048
+#define HVX_FA_DMA_CACHE_SIZE  128
+#define HMX_FA_DMA_CACHE_SIZE  4
+
+#define HTP_FA_M_INITIAL_VAL  -10000.0f
 
 enum htp_fa_kernel_type {
     HTP_FA_KERNEL_UNSUPPORTED = 0,

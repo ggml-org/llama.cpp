@@ -270,7 +270,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
         const __fp16 slope = factx->slopes[h];
 
         HVX_Vector S_vec = hvx_vec_splat_f32(0.0f);
-        HVX_Vector M_vec = hvx_vec_splat_f32(-INFINITY);
+        HVX_Vector M_vec = hvx_vec_splat_f32(HTP_FA_M_INITIAL_VAL);
 
         // Clear accumulator
         hvx_splat_f32_a(spad_a, 0, DV);
@@ -620,7 +620,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
                         const size_t head  = args->kv_head * G + h_idx;
                         local_m.fp32[j] = sinks_data[head];
                     } else {
-                        local_m.fp32[j] = HMX_FA_M_INITIAL_VAL;
+                        local_m.fp32[j] = HTP_FA_M_INITIAL_VAL;
                     }
                 }
                 HVX_Vector v_scaled = HVX_OP_MUL_F32(local_m.v, v_scale);
@@ -634,7 +634,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
                 hvx_splat_u8_a((char *) factx->vtcm_l_vec + l_start, 0, l_end - l_start);
             }
             if (m_start < col_vec_bytes) {
-                hvx_splat_f32_a((char *) factx->vtcm_m_vec + m_start, HMX_FA_M_INITIAL_VAL, (m_end - m_start) / sizeof(float));
+                hvx_splat_f32_a((char *) factx->vtcm_m_vec + m_start, HTP_FA_M_INITIAL_VAL, (m_end - m_start) / sizeof(float));
             }
         }
 
