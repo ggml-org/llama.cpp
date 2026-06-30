@@ -125,22 +125,16 @@ class GraniteMoeModel(GraniteModel):
 
 @ModelBase.register("GraniteSwitchForCausalLM")
 class GraniteSwitchModel(GraniteMoeModel):
-    """Dense, all-attention Granite model with N embedded LoRA adapters selected
-    per-token by control tokens. Base weights live under ``.base_layer.weight``;
-    each LoRA is stacked over the adapter dim (B pre-scaled by ``alpha/rank``, so
-    the runtime scale is 1.0). A zero adapter is materialized at slot 0 so the
-    stacked dim is ``N = num_adapters + 1`` and base tokens add an exact-zero delta.
-    """
+    """Dense, all-attention Granite with N per-token embedded LoRA adapters, stacked
+    over the adapter dim with a zero adapter at slot 0 (N = num_adapters + 1)."""
     model_arch = gguf.MODEL_ARCH.GRANITE_SWITCH
 
-    # permute q/k per-slice below (NORM-rope layout) instead of via the parent's
-    # automatic separate-projection permute
+    # permute q/k per-slice below (NORM-rope layout), not via the parent's auto-permute
     undo_permute = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # the weightless switch reserves one cache slot, so the decoder has one
-        # fewer block than num_hidden_layers (block ids map straight through)
+        # the weightless switch reserves one cache slot: one fewer block than num_hidden_layers
         self.block_count = self.block_count - 1
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
@@ -164,8 +158,7 @@ class GraniteSwitchModel(GraniteMoeModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-        # the model is dense; force the dense invariant in case the llama parent
-        # emitted a nonzero expert_used_count from num_experts_per_tok
+        # dense model: override any expert counts the llama parent emitted
         self.gguf_writer.add_expert_count(0)
         self.gguf_writer.add_expert_used_count(0)
 
@@ -188,7 +181,6 @@ class GraniteSwitchModel(GraniteMoeModel):
         b = data.squeeze(1)
         if permute_n_head is not None:
             # permute each adapter's B output rows to match the permuted q/k base
-            # (LlamaModel.permute interleaves q/k for ggml's NORM-rope layout)
             b = torch.stack([self.permute(b[i], permute_n_head, permute_n_head) for i in range(b.shape[0])], dim=0)
         zero = torch.zeros_like(b[:1])
         return torch.cat([zero, b], dim=0).contiguous()
@@ -196,8 +188,7 @@ class GraniteSwitchModel(GraniteMoeModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         T = gguf.MODEL_TENSOR
 
-        # skip the weightless switch + control-token buffers (reconstructed at
-        # load time from the adapter id arrays emitted in set_gguf_parameters)
+        # skip the weightless switch + control-token buffers (rebuilt at load time)
         bare = name.split(".")[-1]
         if (
             name.startswith("model.switch.") or name.startswith("switch.")
@@ -208,8 +199,7 @@ class GraniteSwitchModel(GraniteMoeModel):
         # ---- Attention: fused QKV ----
         if "self_attn.qkv_proj" in name:
             if name.endswith("base_layer.weight"):
-                # Fused [q|k|v] rows. Permute the q and k row-blocks for ggml's
-                # NORM-rope layout (LlamaModel.permute, n_head_kv == n_head per slice).
+                # fused [q|k|v] rows: permute q/k row-blocks for ggml's NORM-rope layout
                 q, k, v = data_torch.split([self._q_size, self._kv_size, self._kv_size], dim=0)
                 q = self.permute(q, self._n_head, self._n_head)
                 k = self.permute(k, self._n_kv_head, self._n_kv_head)
