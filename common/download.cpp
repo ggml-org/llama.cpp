@@ -564,6 +564,9 @@ static hf_cache::hf_files get_split_files(const hf_cache::hf_files & files,
             result.push_back(f);
         }
     }
+    std::sort(result.begin(), result.end(), [](const hf_cache::hf_file & a, const hf_cache::hf_file & b){
+        return get_gguf_split_info(a.path).index < get_gguf_split_info(b.path).index;
+    });
     return result;
 }
 
