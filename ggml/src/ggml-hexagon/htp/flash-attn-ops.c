@@ -1582,61 +1582,54 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const uint32_t G = factx.G;
 
     // ======== VTCM allocation (GQA-aware) ========
+    // K/V row sizes drive the DMA descriptors (not the VTCM layout) and are used
+    // throughout the KV loop below.
     const size_t size_k_row        = DK * sizeof(__fp16);
     const size_t size_v_row        = DV * sizeof(__fp16);
     const size_t size_k_row_padded = hex_round_up(size_k_row, 128);
     const size_t size_v_row_padded = hex_round_up(size_v_row, 128);
 
-    const size_t q_tile_bytes  = hex_align_up(g_br * DK * sizeof(__fp16), 4096);
-    const size_t o_tile_bytes  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);
-    const size_t k_dma_bytes   = hex_align_up(Bc * size_k_row_padded, 4096);
-    const size_t v_dma_bytes   = hex_align_up(Bc * size_v_row_padded, 4096);
-    const size_t k_tile_bytes  = hex_align_up(Bc * DK * sizeof(__fp16), 4096);
-    const size_t v_tile_bytes  = hex_align_up(Bc * DV * sizeof(__fp16), 4096);
-    const size_t s_tile_bytes  = hex_align_up(g_br * Bc * sizeof(__fp16), 4096);
-    const size_t d_tile_bytes  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);
-    const size_t col_vec_bytes = hex_align_up(g_br * sizeof(float), 256);
-    const size_t row_vec_bytes = hex_align_up(Bc * sizeof(__fp16), 256);
-    const size_t m_line_bytes  = hex_align_up(Bc * sizeof(__fp16), 128);
-    const size_t m_buf_bytes   = hex_align_up(Br * m_line_bytes, 4096) * HMX_FA_DMA_CACHE_SIZE;
-    const size_t slopes_bytes  = hex_align_up(g_br * sizeof(__fp16), 128);
+    // Build the VTCM layout once (shared with the host estimator) and place every
+    // scratch buffer at its computed offset. This is the single source of truth for
+    // sizes/offsets/strides -- host and device can no longer disagree.
+    _Static_assert(sizeof(HVX_Vector) == HMX_FA_HVX_VECTOR_BYTES, "HVX vector size mismatch");
+    struct hmx_fa_layout L;
+    hmx_fa_layout_build(&L, G, DK, DV, Br, Bc, n_threads, pipeline);
 
-    uint8_t * vtcm_cur = ctx->vtcm_base;
-
-    factx.vtcm_q_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, q_tile_bytes);
-    factx.vtcm_o_tiles[0]     = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, o_tile_bytes);
-    factx.vtcm_o_tiles[1]     = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, o_tile_bytes);
-    factx.vtcm_k_fp16[0]      = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, k_dma_bytes);
-    factx.vtcm_k_fp16[1]      = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, k_dma_bytes);
-    factx.vtcm_v_fp16[0]      = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_dma_bytes);
-    factx.vtcm_v_fp16[1]      = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_dma_bytes);
-    factx.vtcm_k_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, k_tile_bytes);
-    factx.vtcm_v_tiles[0]     = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_tile_bytes);
-    if (pipeline) {
-        factx.vtcm_v_tiles[1] = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, v_tile_bytes);
-    } else {
-        factx.vtcm_v_tiles[1] = NULL;
-    }
-    factx.vtcm_s_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, s_tile_bytes);
-    factx.vtcm_p_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, s_tile_bytes);
-    factx.vtcm_d_tiles        = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, d_tile_bytes);
-    factx.vtcm_m_vec          = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_bytes);
-    factx.vtcm_l_vec          = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_bytes);
-    factx.vtcm_s_rowmax       = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_bytes);
-    factx.vtcm_p_rowsum       = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, col_vec_bytes);
-    factx.vtcm_row_bufs       = (HVX_Vector *) vtcm_seq_alloc(&vtcm_cur, row_vec_bytes * 2 * n_threads);
-    factx.row_buf_stride      = row_vec_bytes / sizeof(HVX_Vector);
-    factx.vtcm_hmx_scales_id  = vtcm_seq_alloc(&vtcm_cur, 256);
-    factx.vtcm_hmx_scales_qk  = vtcm_seq_alloc(&vtcm_cur, 256);
-    factx.vtcm_mask_buf       = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, m_buf_bytes);
-    factx.mask_buf_row_stride = m_line_bytes / sizeof(__fp16);
-    factx.vtcm_slopes         = (__fp16 *) vtcm_seq_alloc(&vtcm_cur, slopes_bytes);
-
-    dma_cache_init(&factx.m_cache, (uint8_t *) factx.vtcm_mask_buf, hex_align_up(Br * m_line_bytes, 4096), HMX_FA_DMA_CACHE_SIZE);
-
-    if ((size_t) (vtcm_cur - ctx->vtcm_base) > ctx->vtcm_size) {
+    if (L.total_bytes > ctx->vtcm_size) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
+
+    uint8_t * const base = ctx->vtcm_base;
+
+    factx.vtcm_q_tiles        = (__fp16 *)     (base + L.off_q_tiles);
+    factx.vtcm_o_tiles[0]     = (__fp16 *)     (base + L.off_o_tiles[0]);
+    factx.vtcm_o_tiles[1]     = (__fp16 *)     (base + L.off_o_tiles[1]);
+    factx.vtcm_k_fp16[0]      = (__fp16 *)     (base + L.off_k_fp16[0]);
+    factx.vtcm_k_fp16[1]      = (__fp16 *)     (base + L.off_k_fp16[1]);
+    factx.vtcm_v_fp16[0]      = (__fp16 *)     (base + L.off_v_fp16[0]);
+    factx.vtcm_v_fp16[1]      = (__fp16 *)     (base + L.off_v_fp16[1]);
+    factx.vtcm_k_tiles        = (__fp16 *)     (base + L.off_k_tiles);
+    factx.vtcm_v_tiles[0]     = (__fp16 *)     (base + L.off_v_tiles[0]);
+    factx.vtcm_v_tiles[1]     = pipeline ? (__fp16 *) (base + L.off_v_tiles[1]) : NULL;
+    factx.vtcm_s_tiles        = (__fp16 *)     (base + L.off_s_tiles);
+    factx.vtcm_p_tiles        = (__fp16 *)     (base + L.off_p_tiles);
+    factx.vtcm_d_tiles        = (__fp16 *)     (base + L.off_d_tiles);
+    factx.vtcm_m_vec          = (HVX_Vector *) (base + L.off_m_vec);
+    factx.vtcm_l_vec          = (HVX_Vector *) (base + L.off_l_vec);
+    factx.vtcm_s_rowmax       = (HVX_Vector *) (base + L.off_s_rowmax);
+    factx.vtcm_p_rowsum       = (HVX_Vector *) (base + L.off_p_rowsum);
+    factx.vtcm_row_bufs       = (HVX_Vector *) (base + L.off_row_bufs);
+    factx.row_buf_stride      = L.row_buf_stride;
+    factx.vtcm_hmx_scales_id  =                 base + L.off_hmx_scales_id;
+    factx.vtcm_hmx_scales_qk  =                 base + L.off_hmx_scales_qk;
+    factx.vtcm_mask_buf       = (__fp16 *)     (base + L.off_mask_buf);
+    factx.mask_buf_row_stride = L.mask_buf_row_stride;
+    factx.vtcm_slopes         = (__fp16 *)     (base + L.off_slopes);
+
+    const size_t m_line_bytes = L.m_line_bytes;  // used by the mask DMAs in the KV loop
+
+    dma_cache_init(&factx.m_cache, (uint8_t *) factx.vtcm_mask_buf, L.m_buf_slot_bytes, HMX_FA_DMA_CACHE_SIZE);
 
     // ======== Initialize HMX output scales ========
     hmx_init_column_scales(factx.vtcm_hmx_scales_id, Q6_V_vsplat_R(0x3c00)); // 1.0
