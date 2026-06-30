@@ -11,6 +11,7 @@
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
 #include "llama-kv-cache-dsa.h"
+#include "llama-kv-cache-dsv4.h"
 #include "llama-memory-hybrid.h"
 #include "llama-memory-hybrid-iswa.h"
 #include "llama-memory-recurrent.h"
@@ -181,6 +182,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_deepseek2ocr(params);
         case LLM_ARCH_DEEPSEEK32:
             return new llama_model_deepseek32(params);
+        case LLM_ARCH_DEEPSEEK4:
+            return new llama_model_deepseek4(params);
         case LLM_ARCH_GLM_DSA:
             return new llama_model_glm_dsa(params);
         case LLM_ARCH_MISTRAL4:
@@ -291,6 +294,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_mistral3(params);
         case LLM_ARCH_EAGLE3:
             return new llama_model_eagle3(params);
+        case LLM_ARCH_DFLASH:
+            return new llama_model_dflash(params);
         case LLM_ARCH_MIMO2:
             return new llama_model_mimo2(params);
         case LLM_ARCH_KIMI_LINEAR:
@@ -815,6 +820,7 @@ static const char * llama_expert_gating_func_name(llama_expert_gating_func_type 
     switch (type) {
         case LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX: return "softmax";
         case LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID: return "sigmoid";
+        case LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS: return "sqrtsoftplus";
         default:                                    return "unknown";
     }
 }
@@ -2154,7 +2160,24 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         }
                     }
 
-                    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                    if (arch == LLM_ARCH_DEEPSEEK4) {
+                        GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
+
+                        res = new llama_kv_cache_dsv4(
+                                *this,
+                                params.type_k,
+                                params.type_v,
+                                !cparams.flash_attn,
+                                cparams.offload_kqv,
+                                params.swa_full,
+                                cparams.kv_unified,
+                                cparams.n_ctx_seq,
+                                cparams.n_seq_max,
+                                cparams.n_ubatch,
+                                1,
+                                filter,
+                                reuse);
+                    } else if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
                         GGML_ASSERT(hparams.is_swa_any());
 
                         if (arch == LLM_ARCH_GEMMA4_ASSISTANT) {
@@ -2326,6 +2349,11 @@ int32_t llama_model_n_head_kv(const llama_model * model) {
 }
 
 int32_t llama_model_n_swa(const llama_model * model) {
+    // dsv4 kv-cache has SWA but it cannot be used as a rollback because of
+    // other compression ratios, so we return 0 here
+    if (model->arch == LLM_ARCH_DEEPSEEK4) {
+        return 0;
+    }
     return model->hparams.n_swa;
 }
 
@@ -2407,6 +2435,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DEEPSEEK2:
         case LLM_ARCH_DEEPSEEK2OCR:
         case LLM_ARCH_DEEPSEEK32:
+        case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_PLM:
         case LLM_ARCH_CHATGLM:
         case LLM_ARCH_GRANITE:
@@ -2494,6 +2523,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_STEP35:
         case LLM_ARCH_TALKIE:
         case LLM_ARCH_MELLUM:
+        case LLM_ARCH_DFLASH:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
@@ -2617,7 +2647,8 @@ bool llama_model_has_encoder(const llama_model * model) {
     switch (model->arch) {
         case LLM_ARCH_T5:
         case LLM_ARCH_T5ENCODER:
-        case LLM_ARCH_EAGLE3:    return true;
+        case LLM_ARCH_EAGLE3:
+        case LLM_ARCH_DFLASH:    return true;
         default:                 return false;
     }
 }
