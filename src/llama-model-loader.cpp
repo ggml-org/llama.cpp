@@ -27,10 +27,10 @@ const char * llama_file_version_name(llama_fver version) {
     return "unknown";
 }
 
-const char * llama_model_ftype_name(llama_ftype ftype) {
+const char * llama_ftype_name(llama_ftype ftype) {
     if (ftype & LLAMA_FTYPE_GUESSED) {
         static std::string s;
-        s  = llama_model_ftype_name((enum llama_ftype) (ftype & ~LLAMA_FTYPE_GUESSED));
+        s  = llama_ftype_name((enum llama_ftype) (ftype & ~LLAMA_FTYPE_GUESSED));
         s += " (guessed)";
         return s.c_str();
     }
@@ -1696,12 +1696,12 @@ bool llama_model_loader::load_all_data(
 }
 
 std::string llama_model_loader::ftype_name() const {
-    return llama_model_ftype_name(ftype);
+    return llama_ftype_name(ftype);
 }
 
 void llama_model_loader::print_info() const {
     LLAMA_LOG_INFO("%s: file format = %s\n", __func__, llama_file_version_name(fver));
-    LLAMA_LOG_INFO("%s: file type   = %s\n", __func__, llama_model_ftype_name(ftype));
+    LLAMA_LOG_INFO("%s: file type   = %s\n", __func__, llama_ftype_name(ftype));
     if (n_bytes < GiB) {
         LLAMA_LOG_INFO("%s: file size   = %.2f MiB (%.2f BPW) \n", __func__, n_bytes/1024.0/1024.0,        n_bytes*8.0/n_elements);
     } else {

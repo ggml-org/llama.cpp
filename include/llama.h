@@ -160,7 +160,7 @@ extern "C" {
     };
 
     // Get the model file type (quantization) as a string, e.g. "Q8_0" or "Q4_K - Medium"
-    LLAMA_API const char * llama_model_ftype_name(enum llama_ftype ftype);
+    LLAMA_API const char * llama_ftype_name(enum llama_ftype ftype);
 
     enum llama_rope_scaling_type {
         LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED = -1,
