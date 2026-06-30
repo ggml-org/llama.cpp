@@ -48,7 +48,7 @@ enum server_child_mode {
     SERVER_CHILD_MODE_DOWNLOAD, // download the model and exit
 };
 
-static std::string server_model_status_to_string(server_model_status status) {
+static constexpr std::string_view server_model_status_to_string(const server_model_status status) {
     switch (status) {
         case SERVER_MODEL_STATUS_DOWNLOADING: return "downloading";
         case SERVER_MODEL_STATUS_DOWNLOADED:  return "downloaded";
@@ -60,7 +60,7 @@ static std::string server_model_status_to_string(server_model_status status) {
     }
 }
 
-static std::string server_model_source_to_string(server_model_source source) {
+static constexpr std::string_view server_model_source_to_string(const server_model_source source) {
     switch (source) {
         case SERVER_MODEL_SOURCE_PRESET:     return "preset";
         case SERVER_MODEL_SOURCE_MODELS_DIR: return "models_dir";
@@ -170,7 +170,7 @@ private:
     common_preset_context ctx_preset;
 
     common_params base_params;
-    std::string bin_path;
+    std::filesystem::path bin_path;
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
 

@@ -305,8 +305,8 @@ static void normalize_anthropic_billing_header(std::string & system_text) {
         return;
     }
 
-    const size_t header_prefix_length = strlen("x-anthropic-billing-header:");
-    const size_t cch_length = 5;
+    constexpr size_t header_prefix_length = sizeof("x-anthropic-billing-header:") - 1;  // null terminator
+    constexpr size_t cch_length = 5;
     const size_t index_cch = system_text.find("cch=", header_prefix_length);
     if (index_cch == std::string::npos) {
         return;
