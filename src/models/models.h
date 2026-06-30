@@ -1545,6 +1545,7 @@ struct llama_model_granite_switch : public llama_model_base {
     uint32_t n_adapters    = 0;  // number of real adapters (excludes the zero slot)
     uint32_t n_slots       = 0;  // n_adapters + 1 (slot 0 = base/zero delta)
     uint32_t max_lora_rank = 0;
+    float    router_gain   = 15.0f;  // control-token softmax bias magnitude (see set_input)
 
     // token id -> adapter slot (1 + adapter, so slot 0 stays "base")
     std::unordered_map<llama_token, int32_t> control_token_to_index;
