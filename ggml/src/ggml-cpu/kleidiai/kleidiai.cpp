@@ -331,6 +331,13 @@ static inline size_t ceil_div_size(size_t a, size_t b) {
     return b == 0 ? 0 : (a + b - 1) / b;
 }
 
+static inline size_t kleidiai_chunk_cols(size_t n, int nth_total, bool disable_chunking, size_t n_step) {
+    const size_t multiplier = (nth_total == 1 || disable_chunking) ? 1 : std::max<size_t>(1, (size_t) ctx.chunk_multiplier);
+    const size_t divisor = std::max<size_t>(1, (size_t) nth_total * multiplier);
+    const size_t chunk_cols = align_up(std::max<size_t>(1, ceil_div_size(n, divisor)), n_step);
+    return chunk_cols ? chunk_cols : n_step;
+}
+
 struct kleidiai_block_args {
     size_t lhs_bl;
     size_t rhs_bl;
@@ -701,6 +708,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
         uint8_t * lhs_packed   = static_cast<uint8_t *>(params->wdata);
         const size_t dst_stride = dst->nb[1];
+        const size_t n_step = kernel->get_n_step() ? kernel->get_n_step() : 1;
+        const bool disable_chunking = ggml_is_numa();
+        GGML_ASSERT(n <= (size_t) INT_MAX);
 
         for (int64_t batch_idx = 0; batch_idx < ne12; ++batch_idx) {
             const uint8_t * lhs_batch_base = static_cast<const uint8_t *>(src1->data) + batch_idx * src1->nb[2];
@@ -741,41 +751,40 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                 }
             }
 
+            if (ith == 0) {
+                ggml_threadpool_chunk_set(params->threadpool, 0);
+            }
+
             ggml_barrier(params->threadpool);
 
-            {
-                const size_t step = kernel->get_n_step() ? kernel->get_n_step() : 1;
-                int64_t num_threads_n = KAI_MIN((int64_t)(n / step), (int64_t)nth);
-                if (num_threads_n <= 0) {
-                    num_threads_n = 1;
+            const size_t chunk_cols = kleidiai_chunk_cols(n, nth, disable_chunking, n_step);
+            GGML_ASSERT(chunk_cols <= (size_t) INT_MAX);
+
+            int current_col = ggml_threadpool_chunk_add(params->threadpool, (int) chunk_cols);
+            while ((size_t) current_col < n) {
+                const size_t n_start = (size_t) current_col;
+                const size_t n_to_process = std::min(chunk_cols, n - n_start);
+
+                if (n_to_process > 0) {
+                    const size_t lhs_packed_offset = lhs_info->get_packed_offset_ex(0, k, 0, mr, kr, sr);
+                    const size_t rhs_packed_offset = kernel->get_rhs_packed_offset_ex(n_start, k, 0);
+                    const size_t dst_offset        = kernel->get_dst_offset(0, n_start, dst_stride);
+
+                    const void * lhs_ptr = lhs_packed + lhs_packed_offset;
+                    const void * rhs_ptr = rhs_base + rhs_packed_offset;
+                    float * dst_ptr      = reinterpret_cast<float *>(dst_batch_base + dst_offset);
+
+                    kernel->run_kernel_ex(m, n_to_process, k, 0,
+                                          lhs_ptr,
+                                          rhs_ptr,
+                                          dst_ptr,
+                                          dst_stride,
+                                          sizeof(float),
+                                          -FLT_MAX,
+                                          FLT_MAX);
                 }
 
-                if (ith < num_threads_n) {
-                    const size_t num_n_per_thread0 = round_down((size_t)(n / num_threads_n), step);
-                    const size_t num_n_per_threadN_1 = n - (size_t)(num_threads_n - 1) * num_n_per_thread0;
-
-                    const size_t n_start      = (size_t)ith * num_n_per_thread0;
-                    const size_t n_to_process = (ith == num_threads_n - 1) ? num_n_per_threadN_1 : num_n_per_thread0;
-
-                    if (n_to_process > 0) {
-                        const size_t lhs_packed_offset = lhs_info->get_packed_offset_ex(0, k, 0, mr, kr, sr);
-                        const size_t rhs_packed_offset = kernel->get_rhs_packed_offset_ex(n_start, k, 0);
-                        const size_t dst_offset        = kernel->get_dst_offset(0, n_start, dst_stride);
-
-                        const void * lhs_ptr = lhs_packed + lhs_packed_offset;
-                        const void * rhs_ptr = rhs_base + rhs_packed_offset;
-                        float * dst_ptr      = reinterpret_cast<float *>(dst_batch_base + dst_offset);
-
-                        kernel->run_kernel_ex(m, n_to_process, k, 0,
-                                              lhs_ptr,
-                                              rhs_ptr,
-                                              dst_ptr,
-                                              dst_stride,
-                                              sizeof(float),
-                                              -FLT_MAX,
-                                              FLT_MAX);
-                    }
-                }
+                current_col = ggml_threadpool_chunk_add(params->threadpool, (int) chunk_cols);
             }
 
             if (batch_idx != ne12 - 1) {
