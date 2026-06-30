@@ -117,6 +117,23 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
     }
 }
 
+// graph input for the per-token switch: fills the substituted ids and the
+// router Q/K/V signals consumed by the in-graph router attention
+class llm_graph_input_switch : public llm_graph_input_i {
+public:
+    llm_graph_input_switch(const llama_model_granite_switch & smodel) : smodel(smodel) {}
+    virtual ~llm_graph_input_switch() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * sub_tokens  = nullptr; // I32 [n_tokens] control-substituted token ids
+    ggml_tensor * router_ksig = nullptr; // F32 [n_tokens] router K signal (±gain)
+    ggml_tensor * router_vval = nullptr; // F32 [n_tokens] router V value (adapter slot / 0)
+    ggml_tensor * router_q    = nullptr; // F32 [n_tokens] router Q value (constant 1.0)
+
+    const llama_model_granite_switch & smodel;
+};
+
 // router K dim-0 is +gain for a control token and -gain otherwise; in the causal
 // softmax a single visible control token then dominates, so the readback recovers
 // its adapter slot. The gain (smodel.router_gain) comes from the GGUF, defaulting to 15.0.
