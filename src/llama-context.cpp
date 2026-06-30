@@ -1565,9 +1565,8 @@ static std::map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubat
             continue;
         }
 
-        const llama_seq_id seq_id = ubatch.seq_id[i][0];
         // row_offset is the number of output tokens before this ubatch.
-        seq_to_row[seq_id] = row_offset + local;
+        seq_to_row[local] = row_offset + local;
         ++local;
     }
     return seq_to_row;
@@ -1704,29 +1703,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     const uint32_t n_seq_max = cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max;
 
-    // TODO: avoid this workaround in the future
-    if (has_samplers && batch_inp.logits) {
-        std::vector<int32_t> seq_output_count(n_seq_max, 0);
-
-        for (int32_t i = 0; i < batch_inp.n_tokens; ++i) {
-            if (batch_inp.logits[i] == 0) {
-                continue;
-            }
-
-            const int ns = batch_inp.n_seq_id ? batch_inp.n_seq_id[i] : 1;
-
-            for (int32_t s = 0; s < ns; ++s) {
-                const llama_seq_id seq_id = batch_inp.seq_id ? batch_inp.seq_id[i][s] : 0;
-
-                seq_output_count[seq_id]++;
-                if (seq_output_count[seq_id] > 1) {
-                    LLAMA_LOG_ERROR("%s: backend sampling requires at most one output token per sequence (seq_id %d had %d)\n",
-                            __func__, seq_id, seq_output_count[seq_id]);
-                    return -1;
-                }
-            }
-        }
-    }
 
     if (!balloc->init(batch_inp, vocab, memory.get(), n_embd, n_seq_max, output_all)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
