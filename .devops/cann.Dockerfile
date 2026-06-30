@@ -4,7 +4,7 @@
 
 # Define the CANN base image for easier version updates later
 ARG CHIP_TYPE=910b
-ARG CANN_BASE_IMAGE=quay.io/ascend/cann:8.5.0-${CHIP_TYPE}-openeuler24.03-py3.11
+ARG CANN_BASE_IMAGE=quay.io/ascend/cann:9.0.0-${CHIP_TYPE}-openeuler24.03-py3.11
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
