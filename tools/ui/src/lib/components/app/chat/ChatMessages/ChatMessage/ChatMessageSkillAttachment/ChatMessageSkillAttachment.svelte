@@ -11,17 +11,17 @@
 	import { parseMcpPromptId } from '$lib/utils';
 	import type {
 		DatabaseMessage,
-		DatabaseMessageExtraCustomPrompt,
+		DatabaseMessageExtraSkill,
 		DatabaseMessageExtraMcpPrompt
 	} from '$lib/types';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		customPromptExtra: DatabaseMessageExtraCustomPrompt | null;
+		skillExtra: DatabaseMessageExtraSkill | null;
 		messageRole: MessageRole;
-		promptTitle?: string;
-		promptIsStale?: boolean;
+		skillName?: string;
+		skillIsStale?: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 		showDeleteDialog: boolean;
 		deletionInfo: {
@@ -36,16 +36,16 @@
 		onConfirmDelete: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
-		onPromptUpdate?: () => void;
+		onSkillUpdate?: () => void;
 	}
 
 	let {
 		class: className = '',
 		message,
-		customPromptExtra,
+		skillExtra,
 		messageRole,
-		promptTitle,
-		promptIsStale = false,
+		skillName,
+		skillIsStale = false,
 		siblingInfo = null,
 		showDeleteDialog,
 		deletionInfo,
@@ -55,23 +55,19 @@
 		onConfirmDelete,
 		onNavigateToSibling,
 		onShowDeleteDialogChange,
-		onPromptUpdate
+		onSkillUpdate
 	}: Props = $props();
 
 	const editCtx = getMessageEditContext();
 
-	// Detect whether this custom prompt originates from an MCP prompt.
-	// MCP prompts encode server/prompt identity in a synthetic promptId
-	// of the form `mcp:<serverName>:<promptName>`.
-	let isMcpPrompt = $derived(
-		customPromptExtra !== null && parseMcpPromptId(customPromptExtra.promptId) !== null
-	);
+	// Detect whether this skill attachment originates from an MCP prompt.
+	// MCP prompts encode server/prompt identity in a synthetic skillId of
+	// the form `mcp:<serverName>:<promptName>`.
+	let isMcpPrompt = $derived(skillExtra !== null && parseMcpPromptId(skillExtra.skillId) !== null);
 
-	// Build an MCP prompt object from the synthetic promptId so we can
-	// reuse ChatMessageMcpPromptContent for rendering.
 	let mcpPrompt: DatabaseMessageExtraMcpPrompt | null = $derived.by(() => {
-		if (!isMcpPrompt || !customPromptExtra) return null;
-		const parsed = parseMcpPromptId(customPromptExtra.promptId);
+		if (!isMcpPrompt || !skillExtra) return null;
+		const parsed = parseMcpPromptId(skillExtra.skillId);
 		if (!parsed) return null;
 
 		return {
@@ -87,8 +83,8 @@
 		isMcpPrompt
 			? 'MCP Prompt message with actions'
 			: messageRole === MessageRole.SYSTEM
-				? 'Custom prompt system message with actions'
-				: 'Custom prompt message with actions'
+				? 'Skill system message with actions'
+				: 'Skill message with actions'
 	);
 </script>
 
@@ -99,7 +95,7 @@
 	data-message-role={messageRole}
 >
 	{#if editCtx.isEditing}
-		<div class="flex w-full max-w-[80%] flex-col items-end gap-2">
+		<div class="flex w-full flex-col items-end gap-2">
 			<ChatMessageEditForm variant={ChatMessageEditFormVariant.SYSTEM} />
 		</div>
 	{:else}
@@ -110,28 +106,29 @@
 				variant={McpPromptVariant.MESSAGE}
 				class="w-full max-w-[80%]"
 			/>
-		{:else if customPromptExtra && customPromptExtra.promptId}
-			<!-- Regular custom prompt rendering -->
-			<div class="max-w-[80%]">
-				<Card
-					class="overflow-y-auto rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5"
-				>
-					<div class="flex items-center gap-2">
-						<ScanText class="h-3.5 w-3.5 text-muted-foreground" />
-						<span class="text-sm font-medium">{promptTitle ?? customPromptExtra.title}</span>
+		{:else if skillExtra && skillExtra.skillId}
+			<!-- Regular skill rendering -->
+			<!-- <div class="max-w-[80%]"> -->
+			<Card
+				class="overflow-y-auto rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5"
+			>
+				<div class="flex items-center gap-2">
+					<ScanText class="h-3.5 w-3.5 text-muted-foreground" />
+					<span class="text-sm font-medium">{skillName ?? skillExtra.title}</span>
 
-						{#if promptIsStale && onPromptUpdate}
-							<button
-								type="button"
-								class="ml-auto text-xs font-medium text-amber-600 hover:underline hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
-								onclick={onPromptUpdate}
-							>
-								Sync
-							</button>
-						{/if}
-					</div>
-				</Card>
-			</div>
+					{#if skillIsStale && onSkillUpdate}
+						<button
+							type="button"
+							class="ml-auto text-xs font-medium text-amber-600 hover:underline hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
+							onclick={onSkillUpdate}
+							title="This skill has been modified. Click to save the changes back to the library."
+						>
+							Modified
+						</button>
+					{/if}
+				</div>
+			</Card>
+			<!-- </div> -->
 		{/if}
 
 		{#if message.timestamp}

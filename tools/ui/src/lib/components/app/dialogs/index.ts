@@ -476,37 +476,38 @@ export { default as DialogMcpResourcesBrowser } from './DialogMcpResourcesBrowse
 export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.svelte';
 
 /**
- * **DialogPromptAddNew** - Add new prompt dialog
+ * **DialogSkillAddNew** - Add new skill dialog
  *
- * Modal dialog for creating a new prompt with title and content.
- * Integrates with promptsStore for persistence via IndexedDB.
+ * Modal dialog for creating a new skill with name, description, content,
+ * and an optional always-on flag. Integrates with skillsStore for
+ * persistence via IndexedDB.
  *
  * @example
  * ```svelte
- * <DialogPromptAddNew bind:open={showAddDialog} />
+ * <DialogSkillAddNew bind:open={showAddDialog} />
  * ```
  */
-export { default as DialogPromptAddNew } from './DialogPromptAddNew.svelte';
+export { default as DialogSkillAddNew } from './DialogSkillAddNew.svelte';
 
 /**
- * **DialogPromptSync** - Sync a conversation system message to its library prompt
+ * **DialogSkillSync** - Sync a conversation system message to its library skill
  *
  * Shows a unified diff between the system message currently in the
- * conversation and the latest content of its referenced library prompt,
+ * conversation and the latest content of its referenced library skill,
  * letting the user accept the update.
  *
  * @example
  * ```svelte
- * <DialogPromptSync
+ * <DialogSkillSync
  *   bind:open={showSync}
- *   promptTitle={title}
+ *   skillName={title}
  *   currentContent={message.content}
- *   updatedContent={libraryPrompt.content}
+ *   updatedContent={librarySkill.content}
  *   onUpdate={handleUpdate}
  * />
  * ```
  */
-export { default as DialogPromptSync } from './DialogPromptSync.svelte';
+export { default as DialogSkillSync } from './DialogSkillSync.svelte';
 
 /**
  * **DialogMermaidPreview** - Full-screen Mermaid diagram preview with zoom and pan

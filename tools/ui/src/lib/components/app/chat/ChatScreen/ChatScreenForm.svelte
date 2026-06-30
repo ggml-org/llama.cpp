@@ -153,6 +153,8 @@
 		onSystemPromptClick={handleSystemPromptClick}
 		{onSystemPromptWithContent}
 		onUploadedFileRemove={handleUploadedFileRemove}
-		placeholder={serverStore.props?.modalities?.audio ? CHAT_FORM_PLACEHOLDER.VOICE_MODE_AVAILABLE : CHAT_FORM_PLACEHOLDER.DEFAULT}
+		placeholder={serverStore.props?.modalities?.audio
+			? CHAT_FORM_PLACEHOLDER.VOICE_MODE_AVAILABLE
+			: CHAT_FORM_PLACEHOLDER.DEFAULT}
 	/>
 </div>

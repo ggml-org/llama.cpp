@@ -12,13 +12,13 @@
 		ChatMessageAssistant,
 		ChatMessageUser,
 		ChatMessageSystem,
-		ChatMessageCustomPrompt
+		ChatMessageSkillAttachment
 	} from '$lib/components/app/chat';
-	import { DialogPromptAddNew, DialogPromptSync } from '$lib/components/app';
+	import { DialogSkillAddNew, DialogSkillSync } from '$lib/components/app';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { deriveAgenticSections, hasContentDiff } from '$lib/utils';
-	import { promptsStore } from '$lib/stores/prompts.svelte';
-	import type { DatabaseMessageExtraCustomPrompt } from '$lib/types';
+	import { skillsStore } from '$lib/stores/skills.svelte';
+	import type { DatabaseMessageExtraSkill, Skill } from '$lib/types';
 	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
@@ -93,34 +93,62 @@
 
 	let editedExtras = $derived<DatabaseMessageExtra[]>(message.extra ? [...message.extra] : []);
 	let editedUploadedFiles = $state<ChatUploadedFile[]>([]);
-	let customPromptExtra = $derived.by(() => {
-		if (message.role !== MessageRole.SYSTEM) return null;
-		if (!message.extra || message.extra.length === 0) return null;
+	let skillExtras = $derived.by(() => {
+		if (message.role !== MessageRole.SYSTEM) return [];
+		if (!message.extra || message.extra.length === 0) return [];
+		const extras: DatabaseMessageExtraSkill[] = [];
 		for (const extra of message.extra) {
-			if (extra.type === AttachmentType.CUSTOM_PROMPT) {
-				return extra as DatabaseMessageExtraCustomPrompt;
-			}
+			if (extra.type === AttachmentType.SKILL) extras.push(extra);
 		}
-		return null;
+		return extras;
 	});
+	let skillExtra = $derived(skillExtras[0] ?? null);
 	let isEditing = $state(false);
 	let showDeleteDialog = $state(false);
 	let shouldBranchAfterEdit = $state(false);
-	let promptDialogOpen = $state(false);
+	let skillDialogOpen = $state(false);
 
-	// Pull the referenced library prompt (if any). A null prompt means the
-	// CUSTOM_PROMPT points at a prompt the user has since deleted.
-	let referencedPrompt = $derived(
-		customPromptExtra ? promptsStore.getPrompt(customPromptExtra.promptId) : undefined
-	);
-	let promptTitle = $derived(referencedPrompt?.title ?? customPromptExtra?.title);
-	let promptIsStale = $derived.by(() => {
-		if (!customPromptExtra || !referencedPrompt) return false;
-		return hasContentDiff(message.content, referencedPrompt.content);
+	// Pull the referenced library skill (if any). A null skill means the
+	// SKILL extra points at a skill the user has since deleted.
+	let referencedSkill = $derived(skillExtra ? skillsStore.getSkill(skillExtra.skillId) : undefined);
+	let skillIsStale = $derived.by(() => {
+		if (!skillExtra || !referencedSkill) return false;
+		return hasContentDiff(message.content, referencedSkill.content);
 	});
-	let showPromptSyncDialog = $state(false);
+	// Which side has changed more recently?
+	//   - `libraryEdited`: the library row's `lastModified` is newer than
+	//     the message's `timestamp` (or the message has never been edited
+	//     since creation) — user wants to pull the new library version
+	//     into the conversation.
+	//   - `messageEdited`: the message body differs from the library and
+	//     the library hasn't been touched since the message was created —
+	//     user wants to push the message's edits back to the library.
+	//   - both true: the two diverged independently. The dialog offers
+	//     both directions and lets the user pick.
+	let libraryEdited = $derived(
+		!!referencedSkill && referencedSkill.lastModified > message.timestamp
+	);
+	let messageEdited = $derived(
+		!!referencedSkill && hasContentDiff(message.content, referencedSkill.content) && !libraryEdited
+	);
 	let showUpdateLibraryDialog = $state(false);
+	// Diff sides for the unified dialog:
+	//   - `messageEdited`: library on the left, conversation on the right
+	//     (the user is pushing the conversation's edits back to the library).
+	//   - `libraryEdited`:  conversation on the left, library on the right
+	//     (the user is pulling the new library content into the conversation).
+	let dialogCurrentContent = $derived(
+		messageEdited ? (referencedSkill?.content ?? '') : message.content
+	);
+	let dialogUpdatedContent = $derived(
+		messageEdited
+			? isEditing
+				? editedContent.trim()
+				: message.content.trim()
+			: (referencedSkill?.content ?? '')
+	);
 	let updatedTitle: string | undefined = $state(undefined);
+	let updatedDescription: string | undefined = $state(undefined);
 
 	// System-message affordances surfaced to the edit form.
 	let isSystemMessage = $derived(message.role === MessageRole.SYSTEM);
@@ -129,17 +157,17 @@
 	);
 	let canAddToLibrary = $derived.by(() => {
 		if (message.role !== MessageRole.SYSTEM) return false;
-		const custom = customPromptExtra;
-		if (!custom) return true;
-		if (custom.promptId.startsWith(MCPPromptIdPrefix.PROMPT)) return false;
-		return !referencedPrompt;
+		const skill = skillExtra;
+		if (!skill) return true;
+		if (skill.skillId.startsWith(MCPPromptIdPrefix.PROMPT)) return false;
+		return !referencedSkill;
 	});
-	let canUpdateLibraryPrompt = $derived.by(() => {
+	let canUpdateLibrarySkill = $derived.by(() => {
 		if (message.role !== MessageRole.SYSTEM) return false;
-		const custom = customPromptExtra;
-		if (!custom) return false;
-		if (custom.promptId.startsWith(MCPPromptIdPrefix.PROMPT)) return false;
-		return !!referencedPrompt;
+		const skill = skillExtra;
+		if (!skill) return false;
+		if (skill.skillId.startsWith(MCPPromptIdPrefix.PROMPT)) return false;
+		return !!referencedSkill;
 	});
 
 	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
@@ -190,11 +218,11 @@
 		get canAddToLibrary() {
 			return canAddToLibrary;
 		},
-		get canUpdateLibraryPrompt() {
-			return canUpdateLibraryPrompt;
+		get canUpdateLibrarySkill() {
+			return canUpdateLibrarySkill;
 		},
-		get libraryPromptTitle() {
-			return referencedPrompt?.title;
+		get librarySkillTitle() {
+			return referencedSkill?.name;
 		},
 		setContent: (content: string) => {
 			editedContent = content;
@@ -211,11 +239,12 @@
 		save: handleSaveEdit,
 		saveOnly: handleSaveEditOnly,
 		saveAsLibrary: handleSaveAsLibrary,
-		updateLibraryPrompt: handleUpdateLibraryPrompt,
+		updateLibrarySkill: handleUpdateLibrarySkill,
+		updateLibraryPrompt: handleUpdateLibrarySkill,
+
 		cancel: handleCancelEdit,
 		startEdit: handleEdit
 	});
-
 
 	$effect(() => {
 		const pendingId = pendingEditMessageId();
@@ -334,25 +363,24 @@
 		if (message.role !== MessageRole.SYSTEM) return;
 
 		// Empty content falls back to the normal save flow (which removes the
-		// placeholder system message). We can't create a library prompt without
+		// placeholder system message). We can't create a library skill without
 		// content anyway.
 		if (!editedContent.trim()) {
 			await handleSaveEdit();
 			return;
 		}
 
-		promptDialogOpen = true;
+		skillDialogOpen = true;
 	}
 
-	async function handleUpdateLibraryPrompt() {
+	async function handleUpdateLibrarySkill() {
 		if (message.role !== MessageRole.SYSTEM) return;
-		if (!referencedPrompt) return;
+		if (!referencedSkill) return;
 
 		const newContent = editedContent.trim();
 
-		// Empty content falls back to the normal save flow (which removes the
-		// placeholder system message). We can't push empty content to the
-		// library prompt either.
+		// Empty content falls back to the normal save flow. We can't push
+		// empty content to the library skill either.
 		if (!newContent) {
 			await handleSaveEdit();
 			return;
@@ -361,19 +389,45 @@
 		showUpdateLibraryDialog = true;
 	}
 
-	async function handleUpdateLibraryConfirm(updatedTitle?: string) {
-		if (!referencedPrompt) return;
+	// Card-button entrypoint: open the dialog seeded with the *current*
+	// message content (no edit form involvement). The confirm handler
+	// applies the updates directly to the library row and refreshes the
+	// message extras to reflect the new title/description.
+	function openUpdateLibraryDialogFromCard() {
+		if (message.role !== MessageRole.SYSTEM) return;
+		if (!referencedSkill) return;
+		updatedTitle = referencedSkill.name;
+		updatedDescription = referencedSkill.description;
+		showUpdateLibraryDialog = true;
+	}
 
-		const newContent = editedContent.trim();
-		const newTitle = updatedTitle?.trim() ?? '';
+	async function handleUpdateLibraryConfirm(updatedName?: string, updatedDescription?: string) {
+		if (!referencedSkill) return;
 
-		const updates: Partial<{ content: string; title: string }> = { content: newContent };
-		if (newTitle && newTitle !== referencedPrompt.title) {
-			updates.title = newTitle;
+		const newContent = isEditing ? editedContent.trim() : message.content.trim();
+		const newName = updatedName?.trim() ?? '';
+		const newDescription = updatedDescription?.trim() ?? '';
+
+		const updates: Partial<{ content: string; name: string; description: string }> = {
+			content: newContent
+		};
+		if (newName && newName !== referencedSkill.name) {
+			updates.name = newName;
+		}
+		if (newDescription && newDescription !== referencedSkill.description) {
+			updates.description = newDescription;
 		}
 
-		await promptsStore.updatePrompt(referencedPrompt.id, updates);
-		await handleSaveEdit();
+		await skillsStore.updateSkill(referencedSkill.id, updates);
+
+		// Refresh the message extras so the card reflects the new
+		// title/description, and persist the (possibly unchanged) body.
+		const refreshed = skillsStore.getSkill(referencedSkill.id);
+		if (refreshed) {
+			await saveSystemPromptWithSkill(newContent, refreshed);
+		}
+
+		if (isEditing) await handleSaveEdit();
 		showUpdateLibraryDialog = false;
 	}
 
@@ -389,10 +443,10 @@
 			return;
 		}
 
-		// Preserve existing extras (drop stale CUSTOM_PROMPT so we can re-add cleanly)
+		// Preserve existing extras (drop stale SKILL so we can re-add cleanly)
 		const existingExtras = message.extra || [];
 		const extrasToSave = existingExtras.filter(
-			(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_PROMPT
+			(e: DatabaseMessageExtra) => e.type !== AttachmentType.SKILL
 		);
 
 		if (extrasToSave.length > 0) {
@@ -416,20 +470,21 @@
 		}
 	}
 
-	async function saveSystemPromptWithPrompt(content: string, promptId: string, title: string) {
+	async function saveSystemPromptWithSkill(content: string, skill: Skill) {
 		// message.extra is a deep $state proxy; snapshot to plain values so
 		// Dexie/IndexedDB can structured-clone it (see getMergedExtras precedent)
 		const existingExtras = (
 			message.extra ? $state.snapshot(message.extra) : []
 		) as DatabaseMessageExtra[];
 		const extras: DatabaseMessageExtra[] = [
-			...existingExtras.filter(
-				(e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_PROMPT
-			),
+			...existingExtras.filter((e: DatabaseMessageExtra) => e.type !== AttachmentType.SKILL),
 			{
-				type: AttachmentType.CUSTOM_PROMPT,
-				promptId,
-				title
+				type: AttachmentType.SKILL,
+				skillId: skill.id,
+				title: skill.name,
+				description: skill.description,
+				origin: skill.origin,
+				path: skill.path
 			}
 		];
 
@@ -440,13 +495,13 @@
 		}
 	}
 
-	// Apply the latest library prompt content to this system message, keeping
-	// the CUSTOM_PROMPT extra (title may also have changed in the library)
-	async function syncPromptFromLibrary() {
-		if (!customPromptExtra || !referencedPrompt) return;
-		const { promptId } = customPromptExtra;
-		await saveSystemPromptWithPrompt(referencedPrompt.content, promptId, referencedPrompt.title);
-		showPromptSyncDialog = false;
+	// Overwrite the system message body with the library version (sync
+	// from library). Used when the library has been updated and the user
+	// wants the conversation to reflect the new library content.
+	async function syncSkillFromLibrary() {
+		if (!skillExtra || !referencedSkill) return;
+		await saveSystemPromptWithSkill(referencedSkill.content, referencedSkill);
+		showUpdateLibraryDialog = false;
 	}
 
 	async function getMergedExtras(): Promise<DatabaseMessageExtra[]> {
@@ -468,34 +523,37 @@
 
 <div use:fadeInView class="chat-message">
 	{#if message.role === MessageRole.SYSTEM}
-		{#if customPromptExtra}
-			<ChatMessageCustomPrompt
-				class={className}
-				{message}
-				customPromptExtra={customPromptExtra}
-				messageRole={message.role}
-				promptTitle={promptTitle}
-				{promptIsStale}
-				{deletionInfo}
-				onPromptUpdate={() => (showPromptSyncDialog = true)}
-				onConfirmDelete={handleConfirmDelete}
-				onCopy={handleCopy}
-				onDelete={handleDelete}
-				onEdit={handleEdit}
-				onNavigateToSibling={handleNavigateToSibling}
-				onShowDeleteDialogChange={handleShowDeleteDialogChange}
-				{showDeleteDialog}
-				{siblingInfo}
-			/>
+		{#if skillExtras.length > 0}
+			<div class="flex flex-col items-end gap-2 {className}">
+				{#each skillExtras as extra: DatabaseMessageExtraSkill (extra.skillId)}
+					<ChatMessageSkillAttachment
+						{message}
+						skillExtra={extra}
+						messageRole={message.role}
+						skillName={skillsStore.getSkill(extra.skillId)?.name ?? extra.title}
+						{skillIsStale}
+						{deletionInfo}
+						onSkillUpdate={openUpdateLibraryDialogFromCard}
+						onConfirmDelete={handleConfirmDelete}
+						onCopy={handleCopy}
+						onDelete={handleDelete}
+						onEdit={handleEdit}
+						onNavigateToSibling={handleNavigateToSibling}
+						onShowDeleteDialogChange={handleShowDeleteDialogChange}
+						{showDeleteDialog}
+						{siblingInfo}
+					/>
+				{/each}
+			</div>
 		{:else}
 			<ChatMessageSystem
 				class={className}
 				{deletionInfo}
 				{message}
-				promptId={undefined}
+				skillId={undefined}
 				title={undefined}
-				{promptIsStale}
-				onPromptUpdate={() => (showPromptSyncDialog = true)}
+				{skillIsStale}
+				onSkillUpdate={openUpdateLibraryDialogFromCard}
 				onConfirmDelete={handleConfirmDelete}
 				onCopy={handleCopy}
 				onDelete={handleDelete}
@@ -506,43 +564,40 @@
 				{siblingInfo}
 			/>
 
-			{#if promptDialogOpen}
-				<DialogPromptAddNew
-					open={promptDialogOpen}
+			{#if skillDialogOpen}
+				<DialogSkillAddNew
+					open={skillDialogOpen}
 					initialContent={editedContent.trim()}
-					onAddToLibraryComplete={(id: string, title: string) => {
-						promptDialogOpen = false;
+					onAddSkillComplete={(id: string) => {
+						skillDialogOpen = false;
 						isEditing = false;
-						saveSystemPromptWithPrompt(editedContent.trim(), id, title);
+						const skill = skillsStore.getSkill(id);
+						if (skill) {
+							saveSystemPromptWithSkill(editedContent.trim(), skill);
+						}
 					}}
 				/>
 			{/if}
-
-			{#if showPromptSyncDialog && referencedPrompt}
-				<DialogPromptSync
-					bind:open={showPromptSyncDialog}
-					promptTitle={referencedPrompt.title}
-					currentTitle={undefined}
-					currentContent={message.content}
-					updatedContent={referencedPrompt.content}
-					onUpdate={syncPromptFromLibrary}
-				/>
-			{/if}
-
-			{#if showUpdateLibraryDialog && referencedPrompt}
-				<DialogPromptSync
-					bind:open={showUpdateLibraryDialog}
-					promptTitle={referencedPrompt.title}
-					currentTitle={undefined}
-					currentContent={message.content}
-					updatedContent={editedContent.trim()}
-					bind:updatedTitle
-					editableTitle
-					onUpdate={handleUpdateLibraryConfirm}
-				/>
-			{/if}
 		{/if}
-{:else if message.role === MessageRole.USER}
+
+		{#if showUpdateLibraryDialog && referencedSkill}
+			<DialogSkillSync
+				bind:open={showUpdateLibraryDialog}
+				skillName={referencedSkill.name}
+				currentTitle={skillExtra?.title}
+				currentContent={dialogCurrentContent}
+				updatedContent={dialogUpdatedContent}
+				{messageEdited}
+				{libraryEdited}
+				bind:updatedTitle
+				bind:updatedDescription
+				editableTitle
+				editableDescription
+				onUpdate={messageEdited ? handleUpdateLibraryConfirm : syncSkillFromLibrary}
+				onUseLibraryVersion={syncSkillFromLibrary}
+			/>
+		{/if}
+	{:else if message.role === MessageRole.USER}
 		<ChatMessageUser
 			class={className}
 			{deletionInfo}

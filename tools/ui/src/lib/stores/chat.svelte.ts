@@ -21,6 +21,8 @@ import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
+import { skillsStore } from '$lib/stores/skills.svelte';
+import { skillPreferencesStore } from '$lib/stores/skill-preferences.svelte';
 import {
 	selectedModelName,
 	modelsStore,
@@ -33,7 +35,8 @@ import {
 	findLeafNode,
 	findMessageById,
 	isAbortError,
-	generateConversationTitle
+	generateConversationTitle,
+	composeSystemPromptWithAlwaysOnSkills
 } from '$lib/utils';
 import { classifyContinueIntent } from '$lib/utils/agentic';
 import {
@@ -53,8 +56,12 @@ import type {
 	ApiProcessingState,
 	ApiStreamSession,
 	DatabaseMessage,
-	DatabaseMessageExtra
+	DatabaseMessageExtra,
+	DatabaseMessageExtraSkill,
+	DatabaseSkill
 } from '$lib/types';
+
+type Skill = DatabaseSkill;
 import {
 	AttachmentType,
 	ContinueIntentKind,
@@ -854,8 +861,8 @@ class ChatStore {
 
 	async addSystemPromptWithContent(
 		content: string,
-		promptId?: string,
-		promptTitle?: string
+		skillId?: string,
+		skillTitle?: string
 	): Promise<void> {
 		const trimmedContent = content.trim();
 		if (!trimmedContent) return;
@@ -884,13 +891,13 @@ class ChatStore {
 			const am = conversationsStore.activeMessages;
 			const firstActiveMessage = am.find((m) => m.parent === rootId);
 
-			// Create CUSTOM_PROMPT extra if prompt ID is provided
-			const extra: DatabaseMessageExtra[] | undefined = promptId
+			// Create SKILL extra if skill ID is provided
+			const extra: DatabaseMessageExtra[] | undefined = skillId
 				? [
 						{
-							type: AttachmentType.CUSTOM_PROMPT,
-							promptId,
-							title: promptTitle ?? ''
+							type: AttachmentType.SKILL,
+							skillId,
+							title: skillTitle ?? ''
 						}
 					]
 				: undefined;
@@ -924,8 +931,8 @@ class ChatStore {
 					});
 			}
 			conversationsStore.activeMessages.unshift(systemMessage);
-			// Only enter edit mode for plain text inputs, not for saved custom prompts
-			if (!promptId) {
+			// Only enter edit mode for plain text inputs, not for saved skills
+			if (!skillId) {
 				this.pendingEditMessageId = systemMessage.id;
 			}
 			conversationsStore.updateConversationTimestamp();
@@ -1034,11 +1041,26 @@ class ChatStore {
 				const rootId = await DatabaseService.createRootMessage(currentConv.id);
 				const currentConfig = config();
 				const systemPrompt = currentConfig.systemMessage?.toString().trim();
-				if (systemPrompt) {
+				const { text: fullSystemPrompt, alwaysOnSkills } = buildAlwaysOnSystemPrompt(
+					systemPrompt ?? ''
+				);
+				if (fullSystemPrompt) {
+					const skillExtras =
+						alwaysOnSkills.length > 0
+							? alwaysOnSkills.map<DatabaseMessageExtraSkill>((skill) => ({
+									type: AttachmentType.SKILL,
+									skillId: skill.id,
+									title: skill.name,
+									description: skill.description,
+									origin: skill.origin,
+									path: skill.path
+								}))
+							: undefined;
 					const systemMessage = await DatabaseService.createSystemMessage(
 						currentConv.id,
-						systemPrompt,
-						rootId
+						fullSystemPrompt,
+						rootId,
+						{ extra: skillExtras }
 					);
 					conversationsStore.addMessageToActive(systemMessage);
 					parentIdForUserMessage = systemMessage.id;
@@ -2464,6 +2486,32 @@ class ChatStore {
 			}
 		}
 	}
+}
+
+/**
+ * Resolve the always-on skills from `skillPreferencesStore` and compose
+ * the system prompt contribution. The composition itself is delegated to
+ * `composeSystemPromptWithAlwaysOnSkills` (a pure helper in
+ * `$lib/utils/skill-format`) so the rule — plain `### Skill: <name>`
+ * headers with no XML wrapping, no llama-ui markers — can be unit-tested
+ * without spinning up a chat store.
+ */
+function buildAlwaysOnSystemPrompt(baseSystemPrompt: string): {
+	text: string;
+	alwaysOnSkills: Skill[];
+} {
+	const ids = skillPreferencesStore.getAlwaysOnIds();
+	if (ids.length === 0) return { text: baseSystemPrompt, alwaysOnSkills: [] };
+
+	const resolved: Skill[] = [];
+	for (const id of ids) {
+		const skill = skillsStore.getSkill(id);
+		if (!skill) continue;
+		resolved.push(skill);
+	}
+
+	const { text, skills } = composeSystemPromptWithAlwaysOnSkills(baseSystemPrompt, resolved);
+	return { text, alwaysOnSkills: skills };
 }
 
 export const chatStore = new ChatStore();

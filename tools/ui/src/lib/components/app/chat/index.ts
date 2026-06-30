@@ -610,10 +610,11 @@ export { default as ChatMessageUserPending } from './ChatMessages/ChatMessage/Ch
 export { default as ChatMessageSystem } from './ChatMessages/ChatMessage/ChatMessageSystem/ChatMessageSystem.svelte';
 
 /**
- * Custom prompt display component. Renders a card showing the referenced
- * custom prompt title and ID.
+ * Skill attachment display component. Renders a card showing the referenced
+ * library skill title and ID; routes MCP-origin attachments to the dedicated
+ * MCP-prompt renderer.
  */
-export { default as ChatMessageCustomPrompt } from './ChatMessages/ChatMessage/ChatMessageCustomPrompt/ChatMessageCustomPrompt.svelte';
+export { default as ChatMessageSkillAttachment } from './ChatMessages/ChatMessage/ChatMessageSkillAttachment/ChatMessageSkillAttachment.svelte';
 
 /**
  *

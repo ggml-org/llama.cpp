@@ -21,25 +21,26 @@ export interface MessageEditState {
 	 */
 	readonly isSystemMessage: boolean;
 	readonly isSystemPlaceholder: boolean;
-	/** Available when the user may attach the system message to a library prompt. */
+	/** Available when the user may attach the system message to a library skill. */
 	readonly canAddToLibrary: boolean;
-	/** Available when the system message is already linked to an existing (non-MCP) library prompt. */
-	readonly canUpdateLibraryPrompt: boolean;
-	/** Title of the linked library prompt, surfaced to the form for labeling. */
-	readonly libraryPromptTitle?: string;
+	/** Available when the system message is already linked to an existing (non-MCP) library skill. */
+	readonly canUpdateLibrarySkill: boolean;
+	/** Title of the linked library skill, surfaced to the form for labeling. */
+	readonly librarySkillTitle?: string;
 }
 
 export interface MessageEditActions {
 	setContent: (content: string) => void;
 	setExtras: (extras: DatabaseMessageExtra[]) => void;
 	setUploadedFiles: (files: ChatUploadedFile[]) => void;
-	/** Save the edit and, for system messages, route through the "Add to Prompts library" dialog. */
+	/** Save the edit and, for system messages, route through the "Add to Skills library" dialog. */
 	save: () => void;
 	saveOnly: () => void;
 	/** For system messages: same effect as `save` plus opens the add-to-library dialog. */
 	saveAsLibrary: () => void;
-	/** For system messages linked to a library prompt: save and propagate new content to the prompt. */
+	/** For system messages linked to a library skill: save and propagate new content to the skill. */
 	updateLibraryPrompt: () => void;
+	updateLibrarySkill?: () => void;
 	cancel: () => void;
 	startEdit: () => void;
 }

@@ -14,7 +14,5 @@
 >
 	<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
 
-	<p class="text-muted-foreground md:text-lg">
-	   What can i do for you today?
-	</p>
+	<p class="text-muted-foreground md:text-lg">What can i do for you today?</p>
 </div>

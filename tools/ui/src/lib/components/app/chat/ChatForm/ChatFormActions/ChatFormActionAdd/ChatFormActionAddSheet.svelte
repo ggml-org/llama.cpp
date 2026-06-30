@@ -20,7 +20,8 @@
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { promptsStore } from '$lib/stores/prompts.svelte';
+	import { skillsStore } from '$lib/stores/skills.svelte';
+	import { skillPreferencesStore } from '$lib/stores/skill-preferences.svelte';
 	import { McpLogo } from '$lib/components/app';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import { ContentPartType } from '$lib/enums';
@@ -39,7 +40,7 @@
 		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
-		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
+		onSystemPromptWithContent?: (content: string, skillId?: string, title?: string) => void;
 		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
 		trigger: Snippet<[{ disabled: boolean; onclick?: () => void }]>;
@@ -64,7 +65,7 @@
 	let sheetOpen = $state(false);
 	let filesExpanded = $state(false);
 	let toolsExpanded = $state(false);
-	let promptsExpanded = $state(false);
+	let skillsExpanded = $state(false);
 	let searchQuery = $state('');
 
 	const attachmentMenu = useAttachmentMenu(
@@ -89,13 +90,16 @@
 	const sheetItemRowClass =
 		'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent';
 
-	let prompts = $derived(promptsStore.getPrompts());
+	let skills = $derived(skillsStore.getSkills());
 
-	let filteredLibraryPrompts = $derived.by(() => {
+	let filteredLibrarySkills = $derived.by(() => {
 		const q = searchQuery.trim().toLowerCase();
-		if (!q) return prompts;
-		return prompts.filter(
-			(p) => p.title.toLowerCase().includes(q) || p.content.toLowerCase().includes(q)
+		if (!q) return skills;
+		return skills.filter(
+			(s) =>
+				s.name?.toLowerCase().includes(q) ||
+				s.content?.toLowerCase().includes(q) ||
+				(s.description?.toLowerCase().includes(q) ?? false)
 		);
 	});
 
@@ -145,15 +149,15 @@
 		});
 	});
 
-	function handlePromptClick(promptId: string) {
-		const prompt = promptsStore.getPrompt(promptId);
-		if (prompt && onSystemPromptWithContent) {
+	function handleSkillClick(skillId: string) {
+		const skill = skillsStore.getSkill(skillId);
+		if (skill && onSystemPromptWithContent) {
 			sheetOpen = false;
-			onSystemPromptWithContent(prompt.content, promptId, prompt.title);
+			onSystemPromptWithContent(skill.content ?? '', skillId, skill.name ?? skillId);
 		}
 	}
 
-	function handleAddPromptClick() {
+	function handleAddSkillClick() {
 		attachmentMenu.callbacks[AttachmentAction.SYSTEM_PROMPT_CLICK]();
 	}
 
@@ -259,9 +263,9 @@
 					</Collapsible.Content>
 				</Collapsible.Root>
 
-				<Collapsible.Root open={promptsExpanded} onOpenChange={(open) => (promptsExpanded = open)}>
+				<Collapsible.Root open={skillsExpanded} onOpenChange={(open) => (skillsExpanded = open)}>
 					<Collapsible.Trigger class={sheetItemClass}>
-						{#if promptsExpanded}
+						{#if skillsExpanded}
 							<ChevronDown class="h-4 w-4 shrink-0" />
 						{:else}
 							<ChevronRight class="h-4 w-4 shrink-0" />
@@ -274,7 +278,7 @@
 
 					<Collapsible.Content>
 						<div class="flex flex-col gap-0.5 pl-4">
-							{#if prompts.length > 0 || mcpStore.allPrompts.length > 0}
+							{#if skills.length > 0 || mcpStore.allPrompts.length > 0}
 								<div class="mb-1.5 mt-1">
 									<SearchInput
 										bind:value={searchQuery}
@@ -287,29 +291,37 @@
 							<button
 								type="button"
 								class="{sheetItemClass} mt-2.5 mb-2"
-								onclick={handleAddPromptClick}
+								onclick={handleAddSkillClick}
 							>
 								<Plus class="h-4 w-4 shrink-0" />
 
 								<span>Write new</span>
 							</button>
 
-							{#if filteredLibraryPrompts.length > 0}
+							{#if filteredLibrarySkills.length > 0}
 								<div class="mt-1.5 mb-1 px-3 text-xs font-medium text-muted-foreground">
-									Your Prompts
+									Your Skills
 								</div>
 
-								{#each filteredLibraryPrompts as prompt (prompt.id)}
+								{#each filteredLibrarySkills as skill (skill.id)}
 									<button
 										type="button"
 										class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent active:bg-accent"
-										onclick={() => handlePromptClick(prompt.id)}
+										onclick={() => handleSkillClick(skill.id)}
 									>
-										<span class="line-clamp-1 text-sm font-medium">{prompt.title}</span>
+										<div class="flex w-full items-center gap-1.5">
+											<span class="line-clamp-1 text-sm font-medium">{skill.name ?? skill.id}</span>
+											{#if skillPreferencesStore.isAlwaysOn(skill.id)}
+												<span
+													class="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground"
+													>always-on</span
+												>
+											{/if}
+										</div>
 										<span
 											class="line-clamp-3 w-full text-left text-xs leading-5 text-muted-foreground"
 										>
-											{prompt.content}
+											{skill.content}
 										</span>
 									</button>
 								{/each}
@@ -367,7 +379,7 @@
 								{/each}
 							{/if}
 
-							{#if searchQuery.trim() !== '' && (prompts.length > 0 || mcpStore.allPrompts.length > 0) && filteredLibraryPrompts.length === 0 && filteredMcpPrompts.length === 0}
+							{#if searchQuery.trim() !== '' && (skills.length > 0 || mcpStore.allPrompts.length > 0) && filteredLibrarySkills.length === 0 && filteredMcpPrompts.length === 0}
 								<div class="px-3 py-2 text-xs text-muted-foreground">No matches</div>
 							{/if}
 						</div>

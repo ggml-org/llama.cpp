@@ -165,13 +165,13 @@
 			<Switch id="add-to-library" bind:checked={addToLibrary} class="scale-75" />
 
 			<label for="add-to-library" class="cursor-pointer text-xs text-muted-foreground">
-				Add Prompt to library
+				Add skill to library
 			</label>
-		{:else if isSystemMessage && editCtx.canUpdateLibraryPrompt}
-			<Switch id="update-library-prompt" bind:checked={updateLibraryPrompt} class="scale-75" />
+		{:else if isSystemMessage && editCtx.canUpdateLibrarySkill}
+			<Switch id="update-library-skill" bind:checked={updateLibraryPrompt} class="scale-75" />
 
-			<label for="update-library-prompt" class="cursor-pointer text-xs text-muted-foreground">
-				Update{editCtx.libraryPromptTitle ? ` "${editCtx.libraryPromptTitle}"` : ''} prompt in library
+			<label for="update-library-skill" class="cursor-pointer text-xs text-muted-foreground">
+				Update{editCtx.librarySkillTitle ? ` "${editCtx.librarySkillTitle}"` : ''} in library
 			</label>
 		{:else}
 			<div></div>
