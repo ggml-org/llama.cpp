@@ -1173,7 +1173,8 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             {
                 for (int i = MTLGPUFamilyApple1 + 20; i >= MTLGPUFamilyApple1; --i) {
                     if ([dev->mtl_device supportsFamily:i]) {
-                        GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyApple%d  (%d)\n", __func__, i - (int) MTLGPUFamilyApple1 + 1, i);
+                        dev->props.gpu_family = i - (int) MTLGPUFamilyApple1 + 1;
+                        GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyApple%d  (%d)\n", __func__, dev->props.gpu_family, i);
                         break;
                     }
                 }

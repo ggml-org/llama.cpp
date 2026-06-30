@@ -19,14 +19,12 @@ int fa_vec_ne11_bucket(int64_t ne11);
 int fa_vec_ne01_bucket(int64_t ne01);
 
 // NE baked into each (dk,dv) baseline instantiation in kernels/fa.metal.
-// Must stay in sync with those instantiations (drift guard checks this).
+// Hand-maintained mirror; keep in sync with those instantiations (run_fa_vec_tune_check
+// exercises every (Q,NE), so a missing instantiation surfaces there).
 int fa_vec_baseline_ne(int dk, int dv);
 
-// device_id -> Apple GPU family (7..10); 0 for GENERIC/unknown.
-int fa_vec_device_family(enum ggml_metal_device_id device_id);
-
 struct fa_vec_key_t {
-    int8_t  device_id;  // ggml_metal_device_id; reused as the family value in the family table
+    int8_t  device_id;
     int8_t  dtype;
     int16_t dk;
     int16_t dv;
@@ -52,6 +50,8 @@ void         fa_vec_clear_override();
 bool         fa_vec_override_active();
 fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv);
 
-fa_vec_cfg_t fa_vec_pick(enum ggml_metal_device_id device_id, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
+// device_id selects a per-SKU row; on a miss, gpu_family (0 if unknown) maps to a representative
+// SKU and the table is retried. No match -> baseline.
+fa_vec_cfg_t fa_vec_pick(enum ggml_metal_device_id device_id, int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
 
 }  // namespace ggml_metal_tuning
