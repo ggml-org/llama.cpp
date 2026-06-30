@@ -207,15 +207,15 @@ class GraniteSwitchModel(GraniteMoeModel):
                 return
             if "lora_A_slices." in name:
                 slot = int(name.rsplit(".", 1)[1])
-                key = {0: T.ATTN_QKV_LORA_A_Q, 1: T.ATTN_QKV_LORA_A_K, 2: T.ATTN_QKV_LORA_A_V}[slot]
+                key = {0: T.ATTN_Q_LORA_A, 1: T.ATTN_K_LORA_A, 2: T.ATTN_V_LORA_A}[slot]
                 yield (self.format_tensor_name(key, bid, suffix=""), self._lora_a(data_torch))
                 return
             if "lora_B_slices." in name:
                 slot = int(name.rsplit(".", 1)[1])
                 key, ph = {
-                    0: (T.ATTN_QKV_LORA_B_Q, self._n_head),
-                    1: (T.ATTN_QKV_LORA_B_K, self._n_kv_head),
-                    2: (T.ATTN_QKV_LORA_B_V, None),
+                    0: (T.ATTN_Q_LORA_B, self._n_head),
+                    1: (T.ATTN_K_LORA_B, self._n_kv_head),
+                    2: (T.ATTN_V_LORA_B, None),
                 }[slot]
                 yield (self.format_tensor_name(key, bid, suffix=""), self._lora_b(data_torch, ph))
                 return
