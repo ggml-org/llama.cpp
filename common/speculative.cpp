@@ -1393,8 +1393,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 common_batch_add(batch, batch_in.token[k], dcur[s]++, { s }, 0);
             }
 
-            // each draft row pairs with the target hidden one position back (shift right by
-            // one); valid only while batch tokens stay sequential per sequence
+            // shift the tgt embeddings to the right by one position
+            // assumes that the tokens in the batch are sequential for each sequence
+            // i.e. we cannot have seq_id like this: [0, 0, 0, 1, 1, 0, 1, 1]
+            //                                                       ^--- this is a problem
+            // TODO:this is generally true, but would be nice to assert it
             {
                 const float * h_tgt = llama_get_embeddings_nextn(ctx_tgt);
                 std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
