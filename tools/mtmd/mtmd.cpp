@@ -251,6 +251,8 @@ mtmd_context_params mtmd_context_params_default() {
         /* cb_eval           */ nullptr,
         /* cb_eval_user_data */ nullptr,
         /* batch_max_tokens  */ 1024,
+        /* progress_callback */ nullptr,
+        /* progress_callback_user_data */ nullptr,
     };
     return params;
 }
@@ -345,6 +347,8 @@ struct mtmd_context {
             /* cb_eval           */ ctx_params.cb_eval,
             /* cb_eval_user_data */ ctx_params.cb_eval_user_data,
             /* no_alloc          */ no_alloc,
+            /* progress_callback */ ctx_params.progress_callback,
+            /* progress_callback_user_data */ ctx_params.progress_callback_user_data,
         };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);
@@ -1295,9 +1299,12 @@ struct mtmd_tokenizer {
             for (auto & mel_spec : mel_spec_chunks) {
                 const bool is_placeholder = mel_spec.data.empty();
 
+                // Validate dimensions fit in clip_image_size (int)
+                GGML_ASSERT(mel_spec.n_len <= INT32_MAX && mel_spec.n_len >= 0);
+                GGML_ASSERT(mel_spec.n_mel <= INT32_MAX && mel_spec.n_mel >= 0);
                 clip_image_f32 mel_f32;
                 mel_f32.set_size(
-                    {mel_spec.n_len, mel_spec.n_mel},
+                    {(int)mel_spec.n_len, (int)mel_spec.n_mel},
                     is_placeholder, /* is_audio */ true);
                 mel_f32.cpy_buf(mel_spec.data);
 
@@ -2130,9 +2137,12 @@ std::map<ggml_backend_dev_t, size_t> mtmd_get_memory_usage(const char * mmproj_f
     mtmd::context_ptr ctx;
     auto saved_log_callback = g_logger_state.log_callback;
     auto saved_log_user_data = g_logger_state.log_callback_user_data;
+
+    ctx_params.progress_callback = nullptr;
+
     try {
         mtmd_log_set(stub_log_callback, nullptr); // suppress logging
-        ctx.reset(new mtmd_context(mmproj_fname, nullptr, ctx_params));
+        ctx.reset(new mtmd_context(mmproj_fname, nullptr, ctx_params, true));
         mtmd_log_set(saved_log_callback, saved_log_user_data); // restore log callback
         std::map<ggml_backend_dev_t, size_t> total_mem;
         auto merge = [&](const struct clip_ctx * c) {

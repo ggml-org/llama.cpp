@@ -233,27 +233,27 @@ struct BuiltinRule {
 };
 
 static std::unordered_map<std::string, BuiltinRule> PRIMITIVE_RULES = {
-    {"boolean", {"(\"true\" | \"false\") space", {}}},
+    {"boolean", {"(\"true\" | \"false\")", {}}},
     {"decimal-part", {"[0-9]{1,16}", {}}},
     {"integral-part", {"[0] | [1-9] [0-9]{0,15}", {}}},
-    {"number", {"(\"-\"? integral-part) (\".\" decimal-part)? ([eE] [-+]? integral-part)? space", {"integral-part", "decimal-part"}}},
-    {"integer", {"(\"-\"? integral-part) space", {"integral-part"}}},
+    {"number", {"(\"-\"? integral-part) (\".\" decimal-part)? ([eE] [-+]? integral-part)?", {"integral-part", "decimal-part"}}},
+    {"integer", {"(\"-\"? integral-part)", {"integral-part"}}},
     {"value", {"object | array | string | number | boolean | null", {"object", "array", "string", "number", "boolean", "null"}}},
-    {"object", {"\"{\" space ( string \":\" space value (\",\" space string \":\" space value)* )? \"}\" space", {"string", "value"}}},
-    {"array", {"\"[\" space ( value (\",\" space value)* )? \"]\" space", {"value"}}},
-    {"uuid", {"\"\\\"\" [0-9a-fA-F]{8} \"-\" [0-9a-fA-F]{4} \"-\" [0-9a-fA-F]{4} \"-\" [0-9a-fA-F]{4} \"-\" [0-9a-fA-F]{12} \"\\\"\" space", {}}},
+    {"object", {"\"{\" space ( string \":\" space value (\",\" space string \":\" space value)* )? space \"}\"", {"string", "value"}}},
+    {"array", {"\"[\" space ( value (\",\" space value)* )? space \"]\"", {"value"}}},
+    {"uuid", {"\"\\\"\" [0-9a-fA-F]{8} \"-\" [0-9a-fA-F]{4} \"-\" [0-9a-fA-F]{4} \"-\" [0-9a-fA-F]{4} \"-\" [0-9a-fA-F]{12} \"\\\"\"", {}}},
     {"char",   {"[^\"\\\\\\x7F\\x00-\\x1F] | [\\\\] ([\"\\\\bfnrt] | \"u\" [0-9a-fA-F]{4})", {}}},
-    {"string", {"\"\\\"\" char* \"\\\"\" space", {"char"}}},
-    {"null", {"\"null\" space", {}}},
+    {"string", {"\"\\\"\" char* \"\\\"\"", {"char"}}},
+    {"null", {"\"null\"", {}}},
 };
 
 static std::unordered_map<std::string, BuiltinRule> STRING_FORMAT_RULES = {
     {"date", {"[0-9]{4} \"-\" ( \"0\" [1-9] | \"1\" [0-2] ) \"-\" ( \"0\" [1-9] | [1-2] [0-9] | \"3\" [0-1] )", {}}},
     {"time", {"([01] [0-9] | \"2\" [0-3]) \":\" [0-5] [0-9] \":\" [0-5] [0-9] ( \".\" [0-9]{3} )? ( \"Z\" | ( \"+\" | \"-\" ) ( [01] [0-9] | \"2\" [0-3] ) \":\" [0-5] [0-9] )", {}}},
     {"date-time", {"date \"T\" time", {"date", "time"}}},
-    {"date-string", {"\"\\\"\" date \"\\\"\" space", {"date"}}},
-    {"time-string", {"\"\\\"\" time \"\\\"\" space", {"time"}}},
-    {"date-time-string", {"\"\\\"\" date-time \"\\\"\" space", {"date-time"}}}
+    {"date-string", {"\"\\\"\" date \"\\\"\"", {"date"}}},
+    {"time-string", {"\"\\\"\" time \"\\\"\"", {"time"}}},
+    {"date-time-string", {"\"\\\"\" date-time \"\\\"\"", {"date-time"}}}
 };
 
 static bool is_reserved_name(const std::string & name) {
@@ -551,16 +551,16 @@ private:
             }
             return join_seq();
         };
-        return _add_rule(name, "\"\\\"\" (" + to_rule(transform()) + ") \"\\\"\" space");
+        return _add_rule(name, "\"\\\"\" (" + to_rule(transform()) + ") \"\\\"\"");
     }
 
     /*
         Returns a rule that matches a JSON string that is none of the provided strings
 
         not_strings({"a"})
-            -> ["] ( [a] char+ | [^"a] char* )? ["] space
+            -> ["] ( [a] char+ | [^"a] char* )? ["]
         not_strings({"and", "also"})
-            -> ["] ( [a] ([l] ([s] ([o] char+ | [^"o] char*) | [^"s] char*) | [n] ([d] char+ | [^"d] char*) | [^"ln] char*) | [^"a] char* )? ["] space
+            -> ["] ( [a] ([l] ([s] ([o] char+ | [^"o] char*) | [^"s] char*) | [n] ([d] char+ | [^"d] char*) | [^"ln] char*) | [^"a] char* )? ["]
     */
     std::string _not_strings(const std::vector<std::string> & strings) {
 
@@ -619,7 +619,7 @@ private:
         if (!trie.is_end_of_string) {
             out << "?";
         }
-        out << " [\"] space";
+        out << " [\"]";
         return out.str();
     }
 
@@ -725,7 +725,7 @@ private:
             rule += " )?";
         }
 
-        rule += " \"}\" space";
+        rule += " space \"}\"";
 
         return rule;
     }
@@ -858,14 +858,14 @@ public:
             return _add_rule(rule_name, _generate_union_rule(name, schema_types));
         }
         if (schema.contains("const")) {
-            return _add_rule(rule_name, _generate_constant_rule(schema["const"]) + " space");
+            return _add_rule(rule_name, _generate_constant_rule(schema["const"]));
         }
         if (schema.contains("enum")) {
             std::vector<std::string> enum_values;
             for (const auto & v : schema["enum"]) {
                 enum_values.push_back(_generate_constant_rule(v));
             }
-            return _add_rule(rule_name, "(" + string_join(enum_values, " | ") + ") space");
+            return _add_rule(rule_name, "(" + string_join(enum_values, " | ") + ")");
         }
         if ((schema_type.is_null() || schema_type == "object")
                 && (schema.contains("properties") ||
@@ -933,7 +933,7 @@ public:
                     }
                 }
                 if (!enum_intersection.empty()) {
-                    return _add_rule(rule_name, "(" + string_join(enum_intersection, " | ") + ") space");
+                    return _add_rule(rule_name, "(" + string_join(enum_intersection, " | ") + ")");
                 }
             }
             return _add_rule(rule_name, _build_object_rule(properties, required, hybrid_name, json()));
@@ -948,7 +948,7 @@ public:
                     }
                     rule += visit(items[i], name + (name.empty() ? "" : "-") + "tuple-" + std::to_string(i));
                 }
-                rule += " \"]\" space";
+                rule += " space \"]\"";
                 return _add_rule(rule_name, rule);
             }
             std::string item_rule_name = visit(items, name + (name.empty() ? "" : "-") + "item");
@@ -956,7 +956,7 @@ public:
             json max_items_json = schema.contains("maxItems") ? schema["maxItems"] : json();
             int max_items = max_items_json.is_number_integer() ? max_items_json.get<int>() : std::numeric_limits<int>::max();
 
-            return _add_rule(rule_name, "\"[\" space " + build_repetition(item_rule_name, min_items, max_items, "\",\" space") + " \"]\" space");
+            return _add_rule(rule_name, "\"[\" space " + build_repetition(item_rule_name, min_items, max_items, "\",\" space") + " space \"]\"");
         }
         if ((schema_type.is_null() || schema_type == "string") && schema.contains("pattern")) {
             return _visit_pattern(schema["pattern"], rule_name);
@@ -972,7 +972,7 @@ public:
             std::string char_rule = _add_primitive("char", PRIMITIVE_RULES.at("char"));
             int min_len = schema.contains("minLength") ? schema["minLength"].get<int>() : 0;
             int max_len = schema.contains("maxLength") ? schema["maxLength"].get<int>() : std::numeric_limits<int>::max();
-            return _add_rule(rule_name, "\"\\\"\" " + build_repetition(char_rule, min_len, max_len) + " \"\\\"\" space");
+            return _add_rule(rule_name, "\"\\\"\" " + build_repetition(char_rule, min_len, max_len) + " \"\\\"\"");
         }
         if (schema_type == "integer" && (schema.contains("minimum") || schema.contains("exclusiveMinimum") || schema.contains("maximum") || schema.contains("exclusiveMaximum"))) {
             int64_t min_value = std::numeric_limits<int64_t>::min();
@@ -990,7 +990,7 @@ public:
             std::stringstream out;
             out << "(";
             build_min_max_int(min_value, max_value, out);
-            out << ") space";
+            out << ")";
             return _add_rule(rule_name, out.str());
         }
         if (schema.empty() || schema_type == "object") {

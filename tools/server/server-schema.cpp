@@ -14,6 +14,9 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         fields.emplace_back(f);
     };
 
+    add((new field_bool("verbose", params.verbose))
+        ->set_desc("Include __verbose field in the response with additional debug information"));
+
     add((new field_bool("timings_per_token", params.timings_per_token))
         ->set_desc("Include prompt processing and text generation speed information in each response"));
 
@@ -284,7 +287,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Chat format used internally by the server")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             ctx.params.chat_parser_params.format = static_cast<common_chat_format>(data.at("chat_format").get<int>());
-            SRV_INF("Chat format: %s\n", common_chat_format_name(ctx.params.chat_parser_params.format));
+            SRV_TRC("chat format: %s\n", common_chat_format_name(ctx.params.chat_parser_params.format));
         }));
 
     add((new field_str("reasoning_format"))

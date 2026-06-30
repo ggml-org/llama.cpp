@@ -13,6 +13,14 @@
 #include <sstream>
 #include <vector>
 #include <memory>
+#include <fstream>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 // Internal header for clip.cpp
 
@@ -34,6 +42,7 @@
 #define KEY_N_HEAD              "clip.%s.attention.head_count"
 #define KEY_N_HEAD_KV           "clip.%s.attention.head_count_kv"
 #define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
+#define KEY_FEATURE_LAYERS      "clip.%s.feature_layer"
 
 // vision-specific
 #define KEY_VISION_PROJ_TYPE        "clip.vision.projector_type" // for models with mixed modalities
@@ -46,7 +55,6 @@
 #define KEY_PATCH_SIZE              "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN              "clip.vision.image_mean"
 #define KEY_IMAGE_STD               "clip.vision.image_std"
-#define KEY_FEATURE_LAYER           "clip.vision.feature_layer"
 #define KEY_PROJ_SCALE_FACTOR       "clip.vision.projector.scale_factor"
 #define KEY_PROJ_SAMPLE_QUERY_SIDE  "clip.vision.projector.query_side"
 #define KEY_PROJ_SAMPLE_WINDOW_SIDE "clip.vision.projector.window_side"
@@ -660,6 +668,22 @@ struct clip_image_f32_batch {
 //
 // common utils
 //
+
+#ifdef _WIN32
+static std::ifstream open_ifstream_binary(const std::string & fname) {
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, NULL, 0);
+    if (!wlen) {
+        throw std::runtime_error("failed to convert filename to UTF-16: " + fname);
+    }
+    std::vector<wchar_t> wfname(wlen);
+    (void)MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, wfname.data(), wlen);
+    return std::ifstream(wfname.data(), std::ios::binary);
+}
+#else
+static std::ifstream open_ifstream_binary(const std::string & fname) {
+    return std::ifstream(fname, std::ios::binary);
+}
+#endif
 
 static std::string string_format(const char * fmt, ...) {
     va_list ap;

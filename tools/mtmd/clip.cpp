@@ -1045,8 +1045,17 @@ struct clip_model_loader {
     bool has_vision = false;
     bool has_audio  = false;
 
+    mtmd_progress_callback progress_callback = nullptr;
+    void * progress_callback_user_data = nullptr;
+
     // TODO @ngxson : we should not pass clip_ctx here, it should be clip_model
-    clip_model_loader(const char * fname, bool skip_tensors = false) : fname(fname) {
+    clip_model_loader(const char * fname,
+            bool skip_tensors = false,
+            mtmd_progress_callback progress_cb = nullptr,
+            void * progress_user_data = nullptr)
+        : fname(fname),
+          progress_callback(progress_cb),
+          progress_callback_user_data(progress_user_data) {
         struct ggml_context * meta = nullptr;
 
         struct gguf_init_params params = {
@@ -1201,6 +1210,9 @@ struct clip_model_loader {
             {
                 std::vector<int> pinpoints;
                 get_arr_int(KEY_IMAGE_GRID_PINPOINTS, pinpoints, false);
+                if (pinpoints.size() % 2 != 0) {
+                    throw std::runtime_error(string_format("%s: image_grid_pinpoints must have an even number of elements, got %zu\n", __func__, pinpoints.size()));
+                }
                 if (!pinpoints.empty()) {
                     for (size_t i = 0; i < pinpoints.size(); i += 2) {
                         hparams.image_res_candidates.push_back({
@@ -1243,24 +1255,23 @@ struct clip_model_loader {
             }
 
             if (is_vision) {
-                int idx_mean = gguf_find_key(ctx_gguf.get(), KEY_IMAGE_MEAN);
-                int idx_std  = gguf_find_key(ctx_gguf.get(), KEY_IMAGE_STD);
-                GGML_ASSERT(idx_mean >= 0 && "image_mean not found");
-                GGML_ASSERT(idx_std >= 0  && "image_std not found");
-                const float * mean_data = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_mean);
-                const float * std_data  = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_std);
+                std::vector<float> image_mean;
+                std::vector<float> image_std;
+                get_arr_f32(KEY_IMAGE_MEAN, image_mean, false);
+                get_arr_f32(KEY_IMAGE_STD , image_std, false);
+                if (image_mean.size() < 3 || image_std.size() < 3) {
+                    throw std::runtime_error(string_format("%s: image_mean/image_std arrays must have at least 3 elements, got %zu and %zu\n", __func__, image_mean.size(), image_std.size()));
+                }
                 for (int i = 0; i < 3; ++i) {
-                    hparams.image_mean[i] = mean_data[i];
-                    hparams.image_std[i]  = std_data[i];
+                    hparams.image_mean[i] = image_mean[i];
+                    hparams.image_std[i]  = image_std[i];
                 }
             }
 
-            // Load the vision feature layer indices if they are explicitly provided;
-            // if multiple vision feature layers are present, the values will be concatenated
-            // to form the final visual features.
+            // Load the vision/audio feature layer indices if they are explicitly provided
             // NOTE: gguf conversions should standardize the values of the vision feature layer to
             // be non-negative, since we use -1 to mark values as unset here.
-            get_arr_int(KEY_FEATURE_LAYER, hparams.vision_feature_layer, false);
+            get_arr_int(string_format(KEY_FEATURE_LAYERS, prefix), hparams.feature_layers, false);
 
             // model-specific params
             switch (model.proj_type) {
@@ -1642,6 +1653,7 @@ struct clip_model_loader {
                         get_u32(KEY_A_PROJ_WINDOW_SIZE,     hparams.audio_proj_window_size);
                         get_u32(KEY_A_PROJ_DOWNSAMPLE_RATE, hparams.audio_proj_downsample_rate);
                         get_u32(KEY_A_PROJ_HEAD_COUNT,      hparams.audio_proj_head_count);
+                        // NOTE: feature layers loaded above in common path
                     } break;
                 case PROJECTOR_TYPE_JANUS_PRO:
                     {
@@ -1654,11 +1666,11 @@ struct clip_model_loader {
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
                         hparams.image_resize_pad = PAD_CEIL;
 
-                        get_arr_int(KEY_FEATURE_LAYER, hparams.vision_feature_layer);
+                        // NOTE: feature_layers loaded in common path as optional
                         get_arr_int(KEY_PROJ_SPATIAL_OFFSETS, hparams.proj_spatial_offsets);
-                        if (hparams.vision_feature_layer.size() != hparams.proj_spatial_offsets.size()) {
-                            throw std::runtime_error(string_format("%s: vision_feature_layer.size() %d != proj_spatial_offsets.size() %d",
-                                                                   hparams.vision_feature_layer.size(), hparams.proj_spatial_offsets.size()));
+                        if (hparams.feature_layers.size() != hparams.proj_spatial_offsets.size()) {
+                            throw std::runtime_error(string_format("%s: feature_layers.size() %d != proj_spatial_offsets.size() %d",
+                                                                   hparams.feature_layers.size(), hparams.proj_spatial_offsets.size()));
                         }
 
                         get_u32(KEY_PROJ_SAMPLE_QUERY_SIDE,  hparams.downsample_query_side);
@@ -1675,14 +1687,20 @@ struct clip_model_loader {
                     // note: some models having hparams.image_size == 0, which means the image size is dynamic
                     throw std::runtime_error(string_format("%s: image_size (%d) cannot be negative\n", __func__, hparams.image_size));
                 }
-                if (hparams.patch_size <= 0) {
-                    throw std::runtime_error(string_format("%s: patch_size (%d) must be greater than 0\n", __func__, hparams.patch_size));
+                if (hparams.image_size > 65536) {
+                    throw std::runtime_error(string_format("%s: image_size (%d) is too large (max 65536)\n", __func__, hparams.image_size));
+                }
+                if (hparams.patch_size <= 0 || hparams.patch_size >= 65536) {
+                    throw std::runtime_error(string_format("%s: patch_size (%d) must be positive and less than 65536\n", __func__, hparams.patch_size));
                 }
                 if (hparams.n_embd <= 0) {
                     throw std::runtime_error(string_format("%s: n_embd (%d) must be greater than 0\n", __func__, hparams.n_embd));
                 }
                 if (hparams.image_max_pixels < hparams.image_min_pixels) {
                     throw std::runtime_error(string_format("%s: image_max_pixels (%d) is less than image_min_pixels (%d)\n", __func__, hparams.image_max_pixels, hparams.image_min_pixels));
+                }
+                if (hparams.n_merge < 0 || hparams.n_merge >= 65536) {
+                    throw std::runtime_error(string_format("%s: n_merge (%d) must be greater than 0 and less than 65536\n", __func__, hparams.n_merge));
                 }
             }
 
@@ -1723,6 +1741,19 @@ struct clip_model_loader {
                 LOG_INF("%s: audio_n_fft:        %d\n", __func__, hparams.audio_n_fft);
                 LOG_INF("%s: audio_window_len:   %d\n", __func__, hparams.audio_window_len);
                 LOG_INF("%s: audio_hop_len:      %d\n", __func__, hparams.audio_hop_len);
+
+                // GEMMA4UA is encoder-free: it uses n_mel_bins as a raw-waveform frame size (640) and has no FFT/filterbank, so the mel-range and FFT
+                // checks below do not apply to it.
+                const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA;
+
+                // Validate audio hparams loaded from GGUF metadata
+                if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
+                    throw std::runtime_error(string_format("%s: n_mel_bins (%d) must be in range [1, 256]\n", __func__, hparams.n_mel_bins));
+                }
+                if (fft_based && (hparams.audio_sample_rate <= 0 || hparams.audio_n_fft <= 0 || hparams.audio_hop_len <= 0 || hparams.audio_window_len <= 0)) {
+                    throw std::runtime_error(string_format("%s: audio hparams invalid: sample_rate=%d n_fft=%d window_len=%d hop_len=%d\n",
+                        __func__, hparams.audio_sample_rate, hparams.audio_n_fft, hparams.audio_window_len, hparams.audio_hop_len));
+                }
             }
             LOG_INF("\n");
             LOG_INF("%s: model size:         %.2f MiB\n", __func__, model_size / 1024.0 / 1024.0);
@@ -1736,7 +1767,7 @@ struct clip_model_loader {
         std::map<std::string, size_t> tensor_offset;
         std::vector<ggml_tensor *> tensors_to_load;
 
-        auto fin = std::ifstream(fname, std::ios::binary);
+        auto fin = open_ifstream_binary(fname);
         if (!fin) {
             throw std::runtime_error(string_format("%s: failed to open %s\n", __func__, fname.c_str()));
         }
@@ -2715,7 +2746,7 @@ struct clip_model_loader {
                     model.image_newline = get_tensor(TN_IMAGE_NEWLINE);
 
                     // Load separate layerwise and spatial projector tensors
-                    const auto projector_count = hparams.vision_feature_layer.size();
+                    const auto projector_count = hparams.feature_layers.size();
                     model.qf_proj_blocks.resize(projector_count);
                     for (size_t bid = 0; bid < projector_count; ++bid) {
                         auto & b = model.qf_proj_blocks[bid];
@@ -2771,37 +2802,60 @@ struct clip_model_loader {
         }
 
         // load data
-        if (!ctx_clip.no_alloc) {
+        {
             std::vector<uint8_t> read_buf;
+
+            // start loading event
+            if (progress_callback){
+                progress_callback(0.0, progress_callback_user_data);
+            }
+
+            // compute total tensor data size for progress reporting
+            size_t total_data_size = 0;
+            for (auto & t : tensors_to_load) {
+                total_data_size += ggml_nbytes(t);
+            }
 
             // alloc memory and offload data
             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
             ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
             ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-            for (auto & t : tensors_to_load) {
-                ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
-                GGML_ASSERT(cur && "tensor not found in ctx_data");
-                auto it_off = tensor_offset.find(t->name);
-                GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
-                const size_t offset = it_off->second;
-                fin.seekg(offset, std::ios::beg);
-                if (!fin) {
-                    throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
+            // read the weight from file
+            if (!ctx_clip.no_alloc) {
+                size_t data_loaded = 0;
+                for (auto & t : tensors_to_load) {
+                    ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+                    GGML_ASSERT(cur && "tensor not found in ctx_data");
+                    auto it_off = tensor_offset.find(t->name);
+                    GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
+                    const size_t offset = it_off->second;
+                    fin.seekg(offset, std::ios::beg);
+                    if (!fin) {
+                        throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
+                    }
+                    size_t num_bytes = ggml_nbytes(cur);
+                    if (ggml_backend_buft_is_host(buft)) {
+                        // for the CPU and Metal backend, we can read directly into the tensor
+                        fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
+                    } else {
+                        // read into a temporary buffer first, then copy to device memory
+                        read_buf.resize(num_bytes);
+                        fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
+                        ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
+                    }
+                    data_loaded += num_bytes;
+                    if (progress_callback && total_data_size > 0) {
+                        const float progress = (float)data_loaded / (float)total_data_size;
+                        if (!progress_callback(progress, progress_callback_user_data)) {
+                            throw std::runtime_error(string_format("%s: model loading cancelled by progress_callback\n", __func__));
+                        }
+                    }
                 }
-                size_t num_bytes = ggml_nbytes(cur);
-                if (ggml_backend_buft_is_host(buft)) {
-                    // for the CPU and Metal backend, we can read directly into the tensor
-                    fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
-                } else {
-                    // read into a temporary buffer first, then copy to device memory
-                    read_buf.resize(num_bytes);
-                    fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
-                    ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
-                }
+                LOG_DBG("%s: loaded %zu tensors from %s\n", __func__, tensors_to_load.size(), fname.c_str());
+            } else {
+                LOG_DBG("%s: no_alloc is set, skipping tensor data loading (%zu tensors)\n", __func__, tensors_to_load.size());
             }
             fin.close();
-
-            LOG_DBG("%s: loaded %zu tensors from %s\n", __func__, tensors_to_load.size(), fname.c_str());
         }
 
     }
@@ -2831,6 +2885,12 @@ struct clip_model_loader {
             img.set_size({sz, sz}, false, false);
             LOG_INF("%s: warmup with image size = %d x %d\n", __func__, sz, sz);
         } else {
+            // GEMMA4UA uses n_mel_bins as a raw-waveform frame size (640), not a mel-bin count,
+            // so the [1, 256] bound only applies to FFT-based models.
+            const bool fft_based = ctx_clip.model.proj_type != PROJECTOR_TYPE_GEMMA4UA;
+            if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
+                throw std::runtime_error(string_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
+            }
             img.set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
             LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
         }
@@ -2994,7 +3054,13 @@ struct clip_model_loader {
             }
             return;
         }
-        output = gguf_get_val_u32(ctx_gguf.get(), i);
+        const uint32_t val = gguf_get_val_u32(ctx_gguf.get(), i);
+        // sanity check
+        if (val > (uint32_t) INT32_MAX) {
+            throw std::runtime_error(string_format("%s: value %u for key '%s' exceeds INT32_MAX\n",
+                __func__, val, key.c_str()));
+        }
+        output = (int) val;
     }
 
     void get_f32(const std::string & key, float & output, bool required = true) const {
@@ -3006,6 +3072,29 @@ struct clip_model_loader {
             return;
         }
         output = gguf_get_val_f32(ctx_gguf.get(), i);
+    }
+
+    void get_arr_f32(const std::string & key, std::vector<float> & output, bool required = true) const {
+        const int i = gguf_find_key(ctx_gguf.get(), key.c_str());
+        if (i < 0) {
+            if (required) {
+                throw std::runtime_error("Key not found: " + key);
+            }
+            return;
+        }
+        const auto type = gguf_get_arr_type(ctx_gguf.get(), i);
+        if (type != GGUF_TYPE_FLOAT32) {
+            throw std::runtime_error(string_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_FLOAT32)\n", __func__, key.c_str(), type, GGUF_TYPE_FLOAT32));
+        }
+        const size_t n = gguf_get_arr_n(ctx_gguf.get(), i);
+        if (n > (size_t) std::numeric_limits<int>::max()) {
+            throw std::runtime_error(string_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
+        }
+        output.resize(n);
+        const float * values = (const float *)gguf_get_arr_data(ctx_gguf.get(), i);
+        for (size_t j = 0; j < n; ++j) {
+            output[j] = values[j];
+        }
     }
 
     void get_string(const std::string & key, std::string & output, bool required = true) const {
@@ -3027,11 +3116,18 @@ struct clip_model_loader {
             }
             return;
         }
-        int n = gguf_get_arr_n(ctx_gguf.get(), i);
+        const auto type = gguf_get_arr_type(ctx_gguf.get(), i);
+        if (type != GGUF_TYPE_INT32) {
+            throw std::runtime_error(string_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_INT32)\n", __func__, key.c_str(), type, GGUF_TYPE_INT32));
+        }
+        const size_t n = gguf_get_arr_n(ctx_gguf.get(), i);
+        if (n > (size_t) std::numeric_limits<int>::max()) {
+            throw std::runtime_error(string_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
+        }
         output.resize(n);
         const int32_t * values = (const int32_t *)gguf_get_arr_data(ctx_gguf.get(), i);
-        for (int i = 0; i < n; ++i) {
-            output[i] = values[i];
+        for (size_t j = 0; j < n; ++j) {
+            output[j] = values[j];
         }
     }
 
@@ -3077,7 +3173,10 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
     clip_ctx * ctx_audio = nullptr;
 
     try {
-        clip_model_loader loader(fname);
+        clip_model_loader loader(fname,
+            /* skip_tensors */ false,
+            ctx_params.progress_callback,
+            ctx_params.progress_callback_user_data);
         bool skip_audio = false;
 
         if (loader.has_vision) {
@@ -3302,8 +3401,8 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
             {
                 // dynamic size
                 int n_merge = ctx->model.hparams.n_merge;
-                int n_patches_x = img->nx() / patch_size / (n_merge > 0 ? n_merge : 1);
-                int n_patches_y = img->ny() / patch_size / (n_merge > 0 ? n_merge : 1);
+                int n_patches_x = img->nx() / patch_size / n_merge;
+                int n_patches_y = img->ny() / patch_size / n_merge;
                 if (ctx->model.token_embd_img_break) {
                     n_patches = n_patches_y * n_patches_x + n_patches_y - 1; // + one [IMG_BREAK] per row, except the last row
                 } else {
@@ -4325,7 +4424,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
 
                 // Stage 1b only uses block 0's permutations; future stages
                 // will upload all blocks.
-                for (size_t bid = 0; bid < hparams.vision_feature_layer.size(); ++bid) {
+                for (size_t bid = 0; bid < hparams.feature_layers.size(); ++bid) {
                     const std::string prefix = "g4v_blk" + std::to_string(bid) + "_";
                     upload(prefix + "win_idx",     make_win_idx(image_side, window_side));
                     upload(prefix + "qwin_idx",    make_win_idx(new_side, query_side));

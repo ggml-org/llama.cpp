@@ -304,14 +304,14 @@ ggml_cgraph * clip_graph_granite4_vision::build() {
     }
 
     // --- Stage 1b/1c: WindowQFormer blocks ---
-    const int projector_count = hparams.vision_feature_layer.size();
+    const int projector_count = hparams.feature_layers.size();
     const float qformer_eps = 1e-12f;
 
     ggml_tensor * mmproj = nullptr;
     for (int bid = 0; bid < projector_count; ++bid) {
         const auto & blk = model.qf_proj_blocks[bid];
 
-        int vlayer = hparams.vision_feature_layer[bid];
+        int vlayer = hparams.feature_layers[bid];
         GGML_ASSERT(vlayer >= 0 && vlayer < n_layer);
         ggml_tensor * h = layer_outs[vlayer];
 
