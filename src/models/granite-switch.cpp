@@ -30,7 +30,6 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_NUM_ADAPTERS,  n_adapters);
     ml.get_key(LLM_KV_MAX_LORA_RANK, max_lora_rank);
     ml.get_key(LLM_KV_CONTROL_TOKEN_GAIN, router_gain, /* required */ false);
-    n_slots = n_adapters + 1;  // n_adapters plus un-adapted base slot
 
     std::vector<llama_token> token_ids;
     std::vector<llama_token> substitute_ids;
@@ -67,7 +66,7 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
-    const int64_t n_slots_i64 = (int64_t) n_slots;
+    const int64_t n_slots_i64 = (int64_t) n_slots();
     const int64_t n_rank      = (int64_t) max_lora_rank;
     const int64_t n_embd_q    = n_embd_head_k * n_head;
     const int64_t n_embd_kv   = n_embd_k_gqa;
