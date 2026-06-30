@@ -1541,7 +1541,6 @@ struct llama_model_granite_switch : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
-    // per-token switch metadata (read from GGUF in load_arch_hparams)
     uint32_t n_adapters    = 0;  // number of real adapters (excludes the zero slot)
     uint32_t max_lora_rank = 0;
     float    router_gain   = 15.0f;  // routing-token softmax bias magnitude (see set_input)
