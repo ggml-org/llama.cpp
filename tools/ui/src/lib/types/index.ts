@@ -11,6 +11,10 @@ export type {
 	ApiChatMessageData,
 	ApiModelStatus,
 	ApiModelDataEntry,
+	ApiModelLoadStage,
+	ApiModelsSseProgress,
+	ApiModelsSseData,
+	ApiModelsSseEvent,
 	ApiModelDetails,
 	ApiModelListResponse,
 	ApiLlamaCppServerProps,
@@ -30,7 +34,8 @@ export type {
 	ApiRouterModelsListResponse,
 	ApiRouterModelsUnloadRequest,
 	ApiRouterModelsUnloadResponse,
-	AudioInputFormat
+	AudioInputFormat,
+	ApiStreamSession
 } from './api';
 
 // Chat types
@@ -70,7 +75,12 @@ export type {
 } from './database';
 
 // Model types
-export type { ModelModalities, ModelOption, ModalityCapabilities } from './models';
+export type {
+	ModelModalities,
+	ModelOption,
+	ModelLoadProgress,
+	ModalityCapabilities
+} from './models';
 
 // Settings types
 export type {

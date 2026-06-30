@@ -20,7 +20,7 @@
 		type="submit"
 		disabled={isDisabled}
 		class={[
-			'h-8 w-8 rounded-full p-0',
+			'md:h-8 md:w-8 h-9 w-9 rounded-full p-0',
 			showErrorState &&
 				'bg-red-400/10 text-red-400 hover:bg-red-400/20 hover:text-red-400 disabled:opacity-100'
 		]}

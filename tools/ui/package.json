@@ -54,7 +54,7 @@
 		"bits-ui": "2.18.1",
 		"clsx": "2.1.1",
 		"dexie": "4.4.3",
-		"dompurify": "3.4.5",
+		"dompurify": "3.4.11",
 		"eslint": "9.39.4",
 		"eslint-config-prettier": "10.1.8",
 		"eslint-plugin-storybook": "10.4.2",
