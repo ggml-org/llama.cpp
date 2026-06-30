@@ -798,13 +798,23 @@ struct server_metrics {
     uint64_t n_tokens_predicted_total        = 0;
     uint64_t t_tokens_generation_total       = 0;
 
-    uint64_t n_tokens_max = 0;
+    uint64_t n_prompt_tokens_cache_total = 0;
+
+    uint64_t n_draft_total          = 0;
+    uint64_t n_draft_accepted_total = 0;
+
+    uint64_t n_ctx_shift_total = 0;
 
     uint64_t n_prompt_tokens_processed = 0;
     uint64_t t_prompt_processing       = 0;
 
     uint64_t n_tokens_predicted  = 0;
     uint64_t t_tokens_generation = 0;
+
+    // bucket-scoped: largest context observed since the last /metrics poll. reset per
+    // bucket so that a peak forming and decaying within a scrape interval is still
+    // captured, rather than being missed by a point-in-time sample.
+    uint64_t n_tokens_max = 0;
 
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
@@ -819,6 +829,8 @@ struct server_metrics {
         t_prompt_processing             += slot.t_prompt_processing;
         t_prompt_processing_total       += slot.t_prompt_processing;
 
+        n_prompt_tokens_cache_total     += slot.n_prompt_tokens_cache;
+
         n_tokens_max = std::max(n_tokens_max, (uint64_t) slot.prompt.n_tokens());
     }
 
@@ -827,6 +839,9 @@ struct server_metrics {
         n_tokens_predicted         += slot.n_decoded;
         t_tokens_generation        += slot.t_token_generation;
         t_tokens_generation_total  += slot.t_token_generation;
+
+        n_draft_total          += slot.n_draft_total;
+        n_draft_accepted_total += slot.n_draft_accepted;
     }
 
     void on_decoded(const std::vector<server_slot> & slots) {
@@ -839,11 +854,16 @@ struct server_metrics {
         }
     }
 
+    void on_ctx_shift() {
+        n_ctx_shift_total++;
+    }
+
     void reset_bucket() {
         n_prompt_tokens_processed = 0;
         t_prompt_processing       = 0;
         n_tokens_predicted        = 0;
         t_tokens_generation       = 0;
+        n_tokens_max              = 0;
     }
 };
 
@@ -2500,6 +2520,8 @@ private:
                     int n_idle_slots       = 0;
                     int n_processing_slots = 0;
 
+                    uint64_t kv_cache_tokens = 0;
+
                     for (server_slot & slot : slots) {
                         json slot_data = slot.to_json(slots_debug == 0);
 
@@ -2508,6 +2530,8 @@ private:
                         } else {
                             n_idle_slots++;
                         }
+
+                        kv_cache_tokens += (uint64_t) slot.prompt.n_tokens();
 
                         slots_data.push_back(slot_data);
                     }
@@ -2528,6 +2552,13 @@ private:
 
                     res->n_tokens_max = metrics.n_tokens_max;
 
+                    res->n_prompt_tokens_cache_total = metrics.n_prompt_tokens_cache_total;
+
+                    res->n_draft_total          = metrics.n_draft_total;
+                    res->n_draft_accepted_total = metrics.n_draft_accepted_total;
+
+                    res->n_ctx_shift_total = metrics.n_ctx_shift_total;
+
                     res->n_prompt_tokens_processed = metrics.n_prompt_tokens_processed;
                     res->t_prompt_processing       = metrics.t_prompt_processing;
                     res->n_tokens_predicted        = metrics.n_tokens_predicted;
@@ -2535,6 +2566,9 @@ private:
 
                     res->n_decode_total          = metrics.n_decode_total;
                     res->n_busy_slots_total      = metrics.n_busy_slots_total;
+
+                    res->kv_cache_tokens = kv_cache_tokens;
+                    res->kv_cache_cells  = (uint64_t) n_ctx;
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -2894,6 +2928,8 @@ private:
                 n_discard = std::clamp(n_discard, 0, std::max(0, n_left - 1));
 
                 SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
+
+                metrics.on_ctx_shift();
 
                 common_context_seq_rm (ctx_tgt, slot.id, n_keep            , n_keep + n_discard);
                 common_context_seq_add(ctx_tgt, slot.id, n_keep + n_discard, slot.prompt.n_tokens(), -n_discard);
@@ -4378,6 +4414,7 @@ void server_routes::init_routes() {
         {
             server_task task(SERVER_TASK_TYPE_METRICS);
             task.id = res->rd.get_new_id();
+            task.metrics_reset_bucket = true; // reset per-interval buckets on each scrape
             res->rd.post_task(std::move(task), true); // high-priority task
         }
 
@@ -4417,13 +4454,25 @@ void server_routes::init_routes() {
                     {"help",  "Predict process time"},
                     {"value",  (uint64_t) res_task->t_tokens_generation_total / 1.e3}
             }, {
+                    {"name",  "prompt_tokens_cache_total"},
+                    {"help",  "Number of prompt tokens reused from the KV cache (i.e. not re-evaluated)."},
+                    {"value",  res_task->n_prompt_tokens_cache_total}
+            }, {
+                    {"name",  "draft_tokens_total"},
+                    {"help",  "Number of draft tokens generated for speculative decoding."},
+                    {"value",  res_task->n_draft_total}
+            }, {
+                    {"name",  "draft_tokens_accepted_total"},
+                    {"help",  "Number of draft tokens accepted during speculative decoding."},
+                    {"value",  res_task->n_draft_accepted_total}
+            }, {
+                    {"name",  "n_ctx_shift_total"},
+                    {"help",  "Total number of context shifts (oldest tokens discarded to make room)."},
+                    {"value",  res_task->n_ctx_shift_total}
+            }, {
                     {"name",  "n_decode_total"},
                     {"help",  "Total number of llama_decode() calls"},
                     {"value",  res_task->n_decode_total}
-            }, {
-                    {"name",  "n_tokens_max"},
-                    {"help",  "Largest observed n_tokens."},
-                    {"value",  res_task->n_tokens_max}
             }}},
             {"gauge", {{
                     {"name",  "prompt_tokens_seconds"},
@@ -4445,8 +4494,37 @@ void server_routes::init_routes() {
                     {"name",  "n_busy_slots_per_decode"},
                     {"help",  "Average number of busy slots per llama_decode() call"},
                     {"value",  (float) res_task->n_busy_slots_total / std::max((float) res_task->n_decode_total, 1.f)}
+            },{
+                    {"name",  "n_tokens_max"},
+                    {"help",  "Largest context (n_tokens) observed since the last metrics poll."},
+                    {"value",  res_task->n_tokens_max}
+            },{
+                    {"name",  "kv_cache_tokens"},
+                    {"help",  "Current number of tokens held in the KV cache across all slots."},
+                    {"value",  res_task->kv_cache_tokens}
+            },{
+                    {"name",  "kv_cache_cells"},
+                    {"help",  "Total KV cache capacity in tokens (n_ctx)."},
+                    {"value",  res_task->kv_cache_cells}
             }}}
         };
+
+        // label every series with the loaded model so scrapers can distinguish
+        // instances (in router mode each child process serves exactly one model)
+        std::string model_label;
+        {
+            // escape per Prometheus exposition format: backslash, double-quote, newline
+            std::string escaped;
+            for (char c : meta->model_name) {
+                switch (c) {
+                    case '\\': escaped += "\\\\"; break;
+                    case '"':  escaped += "\\\""; break;
+                    case '\n': escaped += "\\n";  break;
+                    default:   escaped += c;      break;
+                }
+            }
+            model_label = "{model=\"" + escaped + "\"}";
+        }
 
         std::stringstream prometheus;
 
@@ -4459,9 +4537,9 @@ void server_routes::init_routes() {
                 const std::string help = metric_def.at("help");
 
                 auto value = json_value(metric_def, "value", 0.);
-                prometheus << "# HELP llamacpp:" << name << " " << help  << "\n"
-                            << "# TYPE llamacpp:" << name << " " << type  << "\n"
-                            << "llamacpp:"        << name << " " << value << "\n";
+                prometheus << "# HELP llamacpp:" << name << " " << help        << "\n"
+                            << "# TYPE llamacpp:" << name << " " << type        << "\n"
+                            << "llamacpp:"        << name << model_label << " " << value << "\n";
             }
         }
 

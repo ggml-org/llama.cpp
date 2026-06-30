@@ -519,6 +519,13 @@ struct server_task_result_metrics : server_task_result {
 
     uint64_t n_tokens_max = 0;
 
+    uint64_t n_prompt_tokens_cache_total = 0;
+
+    uint64_t n_draft_total          = 0;
+    uint64_t n_draft_accepted_total = 0;
+
+    uint64_t n_ctx_shift_total = 0;
+
     uint64_t n_prompt_tokens_processed = 0;
     uint64_t t_prompt_processing       = 0;
 
@@ -527,6 +534,10 @@ struct server_task_result_metrics : server_task_result {
 
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
+
+    // current KV cache occupancy across all slots, vs. total capacity
+    uint64_t kv_cache_tokens = 0;
+    uint64_t kv_cache_cells  = 0;
 
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
