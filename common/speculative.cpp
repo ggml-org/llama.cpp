@@ -1209,10 +1209,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     bool    is_mem_shared = false;   // gemma4
     bool    chain_heads   = false;   // derived in the ctor: n_mtp_layers > 1 && !is_mem_shared
 
-    // 1-axis RoPE drafts require consecutive batch positions (Y = X + 1); M-RoPE drafts
-    // allow a forward jump. only the former break on a vision gap (see process()).
-    bool    pos_consec    = true;
-
     // Per-sequence cross-batch carryover: pair (h_p, x_{p+1}) at MTP pos p+1.
     // The last h-row of one process() call needs the first token of the NEXT
     // call to pair with, so it's stashed here until that next call fires.
@@ -1288,10 +1284,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
-
-        // only 1-axis RoPE drafts enforce consecutive positions and need the vision gap guard
-        const llama_rope_type rt_dft = llama_model_rope_type(llama_get_model(ctx_dft));
-        pos_consec = rt_dft != LLAMA_ROPE_TYPE_MROPE && rt_dft != LLAMA_ROPE_TYPE_IMROPE;
 
         if (chain_heads) {
             this->params.n_max = std::min(this->params.n_max, n_mtp_layers);
@@ -1384,89 +1376,75 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
-        // seqs skipped this call because their draft KV fell behind. recomputed every call,
-        // so it self heals once the KV realigns: no persistent state
-        std::vector<bool> drop(n_seq, false);
-
         // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
         if (!is_mem_shared) {
-            auto * mem_dft = llama_get_memory(ctx_dft);
-
-            // a vision chunk advances the target over image embeddings the MTP head cannot
-            // replay (no token id), so the separate draft KV freezes at the last pre-image
-            // position. a 1-axis draft then fails the consecutive position check on the next
-            // batch: drop the seq. M-RoPE drafts keep up across the jump, so leave them be.
-            if (pos_consec) {
-                for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                    if (i_batch_beg[seq_id] < 0) {
-                        continue;
-                    }
-                    if (batch_in.pos[i_batch_beg[seq_id]] != llama_memory_seq_pos_max(mem_dft, seq_id) + 1) {
-                        drop[seq_id] = true;
-                    }
-                }
-            }
-
-            const float * h_tgt = llama_get_embeddings_nextn(ctx_tgt);
-
-            // mirror the target batch on the draft: pair each token with the target hidden one
-            // position back, and each seq begin with its carried-over hidden.
-            // assumes tokens are sequential per seq: [0, 0, 1, 1] not [0, 0, 1, 0].
-            // dropped seqs are excluded so the frozen draft KV never reaches llama_decode.
             common_batch_clear(batch);
 
-            int last_seq = -1;
+            // renumber the draft KV draft-local so a vision gap leaves no position jump:
+            // a 1-axis RoPE draft keeps consecutive positions (Y = X + 1) across the gap
+            auto * mem_dft = llama_get_memory(ctx_dft);
+            std::vector<llama_pos> dbase(n_seq, 0);
+            for (llama_seq_id s = 0; s < (llama_seq_id) n_seq; ++s) {
+                dbase[s] = llama_memory_seq_pos_max(mem_dft, s) + 1;
+            }
+            std::vector<llama_pos> dcur = dbase;
             for (int k = 0; k < n_tokens; ++k) {
-                const llama_seq_id seq_id = batch_in.seq_id[k][0];
-                if (drop[seq_id]) {
+                const llama_seq_id s = batch_in.seq_id[k][0];
+                common_batch_add(batch, batch_in.token[k], dcur[s]++, { s }, 0);
+            }
+
+            // each draft row pairs with the target hidden one position back (shift right by
+            // one); valid only while batch tokens stay sequential per sequence
+            {
+                const float * h_tgt = llama_get_embeddings_nextn(ctx_tgt);
+                std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
+            }
+
+            // fill the pending embeddings from a previous run
+            auto set_h = [&](int idx, const float * h_row) {
+                std::memcpy(batch.embd + (size_t) idx * n_embd, h_row, row_bytes);
+            };
+
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                if (i_batch_beg[seq_id] < 0) {
                     continue;
                 }
 
-                common_batch_add(batch, batch_in.token[k], batch_in.pos[k], { seq_id }, 0);
+                set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
+            }
 
-                const size_t m = (size_t) (batch.n_tokens - 1);
-                if (seq_id != last_seq) {
-                    std::memcpy(batch.embd + m * n_embd, pending_h[seq_id].data(), row_bytes);
-                    last_seq = seq_id;
-                } else {
-                    std::memcpy(batch.embd + m * n_embd, h_tgt + (size_t) (k - 1) * n_embd, row_bytes);
+            bool ok = true;
+            for (int head = 0; head < n_mtp_layers; ++head) {
+                if (chain_heads) {
+                    // ref: https://github.com/ggml-org/llama.cpp/pull/24340/changes#r3413498544
+                    for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                        if (i_batch_beg[seq_id] < 0) {
+                            continue;
+                        }
+                        llama_memory_seq_rm(mem_dft, seq_id, dbase[seq_id], -1);
+                    }
+                    llama_set_nextn_layer_offset(ctx_dft, head);
+                }
+
+                const int32_t rc = llama_decode(ctx_dft, batch);
+                if (rc != 0) {
+                    SPC_ERR("llama_decode(ctx_dft) head=%d failed rc=%d (pos=%d)\n",
+                            head, (int) rc, (int) batch_in.pos[0]);
+                    ok = false;
+                    break;
                 }
             }
 
-            if (batch.n_tokens > 0) {
-                bool ok = true;
-                for (int head = 0; head < n_mtp_layers; ++head) {
-                    if (chain_heads) {
-                        // ref: https://github.com/ggml-org/llama.cpp/pull/24340/changes#r3413498544
-                        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                            if (i_batch_beg[seq_id] < 0 || drop[seq_id]) {
-                                continue;
-                            }
-                            llama_memory_seq_rm(mem_dft, seq_id, batch_in.pos[i_batch_beg[seq_id]], -1);
-                        }
-                        llama_set_nextn_layer_offset(ctx_dft, head);
-                    }
-
-                    const int32_t rc = llama_decode(ctx_dft, batch);
-                    if (rc != 0) {
-                        SPC_ERR("llama_decode(ctx_dft) head=%d failed rc=%d (pos=%d)\n",
-                                head, (int) rc, (int) batch.pos[0]);
-                        ok = false;
-                        break;
-                    }
-                }
-
-                if (chain_heads) {
-                    llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
-                }
-                if (!ok) {
-                    return false;
-                }
+            if (chain_heads) {
+                llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
+            }
+            if (!ok) {
+                return false;
             }
         }
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-            if (i_batch_end[seq_id] < 0 || drop[seq_id]) {
+            if (i_batch_end[seq_id] < 0) {
                 continue;
             }
 
@@ -1494,15 +1472,14 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         // keep track of which sequences are still drafting
         int n_drafting = 0;
         std::vector<bool> drafting(n_seq);
+        std::vector<llama_pos> ddbase(n_seq, 0);
 
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];
 
-            // same vision gap guard as process(): a 1-axis draft seq whose KV fell behind
-            // would decode at n_past against a non consecutive position, so skip it.
-            if (!dp.drafting || (pos_consec && llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id) + 1 != dp.n_past)) {
+            if (!dp.drafting) {
                 continue;
             }
 
@@ -1510,7 +1487,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             drafting[seq_id] = true;
             common_sampler_reset(smpls[seq_id].get());
 
-            common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
+            ddbase[seq_id] = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id) + 1;
+            common_batch_add(batch, dp.id_last, ddbase[seq_id], { seq_id }, true);
             std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, pending_h[seq_id].data(), row_bytes);
 
             i_last[seq_id] = batch.n_tokens - 1;
@@ -1533,7 +1511,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 auto * mem_dft = llama_get_memory(ctx_dft);
                 for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                     if (drafting[seq_id]) {
-                        llama_memory_seq_rm(mem_dft, seq_id, dparams[seq_id].n_past, -1);
+                        llama_memory_seq_rm(mem_dft, seq_id, ddbase[seq_id], -1);
                     }
                 }
                 llama_set_nextn_layer_offset(ctx_dft, i);
