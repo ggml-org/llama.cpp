@@ -19,6 +19,7 @@ extern "C" {
 #define HMX_FP16_TILE_SIZE    2048
 #define HVX_FA_DMA_CACHE_SIZE    128
 #define HMX_FA_DMA_CACHE_SIZE    4
+#define HMX_FA_M_INITIAL_VAL     -10000.0f
 
 enum htp_fa_kernel_type {
     HTP_FA_KERNEL_UNSUPPORTED = 0,

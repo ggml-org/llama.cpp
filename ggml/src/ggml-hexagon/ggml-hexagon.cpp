@@ -1999,6 +1999,10 @@ static bool ggml_hexagon_precompute_flash_attn_params(
             kparams->u.hmx.mask_buf_row_stride = m_line_bytes / sizeof(uint16_t);
             kparams->u.hmx.mask_broadcast = (mask != nullptr && mask->ne[2] == 1) ? 1 : 0;
             kparams->u.hmx.div_G = init_fastdiv_values(G);
+            if (mask) {
+                kparams->src3_div2 = init_fastdiv_values(mask->ne[2]);
+                kparams->src3_div3 = init_fastdiv_values(mask->ne[3]);
+            }
 
             kparams->qrows = 0;
             kparams->qrows_per_thread = 0;
