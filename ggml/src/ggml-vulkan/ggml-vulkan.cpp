@@ -335,7 +335,30 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         }
 
         if (!amd_shader_core_properties || !integer_dot_product || !subgroup_size_control) {
-            return vk_device_architecture::OTHER;
+            // Not all extensions available — e.g. MoltenVK on macOS never exposes
+            // VK_AMD_shader_core_properties.  Use subgroup size control (if present)
+            // to distinguish GCN (min=max=64) from RDNA (min=32, max=64).
+            if (subgroup_size_control) {
+                vk::PhysicalDeviceProperties2 props2;
+                vk::PhysicalDeviceSubgroupSizeControlPropertiesEXT subgroup_size_control_props;
+                props2.pNext = &subgroup_size_control_props;
+                device.getProperties2(&props2);
+
+                if (subgroup_size_control_props.maxSubgroupSize == 64 && subgroup_size_control_props.minSubgroupSize == 64) {
+                    GGML_LOG_DEBUG("ggml_vulkan: Detected AMD GCN (min=max=64) for %s\n", props.deviceName.data());
+                    return vk_device_architecture::AMD_GCN;
+                }
+                if (subgroup_size_control_props.maxSubgroupSize == 64 && subgroup_size_control_props.minSubgroupSize == 32) {
+                    // RDNA, but cannot distinguish RDNA1/2/3 without VK_AMD_shader_core_properties
+                    GGML_LOG_DEBUG("ggml_vulkan: Detected AMD RDNA (min=32, max=64) for %s\n", props.deviceName.data());
+                    return vk_device_architecture::AMD_RDNA2;
+                }
+                // Subgroup sizes don't match any known AMD pattern
+                return vk_device_architecture::OTHER;
+            }
+            // No subgroup size control — conservatively assume GCN (64-wide wavefronts)
+            GGML_LOG_DEBUG("ggml_vulkan: AMD GPU without extension support, assuming GCN for %s\n", props.deviceName.data());
+            return vk_device_architecture::AMD_GCN;
         }
 
         vk::PhysicalDeviceProperties2 props2;
