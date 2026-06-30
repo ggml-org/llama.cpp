@@ -9997,9 +9997,9 @@ static bool run_fa_vec_tune_perf(ggml_backend_t backend_metal) {
         return false;
     }
 
-    struct shape_t { int dk, dv; };
-    const shape_t shapes[] = { { 32, 32 }, { 64, 64 }, { 96, 96 }, { 128, 128 }, { 192, 192 },
-                               { 192, 128 }, { 256, 256 }, { 320, 256 }, { 512, 512 }, { 576, 512 } };
+    struct shape_t { int dk, dv, base_ne; };  // base_ne mirrors fa_vec_baseline_ne (the no-override kernel)
+    const shape_t shapes[] = { { 32, 32, 4 }, { 64, 64, 2 }, { 96, 96, 4 }, { 128, 128, 1 }, { 192, 192, 2 },
+                               { 192, 128, 2 }, { 256, 256, 1 }, { 320, 256, 2 }, { 512, 512, 1 }, { 576, 512, 2 } };
     const int ne11_rep[] = { 512, 2048, 8192, 32768 };  // ne11 bucket representatives
     const int ne01_rep[] = { 1, 2, 3, 8 };              // ne01 bucket representatives
     const int REPS = 7;                                 // odd -> exact median
@@ -10016,9 +10016,13 @@ static bool run_fa_vec_tune_perf(ggml_backend_t backend_metal) {
         return n;
     };
 
-    printf("# fa_vec perf sweep (replace GGML_METAL_DEVICE_M4_MAX with this machine's device)\n");
-    printf("# paste rows that beat baseline into fa_vec_tuned_table; to make a whole Apple\n");
-    printf("# family inherit a SKU, point fa_vec_family_representative at that device\n");
+    printf("# fa_vec perf sweep — replace GGML_METAL_DEVICE_M4_MAX with this machine's device\n");
+    printf("# [1] per-bucket timings (us, winner *): '=> cfg Nx' beats baseline, else '=> baseline'\n");
+    printf("# [2] a pasteable fa_vec_tuned_table block (kept buckets only) is printed after [1]\n");
+
+    struct cell_res { int dk, dv, ne11_b, ne01_b, Q, NE; bool beat; };
+    struct tally    { int Q, NE, n; };
+    std::vector<cell_res> cells;  // one per swept (shape, ne11, ne01); aggregated into buckets below
 
     for (auto s : shapes) {
         const std::vector<int> legal = fa_vec_legal_ne(s.dk, s.dv);
@@ -10069,18 +10073,75 @@ static bool run_fa_vec_tune_perf(ggml_backend_t backend_metal) {
                         best = c;
                     }
                 }
+                double base_t = 0.0;  // the swept (Q=1, base_ne) candidate == baseline kernel
+                for (const auto & c : cs) {
+                    if (c.Q == 1 && c.NE == s.base_ne) { base_t = c.t; break; }
+                }
+                const bool keep = best.t > 0.0 && base_t > 0.0 && best.t < base_t * 0.98;
+
                 printf("# dk=%d dv=%d ne11=%d ne01=%d:", s.dk, s.dv, ne11, ne01);
                 for (const auto & c : cs) {
                     printf("  Q%dNE%d=%.1f%s", c.Q, c.NE, c.t, (c.Q == best.Q && c.NE == best.NE) ? "*" : "");
                 }
-                printf("\n");
-                printf("    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, %d, %d, %d, %d }, { %d, %d } }, // %.1fus\n",
-                       s.dk, s.dv,
-                       bucket(ne11, ne11_bounds, (int) std::size(ne11_bounds)),
-                       bucket(ne01, ne01_bounds, (int) std::size(ne01_bounds)),
-                       best.Q, best.NE, best.t);
+                if (keep) {
+                    printf("  => Q%d,NE%d  %.2fx\n", best.Q, best.NE, base_t / best.t);
+                } else {
+                    printf("  => baseline\n");
+                }
+                cells.push_back({ s.dk, s.dv,
+                                  bucket(ne11, ne11_bounds, (int) std::size(ne11_bounds)),
+                                  bucket(ne01, ne01_bounds, (int) std::size(ne01_bounds)),
+                                  best.Q, best.NE, keep });
             }
         }
+    }
+
+    // Aggregate the per-shape cells into one row per (ne11_b, ne01_b) bucket: emit a bucket only
+    // when most sampled shapes beat baseline, taking the majority winner (ties -> smaller Q, then NE).
+    printf("\n    // paste into fa_vec_tuned_table — replace GGML_METAL_DEVICE_M4_MAX; one row per bucket\n");
+    for (size_t i = 0; i < cells.size(); ++i) {
+        bool first = true;
+        for (size_t j = 0; j < i; ++j) {
+            if (cells[j].dk == cells[i].dk && cells[j].dv == cells[i].dv &&
+                cells[j].ne11_b == cells[i].ne11_b && cells[j].ne01_b == cells[i].ne01_b) {
+                first = false;
+                break;
+            }
+        }
+        if (!first) {
+            continue;
+        }
+        std::vector<tally> ts;
+        int total = 0, nbeat = 0;
+        for (const auto & c : cells) {
+            if (c.dk != cells[i].dk || c.dv != cells[i].dv ||
+                c.ne11_b != cells[i].ne11_b || c.ne01_b != cells[i].ne01_b) {
+                continue;
+            }
+            total++;
+            if (!c.beat) {
+                continue;
+            }
+            nbeat++;
+            bool found = false;
+            for (auto & t : ts) {
+                if (t.Q == c.Q && t.NE == c.NE) { t.n++; found = true; break; }
+            }
+            if (!found) {
+                ts.push_back({ c.Q, c.NE, 1 });
+            }
+        }
+        if (nbeat * 2 <= total) {
+            continue;  // not a majority of sampled shapes -> bucket stays on baseline
+        }
+        tally win = ts[0];
+        for (const auto & t : ts) {
+            if (t.n > win.n || (t.n == win.n && (t.Q < win.Q || (t.Q == win.Q && t.NE < win.NE)))) {
+                win = t;
+            }
+        }
+        printf("    { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, %d, %d, %d, %d }, { %d, %d } },\n",
+               cells[i].dk, cells[i].dv, cells[i].ne11_b, cells[i].ne01_b, win.Q, win.NE);
     }
     return true;
 }
