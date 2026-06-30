@@ -28,7 +28,9 @@ static void hvx_tensor_add_f32_grid(
     uint32_t start_row,
     uint32_t end_row,
     uint32_t start_col,
-    uint32_t end_col
+    uint32_t end_col,
+    const struct fastdiv_values * div_ne11_12,
+    const struct fastdiv_values * div_ne11
 );
 
 typedef struct {
@@ -288,7 +290,7 @@ static void hvx_mm_4d(unsigned int nth, unsigned int ith, void * data) {
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0_start);
     if (src2) {
-        hvx_tensor_add_f32_grid(dst, src2, ir1_start, ir1_end, ir0_start, ir0_end);
+        hvx_tensor_add_f32_grid(dst, src2, ir1_start, ir1_end, ir0_start, ir0_end, &mmctx->mm_div_ne12_ne1, &mmctx->mm_div_ne1);
     }
 }
 
@@ -316,6 +318,7 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     const size_t dst_row_size  = nb1;                                                                                             \
     const size_t src1_row_size = nb11;                                                                                            \
     const size_t src1_stride = mmctx->vtcm_src1_stride;                                                                           \
+    const size_t src2_stride = src2 ? ((src2->ne[1] == 1) ? 0 : src2->nb[1]) : 0;                                                 \
                                                                                                                                   \
     uint8_t * restrict vtcm_dst_ptr  = mmctx->vtcm_dst  + mmctx->vtcm_dst_size_per_thread  * ith;                                 \
     uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;                                 \
@@ -368,8 +371,8 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
             const float * src2_ptr0 = NULL;                                                                                       \
             const float * src2_ptr1 = NULL;                                                                                       \
             if (src2) {                                                                                                           \
-                const float * restrict src2_row0 = (const float *) ((const uint8_t *) src2->data + ((ir1+0) * nb1));              \
-                const float * restrict src2_row1 = (const float *) ((const uint8_t *) src2->data + ((ir1+1) * nb1));              \
+                const float * restrict src2_row0 = (const float *) ((const uint8_t *) src2->data + ((ir1+0) * src2_stride));      \
+                const float * restrict src2_row1 = (const float *) ((const uint8_t *) src2->data + ((ir1+1) * src2_stride));      \
                 src2_ptr0 = &src2_row0[ct * 32];                                                                                  \
                 src2_ptr1 = &src2_row1[ct * 32];                                                                                  \
             }                                                                                                                     \
@@ -383,7 +386,7 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                   \
             const float * src2_ptr = NULL;                                                                                        \
             if (src2) {                                                                                                           \
-                const float * restrict src2_row = (const float *) ((const uint8_t *) src2->data + (ir1 * nb1));                   \
+                const float * restrict src2_row = (const float *) ((const uint8_t *) src2->data + (ir1 * src2_stride));           \
                 src2_ptr = &src2_row[ct * 32];                                                                                    \
             }                                                                                                                     \
             DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows, src2_ptr);                                                       \
@@ -1025,7 +1028,7 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
     }
     if (src2) {
-        hvx_tensor_add_f32_grid(dst, src2, 0, src1_nrows, src0_start_row, src0_end_row);
+        hvx_tensor_add_f32_grid(dst, src2, 0, src1_nrows, src0_start_row, src0_end_row, &kparams->div_ne12_ne1, &kparams->div_ne1);
     }
 }
 
@@ -2817,9 +2820,9 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
     size_t src2_nb3 = 0;
     if (src2) {
         src2_ptr = (const float *) src2->data;
-        src2_stride = (uint32_t) (src2->nb[1] / sizeof(float));
-        src2_nb2 = src2->nb[2];
-        src2_nb3 = src2->nb[3];
+        src2_stride = (src2->ne[1] == 1) ? 0 : (uint32_t) (src2->nb[1] / sizeof(float));
+        src2_nb2 = (src2->ne[2] == 1) ? 0 : src2->nb[2];
+        src2_nb3 = (src2->ne[3] == 1) ? 0 : src2->nb[3];
     }
 
     int ret = -1;

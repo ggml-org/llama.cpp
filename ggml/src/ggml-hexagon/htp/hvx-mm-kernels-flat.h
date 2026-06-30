@@ -1461,14 +1461,34 @@ static inline void hvx_tensor_add_f32_grid(
     uint32_t start_row,
     uint32_t end_row,
     uint32_t start_col,
-    uint32_t end_col
+    uint32_t end_col,
+    const struct fastdiv_values * div_ne11_12,
+    const struct fastdiv_values * div_ne11
 ) {
     if (start_row >= end_row || start_col >= end_col) return;
     const uint32_t nb1 = dst->nb[1]; // row stride in bytes
 
+    const uint32_t ne11 = dst->ne[1];
+    const uint32_t ne12 = dst->ne[2];
+    const uint32_t ne11_12 = ne11 * ne12;
+
+    const bool is_broadcast1 = (src2->ne[1] == 1);
+    const bool is_broadcast2 = (src2->ne[2] == 1);
+    const bool is_broadcast3 = (src2->ne[3] == 1);
+
     for (uint32_t r = start_row; r < end_row; r++) {
         float * dst_row = (float *) ((uint8_t *) dst->data + r * nb1);
-        const float * src2_row = (const float *) ((const uint8_t *) src2->data + r * nb1);
+
+        uint32_t i13 = fastdiv(r, div_ne11_12);
+        uint32_t i12 = fastdiv(r - i13 * ne11_12, div_ne11);
+        uint32_t i11 = r - i13 * ne11_12 - i12 * ne11;
+
+        uint32_t i23 = is_broadcast3 ? 0 : i13;
+        uint32_t i22 = is_broadcast2 ? 0 : i12;
+        uint32_t i21 = is_broadcast1 ? 0 : i11;
+
+        const float * src2_row = (const float *) ((const uint8_t *) src2->data +
+                                  i21 * src2->nb[1] + i22 * src2->nb[2] + i23 * src2->nb[3]);
 
         float * dst_ptr = &dst_row[start_col];
         const float * src2_ptr = &src2_row[start_col];
