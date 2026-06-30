@@ -9,7 +9,6 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE,             hparams.f_attention_scale, false);
 
-    // Granite uses rope_finetuned as a switch for rope, so default to true
     bool rope_finetuned = true;
     ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
     hparams.rope_finetuned = rope_finetuned;
@@ -149,7 +148,6 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
             vval[i] = 0.0f;
         }
 
-        // rewrite an adapter token to its substitute id before embedding
         const auto sit = smodel.adapter_token_to_substitute.find(tok);
         sub[i] = (sit != smodel.adapter_token_to_substitute.end())
             ? (int32_t) sit->second
@@ -296,7 +294,6 @@ llama_model_granite_switch::graph::graph(
 
     cur = build_lora_mm(model.output, cur, model.output_s);
 
-    // For Granite architectures - scale logits
     cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
@@ -375,7 +372,6 @@ ggml_tensor * llama_model_granite_switch::graph::build_layer_ffn(
     const auto & layer = model.layers[il];
     const auto & sl    = layer.switch_lora;
 
-    // For Granite architectures - scale residual
     if (hparams.f_residual_scale) {
         cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
     }
