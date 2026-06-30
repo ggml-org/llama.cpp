@@ -9807,9 +9807,11 @@ static std::vector<int> fa_vec_legal_ne(int dk, int dv) {
     return r;
 }
 
-// Drift guard: with no override fa_vec_pick returns (1, baseline_ne) for each baseline
-// (dk,dv), so the dispatched host_name has no _q*_ne* suffix. If fa.metal's instantiated
-// NE drifts from fa_vec_baseline_ne, dispatch hits a missing kernel or wrong NE -> caught here.
+// Baseline-path smoke test: with no override fa_vec_pick returns (1, baseline_ne) for each
+// (dk,dv), which dispatches the no-suffix baseline kernel. Confirms baseline FA stays
+// numerically correct for all 10 shapes. NE is numerically transparent and the no-suffix
+// kernel is dispatched regardless of baseline_ne, so this does not by itself detect a wrong
+// baseline_ne; the (Q,NE) kernels' existence/correctness are covered by run_fa_vec_tune_check.
 static bool run_fa_vec_drift_guard(ggml_backend_t backend_metal, ggml_backend_t backend_cpu) {
     struct shape_t { int dk, dv, expect_ne; };
     const shape_t shapes[] = { {32,32,4},{64,64,2},{96,96,4},{128,128,1},{192,192,2},
@@ -10015,7 +10017,8 @@ static bool run_fa_vec_tune_perf(ggml_backend_t backend_metal) {
     };
 
     printf("# fa_vec perf sweep (replace GGML_METAL_DEVICE_M4_MAX with this machine's device)\n");
-    printf("# paste rows that beat baseline into fa_vec_tuned_table / fa_vec_family_table\n");
+    printf("# paste rows that beat baseline into fa_vec_tuned_table; to make a whole Apple\n");
+    printf("# family inherit a SKU, point fa_vec_family_representative at that device\n");
 
     for (auto s : shapes) {
         const std::vector<int> legal = fa_vec_legal_ne(s.dk, s.dv);

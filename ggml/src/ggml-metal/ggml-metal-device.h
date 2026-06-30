@@ -264,6 +264,7 @@ struct ggml_metal_device_props {
     bool supports_gpu_family_apple7;
 
     enum ggml_metal_device_id device_id;
+    int gpu_family;
 
     int op_offload_min_batch_size;
 };
