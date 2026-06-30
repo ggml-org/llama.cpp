@@ -82,7 +82,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     int *                     tmp_dst = temp_dst_alloc.get();
 
     for (int64_t i = 0; i < nrows; i += chunk_nrows) {
-        int iter_nrows = chunk_nrows < nrows - i ? chunk_nrows : nrows - i;
+        int iter_nrows = std::min((int64_t) chunk_nrows, nrows - i);
 
         if (use_bitonic) {
             argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, iter_nrows, GGML_SORT_ORDER_DESC, stream);

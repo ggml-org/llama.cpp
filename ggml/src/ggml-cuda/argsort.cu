@@ -36,10 +36,10 @@ int argsort_f32_i32_cuda_cub_chunk_nrows(const size_t nb01, const int64_t nrows)
     const int chunk_bytes = 1 << 26;
 
     // calculate how many rows will fit in one chunk (must be at least one)
-    const int chunk_nrows = chunk_bytes > nb01 ? chunk_bytes / nb01 : 1;
+    const int chunk_nrows = std::max((int) (chunk_bytes / nb01), 1);
 
     // limit the resulting amount to total nrows
-    return nrows < chunk_nrows ? nrows : chunk_nrows;
+    return std::min((int64_t) chunk_nrows, nrows);
 }
 
 void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
@@ -279,7 +279,7 @@ void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_pool & pool = ctx.pool();
 
     for (int64_t i = 0; i < nrows; i += chunk_nrows) {
-        int iter_nrows = chunk_nrows < nrows - i ? chunk_nrows : nrows - i;
+        int iter_nrows = std::min((int64_t) chunk_nrows, nrows - i);
 
         argsort_f32_i32_cuda_cub(pool, src0_d, (int *) dst_d, ncols, iter_nrows, order, stream);
 
