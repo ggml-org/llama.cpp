@@ -29,6 +29,7 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_NUM_ADAPTERS,  n_adapters);
     ml.get_key(LLM_KV_MAX_LORA_RANK, max_lora_rank);
+    ml.get_key(LLM_KV_CONTROL_TOKEN_GAIN, router_gain, /* required */ false);
     n_slots = n_adapters + 1;  // n_adapters plus un-adapted base slot
 
     std::vector<llama_token> token_ids;
@@ -117,11 +118,9 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-// router K dim-0 is +GAIN for a control token and -GAIN otherwise; in the causal
+// router K dim-0 is +gain for a control token and -gain otherwise; in the causal
 // softmax a single visible control token then dominates, so the readback recovers
-// its adapter slot. This assumes the HF control_token_gain default of 15.0 (the
-// only value IBM ships); it is not read from the GGUF. 15.0 is also F16-safe.
-static constexpr float GRANITE_SWITCH_ROUTER_GAIN = 15.0f;
+// its adapter slot. The gain (smodel.router_gain) comes from the GGUF, defaulting to 15.0.
 
 void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
     if (!ubatch->token) {
@@ -141,10 +140,10 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
         // router K/V signals: control token -> (+gain, slot); else -> (-gain, 0)
         const auto it = smodel.control_token_to_index.find(tok);
         if (it != smodel.control_token_to_index.end()) {
-            ksig[i] = +GRANITE_SWITCH_ROUTER_GAIN;
+            ksig[i] = +smodel.router_gain;
             vval[i] = (float) it->second;
         } else {
-            ksig[i] = -GRANITE_SWITCH_ROUTER_GAIN;
+            ksig[i] = -smodel.router_gain;
             vval[i] = 0.0f;
         }
 
