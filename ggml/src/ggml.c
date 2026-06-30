@@ -6882,6 +6882,11 @@ static void ggml_compute_backward(
         case GGML_OP_NONE: {
             // noop
         } break;
+        case GGML_OP_SET_ROWS: {
+            if (src0_needs_grads) {
+                ggml_add_or_set(ctx, cgraph, isrc0, ggml_get_rows_back(ctx, grad, src1, src0));
+            }
+        } break;
         case GGML_OP_COUNT:
         default: {
             GGML_ABORT("%s: unsupported ggml op for backward pass: %s\n", __func__, ggml_op_name(tensor->op));
@@ -7050,6 +7055,7 @@ void ggml_build_backward_expand(
             // gradients in node->src[1] for one reason or another have no effect on output gradients
             case GGML_OP_CPY:           // gradients in CPY target are irrelevant
             case GGML_OP_GET_ROWS:      // row indices not differentiable
+            case GGML_OP_SET_ROWS:      // row indices not differentiable
             case GGML_OP_GET_ROWS_BACK: // same as for GET_ROWS
             case GGML_OP_ROPE:          // positions not differentiable
                 ignore_src[1] = true;
@@ -7070,9 +7076,11 @@ void ggml_build_backward_expand(
             continue;
         }
 
-        // inplace operations are currently not supported
+        // inplace operations: allow ops that have backward implementations
         GGML_ASSERT(!node->view_src || node->op == GGML_OP_CPY || node->op == GGML_OP_VIEW ||
-            node->op == GGML_OP_RESHAPE || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_TRANSPOSE);
+            node->op == GGML_OP_RESHAPE || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_TRANSPOSE ||
+            node->op == GGML_OP_SET_ROWS || node->op == GGML_OP_SCALE || node->op == GGML_OP_SET ||
+            node->op == GGML_OP_ROPE);
 
         const size_t ihash = ggml_hash_find(&cgraph->visited_hash_set, node);
         GGML_ASSERT(ihash != GGML_HASHSET_FULL);
@@ -7245,7 +7253,10 @@ void ggml_graph_cpy(struct ggml_cgraph * src, struct ggml_cgraph * dst) {
 }
 
 struct ggml_cgraph * ggml_graph_dup(struct ggml_context * ctx, struct ggml_cgraph * cgraph, bool force_grads) {
-    struct ggml_cgraph * result = ggml_new_graph_custom(ctx, cgraph->size, cgraph->grads || force_grads);
+    const size_t size = force_grads && 3 * cgraph->n_nodes > cgraph->size
+        ? 3 * cgraph->n_nodes
+        : cgraph->size;
+    struct ggml_cgraph * result = ggml_new_graph_custom(ctx, size, cgraph->grads || force_grads);
     ggml_graph_cpy(cgraph, result);
     return result;
 }
