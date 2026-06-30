@@ -78,7 +78,7 @@ struct ggml_et_elmap_params {
 struct ggml_et_rope_settings {
     int32_t n_past;
     int32_t n_dims;  // Number of dimensions to apply ROPE to (must be even)
-    int32_t mode;    // ROPE mode (0=normal, 1=neox, 2=glm)
+    int32_t mode;    // ROPE mode, GGML_ROPE_TYPE_*
     int32_t n_ctx;
     int32_t n_ctx_orig;
     float   freq_base;    // Base frequency (usually 10000.0f)
@@ -258,8 +258,8 @@ struct ggml_et_gated_delta_net_params {
     ggml_tensor v;         // [S_v, H, n_tokens, n_seqs]
     ggml_tensor g;         // [1 or S_v, H, n_tokens, n_seqs]
     ggml_tensor beta;      // [1, H, n_tokens, n_seqs]
-    ggml_tensor state_in;  // [S_v, S_v, H, n_seqs]
-    ggml_tensor dst;       // [S_v*H, n_tokens*n_seqs + S_v*n_seqs]
+    ggml_tensor state_in;  // [S_v*S_v*H, K, n_seqs]
+    ggml_tensor dst;       // [S_v*H, n_tokens*n_seqs + S_v*n_seqs*K]
     int32_t     S_v;       // head dimension (value size)
     int32_t     H;         // number of value heads
     int32_t     H_q;       // number of Q heads
@@ -269,6 +269,7 @@ struct ggml_et_gated_delta_net_params {
     int32_t     n_seqs_q;  // Q sequence count
     int32_t     n_seqs_k;  // K sequence count
     int32_t     kda;       // 1 if per-element gate (g_ne0 == S_v), 0 if scalar
+    int32_t     K;         // snapshot slot count
     float       scale;     // 1/sqrt(S_v)
 };
 

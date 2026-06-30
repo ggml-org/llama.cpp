@@ -1056,15 +1056,22 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             break;
         case GGML_OP_ROPE:
-            // Support F32 x I32 -> F32 RoPE (standard and NEOX modes only)
+            // Support F32 x I32 -> F32 RoPE for the modes implemented by rope_f32.
             if (op->type == GGML_TYPE_F32 && op->src[0] && op->src[0]->type == GGML_TYPE_F32 && op->src[1] &&
                 op->src[1]->type == GGML_TYPE_I32 && ggml_is_contiguous(op) && et_ggml_is_row_contiguous(op->src[0])) {
-                // Check ROPE mode - support standard (0x0), NEOX (0x2), and IMROPE (0x28)
-                const int mode  = ((const int32_t *) op->op_params)[2];
-                const int ndims = ((const int32_t *) op->op_params)[1];
-                supported = ((mode == 0x0) ||
-                             (((mode & GGML_ROPE_TYPE_NEOX) || mode == GGML_ROPE_TYPE_IMROPE) && ndims % 16 == 0)) &&
-                            (ndims <= 512);
+                const int mode       = ggml_get_op_params_i32(op, 2);
+                const int ndims      = ggml_get_op_params_i32(op, 1);
+                const bool is_normal = mode == GGML_ROPE_TYPE_NORMAL;
+                const bool is_neox   = mode == GGML_ROPE_TYPE_NEOX;
+                const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
+                const bool zero_view_offset = op->src[0]->view_src == nullptr || op->src[0]->view_offs == 0;
+                const bool has_sections =
+                    ggml_get_op_params_i32(op, 11) > 0 || ggml_get_op_params_i32(op, 12) > 0 ||
+                    ggml_get_op_params_i32(op, 13) > 0;
+
+                supported = zero_view_offset && ndims <= 512 &&
+                            (is_normal || (is_neox && ndims % 16 == 0) ||
+                             (is_imrope && ndims % 16 == 0 && has_sections));
             } else {
                 supported = false;
             }
