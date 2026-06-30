@@ -37,6 +37,7 @@
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 	let isVisible = $state(false);
 	let previousConversationId = $state<string | null>(null);
+	let previousRouteId = $state<string | null>(null);
 
 	const currentConfig = config();
 
@@ -157,8 +158,9 @@
 		});
 	});
 
-	beforeNavigate(() => {
+	beforeNavigate((navigation) => {
 		isVisible = false;
+		previousRouteId = navigation.from?.route.id ?? null;
 	});
 
 	afterNavigate(() => {
@@ -249,12 +251,13 @@
 </script>
 
 <div
-	class="transition-opacity delay-300 duration-500 ease-out
-		{isVisible ? 'opacity-100' : 'opacity-0'}"
+	class="transition-opacity duration-500 ease-out
+		{isVisible ? 'opacity-100' : 'opacity-0'}
+		{previousRouteId === '/(chat)/chat/[id]' ? '' : 'delay-300'}"
 >
 	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
 		<ChatMessage
-			class="mx-auto mt-12 w-full max-w-[48rem]"
+			class="mx-auto mt-12 w-full max-w-3xl"
 			{message}
 			{toolMessages}
 			{isLastAssistantMessage}

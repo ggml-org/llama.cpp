@@ -114,7 +114,8 @@ class Mamba2Model(TextModel):
             hparams["text_config"] = hparams["llm_config"]
         super().__init__(dir_model, *args, hparams=hparams, **kwargs)
         self.d_model = self.find_hparam(["hidden_size", "d_model", "dim"])
-        self.d_inner = self.find_hparam(["mamba_d_ssm", "intermediate_size", "d_inner"], optional=True) or 2 * self.d_model
+        self.expand = self.find_hparam(["mamba_expand", "expand"], optional=True) or 2
+        self.d_inner = self.find_hparam(["mamba_d_ssm", "intermediate_size", "d_inner"], optional=True) or self.expand * self.d_model
         self.n_group = self.find_hparam(["n_groups"], optional=True) or 1
 
     def set_vocab(self):
@@ -144,11 +145,9 @@ class Mamba2Model(TextModel):
 
         rms_norm_eps = self.find_hparam(["layer_norm_epsilon", "rms_norm_eps"], optional=True) or 1e-5
 
-        # Fail early for models which don't have a block expansion factor of 2
-        # TODO: does this really matter?
         # skip the assertion for FalconH1 Model
         if self.model_arch != gguf.MODEL_ARCH.FALCON_H1:
-            assert self.d_inner == 2 * self.d_model
+            assert self.d_inner == self.expand * self.d_model
             assert self.d_inner % head_dim == 0
 
         self.gguf_writer.add_context_length(2**20)  # arbitrary value; for those who use the default
