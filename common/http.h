@@ -76,10 +76,12 @@ static common_http_url common_http_parse_url(const std::string & url) {
 
     if (!port_str.empty()) {
         parts.port = std::stoi(port_str);
+    } else if (parts.scheme == "http") {
+        parts.port = 80;
     } else if (parts.scheme == "https") {
         parts.port = 443;
     } else {
-        parts.port = 80;
+        throw std::runtime_error("unsupported URL scheme: " + parts.scheme);
     }
 
     return parts;
