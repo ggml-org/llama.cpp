@@ -7013,6 +7013,26 @@ static void ggml_compute_backward(
                         ggml_add_or_set(ctx, cgraph, isrc1, ggml_mul(ctx, ggml_silu(ctx, src0), grad));
                     }
                 } break;
+                case GGML_GLU_OP_GEGLU: {
+                    GGML_ASSERT(src1 && "backward pass only implemented for split geglu");
+                    if (src0_needs_grads) {
+                        const float gelu_coef_a    = 0.044715f;
+                        const float sqrt_2_over_pi = 0.79788456080286535587989211986876f;
+
+                        struct ggml_tensor * x2    = ggml_sqr(ctx, src0);
+                        struct ggml_tensor * inner = ggml_mul(ctx, src0, ggml_scale_bias(ctx, x2, gelu_coef_a, 1.0f));
+                        struct ggml_tensor * t     = ggml_tanh(ctx, ggml_scale(ctx, inner, sqrt_2_over_pi));
+                        struct ggml_tensor * dt    = ggml_scale_bias(ctx, ggml_sqr(ctx, t), -1.0f, 1.0f);
+                        struct ggml_tensor * poly  = ggml_scale_bias(ctx, x2, 3.0f*gelu_coef_a, 1.0f);
+                        struct ggml_tensor * dgelu = ggml_add(ctx,
+                                ggml_scale_bias(ctx, t, 0.5f, 0.5f),
+                                ggml_mul(ctx, ggml_scale(ctx, src0, 0.5f*sqrt_2_over_pi), ggml_mul(ctx, dt, poly)));
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, ggml_mul(ctx, grad, src1), dgelu));
+                    }
+                    if (src1_needs_grads) {
+                        ggml_add_or_set(ctx, cgraph, isrc1, ggml_mul(ctx, ggml_gelu(ctx, src0), grad));
+                    }
+                } break;
                 default: {
                     GGML_ABORT("unsupported glu op for backward pass: %s", ggml_glu_op_name(ggml_get_glu_op(tensor)));
                 } //break;
