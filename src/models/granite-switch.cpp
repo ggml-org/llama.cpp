@@ -36,12 +36,12 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
     GGML_ASSERT(token_ids.size() == n_adapters);
     GGML_ASSERT(substitute_ids.size() == n_adapters);
 
-    control_token_to_index.clear();
-    control_token_to_substitute.clear();
+    adapter_token_to_slot.clear();
+    adapter_token_to_substitute.clear();
     for (uint32_t i = 0; i < n_adapters; ++i) {
         // adapter i -> stacked slot i+1 (slot 0 is the base/zero delta)
-        control_token_to_index[token_ids[i]]      = (int32_t) (i + 1);
-        control_token_to_substitute[token_ids[i]] = substitute_ids[i];
+        adapter_token_to_slot[token_ids[i]]       = (int32_t) (i + 1);
+        adapter_token_to_substitute[token_ids[i]] = substitute_ids[i];
     }
 
     // extra single-head attention layer at the END (index n_real) holds the router
@@ -115,7 +115,7 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
-    ggml_tensor * sub_tokens  = nullptr; // I32 [n_tokens] control-substituted token ids
+    ggml_tensor * sub_tokens  = nullptr; // I32 [n_tokens] adapter-substituted token ids
     ggml_tensor * router_ksig = nullptr; // F32 [n_tokens] router K signal (±gain)
     ggml_tensor * router_vval = nullptr; // F32 [n_tokens] router V value (adapter slot / 0)
     ggml_tensor * router_q    = nullptr; // F32 [n_tokens] router Q value (constant 1.0)
@@ -123,8 +123,8 @@ public:
     const llama_model_granite_switch & smodel;
 };
 
-// K dim-0 is +gain for a control token, -gain otherwise; the causal softmax then
-// lets a single visible control token dominate so the readback recovers its slot.
+// K dim-0 is +gain for an adapter token, -gain otherwise; the causal softmax then
+// lets a single visible adapter token dominate so the readback recovers its slot.
 void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
     if (!ubatch->token) {
         return;
@@ -140,8 +140,8 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
     for (int64_t i = 0; i < n_tokens; ++i) {
         const llama_token tok = ubatch->token[i];
 
-        const auto it = smodel.control_token_to_index.find(tok);
-        if (it != smodel.control_token_to_index.end()) {
+        const auto it = smodel.adapter_token_to_slot.find(tok);
+        if (it != smodel.adapter_token_to_slot.end()) {
             ksig[i] = +smodel.router_gain;
             vval[i] = (float) it->second;
         } else {
@@ -149,9 +149,9 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
             vval[i] = 0.0f;
         }
 
-        // rewrite a control token to its substitute id before embedding
-        const auto sit = smodel.control_token_to_substitute.find(tok);
-        sub[i] = (sit != smodel.control_token_to_substitute.end())
+        // rewrite an adapter token to its substitute id before embedding
+        const auto sit = smodel.adapter_token_to_substitute.find(tok);
+        sub[i] = (sit != smodel.adapter_token_to_substitute.end())
             ? (int32_t) sit->second
             : (int32_t) tok;
     }
