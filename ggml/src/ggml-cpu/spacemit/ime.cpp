@@ -1502,17 +1502,9 @@ static size_t ggml_backend_cpu_riscv64_spacemit_nbytes(ggml_backend_buffer_type_
 
     GGML_UNUSED(buft);
 
-    const auto plain_nbytes = [&]() {
-        size_t total = ggml_type_size(tensor->type);
-        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-            total += (tensor->ne[i] - 1) * tensor->nb[i];
-        }
-        return total;
-    };
-
     const size_t blck_size = ggml_blck_size(tensor->type);
     if (blck_size == 1) {
-        return plain_nbytes();
+        return ggml_nbytes(tensor);
     }
 
     const size_t row_nbytes = tensor->ne[0] * tensor->nb[0] / blck_size;
