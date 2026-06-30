@@ -1018,7 +1018,6 @@ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, co
 static cl_program build_program_from_binary(cl_context ctx, cl_device_id dev, const char* program_buffer, const std::string &compile_opts, size_t bin_size = 0) {
     cl_program p;
     char *program_log;
-    size_t program_size;
     size_t log_size;
     int err;
 
@@ -3306,7 +3305,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_noshuffle_q8_0_f32_ila", &bin_size);
             if (kernel_bin && bin_size > 0) {
                 cl_program prog =
-                    build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_bin, compile_opts, bin_size);
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, compile_opts, bin_size);
 
                 CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q8_0_f32_bin = clCreateKernel(prog, "kernel_gemm_noshuffle_q8_0_f32_ila", &err), err));
                 CL_CHECK(clReleaseProgram(prog));
@@ -3425,7 +3424,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_q4_1_f32_ns_ila", &bin_size);
             if (kernel_bin && bin_size > 0) {
                 cl_program prog =
-                    build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
 
                 CL_CHECK((backend_ctx->kernel_gemm_moe_q4_1_f32_ns_bin = clCreateKernel(prog, "kernel_gemm_moe_q4_1_f32_ns_ila", &err), err));
                 CL_CHECK(clReleaseProgram(prog));
@@ -3509,7 +3508,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_q4_0_f32_ns_ila", &bin_size);
             if (kernel_bin && bin_size > 0) {
                 cl_program prog =
-                    build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
 
                 CL_CHECK((backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin = clCreateKernel(prog, "kernel_gemm_moe_q4_0_f32_ns_ila", &err), err));
                 CL_CHECK(clReleaseProgram(prog));
@@ -3629,7 +3628,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_q4_k_f32_ns_ila", &bin_size);
             if (kernel_bin && bin_size > 0) {
                 cl_program prog =
-                    build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
 
                 CL_CHECK((backend_ctx->kernel_gemm_moe_q4_k_f32_ns_bin = clCreateKernel(prog, "kernel_gemm_moe_q4_k_f32_ns_ila", &err), err));
                 CL_CHECK(clReleaseProgram(prog));
@@ -3749,7 +3748,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_mxfp4_f32_ns_ila", &bin_size);
             if (kernel_bin && bin_size > 0) {
                 cl_program prog =
-                    build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
 
                 CL_CHECK((backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_bin = clCreateKernel(prog, "kernel_gemm_moe_mxfp4_f32_ns_ila", &err), err));
                 CL_CHECK(clReleaseProgram(prog));
