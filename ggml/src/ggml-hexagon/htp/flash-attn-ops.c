@@ -34,8 +34,6 @@
 #include "hvx-fa-kernels.h"
 #include "hmx-fa-kernels.h"
 
-int hmx_flash_attn_ext(struct htp_ops_context * octx);
-
 // Must be multiple of 32
 #define FLASH_ATTN_BLOCK_SIZE (32 * 2)
 
@@ -91,6 +89,7 @@ struct htp_fa_context {
 
 struct hmx_fa_context {
     const struct htp_ops_context * octx;
+    const struct htp_tensor *      sinks;  // attention sinks (src[4]), NULL if absent
     bool         pipeline;  // true when n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads >= 2
     uint32_t     n_threads;
 
@@ -564,7 +563,6 @@ typedef struct {
     uint32_t                  ib3;
     size_t                    n_rows_g;
     size_t                    rows_per_t;
-    const struct htp_tensor * sinks;
 } fa_q_load_args_t;
 
 static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
@@ -602,8 +600,8 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
         const size_t m_start       = i * m_bytes_per_t;
         const size_t m_end         = hex_smin(m_start + m_bytes_per_t, col_vec_bytes);
 
-        if (args->sinks) {
-            const float * sinks_data = (const float *) (uintptr_t) args->sinks->data;
+        if (factx->sinks) {
+            const float * sinks_data = (const float *) (uintptr_t) factx->sinks->data;
             float *       m_vec      = (float *) factx->vtcm_m_vec;
             const size_t  r_start    = l_start / sizeof(float);
             const size_t  r_end      = l_end / sizeof(float);
@@ -728,8 +726,7 @@ static void fa_phase_q_load(struct hmx_fa_context *   factx,
         n = factx->n_threads;
     }
     size_t rows_per_t = hex_align_up(hmx_ceil_div(factx->g_br, n), 2);
-    const struct htp_tensor * sinks = factx->octx->src[4] ? factx->octx->src[4] : NULL;
-    fa_q_load_args_t args = { factx, q, q_start, kv_head, ib3, n_rows_g, rows_per_t, sinks };
+    fa_q_load_args_t args = { factx, q, q_start, kv_head, ib3, n_rows_g, rows_per_t };
     if (n > 1) {
         worker_pool_run_func(wp, fa_q_load_thread, &args, n);
     } else {
@@ -1176,7 +1173,11 @@ static inline void fa_softmax_impl(
 
         HVX_Vector v_l_curr0;
         HVX_Vector v_l_curr1;
-        if (args->kv_start == 0 && factx->octx->src[4] != NULL) {
+        if (args->kv_start == 0 && factx->sinks != NULL) {
+            // First KV block with sinks: m_prev holds the seeded sink value (not -inf),
+            // so exp_m_diff = exp2(sink - m_curr) is the sink's contribution to the
+            // denominator. l_prev is 0 here, so add exp_m_diff directly instead of
+            // multiplying the (uninitialized) l_prev term.
             v_l_curr0 = HVX_OP_ADD_F32(exp_m_diff0, v_rowsum_acc_f32_0);
             v_l_curr1 = HVX_OP_ADD_F32(exp_m_diff1, v_rowsum_acc_f32_1);
         } else {
@@ -1538,6 +1539,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     struct hmx_fa_context factx;
     memset(&factx, 0, sizeof(factx));
     factx.octx           = octx;
+    factx.sinks          = octx->src[4];  // NULL if this op has no attention sinks
     factx.n_threads      = kparams->n_threads;
     factx.DK             = DK;
     factx.DV             = DV;
