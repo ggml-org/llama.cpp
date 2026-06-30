@@ -179,10 +179,6 @@ class GraniteSwitchModel(GraniteMoeModel):
         )
         # control_token_gain is intentionally not emitted; the runtime uses a fixed gain
 
-    def _permute_qk(self, w: Tensor, n_head: int) -> Tensor:
-        # the interleave permute LlamaModel applies to q/k for ggml's NORM-rope layout
-        return LlamaModel.permute(w, n_head, n_head)
-
     def _lora_a(self, data: Tensor) -> Tensor:
         # on-disk A: [n_adapters, 1, max_rank, in] -> [n_adapters+1, max_rank, in]
         a = data.squeeze(1)
@@ -194,7 +190,8 @@ class GraniteSwitchModel(GraniteMoeModel):
         b = data.squeeze(1)
         if permute_n_head is not None:
             # permute each adapter's B output rows to match the permuted q/k base
-            b = torch.stack([self._permute_qk(b[i], permute_n_head) for i in range(b.shape[0])], dim=0)
+            # (LlamaModel.permute interleaves q/k for ggml's NORM-rope layout)
+            b = torch.stack([self.permute(b[i], permute_n_head, permute_n_head) for i in range(b.shape[0])], dim=0)
         zero = torch.zeros_like(b[:1])
         return torch.cat([zero, b], dim=0).contiguous()
 
@@ -213,10 +210,11 @@ class GraniteSwitchModel(GraniteMoeModel):
         # ---- Attention: fused QKV ----
         if "self_attn.qkv_proj" in name:
             if name.endswith("base_layer.weight"):
-                # Fused [q|k|v] rows. Permute the q and k row-blocks (split-half rope).
+                # Fused [q|k|v] rows. Permute the q and k row-blocks for ggml's
+                # NORM-rope layout (LlamaModel.permute, n_head_kv == n_head per slice).
                 q, k, v = data_torch.split([self._q_size, self._kv_size, self._kv_size], dim=0)
-                q = self._permute_qk(q, self._n_head)
-                k = self._permute_qk(k, self._n_kv_head)
+                q = self.permute(q, self._n_head, self._n_head)
+                k = self.permute(k, self._n_kv_head, self._n_kv_head)
                 fused = torch.cat([q, k, v], dim=0)
                 yield (self.format_tensor_name(T.ATTN_QKV, bid), fused)
                 return
