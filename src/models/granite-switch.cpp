@@ -29,10 +29,10 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_NUM_ADAPTERS,  n_adapters);
     ml.get_key(LLM_KV_MAX_LORA_RANK, max_lora_rank);
-    n_slots = n_adapters + 1;
+    n_slots = n_adapters + 1;  // n_adapters plus un-adapted base slot
 
-    std::vector<int32_t> token_ids;
-    std::vector<int32_t> substitute_ids;
+    std::vector<llama_token> token_ids;
+    std::vector<llama_token> substitute_ids;
     ml.get_arr(LLM_KV_ADAPTER_TOKEN_IDS,            token_ids);
     ml.get_arr(LLM_KV_ADAPTER_SUBSTITUTE_TOKEN_IDS, substitute_ids);
 
@@ -43,14 +43,16 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
     control_token_to_substitute.clear();
     for (uint32_t i = 0; i < n_adapters; ++i) {
         // adapter i -> stacked slot i+1 (slot 0 is the base/zero delta)
-        control_token_to_index[(llama_token) token_ids[i]]      = (int32_t) (i + 1);
-        control_token_to_substitute[(llama_token) token_ids[i]] = (llama_token) substitute_ids[i];
+        control_token_to_index[token_ids[i]]      = (int32_t) (i + 1);
+        control_token_to_substitute[token_ids[i]] = substitute_ids[i];
     }
 
     // append one extra single-head attention layer at index R = n_real to hold
     // the router K/V; bump n_layer_all so the KV cache allocates it. reuse
     // n_layer_nextn (the trailing-layers count; no MTP here) = 1 so n_layer()
-    // stays n_real and the decoder loop is unchanged
+    // stays n_real and the decoder loop is unchanged. note the router layer lives
+    // at the END (index n_real), not the start, so the regular layers keep their
+    // indices and the KV cache shift/defrag can skip it without renumbering
     const uint32_t n_real = hparams.n_layer();
     hparams.router_layer  = (int32_t) n_real;
     hparams.n_layer_all   = n_real + 1;
@@ -137,7 +139,7 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
         const llama_token tok = ubatch->token[i];
 
         // router K/V signals: control token -> (+gain, slot); else -> (-gain, 0)
-        auto it = smodel.control_token_to_index.find(tok);
+        const auto it = smodel.control_token_to_index.find(tok);
         if (it != smodel.control_token_to_index.end()) {
             ksig[i] = +GRANITE_SWITCH_ROUTER_GAIN;
             vval[i] = (float) it->second;
@@ -147,7 +149,7 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
         }
 
         // rewrite a control token to its substitute id before embedding
-        auto sit = smodel.control_token_to_substitute.find(tok);
+        const auto sit = smodel.control_token_to_substitute.find(tok);
         sub[i] = (sit != smodel.control_token_to_substitute.end())
             ? (int32_t) sit->second
             : (int32_t) tok;
