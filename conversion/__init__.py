@@ -68,6 +68,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "ExaoneMoEForCausalLM": "exaone",
     "FalconForCausalLM": "falcon",
     "FalconH1ForCausalLM": "falcon_h1",
+    "MicroDaviPMTModel": "microdavi",
     "FalconMambaForCausalLM": "mamba",
     "GPT2LMHeadModel": "gpt2",
     "GPTBigCodeForCausalLM": "starcoder",
