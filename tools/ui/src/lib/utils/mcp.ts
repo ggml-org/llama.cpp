@@ -322,7 +322,7 @@ export function downloadResourceContent(
 }
 
 /**
- * Builds the synthetic CUSTOM_PROMPT promptId used to record the origin of a
+ * Builds the synthetic SKILL skillId used to record the origin of a
  * system message produced from an MCP prompt. Encoded as
  * `mcp:<serverName>:<promptName>` so it round-trips through storage and can be
  * parsed back into its parts by `parseMcpPromptId`.
@@ -332,7 +332,7 @@ export function buildMcpPromptId(serverName: string, promptName: string): string
 }
 
 /**
- * Decodes a CUSTOM_PROMPT promptId back into its MCP server/prompt parts.
+ * Decodes a SKILL skillId back into its MCP server/prompt parts.
  * Returns null when the id doesn't carry the MCP prefix or is malformed.
  */
 export function parseMcpPromptId(

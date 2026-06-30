@@ -8,6 +8,7 @@
 	import { createMessageCountMap } from '$lib/utils';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
+	import { skillsStore } from '$lib/stores/skills.svelte';
 	import { toast } from 'svelte-sonner';
 	import { fade } from 'svelte/transition';
 	import { ConversationSelectionMode, HtmlInputType, FileExtensionText } from '$lib/enums';
@@ -35,6 +36,12 @@
 	let showSettingsImportSummary = $state(false);
 	let showSettingsExportDialog = $state(false);
 	let includeSensitiveData = $state(false);
+
+	// Skills import/export state
+	let exportedSkills = $state<DatabaseSkill[]>([]);
+	let importedSkills = $state<DatabaseSkill[]>([]);
+	let showSkillsExportSummary = $state(false);
+	let showSkillsImportSummary = $state(false);
 
 	function handleSettingsExport() {
 		showSettingsExportDialog = true;
@@ -96,6 +103,62 @@
 				} catch (err) {
 					console.error('Failed to import settings:', err);
 					toast.error('Failed to import settings');
+				}
+			};
+
+			input.click();
+		} catch (err) {
+			console.error('Failed to open file picker:', err);
+			toast.error('Failed to open file picker');
+		}
+	}
+
+	async function handleSkillsExport() {
+		try {
+			const blob = await skillsStore.exportSkillsArchive();
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `llama_skills_${new Date().toISOString().split('T')[0]}.zip`;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+
+			exportedSkills = skillsStore.getSkills();
+			showSkillsExportSummary = true;
+			showSkillsImportSummary = false;
+			toast.success(
+				`${exportedSkills.length} skill${exportedSkills.length === 1 ? '' : 's'} exported`
+			);
+		} catch (err) {
+			console.error('Failed to export skills:', err);
+			toast.error('Failed to export skills');
+		}
+	}
+
+	async function handleSkillsImport() {
+		try {
+			const input = document.createElement('input');
+			input.type = HtmlInputType.FILE;
+			input.accept = `${FileExtensionText.ZIP},${FileExtensionText.MD}`;
+
+			input.onchange = async (e) => {
+				const file = (e.target as HTMLInputElement)?.files?.[0];
+				if (!file) return;
+
+				try {
+					const result = await skillsStore.importSkills(file);
+
+					importedSkills = skillsStore.getSkills();
+					showSkillsImportSummary = true;
+					showSkillsExportSummary = false;
+					const summary = `${result.added} added, ${result.updated} updated${result.skipped ? `, ${result.skipped} skipped` : ''}`;
+					toast.success(`Skills imported — ${summary}`);
+				} catch (err) {
+					console.error('Failed to import skills:', err);
+					const message = err instanceof Error ? err.message : 'Unknown error';
+					toast.error(`Failed to import skills: ${message}`);
 				}
 			};
 
@@ -271,6 +334,26 @@
 			titleClass="text-destructive"
 			buttonVariant="destructive"
 			buttonClass="text-destructive-foreground justify-start justify-self-start bg-destructive hover:bg-destructive/80 md:w-auto"
+		/>
+	</SettingsGroup>
+
+	<SettingsGroup title="Skills">
+		<SettingsChatImportExportSection
+			title="Export"
+			description="Export all your saved skills as a zip of <name>/SKILL.md files. The archive is the same layout Pi loads natively, so it can be unzipped into ~/.pi/agent/skills/ on another machine."
+			IconComponent={Download}
+			buttonText="Export skills (.zip)"
+			onclick={handleSkillsExport}
+			summary={{ show: showSkillsExportSummary, verb: 'Exported', items: exportedSkills }}
+		/>
+
+		<SettingsChatImportExportSection
+			title="Import"
+			description="Import skills from a zip of <name>/SKILL.md files, or a single SKILL.md-shaped markdown file. Existing skills with matching IDs or names are updated."
+			IconComponent={Upload}
+			buttonText="Import skills"
+			onclick={handleSkillsImport}
+			summary={{ show: showSkillsImportSummary, verb: 'Imported', items: importedSkills }}
 		/>
 	</SettingsGroup>
 

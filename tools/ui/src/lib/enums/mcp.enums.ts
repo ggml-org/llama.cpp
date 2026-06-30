@@ -68,8 +68,8 @@ export enum MCPRefType {
 }
 
 /**
- * Prefix used to encode MCP prompt identity inside a CUSTOM_PROMPT
- * extra's promptId (`mcp:<serverName>:<promptName>`). System messages
+ * Prefix used to encode MCP prompt identity inside a SKILL
+ * extra's skillId (`mcp:<serverName>:<promptName>`). System messages
  * created from MCP prompts carry this so the renderer can recover the
  * original MCP server/prompt without an extra attachment.
  */

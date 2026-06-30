@@ -43,7 +43,6 @@ export * from './sse';
 export * from './precision';
 export * from './processing-info';
 export * from './pwa';
-export * from './prompts';
 export * from './routes';
 export * from './sandbox';
 export * from './settings-keys';

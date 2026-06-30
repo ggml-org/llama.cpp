@@ -28,10 +28,10 @@
 		onConfirmDelete: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
-		promptId?: string;
+		skillId?: string;
 		title?: string;
-		promptIsStale?: boolean;
-		onPromptUpdate?: () => void;
+		skillIsStale?: boolean;
+		onSkillUpdate?: () => void;
 	}
 
 	let {
@@ -46,10 +46,10 @@
 		onConfirmDelete,
 		onNavigateToSibling,
 		onShowDeleteDialogChange,
-		promptId,
+		skillId,
 		title,
-		promptIsStale = false,
-		onPromptUpdate
+		skillIsStale = false,
+		onSkillUpdate
 	}: Props = $props();
 
 	const editCtx = getMessageEditContext();
@@ -99,12 +99,12 @@
 	role="group"
 >
 	{#if editCtx.isEditing}
-		<div class="flex w-full max-w-[80%] flex-col items-end gap-2">
+		<div class="flex w-full flex-col items-end gap-2">
 			<ChatMessageEditForm variant={ChatMessageEditFormVariant.SYSTEM} />
 		</div>
 	{:else}
 		{#if message.content.trim()}
-			<div class="relative max-w-[80%]">
+			<div class="relative">
 				<button
 					class="group/expand w-full text-left {!isExpanded && showExpandButton
 						? 'cursor-pointer'
@@ -180,19 +180,20 @@
 			</div>
 		{/if}
 
-		{#if promptId && title}
-			<div class="max-w-[80%] flex items-center gap-2">
+		{#if skillId && title}
+			<div class="flex items-center gap-2">
 				<ScanText class="h-3.5 w-3.5 text-muted-foreground" />
 
 				<span class="text-xs font-medium text-muted-foreground">{title}</span>
 
-				{#if promptIsStale}
+				{#if skillIsStale}
 					<button
 						type="button"
 						class="text-xs font-medium text-amber-600 hover:underline hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
-						onclick={onPromptUpdate}
+						onclick={onSkillUpdate}
+						title="This skill has been modified. Click to save the changes back to the library."
 					>
-						Sync with library prompt
+						Modified
 					</button>
 				{/if}
 			</div>

@@ -14,19 +14,19 @@ export const DB_NAME = STORAGE_APP_NAME;
 export const IDXDB_TABLES = {
 	conversations: 'conversations',
 	messages: 'messages',
-	prompts: 'prompts'
+	skills: 'skills'
 } as const;
 
 /** IndexedDB store schemas */
 export const IDXDB_STORE_SCHEMAS = {
 	conversations: 'id, lastModified, currNode, name',
 	messages: 'id, convId, type, role, timestamp, parent, children',
-	prompts: 'id, lastModified'
+	skills: 'id, lastModified, alwaysOn'
 } as const;
 
 /** Combined Dexie stores definition — keys are table names, values are schemas */
 export const IDXDB_STORES = {
 	[IDXDB_TABLES.conversations]: IDXDB_STORE_SCHEMAS.conversations,
 	[IDXDB_TABLES.messages]: IDXDB_STORE_SCHEMAS.messages,
-	[IDXDB_TABLES.prompts]: IDXDB_STORE_SCHEMAS.prompts
+	[IDXDB_TABLES.skills]: IDXDB_STORE_SCHEMAS.skills
 } as const;

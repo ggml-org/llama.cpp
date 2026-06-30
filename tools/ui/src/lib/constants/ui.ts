@@ -30,9 +30,9 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	},
 	{
 		icon: ScanText,
-		tooltip: 'Prompts',
-		route: ROUTES.PROMPTS,
-		activeRouteId: '/(manage)/prompts'
+		tooltip: 'Skills',
+		route: ROUTES.SKILLS,
+		activeRouteId: '/(manage)/skills'
 	},
 	{
 		icon: Settings,
@@ -45,8 +45,8 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 export const CHAT_FORM_PLACEHOLDER_GREETING = 'Hello there!';
 
 export const CHAT_FORM_PLACEHOLDER = {
-  DEFAULT: 'Type a message',
-  VOICE_MODE_AVAILABLE: 'Type a message or use your voice',
-  PROMPTS: 'Use / to attach a prompt',
-  RESOURCES: 'Use @ to attach resources'
-}
+	DEFAULT: 'Type a message',
+	VOICE_MODE_AVAILABLE: 'Type a message or use your voice',
+	SKILLS: 'Use / to insert a skill',
+	RESOURCES: 'Use @ to attach resources'
+};

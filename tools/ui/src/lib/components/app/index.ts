@@ -7,7 +7,7 @@ export * from './forms';
 export * from './manage';
 export * from './mcp';
 export * from './misc';
-export * from './prompts';
+export * from './skills';
 export * from './settings';
 export * from './models';
 export * from './navigation';

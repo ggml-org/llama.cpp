@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { MessageSquare, Plus } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { promptsStore } from '$lib/stores/prompts.svelte';
+	import { skillsStore } from '$lib/stores/skills.svelte';
+	import { skillPreferencesStore } from '$lib/stores/skill-preferences.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpLogo } from '$lib/components/app';
@@ -15,7 +16,7 @@
 
 	interface Props {
 		onSystemPromptClick?: () => void;
-		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
+		onSystemPromptWithContent?: (content: string, skillId?: string, title?: string) => void;
 		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 		preloadOnOpen?: boolean;
 	}
@@ -27,15 +28,18 @@
 		preloadOnOpen = false
 	}: Props = $props();
 
-	let prompts = $derived(promptsStore.getPrompts());
+	let skills = $derived(skillsStore.getSkills());
 
 	let searchQuery = $state('');
 
-	let filteredLibraryPrompts = $derived.by(() => {
+	let filteredLibrarySkills = $derived.by(() => {
 		const q = searchQuery.trim().toLowerCase();
-		if (!q) return prompts;
-		return prompts.filter(
-			(p) => p.title.toLowerCase().includes(q) || p.content.toLowerCase().includes(q)
+		if (!q) return skills;
+		return skills.filter(
+			(s) =>
+				s.name?.toLowerCase().includes(q) ||
+				s.content?.toLowerCase().includes(q) ||
+				(s.description?.toLowerCase().includes(q) ?? false)
 		);
 	});
 
@@ -87,14 +91,14 @@
 		});
 	});
 
-	function handlePromptClick(promptId: string) {
-		const prompt = promptsStore.getPrompt(promptId);
-		if (prompt && onSystemPromptWithContent) {
-			onSystemPromptWithContent(prompt.content, promptId, prompt.title);
+	function handleSkillClick(skillId: string) {
+		const skill = skillsStore.getSkill(skillId);
+		if (skill && onSystemPromptWithContent) {
+			onSystemPromptWithContent(skill.content ?? '', skillId, skill.name ?? skillId);
 		}
 	}
 
-	function handleAddPromptClick() {
+	function handleAddSkillClick() {
 		onSystemPromptClick?.();
 	}
 
@@ -145,7 +149,7 @@
 	</DropdownMenu.SubTrigger>
 
 	<DropdownMenu.SubContent class="w-72">
-		{#if prompts.length > 0 || mcpStore.allPrompts.length > 0}
+		{#if skills.length > 0 || mcpStore.allPrompts.length > 0}
 			<div class="mb-1.5">
 				<SearchInput
 					bind:value={searchQuery}
@@ -157,26 +161,36 @@
 
 		<DropdownMenu.Item
 			class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-left transition-colors hover:bg-accent mt-2.5 mb-2"
-			onclick={handleAddPromptClick}
+			onclick={handleAddSkillClick}
 		>
 			<Plus class="h-4 w-4" />
 
 			<span>Write new</span>
 		</DropdownMenu.Item>
 
-		{#if filteredLibraryPrompts.length > 0}
+		{#if filteredLibrarySkills.length > 0}
 			<DropdownMenu.Separator />
 
-			<DropdownMenu.Label class="mt-1.5 mb-1">Your Prompts</DropdownMenu.Label>
+			<DropdownMenu.Label class="mt-1.5 mb-1">Your Skills</DropdownMenu.Label>
 
-			{#each filteredLibraryPrompts as prompt (prompt.id)}
+			{#each filteredLibrarySkills as skill (skill.id)}
 				<DropdownMenu.Item
 					class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-sm px-2 py-2 text-left transition-colors hover:bg-accent"
-					onclick={() => handlePromptClick(prompt.id)}
+					onclick={() => handleSkillClick(skill.id)}
 				>
-					<span class="line-clamp-1 text-sm font-medium">{prompt.title}</span>
+					<span class="line-clamp-1 text-sm font-medium">{skill.name ?? skill.id}</span>
+					{#if skillPreferencesStore.isAlwaysOn(skill.id)}
+						<span class="ml-1 text-[10px] uppercase tracking-wide text-muted-foreground"
+							>always-on</span
+						>
+					{/if}
+					{#if skill.description}
+						<span class="line-clamp-1 w-full text-xs leading-5 text-muted-foreground">
+							{skill.description}
+						</span>
+					{/if}
 					<span class="line-clamp-3 w-full text-xs leading-5 text-muted-foreground">
-						{prompt.content}
+						{skill.content}
 					</span>
 				</DropdownMenu.Item>
 			{/each}
@@ -228,7 +242,7 @@
 			{/each}
 		{/if}
 
-		{#if searchQuery.trim() !== '' && (prompts.length > 0 || mcpStore.allPrompts.length > 0) && filteredLibraryPrompts.length === 0 && filteredMcpPrompts.length === 0}
+		{#if searchQuery.trim() !== '' && (skills.length > 0 || mcpStore.allPrompts.length > 0) && filteredLibrarySkills.length === 0 && filteredMcpPrompts.length === 0}
 			<div class="px-2 py-2 text-xs text-muted-foreground">No matches</div>
 		{/if}
 	</DropdownMenu.SubContent>

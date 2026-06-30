@@ -82,10 +82,10 @@ export function useMessageEditContext(options: UseMessageEditContextOptions) {
 		get canAddToLibrary() {
 			return false;
 		},
-		get canUpdateLibraryPrompt() {
+		get canUpdateLibrarySkill() {
 			return false;
 		},
-		get libraryPromptTitle() {
+		get librarySkillTitle() {
 			return undefined;
 		},
 		setContent: (c: string) => {

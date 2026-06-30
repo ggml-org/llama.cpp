@@ -1183,11 +1183,10 @@ export class ChatService {
 			}
 		}
 
-		// CUSTOM_PROMPT is metadata-only (text lives in message.content); exclude it
+		// SKILL is metadata-only (text lives in message.content); exclude it
 		// so it doesn't force multipart conversion and get dropped as array content.
 		const contentExtras =
-			message.extra?.filter((e: DatabaseMessageExtra) => e.type !== AttachmentType.CUSTOM_PROMPT) ??
-			[];
+			message.extra?.filter((e: DatabaseMessageExtra) => e.type !== AttachmentType.SKILL) ?? [];
 
 		if (contentExtras.length === 0) {
 			const result: ApiChatMessageData = {

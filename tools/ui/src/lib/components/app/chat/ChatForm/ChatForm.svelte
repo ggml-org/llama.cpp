@@ -9,7 +9,7 @@
 		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
 	import {
-       	CHAT_FORM_PLACEHOLDER,
+		CHAT_FORM_PLACEHOLDER,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		INPUT_CLASSES,
 		SETTING_CONFIG_DEFAULT,
