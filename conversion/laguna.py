@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
@@ -10,9 +9,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf
-
-logger = logging.getLogger("hf-to-gguf")
+from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("LagunaForCausalLM")
@@ -61,24 +58,18 @@ class LagunaModel(TextModel):
     # --- hparams -------------------------------------------------------------
 
     def set_gguf_parameters(self) -> None:
-        # Don't call super().set_gguf_parameters() — TextModel emits a scalar
-        # head_count from hparams["num_attention_heads"], but Laguna varies
-        # head count per layer and we want it as an ARRAY. We re-emit the
-        # other base keys explicitly below.
+        super().set_gguf_parameters()
         hparams = self.hparams
 
-        self.gguf_writer.add_block_count(hparams["num_hidden_layers"])
-        self.gguf_writer.add_context_length(hparams["max_position_embeddings"])
-        self.gguf_writer.add_embedding_length(hparams["hidden_size"])
-        self.gguf_writer.add_feed_forward_length(hparams["intermediate_size"])  # dense layers
+        # super() covers the standard keys (block/context/embedding/ffn length,
+        # head_count_kv, key/value_length from the explicit head_dim, rms_eps,
+        # file_type). It does not emit vocab_size for the gpt2 vocab path, so set
+        # it here, and override the scalar head_count with a per-layer ARRAY:
+        # XS.2 varies heads per layer (full=48, SWA=64) via
+        # num_attention_heads_per_layer; M.1 is uniform and omits it, so build a
+        # constant list from the scalar num_attention_heads.
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
-        self.gguf_writer.add_layer_norm_rms_eps(hparams["rms_norm_eps"])
-        self.gguf_writer.add_file_type(self.ftype)
 
-        # Per-layer head count — emit as ARRAY. XS.2 varies heads per layer
-        # (full=48, SWA=64) and ships num_attention_heads_per_layer; M.1 is
-        # uniform and omits it, so fall back to a constant list built from the
-        # scalar num_attention_heads.
         per_layer_heads = hparams.get("num_attention_heads_per_layer")
         if not per_layer_heads:
             per_layer_heads = [hparams["num_attention_heads"]] * hparams["num_hidden_layers"]
@@ -87,11 +78,6 @@ class LagunaModel(TextModel):
             f"num_hidden_layers {hparams['num_hidden_layers']}"
         )
         self.gguf_writer.add_head_count(per_layer_heads)
-        self.gguf_writer.add_head_count_kv(hparams["num_key_value_heads"])
-
-        head_dim = hparams["head_dim"]
-        self.gguf_writer.add_key_length(head_dim)
-        self.gguf_writer.add_value_length(head_dim)
 
         # Resolve + validate the attention gate type now, so an inconsistent
         # `gating` field fails at conversion time rather than silently. See
