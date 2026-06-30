@@ -1213,8 +1213,15 @@ class ChatStore {
 				};
 				if (timings) uiUpdate.timings = timings;
 				if (resolvedModel) uiUpdate.model = resolvedModel;
-				conversationsStore.updateMessageAtIndex(idx, uiUpdate);
-				await conversationsStore.updateCurrentNode(currentMessageId);
+				// touch the active ui array and node pointer only when this conversation
+				// is displayed; otherwise persist the node move straight to the db so a
+				// foreign conv's currNode stays untouched
+				if (conversationsStore.activeConversation?.id === convId) {
+					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
+					await conversationsStore.updateCurrentNode(currentMessageId);
+				} else {
+					await DatabaseService.updateCurrentNode(convId, currentMessageId);
+				}
 			},
 			createToolResultMessage: async (
 				toolCallId: string,
@@ -1235,12 +1242,15 @@ class ChatStore {
 					},
 					currentMessageId
 				);
-				// mirror into the active store only when this conversation is displayed;
-				// otherwise the tool message would land in another conv's UI array
+				// mirror into the active store and move the node pointer only when this
+				// conversation is displayed; otherwise persist the node move straight to
+				// the db for the owning conv so a foreign conv's currNode stays untouched
 				if (conversationsStore.activeConversation?.id === convId) {
 					conversationsStore.addMessageToActive(msg);
+					await conversationsStore.updateCurrentNode(msg.id);
+				} else {
+					await DatabaseService.updateCurrentNode(convId, msg.id);
 				}
-				await conversationsStore.updateCurrentNode(msg.id);
 				lastCreatedInFlow = msg.id;
 				return msg;
 			},
