@@ -194,19 +194,30 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx *          ct
             ctx->cpu_dst = ggml_mul_mat_id(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1, ctx->cpu_src2);
             break;
         case GGML_OP_ROPE:
-            // Copy op_params to destination tensor for ROPE operation
-            ctx->cpu_dst = ggml_rope_ext(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1,
-                                         ctx->cpu_src2,                           // freq_factors (may be null)
-                                         ((const int32_t *) node->op_params)[1],  // n_dims
-                                         ((const int32_t *) node->op_params)[2],  // mode
-                                         ((const int32_t *) node->op_params)[4],  // n_ctx_orig
-                                         *((const float *) ((const int32_t *) node->op_params + 5)),  // freq_base
-                                         *((const float *) ((const int32_t *) node->op_params + 6)),  // freq_scale
-                                         *((const float *) ((const int32_t *) node->op_params + 7)),  // ext_factor
-                                         *((const float *) ((const int32_t *) node->op_params + 8)),  // attn_factor
-                                         *((const float *) ((const int32_t *) node->op_params + 9)),  // beta_fast
-                                         *((const float *) ((const int32_t *) node->op_params + 10))  // beta_slow
-            );
+            {
+                const int32_t * op_params  = (const int32_t *) node->op_params;
+                const int32_t   n_dims     = op_params[1];
+                const int32_t   mode       = op_params[2];
+                const int32_t   n_ctx_orig = op_params[4];
+                const float     freq_base  = *((const float *) (op_params + 5));
+                const float     freq_scale = *((const float *) (op_params + 6));
+                const float     ext_factor = *((const float *) (op_params + 7));
+                const float     attn_factor = *((const float *) (op_params + 8));
+                const float     beta_fast  = *((const float *) (op_params + 9));
+                const float     beta_slow  = *((const float *) (op_params + 10));
+
+                if (mode & GGML_ROPE_TYPE_MROPE) {
+                    int sections[GGML_MROPE_SECTIONS];
+                    memcpy(sections, op_params + 11, sizeof(sections));
+                    ctx->cpu_dst = ggml_rope_multi(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1, ctx->cpu_src2,
+                                                   n_dims, sections, mode, n_ctx_orig, freq_base, freq_scale,
+                                                   ext_factor, attn_factor, beta_fast, beta_slow);
+                } else {
+                    ctx->cpu_dst = ggml_rope_ext(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1, ctx->cpu_src2,
+                                                 n_dims, mode, n_ctx_orig, freq_base, freq_scale, ext_factor,
+                                                 attn_factor, beta_fast, beta_slow);
+                }
+            }
             break;
         case GGML_OP_RMS_NORM:
             // Extract epsilon parameter from op_params (stored as float)

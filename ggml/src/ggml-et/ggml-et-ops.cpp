@@ -2274,6 +2274,7 @@ bool ggml_et_op_gated_delta_net(ggml_backend_et_device_context * dev_ctx, const 
     params.n_seqs_q = (int32_t) n_seqs_q;
     params.n_seqs_k = (int32_t) n_seqs_k;
     params.kda      = (src_g->ne[0] == S_v) ? 1 : 0;
+    params.K        = ggml_get_op_params_i32(node, 0);
     params.scale    = 1.0f / sqrtf((float) S_v);
 
     // CPU comparison for debugging
