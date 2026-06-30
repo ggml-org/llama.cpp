@@ -1,4 +1,5 @@
 #include "common.h"
+#include "http.h"
 #include "server-http.h"
 #include "server-stream.h"
 #include "server-common.h"
@@ -441,7 +442,7 @@ bool server_http_context::start() {
     srv->wait_until_ready();
 
     listening_address = is_sock ? string_format("unix://%s", hostname.c_str())
-                                : string_format("%s://%s:%d", is_ssl ? "https" : "http", hostname.c_str(), port);
+                                : string_format("%s://%s:%d", is_ssl ? "https" : "http", common_http_format_host(hostname).c_str(), port);
     return true;
 }
 
