@@ -468,8 +468,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             new_type = GGML_TYPE_Q8_0;
         }
     } else if (ftype == LLAMA_FTYPE_MOSTLY_NVFP4) {
-        // 2D weight tensors -> NVFP4. Shapes whose ne[0] is not a multiple of the NVFP4 block
-        // size fall back to Q8_0 in tensor_type_fallback(); 1D / tiny tensors are skipped earlier.
+        // weight tensors -> NVFP4 (ne[0] % block != 0 falls back to Q8_0 in tensor_type_fallback)
         new_type = GGML_TYPE_NVFP4;
     } else if (category == tensor_category::TOKEN_EMBD) {
         if (qs.params->token_embedding_type < GGML_TYPE_COUNT) {
