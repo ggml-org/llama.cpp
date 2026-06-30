@@ -182,6 +182,19 @@ int main()
     });
 
     verify_parsing(R"""(
+        root  ::= "a"
+                | "b"
+    )""", {
+        {"root", 0},
+    }, {
+        // root (index 0)
+        {LLAMA_GRETYPE_CHAR, 'a'},
+        {LLAMA_GRETYPE_ALT, 0},
+        {LLAMA_GRETYPE_CHAR, 'b'},
+        {LLAMA_GRETYPE_END, 0},
+    });
+
+    verify_parsing(R"""(
         root  ::= a+
         a     ::= "a"
     )""", {
