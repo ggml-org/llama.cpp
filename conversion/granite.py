@@ -198,12 +198,6 @@ class GraniteSwitchModel(GraniteMoeModel):
         zero = torch.zeros_like(b[:1])
         return torch.cat([zero, b], dim=0).contiguous()
 
-    def tensor_force_quant(self, name, new_name, bid, n_dims):
-        # keep the stacked LoRA tensors in F16
-        if ".lora_a" in new_name or ".lora_b" in new_name:
-            return gguf.GGMLQuantizationType.F16
-        return super().tensor_force_quant(name, new_name, bid, n_dims)
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         T = gguf.MODEL_TENSOR
 
