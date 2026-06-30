@@ -152,6 +152,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_mamba2(params);
         case LLM_ARCH_JAMBA:
             return new llama_model_jamba(params);
+        case LLM_ARCH_MICRODAVI:
+            return new llama_model_microdavi(params);
         case LLM_ARCH_XVERSE:
             return new llama_model_xverse(params);
         case LLM_ARCH_COMMAND_R:

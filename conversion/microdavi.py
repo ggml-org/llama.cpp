@@ -205,13 +205,14 @@ class MicroDaviModel(Mamba2Model):
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_DT, bid, suffix=".bias"), data_torch)
             return
         if name.endswith("mamba.A_log"):
+            print("DEBUG hit A_log branch for", name)
             logger.debug("A_log --> A ==> " + name)
             reshaped = (-torch.exp(data_torch)).reshape((*data_torch.shape, 1))
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_A, bid), reshaped)
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_A, bid, suffix=""), reshaped)
             return
         if name.endswith("mamba.D"):
             reshaped = data_torch.reshape((*data_torch.shape, 1))
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_D, bid), reshaped)
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_D, bid, suffix=""), reshaped)
             return
 
         raise ValueError(f"microdavi: unhandled tensor name {name!r}")
@@ -283,11 +284,11 @@ class MicroDaviModel(Mamba2Model):
         if name.endswith("mamba.A_log"):
             logger.debug("A_log --> A ==> " + name)
             reshaped = (-torch.exp(data_torch)).reshape((*data_torch.shape, 1))
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_A, bid), reshaped)
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_A, bid, suffix=""), reshaped)
             return
         if name.endswith("mamba.D"):
             reshaped = data_torch.reshape((*data_torch.shape, 1))
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_D, bid), reshaped)
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_D, bid, suffix=""), reshaped)
             return
 
         raise ValueError(f"microdavi: unhandled tensor name {name!r}")
