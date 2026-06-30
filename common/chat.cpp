@@ -2911,6 +2911,12 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         }
         LOG_WRN("%s: unparsed %s output: %s\n", __func__, common_chat_format_name(params.format), effective_input.substr(result.end).c_str());
         LOG_DBG("%s: full %s output triggering error:\n=== BEGIN ===\n%s\n=== END ===\n", __func__, common_chat_format_name(params.format), effective_input.c_str());
+        if (params.reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+            common_chat_msg msg;
+            msg.role = "assistant";
+            msg.content = input;
+            return msg;
+        }
         throw std::runtime_error(std::string("The model produced output that does not match the expected ") + common_chat_format_name(params.format) + " format");
     }
 

@@ -475,7 +475,10 @@ class DeepseekV32Model(DeepseekV2Model):
 @ModelBase.register("DeepseekV4ForCausalLM")
 class DeepseekV4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK4
+    supports_mtp_export = True
     _skipped_mtp_tensors = 0
+    _dsv4_main_layers: int | None = None
+    _dsv4_nextn_layers: int = 0
 
     def __init__(self, *args, **kwargs):
         type(self)._skipped_mtp_tensors = 0
@@ -487,6 +490,8 @@ class DeepseekV4Model(TextModel):
             self.hparams.setdefault(key, value)
 
         self.block_count = self.hparams["num_hidden_layers"]
+        if self.mtp_only:
+            self.block_count += self.hparams.get("num_nextn_predict_layers", 0)
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
         self._dsv4_fp8_dequantized: set[str] = set()
@@ -504,13 +509,63 @@ class DeepseekV4Model(TextModel):
             with open(template_path, "r", encoding="utf-8") as f:
                 self.gguf_writer.add_chat_template(f.read())
 
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        type(self)._dsv4_main_layers = self.hparams["num_hidden_layers"]
+        type(self)._dsv4_nextn_layers = self.hparams.get("num_nextn_predict_layers", 0)
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, _ = item
+        name, gen = item
         if name.startswith("mtp."):
-            cls._skipped_mtp_tensors += 1
-            return None
-        return super().filter_tensors(item)
+            if not cls.mtp_only:
+                cls._skipped_mtp_tensors += 1
+                return None
+
+            assert cls._dsv4_main_layers is not None
+            parts = name.split(".", 2)
+            if len(parts) < 3 or not parts[1].isdecimal():
+                raise ValueError(f"Unexpected DeepSeek-V4 MTP tensor {name!r}")
+
+            mtp_idx = int(parts[1])
+            if mtp_idx >= cls._dsv4_nextn_layers:
+                raise ValueError(f"Unexpected DeepSeek-V4 MTP layer {mtp_idx}")
+
+            bid = cls._dsv4_main_layers + mtp_idx
+            suffix = parts[2]
+            root_hc_head = {
+                "hc_head_fn",
+                "hc_head_base",
+                "hc_head_scale",
+            }
+            if suffix in root_hc_head:
+                name = suffix
+            elif suffix in (
+                "e_proj.weight", "e_proj.scale",
+                "h_proj.weight", "h_proj.scale",
+            ):
+                name = f"layers.{bid}.nextn.{suffix}"
+            elif suffix == "enorm.weight":
+                name = f"layers.{bid}.nextn.enorm.weight"
+            elif suffix == "hnorm.weight":
+                name = f"layers.{bid}.nextn.hnorm.weight"
+            elif suffix == "norm.weight":
+                name = f"layers.{bid}.nextn.shared_head_norm.weight"
+            else:
+                name = f"layers.{bid}.{suffix}"
+            return name, gen
+
+        if cls.mtp_only:
+            keep = name in (
+                "embed.weight",
+                "norm.weight",
+                "head.weight",
+                "head.scale",
+            )
+            if not keep:
+                return None
+
+        return super().filter_tensors((name, gen))
 
     @staticmethod
     def _float8_dtypes() -> tuple[torch.dtype, ...]:
@@ -565,6 +620,9 @@ class DeepseekV4Model(TextModel):
         self.gguf_writer.add_hyper_connection_sinkhorn_iterations(hparams["hc_sinkhorn_iters"])
         self.gguf_writer.add_hyper_connection_epsilon(hparams["hc_eps"])
         self.gguf_writer.add_hash_layer_count(hparams["num_hash_layers"])
+        self.gguf_writer.add_embedding_length_out(hparams["hidden_size"] * hparams["hc_mult"])
+        if self.mtp_only and (num_nextn_predict_layers := hparams.get("num_nextn_predict_layers", 0)) > 0:
+            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
 
     def dequant_model(self):
         fp8_dtypes = self._float8_dtypes()
@@ -669,11 +727,36 @@ class DeepseekV4Model(TextModel):
         if self._dsv4_mxfp4_generated:
             return ()
 
-        consumed: list[str] = self._write_hash_routing_tensors()
+        consumed: list[str] = []
+        main_layers = self.hparams["num_hidden_layers"]
+        if not self.mtp_only:
+            consumed.extend(self._write_hash_routing_tensors())
+        elif self.hparams["num_hash_layers"] > 0:
+            for bid in range(self.hparams["num_hash_layers"]):
+                name = f"layers.{bid}.ffn.gate.tid2eid"
+                if name in self.model_tensors:
+                    consumed.extend(self._write_hash_routing_tensors())
+                    break
+
         for bid in range(self.block_count):
+            if self.mtp_only and bid < main_layers:
+                continue
             consumed.extend(self._write_mxfp4_expert_tensor(bid, "w1", gguf.MODEL_TENSOR.FFN_GATE_EXP))
             consumed.extend(self._write_mxfp4_expert_tensor(bid, "w2", gguf.MODEL_TENSOR.FFN_DOWN_EXP))
             consumed.extend(self._write_mxfp4_expert_tensor(bid, "w3", gguf.MODEL_TENSOR.FFN_UP_EXP))
+
+        for bid in range(main_layers, self.block_count):
+            e_name = f"layers.{bid}.nextn.e_proj.weight"
+            h_name = f"layers.{bid}.nextn.h_proj.weight"
+            if e_name not in self.model_tensors and h_name not in self.model_tensors:
+                continue
+            if e_name not in self.model_tensors or h_name not in self.model_tensors:
+                raise KeyError(f"Missing DeepSeek-V4 MTP e/h projection pair for block {bid}")
+
+            e_proj = LazyTorchTensor.to_eager(self.model_tensors[e_name]())
+            h_proj = LazyTorchTensor.to_eager(self.model_tensors[h_name]())
+            yield (f"layers.{bid}.nextn.eh_proj.weight", torch.cat((e_proj, h_proj), dim=1).contiguous())
+            consumed.extend((e_name, h_name))
 
         for name in consumed:
             del self.model_tensors[name]
@@ -737,6 +820,12 @@ class DeepseekV4Model(TextModel):
             "ffn.shared_experts.w1.weight": (gguf.MODEL_TENSOR.FFN_GATE_SHEXP, ".weight"),
             "ffn.shared_experts.w2.weight": (gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, ".weight"),
             "ffn.shared_experts.w3.weight": (gguf.MODEL_TENSOR.FFN_UP_SHEXP, ".weight"),
+            "nextn.eh_proj.weight": (gguf.MODEL_TENSOR.NEXTN_EH_PROJ, ".weight"),
+            "nextn.enorm.weight": (gguf.MODEL_TENSOR.NEXTN_ENORM, ".weight"),
+            "nextn.hnorm.weight": (gguf.MODEL_TENSOR.NEXTN_HNORM, ".weight"),
+            "nextn.shared_head_norm.weight": (gguf.MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM, ".weight"),
+            "nextn.embed_tokens.weight": (gguf.MODEL_TENSOR.NEXTN_EMBED_TOKENS, ".weight"),
+            "nextn.shared_head_head.weight": (gguf.MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD, ".weight"),
         }
 
         tensor_name = match.group(2)
@@ -759,9 +848,11 @@ class DeepseekV4Model(TextModel):
         return [(self._format_dsv4_tensor_name(tensor_key, bid, suffix), data_torch)]
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
-        del new_name, bid  # unused
+        del bid  # unused
 
         if name in self._dsv4_fp8_dequantized and n_dims >= 2:
+            return gguf.GGMLQuantizationType.Q8_0
+        if new_name.endswith(".nextn.eh_proj.weight"):
             return gguf.GGMLQuantizationType.Q8_0
         if name in self._dsv4_f32_tensors:
             return gguf.GGMLQuantizationType.F32
@@ -769,6 +860,19 @@ class DeepseekV4Model(TextModel):
             return gguf.GGMLQuantizationType.BF16
 
         return False
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)
+
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     def prepare_tensors(self):
         super().prepare_tensors()
