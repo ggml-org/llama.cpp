@@ -74,6 +74,10 @@ def parse_args() -> argparse.Namespace:
         help="use the tempfile library while processing (helpful when running out of memory, process killed)",
     )
     parser.add_argument(
+        "--temp-dir", type=str, default=None,
+        help="directory to store temporary files when using --use-temp-file (default: system temp directory)",
+    )
+    parser.add_argument(
         "--no-lazy", action="store_true",
         help="use more RAM by computing all outputs before writing (use in case lazy evaluation is broken)",
     )
@@ -216,6 +220,13 @@ def main() -> None:
         logger.error("Error: Cannot use temp file when splitting")
         sys.exit(1)
 
+    if args.temp_dir is not None:
+        if not args.use_temp_file:
+            logger.warning("Warning: --temp-dir is ignored without --use-temp-file")
+        elif not os.path.isdir(args.temp_dir):
+            logger.error(f"Error: Temp directory does not exist: {args.temp_dir}")
+            sys.exit(1)
+
     if args.outfile is not None:
         fname_out = args.outfile
     elif hf_repo_id:
@@ -271,6 +282,7 @@ def main() -> None:
 
         model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
+                                     temp_dir=args.temp_dir,
                                      eager=args.no_lazy,
                                      metadata_override=args.metadata, model_name=args.model_name,
                                      split_max_tensors=args.split_max_tensors,
