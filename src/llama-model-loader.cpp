@@ -28,52 +28,47 @@ const char * llama_file_version_name(llama_fver version) {
 }
 
 const char * llama_ftype_name(llama_ftype ftype) {
-    if (ftype & LLAMA_FTYPE_GUESSED) {
-        static std::string s;
-        s  = llama_ftype_name((enum llama_ftype) (ftype & ~LLAMA_FTYPE_GUESSED));
-        s += " (guessed)";
-        return s.c_str();
+    static constexpr size_t guessed_prefix_len = sizeof("(guessed) ") - 1;
+    const char * name;
+    switch ((enum llama_ftype) (ftype & ~LLAMA_FTYPE_GUESSED)) {
+        case LLAMA_FTYPE_ALL_F32:          name = "(guessed) all F32"; break;
+        case LLAMA_FTYPE_MOSTLY_F16:       name = "(guessed) F16"; break;
+        case LLAMA_FTYPE_MOSTLY_BF16:      name = "(guessed) BF16"; break;
+        case LLAMA_FTYPE_MOSTLY_Q1_0:      name = "(guessed) Q1_0"; break;
+        case LLAMA_FTYPE_MOSTLY_Q4_0:      name = "(guessed) Q4_0"; break;
+        case LLAMA_FTYPE_MOSTLY_Q4_1:      name = "(guessed) Q4_1"; break;
+        case LLAMA_FTYPE_MOSTLY_Q5_0:      name = "(guessed) Q5_0"; break;
+        case LLAMA_FTYPE_MOSTLY_Q5_1:      name = "(guessed) Q5_1"; break;
+        case LLAMA_FTYPE_MOSTLY_Q8_0:      name = "(guessed) Q8_0"; break;
+        case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: name = "(guessed) MXFP4 MoE"; break;
+        case LLAMA_FTYPE_MOSTLY_NVFP4:     name = "(guessed) NVFP4"; break;
+        case LLAMA_FTYPE_MOSTLY_Q2_K:      name = "(guessed) Q2_K - Medium"; break;
+        case LLAMA_FTYPE_MOSTLY_Q2_K_S:    name = "(guessed) Q2_K - Small"; break;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_S:    name = "(guessed) Q3_K - Small"; break;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_M:    name = "(guessed) Q3_K - Medium"; break;
+        case LLAMA_FTYPE_MOSTLY_Q3_K_L:    name = "(guessed) Q3_K - Large"; break;
+        case LLAMA_FTYPE_MOSTLY_Q4_K_S:    name = "(guessed) Q4_K - Small"; break;
+        case LLAMA_FTYPE_MOSTLY_Q4_K_M:    name = "(guessed) Q4_K - Medium"; break;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_S:    name = "(guessed) Q5_K - Small"; break;
+        case LLAMA_FTYPE_MOSTLY_Q5_K_M:    name = "(guessed) Q5_K - Medium"; break;
+        case LLAMA_FTYPE_MOSTLY_Q6_K:      name = "(guessed) Q6_K"; break;
+        case LLAMA_FTYPE_MOSTLY_TQ1_0:     name = "(guessed) TQ1_0 - 1.69 bpw ternary"; break;
+        case LLAMA_FTYPE_MOSTLY_TQ2_0:     name = "(guessed) TQ2_0 - 2.06 bpw ternary"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_XXS:   name = "(guessed) IQ2_XXS - 2.0625 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_XS:    name = "(guessed) IQ2_XS - 2.3125 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_S:     name = "(guessed) IQ2_S - 2.5 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ2_M:     name = "(guessed) IQ2_M - 2.7 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ3_XS:    name = "(guessed) IQ3_XS - 3.3 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ3_XXS:   name = "(guessed) IQ3_XXS - 3.0625 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ1_S:     name = "(guessed) IQ1_S - 1.5625 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ1_M:     name = "(guessed) IQ1_M - 1.75 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ4_NL:    name = "(guessed) IQ4_NL - 4.5 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ4_XS:    name = "(guessed) IQ4_XS - 4.25 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ3_S:     name = "(guessed) IQ3_S - 3.4375 bpw"; break;
+        case LLAMA_FTYPE_MOSTLY_IQ3_M:     name = "(guessed) IQ3_S mix - 3.66 bpw"; break;
+        default:                           name = "(guessed) unknown, may not work"; break;
     }
-
-    switch (ftype) {
-        case LLAMA_FTYPE_ALL_F32:         return "all F32";
-        case LLAMA_FTYPE_MOSTLY_F16:      return "F16";
-        case LLAMA_FTYPE_MOSTLY_BF16:     return "BF16";
-        case LLAMA_FTYPE_MOSTLY_Q1_0:     return "Q1_0";
-        case LLAMA_FTYPE_MOSTLY_Q4_0:     return "Q4_0";
-        case LLAMA_FTYPE_MOSTLY_Q4_1:     return "Q4_1";
-        case LLAMA_FTYPE_MOSTLY_Q5_0:     return "Q5_0";
-        case LLAMA_FTYPE_MOSTLY_Q5_1:     return "Q5_1";
-        case LLAMA_FTYPE_MOSTLY_Q8_0:     return "Q8_0";
-        case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return "MXFP4 MoE";
-        case LLAMA_FTYPE_MOSTLY_NVFP4:    return "NVFP4";
-        case LLAMA_FTYPE_MOSTLY_Q2_K:     return "Q2_K - Medium";
-        case LLAMA_FTYPE_MOSTLY_Q2_K_S:   return "Q2_K - Small";
-        case LLAMA_FTYPE_MOSTLY_Q3_K_S:   return "Q3_K - Small";
-        case LLAMA_FTYPE_MOSTLY_Q3_K_M:   return "Q3_K - Medium";
-        case LLAMA_FTYPE_MOSTLY_Q3_K_L:   return "Q3_K - Large";
-        case LLAMA_FTYPE_MOSTLY_Q4_K_S:   return "Q4_K - Small";
-        case LLAMA_FTYPE_MOSTLY_Q4_K_M:   return "Q4_K - Medium";
-        case LLAMA_FTYPE_MOSTLY_Q5_K_S:   return "Q5_K - Small";
-        case LLAMA_FTYPE_MOSTLY_Q5_K_M:   return "Q5_K - Medium";
-        case LLAMA_FTYPE_MOSTLY_Q6_K:     return "Q6_K";
-        case LLAMA_FTYPE_MOSTLY_TQ1_0:    return "TQ1_0 - 1.69 bpw ternary";
-        case LLAMA_FTYPE_MOSTLY_TQ2_0:    return "TQ2_0 - 2.06 bpw ternary";
-        case LLAMA_FTYPE_MOSTLY_IQ2_XXS:  return "IQ2_XXS - 2.0625 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ2_XS:   return "IQ2_XS - 2.3125 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ2_S:    return "IQ2_S - 2.5 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ2_M:    return "IQ2_M - 2.7 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ3_XS:   return "IQ3_XS - 3.3 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ3_XXS:  return "IQ3_XXS - 3.0625 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ1_S:    return "IQ1_S - 1.5625 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ1_M:    return "IQ1_M - 1.75 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ4_NL:   return "IQ4_NL - 4.5 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ4_XS:   return "IQ4_XS - 4.25 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ3_S:    return "IQ3_S - 3.4375 bpw";
-        case LLAMA_FTYPE_MOSTLY_IQ3_M:    return "IQ3_S mix - 3.66 bpw";
-
-        default: return "unknown, may not work";
-    }
+    return (ftype & LLAMA_FTYPE_GUESSED) ? name : name + guessed_prefix_len;
 }
 
 // return a list of splits for a given path
