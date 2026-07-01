@@ -201,6 +201,8 @@ llama_model_granite_switch::graph::graph(
 
     const auto & smodel = static_cast<const llama_model_granite_switch &>(model);
 
+    GGML_ASSERT(ubatch.token && "granite-switch requires token input");
+
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
     GGML_ASSERT(n_embd_head == n_rot);
