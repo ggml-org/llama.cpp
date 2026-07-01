@@ -4052,6 +4052,13 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     }
 }
 
+static bool mmq_use_routed_moe_ncols_picker(const int cc) {
+    return GGML_CUDA_CC_IS_CDNA(cc) ||
+           GGML_CUDA_CC_IS_RDNA2(cc) ||
+           GGML_CUDA_CC_IS_RDNA3(cc) ||
+           GGML_CUDA_CC_IS_RDNA4(cc);
+}
+
 template <ggml_type type>
 void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
     const int    id     = ggml_cuda_get_device();
@@ -4066,6 +4073,17 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     int mmq_x_best  = 0;
     int ntiles_x_best = INT_MAX;
 
+    int64_t ncols_picker = args.ncols_max;
+    if (args.expert_bounds != nullptr && mmq_use_routed_moe_ncols_picker(cc) && args.nchannels_x > 0) {
+        // In routed MoE, ncols_max is the worst-case per-expert width. Size the
+        // MMQ N-tile from the typical routed width while it is below the current
+        // architecture's max tile width. The launch grid still uses args.ncols_max.
+        const int64_t ncols_typical = (args.ncols_dst + args.nchannels_x - 1) / args.nchannels_x;
+        if (ncols_typical >= 1 && ncols_typical < mmq_x_max && ncols_typical < ncols_picker) {
+            ncols_picker = ncols_typical;
+        }
+    }
+
     for (int mmq_x = 8; mmq_x <= mmq_x_max && ntiles_x_best > 1; mmq_x += 8) {
         const int granularity = mmq_get_granularity_host(mmq_x, cc);
 
@@ -4073,7 +4091,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
             continue;
         }
 
-        const int ntiles_x = (args.ncols_max + mmq_x - 1) / mmq_x;
+        const int ntiles_x = (ncols_picker + mmq_x - 1) / mmq_x;
 
         if (ntiles_x < ntiles_x_best) {
             mmq_x_best = mmq_x;
