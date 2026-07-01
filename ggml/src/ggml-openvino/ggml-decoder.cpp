@@ -369,6 +369,57 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         return -1;
     };
 
+    // Extract (cache_k, mask) for an attention node, or {nullptr, nullptr} if it is not one.
+    auto get_attention_cache_k_and_mask =
+        [&get_attention_pattern_case](const ggml_tensor * node) -> std::pair<ggml_tensor *, ggml_tensor *> {
+        const int pattern_case = get_attention_pattern_case(node);
+        ggml_tensor * cache_k_permute = nullptr;
+        ggml_tensor * mask = nullptr;
+        switch (pattern_case) {
+        case 0: cache_k_permute = node->src[1];                    mask = node->src[3]; break;
+        case 1: cache_k_permute = node->src[1]->src[0];            mask = node->src[3]; break;
+        case 2: cache_k_permute = node->src[0]->src[0];            mask = node->src[1]; break;
+        case 3: cache_k_permute = node->src[0]->src[0]->src[0];    mask = node->src[1]; break;
+        default: return {nullptr, nullptr};
+        }
+        if (cache_k_permute == nullptr || mask == nullptr) {
+            return {nullptr, nullptr};
+        }
+        ggml_tensor * cache_k_view = cache_k_permute->src[0];
+        if (cache_k_view->op != GGML_OP_VIEW) {
+            return {nullptr, nullptr};
+        }
+        return {cache_k_view->src[0], mask};
+    };
+
+    // Identify the sliding-window-attention (SWA) mask structurally and tag it by name.
+    // llama.cpp names both the full-attention and SWA KQ masks "attn_inp_kq_mask" (neither
+    // contains "swa"), so the SWA layers cannot be distinguished by name. With iSWA the
+    // sliding-window KV cache is strictly smaller than the full-attention cache, so detect the
+    // SWA attention by its smaller cache size and rename its mask in place. This makes the
+    // name-based SWA logic below (and in get_graph_input_ov_name and the op translators) work,
+    // and makes the two masks map to distinct OV graph inputs instead of collapsing into one.
+    // Without this, SWA layers read the full-attention mask, whose kv length diverges from the
+    // SWA one once the prompt exceeds the SWA cache size, producing a shape-mismatched Add.
+    {
+        int64_t base_kv_cache_size = 0;
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            ggml_tensor * cache_k = get_attention_cache_k_and_mask(cgraph->nodes[i]).first;
+            if (cache_k != nullptr) {
+                base_kv_cache_size = std::max(base_kv_cache_size, cache_k->ne[1]);
+            }
+        }
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            auto cache_k_mask = get_attention_cache_k_and_mask(cgraph->nodes[i]);
+            ggml_tensor * cache_k = cache_k_mask.first;
+            ggml_tensor * mask = cache_k_mask.second;
+            if (cache_k != nullptr && mask != nullptr && cache_k->ne[1] < base_kv_cache_size &&
+                std::string(mask->name).find("swa") == std::string::npos) {
+                ggml_set_name(mask, "attn_inp_kq_mask_swa");
+            }
+        }
+    }
+
     bool rope_seen = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         auto * node = cgraph->nodes[i];
