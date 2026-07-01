@@ -72,6 +72,24 @@ static __global__ void k_lerp_fused_f32(
     dst[idx] = c + (x_prev[ixp] - c) * weight[iw];
 }
 
+static __global__ void k_lerp_fused_rwv_contig_f32(
+        const float * __restrict__ x_prev,
+        const float * __restrict__ cur,
+        const float * __restrict__ weight,
+        float * __restrict__ dst,
+        const int64_t ne0,
+        const int64_t base_total) {
+    const int64_t ibase = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (ibase >= base_total) {
+        return;
+    }
+
+    const int64_t imix = blockIdx.y;
+    const int64_t i0   = ibase % ne0;
+    const float c = cur[ibase];
+    dst[imix * base_total + ibase] = c + (x_prev[ibase] - c) * weight[imix * ne0 + i0];
+}
+
 static __global__ void k_mul_sub_add_fused_f32(
         const float * __restrict__ base,
         const float * __restrict__ scale,
@@ -679,6 +697,34 @@ void ggml_cuda_op_lerp_fused(
     const int64_t grid  = (total + block - 1) / block;
 
     GGML_ASSERT(grid <= std::numeric_limits<uint32_t>::max());
+
+    const int64_t base_total = ggml_nelements(x_prev);
+    const int64_t n_mix      = dst->ne[3];
+
+    if (ggml_are_same_shape(x_prev, cur) &&
+            dst->ne[0] == x_prev->ne[0] &&
+            dst->ne[1] == x_prev->ne[1] &&
+            dst->ne[2] == x_prev->ne[2] &&
+            total == base_total * n_mix &&
+            weight->ne[0] == dst->ne[0] &&
+            weight->ne[1] == 1 &&
+            weight->ne[2] == 1 &&
+            weight->ne[3] == n_mix &&
+            ggml_nelements(weight) == dst->ne[0] * n_mix) {
+        const int64_t base_grid = (base_total + block - 1) / block;
+        GGML_ASSERT(base_grid <= std::numeric_limits<uint32_t>::max());
+        GGML_ASSERT(n_mix      <= std::numeric_limits<uint32_t>::max());
+
+        const ggml_cuda_kernel_launch_params launch_params(dim3((uint32_t) base_grid, (uint32_t) n_mix), block, 0, ctx.stream());
+        ggml_cuda_kernel_launch(k_lerp_fused_rwv_contig_f32, launch_params,
+                (const float *) x_prev->data,
+                (const float *) cur->data,
+                (const float *) weight->data,
+                (float *) dst->data,
+                dst->ne[0],
+                base_total);
+        return;
+    }
 
     auto stride = [](const ggml_tensor * t, int dim) {
         return int64_t(t->nb[dim] / ggml_element_size(t));
