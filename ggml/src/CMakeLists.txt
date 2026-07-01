@@ -206,6 +206,8 @@ add_library(ggml-base
             ggml-threading.h
             ggml-quants.c
             ggml-quants.h
+            ../rocmfp4/rocmfp4.c
+            ../rocmfp4/rocmfp4.h
             gguf.cpp)
 
 set_target_properties(ggml-base PROPERTIES
