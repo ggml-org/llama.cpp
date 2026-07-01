@@ -318,9 +318,19 @@ export class ChatService {
 					: samplers;
 		}
 
-		if (backend_sampling !== undefined) requestBody.backend_sampling = backend_sampling;
+		if (backend_sampling !== undefined) {
+			requestBody.backend_sampling =
+				typeof backend_sampling === 'string'
+					? backend_sampling === 'true'
+					: Boolean(backend_sampling);
+		}
 
-		if (timings_per_token !== undefined) requestBody.timings_per_token = timings_per_token;
+		if (timings_per_token !== undefined) {
+			requestBody.timings_per_token =
+				typeof timings_per_token === 'string'
+					? timings_per_token === 'true'
+					: Boolean(timings_per_token);
+		}
 
 		if (custom) {
 			try {
