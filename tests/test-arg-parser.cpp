@@ -2,7 +2,9 @@
 #include "common.h"
 #include "download.h"
 #include "llama.h"
+#include "speculative.h"
 
+#include <limits>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -13,6 +15,14 @@
 
 static void test(void) {
     common_params params;
+
+    assert(common_speculative_n_outputs_max(16, 2, 3) == 8);
+    assert(common_speculative_n_outputs_max(16, 2, -1) == 2);
+    assert(common_speculative_n_outputs_max(4, 2, 3) == 4);
+    assert(common_speculative_n_outputs_max(
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max()) == std::numeric_limits<int32_t>::max());
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
