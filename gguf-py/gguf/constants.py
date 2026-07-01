@@ -989,21 +989,6 @@ class MODEL_TENSOR(IntEnum):
     A_QF_FFN_UP            = auto()
     A_QF_FFN_DOWN          = auto()
     A_QF_FFN_NORM          = auto()
-    # per-token embedded LoRA adapters - Granite Switch
-    ATTN_Q_LORA_A          = auto()
-    ATTN_Q_LORA_B          = auto()
-    ATTN_K_LORA_A          = auto()
-    ATTN_K_LORA_B          = auto()
-    ATTN_V_LORA_A          = auto()
-    ATTN_V_LORA_B          = auto()
-    ATTN_OUT_LORA_A        = auto()
-    ATTN_OUT_LORA_B        = auto()
-    FFN_GATE_LORA_A        = auto()
-    FFN_GATE_LORA_B        = auto()
-    FFN_UP_LORA_A          = auto()
-    FFN_UP_LORA_B          = auto()
-    FFN_DOWN_LORA_A        = auto()
-    FFN_DOWN_LORA_B        = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -1582,21 +1567,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
     MODEL_TENSOR.FC:                        "fc",
     MODEL_TENSOR.D2T:                       "d2t",
-    # per-token embedded LoRA adapters - Granite Switch
-    MODEL_TENSOR.ATTN_Q_LORA_A:             "blk.{bid}.attn_q.lora_a",
-    MODEL_TENSOR.ATTN_Q_LORA_B:             "blk.{bid}.attn_q.lora_b",
-    MODEL_TENSOR.ATTN_K_LORA_A:             "blk.{bid}.attn_k.lora_a",
-    MODEL_TENSOR.ATTN_K_LORA_B:             "blk.{bid}.attn_k.lora_b",
-    MODEL_TENSOR.ATTN_V_LORA_A:             "blk.{bid}.attn_v.lora_a",
-    MODEL_TENSOR.ATTN_V_LORA_B:             "blk.{bid}.attn_v.lora_b",
-    MODEL_TENSOR.ATTN_OUT_LORA_A:           "blk.{bid}.attn_output.lora_a",
-    MODEL_TENSOR.ATTN_OUT_LORA_B:           "blk.{bid}.attn_output.lora_b",
-    MODEL_TENSOR.FFN_GATE_LORA_A:           "blk.{bid}.ffn_gate.lora_a",
-    MODEL_TENSOR.FFN_GATE_LORA_B:           "blk.{bid}.ffn_gate.lora_b",
-    MODEL_TENSOR.FFN_UP_LORA_A:             "blk.{bid}.ffn_up.lora_a",
-    MODEL_TENSOR.FFN_UP_LORA_B:             "blk.{bid}.ffn_up.lora_b",
-    MODEL_TENSOR.FFN_DOWN_LORA_A:           "blk.{bid}.ffn_down.lora_a",
-    MODEL_TENSOR.FFN_DOWN_LORA_B:           "blk.{bid}.ffn_down.lora_b",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -3712,25 +3682,14 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.OUTPUT,
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
-        MODEL_TENSOR.ATTN_Q_LORA_A,
-        MODEL_TENSOR.ATTN_Q_LORA_B,
-        MODEL_TENSOR.ATTN_K_LORA_A,
-        MODEL_TENSOR.ATTN_K_LORA_B,
-        MODEL_TENSOR.ATTN_V_LORA_A,
-        MODEL_TENSOR.ATTN_V_LORA_B,
-        MODEL_TENSOR.ATTN_OUT_LORA_A,
-        MODEL_TENSOR.ATTN_OUT_LORA_B,
-        MODEL_TENSOR.FFN_GATE_LORA_A,
-        MODEL_TENSOR.FFN_GATE_LORA_B,
-        MODEL_TENSOR.FFN_UP_LORA_A,
-        MODEL_TENSOR.FFN_UP_LORA_B,
-        MODEL_TENSOR.FFN_DOWN_LORA_A,
-        MODEL_TENSOR.FFN_DOWN_LORA_B,
     ],
     MODEL_ARCH.CHAMELEON: [
         MODEL_TENSOR.TOKEN_EMBD,

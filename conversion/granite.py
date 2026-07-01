@@ -207,17 +207,17 @@ class GraniteSwitchModel(GraniteMoeModel):
                 return
             if "lora_A_slices." in name:
                 slot = int(name.rsplit(".", 1)[1])
-                key = {0: T.ATTN_Q_LORA_A, 1: T.ATTN_K_LORA_A, 2: T.ATTN_V_LORA_A}[slot]
-                yield (self.format_tensor_name(key, bid, suffix=""), self._lora_a(data_torch))
+                key = {0: T.ATTN_Q, 1: T.ATTN_K, 2: T.ATTN_V}[slot]
+                yield (self.format_tensor_name(key, bid, suffix=".lora_a"), self._lora_a(data_torch))
                 return
             if "lora_B_slices." in name:
                 slot = int(name.rsplit(".", 1)[1])
                 key, ph = {
-                    0: (T.ATTN_Q_LORA_B, self._n_head),
-                    1: (T.ATTN_K_LORA_B, self._n_kv_head),
-                    2: (T.ATTN_V_LORA_B, None),
+                    0: (T.ATTN_Q, self._n_head),
+                    1: (T.ATTN_K, self._n_kv_head),
+                    2: (T.ATTN_V, None),
                 }[slot]
-                yield (self.format_tensor_name(key, bid, suffix=""), self._lora_b(data_torch, ph))
+                yield (self.format_tensor_name(key, bid, suffix=".lora_b"), self._lora_b(data_torch, ph))
                 return
             raise ValueError(f"Unexpected qkv_proj tensor: {name}")
 
@@ -226,10 +226,10 @@ class GraniteSwitchModel(GraniteMoeModel):
                 yield (self.format_tensor_name(T.ATTN_OUT, bid), data_torch)
                 return
             if name.endswith("lora_A"):
-                yield (self.format_tensor_name(T.ATTN_OUT_LORA_A, bid, suffix=""), self._lora_a(data_torch))
+                yield (self.format_tensor_name(T.ATTN_OUT, bid, suffix=".lora_a"), self._lora_a(data_torch))
                 return
             if name.endswith("lora_B"):
-                yield (self.format_tensor_name(T.ATTN_OUT_LORA_B, bid, suffix=""), self._lora_b(data_torch))
+                yield (self.format_tensor_name(T.ATTN_OUT, bid, suffix=".lora_b"), self._lora_b(data_torch))
                 return
             raise ValueError(f"Unexpected o_proj tensor: {name}")
 
@@ -242,13 +242,13 @@ class GraniteSwitchModel(GraniteMoeModel):
                 return
             if "lora_A_slices." in name:
                 slot = int(name.rsplit(".", 1)[1])
-                key = {0: T.FFN_GATE_LORA_A, 1: T.FFN_UP_LORA_A}[slot]
-                yield (self.format_tensor_name(key, bid, suffix=""), self._lora_a(data_torch))
+                key = {0: T.FFN_GATE, 1: T.FFN_UP}[slot]
+                yield (self.format_tensor_name(key, bid, suffix=".lora_a"), self._lora_a(data_torch))
                 return
             if "lora_B_slices." in name:
                 slot = int(name.rsplit(".", 1)[1])
-                key = {0: T.FFN_GATE_LORA_B, 1: T.FFN_UP_LORA_B}[slot]
-                yield (self.format_tensor_name(key, bid, suffix=""), self._lora_b(data_torch))
+                key = {0: T.FFN_GATE, 1: T.FFN_UP}[slot]
+                yield (self.format_tensor_name(key, bid, suffix=".lora_b"), self._lora_b(data_torch))
                 return
             raise ValueError(f"Unexpected shared_mlp.input_linear tensor: {name}")
 
@@ -257,10 +257,10 @@ class GraniteSwitchModel(GraniteMoeModel):
                 yield (self.format_tensor_name(T.FFN_DOWN, bid), data_torch)
                 return
             if name.endswith("lora_A"):
-                yield (self.format_tensor_name(T.FFN_DOWN_LORA_A, bid, suffix=""), self._lora_a(data_torch))
+                yield (self.format_tensor_name(T.FFN_DOWN, bid, suffix=".lora_a"), self._lora_a(data_torch))
                 return
             if name.endswith("lora_B"):
-                yield (self.format_tensor_name(T.FFN_DOWN_LORA_B, bid, suffix=""), self._lora_b(data_torch))
+                yield (self.format_tensor_name(T.FFN_DOWN, bid, suffix=".lora_b"), self._lora_b(data_torch))
                 return
             raise ValueError(f"Unexpected shared_mlp.output_linear tensor: {name}")
 
