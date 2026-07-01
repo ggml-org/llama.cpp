@@ -582,6 +582,8 @@ extern "C" {
 
     LLAMA_API int32_t llama_vocab_n_tokens(const struct llama_vocab * vocab);
 
+    LLAMA_API int32_t llama_vocab_max_token_len(const struct llama_vocab * vocab);
+
     // Functions to access the model's GGUF metadata scalar values
     // - The functions return the length of the string on success, or -1 on failure
     // - The output string is always null-terminated and cleared on failure
