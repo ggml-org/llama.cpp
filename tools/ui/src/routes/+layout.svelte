@@ -47,6 +47,7 @@
 	);
 	let mcpRecommendationsOpen = $state(false);
 	let mcpRecommendationsChecked = $state(false);
+	let mcpRecommendationsTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	let chatSidebar:
 		| {
@@ -272,19 +273,28 @@
 		}
 	});
 
-	// Prompt the user once to opt-in to suggested MCP servers
+	// Prompt the user once to opt-in to suggested MCP servers, after a short delay
 	$effect(() => {
 		if (!browser) return;
-		if (mcpRecommendationsDismissed || mcpRecommendationsOpen || mcpRecommendationsChecked) {
+
+		if (mcpRecommendationsOpen || mcpRecommendationsDismissed) {
+			if (mcpRecommendationsTimeout) {
+				clearTimeout(mcpRecommendationsTimeout);
+				mcpRecommendationsTimeout = null;
+			}
 			return;
 		}
+
+		if (mcpRecommendationsChecked) return;
 
 		const hasRecommendations = mcpStore
 			.getServers()
 			.some((server) => RECOMMENDED_MCP_SERVER_IDS.has(server.id));
 
 		if (hasRecommendations) {
-			mcpRecommendationsOpen = true;
+			mcpRecommendationsTimeout = setTimeout(() => {
+				mcpRecommendationsOpen = true;
+			}, 2000);
 		}
 
 		mcpRecommendationsChecked = true;

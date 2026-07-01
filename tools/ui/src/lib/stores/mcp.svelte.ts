@@ -70,6 +70,7 @@ import type {
 	Tool,
 	HealthCheckState,
 	MCPServerSettingsEntry,
+	MCPServerDisplayInfo,
 	MCPServerConfig,
 	MCPResourceIcon,
 	MCPResourceAttachment,
@@ -365,7 +366,7 @@ class MCPStore {
 		return this.connections;
 	}
 
-	getServerLabel(server: MCPServerSettingsEntry): string {
+	getServerLabel(server: MCPServerDisplayInfo): string {
 		const healthState = this.getHealthCheckState(server.id);
 
 		if (healthState?.status === HealthCheckStatus.SUCCESS)

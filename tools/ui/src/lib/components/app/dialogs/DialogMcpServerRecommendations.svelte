@@ -1,10 +1,15 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
+	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { McpServerCard } from '$lib/components/app/mcp';
+	import { fly } from 'svelte/transition';
+	import { McpServerCardCompact, McpServerForm } from '$lib/components/app/mcp';
 	import { RECOMMENDED_MCP_SERVERS } from '$lib/constants';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { uuid } from '$lib/utils';
+	import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
+	import { Plus } from '@lucide/svelte';
 
 	interface Props {
 		open: boolean;
@@ -17,9 +22,34 @@
 		Object.fromEntries(RECOMMENDED_MCP_SERVERS.map((server) => [server.id, false]))
 	);
 
+	let showAddForm = $state(false);
+	let newServerUrl = $state('');
+	let newServerHeaders = $state('');
+	let newServerUrlError = $derived.by(() => {
+		if (!newServerUrl.trim()) return 'URL is required';
+		try {
+			new URL(newServerUrl);
+
+			return null;
+		} catch {
+			return 'Invalid URL format';
+		}
+	});
+
 	function handleOpenChange(value: boolean) {
+		if (!value) {
+			showAddForm = false;
+			newServerUrl = '';
+			newServerHeaders = '';
+		}
 		open = value;
 		onOpenChange?.(value);
+	}
+
+	function resetAddForm() {
+		showAddForm = false;
+		newServerUrl = '';
+		newServerHeaders = '';
 	}
 
 	function enableSelected() {
@@ -28,6 +58,23 @@
 				conversationsStore.setMcpServerOverride(server.id, true);
 			}
 		}
+		handleOpenChange(false);
+	}
+
+	function saveNewServer() {
+		if (newServerUrlError) return;
+
+		const newServerId = uuid() ?? `${MCP_SERVER_ID_PREFIX}-${Date.now()}`;
+
+		mcpStore.addServer({
+			id: newServerId,
+			enabled: true,
+			url: newServerUrl.trim(),
+			headers: newServerHeaders.trim() || undefined
+		});
+
+		conversationsStore.setMcpServerOverride(newServerId, true);
+
 		handleOpenChange(false);
 	}
 </script>
@@ -42,16 +89,53 @@
 			</Dialog.Description>
 		</Dialog.Header>
 
-		<div class="max-h-[60vh] space-y-4 overflow-y-auto py-4">
+		<div class="max-h-[60vh] space-y-4 overflow-y-auto py-4" in:fly={{ y: 16, duration: 300 }}>
 			{#each RECOMMENDED_MCP_SERVERS as server (server.id)}
-				<McpServerCard
+				<McpServerCardCompact
 					{server}
 					enabled={selected[server.id]}
 					onToggle={(enabled) => (selected[server.id] = enabled)}
-					onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
-					onDelete={() => mcpStore.removeServer(server.id)}
 				/>
 			{/each}
+
+			{#if showAddForm}
+				<Card.Root class="!gap-3 bg-muted/30 p-4">
+					<McpServerForm
+						url={newServerUrl}
+						headers={newServerHeaders}
+						onUrlChange={(v) => (newServerUrl = v)}
+						onHeadersChange={(v) => (newServerHeaders = v)}
+						urlError={newServerUrl ? newServerUrlError : null}
+						id="recommendation-new-server"
+					/>
+
+					<div class="flex justify-end gap-2 pt-2">
+						<Button variant="secondary" size="sm" onclick={resetAddForm}>Cancel</Button>
+
+						<Button
+							variant="default"
+							size="sm"
+							onclick={saveNewServer}
+							disabled={!!newServerUrlError}
+							aria-label="Save"
+						>
+							Add
+						</Button>
+					</div>
+				</Card.Root>
+			{:else}
+				<Card.Root class="gap-0 border-dashed bg-muted/30 p-0 transition-colors hover:bg-muted/50">
+					<button
+						type="button"
+						class="flex w-full items-center justify-center gap-2 rounded-lg p-6 text-sm text-muted-foreground transition-colors hover:text-foreground"
+						onclick={() => (showAddForm = true)}
+						aria-label="Add your own MCP server"
+					>
+						<Plus class="h-4 w-4" />
+						<span>Add your own server</span>
+					</button>
+				</Card.Root>
+			{/if}
 		</div>
 
 		<Dialog.Footer>
