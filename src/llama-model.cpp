@@ -1662,6 +1662,14 @@ const float * llama_model::tensor_split() const {
     return params.tensor_split;
 }
 
+void llama_model::own_tensor_split(size_t n) {
+    if (params.tensor_split == nullptr || n == 0) {
+        return;
+    }
+    tensor_split_owned.assign(params.tensor_split, params.tensor_split + n);
+    params.tensor_split = tensor_split_owned.data();
+}
+
 uint32_t llama_model::n_gpu_layers() const {
     // note: plus 1 for the "output" layer
     return params.n_gpu_layers >= 0 ? params.n_gpu_layers : hparams.n_layer_all + 1;
