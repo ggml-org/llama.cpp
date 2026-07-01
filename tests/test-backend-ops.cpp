@@ -8428,6 +8428,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 128, 32, 128));
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 128, 4, 128, {2, 3}));
 
+    // Qwen3 8B dense (Q8_0 weights × F32 activations) — catches regressions in
+    // ET backend mul_mat Q8_0 kernel across GEMV (n=1) and large-N prefill paths.
+    // hidden=4096, intermediate=12288, q_heads=32, kv_heads=8, head_dim=128.
+    for (int n : {1, 2, 4, 8, 16, 32, 128, 512}) {
+        // attention projections
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 4096, n, 4096, {1, 1}, {1, 1})); // q_proj / o_proj
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 1024, n, 4096, {1, 1}, {1, 1})); // k_proj / v_proj
+        // FFN projections
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 12288, n, 4096, {1, 1}, {1, 1})); // gate_proj / up_proj
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 4096, n, 12288, {1, 1}, {1, 1})); // down_proj
+    }
+
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F16,  900000,  3, 2592, {1, 1}, {1, 1}));
@@ -9169,6 +9181,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q1_0, GGML_TYPE_Q4_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 128, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q1_0));
     test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 64, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q1_0, GGML_TYPE_F16));
+
+    // ET baseline bring-up case: exact small FP32 FLASH_ATTN_EXT path.
+    test_cases.emplace_back(new test_flash_attn_ext(16, 16, 16, {1, 1}, 16, 16, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_flash_attn_ext(16, 16, 4, {1, 3}, 23, 7, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F32));
 
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   10, 5, 4, 3}));
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {30000, 1, 1, 1}));
