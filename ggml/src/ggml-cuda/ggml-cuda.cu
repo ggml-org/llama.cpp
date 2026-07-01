@@ -3549,6 +3549,120 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
     return true;
 }
 
+static bool ggml_cuda_should_fuse_lerp(
+        const ggml_tensor * sub,
+        const ggml_tensor * repeat,
+        const ggml_tensor * mul,
+        const ggml_tensor * add,
+        const ggml_tensor ** x_prev,
+        const ggml_tensor ** cur,
+        const ggml_tensor ** weight) {
+    if (sub->op != GGML_OP_SUB || mul->op != GGML_OP_MUL || add->op != GGML_OP_ADD) {
+        return false;
+    }
+
+    const ggml_tensor * sx = sub;
+    if (repeat) {
+        if (repeat->op != GGML_OP_REPEAT || repeat->src[0] != sub) {
+            return false;
+        }
+        sx = repeat;
+    }
+
+    const ggml_tensor * w = nullptr;
+    if (mul->src[0] == sx) {
+        w = mul->src[1];
+    } else if (mul->src[1] == sx) {
+        w = mul->src[0];
+    } else {
+        return false;
+    }
+
+    const ggml_tensor * add_cur = nullptr;
+    if (add->src[0] == mul) {
+        add_cur = add->src[1];
+    } else if (add->src[1] == mul) {
+        add_cur = add->src[0];
+    } else {
+        return false;
+    }
+
+    if (add_cur != sub->src[1]) {
+        return false;
+    }
+
+    const ggml_tensor * xp = sub->src[0];
+    const ggml_tensor * c  = sub->src[1];
+
+    if (xp->type != GGML_TYPE_F32 || c->type != GGML_TYPE_F32 || w->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (!ggml_can_repeat(xp, add) || !ggml_can_repeat(c, add) || !ggml_can_repeat(w, add)) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous(xp) || !ggml_is_contiguous(c) || !ggml_is_contiguous(w) || !ggml_is_contiguous(add)) {
+        return false;
+    }
+
+    *x_prev = xp;
+    *cur    = c;
+    *weight = w;
+    return true;
+}
+
+static bool ggml_cuda_should_fuse_mul_sub_add(
+        const ggml_tensor * mul,
+        const ggml_tensor * sub,
+        const ggml_tensor * add,
+        const ggml_tensor ** base,
+        const ggml_tensor ** scale,
+        const ggml_tensor ** value) {
+    if (mul->op != GGML_OP_MUL || sub->op != GGML_OP_SUB || add->op != GGML_OP_ADD) {
+        return false;
+    }
+    if (sub->src[0] != mul) {
+        return false;
+    }
+
+    const ggml_tensor * v = sub->src[1];
+    const ggml_tensor * s = nullptr;
+    if (mul->src[0] == v) {
+        s = mul->src[1];
+    } else if (mul->src[1] == v) {
+        s = mul->src[0];
+    } else {
+        return false;
+    }
+
+    const ggml_tensor * b = nullptr;
+    if (add->src[0] == sub) {
+        b = add->src[1];
+    } else if (add->src[1] == sub) {
+        b = add->src[0];
+    } else {
+        return false;
+    }
+
+    if (b->type != GGML_TYPE_F32 || s->type != GGML_TYPE_F32 || v->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (!ggml_can_repeat(b, add) || !ggml_can_repeat(s, add) || !ggml_can_repeat(v, add)) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous(b) || !ggml_is_contiguous(s) || !ggml_is_contiguous(v) || !ggml_is_contiguous(add)) {
+        return false;
+    }
+
+    *base  = b;
+    *scale = s;
+    *value = v;
+    return true;
+}
+
 // returns whether the write (out) nodes overwrite the read nodes in operation
 static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                                                  const int           node_idx,
@@ -3921,6 +4035,54 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
         ggml_cuda_op_rope_fused(*cuda_ctx, rope, set_rows);
         return 2;
+    }
+
+    // RWKV lerp: cur + (x_prev - cur) * weight. Time-mix has an extra REPEAT
+    // between SUB and MUL; channel-mix uses SUB directly.
+    if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_SUB, GGML_OP_REPEAT, GGML_OP_MUL, GGML_OP_ADD }, { i + 3 })) {
+        const ggml_tensor * x_prev = nullptr;
+        const ggml_tensor * cur    = nullptr;
+        const ggml_tensor * weight = nullptr;
+
+        if (ggml_cuda_should_fuse_lerp(cgraph->nodes[i], cgraph->nodes[i + 1], cgraph->nodes[i + 2], cgraph->nodes[i + 3],
+                                       &x_prev, &cur, &weight)) {
+            const int out_nodes[] = { i + 3 };
+            if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, 4, out_nodes, 1)) {
+                ggml_cuda_op_lerp_fused(*cuda_ctx, x_prev, cur, weight, cgraph->nodes[i + 3]);
+                return 3;
+            }
+        }
+    }
+
+    if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_SUB, GGML_OP_MUL, GGML_OP_ADD }, { i + 2 })) {
+        const ggml_tensor * x_prev = nullptr;
+        const ggml_tensor * cur    = nullptr;
+        const ggml_tensor * weight = nullptr;
+
+        if (ggml_cuda_should_fuse_lerp(cgraph->nodes[i], nullptr, cgraph->nodes[i + 1], cgraph->nodes[i + 2],
+                                       &x_prev, &cur, &weight)) {
+            const int out_nodes[] = { i + 2 };
+            if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, 3, out_nodes, 1)) {
+                ggml_cuda_op_lerp_fused(*cuda_ctx, x_prev, cur, weight, cgraph->nodes[i + 2]);
+                return 2;
+            }
+        }
+    }
+
+    // RWKV key update: k + (a * ka - ka).
+    if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_MUL, GGML_OP_SUB, GGML_OP_ADD }, { i + 2 })) {
+        const ggml_tensor * base  = nullptr;
+        const ggml_tensor * scale = nullptr;
+        const ggml_tensor * value = nullptr;
+
+        if (ggml_cuda_should_fuse_mul_sub_add(cgraph->nodes[i], cgraph->nodes[i + 1], cgraph->nodes[i + 2],
+                                              &base, &scale, &value)) {
+            const int out_nodes[] = { i + 2 };
+            if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, 3, out_nodes, 1)) {
+                ggml_cuda_op_mul_sub_add_fused(*cuda_ctx, base, scale, value, cgraph->nodes[i + 2]);
+                return 2;
+            }
+        }
     }
 
     // Snake activation: y = x + sin(a*x)^2 * inv_b

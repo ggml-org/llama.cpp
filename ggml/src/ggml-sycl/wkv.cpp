@@ -100,7 +100,7 @@ template <int block_size>
 static void rwkv_wkv7_f32_kernel(
     const int B, const int T, const int C, const int H,
     const float* r, const float* w, const float* k, const float* v,
-    const float* a, const float* b, const float* s,
+    const float* kk, const float* a, const float* r_k, const float* s,
     float* dst, const sycl::nd_item<3>& item_ct1, float* shared_mem) {
 
     const int tid = item_ct1.get_local_id(2);
@@ -115,8 +115,9 @@ static void rwkv_wkv7_f32_kernel(
     float* _r = shared_mem;
     float* _w = _r + head_size;
     float* _k = _w + head_size;
-    float* _a = _k + head_size;
-    float* _b = _a + head_size;
+    float* _kk = _k + head_size;
+    float* _a = _kk + head_size;
+    float* _r_k = _a + head_size;
 
     float state[block_size];
 
@@ -124,6 +125,7 @@ static void rwkv_wkv7_f32_kernel(
     for (int i = 0; i < head_size; i++) {
         state[i] = s[batch_i * state_size + head_i * head_size * head_size + tid * head_size + i];
     }
+    _r_k[tid] = r_k[head_i * head_size + tid];
 
     for (int t = batch_i * n_seq_tokens * C + head_i * head_size + tid;
          t < (batch_i + 1) * n_seq_tokens * C + head_i * head_size + tid;
@@ -131,37 +133,44 @@ static void rwkv_wkv7_f32_kernel(
 
         item_ct1.barrier(sycl::access::fence_space::local_space);
 
+        constexpr float w_scale = -0.6065306597126334f;
         _r[tid] = r[t];
-        _w[tid] = w[t];
+        _w[tid] = sycl::exp(w_scale / (1.0f + sycl::exp(-w[t])));
         _k[tid] = k[t];
+        _kk[tid] = kk[t];
         _a[tid] = a[t];
-        _b[tid] = b[t];
 
         item_ct1.barrier(sycl::access::fence_space::local_space);
 
         const float _v = v[t];
-        float y = 0, sa = 0;
-        sycl::float4 a4, s4;
+        float y = 0, sa = 0, rk = 0;
+        sycl::float4 r4, k4, kk4, r_k4, s4;
 
         #pragma unroll
         for (int j = 0; j < head_size; j += 4) {
-            a4 = sycl::float4(_a[j], _a[j+1], _a[j+2], _a[j+3]);
+            r4 = sycl::float4(_r[j], _r[j+1], _r[j+2], _r[j+3]);
+            k4 = sycl::float4(_k[j], _k[j+1], _k[j+2], _k[j+3]);
+            kk4 = sycl::float4(_kk[j], _kk[j+1], _kk[j+2], _kk[j+3]);
+            r_k4 = sycl::float4(_r_k[j], _r_k[j+1], _r_k[j+2], _r_k[j+3]);
             s4 = sycl::float4(state[j], state[j+1], state[j+2], state[j+3]);
-            sa += sycl::dot(a4, s4);
+            sa += sycl::dot(kk4, s4);
+            rk += sycl::dot(r4 * k4, r_k4);
         }
+        sa = -sa;
 
-        sycl::float4 r4, w4, k4, b4;
+        sycl::float4 w4, kk4_update, a4;
         #pragma unroll
         for (int j = 0; j < head_size; j += 4) {
             r4 = sycl::float4(_r[j], _r[j+1], _r[j+2], _r[j+3]);
             w4 = sycl::float4(_w[j], _w[j+1], _w[j+2], _w[j+3]);
             k4 = sycl::float4(_k[j], _k[j+1], _k[j+2], _k[j+3]);
-            b4 = sycl::float4(_b[j], _b[j+1], _b[j+2], _b[j+3]);
+            kk4_update = sycl::float4(_kk[j], _kk[j+1], _kk[j+2], _kk[j+3]);
+            a4 = sycl::float4(_a[j], _a[j+1], _a[j+2], _a[j+3]);
             s4 = sycl::float4(state[j], state[j+1], state[j+2], state[j+3]);
 
             sycl::float4 kv4 = k4 * _v;
 
-            s4 = s4 * w4 + kv4 + sa * b4;
+            s4 = s4 * w4 + kv4 + sa * kk4_update * a4;
             y += sycl::dot(r4, s4);
 
             state[j] = s4.x();
@@ -171,11 +180,12 @@ static void rwkv_wkv7_f32_kernel(
         }
 
         dst[t] = y;
+        dst[T * C + t] = _v * rk;
     }
 
     #pragma unroll
     for (int i = 0; i < head_size; i++) {
-        dst[T * C + batch_i * state_size + head_i * head_size * head_size + tid * head_size + i] = state[i];
+        dst[2 * T * C + batch_i * state_size + head_i * head_size * head_size + tid * head_size + i] = state[i];
     }
 }
 
@@ -241,24 +251,25 @@ void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     const float* w_d = (const float*)dst->src[1]->data;
     const float* k_d = (const float*)dst->src[2]->data;
     const float* v_d = (const float*)dst->src[3]->data;
-    const float* a_d = (const float*)dst->src[4]->data;
-    const float* b_d = (const float*)dst->src[5]->data;
-    const float* s_d = (const float*)dst->src[6]->data;
+    const float* kk_d = (const float*)dst->src[4]->data;
+    const float* a_d  = (const float*)dst->src[5]->data;
+    const float* r_k_d = (const float*)dst->src[6]->data;
+    const float* s_d   = (const float*)dst->src[7]->data;
     float* dst_d = (float*)dst->data;
 
-    const int64_t B = dst->src[6]->ne[1];
+    const int64_t B = dst->src[7]->ne[1];
     const int64_t T = dst->src[0]->ne[2];
     const int64_t C = dst->ne[0];
     const int64_t H = dst->src[0]->ne[1];
 
-    GGML_ASSERT(dst->src[6]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[7]->type == GGML_TYPE_F32);
     GGML_ASSERT(C % H == 0);
     GGML_ASSERT(C / H == WKV_BLOCK_SIZE || C / H == WKV_BLOCK_SIZE * 2);
 
     dpct::queue_ptr stream = ctx.stream();
 
     // Calculate execution configuration
-    const size_t shared_mem_size = C / H * 5 * sizeof(float); // For r, w, k, a, b
+    const size_t shared_mem_size = C / H * 6 * sizeof(float); // For r, w, k, kk, a, r_k
     sycl::range<3> block_dims(1, 1, C / H);
     sycl::range<3> grid_dims(1, 1, B * H);
 
@@ -271,7 +282,7 @@ void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
                 sycl::nd_range<3>(grid_dims * block_dims, block_dims),
                 [=](sycl::nd_item<3> item_ct1) {
                     rwkv_wkv7_f32_kernel<WKV_BLOCK_SIZE>(
-                        B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d,
+                        B, T, C, H, r_d, w_d, k_d, v_d, kk_d, a_d, r_k_d, s_d, dst_d,
                         item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
                     );
                 });
@@ -284,7 +295,7 @@ void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
                 sycl::nd_range<3>(grid_dims * block_dims, block_dims),
                 [=](sycl::nd_item<3> item_ct1) {
                     rwkv_wkv7_f32_kernel<WKV_BLOCK_SIZE * 2>(
-                        B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d,
+                        B, T, C, H, r_d, w_d, k_d, v_d, kk_d, a_d, r_k_d, s_d, dst_d,
                         item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
                     );
                 });

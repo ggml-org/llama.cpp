@@ -576,7 +576,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_rwkv(ggml_metal_
             } break;
         case GGML_OP_RWKV_WKV7:
             {
-                GGML_ASSERT(op->src[6]->type == GGML_TYPE_F32);
+                GGML_ASSERT(op->src[7]->type == GGML_TYPE_F32);
                 GGML_ASSERT(C % H == 0);
                 GGML_ASSERT(C / H == 64);
 

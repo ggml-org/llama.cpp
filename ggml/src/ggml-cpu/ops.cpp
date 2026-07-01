@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <vector>
 
 // ggml_compute_forward_dup
 
@@ -10825,17 +10826,22 @@ void ggml_compute_forward_gated_delta_net(
 
 // ggml_compute_forward_rwkv_wkv7
 
+static inline float ggml_rwkv_wkv7_decay(float w) {
+    constexpr float w_scale = -0.6065306597126334f;
+    return expf(w_scale / (1.0f + expf(-w)));
+}
+
 static void ggml_compute_forward_rwkv_wkv7_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     const int64_t T = dst->src[1]->ne[2];
     const int64_t C = dst->ne[0];
     const int64_t HEADS = dst->src[1]->ne[1];
-    const int64_t n_seqs = dst->src[6]->ne[1];
+    const int64_t n_seqs = dst->src[7]->ne[1];
     const int64_t head_size = C / HEADS;
 
     float * dst_data = (float *) dst->data;
-    float * state = ((float *) dst->data) + C * T;
+    float * state = ((float *) dst->data) + 2 * C * T;
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -10848,14 +10854,16 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
     float * w = (float *) dst->src[1]->data;
     float * k = (float *) dst->src[2]->data;
     float * v = (float *) dst->src[3]->data;
-    float * a = (float *) dst->src[4]->data;
-    float * b = (float *) dst->src[5]->data;
+    float * kk = (float *) dst->src[4]->data;
+    float * a  = (float *) dst->src[5]->data;
+    float * r_k = (float *) dst->src[6]->data;
 
     int64_t t_stride = HEADS * head_size; // Same to C
 
     int64_t h_stride = C / HEADS;
     GGML_ASSERT(C % HEADS == 0); // C must be divisible by HEADS
     int64_t h_stride_2d = head_size * head_size;
+    std::vector<float> w_decay(head_size);
 
     #if defined(GGML_SIMD)
         #if defined(__ARM_FEATURE_SVE) || defined(__riscv_v_intrinsic)
@@ -10864,12 +10872,19 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                 int64_t t_offset = t * t_stride;
                 int64_t state_offset = head_size * C * (t / (T / n_seqs));
                 float * state_cur = state + state_offset;
-                float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[6]->data + state_offset;
+                float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[7]->data + state_offset;
 
                 for (int64_t h = h_start; h < h_end; h++) {
                     int64_t h_offset = h * h_stride;
                     int64_t t_h_offset = t_offset + h_offset;
                     int64_t h_2d_offset = h * h_stride_2d;
+
+                    float rk = 0;
+                    for (int64_t j = 0; j < head_size; j++) {
+                        const int64_t t_h_j_offset = t_h_offset + j;
+                        rk += k[t_h_j_offset] * r[t_h_j_offset] * r_k[h_offset + j];
+                        w_decay[j] = ggml_rwkv_wkv7_decay(w[t_h_j_offset]);
+                    }
 
                     for (int64_t i = 0; i < head_size; i++) {
                         int64_t t_h_i_offset = t_h_offset + i;
@@ -10879,23 +10894,25 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
 
                         float sa = 0, result = 0;
                         for (int64_t j = 0; j < head_size; j++) {
-                            sa += a[t_h_offset + j] * state_prev[h_2d_i_offset + j];
+                            sa += kk[t_h_offset + j] * state_prev[h_2d_i_offset + j];
                         }
+                        sa = -sa;
 
                         for (int64_t j = 0; j < head_size; j++) {
                             int64_t t_h_j_offset = t_h_offset + j;
                             int64_t h_2d_i_j_offset = h_2d_i_offset + j;
 
                             float r_val = r[t_h_j_offset];
-                            float w_val = w[t_h_j_offset];
+                            float w_val = w_decay[j];
                             float k_val = k[t_h_j_offset];
-                            float b_val = b[t_h_j_offset];
+                            float b_val = kk[t_h_j_offset] * a[t_h_j_offset];
                             float kv_val = v_val * k_val;
                             float prev_state_val = state_prev[h_2d_i_j_offset];
                             state_cur[h_2d_i_j_offset] = prev_state_val * w_val + kv_val + sa * b_val;
                             result += state_cur[h_2d_i_j_offset] * r_val;
                         }
                         dst_data[t_h_i_offset] = result;
+                        dst_data[C * T + t_h_i_offset] = v_val * rk;
                     }
                 }
             }
@@ -10904,12 +10921,19 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                 int64_t t_offset = t * t_stride;
                 int64_t state_offset = head_size * C * (t / (T / n_seqs));
                 float * state_cur = state + state_offset;
-                float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[6]->data + state_offset;
+                float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[7]->data + state_offset;
 
                 for (int64_t h = h_start; h < h_end; h++) {
                     int64_t h_offset = h * h_stride;
                     int64_t t_h_offset = t_offset + h_offset;
                     int64_t h_2d_offset = h * h_stride_2d;
+
+                    float rk = 0;
+                    for (int64_t j = 0; j < head_size; j++) {
+                        const int64_t t_h_j_offset = t_h_offset + j;
+                        rk += k[t_h_j_offset] * r[t_h_j_offset] * r_k[h_offset + j];
+                        w_decay[j] = ggml_rwkv_wkv7_decay(w[t_h_j_offset]);
+                    }
 
                     for (int64_t ii = 0; ii < head_size; ii++) {
                         int64_t t_h_i_offset = t_h_offset + ii;
@@ -10923,13 +10947,14 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                             GGML_F32_VEC ax[GGML_F32_ARR];
                             GGML_F32_VEC ay[GGML_F32_ARR];
                             for (int64_t j = 0; j < head_size; j += GGML_F32_STEP) {
-                                for (int64_t kk = 0; kk < GGML_F32_ARR; kk++) {
-                                    ax[kk] = GGML_F32_VEC_LOAD(&a[t_h_offset + j + kk * GGML_F32_EPR]);
-                                    ay[kk] = GGML_F32_VEC_LOAD(&state_prev[h_2d_i_offset + j + kk * GGML_F32_EPR]);
-                                    sum[kk] = GGML_F32_VEC_FMA(sum[kk], ax[kk], ay[kk]);
+                                for (int64_t iv = 0; iv < GGML_F32_ARR; iv++) {
+                                    ax[iv] = GGML_F32_VEC_LOAD(&kk[t_h_offset + j + iv * GGML_F32_EPR]);
+                                    ay[iv] = GGML_F32_VEC_LOAD(&state_prev[h_2d_i_offset + j + iv * GGML_F32_EPR]);
+                                    sum[iv] = GGML_F32_VEC_FMA(sum[iv], ax[iv], ay[iv]);
                                 }
                             }
                             GGML_F32_VEC_REDUCE(sa, sum);
+                            sa = -sa;
                         }
 
                         GGML_F32_VEC sa_vec = GGML_F32_VEC_SET1(sa);
@@ -10937,14 +10962,16 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                         int64_t j = 0;
                         GGML_F32_VEC result_vec[GGML_F32_ARR] = { GGML_F32_VEC_ZERO };
                         for (; j < head_size; j += GGML_F32_STEP) {
-                            for (int64_t kk = 0; kk < GGML_F32_ARR; kk++) {
-                                int64_t t_h_j_offset = t_h_offset + j + kk * GGML_F32_EPR;
-                                int64_t h_2d_i_j_offset = h_2d_i_offset + j + kk * GGML_F32_EPR;
+                            for (int64_t iv = 0; iv < GGML_F32_ARR; iv++) {
+                                int64_t t_h_j_offset = t_h_offset + j + iv * GGML_F32_EPR;
+                                int64_t h_2d_i_j_offset = h_2d_i_offset + j + iv * GGML_F32_EPR;
 
                                 GGML_F32_VEC r_vec = GGML_F32_VEC_LOAD(&r[t_h_j_offset]);
-                                GGML_F32_VEC w_vec = GGML_F32_VEC_LOAD(&w[t_h_j_offset]);
+                                GGML_F32_VEC w_vec = GGML_F32_VEC_LOAD(&w_decay[j + iv * GGML_F32_EPR]);
                                 GGML_F32_VEC k_vec = GGML_F32_VEC_LOAD(&k[t_h_j_offset]);
-                                GGML_F32_VEC b_vec = GGML_F32_VEC_LOAD(&b[t_h_j_offset]);
+                                GGML_F32_VEC kk_vec = GGML_F32_VEC_LOAD(&kk[t_h_j_offset]);
+                                GGML_F32_VEC a_vec = GGML_F32_VEC_LOAD(&a[t_h_j_offset]);
+                                GGML_F32_VEC b_vec = GGML_F32_VEC_MUL(kk_vec, a_vec);
 
                                 k_vec = GGML_F32_VEC_MUL(v_vec, k_vec);
 
@@ -10954,10 +10981,11 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                                 state_vec = GGML_F32_VEC_FMA(state_vec, sa_vec, b_vec);
                                 GGML_F32_VEC_STORE(&state_cur[h_2d_i_j_offset], state_vec);
 
-                                result_vec[kk] = GGML_F32_VEC_FMA(result_vec[kk], state_vec, r_vec);
+                                result_vec[iv] = GGML_F32_VEC_FMA(result_vec[iv], state_vec, r_vec);
                             }
                         }
                         GGML_F32_VEC_REDUCE(dst_data[t_h_i_offset], result_vec);
+                        dst_data[C * T + t_h_i_offset] = v[t_h_i_offset] * rk;
 
                         // There shouldn't be left-overs though.
                         for (; j < head_size; j++) {
@@ -10965,14 +10993,15 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                             int64_t h_2d_i_j_offset = h_2d_i_offset + j;
 
                             float r_val = r[t_h_j_offset];
-                            float w_val = w[t_h_j_offset];
+                            float w_val = w_decay[j];
                             float k_val = k[t_h_j_offset];
-                            float b_val = b[t_h_j_offset];
+                            float b_val = kk[t_h_j_offset] * a[t_h_j_offset];
                             float kv_val = v[t_h_i_offset] * k_val;
 
                             float prev_state_val = state_prev[h_2d_i_j_offset];
                             state_cur[h_2d_i_j_offset] = prev_state_val * w_val + kv_val + sa * b_val;
                             dst_data[t_h_i_offset] += state_cur[h_2d_i_j_offset] * r_val;
+                            dst_data[C * T + t_h_i_offset] = v[t_h_i_offset] * rk;
                         }
                     }
                 }
@@ -10983,12 +11012,19 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
             int64_t t_offset = t * t_stride;
             int64_t state_offset = head_size * C * (t / (T / n_seqs));
             float * state_cur = state + state_offset;
-            float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[6]->data + state_offset;
+            float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[7]->data + state_offset;
 
             for (int64_t h = h_start; h < h_end; h++) {
                 int64_t h_offset = h * h_stride;
                 int64_t t_h_offset = t_offset + h_offset;
                 int64_t h_2d_offset = h * h_stride_2d;
+
+                float rk = 0;
+                for (int64_t j = 0; j < head_size; j++) {
+                    const int64_t t_h_j_offset = t_h_offset + j;
+                    rk += k[t_h_j_offset] * r[t_h_j_offset] * r_k[h_offset + j];
+                    w_decay[j] = ggml_rwkv_wkv7_decay(w[t_h_j_offset]);
+                }
 
                 for (int64_t i = 0; i < head_size; i++) {
                     int64_t t_h_i_offset = t_h_offset + i;
@@ -10998,23 +11034,25 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
 
                     float sa = 0, result = 0;
                     for (int64_t j = 0; j < head_size; j++) {
-                        sa += a[t_h_offset + j] * state_prev[h_2d_i_offset + j];
+                        sa += kk[t_h_offset + j] * state_prev[h_2d_i_offset + j];
                     }
+                    sa = -sa;
 
                     for (int64_t j = 0; j < head_size; j++) {
                         int64_t t_h_j_offset = t_h_offset + j;
                         int64_t h_2d_i_j_offset = h_2d_i_offset + j;
 
                         float r_val = r[t_h_j_offset];
-                        float w_val = w[t_h_j_offset];
+                        float w_val = w_decay[j];
                         float k_val = k[t_h_j_offset];
-                        float b_val = b[t_h_j_offset];
+                        float b_val = kk[t_h_j_offset] * a[t_h_j_offset];
                         float kv_val = v_val * k_val;
                         float prev_state_val = state_prev[h_2d_i_j_offset];
                         state_cur[h_2d_i_j_offset] = prev_state_val * w_val + kv_val + sa * b_val;
                         result += state_cur[h_2d_i_j_offset] * r_val;
                     }
                     dst_data[t_h_i_offset] = result;
+                    dst_data[C * T + t_h_i_offset] = v_val * rk;
                 }
             }
         }

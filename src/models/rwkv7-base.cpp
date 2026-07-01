@@ -67,7 +67,6 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
     ggml_tensor * w = ggml_add(
         ctx0, ggml_mul_mat(ctx0, layer.time_mix_w2, ggml_tanh(ctx0, ggml_mul_mat(ctx0, layer.time_mix_w1, xw))),
         layer.time_mix_w0);
-    w = ggml_exp(ctx0, ggml_scale(ctx0, ggml_sigmoid(ctx0, w), -0.606531));
 
     ggml_tensor * k = build_lora_mm(layer.time_mix_key, xk);
     ggml_tensor * v = build_lora_mm(layer.time_mix_value, xv);
@@ -103,10 +102,12 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
     a = ggml_reshape_3d(ctx0, a, head_size, head_count, n_tokens);
 
     ggml_tensor * wkv_state = build_rs(inp, mctx_cur->get_s_l(il), hparams.n_embd_s(), n_seqs);
+    ggml_tensor * r_k = ggml_reshape_2d(ctx0, layer.time_mix_r_k, head_size, head_count);
 
-    ggml_tensor * wkv_output = ggml_rwkv_wkv7(ctx0, r, w, k, v, ggml_neg(ctx0, kk), ggml_mul(ctx0, kk, a), wkv_state);
+    ggml_tensor * wkv_output = ggml_rwkv_wkv7(ctx0, r, w, k, v, kk, a, r_k, wkv_state);
     cur                      = ggml_view_1d(ctx0, wkv_output, n_embd * n_tokens, 0);
-    wkv_state = ggml_view_1d(ctx0, wkv_output, n_embd * head_size * n_seqs, n_embd * n_tokens * sizeof(float));
+    ggml_tensor * vk = ggml_view_1d(ctx0, wkv_output, n_embd * n_tokens, n_embd * n_tokens * sizeof(float));
+    wkv_state = ggml_view_1d(ctx0, wkv_output, n_embd * head_size * n_seqs, 2 * n_embd * n_tokens * sizeof(float));
 
     ggml_build_forward_expand(
         gf, ggml_cpy(ctx0, wkv_state,
@@ -124,9 +125,7 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
     } else {
         cur = ggml_reshape_2d(ctx0, cur, n_embd, n_tokens);
     }
-    ggml_tensor * rk = ggml_sum_rows(
-        ctx0, ggml_mul(ctx0, ggml_mul(ctx0, k, r), ggml_reshape_2d(ctx0, layer.time_mix_r_k, head_size, head_count)));
-    cur = ggml_add(ctx0, cur, ggml_reshape_2d(ctx0, ggml_mul(ctx0, v, rk), n_embd, n_tokens));
+    cur = ggml_add(ctx0, cur, ggml_reshape_2d(ctx0, vk, n_embd, n_tokens));
 
     if (has_gating) {
         cur = ggml_mul(ctx0, cur, g);
