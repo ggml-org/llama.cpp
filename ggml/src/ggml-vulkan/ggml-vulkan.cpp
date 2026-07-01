@@ -11530,8 +11530,8 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         } break;
     case GGML_OP_POOL_1D:
         {
-            const uint32_t N = dst->ne[3];
-            const uint32_t OC = dst->ne[2];
+            const uint32_t N = dst->ne[3] * dst->ne[2];
+            const uint32_t OC = dst->ne[1];
             const uint32_t OL = dst->ne[0];
             elements = { N * OC * OL, 1, 1};
         } break;
@@ -13430,7 +13430,7 @@ static void ggml_vk_pool_1d(ggml_backend_vk_context * ctx, vk_context& subctx, c
 
     const uint32_t IL = src0->ne[0];
 
-    const uint32_t N = dst->ne[2];
+    const uint32_t N = dst->ne[3] * dst->ne[2];
 
     const uint32_t OC = dst->ne[1];
     const uint32_t OL = dst->ne[0];
