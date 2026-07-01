@@ -1169,7 +1169,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "add_rel_pos(x)",
     "rwkv_wkv6(k, v, r, tf, td, s)",
     "gated_linear_attn(k, v, q, gate, s)",
-    "rwkv_wkv7(r, w, k, v, a, b, s)",
+    "rwkv_wkv7(r, w, k, v, kk, a, s)",
     "A X = B, A triangular, solve X",
     "gated_delta_net(q, k, v, g, beta, s)",
 
@@ -5814,7 +5814,6 @@ struct ggml_tensor * ggml_rwkv_wkv7(
         struct ggml_tensor  * v,
         struct ggml_tensor  * kk,
         struct ggml_tensor  * a,
-        struct ggml_tensor  * r_k,
         struct ggml_tensor  * state) {
     GGML_ASSERT(ggml_is_contiguous(r));
     GGML_ASSERT(ggml_is_contiguous(w));
@@ -5822,7 +5821,6 @@ struct ggml_tensor * ggml_rwkv_wkv7(
     GGML_ASSERT(ggml_is_contiguous(v));
     GGML_ASSERT(ggml_is_contiguous(kk));
     GGML_ASSERT(ggml_is_contiguous(a));
-    GGML_ASSERT(ggml_is_contiguous(r_k));
     GGML_ASSERT(ggml_is_contiguous(state));
 
     const int64_t S = k->ne[0];
@@ -5835,12 +5833,11 @@ struct ggml_tensor * ggml_rwkv_wkv7(
         GGML_ASSERT(v->ne[0] == S && v->ne[1] == H && v->ne[2] == n_tokens);
         GGML_ASSERT(kk->ne[0] == S && kk->ne[1] == H && kk->ne[2] == n_tokens);
         GGML_ASSERT(a->ne[0] == S && a->ne[1] == H && a->ne[2] == n_tokens);
-        GGML_ASSERT(r_k->ne[0] == S && r_k->ne[1] == H);
         GGML_ASSERT(ggml_nelements(state) == S * S * H * n_seqs);
     }
 
-    // concat output, v*rk, and new_state
-    const int64_t ne[4] = { S * H, 2*n_tokens + S * n_seqs, 1, 1 };
+    // concat output and new_state
+    const int64_t ne[4] = { S * H, n_tokens + S * n_seqs, 1, 1 };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
     result->op     = GGML_OP_RWKV_WKV7;
@@ -5850,8 +5847,7 @@ struct ggml_tensor * ggml_rwkv_wkv7(
     result->src[3] = v;
     result->src[4] = kk;
     result->src[5] = a;
-    result->src[6] = r_k;
-    result->src[7] = state;
+    result->src[6] = state;
 
     return result;
 }

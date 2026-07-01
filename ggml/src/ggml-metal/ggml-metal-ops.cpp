@@ -1561,7 +1561,7 @@ int ggml_metal_op_rwkv(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
-    const int64_t B = op->op == GGML_OP_RWKV_WKV6 ? op->src[5]->ne[1] : op->src[7]->ne[1];
+    const int64_t B = op->op == GGML_OP_RWKV_WKV6 ? op->src[5]->ne[1] : op->src[6]->ne[1];
     const int64_t T = op->src[0]->ne[2];
     const int64_t C = op->ne[0];
     const int64_t H = op->src[0]->ne[1];
@@ -1579,7 +1579,6 @@ int ggml_metal_op_rwkv(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[5]), ida++);
     if (op->op == GGML_OP_RWKV_WKV7) {
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[6]), ida++);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[7]), ida++);
     }
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++);
     ggml_metal_encoder_set_bytes   (enc, (void *) &B, sizeof(B), ida++);

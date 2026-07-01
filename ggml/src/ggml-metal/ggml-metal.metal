@@ -2482,7 +2482,6 @@ kernel void kernel_rwkv_wkv7_f32(
     device const float * v,
     device const float * kk,
     device const float * a,
-    device const float * r_k,
     device const float * state_in,
     device       float * dst,
     constant    uint & B,
@@ -2510,7 +2509,6 @@ kernel void kernel_rwkv_wkv7_f32(
     threadgroup float _k[head_size];
     threadgroup float _kk[head_size];
     threadgroup float _a[head_size];
-    threadgroup float _r_k[head_size];
 
     float state[head_size];
 
@@ -2518,7 +2516,6 @@ kernel void kernel_rwkv_wkv7_f32(
         state[i] = state_in[batch_id * state_size + head_id * head_size * head_size
                           + tid * head_size + i];
     }
-    _r_k[tid] = r_k[head_id * head_size + tid];
 
     const uint start_t = batch_id * n_seq_tokens * C + head_id * head_size + tid;
     const uint end_t = (batch_id + 1) * n_seq_tokens * C + head_id * head_size + tid;
@@ -2534,22 +2531,16 @@ kernel void kernel_rwkv_wkv7_f32(
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         const float v_val = v[t];
-        float y = 0.0, sa = 0.0, rk = 0.0;
+        float y = 0.0, sa = 0.0;
 
         float4 sa_vec(0.0);
-        float4 rk_vec(0.0);
 
         for (uint j = 0; j < head_size; j += 4) {
-            float4 r_vec = float4(_r[j], _r[j+1], _r[j+2], _r[j+3]);
-            float4 k_vec = float4(_k[j], _k[j+1], _k[j+2], _k[j+3]);
             float4 kk_vec = float4(_kk[j], _kk[j+1], _kk[j+2], _kk[j+3]);
-            float4 r_k_vec = float4(_r_k[j], _r_k[j+1], _r_k[j+2], _r_k[j+3]);
             float4 s_vec = float4(state[j], state[j+1], state[j+2], state[j+3]);
             sa_vec += kk_vec * s_vec;
-            rk_vec += r_vec * k_vec * r_k_vec;
         }
         sa = -(sa_vec[0] + sa_vec[1] + sa_vec[2] + sa_vec[3]);
-        rk = rk_vec[0] + rk_vec[1] + rk_vec[2] + rk_vec[3];
 
         for (uint j = 0; j < head_size; j += 4) {
             float4 r_vec = float4(_r[j], _r[j+1], _r[j+2], _r[j+3]);
@@ -2571,11 +2562,10 @@ kernel void kernel_rwkv_wkv7_f32(
         }
 
         dst[t] = y;
-        dst[T * C + t] = v_val * rk;
     }
 
     for (uint i = 0; i < head_size; i++) {
-        dst[2 * T * C + batch_id * state_size + head_id * head_size * head_size
+        dst[T * C + batch_id * state_size + head_id * head_size * head_size
             + tid * head_size + i] = state[i];
     }
 }

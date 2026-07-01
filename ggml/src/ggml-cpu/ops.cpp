@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
-#include <vector>
 
 // ggml_compute_forward_dup
 
@@ -10962,22 +10961,17 @@ void ggml_compute_forward_gated_delta_net(
 
 // ggml_compute_forward_rwkv_wkv7
 
-static inline float ggml_rwkv_wkv7_decay(float w) {
-    constexpr float w_scale = -0.6065306597126334f;
-    return expf(w_scale / (1.0f + expf(-w)));
-}
-
 static void ggml_compute_forward_rwkv_wkv7_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     const int64_t T = dst->src[1]->ne[2];
     const int64_t C = dst->ne[0];
     const int64_t HEADS = dst->src[1]->ne[1];
-    const int64_t n_seqs = dst->src[7]->ne[1];
+    const int64_t n_seqs = dst->src[6]->ne[1];
     const int64_t head_size = C / HEADS;
 
     float * dst_data = (float *) dst->data;
-    float * state = ((float *) dst->data) + 2 * C * T;
+    float * state = ((float *) dst->data) + C * T;
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -10992,14 +10986,14 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
     float * v = (float *) dst->src[3]->data;
     float * kk = (float *) dst->src[4]->data;
     float * a  = (float *) dst->src[5]->data;
-    float * r_k = (float *) dst->src[6]->data;
 
     int64_t t_stride = HEADS * head_size; // Same to C
 
     int64_t h_stride = C / HEADS;
     GGML_ASSERT(C % HEADS == 0); // C must be divisible by HEADS
+    GGML_ASSERT(head_size == 64 || head_size == 128);
     int64_t h_stride_2d = head_size * head_size;
-    std::vector<float> w_decay(head_size);
+    float w_decay[128];
 
     #if defined(GGML_SIMD)
         #if defined(__ARM_FEATURE_SVE) || defined(__riscv_v_intrinsic)
@@ -11008,18 +11002,17 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                 int64_t t_offset = t * t_stride;
                 int64_t state_offset = head_size * C * (t / (T / n_seqs));
                 float * state_cur = state + state_offset;
-                float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[7]->data + state_offset;
+                float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[6]->data + state_offset;
 
                 for (int64_t h = h_start; h < h_end; h++) {
                     int64_t h_offset = h * h_stride;
                     int64_t t_h_offset = t_offset + h_offset;
                     int64_t h_2d_offset = h * h_stride_2d;
 
-                    float rk = 0;
+                    constexpr float w_scale = -0.6065306597126334f;
                     for (int64_t j = 0; j < head_size; j++) {
                         const int64_t t_h_j_offset = t_h_offset + j;
-                        rk += k[t_h_j_offset] * r[t_h_j_offset] * r_k[h_offset + j];
-                        w_decay[j] = ggml_rwkv_wkv7_decay(w[t_h_j_offset]);
+                        w_decay[j] = expf(w_scale / (1.0f + expf(-w[t_h_j_offset])));
                     }
 
                     for (int64_t i = 0; i < head_size; i++) {
@@ -11048,7 +11041,6 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                             result += state_cur[h_2d_i_j_offset] * r_val;
                         }
                         dst_data[t_h_i_offset] = result;
-                        dst_data[C * T + t_h_i_offset] = v_val * rk;
                     }
                 }
             }
@@ -11057,18 +11049,17 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                 int64_t t_offset = t * t_stride;
                 int64_t state_offset = head_size * C * (t / (T / n_seqs));
                 float * state_cur = state + state_offset;
-                float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[7]->data + state_offset;
+                float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[6]->data + state_offset;
 
                 for (int64_t h = h_start; h < h_end; h++) {
                     int64_t h_offset = h * h_stride;
                     int64_t t_h_offset = t_offset + h_offset;
                     int64_t h_2d_offset = h * h_stride_2d;
 
-                    float rk = 0;
+                    constexpr float w_scale = -0.6065306597126334f;
                     for (int64_t j = 0; j < head_size; j++) {
                         const int64_t t_h_j_offset = t_h_offset + j;
-                        rk += k[t_h_j_offset] * r[t_h_j_offset] * r_k[h_offset + j];
-                        w_decay[j] = ggml_rwkv_wkv7_decay(w[t_h_j_offset]);
+                        w_decay[j] = expf(w_scale / (1.0f + expf(-w[t_h_j_offset])));
                     }
 
                     for (int64_t ii = 0; ii < head_size; ii++) {
@@ -11121,7 +11112,6 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                             }
                         }
                         GGML_F32_VEC_REDUCE(dst_data[t_h_i_offset], result_vec);
-                        dst_data[C * T + t_h_i_offset] = v[t_h_i_offset] * rk;
 
                         // There shouldn't be left-overs though.
                         for (; j < head_size; j++) {
@@ -11137,7 +11127,6 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                             float prev_state_val = state_prev[h_2d_i_j_offset];
                             state_cur[h_2d_i_j_offset] = prev_state_val * w_val + kv_val + sa * b_val;
                             dst_data[t_h_i_offset] += state_cur[h_2d_i_j_offset] * r_val;
-                            dst_data[C * T + t_h_i_offset] = v[t_h_i_offset] * rk;
                         }
                     }
                 }
@@ -11148,18 +11137,17 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
             int64_t t_offset = t * t_stride;
             int64_t state_offset = head_size * C * (t / (T / n_seqs));
             float * state_cur = state + state_offset;
-            float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[7]->data + state_offset;
+            float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[6]->data + state_offset;
 
             for (int64_t h = h_start; h < h_end; h++) {
                 int64_t h_offset = h * h_stride;
                 int64_t t_h_offset = t_offset + h_offset;
                 int64_t h_2d_offset = h * h_stride_2d;
 
-                float rk = 0;
+                constexpr float w_scale = -0.6065306597126334f;
                 for (int64_t j = 0; j < head_size; j++) {
                     const int64_t t_h_j_offset = t_h_offset + j;
-                    rk += k[t_h_j_offset] * r[t_h_j_offset] * r_k[h_offset + j];
-                    w_decay[j] = ggml_rwkv_wkv7_decay(w[t_h_j_offset]);
+                    w_decay[j] = expf(w_scale / (1.0f + expf(-w[t_h_j_offset])));
                 }
 
                 for (int64_t i = 0; i < head_size; i++) {
@@ -11188,7 +11176,6 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                         result += state_cur[h_2d_i_j_offset] * r_val;
                     }
                     dst_data[t_h_i_offset] = result;
-                    dst_data[C * T + t_h_i_offset] = v_val * rk;
                 }
             }
         }

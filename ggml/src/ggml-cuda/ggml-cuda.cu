@@ -25,6 +25,7 @@
 #include "ggml-cuda/diagmask.cuh"
 #include "ggml-cuda/diag.cuh"
 #include "ggml-cuda/fattn.cuh"
+#include "ggml-cuda/fused-ops.cuh"
 #include "ggml-cuda/fwht.cuh"
 #include "ggml-cuda/getrows.cuh"
 #include "ggml-cuda/im2col.cuh"
@@ -3705,6 +3706,100 @@ static bool ggml_cuda_should_fuse_add_mul(
     return true;
 }
 
+static bool ggml_cuda_should_fuse_rwkv_rk(
+        const ggml_tensor * mul_kr,
+        const ggml_tensor * mul_kr_rk,
+        const ggml_tensor * sum_rows,
+        const ggml_tensor * mul_v_rk,
+        const ggml_tensor * reshape,
+        const ggml_tensor * add,
+        const ggml_tensor ** cur,
+        const ggml_tensor ** k,
+        const ggml_tensor ** r,
+        const ggml_tensor ** v,
+        const ggml_tensor ** r_k) {
+    if (mul_kr->op != GGML_OP_MUL || mul_kr_rk->op != GGML_OP_MUL ||
+            sum_rows->op != GGML_OP_SUM_ROWS || mul_v_rk->op != GGML_OP_MUL ||
+            reshape->op != GGML_OP_RESHAPE || add->op != GGML_OP_ADD) {
+        return false;
+    }
+
+    if (sum_rows->src[0] != mul_kr_rk || reshape->src[0] != mul_v_rk) {
+        return false;
+    }
+
+    const ggml_tensor * rk_weight = nullptr;
+    if (mul_kr_rk->src[0] == mul_kr) {
+        rk_weight = mul_kr_rk->src[1];
+    } else if (mul_kr_rk->src[1] == mul_kr) {
+        rk_weight = mul_kr_rk->src[0];
+    } else {
+        return false;
+    }
+
+    const ggml_tensor * value = nullptr;
+    if (mul_v_rk->src[0] == sum_rows) {
+        value = mul_v_rk->src[1];
+    } else if (mul_v_rk->src[1] == sum_rows) {
+        value = mul_v_rk->src[0];
+    } else {
+        return false;
+    }
+
+    const ggml_tensor * add_cur = nullptr;
+    if (add->src[0] == reshape) {
+        add_cur = add->src[1];
+    } else if (add->src[1] == reshape) {
+        add_cur = add->src[0];
+    } else {
+        return false;
+    }
+
+    const ggml_tensor * key = mul_kr->src[0];
+    const ggml_tensor * rec = mul_kr->src[1];
+    if (key->type != GGML_TYPE_F32 || rec->type != GGML_TYPE_F32 || value->type != GGML_TYPE_F32 ||
+            rk_weight->type != GGML_TYPE_F32 || add_cur->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous(key) || !ggml_is_contiguous(rec) || !ggml_is_contiguous(value) ||
+            !ggml_is_contiguous(rk_weight) || !ggml_is_contiguous(add_cur) || !ggml_is_contiguous(add)) {
+        return false;
+    }
+
+    if (!ggml_are_same_shape(key, rec) || !ggml_are_same_shape(key, value)) {
+        return false;
+    }
+
+    const int64_t head_size = key->ne[0];
+    const int64_t heads     = key->ne[1];
+    const int64_t n_tokens  = key->ne[2];
+    const int64_t n_embd    = head_size * heads;
+
+    if (head_size != 64 && head_size != 128) {
+        return false;
+    }
+    if (rk_weight->ne[0] != head_size || rk_weight->ne[1] != heads || ggml_nelements(rk_weight) != head_size * heads) {
+        return false;
+    }
+    if (sum_rows->ne[0] != 1 || sum_rows->ne[1] != heads || sum_rows->ne[2] != n_tokens) {
+        return false;
+    }
+    if (add->ne[0] != n_embd || add->ne[1] != n_tokens || ggml_nelements(add) != n_embd * n_tokens) {
+        return false;
+    }
+    if (!ggml_are_same_shape(add_cur, add) || ggml_nelements(reshape) != ggml_nelements(add)) {
+        return false;
+    }
+
+    *cur = add_cur;
+    *k   = key;
+    *r   = rec;
+    *v   = value;
+    *r_k = rk_weight;
+    return true;
+}
+
 static int ggml_cuda_find_single_consumer(const ggml_cgraph * cgraph, int node_idx) {
     if (ggml_node_get_use_count(cgraph, node_idx) != 1) {
         return -1;
@@ -3748,6 +3843,23 @@ static bool ggml_cuda_add_mul_memory_ok(
     return can_read_write_inplace(src0) &&
            can_read_write_inplace(src1) &&
            can_read_write_inplace(scale);
+}
+
+static bool ggml_cuda_rwkv_rk_memory_ok(
+        const ggml_tensor * cur,
+        const ggml_tensor * k,
+        const ggml_tensor * r,
+        const ggml_tensor * v,
+        const ggml_tensor * r_k,
+        const ggml_tensor * dst) {
+    if (ggml_cuda_tensors_overlap(dst, cur) && !ggml_are_same_layout(dst, cur)) {
+        return false;
+    }
+
+    return !ggml_cuda_tensors_overlap(dst, k) &&
+           !ggml_cuda_tensors_overlap(dst, r) &&
+           !ggml_cuda_tensors_overlap(dst, v) &&
+           !ggml_cuda_tensors_overlap(dst, r_k);
 }
 
 // returns whether the write (out) nodes overwrite the read nodes in operation
@@ -4199,6 +4311,49 @@ static int ggml_cuda_try_fuse(
             }
             fused_noncontiguous_nodes.insert(cgraph->nodes[mul_idx]);
             return -1;
+        }
+    }
+
+    // RWKV r_k correction:
+    //   cur + reshape(v * sum_rows((k * r) * r_k))
+    if (node->op == GGML_OP_MUL) {
+        const int mul_kr_rk_idx = ggml_cuda_find_single_consumer(cgraph, i);
+        const int sum_rows_idx  = mul_kr_rk_idx > i ? ggml_cuda_find_single_consumer(cgraph, mul_kr_rk_idx) : -1;
+        const int mul_v_rk_idx  = sum_rows_idx  > i ? ggml_cuda_find_single_consumer(cgraph, sum_rows_idx)  : -1;
+        const int reshape_idx   = mul_v_rk_idx  > i ? ggml_cuda_find_single_consumer(cgraph, mul_v_rk_idx)  : -1;
+        const int add_idx       = reshape_idx   > i ? ggml_cuda_find_single_consumer(cgraph, reshape_idx)   : -1;
+        const ggml_tensor * cur = nullptr;
+        const ggml_tensor * k   = nullptr;
+        const ggml_tensor * r   = nullptr;
+        const ggml_tensor * v   = nullptr;
+        const ggml_tensor * r_k = nullptr;
+
+        const bool chain_ok = add_idx > i &&
+            cgraph->nodes[mul_kr_rk_idx]->op == GGML_OP_MUL &&
+            cgraph->nodes[sum_rows_idx]->op  == GGML_OP_SUM_ROWS &&
+            cgraph->nodes[mul_v_rk_idx]->op  == GGML_OP_MUL &&
+            cgraph->nodes[reshape_idx]->op   == GGML_OP_RESHAPE &&
+            cgraph->nodes[add_idx]->op       == GGML_OP_ADD;
+
+        bool range_ok = chain_ok;
+        for (int j = i + 1; range_ok && j < add_idx; ++j) {
+            if (j == mul_kr_rk_idx || j == sum_rows_idx || j == mul_v_rk_idx || j == reshape_idx) {
+                continue;
+            }
+            const ggml_tensor * n = cgraph->nodes[j];
+            range_ok = ggml_is_empty(n) || n->op == GGML_OP_RESHAPE || n->op == GGML_OP_TRANSPOSE ||
+                       n->op == GGML_OP_VIEW || n->op == GGML_OP_PERMUTE || n->op == GGML_OP_NONE ||
+                       (n->flags & GGML_TENSOR_FLAG_COMPUTE) == 0;
+        }
+
+        if (range_ok &&
+                ggml_cuda_should_fuse_rwkv_rk(cgraph->nodes[i], cgraph->nodes[mul_kr_rk_idx], cgraph->nodes[sum_rows_idx],
+                                              cgraph->nodes[mul_v_rk_idx], cgraph->nodes[reshape_idx], cgraph->nodes[add_idx],
+                                              &cur, &k, &r, &v, &r_k)) {
+            if (ggml_cuda_rwkv_rk_memory_ok(cur, k, r, v, r_k, cgraph->nodes[add_idx])) {
+                ggml_cuda_op_rwkv_rk_fused(*cuda_ctx, cur, k, r, v, r_k, cgraph->nodes[add_idx]);
+                return add_idx - i;
+            }
         }
     }
 

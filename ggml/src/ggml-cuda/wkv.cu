@@ -66,7 +66,7 @@ static __global__ void rwkv_wkv_f32(const int B, const int T, const int C, const
 }
 
 template <int block_size>
-static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, const int H, const float * r, const float * w, const float * k, const float * v, const float * kk, const float * a, const float * r_k, const float * s, float * dst) {
+static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, const int H, const float * r, const float * w, const float * k, const float * v, const float * kk, const float * a, const float * s, float * dst) {
     const int tid = threadIdx.x;
     const int bid = blockIdx.x;
 
@@ -77,7 +77,7 @@ static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, cons
     const int n_seq_tokens = T / B;
 
     float state[head_size];
-    __shared__ float _r[head_size], _w[head_size], _k[head_size], _kk[head_size], _a[head_size], _r_k[head_size];
+    __shared__ float _r[head_size], _w[head_size], _k[head_size], _kk[head_size], _a[head_size];
 
 #ifndef GGML_USE_MUSA
     #pragma unroll
@@ -85,7 +85,6 @@ static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, cons
     for (int i = 0; i < head_size; i++) {
         state[i] = s[batch_i * state_size + head_i * head_size * head_size + tid * head_size + i];
     }
-    _r_k[tid] = r_k[head_i * head_size + tid];
 
     for (int t = batch_i * n_seq_tokens * C + head_i * head_size + tid; t < (batch_i + 1) * n_seq_tokens * C + head_i * head_size + tid; t += C) {
         __syncthreads();
@@ -98,23 +97,15 @@ static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, cons
         __syncthreads();
 
         float sa = 0;
-        float rk = 0;
         #pragma unroll
         for (int j = 0; j < head_size; j += 4)
         {
-            const float4& r = (float4&)(_r[j]);
-            const float4& k = (float4&)(_k[j]);
             const float4& kk = (float4&)(_kk[j]);
-            const float4& r_k = (float4&)(_r_k[j]);
             const float4& s = (float4&)(state[j]);
             sa += kk.x * s.x;
             sa += kk.y * s.y;
             sa += kk.z * s.z;
             sa += kk.w * s.w;
-            rk += r.x * k.x * r_k.x;
-            rk += r.y * k.y * r_k.y;
-            rk += r.z * k.z * r_k.z;
-            rk += r.w * k.w * r_k.w;
         }
         sa = -sa;
 
@@ -145,18 +136,17 @@ static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, cons
             y += s.w * r.w;
         }
         dst[t] = y;
-        dst[T * C + t] = _v * rk;
     }
 
     #pragma unroll
     for (int i = 0; i < head_size; i++) {
-        dst[2 * T * C + batch_i * state_size + head_i * head_size * head_size + tid * head_size + i] = state[i];
+        dst[T * C + batch_i * state_size + head_i * head_size * head_size + tid * head_size + i] = state[i];
     }
 }
 
 template <int rows_per_block>
 static __global__ void __launch_bounds__(WARP_SIZE * rows_per_block, 2)
-rwkv_wkv7_f32_t1_warp_row(const int T, const int C, const int H, const float * r, const float * w, const float * k, const float * v, const float * kk, const float * a, const float * r_k, const float * s, float * dst) {
+rwkv_wkv7_f32_t1_warp_row(const int T, const int C, const int H, const float * r, const float * w, const float * k, const float * v, const float * kk, const float * a, const float * s, float * dst) {
     constexpr int head_size = CUDA_WKV_BLOCK_SIZE;
     constexpr int half_head = head_size / 2;
 
@@ -170,7 +160,7 @@ rwkv_wkv7_f32_t1_warp_row(const int T, const int C, const int H, const float * r
     const int head_off = head_i * head_size;
     const int t = batch_i * C + head_off + row;
 
-    __shared__ float _r[head_size], _w[head_size], _k[head_size], _kk[head_size], _a[head_size], _r_k[head_size];
+    __shared__ float _r[head_size], _w[head_size], _k[head_size], _kk[head_size], _a[head_size];
 
     if (threadIdx.y == 0) {
         constexpr float w_scale = -0.6065306597126334f;
@@ -180,14 +170,12 @@ rwkv_wkv7_f32_t1_warp_row(const int T, const int C, const int H, const float * r
         _k[lane]          = k[batch_i * C + head_off + lane];
         _kk[lane]         = kk[batch_i * C + head_off + lane];
         _a[lane]          = a[batch_i * C + head_off + lane];
-        _r_k[lane]        = r_k[head_off + lane];
 
         _r[lane + half_head]   = r[batch_i * C + head_off + lane + half_head];
         _w[lane + half_head]   = __expf(w_scale / (1.0f + __expf(-w[batch_i * C + head_off + lane + half_head])));
         _k[lane + half_head]   = k[batch_i * C + head_off + lane + half_head];
         _kk[lane + half_head]  = kk[batch_i * C + head_off + lane + half_head];
         _a[lane + half_head]   = a[batch_i * C + head_off + lane + half_head];
-        _r_k[lane + half_head] = r_k[head_off + lane + half_head];
     }
     __syncthreads();
 
@@ -196,20 +184,17 @@ rwkv_wkv7_f32_t1_warp_row(const int T, const int C, const int H, const float * r
     const float s1 = s[state_base + lane + half_head];
 
     const float sa = -warp_reduce_sum(_kk[lane] * s0 + _kk[lane + half_head] * s1);
-    const float rk =  warp_reduce_sum(_r[lane] * _k[lane] * _r_k[lane] +
-                                      _r[lane + half_head] * _k[lane + half_head] * _r_k[lane + half_head]);
 
     const float vt  = v[t];
     const float st0 = s0 * _w[lane]             + _k[lane]             * vt + sa * _kk[lane]             * _a[lane];
     const float st1 = s1 * _w[lane + half_head] + _k[lane + half_head] * vt + sa * _kk[lane + half_head] * _a[lane + half_head];
     const float y   = warp_reduce_sum(st0 * _r[lane] + st1 * _r[lane + half_head]);
 
-    dst[2 * T * C + state_base + lane]             = st0;
-    dst[2 * T * C + state_base + lane + half_head] = st1;
+    dst[T * C + state_base + lane]             = st0;
+    dst[T * C + state_base + lane + half_head] = st1;
 
     if (lane == 0) {
         dst[t] = y;
-        dst[T * C + t] = vt * rk;
     }
 }
 
@@ -248,10 +233,9 @@ void ggml_cuda_op_rwkv_wkv7(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const float * v_d = (const float *)dst->src[3]->data;
     const float * kk_d = (const float *)dst->src[4]->data;
     const float * a_d  = (const float *)dst->src[5]->data;
-    const float * r_k_d = (const float *)dst->src[6]->data;
-    const float * s_d   = (const float *)dst->src[7]->data;
+    const float * s_d   = (const float *)dst->src[6]->data;
 
-    const int64_t B = dst->src[7]->ne[1];
+    const int64_t B = dst->src[6]->ne[1];
     const int64_t T = dst->src[0]->ne[2];
     const int64_t C = dst->ne[0];
     const int64_t H = dst->src[0]->ne[1];
@@ -260,16 +244,16 @@ void ggml_cuda_op_rwkv_wkv7(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
 
     cudaStream_t stream = ctx.stream();
 
-    GGML_ASSERT(dst->src[7]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[6]->type == GGML_TYPE_F32);
     GGML_ASSERT(C % H == 0);
     GGML_ASSERT(C / H == CUDA_WKV_BLOCK_SIZE || C / H == CUDA_WKV_BLOCK_SIZE * 2);
 
     if (T / B == 1 && C / H == CUDA_WKV_BLOCK_SIZE) {
         constexpr int rows_per_block = 4;
-        rwkv_wkv7_f32_t1_warp_row<rows_per_block><<<dim3(B * H, CUDA_WKV_BLOCK_SIZE / rows_per_block), dim3(WARP_SIZE, rows_per_block), 0, stream>>>(T, C, H, r_d, w_d, k_d, v_d, kk_d, a_d, r_k_d, s_d, dst_d);
+        rwkv_wkv7_f32_t1_warp_row<rows_per_block><<<dim3(B * H, CUDA_WKV_BLOCK_SIZE / rows_per_block), dim3(WARP_SIZE, rows_per_block), 0, stream>>>(T, C, H, r_d, w_d, k_d, v_d, kk_d, a_d, s_d, dst_d);
     } else if (C / H == CUDA_WKV_BLOCK_SIZE) {
-        rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, kk_d, a_d, r_k_d, s_d, dst_d);
+        rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, kk_d, a_d, s_d, dst_d);
     } else {
-        rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE * 2><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, kk_d, a_d, r_k_d, s_d, dst_d);
+        rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE * 2><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, kk_d, a_d, s_d, dst_d);
     }
 }
