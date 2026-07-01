@@ -1380,8 +1380,17 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         if (!is_mem_shared) {
             common_batch_clear(batch);
 
+            // renumber the draft KV draft-local so a vision gap leaves no position jump:
+            // a 1-axis RoPE draft keeps consecutive positions (Y = X + 1) across the gap
+            auto * mem_dft = llama_get_memory(ctx_dft);
+            std::vector<llama_pos> dbase(n_seq, 0);
+            for (llama_seq_id s = 0; s < (llama_seq_id) n_seq; ++s) {
+                dbase[s] = llama_memory_seq_pos_max(mem_dft, s) + 1;
+            }
+            std::vector<llama_pos> dcur = dbase;
             for (int k = 0; k < n_tokens; ++k) {
-                common_batch_add(batch, batch_in.token[k], batch_in.pos[k], { batch_in.seq_id[k][0] }, 0);
+                const llama_seq_id s = batch_in.seq_id[k][0];
+                common_batch_add(batch, batch_in.token[k], dcur[s]++, { s }, 0);
             }
 
             // shift the tgt embeddings to the right by one position
@@ -1407,8 +1416,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
             }
 
-            auto * mem_dft = llama_get_memory(ctx_dft);
-
             bool ok = true;
             for (int head = 0; head < n_mtp_layers; ++head) {
                 if (chain_heads) {
@@ -1417,7 +1424,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                         if (i_batch_beg[seq_id] < 0) {
                             continue;
                         }
-                        llama_memory_seq_rm(mem_dft, seq_id, batch_in.pos[i_batch_beg[seq_id]], -1);
+                        llama_memory_seq_rm(mem_dft, seq_id, dbase[seq_id], -1);
                     }
                     llama_set_nextn_layer_offset(ctx_dft, head);
                 }
@@ -1468,6 +1475,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         // keep track of which sequences are still drafting
         int n_drafting = 0;
         std::vector<bool> drafting(n_seq);
+        std::vector<llama_pos> ddbase(n_seq, 0);
 
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
@@ -1482,7 +1490,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             drafting[seq_id] = true;
             common_sampler_reset(smpls[seq_id].get());
 
-            common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
+            ddbase[seq_id] = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id) + 1;
+            common_batch_add(batch, dp.id_last, ddbase[seq_id], { seq_id }, true);
             std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, pending_h[seq_id].data(), row_bytes);
 
             i_last[seq_id] = batch.n_tokens - 1;
@@ -1505,7 +1514,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 auto * mem_dft = llama_get_memory(ctx_dft);
                 for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                     if (drafting[seq_id]) {
-                        llama_memory_seq_rm(mem_dft, seq_id, dparams[seq_id].n_past, -1);
+                        llama_memory_seq_rm(mem_dft, seq_id, ddbase[seq_id], -1);
                     }
                 }
                 llama_set_nextn_layer_offset(ctx_dft, i);
