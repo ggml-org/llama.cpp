@@ -7,6 +7,10 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-kv-cache.h"
+#include "llama-kv-cache-iswa.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-hybrid-iswa.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
@@ -4018,6 +4022,144 @@ size_t llama_state_seq_set_data_ext(llama_context * ctx, const uint8_t * src, si
     ctx->synchronize();
 
     return ctx->state_seq_set_data(seq_id, src, size, flags);
+}
+
+static llama_kv_cache * llama_get_kv_cache(llama_context * ctx) {
+    llama_memory_t mem = ctx->get_memory();
+    if (!mem) {
+        return nullptr;
+    }
+
+    if (auto * kv = dynamic_cast<llama_kv_cache *>(mem)) {
+        return kv;
+    }
+
+    if (auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(mem)) {
+        return kv_iswa->get_base();
+    }
+
+    if (auto * hyb = dynamic_cast<llama_memory_hybrid *>(mem)) {
+        return hyb->get_mem_attn();
+    }
+
+    if (auto * hyb_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(mem)) {
+        return hyb_iswa->get_mem_attn()->get_base();
+    }
+
+    return nullptr;
+}
+
+static llama_kv_cache * llama_get_kv_cache_swa(llama_context * ctx) {
+    llama_memory_t mem = ctx->get_memory();
+    if (!mem) {
+        return nullptr;
+    }
+    if (auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(mem)) {
+        return kv_iswa->get_swa();
+    }
+    if (auto * hyb_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(mem)) {
+        return hyb_iswa->get_mem_attn()->get_swa();
+    }
+    return nullptr;
+}
+
+size_t llama_state_seq_get_range(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, uint8_t * dst, size_t cap) {
+    ctx->synchronize();
+
+    // seq_add defers K rotation; flush so serialized K matches recorded positions,
+    // to avoid range_read re-anchoring by the wrong delta on load.
+    ctx->memory_update(false);
+    ctx->synchronize();
+
+    llama_kv_cache * kv = llama_get_kv_cache(ctx);
+    if (!kv) {
+        LLAMA_LOG_ERROR("%s: context is not backed by an attention KV cache\n", __func__);
+        return 0;
+    }
+    llama_kv_cache * kv_swa = llama_get_kv_cache_swa(ctx);
+
+    size_t required = 0;
+    try {
+        llama_io_write_dummy io(false);
+        kv->range_write(io, seq_id, p0, p1);
+        required = io.n_bytes();
+        if (kv_swa) {
+            llama_io_write_dummy io_swa(false);
+            kv_swa->range_write(io_swa, seq_id, p0, p1);
+            required += sizeof(uint32_t) + io_swa.n_bytes();
+        }
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: error measuring kv range: %s\n", __func__, err.what());
+        return 0;
+    }
+
+    if (dst == nullptr || cap < required) {
+        return required;
+    }
+
+    try {
+        llama_io_write_host io(dst, cap);
+        kv->range_write(io, seq_id, p0, p1);
+        const size_t base_written = io.n_bytes();
+        if (kv_swa) {
+            // iSWA layout: [base bytes][4-byte swa_size][swa bytes]
+            llama_io_write_dummy io_swa_meas(false);
+            kv_swa->range_write(io_swa_meas, seq_id, p0, p1);
+            const uint32_t swa_size = (uint32_t) io_swa_meas.n_bytes();
+            io.write(&swa_size, sizeof(uint32_t));
+            kv_swa->range_write(io, seq_id, p0, p1);
+            return base_written + sizeof(uint32_t) + (size_t) swa_size;
+        }
+        return base_written;
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: error saving kv range: %s\n", __func__, err.what());
+        return 0;
+    }
+}
+
+bool llama_state_seq_set_range(llama_context * ctx, llama_seq_id seq_id, const uint8_t * src, size_t size, llama_pos new_p0) {
+    ctx->synchronize();
+
+    if (src == nullptr) {
+        LLAMA_LOG_ERROR("%s: null source buffer\n", __func__);
+        return false;
+    }
+
+    llama_kv_cache * kv = llama_get_kv_cache(ctx);
+    if (!kv) {
+        LLAMA_LOG_ERROR("%s: context is not backed by an attention KV cache\n", __func__);
+        return false;
+    }
+    llama_kv_cache * kv_swa = llama_get_kv_cache_swa(ctx);
+
+    bool ok = false;
+    try {
+        llama_io_read_host io(src, size);
+        ok = kv->range_read(io, seq_id, new_p0);
+        if (!ok) {
+            return false;
+        }
+        if (kv_swa) {
+            // iSWA: [swa_size u32][swa bytes] follow the base section
+            uint32_t swa_size = 0;
+            io.read(&swa_size, sizeof(uint32_t));
+            if (swa_size > 0) {
+                ok = kv_swa->range_read(io, seq_id, new_p0) && ok;
+            }
+        }
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: error loading kv range: %s\n", __func__, err.what());
+        return false;
+    }
+
+    if (!ok) {
+        return false;
+    }
+
+    // apply the per-cell RoPE shift queued by range_read so K is re-anchored before decode
+    ctx->memory_update(false);
+
+    return true;
 }
 
 size_t llama_state_seq_save_file(llama_context * ctx, const char * filepath, llama_seq_id seq_id, const llama_token * tokens, size_t n_token_count) {

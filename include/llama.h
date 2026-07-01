@@ -905,6 +905,25 @@ extern "C" {
                     llama_seq_id   dest_seq_id,
            llama_state_seq_flags   flags);
 
+    // Serialize K/V tensors of seq_id for positions [p0, p1). Returns bytes written, or the
+    // required size if dst is NULL or cap is too small. Non-destructive on the KV cache.
+    LLAMA_API size_t llama_state_seq_get_range(
+            struct llama_context * ctx,
+                    llama_seq_id   seq_id,
+                       llama_pos   p0,
+                       llama_pos   p1,
+                         uint8_t * dst,
+                          size_t   cap);
+
+    // Load a buffer from llama_state_seq_get_range into seq_id at new_p0.
+    // Clears [new_p0, new_p0+n_cells) only; re-anchors K via RoPE. No forward pass.
+    LLAMA_API bool llama_state_seq_set_range(
+            struct llama_context * ctx,
+                    llama_seq_id   seq_id,
+                   const uint8_t * src,
+                          size_t   size,
+                       llama_pos   new_p0);
+
     //
     // Decoding
     //
