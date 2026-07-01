@@ -10,7 +10,8 @@ export const SETTINGS_SECTION_SLUGS = {
 	DEVELOPER: 'developer',
 	MCP: 'mcp',
 	TOOLS: 'tools',
-	IMPORT_EXPORT: 'import-export'
+	IMPORT_EXPORT: 'import-export',
+	REMOTE_ACCESS: 'remote-access'
 } as const;
 
 export const ROUTES = {

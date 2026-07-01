@@ -272,6 +272,7 @@
 			}
 		);
 	});
+
 </script>
 
 <svelte:head>
