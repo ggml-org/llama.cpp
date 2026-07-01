@@ -1016,6 +1016,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_yasa2>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_PARAKEET:
+            {
+                builder = std::make_unique<clip_graph_parakeet>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_GRANITE4_VISION:
             {
                 builder = std::make_unique<clip_graph_granite4_vision>(ctx, img);
@@ -1336,6 +1340,16 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_NEMOTRON_V2_VL:
                     {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                    } break;
+                case PROJECTOR_TYPE_PARAKEET:
+                    {
+                        get_u32(KEY_AUDIO_SUBSAMPLING_FACTOR, hparams.subsampling_factor);
+                        get_u32(KEY_A_CONV_KERNEL_SIZE,       hparams.audio_conv_kernel_size);
+                        hparams.audio_chunk_len    = 0;
+                        hparams.audio_sample_rate  = 16000;
+                        hparams.audio_n_fft        = 512;
+                        hparams.audio_window_len   = 400;
+                        hparams.audio_hop_len      = 160;
                     } break;
                 case PROJECTOR_TYPE_IDEFICS3:
                     {
@@ -1815,16 +1829,36 @@ struct clip_model_loader {
             return cur;
         };
 
-        auto get_scalar = [&](const std::string & name, float default_val) {
+        auto get_vector = [&](const std::string & name) {
+            std::vector<float> result;
             auto it = tensor_offset.find(name);
             if (it == tensor_offset.end()) {
+                return result;
+            }
+
+            int idx = gguf_find_tensor(ctx_gguf.get(), name.c_str());
+            if (idx <= 0) {
+                throw std::runtime_error(string_format("%s: failed to find tensor %s\n", __func__, name.c_str()));
+            }
+            size_t n_bytes = gguf_get_tensor_size(ctx_gguf.get(), idx);
+            size_t n_elems = n_bytes / sizeof(float);
+            result.resize(n_elems);
+            fin.seekg(it->second, std::ios::beg);
+            fin.read(reinterpret_cast<char*>(result.data()), n_bytes);
+            return result;
+        };
+
+        auto get_scalar = [&](const std::string & name, float default_val) {
+            auto v = get_vector(name);
+            if (v.empty()) {
                 return default_val;
             }
-            size_t offset = it->second;
-            fin.seekg(offset, std::ios::beg);
-            float value;
-            fin.read(reinterpret_cast<char*>(&value), sizeof(float));
-            return value;
+            if (v.size() != 1) {
+                throw std::runtime_error(string_format("%s: expected scalar tensor '%s' but got %d elements\n",
+                            __func__, name.c_str(), (int) v.size()));
+            }
+
+            return v[0];
         };
 
         model.class_embedding = get_tensor(TN_CLASS_EMBD, false);
@@ -2661,6 +2695,68 @@ struct clip_model_loader {
                         layer.conv_pw2_b   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
                     }
                 } break;
+            case PROJECTOR_TYPE_PARAKEET:
+                {
+
+                    hparams.mel_filters = get_vector(TN_MEL_FILTERS);
+                    hparams.window      = get_vector(TN_WINDOW);
+
+                    // Subsampling layers (conv1d)
+                    for (int i : {0, 2, 3, 5, 6}) {
+                        model.pre_encode_conv_X_w[i] = get_tensor(string_format(TN_CONV1D, i, "weight"));
+                        model.pre_encode_conv_X_b[i] = get_tensor(string_format(TN_CONV1D, i, "bias"));
+                    }
+                    model.pre_encode_out_w = get_tensor(string_format(TN_PRE_ENCODE_OUT, "weight"));
+                    model.pre_encode_out_b = get_tensor(string_format(TN_PRE_ENCODE_OUT, "bias"));
+
+                    // Projection layers
+                    model.mm_norm_pre_w = get_tensor(string_format(TN_MM_NORM_PRE, "weight"), false);
+                    model.mm_0_w        = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"), false);
+                    model.mm_1_w        = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"), false);
+
+                    // Encoder layers
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        auto & layer = model.layers[il];
+
+                        // Attention (from shared above)
+
+                        // Relative position encoding
+                        layer.linear_pos_w = get_tensor(string_format(TN_LINEAR_POS, prefix, il, "weight"));
+                        layer.pos_bias_u   = get_tensor(string_format(TN_POS_BIAS_U, prefix, il));
+                        layer.pos_bias_v   = get_tensor(string_format(TN_POS_BIAS_V, prefix, il));
+
+                        // Convolution module
+                        layer.conv_pw1_w     = get_tensor(string_format(TN_CONV_PW1,       prefix, il, "weight"));
+                        layer.conv_pw1_b     = get_tensor(string_format(TN_CONV_PW1,       prefix, il, "bias"), false);
+                        layer.conv_dw_w      = get_tensor(string_format(TN_CONV_DW,        prefix, il, "weight"));
+                        layer.conv_dw_b      = get_tensor(string_format(TN_CONV_DW,        prefix, il, "bias"), false);
+                        layer.conv_norm_w    = get_tensor(string_format(TN_CONV_NORM,      prefix, il, "weight"));
+                        layer.conv_norm_b    = get_tensor(string_format(TN_CONV_NORM,      prefix, il, "bias"), false);
+                        layer.conv_norm_mean = get_tensor(string_format(TN_CONV_NORM_MEAN, prefix, il), false);
+                        layer.conv_norm_var  = get_tensor(string_format(TN_CONV_NORM_VAR,  prefix, il), false);
+                        layer.conv_pw2_w     = get_tensor(string_format(TN_CONV_PW2,       prefix, il, "weight"));
+                        layer.conv_pw2_b     = get_tensor(string_format(TN_CONV_PW2,       prefix, il, "bias"), false);
+
+                        // Feed-forward networks
+                        layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "weight"));
+                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "bias"), false);
+
+                        layer.ff_norm_1_w = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "weight"));
+                        layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "bias"), false);
+                        layer.ff_up_1_w   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "weight"));
+                        layer.ff_up_1_b   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "bias"), false);
+                        layer.ff_down_1_w = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "weight"));
+                        layer.ff_down_1_b = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "bias"), false);
+
+                        // Layer norms
+                        layer.norm_conv_w = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"));
+                        layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"), false);
+                    }
+
+                    model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
+                    model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
+                    model.mm_model_mlp_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
+                } break;
             case PROJECTOR_TYPE_GRANITE_SPEECH:
                 {
                     model.inp_proj_w     = get_tensor(string_format(TN_INP_PROJ,    "weight"));
@@ -3495,6 +3591,10 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                 }
                 n_patches = n;
             } break;
+        case PROJECTOR_TYPE_PARAKEET:
+            {
+                n_patches = (img->nx() + (params.subsampling_factor - 1)) / params.subsampling_factor;
+            } break;
         case PROJECTOR_TYPE_GEMMA4UA:
             {
                 n_patches = img->nx();  // no downsampling: one token per raw waveform frame
@@ -4326,6 +4426,86 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                 }
                 set_input_f32("pos_emb", pos_emb);
             } break;
+        case PROJECTOR_TYPE_PARAKEET:
+            {
+                struct ggml_tensor * attn_mask = ggml_graph_get_tensor(gf, "attn_mask");
+                const int n_q = attn_mask->ne[1];
+                const int n_k = attn_mask->ne[0];
+                const int n_tokens_real = (1101 + hparams.subsampling_factor-1) / hparams.subsampling_factor;
+                const float mask_value  = -1e30f;
+
+                std::vector<float> mask_data(n_q * n_k);
+                if (n_k == n_q) {
+                    // full attention: mask keys that are padding
+                    for (int q = 0; q < n_q; ++q) {
+                        for (int k = 0; k < n_k; ++k) {
+                            mask_data[q * n_k + k] = (k >= n_tokens_real) ? mask_value : 0.0f;
+                        }
+                    }
+                } else {
+                    // local attention: mask keys outside the valid window
+                    const int att_left = n_k / 2;
+                    for (int q = 0; q < n_q; ++q) {
+                        for (int k = 0; k < n_k; ++k) {
+                            const int key = q - att_left + k;
+                            mask_data[q * n_k + k] = (key >= 0 && key < n_tokens_real) ? 0.0f : mask_value;
+                        }
+                    }
+                }
+                set_input_f32(attn_mask->name, mask_data);
+
+                // local attention skew mask: zeroes out the probs that were
+                // computed for keys outside the valid sliding window.
+                if (struct ggml_tensor * local_mask = ggml_graph_get_tensor(gf, "local_mask")) {
+                    const int lm_k = local_mask->ne[0];
+                    const int lm_q = local_mask->ne[1];
+                    const int window_size = lm_k - lm_q + 1;
+                    std::vector<float> lm_data(lm_q * lm_k);
+                    for (int q = 0; q < lm_q; ++q) {
+                        for (int k = 0; k < lm_k; ++k) {
+                            const int rel = k - q;
+                            lm_data[q * lm_k + k] = (rel >= 0 && rel < window_size) ? 1.0f : 0.0f;
+                        }
+                    }
+                    set_input_f32(local_mask->name, lm_data);
+                }
+
+                // Generate rotation frequencies for relative positional encoding.
+                {
+                    const int n_state     = hparams.n_embd;
+                    const int d_half      = n_state / 2;
+                    const float log_10000 = logf(10000.0f);
+                    std::vector<float> freqs(d_half);
+                    for (int k = 0; k < d_half; ++k) {
+                        freqs[k] = expf(-(float(k * 2) * log_10000 / float(n_state)));
+                    }
+                    set_input_f32("pos_freqs", freqs);
+                }
+
+                // Generate relative positional distance values which scaled by
+                // the frequency to produce the angles for sin/cos.
+                {
+                    // window_size is only known after graph construction since it depends on
+                    // n_time from the conv output, so we read it back from the graph tensor.
+                    struct ggml_tensor * rel_pos = ggml_graph_get_tensor(gf, "rel_positions");
+                    const int window_size = rel_pos->ne[1];
+                    std::vector<float> pos(window_size);
+                    // local attention: window is fixed at [att_left, att_right]
+                    // full attention: window covers the full sequence, centered
+                    if (ggml_graph_get_tensor(gf, "local_mask")) {
+                        const int att_left = window_size / 2;
+                        for (int t = 0; t < window_size; ++t) {
+                            pos[t] = float(att_left - t);
+                        }
+                    } else {
+                        const int n_time = (window_size + 1) / 2;
+                        for (int t = 0; t < window_size; ++t) {
+                            pos[t] = float(n_time - 1 - t);
+                        }
+                    }
+                    set_input_f32(rel_pos->name, pos);
+                }
+            } break;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             {
                 const int context_size = ctx->model.hparams.audio_chunk_size;
@@ -4605,6 +4785,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.qf_proj_blocks.size() * ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
+        case PROJECTOR_TYPE_PARAKEET:
+            return ctx->model.mm_1_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }

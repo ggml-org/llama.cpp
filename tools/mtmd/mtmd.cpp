@@ -714,6 +714,10 @@ struct mtmd_context {
                     aud_end = "<audio|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4a>(ctx_a);
                 } break;
+            case PROJECTOR_TYPE_PARAKEET:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_parakeet>(ctx_a);
+                } break;
             case PROJECTOR_TYPE_GEMMA4UA:
                 {
                     aud_beg = "<|audio>";

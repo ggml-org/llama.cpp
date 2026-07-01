@@ -367,6 +367,7 @@ class Keys:
         FEED_FORWARD_LENGTH = "clip.audio.feed_forward_length"
         PROJECTION_DIM      = "clip.audio.projection_dim"
         BLOCK_COUNT         = "clip.audio.block_count"
+        SUBSAMPLING_FACTOR  = "clip.audio.subsampling_factor"
         CHUNK_SIZE          = "clip.audio.chunk_size"
         CONV_KERNEL_SIZE    = "clip.audio.conv_kernel_size"
         MAX_POS_EMB         = "clip.audio.max_pos_emb"
@@ -963,6 +964,10 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_CONV_NORM        = auto() # SSM conv
     A_ENC_CONV_PW1         = auto()
     A_ENC_CONV_PW2         = auto()
+    A_ENC_CONV_NORM_MEAN   = auto() # parakeet
+    A_ENC_CONV_NORM_VAR    = auto() # parakeet
+    A_ENC_MEL_FILTERS      = auto() # parakeet
+    A_ENC_WINDOW           = auto() # parakeet
     A_CTC_OUT              = auto()
     A_CTC_OUT_MID          = auto()
     A_ENC_ATTN_REL_POS_EMB = auto()
@@ -1529,6 +1534,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_ENC_CONV_NORM:           "a.blk.{bid}.conv_norm",
     MODEL_TENSOR.A_ENC_CONV_PW1:            "a.blk.{bid}.conv_pw1",
     MODEL_TENSOR.A_ENC_CONV_PW2:            "a.blk.{bid}.conv_pw2",
+    MODEL_TENSOR.A_ENC_CONV_NORM_MEAN:      "a.blk.{bid}.conv_norm_mean",
+    MODEL_TENSOR.A_ENC_CONV_NORM_VAR:       "a.blk.{bid}.conv_norm_var",
+    MODEL_TENSOR.A_ENC_MEL_FILTERS:         "a.mel_filters",
+    MODEL_TENSOR.A_ENC_WINDOW:              "a.window",
     MODEL_TENSOR.A_CTC_OUT:                 "a.enc_ctc_out",
     MODEL_TENSOR.A_CTC_OUT_MID:             "a.enc_ctc_out_mid",
     MODEL_TENSOR.A_ENC_ATTN_REL_POS_EMB:    "a.blk.{bid}.attn_rel_pos_emb",
@@ -1729,6 +1738,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_ENC_CONV_NORM,
         MODEL_TENSOR.A_ENC_CONV_PW1,
         MODEL_TENSOR.A_ENC_CONV_PW2,
+        MODEL_TENSOR.A_ENC_CONV_NORM_MEAN,
+        MODEL_TENSOR.A_ENC_CONV_NORM_VAR,
+        MODEL_TENSOR.A_ENC_MEL_FILTERS,
+        MODEL_TENSOR.A_ENC_WINDOW,
         MODEL_TENSOR.A_MM_INP_PROJ,
         MODEL_TENSOR.A_MM_SOFT_EMB_NORM,
         MODEL_TENSOR.A_MM_EMBEDDING,
@@ -4670,6 +4683,7 @@ class VisionProjectorType:
     YOUTUVL = "youtuvl"
     NEMOTRON_V2_VL = "nemotron_v2_vl"
     HUNYUANVL      = "hunyuanvl"
+    PARAKEET       = "parakeet"
     MINICPMV4_6    = "minicpmv4_6"
     GRANITE_SPEECH = "granite_speech"  # audio
     MIMOVL         = "mimovl"
