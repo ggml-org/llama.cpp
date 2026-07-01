@@ -24,8 +24,7 @@
 
 #define DK_VEC (DK/4)
 #define DV_VEC (DV/4)
-// q1 reduces over a Q1_WG_SIZE-wide WG via work-group barriers; the launch WG
-// must match. Defaults to the Adreno sg (64); host passes -D FA_SG=32 on Intel.
+
 #ifndef FA_SG
 #define FA_SG 64
 #endif
@@ -315,9 +314,6 @@ __kernel void flash_attn_f32_q8_0_q1(
     }
 }
 
-// Decode variant for large DV with q8_0 KV — mirrors the f16 vec FA design.
-// See flash_attn_f32_f16.cl / _q4_0.cl for the protocol; the only change here
-// is the per-lane q8_0 dequant on the K/V reads.
 #ifdef cl_intel_subgroups
 #pragma OPENCL EXTENSION cl_intel_subgroups : enable
 #else
@@ -335,8 +331,6 @@ __kernel void flash_attn_f32_q8_0_q1(
 #define VEC_WG_SIZE      (Q1_WG_SIZE * VEC_NSG)
 #define Q1V_DV_PER_THREAD ((DV_VEC + Q1_WG_SIZE - 1) / Q1_WG_SIZE)
 
-// Dequant one float4 lane (0..7) from a q8_0 block.
-// Each q8_0 block holds 32 int8 values; lane L reads bytes [2+L*4 .. 2+L*4+3].
 inline float4 dequant_q8_0_lane(const global char * block_ptr, int lane) {
     const float d = vload_half(0, (const global half *)block_ptr);
     const global char * qs = block_ptr + 2 + lane * 4;
@@ -738,25 +732,6 @@ __kernel void flash_attn_f32_q8_0_q1_split(
 #define FA_V_STRATEGY 0
 #endif
 
-// ---------------------------------------------------------------------------
-// flash_attn_f32_q8_0_q1_vec_mq_split — Multi-Query KV-head-coalesced FA decode
-// with flash-decoding split for q8_0 KV. Structural port of
-// flash_attn_f32_f16_q1_vec_mq_split (in flash_attn_f32_f16.cl); each WG handles
-// MQ_GQA Q-heads sharing one KV-head, so K and V are read once and reused
-// MQ_GQA times. Per-h state (m_i, l_i, o_acc, slope, mask_base) tracked
-// separately.
-//
-// Compile-time params:
-//   MQ_GQA       — Q-heads coalesced per WG (defaults 4; second compile with =8
-//                  for Qwen3-30B-A3B class).
-//   MQ_NSG_SPLIT — subgroups per WG (defaults 4; second compile with =3 paired
-//                  with MQ_GQA=8 on Adreno X2 where the per-kernel WG cap drops
-//                  to 192 due to register pressure).
-//
-// Writes one partial record per (batch, head_idx, q_idx, split_idx) into
-// partial_void; flash_attn_f32_merge (below) normalizes across splits.
-// ---------------------------------------------------------------------------
-
 #ifndef MQ_GQA
 #define MQ_GQA 4
 #endif
@@ -830,7 +805,6 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split(
     const global char * k_base = (const global char *) k_void + k_offset;
     const global char * v_base = (const global char *) v_void + v_offset;
 
-    // Stage MQ_GQA Q rows in __local as float4 once (uniform across WG).
     __local ACC_TYPE4 q_shared[MQ_GQA * DK_VEC];
     for (int i = tid; i < MQ_GQA * DK_VEC; i += MQ_SPLIT_WG_SIZE_Q8) {
         const int h        = i / DK_VEC;
@@ -876,7 +850,6 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split(
         for (int i = 0; i < Q1V_DV_PER_THREAD; ++i) o_acc[h][i] = (ACC_TYPE4)(0.0f);
     }
 
-    // Each subgroup sweeps its slice of this split's kv range.
     const int kv_len    = kv_end - kv_start;
     const int kv_per_sg = (kv_len + MQ_NSG_SPLIT - 1) / MQ_NSG_SPLIT;
     const int kv_lo     = kv_start + sgid * kv_per_sg;
@@ -938,8 +911,6 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split(
         }
     }
 
-    // Per-h cross-subgroup merge: subgroup 0 folds NSG partials into a single
-    // (m, l, O) record per Q-head, written to the partial buffer.
     __local ACC_TYPE  sg_m[MQ_GQA][MQ_NSG_SPLIT];
     __local ACC_TYPE  sg_l[MQ_GQA][MQ_NSG_SPLIT];
     __local ACC_TYPE4 sg_o[MQ_NSG_SPLIT][DV_VEC];

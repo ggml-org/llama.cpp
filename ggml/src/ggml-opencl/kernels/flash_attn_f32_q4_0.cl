@@ -27,8 +27,7 @@
 
 #define DK_VEC (DK/4)
 #define DV_VEC (DV/4)
-// q1 reduces over a Q1_WG_SIZE-wide WG via work-group barriers; the launch WG
-// must match. Defaults to the Adreno sg (64); host passes -D FA_SG=32 on Intel.
+
 #ifndef FA_SG
 #define FA_SG 64
 #endif
@@ -370,9 +369,6 @@ __kernel void flash_attn_f32_q4_0_q1(
     }
 }
 
-// Decode variant for large DV with q4_0 KV — mirrors the f16 vec FA design.
-// See flash_attn_f32_f16.cl for the protocol; the only change here is the
-// per-lane q4_0 dequant on the K/V reads.
 #ifdef cl_intel_subgroups
 #pragma OPENCL EXTENSION cl_intel_subgroups : enable
 #else
@@ -469,10 +465,8 @@ __kernel void flash_attn_f32_q4_0_q1_vec(
     barrier(CLK_LOCAL_MEM_FENCE);
 
 #ifdef FA_HAVE_INT_DOT
-    // Quantize Q to int8-packed uints + per-block (qd, q_sum) once per WG
-    // for dp4a dot. One thread per Q block (DK_Q4_BLOCKS threads active);
-    // remaining threads idle this step. At DK=256 this is 8 blocks ~ 320 B
-    // LDS plus the 8-uint packed payload per block.
+    // quantize Q to int8-packed uints + per-block (qd, q_sum) once per WG for dp4a
+    // one thread per Q block, remaining threads idle this step
     __local uint  q_packed_shared[DK_Q4_BLOCKS * 8];
     __local float q_d_shared[DK_Q4_BLOCKS];
     __local int   q_sum_shared[DK_Q4_BLOCKS];
@@ -513,12 +507,8 @@ __kernel void flash_attn_f32_q4_0_q1_vec(
         const global char * v_row = v_base + batch_idx * v_nb3 + head_kv_idx * v_nb2 + k_idx * v_nb1;
 
 #ifdef FA_HAVE_INT_DOT
-        // Per-lane dp4a path: each lane packs 4 raw q4_0 nibbles (its
-        // quartet of the K block) into a uint, then dot_acc_sat_4x8packed_ss_int
-        // against the matching Q-quartet uint from q_packed_shared. The
-        // (nibble - 8) bias correction is folded in on lane_in_block==0 only,
-        // so the per-block sum reduces correctly across the 8 lanes
-        // contributing to it.
+        // per-lane dp4a: each lane packs 4 raw q4_0 nibbles into a uint,
+        // then dot_acc_sat_4x8packed_ss_int against the matching uint.
         ACC_TYPE lane_contrib = 0.0f;
         for (int qk = tid_sg; qk < DK_VEC; qk += Q1_WG_SIZE) {
             const int block_idx     = qk / 8;
@@ -542,9 +532,7 @@ __kernel void flash_attn_f32_q4_0_q1_vec(
             const float block_scale = qd * kd;
             float contrib = (float)raw_dot * block_scale;
             if (lane_in_block == 0) {
-                // Block bias correction is per-block; attribute it to lane 0
-                // so summing across the 8 lanes recovers
-                // qd*kd*(raw_dot_block - 8*q_sum_block).
+                // block bias correction is per-block
                 const int q_sum_b = q_sum_shared[block_idx];
                 contrib -= 8.0f * block_scale * (float)q_sum_b;
             }
@@ -856,21 +844,6 @@ __kernel void flash_attn_f32_q4_0_q1_split(
 #define WG_SIZE             BLOCK_M
 #endif
 
-// ---------------------------------------------------------------------------
-// flash_attn_f32_q4_0_q1_vec_mq_split — Multi-Query KV-head-coalesced FA decode
-// with flash-decoding split for q4_0 KV. Structural port of the f16/q8_0 MQ
-// split kernels, with q4_0-specific dp4a K dot (per-lane raw_dot against
-// LDS-staged Q-quantized-int8 + per-block bias correction on lane 0).
-// V dequant stays float (output-side, not on the hot dot).
-//
-// Compile-time params:
-//   MQ_GQA       — Q-heads coalesced per WG (defaults 4; second compile =8
-//                  for Qwen3-30B-A3B / Qwen3-4B GQA=8 class).
-//   MQ_NSG_SPLIT — subgroups per WG (defaults 4; second compile =3 paired
-//                  with MQ_GQA=8 on Adreno X2 where the per-kernel WG cap
-//                  drops to 192 due to register pressure).
-// ---------------------------------------------------------------------------
-
 #ifndef MQ_GQA
 #define MQ_GQA 4
 #endif
@@ -943,9 +916,6 @@ __kernel void flash_attn_f32_q4_0_q1_vec_mq_split(
     const global char * k_base = (const global char *) k_void + k_offset;
     const global char * v_base = (const global char *) v_void + v_offset;
 
-    // Stage MQ_GQA Q rows in __local as float4. Used by the FA_HAVE_INT_DOT
-    // path as the source for Q-block quantize, and by the fallback path as
-    // the direct Q vectors for fp dot.
     __local ACC_TYPE4 q_shared[MQ_GQA * DK_VEC];
     for (int i = tid; i < MQ_GQA * DK_VEC; i += MQ_SPLIT_WG_SIZE_Q4) {
         const int h        = i / DK_VEC;
@@ -958,8 +928,6 @@ __kernel void flash_attn_f32_q4_0_q1_vec_mq_split(
     barrier(CLK_LOCAL_MEM_FENCE);
 
 #ifdef FA_HAVE_INT_DOT
-    // Per-h, per-block: int8-packed Q + per-block (qd, q_sum). Quantize once
-    // per WG. One thread per (h, block) — MQ_GQA × DK_Q4_BLOCKS active.
     __local uint  q_packed_shared[MQ_GQA * DK_Q4_BLOCKS * 8];
     __local float q_d_shared[MQ_GQA * DK_Q4_BLOCKS];
     __local int   q_sum_shared[MQ_GQA * DK_Q4_BLOCKS];
@@ -1026,11 +994,6 @@ __kernel void flash_attn_f32_q4_0_q1_vec_mq_split(
         const global char * v_row = v_base + batch_idx * v_nb3 + head_kv_idx * v_nb2 + k_idx * v_nb1;
 
 #ifdef FA_HAVE_INT_DOT
-        // Per-lane dp4a: each lane handles its quartet of one K block. Each
-        // lane's contribution to each h is dp4a(Q_h_packed, K_packed) scaled
-        // by qd_h * kd. Per-block bias correction (-8*qd_h*kd*q_sum_h) is
-        // attributed to lane_in_block==0 so summing across 8 lanes recovers
-        // qd_h*kd*(raw_dot_block - 8*q_sum_block).
         ACC_TYPE lane_contrib[MQ_GQA];
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) lane_contrib[h] = 0.0f;
@@ -1080,7 +1043,7 @@ __kernel void flash_attn_f32_q4_0_q1_vec_mq_split(
             score[h] = s;
         }
 #else
-        // Fallback float-dequant K dot.
+        // fallback float-dequant K dot
         ACC_TYPE4 dot4[MQ_GQA];
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) dot4[h] = (ACC_TYPE4)(0.0f);
@@ -1134,7 +1097,7 @@ __kernel void flash_attn_f32_q4_0_q1_vec_mq_split(
         }
     }
 
-    // Per-h cross-subgroup merge: subgroup 0 folds MQ_NSG_SPLIT partials.
+    // per-h cross-subgroup merge
     __local ACC_TYPE  sg_m[MQ_GQA][MQ_NSG_SPLIT];
     __local ACC_TYPE  sg_l[MQ_GQA][MQ_NSG_SPLIT];
     __local ACC_TYPE4 sg_o[MQ_NSG_SPLIT][DV_VEC];

@@ -13,13 +13,7 @@
 #define REQD_SUBGROUP_SIZE_64
 #endif
 
-// Subgroup width the q1-family kernels stripe the dot/o_acc over and reduce
-// across (sub_group_reduce_*). Defaults to the Adreno default sg (64); the host
-// overrides it with -D FA_SG=<device sg> on non-Adreno GPUs. REQD_FA_SG pins the
-// width on Intel (intel_reqd_sub_group_size), where the WG would otherwise split
-// into multiple narrower subgroups and the reduces would cover only part of it.
-// Left empty on Adreno: the qcom default sg already equals FA_SG=64 there, and
-// the explicit attribute regresses sibling kernels (see the q1_vec note below).
+// subgroup size for q1 kernels
 #ifndef FA_SG
 #define FA_SG 64
 #endif
@@ -50,8 +44,7 @@
 
 #define DK_VEC (DK/4)
 #define DV_VEC (DV/4)
-// Hoisted to file scope so the kept decode kernels (q1_split, merge) still see
-// it when FA_DECODE_ONLY excludes the vec/MQ block that originally defined it.
+
 #ifndef FA_PARTIAL_FLOATS
 #define FA_PARTIAL_FLOATS (2 + DV)
 #endif
@@ -94,10 +87,9 @@ inline float get_alibi_slope(
 
     return pow(base, exph);
 }
-// FA_DECODE_ONLY: built for DK=512 (Gemma-4 global layers) where compiling the
-// full program OOMs the Adreno shader compiler (CL_OUT_OF_HOST_MEMORY). The
-// decode-only build keeps just q1 + q1_split + merge; the heavy BM-tile prefill
-// kernel and all vec/MQ variants are excluded so the program fits the compiler.
+
+// Adreno compiler crashes when attempting to compile the entire program for DK=512,
+// FA_DECODE_ONLY allows bypass the encoding kernel.
 #ifndef FA_DECODE_ONLY
 #ifndef FA_TILE_NAME
 #define FA_TILE_NAME flash_attn_f32_f16
@@ -105,11 +97,6 @@ inline float get_alibi_slope(
 __kernel void FA_TILE_NAME(
     const global void * q_void, ulong q_offset,
 #ifdef FA_K_IMG
-    // K bound as a read-only image1d_buffer_t (CL_RGBA / CL_HALF_FLOAT, 8 B/pixel
-    // = 1 half4) → reads go through the Adreno texture cache, a separate BW lane
-    // that survives the per-query-block K re-reads. k_offset is baked into the
-    // sub-buffer the image views, so the second slot is an unused placeholder
-    // kept only so the host arg layout matches the non-image tile.
     __read_only image1d_buffer_t k_img, ulong k_offset_unused,
 #else
     const global void * k_void, ulong k_offset,
@@ -629,18 +616,9 @@ __kernel void FA_TILE_NAME(
     }
 #endif
 }
+#endif  // !FA_DECODE_ONLY
 
-// Note: REQD_SUBGROUP_SIZE_64 intentionally omitted. Adding it routes the
-// X2 driver (and X1, per hp-hamoa) to its slower $fallback kernel variant
-// for sibling kernels in the same program — measured -5% on Llama-3.2-3B
-// _q1_vec at d=8192. At WG=Q1_WG_SIZE=64 the Adreno default sg=64, so
-// sub_group_reduce_max/add and sub_group_barrier produce correct WG-wide
-// semantics without the explicit attribute (TBO 2564/2564).
-#endif  // !FA_DECODE_ONLY (BM-tile prefill kernel)
-
-// FA_PREFILL_ONLY: the DK=512 prefill program builds ONLY the BM-tile kernel
-// above; every decode kernel below is excluded so the tile compiles in its own
-// minimal program (the full program OOMs the Adreno compiler at DK=512).
+// allow bypassing decode kernels to avoid compiler crash for DK=512 on Adreno GPUs
 #ifndef FA_PREFILL_ONLY
 REQD_FA_SG
 __kernel void flash_attn_f32_f16_q1(
@@ -798,32 +776,12 @@ __kernel void flash_attn_f32_f16_q1(
     }
 }
 
-// Decode variant for large DV (e.g. Gemma-4 DK=DV=512 global layers).
-// Mirrors ggml-metal's kernel_flash_attn_ext_vec design:
-//   - WG = VEC_NSG subgroups × 64 lanes. Each subgroup runs the FA-2 online
-//     softmax loop independently over its slice of n_kv, then a __local merge
-//     combines (m_i, l_i, o_acc) across subgroups. This restores the n_kv
-//     parallelism that a single-subgroup vec port loses.
-//   - DV is split across the subgroup (each thread owns DV_VEC/64 of o_acc);
-//     this kills the o_acc[DV_VEC] private-array spill (~2 KB/thread at DV=512).
-//   - DK is split across the subgroup too; partial dots reduce via
-//     sub_group_reduce_add — no per-iteration barriers in the inner loop.
-//   - Cross-subgroup merge uses __local for sg_m / sg_l / sg_o (~4 KB at
-//     NSG=2, DV=512); one subgroup performs the final norm + write.
-// REQD_SUBGROUP_SIZE_64 ensures the subgroup width matches what the
-// dot/o_acc striding assumes (Adreno X2 miscompiles full-subgroup reduces
-// without the explicit attribute; see ssm_scan notes).
-
+// decode variant for large DV (e.g. Gemma-4 DK=DV=512 global layers).
 #define VEC_NSG          4
 #define VEC_WG_SIZE      (Q1_WG_SIZE * VEC_NSG)
 #define Q1V_DV_PER_THREAD ((DV_VEC + Q1_WG_SIZE - 1) / Q1_WG_SIZE)
 
-// FA_DECODE_MINIMAL: the DK=512 (Gemma-4 global-layer) decode program drops the
-// q1_vec kernel too — its DV=512 vector arrays + REQD_SUBGROUP_SIZE_64 dominate the
-// program's shader-compiler host-memory footprint (the OOM that made DK=512 builds
-// fragile under load), and on Adreno X1 REQD_SUBGROUP_SIZE_64 routes to a slow
-// fallback variant anyway. The minimal program keeps q1 + q1_split + merge, which is
-// correct for decode at any depth; dispatch falls back from q1_vec to q1 cleanly.
+// allow bypassing the kernel to avoid compiler crash for DK=512 on Adreno GPUs
 #ifndef FA_DECODE_MINIMAL
 REQD_SUBGROUP_SIZE_64
 __kernel void flash_attn_f32_f16_q1_vec(
@@ -898,16 +856,15 @@ __kernel void flash_attn_f32_f16_q1_vec(
         sinks_ptr = (const global ACC_TYPE *) ((const global char *) sinks_void + sinks_offset);
     }
 
-    // Per-thread DV slice within its subgroup. For DV=512 / 64-wide subgroup
-    // this is 2 float4 = 32 bytes; for DV=256, 1 float4. Cheap in registers —
-    // replaces the o_acc[DV_VEC] per-thread spill (~2 KB at DV=512).
+    // per-thread DV slice within its subgroup
+    // DV=512 -> 2x float4 = 32 bytes; DV=256 -> 1x float4 - no spill
     ACC_TYPE4 o_acc[Q1V_DV_PER_THREAD];
     #pragma unroll
     for (int i = 0; i < Q1V_DV_PER_THREAD; ++i) o_acc[i] = (ACC_TYPE4)(0.0f);
 
-    // Each subgroup independently runs the FA-2 online softmax over its slice
-    // of n_kv. Sinks are NOT folded into per-subgroup m_i — they're added once
-    // in the cross-subgroup merge to avoid double-counting.
+    // each subgroup independently runs the FA-2 online softmax over its slice of n_kv.
+    // sinks are not folded into per-subgroup m_i — they're added once in
+    // the cross-subgroup merge to avoid double-counting.
     ACC_TYPE m_i = FA_M_INIT;
     ACC_TYPE l_i = 0.0f;
 
@@ -1009,41 +966,12 @@ __kernel void flash_attn_f32_f16_q1_vec(
     }
 }
 
-#endif  // !FA_DECODE_MINIMAL (q1_vec excluded for the minimal DK=512 decode program)
+#endif  // !FA_DECODE_MINIMAL
 
-#ifndef FA_DECODE_ONLY  // MQ / local-tile decode variants — excluded for the DK=512 decode-only program (minimal program keeps q1 + q1_split + merge)
-// Multi-Query coalesced vec decode (KV-head-coalesced WG dispatch).
-//
-// At high GQA + DK>=256 + small n_head_kv (e.g. Gemma-3-1B: n_head=4,
-// n_head_kv=1, gqa_ratio=4), the standard q1_vec dispatches gqa_ratio WGs
-// per KV head and each WG re-reads the same KV stream from DDR. For a 1B
-// model where attention dominates decode, that 4× K bandwidth overhead is
-// the bottleneck — fa=1 lands at ~40% of fa=0 instead of the ~90% seen on
-// larger models where attention is a smaller fraction of the work.
-//
-// This variant coalesces gqa_ratio Q-heads sharing one KV-head into ONE
-// WG. K and V are read once per cache step and reused across MQ_GQA Q rows,
-// each maintaining its own (m_i, l_i, o_acc) online-softmax state. Output
-// writes MQ_GQA rows from one WG.
-//
-// Differs from Metal's vec FA: Metal does NOT coalesce — it relies on L2
-// reuse across gqa_ratio sibling WGs. Adreno's L2 doesn't amortize the
-// reuse strongly enough on small models, so we coalesce explicitly.
-//
-// Currently compile-locked to MQ_GQA=4 (covers Gemma-3 family); other GQA
-// ratios still fall back to legacy q1 / q1_vec at the dispatch site.
+#ifndef FA_DECODE_ONLY
 
-// ---------------------------------------------------------------------------
-// flash_attn_f32_f16_q1_local_tile — alternative decode FA design:
-// one WG per (q_idx, q_head). Stages K/V into __local tiles of
-// LT_KC rows. Per K-step, all LT_WG=DK lanes co-compute one Q·K dot via a
-// pure __local tree-reduce (no subgroup primitives), broadcast the score,
-// then each lane updates ONE float of its private o_val (D-split, not
-// DV-split). Trades K-bandwidth (no Q-head coalescing, K read by every Q
-// head's WG) for parallelism (n_head WGs in flight instead of n_head_kv).
-// Compiled only at DK=DV=128 and registered at WG=DK=128 (LT_WG match).
-// Dispatch is gated behind GGML_OPENCL_FA_LOCAL_TILE=1.
-// ---------------------------------------------------------------------------
+// flash_attn_f32_f16_q1_local_tile
+// one WG per (q_idx, q_head)
 
 #define LT_KC 32
 #define LT_WG 128
@@ -1189,23 +1117,7 @@ __kernel void flash_attn_f32_f16_q1_local_tile(
     o_row[tid] = o_val * l_inv;
 }
 
-// ---------------------------------------------------------------------------
-// flash_attn_f32_f16_q1_local_mq_split — hybrid local-tile + MQ + FD-split.
-// Combines the 3 levers identified while evaluating local_tile:
-//   1. Q-head coalescing (MQ_GQA Q rows per WG share one KV slice)
-//   2. sub_group_reduce_add for the dot (1 reduce vs tree-reduce's 7 barriers)
-//   3. Flash-decoding split along n_kv (n_splits WGs per kv_head)
-// Plus the __local K/V tile from local_tile (re-use within each tile).
-//
-// WG layout: 1 subgroup of 64 lanes. Each lane owns DK/64 = 2 D-elements at
-// indices (tid*LMQ_DPL .. tid*LMQ_DPL+1). MQ_GQA per-h state lives in
-// private registers (o_acc[MQ_GQA][LMQ_DPL], m_i[MQ_GQA], l_i[MQ_GQA]).
-//
-// Grid: (LMQ_WG, n_head_kv * n_batch, n_splits * n_q). Compiled at DK=DV=128.
-// MQ_GQA=4 default + second compile MQ_GQA=8 alongside the existing MQ split
-// kernels (shared MQ_GQA macro). Writes one partial record per (h, split);
-// flash_attn_f32_merge reused for normalization.
-// ---------------------------------------------------------------------------
+// flash_attn_f32_f16_q1_local_mq_split
 
 #define LMQ_WG  64
 #define LMQ_KC  32
@@ -1396,8 +1308,7 @@ __kernel void flash_attn_f32_f16_q1_local_mq_split(
         barrier(CLK_LOCAL_MEM_FENCE);  // Before next tile load overwrites k/v_tile.
     }
 
-    // Write partial records: one per (h, split). Each lane writes its
-    // LMQ_DPL D-positions of o_acc[h]; merge kernel rescales across splits.
+    // write partial records: one per (h, split)
     #pragma unroll
     for (int h = 0; h < MQ_GQA; ++h) {
         const int head_idx = head_kv_idx * MQ_GQA + h;
@@ -1418,15 +1329,6 @@ __kernel void flash_attn_f32_f16_q1_local_mq_split(
     }
 }
 
-// MQ collapses one WG per KV-head (vs one per Q-head in legacy q1_vec).
-// Wanted NSG=8 or 16 to compensate for the wavefront-count loss after the
-// head-dim collapse, but Adreno X2's per-kernel CL_KERNEL_WORK_GROUP_SIZE
-// for this signature is 320 — only NSG=4 / WG=256 is reliably dispatchable.
-// At that NSG this kernel benches worse than legacy q1_vec on the target
-// model (Gemma-3-1B tg@d=0 = 60 t/s vs 72 legacy), so it's compiled but
-// not dispatched in the host code. The win came from pairing MQ with the
-// flash-decoding split (q1_vec_mq_split below) — that's the path host
-// dispatch uses at n_kv >= FD_MIN_N_KV.
 #ifndef MQ_NSG
 #define MQ_NSG 4
 #endif
@@ -1475,8 +1377,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq(
     const global char * k_base = (const global char *) k_void + k_offset;
     const global char * v_base = (const global char *) v_void + v_offset;
     global       char * o_base = (global       char *) o_void + o_offset;
-
-    // Q for all MQ_GQA heads staged in __local once (~4 KB at DK=256).
+.
     __local ACC_TYPE4 q_shared[MQ_GQA * DK_VEC];
     for (int i = tid; i < MQ_GQA * DK_VEC; i += MQ_WG_SIZE) {
         const int h        = i / DK_VEC;
@@ -1488,16 +1389,14 @@ __kernel void flash_attn_f32_f16_q1_vec_mq(
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    // Per-h ALiBi slope (cheap: 4 floats).
+    // per-h ALiBi slope
     float slope[MQ_GQA];
     #pragma unroll
     for (int h = 0; h < MQ_GQA; ++h) {
         slope[h] = get_alibi_slope(max_bias, head_kv_idx * MQ_GQA + h, n_head_log2, m0, m1);
     }
 
-    // Per-h mask row pointer. mask_ne2 is usually 1 (broadcast across heads),
-    // in which case all mask_base[h] coincide — but the indexing math handles
-    // both cases.
+    // per-h mask row pointer
     const global char * mask_base[MQ_GQA];
     if (mask_void != NULL) {
         const int mask_batch_idx = batch_idx % mask_ne3;
@@ -1519,8 +1418,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq(
         sinks_ptr = (const global ACC_TYPE *) ((const global char *) sinks_void + sinks_offset);
     }
 
-    // Per-thread per-h DV slice. At DK=DV=256 / 64-wide sg, Q1V_DV_PER_THREAD=1,
-    // so this is MQ_GQA float4 = 64 bytes per thread.
+    // per-thread per-h DV slice.
     ACC_TYPE4 o_acc[MQ_GQA][Q1V_DV_PER_THREAD];
     ACC_TYPE  m_i[MQ_GQA];
     ACC_TYPE  l_i[MQ_GQA];
@@ -1532,8 +1430,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq(
         for (int i = 0; i < Q1V_DV_PER_THREAD; ++i) o_acc[h][i] = (ACC_TYPE4)(0.0f);
     }
 
-    // Each subgroup independently sweeps its slice of n_kv. K and V are
-    // loaded once per cache step and reused MQ_GQA times.
+    // each subgroup independently sweeps its slice of n_kv.
     const int kv_per_sg = (n_kv + MQ_NSG - 1) / MQ_NSG;
     const int kv_start  = sgid * kv_per_sg;
     const int kv_end    = min(n_kv, kv_start + kv_per_sg);
@@ -1595,11 +1492,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq(
         }
     }
 
-    // Cross-subgroup merge — per-h to keep LDS bounded at NSG=16.
-    //   sg_m, sg_l: [MQ_GQA][MQ_NSG] floats (tiny).
-    //   sg_o: [MQ_NSG][DV_VEC] float4, REUSED across h via barriers.
-    // At MQ_NSG=16, DV=256: sg_o = 16 KB; +4 KB q_shared ≈ 20 KB total LDS.
-    // (Storing all h at once would need 4×16 KB sg_o = 64 KB, exceeding 32 KB.)
+    // cross subgroup merge
     __local ACC_TYPE  sg_m[MQ_GQA][MQ_NSG];
     __local ACC_TYPE  sg_l[MQ_GQA][MQ_NSG];
     __local ACC_TYPE4 sg_o[MQ_NSG][DV_VEC];
@@ -1614,7 +1507,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq(
 
     #pragma unroll
     for (int h = 0; h < MQ_GQA; ++h) {
-        // Each subgroup publishes its o_acc slice for head h.
+        // each subgroup publishes its o_acc slice for head h.
         {
             int idx = 0;
             for (int dv_idx = tid_sg; dv_idx < DV_VEC; dv_idx += Q1_WG_SIZE, ++idx) {
@@ -1661,18 +1554,6 @@ __kernel void flash_attn_f32_f16_q1_vec_mq(
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 }
-
-// KV-head-coalesced + flash-decoding split. Pairs the MQ_GQA coalescing
-// (gqa_ratio Q-heads share one KV stream) with flash-decoding (n_splits WGs
-// per (kv_head, batch) along n_kv). One WG = (kv_head, batch, split):
-//   total WGs = n_head_kv * n_batch * n_splits, each WG = MQ_NSG_SPLIT
-//   subgroups × 64 lanes.
-// For Gemma-3-1B at d=16k (n_head_kv=1, n_batch=1, n_splits=8, NSG=8):
-//   8 WGs × 8 sg = 64 wavefronts (vs 16 for the single-WG MQ kernel and
-//   16 for legacy 4 WGs × 4 sg). Restores per-CU occupancy on Adreno X2
-//   while keeping the 4× K-bandwidth saving from MQ coalescing.
-// Output: MQ_GQA partial records per WG, format identical to
-// `flash_attn_f32_f16_q1_split` so the same merge kernel applies.
 
 #ifndef MQ_NSG_SPLIT
 #define MQ_NSG_SPLIT 4
@@ -1729,8 +1610,8 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
     const ulong record_stride = (ulong) FA_PARTIAL_FLOATS;
 
     if (kv_start >= kv_end) {
-        // Empty split — write sentinel for each of the MQ_GQA Q-heads so the
-        // merge pass treats this slot as dropped (exp(-INF)=0 contribution).
+        // write sentinel for each of the MQ_GQA Q-heads so the
+        // merge pass treats this slot as dropped
         if (tid == 0) {
             #pragma unroll
             for (int h = 0; h < MQ_GQA; ++h) {
@@ -1749,7 +1630,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
     const global char * k_base = (const global char *) k_void + k_offset;
     const global char * v_base = (const global char *) v_void + v_offset;
 
-    // Stage MQ_GQA Q rows in __local once (uniform across WG).
+    // stage MQ_GQA Q rows in __local once (uniform across WG)
     __local ACC_TYPE4 q_shared[MQ_GQA * DK_VEC];
     for (int i = tid; i < MQ_GQA * DK_VEC; i += MQ_SPLIT_WG_SIZE) {
         const int h        = i / DK_VEC;
@@ -1795,7 +1676,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
         for (int i = 0; i < Q1V_DV_PER_THREAD; ++i) o_acc[h][i] = (ACC_TYPE4)(0.0f);
     }
 
-    // Each subgroup independently sweeps its slice of the split's kv range.
+    // each subgroup independently sweeps its slice of the split's kv range.
     const int kv_len   = kv_end - kv_start;
     const int kv_per_sg = (kv_len + MQ_NSG_SPLIT - 1) / MQ_NSG_SPLIT;
     const int kv_lo    = kv_start + sgid * kv_per_sg;
@@ -1854,8 +1735,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
         }
     }
 
-    // Per-h cross-subgroup merge: subgroup 0 folds NSG partials into a single
-    // (m, l, O) record per Q-head, written to the partial buffer.
+    // per-h cross-subgroup merge
     __local ACC_TYPE  sg_m[MQ_GQA][MQ_NSG_SPLIT];
     __local ACC_TYPE  sg_l[MQ_GQA][MQ_NSG_SPLIT];
     __local ACC_TYPE4 sg_o[MQ_NSG_SPLIT][DV_VEC];
@@ -1881,9 +1761,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
         if (sgid == 0) {
             const int head_idx = head_kv_idx * MQ_GQA + h;
 
-            // Fold per-subgroup (m, l) into split-level (m_c, l_c). Note: the
-            // partial record stores RAW O (un-normalized), so the merge kernel
-            // can rescale across splits with exp(m_c - m_final).
+            // fold per-subgroup (m, l) into split-level (m_c, l_c)
             ACC_TYPE m_c = sg_m[h][0];
             #pragma unroll
             for (int s = 1; s < MQ_NSG_SPLIT; ++s) {
@@ -1904,7 +1782,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
                 rec[0] = (float) m_c;
                 rec[1] = (float) l_c;
             }
-            // Each thread writes its DV slice of the merged O.
+            // each thread writes its DV slice of the merged O.
             for (int dv_idx = tid_sg; dv_idx < DV_VEC; dv_idx += Q1_WG_SIZE) {
                 ACC_TYPE4 o_merged = (ACC_TYPE4)(0.0f);
                 #pragma unroll
@@ -1918,27 +1796,6 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 }
-
-// K-image variant of _q1_vec_mq_split.
-//
-// K is bound as a __read_only image1d_buffer_t (CL_RGBA, CL_HALF_FLOAT —
-// 8-byte pixels = 1 half4) over a sub-buffer covering the K cache for
-// this call. Adreno's texture cache is a separate BW path from L2 and
-// dramatically outperforms __global K reads at long context (the
-// _x8_gqa4_img port at the mul_mat layer gave +244% on KQ decode at
-// d=16k). FA's split-path K access pattern (NSG_SPLIT subgroups each
-// stream a contiguous slice of n_kv) is the same shape, so the same
-// texture-cache win should apply.
-//
-// V stays on __global: V's inner loop is long (DV_VEC iters per K
-// position) and arithmetic-intensity hides V latency, so the texture
-// cache adds latency without enough memory-stall to mask (the
-// _y8_gqa_img port at mul_mat regressed -13% for this reason).
-//
-// k_offset is NOT a kernel arg: the sub-buffer is created host-side
-// with CL_BUFFER_CREATE_TYPE_REGION (origin = offset_k), so image
-// addressing is relative to the sub-buffer start. Pixel pitches come
-// from the byte strides via (k_nb >> 3) since each pixel = 8 B.
 
 REQD_SUBGROUP_SIZE_64
 __kernel void flash_attn_f32_f16_q1_vec_mq_split_k_img(
@@ -2048,7 +1905,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_k_img(
         for (int i = 0; i < Q1V_DV_PER_THREAD; ++i) o_acc[h][i] = (ACC_TYPE4)(0.0f);
     }
 
-    // K pitches in pixel units. Pixel = 1 half4 = 8 B → byte_stride >> 3.
+    // K pitches in pixel units, pixel = 1 half4 = 8 B -> byte_stride >> 3.
     const int pitch_px_row   = (int)(k_nb1 >> 3);
     const int pitch_px_head  = (int)(k_nb2 >> 3);
     const int pitch_px_batch = (int)(k_nb3 >> 3);
@@ -2172,9 +2029,8 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_k_img(
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 }
+#endif  // !FA_DECODE_ONLY
 
-
-#endif  // !FA_DECODE_ONLY (vec / MQ / local-tile decode variants)
 __kernel void flash_attn_f32_f16_q1_split(
     const global void * q_void, ulong q_offset,
     const global void * k_void, ulong k_offset,
@@ -2244,7 +2100,7 @@ __kernel void flash_attn_f32_f16_q1_split(
                     (ulong) q_idx * mask_nb1;
     }
 
-    // Share Q via local memory (n_q=1 per split -> uniform across WG).
+    // share Q via local memory (n_q=1 per split -> uniform across WG).
     __local ACC_TYPE4 q_shared[DK_VEC];
     const ulong q_row_offset = batch_idx * q_nb3 + head_idx * q_nb2 + (ulong) q_idx * q_nb1;
     const global Q_DATA_TYPE4 * q_ptr = (const global Q_DATA_TYPE4 *) (q_base + q_row_offset);
@@ -2255,7 +2111,7 @@ __kernel void flash_attn_f32_f16_q1_split(
 
     const float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
 
-    // Pass 1a — split-local max.
+    // pass 1a — split-local max.
     ACC_TYPE m_i = FA_M_INIT;
     for (int k_idx = kv_start + tid; k_idx < kv_end; k_idx += Q1_WG_SIZE) {
         const ulong k_row_offset = batch_idx * k_nb3 + head_kv_idx * k_nb2 + k_idx * k_nb1;
@@ -2278,7 +2134,7 @@ __kernel void flash_attn_f32_f16_q1_split(
 
     const ACC_TYPE m_c = sub_group_reduce_max(m_i);
 
-    // Pass 1b — softmax-weighted V accumulate.
+    // pass 1b — softmax-weighted V accumulate.
     ACC_TYPE4 o_acc[DV_VEC];
     #pragma unroll
     for (int i = 0; i < DV_VEC; ++i) o_acc[i] = (ACC_TYPE4)(0.0f);
@@ -2331,7 +2187,8 @@ __kernel void flash_attn_f32_f16_q1_split(
     }
 }
 
-// FD Pass 2: merge per-split partials into final O. Empty splits drop via exp(-INF)=0.
+// FD Pass 2: merge per-split partials into final O
+// empty splits drop via exp(-INF)=0.
 __kernel void flash_attn_f32_merge(
     const global float * partial_void,
     global void * o_void,
