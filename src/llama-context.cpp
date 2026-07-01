@@ -100,7 +100,7 @@ llama_context::llama_context(
         cparams.ctx_other = params.ctx_other;
     }
 
-    if (model.arch == LLM_ARCH_EAGLE3 || model.arch == LLM_ARCH_DFLASH) {
+    if (model.arch == LLM_ARCH_EAGLE3 || model.arch == LLM_ARCH_DFLASH || model.arch == LLM_ARCH_DSPARK) {
         if (model.tok_embd == nullptr || model.output == nullptr) {
             if (params.ctx_other == nullptr) {
                 throw std::runtime_error(model.arch_name() + " requires ctx_other to be set (this warning is normal during memory fitting)");
@@ -3735,6 +3735,55 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
     ctx->synchronize();
 
     return ctx->get_embeddings_layer_inp(lid);
+}
+
+void llama_context::dspark_markov_bias(const llama_token * prev, int32_t n, float * out_bias) {
+    GGML_ASSERT(prev != nullptr && out_bias != nullptr && n > 0);
+    ggml_tensor * w1 = model.dspark_markov_w1;
+    ggml_tensor * w2 = model.dspark_markov_w2;
+    GGML_ASSERT(w1 && w2 && "DSpark markov weights not loaded");
+
+    const int64_t n_vocab = w2->ne[1]; // w2: {markov_rank, n_vocab}
+
+    // tiny aux graph on the context scheduler: bias[vocab, n] = mul_mat(w2, get_rows(w1, prev))
+    ggml_init_params gparams = {
+        /*.mem_size   =*/ ggml_tensor_overhead()*8 + ggml_graph_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * ctx0 = ggml_init(gparams);
+
+    ggml_tensor * prev_t = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n);
+    ggml_set_input(prev_t);
+    ggml_set_name(prev_t, "dspark_markov_prev");
+
+    ggml_tensor * w1emb = ggml_get_rows(ctx0, w1, prev_t);   // [rank, n] (ggml_get_rows returns f32)
+    ggml_tensor * bias  = ggml_mul_mat(ctx0, w2, w1emb);     // [vocab, n]
+    ggml_set_output(bias);
+
+    ggml_cgraph * gf = ggml_new_graph(ctx0);
+    ggml_build_forward_expand(gf, bias);
+
+    ggml_backend_sched_reset(sched.get());
+    if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
+        LLAMA_LOG_ERROR("%s: failed to allocate DSpark markov graph\n", __func__);
+        std::memset(out_bias, 0, (size_t) n * n_vocab * sizeof(float)); // neutral bias on failure
+        ggml_free(ctx0);
+        return;
+    }
+    ggml_backend_tensor_set(prev_t, prev, 0, (size_t) n * sizeof(int32_t));
+    if (ggml_backend_sched_graph_compute(sched.get(), gf) != GGML_STATUS_SUCCESS) {
+        LLAMA_LOG_ERROR("%s: DSpark markov compute failed\n", __func__);
+        std::memset(out_bias, 0, (size_t) n * n_vocab * sizeof(float)); // neutral bias on failure
+        ggml_free(ctx0);
+        return;
+    }
+    ggml_backend_tensor_get(bias, out_bias, 0, (size_t) n * n_vocab * sizeof(float));
+    ggml_free(ctx0);
+}
+
+void llama_dspark_markov_bias(llama_context * ctx, const llama_token * prev, int32_t n, float * out_bias) {
+    ctx->dspark_markov_bias(prev, n, out_bias);
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {

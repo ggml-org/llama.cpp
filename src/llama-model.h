@@ -597,6 +597,11 @@ struct llama_model {
 
     // eagle3
     struct ggml_tensor * fc  = nullptr;  // feature fusion layer
+    // dspark heads (loaded by llama_model_dspark; consumed in the speculative loop)
+    struct ggml_tensor * dspark_markov_w1 = nullptr; // [markov_rank, n_vocab]
+    struct ggml_tensor * dspark_markov_w2 = nullptr; // [markov_rank, n_vocab]
+    struct ggml_tensor * dspark_conf_proj = nullptr; // [n_embd + markov_rank, 1]
+    struct ggml_tensor * dspark_conf_proj_b = nullptr; // [1]
     struct ggml_tensor * d2t = nullptr;  // draft to target vocabulary mapping
 
     // unified vector to store target-model extracted layer ids in eagle3, dflash, etc.

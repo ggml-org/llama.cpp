@@ -673,3 +673,53 @@ class DFlashModel(Qwen3Model):
         if not name.startswith("model."):
             name = "model." + name
         return super().filter_tensors((name, gen))
+
+
+@ModelBase.register("Qwen3DSparkModel")
+class DSparkModel(Qwen3Model):
+    # DSpark = DFlash backbone + a semi-autoregressive Markov head (+ optional confidence head).
+    # The DeepSpec checkpoint stores its config flat (block_size / target_layer_ids / mask_token_id /
+    # markov_rank at top level). embed_tokens / lm_head are byte-identical to the target, so they are
+    # NOT emitted here -- the DSpark decoder shares the target's via ctx_other (same as DFlash).
+    model_arch = gguf.MODEL_ARCH.DSPARK
+
+    def set_vocab(self):
+        if self.target_model_dir is None:
+            raise ValueError(
+                "DSpark draft model requires --target-model-dir to be specified. "
+                "Please provide the path to the target model directory containing the tokenizer."
+            )
+        logger.info(f"DSpark: Using tokenizer from target model: {self.target_model_dir}")
+        original_dir = self.dir_model
+        self.dir_model = self.target_model_dir
+        super().set_vocab()
+        self.dir_model = original_dir
+
+        mask_token_id = self.hparams.get("mask_token_id")
+        if mask_token_id is not None:
+            self.gguf_writer.add_mask_token_id(mask_token_id)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        block_size = self.hparams.get("block_size", 7)
+        self.gguf_writer.add_block_size(block_size)
+
+        # flat DeepSpec schema; mirror DFlash's +1 extract-layer convention
+        target_layer_ids = self.hparams.get("target_layer_ids", [])
+        if target_layer_ids:
+            extract_layer_ids = [i + 1 for i in target_layer_ids]
+            self.gguf_writer.add_target_layers(extract_layer_ids)
+
+        markov_rank = self.hparams.get("markov_rank", 0)
+        self.gguf_writer.add_markov_rank(markov_rank)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        # embed_tokens / lm_head are byte-identical to the target and shared at runtime -- drop them
+        if name.endswith(("embed_tokens.weight", "lm_head.weight")):
+            return None
+        if not name.startswith("model."):
+            name = "model." + name
+        return super().filter_tensors((name, gen))
