@@ -3383,6 +3383,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--no-sleep"}, "SECONDS",
+        string_format("submit GPU heartbeat every N seconds to prevent driver VRAM eviction "
+                       "on headless GPUs (default: %d; overrides --sleep-idle-seconds)",
+                       params.no_sleep_seconds),
+        [](common_params & params, const std::string & value) {
+            // No Sleep Till Brooklyn - Beastie Boys - 246s
+            std::string v = value;
+            for (auto & c : v) { c = (char)::tolower((unsigned char)c); }
+            if (v == "brooklyn" || v == "nosleeptillbrooklyn" || v == "nosleeptilbrooklyn") {
+                params.no_sleep_seconds = 246;
+                LOG_INF("no_sleep_till_brooklyn: heartbeat set to 246s\n");
+                return;
+            }
+            int val = std::stoi(value);
+            if (val < 1) {
+                throw std::invalid_argument("--no-sleep must be >= 1");
+            }
+            params.no_sleep_seconds = val;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--simple-io"},
         "use basic IO for better compatibility in subprocesses and limited consoles",
         [](common_params & params) {
