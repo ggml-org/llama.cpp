@@ -1290,3 +1290,100 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     ggml_vec_dot_q6_K_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
+
+void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK4_NL == 0);
+    static_assert(QK4_NL == QK8_0, "QK4_NL and QK8_0 must be the same");
+
+    const block_iq4_nl * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK4_NL;
+
+    int ib = 0;
+    float sumf = 0;
+
+#if defined __wasm_simd128__
+    const v128_t values = wasm_v128_load(kvalues_iq4nl);
+    const v128_t m4b    = wasm_i8x16_splat(0x0F);
+
+    v128_t sumv = wasm_f32x4_splat(0.0f);
+
+    for (; ib + 1 < nb; ib += 2) {
+        const block_iq4_nl * GGML_RESTRICT x0 = &x[ib];
+        const block_iq4_nl * GGML_RESTRICT x1 = &x[ib + 1];
+        const block_q8_0   * GGML_RESTRICT y0 = &y[ib];
+        const block_q8_0   * GGML_RESTRICT y1 = &y[ib + 1];
+
+        const v128_t q4_0 = wasm_v128_load(x0->qs);
+        const v128_t x0l  = wasm_i8x16_swizzle(values, wasm_v128_and(q4_0, m4b));
+        const v128_t x0h  = wasm_i8x16_swizzle(values, wasm_u8x16_shr(q4_0, 4));
+
+        const v128_t y0l = wasm_v128_load(y0->qs);
+        const v128_t y0h = wasm_v128_load(y0->qs + 16);
+
+        const v128_t dp0 = wasm_i32x4_add(
+            wasm_i32x4_add(
+                wasm_i32x4_dot_i16x8(wasm_i16x8_extend_low_i8x16 (x0l), wasm_i16x8_extend_low_i8x16 (y0l)),
+                wasm_i32x4_dot_i16x8(wasm_i16x8_extend_high_i8x16(x0l), wasm_i16x8_extend_high_i8x16(y0l))
+            ),
+            wasm_i32x4_add(
+                wasm_i32x4_dot_i16x8(wasm_i16x8_extend_low_i8x16 (x0h), wasm_i16x8_extend_low_i8x16 (y0h)),
+                wasm_i32x4_dot_i16x8(wasm_i16x8_extend_high_i8x16(x0h), wasm_i16x8_extend_high_i8x16(y0h))
+            )
+        );
+
+        const v128_t q4_1 = wasm_v128_load(x1->qs);
+        const v128_t x1l  = wasm_i8x16_swizzle(values, wasm_v128_and(q4_1, m4b));
+        const v128_t x1h  = wasm_i8x16_swizzle(values, wasm_u8x16_shr(q4_1, 4));
+
+        const v128_t y1l = wasm_v128_load(y1->qs);
+        const v128_t y1h = wasm_v128_load(y1->qs + 16);
+
+        const v128_t dp1 = wasm_i32x4_add(
+            wasm_i32x4_add(
+                wasm_i32x4_dot_i16x8(wasm_i16x8_extend_low_i8x16 (x1l), wasm_i16x8_extend_low_i8x16 (y1l)),
+                wasm_i32x4_dot_i16x8(wasm_i16x8_extend_high_i8x16(x1l), wasm_i16x8_extend_high_i8x16(y1l))
+            ),
+            wasm_i32x4_add(
+                wasm_i32x4_dot_i16x8(wasm_i16x8_extend_low_i8x16 (x1h), wasm_i16x8_extend_low_i8x16 (y1h)),
+                wasm_i32x4_dot_i16x8(wasm_i16x8_extend_high_i8x16(x1h), wasm_i16x8_extend_high_i8x16(y1h))
+            )
+        );
+
+        const float scale0 = GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d);
+        const float scale1 = GGML_CPU_FP16_TO_FP32(x1->d) * GGML_CPU_FP16_TO_FP32(y1->d);
+
+        sumv = wasm_f32x4_add(sumv, wasm_f32x4_mul(wasm_f32x4_convert_i32x4(dp0), wasm_f32x4_splat(scale0)));
+        sumv = wasm_f32x4_add(sumv, wasm_f32x4_mul(wasm_f32x4_convert_i32x4(dp1), wasm_f32x4_splat(scale1)));
+    }
+
+    sumf = wasm_f32x4_extract_lane(sumv, 0) + wasm_f32x4_extract_lane(sumv, 1) +
+           wasm_f32x4_extract_lane(sumv, 2) + wasm_f32x4_extract_lane(sumv, 3);
+
+    // odd-tail: at most one block left when nb is odd
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d) * GGML_CPU_FP16_TO_FP32(x[ib].d);
+        int sumi1 = 0, sumi2 = 0;
+        for (int j = 0; j < QK4_NL/2; ++j) {
+            sumi1 += y[ib].qs[j+         0] * kvalues_iq4nl[x[ib].qs[j] & 0xf];
+            sumi2 += y[ib].qs[j+QK4_NL/2] * kvalues_iq4nl[x[ib].qs[j] >>  4];
+        }
+        sumf += d * (sumi1 + sumi2);
+    }
+
+    *s = sumf;
+#else
+    UNUSED(nb);
+    UNUSED(ib);
+    UNUSED(sumf);
+    UNUSED(x);
+    UNUSED(y);
+    ggml_vec_dot_iq4_nl_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
