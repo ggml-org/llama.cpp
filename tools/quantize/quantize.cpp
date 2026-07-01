@@ -1,24 +1,12 @@
-#include "llama.h"
-
 #include "build-info.h"
 #include "common.h"
 #include "imatrix-loader.h"
 
-#include "gguf.h"
-
-#include <algorithm>
-#include <cctype>
-#include <clocale>
-#include <cmath>
-#include <cstdio>
 #include <cstring>
-#include <vector>
-#include <string>
-#include <unordered_map>
-#include <fstream>
 #include <filesystem>
+#include <fstream>
+#include <unordered_map>
 
-// result of parsing --tensor-type option
 // changes to this struct must also be reflected in src/llama-quant.cpp
 struct tensor_type_option {
     std::string name;
@@ -120,8 +108,8 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 [[noreturn]]
 static void usage(const char * executable) {
     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
-    printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file]\n");
-    printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run]\n");
+    printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file] [--prune-layers]\n");
+    printf("       [--keep-split] [--override-kv] [--dry-run] [--target-bpw] [--target-size] [--save-state] [--state-file]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize\n");
     printf("                                      allow requantizing tensors that have already been quantized\n");
@@ -144,7 +132,7 @@ static void usage(const char * executable) {
     printf("                                      use this ggml_type for the token embeddings tensor\n");
     printf("  --tensor-type tensor_name=ggml_type\n");
     printf("                                      quantize this tensor to this ggml_type\n");
-    printf("                                      this is an advanced option to selectively quantize tensors. may be specified multiple times.\n");
+    printf("                                      this is an advanced option to selectively quantize tensors; may be specified multiple times.\n");
     printf("                                      example: --tensor-type attn_q=q8_0\n");
     printf("  --tensor-type-file tensor_types.txt\n");
     printf("                                      list of tensors to quantize to a specific ggml_type\n");
@@ -156,12 +144,22 @@ static void usage(const char * executable) {
     printf("  --keep-split\n");
     printf("                                      generate quantized model in the same shards as input\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
-    printf("                                      override model metadata by key in the quantized model. may be specified multiple times.\n");
+    printf("                                      override model metadata by key in the quantized model; may be specified multiple times.\n");
     printf("                                      WARNING: this is an advanced option, use with care.\n");
     printf("  --dry-run\n");
     printf("                                      calculate and show the final quantization size without performing quantization\n");
     printf("                                      example: llama-quantize --dry-run model-f32.gguf Q4_K\n\n");
-    printf("note: --include-weights and --exclude-weights cannot be used together\n\n");
+    printf("  --target-bpw n\n");
+    printf("                                      target a bits per weight (bpw); must be a positive number between 0.0 and 16.0\n");
+    printf("                                      advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n\n");
+    printf("  --target-size n\n");
+    printf("                                      target a file size; must be a positive number\n");
+    printf("                                      advanced option to automatically select quantization types to achieve a total file size\n");
+    printf("                                      allowed units: b, k|kib, m|mib, g|gib, t|tib; defaults to b (bytes) if none is provided\n\n");
+    printf("  --state-file [filename]\n");
+    printf("                                      file name to use/save; if none is provided, the default name will be used\n\n");
+    printf("note: --include-weights and --exclude-weights cannot be used together\n");
+    printf("      --target-bpw and --target-size cannot be used together\n\n");
     printf("-----------------------------------------------------------------------------\n");
     printf(" allowed quantization types\n");
     printf("-----------------------------------------------------------------------------\n\n");
@@ -176,7 +174,12 @@ static void usage(const char * executable) {
     exit(1);
 }
 
-static int load_imatrix(const std::string & imatrix_file, std::vector<std::string> & imatrix_datasets, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+static int load_imatrix(const std::string & imatrix_file,
+    std::vector<std::string> & imatrix_datasets,
+    std::unordered_map<std::string, std::vector<float>> & values_data,
+    std::unordered_map<std::string, std::vector<float>> & activations_data,
+    std::unordered_map<std::string, std::vector<float>> & statistics_data)
+{
     common_imatrix loaded;
     if (!common_imatrix_load(imatrix_file, loaded)) {
         fprintf(stderr, "%s: failed to load imatrix from '%s'\n", __func__, imatrix_file.c_str());
@@ -189,55 +192,79 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
     }
 
     for (const auto & [name, entry] : loaded.entries) {
-        auto & e = imatrix_data[name];
-        e.resize(entry.sums.size());
+        const int64_t ncounts = (int64_t) entry.counts.size();
+        if (ncounts == 0) {
+            fprintf(stderr, "%s: no counts for entry '%s', skipping\n", __func__, name.c_str());
+            continue;
+        }
+
+        const int64_t nsums = (int64_t) entry.sums.size();
+        if (nsums == 0) {
+            continue;
+        }
+        const int64_t ne0 = nsums / ncounts;
+
+        auto & values = values_data[name];
+        values.resize(nsums);
 
         if (!loaded.is_legacy) {
-            // GGUF format: normalize by per-expert counts
-            const int64_t ncounts = entry.counts.size();
-            const int64_t ne0     = (int64_t) entry.sums.size() / ncounts;
-
             for (int64_t j = 0; j < ncounts; ++j) {
                 const float count = (float) entry.counts[j];
                 if (count > 0.0f) {
                     for (int64_t i = 0; i < ne0; ++i) {
-                        e[j*ne0 + i] = entry.sums[j*ne0 + i] / count;
+                        values[j*ne0 + i] = entry.sums[j*ne0 + i] / count;
                     }
                 } else {
                     for (int64_t i = 0; i < ne0; ++i) {
-                        e[j*ne0 + i] = 1;
+                        values[j*ne0 + i] = 1;
                     }
                 }
-            }
-
-            if (getenv("LLAMA_TRACE")) {
-                float max_count = 0.0f;
-                for (int64_t j = 0; j < ncounts; ++j) {
-                    const float count = (float) entry.counts[j];
-                    if (count > max_count) {
-                        max_count = count;
-                    }
-                }
-                printf("%s: loaded data (size = %6d, n_tokens = %6d, n_chunks = %6d) for '%s'\n",
-                       __func__, int(e.size()), int(max_count), int(max_count / loaded.chunk_size), name.c_str());
             }
         } else {
-            // Legacy format: sums contain (raw/count)*ncall, divide by ncall
-            const int64_t ncall = entry.counts.empty() ? 0 : entry.counts[0];
+            const int64_t ncall = entry.counts[0];
             if (ncall > 0) {
-                for (size_t i = 0; i < entry.sums.size(); ++i) {
-                    e[i] = entry.sums[i] / ncall;
+                for (int64_t i = 0; i < nsums; ++i) {
+                    values[i] = entry.sums[i] / ncall;
                 }
             } else {
-                for (size_t i = 0; i < entry.sums.size(); ++i) {
-                    e[i] = entry.sums[i];
+                for (int64_t i = 0; i < nsums; ++i) {
+                    values[i] = entry.sums[i];
                 }
             }
+        }
 
-            if (getenv("LLAMA_TRACE")) {
-                printf("%s: loaded data (size = %6d, ncall = %6d) for '%s'\n",
-                       __func__, int(e.size()), int(ncall), name.c_str());
+        if (!entry.activations.empty()) {
+            auto & activations = activations_data[name];
+            activations.resize(entry.activations.size());
+            if (!loaded.is_legacy) {
+                for (int64_t j = 0; j < ncounts; ++j) {
+                    const float count = (float) entry.counts[j];
+                    if (count > 0.0f) {
+                        for (int64_t i = 0; i < ne0; ++i) {
+                            activations[j*ne0 + i] = entry.activations[j*ne0 + i] / count;
+                        }
+                    } else {
+                        for (int64_t i = 0; i < ne0; ++i) {
+                            activations[j*ne0 + i] = 0;
+                        }
+                    }
+                }
+            } else {
+                const int64_t ncall = entry.counts[0];
+                if (ncall > 0) {
+                    for (size_t i = 0; i < entry.activations.size(); ++i) {
+                        activations[i] = entry.activations[i] / ncall;
+                    }
+                } else {
+                    for (size_t i = 0; i < entry.activations.size(); ++i) {
+                        activations[i] = entry.activations[i];
+                    }
+                }
             }
+        }
+
+        if (!entry.stats.empty()) {
+            statistics_data[name] = entry.stats;
         }
     }
 
@@ -251,7 +278,7 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
         printf("]\n");
     }
 
-    printf("%s: loaded %d importance matrix entries from %s computed on %d chunks\n", __func__, int(imatrix_data.size()), imatrix_file.c_str(), loaded.chunk_count);
+    printf("%s: loaded %d importance matrix entries from %s computed on %d chunks\n", __func__, int(values_data.size()), imatrix_file.c_str(), loaded.chunk_count);
 
     return loaded.chunk_count;
 }
@@ -260,41 +287,73 @@ static int prepare_imatrix(const std::string & imatrix_file,
         std::vector<std::string> & imatrix_dataset,
         const std::vector<std::string> & included_weights,
         const std::vector<std::string> & excluded_weights,
-        std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+        std::unordered_map<std::string, std::vector<float>> & values_data,
+        std::unordered_map<std::string, std::vector<float>> & activations_data,
+        std::unordered_map<std::string, std::vector<float>> & statistics_data) {
     int m_last_call = -1;
     if (!imatrix_file.empty()) {
-        m_last_call = load_imatrix(imatrix_file, imatrix_dataset, imatrix_data);
+        m_last_call = load_imatrix(imatrix_file, imatrix_dataset, values_data, activations_data, statistics_data);
     }
-    if (imatrix_data.empty()) {
+    if (values_data.empty()) {
         return m_last_call;
     }
     if (!excluded_weights.empty()) {
         for (const auto & name : excluded_weights) {
-            for (auto it = imatrix_data.begin(); it != imatrix_data.end();) {
-                auto pos = it->first.find(name);
+            for (auto vt = values_data.begin(); vt != values_data.end();) {
+                auto pos = vt->first.find(name);
                 if (pos != std::string::npos) {
-                    it = imatrix_data.erase(it);
+                    vt = values_data.erase(vt);
                 } else {
-                    ++it;
+                    ++vt;
+                }
+            }
+            for (auto at = activations_data.begin(); at != activations_data.end();) {
+                auto pos = at->first.find(name);
+                if (pos != std::string::npos) {
+                    at = activations_data.erase(at);
+                } else {
+                    ++at;
+                }
+            }
+            for (auto st = statistics_data.begin(); st != statistics_data.end();) {
+                auto pos = st->first.find(name);
+                if (pos != std::string::npos) {
+                    st = statistics_data.erase(st);
+                } else {
+                    ++st;
                 }
             }
         }
     }
     if (!included_weights.empty()) {
-        std::unordered_map<std::string, std::vector<float>> tmp;
+        std::unordered_map<std::string, std::vector<float>> tmp_values;
+        std::unordered_map<std::string, std::vector<float>> tmp_activations;
+        std::unordered_map<std::string, std::vector<float>> tmp_statistics;
         for (const auto & name : included_weights) {
-            for (auto & e : imatrix_data) {
+            for (auto & e : values_data) {
                 auto pos = e.first.find(name);
                 if (pos != std::string::npos) {
-                    tmp.emplace(std::move(e));
+                    tmp_values.emplace(std::move(e));
+                }
+            }
+            for (auto & a : activations_data) {
+                auto pos = a.first.find(name);
+                if (pos != std::string::npos) {
+                    tmp_activations.emplace(std::move(a));
+                }
+            }
+            for (auto & s : statistics_data) {
+                auto pos = s.first.find(name);
+                if (pos != std::string::npos) {
+                    tmp_statistics.emplace(std::move(s));
                 }
             }
         }
-        imatrix_data = std::move(tmp);
+        values_data = std::move(tmp_values);
+        activations_data = std::move(tmp_activations);
+        statistics_data = std::move(tmp_statistics);
     }
-    if (!imatrix_data.empty()) {
-        printf("%s: have %d importance matrix entries\n", __func__, int(imatrix_data.size()));
-    }
+
     return m_last_call;
 }
 
@@ -385,6 +444,88 @@ static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers
     return true;
 }
 
+static bool parse_target_bpw(const char * data, float & target_bpw) {
+    if (!data) {
+        printf("\n%s: no target bits per weight (bpw) provided\n\n", __func__);
+        return false;
+    }
+
+    try {
+        target_bpw = std::stof(data);
+        if (target_bpw < 0.0f || target_bpw > 16.0f) {
+            printf("\n%s: target bits per weight (bpw) must be a positive number between 0.0 and 16.0\n\n", __func__);
+            return false;
+        }
+    }
+    catch (const std::exception & e) {
+        printf("\n%s: '%s' is not valid. Target bits per weight (bpw) must be a positive number between 0.0 and 16.0\n\n", __func__, data);
+        return false;
+    }
+
+    return true;
+}
+
+static bool parse_target_size(const char * data, int64_t & target_size) {
+    if (!data) {
+        printf("\n%s: no target file size provided\n\n", __func__);
+        return false;
+    }
+
+    char * end = nullptr;
+    const double val = std::strtod(data, &end);
+    if (end == data || val < 0) {
+        printf("\n%s: invalid target file size '%s'\n\n", __func__, data);
+        return false;
+    }
+
+    std::string suffix(end);
+    for (auto & c : suffix) { c = std::tolower(c); }
+
+    int64_t mul = 0;
+    if (suffix.empty() || suffix == "b") {
+        mul = 1;
+    } else if (suffix == "k" || suffix == "kib") {
+        mul = 1024;
+    } else if (suffix == "m" || suffix == "mib") {
+        mul = 1024 * 1024;
+    } else if (suffix == "g" || suffix == "gib") {
+        mul = 1024 * 1024 * 1024;
+    } else if (suffix == "t" || suffix == "tib") {
+        mul = 1024LL * 1024 * 1024 * 1024;
+    } else {
+        printf("\n%s: invalid unit '%s' in '%s'. Allowed: b, k or kib, m or mib, g or gib, t or tib\n\n", __func__, suffix.c_str(), data);
+        return false;
+    }
+
+    target_size = (int64_t)val * mul;
+    return true;
+}
+
+static const char * get_ftype(const float bpw) {
+    const std::map<float, const char *> quant_bpw = {
+        {1.5625, "IQ1_S"},
+        {1.7500, "IQ1_M"},
+        {2.0625, "IQ2_XXS"},
+        {2.3125, "IQ2_XS"},
+        {2.5625, "IQ2_S"},
+        {2.6250, "Q2_K"},
+        {3.0625, "IQ3_XXS"},
+        {3.4375, "Q3_K"},
+        {4.2500, "IQ4_XS"},
+        {4.5000, "Q4_K"},
+        {5.5000, "Q5_K"},
+        {6.5625, "Q6_K"},
+        {8.5000, "Q8_0"},
+#ifdef GGML_USE_METAL
+        {16.0000, "F16"}
+#else
+        {16.0000, "BF16"}
+#endif
+    };
+
+    return quant_bpw.lower_bound(bpw)->second;
+}
+
 // satisfies -Wmissing-declarations
 int llama_quantize(int argc, char ** argv);
 
@@ -398,10 +539,13 @@ int llama_quantize(int argc, char ** argv) {
 
     int arg_idx = 1;
     std::string imatrix_file;
-    std::vector<std::string> included_weights, excluded_weights;
+    std::vector<std::string> included_weights;
+    std::vector<std::string> excluded_weights;
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<tensor_type_option> tensor_type_opts;
     std::vector<int> prune_layers;
+    float target_bpw = -1.0f;
+    int64_t target_size = -1;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -431,6 +575,21 @@ int llama_quantize(int argc, char ** argv) {
         } else if (strcmp(argv[arg_idx], "--tensor-type-file") == 0) {
             if (arg_idx == argc-1 || !parse_tensor_type_file(argv[++arg_idx], tensor_type_opts)) {
                 usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--target-bpw") == 0) {
+            if (arg_idx == argc-1 || !parse_target_bpw(argv[++arg_idx], target_bpw)) {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--target-size") == 0) {
+            if (arg_idx == argc-1 || !parse_target_size(argv[++arg_idx], target_size)) {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--state-file") == 0) {
+            if (arg_idx + 1 < argc && argv[arg_idx + 1][0] != '-') {
+                params.state_file = argv[++arg_idx];
+            } else {
+                static char empty[] = "";
+                params.state_file = empty;
             }
         } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
             if (arg_idx == argc-1 || !parse_layer_prune(argv[++arg_idx], prune_layers)) {
@@ -478,20 +637,26 @@ int llama_quantize(int argc, char ** argv) {
     if (!included_weights.empty() && !excluded_weights.empty()) {
         usage(argv[0]);
     }
+    if (target_bpw != -1.0f && target_size != -1) {
+        usage(argv[0]);
+    }
 
     std::vector<std::string> imatrix_datasets;
-    std::unordered_map<std::string, std::vector<float>> imatrix_data;
-    int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, imatrix_data);
+    std::unordered_map<std::string, std::vector<float>> values_data;
+    std::unordered_map<std::string, std::vector<float>> activations_data;
+    std::unordered_map<std::string, std::vector<float>> statistics_data;
+    int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, values_data, activations_data, statistics_data);
 
-    std::vector<llama_model_imatrix_data> i_data;
-    std::vector<llama_model_tensor_override> t_override;
-    if (!imatrix_data.empty()) {
-        i_data.reserve(imatrix_data.size() + 1);
-        for (const auto & kv : imatrix_data) {
-            i_data.push_back({kv.first.c_str(), kv.second.data(), kv.second.size()});
-        }
-        i_data.push_back({nullptr, nullptr, 0});  // array terminator
-        params.imatrix = i_data.data();
+    std::vector<llama_model_imatrix_data> vdata;
+    std::vector<llama_model_imatrix_data> adata;
+    std::vector<llama_model_imatrix_data> sdata;
+    std::vector<llama_model_tensor_override> tto;
+
+    if (!values_data.empty()) {
+        vdata.reserve(values_data.size() + 1);
+        for (const auto & kv : values_data) { vdata.push_back({kv.first.c_str(), kv.second.data(), kv.second.size()}); }
+        vdata.push_back({nullptr, nullptr, 0});  // array terminator
+        params.imatrix = vdata.data();
         {
             llama_model_kv_override kvo;
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_FILE);
@@ -513,7 +678,7 @@ int llama_quantize(int argc, char ** argv) {
             llama_model_kv_override kvo;
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_N_ENTRIES);
             kvo.tag = LLAMA_KV_OVERRIDE_TYPE_INT;
-            kvo.val_i64 = imatrix_data.size();
+            kvo.val_i64 = values_data.size();
             kv_overrides.emplace_back(std::move(kvo));
         }
         if (m_last_call > 0) {
@@ -524,22 +689,38 @@ int llama_quantize(int argc, char ** argv) {
             kv_overrides.emplace_back(std::move(kvo));
         }
     }
+    if (!activations_data.empty()) {
+        adata.reserve(activations_data.size() + 1);
+        for (const auto & kv : activations_data) { adata.push_back({kv.first.c_str(), kv.second.data(), kv.second.size()}); }
+        adata.push_back({nullptr, nullptr, 0});  // array terminator
+        params.activations = adata.data();
+    }
+    if (!statistics_data.empty()) {
+        sdata.reserve(statistics_data.size() + 1);
+        for (const auto & kv : statistics_data) { sdata.push_back({kv.first.c_str(), kv.second.data(), kv.second.size()}); }
+        sdata.push_back({nullptr, nullptr, 0});  // array terminator
+        params.statistics = sdata.data();
+    }
     if (!kv_overrides.empty()) {
         kv_overrides.emplace_back();
         kv_overrides.back().key[0] = 0;
         params.kv_overrides = kv_overrides.data();
     }
     if (!tensor_type_opts.empty()) {
-        t_override.reserve(tensor_type_opts.size() + 1);
-        for (const auto & tt : tensor_type_opts) {
-            t_override.push_back({tt.name.c_str(), tt.type});
-        }
-        t_override.push_back({nullptr, GGML_TYPE_COUNT});  // array terminator
-        params.tt_overrides = t_override.data();
+        tto.reserve(tensor_type_opts.size() + 1);
+        for (const auto & tt : tensor_type_opts) { tto.push_back({tt.name.c_str(), tt.type}); }
+        tto.push_back({nullptr, GGML_TYPE_COUNT});  // array terminator
+        params.tt_overrides = tto.data();
     }
     if (!prune_layers.empty()) {
         prune_layers.push_back(-1);  // array terminator
         params.prune_layers = prune_layers.data();
+    }
+    if (target_bpw != -1.0f) {
+        params.target_bpw = target_bpw;
+    }
+    if (target_size != -1) {
+        params.target_size = target_size;
     }
 
     llama_backend_init();
@@ -551,6 +732,7 @@ int llama_quantize(int argc, char ** argv) {
 
     std::string ftype_str;
     std::string suffix = ".gguf";
+    std::vector<const char *> tmp_argv(argv, argv + argc);
     if (try_parse_ftype(argv[arg_idx], params.ftype, ftype_str)) {
         // argv[arg_idx] is the ftype directly: <input> <ftype>
         if (!params.dry_run) {
@@ -578,7 +760,22 @@ int llama_quantize(int argc, char ** argv) {
         }
         arg_idx++;
 
-        if (argc <= arg_idx) {
+        // If --target-bpw or --target-size are set, select a quantization type and ignore any user specified type
+        if (params.target_bpw != -1.0f || params.target_size != -1) {
+            auto * ftype = params.target_bpw != -1.0f ? const_cast<char *>(get_ftype(params.target_bpw)) : const_cast<char *>("F16");
+            bool added_type = false;
+            if (argc == arg_idx) {
+                tmp_argv.push_back(ftype);
+                added_type = true;
+            } else {
+                tmp_argv[arg_idx] = ftype;
+            }
+            tmp_argv.push_back(nullptr);
+            argv = const_cast<char **>(tmp_argv.data());
+            if (added_type) {
+                argc++;
+            }
+        } else if (argc <= arg_idx) {
             fprintf(stderr, "%s: missing ftype\n", __func__);
             return 1;
         }

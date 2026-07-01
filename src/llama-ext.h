@@ -25,7 +25,7 @@ LLAMA_API quantize_state_impl * llama_quant_init(
         const llama_model * model,
         const llama_model_quantize_params * params);
 
-LLAMA_API void llama_quant_free(quantize_state_impl * qs);
+LLAMA_API void llama_quant_free(const quantize_state_impl * qs);
 
 // Descriptor for constructing a mock model for quantization testing.
 struct llama_quant_model_desc {

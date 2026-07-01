@@ -5,18 +5,22 @@
 #include <string>
 #include <vector>
 
-inline constexpr const char * LLM_KV_IMATRIX_DATASETS    = "imatrix.datasets";
-inline constexpr const char * LLM_KV_IMATRIX_CHUNK_COUNT = "imatrix.chunk_count";
-inline constexpr const char * LLM_KV_IMATRIX_CHUNK_SIZE  = "imatrix.chunk_size";
+inline constexpr const char * LLM_KV_IMATRIX_DATASETS     = "imatrix.datasets";
+inline constexpr const char * LLM_KV_IMATRIX_CHUNK_COUNT  = "imatrix.chunk_count";
+inline constexpr const char * LLM_KV_IMATRIX_CHUNK_SIZE   = "imatrix.chunk_size";
+inline constexpr const char * LLM_KV_IMATRIX_STATS_SCHEMA = "imatrix.stats_schema";
 
 struct common_imatrix_entry {
     std::vector<float>   sums;
+    std::vector<float>   activations;
     std::vector<int64_t> counts;
+    std::vector<float>   stats;
 };
 
 struct common_imatrix {
     std::map<std::string, common_imatrix_entry> entries;
     std::vector<std::string> datasets;
+    std::vector<std::string> stats_schema;
     int32_t chunk_count    = 0;
     int32_t chunk_size     = 0;
     bool    is_legacy      = false;
