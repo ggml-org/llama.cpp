@@ -1157,6 +1157,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
                 op->src[1]->type == GGML_TYPE_F32 &&
                 op->type == GGML_TYPE_F32;
+        case GGML_OP_COL2IM_1D:
+            return ggml_is_contiguous(op->src[0]) &&
+                (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_BF16);
         case GGML_OP_CONV_3D:
             return ggml_is_contiguous(op->src[0]) &&
                    ggml_is_contiguous(op->src[1]) &&
