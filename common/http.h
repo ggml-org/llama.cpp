@@ -113,6 +113,31 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
 
     cli.set_follow_location(true);
 
+    // Honor HTTP_PROXY / HTTPS_PROXY environment variables (both lower- and upper-case).
+    auto getenv_s = [](const char * upper, const char * lower) -> std::string {
+        const char * val = std::getenv(upper);
+        if (!val) {
+            val = std::getenv(lower);
+        }
+        return val ? val : "";
+    };
+
+    const std::string proxy_url = (parts.scheme == "https")
+        ? getenv_s("HTTPS_PROXY", "https_proxy")
+        : getenv_s("HTTP_PROXY",  "http_proxy");
+
+    if (!proxy_url.empty()) {
+        try {
+            common_http_url proxy = common_http_parse_url(proxy_url);
+            cli.set_proxy(proxy.host, proxy.port);
+            if (!proxy.user.empty()) {
+                cli.set_proxy_basic_auth(proxy.user, proxy.password);
+            }
+        } catch (...) {
+            // ignore malformed proxy URL — don't break existing callers
+        }
+    }
+
     return { std::move(cli), std::move(parts) };
 }
 
