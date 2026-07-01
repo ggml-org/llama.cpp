@@ -2993,6 +2993,37 @@ static int ggml_cpu_try_fuse_ops(
 
     struct ggml_tensor * node = cgraph->nodes[node_n];
 
+    if (node->op == GGML_OP_NORM) {
+        // NORM + MUL + ADD fusion
+        const enum ggml_op fuse_ops[] = { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD };
+        if (ggml_can_fuse(cgraph, node_n, fuse_ops, 3)) {
+            struct ggml_tensor * mul_node = cgraph->nodes[node_n + 1];
+            struct ggml_tensor * add_node = cgraph->nodes[node_n + 2];
+            const struct ggml_tensor * mul_w = (mul_node->src[0] == node)
+                ? mul_node->src[1] : mul_node->src[0];
+            const struct ggml_tensor * add_b = (add_node->src[0] == mul_node)
+                ? add_node->src[1] : add_node->src[0];
+
+            if (node->src[0]->type  == GGML_TYPE_F32 &&
+                node->type          == GGML_TYPE_F32 &&
+                mul_node->type      == GGML_TYPE_F32 &&
+                add_node->type      == GGML_TYPE_F32 &&
+                mul_w->type         == GGML_TYPE_F32 &&
+                add_b->type         == GGML_TYPE_F32 &&
+                mul_w->ne[0]        == node->ne[0]   &&
+                add_b->ne[0]        == node->ne[0]   &&
+                ggml_are_same_shape(node, add_node)  &&
+                ggml_is_contiguous_rows(node->src[0]) &&
+                ggml_is_contiguous_rows(mul_w)       &&
+                ggml_is_contiguous_rows(add_b)       &&
+                ggml_is_contiguous_rows(add_node)) {
+
+                ggml_compute_forward_norm_mul_add_fused(params, node, mul_node, add_node);
+                return 2;
+            }
+        }
+    }
+
     if (node->op == GGML_OP_RMS_NORM) {
         // RMS_NORM + MUL fusion
         const enum ggml_op fuse_ops[] = { GGML_OP_RMS_NORM, GGML_OP_MUL };

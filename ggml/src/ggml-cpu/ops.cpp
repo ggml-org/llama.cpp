@@ -3768,6 +3768,100 @@ void ggml_compute_forward_norm(
     }
 }
 
+// Fused NORM + MUL + ADD: computes dst = norm(src0) * src1 + src2 in a single pass.
+static void ggml_compute_forward_norm_mul_add_fused_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst_norm,
+        ggml_tensor * dst_mul,
+        ggml_tensor * dst_add) {
+
+    GGML_ASSERT(dst_mul->src[0] == dst_norm || dst_mul->src[1] == dst_norm);
+    GGML_ASSERT(dst_add->src[0] == dst_mul  || dst_add->src[1] == dst_mul);
+
+    const ggml_tensor * src0 = dst_norm->src[0];
+    const ggml_tensor * src1 = dst_mul->src[0] == dst_norm ? dst_mul->src[1] : dst_mul->src[0];
+    const ggml_tensor * src2 = dst_add->src[0] == dst_mul  ? dst_add->src[1] : dst_add->src[0];
+    ggml_tensor * dst = dst_add;
+
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src2->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
+    GGML_ASSERT(src2->nb[0] == sizeof(float));
+    GGML_ASSERT(dst->nb[0]  == sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_TERNARY_OP_LOCALS
+
+    float eps;
+    memcpy(&eps, dst_norm->op_params, sizeof(float));
+    GGML_ASSERT(eps >= 0.0f);
+
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const float * x = (const float *) ((const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
+
+                float sum = 0.0f;
+                ggml_vec_sum_f32(ne00, &sum, x);
+                const float mean = sum/ne00;
+
+                float variance = 0.0f;
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    const float v = x[i00] - mean;
+                    y[i00] = v;
+                    variance += v * v;
+                }
+                variance /= ne00;
+
+                const float scale = 1.0f/sqrtf(variance + eps);
+
+                const int64_t i11 = i01 % ne11;
+                const int64_t i12 = i02 % ne12;
+                const int64_t i13 = i03 % ne13;
+                const int64_t i21 = i01 % ne21;
+                const int64_t i22 = i02 % ne22;
+                const int64_t i23 = i03 % ne23;
+                const float * w = (const float *) ((const char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13);
+                const float * b = (const float *) ((const char *) src2->data + i21*nb21 + i22*nb22 + i23*nb23);
+
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    y[i00] = y[i00] * scale * w[i00] + b[i00];
+                }
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_norm_mul_add_fused(
+        const ggml_compute_params * params,
+        ggml_tensor * dst_norm,
+        ggml_tensor * dst_mul,
+        ggml_tensor * dst_add) {
+
+    GGML_ASSERT(dst_mul != nullptr);
+    GGML_ASSERT(dst_add != nullptr);
+
+    const ggml_tensor * src0 = dst_norm->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_norm_mul_add_fused_f32(params, dst_norm, dst_mul, dst_add);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_group_rms_norm
 
 // fusion kinds that can be combined with the rms_norm computation in a single pass.
