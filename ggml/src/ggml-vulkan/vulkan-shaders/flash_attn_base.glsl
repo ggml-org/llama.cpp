@@ -97,6 +97,7 @@ layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 #define FA_TYPE_Q5_0  6u
 #define FA_TYPE_Q5_1  7u
 #define FA_TYPE_Q8_0  8u
+#define FA_TYPE_IQ4_NL 20u
 #define FA_TYPE_BF16 30u
 #define FA_TYPE_Q1_0 41u
 
@@ -120,8 +121,9 @@ uint fa_block_elems(uint ty) {
         case FA_TYPE_Q5_0: return uint(QUANT_K_Q5_0);
         case FA_TYPE_Q5_1: return uint(QUANT_K_Q5_1);
         case FA_TYPE_Q8_0: return uint(QUANT_K_Q8_0);
+        case FA_TYPE_IQ4_NL: return uint(QUANT_K_IQ4_NL);
         case FA_TYPE_BF16: return 1u;
-        case FA_TYPE_Q1_0: return uint(QUANT_K_Q1_0); // cm2-only, harmless elsewhere
+        case FA_TYPE_Q1_0: return uint(QUANT_K_Q1_0);
         default:           return 1u;
     }
 }
@@ -137,6 +139,13 @@ uint fa_quant_r_mmq(uint ty) {
         case FA_TYPE_Q5_1: return uint(QUANT_R_Q5_1);
         case FA_TYPE_Q8_0: return uint(QUANT_R_Q8_0);
         default:           return 1u;
+    }
+}
+
+bool fa_type_needs_shmem(uint ty) {
+    switch (ty) {
+        case FA_TYPE_IQ4_NL: return true;
+        default:             return false;
     }
 }
 
