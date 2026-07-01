@@ -2500,6 +2500,15 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
     return use_mul_mat_vec_f;
 }
 
+static inline bool ggml_cuda_mmvq_eligible(const ggml_tensor * src0,
+                                           const ggml_tensor * src1,
+                                           const ggml_tensor * dst,
+                                           const bool          bad_padding_clear) {
+    return ggml_is_quantized(src0->type) && !bad_padding_clear &&
+           (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_Q8_1) && dst->type == GGML_TYPE_F32 &&
+           src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
+}
+
 static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     ggml_tensor *       src0 = tensor->src[0];
     ggml_tensor *       src1 = tensor->src[1];
@@ -2509,8 +2518,7 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
                                    ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
                                    src0->view_src;
 
-    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && src1->type == GGML_TYPE_F32 &&
-                             dst->type == GGML_TYPE_F32 && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
+    bool use_mul_mat_vec_q = ggml_cuda_mmvq_eligible(src0, src1, dst, bad_padding_clear);
 
     // fusion is not universally faster on Pascal
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -2551,9 +2559,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
     bool use_mul_mat_f     = !ggml_is_quantized(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
-    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear
-        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
-        && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
+    bool use_mul_mat_vec_q = ggml_cuda_mmvq_eligible(src0, src1, dst, bad_padding_clear);
     bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
@@ -2635,7 +2641,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * ids  = dst->src[2];
 
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_Q8_1);
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ggml_backend_buft_is_cuda_split(src0->buffer->buft) && "mul_mat_id does not support split buffers");
 
@@ -2644,7 +2650,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
-    if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+    if ((src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_Q8_1) && dst->type == GGML_TYPE_F32) {
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
         if (ne2 <= MMVQ_MAX_BATCH_SIZE) {
             if (ggml_is_quantized(src0->type)) {
@@ -2674,6 +2680,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     // note: this path should not be reached when recording CUDA graphs, because it requires stream synchronization
     // TODO: add asserts to verify this. should work with CUDA, HIP, etc.
+    GGML_ASSERT(src1->type == GGML_TYPE_F32 && "Q8_1 src1 must be handled by the MMVQ path above");
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(nb12 % nb11 == 0);
@@ -3688,10 +3695,10 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
         GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
 
-        //rms norm only supports F32
-        if (mul->src[0]->type != GGML_TYPE_F32 ||
-            mul->src[1]->type != GGML_TYPE_F32 ||
-            mul->type != GGML_TYPE_F32) {
+        //rms norm only supports F32; Q8_1 mul output is only valid for the 2-op fusion
+        const bool mul_q8_1_ok = (ops.size() == 2) && (mul->type == GGML_TYPE_Q8_1);
+        if (mul->src[0]->type != GGML_TYPE_F32 || mul->src[1]->type != GGML_TYPE_F32 ||
+            (mul->type != GGML_TYPE_F32 && !mul_q8_1_ok)) {
             return false;
         }
 
@@ -4200,7 +4207,12 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
-        ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i + 1]);
+        ggml_tensor * mul_node = cgraph->nodes[i + 1];
+        if (mul_node->type == GGML_TYPE_Q8_1) {
+            ggml_cuda_op_rms_norm_mul_q8_1(*cuda_ctx, node, mul_node);
+        } else {
+            ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, mul_node);
+        }
         return 1;
     }
 
@@ -4552,13 +4564,70 @@ static void ggml_backend_cuda_event_wait(ggml_backend_t backend, ggml_backend_ev
 static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
 
+    // Change mul->type F32→Q8_1 when all downstream consumers are MMVQ-eligible.
+    // gallocr then allocates Q8_1-sized memory; try_fuse dispatches the Q8_1 kernel.
+    for (int i = 0; i + 1 < cgraph->n_nodes; i++) {
+        ggml_tensor * rms = cgraph->nodes[i];
+        ggml_tensor * mul = cgraph->nodes[i + 1];
+
+        if (rms->op != GGML_OP_RMS_NORM) {
+            continue;
+        }
+        if (mul->op != GGML_OP_MUL) {
+            continue;
+        }
+        if (mul->type != GGML_TYPE_F32) {
+            continue;
+        }
+        if (mul->src[0] != rms && mul->src[1] != rms) {
+            continue;
+        }
+
+        if (mul->ne[0] % MATRIX_ROW_PADDING != 0) {
+            continue;
+        }
+        if (mul->ne[0] % QK8_1 != 0) {
+            continue;
+        }
+
+        const int32_t mul_use_count = ggml_node_get_use_count(cgraph, i + 1);
+        if (mul_use_count == 0) {
+            continue;
+        }
+        int  found    = 0;
+        bool all_mmvq = true;
+
+        for (int j = i + 2; j < cgraph->n_nodes && found < mul_use_count && all_mmvq; j++) {
+            ggml_tensor * cand = cgraph->nodes[j];
+            if (cand->src[0] != mul && cand->src[1] != mul) {
+                continue;
+            }
+            found++;
+            const bool    is_mmvq_op     = cand->op == GGML_OP_MUL_MAT || cand->op == GGML_OP_MUL_MAT_ID;
+            const bool    src0_quantized = cand->src[0] && ggml_is_quantized(cand->src[0]->type);
+            const int64_t batch          = (cand->op == GGML_OP_MUL_MAT_ID) ? cand->ne[2] : cand->ne[1];
+            if (!is_mmvq_op || !src0_quantized || batch > MMVQ_MAX_BATCH_SIZE) {
+                all_mmvq = false;
+            }
+        }
+
+        if (!all_mmvq || found != mul_use_count) {
+            continue;
+        }
+
+        mul->type  = GGML_TYPE_Q8_1;
+        mul->nb[0] = ggml_type_size(GGML_TYPE_Q8_1);
+        mul->nb[1] = ggml_row_size(GGML_TYPE_Q8_1, mul->ne[0]);
+        mul->nb[2] = mul->nb[1] * mul->ne[1];
+        mul->nb[3] = mul->nb[2] * mul->ne[2];
+    }
+
 #ifdef USE_CUDA_GRAPH
     const void * graph_key = ggml_cuda_graph_get_key(cgraph);
     const bool use_cuda_graph = ggml_cuda_graph_set_enabled(cuda_ctx, graph_key);
 #else
     const bool use_cuda_graph = false;
     GGML_UNUSED(cuda_ctx);
-    GGML_UNUSED(cgraph);
 #endif
 
     static bool enable_graph_optimization = [] {
