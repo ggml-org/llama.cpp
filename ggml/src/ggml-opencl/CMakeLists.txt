@@ -166,6 +166,7 @@ set(GGML_OPENCL_KERNELS
     gemm_noshuffle_q6_k_f32
     gemv_noshuffle_q5_k_f32
     gemm_noshuffle_q5_k_f32
+    gemm_dot8_q8_0_f32_lmbcast
     mul
     neg
     norm
