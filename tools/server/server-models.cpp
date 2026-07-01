@@ -375,10 +375,31 @@ void server_models::load_models() {
         source_map[name] = SERVER_MODEL_SOURCE_MODELS_DIR;
     }
     for (const auto & [name, custom] : custom_presets) {
-        if (final_presets.find(name) != final_presets.end()) {
-            final_presets[name].merge(custom);
+        std::string merged_name = name;
+
+        std::string hf_repo;
+        if (custom.get_option("LLAMA_ARG_HF_REPO", hf_repo) && !hf_repo.empty()) {
+            auto repo_it = final_presets.find(hf_repo);
+            if (repo_it != final_presets.end()) {
+                merged_name = hf_repo;
+            }
+        }
+
+        if (final_presets.find(merged_name) != final_presets.end()) {
+            final_presets[merged_name].merge(custom);
         } else {
-            final_presets[name] = custom;
+            final_presets[merged_name] = custom;
+        }
+
+        if (merged_name != name) {
+            std::string alias;
+            final_presets[merged_name].get_option("LLAMA_ARG_ALIAS", alias);
+            if (alias.empty()) {
+                alias = name;
+            } else if (alias.find(name) == std::string::npos) {
+                alias += "," + name;
+            }
+            final_presets[merged_name].set_option(ctx_preset, "LLAMA_ARG_ALIAS", alias);
         }
         source_map[name] = SERVER_MODEL_SOURCE_PRESET;
     }
