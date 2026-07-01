@@ -622,9 +622,10 @@ struct server_prompt {
 };
 
 struct server_prompt_cache {
-    server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
+    server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens, bool strict_limit) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
         this->limit_tokens = limit_tokens;
+        this->strict_limit = strict_limit;
     }
 
     std::list<server_prompt> states;
@@ -635,9 +636,13 @@ struct server_prompt_cache {
     // in tokens, 0 = no limit
     size_t limit_tokens = 0;
 
+    bool strict_limit = false;
+
     size_t size() const;
 
     size_t n_tokens() const;
+
+    bool can_evict_for_limit() const;
 
     server_prompt * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
