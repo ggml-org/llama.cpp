@@ -609,7 +609,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
         const int alignment_idx = gguf_find_key(ctx, GGUF_KEY_GENERAL_ALIGNMENT);
         ctx->alignment = alignment_idx == -1 ? GGUF_DEFAULT_ALIGNMENT : gguf_get_val_u32(ctx, alignment_idx);
 
-        if (ctx->alignment == 0 || (ctx->alignment & (ctx->alignment - 1)) != 0) {
+        if (ctx->alignment == 0 || (ctx->alignment & (ctx->alignment - 1)) != 0 || ctx->alignment > 1048576) {
             GGML_LOG_ERROR("%s: alignment %zu is not a power of 2\n", __func__, ctx->alignment);
             gguf_free(ctx);
             return nullptr;
