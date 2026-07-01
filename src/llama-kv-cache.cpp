@@ -1941,6 +1941,13 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
     for (const auto & layer : layers) {
         const uint32_t il = layer.il;
 
+        // granite-switch: the router layer's K encodes the adapter slot as a
+        // literal dim-0 magnitude (no positional rotation), so it must NOT be
+        // RoPE-shifted when the KV cache is defragmented / position-shifted.
+        if (hparams.router_layer >= 0 && (int) il == hparams.router_layer) {
+            continue;
+        }
+
         const int64_t n_head_kv    = hparams.n_head_kv(il);
         const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
 

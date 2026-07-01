@@ -892,6 +892,21 @@ class GGUFWriter:
     def add_embedding_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EMBEDDING_SCALE.format(arch=self.arch), value)
 
+    def add_num_adapters(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.NUM_ADAPTERS.format(arch=self.arch), count)
+
+    def add_adapter_token_ids(self, ids: Sequence[int]) -> None:
+        self.add_array(Keys.LLM.ADAPTER_TOKEN_IDS.format(arch=self.arch), ids)
+
+    def add_adapter_substitute_token_ids(self, ids: Sequence[int]) -> None:
+        self.add_array(Keys.LLM.ADAPTER_SUBSTITUTE_TOKEN_IDS.format(arch=self.arch), ids)
+
+    def add_max_lora_rank(self, rank: int) -> None:
+        self.add_uint32(Keys.LLM.MAX_LORA_RANK.format(arch=self.arch), rank)
+
+    def add_control_token_gain(self, gain: float) -> None:
+        self.add_float32(Keys.LLM.CONTROL_TOKEN_GAIN.format(arch=self.arch), gain)
+
     def add_wkv_head_size(self, size: int) -> None:
         self.add_uint32(Keys.WKV.HEAD_SIZE.format(arch=self.arch), size)
 

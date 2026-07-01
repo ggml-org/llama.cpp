@@ -100,6 +100,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GRANITE,          "granite"          },
     { LLM_ARCH_GRANITE_MOE,      "granitemoe"       },
     { LLM_ARCH_GRANITE_HYBRID,   "granitehybrid"    },
+    { LLM_ARCH_GRANITE_SWITCH,   "graniteswitch"    },
     { LLM_ARCH_CHAMELEON,        "chameleon"        },
     { LLM_ARCH_WAVTOKENIZER_DEC, "wavtokenizer-dec" },
     { LLM_ARCH_PLM,              "plm"              },
@@ -215,6 +216,11 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TIME_DECAY_EXTRA_DIM,              "%s.time_decay_extra_dim"              },
     { LLM_KV_RESIDUAL_SCALE,                    "%s.residual_scale"                    },
     { LLM_KV_EMBEDDING_SCALE,                   "%s.embedding_scale"                   },
+    { LLM_KV_NUM_ADAPTERS,                      "%s.num_adapters"                      },
+    { LLM_KV_ADAPTER_TOKEN_IDS,                 "%s.adapter_token_ids"                 },
+    { LLM_KV_ADAPTER_SUBSTITUTE_TOKEN_IDS,      "%s.adapter_substitute_token_ids"      },
+    { LLM_KV_MAX_LORA_RANK,                     "%s.max_lora_rank"                     },
+    { LLM_KV_CONTROL_TOKEN_GAIN,                "%s.control_token_gain"                },
     { LLM_KV_TOKEN_SHIFT_COUNT,                 "%s.token_shift_count"                 },
     { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
     { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"           },
@@ -603,6 +609,21 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_MASKED_EMBD_ORDERING,                   "masked_embd_ordering" },
     { LLM_TENSOR_FC,                                     "fc" },
     { LLM_TENSOR_D2T,                                    "d2t" },
+    // Granite Switch: per-token embedded LoRA adapters (no ".weight" suffix on disk)
+    { LLM_TENSOR_ATTN_Q_LORA_A,                          "blk.%d.attn_q.lora_a" },
+    { LLM_TENSOR_ATTN_Q_LORA_B,                          "blk.%d.attn_q.lora_b" },
+    { LLM_TENSOR_ATTN_K_LORA_A,                          "blk.%d.attn_k.lora_a" },
+    { LLM_TENSOR_ATTN_K_LORA_B,                          "blk.%d.attn_k.lora_b" },
+    { LLM_TENSOR_ATTN_V_LORA_A,                          "blk.%d.attn_v.lora_a" },
+    { LLM_TENSOR_ATTN_V_LORA_B,                          "blk.%d.attn_v.lora_b" },
+    { LLM_TENSOR_ATTN_OUT_LORA_A,                        "blk.%d.attn_output.lora_a" },
+    { LLM_TENSOR_ATTN_OUT_LORA_B,                        "blk.%d.attn_output.lora_b" },
+    { LLM_TENSOR_FFN_GATE_LORA_A,                        "blk.%d.ffn_gate.lora_a" },
+    { LLM_TENSOR_FFN_GATE_LORA_B,                        "blk.%d.ffn_gate.lora_b" },
+    { LLM_TENSOR_FFN_UP_LORA_A,                          "blk.%d.ffn_up.lora_a" },
+    { LLM_TENSOR_FFN_UP_LORA_B,                          "blk.%d.ffn_up.lora_b" },
+    { LLM_TENSOR_FFN_DOWN_LORA_A,                        "blk.%d.ffn_down.lora_a" },
+    { LLM_TENSOR_FFN_DOWN_LORA_B,                        "blk.%d.ffn_down.lora_b" },
 };
 
 // declare information about the model weight tensors:
@@ -854,6 +875,21 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     // eagle3
     {LLM_TENSOR_FC,                         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_D2T,                        {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
+    // granite-switch: per-token embedded LoRA adapters (selected via mul_mat_id)
+    {LLM_TENSOR_ATTN_Q_LORA_A,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_ATTN_Q_LORA_B,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_ATTN_K_LORA_A,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_ATTN_K_LORA_B,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_ATTN_V_LORA_A,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_ATTN_V_LORA_B,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_ATTN_OUT_LORA_A,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_ATTN_OUT_LORA_B,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_FFN_GATE_LORA_A,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_FFN_GATE_LORA_B,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_FFN_UP_LORA_A,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_FFN_UP_LORA_B,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_FFN_DOWN_LORA_A,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    {LLM_TENSOR_FFN_DOWN_LORA_B,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}

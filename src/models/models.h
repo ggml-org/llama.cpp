@@ -1536,6 +1536,66 @@ struct llama_model_granite_moe : public llama_model_base {
 };
 
 
+struct llama_model_granite_switch : public llama_model_base {
+    llama_model_granite_switch(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    uint32_t n_adapters    = 0;  // number of real adapters (excludes the zero slot)
+    uint32_t max_lora_rank = 0;
+    float    router_gain   = 15.0f;  // routing-token softmax bias magnitude (see set_input)
+
+    // stacked-adapter slots: n_adapters + 1 (slot 0 = base/zero delta)
+    uint32_t n_slots() const { return n_adapters + 1; }
+
+    // token id -> adapter slot (1 + adapter, so slot 0 stays "base")
+    std::unordered_map<llama_token, int32_t> adapter_token_to_slot;
+    // token id -> substitute token id (token-exchange before embedding)
+    std::unordered_map<llama_token, llama_token> adapter_token_to_substitute;
+
+    // the per-token adapter selection is recovered in-graph by a single-head
+    // causal router attention whose K/V live in the KV cache at hparams.router_layer
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+    private:
+        // per-token switched LoRA delta only: B_a·(A_a·x) -> {n_out, n_tokens}
+        ggml_tensor * build_switched_lora_delta(
+                  ggml_tensor * lora_a,  // {n_in, max_lora_rank, N}
+                  ggml_tensor * lora_b,  // {max_lora_rank, n_out, N}
+                  ggml_tensor * cur,     // {n_in, n_tokens}
+                  ggml_tensor * ids);    // {n_tokens} I32 adapter index per token
+
+        // per-token switched LoRA: y = W·x + B_a·(A_a·x), selected per token
+        ggml_tensor * build_switched_lora_mm(
+                  ggml_tensor * w,       // base weight (plain 2D)
+                  ggml_tensor * lora_a,  // {n_in, max_lora_rank, N}
+                  ggml_tensor * lora_b,  // {max_lora_rank, n_out, N}
+                  ggml_tensor * cur,     // {n_in, n_tokens}
+                  ggml_tensor * ids);    // {n_tokens} I32 adapter index per token
+
+        ggml_tensor * build_attention_layer(
+                  ggml_tensor             * cur,
+                  ggml_tensor             * inp_pos,
+                  ggml_tensor             * adapter_ids,
+                  llm_graph_input_attn_kv * inp_attn,
+            const llama_model             & model,
+            const int64_t                 n_embd_head,
+            const int                     il);
+
+        ggml_tensor * build_layer_ffn(
+                  ggml_tensor       * cur,
+                  ggml_tensor       * inpSA,
+                  ggml_tensor       * adapter_ids,
+            const llama_model       & model,
+            const int                 il);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_minicpm : public llama_model_base {
     llama_model_minicpm(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
