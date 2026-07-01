@@ -1114,18 +1114,25 @@ json oaicompat_chat_params_parse(
 
     llama_params["message_delimiters"] = chat_params.message_delimiters.to_json();
 
-    // Reasoning budget: pass parameters through to sampling layer
+    // Reasoning budget: the per-request thinking_budget_tokens takes precedence,
+    // falling back to the CLI default. The exhaustion message defaults to the CLI
+    // value, falling back to the per-request thinking_budget_message.
     {
         int reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
         if (reasoning_budget == -1) {
             reasoning_budget = opt.reasoning_budget;
         }
 
+        std::string reasoning_budget_message = opt.reasoning_budget_message;
+        if (reasoning_budget_message.empty() && body.contains("thinking_budget_message")) {
+            reasoning_budget_message = json_value(body, "thinking_budget_message", std::string());
+        }
+
         if (!chat_params.thinking_end_tag.empty()) {
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
             llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
-            llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+            llama_params["reasoning_budget_message"] = reasoning_budget_message;
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
     }
