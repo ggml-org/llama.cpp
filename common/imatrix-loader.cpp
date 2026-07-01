@@ -110,33 +110,41 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
         }
     }
 
-    imatrix.has_metadata = (datasets_key != -1 && chunk_count_key != -1 && chunk_size_key != -1);
-    imatrix.chunk_count  = (chunk_count_key != -1) ? gguf_get_val_u32(ctx_gguf, chunk_count_key) : 0;
-    imatrix.chunk_size   = (chunk_size_key  != -1) ? gguf_get_val_u32(ctx_gguf, chunk_size_key)  : 0;
+    imatrix.has_metadata = datasets_key != -1 && chunk_count_key != -1 && chunk_size_key != -1;
+    imatrix.chunk_count  = chunk_count_key != -1 ? gguf_get_val_u32(ctx_gguf, chunk_count_key) : 0;
+    imatrix.chunk_size   = chunk_size_key  != -1 ? gguf_get_val_u32(ctx_gguf, chunk_size_key)  : 0;
 
+    const std::string in_sum_suffix{ ".in_sum" };
     const std::string in_sum2_suffix{ ".in_sum2" };
     const std::string counts_suffix{ ".counts" };
 
-    std::map<std::string, std::pair<struct ggml_tensor *, struct ggml_tensor *>> sums_counts_for;
+    struct sum_tensors {
+        struct ggml_tensor * in_sum  = nullptr;
+        struct ggml_tensor * in_sum2 = nullptr;
+        struct ggml_tensor * counts  = nullptr;
+    };
 
+    std::map<std::string, sum_tensors> sums_counts_for;
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
         std::string name = cur->name;
-
         if (name.empty()) { continue; }
 
-        if (string_remove_suffix(name, in_sum2_suffix)) {
-            sums_counts_for[std::move(name)].first = cur;
+        if (string_remove_suffix(name, in_sum_suffix)) {
+            sums_counts_for[std::move(name)].in_sum = cur;
+        } else if (string_remove_suffix(name, in_sum2_suffix)) {
+            sums_counts_for[std::move(name)].in_sum2 = cur;
         } else if (string_remove_suffix(name, counts_suffix)) {
-            sums_counts_for[std::move(name)].second = cur;
+            sums_counts_for[std::move(name)].counts = cur;
         }
     }
 
     for (const auto & sc : sums_counts_for) {
         const std::string &        name    = sc.first;
-        const struct ggml_tensor * in_sum2 = sc.second.first;
-        const struct ggml_tensor * counts  = sc.second.second;
+        const struct ggml_tensor * in_sum  = sc.second.in_sum;
+        const struct ggml_tensor * in_sum2 = sc.second.in_sum2;
+        const struct ggml_tensor * counts  = sc.second.counts;
 
-        if (!in_sum2 || !counts) {
+        if (!in_sum2 || !counts || (in_sum != nullptr && ggml_nelements(in_sum) != ggml_nelements(in_sum2))) {
             LOG_ERR("%s: mismatched sums and counts for %s\n", __func__, name.c_str());
             gguf_free(ctx_gguf);
             ggml_free(ctx);
@@ -156,6 +164,13 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
         e.counts.resize(ncounts);
         for (int64_t j = 0; j < ncounts; ++j) {
             e.counts[j] = std::lround(((const float *) counts->data)[j]);
+        }
+
+        if (in_sum && ggml_nelements(in_sum) == nval) {
+            e.activations.resize(nval);
+            for (int64_t j = 0; j < nval; ++j) {
+                e.activations[j] = ((const float *) in_sum->data)[j];
+            }
         }
     }
 
