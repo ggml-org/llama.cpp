@@ -614,26 +614,32 @@ static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict 
     __builtin_assume(n_dot_tiles > 0);
 
     Q6_bias_mxmem2_A((void *)scales);
+
+    asm volatile("" ::: "memory");
     for (uint32_t r = 0; r < n_row_tiles; ++r) {
         for (size_t c = 0; c < n_col_tiles; ++c) {
-            Q6_mxclracc_hf();
-
             const __fp16 *row_tiles = activation + r * n_dot_tiles * HTP_MM_HMX_TILE_N_ELMS;
             const __fp16 *col_tiles = weight + c * n_dot_tiles * HTP_MM_HMX_TILE_N_ELMS;
+
+            Q6_mxclracc_hf();
+            asm volatile("" ::: "memory");
 
             for (uint32_t k = 0, k_block; k < n_dot_tiles; k += k_block) {
                 k_block = hex_smin(n_dot_tiles - k, 32);
                 const uint32_t range = 2048u * (uint32_t)k_block - 1;
                 Q6_activation_hf_mxmem_RR_deep((unsigned int)row_tiles, range);
                 Q6_weight_hf_mxmem_RR((unsigned int)col_tiles, range);
+                asm volatile("" ::: "memory");
                 row_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
                 col_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
             }
 
+            asm volatile("" ::: "memory");
             __fp16 *out_tile = output + (r * n_col_tiles + c) * HTP_MM_HMX_TILE_N_ELMS;
             Q6_mxmem_AR_after_hf(out_tile, 0);
         }
     }
+    asm volatile("" ::: "memory");
 }
 
 // C += AB
@@ -647,11 +653,14 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
     Q6_bias_mxmem2_A((void *)col_scales);
 
     const size_t dot_tile_stride = n_dot_tiles * HTP_MM_HMX_TILE_N_ELMS;
+
+    asm volatile("" ::: "memory");
     for (size_t i = 0; i < n_row_tiles; ++i) {
         const __fp16 *row_base = a + i * dot_tile_stride;
         __fp16 *res_base = c + i * n_col_tiles * HTP_MM_HMX_TILE_N_ELMS;
         for (size_t j = 0; j < n_col_tiles; ++j) {
             Q6_mxclracc_hf();
+            asm volatile("" ::: "memory");
 
             const __fp16 *col_tiles = b + j * dot_tile_stride;
             const __fp16 *row_tiles = row_base;
@@ -670,9 +679,11 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
                 col_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
             }
 
+            asm volatile("" ::: "memory");
             Q6_mxmem_AR_after_hf(accum_tile, 0);
         }
     }
+    asm volatile("" ::: "memory");
 }
 
 // --- Async HMX matmul job (for pipeline overlap) ---

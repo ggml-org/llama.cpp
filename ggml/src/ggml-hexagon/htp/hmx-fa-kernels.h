@@ -47,19 +47,22 @@ static const int16_t d_tile_scatter_offsets[64] __attribute__((aligned(128))) = 
 };
 // Inner HMX tile computation kernels
 
-static inline void hmx_fa_qk_dot_tile(
+static void hmx_fa_qk_dot_tile(
     const __fp16 * row_tiles,
     const __fp16 * col_tiles,
     __fp16 *       out_tile,
     size_t         n_dot_tiles
 ) {
+    asm volatile("" ::: "memory");
     for (size_t k = 0; k < n_dot_tiles; ++k) {
         Q6_activation_hf_mxmem_RR((unsigned int) row_tiles, 2047);
         Q6_weight_hf_mxmem_RR((unsigned int) col_tiles, 2047);
         row_tiles += HMX_FP16_TILE_N_ELMS;
         col_tiles += HMX_FP16_TILE_N_ELMS;
     }
+    asm volatile("" ::: "memory");
     Q6_mxmem_AR_after_hf(out_tile, 0);
+    asm volatile("" ::: "memory");
 }
 
 static inline void hmx_fa_o_update_tile(
@@ -70,17 +73,18 @@ static inline void hmx_fa_o_update_tile(
     __fp16 *       o_tile_out,
     size_t         n_col_tiles
 ) {
+    asm volatile("" ::: "memory");
     Q6_activation_hf_mxmem_RR((unsigned int) d_diag, 2047);
     Q6_weight_hf_mxmem_RR((unsigned int) o_rc, 2047);
-
     for (size_t k = 0; k < n_col_tiles; ++k) {
         Q6_activation_hf_mxmem_RR((unsigned int) p_tile_in, 2047);
         Q6_weight_hf_mxmem_RR((unsigned int) v_tile_in, 2047);
         p_tile_in += HMX_FP16_TILE_N_ELMS;
         v_tile_in += HMX_FP16_TILE_N_ELMS;
     }
-
+    asm volatile("" ::: "memory");
     Q6_mxmem_AR_after_hf(o_tile_out, 0);
+    asm volatile("" ::: "memory");
 }
 
 static inline void hmx_fa_o_norm_tile(
@@ -88,9 +92,12 @@ static inline void hmx_fa_o_norm_tile(
     const __fp16 * o_rc,
     __fp16 *       o_out
 ) {
+    asm volatile("" ::: "memory");
     Q6_activation_hf_mxmem_RR((unsigned int) d_diag, 2047);
     Q6_weight_hf_mxmem_RR((unsigned int) o_rc, 2047);
+    asm volatile("" ::: "memory");
     Q6_mxmem_AR_after_hf(o_out, 0);
+    asm volatile("" ::: "memory");
 }
 
 #endif /* HMX_FA_KERNELS_H */
