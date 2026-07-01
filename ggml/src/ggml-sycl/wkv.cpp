@@ -241,13 +241,13 @@ void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
 void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/7);
-    const float* r_d = (const float*)dst->src[0]->data;
-    const float* w_d = (const float*)dst->src[1]->data;
-    const float* k_d = (const float*)dst->src[2]->data;
-    const float* v_d = (const float*)dst->src[3]->data;
+    const float* r_d  = (const float*)dst->src[0]->data;
+    const float* w_d  = (const float*)dst->src[1]->data;
+    const float* k_d  = (const float*)dst->src[2]->data;
+    const float* v_d  = (const float*)dst->src[3]->data;
     const float* kk_d = (const float*)dst->src[4]->data;
     const float* a_d  = (const float*)dst->src[5]->data;
-    const float* s_d   = (const float*)dst->src[6]->data;
+    const float* s_d  = (const float*)dst->src[6]->data;
     float* dst_d = (float*)dst->data;
 
     const int64_t B = dst->src[6]->ne[1];

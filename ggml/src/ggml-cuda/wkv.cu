@@ -165,17 +165,17 @@ rwkv_wkv7_f32_t1_warp_row(const int T, const int C, const int H, const float * r
     if (threadIdx.y == 0) {
         constexpr float w_scale = -0.6065306597126334f;
 
-        _r[lane]          = r[batch_i * C + head_off + lane];
-        _w[lane]          = __expf(w_scale / (1.0f + __expf(-w[batch_i * C + head_off + lane])));
-        _k[lane]          = k[batch_i * C + head_off + lane];
-        _kk[lane]         = kk[batch_i * C + head_off + lane];
-        _a[lane]          = a[batch_i * C + head_off + lane];
+        _r[lane]  = r[batch_i * C + head_off + lane];
+        _w[lane]  = __expf(w_scale / (1.0f + __expf(-w[batch_i * C + head_off + lane])));
+        _k[lane]  = k[batch_i * C + head_off + lane];
+        _kk[lane] = kk[batch_i * C + head_off + lane];
+        _a[lane]  = a[batch_i * C + head_off + lane];
 
-        _r[lane + half_head]   = r[batch_i * C + head_off + lane + half_head];
-        _w[lane + half_head]   = __expf(w_scale / (1.0f + __expf(-w[batch_i * C + head_off + lane + half_head])));
-        _k[lane + half_head]   = k[batch_i * C + head_off + lane + half_head];
-        _kk[lane + half_head]  = kk[batch_i * C + head_off + lane + half_head];
-        _a[lane + half_head]   = a[batch_i * C + head_off + lane + half_head];
+        _r[lane + half_head]  = r[batch_i * C + head_off + lane + half_head];
+        _w[lane + half_head]  = __expf(w_scale / (1.0f + __expf(-w[batch_i * C + head_off + lane + half_head])));
+        _k[lane + half_head]  = k[batch_i * C + head_off + lane + half_head];
+        _kk[lane + half_head] = kk[batch_i * C + head_off + lane + half_head];
+        _a[lane + half_head]  = a[batch_i * C + head_off + lane + half_head];
     }
     __syncthreads();
 
@@ -227,13 +227,13 @@ void ggml_cuda_op_rwkv_wkv6(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
 }
 
 void ggml_cuda_op_rwkv_wkv7(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    const float * r_d = (const float *)dst->src[0]->data;
-    const float * w_d = (const float *)dst->src[1]->data;
-    const float * k_d = (const float *)dst->src[2]->data;
-    const float * v_d = (const float *)dst->src[3]->data;
+    const float * r_d  = (const float *)dst->src[0]->data;
+    const float * w_d  = (const float *)dst->src[1]->data;
+    const float * k_d  = (const float *)dst->src[2]->data;
+    const float * v_d  = (const float *)dst->src[3]->data;
     const float * kk_d = (const float *)dst->src[4]->data;
     const float * a_d  = (const float *)dst->src[5]->data;
-    const float * s_d   = (const float *)dst->src[6]->data;
+    const float * s_d  = (const float *)dst->src[6]->data;
 
     const int64_t B = dst->src[6]->ne[1];
     const int64_t T = dst->src[0]->ne[2];
