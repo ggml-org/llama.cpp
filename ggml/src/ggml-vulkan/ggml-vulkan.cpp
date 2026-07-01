@@ -6555,6 +6555,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
         const bool prefers_transfer_queue =
             device->vendor_id == VK_VENDOR_ID_AMD &&
             device->architecture != AMD_GCN &&
+            device->driver_id != vk::DriverId::eAmdProprietary &&
+            device->driver_id != vk::DriverId::eAmdOpenSource &&
             !device->uma &&
             !allow_graphics_queue;
 
