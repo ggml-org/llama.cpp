@@ -12,6 +12,7 @@
 #include <regex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 // result of parsing --tensor-type option
 // (changes to this struct must be reflected in tools/quantize/quantize.cpp)
@@ -195,6 +196,27 @@ struct quantize_state_impl {
     }
 };
 
+// extract the block index from a tensor name like "blk.N.foo.weight", or -1 if not a block tensor
+static int tensor_block_index(const std::string & name) {
+    int i_layer = -1;
+    sscanf(name.data(), "blk.%d.", &i_layer);
+    return i_layer;
+}
+
+// check whether a manual --tensor-type override applies to this tensor.
+// mirrors the condition used in llama_tensor_get_type so the result is consistent.
+static bool tensor_has_manual_override(const quantize_state_impl & qs, ggml_type default_type, const std::string & tensor_name) {
+    if (qs.params->pure || !ggml_is_quantized(default_type) || qs.tensor_type_patterns.empty()) {
+        return false;
+    }
+    for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
+        if (std::regex_search(tensor_name, pattern)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // per-tensor metadata, computed in the preliminary loop and used in the main loop
 struct tensor_metadata {
     std::string     name;
@@ -203,6 +225,7 @@ struct tensor_metadata {
     std::string     remapped_imatrix_name;
     bool            allows_quantization;
     bool            requires_imatrix;
+    bool            is_mtp;
 };
 
 //
@@ -424,9 +447,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             // sprinkled in the model. Hence, simply dividing i_ffn_down by n_expert does not work
             // for getting the current layer as I initially thought, and we need to resort to parsing the
             // tensor name.
-            if (sscanf(name, "blk.%d.", &i_layer) != 1) {
-                throw std::runtime_error(format("Failed to determine layer for tensor %s", name));
-            }
+            i_layer = tensor_block_index(name);
             if (i_layer < 0 || i_layer >= n_layer) {
                 throw std::runtime_error(format("Bad layer %d for tensor %s. Must be in [0, %d)", i_layer, name, n_layer));
             }
@@ -693,6 +714,10 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
         // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
         if (!manual) {
             new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
+            if (params->mtp_tensor_type < GGML_TYPE_COUNT && tm.is_mtp) {
+                // Override type with value from --mtp for mtp blocks
+                new_type = params->mtp_tensor_type;
+            }
         }
 
         // incompatible tensor shapes are handled here - fallback to a compatible type
@@ -999,6 +1024,18 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // initialize quantization state counters and metadata categories
     init_quantize_state_counters(qs, metadata);
 
+    // scan for blocks that contain nextn (MTP) tensors, so we can apply a
+    // fixed fallback quantization level when their imatrix data is missing
+    std::unordered_set<int> mtp_blocks;
+    for (const auto & tm : metadata) {
+        if (tm.name.find(".nextn.") != std::string::npos) {
+            const int blk = tensor_block_index(tm.name);
+            if (blk >= 0) {
+                mtp_blocks.insert(blk);
+            }
+        }
+    }
+
     int idx = 0;
     uint16_t n_split = 1;
 
@@ -1017,7 +1054,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     //
     // preliminary iteration over all weights
     //
-
     for (size_t i = 0; i < tensors.size(); ++i) {
         const auto * it = tensors[i];
         const struct ggml_tensor * tensor = it->tensor;
@@ -1029,6 +1065,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         gguf_add_tensor(ctx_outs[i_split].get(), tensor);
 
         metadata[i].allows_quantization = tensor_allows_quantization(params, model->arch, tensor);
+        const int blk = tensor_block_index(tensor->name);
+        metadata[i].is_mtp = blk >= 0 && mtp_blocks.count(blk) > 0;
 
         if (metadata[i].allows_quantization) {
             metadata[i].target_type = llama_tensor_get_type(qs, params, tensor, default_type, metadata[i]);
@@ -1037,9 +1075,47 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
 
         metadata[i].requires_imatrix = tensor_requires_imatrix(tensor->name, metadata[i].target_type, ftype);
-
         if (params->imatrix) {
             metadata[i].remapped_imatrix_name = remap_imatrix(tensor->name, mapped);
+
+            if (params->imatrix_allow_missing_tensors && metadata[i].allows_quantization && imatrix_data) {
+                auto it = imatrix_data->find(metadata[i].remapped_imatrix_name);
+                if (it == imatrix_data->end()) {
+                    // fallback tensor type when imatrix data is missing:
+                    // manual overrides take precedence over the missing-imatrix fallback
+                    if (!tensor_has_manual_override(qs, default_type, metadata[i].name)) {
+                        ggml_type fallback_type = metadata[i].target_type;
+                        if (metadata[i].is_mtp) {
+                            if (params->mtp_tensor_type == GGML_TYPE_COUNT) {
+                                // MTP layers: if --mtp is not used, use a small, simple quantization level, because
+                                // speed is more important than a minor accuracy loss for drafting / MTP
+                                switch (default_type) {
+                                    case GGML_TYPE_Q8_0:
+                                    case GGML_TYPE_MXFP4:
+                                        fallback_type = default_type; break;
+                                    default:
+                                        fallback_type = GGML_TYPE_Q4_0; break;
+                                }
+                            }
+                        } else {
+                            // other tensors: quantize to the default level for the target ftype
+                            fallback_type = default_type;
+                        }
+
+                        // for tiny tensor types requiring a imatrix data, we fall back to a small type that doesn't (IQ3_S)
+                        if (tensor_requires_imatrix(tensor->name, fallback_type, ftype)) {
+                            fallback_type = GGML_TYPE_IQ3_S;
+                        }
+
+                        if (metadata[i].target_type != fallback_type) {
+                            LLAMA_LOG_WARN("%s: %-36s - no imatrix entry found, using %s as fallback\n",
+                                            __func__, tensor->name, ggml_type_name(fallback_type));
+                            metadata[i].target_type = fallback_type;
+                        }
+                        metadata[i].requires_imatrix = false;
+                    }
+                }
+            }
         } else if (metadata[i].allows_quantization && metadata[i].requires_imatrix) {
             if (params->dry_run) {
                 will_require_imatrix = true;
@@ -1204,6 +1280,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     LLAMA_LOG_ERROR("\n\n============================================================\n");
                     LLAMA_LOG_ERROR("Missing importance matrix for tensor %s in a very low-bit quantization\n", tensor->name);
                     LLAMA_LOG_ERROR("The result will be garbage, so bailing out\n");
+                    LLAMA_LOG_ERROR("To ignore this error and use a larger bitsize for tensors missing from\n");
+                    LLAMA_LOG_ERROR("the provider imatrix gguf, use --imatrix-allow-missing-tensors.\n");
                     LLAMA_LOG_ERROR("============================================================\n\n");
                     throw std::runtime_error(format("Missing importance matrix for tensor %s in a very low-bit quantization", tensor->name));
                 }
@@ -1287,20 +1365,22 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
 llama_model_quantize_params llama_model_quantize_default_params() {
     llama_model_quantize_params result = {
-        /*.nthread                     =*/ 0,
-        /*.ftype                       =*/ LLAMA_FTYPE_MOSTLY_Q8_0,
-        /*.output_tensor_type          =*/ GGML_TYPE_COUNT,
-        /*.token_embedding_type        =*/ GGML_TYPE_COUNT,
-        /*.allow_requantize            =*/ false,
-        /*.quantize_output_tensor      =*/ true,
-        /*.only_copy                   =*/ false,
-        /*.pure                        =*/ false,
-        /*.keep_split                  =*/ false,
-        /*.dry_run                     =*/ false,
-        /*.imatrix                     =*/ nullptr,
-        /*.kv_overrides                =*/ nullptr,
-        /*.tensor_type                 =*/ nullptr,
-        /*.prune_layers                =*/ nullptr
+        /*.nthread                        =*/ 0,
+        /*.ftype                          =*/ LLAMA_FTYPE_MOSTLY_Q8_0,
+        /*.output_tensor_type             =*/ GGML_TYPE_COUNT,
+        /*.token_embedding_type           =*/ GGML_TYPE_COUNT,
+        /*.allow_requantize               =*/ false,
+        /*.quantize_output_tensor         =*/ true,
+        /*.only_copy                      =*/ false,
+        /*.pure                           =*/ false,
+        /*.imatrix_allow_missing_tensors  =*/ false,
+        /*.mtp_tensor_type                =*/ GGML_TYPE_COUNT,
+        /*.keep_split                     =*/ false,
+        /*.dry_run                        =*/ false,
+        /*.imatrix                        =*/ nullptr,
+        /*.kv_overrides                   =*/ nullptr,
+        /*.tensor_type                    =*/ nullptr,
+        /*.prune_layers                   =*/ nullptr
     };
 
     return result;
