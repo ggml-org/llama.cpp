@@ -3,24 +3,29 @@
 // MiniMax-M3 vision graph
 
 ggml_tensor * clip_graph_minimax_m3::apply_rope(
-        ggml_tensor * x, ggml_tensor * rope_cos, ggml_tensor * rope_sin) {
-    const int64_t d    = x->ne[0];
-    const int64_t rd   = rope_cos->ne[0];
-    const int64_t half = rd / 2;
-    const size_t  es   = ggml_element_size(x);
-
-    ggml_tensor * x_rot  = ggml_cont(ctx0, ggml_view_3d(ctx0, x, rd,    x->ne[1], x->ne[2], x->nb[1], x->nb[2], 0));
-    ggml_tensor * x_pass = ggml_cont(ctx0, ggml_view_3d(ctx0, x, d - rd, x->ne[1], x->ne[2], x->nb[1], x->nb[2], rd * es));
-
-    const size_t es_r = ggml_element_size(x_rot);
-    ggml_tensor * x1 = ggml_cont(ctx0, ggml_view_3d(ctx0, x_rot, half, x_rot->ne[1], x_rot->ne[2], x_rot->nb[1], x_rot->nb[2], 0));
-    ggml_tensor * x2 = ggml_cont(ctx0, ggml_view_3d(ctx0, x_rot, half, x_rot->ne[1], x_rot->ne[2], x_rot->nb[1], x_rot->nb[2], half * es_r));
-    ggml_tensor * rot = ggml_concat(ctx0, ggml_neg(ctx0, x2), x1, 0); 
-
-    ggml_tensor * out = ggml_add(ctx0,
-        ggml_mul(ctx0, x_rot, rope_cos),
-        ggml_mul(ctx0, rot,   rope_sin));
-    return ggml_concat(ctx0, out, x_pass, 0);
+        ggml_tensor * x, ggml_tensor * pos_t, ggml_tensor * pos_h, ggml_tensor * pos_w) {
+    const int64_t Hn  = x->ne[1];
+    const int64_t P   = x->ne[2];
+    const size_t  es  = ggml_element_size(x);
+    const int     dh  = (int) x->ne[0];
+    const int     axd = 2 * ((2 * (dh / 2) / 3) / 2);
+    
+    GGML_ASSERT(x->nb[0] == es);
+    GGML_ASSERT(3 * axd <= dh);
+    
+    const float   th  = hparams.rope_theta;
+    auto sl = [&](int off, int n) {
+        return ggml_cont(ctx0, ggml_view_3d(ctx0, x, n, Hn, P, x->nb[1], x->nb[2], (size_t) off * es));
+    };
+    ggml_tensor * t   = sl(0,        axd);
+    ggml_tensor * h   = sl(axd,      axd);
+    ggml_tensor * w   = sl(2 * axd,  axd);
+    ggml_tensor * pad = sl(3 * axd,  dh - 3 * axd);
+    
+    t = ggml_rope_ext(ctx0, t, pos_t, nullptr, axd, GGML_ROPE_TYPE_NEOX, 0, th, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+    h = ggml_rope_ext(ctx0, h, pos_h, nullptr, axd, GGML_ROPE_TYPE_NEOX, 0, th, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+    w = ggml_rope_ext(ctx0, w, pos_w, nullptr, axd, GGML_ROPE_TYPE_NEOX, 0, th, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+    return ggml_concat(ctx0, ggml_concat(ctx0, ggml_concat(ctx0, t, h, 0), w, 0), pad, 0);
 }
 
 ggml_cgraph * clip_graph_minimax_m3::build() {
@@ -49,21 +54,17 @@ ggml_cgraph * clip_graph_minimax_m3::build() {
         inp = ggml_cont_3d(ctx0, inp, n_embd, n_patches_x * n_patches_y, batch_size);
     }
 
-    // 3D RoPE inputs
-    const int axis_dim = 2 * ((2 * (d_head / 2) / 3) / 2);
-    const int rope_dim = 3 * axis_dim;
-    ggml_tensor * rope_cos = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, rope_dim, 1, n_pos);
-    ggml_set_name(rope_cos, "minimax_cos"); ggml_set_input(rope_cos);
-    ggml_tensor * rope_sin = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, rope_dim, 1, n_pos);
-    ggml_set_name(rope_sin, "minimax_sin"); ggml_set_input(rope_sin);
+    ggml_tensor * pos_t = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
+    ggml_set_name(pos_t, "minimax_pos_t"); ggml_set_input(pos_t);
+    ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
+    ggml_set_name(pos_h, "minimax_pos_h"); ggml_set_input(pos_h);
+    ggml_tensor * pos_w = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
+    ggml_set_name(pos_w, "minimax_pos_w"); ggml_set_input(pos_w);
 
     ggml_tensor * inpL = build_vit(
-        inp, n_pos,
-        NORM_TYPE_NORMAL,
-        FFN_GELU_ERF,
-        nullptr,
+        inp, n_pos, NORM_TYPE_NORMAL, FFN_GELU_ERF, nullptr,
         [&](ggml_tensor * c, const clip_layer &) {
-            return apply_rope(c, rope_cos, rope_sin); // rotate first rd dims, pass remaining dims through
+            return apply_rope(c, pos_t, pos_h, pos_w);
         });
 
     // projector

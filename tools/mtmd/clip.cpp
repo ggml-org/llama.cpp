@@ -3875,39 +3875,23 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
             } break;
         case PROJECTOR_TYPE_MINIMAX_M3:
             {
-                // 3D RoPE cos/sin, host port of MiniMaxM3VL3DRotaryEmbedding.
-                // Block (2x2-merge) order, per-axis frequency denominator = axis_dim.
                 const int gh = image_size_height / patch_size;
                 const int gw = image_size_width  / patch_size;
-                const int n_pos    = gh * gw;
-                const int axis_dim = 26, nf = axis_dim / 2;   // 13 freqs/axis
-                const int rope_dim = 3 * axis_dim;            // 78
-                const float theta  = hparams.rope_theta;       // vision_config.rope_theta (10000)
-                std::vector<float> inv(nf);
-                for (int k = 0; k < nf; k++) {
-                    inv[k] = 1.0f / std::pow(theta, (2.0f * k) / axis_dim);
-                }
-                std::vector<float> cosb(rope_dim * n_pos), sinb(rope_dim * n_pos);
-                int p = 0;
+                std::vector<int32_t> pos_t, pos_h, pos_w;
+                pos_t.reserve(gh * gw);
+                pos_h.reserve(gh * gw);
+                pos_w.reserve(gh * gw);
                 for (int bh = 0; bh < gh / 2; bh++)
                 for (int bw = 0; bw < gw / 2; bw++)
                 for (int mh = 0; mh < 2; mh++)
                 for (int mw = 0; mw < 2; mw++) {
-                    const int coord[3] = { 0, bh * 2 + mh, bw * 2 + mw }; // t,h,w
-                    for (int axis = 0; axis < 3; axis++) {
-                        for (int k = 0; k < nf; k++) {
-                            const float ang = coord[axis] * inv[k];
-                            const int d0 = axis * nf + k;          // 0..38
-                            cosb[p*rope_dim + d0]      = std::cos(ang);
-                            sinb[p*rope_dim + d0]      = std::sin(ang);
-                            cosb[p*rope_dim + d0 + 39] = std::cos(ang); // emb = cat([f,f])
-                            sinb[p*rope_dim + d0 + 39] = std::sin(ang);
-                        }
-                    }
-                    p++;
+                    pos_t.push_back(0);
+                    pos_h.push_back(bh * 2 + mh);
+                    pos_w.push_back(bw * 2 + mw);
                 }
-                set_input_f32("minimax_cos", cosb);
-                set_input_f32("minimax_sin", sinb);
+                set_input_i32("minimax_pos_t", pos_t);
+                set_input_i32("minimax_pos_h", pos_h);
+                set_input_i32("minimax_pos_w", pos_w);
             } break;
         case PROJECTOR_TYPE_DOTS_OCR:
             {

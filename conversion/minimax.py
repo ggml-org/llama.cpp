@@ -117,20 +117,42 @@ class MiniMaxM3VisionModel(MmprojModel):
     def modify_tensors(self, data_torch, name, bid):
         assert self.hparams_vision is not None
 
-        # Conv3d patch embed -> split into temporal_patch_size Conv2d slices, summed in C++.
-        # MiniMax-M3 has no patch-embed bias.
+        # Conv3d patch embed -> Conv2d slices
         if name == "vision_tower.vision_model.embeddings.patch_embedding.weight":
             if data_torch.ndim != 5:
                 raise ValueError(f"unexpected patch_embedding rank {data_torch.ndim} for {name}")
-            kt = data_torch.shape[2]  # temporal_patch_size
+            kt = data_torch.shape[2]
             base = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH]
             for t in range(kt):
                 suffix = ".weight" if t == 0 else f".weight.{t}"
                 yield (base + suffix, data_torch[:, :, t, ...])
             return
 
-        # everything else resolves through the precomputed MMPROJ name map:
-        #   vision_tower.vision_model.*        -> v.* (auto, shared CLIP mapping)
-        #   multi_modal_projector.linear_{bid} -> mm.{bid}
-        #   patch_merge_mlp.linear_{1,2}       -> mm.merge.fc{1,2}
-        yield from super().modify_tensors(data_torch, name, bid)
+        # Permute ViT q/k. HF [Ta Ha Wa | Tb Hb Wb | pad] reorder to [Ta Tb | Ha Hb | Wa Wb | pad]. 
+        for new_name, tensor in super().modify_tensors(data_torch, name, bid):
+            if ".attn_q." in new_name or ".attn_k." in new_name:
+                tensor = self._permute_vit_qk(tensor, new_name)
+            yield new_name, tensor
+            
+    def _permute_vit_qk(self, t: "Tensor", new_name: str) -> "Tensor":
+        n_head = self.hparams_vision["num_attention_heads"]
+        d_head = t.shape[0] // n_head
+        axis_dim = 2 * ((2 * (d_head // 2) // 3) // 2)
+        ah   = axis_dim // 2
+        half = 3 * ah
+        perm = (list(range(0, ah))            + list(range(half,        half + ah)) +
+                list(range(ah, 2 * ah))       + list(range(half + ah,   half + 2*ah)) +
+                list(range(2 * ah, 3 * ah))   + list(range(half + 2*ah, half + 3*ah)) +
+                list(range(2 * half, d_head)))
+                
+        assert axis_dim % 2 == 0
+        assert 3 * axis_dim <= d_head
+        assert len(perm) == d_head
+        assert sorted(perm) == list(range(d_head)), "perm is not a bijection of d_head"
+        assert t.shape[0] == n_head * d_head, f"{new_name}: {t.shape[0]} != {n_head}*{d_head}"
+        assert d_head == 80
+        
+        idx = torch.tensor(perm, dtype=torch.long)
+        if t.ndim == 2:
+            return t.reshape(n_head, d_head, t.shape[1])[:, idx, :].reshape(t.shape)
+        return t.reshape(n_head, d_head)[:, idx].reshape(t.shape)
