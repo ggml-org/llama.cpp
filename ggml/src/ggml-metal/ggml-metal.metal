@@ -5410,7 +5410,9 @@ typedef decltype(kernel_pad_impl<float>) kernel_pad_t;
 template [[host_name("kernel_pad_f32")]]   kernel kernel_pad_t kernel_pad_impl<float>;
 template [[host_name("kernel_pad_f32_4")]] kernel kernel_pad_t kernel_pad_impl<float4>;
 
-// TODO: this is slow - optimize
+// set when row bases and p0 offset are 16-byte aligned, enabling float4 loads/stores
+constant bool FC_pad_reflect_1d_use_f4 [[function_constant(FC_PAD_REFLECT_1D + 0)]];
+
 kernel void kernel_pad_reflect_1d_f32(
     constant   ggml_metal_kargs_pad_reflect_1d & args,
     device  const char * src0,
@@ -5432,14 +5434,29 @@ kernel void kernel_pad_reflect_1d_f32(
     device       float * dst_ptr  = (device       float *) (dst  +  i3*args.nb3  +  i2*args.nb2  +  i1*args.nb1);
 
     if (i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
-        for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
-            if (i0 < args.p0) {
-                dst_ptr[i0] = src0_ptr[args.p0 - i0];
-            } else if (i0 < args.ne0 - args.p1) {
-                dst_ptr[i0] = src0_ptr[i0 - args.p0];
-            } else {
-                dst_ptr[i0] = src0_ptr[(args.ne0 - args.p1 - args.p0) - (args.p1 + 1 - (args.ne0 - i0)) - 1];
+        for (int i0 = tpitg.x; i0 < args.p0; i0 += ntg.x) {
+            dst_ptr[i0] = src0_ptr[args.p0 - i0];
+        }
+
+        const int ne00 = args.ne0 - args.p0 - args.p1;
+
+        if (FC_pad_reflect_1d_use_f4) {
+            device float4 * dst4 = (device float4*)(dst_ptr + args.p0);
+            device const float4 * src4 = (device const float4*)src0_ptr;
+            const int num_float4 = ne00 / 4;
+
+            for (int j = tpitg.x; j < num_float4; j += ntg.x) {
+                dst4[j] = src4[j];
             }
+        } else {
+            for (int j = tpitg.x; j < ne00; j += ntg.x) {
+                dst_ptr[args.p0 + j] = src0_ptr[j];
+            }
+        }
+
+        const int right_pad_start = args.ne0 - args.p1;
+        for (int i0 = right_pad_start + tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+            dst_ptr[i0] = src0_ptr[(args.ne0 - args.p1 - args.p0) - (args.p1 + 1 - (args.ne0 - i0)) - 1];
         }
     }
 }
