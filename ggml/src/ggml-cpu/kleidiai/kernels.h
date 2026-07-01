@@ -55,6 +55,12 @@ struct lhs_packing_info {
         size_t m_idx_start, const void * lhs, size_t lhs_stride, void * lhs_packed);
 };
 
+enum rhs_repack_mode {
+    RHS_REPACK_PER_KERNEL,
+    RHS_REPACK_SHARED,
+    RHS_REPACK_SINGLE_ONLY,
+};
+
 struct rhs_packing_info {
     size_t (*packed_stride)(size_t k, size_t nr, size_t kr, size_t bl);
 
@@ -68,6 +74,8 @@ struct rhs_packing_info {
 
     void (*pack_func_ex)(size_t num_groups, size_t n, size_t k, size_t nr, size_t kr, size_t sr, size_t bl,
         size_t rhs_stride, const void * rhs, const void * bias, const void * scale, void * rhs_packed, size_t extra_bytes, const void * params);
+
+    rhs_repack_mode repack_mode = RHS_REPACK_PER_KERNEL;
 };
 
 struct ggml_kleidiai_kernels {
@@ -88,3 +96,4 @@ struct ggml_kleidiai_kernels {
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, const ggml_tensor * tensor);
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q4_0(cpu_feature features);
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q8_0(cpu_feature features);
+ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_f32(cpu_feature features);
