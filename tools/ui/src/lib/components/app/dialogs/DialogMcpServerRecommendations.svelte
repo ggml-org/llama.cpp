@@ -7,7 +7,7 @@
 	import { RECOMMENDED_MCP_SERVERS } from '$lib/constants';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { uuid } from '$lib/utils';
+	import { addOptedInRecommendationIds, uuid } from '$lib/utils';
 	import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
 	import { Plus } from '@lucide/svelte';
 
@@ -53,11 +53,17 @@
 	}
 
 	function enableSelected() {
+		const acceptedIds: string[] = [];
 		for (const server of RECOMMENDED_MCP_SERVERS) {
 			if (selected[server.id]) {
 				conversationsStore.setMcpServerOverride(server.id, true);
+				acceptedIds.push(server.id);
 			}
 		}
+		// Persist which recommendations the user accepted so the /mcp-servers
+		// page can surface them; custom servers added below are unaffected
+		// because they are not part of RECOMMENDED_MCP_SERVER_IDS.
+		addOptedInRecommendationIds(acceptedIds);
 		handleOpenChange(false);
 	}
 

@@ -7,7 +7,8 @@
 	import { ActionIcon, McpServerCard, McpServerCardSkeleton } from '$lib/components/app';
 	import { DialogMcpServerAddNew } from '$lib/components/app/dialogs';
 	import { HealthCheckStatus } from '$lib/enums';
-	import { ROUTES } from '$lib/constants';
+	import { RECOMMENDED_MCP_SERVER_IDS, ROUTES } from '$lib/constants';
+	import { getOptedInRecommendationIds } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { onMount } from 'svelte';
 	import McpLogo from '../mcp/McpLogo.svelte';
@@ -21,7 +22,17 @@
 
 	let { class: className }: Props = $props();
 
-	let servers = $derived(mcpStore.getServersSorted());
+	// Predefined recommendations stay in the MCP servers setting as a default,
+	// but they only show up here once the user has accepted them in the
+	// suggestions dialog. Custom servers always pass through.
+	let servers = $derived(
+		mcpStore
+			.getServersSorted()
+			.filter(
+				(server) =>
+					!RECOMMENDED_MCP_SERVER_IDS.has(server.id) || getOptedInRecommendationIds().has(server.id)
+			)
+	);
 
 	let initialLoadComplete = $state(false);
 	let isAddingServer = $state(false);

@@ -138,6 +138,13 @@ export {
 	downloadResourceContent
 } from './mcp';
 
+// Predefined MCP recommendation opt-in helpers
+export {
+	getOptedInRecommendationIds,
+	addOptedInRecommendationIds,
+	isOptedInRecommendation
+} from './recommended-mcp-servers.svelte';
+
 // URI Template utilities
 export {
 	extractTemplateVariables,

@@ -25,6 +25,8 @@ export const MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.mcpDefa
 export const THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.thinkingEnabledDefault`;
 export const REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.reasoningEffortDefault`;
 export const MCP_RECOMMENDATIONS_DISMISSED_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.mcpRecommendationsDismissed`;
+/** JSON-encoded array of recommendation IDs the user opted in to in the suggestions dialog */
+export const MCP_RECOMMENDATIONS_OPTED_IN_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.mcpRecommendationsOptedIn`;
 export const USER_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.userOverrides`;
 
 /** Key prefix for per-conversation resumable stream state, conversationId is appended */
