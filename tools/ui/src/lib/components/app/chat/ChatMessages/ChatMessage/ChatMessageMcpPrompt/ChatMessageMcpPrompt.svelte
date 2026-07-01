@@ -12,6 +12,7 @@
 		class?: string;
 		message: DatabaseMessage;
 		mcpPrompt: DatabaseMessageExtraMcpPrompt;
+		role?: MessageRole;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 		showDeleteDialog: boolean;
 		deletionInfo: {
@@ -32,6 +33,7 @@
 		class: className = '',
 		message,
 		mcpPrompt,
+		role = MessageRole.USER,
 		siblingInfo = null,
 		showDeleteDialog,
 		deletionInfo,
@@ -43,14 +45,20 @@
 		onShowDeleteDialogChange
 	}: Props = $props();
 
+	let isSystem = $derived(role === MessageRole.SYSTEM);
+	let ariaLabel = $derived(
+		isSystem ? 'MCP Prompt system message with actions' : 'MCP Prompt message with actions'
+	);
+
 	// Get edit context
 	const editCtx = getMessageEditContext();
 </script>
 
 <div
-	aria-label="MCP Prompt message with actions"
+	aria-label={ariaLabel}
 	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
+	data-message-role={role}
 >
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />

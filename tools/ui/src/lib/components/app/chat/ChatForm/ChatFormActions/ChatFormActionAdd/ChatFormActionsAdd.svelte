@@ -3,6 +3,7 @@
 	import ChatFormActionAddDropdown from './ChatFormActionAddDropdown.svelte';
 	import ChatFormActionAddSheet from './ChatFormActionAddSheet.svelte';
 	import ChatFormActionAddButton from './ChatFormActionAddButton.svelte';
+	import type { MCPPromptInfo } from '$lib/types';
 
 	interface Props {
 		disabled?: boolean;
@@ -12,10 +13,10 @@
 		hasMcpResourcesSupport?: boolean;
 		hasVisionModality?: boolean;
 		onFileUpload?: () => void;
-		onMcpPromptClick?: () => void;
+		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
-		onMcpSettingsClick?: () => void;
 		onSystemPromptClick?: () => void;
+		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
 	}
 
 	let {
@@ -28,8 +29,8 @@
 		onFileUpload,
 		onMcpPromptClick,
 		onMcpResourcesClick,
-		onMcpSettingsClick,
-		onSystemPromptClick
+		onSystemPromptClick,
+		onSystemPromptWithContent
 	}: Props = $props();
 </script>
 
@@ -45,6 +46,7 @@
 		{onSystemPromptClick}
 		{onMcpPromptClick}
 		{onMcpResourcesClick}
+		{onSystemPromptWithContent}
 	>
 		{#snippet trigger({ disabled, onclick })}
 			<ChatFormActionAddButton {disabled} {onclick} />
@@ -61,7 +63,7 @@
 		{onFileUpload}
 		{onMcpPromptClick}
 		{onMcpResourcesClick}
-		{onMcpSettingsClick}
 		{onSystemPromptClick}
+		{onSystemPromptWithContent}
 	/>
 {/if}

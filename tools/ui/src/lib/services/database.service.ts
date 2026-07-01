@@ -1,17 +1,29 @@
 import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
-import { IDXDB_TABLES, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
+import { IDXDB_TABLES, IDXDB_STORE_SCHEMAS, STORAGE_APP_NAME } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 
 class LlamaUiDatabase extends Dexie {
 	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
 	[IDXDB_TABLES.messages]!: EntityTable<DatabaseMessage, string>;
+	[IDXDB_TABLES.skills]!: EntityTable<DatabaseSkill, string>;
 
 	constructor() {
 		super(STORAGE_APP_NAME);
 
-		this.version(1).stores(IDXDB_STORES);
+		// v1: original schema (conversations + messages)
+		this.version(1).stores({
+			[IDXDB_TABLES.conversations]: IDXDB_STORE_SCHEMAS.conversations,
+			[IDXDB_TABLES.messages]: IDXDB_STORE_SCHEMAS.messages
+		});
+		// v2: add skills store (replaces what used to be the prompts PR's
+		// 0.x mockup — full v3 with idb is what's shipping now)
+		this.version(2).stores({
+			[IDXDB_TABLES.conversations]: IDXDB_STORE_SCHEMAS.conversations,
+			[IDXDB_TABLES.messages]: IDXDB_STORE_SCHEMAS.messages,
+			[IDXDB_TABLES.skills]: IDXDB_STORE_SCHEMAS.skills
+		});
 	}
 }
 
@@ -141,7 +153,8 @@ export class DatabaseService {
 	static async createSystemMessage(
 		convId: string,
 		systemPrompt: string,
-		parentId: string
+		parentId: string,
+		options?: { extra?: DatabaseMessageExtra[] }
 	): Promise<DatabaseMessage> {
 		const trimmedPrompt = systemPrompt.trim();
 		if (!trimmedPrompt) {
@@ -156,7 +169,8 @@ export class DatabaseService {
 			role: MessageRole.SYSTEM,
 			content: trimmedPrompt,
 			parent: parentId,
-			children: []
+			children: [],
+			extra: options?.extra
 		};
 
 		await db[IDXDB_TABLES.messages].add(systemMessage);
@@ -527,5 +541,53 @@ export class DatabaseService {
 				return newConv;
 			}
 		);
+	}
+
+	/**
+	 *
+	 *
+	 * Skills
+	 *
+	 *
+	 */
+
+	/**
+	 * Returns all stored skills.
+	 */
+	static async getAllSkills(): Promise<DatabaseSkill[]> {
+		return await db[IDXDB_TABLES.skills].toArray();
+	}
+
+	/**
+	 * Adds a new skill.
+	 */
+	static async addSkill(skill: DatabaseSkill): Promise<void> {
+		await db[IDXDB_TABLES.skills].add(skill);
+	}
+
+	/**
+	 * Updates a skill by id.
+	 */
+	static async updateSkill(id: string, updates: Partial<DatabaseSkill>): Promise<void> {
+		await db[IDXDB_TABLES.skills].update(id, updates);
+	}
+
+	/**
+	 * Deletes a skill by id.
+	 */
+	static async deleteSkill(id: string): Promise<void> {
+		await db[IDXDB_TABLES.skills].delete(id);
+	}
+
+	/**
+	 * Bulk-replace (used by archive import to flush a fresh set).
+	 */
+	static async replaceAllSkills(skills: DatabaseSkill[]): Promise<void> {
+		await db.transaction('rw', db[IDXDB_TABLES.skills], async () => {
+			await db[IDXDB_TABLES.skills].clear();
+			if (skills.length > 0) {
+				await db[IDXDB_TABLES.skills].bulkAdd(skills);
+			}
+		});
 	}
 }

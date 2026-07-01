@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { McpServerForm } from '$lib/components/app/mcp';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 
 	interface Props {
 		serverId: string;
 		serverUrl: string;
 		serverUseProxy?: boolean;
-		onSave: (url: string, headers: string, useProxy: boolean) => void;
+		onSave: (url: string, headers: string, useProxy: boolean) => boolean;
 		onCancel: () => void;
 	}
 
@@ -17,20 +18,35 @@
 	let editUseProxy = $derived(serverUseProxy);
 
 	let urlError = $derived.by(() => {
-		if (!editUrl.trim()) return 'URL is required';
+		const trimmed = editUrl.trim();
+		if (!trimmed) return 'URL is required';
 		try {
-			new URL(editUrl);
+			new URL(trimmed);
 			return null;
 		} catch {
 			return 'Invalid URL format';
 		}
 	});
+	let isDuplicateUrl = $derived.by(() => {
+		const trimmed = editUrl.trim();
+		if (!trimmed) return false;
+		const matches = mcpStore
+			.getServers()
+			.filter((s) => s.id !== serverId && s.url.trim() === trimmed);
+		return matches.length > 0;
+	});
 
-	let canSave = $derived(!urlError);
+	let canSave = $derived(!urlError && !isDuplicateUrl);
+	let displayUrlError = $derived(
+		editUrl ? (isDuplicateUrl ? 'A server with this URL already exists' : urlError) : null
+	);
 
 	function handleSave() {
 		if (!canSave) return;
-		onSave(editUrl.trim(), editHeaders.trim(), editUseProxy);
+		const saved = onSave(editUrl.trim(), editHeaders.trim(), editUseProxy);
+		if (!saved) {
+			return;
+		}
 	}
 
 	export function setInitialValues(url: string, headers: string, useProxy: boolean) {
@@ -50,7 +66,7 @@
 		onUrlChange={(v) => (editUrl = v)}
 		onHeadersChange={(v) => (editHeaders = v)}
 		onUseProxyChange={(v) => (editUseProxy = v)}
-		urlError={editUrl ? urlError : null}
+		urlError={displayUrlError}
 		id={serverId}
 	/>
 

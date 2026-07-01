@@ -28,7 +28,7 @@
 			{@const isExpanded = expandedGroups.has(group.label)}
 			<Collapsible.Root open={isExpanded} onOpenChange={() => toggleExpanded(group.label)}>
 				<Collapsible.Trigger
-					class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-muted/50"
+					class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-muted/50"
 				>
 					{#if isExpanded}
 						<ChevronDown class="h-3.5 w-3.5 shrink-0" />
@@ -48,15 +48,15 @@
 						/>
 					</span>
 
-					<span class="ml-auto shrink-0 text-xs text-muted-foreground">
+					<span class="ml-auto shrink-0 text-[11px] text-muted-foreground/80">
 						{group.tools.length} tool{group.tools.length !== 1 ? 's' : ''}
 					</span>
 				</Collapsible.Trigger>
 
 				<Collapsible.Content>
-					<div class="ml-4 border-l border-border/50 pl-2">
+					<div class="ml-3.5 border-l border-border/50 pl-2">
 						<!-- Header row -->
-						<div class="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
+						<div class="flex items-center gap-2 pl-2 py-2 my-1 text-xs text-muted-foreground">
 							<span class="min-w-0 flex-1">Tool</span>
 							<span class="w-16 shrink-0 text-center">Enabled</span>
 							<span class="w-20 shrink-0 text-center">Always allow</span>
@@ -68,7 +68,7 @@
 							{@const permissionKey = entry.key}
 							{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}
 
-							<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
+							<div class="flex items-center gap-2 rounded pl-2 py-2 text-sm hover:bg-muted/50">
 								<TruncatedText text={toolName} class="flex-1" showTooltip={true} />
 
 								<div class="flex w-16 shrink-0 justify-center">

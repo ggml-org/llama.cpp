@@ -29,6 +29,7 @@ import type { McpServerOverride } from '$lib/types/database';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import {
 	MessageRole,
+	MessageType,
 	HtmlInputType,
 	FileExtensionText,
 	MimeTypeText,
@@ -350,7 +351,7 @@ class ConversationsStore {
 				this.activeMessages = filteredMessages;
 			} else {
 				const messages = await DatabaseService.getConversationMessages(convId);
-				this.activeMessages = messages;
+				this.activeMessages = messages.filter((m) => m.type !== MessageType.ROOT);
 			}
 
 			return true;
@@ -375,7 +376,10 @@ class ConversationsStore {
 	 * Deletes a conversation and all its messages
 	 * @param convId - The conversation ID to delete
 	 */
-	async deleteConversation(convId: string, options?: { deleteWithForks?: boolean }): Promise<void> {
+	async deleteConversation(
+		convId: string,
+		options?: { deleteWithForks?: boolean; skipNavigation?: boolean }
+	): Promise<void> {
 		try {
 			await DatabaseService.deleteConversation(convId, options);
 
@@ -396,7 +400,7 @@ class ConversationsStore {
 
 				if (this.activeConversation && idsToRemove.has(this.activeConversation.id)) {
 					this.clearActiveConversation();
-					await goto(ROUTES.NEW_CHAT);
+					if (!options?.skipNavigation) await goto(ROUTES.NEW_CHAT);
 				}
 			} else {
 				// Reparent direct children to deleted conv's parent (or promote to top-level)
@@ -412,7 +416,7 @@ class ConversationsStore {
 
 				if (this.activeConversation?.id === convId) {
 					this.clearActiveConversation();
-					await goto(ROUTES.NEW_CHAT);
+					if (!options?.skipNavigation) await goto(ROUTES.NEW_CHAT);
 				}
 			}
 		} catch (error) {
@@ -615,7 +619,7 @@ class ConversationsStore {
 		if (!this.activeConversation) return;
 
 		const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-		const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+		const rootMessage = allMessages.find((m) => m.type === MessageType.ROOT && m.parent === null);
 		const currentFirstUserMessage = this.activeMessages.find(
 			(m) => m.role === MessageRole.USER && m.parent === rootMessage?.id
 		);

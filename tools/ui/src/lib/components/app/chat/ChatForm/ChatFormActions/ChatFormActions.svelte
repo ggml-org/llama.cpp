@@ -9,13 +9,12 @@
 		ChatFormActionSubmit,
 		ChatFormReasoningToggle
 	} from '$lib/components/app';
+	import type { MCPPromptInfo } from '$lib/types';
 	import { FileTypeCategory } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { getFileTypeCategory } from '$lib/utils';
-	import { goto } from '$app/navigation';
-	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
 		canSend?: boolean;
@@ -27,12 +26,14 @@
 		isRecording?: boolean;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
+		showReasoningToggle?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
+		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
+		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
 	}
 
@@ -46,11 +47,13 @@
 		isRecording = false,
 		showAddButton = true,
 		showModelSelector = true,
+		showReasoningToggle = true,
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
+		onSystemPromptWithContent,
 		onMcpPromptClick,
 		onMcpResourcesClick
 	}: Props = $props();
@@ -110,15 +113,17 @@
 				{hasMcpResourcesSupport}
 				{onFileUpload}
 				{onSystemPromptClick}
+				{onSystemPromptWithContent}
 				{onMcpPromptClick}
 				{onMcpResourcesClick}
-				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}
 			/>
 		</div>
 	{/if}
 
 	<div class="flex items-center gap-2">
-		<ChatFormReasoningToggle />
+		{#if showReasoningToggle}
+			<ChatFormReasoningToggle />
+		{/if}
 
 		{#if showModelSelector}
 			<ChatFormActionModels

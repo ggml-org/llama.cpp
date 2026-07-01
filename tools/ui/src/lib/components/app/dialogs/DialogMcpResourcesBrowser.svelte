@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FolderOpen, Plus, Loader2, Braces } from '@lucide/svelte';
+	import { FolderOpen, Plus, Loader2, Braces, ChevronLeft } from '@lucide/svelte';
 	import { toast } from 'svelte-sonner';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -16,6 +16,7 @@
 		McpResourceTemplateForm
 	} from '$lib/components/app';
 	import { getResourceDisplayName } from '$lib/utils';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import type { MCPResourceInfo, MCPResourceContent, MCPResourceTemplateInfo } from '$lib/types';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -253,117 +254,244 @@
 	const hasTemplateResult = $derived(
 		!!selectedTemplate && !!templatePreviewContent && !!templatePreviewUri
 	);
+
+	// Single resource selection or any active template jumps to content view;
+	// multi-selection via checkboxes stays on the tree so the user can attach
+	// multiple resources at once via the footer.
+	const mobileContentMode = $derived(selectedTemplate !== null || selectedResources.size === 1);
+
+	const selectedSingleResource = $derived.by(() => {
+		if (selectedResources.size !== 1) return null;
+		return getAllResourcesFlatInTreeOrder().find((r) => selectedResources.has(r.uri)) ?? null;
+	});
+
+	const mobileHeading = $derived.by(() => {
+		if (selectedTemplate) {
+			return selectedTemplate.title || selectedTemplate.name;
+		}
+		if (selectedSingleResource) {
+			return selectedSingleResource.title || getResourceDisplayName(selectedSingleResource);
+		}
+		return '';
+	});
+
+	function handleMobileBack() {
+		if (selectedTemplate !== null) {
+			clearTemplateState();
+
+			return;
+		}
+
+		selectedResources.clear();
+		lastSelectedUri = null;
+	}
 </script>
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
 	<Dialog.Content class="max-h-[80vh] !max-w-4xl overflow-hidden p-0">
-		<Dialog.Header class="border-b border-border/30 px-6 py-4">
-			<Dialog.Title class="flex items-center gap-2">
-				<FolderOpen class="h-5 w-5" />
+		<Dialog.Header
+			class="!text-left flex flex-col items-start gap-2 border-b border-border/30 px-6 py-4"
+		>
+			<Dialog.Title class="flex w-full items-center gap-2">
+				{#if isMobile.current && mobileContentMode}
+					<button
+						type="button"
+						onclick={handleMobileBack}
+						aria-label="Back to resources"
+						class="-ml-2 inline-flex shrink-0 cursor-pointer items-center justify-center rounded-md p-0 text-muted-foreground transition-colors hover:text-foreground"
+					>
+						<ChevronLeft class="h-6 w-6" />
+					</button>
 
-				<span>MCP Resources</span>
+					<span class="min-w-0 flex-1 truncate">{mobileHeading}</span>
+				{:else}
+					<FolderOpen class="h-6 w-6 shrink-0" />
 
-				{#if totalCount > 0}
-					<span class="text-sm font-normal text-muted-foreground">({totalCount})</span>
+					<span>MCP Resources</span>
+
+					{#if totalCount > 0}
+						<span class="text-sm font-normal text-muted-foreground">({totalCount})</span>
+					{/if}
 				{/if}
 			</Dialog.Title>
 
-			<Dialog.Description>
+			<Dialog.Description class="text-sm text-muted-foreground">
 				Browse and attach resources from connected MCP servers to your chat context.
 			</Dialog.Description>
 		</Dialog.Header>
 
-		<div class="flex h-[500px] min-w-0">
-			<div class="w-72 shrink-0 overflow-y-auto border-r border-border/30 p-4">
-				<McpResourcesBrowser
-					onSelect={handleResourceSelect}
-					onToggle={handleResourceToggle}
-					onTemplateSelect={handleTemplateSelect}
-					selectedUris={selectedResources}
-					{selectedTemplateUri}
-					expandToUri={preSelectedUri}
-				/>
-			</div>
+		{#if isMobile.current}
+			{@const selectedResource = selectedSingleResource}
 
-			<div class="min-w-0 flex-1 overflow-auto p-4">
-				{#if selectedTemplate && !templatePreviewContent}
-					<div class="flex h-full flex-col">
-						<div class="mb-3 flex items-center gap-2">
-							<Braces class="h-4 w-4 text-muted-foreground" />
+			<div class="flex h-[70vh] min-w-0 flex-col">
+				{#if mobileContentMode}
+					<div class="min-w-0 flex-1 overflow-auto p-4">
+						{#if selectedTemplate && !templatePreviewContent}
+							<div class="flex h-full flex-col">
+								<div class="mb-3 flex items-center gap-2">
+									<Braces class="h-4 w-4 text-muted-foreground" />
 
-							<span class="text-sm font-medium">
-								{selectedTemplate.title || selectedTemplate.name}
-							</span>
-						</div>
+									<span class="text-sm font-medium">
+										{selectedTemplate.title || selectedTemplate.name}
+									</span>
+								</div>
 
-						{#if selectedTemplate.description}
-							<p class="mb-4 text-xs text-muted-foreground">
-								{selectedTemplate.description}
-							</p>
-						{/if}
+								{#if selectedTemplate.description}
+									<p class="mb-4 text-xs text-muted-foreground">
+										{selectedTemplate.description}
+									</p>
+								{/if}
 
-						<div class="mb-4 rounded-md border border-border/50 bg-muted/30 px-3 py-2">
-							<p class="font-mono text-xs break-all text-muted-foreground">
-								{selectedTemplate.uriTemplate}
-							</p>
-						</div>
+								<div class="mb-4 rounded-md border border-border/50 bg-muted/30 px-3 py-2">
+									<p class="font-mono text-xs break-all text-muted-foreground">
+										{selectedTemplate.uriTemplate}
+									</p>
+								</div>
 
-						{#if templatePreviewLoading}
-							<div class="flex flex-1 items-center justify-center">
-								<Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+								{#if templatePreviewLoading}
+									<div class="flex flex-1 items-center justify-center">
+										<Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+									</div>
+								{:else if templatePreviewError}
+									<div class="flex flex-1 flex-col items-center justify-center gap-2 text-red-500">
+										<span class="text-sm">{templatePreviewError}</span>
+
+										<Button
+											size="sm"
+											variant="outline"
+											onclick={() => {
+												templatePreviewError = null;
+											}}
+										>
+											Try again
+										</Button>
+									</div>
+								{:else}
+									<McpResourceTemplateForm
+										template={selectedTemplate}
+										onResolve={handleTemplateResolve}
+										onCancel={handleTemplateCancelForm}
+									/>
+								{/if}
 							</div>
-						{:else if templatePreviewError}
-							<div class="flex flex-1 flex-col items-center justify-center gap-2 text-red-500">
-								<span class="text-sm">{templatePreviewError}</span>
-
-								<Button
-									size="sm"
-									variant="outline"
-									onclick={() => {
-										templatePreviewError = null;
-									}}
-								>
-									Try again
-								</Button>
-							</div>
-						{:else}
-							<McpResourceTemplateForm
-								template={selectedTemplate}
-								onResolve={handleTemplateResolve}
-								onCancel={handleTemplateCancelForm}
+						{:else if hasTemplateResult}
+							<McpResourcePreview
+								resource={{
+									uri: templatePreviewUri ?? '',
+									name: templatePreviewUri?.split('/').pop() || (templatePreviewUri ?? ''),
+									serverName: selectedTemplate?.serverName || ''
+								}}
+								preloadedContent={templatePreviewContent}
 							/>
+						{:else}
+							<McpResourcePreview resource={selectedResource ?? null} />
 						{/if}
-					</div>
-				{:else if hasTemplateResult}
-					<!-- Template resolved: show preview -->
-					<McpResourcePreview
-						resource={{
-							uri: templatePreviewUri ?? '',
-							name: templatePreviewUri?.split('/').pop() || (templatePreviewUri ?? ''),
-							serverName: selectedTemplate?.serverName || ''
-						}}
-						preloadedContent={templatePreviewContent}
-					/>
-				{:else if selectedResources.size === 1}
-					{@const allResources = getAllResourcesFlatInTreeOrder()}
-					{@const selectedResource = allResources.find((r) => selectedResources.has(r.uri))}
-
-					<McpResourcePreview resource={selectedResource ?? null} />
-				{:else if selectedResources.size > 1}
-					<div class="flex flex-col gap-10">
-						{#each getAllResourcesFlatInTreeOrder() as resource (resource.uri)}
-							{#if selectedResources.has(resource.uri)}
-								<McpResourcePreview {resource} />
-							{/if}
-						{/each}
 					</div>
 				{:else}
-					<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-						Select a resource to preview
+					<div class="min-w-0 flex-1 overflow-auto p-4">
+						<McpResourcesBrowser
+							onSelect={handleResourceSelect}
+							onToggle={handleResourceToggle}
+							onTemplateSelect={handleTemplateSelect}
+							selectedUris={selectedResources}
+							{selectedTemplateUri}
+							expandToUri={preSelectedUri}
+						/>
 					</div>
 				{/if}
 			</div>
-		</div>
+		{:else}
+			<div class="flex h-[500px] min-w-0">
+				<div class="w-72 shrink-0 overflow-y-auto border-r border-border/30 p-4">
+					<McpResourcesBrowser
+						onSelect={handleResourceSelect}
+						onToggle={handleResourceToggle}
+						onTemplateSelect={handleTemplateSelect}
+						selectedUris={selectedResources}
+						{selectedTemplateUri}
+						expandToUri={preSelectedUri}
+					/>
+				</div>
+
+				<div class="min-w-0 flex-1 overflow-auto p-4">
+					{#if selectedTemplate && !templatePreviewContent}
+						<div class="flex h-full flex-col">
+							<div class="mb-3 flex items-center gap-2">
+								<Braces class="h-4 w-4 text-muted-foreground" />
+
+								<span class="text-sm font-medium">
+									{selectedTemplate.title || selectedTemplate.name}
+								</span>
+							</div>
+
+							{#if selectedTemplate.description}
+								<p class="mb-4 text-xs text-muted-foreground">
+									{selectedTemplate.description}
+								</p>
+							{/if}
+
+							<div class="mb-4 rounded-md border border-border/50 bg-muted/30 px-3 py-2">
+								<p class="font-mono text-xs break-all text-muted-foreground">
+									{selectedTemplate.uriTemplate}
+								</p>
+							</div>
+
+							{#if templatePreviewLoading}
+								<div class="flex flex-1 items-center justify-center">
+									<Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+								</div>
+							{:else if templatePreviewError}
+								<div class="flex flex-1 flex-col items-center justify-center gap-2 text-red-500">
+									<span class="text-sm">{templatePreviewError}</span>
+
+									<Button
+										size="sm"
+										variant="outline"
+										onclick={() => {
+											templatePreviewError = null;
+										}}
+									>
+										Try again
+									</Button>
+								</div>
+							{:else}
+								<McpResourceTemplateForm
+									template={selectedTemplate}
+									onResolve={handleTemplateResolve}
+									onCancel={handleTemplateCancelForm}
+								/>
+							{/if}
+						</div>
+					{:else if hasTemplateResult}
+						<McpResourcePreview
+							resource={{
+								uri: templatePreviewUri ?? '',
+								name: templatePreviewUri?.split('/').pop() || (templatePreviewUri ?? ''),
+								serverName: selectedTemplate?.serverName || ''
+							}}
+							preloadedContent={templatePreviewContent}
+						/>
+					{:else if selectedResources.size === 1}
+						{@const allResources = getAllResourcesFlatInTreeOrder()}
+						{@const selectedResource = allResources.find((r) => selectedResources.has(r.uri))}
+
+						<McpResourcePreview resource={selectedResource ?? null} />
+					{:else if selectedResources.size > 1}
+						<div class="flex flex-col gap-10">
+							{#each getAllResourcesFlatInTreeOrder() as resource (resource.uri)}
+								{#if selectedResources.has(resource.uri)}
+									<McpResourcePreview {resource} />
+								{/if}
+							{/each}
+						</div>
+					{:else}
+						<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+							Select a resource to preview
+						</div>
+					{/if}
+				</div>
+			</div>
+		{/if}
 
 		<Dialog.Footer class="border-t border-border/30 px-6 py-4">
 			<Button variant="outline" onclick={() => handleOpenChange(false)}>Cancel</Button>

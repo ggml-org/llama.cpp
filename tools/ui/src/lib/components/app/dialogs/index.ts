@@ -476,6 +476,40 @@ export { default as DialogMcpResourcesBrowser } from './DialogMcpResourcesBrowse
 export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.svelte';
 
 /**
+ * **DialogSkillAddNew** - Add new skill dialog
+ *
+ * Modal dialog for creating a new skill with name, description, content,
+ * and an optional always-on flag. Integrates with skillsStore for
+ * persistence via IndexedDB.
+ *
+ * @example
+ * ```svelte
+ * <DialogSkillAddNew bind:open={showAddDialog} />
+ * ```
+ */
+export { default as DialogSkillAddNew } from './DialogSkillAddNew.svelte';
+
+/**
+ * **DialogSkillSync** - Sync a conversation system message to its library skill
+ *
+ * Shows a unified diff between the system message currently in the
+ * conversation and the latest content of its referenced library skill,
+ * letting the user accept the update.
+ *
+ * @example
+ * ```svelte
+ * <DialogSkillSync
+ *   bind:open={showSync}
+ *   skillName={title}
+ *   currentContent={message.content}
+ *   updatedContent={librarySkill.content}
+ *   onUpdate={handleUpdate}
+ * />
+ * ```
+ */
+export { default as DialogSkillSync } from './DialogSkillSync.svelte';
+
+/**
  * **DialogMermaidPreview** - Full-screen Mermaid diagram preview with zoom and pan
  *
  * Full-screen dialog for previewing Mermaid diagrams with interactive controls.

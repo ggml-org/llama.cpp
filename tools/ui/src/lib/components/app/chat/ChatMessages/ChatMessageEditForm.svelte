@@ -4,18 +4,27 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { ChatForm, DialogConfirmation } from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { KeyboardKey, MessageRole } from '$lib/enums';
+	import { ChatMessageEditFormVariant, KeyboardKey, MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
+
+	interface Props {
+		variant?: ChatMessageEditFormVariant;
+	}
+
+	let { variant = ChatMessageEditFormVariant.DEFAULT }: Props = $props();
 
 	const editCtx = getMessageEditContext();
 
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);
 	let branchAfterEdit = $state(false);
+	let addToLibrary = $state(false);
+	let updateLibraryPrompt = $state(false);
 
 	let isUserMessage = $derived(editCtx.messageRole === MessageRole.USER);
 	let isAssistantMessage = $derived(editCtx.messageRole === MessageRole.ASSISTANT);
+	let isSystemMessage = $derived(editCtx.messageRole === MessageRole.SYSTEM);
 
 	let hasUnsavedChanges = $derived.by(() => {
 		if (editCtx.editedContent !== editCtx.originalContent) return true;
@@ -57,6 +66,10 @@
 
 		if (isUserMessage && saveWithoutRegenerate && editCtx.showSaveOnlyOption) {
 			editCtx.saveOnly();
+		} else if (isSystemMessage && addToLibrary) {
+			editCtx.saveAsLibrary();
+		} else if (isSystemMessage && updateLibraryPrompt) {
+			editCtx.updateLibraryPrompt();
 		} else {
 			if (isAssistantMessage && editCtx.setShouldBranchAfterEdit) {
 				editCtx.setShouldBranchAfterEdit(branchAfterEdit);
@@ -67,6 +80,8 @@
 
 		saveWithoutRegenerate = false;
 		branchAfterEdit = false;
+		addToLibrary = false;
+		updateLibraryPrompt = false;
 	}
 
 	function handleAttachmentRemove(index: number) {
@@ -96,43 +111,72 @@
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
-<div class="relative w-full max-w-[80%]">
+{#if variant === ChatMessageEditFormVariant.SYSTEM}
 	<ChatForm
+		class="w-full **:data-[slot=input-area]:border-2! **:data-[slot=input-area]:border-dashed! **:data-[slot=input-area]:border-border/50! **:data-[slot=input-area]:bg-muted!"
 		value={editCtx.editedContent}
 		attachments={editCtx.editedExtras}
 		bind:uploadedFiles={editCtx.editedUploadedFiles}
-		placeholder="Edit your message..."
-		showMcpPromptButton
-		showAddButton={editCtx.messageRole === MessageRole.USER}
-		showModelSelector={editCtx.messageRole === MessageRole.USER}
+		placeholder="Edit system message..."
+		showMcpPromptButton={false}
+		showAddButton={false}
+		showModelSelector={false}
+		showReasoningToggle={false}
 		onValueChange={editCtx.setContent}
 		onAttachmentRemove={handleAttachmentRemove}
 		onUploadedFileRemove={handleUploadedFileRemove}
 		onFilesAdd={handleFilesAdd}
 		onSubmit={handleSubmit}
 	/>
-</div>
+{:else}
+	<div class="relative w-full w-full">
+		<ChatForm
+			value={editCtx.editedContent}
+			attachments={editCtx.editedExtras}
+			bind:uploadedFiles={editCtx.editedUploadedFiles}
+			placeholder="Edit your message..."
+			showMcpPromptButton
+			showAddButton={editCtx.messageRole === MessageRole.USER}
+			showModelSelector={editCtx.messageRole === MessageRole.USER}
+			onValueChange={editCtx.setContent}
+			onAttachmentRemove={handleAttachmentRemove}
+			onUploadedFileRemove={handleUploadedFileRemove}
+			onFilesAdd={handleFilesAdd}
+			onSubmit={handleSubmit}
+		/>
+	</div>
+{/if}
 
-<div class="mt-2 flex w-full max-w-[80%] items-center justify-between">
-	{#if isUserMessage && editCtx.showSaveOnlyOption}
-		<div class="flex items-center gap-2">
+<div class="mt-2 flex w-full w-full items-center justify-between gap-2">
+	<div class="flex min-w-0 items-center gap-2">
+		{#if isUserMessage && editCtx.showSaveOnlyOption}
 			<Switch id="save-only-switch" bind:checked={saveWithoutRegenerate} class="scale-75" />
 
 			<label for="save-only-switch" class="cursor-pointer text-xs text-muted-foreground">
 				Update without re-sending
 			</label>
-		</div>
-	{:else if isAssistantMessage}
-		<div class="flex items-center gap-2">
+		{:else if isAssistantMessage}
 			<Switch id="branch-after-edit" bind:checked={branchAfterEdit} class="scale-75" />
 
 			<label for="branch-after-edit" class="cursor-pointer text-xs text-muted-foreground">
 				Branch conversation after edit
 			</label>
-		</div>
-	{:else}
-		<div></div>
-	{/if}
+		{:else if isSystemMessage && editCtx.canAddToLibrary}
+			<Switch id="add-to-library" bind:checked={addToLibrary} class="scale-75" />
+
+			<label for="add-to-library" class="cursor-pointer text-xs text-muted-foreground">
+				Add skill to library
+			</label>
+		{:else if isSystemMessage && editCtx.canUpdateLibrarySkill}
+			<Switch id="update-library-skill" bind:checked={updateLibraryPrompt} class="scale-75" />
+
+			<label for="update-library-skill" class="cursor-pointer text-xs text-muted-foreground">
+				Update{editCtx.librarySkillTitle ? ` "${editCtx.librarySkillTitle}"` : ''} in library
+			</label>
+		{:else}
+			<div></div>
+		{/if}
+	</div>
 
 	<Button class="h-7 px-3 text-xs" onclick={attemptCancel} size="sm" variant="ghost">
 		<X class="mr-1 h-3 w-3" />

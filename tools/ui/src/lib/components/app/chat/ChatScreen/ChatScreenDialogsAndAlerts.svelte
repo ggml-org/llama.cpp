@@ -5,7 +5,8 @@
 		DialogChatError,
 		DialogConfirmation,
 		DialogEmptyFileAlert,
-		DialogFileUploadError
+		DialogFileUploadError,
+		DialogMcpServerAddNew
 	} from '$lib/components/app';
 
 	let {
@@ -15,7 +16,8 @@
 		emptyFileNames,
 		activeErrorDialog,
 		handleErrorDialogOpenChange,
-		fileUpload
+		fileUpload,
+		isAddingServer = $bindable()
 	} = $props();
 </script>
 
@@ -53,3 +55,5 @@
 	open={Boolean(activeErrorDialog)}
 	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
 />
+
+<DialogMcpServerAddNew bind:open={isAddingServer} />

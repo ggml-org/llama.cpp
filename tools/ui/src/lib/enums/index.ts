@@ -10,6 +10,7 @@ export { AgenticSectionType, ContinueIntentKind, ToolCallType } from './agentic.
 
 export {
 	ChatMessageStatsView,
+	ChatMessageEditFormVariant,
 	StreamConnectionState,
 	ContentPartType,
 	ConversationSelectionMode,
@@ -50,7 +51,8 @@ export {
 	HealthCheckStatus,
 	MCPContentType,
 	MCPRefType,
-	JsonSchemaType
+	JsonSchemaType,
+	MCPPromptIdPrefix
 } from './mcp.enums';
 
 export { ModelModality } from './model.enums';

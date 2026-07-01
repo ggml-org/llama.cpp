@@ -2,6 +2,7 @@ import type { MCPServerSettingsEntry, MCPResourceContent, MCPResourceInfo } from
 import {
 	MCPTransportType,
 	MCPLogLevel,
+	MCPPromptIdPrefix,
 	UrlProtocol,
 	MimeTypePrefix,
 	MimeTypeIncludes,
@@ -318,4 +319,34 @@ export function downloadResourceContent(
 	a.click();
 	document.body.removeChild(a);
 	URL.revokeObjectURL(url);
+}
+
+/**
+ * Builds the synthetic SKILL skillId used to record the origin of a
+ * system message produced from an MCP prompt. Encoded as
+ * `mcp:<serverName>:<promptName>` so it round-trips through storage and can be
+ * parsed back into its parts by `parseMcpPromptId`.
+ */
+export function buildMcpPromptId(serverName: string, promptName: string): string {
+	return `${MCPPromptIdPrefix.PROMPT}${serverName}:${promptName}`;
+}
+
+/**
+ * Decodes a SKILL skillId back into its MCP server/prompt parts.
+ * Returns null when the id doesn't carry the MCP prefix or is malformed.
+ */
+export function parseMcpPromptId(
+	promptId: string
+): { serverName: string; promptName: string } | null {
+	if (!promptId.startsWith(MCPPromptIdPrefix.PROMPT)) return null;
+
+	const stripped = promptId.slice(MCPPromptIdPrefix.PROMPT.length);
+	const sepIndex = stripped.indexOf(':');
+
+	if (sepIndex <= 0) return null;
+
+	return {
+		serverName: stripped.slice(0, sepIndex),
+		promptName: stripped.slice(sepIndex + 1)
+	};
 }

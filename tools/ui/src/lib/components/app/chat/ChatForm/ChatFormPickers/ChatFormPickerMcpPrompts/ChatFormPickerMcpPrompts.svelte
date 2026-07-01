@@ -2,15 +2,20 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { debounce, uuid } from '$lib/utils';
-	import { KeyboardKey } from '$lib/enums';
-	import type { MCPPromptInfo, GetPromptResult, MCPServerSettingsEntry } from '$lib/types';
+	import { KeyboardKey, ContentPartType } from '$lib/enums';
+	import { PROMPT_CONTENT_SEPARATOR } from '$lib/constants';
+	import type {
+		MCPPromptInfo,
+		GetPromptResult,
+		MCPServerSettingsEntry,
+		PromptMessage
+	} from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
 	import {
 		ChatFormPickerPopover,
 		ChatFormPickerList,
 		ChatFormPickerListItem,
 		ChatFormPickerItemHeader,
-		ChatFormPickerListItemSkeleton,
 		ChatFormPromptPickerArgumentForm
 	} from '$lib/components/app/chat';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
@@ -19,6 +24,7 @@
 		class?: string;
 		isOpen?: boolean;
 		searchQuery?: string;
+		pendingPromptKey?: string | null;
 		onClose?: () => void;
 		onPromptLoadStart?: (
 			placeholderId: string,
@@ -27,20 +33,40 @@
 		) => void;
 		onPromptLoadComplete?: (placeholderId: string, result: GetPromptResult) => void;
 		onPromptLoadError?: (placeholderId: string, error: string) => void;
+		onMcpPromptSystemExecute?: (prompt: MCPPromptInfo, text: string, title: string) => void;
+		onPendingPromptConsumed?: () => void;
 	}
 
 	let {
 		class: className = '',
 		isOpen = false,
 		searchQuery = '',
+		pendingPromptKey = null,
 		onClose,
 		onPromptLoadStart,
 		onPromptLoadComplete,
-		onPromptLoadError
+		onPromptLoadError,
+		onMcpPromptSystemExecute,
+		onPendingPromptConsumed
 	}: Props = $props();
 
-	let prompts = $state<MCPPromptInfo[]>([]);
-	let isLoading = $state(false);
+	function promptKey(prompt: MCPPromptInfo): string {
+		return prompt.serverName + ':' + prompt.name;
+	}
+
+	function applyPendingPrompt() {
+		if (!pendingPromptKey || prompts.length === 0) return;
+		const found = prompts.find((p) => promptKey(p) === pendingPromptKey);
+		if (!found) return;
+		handlePromptClick(found);
+		// `executePrompt` consumes `pendingPromptKey` once it completes; leaving
+		// it in place lets `executePrompt` recognize the submenu click as a
+		// system-prompt request, even after the user submits the argument form.
+	}
+
+	// Prompts come from `mcpStore.allPrompts` (eagerly populated on connect).
+	// Local `$state` is used for fields mutated while the picker is open.
+	let prompts = $derived(mcpStore.allPrompts);
 	let selectedPrompt = $state<MCPPromptInfo | null>(null);
 	let promptArgs = $state<Record<string, string>>({});
 	let selectedIndex = $state(0);
@@ -64,9 +90,11 @@
 		return map;
 	});
 
+	// Ensure MCP connections are established when the picker opens; this only
+	// kicks off initialization if it hasn't happened yet.
 	$effect(() => {
 		if (isOpen) {
-			loadPrompts();
+			void mcpStore.ensureInitialized(conversationsStore.getAllMcpServerOverrides());
 			selectedIndex = 0;
 		} else {
 			selectedPrompt = null;
@@ -81,28 +109,11 @@
 		}
 	});
 
-	async function loadPrompts() {
-		isLoading = true;
-
-		try {
-			const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-
-			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
-
-			if (!initialized) {
-				prompts = [];
-
-				return;
-			}
-
-			prompts = await mcpStore.getAllPrompts();
-		} catch (error) {
-			console.error('[ChatFormPickerMcpPrompts] Failed to load prompts:', error);
-			prompts = [];
-		} finally {
-			isLoading = false;
+	$effect(() => {
+		if (isOpen && pendingPromptKey && prompts.length > 0) {
+			applyPendingPrompt();
 		}
-	}
+	});
 
 	function handlePromptClick(prompt: MCPPromptInfo) {
 		const args = prompt.arguments ?? [];
@@ -124,6 +135,17 @@
 		}
 	}
 
+	function extractPromptText(result: GetPromptResult): string {
+		return (result.messages ?? [])
+			.map((msg: PromptMessage) => {
+				if (typeof msg.content === 'string') return msg.content;
+				if (msg.content.type === ContentPartType.TEXT) return msg.content.text;
+				return '';
+			})
+			.filter(Boolean)
+			.join(PROMPT_CONTENT_SEPARATOR);
+	}
+
 	async function executePrompt(prompt: MCPPromptInfo, args: Record<string, string>) {
 		promptError = null;
 
@@ -134,16 +156,35 @@
 		);
 		const argsToPass = Object.keys(nonEmptyArgs).length > 0 ? nonEmptyArgs : undefined;
 
-		onPromptLoadStart?.(placeholderId, prompt, argsToPass);
+		// Submenu flow posts the result as a system prompt via `onMcpPromptSystemExecute`
+		// instead of a placeholder attachment.
+		const isSystemMode = !!pendingPromptKey;
+
+		if (!isSystemMode) {
+			onPromptLoadStart?.(placeholderId, prompt, argsToPass);
+		}
+
 		onClose?.();
 
 		try {
 			const result = await mcpStore.getPrompt(prompt.serverName, prompt.name, args);
-			onPromptLoadComplete?.(placeholderId, result);
+
+			if (isSystemMode) {
+				const text = extractPromptText(result);
+				onMcpPromptSystemExecute?.(prompt, text, prompt.title || prompt.name);
+				onPendingPromptConsumed?.();
+			} else {
+				onPromptLoadComplete?.(placeholderId, result);
+			}
 		} catch (error) {
 			const errorMessage =
 				error instanceof Error ? error.message : 'Unknown error executing prompt';
-			onPromptLoadError?.(placeholderId, errorMessage);
+
+			if (isSystemMode) {
+				onPendingPromptConsumed?.();
+			} else {
+				onPromptLoadError?.(placeholderId, errorMessage);
+			}
 		}
 	}
 
@@ -393,7 +434,7 @@
 	{:else}
 		<ChatFormPickerList
 			items={filteredPrompts}
-			{isLoading}
+			isLoading={false}
 			{selectedIndex}
 			bind:searchQuery={internalSearchQuery}
 			{showSearchInput}
@@ -425,10 +466,6 @@
 						{/snippet}
 					</ChatFormPickerItemHeader>
 				</ChatFormPickerListItem>
-			{/snippet}
-
-			{#snippet skeleton()}
-				<ChatFormPickerListItemSkeleton titleWidth="w-32" showBadge />
 			{/snippet}
 		</ChatFormPickerList>
 	{/if}

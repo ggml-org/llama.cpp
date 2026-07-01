@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Plus, File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
+	import { Plus, File, FolderOpen } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { buttonVariants } from '$lib/components/ui/button';
@@ -11,9 +11,11 @@
 	} from '$lib/constants';
 	import {
 		ChatFormActionAddToolsSubmenu,
-		ChatFormActionAddMcpServersSubmenu
+		ChatFormActionAddSystemMessageSubmenu
 	} from '$lib/components/app';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
+	import { registerMcpDialogReopen } from '$lib/stores/mcp-dialog-reopen';
+	import type { MCPPromptInfo } from '$lib/types';
 
 	interface Props {
 		class?: string;
@@ -25,8 +27,8 @@
 		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
+		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
+		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
 	}
 
@@ -40,17 +42,22 @@
 		hasMcpResourcesSupport = false,
 		onFileUpload,
 		onSystemPromptClick,
+		onSystemPromptWithContent,
 		onMcpPromptClick,
-		onMcpSettingsClick,
 		onMcpResourcesClick
 	}: Props = $props();
 
 	let dropdownOpen = $state(false);
+	let toolsSubOpen = $state(false);
 
-	function handleMcpSettingsClick() {
-		dropdownOpen = false;
-		onMcpSettingsClick?.();
-	}
+	registerMcpDialogReopen(() => {
+		dropdownOpen = true;
+		// Defer so the dropdown content mounts before the tools submenu tries
+		// to position itself via Floating UI.
+		setTimeout(() => {
+			toolsSubOpen = true;
+		}, 0);
+	});
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
@@ -138,31 +145,14 @@
 				</DropdownMenu.SubContent>
 			</DropdownMenu.Sub>
 
-			<DropdownMenu.Item
-				class="flex cursor-pointer items-center gap-2"
-				onclick={onSystemPromptClick}
-			>
-				<MessageSquare class="h-4 w-4" />
+			<ChatFormActionAddSystemMessageSubmenu
+				{onSystemPromptClick}
+				{onSystemPromptWithContent}
+				{onMcpPromptClick}
+				preloadOnOpen={dropdownOpen}
+			/>
 
-				<span>System Message</span>
-			</DropdownMenu.Item>
-
-			<ChatFormActionAddToolsSubmenu />
-
-			<ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
-
-			{#if hasMcpPromptsSupport}
-				<DropdownMenu.Separator />
-
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={onMcpPromptClick}
-				>
-					<Zap class="h-4 w-4" />
-
-					<span>MCP Prompt</span>
-				</DropdownMenu.Item>
-			{/if}
+			<ChatFormActionAddToolsSubmenu bind:open={toolsSubOpen} />
 
 			{#if hasMcpResourcesSupport}
 				<DropdownMenu.Item

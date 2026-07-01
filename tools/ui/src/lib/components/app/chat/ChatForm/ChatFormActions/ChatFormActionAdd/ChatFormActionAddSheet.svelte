@@ -3,19 +3,32 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
-	import { Switch } from '$lib/components/ui/switch';
+	import {
+		File,
+		MessageSquare,
+		Plus,
+		FolderOpen,
+		PencilRuler,
+		ChevronDown,
+		ChevronRight
+	} from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { Badge } from '$lib/components/ui/badge';
+	import { TOOLTIP_DELAY_DURATION, PROMPT_CONTENT_SEPARATOR } from '$lib/constants';
 	import { ATTACHMENT_FILE_ITEMS } from '$lib/constants/attachment-menu';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { skillsStore } from '$lib/stores/skills.svelte';
+	import { skillPreferencesStore } from '$lib/stores/skill-preferences.svelte';
 	import { McpLogo } from '$lib/components/app';
-	import { PencilRuler, ChevronDown, ChevronRight } from '@lucide/svelte';
-	import { HealthCheckStatus } from '$lib/enums';
+	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
+	import { ContentPartType } from '$lib/enums';
 	import { AttachmentAction } from '$lib/enums/attachment.enums';
+	import type { MCPPromptInfo, PromptMessage } from '$lib/types';
+	import { buildMcpPromptId } from '$lib/utils';
+	import { SvelteMap } from 'svelte/reactivity';
 
 	interface Props {
 		class?: string;
@@ -27,7 +40,8 @@
 		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
+		onSystemPromptWithContent?: (content: string, skillId?: string, title?: string) => void;
+		onMcpPromptClick?: (prompt?: MCPPromptInfo) => void;
 		onMcpResourcesClick?: () => void;
 		trigger: Snippet<[{ disabled: boolean; onclick?: () => void }]>;
 	}
@@ -42,15 +56,17 @@
 		hasMcpResourcesSupport = false,
 		onFileUpload,
 		onSystemPromptClick,
+		onSystemPromptWithContent,
 		onMcpPromptClick,
 		onMcpResourcesClick,
 		trigger
 	}: Props = $props();
 
 	let sheetOpen = $state(false);
-	let filesExpanded = $state(true);
+	let filesExpanded = $state(false);
 	let toolsExpanded = $state(false);
-	let mcpExpanded = $state(false);
+	let skillsExpanded = $state(false);
+	let searchQuery = $state('');
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
@@ -74,8 +90,115 @@
 	const sheetItemRowClass =
 		'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent';
 
-	function getEnabledMcpServers() {
-		return mcpStore.getServersSorted().filter((s) => s.enabled);
+	let skills = $derived(skillsStore.getSkills());
+
+	let filteredLibrarySkills = $derived.by(() => {
+		const q = searchQuery.trim().toLowerCase();
+		if (!q) return skills;
+		return skills.filter(
+			(s) =>
+				s.name?.toLowerCase().includes(q) ||
+				s.content?.toLowerCase().includes(q) ||
+				(s.description?.toLowerCase().includes(q) ?? false)
+		);
+	});
+
+	$effect(() => {
+		if (sheetOpen) {
+			void mcpStore.ensureInitialized(conversationsStore.getAllMcpServerOverrides());
+		}
+	});
+
+	let serverSettingsMap = $derived.by(() => {
+		const servers = mcpStore.getServers();
+		const map = new SvelteMap<string, ReturnType<typeof mcpStore.getServers>[number]>();
+		for (const server of servers) {
+			map.set(server.id, server);
+		}
+		return map;
+	});
+
+	let filteredMcpPrompts = $derived.by(() => {
+		const sortedServers = mcpStore.getServersSorted();
+		const serverOrderMap = new Map(sortedServers.map((server, index) => [server.id, index]));
+
+		const entries = mcpStore.allPrompts
+			.slice()
+			.sort((a, b) => {
+				const orderA = serverOrderMap.get(a.serverName) ?? Number.MAX_SAFE_INTEGER;
+				const orderB = serverOrderMap.get(b.serverName) ?? Number.MAX_SAFE_INTEGER;
+				return orderA - orderB;
+			})
+			.map((prompt) => {
+				const server = serverSettingsMap.get(prompt.serverName);
+				return {
+					prompt,
+					server,
+					serverLabel: server ? mcpStore.getServerLabel(server) : prompt.serverName,
+					faviconUrl: server ? mcpStore.getServerFavicon(server.id) : null
+				};
+			});
+
+		const q = searchQuery.trim().toLowerCase();
+		if (!q) return entries;
+		return entries.filter((entry) => {
+			const name = (entry.prompt.title || entry.prompt.name || '').toLowerCase();
+			const description = (entry.prompt.description || '').toLowerCase();
+			const server = entry.serverLabel.toLowerCase();
+			return name.includes(q) || description.includes(q) || server.includes(q);
+		});
+	});
+
+	function handleSkillClick(skillId: string) {
+		const skill = skillsStore.getSkill(skillId);
+		if (skill && onSystemPromptWithContent) {
+			sheetOpen = false;
+			onSystemPromptWithContent(skill.content ?? '', skillId, skill.name ?? skillId);
+		}
+	}
+
+	function handleAddSkillClick() {
+		attachmentMenu.callbacks[AttachmentAction.SYSTEM_PROMPT_CLICK]();
+	}
+
+	async function handleMcpPromptClick(entry: (typeof filteredMcpPrompts)[number]) {
+		sheetOpen = false;
+
+		if (entry.prompt.arguments?.length) {
+			onMcpPromptClick?.(entry.prompt);
+			return;
+		}
+
+		void executeAndPostAsSystemPrompt(entry.prompt);
+	}
+
+	function mcpPromptId(prompt: MCPPromptInfo): string {
+		return buildMcpPromptId(prompt.serverName, prompt.name);
+	}
+
+	async function executeAndPostAsSystemPrompt(prompt: MCPPromptInfo) {
+		if (!onSystemPromptWithContent) return;
+
+		try {
+			const result = await mcpStore.getPrompt(prompt.serverName, prompt.name, {});
+
+			if (!result?.messages) return;
+
+			const text = result.messages
+				.map((msg: PromptMessage) => {
+					if (typeof msg.content === 'string') return msg.content;
+					if (msg.content.type === ContentPartType.TEXT) return msg.content.text;
+					return '';
+				})
+				.filter(Boolean)
+				.join(PROMPT_CONTENT_SEPARATOR);
+
+			if (!text) return;
+
+			onSystemPromptWithContent(text, mcpPromptId(prompt), prompt.title || prompt.name);
+		} catch (error) {
+			console.warn('[ChatFormActionAddSheet] Failed to execute MCP prompt:', error);
+		}
 	}
 </script>
 
@@ -140,72 +263,124 @@
 					</Collapsible.Content>
 				</Collapsible.Root>
 
-				<Collapsible.Root open={mcpExpanded} onOpenChange={(open) => (mcpExpanded = open)}>
+				<Collapsible.Root open={skillsExpanded} onOpenChange={(open) => (skillsExpanded = open)}>
 					<Collapsible.Trigger class={sheetItemClass}>
-						{#if mcpExpanded}
+						{#if skillsExpanded}
 							<ChevronDown class="h-4 w-4 shrink-0" />
 						{:else}
 							<ChevronRight class="h-4 w-4 shrink-0" />
 						{/if}
 
-						<McpLogo class="inline h-4 w-4 shrink-0" />
+						<MessageSquare class="h-4 w-4 shrink-0" />
 
-						<span class="flex-1">MCP Servers</span>
-
-						<span class="text-xs text-muted-foreground">
-							{getEnabledMcpServers().length} server{getEnabledMcpServers().length !== 1 ? 's' : ''}
-						</span>
+						<span class="flex-1">System message</span>
 					</Collapsible.Trigger>
 
 					<Collapsible.Content>
 						<div class="flex flex-col gap-0.5 pl-4">
-							{#each getEnabledMcpServers() as server (server.id)}
-								{@const healthState = mcpStore.getHealthCheckState(server.id)}
-								{@const hasError = healthState.status === HealthCheckStatus.ERROR}
-								{@const displayName = mcpStore.getServerLabel(server)}
-								{@const faviconUrl = mcpStore.getServerFavicon(server.id)}
-								{@const isEnabled = conversationsStore.isMcpServerEnabledForChat(server.id)}
-
-								<button
-									type="button"
-									class={sheetItemRowClass}
-									onclick={() => !hasError && conversationsStore.toggleMcpServerForChat(server.id)}
-									disabled={hasError}
-								>
-									<div class="flex min-w-0 flex-1 items-center gap-2">
-										{#if faviconUrl}
-											<img
-												src={faviconUrl}
-												alt=""
-												class="h-4 w-4 shrink-0 rounded-sm"
-												onerror={(e) => {
-													(e.currentTarget as HTMLImageElement).style.display = 'none';
-												}}
-											/>
-										{/if}
-
-										<span class="min-w-0 truncate text-sm">{displayName}</span>
-									</div>
-
-									{#if hasError}
-										<span
-											class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
-										>
-											Error
-										</span>
-									{:else}
-										<Switch
-											checked={isEnabled}
-											onCheckedChange={() => conversationsStore.toggleMcpServerForChat(server.id)}
-										/>
-									{/if}
-								</button>
-							{/each}
-
-							{#if getEnabledMcpServers().length === 0}
-								<div class="px-3 py-2 text-center text-sm text-muted-foreground">
-									No MCP servers configured
+							{#if skills.length > 0 || mcpStore.allPrompts.length > 0}
+								<div class="mb-1.5 mt-1">
+									<SearchInput
+										bind:value={searchQuery}
+										variant="sm"
+										placeholder="Search by name, content, or server..."
+									/>
 								</div>
+							{/if}
+
+							<button
+								type="button"
+								class="{sheetItemClass} mt-2.5 mb-2"
+								onclick={handleAddSkillClick}
+							>
+								<Plus class="h-4 w-4 shrink-0" />
+
+								<span>Write new</span>
+							</button>
+
+							{#if filteredLibrarySkills.length > 0}
+								<div class="mt-1.5 mb-1 px-3 text-xs font-medium text-muted-foreground">
+									Your Skills
+								</div>
+
+								{#each filteredLibrarySkills as skill (skill.id)}
+									<button
+										type="button"
+										class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent active:bg-accent"
+										onclick={() => handleSkillClick(skill.id)}
+									>
+										<div class="flex w-full items-center gap-1.5">
+											<span class="line-clamp-1 text-sm font-medium">{skill.name ?? skill.id}</span>
+											{#if skillPreferencesStore.isAlwaysOn(skill.id)}
+												<span
+													class="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground"
+													>always-on</span
+												>
+											{/if}
+										</div>
+										<span
+											class="line-clamp-3 w-full text-left text-xs leading-5 text-muted-foreground"
+										>
+											{skill.content}
+										</span>
+									</button>
+								{/each}
+							{/if}
+
+							{#if filteredMcpPrompts.length > 0}
+								<div class="mt-1.5 mb-1 px-3 text-xs font-medium text-muted-foreground">
+									MCP Prompts
+								</div>
+
+								{#each filteredMcpPrompts as entry (entry)}
+									<button
+										type="button"
+										class="flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent active:bg-accent"
+										onclick={() => handleMcpPromptClick(entry)}
+									>
+										<div class="flex w-full items-center gap-1.5">
+											{#if entry.faviconUrl}
+												<img
+													src={entry.faviconUrl}
+													alt=""
+													class="h-3 w-3 shrink-0 rounded-sm"
+													onerror={(e) => {
+														(e.currentTarget as HTMLImageElement).style.display = 'none';
+													}}
+												/>
+											{:else}
+												<McpLogo class="h-3 w-3 shrink-0" />
+											{/if}
+
+											<span class="truncate text-xs text-muted-foreground">{entry.serverLabel}</span
+											>
+
+											{#if entry.prompt.arguments?.length}
+												<Badge variant="secondary" class="ml-auto shrink-0 text-[10px]">
+													{entry.prompt.arguments.length} arg{entry.prompt.arguments.length > 1
+														? 's'
+														: ''}
+												</Badge>
+											{/if}
+										</div>
+
+										<span class="line-clamp-1 text-sm font-medium">
+											{entry.prompt.title || entry.prompt.name}
+										</span>
+
+										{#if entry.prompt.description}
+											<span
+												class="line-clamp-2 w-full text-left text-xs leading-5 text-muted-foreground"
+											>
+												{entry.prompt.description}
+											</span>
+										{/if}
+									</button>
+								{/each}
+							{/if}
+
+							{#if searchQuery.trim() !== '' && (skills.length > 0 || mcpStore.allPrompts.length > 0) && filteredLibrarySkills.length === 0 && filteredMcpPrompts.length === 0}
+								<div class="px-3 py-2 text-xs text-muted-foreground">No matches</div>
 							{/if}
 						</div>
 					</Collapsible.Content>
@@ -269,28 +444,6 @@
 							</div>
 						</Collapsible.Content>
 					</Collapsible.Root>
-				{/if}
-
-				<button
-					type="button"
-					class={sheetItemClass}
-					onclick={() => attachmentMenu.callbacks[AttachmentAction.SYSTEM_PROMPT_CLICK]()}
-				>
-					<MessageSquare class="h-4 w-4 shrink-0" />
-
-					<span>System Message</span>
-				</button>
-
-				{#if hasMcpPromptsSupport}
-					<button
-						type="button"
-						class={sheetItemClass}
-						onclick={() => attachmentMenu.callbacks[AttachmentAction.MCP_PROMPT_CLICK]()}
-					>
-						<Zap class="h-4 w-4 shrink-0" />
-
-						<span>MCP Prompt</span>
-					</button>
 				{/if}
 
 				{#if hasMcpResourcesSupport}

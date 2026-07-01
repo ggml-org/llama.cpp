@@ -16,6 +16,7 @@ export * from './cache';
 export * from './chat-form';
 export * from './cli-flags';
 export * from './code-blocks';
+export * from './diff';
 export * from './icons';
 export * from './code';
 export * from './context-keys';

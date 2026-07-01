@@ -59,13 +59,18 @@ export type {
 // Database types
 export type {
 	McpServerOverride,
+	Skill,
+	SkillOrigin,
+	SkillProvider,
 	DatabaseConversation,
+	DatabaseSkill,
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraVideoFile,
 	DatabaseMessageExtraImageFile,
 	DatabaseMessageExtraLegacyContext,
 	DatabaseMessageExtraMcpPrompt,
 	DatabaseMessageExtraMcpResource,
+	DatabaseMessageExtraSkill,
 	DatabaseMessageExtraPdfFile,
 	DatabaseMessageExtraTextFile,
 	DatabaseMessageExtra,

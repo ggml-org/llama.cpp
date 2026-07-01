@@ -1,13 +1,15 @@
 <script lang="ts">
-	import { Check, X } from '@lucide/svelte';
-	import { ChatMessageActionIcons, MarkdownContent } from '$lib/components/app';
+	import { ScanText } from '@lucide/svelte';
+	import {
+		ChatMessageActionIcons,
+		ChatMessageEditForm,
+		MarkdownContent
+	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
-	import { INPUT_CLASSES } from '$lib/constants';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { KeyboardKey, MessageRole } from '$lib/enums';
+	import { ChatMessageEditFormVariant, MessageRole } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
-	import { isIMEComposing } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -26,7 +28,10 @@
 		onConfirmDelete: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
-		textareaElement?: HTMLTextAreaElement;
+		skillId?: string;
+		title?: string;
+		skillIsStale?: boolean;
+		onSkillUpdate?: () => void;
 	}
 
 	let {
@@ -41,22 +46,13 @@
 		onConfirmDelete,
 		onNavigateToSibling,
 		onShowDeleteDialogChange,
-		textareaElement = $bindable()
+		skillId,
+		title,
+		skillIsStale = false,
+		onSkillUpdate
 	}: Props = $props();
 
 	const editCtx = getMessageEditContext();
-
-	function handleEditKeydown(event: KeyboardEvent) {
-		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
-			event.preventDefault();
-
-			editCtx.save();
-		} else if (event.key === KeyboardKey.ESCAPE) {
-			event.preventDefault();
-
-			editCtx.cancel();
-		}
-	}
 
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
@@ -103,38 +99,12 @@
 	role="group"
 >
 	{#if editCtx.isEditing}
-		<div class="w-full max-w-[80%]">
-			<textarea
-				bind:this={textareaElement}
-				value={editCtx.editedContent}
-				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
-				onkeydown={handleEditKeydown}
-				oninput={(e) => editCtx.setContent(e.currentTarget.value)}
-				placeholder="Edit system message..."
-			></textarea>
-
-			<div class="mt-2 flex justify-end gap-2">
-				<Button class="h-8 px-3" onclick={editCtx.cancel} size="sm" variant="outline">
-					<X class="mr-1 h-3 w-3" />
-
-					Cancel
-				</Button>
-
-				<Button
-					class="h-8 px-3"
-					onclick={editCtx.save}
-					disabled={!editCtx.editedContent.trim()}
-					size="sm"
-				>
-					<Check class="mr-1 h-3 w-3" />
-
-					Save
-				</Button>
-			</div>
+		<div class="flex w-full flex-col items-end gap-2">
+			<ChatMessageEditForm variant={ChatMessageEditFormVariant.SYSTEM} />
 		</div>
 	{:else}
 		{#if message.content.trim()}
-			<div class="relative max-w-[80%]">
+			<div class="relative">
 				<button
 					class="group/expand w-full text-left {!isExpanded && showExpandButton
 						? 'cursor-pointer'
@@ -143,7 +113,7 @@
 					type="button"
 				>
 					<Card
-						class="overflow-y-auto rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
+						class="overflow-y-auto rounded-[1.125rem] border-2! border-dashed! border-border/50! bg-muted px-3.75 py-1.5 data-multiline:py-2.5"
 						data-multiline={isMultiline ? '' : undefined}
 						style="border: 2px dashed hsl(var(--border)); max-height: var(--max-message-height); overflow-wrap: anywhere; word-break: break-word;"
 					>
@@ -207,6 +177,25 @@
 						{/if}
 					</Card>
 				</button>
+			</div>
+		{/if}
+
+		{#if skillId && title}
+			<div class="flex items-center gap-2">
+				<ScanText class="h-3.5 w-3.5 text-muted-foreground" />
+
+				<span class="text-xs font-medium text-muted-foreground">{title}</span>
+
+				{#if skillIsStale}
+					<button
+						type="button"
+						class="text-xs font-medium text-amber-600 hover:underline hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
+						onclick={onSkillUpdate}
+						title="This skill has been modified. Click to save the changes back to the library."
+					>
+						Modified
+					</button>
+				{/if}
 			</div>
 		{/if}
 

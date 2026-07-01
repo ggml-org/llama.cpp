@@ -1,4 +1,4 @@
-import { Search, Settings, SquarePen } from '@lucide/svelte';
+import { Settings, Search, SquarePen, ScanText } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import type { Component } from 'svelte';
 import { ROUTES } from './routes';
@@ -26,7 +26,13 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		icon: McpLogo,
 		tooltip: 'MCP Servers',
 		route: ROUTES.MCP_SERVERS,
-		activeRouteId: '/mcp-servers'
+		activeRouteId: '/(manage)/mcp-servers'
+	},
+	{
+		icon: ScanText,
+		tooltip: 'Skills',
+		route: ROUTES.SKILLS,
+		activeRouteId: '/(manage)/skills'
 	},
 	{
 		icon: Settings,
@@ -35,3 +41,12 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		activeUrlIncludes: '#/settings'
 	}
 ];
+
+export const CHAT_FORM_PLACEHOLDER_GREETING = 'Hello there!';
+
+export const CHAT_FORM_PLACEHOLDER = {
+	DEFAULT: 'Type a message',
+	VOICE_MODE_AVAILABLE: 'Type a message or use your voice',
+	SKILLS: 'Use / to insert a skill',
+	RESOURCES: 'Use @ to attach resources'
+};

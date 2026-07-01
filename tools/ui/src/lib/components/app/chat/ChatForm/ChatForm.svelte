@@ -9,6 +9,7 @@
 		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
 	import {
+		CHAT_FORM_PLACEHOLDER,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		INPUT_CLASSES,
 		SETTING_CONFIG_DEFAULT,
@@ -55,6 +56,7 @@
 		showMcpPromptButton?: boolean;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
+		showReasoningToggle?: boolean;
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
@@ -62,6 +64,7 @@
 		onStop?: () => void;
 		onSubmit?: () => void;
 		onSystemPromptClick?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
+		onSystemPromptWithContent?: (content: string, promptId?: string, title?: string) => void;
 		onUploadedFileRemove?: (fileId: string) => void;
 		onUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
 		onValueChange?: (value: string) => void;
@@ -72,10 +75,11 @@
 		class: className = '',
 		disabled = false,
 		isLoading = false,
-		placeholder = 'Type a message...',
+		placeholder = CHAT_FORM_PLACEHOLDER.DEFAULT,
 		showMcpPromptButton = false,
 		showAddButton = true,
 		showModelSelector = true,
+		showReasoningToggle = true,
 		uploadedFiles = $bindable([]),
 		value = $bindable(''),
 		onAttachmentRemove,
@@ -83,6 +87,7 @@
 		onStop,
 		onSubmit,
 		onSystemPromptClick,
+		onSystemPromptWithContent,
 		onUploadedFileRemove,
 		onUploadedFilesChange,
 		onValueChange
@@ -103,6 +108,7 @@
 	// Picker State
 	let isPromptPickerOpen = $state(false);
 	let promptSearchQuery = $state('');
+	let pendingPromptKey = $state<string | null>(null);
 	let isInlineResourcePickerOpen = $state(false);
 	let resourceSearchQuery = $state('');
 
@@ -406,6 +412,7 @@
 	function handlePromptPickerClose() {
 		isPromptPickerOpen = false;
 		promptSearchQuery = '';
+		pendingPromptKey = null;
 		textareaRef?.focus();
 	}
 
@@ -482,6 +489,7 @@
 		bind:this={pickersRef}
 		{isPromptPickerOpen}
 		{promptSearchQuery}
+		{pendingPromptKey}
 		{isInlineResourcePickerOpen}
 		{resourceSearchQuery}
 		onPromptPickerClose={handlePromptPickerClose}
@@ -490,7 +498,10 @@
 		onPromptLoadStart={handlePromptLoadStart}
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
+		onMcpPromptSystemExecute={(prompt, text, title) =>
+			onSystemPromptWithContent?.(text, `mcp:${prompt.serverName}:${prompt.name}`, title)}
 		onInlineResourceBrowse={handleBrowseResources}
+		onPendingPromptConsumed={() => (pendingPromptKey = null)}
 	/>
 
 	<div
@@ -546,12 +557,19 @@
 				{isRecording}
 				{showAddButton}
 				{showModelSelector}
+				{showReasoningToggle}
 				{uploadedFiles}
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
-				onMcpPromptClick={showMcpPromptButton ? () => (isPromptPickerOpen = true) : undefined}
+				{onSystemPromptWithContent}
+				onMcpPromptClick={showMcpPromptButton
+					? (prompt) => {
+							pendingPromptKey = prompt ? prompt.serverName + ':' + prompt.name : null;
+							isPromptPickerOpen = true;
+						}
+					: undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 			/>
 		</div>
