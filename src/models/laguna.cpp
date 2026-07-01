@@ -14,11 +14,11 @@ void llama_model_laguna::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm);
 
-    // Laguna ships exactly one shared expert; the size lives in the
-    // expert_shared_feed_forward_length key. afmoe stores a count and derives
-    // size = count * n_ff_exp, but Laguna's shared and routed experts can in
-    // principle have different sizes, so we read the size directly.
+    // Laguna ships one shared expert and stores its size directly (routed and
+    // shared experts may differ), so read the size from expert_shared_feed_forward_length.
+    // The count is not in the config; default to 1 but read the key if present.
     hparams.n_expert_shared = 1;
+    ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared, false);
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
 
     // Sliding-window attention is OPTIONAL. XS.2 is hybrid (full / SWA / SWA /
