@@ -2480,8 +2480,8 @@ kernel void kernel_rwkv_wkv7_f32(
     device const float * w,
     device const float * k,
     device const float * v,
+    device const float * kk,
     device const float * a,
-    device const float * b,
     device const float * state_in,
     device       float * dst,
     constant    uint & B,
@@ -2507,8 +2507,8 @@ kernel void kernel_rwkv_wkv7_f32(
     threadgroup float _r[head_size];
     threadgroup float _w[head_size];
     threadgroup float _k[head_size];
+    threadgroup float _kk[head_size];
     threadgroup float _a[head_size];
-    threadgroup float _b[head_size];
 
     float state[head_size];
 
@@ -2522,11 +2522,12 @@ kernel void kernel_rwkv_wkv7_f32(
 
     for (uint t = start_t; t < end_t; t += C) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
+        const float w_scale = -0.6065306597126334f;
         _r[tid] = r[t];
-        _w[tid] = w[t];
+        _w[tid] = exp(w_scale / (1.0f + exp(-w[t])));
         _k[tid] = k[t];
+        _kk[tid] = kk[t];
         _a[tid] = a[t];
-        _b[tid] = b[t];
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         const float v_val = v[t];
@@ -2535,22 +2536,23 @@ kernel void kernel_rwkv_wkv7_f32(
         float4 sa_vec(0.0);
 
         for (uint j = 0; j < head_size; j += 4) {
-            float4 a_vec = float4(_a[j], _a[j+1], _a[j+2], _a[j+3]);
+            float4 kk_vec = float4(_kk[j], _kk[j+1], _kk[j+2], _kk[j+3]);
             float4 s_vec = float4(state[j], state[j+1], state[j+2], state[j+3]);
-            sa_vec += a_vec * s_vec;
+            sa_vec += kk_vec * s_vec;
         }
-        sa = sa_vec[0] + sa_vec[1] + sa_vec[2] + sa_vec[3];
+        sa = -(sa_vec[0] + sa_vec[1] + sa_vec[2] + sa_vec[3]);
 
         for (uint j = 0; j < head_size; j += 4) {
             float4 r_vec = float4(_r[j], _r[j+1], _r[j+2], _r[j+3]);
             float4 w_vec = float4(_w[j], _w[j+1], _w[j+2], _w[j+3]);
             float4 k_vec = float4(_k[j], _k[j+1], _k[j+2], _k[j+3]);
-            float4 b_vec = float4(_b[j], _b[j+1], _b[j+2], _b[j+3]);
+            float4 kk_vec = float4(_kk[j], _kk[j+1], _kk[j+2], _kk[j+3]);
+            float4 a_vec = float4(_a[j], _a[j+1], _a[j+2], _a[j+3]);
             float4 s_vec = float4(state[j], state[j+1], state[j+2], state[j+3]);
 
             float4 kv = k_vec * v_val;
 
-            s_vec = s_vec * w_vec + kv + sa * b_vec;
+            s_vec = s_vec * w_vec + kv + sa * kk_vec * a_vec;
             y += dot(s_vec, r_vec);
 
             state[j]   = s_vec[0];

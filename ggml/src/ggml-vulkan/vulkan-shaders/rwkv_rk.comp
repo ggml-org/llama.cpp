@@ -1,0 +1,49 @@
+#version 450
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Parameters {
+    uint C;
+    uint H;
+    uint head_size;
+    uint cur_offset;
+    uint k_offset;
+    uint r_offset;
+    uint v_offset;
+    uint rk_offset;
+    uint dst_offset;
+};
+
+layout(binding = 0) readonly buffer CurBuf { float cur[]; };
+layout(binding = 1) readonly buffer KBuf   { float k[]; };
+layout(binding = 2) readonly buffer RBuf   { float r[]; };
+layout(binding = 3) readonly buffer VBuf   { float v[]; };
+layout(binding = 4) readonly buffer RKBuf  { float r_k[]; };
+layout(binding = 5) buffer DstBuf          { float dst[]; };
+
+shared float rk[128];
+
+void main() {
+    const uint tid = gl_LocalInvocationID.x;
+    const uint h   = gl_WorkGroupID.y % H;
+    const uint t   = gl_WorkGroupID.y / H;
+    const uint off = t*C + h*head_size;
+
+    if (tid < head_size) {
+        rk[tid] = k[k_offset + off + tid] * r[r_offset + off + tid] * r_k[rk_offset + h*head_size + tid];
+    } else {
+        rk[tid] = 0.0f;
+    }
+    barrier();
+
+    for (uint stride = 64; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            rk[tid] += rk[tid + stride];
+        }
+        barrier();
+    }
+
+    if (tid < head_size) {
+        dst[dst_offset + off + tid] = cur[cur_offset + off + tid] + v[v_offset + off + tid] * rk[0];
+    }
+}

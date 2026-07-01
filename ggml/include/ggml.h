@@ -2525,8 +2525,8 @@ extern "C" {
             struct ggml_tensor  * w,
             struct ggml_tensor  * k,
             struct ggml_tensor  * v,
+            struct ggml_tensor  * kk,
             struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
             struct ggml_tensor  * state);
 
     /* Solves a specific equation of the form Ax=B, where A is a triangular matrix

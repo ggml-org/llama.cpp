@@ -1,0 +1,96 @@
+#version 450
+
+#include "generic_binary_head.glsl"
+#include "types.glsl"
+
+#extension GL_EXT_control_flow_attributes : enable
+#define BLOCK_SIZE 512
+
+layout (binding = 3) readonly buffer C {B_TYPE data_c[];};
+
+layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+shared vec2 sum[BLOCK_SIZE];
+
+void norm_mul_add(uint num_iters) {
+    const uint ncols   = p.ne00;
+    const uint row     = gl_WorkGroupID.x;
+    const uint channel = gl_WorkGroupID.y;
+    const uint samp    = gl_WorkGroupID.z;
+    const uint tid     = gl_LocalInvocationID.x;
+
+    const uint a_base = get_aoffset() + src0_idx(0, row, channel, samp);
+    const uint b_base = get_boffset() + src1_idx(0, row, channel, samp);
+    const uint d_base = get_doffset() + dst_idx(0, row, channel, samp);
+
+    vec2 sum_tid = vec2(0.0f, 0.0f);
+
+    [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
+        if (col < ncols) {
+            const float xi = float(data_a[a_base + col*p.nb00]);
+            sum_tid.x += xi;
+            sum_tid.y += xi * xi;
+        }
+    }
+
+    sum[tid] = sum_tid;
+    barrier();
+    [[unroll]] for (int s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sum[tid] += sum[tid + s];
+        }
+        barrier();
+    }
+
+    const float mean    = sum[0].x / float(ncols);
+    const float var     = sum[0].y / float(ncols) - mean * mean;
+    const float inv_std = inversesqrt(var + p.param1);
+
+    if (ncols > p.ne10) {
+        [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
+            if (col >= ncols) {
+                continue;
+            }
+            const uint b_col = fastmod(col, p.ne10);
+            const float xi = float(data_a[a_base + col*p.nb00]);
+            const float w  = float(data_b[b_base + b_col*p.nb10]);
+            const float b  = float(data_c[b_base + b_col*p.nb10]);
+            data_d[d_base + col*p.nb20] = D_TYPE((xi - mean) * inv_std * w + b);
+        }
+    } else {
+        [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
+            if (col >= ncols) {
+                continue;
+            }
+            const float xi = float(data_a[a_base + col*p.nb00]);
+            const float w  = float(data_b[b_base + col*p.nb10]);
+            const float b  = float(data_c[b_base + col*p.nb10]);
+            data_d[d_base + col*p.nb20] = D_TYPE((xi - mean) * inv_std * w + b);
+        }
+    }
+}
+
+void main() {
+    uint num_blocks = (p.ne00 + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    if (num_blocks > 32) {
+        norm_mul_add(num_blocks);
+    } else if (num_blocks > 16) {
+        norm_mul_add(32);
+    } else if (num_blocks > 12) {
+        norm_mul_add(16);
+    } else if (num_blocks > 10) {
+        norm_mul_add(12);
+    } else if (num_blocks > 8) {
+        norm_mul_add(10);
+    } else if (num_blocks > 4) {
+        norm_mul_add(8);
+    } else if (num_blocks == 4) {
+        norm_mul_add(4);
+    } else if (num_blocks == 3) {
+        norm_mul_add(3);
+    } else if (num_blocks == 2) {
+        norm_mul_add(2);
+    } else if (num_blocks == 1) {
+        norm_mul_add(1);
+    }
+}

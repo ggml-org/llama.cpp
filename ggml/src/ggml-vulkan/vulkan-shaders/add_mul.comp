@@ -1,0 +1,33 @@
+#version 450
+
+#include "types.glsl"
+#include "generic_binary_head.glsl"
+
+const uint num_threads = 256;
+
+layout (binding = 3) readonly buffer C {B_TYPE data_c[];};
+
+layout(local_size_x = num_threads, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    uint idx = get_idx();
+
+    // num_threads * num_iter must equal 512, to match the wg_denoms and get_idx calculation.
+    const uint num_iter = 2;
+
+    [[unroll]] for (uint i = 0; i < num_iter; ++i) {
+        if (idx >= p.ne) {
+            continue;
+        }
+        uint i00, i01, i02, i03;
+        get_indices(idx, i00, i01, i02, i03);
+
+        const uint d_idx = get_doffset() + dst_idx(i00, i01, i02, i03);
+        const FLOAT_TYPE sum =
+            FLOAT_TYPE(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]) +
+            FLOAT_TYPE(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]);
+        data_d[d_idx] = D_TYPE(sum * FLOAT_TYPE(data_c[d_idx]));
+
+        idx += num_threads;
+    }
+}
