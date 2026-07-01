@@ -40,6 +40,7 @@ add_library(mtmd
             models/paddleocr.cpp
             models/pixtral.cpp
             models/qwen2vl.cpp
+            models/minimax-m3.cpp
             models/qwen3vl.cpp
             models/mimovl.cpp
             models/qwen3a.cpp
