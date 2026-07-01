@@ -1520,6 +1520,14 @@ private:
             const bool enable_thinking = params_base.enable_reasoning != 0 && template_supports_thinking;
             SRV_TRC("%s: chat template, thinking = %d\n", __func__, enable_thinking);
 
+            // hint: suggest preserve_thinking if the template supports it but user hasn't set it
+            if (params_base.use_jinja && common_chat_templates_support_preserve_thinking(chat_templates.get())) {
+                auto it = params_base.default_template_kwargs.find("preserve_thinking");
+                if (it == params_base.default_template_kwargs.end()) {
+                    SRV_WRN("%s\n", "chat template supports 'preserve_thinking' - consider using --chat-template-kwargs \"{\\\"preserve_thinking\\\": true}\" (ref: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking)");
+                }
+            }
+
             // IMPORTANT: chat_params is reused across sleeping / resuming states,
             //            never store llama_context/llama_model pointers in chat_params,
             //            as they may be invalidated after sleeping
