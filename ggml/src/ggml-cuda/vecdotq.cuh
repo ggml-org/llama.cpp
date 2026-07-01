@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.cuh"
+#include "convert.cuh"
 
 #include <cstdint>
 
@@ -112,9 +113,11 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
 
-template <int vdr> static __device__ __forceinline__ float vec_dot_q4_0_q8_1_impl(
-    const int * v, const int * u, const float & d4, const half2 & ds8) {
-
+template <int vdr>
+static __device__ __forceinline__ float vec_dot_q4_0_q8_1_impl(const int *          v,
+                                                               const int *          u,
+                                                               const float &        d4,
+                                                               const nv_bfloat162 & ds8) {
     int sumi = 0;
 
 #pragma unroll
@@ -127,7 +130,7 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q4_0_q8_1_imp
         sumi = ggml_cuda_dp4a(vi1, u[2*i+1], sumi);
     }
 
-    const float2 ds8f = __half22float2(ds8);
+    const float2 ds8f = ggml_cuda_cast<float2>(ds8);
 
     // second part effectively subtracts 8 from each quant value
     return d4 * (sumi * ds8f.x - (8*vdr/QI4_0) * ds8f.y);
@@ -136,9 +139,11 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q4_0_q8_1_imp
 #define VDR_Q4_1_Q8_1_MMVQ 2
 #define VDR_Q4_1_Q8_1_MMQ  4
 
-template <int vdr> static __device__ __forceinline__ float vec_dot_q4_1_q8_1_impl(
-    const int * v, const int * u, const half2 & dm4, const half2 & ds8) {
-
+template <int vdr>
+static __device__ __forceinline__ float vec_dot_q4_1_q8_1_impl(const int *          v,
+                                                               const int *          u,
+                                                               const half2 &        dm4,
+                                                               const nv_bfloat162 & ds8) {
     int sumi = 0;
 
 #pragma unroll
@@ -151,16 +156,10 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q4_1_q8_1_imp
         sumi = ggml_cuda_dp4a(vi1, u[2*i+1], sumi);
     }
 
-#ifdef FAST_FP16_AVAILABLE
-    const float2 tmp = __half22float2(__hmul2(dm4, ds8));
-    const float d4d8 = tmp.x;
-    const float m4s8 = tmp.y;
-#else
     const float2 dm4f = __half22float2(dm4);
-    const float2 ds8f = __half22float2(ds8);
+    const float2 ds8f = ggml_cuda_cast<float2>(ds8);
     const float d4d8 = dm4f.x * ds8f.x;
     const float m4s8 = dm4f.y * ds8f.y;
-#endif // FAST_FP16_AVAILABLE
 
     // scale second part of sum by QI8_1/(vdr * QR4_1) to compensate for multiple threads adding it
     return sumi * d4d8 + m4s8 / (QI8_1 / (vdr * QR4_1));
@@ -169,9 +168,12 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q4_1_q8_1_imp
 #define VDR_Q5_0_Q8_1_MMVQ 2
 #define VDR_Q5_0_Q8_1_MMQ  4
 
-template <int vdr> static __device__ __forceinline__ float vec_dot_q5_0_q8_1_impl(
-    const int * vl, const int * vh, const int * u, const float & d5, const half2 & ds8) {
-
+template <int vdr>
+static __device__ __forceinline__ float vec_dot_q5_0_q8_1_impl(const int *          vl,
+                                                               const int *          vh,
+                                                               const int *          u,
+                                                               const float &        d5,
+                                                               const nv_bfloat162 & ds8) {
     int sumi = 0;
 
 #pragma unroll
@@ -191,7 +193,7 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q5_0_q8_1_imp
         sumi = ggml_cuda_dp4a(vi1, u[2*i+1], sumi); // SIMD dot product of quantized values
     }
 
-    const float2 ds8f = __half22float2(ds8);
+    const float2 ds8f = ggml_cuda_cast<float2>(ds8);
 
     // second part effectively subtracts 16 from each quant value
     return d5 * (sumi * ds8f.x - (16*vdr/QI5_0) * ds8f.y);
@@ -200,9 +202,12 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q5_0_q8_1_imp
 #define VDR_Q5_1_Q8_1_MMVQ 2
 #define VDR_Q5_1_Q8_1_MMQ  4
 
-template <int vdr> static __device__ __forceinline__ float vec_dot_q5_1_q8_1_impl(
-    const int * vl, const int * vh, const int * u, const half2 & dm5, const half2 & ds8) {
-
+template <int vdr>
+static __device__ __forceinline__ float vec_dot_q5_1_q8_1_impl(const int *          vl,
+                                                               const int *          vh,
+                                                               const int *          u,
+                                                               const half2 &        dm5,
+                                                               const nv_bfloat162 & ds8) {
     int sumi = 0;
 
 #pragma unroll
@@ -222,16 +227,10 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q5_1_q8_1_imp
         sumi = ggml_cuda_dp4a(vi1, u[2*i+1], sumi); // SIMD dot product of quantized values
     }
 
-#ifdef FAST_FP16_AVAILABLE
-    const float2 tmp = __half22float2(__hmul2(dm5, ds8));
-    const float d5d8 = tmp.x;
-    const float m5s8 = tmp.y;
-#else
     const float2 dm5f = __half22float2(dm5);
-    const float2 ds8f = __half22float2(ds8);
+    const float2 ds8f = ggml_cuda_cast<float2>(ds8);
     const float d5d8 = dm5f.x * ds8f.x;
     const float m5s8 = dm5f.y * ds8f.y;
-#endif // FAST_FP16_AVAILABLE
 
     // scale second part of sum by QI5_1 / vdr to compensate for multiple threads adding it
     return sumi*d5d8 + m5s8 / (QI5_1 / vdr);
@@ -254,9 +253,11 @@ template <typename T, int vdr> static __device__ __forceinline__ T vec_dot_q8_0_
     return d8_0*d8_1 * ((T) sumi);
 }
 
-template <int vdr> static __device__ __forceinline__ float vec_dot_q8_1_q8_1_impl(
-    const int * v, const int * u, const half2 & dm8, const half2 & ds8) {
-
+template <int vdr>
+static __device__ __forceinline__ float vec_dot_q8_1_q8_1_impl(const int *          v,
+                                                               const int *          u,
+                                                               const half2 &        dm8,
+                                                               const nv_bfloat162 & ds8) {
     int sumi = 0;
 
 #pragma unroll
@@ -265,16 +266,10 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q8_1_q8_1_imp
         sumi = ggml_cuda_dp4a(v[i], u[i], sumi);
     }
 
-#ifdef FAST_FP16_AVAILABLE
-    const float2 tmp = __half22float2(__hmul2(dm8, ds8));
-    const float d8d8 = tmp.x;
-    const float m8s8 = tmp.y;
-#else
     const float2 dm8f = __half22float2(dm8);
-    const float2 ds8f = __half22float2(ds8);
+    const float2 ds8f = ggml_cuda_cast<float2>(ds8);
     const float d8d8 = dm8f.x * ds8f.x;
     const float m8s8 = dm8f.y * ds8f.y;
-#endif // FAST_FP16_AVAILABLE
 
     // scale second part of sum by QI8_1/ vdr to compensate for multiple threads adding it
     return sumi*d8d8 + m8s8 / (QI8_1 / vdr);
@@ -304,9 +299,10 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q8_0_16_q8_1_
 #define VDR_MXFP4_Q8_1_MMVQ 2
 #define VDR_MXFP4_Q8_1_MMQ  4
 
-static __device__ __forceinline__ float vec_dot_mxfp4_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_mxfp4_q8_1(const void * __restrict__ vbq,
+                                                           const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                           const int & kbx,
+                                                           const int & iqs) {
     const block_mxfp4 * bq4 = (const block_mxfp4 *) vbq + kbx;
 
     const int * q8 = (const int *) bq8_1->qs + iqs;
@@ -321,19 +317,17 @@ static __device__ __forceinline__ float vec_dot_mxfp4_q8_1(
         sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
     }
 
-    const float d = ggml_cuda_e8m0_to_fp32(bq4->e) * 0.5f * __low2float(bq8_1->ds);
+    const float d = ggml_cuda_e8m0_to_fp32(bq4->e) * 0.5f * ggml_cuda_cast<float2>(bq8_1->ds).x;
     return d * sumi;
 }
 
 #define VDR_NVFP4_Q8_1_MMVQ 4
 #define VDR_NVFP4_Q8_1_MMQ  8
 
-static __device__ __forceinline__ float vec_dot_nvfp4_q8_1(
-                                        const void * __restrict__ vbq,
-                                        const block_q8_1 * __restrict__ bq8_1,
-                                        const int32_t & kbx,
-                                        const int32_t & iqs) {
-
+static __device__ __forceinline__ float vec_dot_nvfp4_q8_1(const void * __restrict__ vbq,
+                                                           const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                           const int32_t & kbx,
+                                                           const int32_t & iqs) {
     const block_nvfp4 * bq4 = (const block_nvfp4 *) vbq + kbx;
     float sum = 0.0f;
 #pragma unroll
@@ -343,7 +337,7 @@ static __device__ __forceinline__ float vec_dot_nvfp4_q8_1(
         const int32_t is = iqs0 >> 1;
         const int2 v0 = get_int_from_table_16(get_int_b4(bq4->qs, iqs0), kvalues_mxfp4);
         const int2 v1 = get_int_from_table_16(get_int_b4(bq4->qs, iqs1), kvalues_mxfp4);
-        const block_q8_1 * bq8 = bq8_1 + (is >> 1);
+        const block_q8_1_bf16 * bq8  = bq8_1 + (is >> 1);
         const int32_t i8 = ((is & 1) << 2);
 
         int sumi = ggml_cuda_dp4a(v0.x, get_int_b4(bq8->qs, i8 + 0), 0);
@@ -351,7 +345,7 @@ static __device__ __forceinline__ float vec_dot_nvfp4_q8_1(
         sumi = ggml_cuda_dp4a(v1.x, get_int_b4(bq8->qs, i8 + 1), sumi);
         sumi = ggml_cuda_dp4a(v1.y, get_int_b4(bq8->qs, i8 + 3), sumi);
 
-        const float d = ggml_cuda_ue4m3_to_fp32(bq4->d[is]) * __low2float(bq8->ds);
+        const float d = ggml_cuda_ue4m3_to_fp32(bq4->d[is]) * ggml_cuda_cast<float2>(bq8->ds).x;
         sum += d * float(sumi);
     }
 
@@ -527,10 +521,12 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq(
 }
 
 // contiguous v/x + u/y values
-static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_mmq(
-    const int * __restrict__ v, const int * __restrict__ u, const uint8_t * __restrict__ sc,
-    const uint8_t * __restrict__ m, const half2 & dm4, const half2 * __restrict__ ds8) {
-
+static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_mmq(const int * __restrict__ v,
+                                                                   const int * __restrict__ u,
+                                                                   const uint8_t * __restrict__ sc,
+                                                                   const uint8_t * __restrict__ m,
+                                                                   const half2 & dm4,
+                                                                   const nv_bfloat162 * __restrict__ ds8) {
     float sumf_d = 0.0f;
     float sumf_m = 0.0f;
 
@@ -543,7 +539,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_mmq(
             sumi_d = ggml_cuda_dp4a((v[j] >> (4*i)) & 0x0F0F0F0F, u[i*QI8_1 + j], sumi_d); // SIMD dot product
         }
 
-        const float2 ds8f = __half22float2(ds8[i]);
+        const float2 ds8f = ggml_cuda_cast<float2>(ds8[i]);
 
         sumf_d += ds8f.x * (sc[i] * sumi_d);
         sumf_m += ds8f.y *   m[i]; // sum of q8_1 block * q4_K min val
@@ -590,10 +586,12 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_vmmq(
 }
 
 // contiguous v/x + u/y values
-static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_mmq(
-    const int * __restrict__ v, const int * __restrict__ u, const uint8_t * __restrict__ sc,
-    const uint8_t * __restrict__ m, const half2 & dm4, const half2 * __restrict__ ds8) {
-
+static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_mmq(const int * __restrict__ v,
+                                                                   const int * __restrict__ u,
+                                                                   const uint8_t * __restrict__ sc,
+                                                                   const uint8_t * __restrict__ m,
+                                                                   const half2 & dm4,
+                                                                   const nv_bfloat162 * __restrict__ ds8) {
     float sumf_d = 0.0f;
     float sumf_m = 0.0f;
 
@@ -606,7 +604,7 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_mmq(
             sumi_d = ggml_cuda_dp4a(v[i*QI8_1 + j], u[i*QI8_1 + j], sumi_d); // SIMD dot product
         }
 
-        const float2 ds8f = __half22float2(ds8[i]);
+        const float2 ds8f = ggml_cuda_cast<float2>(ds8[i]);
 
         sumf_d += ds8f.x * (sc[i] * sumi_d);
         sumf_m += ds8f.y *   m[i]; // sum of q8_1 block * q4_K min val
@@ -672,6 +670,7 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_mmq(
     return d6 * sumf_d;
 }
 
+
 static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
@@ -718,7 +717,7 @@ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
 }
 
 static __device__ __forceinline__ float vec_dot_q4_0_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+    const void * __restrict__ vbq, const block_q8_1_bf16 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
     const block_q4_0 * bq4_0 = (const block_q4_0 *) vbq + kbx;
 
@@ -735,10 +734,10 @@ static __device__ __forceinline__ float vec_dot_q4_0_q8_1(
     return vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMVQ>(v, u, bq4_0->d, bq8_1->ds);
 }
 
-
-static __device__ __forceinline__ float vec_dot_q4_1_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_q4_1_q8_1(const void * __restrict__ vbq,
+                                                          const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                          const int & kbx,
+                                                          const int & iqs) {
     const block_q4_1 * bq4_1 = (const block_q4_1 *) vbq + kbx;
 
     int v[VDR_Q4_1_Q8_1_MMVQ];
@@ -754,9 +753,10 @@ static __device__ __forceinline__ float vec_dot_q4_1_q8_1(
     return vec_dot_q4_1_q8_1_impl<VDR_Q4_1_Q8_1_MMVQ>(v, u, bq4_1->dm, bq8_1->ds);
 }
 
-static __device__ __forceinline__ float vec_dot_q5_0_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_q5_0_q8_1(const void * __restrict__ vbq,
+                                                          const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                          const int & kbx,
+                                                          const int & iqs) {
     const block_q5_0 * bq5_0 = (const block_q5_0 *) vbq + kbx;
 
     int vl[VDR_Q5_0_Q8_1_MMVQ];
@@ -774,9 +774,10 @@ static __device__ __forceinline__ float vec_dot_q5_0_q8_1(
     return vec_dot_q5_0_q8_1_impl<VDR_Q5_0_Q8_1_MMVQ>(vl, vh, u, bq5_0->d, bq8_1->ds);
 }
 
-static __device__ __forceinline__ float vec_dot_q5_1_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_q5_1_q8_1(const void * __restrict__ vbq,
+                                                          const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                          const int & kbx,
+                                                          const int & iqs) {
     const block_q5_1 * bq5_1 = (const block_q5_1 *) vbq + kbx;
 
     int vl[VDR_Q5_1_Q8_1_MMVQ];
@@ -794,9 +795,10 @@ static __device__ __forceinline__ float vec_dot_q5_1_q8_1(
     return vec_dot_q5_1_q8_1_impl<VDR_Q5_1_Q8_1_MMVQ>(vl, vh, u, bq5_1->dm, bq8_1->ds);
 }
 
-static __device__ __forceinline__ float vec_dot_q8_0_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_q8_0_q8_1(const void * __restrict__ vbq,
+                                                          const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                          const int & kbx,
+                                                          const int & iqs) {
     const block_q8_0 * bq8_0 = (const block_q8_0 *) vbq + kbx;
 
     int v[VDR_Q8_0_Q8_1_MMVQ];
@@ -808,12 +810,13 @@ static __device__ __forceinline__ float vec_dot_q8_0_q8_1(
         u[i] = get_int_b4(bq8_1->qs, iqs + i);
     }
 
-    return vec_dot_q8_0_q8_1_impl<float, VDR_Q8_0_Q8_1_MMVQ>(v, u, bq8_0->d, __low2half(bq8_1->ds));
+    return vec_dot_q8_0_q8_1_impl<float, VDR_Q8_0_Q8_1_MMVQ>(v, u, bq8_0->d, ggml_cuda_cast<float2>(bq8_1->ds).x);
 }
 
-static __device__ __forceinline__ float vec_dot_q2_K_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_q2_K_q8_1(const void * __restrict__ vbq,
+                                                          const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                          const int & kbx,
+                                                          const int & iqs) {
     const block_q2_K * bq2_K = (const block_q2_K *) vbq + kbx;
 
     const int bq8_offset = QR2_K * (iqs / QI8_1);
@@ -828,15 +831,16 @@ static __device__ __forceinline__ float vec_dot_q2_K_q8_1(
 #pragma unroll
     for (int i = 0; i < QR2_K; ++ i) {
         u[i]  = get_int_b4(bq8_1[bq8_offset + i].qs, iqs % QI8_1);
-        d8[i] = __low2float(bq8_1[bq8_offset + i].ds);
+        d8[i] = ggml_cuda_cast<float2>(bq8_1[bq8_offset + i].ds).x;
     }
 
     return vec_dot_q2_K_q8_1_impl_mmvq(v, u, scales, bq2_K->dm, d8);
 }
 
-static __device__ __forceinline__ float vec_dot_q3_K_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_q3_K_q8_1(const void * __restrict__ vbq,
+                                                          const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                          const int & kbx,
+                                                          const int & iqs) {
     const block_q3_K * bq3_K = (const block_q3_K *) vbq + kbx;
 
     const int bq8_offset = QR3_K * (iqs / (QI3_K/2));
@@ -855,15 +859,16 @@ static __device__ __forceinline__ float vec_dot_q3_K_q8_1(
 #pragma unroll
     for (int i = 0; i < QR3_K; ++i) {
         u[i]  = get_int_b4(bq8_1[bq8_offset + i].qs, iqs % QI8_1);
-        d8[i] = __low2float(bq8_1[bq8_offset + i].ds);
+        d8[i] = ggml_cuda_cast<float2>(bq8_1[bq8_offset + i].ds).x;
     }
 
     return vec_dot_q3_K_q8_1_impl_mmvq(vl, vh, u, bq3_K->scales, scale_offset, d, d8);
 }
 
-static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_q4_K_q8_1(const void * __restrict__ vbq,
+                                                          const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                          const int & kbx,
+                                                          const int & iqs) {
     const block_q4_K * bq4_K = (const block_q4_K *) vbq + kbx;
 
     int    v[2];
@@ -896,8 +901,8 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
     const uint8_t * m  = sc + 2;
 
     for (int i = 0; i < QR4_K; ++i) {
-        const block_q8_1 * bq8i = bq8_1 + bq8_offset + i;
-        d8[i] = __low2float(bq8i->ds);
+        const block_q8_1_bf16 * bq8i = bq8_1 + bq8_offset + i;
+        d8[i]                        = ggml_cuda_cast<float2>(bq8i->ds).x;
 
         const int * q8 = (const int *)bq8i->qs + ((iqs/2)%4);
         u[2*i+0] = q8[0];
@@ -907,9 +912,10 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
     return vec_dot_q4_K_q8_1_impl_vmmq(v, u, sc, m, bq4_K->dm, d8);
 }
 
-static __device__ __forceinline__ float vec_dot_q5_K_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_q5_K_q8_1(const void * __restrict__ vbq,
+                                                          const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                          const int & kbx,
+                                                          const int & iqs) {
     const block_q5_K * bq5_K = (const block_q5_K *) vbq + kbx;
 
     int   vl[2];
@@ -942,8 +948,8 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1(
 
 #pragma unroll
     for (int i = 0; i < QR5_K; ++i) {
-        const block_q8_1 * bq8i = bq8_1 + bq8_offset + i;
-        d8[i] = __low2float(bq8i->ds);
+        const block_q8_1_bf16 * bq8i = bq8_1 + bq8_offset + i;
+        d8[i]                        = ggml_cuda_cast<float2>(bq8i->ds).x;
 
         const int * q8 = (const int *)bq8i->qs + ((iqs/2)%4);
         u[2*i+0] = q8[0];
@@ -953,9 +959,10 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1(
     return vec_dot_q5_K_q8_1_impl_vmmq(vl, vh, u, sc, m, bq5_K->dm, d8);
 }
 
-static __device__ __forceinline__ float vec_dot_q6_K_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_q6_K_q8_1(const void * __restrict__ vbq,
+                                                          const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                          const int & kbx,
+                                                          const int & iqs) {
     const block_q6_K * bq6_K = (const block_q6_K *) vbq + kbx;
 
     const int bq8_offset = 2 * QR6_K * (iqs / (QI6_K/2)) + (iqs % (QI6_K/2)) / (QI6_K/4);
@@ -973,7 +980,7 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1(
 #pragma unroll
     for (int i = 0; i < QR6_K; ++i) {
         u[i]  = get_int_b4(bq8_1[bq8_offset + 2*i].qs, iqs % QI8_1);
-        d8[i] = __low2float(bq8_1[bq8_offset + 2*i].ds);
+        d8[i] = ggml_cuda_cast<float2>(bq8_1[bq8_offset + 2 * i].ds).x;
     }
 
     return vec_dot_q6_K_q8_1_impl_mmvq(vl, vh, u, scales, bq6_K->d, d8);
@@ -982,9 +989,10 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1(
 #define VDR_IQ2_XXS_Q8_1_MMVQ 2
 #define VDR_IQ2_XXS_Q8_1_MMQ  2
 
-static __device__ __forceinline__ float vec_dot_iq2_xxs_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_iq2_xxs_q8_1(const void * __restrict__ vbq,
+                                                             const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                             const int & kbx,
+                                                             const int & iqs) {
     const block_iq2_xxs * bq2 = (const block_iq2_xxs *) vbq + kbx;
 
     const int q2 = get_int_b2(bq2->qs, iqs);
@@ -1010,16 +1018,17 @@ static __device__ __forceinline__ float vec_dot_iq2_xxs_q8_1(
 
     const int ls = aux32 >> 27 | 1; // (scale * 2 + 1)
     sumi = sumi * ls / 8;           // (sumi * scale + sumi / 2) / 4
-    const float d = __half2float(bq2->d) * __low2float(bq8_1[iqs/2].ds);
+    const float d = __half2float(bq2->d) * ggml_cuda_cast<float2>(bq8_1[iqs / 2].ds).x;
     return d * sumi;
 }
 
 #define VDR_IQ2_XS_Q8_1_MMVQ 2
 #define VDR_IQ2_XS_Q8_1_MMQ  2
 
-static __device__ __forceinline__ float vec_dot_iq2_xs_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_iq2_xs_q8_1(const void * __restrict__ vbq,
+                                                            const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                            const int & kbx,
+                                                            const int & iqs) {
     const block_iq2_xs * bq2 = (const block_iq2_xs *) vbq + kbx;
 
     const int2 q2_packed = make_int2(get_int_b2(bq2->qs, iqs + 0), get_int_b2(bq2->qs, iqs + 1));
@@ -1051,16 +1060,17 @@ static __device__ __forceinline__ float vec_dot_iq2_xs_q8_1(
         }
     }
     const int sumi = (sumi0*ls0 + sumi1*ls1 + (sumi0 + sumi1)/2)/4;
-    const float d = __half2float(bq2->d) * __low2float(bq8_1[iqs/2].ds);
+    const float d    = __half2float(bq2->d) * ggml_cuda_cast<float2>(bq8_1[iqs / 2].ds).x;
     return d * sumi;
 }
 
 #define VDR_IQ2_S_Q8_1_MMVQ 2
 #define VDR_IQ2_S_Q8_1_MMQ  2
 
-static __device__ __forceinline__ float vec_dot_iq2_s_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_iq2_s_q8_1(const void * __restrict__ vbq,
+                                                           const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                           const int & kbx,
+                                                           const int & iqs) {
     const block_iq2_s * bq2 = (const block_iq2_s *) vbq + kbx;
 
     const int       qs_packed = get_int_b2(bq2->qs, iqs/2);
@@ -1099,16 +1109,17 @@ static __device__ __forceinline__ float vec_dot_iq2_s_q8_1(
     }
     const int sumi = (sumi0*ls0 + sumi1*ls1 + (sumi0 + sumi1)/2)/4;
 
-    const float d = __half2float(bq2->d) * __low2float(bq8_1[iqs/2].ds);
+    const float d = __half2float(bq2->d) * ggml_cuda_cast<float2>(bq8_1[iqs / 2].ds).x;
     return d * sumi;
 }
 
 #define VDR_IQ3_XXS_Q8_1_MMVQ 2
 #define VDR_IQ3_XXS_Q8_1_MMQ  2
 
-static __device__ __forceinline__ float vec_dot_iq3_xxs_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_iq3_xxs_q8_1(const void * __restrict__ vbq,
+                                                             const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                             const int & kbx,
+                                                             const int & iqs) {
     const block_iq3_xxs * bq3 = (const block_iq3_xxs *) vbq + kbx;
 
     const int2 q3_packed = make_int2(get_int_b2(bq3->qs, iqs), get_int_b2(bq3->qs, iqs+1));
@@ -1137,7 +1148,7 @@ static __device__ __forceinline__ float vec_dot_iq3_xxs_q8_1(
 
     const int ls = aux32 >> 28;
     sumi = (ls*sumi + sumi/2)/2;
-    const float d = __half2float(bq3->d) * __low2float(bq8_1[iqs/2].ds);
+    const float d = __half2float(bq3->d) * ggml_cuda_cast<float2>(bq8_1[iqs / 2].ds).x;
     return d * sumi;
 }
 
@@ -1145,9 +1156,10 @@ static __device__ __forceinline__ float vec_dot_iq3_xxs_q8_1(
 #define VDR_IQ3_S_Q8_1_MMQ  2
 
 // TODO: don't use lookup table for signs
-static __device__ __forceinline__ float vec_dot_iq3_s_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_iq3_s_q8_1(const void * __restrict__ vbq,
+                                                           const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                           const int & kbx,
+                                                           const int & iqs) {
     const block_iq3_s * bq3 = (const block_iq3_s *) vbq + kbx;
 
     const int2      qs_packed = make_int2(get_int_b2(bq3->qs, iqs + 0), get_int_b2(bq3->qs, iqs + 1));
@@ -1180,15 +1192,17 @@ static __device__ __forceinline__ float vec_dot_iq3_s_q8_1(
 
     sumi *= 1 + 2*((bq3->scales[iqs/4] >> ((iqs << 1) & 0x04)) & 0x0F);
 
-    const float d = __half2float(bq3->d) * __low2float(bq8_1[iqs/2].ds);
+    const float d = __half2float(bq3->d) * ggml_cuda_cast<float2>(bq8_1[iqs / 2].ds).x;
     return d * sumi;
 }
 
 #define VDR_IQ1_S_Q8_1_MMVQ 1
 #define VDR_IQ1_S_Q8_1_MMQ  1
 
-static __device__ __forceinline__ float vec_dot_iq1_s_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+static __device__ __forceinline__ float vec_dot_iq1_s_q8_1(const void * __restrict__ vbq,
+                                                           const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                           const int & kbx,
+                                                           const int & iqs) {
     const block_iq1_s * bq1 = (const block_iq1_s *) vbq + kbx;
 
     const int       qs_packed = get_int_b2(bq1->qs, iqs);
@@ -1213,16 +1227,17 @@ static __device__ __forceinline__ float vec_dot_iq1_s_q8_1(
 
     const float  d1q   = __half2float(bq1->d) * (((qh >> 11) & 0x0E) + 1);
     const float  delta = -1.0f + IQ1S_DELTA - (qh & 0x8000) * (2.0f*IQ1S_DELTA/0x8000);
-    const float2 ds    = __half22float2(bq8_1[iqs].ds);
+    const float2 ds    = ggml_cuda_cast<float2>(bq8_1[iqs].ds);
     return d1q * (ds.x*sumi + ds.y*delta);
 }
 
 #define VDR_IQ1_M_Q8_1_MMVQ 1
 #define VDR_IQ1_M_Q8_1_MMQ  1
 
-static __device__ __forceinline__ float vec_dot_iq1_m_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_iq1_m_q8_1(const void * __restrict__ vbq,
+                                                           const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                           const int & kbx,
+                                                           const int & iqs) {
     const block_iq1_m * bq1 = (const block_iq1_m *) vbq + kbx;
 
     const int       qs_packed = get_int_b4(bq1->qs, iqs);
@@ -1256,7 +1271,7 @@ static __device__ __forceinline__ float vec_dot_iq1_m_q8_1(
 
     iq1m_scale_t scale;
     scale.u16 = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00F0) | ((sc[2] >> 4) & 0x0F00) | (sc[3] & 0xF000);
-    const float d = __half2float(scale.f16) * __low2float(bq8_1[iqs].ds);
+    const float d = __half2float(scale.f16) * ggml_cuda_cast<float2>(bq8_1[iqs].ds).x;
 
     const int tmp = sc[iqs/2] >> (6*(iqs%2));
     const int sc0 = 2*((tmp >> 0) & 0x07) + 1;
@@ -1267,9 +1282,10 @@ static __device__ __forceinline__ float vec_dot_iq1_m_q8_1(
 #define VDR_IQ4_NL_Q8_1_MMVQ 2
 #define VDR_IQ4_NL_Q8_1_MMQ  4
 
-static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1(const void * __restrict__ vbq,
+                                                            const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                            const int & kbx,
+                                                            const int & iqs) {
     const block_iq4_nl * bq4 = (const block_iq4_nl *) vbq + kbx;
 
     const int * q8 = (const int *) bq8_1->qs + iqs;
@@ -1284,16 +1300,17 @@ static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1(
         sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
     }
 
-    const float d = __half2float(bq4->d) * __low2float(bq8_1->ds);
+    const float d = __half2float(bq4->d) * ggml_cuda_cast<float2>(bq8_1->ds).x;
     return d * sumi;
 }
 
 #define VDR_IQ4_XS_Q8_1_MMVQ 4
 #define VDR_IQ4_XS_Q8_1_MMQ  4
 
-static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
+static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(const void * __restrict__ vbq,
+                                                            const block_q8_1_bf16 * __restrict__ bq8_1,
+                                                            const int & kbx,
+                                                            const int & iqs) {
     const block_iq4_xs * bq4 = (const block_iq4_xs *) vbq + kbx;
 
     int sumi = 0;
@@ -1312,6 +1329,6 @@ static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
     const int ls = ((bq4->scales_l[iqs/8] >> (iqs & 0x04)) & 0x0F) | (((bq4->scales_h >> (iqs/2)) & 0x03) << 4);
     sumi *= ls - 32;
 
-    const float d = __half2float(bq4->d) * __low2float(bq8_1[iqs/4].ds);
+    const float d = __half2float(bq4->d) * ggml_cuda_cast<float2>(bq8_1[iqs / 4].ds).x;
     return d * sumi;
 }

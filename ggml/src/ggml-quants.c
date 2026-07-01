@@ -292,7 +292,9 @@ void quantize_row_q8_1_ref(const float * GGML_RESTRICT x, block_q8_1 * GGML_REST
             sum += y[i].qs[QK8_1/2 + j];
         }
 
-        y[i].s = GGML_FP32_TO_FP16(sum*d);
+        // store sum as bf16 in the fp16 slot to preserve full fp32 range
+        // (avoids overflow when used in Q4_1/Q5_1/Q4_K/Q5_K dot products with large activations)
+        y[i].s = GGML_FP32_TO_BF16(sum * d).bits;
     }
 }
 

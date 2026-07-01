@@ -448,8 +448,9 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
         __m256i i3 = _mm256_cvtps_epi32( v3 );
 
 #if defined(__AVX2__)
-        // Compute the sum of the quants and set y[i].s
-        y[i].s = GGML_CPU_FP32_TO_FP16(d * hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3))));
+        // Store sum as bf16 in the fp16 slot to preserve full fp32 range
+        // (avoids overflow when used in Q4_1/Q5_1/Q4_K/Q5_K dot products with large activations)
+        y[i].s = GGML_FP32_TO_BF16(d * hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3)))).bits;
 
         // Convert int32 to int16
         i0 = _mm256_packs_epi32( i0, i1 );	// 0, 1, 2, 3,  8, 9, 10, 11,  4, 5, 6, 7, 12, 13, 14, 15
@@ -476,10 +477,11 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
         __m128i ni6 = _mm256_castsi256_si128( i3 );
         __m128i ni7 = _mm256_extractf128_si256( i3, 1);
 
-        // Compute the sum of the quants and set y[i].s
+        // Store sum as bf16 in the fp16 slot to preserve full fp32 range
+        // (avoids overflow when used in Q4_1/Q5_1/Q4_K/Q5_K dot products with large activations)
         const __m128i s0 = _mm_add_epi32(_mm_add_epi32(ni0, ni1), _mm_add_epi32(ni2, ni3));
         const __m128i s1 = _mm_add_epi32(_mm_add_epi32(ni4, ni5), _mm_add_epi32(ni6, ni7));
-        y[i].s = GGML_CPU_FP32_TO_FP16(d * hsum_i32_4(_mm_add_epi32(s0, s1)));
+        y[i].s = GGML_FP32_TO_BF16(d * hsum_i32_4(_mm_add_epi32(s0, s1))).bits;
 
         // Convert int32 to int16
         ni0 = _mm_packs_epi32( ni0, ni1 );
@@ -883,7 +885,8 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const float d0 = GGML_CPU_FP16_TO_FP32(x[ib].d);
         const float d1 = GGML_CPU_FP16_TO_FP32(y[ib].d);
 
-        summs += GGML_CPU_FP16_TO_FP32(x[ib].m) * GGML_CPU_FP16_TO_FP32(y[ib].s);
+        // y[ib].s holds bf16 bits (see quantize_row_q8_1); decode as bf16 to preserve full fp32 range.
+        summs += GGML_CPU_FP16_TO_FP32(x[ib].m) * GGML_BF16_TO_FP32((ggml_bf16_t){ .bits = y[ib].s });
 
         const __m256 d0v = _mm256_set1_ps( d0 );
         const __m256 d1v = _mm256_set1_ps( d1 );
@@ -1246,7 +1249,8 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     for (; ib < nb; ++ib) {
         const __m256 dx = _mm256_set1_ps(GGML_CPU_FP16_TO_FP32(x[ib].d));
 
-        summs += GGML_CPU_FP16_TO_FP32(x[ib].m) * GGML_CPU_FP16_TO_FP32(y[ib].s);
+        // y[ib].s holds bf16 bits (see quantize_row_q8_1); decode as bf16 to preserve full fp32 range.
+        summs += GGML_CPU_FP16_TO_FP32(x[ib].m) * GGML_BF16_TO_FP32((ggml_bf16_t){ .bits = y[ib].s });
 
         __m256i qx = bytes_from_nibbles_32(x[ib].qs);
         __m256i bxhi = bytes_from_bits_32(x[ib].qh);
@@ -1273,7 +1277,8 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     for (; ib < nb; ++ib) {
         const __m256 dx = _mm256_set1_ps(GGML_CPU_FP16_TO_FP32(x[ib].d));
 
-        summs += GGML_CPU_FP16_TO_FP32(x[ib].m) * GGML_CPU_FP16_TO_FP32(y[ib].s);
+        // y[ib].s holds bf16 bits (see quantize_row_q8_1); decode as bf16 to preserve full fp32 range.
+        summs += GGML_CPU_FP16_TO_FP32(x[ib].m) * GGML_BF16_TO_FP32((ggml_bf16_t){ .bits = y[ib].s });
 
         __m256i bx_0 = bytes_from_nibbles_32(x[ib].qs);
         const __m256i bxhi = bytes_from_bits_32(x[ib].qh);

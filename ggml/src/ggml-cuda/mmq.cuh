@@ -54,9 +54,26 @@ struct block_fp4_mmq {
     int8_t   qs[4 * 32];  // 256 FP4 values packed as 4-bit pairs (2 per byte)
 };
 
-static_assert(sizeof(block_q8_1_mmq) == 4*QK8_1 + 4*sizeof(half2), "Unexpected block_q8_1_mmq size");
-static_assert(sizeof(block_q8_1_mmq) == 4*sizeof(block_q8_1),      "Unexpected block_q8_1_mmq size");
-static_assert(sizeof(block_fp4_mmq)  == sizeof(block_q8_1_mmq),    "Unexpected block_fp4_mmq size");
+// CUDA-only bf16 sibling of block_q8_1_mmq. Identical byte layout; the DS4
+// layout (1 scale + 1 partial sum per 32 values) holds bf16 pairs instead of
+// fp16 pairs to keep the partial sum within range for Q4_1/Q5_1/Q4_K/Q5_K
+// dot products. The D4 (fp32) and D2S6 (fp16, Q2_K) layouts are unchanged.
+// The union is named (.u) because nv_bfloat16 carries a non-trivial constructor
+// in cuda_bf16.h, which C++ disallows in anonymous aggregates.
+struct block_q8_1_mmq_bf16 {
+    union {
+        float        d4[4];
+        nv_bfloat162 ds4[4];
+        half         d2s6[8];
+    } u;
+
+    int8_t qs[4 * QK8_1];
+};
+
+static_assert(sizeof(block_q8_1_mmq) == 4 * QK8_1 + 4 * sizeof(half2), "Unexpected block_q8_1_mmq size");
+static_assert(sizeof(block_q8_1_mmq) == 4 * sizeof(block_q8_1), "Unexpected block_q8_1_mmq size");
+static_assert(sizeof(block_q8_1_mmq_bf16) == sizeof(block_q8_1_mmq), "Unexpected block_q8_1_mmq_bf16 size");
+static_assert(sizeof(block_fp4_mmq) == sizeof(block_q8_1_mmq), "Unexpected block_fp4_mmq size");
 
 static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
     switch (type_x) {
@@ -463,12 +480,12 @@ static __device__ __forceinline__ void vec_dot_q4_0_q8_1_dp4a(
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
     constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q4_0, mmq_y);
-    const int   * x_qs = (const int   *) x;
-    const float * x_df = (const float *) x_qs + txs.qs;
-    const int   * y_qs = (const int   *) y + 4;
-    const half2 * y_ds = (const half2 *) y;
+    const int *            x_qs = (const int *) x;
+    const float *          x_df = (const float *) x_qs + txs.qs;
+    const int *            y_qs = (const int *) y + 4;
+    const nv_bfloat162 *   y_ds = (const nv_bfloat162 *) y;
 
-// #pragma unroll
+    // #pragma unroll
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR4_0*VDR_Q4_0_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
@@ -574,12 +591,12 @@ static __device__ __forceinline__ void vec_dot_q4_1_q8_1_dp4a(
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
     constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q4_1, mmq_y);
-    const int   * x_qs = (const int   *) x;
-    const half2 * x_dm = (const half2 *) x_qs + txs.qs;
-    const int   * y_qs = (const int   *) y + 4;
-    const half2 * y_ds = (const half2 *) y;
+    const int *            x_qs = (const int *) x;
+    const half2 *          x_dm = (const half2 *) x_qs + txs.qs;
+    const int *            y_qs = (const int *) y + 4;
+    const nv_bfloat162 *   y_ds = (const nv_bfloat162 *) y;
 
-// #pragma unroll
+    // #pragma unroll
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR4_1*VDR_Q4_1_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
@@ -1170,11 +1187,11 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
 
     y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
 
-    const int   * x_qs = (const int   *) x;
-    const float * x_df = (const float *) x_qs + 2*MMQ_TILE_NE_K;
-    const int   * y_qs = (const int   *) y + 4;
-    const float * y_df = (const float *) y;
-    const half2 * y_ds = (const half2 *) y;
+    const int *          x_qs = (const int *) x;
+    const float *        x_df = (const float *) x_qs + 2 * MMQ_TILE_NE_K;
+    const int *          y_qs = (const int *) y + 4;
+    const float *        y_df = (const float *) y;
+    const nv_bfloat162 * y_ds = (const nv_bfloat162 *) y;
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
 
@@ -1197,7 +1214,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
             if (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
                 dB = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
             } else {
-                dB = __low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                dB = ggml_cuda_cast<float2>(y_ds[j * MMQ_TILE_Y_K + k01 / QI8_1]).x;
             }
 
 #pragma unroll
@@ -1225,11 +1242,11 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
 
     y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
 
-    const int   * x_qs = (const int   *) x;
-    const float * x_df = (const float *) x_qs + 2*MMQ_TILE_NE_K;
-    const int   * y_qs = (const int   *) y + 4;
-    const float * y_df = (const float *) y;
-    const half2 * y_ds = (const half2 *) y;
+    const int *          x_qs = (const int *) x;
+    const float *        x_df = (const float *) x_qs + 2 * MMQ_TILE_NE_K;
+    const int *          y_qs = (const int *) y + 4;
+    const float *        y_df = (const float *) y;
+    const nv_bfloat162 * y_ds = (const nv_bfloat162 *) y;
 
     tile_A A[ntx][MMQ_TILE_NE_K/QI8_0];
     float dA[ntx][tile_C::ne/2][MMQ_TILE_NE_K/QI8_0];
@@ -1272,9 +1289,9 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
                 const int j = j0 + tile_C::get_j(l);
 
                 if (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
-                    dB[l] =             y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
+                    dB[l] = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
                 } else {
-                    dB[l] = __low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                    dB[l] = ggml_cuda_cast<float2>(y_ds[j * MMQ_TILE_Y_K + k01 / QI8_1]).x;
                 }
             }
 
@@ -1301,12 +1318,12 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_dp4a(
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
     constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q5_1, mmq_y);
-    const int   * x_qs = (const int   *) x;
-    const half2 * x_dm = (const half2 *) x_qs + txs.qs;
-    const int   * y_qs = (const int   *) y + 4;
-    const half2 * y_ds = (const half2 *) y;
+    const int *            x_qs = (const int *) x;
+    const half2 *          x_dm = (const half2 *) x_qs + txs.qs;
+    const int *            y_qs = (const int *) y + 4;
+    const nv_bfloat162 *   y_ds = (const nv_bfloat162 *) y;
 
-// #pragma unroll
+    // #pragma unroll
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += VDR_Q8_0_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
@@ -1341,10 +1358,10 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
 
     y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
 
-    const int   * x_qs = (const int   *) x;
-    const half2 * x_dm = (const half2 *) x_qs + 2*MMQ_TILE_NE_K;
-    const int   * y_qs = (const int   *) y + 4;
-    const half2 * y_dm = (const half2 *) y;
+    const int *          x_qs = (const int *) x;
+    const half2 *        x_dm = (const half2 *) x_qs + 2 * MMQ_TILE_NE_K;
+    const int *          y_qs = (const int *) y + 4;
+    const nv_bfloat162 * y_dm = (const nv_bfloat162 *) y;
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
 
@@ -1363,7 +1380,7 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
             load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
 
             const int j = j0 + tile_C::get_j(0);
-            const float2 dsB = __half22float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
+            const float2 dsB = ggml_cuda_cast<float2>(y_dm[j * MMQ_TILE_Y_K + k01 / QI8_1]);
 
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
@@ -1391,10 +1408,10 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
 
     y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
 
-    const int   * x_qs = (const int   *) x;
-    const half2 * x_dm = (const half2 *) x_qs + 2*MMQ_TILE_NE_K;
-    const int   * y_qs = (const int   *) y + 4;
-    const half2 * y_dm = (const half2 *) y;
+    const int *          x_qs = (const int *) x;
+    const half2 *        x_dm = (const half2 *) x_qs + 2 * MMQ_TILE_NE_K;
+    const int *          y_qs = (const int *) y + 4;
+    const nv_bfloat162 * y_dm = (const nv_bfloat162 *) y;
 
     tile_A   A[ntx][MMQ_TILE_NE_K/QI8_1];
     float2 dmA[ntx][tile_C::ne/2][MMQ_TILE_NE_K/QI8_1];
@@ -1436,7 +1453,7 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
             for (int l = 0; l < tile_C::ne/2; ++l) {
                 const int j = j0 + tile_C::get_j(l);
 
-                dsB[l] = __half22float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                dsB[l] = ggml_cuda_cast<float2>(y_dm[j * MMQ_TILE_Y_K + k01 / QI8_1]);
             }
 
 #pragma unroll
@@ -2206,13 +2223,13 @@ static __device__ __forceinline__ void vec_dot_q4_K_q8_1_dp4a(
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
     constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q4_K, mmq_y);
-    const int   * x_qs = (const int   *) x;
-    const half2 * x_dm = (const half2 *) x_qs + txs.qs;
-    const int   * x_sc = (const int   *) x_dm + txs.dm;
-    const int   * y_qs = (const int   *) y + 4;
-    const half2 * y_ds = (const half2 *) y;
+    const int *            x_qs = (const int *) x;
+    const half2 *          x_dm = (const half2 *) x_qs + txs.qs;
+    const int *            x_sc = (const int *) x_dm + txs.dm;
+    const int *            y_qs = (const int *) y + 4;
+    const nv_bfloat162 *   y_ds = (const nv_bfloat162 *) y;
 
-// #pragma unroll
+    // #pragma unroll
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR4_K*VDR_Q4_K_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
@@ -2363,11 +2380,11 @@ static __device__ __forceinline__ void vec_dot_q5_K_q8_1_dp4a(
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
     constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q5_K, mmq_y);
-    const int   * x_qs = (const int   *) x;
-    const half2 * x_dm = (const half2 *) x_qs + txs.qs;
-    const int   * x_sc = (const int   *) x_dm + txs.dm;
-    const int   * y_qs = (const int   *) y + 4;
-    const half2 * y_ds = (const half2 *) y;
+    const int *            x_qs = (const int *) x;
+    const half2 *          x_dm = (const half2 *) x_qs + txs.qs;
+    const int *            x_sc = (const int *) x_dm + txs.dm;
+    const int *            y_qs = (const int *) y + 4;
+    const nv_bfloat162 *   y_ds = (const nv_bfloat162 *) y;
 
 // #pragma unroll
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR5_K*VDR_Q5_K_Q8_1_MMQ) {
