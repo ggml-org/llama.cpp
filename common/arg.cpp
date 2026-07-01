@@ -581,9 +581,6 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
 
-    // setup log directly from params.verbosity: see tools/cli/cli.cpp
-    common_log_set_verbosity_thold(params.verbosity);
-
     std::unordered_map<std::string, std::pair<common_arg *, bool>> arg_to_options;
     for (auto & opt : ctx_arg.options) {
         for (const auto & arg : opt.args) {
@@ -1174,6 +1171,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         params.n_parallel = -1;     // auto by default
     }
 
+    // Set log verbosity before other functions (they might log).
+    common_log_set_verbosity_thold(params.verbosity);
+
     params.use_color = tty_can_use_colors();
 
     common_params_context ctx_arg(params);
@@ -1669,6 +1669,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.single_turn = true;
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"-q", "--quiet"},
+        "suppress non-model output (banner, loading messages, prompts, etc.)\n"
+        "only model-generated text is printed to stdout\n"
+        "(default: false)",
+        [](common_params & params) {
+            params.quiet = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"-i", "--interactive"},
         string_format("run in interactive mode (default: %s)", params.interactive ? "true" : "false"),

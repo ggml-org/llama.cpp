@@ -169,21 +169,21 @@ struct cli_context {
                 for (const auto & diff : res_partial->oaicompat_msg_diffs) {
                     if (!diff.content_delta.empty()) {
                         if (is_thinking) {
-                            console::log("\n[End thinking]\n\n");
+                            console::output("\n[End thinking]\n\n");
                             console::set_display(DISPLAY_TYPE_RESET);
                             is_thinking = false;
                         }
                         curr_content += diff.content_delta;
-                        console::log("%s", diff.content_delta.c_str());
+                        console::output("%s", diff.content_delta.c_str());
                         console::flush();
                     }
                     if (!diff.reasoning_content_delta.empty()) {
                         console::set_display(DISPLAY_TYPE_REASONING);
                         if (!is_thinking) {
-                            console::log("[Start thinking]\n");
+                            console::output("[Start thinking]\n");
                         }
                         is_thinking = true;
-                        console::log("%s", diff.reasoning_content_delta.c_str());
+                        console::output("%s", diff.reasoning_content_delta.c_str());
                         console::flush();
                     }
                 }
@@ -390,6 +390,8 @@ int llama_cli(int argc, char ** argv) {
     // TODO: avoid using atexit() here by making `console` a singleton
     console::init(params.simple_io, params.use_color);
     atexit([]() { console::cleanup(); });
+
+    console::set_quiet(params.quiet);
 
     console::set_display(DISPLAY_TYPE_RESET);
     console::set_completion_callback(auto_completion_callback);
@@ -652,7 +654,7 @@ int llama_cli(int argc, char ** argv) {
             {"role",    "assistant"},
             {"content", assistant_content}
         });
-        console::log("\n");
+        console::output("\n"); // final newline after model output
 
         if (params.show_timings) {
             console::set_display(DISPLAY_TYPE_INFO);
@@ -673,8 +675,10 @@ int llama_cli(int argc, char ** argv) {
     inference_thread.join();
 
     // bump the log level to display timings
-    common_log_set_verbosity_thold(LOG_LEVEL_INFO);
-    common_memory_breakdown_print(ctx_cli.ctx_server.get_llama_context());
+    if (!params.quiet) {
+        common_log_set_verbosity_thold(LOG_LEVEL_INFO);
+        common_memory_breakdown_print(ctx_cli.ctx_server.get_llama_context());
+    }
 
     return 0;
 }
