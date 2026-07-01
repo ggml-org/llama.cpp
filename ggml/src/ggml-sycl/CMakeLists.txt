@@ -162,6 +162,9 @@ if (GGML_SYCL_F16)
     add_compile_definitions(GGML_SYCL_F16)
 endif()
 
+set(GGML_SYCL_FATTN_VEC_NTHREADS "128" CACHE STRING "SYCL flash-attention vec kernel work-group threads; default 128, set 256 for Battlemage/Xe2 dGPUs")
+add_compile_definitions(GGML_SYCL_FATTN_VEC_NTHREADS=${GGML_SYCL_FATTN_VEC_NTHREADS})
+
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
     if (NOT GGML_SYCL_DEVICE_ARCH)

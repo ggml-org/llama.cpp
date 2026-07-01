@@ -15,13 +15,17 @@
 
 namespace syclex = sycl::ext::oneapi::experimental;
 
+#ifndef GGML_SYCL_FATTN_VEC_NTHREADS
+#define GGML_SYCL_FATTN_VEC_NTHREADS 128
+#endif
+
 static int ggml_sycl_fattn_vec_get_nthreads_host(const int cc) {
-    return 128;
     GGML_UNUSED(cc);
+    return GGML_SYCL_FATTN_VEC_NTHREADS;
 }
 
 static constexpr int ggml_sycl_fattn_vec_get_nthreads_device() {
-    return 128;
+    return GGML_SYCL_FATTN_VEC_NTHREADS;
 }
 
 // Currenlty llvm with the amdgcn target dose not support unrolling loops
