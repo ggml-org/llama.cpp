@@ -2,9 +2,12 @@
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
+#include "ggml-quants.h"
 #include "binary-ops.h"
 #include "simd-gemm.h"
 #include "ggml.h"
+#define GGML_COMMON_DECL_CPP
+#include "ggml-common.h"
 #include "unary-ops.h"
 #include "vec.h"
 
@@ -4767,6 +4770,25 @@ void ggml_compute_forward_cont(
 
 // ggml_compute_forward_get_rows
 
+static inline const void * ggml_cvt_row_to_mxfp6_tile_index(
+        const struct ggml_tensor * tensor,
+        int64_t row,
+        int64_t channel,
+        size_t row_stride,
+        size_t offset,
+        ggml_tile_to_row_ref * ref) {
+
+    const int64_t tile_row = row / MXFP6_TILE_ROWS;
+
+    *ref = {
+        tensor,
+        (const char *) tensor->data + MXFP6_HEADER_OFFSET + tile_row*row_stride*MXFP6_TILE_ROWS + offset,
+        row,
+        channel,
+    };
+    return ref;
+}
+
 static void ggml_compute_forward_get_rows_q(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -4805,9 +4827,19 @@ static void ggml_compute_forward_get_rows_q(
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
-        dequantize_row_q(
-                (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
-                     (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
+        ggml_tile_to_row_ref tile_row_ref;
+        const void * src_row;
+        if (type == GGML_TYPE_MXFP6_E2M3) {
+            src_row = ggml_cvt_row_to_mxfp6_tile_index(src0, i01, i11 + i12*ne11, nb01, i11*nb02 + i12*nb03, &tile_row_ref);
+            dequantize_row_mxfp6_e2m3_tile(
+                    src_row,
+                         (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
+        } else {
+            src_row = (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03);
+            dequantize_row_q(
+                    src_row,
+                         (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
+        }
     }
 }
 
@@ -5675,6 +5707,7 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_MXFP6_E2M3:
         case GGML_TYPE_NVFP4:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
