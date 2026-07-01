@@ -2246,6 +2246,18 @@ extern "C" {
         GGML_SCALE_FLAG_ANTIALIAS     = (1 << 9),
     };
 
+#ifdef __cplusplus
+    // Overloads to apply a flag to a mode. Explicitly defined because arithmethic between different enum types are deprecated by C++20 (https://wg21.link/P1120) and disallowed by C++26 (https://wg21.link/P2864).
+
+    inline constexpr ggml_scale_mode operator|(const ggml_scale_mode mode, const ggml_scale_flag flag) {
+        return ggml_scale_mode(int(mode) | int(flag));
+    }
+
+    inline constexpr ggml_scale_mode operator&(const ggml_scale_mode mode, const ggml_scale_flag flag) {
+        return ggml_scale_mode(int(mode) & int(flag));
+    }
+#endif
+
     // interpolate
     // multiplies ne0 and ne1 by scale factor
     GGML_API struct ggml_tensor * ggml_upscale(
