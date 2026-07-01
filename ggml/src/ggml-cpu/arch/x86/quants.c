@@ -339,13 +339,9 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
         v2 = _mm256_mul_ps( v2, mul );
         v3 = _mm256_mul_ps( v3, mul );
 
-        // Round to nearest integer
-        v0 = _mm256_round_ps( v0, _MM_ROUND_NEAREST );
-        v1 = _mm256_round_ps( v1, _MM_ROUND_NEAREST );
-        v2 = _mm256_round_ps( v2, _MM_ROUND_NEAREST );
-        v3 = _mm256_round_ps( v3, _MM_ROUND_NEAREST );
-
-        // Convert floats to integers
+        // Convert floats to integers. vcvtps2dq uses MXCSR rounding mode;
+        // with the default round-to-nearest-even mode, a separate
+        // _mm256_round_ps pass is redundant.
         __m256i i0 = _mm256_cvtps_epi32( v0 );
         __m256i i1 = _mm256_cvtps_epi32( v1 );
         __m256i i2 = _mm256_cvtps_epi32( v2 );
@@ -435,13 +431,9 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
         v2 = _mm256_mul_ps( v2, mul );
         v3 = _mm256_mul_ps( v3, mul );
 
-        // Round to nearest integer
-        v0 = _mm256_round_ps( v0, _MM_ROUND_NEAREST );
-        v1 = _mm256_round_ps( v1, _MM_ROUND_NEAREST );
-        v2 = _mm256_round_ps( v2, _MM_ROUND_NEAREST );
-        v3 = _mm256_round_ps( v3, _MM_ROUND_NEAREST );
-
-        // Convert floats to integers
+        // Convert floats to integers. vcvtps2dq uses MXCSR rounding mode;
+        // with the default round-to-nearest-even mode, a separate
+        // _mm256_round_ps pass is redundant.
         __m256i i0 = _mm256_cvtps_epi32( v0 );
         __m256i i1 = _mm256_cvtps_epi32( v1 );
         __m256i i2 = _mm256_cvtps_epi32( v2 );
@@ -502,8 +494,210 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 }
 
 // placeholder implementation for Apple targets
-void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-    quantize_row_q8_K_ref(x, y, k);
+void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    block_q8_K * GGML_RESTRICT y = (block_q8_K *) vy;
+
+#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
+    const __m512i clamp_hi = _mm512_set1_epi32(127);
+
+    for (int64_t i = 0; i < nb; ++i) {
+        const __m512 v0  = _mm512_loadu_ps(x +   0);
+        const __m512 v1  = _mm512_loadu_ps(x +  16);
+        const __m512 v2  = _mm512_loadu_ps(x +  32);
+        const __m512 v3  = _mm512_loadu_ps(x +  48);
+        const __m512 v4  = _mm512_loadu_ps(x +  64);
+        const __m512 v5  = _mm512_loadu_ps(x +  80);
+        const __m512 v6  = _mm512_loadu_ps(x +  96);
+        const __m512 v7  = _mm512_loadu_ps(x + 112);
+        const __m512 v8  = _mm512_loadu_ps(x + 128);
+        const __m512 v9  = _mm512_loadu_ps(x + 144);
+        const __m512 v10 = _mm512_loadu_ps(x + 160);
+        const __m512 v11 = _mm512_loadu_ps(x + 176);
+        const __m512 v12 = _mm512_loadu_ps(x + 192);
+        const __m512 v13 = _mm512_loadu_ps(x + 208);
+        const __m512 v14 = _mm512_loadu_ps(x + 224);
+        const __m512 v15 = _mm512_loadu_ps(x + 240);
+
+        const __m512 vmax01 = _mm512_max_ps(v0,  v1);
+        const __m512 vmax23 = _mm512_max_ps(v2,  v3);
+        const __m512 vmax45 = _mm512_max_ps(v4,  v5);
+        const __m512 vmax67 = _mm512_max_ps(v6,  v7);
+        const __m512 vmax89 = _mm512_max_ps(v8,  v9);
+        const __m512 vmaxab = _mm512_max_ps(v10, v11);
+        const __m512 vmaxcd = _mm512_max_ps(v12, v13);
+        const __m512 vmaxef = _mm512_max_ps(v14, v15);
+        const __m512 vmax0 = _mm512_max_ps(_mm512_max_ps(vmax01, vmax23),
+                                           _mm512_max_ps(vmax45, vmax67));
+        const __m512 vmax1 = _mm512_max_ps(_mm512_max_ps(vmax89, vmaxab),
+                                           _mm512_max_ps(vmaxcd, vmaxef));
+        const __m512 vmax  = _mm512_max_ps(vmax0, vmax1);
+
+        const __m512 vmin01 = _mm512_min_ps(v0,  v1);
+        const __m512 vmin23 = _mm512_min_ps(v2,  v3);
+        const __m512 vmin45 = _mm512_min_ps(v4,  v5);
+        const __m512 vmin67 = _mm512_min_ps(v6,  v7);
+        const __m512 vmin89 = _mm512_min_ps(v8,  v9);
+        const __m512 vminab = _mm512_min_ps(v10, v11);
+        const __m512 vmincd = _mm512_min_ps(v12, v13);
+        const __m512 vminef = _mm512_min_ps(v14, v15);
+        const __m512 vmin0 = _mm512_min_ps(_mm512_min_ps(vmin01, vmin23),
+                                           _mm512_min_ps(vmin45, vmin67));
+        const __m512 vmin1 = _mm512_min_ps(_mm512_min_ps(vmin89, vminab),
+                                           _mm512_min_ps(vmincd, vminef));
+        const __m512 vmin  = _mm512_min_ps(vmin0, vmin1);
+
+        const float max_pos = _mm512_reduce_max_ps(vmax);
+        const float min_neg = _mm512_reduce_min_ps(vmin);
+        const float max = (max_pos >= -min_neg) ? max_pos : min_neg;
+
+        if (max == 0.0f) {
+            y[i].d = 0;
+            memset(y[i].qs, 0, QK_K);
+            memset(y[i].bsums, 0, (QK_K / 16) * sizeof(int16_t));
+            x += QK_K;
+            continue;
+        }
+
+        const float iscale = -127.0f / max;
+        const __m512 viscale = _mm512_set1_ps(iscale);
+
+#define Q8K_ZMM_LANE(src, off)                                                   \
+        do {                                                                      \
+            const __m512i i32_ = _mm512_cvtps_epi32(_mm512_mul_ps(src, viscale)); \
+            const __m512i clamped_ = _mm512_min_epi32(i32_, clamp_hi);            \
+            _mm_storeu_si128((__m128i *) (y[i].qs + (off)),                       \
+                             _mm512_cvtsepi32_epi8(clamped_));                   \
+            y[i].bsums[(off) / 16] = (int16_t) _mm512_reduce_add_epi32(clamped_); \
+        } while (0)
+
+        Q8K_ZMM_LANE(v0,    0);
+        Q8K_ZMM_LANE(v1,   16);
+        Q8K_ZMM_LANE(v2,   32);
+        Q8K_ZMM_LANE(v3,   48);
+        Q8K_ZMM_LANE(v4,   64);
+        Q8K_ZMM_LANE(v5,   80);
+        Q8K_ZMM_LANE(v6,   96);
+        Q8K_ZMM_LANE(v7,  112);
+        Q8K_ZMM_LANE(v8,  128);
+        Q8K_ZMM_LANE(v9,  144);
+        Q8K_ZMM_LANE(v10, 160);
+        Q8K_ZMM_LANE(v11, 176);
+        Q8K_ZMM_LANE(v12, 192);
+        Q8K_ZMM_LANE(v13, 208);
+        Q8K_ZMM_LANE(v14, 224);
+        Q8K_ZMM_LANE(v15, 240);
+
+#undef Q8K_ZMM_LANE
+
+        y[i].d = 1.0f / iscale;
+        x += QK_K;
+    }
+#elif defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
+    const __m512i clamp_hi = _mm512_set1_epi32(127);
+
+    for (int64_t i = 0; i < nb; ++i) {
+        __m512 vmax = _mm512_setzero_ps();
+        __m512 vmin = _mm512_setzero_ps();
+        for (int j = 0; j < QK_K; j += 16) {
+            const __m512 v = _mm512_loadu_ps(x + j);
+            vmax = _mm512_max_ps(vmax, v);
+            vmin = _mm512_min_ps(vmin, v);
+        }
+
+        const float max_pos = _mm512_reduce_max_ps(vmax);
+        const float min_neg = _mm512_reduce_min_ps(vmin);
+        const float max = (max_pos >= -min_neg) ? max_pos : min_neg;
+
+        if (max == 0.0f) {
+            y[i].d = 0;
+            memset(y[i].qs, 0, QK_K);
+            memset(y[i].bsums, 0, (QK_K / 16) * sizeof(int16_t));
+            x += QK_K;
+            continue;
+        }
+
+        const float iscale = -127.0f / max;
+        const __m512 viscale = _mm512_set1_ps(iscale);
+
+        for (int j = 0; j < QK_K; j += 16) {
+            const __m512 v = _mm512_loadu_ps(x + j);
+            const __m512i i32 = _mm512_cvtps_epi32(_mm512_mul_ps(v, viscale));
+            const __m512i clamped = _mm512_min_epi32(i32, clamp_hi);
+            _mm_storeu_si128((__m128i *) (y[i].qs + j), _mm512_cvtsepi32_epi8(clamped));
+            y[i].bsums[j / 16] = (int16_t) _mm512_reduce_add_epi32(clamped);
+        }
+
+        y[i].d = 1.0f / iscale;
+        x += QK_K;
+    }
+#elif defined(__AVX2__)
+    const __m256i clamp_hi = _mm256_set1_epi32(127);
+
+    for (int64_t i = 0; i < nb; ++i) {
+        __m256 vmax = _mm256_setzero_ps();
+        __m256 vmin = _mm256_setzero_ps();
+        for (int j = 0; j < QK_K; j += 8) {
+            const __m256 v = _mm256_loadu_ps(x + j);
+            vmax = _mm256_max_ps(vmax, v);
+            vmin = _mm256_min_ps(vmin, v);
+        }
+
+        __m128 max4 = _mm_max_ps(_mm256_extractf128_ps(vmax, 1),
+                                 _mm256_castps256_ps128(vmax));
+        max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
+        max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
+        const float max_pos = _mm_cvtss_f32(max4);
+
+        __m128 min4 = _mm_min_ps(_mm256_extractf128_ps(vmin, 1),
+                                 _mm256_castps256_ps128(vmin));
+        min4 = _mm_min_ps(min4, _mm_movehl_ps(min4, min4));
+        min4 = _mm_min_ss(min4, _mm_movehdup_ps(min4));
+        const float min_neg = _mm_cvtss_f32(min4);
+
+        const float max = (max_pos >= -min_neg) ? max_pos : min_neg;
+
+        if (max == 0.0f) {
+            y[i].d = 0;
+            memset(y[i].qs, 0, QK_K);
+            memset(y[i].bsums, 0, (QK_K / 16) * sizeof(int16_t));
+            x += QK_K;
+            continue;
+        }
+
+        const float iscale = -127.0f / max;
+        const __m256 viscale = _mm256_set1_ps(iscale);
+
+        for (int j = 0; j < QK_K; j += 16) {
+            const __m256 v_lo = _mm256_loadu_ps(x + j);
+            const __m256 v_hi = _mm256_loadu_ps(x + j + 8);
+
+            const __m256i i32_lo = _mm256_cvtps_epi32(_mm256_mul_ps(v_lo, viscale));
+            const __m256i i32_hi = _mm256_cvtps_epi32(_mm256_mul_ps(v_hi, viscale));
+
+            const __m256i c_lo = _mm256_min_epi32(i32_lo, clamp_hi);
+            const __m256i c_hi = _mm256_min_epi32(i32_hi, clamp_hi);
+
+            const __m128i i16_lo = _mm_packs_epi32(
+                _mm256_castsi256_si128(c_lo),
+                _mm256_extracti128_si256(c_lo, 1));
+            const __m128i i16_hi = _mm_packs_epi32(
+                _mm256_castsi256_si128(c_hi),
+                _mm256_extracti128_si256(c_hi, 1));
+            const __m128i packed = _mm_packs_epi16(i16_lo, i16_hi);
+            _mm_storeu_si128((__m128i *) (y[i].qs + j), packed);
+
+            y[i].bsums[j / 16] = (int16_t) hsum_i32_8(_mm256_add_epi32(c_lo, c_hi));
+        }
+
+        y[i].d = 1.0f / iscale;
+        x += QK_K;
+    }
+#else
+    quantize_row_q8_K_ref(x, vy, k);
+#endif
 }
 
 //===================================== Dot products =================================
@@ -1184,7 +1378,48 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     int ib = 0;
     float sumf = 0;
 
-#if defined(__AVX2__)
+#if defined(__AVX512VNNI__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
+    __m512 acc512 = _mm512_setzero_ps();
+
+    for (; ib + 1 < nb; ib += 2) {
+        const __m256i qx0 = _mm256_loadu_si256((const __m256i *) x[ib  ].qs);
+        const __m256i qx1 = _mm256_loadu_si256((const __m256i *) x[ib+1].qs);
+        const __m512i qx  = _mm512_inserti32x8(_mm512_castsi256_si512(qx0), qx1, 1);
+
+        const __m256i qy0 = _mm256_loadu_si256((const __m256i *) y[ib  ].qs);
+        const __m256i qy1 = _mm256_loadu_si256((const __m256i *) y[ib+1].qs);
+        const __m512i qy  = _mm512_inserti32x8(_mm512_castsi256_si512(qy0), qy1, 1);
+
+        const __m512i ax = _mm512_abs_epi8(qx);
+        const __mmask64 neg = _mm512_movepi8_mask(qx);
+        const __m512i sy = _mm512_mask_sub_epi8(qy, neg, _mm512_setzero_si512(), qy);
+
+        const __m512i dot_i32 = _mm512_dpbusd_epi32(_mm512_setzero_si512(), ax, sy);
+        const __m512  dot_f32 = _mm512_cvtepi32_ps(dot_i32);
+
+        const float s0 = GGML_CPU_FP16_TO_FP32(x[ib  ].d) * GGML_CPU_FP16_TO_FP32(y[ib  ].d);
+        const float s1 = GGML_CPU_FP16_TO_FP32(x[ib+1].d) * GGML_CPU_FP16_TO_FP32(y[ib+1].d);
+        const __m512 d = _mm512_insertf32x8(
+            _mm512_castps256_ps512(_mm256_set1_ps(s0)),
+            _mm256_set1_ps(s1),
+            1);
+
+        acc512 = _mm512_fmadd_ps(d, dot_f32, acc512);
+    }
+
+    sumf = _mm512_reduce_add_ps(acc512);
+
+    __m256 acc = _mm256_setzero_ps();
+    for (; ib < nb; ++ib) {
+        const __m256 d = _mm256_set1_ps(GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d));
+        const __m256i qx = _mm256_loadu_si256((const __m256i *)x[ib].qs);
+        const __m256i qy = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+        const __m256 q = mul_sum_i8_pairs_float(qx, qy);
+        acc = _mm256_fmadd_ps(d, q, acc);
+    }
+
+    sumf += hsum_float_8(acc);
+#elif defined(__AVX2__)
     // Initialize accumulator with zeros
     __m256 acc = _mm256_setzero_ps();
 
