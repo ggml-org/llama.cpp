@@ -671,6 +671,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_q1_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q1_0_ref,
     },
+    [GGML_TYPE_Q2_0] = {
+        .type_name                = "q2_0",
+        .blck_size                = QK2_0,
+        .type_size                = sizeof(block_q2_0),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q2_0,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_q2_0_ref,
+    },
     [GGML_TYPE_Q4_0] = {
         .type_name                = "q4_0",
         .blck_size                = QK4_0,

@@ -108,6 +108,8 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 
 #define VDR_Q1_0_Q8_1_MMVQ 1  // Process one 32-element chunk at a time for parallelism
 #define VDR_Q1_0_Q8_1_MMQ  4  // Q1_0 has 128 bits (4 ints) per block
+#define VDR_Q2_0_Q8_1_MMVQ 1  // Process one 32-element chunk at a time
+#define VDR_Q2_0_Q8_1_MMQ  4  // Q2_0 has 256 bits (8 ints) per block, 4 32-element chunks
 
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
@@ -715,6 +717,39 @@ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
     // Apply Q1_0's single scale and this chunk's Q8_1 scale
     const float d8 = __low2float(bq8_1_chunk->ds);
     return d1 * d8 * sumi;
+}
+
+static __device__ __forceinline__ float vec_dot_q2_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q2_0 * bq2_0 = (const block_q2_0 *) vbq + kbx;
+
+    // Q2_0: 128 elements with ONE scale, 2 bits per element (4 per byte). code c -> symbol s = c-1.
+    // Use the identity dot(s,u) = dot(c,u) - sum(u): bit-spread the codes (no per-code subtract/borrow)
+    // and apply the -sum(u) offset once via the q8_1 stored sum s8 = d8*sum(u).
+    const float d2 = bq2_0->d;
+    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+
+    const int offset = iqs * 8;
+    const int qs0 = bq2_0->qs[offset + 0] | (bq2_0->qs[offset + 1] << 8) |
+                    (bq2_0->qs[offset + 2] << 16) | (bq2_0->qs[offset + 3] << 24);
+    const int qs1 = bq2_0->qs[offset + 4] | (bq2_0->qs[offset + 5] << 8) |
+                    (bq2_0->qs[offset + 6] << 16) | (bq2_0->qs[offset + 7] << 24);
+
+    int sumi = 0;   // = dot(c, u), c in {0,1,2,3}
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        const int b0 = (qs0 >> (j*8)) & 0xFF;
+        const int s0 = (b0 | (b0 << 6) | (b0 << 12) | (b0 << 18)) & 0x03030303; // 4 codes -> 4 bytes
+        sumi = ggml_cuda_dp4a(s0, get_int_b4(bq8_1_chunk->qs, j), sumi);
+        const int b1 = (qs1 >> (j*8)) & 0xFF;
+        const int s1 = (b1 | (b1 << 6) | (b1 << 12) | (b1 << 18)) & 0x03030303;
+        sumi = ggml_cuda_dp4a(s1, get_int_b4(bq8_1_chunk->qs, 4 + j), sumi);
+    }
+
+    const float d8 = __low2float(bq8_1_chunk->ds);
+    const float s8 = __high2float(bq8_1_chunk->ds); // = d8 * sum(u)
+    return d2 * (d8 * sumi - s8);
 }
 
 static __device__ __forceinline__ float vec_dot_q4_0_q8_1(

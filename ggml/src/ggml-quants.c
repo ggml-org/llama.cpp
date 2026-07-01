@@ -71,6 +71,41 @@ void quantize_row_q1_0_ref(const float * GGML_RESTRICT x, block_q1_0 * GGML_REST
     }
 }
 
+void quantize_row_q2_0_ref(const float * GGML_RESTRICT x, block_q2_0 * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK2_0;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        float amax = 0.0f;
+        for (int j = 0; j < qk; j++) {
+            const float a = fabsf(x[i*qk + j]);
+            if (a > amax) amax = a;
+        }
+        const float d = amax;
+        const float id = d > 0.0f ? 1.0f / d : 0.0f;
+
+        y[i].d = GGML_FP32_TO_FP16(d);
+
+        for (int j = 0; j < qk / 4; ++j) {
+            y[i].qs[j] = 0;
+        }
+
+        // 2-bit code c = round(w/d)+1 clamped to [0,3]; symbol s = c-1 in {-1,0,+1,+2}
+        for (int j = 0; j < qk; ++j) {
+            const float w = x[i*qk + j];
+            int q = (int)roundf(w * id) + 1;
+            if (q < 0) q = 0;
+            if (q > 3) q = 3;
+            const int byte_index = j / 4;
+            const int bit_offset = (j % 4) * 2;
+            y[i].qs[byte_index] |= ((uint8_t)q << bit_offset);
+        }
+    }
+}
+
 // reference implementation for deterministic creation of model files
 void quantize_row_q4_0_ref(const float * GGML_RESTRICT x, block_q4_0 * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK4_0;
@@ -394,6 +429,26 @@ void dequantize_row_q1_0(const block_q1_0 * GGML_RESTRICT x, float * GGML_RESTRI
             const int bit_offset = j % 8;
             const uint8_t bit = (x[i].qs[byte_index] >> bit_offset) & 1;
             y[i*qk + j] = bit ? d : neg_d;
+        }
+    }
+}
+
+void dequantize_row_q2_0(const block_q2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK2_0;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_FP16_TO_FP32(x[i].d);
+
+        for (int j = 0; j < qk; ++j) {
+            const int byte_index = j / 4;
+            const int bit_offset = (j % 4) * 2;
+            const uint8_t q = (x[i].qs[byte_index] >> bit_offset) & 0x03;
+            // code {0,1,2,3} -> symbol {-1,0,+1,+2}
+            y[i*qk + j] = ((int)q - 1) * d;
         }
     }
 }
