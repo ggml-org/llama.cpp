@@ -1083,6 +1083,11 @@ class ChatStore {
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
 		const convId = assistantMessage.convId;
+		// Tracks the last message created in this flow. Used as the parent for the next
+		// turn's assistant message so createAssistantMessage does not have to read
+		// conversationsStore.activeMessages, which may belong to a different conversation
+		// after the user navigates while the loop is still running.
+		let lastCreatedInFlow = currentMessageId;
 		// freeze the POST identity from t0 so a stop cancels with the exact session key,
 		// never a stale or empty model resolved later
 		this.setChatStreaming(convId, streamedContent, currentMessageId, effectiveModel);
@@ -1208,8 +1213,15 @@ class ChatStore {
 				};
 				if (timings) uiUpdate.timings = timings;
 				if (resolvedModel) uiUpdate.model = resolvedModel;
-				conversationsStore.updateMessageAtIndex(idx, uiUpdate);
-				await conversationsStore.updateCurrentNode(currentMessageId);
+				// touch the active ui array and node pointer only when this conversation
+				// is displayed; otherwise persist the node move straight to the db so a
+				// foreign conv's currNode stays untouched
+				if (conversationsStore.activeConversation?.id === convId) {
+					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
+					await conversationsStore.updateCurrentNode(currentMessageId);
+				} else {
+					await DatabaseService.updateCurrentNode(convId, currentMessageId);
+				}
 			},
 			createToolResultMessage: async (
 				toolCallId: string,
@@ -1230,8 +1242,16 @@ class ChatStore {
 					},
 					currentMessageId
 				);
-				conversationsStore.addMessageToActive(msg);
-				await conversationsStore.updateCurrentNode(msg.id);
+				// mirror into the active store and move the node pointer only when this
+				// conversation is displayed; otherwise persist the node move straight to
+				// the db for the owning conv so a foreign conv's currNode stays untouched
+				if (conversationsStore.activeConversation?.id === convId) {
+					conversationsStore.addMessageToActive(msg);
+					await conversationsStore.updateCurrentNode(msg.id);
+				} else {
+					await DatabaseService.updateCurrentNode(convId, msg.id);
+				}
+				lastCreatedInFlow = msg.id;
 				return msg;
 			},
 			createAssistantMessage: async () => {
@@ -1239,8 +1259,6 @@ class ChatStore {
 				streamedContent = '';
 				streamedReasoningContent = '';
 
-				const lastMsg =
-					conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1];
 				const msg = await DatabaseService.createMessageBranch(
 					{
 						convId,
@@ -1252,10 +1270,13 @@ class ChatStore {
 						children: [],
 						model: resolvedModel
 					},
-					lastMsg.id
+					lastCreatedInFlow
 				);
-				conversationsStore.addMessageToActive(msg);
+				if (conversationsStore.activeConversation?.id === convId) {
+					conversationsStore.addMessageToActive(msg);
+				}
 				currentMessageId = msg.id;
+				lastCreatedInFlow = msg.id;
 				return msg;
 			},
 			onFlowComplete: (finalTimings?: ChatMessageTimings) => {
