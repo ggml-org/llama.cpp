@@ -1193,9 +1193,23 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
         }
         if (t_ij->view_src != nullptr) {
             t_ij->data = (char *) t_ij->view_src->data + t_ij->view_offs;
-        } else if (simple_buf != nullptr) {
+            if (t_ij->view_src->buffer != nullptr) {
+                t_ij->buffer = t_ij->view_src->buffer;
+            }
+        } else if (simple_buf != nullptr && !ggml_backend_buffer_is_multi_buffer(simple_buf)) {
+            // single contiguous buffer: mirror the offset. A multi-buffer has no usable base, so leave the
+            // tensor for the gallocr to place (alloc_ctx_tensors assigns each tensor a real sub-buffer).
             t_ij->data = (char *) ggml_backend_buffer_get_base(simple_buf)
                 + size_t(tensor->data) - size_t(ggml_backend_buffer_get_base(tensor->buffer));
+        }
+        // Backends require the physical buffer, not the multi-buffer wrapper (its context is unusable).
+        // Resolve it from the tensor's data address -- works for any tensor, not just views.
+        if (t_ij->buffer != nullptr && t_ij->data != nullptr
+                && ggml_backend_buffer_is_multi_buffer(t_ij->buffer)) {
+            ggml_backend_buffer_t sub = ggml_backend_multi_buffer_get_buffer(t_ij->buffer, t_ij->data);
+            if (sub != nullptr) {
+                t_ij->buffer = sub;
+            }
         }
         t_ij->extra = tensor->extra;
         for (int i = 0; i < GGML_MAX_SRC; i++) {
