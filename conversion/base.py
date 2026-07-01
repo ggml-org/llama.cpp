@@ -122,7 +122,8 @@ class ModelBase:
                  sentence_transformers_dense_modules: bool = False,
                  target_model_dir: Path | None = None,
                  fuse_gate_up_exps: bool = False,
-                 fp8_as_q8: bool = False):
+                 fp8_as_q8: bool = False,
+                 fuse_qkv: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -145,6 +146,13 @@ class ModelBase:
         self.fuse_gate_up_exps = fuse_gate_up_exps
         self._gate_exp_buffer: dict[int, Tensor] = {}
         self._up_exp_buffer: dict[int, Tensor] = {}
+        self.fuse_qkv = fuse_qkv
+        self._q_buffer: dict[int, Tensor] = {}
+        self._k_buffer: dict[int, Tensor] = {}
+        self._v_buffer: dict[int, Tensor] = {}
+        self._q_bias_buffer: dict[int, Tensor] = {}
+        self._k_bias_buffer: dict[int, Tensor] = {}
+        self._v_bias_buffer: dict[int, Tensor] = {}
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
@@ -635,6 +643,35 @@ class ModelBase:
             # If we buffered a gate/up tensor, wait for the other
             if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_EXP, bid) or \
                self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
+                return []
+
+        # Handle Q/K/V tensor fusion if enabled
+        if self.fuse_qkv and bid is not None:
+            is_bias = name.endswith('.bias')
+            suffix = 'bias' if is_bias else 'weight'
+            buf_q = self._q_bias_buffer if is_bias else self._q_buffer
+            buf_k = self._k_bias_buffer if is_bias else self._k_buffer
+            buf_v = self._v_bias_buffer if is_bias else self._v_buffer
+
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, bid):
+                buf_q[bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, bid):
+                buf_k[bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, bid):
+                buf_v[bid] = data_torch
+
+            if bid in buf_q and bid in buf_k and bid in buf_v:
+                q_data = buf_q.pop(bid)
+                k_data = buf_k.pop(bid)
+                v_data = buf_v.pop(bid)
+                fused_data = torch.cat([q_data, k_data, v_data], dim=0)
+                fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid, suffix=suffix)
+                logger.info(f"Fused Q, K, V {suffix} into QKV for layer {bid}")
+                return [(fused_name, fused_data)]
+
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, bid) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, bid) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, bid):
                 return []
 
         return [(new_name, data_torch)]

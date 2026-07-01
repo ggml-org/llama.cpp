@@ -176,7 +176,14 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
                     hparams.f_attention_scale, il);
         } else {
             // reuse KV cache of earlier layers
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+            ggml_tensor * Qcur;
+            if (model.layers[il].wqkv) {
+                ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur);
+                const int64_t q_dim = n_embd_head * n_head;
+                Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, q_dim, n_tokens, qkv->nb[1], 0));
+            } else {
+                Qcur = build_lora_mm(model.layers[il].wq, cur);
+            }
             cb(Qcur, "Qcur", il);
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
 

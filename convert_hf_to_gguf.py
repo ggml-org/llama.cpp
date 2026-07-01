@@ -154,6 +154,8 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--fuse-qkv", action="store_true",
+        help="Fuse separate Q, K, V weight tensors into a single QKV tensor.",
         "--target-model-dir", type=str, default=None,
         help=(
             "path to the target model directory; required when converting a standalone draft model "
@@ -281,6 +283,7 @@ def main() -> None:
                                      target_model_dir=Path(args.target_model_dir) if args.target_model_dir else None,
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
+                                     fuse_qkv=args.fuse_qkv,
                                      )
 
         if args.vocab_only:

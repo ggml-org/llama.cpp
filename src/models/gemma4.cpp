@@ -224,9 +224,17 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
         // Q projection (shared for both non-KV and KV layers)
         // this is to mirror Gemma4Attention in pytorch code
+        ggml_tensor * qkv_fused = nullptr;
         ggml_tensor * Qcur;
-        {
+        if (model.layers[il].wqkv) {
+            qkv_fused = build_lora_mm(model.layers[il].wqkv, cur, model.layers[il].wqkv_s);
+            cb(qkv_fused, "wqkv", il);
+            const int64_t q_dim = n_embd_head * n_head;
+            Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, q_dim, n_tokens, qkv_fused->nb[1], 0));
+        } else {
             Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
+        }
+        {
             cb(Qcur, "Qcur", il);
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
@@ -241,12 +249,22 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
         // self-attention
         if (hparams.has_kv(il)) {
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+            ggml_tensor * Kcur;
+            ggml_tensor * Vcur;
+            if (qkv_fused) {
+                const int64_t q_dim = n_embd_head * n_head;
+                const int64_t k_dim = n_embd_head * n_head_kv;
+                const int64_t v_dim = n_embd_head * n_head_kv;
+                const size_t  esize = ggml_element_size(qkv_fused);
+                Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, k_dim, n_tokens, qkv_fused->nb[1], q_dim * esize));
+                Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, v_dim, n_tokens, qkv_fused->nb[1], (q_dim + k_dim) * esize));
+            } else {
+                Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+                Vcur = model.layers[il].wv
+                       ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
+                       : Kcur; // if v_proj is not present, use Kcur as Vcur
+            }
             cb(Kcur, "Kcur", il);
-
-            ggml_tensor * Vcur = model.layers[il].wv
-                                    ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
-                                    : Kcur; // if v_proj is not present, use Kcur as Vcur
             cb(Vcur, "Vcur", il);
 
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
