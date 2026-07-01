@@ -543,12 +543,28 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             // the memory allocation handle is no longer needed after mapping
             CU_CHECK(cuMemRelease(handle));
 
-            // set access
-            CUmemAccessDesc access = {};
-            access.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-            access.location.id = device;
-            access.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-            CU_CHECK(cuMemSetAccess((CUdeviceptr)((char *)(pool_addr) + pool_size), reserve_size, &access, 1));
+            // set access for the device the memory was allocated on, as well as
+            // all other devices that can access it via P2P. without the peer access
+            // grants, P2P writes into pool memory (e.g. from NCCL communication
+            // kernels during tensor parallel allreduce) cause illegal memory accesses,
+            // as cuMemCreate allocations are not accessible to other devices by default.
+            std::vector<CUmemAccessDesc> access_descs;
+            const int device_count = ggml_cuda_info().device_count;
+            for (int id = 0; id < device_count; ++id) {
+                if (id != device) {
+                    int can_access_peer = 0;
+                    CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, id, device));
+                    if (!can_access_peer) {
+                        continue;
+                    }
+                }
+                CUmemAccessDesc access = {};
+                access.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+                access.location.id   = id;
+                access.flags         = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+                access_descs.push_back(access);
+            }
+            CU_CHECK(cuMemSetAccess(start_ptr, reserve_size, access_descs.data(), access_descs.size()));
 
             // add to the pool
             pool_size += reserve_size;
