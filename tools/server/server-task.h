@@ -94,6 +94,7 @@ struct task_params {
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
+    int32_t embd_dimensions = -1; // (-1=model default, >0=truncate to first N dims, then normalize (MRL))
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
