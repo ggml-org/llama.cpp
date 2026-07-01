@@ -154,6 +154,65 @@ static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, cons
     }
 }
 
+template <int rows_per_block>
+static __global__ void __launch_bounds__(WARP_SIZE * rows_per_block, 2)
+rwkv_wkv7_f32_t1_warp_row(const int T, const int C, const int H, const float * r, const float * w, const float * k, const float * v, const float * kk, const float * a, const float * r_k, const float * s, float * dst) {
+    constexpr int head_size = CUDA_WKV_BLOCK_SIZE;
+    constexpr int half_head = head_size / 2;
+
+    const int lane = threadIdx.x;
+    const int row  = blockIdx.y * rows_per_block + threadIdx.y;
+    const int bid  = blockIdx.x;
+
+    const int batch_i = bid / H;
+    const int head_i  = bid % H;
+    const int state_size = C * head_size;
+    const int head_off = head_i * head_size;
+    const int t = batch_i * C + head_off + row;
+
+    __shared__ float _r[head_size], _w[head_size], _k[head_size], _kk[head_size], _a[head_size], _r_k[head_size];
+
+    if (threadIdx.y == 0) {
+        constexpr float w_scale = -0.6065306597126334f;
+
+        _r[lane]          = r[batch_i * C + head_off + lane];
+        _w[lane]          = __expf(w_scale / (1.0f + __expf(-w[batch_i * C + head_off + lane])));
+        _k[lane]          = k[batch_i * C + head_off + lane];
+        _kk[lane]         = kk[batch_i * C + head_off + lane];
+        _a[lane]          = a[batch_i * C + head_off + lane];
+        _r_k[lane]        = r_k[head_off + lane];
+
+        _r[lane + half_head]   = r[batch_i * C + head_off + lane + half_head];
+        _w[lane + half_head]   = __expf(w_scale / (1.0f + __expf(-w[batch_i * C + head_off + lane + half_head])));
+        _k[lane + half_head]   = k[batch_i * C + head_off + lane + half_head];
+        _kk[lane + half_head]  = kk[batch_i * C + head_off + lane + half_head];
+        _a[lane + half_head]   = a[batch_i * C + head_off + lane + half_head];
+        _r_k[lane + half_head] = r_k[head_off + lane + half_head];
+    }
+    __syncthreads();
+
+    const int64_t state_base = batch_i * state_size + head_i * head_size * head_size + row * head_size;
+    const float s0 = s[state_base + lane];
+    const float s1 = s[state_base + lane + half_head];
+
+    const float sa = -warp_reduce_sum(_kk[lane] * s0 + _kk[lane + half_head] * s1);
+    const float rk =  warp_reduce_sum(_r[lane] * _k[lane] * _r_k[lane] +
+                                      _r[lane + half_head] * _k[lane + half_head] * _r_k[lane + half_head]);
+
+    const float vt  = v[t];
+    const float st0 = s0 * _w[lane]             + _k[lane]             * vt + sa * _kk[lane]             * _a[lane];
+    const float st1 = s1 * _w[lane + half_head] + _k[lane + half_head] * vt + sa * _kk[lane + half_head] * _a[lane + half_head];
+    const float y   = warp_reduce_sum(st0 * _r[lane] + st1 * _r[lane + half_head]);
+
+    dst[2 * T * C + state_base + lane]             = st0;
+    dst[2 * T * C + state_base + lane + half_head] = st1;
+
+    if (lane == 0) {
+        dst[t] = y;
+        dst[T * C + t] = vt * rk;
+    }
+}
+
 void ggml_cuda_op_rwkv_wkv6(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const float * k_d  = (const float *)dst->src[0]->data;
     const float * v_d  = (const float *)dst->src[1]->data;
@@ -205,7 +264,10 @@ void ggml_cuda_op_rwkv_wkv7(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     GGML_ASSERT(C % H == 0);
     GGML_ASSERT(C / H == CUDA_WKV_BLOCK_SIZE || C / H == CUDA_WKV_BLOCK_SIZE * 2);
 
-    if (C / H == CUDA_WKV_BLOCK_SIZE) {
+    if (T / B == 1 && C / H == CUDA_WKV_BLOCK_SIZE) {
+        constexpr int rows_per_block = 4;
+        rwkv_wkv7_f32_t1_warp_row<rows_per_block><<<dim3(B * H, CUDA_WKV_BLOCK_SIZE / rows_per_block), dim3(WARP_SIZE, rows_per_block), 0, stream>>>(T, C, H, r_d, w_d, k_d, v_d, kk_d, a_d, r_k_d, s_d, dst_d);
+    } else if (C / H == CUDA_WKV_BLOCK_SIZE) {
         rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, kk_d, a_d, r_k_d, s_d, dst_d);
     } else {
         rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE * 2><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, kk_d, a_d, r_k_d, s_d, dst_d);
