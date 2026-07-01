@@ -40,6 +40,7 @@ def test_with_and_without_draft():
 
     # create new server with draft model
     create_server()
+    server.backend_sampling = True
     server.start()
     res = server.make_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
