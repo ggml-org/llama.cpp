@@ -363,22 +363,34 @@ void server_models::load_models() {
     local_models   = ctx_preset.cascade(global, local_models);
     custom_presets = ctx_preset.cascade(global, custom_presets);
 
-    // note: if a model exists in both cached and local, local takes precedence
+    // with a preset file, cached models are only used to fill in the HF repo
+    // for matching presets, never listed standalone (avoids /v1/models dupes)
+    bool use_preset = !base_params.models_preset.empty();
+
     common_presets final_presets;
     std::unordered_map<std::string, server_model_source> source_map;
-    for (const auto & [name, preset] : cached_models) {
-        final_presets[name] = preset;
-        source_map[name] = SERVER_MODEL_SOURCE_CACHE;
+    if (!use_preset) {
+        for (const auto & [name, preset] : cached_models) {
+            final_presets[name] = preset;
+            source_map[name] = SERVER_MODEL_SOURCE_CACHE;
+        }
     }
     for (const auto & [name, preset] : local_models)  {
         final_presets[name] = preset;
         source_map[name] = SERVER_MODEL_SOURCE_MODELS_DIR;
     }
     for (const auto & [name, custom] : custom_presets) {
-        if (final_presets.find(name) != final_presets.end()) {
-            final_presets[name].merge(custom);
+        auto it = final_presets.find(name);
+        if (it != final_presets.end()) {
+            it->second.merge(custom);
         } else {
-            final_presets[name] = custom;
+            common_preset base = custom;
+            auto cit = cached_models.find(name);
+            if (cit != cached_models.end()) {
+                base = cit->second;
+                base.merge(custom);
+            }
+            final_presets[name] = base;
         }
         source_map[name] = SERVER_MODEL_SOURCE_PRESET;
     }
