@@ -1219,6 +1219,10 @@ private:
             cparams.n_rs_seq  = 0;
             cparams.ctx_other = ctx_tgt;
 
+            // draft/MTP ctx only emits draft logits; must not inherit target embeddings/pooling
+            cparams.embeddings   = false;
+            cparams.pooling_type = LLAMA_POOLING_TYPE_NONE;
+
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
             if (ctx_dft == nullptr) {
                 SRV_ERR("%s", "failed to create draft context\n");
@@ -1241,6 +1245,9 @@ private:
             cparams_mtp.n_rs_seq      = 0;
             cparams_mtp.n_outputs_max = params_base.n_parallel;
             cparams_mtp.ctx_other     = ctx_tgt;
+
+            cparams_mtp.embeddings   = false;
+            cparams_mtp.pooling_type = LLAMA_POOLING_TYPE_NONE;
 
             ctx_dft.reset(llama_init_from_model(model_tgt, cparams_mtp));
             if (ctx_dft == nullptr) {
