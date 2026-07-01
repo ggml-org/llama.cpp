@@ -1039,13 +1039,6 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
                         for (size_t s = 0; s < src_ss[i].n_segments; s++) {
                             sum += src_ss[i].ne[s*n_bufs + j] * src_ss[i].nr[s];
                         }
-                        const bool is_flash_attn_gqa_kv =
-                            tensor->op == GGML_OP_FLASH_ATTN_EXT && (i == 1 || i == 2) &&
-                            tensor->src[i]->ne[src_ss[i].axis] != tensor->ne[split_state.axis];
-                        if (is_flash_attn_gqa_kv) {
-                            // GQA/MQA splits Q/output over query heads, but K/V over fewer KV heads.
-                            continue;
-                        }
                         GGML_ASSERT(split_state.ne[j]*split_state.nr[0] * tensor->src[i]->ne[src_ss[i].axis]
                                                                  == sum * tensor->ne[split_state.axis]);
                     }
