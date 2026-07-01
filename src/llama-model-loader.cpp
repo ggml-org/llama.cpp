@@ -701,8 +701,13 @@ llama_model_loader::llama_model_loader(
         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
     }
 
-    n_kv      = gguf_get_n_kv(metadata);
-    n_tensors = weights_map.size();
+    n_kv = gguf_get_n_kv(metadata);
+    if (files.empty()) {
+        n_tensors = gguf_get_n_tensors(metadata);
+    } else {
+        n_tensors = weights_map.size();
+        GGML_ASSERT(files.size() != 1 || static_cast<int64_t>(n_tensors) == gguf_get_n_tensors(metadata));
+    }
 
     fver = (enum llama_fver) gguf_get_version(metadata);
 
@@ -1216,13 +1221,20 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     };
 
     if (files.empty()) {
-        if (flags & TENSOR_SKIP_IF_VIRTUAL) {
-            return nullptr;
-        }
         ggml_type type = GGML_TYPE_F32;
         const int64_t tid = gguf_find_tensor(metadata, tn.str().c_str());
         if (tid != -1) {
             type = gguf_get_tensor_type(metadata, tid);
+        } else if (flags & TENSOR_SKIP_IF_VIRTUAL) {
+            return nullptr;
+        } else {
+            if (flags & TENSOR_NOT_REQUIRED) {
+                return nullptr;
+            }
+
+            if (no_alloc) {
+                throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
+            }
         }
 
         // for tensors that are not required some of the dimensions can be invalid:
@@ -1240,14 +1252,32 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         for (size_t dim = 0; dim < GGML_MAX_DIMS; dim++) {
             t_meta.ne[dim] = dim < ne.size() ? ne.begin()[dim] : 1;
             GGML_ASSERT(t_meta.ne[dim] >= 1);
-            t_meta.nb[dim] = dim == 0 ? ggml_type_size(type) : t_meta.ne[dim-1]*t_meta.nb[dim-1];
+        }
+        t_meta.nb[0] = ggml_type_size(type);
+        t_meta.nb[1] = t_meta.nb[0] * (t_meta.ne[0] / ggml_blck_size(type));
+        GGML_ASSERT(t_meta.nb[0] >= 1);
+        GGML_ASSERT(t_meta.nb[1] >= 1);
+        for (size_t dim = 2; dim < GGML_MAX_DIMS; ++dim) {
+            t_meta.nb[dim] = t_meta.nb[dim - 1] * t_meta.ne[dim - 1];
             GGML_ASSERT(t_meta.nb[dim] >= 1);
         }
         ggml_set_name(&t_meta, tn.str().c_str());
 
         ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
-        GGML_ASSERT(buft != nullptr);
+        if (buft == nullptr) {
+            return nullptr; // return type is ggml_tensor *
+        }
         ggml_context * ctx = ctx_for_buft(buft);
+
+        if (flags & TENSOR_DUPLICATED) {
+            ggml_tensor * t = ggml_get_tensor(ctx, tn.str().c_str());
+            if (t) {
+                return t;
+            }
+        } else {
+            n_created++;
+        }
+
         ggml_tensor * ret = ggml_dup_tensor(ctx, &t_meta);
         ggml_set_name(ret, tn.str().c_str());
         return ret;
