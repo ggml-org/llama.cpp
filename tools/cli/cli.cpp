@@ -230,10 +230,11 @@ struct cli_context {
         inputs.json_schema           = ""; // TODO
         inputs.grammar               = ""; // TODO
         inputs.use_jinja             = chat_params.use_jinja;
+        inputs.chat_template_kwargs  = chat_params.chat_template_kwargs;
         inputs.parallel_tool_calls   = caps["supports_parallel_tool_calls"];
         inputs.add_generation_prompt = true;
-        inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
         inputs.force_pure_content    = chat_params.force_pure_content;
+        inputs.reasoning_format      = chat_params.reasoning_format;
         inputs.enable_thinking       = chat_params.enable_thinking ? common_chat_templates_support_enable_thinking(chat_params.tmpls.get()) : false;
 
         // Apply chat template to the list of messages
