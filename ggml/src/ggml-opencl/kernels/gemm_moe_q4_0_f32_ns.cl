@@ -109,7 +109,8 @@ kernel void kernel_gemm_moe_q4_0_f32_ns(
         __write_only image1d_buffer_t dst,
         __global     int *            total_tiles,
         uint ne00,
-        uint ne01
+        uint ne01,
+        uint is_ragged
 ) {
     uint block_id_m = get_global_id(1); // m_tile
     uint block_id_n = get_global_id(2); // n_tile
@@ -117,6 +118,17 @@ kernel void kernel_gemm_moe_q4_0_f32_ns(
     // Boundary check
     if (block_id_n >= total_tiles[0]) {
         return;
+    }
+
+    // Ragged tile-skip: when is_ragged and the upper 16 token-slots of this tile are all
+    // padding (router 0xFFFFFFFF), skip the second (reg_c.hi) dotx16_reduce8 half -> ~half
+    // the GEMM dot for sparse tiles. Numerically identical (the skipped lanes are padding).
+    bool skip_hi = false;
+    if (is_ragged) {
+        skip_hi = true;
+        for (int _t = 16; _t < TILESIZE_N; ++_t) {
+            if (src2[block_id_n * TILESIZE_N + _t] != 0xFFFFFFFFu) { skip_hi = false; break; }
+        }
     }
 
     __private half16 reg_a;
@@ -169,7 +181,7 @@ kernel void kernel_gemm_moe_q4_0_f32_ns(
         // 32 16x16 fp16 dot product with 8 elements reduction for better precision
         half16 acc;
         dotx16_reduce8(reg_a, shared_b, reg_c.lo, 0);
-        dotx16_reduce8(reg_a, shared_b, reg_c.hi, 16);
+        if (!skip_hi) { dotx16_reduce8(reg_a, shared_b, reg_c.hi, 16); }
 
         // Repeat for second sub-block
         uint half_step = step + TILESIZE_K;
@@ -195,7 +207,7 @@ kernel void kernel_gemm_moe_q4_0_f32_ns(
 
         // 32 16x16 fp16 dot product with 3-levels reduction for better precision
         dotx16_reduce8(reg_a, shared_b, reg_c.lo, 0);
-        dotx16_reduce8(reg_a, shared_b, reg_c.hi, 16);
+        if (!skip_hi) { dotx16_reduce8(reg_a, shared_b, reg_c.hi, 16); }
     }
 
     if ((get_global_id(0) + block_id_m * TILESIZE_M) >= ne01) {
