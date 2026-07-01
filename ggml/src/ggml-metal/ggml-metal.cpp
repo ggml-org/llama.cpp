@@ -300,12 +300,13 @@ static ggml_backend_buffer_type_t ggml_backend_metal_buffer_type_shared(int devi
 
             ggml_backend_buffer_type buft = {
                 /* .iface = */ {
-                    /* .get_name         = */ ggml_backend_metal_buffer_type_shared_get_name,
-                    /* .alloc_buffer     = */ ggml_backend_metal_buffer_type_shared_alloc_buffer,
-                    /* .get_alignment    = */ ggml_backend_metal_buffer_type_shared_get_alignment,
-                    /* .get_max_size     = */ ggml_backend_metal_buffer_type_shared_get_max_size,
-                    /* .get_alloc_size   = */ ggml_backend_metal_buffer_type_shared_get_alloc_size,
-                    /* .is_host          = */ ggml_backend_metal_buffer_type_shared_is_host,
+                    /* .get_name       = */ ggml_backend_metal_buffer_type_shared_get_name,
+                    /* .alloc_buffer   = */ ggml_backend_metal_buffer_type_shared_alloc_buffer,
+                    /* .alloc_buffer_n = */ NULL,
+                    /* .get_alignment  = */ ggml_backend_metal_buffer_type_shared_get_alignment,
+                    /* .get_max_size   = */ ggml_backend_metal_buffer_type_shared_get_max_size,
+                    /* .get_alloc_size = */ ggml_backend_metal_buffer_type_shared_get_alloc_size,
+                    /* .is_host        = */ ggml_backend_metal_buffer_type_shared_is_host,
                 },
                 /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_metal_reg(), i),
                 /* .context = */ raw_ctx,
@@ -375,12 +376,13 @@ static ggml_backend_buffer_type_t ggml_backend_metal_buffer_type_private(int dev
 
             ggml_backend_buffer_type buft = {
                 /* .iface = */ {
-                    /* .get_name         = */ ggml_backend_metal_buffer_type_private_get_name,
-                    /* .alloc_buffer     = */ ggml_backend_metal_buffer_type_private_alloc_buffer,
-                    /* .get_alignment    = */ ggml_backend_metal_buffer_type_private_get_alignment,
-                    /* .get_max_size     = */ ggml_backend_metal_buffer_type_private_get_max_size,
-                    /* .get_alloc_size   = */ ggml_backend_metal_buffer_type_private_get_alloc_size,
-                    /* .is_host          = */ ggml_backend_metal_buffer_type_private_is_host,
+                    /* .get_name       = */ ggml_backend_metal_buffer_type_private_get_name,
+                    /* .alloc_buffer   = */ ggml_backend_metal_buffer_type_private_alloc_buffer,
+                    /* .alloc_buffer_n = */ NULL,
+                    /* .get_alignment  = */ ggml_backend_metal_buffer_type_private_get_alignment,
+                    /* .get_max_size   = */ ggml_backend_metal_buffer_type_private_get_max_size,
+                    /* .get_alloc_size = */ ggml_backend_metal_buffer_type_private_get_alloc_size,
+                    /* .is_host        = */ ggml_backend_metal_buffer_type_private_is_host,
                 },
                 /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_metal_reg(), i),
                 /* .context = */ raw_ctx,
@@ -453,12 +455,13 @@ static ggml_backend_buffer_type_t ggml_backend_metal_buffer_type_mapped(int devi
             //       https://github.com/ggml-org/llama.cpp/pull/15832#discussion_r2333177099
             ggml_backend_buffer_type buft = {
                 /* .iface = */ {
-                    /* .get_name         = */ ggml_backend_metal_buffer_type_mapped_get_name,
-                    /* .alloc_buffer     = */ ggml_backend_metal_buffer_type_mapped_alloc_buffer,
-                    /* .get_alignment    = */ ggml_backend_metal_buffer_type_mapped_get_alignment,
-                    /* .get_max_size     = */ ggml_backend_metal_buffer_type_mapped_get_max_size,
-                    /* .get_alloc_size   = */ ggml_backend_metal_buffer_type_mapped_get_alloc_size,
-                    /* .is_host          = */ ggml_backend_metal_buffer_type_mapped_is_host,
+                    /* .get_name       = */ ggml_backend_metal_buffer_type_mapped_get_name,
+                    /* .alloc_buffer   = */ ggml_backend_metal_buffer_type_mapped_alloc_buffer,
+                    /* .alloc_buffer_n = */ NULL,
+                    /* .get_alignment  = */ ggml_backend_metal_buffer_type_mapped_get_alignment,
+                    /* .get_max_size   = */ ggml_backend_metal_buffer_type_mapped_get_max_size,
+                    /* .get_alloc_size = */ ggml_backend_metal_buffer_type_mapped_get_alloc_size,
+                    /* .is_host        = */ ggml_backend_metal_buffer_type_mapped_is_host,
                 },
                 /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_metal_reg(), i),
                 /* .context = */ raw_ctx,
