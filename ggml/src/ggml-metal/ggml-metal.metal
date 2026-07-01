@@ -5434,8 +5434,6 @@ kernel void kernel_pad_reflect_1d_f32(
 
         const int ne00 = args.ne0 - args.p0 - args.p1;
 
-        // float4 path is selected via function constant; the alignment guard that sets it
-        // also guarantees ne00 % 4 == 0, so no scalar tail is needed here
         if (FC_pad_reflect_1d_use_f4) {
             device float4 * dst4 = (device float4*)(dst_ptr + args.p0);
             device const float4 * src4 = (device const float4*)src0_ptr;
