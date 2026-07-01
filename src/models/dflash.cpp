@@ -3,6 +3,8 @@
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
 
+#include <cstring>
+
 void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -266,6 +268,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         const auto * model_other = llama_get_model(cparams.ctx_other);
         GGML_ASSERT(model_other->output != nullptr && "DFlash decoder requires the target model's output projection");
         output = model_other->output;
+        if (model_other->tok_embd != nullptr && std::strcmp(output->name, model_other->tok_embd->name) == 0) {
+            output = model_other->tok_embd;
+        }
     }
 
     cur = build_lora_mm(output, cur);
