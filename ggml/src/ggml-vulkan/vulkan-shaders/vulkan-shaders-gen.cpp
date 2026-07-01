@@ -1099,6 +1099,34 @@ void process_shaders() {
     string_to_spv("roll_f32", "roll.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
 
     string_to_spv("add_id_f32", "add_id.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
+    string_to_spv("out_prod_f32", "out_prod.comp", merge_maps(base_dict, {{"DATA_A_F32", "1"}, {"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
+    string_to_spv("out_prod_id_f32", "out_prod_id.comp", {});
+
+    auto out_prod_quant = [&](const std::string & name, const std::string & define) {
+        string_to_spv("out_prod_" + name + "_f32", "out_prod.comp", merge_maps(base_dict, {{define, "1"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
+    };
+    out_prod_quant("q1_0",    "DATA_A_Q1_0");
+    out_prod_quant("q4_0",    "DATA_A_Q4_0");
+    out_prod_quant("q4_1",    "DATA_A_Q4_1");
+    out_prod_quant("q5_0",    "DATA_A_Q5_0");
+    out_prod_quant("q5_1",    "DATA_A_Q5_1");
+    out_prod_quant("q8_0",    "DATA_A_Q8_0");
+    out_prod_quant("q2_k",    "DATA_A_Q2_K");
+    out_prod_quant("q3_k",    "DATA_A_Q3_K");
+    out_prod_quant("q4_k",    "DATA_A_Q4_K");
+    out_prod_quant("q5_k",    "DATA_A_Q5_K");
+    out_prod_quant("q6_k",    "DATA_A_Q6_K");
+    out_prod_quant("iq1_s",   "DATA_A_IQ1_S");
+    out_prod_quant("iq1_m",   "DATA_A_IQ1_M");
+    out_prod_quant("iq2_xxs", "DATA_A_IQ2_XXS");
+    out_prod_quant("iq2_xs",  "DATA_A_IQ2_XS");
+    out_prod_quant("iq2_s",   "DATA_A_IQ2_S");
+    out_prod_quant("iq3_xxs", "DATA_A_IQ3_XXS");
+    out_prod_quant("iq3_s",   "DATA_A_IQ3_S");
+    out_prod_quant("iq4_nl",  "DATA_A_IQ4_NL");
+    out_prod_quant("iq4_xs",  "DATA_A_IQ4_XS");
+    out_prod_quant("mxfp4",   "DATA_A_MXFP4");
+    out_prod_quant("nvfp4",   "DATA_A_NVFP4");
 
     string_to_spv("multi_add_f32", "multi_add.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"ADD_RMS" , "0"}});
     string_to_spv("multi_add_rms_f32", "multi_add.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"ADD_RMS" , "1"}});

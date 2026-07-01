@@ -4397,6 +4397,57 @@ struct test_out_prod : public test_case {
     }
 };
 
+// GGML_OP_OUT_PROD_ID
+struct test_out_prod_id : public test_case {
+    const int64_t cols;
+    const int64_t rows;
+    const int64_t n_experts;
+    const int64_t n_experts_used;
+    const int64_t n_tokens;
+
+    std::string vars() override {
+        return VARS_TO_STR5(cols, rows, n_experts, n_experts_used, n_tokens);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    test_out_prod_id(int64_t cols = 32, int64_t rows = 24, int64_t n_experts = 8,
+            int64_t n_experts_used = 4, int64_t n_tokens = 10)
+        : cols(cols), rows(rows), n_experts(n_experts),
+          n_experts_used(n_experts_used), n_tokens(n_tokens) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, cols, n_experts_used, n_tokens);
+        ggml_tensor * b   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, rows, n_experts_used, n_tokens);
+        ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_experts_used, n_tokens);
+        ggml_set_name(a, "a");
+        ggml_set_name(b, "b");
+        ggml_set_name(ids, "ids");
+
+        ggml_tensor * out = ggml_out_prod_id(ctx, a, b, ids, n_experts);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                for (int64_t itok = 0; itok < n_tokens; ++itok) {
+                    std::vector<int32_t> data(n_experts_used);
+                    for (int64_t iexp = 0; iexp < n_experts_used; ++iexp) {
+                        data[iexp] = (int32_t)((iexp + itok) % n_experts);
+                    }
+                    ggml_backend_tensor_set(t, data.data(), itok*t->nb[1], n_experts_used*sizeof(int32_t));
+                }
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_SQR
 struct test_sqr : public test_case {
     const ggml_type type;
@@ -6745,7 +6796,7 @@ struct test_opt_step_adamw : public test_case {
         ggml_tensor * grad_v = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
         ggml_set_name(grad_v, "grad_v");
 
-        ggml_tensor * adamw_params = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 7);
+        ggml_tensor * adamw_params = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
         ggml_set_name(adamw_params, "adamw_params");
 
         ggml_tensor * out = ggml_opt_step_adamw(ctx, a, grad, grad_m, grad_v, adamw_params);
@@ -8702,6 +8753,43 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_out_prod(GGML_TYPE_F32, GGML_TYPE_F32,
                                                   256, 16, 16, {1, 1}, {nr2, 1}));
     }
+
+    for (std::array<int64_t, 2> nr : {std::array<int64_t, 2>{1, 1}, std::array<int64_t, 2>{2, 1}, std::array<int64_t, 2>{1, 2}}) {
+        test_cases.emplace_back(new test_out_prod(GGML_TYPE_F32, GGML_TYPE_F32,
+                                                  256, 16, 16, {3, 3}, nr, true));
+    }
+
+    for (ggml_type type_a : {
+            GGML_TYPE_Q1_0,
+            GGML_TYPE_Q4_0,
+            GGML_TYPE_Q4_1,
+            GGML_TYPE_Q5_0,
+            GGML_TYPE_Q5_1,
+            GGML_TYPE_Q8_0,
+            GGML_TYPE_Q2_K,
+            GGML_TYPE_Q3_K,
+            GGML_TYPE_Q4_K,
+            GGML_TYPE_Q5_K,
+            GGML_TYPE_Q6_K,
+            GGML_TYPE_IQ1_S,
+            GGML_TYPE_IQ1_M,
+            GGML_TYPE_IQ2_XXS,
+            GGML_TYPE_IQ2_XS,
+            GGML_TYPE_IQ2_S,
+            GGML_TYPE_IQ3_XXS,
+            GGML_TYPE_IQ3_S,
+            GGML_TYPE_IQ4_NL,
+            GGML_TYPE_IQ4_XS,
+            GGML_TYPE_MXFP4,
+            GGML_TYPE_NVFP4,
+        }) {
+        test_cases.emplace_back(new test_out_prod(type_a, GGML_TYPE_F32,
+                                                  256, 16, 16, {3, 3}, {1, 1}, true));
+    }
+
+    test_cases.emplace_back(new test_out_prod_id(16, 12, 4, 2, 5));
+    test_cases.emplace_back(new test_out_prod_id(32, 24, 8, 4, 10));
+    test_cases.emplace_back(new test_out_prod_id(64, 32, 16, 4, 16));
 
     // add_id
     for (ggml_type type_a : {GGML_TYPE_F32}) {
