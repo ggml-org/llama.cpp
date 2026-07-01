@@ -7,6 +7,7 @@
 #include "server-http.h"
 #include "server-queue.h"
 
+#include <atomic>
 #include <mutex>
 #include <condition_variable>
 #include <functional>
@@ -69,6 +70,8 @@ static std::string server_model_source_to_string(server_model_source source) {
     }
 }
 
+using buft_memory_map = std::map<ggml_backend_buffer_type_t, size_t>;
+
 struct server_model_meta {
     server_model_source source = SERVER_MODEL_SOURCE_CACHE;
     common_preset preset;
@@ -78,6 +81,7 @@ struct server_model_meta {
     int port = 0;
     server_model_status status = SERVER_MODEL_STATUS_UNLOADED;
     int64_t last_used = 0; // for LRU unloading
+    buft_memory_map bmm_req; // bytes required per buffer type
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
     json loaded_info; // info to be reflected via /v1/models endpoint ; if in DOWNLOADING state, it should contain download progress info
     json progress; // reflect load or download progress info, if any
@@ -122,6 +126,13 @@ private:
     // for stopping models
     std::condition_variable cv_stop;
     std::set<std::string> stopping_models;
+
+    // background tasks for download/estimate/load pipelines, keyed by model name
+    struct bg_task {
+        std::thread th;
+        std::atomic<bool> done{false};
+    };
+    std::map<std::string, std::unique_ptr<bg_task>> bg_tasks;
 
     // set to true while load_models() is executing a reload; load() will wait until clear
     bool is_reloading = false;
@@ -174,10 +185,16 @@ private:
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
 
+    // available memory per buffer type
+    buft_memory_map bmm_available;
+
+    // buft name -> buft lookup (host buffer types map to CPU buft)
+    std::unordered_map<std::string, ggml_backend_buffer_type_t> buft_by_name;
+
     void update_meta(const std::string & name, const server_model_meta & meta);
 
     // unload least recently used models if the limit is reached
-    void unload_lru();
+    void unload_lru(const buft_memory_map & bmm_req);
 
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
@@ -185,6 +202,21 @@ private:
     // notify SSE clients
     void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
 
+    // return number of buffer types where the memory limit would be exceeded
+    // return 0 if the new model would fit
+    // not thread-safe, caller must hold mutex
+    int can_fit(const buft_memory_map & bmm_req) const;
+
+    // check if active model count or memory limits would be exceeded
+    // not thread-safe, caller must hold mutex
+    bool limits_exceeded(const buft_memory_map & bmm_req) const;
+
+    // estimate model memory by spawning a child process with --measure-only
+    // returns the buft memory map, or empty map on failure (caller must NOT hold mutex)
+    buft_memory_map estimate_model_memory(const std::string & name);
+
+    // join and remove completed background tasks
+    void join_completed_bg_tasks();
 public:
     // conv_id -> model tracker for the resumable stream routes, owns its lock
     conv_model_tracker conv_models;
