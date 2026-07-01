@@ -64,9 +64,7 @@ class LagunaModel(TextModel):
         if sliding_window > 0:
             self.gguf_writer.add_sliding_window(sliding_window)
 
-        # MoE
-        self.gguf_writer.add_expert_count(self.find_hparam(["num_experts", "num_local_experts"]))
-        self.gguf_writer.add_expert_used_count(hparams["num_experts_per_tok"])
+        # MoE (expert_count / expert_used_count come from super().set_gguf_parameters())
         self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
         self.gguf_writer.add_expert_shared_feed_forward_length(hparams["shared_expert_intermediate_size"])
         self.gguf_writer.add_expert_weights_norm(True)  # HF reference always sum-normalises after top-k
