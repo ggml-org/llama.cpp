@@ -54,6 +54,26 @@ static inline dst_t llama_cast(src_t v) {
     }
 }
 
+static inline ggml_tensor * llama_mul_mat_hadamard(
+        ggml_context * ctx,
+        ggml_tensor * cur,
+        ggml_tensor * rot) {
+    const auto n = rot->ne[0];
+
+    ggml_tensor * res;
+
+    if (!ggml_is_contiguous(cur)) {
+        res = ggml_cont_2d(ctx, cur, n, ggml_nelements(cur)/n);
+    } else {
+        res = ggml_reshape_2d(ctx, cur, n, ggml_nelements(cur)/n);
+    }
+    res = ggml_mul_mat(ctx, rot, res);
+    ggml_mul_mat_set_hint(res, GGML_HINT_SRC0_IS_HADAMARD);
+    res = ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+
+    return res;
+}
+
 struct time_meas {
     time_meas(int64_t & t_acc, bool disable = false);
     ~time_meas();
