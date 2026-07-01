@@ -1693,6 +1693,9 @@ std::string common_token_to_piece(const struct llama_vocab * vocab, llama_token 
     std::string piece;
     piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
     const int n_chars = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+    if (n_chars == std::numeric_limits<int32_t>::min()) {
+        throw std::runtime_error("Token to piece failed: supplied token is invalid");
+    }
     if (n_chars < 0) {
         piece.resize(-n_chars);
         int check = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
@@ -1715,6 +1718,9 @@ std::string common_detokenize(const struct llama_vocab * vocab, const std::vecto
     std::string text;
     text.resize(std::max(text.capacity(), tokens.size()));
     int32_t n_chars = llama_detokenize(vocab, tokens.data(), (int32_t)tokens.size(), &text[0], (int32_t)text.size(), false, special);
+    if (n_chars == std::numeric_limits<int32_t>::min()) {
+        throw std::runtime_error("Detokenization failed: some supplied token is invalid");
+    }
     if (n_chars < 0) {
         text.resize(-n_chars);
         n_chars = llama_detokenize(vocab, tokens.data(), (int32_t)tokens.size(), &text[0], (int32_t)text.size(), false, special);

@@ -3236,6 +3236,9 @@ std::string llama_vocab::impl::token_to_piece_for_cache(llama_token token, bool 
     std::string piece;
     piece.resize(piece.capacity());  // using string internal cache
     const int n_chars = vocab.token_to_piece(token, &piece[0], piece.size(), 0, special);
+    if (n_chars == std::numeric_limits<int32_t>::min()) {
+        throw std::runtime_error("Token to piece failed: supplied token is invalid");
+    }
     if (n_chars < 0) {
         piece.resize(-n_chars);
         int check = vocab.token_to_piece(token, &piece[0], piece.size(), 0, special);
@@ -3483,6 +3486,11 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
 }
 
 int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t length, int32_t lstrip, bool special) const {
+    if (token < 0 || token >= (int32_t) id_to_token.size()) {
+        LLAMA_LOG_ERROR("%s: invalid token %d\n", __func__, token);
+        return std::numeric_limits<int32_t>::min();
+    }
+
     // ref: https://github.com/ggml-org/llama.cpp/pull/7587#discussion_r1620983843
     static const int attr_special = LLAMA_TOKEN_ATTR_UNKNOWN | LLAMA_TOKEN_ATTR_CONTROL;
     const llama_token_attr attr = token_get_attr(token);
@@ -3518,82 +3526,80 @@ int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t
         }
     }
 
-    if (0 <= token && token < (int32_t) id_to_token.size()) {
-        const std::string & token_text = id_to_token[token].text;
-        switch (get_type()) {
-            case LLAMA_VOCAB_TYPE_WPM:
-            case LLAMA_VOCAB_TYPE_SPM:
-            case LLAMA_VOCAB_TYPE_UGM: {
-                // NOTE: we accept all unsupported token types,
-                // suppressing them like CONTROL tokens.
-                if (attr & (attr_special | LLAMA_TOKEN_ATTR_USER_DEFINED)) {
-                    return _try_copy(token_text.data(), token_text.size());
-                }
-                if (attr & LLAMA_TOKEN_ATTR_NORMAL) {
+    const std::string & token_text = id_to_token[token].text;
+    switch (get_type()) {
+        case LLAMA_VOCAB_TYPE_WPM:
+        case LLAMA_VOCAB_TYPE_SPM:
+        case LLAMA_VOCAB_TYPE_UGM: {
+            // NOTE: we accept all unsupported token types,
+            // suppressing them like CONTROL tokens.
+            if (attr & (attr_special | LLAMA_TOKEN_ATTR_USER_DEFINED)) {
+                return _try_copy(token_text.data(), token_text.size());
+            }
+            if (attr & LLAMA_TOKEN_ATTR_NORMAL) {
+                std::string result = token_text;
+                llama_unescape_whitespace(result);
+                return _try_copy(result.data(), result.size());
+            }
+            if (attr & LLAMA_TOKEN_ATTR_BYTE) {
+                char byte = (char) token_to_byte(token);
+                return _try_copy((char*) &byte, 1);
+            }
+            break;
+        }
+        case LLAMA_VOCAB_TYPE_BPE: {
+            // NOTE: we accept all unsupported token types,
+            // suppressing them like CONTROL tokens.
+            if (attr & (attr_special | LLAMA_TOKEN_ATTR_USER_DEFINED)) {
+                return _try_copy(token_text.data(), token_text.size());
+            }
+            if (attr & LLAMA_TOKEN_ATTR_NORMAL) {
+                if (escape_whitespaces) {
+                    // SPM-style BPE: tokens contain ▁ for spaces
                     std::string result = token_text;
                     llama_unescape_whitespace(result);
                     return _try_copy(result.data(), result.size());
                 }
-                if (attr & LLAMA_TOKEN_ATTR_BYTE) {
-                    char byte = (char) token_to_byte(token);
-                    return _try_copy((char*) &byte, 1);
-                }
-                break;
-            }
-            case LLAMA_VOCAB_TYPE_BPE: {
-                // NOTE: we accept all unsupported token types,
-                // suppressing them like CONTROL tokens.
-                if (attr & (attr_special | LLAMA_TOKEN_ATTR_USER_DEFINED)) {
-                    return _try_copy(token_text.data(), token_text.size());
-                }
-                if (attr & LLAMA_TOKEN_ATTR_NORMAL) {
-                    if (escape_whitespaces) {
-                        // SPM-style BPE: tokens contain ▁ for spaces
-                        std::string result = token_text;
-                        llama_unescape_whitespace(result);
-                        return _try_copy(result.data(), result.size());
-                    }
-                    std::string result = llama_decode_text(token_text);
-                    return _try_copy(result.data(), result.size());
-                }
-                if (attr & LLAMA_TOKEN_ATTR_BYTE) {
-                    char byte = (char) token_to_byte(token);
-                    return _try_copy((char*) &byte, 1);
-                }
-                break;
-            }
-            case LLAMA_VOCAB_TYPE_RWKV: {
-                std::vector<uint8_t> result = llama_unescape_rwkv_token(token_text);
-
-                // If we don't have enough space, return an error
-                if (result.size() > (size_t)length) {
-                    return -(int)result.size();
-                }
-
-                memcpy(buf, result.data(), result.size());
-                return (int)result.size();
-            }
-            case LLAMA_VOCAB_TYPE_PLAMO2: {
-                // PLaMo-2 uses similar token handling as BPE/SPM
-                if (vocab.is_byte(token)) {
-                    // Handle byte tokens like <0xXX>
-                    if (token_text.length() == 6 && token_text.substr(0, 3) == "<0x" && token_text.back() == '>') {
-                        int hex_val = std::stoi(token_text.substr(3, 2), nullptr, 16);
-                        if (length < 1) {
-                            return -1;
-                        }
-                        buf[0] = static_cast<char>(hex_val);
-                        return 1;
-                    }
-                }
-
-                // Normal token - just copy the text
-                std::string result = token_text;
+                std::string result = llama_decode_text(token_text);
                 return _try_copy(result.data(), result.size());
             }
-            default:
-                GGML_ABORT("fatal error");
+            if (attr & LLAMA_TOKEN_ATTR_BYTE) {
+                char byte = (char) token_to_byte(token);
+                return _try_copy((char*) &byte, 1);
+            }
+            break;
         }
+        case LLAMA_VOCAB_TYPE_RWKV: {
+            std::vector<uint8_t> result = llama_unescape_rwkv_token(token_text);
+
+            // If we don't have enough space, return an error
+            if (result.size() > (size_t)length) {
+                return -(int)result.size();
+            }
+
+            memcpy(buf, result.data(), result.size());
+            return (int)result.size();
+        }
+        case LLAMA_VOCAB_TYPE_PLAMO2: {
+            // PLaMo-2 uses similar token handling as BPE/SPM
+            if (vocab.is_byte(token)) {
+                // Handle byte tokens like <0xXX>
+                if (token_text.length() == 6 && token_text.substr(0, 3) == "<0x" && token_text.back() == '>') {
+                    int hex_val = std::stoi(token_text.substr(3, 2), nullptr, 16);
+                    if (length < 1) {
+                        return -1;
+                    }
+                    buf[0] = static_cast<char>(hex_val);
+                    return 1;
+                }
+            }
+
+            // Normal token - just copy the text
+            std::string result = token_text;
+            return _try_copy(result.data(), result.size());
+        }
+        default:
+            GGML_ABORT("fatal error");
     }
 
     return 0;
@@ -3640,6 +3646,9 @@ int32_t llama_vocab::impl::detokenize(
         GGML_ASSERT(avail >= 0);
         int32_t n_chars = token_to_piece(tokens[i], text, avail, remove_space, unparse_special);
         remove_space = false;
+        if (n_chars == std::numeric_limits<int32_t>::min()) {
+            return std::numeric_limits<int32_t>::min();
+        }
         if (n_chars < 0) {
             avail = 0;
             total -= n_chars;
@@ -4073,6 +4082,9 @@ std::string llama_vocab::detokenize(const std::vector<llama_token> & tokens, boo
     std::string text;
     text.resize(std::max(text.capacity(), tokens.size()));
     int32_t n_chars = detokenize(tokens.data(), (int32_t)tokens.size(), &text[0], (int32_t)text.size(), false, special);
+    if (n_chars == std::numeric_limits<int32_t>::min()) {
+        throw std::runtime_error("Detokenization failed: some supplied token is invalid");
+    }
     if (n_chars < 0) {
         text.resize(-n_chars);
         n_chars = detokenize(tokens.data(), (int32_t)tokens.size(), &text[0], (int32_t)text.size(), false, special);
