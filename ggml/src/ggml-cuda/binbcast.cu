@@ -106,6 +106,39 @@ static __global__ void k_mul_sub_add_fused_f32(
     dst[idx] = base[ib] + (scale[is] * v - v);
 }
 
+static __global__ void k_add_mul_fused_f32(
+        const float * __restrict__ src0,
+        const float * __restrict__ src1,
+        const float * __restrict__ scale,
+        float * __restrict__ dst,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3,
+        const int64_t s0_ne0, const int64_t s0_ne1, const int64_t s0_ne2, const int64_t s0_ne3,
+        const int64_t s0_s0,  const int64_t s0_s1,  const int64_t s0_s2,  const int64_t s0_s3,
+        const int64_t s1_ne0, const int64_t s1_ne1, const int64_t s1_ne2, const int64_t s1_ne3,
+        const int64_t s1_s0,  const int64_t s1_s1,  const int64_t s1_s2,  const int64_t s1_s3,
+        const int64_t sc_ne0, const int64_t sc_ne1, const int64_t sc_ne2, const int64_t sc_ne3,
+        const int64_t sc_s0,  const int64_t sc_s1,  const int64_t sc_s2,  const int64_t sc_s3) {
+    const int64_t idx   = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    const int64_t total = ne0 * ne1 * ne2 * ne3;
+
+    if (idx >= total) {
+        return;
+    }
+
+    const int64_t i0 = idx % ne0;
+    const int64_t t1 = idx / ne0;
+    const int64_t i1 = t1 % ne1;
+    const int64_t t2 = t1 / ne1;
+    const int64_t i2 = t2 % ne2;
+    const int64_t i3 = t2 / ne2;
+
+    const size_t is0 = ggml_cuda_index_4d(i0, i1, i2, i3, s0_ne0, s0_ne1, s0_ne2, s0_ne3, s0_s0, s0_s1, s0_s2, s0_s3);
+    const size_t is1 = ggml_cuda_index_4d(i0, i1, i2, i3, s1_ne0, s1_ne1, s1_ne2, s1_ne3, s1_s0, s1_s1, s1_s2, s1_s3);
+    const size_t isc = ggml_cuda_index_4d(i0, i1, i2, i3, sc_ne0, sc_ne1, sc_ne2, sc_ne3, sc_s0, sc_s1, sc_s2, sc_s3);
+
+    dst[idx] = (src0[is0] + src1[is1]) * scale[isc];
+}
+
 template <float (*bin_op)(const float, const float),
           typename src0_t,
           typename src1_t,
@@ -708,6 +741,50 @@ void ggml_cuda_op_mul_sub_add_fused(
             stride(scale, 0), stride(scale, 1), stride(scale, 2), stride(scale, 3),
             value->ne[0], value->ne[1], value->ne[2], value->ne[3],
             stride(value, 0), stride(value, 1), stride(value, 2), stride(value, 3));
+}
+
+void ggml_cuda_op_add_mul_fused(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        const ggml_tensor * scale,
+        ggml_tensor * dst) {
+    GGML_ASSERT(src0->type  == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type  == GGML_TYPE_F32);
+    GGML_ASSERT(scale->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type   == GGML_TYPE_F32);
+
+    GGML_ASSERT(ggml_can_repeat(src0, dst));
+    GGML_ASSERT(ggml_can_repeat(src1, dst));
+    GGML_ASSERT(ggml_can_repeat(scale, dst));
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(src1));
+    GGML_ASSERT(ggml_is_contiguous(scale));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    const int64_t total = ggml_nelements(dst);
+    const int     block = 256;
+    const int64_t grid  = (total + block - 1) / block;
+
+    GGML_ASSERT(grid <= std::numeric_limits<uint32_t>::max());
+
+    auto stride = [](const ggml_tensor * t, int dim) {
+        return int64_t(t->nb[dim] / ggml_element_size(t));
+    };
+
+    const ggml_cuda_kernel_launch_params launch_params(dim3((uint32_t) grid), block, 0, ctx.stream());
+    ggml_cuda_kernel_launch(k_add_mul_fused_f32, launch_params,
+            (const float *) src0->data,
+            (const float *) src1->data,
+            (const float *) scale->data,
+            (float *) dst->data,
+            dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+            src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+            stride(src0, 0), stride(src0, 1), stride(src0, 2), stride(src0, 3),
+            src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+            stride(src1, 0), stride(src1, 1), stride(src1, 2), stride(src1, 3),
+            scale->ne[0], scale->ne[1], scale->ne[2], scale->ne[3],
+            stride(scale, 0), stride(scale, 1), stride(scale, 2), stride(scale, 3));
 }
 
 void ggml_cuda_op_repeat_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

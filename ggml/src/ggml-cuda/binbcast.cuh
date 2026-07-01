@@ -24,3 +24,10 @@ void ggml_cuda_op_mul_sub_add_fused(
     const ggml_tensor * scale,
     const ggml_tensor * value,
     ggml_tensor * dst);
+
+void ggml_cuda_op_add_mul_fused(
+    ggml_backend_cuda_context & ctx,
+    const ggml_tensor * src0,
+    const ggml_tensor * src1,
+    const ggml_tensor * scale,
+    ggml_tensor * dst);

@@ -699,6 +699,48 @@ void ggml_compute_forward_add(
     }
 }
 
+void ggml_compute_forward_add_mul_fused(
+        const ggml_compute_params * params,
+        ggml_tensor * dst_add,
+        ggml_tensor * dst_mul) {
+    GGML_ASSERT(dst_add->op == GGML_OP_ADD);
+    GGML_ASSERT(dst_mul->op == GGML_OP_MUL);
+    GGML_ASSERT(dst_mul->src[0] == dst_add || dst_mul->src[1] == dst_add);
+
+    const ggml_tensor * src0  = dst_add->src[0];
+    const ggml_tensor * src1  = dst_add->src[1];
+    const ggml_tensor * scale = dst_mul->src[0] == dst_add ? dst_mul->src[1] : dst_mul->src[0];
+
+    GGML_ASSERT(src0->type    == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type    == GGML_TYPE_F32);
+    GGML_ASSERT(scale->type   == GGML_TYPE_F32);
+    GGML_ASSERT(dst_mul->type == GGML_TYPE_F32);
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(src1));
+    GGML_ASSERT(ggml_is_contiguous(scale));
+    GGML_ASSERT(ggml_is_contiguous(dst_mul));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst_mul));
+    GGML_ASSERT(ggml_are_same_shape(src1, dst_mul));
+    GGML_ASSERT(ggml_are_same_shape(scale, dst_mul));
+
+    const int64_t n = ggml_nelements(dst_mul);
+    const int64_t dr = (n + params->nth - 1) / params->nth;
+    const int64_t i0 = dr * params->ith;
+    const int64_t i1 = MIN(i0 + dr, n);
+
+    const float * a = (const float *) src0->data;
+    const float * b = (const float *) src1->data;
+    const float * s = (const float *) scale->data;
+    float * dst = (float *) dst_mul->data;
+
+    for (int64_t i = i0; i < i1; ++i) {
+        dst[i] = (a[i] + b[i]) * s[i];
+    }
+
+    GGML_UNUSED(dst_add);
+}
+
 // ggml_compute_forward_add_id
 
 static void ggml_compute_forward_add_id_f32(
