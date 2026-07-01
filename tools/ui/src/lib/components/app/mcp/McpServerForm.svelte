@@ -51,6 +51,19 @@
 
 	let showAuthorization = $derived(hasAuthorization || wantsAuthorization);
 
+	let urlInput: HTMLInputElement | null = $state(null);
+	let bearerInput: HTMLInputElement | null = $state(null);
+
+	$effect(() => {
+		urlInput?.focus();
+	});
+
+	$effect(() => {
+		if (wantsAuthorization && bearerInput) {
+			bearerInput.focus();
+		}
+	});
+
 	let bearerToken = $derived.by(() => {
 		const auth = headerPairs.find(
 			(p) => p.key.trim().toLowerCase() === AUTHORIZATION_HEADER.toLowerCase()
@@ -116,6 +129,7 @@
 			value={url}
 			oninput={(e) => onUrlChange(e.currentTarget.value)}
 			class={urlError ? 'border-destructive' : ''}
+			bind:ref={urlInput}
 		/>
 
 		{#if urlError}
@@ -139,14 +153,15 @@
 				id="bearer-token-{id}"
 				type="password"
 				autocomplete="off"
-				placeholder="paste token here..."
+				placeholder="Paste token here"
 				value={bearerToken}
 				oninput={(e) => updateBearerToken(e.currentTarget.value)}
 				class="pl-16"
+				bind:ref={bearerInput}
 			/>
 
 			<span
-				class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm font-medium text-muted-foreground"
+				class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm font-medium text-foreground"
 			>
 				Bearer
 			</span>

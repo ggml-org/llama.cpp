@@ -23,7 +23,7 @@
 	import { Toaster } from 'svelte-sonner';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { RECOMMENDED_MCP_SERVERS_OPTIN_DIALOG_DELAY, TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
@@ -294,7 +294,7 @@
 		if (hasRecommendations) {
 			mcpRecommendationsTimeout = setTimeout(() => {
 				mcpRecommendationsOpen = true;
-			}, 2000);
+			}, RECOMMENDED_MCP_SERVERS_OPTIN_DIALOG_DELAY);
 		}
 
 		mcpRecommendationsChecked = true;

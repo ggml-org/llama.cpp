@@ -31,3 +31,5 @@ export const RECOMMENDED_MCP_SERVERS: RecommendedMCPServer[] = [
 export const RECOMMENDED_MCP_SERVER_IDS = new Set(
 	RECOMMENDED_MCP_SERVERS.map((server) => server.id)
 );
+
+export const RECOMMENDED_MCP_SERVERS_OPTIN_DIALOG_DELAY = 1000
