@@ -59,6 +59,7 @@ enum slot_state {
     SLOT_STATE_IDLE,
     SLOT_STATE_WAIT_OTHER, // after assigning a task, but waiting for parent slot to process prompt
     SLOT_STATE_STARTED,    // after assigning a task and about to process prompt
+    SLOT_STATE_DISAGG_PREFILL, // running disaggregated prefill chunks on ctx_pfx before handoff
     SLOT_STATE_PROCESSING_PROMPT,
     SLOT_STATE_DONE_PROMPT,
     SLOT_STATE_GENERATING,
@@ -213,6 +214,13 @@ struct server_slot {
     // state
     slot_state state = SLOT_STATE_IDLE;
 
+    // disaggregated prefill cursor over the prompt prefix processed on ctx_pfx
+    int disagg_pos = 0;
+    int disagg_n = 0;
+    int disagg_seq = -1;
+    bool disagg_attempted = false;
+    bool disagg_prefilled = false;
+
     server_prompt prompt;
 
     bool prompt_save(server_prompt_cache & prompt_cache) const {
@@ -301,6 +309,13 @@ struct server_slot {
         SLT_DBG(*this, "%s", "\n");
 
         n_prompt_tokens_cache = 0;
+
+        // reset disaggregated prefill cursor
+        disagg_pos = 0;
+        disagg_n = 0;
+        disagg_seq = -1;
+        disagg_attempted = false;
+        disagg_prefilled = false;
 
         last_nl_pos    = 0;
         generated_text = "";
@@ -900,6 +915,12 @@ private:
     llama_model_ptr model_dft;
     llama_context_ptr ctx_dft;
 
+    llama_model_ptr model_pfx;
+    llama_context_ptr ctx_pfx;
+
+    // pool of prefill sequences on ctx_pfx, one entry per concurrent disaggregated prefill
+    std::vector<char> disagg_seq_busy;
+
     common_context_seq_rm_type ctx_tgt_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
     common_context_seq_rm_type ctx_dft_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
 
@@ -1174,6 +1195,51 @@ private:
         n_ctx = llama_n_ctx(ctx_tgt);
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
+
+        // disaggregated prefill: load a model replica on the prefill devices and build a
+        // dedicated prefill context, driven from update_slots on the main thread only
+        if (!params_base.devices_prefill.empty()) {
+            SRV_INF("%s", "loading prefill model replica for disaggregated prefill/decode\n");
+
+            // disagg re-establishes the target KV every request, the prompt cache would conflict
+            params_base.cache_ram_mib = 0;
+
+            if (params_base.n_prefill <= 0) {
+                params_base.n_prefill = 1;
+            }
+
+            // the pool cannot hand off more concurrent prefills than there are decode slots
+            if (params_base.n_prefill > params_base.n_parallel) {
+                params_base.n_prefill = params_base.n_parallel;
+            }
+
+            auto params_pfx = params_base;
+            params_pfx.devices = params_base.devices_prefill;
+
+            // ctx_pfx shares ctx_tgt n_seq_max so both contexts have the same n_stream and the
+            // prefilled KV restores into ctx_tgt, the pool uses only the first n_prefill sequences
+            params_pfx.n_parallel = params_base.n_parallel;
+
+            auto mparams_pfx = common_model_params_to_llama(params_pfx);
+
+            model_pfx.reset(llama_model_load_from_file(params_pfx.model.path.c_str(), mparams_pfx));
+            if (model_pfx == nullptr) {
+                SRV_ERR("failed to load prefill model, '%s'\n", params_pfx.model.path.c_str());
+                return false;
+            }
+
+            auto cparams_pfx = common_context_params_to_llama(params_pfx);
+
+            ctx_pfx.reset(llama_init_from_model(model_pfx.get(), cparams_pfx));
+            if (ctx_pfx == nullptr) {
+                SRV_ERR("%s", "failed to create prefill context\n");
+                return false;
+            }
+
+            SRV_INF("prefill context ready on %zu device(s)\n", params_base.devices_prefill.size());
+
+            disagg_seq_busy.assign(params_base.n_prefill, 0);
+        }
 
         if (has_draft) {
             // TODO speculative: move to common/speculative.cpp?
@@ -2763,6 +2829,177 @@ private:
     };
 #endif
 
+    // acquire a free prefill sequence from the pool, return -1 when all are busy
+    int disagg_acquire_seq() {
+        for (int s = 0; s < (int) disagg_seq_busy.size(); s++) {
+            if (!disagg_seq_busy[s]) {
+                disagg_seq_busy[s] = 1;
+                return s;
+            }
+        }
+        return -1;
+    }
+
+    void disagg_release_seq(int s) {
+        if (s >= 0 && s < (int) disagg_seq_busy.size()) {
+            disagg_seq_busy[s] = 0;
+        }
+    }
+
+    // disaggregated prefill: start processing prompt[0..n-2] on ctx_pfx, one chunk per tick
+    void disagg_prefill_begin(server_slot & slot) {
+        const int n = (int) slot.task->tokens.size();
+
+        slot.disagg_pos = 0;
+        slot.disagg_n = n - 1; // last token runs on ctx_tgt to produce logits
+        slot.disagg_attempted = true;
+        slot.disagg_prefilled = false;
+
+        // reset the slot prompt and the acquired prefill sequence so it starts clean
+        slot.prompt_clear(true);
+
+        common_context_seq_rm(ctx_pfx.get(), slot.disagg_seq, -1, -1);
+    }
+
+    // disaggregated prefill: process one chunk for every prefilling slot in a single ctx_pfx batch
+    void disagg_prefill_batch() {
+        if (!ctx_pfx) {
+            return;
+        }
+
+        std::vector<server_slot *> pfx;
+        for (auto & slot : slots) {
+            if (slot.state == SLOT_STATE_DISAGG_PREFILL) {
+                pfx.push_back(&slot);
+            }
+        }
+
+        if (pfx.empty()) {
+            return;
+        }
+
+        const int n_batch = llama_n_batch(ctx_pfx.get());
+        const int n_chunk = std::max(1, std::min<int>(params_base.n_prefill_chunk, n_batch));
+
+        // one chunk per slot on its own sequence, packed into a single ctx_pfx batch
+        llama_batch bpfx = llama_batch_init(n_batch, 0, 1);
+        common_batch_clear(bpfx);
+
+        // only slots whose chunk fits this batch advance, the rest wait the next tick
+        std::vector<server_slot *> used;
+        std::vector<int> n_cur;
+        for (server_slot * slot : pfx) {
+            const auto & toks = slot->task->tokens;
+            const int i = slot->disagg_pos;
+
+            int cur = std::min(n_chunk, slot->disagg_n - i);
+            if (bpfx.n_tokens + cur > n_batch) {
+                cur = n_batch - bpfx.n_tokens;
+            }
+
+            if (cur <= 0) {
+                break;
+            }
+
+            for (int j = 0; j < cur; j++) {
+                common_batch_add(bpfx, toks[i + j], i + j, { slot->disagg_seq }, false);
+            }
+
+            used.push_back(slot);
+            n_cur.push_back(cur);
+
+            if (bpfx.n_tokens >= n_batch) {
+                break;
+            }
+        }
+
+        if (bpfx.n_tokens == 0) {
+            llama_batch_free(bpfx);
+            return;
+        }
+
+        const int ret = llama_decode(ctx_pfx.get(), bpfx);
+        llama_synchronize(ctx_pfx.get());
+
+        llama_batch_free(bpfx);
+
+        // a prefill chunk is progress, keep the empty batch watchdog from firing
+        n_empty_consecutive = 0;
+
+        for (size_t s = 0; s < used.size(); s++) {
+            server_slot * slot = used[s];
+
+            if (ret != 0) {
+                SLT_ERR(*slot, "%s", "disagg prefill: llama_decode on ctx_pfx failed, falling back to local\n");
+                disagg_prefill_finish(*slot);
+                slot->state = SLOT_STATE_STARTED;
+                continue;
+            }
+
+            slot->disagg_pos += n_cur[s];
+
+            if (slot->disagg_pos >= slot->disagg_n) {
+                disagg_prefill_finish(*slot);
+                slot->state = SLOT_STATE_STARTED;
+            }
+        }
+    }
+
+    // disaggregated prefill: hand the prefilled prefix KV from ctx_pfx to ctx_tgt
+    void disagg_prefill_finish(server_slot & slot) {
+        const auto & input_tokens = slot.task->tokens;
+
+        const llama_seq_id seq_pfx = slot.disagg_seq; // acquired prefill sequence in ctx_pfx
+
+        // release the prefill sequence back to the pool
+        disagg_release_seq(slot.disagg_seq);
+        slot.disagg_seq = -1;
+
+        // prefill failed mid way, fall back to processing the whole prompt on ctx_tgt
+        if (slot.disagg_pos < slot.disagg_n) {
+            common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
+            return;
+        }
+
+        const size_t sz = llama_state_seq_get_size_ext(ctx_pfx.get(), seq_pfx, LLAMA_STATE_SEQ_FLAGS_NONE);
+        std::vector<uint8_t> buf(sz);
+
+        const int64_t t_get0 = ggml_time_us();
+        const size_t n_get = llama_state_seq_get_data_ext(ctx_pfx.get(), buf.data(), sz, seq_pfx, LLAMA_STATE_SEQ_FLAGS_NONE);
+        const int64_t t_get1 = ggml_time_us();
+
+        if (n_get != sz) {
+            SLT_ERR(slot, "disagg prefill: state get failed (%zu / %zu), falling back to local\n", n_get, sz);
+            common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
+            return;
+        }
+
+        const size_t n_set = llama_state_seq_set_data_ext(ctx_tgt, buf.data(), sz, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        const int64_t t_set1 = ggml_time_us();
+
+        if (n_set != sz) {
+            SLT_ERR(slot, "disagg prefill: state set failed (%zu / %zu), falling back to local\n", n_set, sz);
+            common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
+            common_context_seq_rm(ctx_tgt, slot.id, -1, -1);
+            return;
+        }
+
+        common_context_seq_rm(ctx_pfx.get(), seq_pfx, -1, -1);
+
+        // record the prefilled tokens so the prompt path only processes the last token
+        for (int i = 0; i < slot.disagg_n; i++) {
+            slot.prompt.tokens.push_back(input_tokens[i]);
+        }
+
+        // the handoff succeeded, the prefix KV is valid in ctx_tgt
+        slot.disagg_prefilled = true;
+
+        SLT_INF(slot, "disagg prefill: %d tokens, %.2f MiB | get(net) %.1f ms | set(local) %.1f ms\n",
+                slot.disagg_n, (float) sz / 1024 / 1024,
+                (t_get1 - t_get0) / 1000.0,
+                (t_set1 - t_get1) / 1000.0);
+    }
+
     void update_slots() {
 #ifdef DEBUG_TIMINGS
         static int64_t t_prev = 0;
@@ -3055,6 +3292,9 @@ private:
         auto & alora_scale       = batch.alora_scale;
         auto & alora_disabled_id = batch.alora_disabled_id;
 
+        // run one batched prefill chunk for all disaggregated prefill slots on ctx_pfx
+        disagg_prefill_batch();
+
         // next, batch any pending prompts without exceeding n_batch
         if (params_base.cont_batching || batch.size() == 0) {
             bool add_ok = true; // false means the batch is full, skip remaining slots
@@ -3079,6 +3319,12 @@ private:
                     return;
                 }
 
+                // disaggregated prefill runs in a single batched ctx_pfx decode before this loop;
+                // a slot still prefilling skips the decode batch this iteration
+                if (slot.state == SLOT_STATE_DISAGG_PREFILL) {
+                    return;
+                }
+
                 // this slot still has a prompt to be processed
                 if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_STARTED) {
                     const auto & input_tokens = slot.task->tokens;
@@ -3088,8 +3334,10 @@ private:
 
                     // TODO: maybe move branch to outside of this loop in the future
                     if (slot.state == SLOT_STATE_STARTED) {
-                        slot.t_start_process_prompt = ggml_time_us();
-                        slot.t_start_generation = 0;
+                        if (!slot.disagg_prefilled) {
+                            slot.t_start_process_prompt = ggml_time_us();
+                            slot.t_start_generation = 0;
+                        }
 
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
@@ -3163,7 +3411,30 @@ private:
                                 return;
                             }
 
-                            if (slot.task->params.cache_prompt) {
+                            // disaggregated prefill: kick off the chunked prefill on ctx_pfx once the prompt
+                            // is validated, the handoff and the single last token on ctx_tgt run when the
+                            // slot returns here
+                            // completion only: embedding and rerank need ctx_tgt outputs past the last token
+                            // no lora: ctx_pfx never sets adapters, a lora prefix KV would be computed wrong
+                            // skipped with speculative decoding: the draft context KV is not handed off
+                            if (ctx_pfx && !ctx_dft && !input_tokens.has_mtmd &&
+                                slot.task->type == SERVER_TASK_TYPE_COMPLETION && slot.lora.empty() &&
+                                slot.task->n_tokens() >= 2 && !slot.disagg_attempted) {
+                                const int seq = disagg_acquire_seq();
+                                if (seq >= 0) {
+                                    slot.disagg_seq = seq;
+                                    disagg_prefill_begin(slot);
+                                    slot.state = SLOT_STATE_DISAGG_PREFILL;
+                                    return;
+                                }
+                            }
+
+                            bool disagg_done = slot.disagg_prefilled;
+
+                            // disagg prefill handed off the prefix KV into ctx_tgt, treat it as already present
+                            if (disagg_done) {
+                                n_past = slot.disagg_n;
+                            } else if (slot.task->params.cache_prompt) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
@@ -3250,7 +3521,7 @@ private:
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, pos_next - n_swa - (has_new_tokens ? 0 : 1));
 
-                            if (n_past > 0 && n_past <= slot.prompt.n_tokens()) {
+                            if (n_past > 0 && n_past <= slot.prompt.n_tokens() && !disagg_done) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
                                 if (pos_min == -1) {
                                     SLT_ERR(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min);

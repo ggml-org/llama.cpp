@@ -2429,6 +2429,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_DEVICE"));
     add_opt(common_arg(
+        {"--prefill-device"}, "<dev1,dev2,..>",
+        "comma-separated list of devices for the disaggregated prefill context\n"
+        "use --list-devices to see a list of available devices",
+        [](common_params & params, const std::string & value) {
+            params.devices_prefill = parse_device_list(value);
+        }
+    ).set_env("LLAMA_ARG_PREFILL_DEVICE").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--n-prefill"}, "N",
+        "sequences in the disaggregated prefill context (default: 0, auto)",
+        [](common_params & params, int value) {
+            params.n_prefill = value;
+        }
+    ).set_env("LLAMA_ARG_N_PREFILL").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--n-prefill-chunk"}, "N",
+        "prefill chunk size in tokens for the disaggregated prefill context (default: 256)",
+        [](common_params & params, int value) {
+            params.n_prefill_chunk = value;
+        }
+    ).set_env("LLAMA_ARG_N_PREFILL_CHUNK").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--list-devices"},
         "print list of available devices and exit",
         [](common_params &) {

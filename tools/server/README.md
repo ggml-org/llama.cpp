@@ -166,6 +166,9 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
 | `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
+| `--prefill-device <dev1,dev2,...>` | comma-separated list of devices for the disaggregated prefill context, these can be RPC devices on remote machines (default: disabled)<br/>(env: LLAMA_ARG_PREFILL_DEVICE) |
+| `--n-prefill N` | number of concurrent prefill sequences in the disaggregated prefill context (default: 1)<br/>(env: LLAMA_ARG_N_PREFILL) |
+| `--n-prefill-chunk N` | prefill chunk size in tokens for the disaggregated prefill context, smaller values interleave decode more finely (default: 256)<br/>(env: LLAMA_ARG_N_PREFILL_CHUNK) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
 | `-r, --reverse-prompt PROMPT` | halt generation at PROMPT, return control in interactive mode |
 | `-sp, --special` | special tokens output enabled (default: false) |
@@ -311,6 +314,24 @@ services:
       LLAMA_ARG_N_PARALLEL: 2
       LLAMA_ARG_ENDPOINT_METRICS: 1
       LLAMA_ARG_PORT: 8080
+```
+
+### Disaggregated prefill/decode
+
+The server can run prompt processing (prefill) on a dedicated context placed on separate devices, while token generation (decode) stays on the main context. This decouples the two stages so that a long prefill no longer blocks the low latency decode of other sequences, which improves throughput when serving multiple users. See [#21266](https://github.com/ggml-org/llama.cpp/issues/21266).
+
+The prefill devices can be remote RPC devices, so the prefill context can live on a different machine than the decode context. The model is loaded on both the prefill and decode devices.
+
+Enable it by listing the prefill devices with `--prefill-device`. Prefill runs in chunks (`--n-prefill-chunk`) interleaved with decode one chunk per iteration, so a smaller chunk gives finer decode interleaving at the cost of a few more graph submissions. Up to `--n-prefill` prefill sequences run concurrently. Disaggregated prefill is skipped for multimodal prompts and when speculative decoding is enabled.
+
+Example, prefill on a remote RPC machine, decode on the local GPU:
+
+```sh
+# on the prefill machine
+rpc-server -H 0.0.0.0 -p 50052 -c
+
+# on the decode machine
+llama-server -m model.gguf --rpc PREFILL_HOST:50052 --device CUDA0 --prefill-device RPC0
 ```
 
 ### Multimodal support
