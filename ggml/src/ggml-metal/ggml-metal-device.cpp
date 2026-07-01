@@ -1386,6 +1386,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         bool    has_bias,
         bool    has_scap,
         bool    has_kvpad,
+        int32_t nqptg,
         int32_t nsg) {
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
@@ -1399,13 +1400,14 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
 
     // do bounds checks for the mask?
-    const bool bc_mask = op->src[3] && (op->src[3]->ne[1] % 8 != 0);
+    const bool bc_mask = op->src[3] && (op->src[3]->ne[1] % nqptg != 0);
 
-    snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
+    snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d%s",
             "flash_attn_ext",
             ggml_type_name(op->src[1]->type),
             dk,
-            dv);
+            dv,
+            nqptg == OP_FLASH_ATTN_EXT_NQPSG_16 ? "_q16" : "");
 
     snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d",
             base,

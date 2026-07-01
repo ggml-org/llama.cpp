@@ -104,6 +104,7 @@
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
+#define OP_FLASH_ATTN_EXT_NQPSG_16 16
 #define OP_FLASH_ATTN_EXT_NCPSG 64
 
 #define OP_FLASH_ATTN_EXT_VEC_NQPSG 1
