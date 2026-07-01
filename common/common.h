@@ -468,6 +468,15 @@ struct common_params {
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
 
+    // CPU tensor parallelism (EXPERIMENTAL); see docs/cpu-tensor-parallel.md
+    int32_t     tp_size = 1;     // number of tensor-parallel ranks (1 = disabled)
+    int32_t     tp_rank = 0;     // this process's rank, in [0, tp_size)
+    int32_t     tp_port = 0;     // inter-rank bootstrap TCP port (0 = default)
+    bool        tp_attn = false; // also shard attention (heads) across ranks
+    bool        tp_ssm  = false; // also shard recurrent SSM/Mamba-2 mixer (heads) across ranks
+    std::string tp_peer;         // rank-0 bootstrap address (empty = 127.0.0.1)
+    enum llama_moe_parallel_mode moe_parallel = LLAMA_MOE_PARALLEL_NONE; // how to parallelize MoE experts
+
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
 

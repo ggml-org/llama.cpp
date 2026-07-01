@@ -1,6 +1,10 @@
 #include "llama-graph.h"
+#include "llama-tp-moe.h"
+#include "llama-tp-shard.h"
+#include <cstdint>
 
 #include "llama-impl.h"
+#include "llama-tp-net.h"
 #include "llama-model.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
@@ -1435,6 +1439,17 @@ ggml_tensor * llm_graph_context::build_ffn(
         }
     }
 
+    // CPU tensor parallelism: ffn_down is row-parallel (weight sharded on the contraction dim),
+    // so each node holds a PARTIAL sum here. All-reduce across nodes to recover the full output.
+    // NOTE: in MoE expert-parallel mode (LLAMA_TP_MOE) build_ffn is used only for the SHARED expert,
+    // whose ffn_down is REPLICATED (not sharded) — all-reducing it would multiply it by size. So
+    // suppress the dense-FFN all-reduce in MoE mode. (Assumes pure-MoE models have no sharded dense
+    // FFN layers, which holds for qwen35moe et al.; the MoE combine is all-reduced in build_moe_ffn.)
+    if (down && llama_tp_enabled() && !llama_tp_moe_enabled()) {
+        cur = ggml_map_custom1_inplace(ctx0, cur, llama_tp_allreduce_op, 1, nullptr);
+        cb(cur, "ffn_down_tp", il);
+    }
+
     if (down_b) {
         cb(cur, "ffn_down", il);
     }
@@ -1643,6 +1658,34 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(weights, "ffn_moe_weights_scaled", il);
     }
 
+    // CPU tensor parallelism — MoE parallelism (selectable mode). Either way the per-rank expert FFN
+    // produces a PARTIAL moe_out that we all-reduce to the full output (below); the router stays
+    // replicated so every rank routes identically.
+    //   EXPERT mode: the loader sharded the expert SET (each rank owns n_expert/size experts). We
+    //     remap the selected ids into this rank's local index space and zero non-local weights, so
+    //     the normal mul_mat_id computes only the locally-owned selected experts.
+    //   TENSOR mode: the loader split each expert's n_ff (gate/up COLUMN, down ROW). NO remap needed —
+    //     the normal mul_mat_id path computes this rank's n_ff slice of EVERY selected expert.
+    ggml_tensor * sel_mm = selected_experts;
+    const bool moe_solo = getenv("LLAMA_TP_MOE_SOLO") != nullptr;  // DEBUG: EP path, 1 proc, full experts
+    const int  moe_mode = moe_solo ? TP_MOE_EXPERT : llama_tp_moe_mode();
+    // up_exps (not gate_exps) is the always-present projection: gated MoEs (SwiGLU) have both, but some
+  // MoEs have no gate experts (e.g. nemotron_h_moe: up -> relu^2 -> down). Require up+down.
+  const bool moe_par  = (moe_mode != TP_MOE_OFF) && up_exps && down_exps && !gate_up_exps && !weight_before_ffn;
+    if (moe_par && moe_mode == TP_MOE_EXPERT) {
+        const int     tp_n   = moe_solo ? 1 : llama_tp_size();
+        const int     tp_r   = moe_solo ? 0 : llama_tp_rank();
+        const int64_t e_cnt  = n_expert / tp_n;
+        const int64_t e_base = (int64_t) tp_r * e_cnt;
+        void * ud = (void *) (((uintptr_t) e_cnt << 32) | (uintptr_t) e_base);
+        // selected_experts is a strided VIEW (top-k of argsort: nb[1] = n_expert, not n_expert_used);
+        // our custom ops index it linearly, so make it contiguous first.
+        ggml_tensor * sel_c = ggml_cont(ctx0, selected_experts);
+        sel_mm  = ggml_map_custom1(ctx0, sel_c, tp_moe_local_ids_op,        1, ud);
+        weights = ggml_map_custom2(ctx0, weights, sel_c, tp_moe_mask_weights_op, 1, ud);
+        cb(weights, "ffn_moe_weights_masked", il);
+    }
+
     //call early so that topk-moe can be used
     ggml_build_forward_expand(gf, weights);
 
@@ -1655,12 +1698,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(cur, "ffn_moe_weighted", il);
     }
 
+
     ggml_tensor * up = nullptr;
     ggml_tensor * experts = nullptr;
 
     if (gate_up_exps) {
         // merged gate_up path: one mul_mat_id, then split into gate and up views
-        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
+        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, sel_mm, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
         cb(gate_up, "ffn_moe_gate_up", il);
 
         if (up_exps_s) {
@@ -1679,7 +1723,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(up, "ffn_moe_up", il);
     } else {
         // separate gate and up path
-        up = build_lora_mm_id(up_exps, cur, selected_experts, up_exps_s); // [n_ff, n_expert_used, n_tokens]
+        up = build_lora_mm_id(up_exps, cur, sel_mm, up_exps_s); // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);
 
         if (up_exps_s) {
@@ -1692,7 +1736,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         }
 
         if (gate_exps) {
-            cur = build_lora_mm_id(gate_exps, cur, selected_experts, gate_exps_s); // [n_ff, n_expert_used, n_tokens]
+            cur = build_lora_mm_id(gate_exps, cur, sel_mm, gate_exps_s); // [n_ff, n_expert_used, n_tokens]
             cb(cur, "ffn_moe_gate", il);
         } else {
             cur = up;
@@ -1777,7 +1821,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             GGML_ABORT("fatal error");
     }
 
-    experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s); // [n_embd, n_expert_used, n_tokens]
+    experts = build_lora_mm_id(down_exps, cur, sel_mm, down_exps_s); // [n_embd, n_expert_used, n_tokens]
     cb(experts, "ffn_moe_down", il);
 
     if (down_exps_s) {
@@ -1824,6 +1868,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         moe_out = ggml_cont(ctx0, moe_out);
     }
 
+    if (moe_par) {
+        // combine each rank's partial moe_out into the full output
+        moe_out = ggml_map_custom1_inplace(ctx0, moe_out, llama_tp_allreduce_op, 1, nullptr);
+    }
     cb(moe_out, "ffn_moe_out", il);
 
     return moe_out;
@@ -2376,6 +2424,15 @@ ggml_tensor * llm_graph_context::build_attn(
         }
     }
 
+    // CPU tensor parallelism (Phase 2): wo is row-parallel (sharded on the contraction == the
+    // per-head attention output), so each node holds a PARTIAL sum here. All-reduce across nodes
+    // to recover the full attention output. Must run BEFORE wo_b so the (replicated) bias is added
+    // once, not summed across ranks.
+    if (wo && llama_tp_attn_enabled()) {
+        cur = ggml_map_custom1_inplace(ctx0, cur, llama_tp_allreduce_op, 1, nullptr);
+        cb(cur, "attn_out_tp", il);
+    }
+
     if (wo_b) {
         cur = ggml_add(ctx0, cur, wo_b);
     }
@@ -2461,6 +2518,14 @@ ggml_tensor * llm_graph_context::build_attn(
         } else {
             cur = build_lora_mm(wo, cur, wo_s);
         }
+    }
+
+    // CPU tensor parallelism: with MLA head-sharding, wo is row-parallel (this rank holds a partial
+    // sum over its query heads) — all-reduce to recover the full attention output. Before wo_b so the
+    // replicated bias is added once.
+    if (wo && llama_tp_attn_enabled()) {
+        cur = ggml_map_custom1_inplace(ctx0, cur, llama_tp_allreduce_op, 1, nullptr);
+        cb(cur, "attn_out_tp", il);
     }
 
     if (wo_b) {

@@ -318,6 +318,18 @@ static std::vector<int> parse_int_range(const std::string & s, bool allow_negati
     return result;
 }
 
+// CPU tensor parallelism is process-global (not a per-row benchmark axis); set from the CLI and
+// applied to every model load in cmd_params_instance::to_llama_mparams().
+static struct {
+    int                     size = 1;
+    int                     rank = 0;
+    int                     port = 0;
+    bool                    attn = false;
+    bool                    ssm  = false;
+    std::string             peer;
+    llama_moe_parallel_mode moe  = LLAMA_MOE_PARALLEL_NONE;
+} g_tp;
+
 struct cmd_params {
     std::vector<std::string>         model;
     std::vector<std::string>         hf_repo;
@@ -457,6 +469,13 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ncmoe, --n-cpu-moe <n>                     (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
     printf("  -sm, --split-mode <none|layer|row|tensor>   (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                         (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
+    printf("  --tp-size <n>                               (CPU tensor parallelism: number of ranks, default: 1)\n");
+    printf("  --tp-rank <n>                               (CPU tensor parallelism: this rank's id)\n");
+    printf("  --moe-parallel <none|expert|tensor>         (CPU tensor parallelism: MoE parallel mode)\n");
+    printf("  --tp-attn                                   (CPU tensor parallelism: also shard attention)\n");
+    printf("  --tp-ssm                                    (CPU tensor parallelism: also shard SSM/Mamba-2 mixer)\n");
+    printf("  --tp-peer <addr>                            (CPU tensor parallelism: rank-0 bootstrap address)\n");
+    printf("  --tp-port <port>                            (CPU tensor parallelism: bootstrap port)\n");
     printf("  -nkvo, --no-kv-offload <0|1>                (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <on|off|auto>             (default: %s)\n", join(transform_to_str(cmd_params_defaults.flash_attn, llama_flash_attn_type_name), ",").c_str());
     printf("  -dev, --device <dev0/dev1/...>              (default: auto)\n");
@@ -774,6 +793,35 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.main_gpu = parse_int_range(argv[i]);
+            } else if (arg == "--tp-size") {
+                if (++i >= argc) { invalid_param = true; break; }
+                g_tp.size = std::stoi(argv[i]);
+            } else if (arg == "--tp-rank") {
+                if (++i >= argc) { invalid_param = true; break; }
+                g_tp.rank = std::stoi(argv[i]);
+            } else if (arg == "--tp-port") {
+                if (++i >= argc) { invalid_param = true; break; }
+                g_tp.port = std::stoi(argv[i]);
+            } else if (arg == "--tp-peer") {
+                if (++i >= argc) { invalid_param = true; break; }
+                g_tp.peer = argv[i];
+            } else if (arg == "--tp-attn") {
+                g_tp.attn = true;
+            } else if (arg == "--tp-ssm") {
+                g_tp.ssm = true;
+            } else if (arg == "--moe-parallel") {
+                if (++i >= argc) { invalid_param = true; break; }
+                std::string v(argv[i]);
+                if (v == "none") {
+                    g_tp.moe = LLAMA_MOE_PARALLEL_NONE;
+                } else if (v == "expert") {
+                    g_tp.moe = LLAMA_MOE_PARALLEL_EXPERT;
+                } else if (v == "tensor") {
+                    g_tp.moe = LLAMA_MOE_PARALLEL_TENSOR;
+                } else {
+                    invalid_param = true;
+                    break;
+                }
             } else if (arg == "-nkvo" || arg == "--no-kv-offload") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1192,6 +1240,15 @@ struct cmd_params_instance {
         mparams.use_mmap      = use_mmap;
         mparams.use_direct_io = use_direct_io;
         mparams.no_host       = no_host;
+
+        // CPU tensor parallelism (process-global; see g_tp)
+        mparams.tp_size      = g_tp.size;
+        mparams.tp_rank      = g_tp.rank;
+        mparams.tp_port      = g_tp.port;
+        mparams.tp_attn      = g_tp.attn;
+        mparams.tp_ssm       = g_tp.ssm;
+        mparams.tp_peer      = g_tp.peer.empty() ? nullptr : g_tp.peer.c_str();
+        mparams.moe_parallel = g_tp.moe;
 
         if (n_cpu_moe <= 0) {
             if (tensor_buft_overrides.empty()) {

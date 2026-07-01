@@ -7,6 +7,7 @@
 #include "llama-mmap.h"
 #include "llama-vocab.h"
 #include "llama-model-loader.h"
+#include "llama-tp-net.h"
 #include "llama-model-saver.h"
 #include "llama-model.h"
 
@@ -331,6 +332,96 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
             return {-2, nullptr};
         }
 
+        // CPU tensor parallelism (Phase 2): when attention is sharded (LLAMA_TP_ATTN), wq/wk/wv
+        // were column-split at load so this rank holds only n_head/tp query heads and n_head_kv/tp
+        // KV heads. Divide the per-layer head counts now (AFTER the tensors were created against the
+        // full GGUF dims) so build_qkv, build_attn and the KV cache all use this rank's LOCAL head
+        // counts. n_embd (the residual stream) and n_embd_head are unchanged.
+        {
+            const tp_shard_config tp = tp_shard_from_env();
+            if (tp.attn) {
+                auto & hp = model->hparams;
+                const uint32_t nl = hp.n_layer();
+                // MLA (DeepSeek) shards only the query heads; its single shared latent KV head
+                // (n_head_kv == 1, the compressed cache) stays replicated on every rank.
+                const bool is_mla = hp.is_mla();
+                for (uint32_t il = 0; il < nl; ++il) {
+                    const bool kv_ok = is_mla || hp.n_head_kv_arr[il] % tp.size == 0;
+                    if (hp.n_head_arr[il] % tp.size != 0 || !kv_ok) {
+                        LLAMA_LOG_ERROR("%s: LLAMA_TP_ATTN: layer %u n_head=%u n_head_kv=%u not divisible "
+                            "by tp_size=%d — refusing to shard attention\n",
+                            __func__, il, hp.n_head_arr[il], hp.n_head_kv_arr[il], tp.size);
+                        return {-2, nullptr};
+                    }
+                }
+                for (const auto & layer : model->layers) {
+                    // Fused QKV (wqkv) is now handled: a standard [Wq|Wk|Wv] weight is sharded per-head
+                    // by the loader (tp_qkv_plan_for); a non-standard wqkv (e.g. a gated-delta-net mixer)
+                    // is left replicated while the layer's separate attention (if any) still shards.
+                    // wq_b/wk_b/wv_b are the MLA per-head latent projections. They are sharded for
+                    // MLA models; on a non-MLA model they would be the legacy unabsorbed path we
+                    // do not handle, so refuse there.
+                    if (!is_mla && (layer.wq_b || layer.wk_b || layer.wv_b)) {
+                        LLAMA_LOG_ERROR("%s: LLAMA_TP_ATTN: model uses low-rank attention without MLA "
+                            "absorption, which attention sharding does not support yet\n", __func__);
+                        return {-2, nullptr};
+                    }
+                }
+                for (uint32_t il = 0; il < nl; ++il) {
+                    hp.n_head_arr[il] /= tp.size;
+                    if (!is_mla) {
+                        hp.n_head_kv_arr[il] /= tp.size;
+                    }
+                }
+                LLAMA_LOG_INFO("%s: tensor parallelism: attention sharded%s — local n_head=%u "
+                    "n_head_kv=%u (tp_size=%d)\n", __func__, is_mla ? " (MLA)" : "",
+                    hp.n_head_arr[0], hp.n_head_kv_arr[0], tp.size);
+            }
+
+            // Recurrent SSM / Mamba-2 mixer: shard the SSM heads + d_inner (channel-parallel) by
+            // dividing the SSM hparams here, AFTER the full-dim tensors were created. The state cache
+            // (n_embd_r/n_embd_s) and build_mamba2_layer read these straight from hparams, so they then
+            // become rank-local automatically. The selective scan is per-head independent, so each rank
+            // scans only its heads; one all-reduce after ssm_out recombines. Groups are sharded only
+            // when n_group divides the rank count (each rank owns whole state groups); otherwise B/C are
+            // replicated — which is only valid without the grouped ssm_norm (it would couple a group's
+            // channels across ranks), so refuse that combination.
+            if (tp.ssm) {
+                auto & hp = model->hparams;
+                const uint32_t n_head  = hp.ssm_dt_rank;
+                const uint32_t d_inner = hp.ssm_d_inner;
+                const uint32_t n_group = hp.ssm_n_group;
+                if (n_head == 0 || d_inner == 0) {
+                    LLAMA_LOG_ERROR("%s: LLAMA_TP_SSM: model has no SSM layers to shard\n", __func__);
+                    return {-2, nullptr};
+                }
+                if (n_head % tp.size != 0 || d_inner % tp.size != 0) {
+                    LLAMA_LOG_ERROR("%s: LLAMA_TP_SSM: ssm n_head=%u d_inner=%u not divisible by "
+                        "tp_size=%d — refusing to shard SSM\n", __func__, n_head, d_inner, tp.size);
+                    return {-2, nullptr};
+                }
+                const bool shard_groups = (n_group % tp.size == 0);
+                bool has_ssm_norm = false;
+                for (const auto & layer : model->layers) {
+                    if (layer.ssm_norm) { has_ssm_norm = true; break; }
+                }
+                if (!shard_groups && has_ssm_norm) {
+                    LLAMA_LOG_ERROR("%s: LLAMA_TP_SSM: n_group=%u not divisible by tp_size=%d but the "
+                        "model has a grouped ssm_norm — cannot split a group across ranks; refusing\n",
+                        __func__, n_group, tp.size);
+                    return {-2, nullptr};
+                }
+                hp.ssm_dt_rank  /= tp.size;
+                hp.ssm_d_inner  /= tp.size;
+                if (shard_groups) {
+                    hp.ssm_n_group /= tp.size;
+                }
+                LLAMA_LOG_INFO("%s: tensor parallelism: SSM sharded — local n_head=%u d_inner=%u "
+                    "n_group=%u (groups %s, tp_size=%d)\n", __func__, hp.ssm_dt_rank, hp.ssm_d_inner,
+                    hp.ssm_n_group, shard_groups ? "sharded" : "replicated", tp.size);
+            }
+        }
+
         return {0, model_ptr.release()};
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
@@ -363,6 +454,11 @@ static struct llama_model * llama_model_load_from_file_impl(
         }
     }
     ggml_time_init();
+
+    // CPU tensor parallelism: publish the requested config so the loader, graph builder and all-reduce
+    // use it. When left at defaults (tp_size <= 1) the accessors fall back to the LLAMA_TP_* env vars.
+    llama_tp_set_config(params.tp_size, params.tp_rank, (int) params.moe_parallel,
+                        params.tp_attn ? 1 : 0, params.tp_ssm ? 1 : 0, params.tp_peer, params.tp_port);
 
     if (!params.vocab_only && ggml_backend_reg_count() == 0) {
         LLAMA_LOG_ERROR("%s: no backends are loaded. hint: use ggml_backend_load() or ggml_backend_load_all() to load a backend before calling this function\n", __func__);

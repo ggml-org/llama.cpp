@@ -2428,6 +2428,54 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MAIN_GPU"));
     add_opt(common_arg(
+        {"--tp-size"}, "N",
+        "CPU tensor parallelism (EXPERIMENTAL): number of ranks (processes), one per NUMA domain/node (default: 1 = disabled)",
+        [](common_params & params, int value) { params.tp_size = value; }
+    ).set_env("LLAMA_ARG_TP_SIZE"));
+    add_opt(common_arg(
+        {"--tp-rank"}, "N",
+        "CPU tensor parallelism: this process's rank, in [0, tp-size)",
+        [](common_params & params, int value) { params.tp_rank = value; }
+    ).set_env("LLAMA_ARG_TP_RANK"));
+    add_opt(common_arg(
+        {"--moe-parallel"}, "{none,expert,tensor}",
+        "how to parallelize MoE experts across CPU tensor-parallel ranks, one of:\n"
+        "- none (default): experts not sharded\n"
+        "- expert: shard the expert set (capacity)\n"
+        "- tensor: split each expert's intermediate n_ff like a dense FFN (throughput)",
+        [](common_params & params, const std::string & value) {
+            if (value == "none") {
+                params.moe_parallel = LLAMA_MOE_PARALLEL_NONE;
+            } else if (value == "expert") {
+                params.moe_parallel = LLAMA_MOE_PARALLEL_EXPERT;
+            } else if (value == "tensor") {
+                params.moe_parallel = LLAMA_MOE_PARALLEL_TENSOR;
+            } else {
+                throw std::invalid_argument("invalid value");
+            }
+        }
+    ).set_env("LLAMA_ARG_MOE_PARALLEL"));
+    add_opt(common_arg(
+        {"--tp-attn"},
+        "CPU tensor parallelism: also shard attention (heads) across ranks",
+        [](common_params & params) { params.tp_attn = true; }
+    ).set_env("LLAMA_ARG_TP_ATTN"));
+    add_opt(common_arg(
+        {"--tp-ssm"},
+        "CPU tensor parallelism: also shard the recurrent SSM/Mamba-2 mixer (heads) across ranks",
+        [](common_params & params) { params.tp_ssm = true; }
+    ).set_env("LLAMA_ARG_TP_SSM"));
+    add_opt(common_arg(
+        {"--tp-peer"}, "ADDR",
+        "CPU tensor parallelism: rank-0 bootstrap address that non-zero ranks connect to (default: 127.0.0.1)",
+        [](common_params & params, const std::string & value) { params.tp_peer = value; }
+    ).set_env("LLAMA_ARG_TP_PEER"));
+    add_opt(common_arg(
+        {"--tp-port"}, "PORT",
+        "CPU tensor parallelism: inter-rank bootstrap TCP port",
+        [](common_params & params, int value) { params.tp_port = value; }
+    ).set_env("LLAMA_ARG_TP_PORT"));
+    add_opt(common_arg(
         { "-fit", "--fit" }, "[on|off]",
         string_format("whether to adjust unset arguments to fit in device memory ('on' or 'off', default: '%s')", params.fit_params ? "on" : "off"),
         [](common_params & params, const std::string & value) {

@@ -814,6 +814,13 @@ llama_model_loader::llama_model_loader(
         use_mmap = false;
     }
 
+    // CPU tensor parallelism shards weights with a strided (non-contiguous) per-row layout that
+    // cannot be zero-copied from mmap -> force a real read into allocated buffers.
+    if (tp_cfg.enabled && use_mmap) {
+        LLAMA_LOG_INFO("%s: tensor parallelism enabled (size=%d rank=%d) -> disabling mmap\n", __func__, tp_cfg.size, tp_cfg.rank);
+        use_mmap = false;
+    }
+
     this->use_mmap = use_mmap;
     this->use_direct_io = use_direct_io;
     this->check_tensors = check_tensors;
@@ -1042,6 +1049,246 @@ static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hpara
     }
 
     return nullptr;
+}
+
+// Which weights are sharded for CPU tensor parallelism, and how.
+// FFN sharding (Phase 1): ffn_up/gate column-parallel (split output rows, no comm), ffn_down
+// row-parallel (split the contraction -> needs an all-reduce in the graph).
+// Attention sharding (Phase 2, when attn != 0): wq/wk/wv column-parallel (split output rows ==
+// split Q/KV heads), wo row-parallel (split the contraction == per-head input) + all-reduce.
+// Column-splitting wq/wk/wv reduces the local head counts; the loader compensates by dividing
+// hparams.n_head/n_head_kv so build_qkv, build_attn and the KV cache use per-rank head counts.
+static tp_shard_role tp_role_for_tensor(llm_tensor t, int attn, int ssm, tp_moe_mode moe_mode) {
+    // SSM/Mamba-2 mixer channel sharding. The concatenated ssm_in/ssm_conv1d/ssm_dt tensors are
+    // handled separately (tp_ssm_plan_for); here only the simple per-head / per-group / output ones:
+    //   ssm_a, ssm_d {1,n_head}  -> COLUMN (split n_head); ssm_norm {.,n_group} -> COLUMN (split groups)
+    //   ssm_out {d_inner,n_embd} -> ROW (split d_inner) + all-reduce.
+    if (ssm) {
+        switch (t) {
+            case LLM_TENSOR_SSM_A:
+            case LLM_TENSOR_SSM_D:
+            case LLM_TENSOR_SSM_NORM: return TP_SHARD_COLUMN;
+            case LLM_TENSOR_SSM_OUT:  return TP_SHARD_ROW;
+            default: break;
+        }
+    }
+    switch (t) {
+        case LLM_TENSOR_FFN_UP:
+        case LLM_TENSOR_FFN_GATE:
+            return TP_SHARD_COLUMN;
+        case LLM_TENSOR_FFN_DOWN:
+            return TP_SHARD_ROW;
+        case LLM_TENSOR_ATTN_Q:
+        case LLM_TENSOR_ATTN_K:
+        case LLM_TENSOR_ATTN_V:
+            return attn ? TP_SHARD_COLUMN : TP_SHARD_NONE;
+        case LLM_TENSOR_ATTN_OUT:
+            return attn ? TP_SHARD_ROW : TP_SHARD_NONE;
+        // MLA (DeepSeek) per-query-head latent projections. The shared latent compressions
+        // (attn_q_a, attn_kv_a_mqa, *_a_norm) stay REPLICATED. wq_b output is n_head*head_k -> COLUMN;
+        // wk_b/wv_b are per-head 3D [.., .., n_head] -> slice the head dim (EXPERT-style ne[2] split).
+        case LLM_TENSOR_ATTN_Q_B:
+            return attn ? TP_SHARD_COLUMN : TP_SHARD_NONE;
+        case LLM_TENSOR_ATTN_K_B:
+        case LLM_TENSOR_ATTN_V_B:
+            return attn ? TP_SHARD_EXPERT : TP_SHARD_NONE;
+        // MoE routed experts. gate_inp (router) stays replicated so every rank routes identically.
+        //   EXPERT mode: shard the n_expert dim (ne[2]) — each rank owns whole experts.
+        //   TENSOR mode: shard each expert's intermediate n_ff like a dense FFN — gate/up COLUMN
+        //     (split ne[1]), down ROW (split ne[0]); the n_expert dim (ne[2]) is kept on every rank.
+        case LLM_TENSOR_FFN_UP_EXPS:
+        case LLM_TENSOR_FFN_GATE_EXPS:
+            if (moe_mode == TP_MOE_TENSOR) return TP_SHARD_COLUMN;
+            return moe_mode == TP_MOE_EXPERT ? TP_SHARD_EXPERT : TP_SHARD_NONE;
+        case LLM_TENSOR_FFN_DOWN_EXPS:
+            if (moe_mode == TP_MOE_TENSOR) return TP_SHARD_ROW;
+            return moe_mode == TP_MOE_EXPERT ? TP_SHARD_EXPERT : TP_SHARD_NONE;
+        case LLM_TENSOR_FFN_GATE_UP_EXPS:   // merged gate+up experts: tensor mode unsupported (would
+            return moe_mode == TP_MOE_EXPERT ? TP_SHARD_EXPERT : TP_SHARD_NONE; // cut the gate|up seam)
+        default:
+            return TP_SHARD_NONE;
+    }
+}
+
+// Read this rank's shard of a tensor from the GGUF. A strided plan (nrows>1: tensor-parallel
+// gate/up/down, one chunk per output row/expert) would otherwise do one read per chunk — millions of
+// tiny, seek-heavy reads on a large model, pathological over a network filesystem. Instead read the
+// enclosing span ONCE, sequentially, and extract the chunks in RAM. Contiguous plans (nrows==1:
+// column / expert-parallel) and naturally-contiguous strides stay a single read.
+static void tp_read_shard(llama_file * file, size_t offs, const tp_shard_plan & pl, uint8_t * dst) {
+    // SSM concatenated-projection gather: the rank's data is a few contiguous spans (its kept
+    // sub-slices of [z|x|B|C|dt]) packed in order. Each span is one sequential read.
+    if (pl.n_seg > 0) {
+        size_t dst_off = 0;
+        for (int i = 0; i < pl.n_seg; i++) {
+            file->seek(offs + pl.seg_src_off[i], SEEK_SET);
+            file->read_raw(dst + dst_off, pl.seg_bytes[i]);
+            dst_off += pl.seg_bytes[i];
+        }
+        return;
+    }
+    if (pl.nrows <= 1 || pl.src_stride == pl.chunk_bytes) {
+        const size_t n = (pl.nrows <= 1) ? pl.chunk_bytes : (size_t) pl.nrows * pl.chunk_bytes;
+        file->seek(offs + pl.base_off, SEEK_SET);
+        file->read_raw(dst, n);
+        return;
+    }
+    const size_t span = (size_t) (pl.nrows - 1) * pl.src_stride + pl.chunk_bytes;
+    std::vector<uint8_t> buf(span);
+    file->seek(offs + pl.base_off, SEEK_SET);
+    file->read_raw(buf.data(), span);
+    for (int64_t r = 0; r < pl.nrows; r++) {
+        memcpy(dst + (size_t) r * pl.chunk_bytes, buf.data() + (size_t) r * pl.src_stride, pl.chunk_bytes);
+    }
+}
+
+// Build this rank's load plan for an SSM/Mamba-2 tensor under LLAMA_TP_SSM (channel/head sharding).
+// The ssm_in / ssm_conv1d projections are CONCATENATIONS of differently-shaped sub-slices
+//   ssm_in  : [ z(d_inner) | x(d_inner) | B(n_group*d_state) | C(n_group*d_state) | dt(n_head) ]
+//   conv1d  : [           x(d_inner) | B(n_group*d_state) | C(n_group*d_state) ]
+// so a plain even split would cut across the z|x|B|C|dt seams. Instead gather, per rank, each
+// segment's own sub-range: z/x/dt split by heads (and d_inner), B/C split by groups when n_group
+// divides the rank count else replicated. Returns 0 for a non-SSM tensor (use the generic path),
+// 1 with the plan filled, or -1 for an SSM tensor that cannot be split this many ways.
+static int tp_ssm_plan_for(llm_tensor t, const llama_hparams & hp, int rank, int size,
+                           const ggml_tensor * cur, tp_shard_plan * out) {
+    const int64_t d_inner = hp.ssm_d_inner;
+    const int64_t n_group = hp.ssm_n_group;
+    const int64_t d_state = hp.ssm_d_state;
+    const int64_t n_head  = hp.ssm_dt_rank;
+    const bool    shard_g = (n_group % size == 0);   // shard B/C groups, else replicate them
+
+    // each segment: full width along the split axis, and whether this rank takes only its slice
+    struct seg_t { int64_t w; bool shard; };
+    seg_t seg[5];
+    int   nseg = 0;
+    int   axis;   // 1 = split ne[1] (output rows of a 2D weight); 0 = split ne[0] (a 1D bias)
+
+    switch (t) {
+        case LLM_TENSOR_SSM_IN:
+            seg[nseg++] = { d_inner,           true   };
+            seg[nseg++] = { d_inner,           true   };
+            seg[nseg++] = { n_group * d_state, shard_g };
+            seg[nseg++] = { n_group * d_state, shard_g };
+            seg[nseg++] = { n_head,            true   };
+            axis = 1;
+            break;
+        case LLM_TENSOR_SSM_CONV1D:   // weight {d_conv, x|B|C} (2D) or bias {x|B|C} (1D)
+            seg[nseg++] = { d_inner,           true   };
+            seg[nseg++] = { n_group * d_state, shard_g };
+            seg[nseg++] = { n_group * d_state, shard_g };
+            axis = ggml_n_dims(cur) >= 2 ? 1 : 0;
+            break;
+        case LLM_TENSOR_SSM_DT:       // bias {n_head} (1D)
+            seg[nseg++] = { n_head, true };
+            axis = 0;
+            break;
+        default:
+            return 0;
+    }
+
+    const int64_t block = ggml_blck_size(cur->type);
+    const size_t  tsz   = ggml_type_size(cur->type);
+    // bytes per unit of the split axis: a whole ne[0] row for a 2D weight; one element for a 1D bias
+    // (1D ssm tensors are F32 -> block 1). For axis 0 with block>1 the seam wouldn't be block-aligned.
+    if (axis == 0 && block != 1) return -1;
+    const size_t unit = axis == 1 ? (size_t)(cur->ne[0] / block) * tsz : tsz;
+
+    int64_t run = 0, kept = 0;
+    out->n_seg = 0;
+    for (int i = 0; i < nseg; i++) {
+        int64_t off, w;
+        if (seg[i].shard) {
+            if (seg[i].w % size != 0) return -1;     // can't split this segment evenly
+            w   = seg[i].w / size;
+            off = run + (int64_t) rank * w;
+        } else {
+            w   = seg[i].w;                          // replicated: every rank keeps the whole segment
+            off = run;
+        }
+        out->seg_src_off[out->n_seg] = (size_t) off * unit;
+        out->seg_bytes[out->n_seg]   = (size_t) w   * unit;
+        out->n_seg++;
+        kept += w;
+        run  += seg[i].w;
+    }
+    out->total_bytes = (size_t) kept * unit;
+    out->ne2 = cur->ne[2];
+    if (axis == 1) { out->ne0 = cur->ne[0]; out->ne1 = kept; }
+    else           { out->ne0 = kept;       out->ne1 = cur->ne[1]; }
+    out->nrows = 0; out->chunk_bytes = 0; out->base_off = 0; out->src_stride = 0;  // unused (n_seg>0)
+    return 1;
+}
+
+// Build this rank's load plan for a FUSED QKV attention weight (LLM_TENSOR_ATTN_QKV). The tensor is
+// [ Wq(n_head*head_dim) | Wk(n_head_kv*head_dim) | Wv(n_head_kv*head_dim) ] concatenated along the
+// output dim, so the per-head shard is the same multi-segment column gather used for ssm_in: this
+// rank takes its query-head slice of Wq and kv-head slice of Wk/Wv. Only applies to a *standard*
+// fused QKV (identified by the output dim matching n_head*hd + 2*n_head_kv*hd); anything else with an
+// ATTN_QKV name (e.g. a gated-delta-net mixer's wqkv) has a different width -> returns 0 so it stays
+// replicated. Returns 0 (not a standard fused QKV), 1 (plan filled), or -1 (can't split this way).
+static int tp_qkv_plan_for(llm_tensor t, const llama_hparams & hp, int rank, int size,
+                           const ggml_tensor * cur, tp_shard_plan * out) {
+    if (t != LLM_TENSOR_ATTN_QKV) return 0;
+    const int64_t hd = hp.n_embd_head_k();
+    const int64_t nq = (int64_t) hp.n_head()    * hd;
+    const int64_t nk = (int64_t) hp.n_head_kv() * hd;
+    const int64_t seg[3] = { nq, nk, nk };            // Wq, Wk, Wv output widths
+    const bool    is_1d  = ggml_n_dims(cur) < 2;      // the bias is 1D
+    const int64_t axis   = is_1d ? cur->ne[0] : cur->ne[1];
+    if (axis != nq + 2 * nk) return 0;                // not a standard fused QKV -> leave replicated
+    if (hp.n_head() % size != 0 || hp.n_head_kv() % size != 0) return -1;
+
+    const int64_t block = ggml_blck_size(cur->type);
+    const size_t  tsz   = ggml_type_size(cur->type);
+    if (is_1d && block != 1) return -1;               // 1D bias must be block 1 (F32) to slice by head
+    const size_t unit = is_1d ? tsz : (size_t)(cur->ne[0] / block) * tsz;
+
+    int64_t run = 0, kept = 0;
+    out->n_seg = 0;
+    for (int i = 0; i < 3; i++) {
+        if (seg[i] % size != 0) return -1;
+        const int64_t w = seg[i] / size, off = run + (int64_t) rank * w;
+        out->seg_src_off[out->n_seg] = (size_t) off * unit;
+        out->seg_bytes[out->n_seg]   = (size_t) w   * unit;
+        out->n_seg++;
+        kept += w;
+        run  += seg[i];
+    }
+    out->total_bytes = (size_t) kept * unit;
+    out->ne2 = cur->ne[2];
+    if (is_1d) { out->ne0 = kept;       out->ne1 = cur->ne[1]; }
+    else       { out->ne0 = cur->ne[0]; out->ne1 = kept; }
+    out->nrows = 0; out->chunk_bytes = 0; out->base_off = 0; out->src_stride = 0;
+    return 1;
+}
+
+// Build this rank's load plan for a FUSED gate/up FFN weight (LLM_TENSOR_FFN_UP holding [gate|up]
+// concatenated, ne[1] == 2*n_ff — e.g. Phi-3, used with LLM_FFN_SWIGLU). A plain COLUMN split would
+// cut the gate|up seam (giving one rank all of gate, another all of up); instead take this rank's
+// column slice of EACH half so the swiglu stays channel-aligned. Returns 0 if not a fused gate/up
+// (normal separate ffn_up, ne[1]==n_ff -> generic COLUMN), 1 with plan, or -1 if it can't split.
+static int tp_gate_up_plan_for(llm_tensor t, const llama_hparams & hp, int rank, int size,
+                               const ggml_tensor * cur, tp_shard_plan * out) {
+    if (t != LLM_TENSOR_FFN_UP) return 0;
+    const int64_t n_ff = hp.n_ff();
+    if (cur->ne[1] != 2 * n_ff) return 0;             // not a fused gate|up -> generic COLUMN path
+    if (n_ff % size != 0) return -1;
+    const int64_t block = ggml_blck_size(cur->type);
+    const size_t  tsz   = ggml_type_size(cur->type);
+    const size_t  unit  = (size_t)(cur->ne[0] / block) * tsz;   // bytes per output row (ne0 = n_embd)
+    const int64_t w = n_ff / size;
+    out->n_seg = 0;
+    for (int i = 0; i < 2; i++) {                     // half 0 = gate, half 1 = up
+        const int64_t off = (int64_t) i * n_ff + (int64_t) rank * w;
+        out->seg_src_off[out->n_seg] = (size_t) off * unit;
+        out->seg_bytes[out->n_seg]   = (size_t) w   * unit;
+        out->n_seg++;
+    }
+    out->total_bytes = (size_t) (2 * w) * unit;
+    out->ne0 = cur->ne[0]; out->ne1 = 2 * w; out->ne2 = cur->ne[2];
+    out->nrows = 0; out->chunk_bytes = 0; out->base_off = 0; out->src_stride = 0;
+    return 1;
 }
 
 struct ggml_tensor * llama_model_loader::create_tensor(
@@ -1274,8 +1521,59 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
     const bool duplicated = flags & TENSOR_DUPLICATED;
 
-    struct ggml_tensor * tensor = ggml_dup_tensor(ctx, cur);
-    ggml_set_name(tensor, ggml_get_name(cur));
+    // CPU tensor parallelism: create this rank's SHARD of the tensor (smaller ne), and record
+    // the load plan so load_data_for reads only the rank's slice from the GGUF.
+    struct ggml_tensor * tensor = nullptr;
+    tp_shard_plan tp_plan;
+    bool tp_sharded = false;
+    bool tp_refused = false;          // a TP role applied but the shape can't be split this many ways
+    const char * tp_why = "";
+    if (tp_cfg.enabled) {
+        // Fused gate|up FFN weight needs the 2-segment gather (else the swiglu seam is cut). Always-on.
+        const int r = tp_gate_up_plan_for(tn.tensor, hparams, tp_cfg.rank, tp_cfg.size, cur, &tp_plan);
+        if (r == 1)       { tp_sharded = true; }
+        else if (r == -1) { tp_refused = true; }
+    }
+    if (!tp_sharded && !tp_refused && tp_cfg.enabled && tp_cfg.attn) {
+        // Fused QKV attention weight/bias needs the per-head multi-segment gather (hparams-aware).
+        const int r = tp_qkv_plan_for(tn.tensor, hparams, tp_cfg.rank, tp_cfg.size, cur, &tp_plan);
+        if (r == 1)       { tp_sharded = true; }
+        else if (r == -1) { tp_refused = true; }
+    }
+    if (!tp_sharded && !tp_refused && tp_cfg.enabled && tp_cfg.ssm) {
+        // SSM/Mamba-2 concatenated projections need the multi-segment gather (hparams-aware).
+        const int r = tp_ssm_plan_for(tn.tensor, hparams, tp_cfg.rank, tp_cfg.size, cur, &tp_plan);
+        if (r == 1)       { tp_sharded = true; }
+        else if (r == -1) { tp_refused = true; }
+    }
+    if (!tp_sharded && !tp_refused && tp_cfg.enabled) {
+        tp_shard_role tp_role = tp_role_for_tensor(tn.tensor, tp_cfg.attn, tp_cfg.ssm, tp_cfg.moe_mode);
+        if (tp_role != TP_SHARD_NONE) {
+            if (tp_shard_plan_make(tp_role, tp_cfg.rank, tp_cfg.size, cur->ne[0], cur->ne[1], cur->ne[2],
+                                   ggml_blck_size(cur->type), ggml_type_size(cur->type), &tp_plan) == 0) {
+                tp_sharded = true;
+            } else {
+                tp_refused = true;
+                if (tp_role == TP_SHARD_ROW) tp_why = " — n_ff/size not quant-block-aligned; try a smaller size or EP mode";
+            }
+        }
+    }
+    if (tp_sharded) {
+        int64_t sne[GGML_MAX_DIMS] = { tp_plan.ne0, tp_plan.ne1, tp_plan.ne2, cur->ne[3] };
+        tensor = ggml_new_tensor(ctx, cur->type, ggml_n_dims(cur), sne);
+        ggml_set_name(tensor, ggml_get_name(cur));
+        tp_plans[ggml_get_name(cur)] = tp_plan;
+    } else if (tp_refused) {
+        // fail loudly so the loader and graph stay consistent (and the user picks a valid TP size or
+        // mode) rather than silently loading the full tensor.
+        throw std::runtime_error(format(
+            "CPU TP: cannot shard tensor '%s' [%lld,%lld,%lld] (%s) %d ways%s",
+            ggml_get_name(cur), (long long)cur->ne[0], (long long)cur->ne[1], (long long)cur->ne[2],
+            ggml_type_name(cur->type), tp_cfg.size, tp_why));
+    } else {
+        tensor = ggml_dup_tensor(ctx, cur);
+        ggml_set_name(tensor, ggml_get_name(cur));
+    }
 
     if (duplicated) {
         size_data += ggml_nbytes(cur);
@@ -1384,6 +1682,25 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
 
 void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     const auto & w = require_weight(ggml_get_name(cur));
+
+    // CPU tensor parallelism: gather this rank's slice. Row-parallel data is strided in the
+    // file (one chunk per output row), so it cannot be zero-copied from mmap -> require a real
+    // (allocated) buffer, i.e. --no-mmap when TP is enabled.
+    auto tp_it = tp_plans.find(ggml_get_name(cur));
+    if (tp_it != tp_plans.end()) {
+        const tp_shard_plan & pl = tp_it->second;
+        if (cur->data == nullptr) {
+            throw std::runtime_error(format("tensor parallelism requires --no-mmap (tensor '%s')", ggml_get_name(cur)));
+        }
+        uint8_t * dst = (uint8_t *) cur->data;
+        GGML_ASSERT(w.idx < files.size());
+        const auto & file = files.at(w.idx);
+        tp_read_shard(file.get(), w.offs, pl, dst);
+        if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
+            throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+        }
+        return;
+    }
 
     if (use_mmap) {
         const auto & mapping = mappings.at(w.idx);
@@ -1567,8 +1884,15 @@ bool llama_model_loader::load_all_data(
             const auto & file = files.at(weight->idx);
 
             if (ggml_backend_buffer_is_host(cur->buffer)) {
-                file->seek(weight->offs, SEEK_SET);
-                file->read_raw(cur->data, n_size);
+                // CPU tensor parallelism: gather this rank's (possibly strided) slice.
+                auto tp_it = tp_plans.find(ggml_get_name(cur));
+                if (tp_it != tp_plans.end()) {
+                    const tp_shard_plan & pl = tp_it->second;
+                    tp_read_shard(file.get(), weight->offs, pl, (uint8_t *) cur->data);
+                } else {
+                    file->seek(weight->offs, SEEK_SET);
+                    file->read_raw(cur->data, n_size);
+                }
                 if (check_tensors) {
                     validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
                         return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));

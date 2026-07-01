@@ -198,6 +198,13 @@ extern "C" {
         LLAMA_SPLIT_MODE_TENSOR = 3,
     };
 
+    // how a Mixture-of-Experts model is parallelized across CPU tensor-parallel ranks (EXPERIMENTAL)
+    enum llama_moe_parallel_mode {
+        LLAMA_MOE_PARALLEL_NONE   = 0, // experts not sharded
+        LLAMA_MOE_PARALLEL_EXPERT = 1, // expert parallel: each rank owns a slice of the expert set
+        LLAMA_MOE_PARALLEL_TENSOR = 2, // tensor parallel: split each expert's intermediate (n_ff)
+    };
+
     enum llama_context_type {
         LLAMA_CONTEXT_TYPE_DEFAULT = 0,
         LLAMA_CONTEXT_TYPE_MTP     = 1,
@@ -304,6 +311,15 @@ extern "C" {
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
 
+        // CPU tensor parallelism (EXPERIMENTAL): shard the model across `tp_size` processes (ranks),
+        // one per NUMA domain/node, combining partial results with an all-reduce. One process per rank;
+        // requires a UCX-enabled build. See docs/cpu-tensor-parallel.md.
+        int32_t tp_size; // number of tensor-parallel ranks (1 = disabled)
+        int32_t tp_rank; // this process's rank, in [0, tp_size)
+        enum llama_moe_parallel_mode moe_parallel; // how to parallelize MoE experts across ranks
+        const char * tp_peer; // rank-0 address for the inter-rank bootstrap (NULL = 127.0.0.1)
+        int32_t tp_port; // inter-rank bootstrap TCP port (0 = default)
+
         // Called with a progress value between 0.0 and 1.0. Pass NULL to disable.
         // If the provided progress_callback returns true, model loading continues.
         // If it returns false, model loading is immediately aborted.
@@ -316,6 +332,8 @@ extern "C" {
         const struct llama_model_kv_override * kv_overrides;
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
+        bool tp_attn;         // CPU tensor parallelism: also shard attention (heads) across ranks
+        bool tp_ssm;          // CPU tensor parallelism: also shard recurrent SSM/Mamba-2 mixer (heads)
         bool vocab_only;      // only load the vocabulary, no weights
         bool use_mmap;        // use mmap if possible
         bool use_direct_io;   // use direct io, takes precedence over use_mmap when supported

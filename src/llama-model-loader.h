@@ -6,6 +6,7 @@
 #include "llama-arch.h"
 #include "llama-hparams.h"
 #include "llama-mmap.h"
+#include "llama-tp-shard.h"
 
 #include "ggml-cpp.h"
 
@@ -102,6 +103,11 @@ struct llama_model_loader {
     size_t size_done = 0;
     size_t size_data = 0;
     std::vector<std::pair<size_t, size_t>> mmaps_used;
+
+    // CPU tensor parallelism: per-rank weight sharding (LLAMA_TP_SIZE / LLAMA_TP_RANK).
+    tp_shard_config tp_cfg = tp_shard_from_env();
+    // load plan for each sharded tensor (keyed by tensor name), set in create_tensor.
+    std::map<std::string, tp_shard_plan> tp_plans;
 
     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
     struct ggml_backend_buft_comparator {

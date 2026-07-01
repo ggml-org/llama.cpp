@@ -1,6 +1,7 @@
 #include "models.h"
 
 #include "llama-memory-recurrent.h"
+#include "llama-tp-net.h"
 
 llm_build_mamba_base::llm_build_mamba_base(const llm_graph_params & params) : llm_graph_context(params) {}
 
@@ -279,6 +280,12 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
 
         // {d_inner, n_embd} @ {d_inner, n_seq_tokens, n_seqs} => {n_embd, n_seq_tokens, n_seqs}
         cur = build_lora_mm(model.layers[il].ssm_out, y, model.layers[il].ssm_out_s);
+
+        // CPU tensor parallelism: ssm_out is row-parallel — this rank summed only its d_inner
+        // channels (its SSM heads), so all-reduce to recover the full mixer output.
+        if (llama_tp_ssm_enabled()) {
+            cur = ggml_map_custom1_inplace(ctx0, cur, llama_tp_allreduce_op, 1, nullptr);
+        }
     }
 
     // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
