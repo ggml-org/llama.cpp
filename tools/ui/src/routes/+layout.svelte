@@ -8,6 +8,7 @@
 	import { onMount } from 'svelte';
 
 	import { SidebarNavigation, DialogConversationTitleUpdate } from '$lib/components/app';
+	import { DialogMcpServerRecommendations } from '$lib/components/app/dialogs';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
@@ -31,11 +32,21 @@
 	import { theme } from '$lib/stores/theme.svelte';
 	import { buildInfoStore } from '$lib/stores/build-info.svelte';
 
-	import { SETTINGS_KEYS } from '$lib/constants';
+	import {
+		MCP_RECOMMENDATIONS_DISMISSED_LOCALSTORAGE_KEY,
+		RECOMMENDED_MCP_SERVER_IDS,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 
 	let { children } = $props();
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
+
+	let mcpRecommendationsDismissed = $state(
+		browser && localStorage.getItem(MCP_RECOMMENDATIONS_DISMISSED_LOCALSTORAGE_KEY) === 'true'
+	);
+	let mcpRecommendationsOpen = $state(false);
+	let mcpRecommendationsChecked = $state(false);
 
 	let chatSidebar:
 		| {
@@ -153,6 +164,13 @@
 		}
 	}
 
+	function dismissMcpRecommendations() {
+		if (browser) {
+			localStorage.setItem(MCP_RECOMMENDATIONS_DISMISSED_LOCALSTORAGE_KEY, 'true');
+		}
+		mcpRecommendationsDismissed = true;
+	}
+
 	onMount(() => {
 		updateFavicon();
 		// snapshot of every backend running stream on first load, populates the sidebar spinners
@@ -254,6 +272,24 @@
 		}
 	});
 
+	// Prompt the user once to opt-in to suggested MCP servers
+	$effect(() => {
+		if (!browser) return;
+		if (mcpRecommendationsDismissed || mcpRecommendationsOpen || mcpRecommendationsChecked) {
+			return;
+		}
+
+		const hasRecommendations = mcpStore
+			.getServers()
+			.some((server) => RECOMMENDED_MCP_SERVER_IDS.has(server.id));
+
+		if (hasRecommendations) {
+			mcpRecommendationsOpen = true;
+		}
+
+		mcpRecommendationsChecked = true;
+	});
+
 	// Monitor API key changes and redirect to error page if removed or changed when required
 	$effect(() => {
 		checkApiKey();
@@ -320,6 +356,15 @@
 		newTitle={titleUpdateNewTitle}
 		onConfirm={handleTitleUpdateConfirm}
 		onCancel={handleTitleUpdateCancel}
+	/>
+
+	<DialogMcpServerRecommendations
+		bind:open={mcpRecommendationsOpen}
+		onOpenChange={(open) => {
+			if (!open) {
+				dismissMcpRecommendations();
+			}
+		}}
 	/>
 </Tooltip.Provider>
 
