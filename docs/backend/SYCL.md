@@ -889,6 +889,10 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
     set UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
   ```
 
+- How to save the power when running llama-server since I see the GPU frequency is always high in idle status?
+
+  Use `-nocb`, `--no-cont-batching` to disable continuous batching feature.
+
 ### **GitHub contribution**:
 Please add the `[SYCL]` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
 
