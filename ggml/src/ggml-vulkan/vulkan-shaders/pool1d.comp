@@ -35,10 +35,11 @@ void main() {
     const uint cur_ol = idx % p.OL;
 
     const int start = int(cur_ol) * p.s0 - p.p0;
-    const uint bl = max(start, 0);
-    const uint el = min(start + p.k0, p.IL);
+    const int bl = max(start, 0);
+    const int el = min(start + p.k0, int(p.IL));
 
-    const float scale = 1.0 / float(p.k0);
+    const int window_size = el - bl;
+    const float scale = window_size > 0 ? 1.0 / float(window_size) : 0.0;
     float res;
 
     if (p.op == OP_POOL_AVG) {
