@@ -77,7 +77,6 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             ctx.params.response_fields = json_value(data, "response_fields", std::vector<std::string>());
         }));
 
-
     //
     // Sampling params
     //

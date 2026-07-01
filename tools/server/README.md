@@ -1419,7 +1419,6 @@ curl http://localhost:8080/v1/responses \
 
 This endpoint works by converting Responses request into Chat Completions request.
 
-
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 
 This endpoint requires that the model uses a pooling different than type `none`. The embeddings are normalized using the Eucledian norm.

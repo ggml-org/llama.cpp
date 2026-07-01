@@ -904,7 +904,9 @@ static void handle_media(
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files)
+    std::vector<raw_buffer> & out_files,
+    bool no_prefill_assistant,
+    bool unsupported_image_as_text)
 {
     json llama_params;
 
@@ -985,12 +987,29 @@ json oaicompat_chat_params_parse(
             std::string type = json_value(p, "type", std::string());
             if (type == "image_url") {
                 if (!opt.allow_image) {
-                    throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                    if (!unsupported_image_as_text) {
+                        throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                    }
+                    p["type"] = "text";
+                    p["text"] = "[image input omitted: current model does not support image input]";
+                    p.erase("image_url");
+                    continue;
                 }
 
                 json image_url = json_value(p, "image_url", json::object());
                 std::string url = json_value(image_url, "url", std::string());
-                handle_media(out_files, url, opt.media_path, true);
+                try {
+                    handle_media(out_files, url, opt.media_path, true);
+                } catch (const std::exception & e) {
+                    if (!unsupported_image_as_text) {
+                        throw;
+                    }
+                    SRV_WRN("image input could not be loaded, sending text placeholder instead: %s\n", e.what());
+                    p["type"] = "text";
+                    p["text"] = "[image input omitted: " + std::string(e.what()) + "]";
+                    p.erase("image_url");
+                    continue;
+                }
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1045,7 +1064,7 @@ json oaicompat_chat_params_parse(
     inputs.continue_final_message = body.contains("continue_final_message") ?
         common_chat_continuation_parse(body.at("continue_final_message")) :
         COMMON_CHAT_CONTINUATION_NONE;
-    if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_NONE && opt.prefill_assistant
+    if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_NONE && opt.prefill_assistant && !no_prefill_assistant
         && !inputs.messages.empty() && inputs.messages.back().role == "assistant") {
         if (inputs.messages.size() >= 2 && inputs.messages[inputs.messages.size() - 2].role == "assistant") {
             throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");

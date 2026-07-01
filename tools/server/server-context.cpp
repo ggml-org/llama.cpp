@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
+#include <ctime>
 #include <exception>
 #include <memory>
 #include <filesystem>
@@ -4232,6 +4233,39 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                         {"event", "error"},
                         {"data", res_json},
                     });
+                } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
+                    const std::string type = json_value(res_json, "type", std::string("server_error"));
+                    std::string code = type;
+                    if (type == "exceed_context_size_error") {
+                        code = "context_length_exceeded";
+                    } else if (type == "invalid_request_error") {
+                        code = "invalid_request";
+                    } else if (type == "unavailable_error") {
+                        code = "server_overloaded";
+                    }
+                    const json response = {
+                        {"id",         "resp_" + random_string()},
+                        {"object",     "response"},
+                        {"created_at", std::time(nullptr)},
+                        {"status",     "failed"},
+                        {"background", false},
+                        {"error", json {
+                            {"code",    code},
+                            {"message", json_value(res_json, "message", std::string("stream failed"))},
+                            {"type",    type},
+                        }},
+                        {"incomplete_details", nullptr},
+                        {"usage",              nullptr},
+                        {"metadata",           json::object()},
+                    };
+                    return format_oai_resp_sse(json {
+                        {"event", "response.failed"},
+                        {"data", json {
+                            {"type",            "response.failed"},
+                            {"sequence_number", 0},
+                            {"response",        response},
+                        }},
+                    });
                 } else {
                     return format_oai_sse(json {{ "error", res_json }});
                 }
@@ -4336,6 +4370,34 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     stream_session_attach_pipe(*res, req.headers);
 
     return res;
+}
+
+static json responses_relax_tool_required_for_parser(json body) {
+    if (!body.contains("tools") || !body.at("tools").is_array()) {
+        return body;
+    }
+    for (auto & tool : body["tools"]) {
+        if (tool.contains("function") && tool.at("function").contains("parameters") &&
+                tool.at("function").at("parameters").is_object()) {
+            tool["function"]["parameters"].erase("required");
+        }
+    }
+    return body;
+}
+
+static void responses_apply_parser_fields(json & dst, const json & src) {
+    for (const char * key : {
+            "chat_parser",
+            "grammar",
+            "grammar_lazy",
+            "grammar_triggers",
+            "grammar_type",
+            "preserved_tokens",
+        }) {
+        if (src.contains(key)) {
+            dst[key] = src.at(key);
+        }
+    }
 }
 
 std::unique_ptr<server_res_generator> server_routes::create_response(bool bypass_sleep) {
@@ -4773,13 +4835,32 @@ void server_routes::init_routes() {
     this->post_responses_oai = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
-        json body = server_chat_convert_responses_to_chatcmpl(json::parse(req.body));
+        const json response_body = json::parse(req.body);
+        json body = server_chat_convert_responses_to_chatcmpl(response_body);
         SRV_DBG("%s\n", "Request converted: OpenAI Responses -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
+        const bool needs_parser_pass =
+            body.contains("tools") && body.at("tools").is_array() && !body.at("tools").empty();
+        json parser_body;
+        if (needs_parser_pass) {
+            parser_body = responses_relax_tool_required_for_parser(body);
+        }
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            /* no_prefill_assistant */ true,
+            /* unsupported_image_as_text */ true);
+        if (needs_parser_pass) {
+            std::vector<raw_buffer> parser_files;
+            json parser_parsed = oaicompat_chat_params_parse(
+                parser_body,
+                meta->chat_params,
+                parser_files,
+                /* no_prefill_assistant */ true,
+                /* unsupported_image_as_text */ true);
+            responses_apply_parser_fields(body_parsed, parser_parsed);
+        }
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
