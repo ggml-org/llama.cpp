@@ -223,6 +223,15 @@ llama_context::llama_context(
         }
     }
 
+    // With SPLIT_MODE_TENSOR both contexts share meta-backend buffers;
+    // a reused graph holds dangling per-device refs after the peer rebuilds.
+    if (cparams.ctx_other != nullptr &&
+        (model.split_mode() == LLAMA_SPLIT_MODE_TENSOR ||
+         cparams.ctx_other->get_model().split_mode() == LLAMA_SPLIT_MODE_TENSOR)) {
+        graph_reuse_disable = true;
+        cparams.ctx_other->graph_reuse_disable = true;
+    }
+
     // ref: https://github.com/ggml-org/llama.cpp/pull/17046#discussion_r2503085732
     cparams.n_ctx = GGML_PAD(cparams.n_ctx, 256);
 
