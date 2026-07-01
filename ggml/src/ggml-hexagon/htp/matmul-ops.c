@@ -9,6 +9,7 @@
 
 #include <math.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #include "hex-dma.h"
 #include "hvx-utils.h"
@@ -21,8 +22,20 @@
 #include "matmul-ops.h"
 #include "vtcm-utils.h"
 
+static void hvx_tensor_add_f32_grid(
+    const struct htp_tensor * restrict dst,
+    const struct htp_tensor * restrict src2,
+    uint32_t start_row,
+    uint32_t end_row,
+    uint32_t start_col,
+    uint32_t end_col,
+    const struct fastdiv_values * div_ne11_12,
+    const struct fastdiv_values * div_ne11
+);
+
 typedef struct {
     float        *dst;
+    const float  *src2;
     const float  *activation;
     const __fp16 *weight;
     int           m;
@@ -31,6 +44,7 @@ typedef struct {
     int           act_stride;
     int           weight_stride;
     int           dst_stride;
+    uint32_t      src2_stride;
     int           ne02;
     int           ne03;
     int           ne12;
@@ -41,6 +55,8 @@ typedef struct {
     size_t        src1_nb3;
     size_t        dst_nb2;
     size_t        dst_nb3;
+    size_t        src2_nb2;
+    size_t        src2_nb3;
 } hmx_mm_f16_f32_batched_params_t;
 
 struct htp_mm_context {
@@ -61,11 +77,11 @@ struct htp_mm_context {
 
     void (*vec_dot_32x1)(const uint32_t n, float * restrict s,
          const void * restrict vx,
-         const void * restrict vy, uint32_t valid_rows);
+         const void * restrict vy, uint32_t valid_rows,
+         const float * restrict sz);
 
     // Precomputed values
     uint32_t src0_nrows_per_thread;
-    uint32_t src1_nrows_per_thread;
 
     struct fastdiv_values mm_div_ne12_ne1;
     struct fastdiv_values mm_div_ne1;
@@ -73,11 +89,16 @@ struct htp_mm_context {
     struct fastdiv_values mm_div_r3;
     struct fastdiv_values mm_div_ne11;
 
+    // Per thread quant tasks
     // Precomputed block-parallel quantization values
-    uint32_t quant_ib_first[MAX_NUM_WORKERS];
-    uint32_t quant_ib_last[MAX_NUM_WORKERS];
-    uint32_t quant_r[MAX_NUM_WORKERS];
-    uint32_t quant_c[MAX_NUM_WORKERS];
+    worker_callback_t quant_task_func;
+    uint32_t          quant_ib_first[MAX_NUM_WORKERS];
+    uint32_t          quant_ib_last[MAX_NUM_WORKERS];
+    uint32_t          quant_r[MAX_NUM_WORKERS];
+    uint32_t          quant_c[MAX_NUM_WORKERS];
+    uint32_t          n_quant_tasks;
+    uint32_t          n_quant_rows_per_thread;
+    atomic_uint       quant_barrier;
 
     // Fields for scattered mapping & HMX support in MUL_MAT_ID
     const uint32_t * matrix_row_counts;
@@ -133,382 +154,7 @@ static const uint8_t __attribute__((aligned(VLEN))) kvalues_mxfp4_lut[] = {
     0,    0, 0,    0, 0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0,    0, 0,    0, 0,    0,
 };
 
-#if __HVX_ARCH__ < 79
-#define HVX_OP_ADD_F32(a, b) Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(a, b))
-#define HVX_OP_MUL_F32(a, b) Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(a, b))
-#else
-#define HVX_OP_ADD_F32(a, b) Q6_Vsf_vadd_VsfVsf(a, b)
-#define HVX_OP_MUL_F32(a, b) Q6_Vsf_vmpy_VsfVsf(a, b)
-#endif
 
-static void vec_dot_f32_f32_aa_1x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy) {
-    const HVX_Vector * restrict x = (const HVX_Vector *) vx;
-    const HVX_Vector * restrict y = (const HVX_Vector *) vy;
-
-    uint32_t nvec = n / VLEN_FP32; // num full fp32 hvx vectors
-    uint32_t nloe = n % VLEN_FP32; // leftover elements
-
-    HVX_Vector rsum = Q6_V_vzero();
-
-    uint32_t i = 0;
-
-    #pragma unroll(4)
-    for (i = 0; i < nvec; i++) {
-        HVX_Vector prod = HVX_OP_MUL_F32(x[i], y[i]);
-        rsum = HVX_OP_ADD_F32(rsum, prod);
-    }
-
-    if (nloe) {
-        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
-        HVX_Vector x_sf = Q6_V_vand_QV(bmask, x[i]);
-        HVX_Vector y_sf = Q6_V_vand_QV(bmask, y[i]);
-        HVX_Vector prod = HVX_OP_MUL_F32(x_sf, y_sf);
-        rsum = HVX_OP_ADD_F32(rsum, prod);
-    }
-
-    *s = hvx_vec_get_f32(hvx_vec_reduce_sum_f32(rsum));
-}
-
-static void vec_dot_f32_f32_aa_2x1(const uint32_t n, float * restrict s0,
-                                const void * restrict vx0, const void * restrict vx1,
-                                const void * restrict vy0) {
-    const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
-    const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
-    const HVX_Vector * restrict y  = (const HVX_Vector *) vy0;
-
-    uint32_t nvec = n / VLEN_FP32;
-    uint32_t nloe = n % VLEN_FP32;
-
-    HVX_Vector rsum0 = Q6_V_vzero();
-    HVX_Vector rsum1 = Q6_V_vzero();
-
-    uint32_t i = 0;
-
-    #pragma unroll(2)
-    for (i = 0; i < nvec; i++) {
-        HVX_Vector y_sf = y[i];
-        HVX_Vector prod0 = HVX_OP_MUL_F32(x0[i], y_sf);
-        HVX_Vector prod1 = HVX_OP_MUL_F32(x1[i], y_sf);
-        rsum0 = HVX_OP_ADD_F32(rsum0, prod0);
-        rsum1 = HVX_OP_ADD_F32(rsum1, prod1);
-    }
-
-    if (nloe) {
-        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
-        HVX_Vector y_sf  = Q6_V_vand_QV(bmask, y[i]);
-        HVX_Vector x0_sf = Q6_V_vand_QV(bmask, x0[i]);
-        HVX_Vector x1_sf = Q6_V_vand_QV(bmask, x1[i]);
-        HVX_Vector prod0 = HVX_OP_MUL_F32(x0_sf, y_sf);
-        HVX_Vector prod1 = HVX_OP_MUL_F32(x1_sf, y_sf);
-        rsum0 = HVX_OP_ADD_F32(rsum0, prod0);
-        rsum1 = HVX_OP_ADD_F32(rsum1, prod1);
-    }
-
-    HVX_Vector rsum = hvx_vec_reduce_sum_f32x2(rsum0, rsum1);
-    HVX_VectorAlias va;
-    va.v = rsum;
-    s0[0] = va.fp32[0];
-    s0[1] = va.fp32[1];
-}
-
-static void vec_dot_f32_f32_aa_2x2(const uint32_t n, float * restrict s0, float * restrict s1,
-                                const void * restrict vx0, const void * restrict vx1,
-                                const void * restrict vy0, const void * restrict vy1) {
-    const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
-    const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
-    const HVX_Vector * restrict y0 = (const HVX_Vector *) vy0;
-    const HVX_Vector * restrict y1 = (const HVX_Vector *) vy1;
-
-    uint32_t nvec = n / VLEN_FP32;
-    uint32_t nloe = n % VLEN_FP32;
-
-    HVX_Vector r0_c0_sum = Q6_V_vzero();
-    HVX_Vector r0_c1_sum = Q6_V_vzero();
-    HVX_Vector r1_c0_sum = Q6_V_vzero();
-    HVX_Vector r1_c1_sum = Q6_V_vzero();
-
-    uint32_t i = 0;
-
-    #pragma unroll(2)
-    for (i = 0; i < nvec; i++) {
-        HVX_Vector r0_sf = x0[i];
-        HVX_Vector r1_sf = x1[i];
-        HVX_Vector c0_sf = y0[i];
-        HVX_Vector c1_sf = y1[i];
-
-        r0_c0_sum = HVX_OP_ADD_F32(r0_c0_sum, HVX_OP_MUL_F32(r0_sf, c0_sf));
-        r0_c1_sum = HVX_OP_ADD_F32(r0_c1_sum, HVX_OP_MUL_F32(r0_sf, c1_sf));
-        r1_c0_sum = HVX_OP_ADD_F32(r1_c0_sum, HVX_OP_MUL_F32(r1_sf, c0_sf));
-        r1_c1_sum = HVX_OP_ADD_F32(r1_c1_sum, HVX_OP_MUL_F32(r1_sf, c1_sf));
-    }
-
-    if (nloe) {
-        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
-
-        HVX_Vector r0_sf = Q6_V_vand_QV(bmask, x0[i]);
-        HVX_Vector r1_sf = Q6_V_vand_QV(bmask, x1[i]);
-        HVX_Vector c0_sf = Q6_V_vand_QV(bmask, y0[i]);
-        HVX_Vector c1_sf = Q6_V_vand_QV(bmask, y1[i]);
-
-        r0_c0_sum = HVX_OP_ADD_F32(r0_c0_sum, HVX_OP_MUL_F32(r0_sf, c0_sf));
-        r0_c1_sum = HVX_OP_ADD_F32(r0_c1_sum, HVX_OP_MUL_F32(r0_sf, c1_sf));
-        r1_c0_sum = HVX_OP_ADD_F32(r1_c0_sum, HVX_OP_MUL_F32(r1_sf, c0_sf));
-        r1_c1_sum = HVX_OP_ADD_F32(r1_c1_sum, HVX_OP_MUL_F32(r1_sf, c1_sf));
-    }
-
-    // Reduce and store results
-    HVX_Vector r0_r1_c0_sum = hvx_vec_reduce_sum_f32x2(r0_c0_sum, r1_c0_sum);
-    HVX_Vector r0_r1_c1_sum = hvx_vec_reduce_sum_f32x2(r0_c1_sum, r1_c1_sum);
-
-    HVX_VectorAlias va0, va1;
-    va0.v = r0_r1_c0_sum;
-    va1.v = r0_r1_c1_sum;
-    s0[0] = va0.fp32[0];
-    s0[1] = va0.fp32[1];
-    s1[0] = va1.fp32[0];
-    s1[1] = va1.fp32[1];
-}
-
-static void vec_dot_f32_f32_uu_1x1(const uint32_t n, float * restrict s, const void * restrict x, const void * restrict y) {
-    const HVX_UVector * restrict vx = (const HVX_UVector * restrict) x;
-    const HVX_UVector * restrict vy = (const HVX_UVector * restrict) y;
-
-    uint32_t nvec = n / VLEN_FP32; // num full fp32 hvx vectors
-    uint32_t nloe = n % VLEN_FP32; // leftover elements
-
-    HVX_Vector       rsum = Q6_V_vzero();
-
-    uint32_t i = 0;
-
-    #pragma unroll(2)
-    for (i = 0; i < nvec; i++) {
-        HVX_Vector x_sf = vx[i];
-        HVX_Vector y_sf = vy[i];
-
-        rsum = HVX_OP_ADD_F32(rsum, HVX_OP_MUL_F32(x_sf, y_sf));
-    }
-
-    if (nloe) {
-        HVX_Vector x_sf = vx[i];
-        HVX_Vector y_sf = vy[i];
-
-        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
-        x_sf = Q6_V_vand_QV(bmask, x_sf);
-        y_sf = Q6_V_vand_QV(bmask, y_sf);
-
-        rsum = HVX_OP_ADD_F32(rsum, HVX_OP_MUL_F32(x_sf, y_sf));
-    }
-
-    rsum = hvx_vec_reduce_sum_f32(rsum);
-    hvx_vec_store_u(&s[0], 4, rsum);
-}
-
-static void vec_dot_f16_f16_aa_1x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy) {
-    const HVX_Vector * restrict x = (const HVX_Vector *) vx;
-    const HVX_Vector * restrict y = (const HVX_Vector *) vy;
-
-    uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
-    uint32_t nloe = n % VLEN_FP16; // leftover elements
-
-    HVX_VectorPair rsum_p = Q6_W_vzero();
-
-    uint32_t i = 0;
-
-    #pragma unroll(4)
-    for (i = 0; i < nvec; i++) {
-        rsum_p = hvx_vec_mpyacc_f32_f16(rsum_p, x[i], y[i]);
-    }
-
-    if (nloe) {
-        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
-        HVX_Vector x_hf = Q6_V_vand_QV(bmask, x[i]);
-        HVX_Vector y_hf = Q6_V_vand_QV(bmask, y[i]);
-        rsum_p = hvx_vec_mpyacc_f32_f16(rsum_p, x_hf, y_hf);
-    }
-
-    HVX_Vector rsum = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(rsum_p), Q6_V_hi_W(rsum_p)));
-    hvx_vec_store_u(s, 4, hvx_vec_reduce_sum_f32(rsum));
-}
-
-static void vec_dot_f16_f16_aa_2x1(const uint32_t n, float * restrict s0,
-                                const void * restrict vx0, const void * restrict vx1,
-                                const void * restrict vy0) {
-    const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
-    const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
-    const HVX_Vector * restrict y  = (const HVX_Vector *) vy0;
-
-    uint32_t nvec = n / VLEN_FP16;
-    uint32_t nloe = n % VLEN_FP16;
-
-    HVX_VectorPair rsum0_p = Q6_W_vzero();
-    HVX_VectorPair rsum1_p = Q6_W_vzero();
-
-    uint32_t i = 0;
-
-    #pragma unroll(2)
-    for (i = 0; i < nvec; i++) {
-        HVX_Vector y_hf = y[i];
-        rsum0_p = hvx_vec_mpyacc_f32_f16(rsum0_p, x0[i], y_hf);
-        rsum1_p = hvx_vec_mpyacc_f32_f16(rsum1_p, x1[i], y_hf);
-    }
-
-    if (nloe) {
-        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
-        HVX_Vector y_hf  = Q6_V_vand_QV(bmask, y[i]);
-        HVX_Vector x0_hf = Q6_V_vand_QV(bmask, x0[i]);
-        HVX_Vector x1_hf = Q6_V_vand_QV(bmask, x1[i]);
-        rsum0_p = hvx_vec_mpyacc_f32_f16(rsum0_p, x0_hf, y_hf);
-        rsum1_p = hvx_vec_mpyacc_f32_f16(rsum1_p, x1_hf, y_hf);
-    }
-
-    HVX_Vector rsum0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(rsum0_p), Q6_V_hi_W(rsum0_p)));
-    HVX_Vector rsum1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(rsum1_p), Q6_V_hi_W(rsum1_p)));
-    HVX_Vector rsum  = hvx_vec_reduce_sum_f32x2(rsum0, rsum1);
-    hvx_vec_store_u(s0, 8, rsum);
-}
-
-static void vec_dot_f16_f16_aa_2x2(const uint32_t n, float * restrict s0, float * restrict s1,
-                                const void * restrict vx0, const void * restrict vx1,
-                                const void * restrict vy0, const void * restrict vy1) {
-    const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
-    const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
-    const HVX_Vector * restrict y0 = (const HVX_Vector *) vy0;
-    const HVX_Vector * restrict y1 = (const HVX_Vector *) vy1;
-
-    uint32_t nvec = n / VLEN_FP16;
-    uint32_t nloe = n % VLEN_FP16;
-
-    // Row sums (sf) - 4 accumulators for 2×2 tile
-    HVX_VectorPair r0_c0_sum_p = Q6_W_vzero();
-    HVX_VectorPair r0_c1_sum_p = Q6_W_vzero();
-    HVX_VectorPair r1_c0_sum_p = Q6_W_vzero();
-    HVX_VectorPair r1_c1_sum_p = Q6_W_vzero();
-
-    uint32_t i = 0;
-
-    #pragma unroll(2)
-    for (i = 0; i < nvec; i++) {
-        HVX_Vector r0_hf = x0[i];
-        HVX_Vector r1_hf = x1[i];
-        HVX_Vector c0_hf = y0[i];
-        HVX_Vector c1_hf = y1[i];
-
-        // Compute 4 dot products: r0×c0, r0×c1, r1×c0, r1×c1
-        r0_c0_sum_p = hvx_vec_mpyacc_f32_f16(r0_c0_sum_p, r0_hf, c0_hf);
-        r0_c1_sum_p = hvx_vec_mpyacc_f32_f16(r0_c1_sum_p, r0_hf, c1_hf);
-        r1_c0_sum_p = hvx_vec_mpyacc_f32_f16(r1_c0_sum_p, r1_hf, c0_hf);
-        r1_c1_sum_p = hvx_vec_mpyacc_f32_f16(r1_c1_sum_p, r1_hf, c1_hf);
-    }
-
-    if (nloe) {
-        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
-
-        HVX_Vector r0_hf = Q6_V_vand_QV(bmask, x0[i]);
-        HVX_Vector r1_hf = Q6_V_vand_QV(bmask, x1[i]);
-        HVX_Vector c0_hf = Q6_V_vand_QV(bmask, y0[i]);
-        HVX_Vector c1_hf = Q6_V_vand_QV(bmask, y1[i]);
-
-        r0_c0_sum_p = hvx_vec_mpyacc_f32_f16(r0_c0_sum_p, r0_hf, c0_hf);
-        r0_c1_sum_p = hvx_vec_mpyacc_f32_f16(r0_c1_sum_p, r0_hf, c1_hf);
-        r1_c0_sum_p = hvx_vec_mpyacc_f32_f16(r1_c0_sum_p, r1_hf, c0_hf);
-        r1_c1_sum_p = hvx_vec_mpyacc_f32_f16(r1_c1_sum_p, r1_hf, c1_hf);
-    }
-
-    HVX_Vector r0_c0_sum = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(r0_c0_sum_p), Q6_V_hi_W(r0_c0_sum_p)));
-    HVX_Vector r0_c1_sum = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(r0_c1_sum_p), Q6_V_hi_W(r0_c1_sum_p)));
-    HVX_Vector r1_c0_sum = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(r1_c0_sum_p), Q6_V_hi_W(r1_c0_sum_p)));
-    HVX_Vector r1_c1_sum = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(r1_c1_sum_p), Q6_V_hi_W(r1_c1_sum_p)));
-
-    // Reduce and store results
-    HVX_Vector r0_r1_c0_sum = hvx_vec_reduce_sum_f32x2(r0_c0_sum, r1_c0_sum);
-    HVX_Vector r0_r1_c1_sum = hvx_vec_reduce_sum_f32x2(r0_c1_sum, r1_c1_sum);
-
-    hvx_vec_store_u(&s0[0], 8, r0_r1_c0_sum);  // row0,col0 row1,col0
-    hvx_vec_store_u(&s1[0], 8, r0_r1_c1_sum);  // row0,col1 row1,col1
-}
-
-static void vec_dot_f16_f16_uu_1x1(const uint32_t n, float * restrict s, const void * restrict vx, const void * restrict vy) {
-    const HVX_UVector * restrict x = (const HVX_UVector *) vx;
-    const HVX_UVector * restrict y = (const HVX_UVector *) vy;
-
-    uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
-    uint32_t nloe = n % VLEN_FP16; // leftover elements
-
-    HVX_Vector rsum = Q6_V_vzero();
-
-    uint32_t i = 0;
-
-    #pragma unroll(4)
-    for (i = 0; i < nvec; i++) {
-        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(x[i], y[i]);
-        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
-    }
-
-    if (nloe) {
-        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
-        HVX_Vector x_hf = Q6_V_vand_QV(bmask, x[i]);
-        HVX_Vector y_hf = Q6_V_vand_QV(bmask, y[i]);
-
-        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(x_hf, y_hf);
-        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
-    }
-
-    rsum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(rsum));
-    hvx_vec_store_u(&s[0], 4, rsum);
-}
-
-static void vec_dot_f16_f32_uu_1x1(const uint32_t n, float * restrict s, const void * restrict x, const void * restrict y) {
-    const HVX_UVector * restrict vx = (const HVX_UVector * restrict) x;
-    const HVX_UVector * restrict vy = (const HVX_UVector * restrict) y;
-
-    uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
-    uint32_t nloe = n % VLEN_FP16; // leftover elements
-
-    const HVX_Vector zero = Q6_V_vzero();
-
-    HVX_Vector       rsum = Q6_V_vzero();
-
-    uint32_t i = 0;
-
-    #pragma unroll(2)
-    for (i = 0; i < nvec; i++) {
-        // Load y (fp32) and convert into fp16
-        HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+0], zero);  // 32 elements
-        HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+1], zero);  // 32 elements
-        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
-
-        // Load x (fp16)
-        HVX_Vector x_hf  = vx[i];
-
-        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(x_hf, y_hf);
-
-        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
-    }
-
-    if (nloe) {
-        // Load y (fp32) and convert into fp16
-        HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+0], zero);  // 32 elements
-        HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+1], zero);  // 32 elements
-        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
-
-        // Load x (fp16)
-        HVX_Vector x_hf  = vx[i];
-
-        // Zero-out unused elements
-        // Note that we need to clear both x and y because they may contain NANs
-        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
-        x_hf = Q6_V_vand_QV(bmask, x_hf);
-        y_hf = Q6_V_vand_QV(bmask, y_hf);
-
-        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(x_hf, y_hf);
-
-        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
-    }
-
-    // Convert into fp32 and reduce
-    rsum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(rsum));
-    hvx_vec_store_u(&s[0], 4, rsum);
-}
 
 #define htp_matmul_tensors_preamble                                 \
     const struct htp_tensor * restrict src0 = octx->src[0];         \
@@ -526,10 +172,10 @@ static void vec_dot_f16_f32_uu_1x1(const uint32_t n, float * restrict s, const v
     const uint32_t ne12 = src1->ne[2];                              \
     const uint32_t ne13 = src1->ne[3];                              \
                                                                     \
-    const uint32_t ne20 = src2->ne[0];                              \
-    const uint32_t ne21 = src2->ne[1];                              \
-    const uint32_t ne22 = src2->ne[2];                              \
-    const uint32_t ne23 = src2->ne[3];                              \
+    const uint32_t ne20 = src2 ? src2->ne[0] : 0;                   \
+    const uint32_t ne21 = src2 ? src2->ne[1] : 0;                   \
+    const uint32_t ne22 = src2 ? src2->ne[2] : 0;                   \
+    const uint32_t ne23 = src2 ? src2->ne[3] : 0;                   \
                                                                     \
     const uint32_t ne0 = dst->ne[0];                                \
     const uint32_t ne1 = dst->ne[1];                                \
@@ -557,6 +203,18 @@ static void vec_dot_f16_f32_uu_1x1(const uint32_t n, float * restrict s, const v
     dma_queue *dma_queue           = octx->ctx->dma[ith];           \
     uint32_t src0_nrows_per_thread = mmctx->src0_nrows_per_thread;  \
     htp_matmul_tensors_preamble;
+
+static inline void hvx_mm_run_quant_task(struct htp_mm_context * mmctx, unsigned int ith) {
+    if (mmctx->quant_task_func) {
+        if (ith < mmctx->n_quant_tasks) {
+            mmctx->quant_task_func(mmctx->n_quant_tasks, ith, mmctx);
+            atomic_fetch_sub(&mmctx->quant_barrier, 1);
+        }
+        while (atomic_load(&mmctx->quant_barrier) > 0) {
+            // spin
+        }
+    }
+}
 
 // *** matmul with support for 4d tensors and full broadcasting
 
@@ -631,6 +289,9 @@ static void hvx_mm_4d(unsigned int nth, unsigned int ith, void * data) {
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0_start);
+    if (src2) {
+        hvx_tensor_add_f32_grid(dst, src2, ir1_start, ir1_end, ir0_start, ir0_end, &mmctx->mm_div_ne12_ne1, &mmctx->mm_div_ne1);
+    }
 }
 
 #include "hmx-mm-kernels-tiled.h"
@@ -648,10 +309,6 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     const uint32_t src0_start_row  = src0_nrows_per_thread * ith;                                                                 \
     const uint32_t src0_end_row    = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);                                     \
                                                                                                                                   \
-    if (src0_start_row >= src0_end_row) {                                                                                         \
-        return;                                                                                                                   \
-    }                                                                                                                             \
-                                                                                                                                  \
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                                     \
                                                                                                                                   \
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;                      \
@@ -661,6 +318,7 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     const size_t dst_row_size  = nb1;                                                                                             \
     const size_t src1_row_size = nb11;                                                                                            \
     const size_t src1_stride = mmctx->vtcm_src1_stride;                                                                           \
+    const size_t src2_stride = src2 ? ((src2->ne[1] == 1) ? 0 : src2->nb[1]) : 0;                                                 \
                                                                                                                                   \
     uint8_t * restrict vtcm_dst_ptr  = mmctx->vtcm_dst  + mmctx->vtcm_dst_size_per_thread  * ith;                                 \
     uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_thread * ith;                                 \
@@ -680,9 +338,17 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                 \
                                                                                                                                   \
     uint32_t push_ct = ct_start;                                                                                                  \
-    for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end; d++, push_ct++) {                                                    \
-        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                                \
-                       src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);              \
+    if (src0_start_row < src0_end_row) {                                                                                          \
+        for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end; d++, push_ct++) {                                                \
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                            \
+                           src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);          \
+        }                                                                                                                         \
+    }                                                                                                                             \
+                                                                                                                                  \
+    hvx_mm_run_quant_task(mmctx, ith);                                                                                            \
+                                                                                                                                  \
+    if (src0_start_row >= src0_end_row) {                                                                                         \
+        return;                                                                                                                   \
     }                                                                                                                             \
                                                                                                                                   \
     for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                             \
@@ -702,7 +368,15 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
             float * dst_ptr0 = &dst_row0[ct * 32];                                                                                \
             float * dst_ptr1 = &dst_row1[ct * 32];                                                                                \
                                                                                                                                   \
-            DOT_2X2(ne10, dst_ptr0, dst_ptr1, w_tile, src1_col0, src1_col1, valid_rows);                                          \
+            const float * src2_ptr0 = NULL;                                                                                       \
+            const float * src2_ptr1 = NULL;                                                                                       \
+            if (src2) {                                                                                                           \
+                const float * restrict src2_row0 = (const float *) ((const uint8_t *) src2->data + ((ir1+0) * src2_stride));      \
+                const float * restrict src2_row1 = (const float *) ((const uint8_t *) src2->data + ((ir1+1) * src2_stride));      \
+                src2_ptr0 = &src2_row0[ct * 32];                                                                                  \
+                src2_ptr1 = &src2_row1[ct * 32];                                                                                  \
+            }                                                                                                                     \
+            DOT_2X2(ne10, dst_ptr0, dst_ptr1, w_tile, src1_col0, src1_col1, valid_rows, src2_ptr0, src2_ptr1);                    \
         }                                                                                                                         \
                                                                                                                                   \
         for (; ir1 < src1_nrows; ++ir1) {                                                                                         \
@@ -710,7 +384,12 @@ static void hvx_mm_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
             float * restrict dst_row          = (float *) (dst->data + (ir1 * dst_row_size));                                     \
             float * dst_ptr = &dst_row[ct * 32];                                                                                  \
                                                                                                                                   \
-            DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows);                                                                 \
+            const float * src2_ptr = NULL;                                                                                        \
+            if (src2) {                                                                                                           \
+                const float * restrict src2_row = (const float *) ((const uint8_t *) src2->data + (ir1 * src2_stride));           \
+                src2_ptr = &src2_row[ct * 32];                                                                                    \
+            }                                                                                                                     \
+            DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows, src2_ptr);                                                       \
         }                                                                                                                         \
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                     \
                                                                                                                                   \
@@ -731,10 +410,6 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     const uint32_t src0_start_row  = src0_nrows_per_thread * ith;                                                                 \
     const uint32_t src0_end_row    = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);                                     \
                                                                                                                                   \
-    if (src0_start_row >= src0_end_row) {                                                                                         \
-        return;                                                                                                                   \
-    }                                                                                                                             \
-                                                                                                                                  \
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                                     \
                                                                                                                                   \
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;                      \
@@ -752,6 +427,7 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     float * tmp = (float *) vtcm_dst_ptr;                                                                                         \
                                                                                                                                   \
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;                                                             \
+                                                                                                                                  \
     const uint8_t * restrict src1_col = (const uint8_t *) src1_data;                                                              \
     float * restrict dst_col          = (float *) dst->data;                                                                      \
                                                                                                                                   \
@@ -767,9 +443,17 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
     uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                 \
                                                                                                                                   \
     uint32_t push_ct = ct_start;                                                                                                  \
-    for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end; d++, push_ct++) {                                                    \
-        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                                \
-                       src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);              \
+    if (src0_start_row < src0_end_row) {                                                                                          \
+        for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end; d++, push_ct++) {                                                \
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                            \
+                           src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);          \
+        }                                                                                                                         \
+    }                                                                                                                             \
+                                                                                                                                  \
+    hvx_mm_run_quant_task(mmctx, ith);                                                                                            \
+                                                                                                                                  \
+    if (src0_start_row >= src0_end_row) {                                                                                         \
+        return;                                                                                                                   \
     }                                                                                                                             \
                                                                                                                                   \
     for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                             \
@@ -780,7 +464,7 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
         valid_rows = MIN(32, MAX(0, valid_rows));                                                                                 \
                                                                                                                                   \
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                    \
-        DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows);                                                                     \
+        DOT_2X1(ne10, dst_ptr, w_tile, src1_col, valid_rows, NULL);                                                               \
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                     \
                                                                                                                                   \
         if (push_ct < ct_end) {                                                                                                   \
@@ -792,7 +476,24 @@ static void hvx_mv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void
                                                                                                                                   \
     int copy_cnt = (int)MIN(src0_end_row, ne0) - (int)src0_start_row;                                                             \
     if (copy_cnt > 0) {                                                                                                           \
-        hvx_copy_f32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, copy_cnt);                                         \
+        if (src2) {                                                                                                               \
+            float * dst_ptr = &dst_col[src0_start_row];                                                                           \
+            const float * src2_ptr = (const float *) src2->data + src0_start_row;                                                 \
+            float * tmp_ptr = tmp;                                                                                                \
+            int remaining = copy_cnt;                                                                                             \
+            while (remaining > 0) {                                                                                               \
+                int n = MIN(remaining, 32);                                                                                       \
+                HVX_Vector v_out = hvx_vmemu(tmp_ptr);                                                                            \
+                HVX_Vector v_z   = hvx_vmemu(src2_ptr);                                                                           \
+                hvx_vec_store_u(dst_ptr, n * sizeof(float), hvx_vec_add_f32_f32(v_out, v_z));                                     \
+                dst_ptr += n;                                                                                                     \
+                src2_ptr += n;                                                                                                    \
+                tmp_ptr += n;                                                                                                     \
+                remaining -= n;                                                                                                   \
+            }                                                                                                                     \
+        } else {                                                                                                                  \
+            hvx_copy_f32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, copy_cnt);                                     \
+        }                                                                                                                         \
     }                                                                                                                             \
 }
 
@@ -850,17 +551,22 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     const uint32_t start_row_kv = src0_nrows_per_thread_kv * ith;                                                                 \
     const uint32_t end_row_kv   = MIN(start_row_kv + src0_nrows_per_thread_kv, src0_nrows_kv);                                    \
                                                                                                                                   \
-    if (start_row_kv < end_row_kv) {                                                                                              \
-        uint32_t ct_start_kv = start_row_kv / 32;                                                                                 \
-        uint32_t ct_end_kv   = (end_row_kv + 31) / 32;                                                                            \
+    uint32_t ct_start_kv = start_row_kv / 32;                                                                                     \
+    uint32_t ct_end_kv   = (end_row_kv + 31) / 32;                                                                                \
                                                                                                                                   \
-        uint32_t push_ct = ct_start_kv;                                                                                           \
+    uint32_t push_ct = ct_start_kv;                                                                                               \
+    if (start_row_kv < end_row_kv) {                                                                                              \
         for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end_kv; d++, push_ct++) {                                             \
             dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                            \
                            src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);          \
             dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + d * tile_row_transfer_size_aligned,                            \
                            src2_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);          \
         }                                                                                                                         \
+    }                                                                                                                             \
+                                                                                                                                  \
+    hvx_mm_run_quant_task(mmctx, ith);                                                                                            \
+                                                                                                                                  \
+    if (start_row_kv < end_row_kv) {                                                                                              \
                                                                                                                                   \
         for (uint32_t ct = ct_start_kv; ct < ct_end_kv; ct++) {                                                                   \
             const uint8_t * w_tile_k = dma_queue_pop(dma_queue).dst;                                                              \
@@ -885,8 +591,8 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                 float * dst_ptr0_v = &dst_row0_v[ct * 32];                                                                        \
                 float * dst_ptr1_v = &dst_row1_v[ct * 32];                                                                        \
                                                                                                                                   \
-                DOT_2X2(ne10, dst_ptr0_k, dst_ptr1_k, w_tile_k, src1_col0, src1_col1, valid_rows);                                \
-                DOT_2X2(ne10, dst_ptr0_v, dst_ptr1_v, w_tile_v, src1_col0, src1_col1, valid_rows);                                \
+                DOT_2X2(ne10, dst_ptr0_k, dst_ptr1_k, w_tile_k, src1_col0, src1_col1, valid_rows, NULL, NULL);                    \
+                DOT_2X2(ne10, dst_ptr0_v, dst_ptr1_v, w_tile_v, src1_col0, src1_col1, valid_rows, NULL, NULL);                    \
             }                                                                                                                     \
                                                                                                                                   \
             for (; ir1 < src1_nrows; ++ir1) {                                                                                     \
@@ -898,8 +604,8 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                 float * restrict dst_row_v = (float *) (dst_v->data + (ir1 * dst_k_row_size));                                    \
                 float * dst_ptr_v = &dst_row_v[ct * 32];                                                                          \
                                                                                                                                   \
-                DOT_2X1(ne10, dst_ptr_k, w_tile_k, src1_col, valid_rows);                                                         \
-                DOT_2X1(ne10, dst_ptr_v, w_tile_v, src1_col, valid_rows);                                                         \
+                DOT_2X1(ne10, dst_ptr_k, w_tile_k, src1_col, valid_rows, NULL);                                                   \
+                DOT_2X1(ne10, dst_ptr_v, w_tile_v, src1_col, valid_rows, NULL);                                                   \
             }                                                                                                                     \
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ith);                                                                \
                                                                                                                                   \
@@ -948,7 +654,7 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                 float * dst_ptr0_q = &dst_row0_q[ct * 32];                                                                        \
                 float * dst_ptr1_q = &dst_row1_q[ct * 32];                                                                        \
                                                                                                                                   \
-                DOT_2X2(ne10, dst_ptr0_q, dst_ptr1_q, w_tile_q, src1_col0, src1_col1, valid_rows);                                \
+                DOT_2X2(ne10, dst_ptr0_q, dst_ptr1_q, w_tile_q, src1_col0, src1_col1, valid_rows, NULL, NULL);                    \
             }                                                                                                                     \
                                                                                                                                   \
             for (; ir1 < src1_nrows; ++ir1) {                                                                                     \
@@ -957,7 +663,7 @@ static void hvx_mm_qkv_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
                 float * restrict dst_row_q = (float *) (dst_q->data + (ir1 * dst_q_row_size));                                    \
                 float * dst_ptr_q = &dst_row_q[ct * 32];                                                                          \
                                                                                                                                   \
-                DOT_2X1(ne10, dst_ptr_q, w_tile_q, src1_col, valid_rows);                                                         \
+                DOT_2X1(ne10, dst_ptr_q, w_tile_q, src1_col, valid_rows, NULL);                                                   \
             }                                                                                                                     \
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                 \
                                                                                                                                   \
@@ -1019,11 +725,19 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
     uint32_t ct_end   = (src0_end_row + 31) / 32;                                                                                 \
                                                                                                                                   \
     uint32_t push_ct = ct_start;                                                                                                  \
-    for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end; d++, push_ct++) {                                                    \
-        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                                \
-                       src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);              \
-        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + d * tile_row_transfer_size_aligned,                                \
-                       src2_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);              \
+    if (src0_start_row < src0_end_row) {                                                                                          \
+        for (uint32_t d = 0; d < n_prefetch && push_ct < ct_end; d++, push_ct++) {                                                \
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + d * tile_row_transfer_size_aligned,                            \
+                           src0_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);          \
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + d * tile_row_transfer_size_aligned,                            \
+                           src2_row + push_ct * tile_row_stride), aligned_tile_size, tile_size, tile_size, n_k_tiles_a);          \
+        }                                                                                                                         \
+    }                                                                                                                             \
+                                                                                                                                  \
+    hvx_mm_run_quant_task(mmctx, ith);                                                                                            \
+                                                                                                                                  \
+    if (src0_start_row >= src0_end_row) {                                                                                         \
+        return;                                                                                                                   \
     }                                                                                                                             \
                                                                                                                                   \
     for (uint32_t ct = ct_start; ct < ct_end; ct++) {                                                                             \
@@ -1049,8 +763,8 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             float * dst_ptr0_up = &dst_row0_up[ct * 32];                                                                          \
             float * dst_ptr1_up = &dst_row1_up[ct * 32];                                                                          \
                                                                                                                                   \
-            DOT_2X2(ne10, dst_ptr0_gate, dst_ptr1_gate, w_tile_gate, src1_col0, src1_col1, valid_rows);                           \
-            DOT_2X2(ne10, dst_ptr0_up, dst_ptr1_up, w_tile_up, src1_col0, src1_col1, valid_rows);                                 \
+            DOT_2X2(ne10, dst_ptr0_gate, dst_ptr1_gate, w_tile_gate, src1_col0, src1_col1, valid_rows, NULL, NULL);               \
+            DOT_2X2(ne10, dst_ptr0_up, dst_ptr1_up, w_tile_up, src1_col0, src1_col1, valid_rows, NULL, NULL);                     \
         }                                                                                                                         \
                                                                                                                                   \
         for (; ir1 < src1_nrows; ++ir1) {                                                                                         \
@@ -1062,8 +776,8 @@ static void hvx_mm_ffn_2d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, 
             float * restrict dst_row_up = (float *) (dst_up->data + (ir1 * dst_row_size));                                        \
             float * dst_ptr_up = &dst_row_up[ct * 32];                                                                            \
                                                                                                                                   \
-            DOT_2X1(ne10, dst_ptr_gate, w_tile_gate, src1_col, valid_rows);                                                       \
-            DOT_2X1(ne10, dst_ptr_up, w_tile_up, src1_col, valid_rows);                                                           \
+            DOT_2X1(ne10, dst_ptr_gate, w_tile_gate, src1_col, valid_rows, NULL);                                                 \
+            DOT_2X1(ne10, dst_ptr_up, w_tile_up, src1_col, valid_rows, NULL);                                                     \
         }                                                                                                                         \
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);                                                                     \
                                                                                                                                   \
@@ -1099,7 +813,7 @@ static void name(unsigned int nth, unsigned int ith, void * data) {             
     const uint32_t ne2 = src->ne[2];                                                                       \
     const uint32_t ne3 = src->ne[3];                                                                       \
     const uint32_t nrows = ne1 * ne2 * ne3;                                                                \
-    const uint32_t nrows_per_thread = mmctx->src1_nrows_per_thread;                                        \
+    const uint32_t nrows_per_thread = mmctx->n_quant_rows_per_thread;                                      \
                                                                                                            \
     const uint32_t ir_first = nrows_per_thread * ith;                                                      \
     if (ir_first >= nrows) {                                                                               \
@@ -1115,7 +829,7 @@ static void name(unsigned int nth, unsigned int ith, void * data) {             
     const size_t dst_row_size = (dst_row_size_expr);                                                       \
     const uint8_t * restrict src_data = (const uint8_t *) src->data + (src_row_size * ir_first);           \
     uint8_t * restrict dst_data = (uint8_t *) dst + (dst_row_size * ir_first);                             \
-    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith); \
+    uint8_t * restrict tmp_data = (uint8_t *) mmctx->vtcm_dst + (mmctx->vtcm_dst_size_per_thread * ith);   \
     kernel_fn(src_data, dst_data, tmp_data, ne0, ir_last - ir_first, src_row_size, dst_row_size);          \
                                                                                                            \
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, ir_first);                                         \
@@ -1140,7 +854,7 @@ static void quantize_f32_q8_0_tiled_block(unsigned int nth, unsigned int ith, vo
     quantize_f32_q8_0_tiled_block_kernel(
         (const float *) src->data,
         mmctx->vtcm_src1,
-        (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith),
+        (uint8_t *) mmctx->vtcm_dst + (mmctx->vtcm_dst_size_per_thread * ith),
         src->ne[0],
         mmctx->quant_ib_first[ith],
         mmctx->quant_ib_last[ith],
@@ -1164,7 +878,7 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
     quantize_f32_q8_1_tiled_block_kernel(
         (const float *) src->data,
         mmctx->vtcm_src1,
-        (uint8_t *) mmctx->vtcm_src0 + (mmctx->vtcm_src0_size_per_thread * ith),
+        (uint8_t *) mmctx->vtcm_dst + (mmctx->vtcm_dst_size_per_thread * ith),
         src->ne[0],
         mmctx->quant_ib_first[ith],
         mmctx->quant_ib_last[ith],
@@ -1230,11 +944,6 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
     const uint32_t src0_end_row    = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
     const uint32_t src0_end_row_x2 = src0_start_row + ((src0_end_row - src0_start_row) & ~1U);
 
-    // no work for this thread
-    if (src0_start_row >= src0_end_row) {
-        return;
-    }
-
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
 
     const size_t dst_row_size  = nb1;
@@ -1252,14 +961,21 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;
 
     // Prefill vtcm with src0 rows
-    #pragma unroll(4)
-    for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
-        const int is0 = (ir0 - src0_start_row);
-        if (is0 >= (int)n_prefetch) {
-            break;
+    if (src0_start_row < src0_end_row) {
+        for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
+            const int is0 = (ir0 - src0_start_row);
+            if (is0 >= (int)n_prefetch) {
+                break;
+            }
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+                           src0_stride, src0_row_size, src0_row_size, 2);
         }
-        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
-                       src0_stride, src0_row_size, src0_row_size, 2);
+    }
+
+    hvx_mm_run_quant_task(mmctx, ith);
+
+    if (src0_start_row >= src0_end_row) {
+        return;
     }
 
     // Process src0 rows
@@ -1311,6 +1027,9 @@ static void hvx_mm_2d(unsigned int nth, unsigned int ith, void * data) {
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
     }
+    if (src2) {
+        hvx_tensor_add_f32_grid(dst, src2, 0, src1_nrows, src0_start_row, src0_end_row, &kparams->div_ne12_ne1, &kparams->div_ne1);
+    }
 }
 
 static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
@@ -1320,11 +1039,6 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
 
     const uint32_t src0_start_row  = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row    = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
-
-    // no work for this thread
-    if (src0_start_row >= src0_end_row) {
-        return;
-    }
 
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
 
@@ -1354,14 +1068,21 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
     const uint32_t prefetch_mask = n_prefetch - 1;
 
     // Prefill vtcm with 2x src0 rows
-    #pragma unroll(2)
-    for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
-        const uint32_t is0 = (ir0 - src0_start_row);
-        if (is0 >= n_prefetch) {
-            break;
+    if (src0_start_row < src0_end_row) {
+        for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
+            const uint32_t is0 = (ir0 - src0_start_row);
+            if (is0 >= n_prefetch) {
+                break;
+            }
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+                           src0_stride, src0_row_size, src0_row_size, 2);
         }
-        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
-                       src0_stride, src0_row_size, src0_row_size, 2);
+    }
+
+    hvx_mm_run_quant_task(mmctx, ith);
+
+    if (src0_start_row >= src0_end_row) {
+        return;
     }
 
     // Process src0 rows
@@ -1392,7 +1113,25 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
     }
 
-    hvx_copy_f32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, src0_end_row - src0_start_row);
+    int copy_cnt = src0_end_row - src0_start_row;
+    if (src2) {
+        float * dst_ptr = &dst_col[src0_start_row];
+        const float * src2_ptr = (const float *) src2->data + src0_start_row;
+        float * tmp_ptr = tmp;
+        int remaining = copy_cnt;
+        while (remaining > 0) {
+            int n = MIN(remaining, 32);
+            HVX_Vector v_out = hvx_vmemu(tmp_ptr);
+            HVX_Vector v_z   = hvx_vmemu(src2_ptr);
+            hvx_vec_store_u(dst_ptr, n * sizeof(float), hvx_vec_add_f32_f32(v_out, v_z));
+            dst_ptr += n;
+            src2_ptr += n;
+            tmp_ptr += n;
+            remaining -= n;
+        }
+    } else {
+        hvx_copy_f32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, copy_cnt);
+    }
 }
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id) * ids->ne[0] * ids->ne[1] + (i1)]
@@ -1410,7 +1149,8 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
     const uint32_t src0_start_row  = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row    = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
 
-    // no work for this thread
+    hvx_mm_run_quant_task(mmctx, ith);
+
     if (src0_start_row >= src0_end_row) {
         return;
     }
@@ -1476,7 +1216,7 @@ static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
                 const uint8_t * restrict src1_col = (const uint8_t *) (src1_data + (ir1 + rm2 * ne11 + 0) * src1_stride);
                 float * restrict dst_row = (float *) (dst->data + (rm1 * nb1 + rm2 * nb2 + 0));
 
-                mmctx->vec_dot_32x1(ne10, &dst_row[ct * 32], w_tile, src1_col, valid_rows);
+                mmctx->vec_dot_32x1(ne10, &dst_row[ct * 32], w_tile, src1_col, valid_rows, NULL);
             }
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
@@ -1498,7 +1238,8 @@ static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
     const uint32_t src0_start_row  = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row    = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
 
-    // no work for this thread
+    hvx_mm_run_quant_task(mmctx, ith);
+
     if (src0_start_row >= src0_end_row) {
         return;
     }
@@ -1555,7 +1296,7 @@ static void hvx_mv_id(unsigned int nth, unsigned int ith, void * data) {
             valid_rows = MIN(32, MAX(0, valid_rows));
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);
-            mmctx->vec_dot_32x1(ne10, &dst_row[ct * 32], w_tile, src1_col, valid_rows);
+            mmctx->vec_dot_32x1(ne10, &dst_row[ct * 32], w_tile, src1_col, valid_rows, NULL);
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
             if (push_ct < ct_end) {
@@ -1625,9 +1366,9 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
     const size_t src0_row_size_padded = hex_round_up(src0_row_size, 128);
     size_t       src1_row_size_padded;
 
-    worker_callback_t quant_job_func;
+    worker_callback_t quant_task_func;
     worker_callback_t matmul_job_func;
-    uint32_t n_quant_jobs = 1;
+    uint32_t n_quant_tasks = 1;
     if (src1_nrows > 1) {
         if (is_repacked) {
             switch (src0->type) {
@@ -1660,7 +1401,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
 
     switch (kparams->kernel_type) {
         case HTP_MM_KERNEL_HVX_F16_F16_VTCM:
-            quant_job_func         = (src1->type == HTP_TYPE_F32) ? quantize_f32_f16_flat : quantize_f16_f16_flat;
+            quant_task_func        = (src1->type == HTP_TYPE_F32) ? quantize_f32_f16_flat : quantize_f16_f16_flat;
             mmctx->type            = "f16-f16";
             mmctx->vec_dot_1x1     = vec_dot_f16_f16_aa_1x1;
             mmctx->vec_dot_2x1     = vec_dot_f16_f16_aa_2x1;
@@ -1677,7 +1418,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
             mmctx->mm_div_r2       = kparams->div_r2;
             mmctx->mm_div_r3       = kparams->div_r3;
             need_quant             = false;
-            quant_job_func         = NULL;
+            quant_task_func        = NULL;
             src1_row_size          = nb11;
             break;
 
@@ -1691,11 +1432,11 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
             mmctx->mm_div_r3       = kparams->div_r3;
             src1_row_size          = nb11;
             need_quant             = false;
-            quant_job_func         = NULL;
+            quant_task_func        = NULL;
             break;
 
         case HTP_MM_KERNEL_HVX_F32_F32_VTCM:
-            quant_job_func         = quantize_f32_f32_flat;
+            quant_task_func        = quantize_f32_f32_flat;
             mmctx->type            = "f32-f32";
             mmctx->vec_dot_1x1     = vec_dot_f32_f32_aa_1x1;
             mmctx->vec_dot_2x1     = vec_dot_f32_f32_aa_2x1;
@@ -1704,7 +1445,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
             break;
 
         case HTP_MM_KERNEL_HVX_F32_F32_DDR:
-            quant_job_func         = NULL;
+            quant_task_func        = NULL;
             mmctx->type            = "f32-f32";
             mmctx->vec_dot_1x1     = vec_dot_f32_f32_uu_1x1;
             mmctx->mm_div_ne12_ne1 = kparams->div_ne12_ne1;
@@ -1717,8 +1458,8 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
             break;
 
         case HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT: {
-            n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-            quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_flat : quantize_f32_q8_0_flat;
+            n_quant_tasks = MIN(src1_nrows, octx->n_threads);
+            quant_task_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_flat : quantize_f32_q8_0_flat;
             src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
 
             if (src1_nrows > 1) {
@@ -1755,19 +1496,19 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
             const uint32_t total_nb = src1_nrows * nb;
 
             if (src1_nrows < octx->n_threads) {
-                n_quant_jobs = MIN(total_nb, octx->n_threads);
-                quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
-                for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
-                    uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
-                    uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
+                n_quant_tasks = MIN(total_nb, octx->n_threads);
+                quant_task_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
+                for (uint32_t ith = 0; ith < n_quant_tasks; ++ith) {
+                    uint32_t ib_first = (total_nb * ith) / n_quant_tasks;
+                    uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_tasks;
                     mmctx->quant_ib_first[ith] = ib_first;
                     mmctx->quant_ib_last[ith]  = ib_last;
                     mmctx->quant_r[ith]        = ib_first / nb;
                     mmctx->quant_c[ith]        = ib_first % nb;
                 }
             } else {
-                n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-                quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
+                n_quant_tasks = MIN(src1_nrows, octx->n_threads);
+                quant_task_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
             }
             src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
             break;
@@ -1831,8 +1572,13 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
 
     if (need_quant) {
-        mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
-        worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
+        mmctx->n_quant_rows_per_thread = (src1_nrows + n_quant_tasks - 1) / n_quant_tasks;
+        mmctx->quant_task_func = quant_task_func;
+        mmctx->n_quant_tasks = n_quant_tasks;
+        atomic_init(&mmctx->quant_barrier, n_quant_tasks);
+    } else {
+        mmctx->quant_task_func = NULL;
+        mmctx->n_quant_tasks = 0;
     }
 
     const uint32_t n_matmul_jobs = octx->n_threads;
@@ -1870,10 +1616,6 @@ static void hvx_mm_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
     const uint32_t src0_end_row    = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
     const uint32_t src0_end_row_x2 = src0_start_row + ((src0_end_row - src0_start_row) & ~1U);
 
-    if (src0_start_row >= src0_end_row) {
-        return;
-    }
-
     const size_t dst_k_row_size  = dst_k->nb[1]; // K and V share output width
     const size_t dst_q_row_size  = dst_q->nb[1]; // Q may be wider (GQA)
     const size_t src0_row_size = src0->nb[1];
@@ -1902,17 +1644,25 @@ static void hvx_mm_qkv_2d(unsigned int nth, unsigned int ith, void * data) {
     const uint8_t * restrict src3_row = (const uint8_t *) src3->data;
 
     // Prefill spad with src0, src2, src3 rows
-    for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
-        const int is0 = (ir0 - src0_start_row);
-        if (is0 >= (int)n_prefetch) {
-            break;
+    if (src0_start_row < src0_end_row) {
+        for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
+            const int is0 = (ir0 - src0_start_row);
+            if (is0 >= (int)n_prefetch) {
+                break;
+            }
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+                           src0_stride, src0_row_size, src0_row_size, 2);
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + ir0 * src2_row_size),
+                           src2_stride, src2_row_size, src2_row_size, 2);
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src3_ptr + is0 * src3_stride, src3_row + ir0 * src3_row_size),
+                           src3_stride, src3_row_size, src3_row_size, 2);
         }
-        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
-                       src0_stride, src0_row_size, src0_row_size, 2);
-        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + ir0 * src2_row_size),
-                       src2_stride, src2_row_size, src2_row_size, 2);
-        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src3_ptr + is0 * src3_stride, src3_row + ir0 * src3_row_size),
-                       src3_stride, src3_row_size, src3_row_size, 2);
+    }
+
+    hvx_mm_run_quant_task(mmctx, ith);
+
+    if (src0_start_row >= src0_end_row) {
+        return;
     }
 
     // Process rows
@@ -2024,10 +1774,6 @@ static void hvx_mm_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
     const uint32_t src0_end_row    = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
     const uint32_t src0_end_row_x2 = src0_start_row + ((src0_end_row - src0_start_row) & ~1U);
 
-    if (src0_start_row >= src0_end_row) {
-        return;
-    }
-
     const size_t dst_row_size  = dst_gate->nb[1];
     const size_t src0_row_size = src0->nb[1];
     const size_t src2_row_size = src2->nb[1];
@@ -2051,15 +1797,23 @@ static void hvx_mm_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
     const uint8_t * restrict src2_row = (const uint8_t *) src2->data;
 
     // Prefill spad with src0, src2 rows
-    for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
-        const int is0 = (ir0 - src0_start_row);
-        if (is0 >= (int)n_prefetch) {
-            break;
+    if (src0_start_row < src0_end_row) {
+        for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
+            const int is0 = (ir0 - src0_start_row);
+            if (is0 >= (int)n_prefetch) {
+                break;
+            }
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
+                           src0_stride, src0_row_size, src0_row_size, 2);
+            dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + ir0 * src2_row_size),
+                           src2_stride, src2_row_size, src2_row_size, 2);
         }
-        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src0_ptr + is0 * src0_stride, src0_row + ir0 * src0_row_size),
-                       src0_stride, src0_row_size, src0_row_size, 2);
-        dma_queue_push(dma_queue, dma_make_ptr(vtcm_src2_ptr + is0 * src2_stride, src2_row + ir0 * src2_row_size),
-                       src2_stride, src2_row_size, src2_row_size, 2);
+    }
+
+    hvx_mm_run_quant_task(mmctx, ith);
+
+    if (src0_start_row >= src0_end_row) {
+        return;
     }
 
     // Process rows
@@ -2187,7 +1941,8 @@ static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void
         size_t chunk_size = hex_smin(st->n_tot_chunks - chunk_idx, st->n_chunks_per_task);
 
         float        *dst      = st->dst      + chunk_idx * st->dst_stride;
-        transfer_output_chunk_fp16_to_fp32(dst, st->vtcm_src, chunk_idx, chunk_size, st->n_cols, st->dst_stride, st->dst_cols);
+        const float  *src2     = st->src2     ? (st->src2     + chunk_idx * st->src2_stride) : NULL;
+        transfer_output_chunk_fp16_to_fp32(dst, src2, st->vtcm_src, chunk_idx, chunk_size, st->n_cols, st->dst_stride, st->src2_stride, st->dst_cols);
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, start_chunk_idx);
@@ -2316,8 +2071,8 @@ static void dequantize_tiled_weight_chunk_to_fp16_tiles(
     }
 }
 
-static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, const __fp16 *vtcm_src,
-                                              int n_rows, int n_cols, int dst_stride, int dst_cols, int n_threads) {
+static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, const float *src2, const __fp16 *vtcm_src,
+                                              int n_rows, int n_cols, int dst_stride, uint32_t src2_stride, int dst_cols, int n_threads) {
     assert(n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
 
     if (n_rows <= 0) return;
@@ -2333,9 +2088,11 @@ static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, 
     state.n_tot_chunks      = n_tot_chunks;
     state.n_chunks_per_task = n_chunks_per_task;
     state.dst               = dst;
+    state.src2              = src2;
     state.vtcm_src          = vtcm_src;
     state.n_cols            = n_cols;
     state.dst_stride        = dst_stride;
+    state.src2_stride       = src2_stride;
     state.dst_cols          = dst_cols;
     state.traces            = ctx->trace;
 
@@ -2384,6 +2141,7 @@ static void transfer_activation_chunk_threaded(
 
 static int hmx_mm_2d_f32(struct htp_context *ctx,
                                   float *restrict dst,
+                                  const float *restrict src2,
                                   const float *activation,
                                   const uint8_t *weight,
                                   int m, int k, int n,
@@ -2392,6 +2150,7 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                                   int weight_type,
                                   int k_valid,
                                   int dst_stride,
+                                  uint32_t src2_stride,
                                   int dst_cols,
                                   int m_chunk,
                                   int n_chunk,
@@ -2425,9 +2184,13 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
     const int n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
     const struct fastdiv_values n_k_tiles_div = init_fastdiv_values(n_k_tiles);
 
-    const bool is_quant     = (weight_type != HTP_TYPE_F16 && weight_type != HTP_TYPE_F32);
+    const bool is_quant       = (weight_type != HTP_TYPE_F16 && weight_type != HTP_TYPE_F32);
     const size_t vec_dot_size = k * sizeof(__fp16);
     const size_t vtcm_budget  = ctx->vtcm_size;
+
+    const uint32_t dma_dst_stride  = is_quant ? aligned_tile_size : row_stride;
+    const uint32_t dma_src_stride  = is_quant ? tile_size : weight_stride;
+    const uint32_t dma_width_bytes = is_quant ? tile_size : row_stride;
 
     size_t m_chunk_n_rows = m_chunk;
     size_t n_chunk_n_cols = n_chunk;
@@ -2458,8 +2221,9 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
             vtcm_weight_raw[0] = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size);
         }
     }
-    __fp16  *vtcm_f16_act = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, act_area_size);
-    float   *vtcm_f32_act    = (float *) vtcm_seq_alloc(&vtcm_ptr, act_f32_size);
+
+    __fp16  *vtcm_f16_act    = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, act_area_size);
+    float   *vtcm_f32_act    = (float *)  vtcm_seq_alloc(&vtcm_ptr, act_f32_size);
     __fp16  *vtcm_output     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, output_area_size);
     void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch0_size);
     void    *vtcm_scratch1   = scratch1_size ? vtcm_seq_alloc(&vtcm_ptr, scratch1_size) : NULL;
@@ -2494,19 +2258,15 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
 
             // Prologue: push A0 and optionally A1 (if n_chunk_cnt > 1)
             const size_t n_cols_A0 = hex_smin(n - 0 * n_chunk_n_cols, n_chunk_n_cols);
-            if (is_quant) {
-                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[0], weight), aligned_tile_size, tile_size, tile_size, (n_cols_A0 / 32) * n_k_tiles);
-            } else {
-                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[0], weight), row_stride, weight_stride, row_stride, n_cols_A0);
-            }
+            const uint32_t height_A0 = is_quant ? (n_cols_A0 / 32) * n_k_tiles : n_cols_A0;
+            dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[0], weight),
+                           dma_dst_stride, dma_src_stride, dma_width_bytes, height_A0);
 
             if (1 < n_chunk_cnt) {
                 const size_t n_cols_A1 = hex_smin(n - 1 * n_chunk_n_cols, n_chunk_n_cols);
-                if (is_quant) {
-                    dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[1], weight + n_chunk_n_cols * weight_stride), aligned_tile_size, tile_size, tile_size, (n_cols_A1 / 32) * n_k_tiles);
-                } else {
-                    dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[1], weight + n_chunk_n_cols * weight_stride), row_stride, weight_stride, row_stride, n_cols_A1);
-                }
+                const uint32_t height_A1 = is_quant ? (n_cols_A1 / 32) * n_k_tiles : n_cols_A1;
+                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[1], weight + n_chunk_n_cols * weight_stride),
+                               dma_dst_stride, dma_src_stride, dma_width_bytes, height_A1);
             }
 
             // pop A0 -> dequantize A0 -> submit C0
@@ -2543,11 +2303,9 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
 
                 // 2. push A_{i+2} (if i+2 < n_chunk_cnt)
                 if (i + 2 < n_chunk_cnt) {
-                    if (is_quant) {
-                        dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[(i + 2) % 2], weight + nc_p2 * weight_stride), aligned_tile_size, tile_size, tile_size, (n_cols_p2 / 32) * n_k_tiles);
-                    } else {
-                        dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[(i + 2) % 2], weight + nc_p2 * weight_stride), row_stride, weight_stride, row_stride, n_cols_p2);
-                    }
+                    const uint32_t height_p2 = is_quant ? (n_cols_p2 / 32) * n_k_tiles : n_cols_p2;
+                    dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[(i + 2) % 2], weight + nc_p2 * weight_stride),
+                                   dma_dst_stride, dma_src_stride, dma_width_bytes, height_p2);
                 }
 
                 // 3. submit C_{i+1} (if i+1 < n_chunk_cnt)
@@ -2562,9 +2320,10 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                 // 4. wait C_i and store D_i (multi-thread HVX, parallel with C_{i+1})
                 hmx_queue_pop(ctx->hmx_queue);
                 float *output_chunk = dst + (mr * dst_stride + nc);
+                const float *src2_chunk = src2 ? (src2 + mr * src2_stride + nc) : NULL;
                 int chunk_dst_cols = dst_cols - (int)nc;
                 if (chunk_dst_cols > 0) {
-                    transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output_bufs[i % 2], n_rows, n_cols, dst_stride, chunk_dst_cols, n_threads);
+                    transfer_output_chunk_threaded(ctx, output_chunk, src2_chunk, vtcm_output_bufs[i % 2], n_rows, n_cols, dst_stride, src2_stride, chunk_dst_cols, n_threads);
                 }
             }
         }
@@ -2583,11 +2342,9 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                 const size_t n_col_tiles = hmx_ceil_div(n_cols, HTP_MM_HMX_TILE_N_COLS);
 
                 // A: Weight DMA (Synchronous)
-                if (is_quant) {
-                    dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[0], weight + nc * weight_stride), aligned_tile_size, tile_size, tile_size, (n_cols / 32) * n_k_tiles);
-                } else {
-                    dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[0], weight + nc * weight_stride), row_stride, weight_stride, row_stride, n_cols);
-                }
+                const uint32_t height = is_quant ? (n_cols / 32) * n_k_tiles : n_cols;
+                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[0], weight + nc * weight_stride),
+                               dma_dst_stride, dma_src_stride, dma_width_bytes, height);
                 dma_queue_pop(ctx->dma[0]);
 
                 // B: Weight Dequantize (Threaded)
@@ -2601,9 +2358,10 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
 
                 // D: Output Store
                 float *output_chunk = dst + (mr * dst_stride + nc);
+                const float *src2_chunk = src2 ? (src2 + mr * src2_stride + nc) : NULL;
                 int chunk_dst_cols = dst_cols - (int)nc;
                 if (chunk_dst_cols > 0) {
-                    transfer_output_chunk_threaded(ctx, output_chunk, vtcm_output, n_rows, n_cols, dst_stride, chunk_dst_cols, n_threads);
+                    transfer_output_chunk_threaded(ctx, output_chunk, src2_chunk, vtcm_output, n_rows, n_cols, dst_stride, src2_stride, chunk_dst_cols, n_threads);
                 }
             }
         }
@@ -2644,6 +2402,13 @@ static inline float *hmx_mm_dst_batch_ptr(const hmx_mm_f16_f32_batched_params_t 
                       (size_t) dst_b3 * params->dst_nb3);
 }
 
+static inline const float *hmx_mm_src2_batch_ptr(const hmx_mm_f16_f32_batched_params_t *params,
+                                               int src2_b2, int src2_b3) {
+    return params->src2 ? (const float *) ((const uint8_t *) params->src2 +
+                      (size_t) src2_b2 * params->src2_nb2 +
+                      (size_t) src2_b3 * params->src2_nb3) : NULL;
+}
+
 static int hmx_mm_f16_f32_batched_simple(struct htp_context *ctx,
                                                         const hmx_mm_f16_f32_batched_params_t *params,
                                                         int m_chunk, int n_chunk, int pipeline, int n_threads, int act_threads, int vtcm_size) {
@@ -2651,11 +2416,12 @@ static int hmx_mm_f16_f32_batched_simple(struct htp_context *ctx,
     for (int b3 = 0; b3 < params->ne13 && ret == 0; ++b3) {
         for (int b2 = 0; b2 < params->ne12 && ret == 0; ++b2) {
             ret = hmx_mm_2d_f32(ctx, hmx_mm_dst_batch_ptr(params, b2, b3),
+                                           hmx_mm_src2_batch_ptr(params, b2, b3),
                                            hmx_mm_activation_batch_ptr(params, b2, b3),
                                            (const uint8_t *)hmx_mm_weight_batch_ptr(params, b2, b3),
                                            params->m, params->k, params->n,
                                            params->act_stride, params->weight_stride * (int)sizeof(__fp16),
-                                           HTP_TYPE_F16, params->k, params->n, params->n,
+                                           HTP_TYPE_F16, params->k, params->dst_stride, params->src2_stride, params->n,
                                            m_chunk, n_chunk, pipeline, n_threads, act_threads,
                                            0, 0, vtcm_size);
         }
@@ -2740,15 +2506,9 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
                 for (int g = 0; g < group_size; ++g) {
                     const float *activation_chunk = hmx_mm_activation_batch_ptr(params, b2_base + g, b3) + mr * params->act_stride;
                     __fp16 *vtcm_act_g = vtcm_f16_act + (size_t) g * act_head_stride;
-                    if (use_dma_activation) {
-                        transfer_activation_chunk_threaded(ctx, vtcm_act_g,
-                                                               activation_chunk, (int) n_rows,
-                                                               params->k, params->act_stride, act_threads, params->k, vtcm_f32_act);
-                    } else {
-                        transfer_activation_chunk_threaded(ctx, vtcm_act_g,
-                                                               activation_chunk, (int) n_rows,
-                                                               params->k, params->act_stride, act_threads, params->k, NULL);
-                    }
+                    transfer_activation_chunk_threaded(ctx, vtcm_act_g,
+                                                           activation_chunk, (int) n_rows,
+                                                           params->k, params->act_stride, act_threads, params->k, vtcm_f32_act);
                 }
 
                 void *buf_curr = vtcm_scratch0;
@@ -2793,9 +2553,10 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
 
                         {
                             float *output = hmx_mm_dst_batch_ptr(params, b2_base + g, b3) + mr * params->dst_stride + nc;
+                            const float *src2_chunk = params->src2 ? (hmx_mm_src2_batch_ptr(params, b2_base + g, b3) + mr * params->src2_stride + nc) : NULL;
                             int chunk_dst_cols = params->n - (int)nc;
                             if (chunk_dst_cols > 0) {
-                                transfer_output_chunk_threaded(ctx, output, vtcm_output, (int) n_rows, (int) n_cols, params->dst_stride, chunk_dst_cols, ctx->n_threads);
+                                transfer_output_chunk_threaded(ctx, output, src2_chunk, vtcm_output, (int) n_rows, (int) n_cols, params->dst_stride, params->src2_stride, chunk_dst_cols, ctx->n_threads);
                             }
                         }
                     }
@@ -2956,6 +2717,10 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
     int tile_size = htp_mm_get_weight_tile_size(weight_type);
     int aligned_tile_size = htp_mm_get_weight_aligned_tile_size(weight_type);
 
+    const uint32_t dma_dst_stride  = is_quant ? aligned_tile_size : row_stride;
+    const uint32_t dma_src_stride  = is_quant ? tile_size : weight_stride;
+    const uint32_t dma_width_bytes = is_quant ? tile_size : row_stride;
+
     const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
     const size_t weight_row_stride = is_quant ? qweight_row_stride : row_stride;
 
@@ -2978,12 +2743,12 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
 
     size_t scratch0_size = hex_align_up(n_chunk_n_cols * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
 
-    uint8_t *vtcm_ptr        = (uint8_t *) ctx->vtcm_base;
-    __fp16  *vtcm_weight     = weight_area_size ? (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size) : NULL;
-    __fp16  *vtcm_f16_act = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, act_area_size);
-    __fp16  *vtcm_output     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, output_area_size);
-    void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch0_size);
-    __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
+    uint8_t *vtcm_ptr      = (uint8_t *) ctx->vtcm_base;
+    __fp16  *vtcm_weight   = weight_area_size ? (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size) : NULL;
+    __fp16  *vtcm_f16_act  = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, act_area_size);
+    __fp16  *vtcm_output   = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, output_area_size);
+    void    *vtcm_scratch0 = vtcm_seq_alloc(&vtcm_ptr, scratch0_size);
+    __fp16  *vtcm_scales   = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
 
     vtcm_used = vtcm_ptr - (uint8_t *) ctx->vtcm_base;
     if (vtcm_used > vtcm_budget) {
@@ -3007,11 +2772,9 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
             const size_t n_cols = hex_smin((size_t) n - nc, n_chunk_n_cols);
             const size_t n_col_tiles = hmx_ceil_div(n_cols, HTP_MM_HMX_TILE_N_COLS);
 
-            if (is_quant) {
-                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight, weight + nc * weight_stride), aligned_tile_size, tile_size, tile_size, (n_cols / 32) * n_k_tiles);
-            } else {
-                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight, weight + nc * weight_stride), row_stride, weight_stride, row_stride, n_cols);
-            }
+            const uint32_t height = is_quant ? (n_cols / 32) * n_k_tiles : n_cols;
+            dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight, weight + nc * weight_stride),
+                           dma_dst_stride, dma_src_stride, dma_width_bytes, height);
             dma_queue_pop(ctx->dma[0]);
 
             dequantize_tiled_weight_chunk_to_fp16_tiles(
@@ -3051,11 +2814,23 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
         return HTP_STATUS_OK;
     }
 
+    const float * src2_ptr = NULL;
+    uint32_t src2_stride = 0;
+    size_t src2_nb2 = 0;
+    size_t src2_nb3 = 0;
+    if (src2) {
+        src2_ptr = (const float *) src2->data;
+        src2_stride = (src2->ne[1] == 1) ? 0 : (uint32_t) (src2->nb[1] / sizeof(float));
+        src2_nb2 = (src2->ne[2] == 1) ? 0 : src2->nb[2];
+        src2_nb3 = (src2->ne[3] == 1) ? 0 : src2->nb[3];
+    }
+
     int ret = -1;
     const int n_threads = MIN(kparams->n_threads, (int) octx->n_threads);
     if (kparams->kernel_type == HTP_MM_KERNEL_HMX_F16_BATCHED) {
         hmx_mm_f16_f32_batched_params_t batch_params = {
             .dst             = (float *) dst->data,
+            .src2            = src2_ptr,
             .activation      = (float *) src1->data,
             .weight          = (const __fp16 *) src0->data,
             .m               = m_total,
@@ -3064,6 +2839,7 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
             .act_stride      = act_stride,
             .weight_stride   = wgt_stride,
             .dst_stride      = (int) (dst->nb[1] / sizeof(float)),
+            .src2_stride     = src2_stride,
             .ne02            = ne02,
             .ne03            = ne03,
             .ne12            = ne12,
@@ -3074,6 +2850,8 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
             .src1_nb3        = src1->nb[3],
             .dst_nb2         = dst->nb[2],
             .dst_nb3         = dst->nb[3],
+            .src2_nb2        = src2_nb2,
+            .src2_nb3        = src2_nb3,
         };
         ret = hmx_mm_f16_f32_batched(octx->ctx, &batch_params,
                                      kparams->m_chunk, kparams->n_chunk,
@@ -3082,9 +2860,9 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
                                      kparams->vtcm_size);
     } else {
         ret = hmx_mm_2d_f32(
-            octx->ctx, (float*) dst->data, (float*) src1->data, (const uint8_t *) src0->data,
+            octx->ctx, (float*) dst->data, src2_ptr, (float*) src1->data, (const uint8_t *) src0->data,
             m_total, k, n, act_stride, (int) src0->nb[1], (int) src0->type, (int) src1->ne[0],
-            (int)(dst->nb[1] / sizeof(float)), (int)dst->ne[0],
+            (int)(dst->nb[1] / sizeof(float)), src2_stride, (int)dst->ne[0],
             kparams->m_chunk, kparams->n_chunk, kparams->pipeline, n_threads,
             kparams->n_act_threads,
             kparams->tile_size, kparams->aligned_tile_size, kparams->vtcm_size
@@ -3145,7 +2923,7 @@ static int hmx_mm_op_matmul_id(
     return HTP_STATUS_OK;
 }
 
-static int hvx_mm_op_matmul_id(
+static int hvx_mm_matmul_id(
     struct htp_ops_context * octx,
     struct htp_mm_context * mmctx,
     size_t src0_row_size_padded,
@@ -3163,22 +2941,22 @@ static int hvx_mm_op_matmul_id(
     const uint32_t nb = (ne10 + qk - 1) / qk;
     const uint32_t total_nb = src1_nrows * nb;
 
-    worker_callback_t quant_job_func;
-    uint32_t n_quant_jobs = 1;
+    worker_callback_t quant_task_func;
+    uint32_t n_quant_tasks = 1;
     if (src1_nrows < octx->n_threads) {
-        n_quant_jobs = MIN(total_nb, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
-        for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
-            uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
-            uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
+        n_quant_tasks = MIN(total_nb, octx->n_threads);
+        quant_task_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
+        for (uint32_t ith = 0; ith < n_quant_tasks; ++ith) {
+            uint32_t ib_first = (total_nb * ith) / n_quant_tasks;
+            uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_tasks;
             mmctx->quant_ib_first[ith] = ib_first;
             mmctx->quant_ib_last[ith]  = ib_last;
             mmctx->quant_r[ith]        = ib_first / nb;
             mmctx->quant_c[ith]        = ib_first % nb;
         }
     } else {
-        n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
+        n_quant_tasks = MIN(src1_nrows, octx->n_threads);
+        quant_task_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
     size_t src1_row_size  = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
 
@@ -3188,13 +2966,13 @@ static int hvx_mm_op_matmul_id(
     size_t src0_sz = kparams->vtcm_src0_size;
     size_t src1_sz = kparams->vtcm_src1_size;
     size_t src2_sz = 0; // mapping lives in DDR
-    size_t dst_sz  = 0; // ID kernels scatter straight to DDR
+    size_t dst_sz  = kparams->vtcm_dst_size;
     size_t vtcm_size = kparams->vtcm_size;
 
     size_t src0_sz_per_thread = src0_sz / octx->n_threads;
     size_t src1_sz_per_thread = src1_sz;
     size_t src2_sz_per_thread = 0;
-    size_t dst_sz_per_thread  = 0;
+    size_t dst_sz_per_thread  = dst_sz / octx->n_threads;
 
     FARF(HIGH, "matmul-id-%s : src0-spad-size %zu src1-spad-size %zu src2-spad-size %zu dst-spad-size %zu (%zu)\n", mmctx->type,
          src0_sz, src1_sz, src2_sz, dst_sz, vtcm_size);
@@ -3230,8 +3008,10 @@ static int hvx_mm_op_matmul_id(
     mmctx->vtcm_src2_size_per_thread = src2_sz_per_thread;
     mmctx->vtcm_dst_size_per_thread  = dst_sz_per_thread;
 
-    mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
-    worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
+    mmctx->n_quant_rows_per_thread = (src1_nrows + n_quant_tasks - 1) / n_quant_tasks;
+    mmctx->quant_task_func = quant_task_func;
+    mmctx->n_quant_tasks = n_quant_tasks;
+    atomic_init(&mmctx->quant_barrier, n_quant_tasks);
 
     const uint32_t n_matmul_jobs = octx->n_threads;
     worker_pool_run_func(octx->ctx->worker_pool, matmul_id_job_func, mmctx, n_matmul_jobs);
@@ -3259,7 +3039,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
     const uint32_t src0_nrows = ne01;  // per expert
     const uint32_t src1_nrows = ne11 * ne12 * ne13;
 
-    worker_callback_t quant_job_func;
+    worker_callback_t quant_task_func;
     worker_callback_t matmul_id_job_func = src1_nrows > 1 ? hvx_mm_id : hvx_mv_id;
 
     // Compute src0_nrows_per_thread
@@ -3329,7 +3109,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
         return hmx_mm_op_matmul_id(octx, mmctx, matrix_row_counts, matrix_rows, mapping_buf, must_free_mapping);
     }
 
-    return hvx_mm_op_matmul_id(octx, mmctx, src0_row_size_padded, src1_nrows, matmul_id_job_func, mapping_buf, must_free_mapping);
+    return hvx_mm_matmul_id(octx, mmctx, src0_row_size_padded, src1_nrows, matmul_id_job_func, mapping_buf, must_free_mapping);
 }
 
 int op_matmul_qkv(struct htp_ops_context * octx) {
@@ -3373,25 +3153,25 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
     const uint32_t nb = (src1->ne[0] + qk - 1) / qk;
     const uint32_t total_nb = src1_nrows * nb;
 
-    worker_callback_t quant_job_func;
-    uint32_t n_quant_jobs = 1;
+    worker_callback_t quant_task_func;
+    uint32_t n_quant_tasks = 1;
     if (kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT) {
-        n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_flat : quantize_f32_q8_0_flat;
+        n_quant_tasks = MIN(src1_nrows, octx->n_threads);
+        quant_task_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_flat : quantize_f32_q8_0_flat;
     } else if (src1_nrows < octx->n_threads) {
-        n_quant_jobs = MIN(total_nb, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
-        for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
-            uint32_t ib_first = (total_nb * ith) / n_quant_jobs;
-            uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
+        n_quant_tasks = MIN(total_nb, octx->n_threads);
+        quant_task_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
+        for (uint32_t ith = 0; ith < n_quant_tasks; ++ith) {
+            uint32_t ib_first = (total_nb * ith) / n_quant_tasks;
+            uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_tasks;
             mmctx->quant_ib_first[ith] = ib_first;
             mmctx->quant_ib_last[ith]  = ib_last;
             mmctx->quant_r[ith]        = ib_first / nb;
             mmctx->quant_c[ith]        = ib_first % nb;
         }
     } else {
-        n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
+        n_quant_tasks = MIN(src1_nrows, octx->n_threads);
+        quant_task_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
 
     size_t src1_row_size;
@@ -3406,12 +3186,14 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
     size_t src1_sz = kparams->vtcm_src1_size;
     size_t src2_sz = kparams->vtcm_src2_size;
     size_t src3_sz = kparams->vtcm_src3_size;
+    size_t dst_sz  = kparams->vtcm_dst_size;
     size_t vtcm_size = kparams->vtcm_size;
 
     size_t src0_sz_per_thread = src0_sz / octx->n_threads;
     size_t src1_sz_per_thread = src1_sz;
     size_t src2_sz_per_thread = src2_sz / octx->n_threads;
     size_t src3_sz_per_thread = src3_sz / octx->n_threads;
+    size_t dst_sz_per_thread  = dst_sz / octx->n_threads;
 
     if (octx->ctx->vtcm_size < vtcm_size) {
         FARF(ERROR, "matmul-qkv: current VTCM reservation %zu is too small, needed %zu\n",
@@ -3424,11 +3206,13 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
     mmctx->vtcm_src0 = vtcm_seq_alloc(&vtcm_ptr, src0_sz);
     mmctx->vtcm_src2 = vtcm_seq_alloc(&vtcm_ptr, src2_sz);
     mmctx->vtcm_src3 = vtcm_seq_alloc(&vtcm_ptr, src3_sz);
+    mmctx->vtcm_dst  = vtcm_seq_alloc(&vtcm_ptr, dst_sz);
 
     octx->src1_spad.src  = NULL;
     octx->src0_spad.src  = NULL;
     octx->src2_spad.src  = NULL;
     octx->src3_spad.src  = NULL;
+    octx->dst_spad.src   = NULL;
 
     mmctx->vtcm_src0_stride = is_repacked ? 0 : src0_row_size_padded;
     mmctx->vtcm_src2_stride = is_repacked ? 0 : src0_row_size_padded;
@@ -3439,13 +3223,15 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
     mmctx->vtcm_src1_size_per_thread = src1_sz_per_thread;
     mmctx->vtcm_src2_size_per_thread = src2_sz_per_thread;
     mmctx->vtcm_src3_size_per_thread = src3_sz_per_thread;
+    mmctx->vtcm_dst_size_per_thread  = dst_sz_per_thread;
 
     if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)
         return HTP_STATUS_OK;
 
-    // Run quantization once
-    mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
-    worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
+    mmctx->n_quant_rows_per_thread = (src1_nrows + n_quant_tasks - 1) / n_quant_tasks;
+    mmctx->quant_task_func = quant_task_func;
+    mmctx->n_quant_tasks = n_quant_tasks;
+    atomic_init(&mmctx->quant_barrier, n_quant_tasks);
 
     // Run fused matmul
     const uint32_t n_matmul_jobs = octx->n_threads;
@@ -3517,25 +3303,25 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
     const uint32_t nb = (src1->ne[0] + qk - 1) / qk;
     const uint32_t total_nb = src1_nrows * nb;
 
-    worker_callback_t quant_job_func;
-    uint32_t n_quant_jobs = 1;
+    worker_callback_t quant_task_func;
+    uint32_t n_quant_tasks = 1;
     if (kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT) {
-        n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_flat : quantize_f32_q8_0_flat;
+        n_quant_tasks = MIN(src1_nrows, octx->n_threads);
+        quant_task_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_flat : quantize_f32_q8_0_flat;
     } else if (src1_nrows < octx->n_threads) {
-        n_quant_jobs = MIN(total_nb, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
-        for (uint32_t ith = 0; ith < n_quant_jobs; ++ith) {
-            uint32_t ib_first = (total_nb * (ith + 0)) / n_quant_jobs;
-            uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_jobs;
+        n_quant_tasks = MIN(total_nb, octx->n_threads);
+        quant_task_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
+        for (uint32_t ith = 0; ith < n_quant_tasks; ++ith) {
+            uint32_t ib_first = (total_nb * (ith + 0)) / n_quant_tasks;
+            uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_tasks;
             mmctx->quant_ib_first[ith] = ib_first;
             mmctx->quant_ib_last[ith]  = ib_last;
             mmctx->quant_r[ith]        = ib_first / nb;
             mmctx->quant_c[ith]        = ib_first % nb;
         }
     } else {
-        n_quant_jobs = MIN(src1_nrows, octx->n_threads);
-        quant_job_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
+        n_quant_tasks = MIN(src1_nrows, octx->n_threads);
+        quant_task_func = (src0->type == HTP_TYPE_Q4_1) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
     }
 
     size_t src1_row_size;
@@ -3549,11 +3335,13 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
     size_t src0_sz = kparams->vtcm_src0_size;
     size_t src1_sz = kparams->vtcm_src1_size;
     size_t src2_sz = kparams->vtcm_src2_size;
+    size_t dst_sz  = kparams->vtcm_dst_size;
     size_t vtcm_size = kparams->vtcm_size;
 
     size_t src0_sz_per_thread = src0_sz / octx->n_threads;
     size_t src1_sz_per_thread = src1_sz;
     size_t src2_sz_per_thread = src2_sz / octx->n_threads;
+    size_t dst_sz_per_thread  = dst_sz / octx->n_threads;
 
     if (octx->ctx->vtcm_size < vtcm_size) {
         FARF(ERROR, "matmul-ffn: current VTCM reservation %zu is too small, needed %zu\n", octx->ctx->vtcm_size, vtcm_size);
@@ -3564,10 +3352,12 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
     mmctx->vtcm_src1 = vtcm_seq_alloc(&vtcm_ptr, src1_sz);
     mmctx->vtcm_src0 = vtcm_seq_alloc(&vtcm_ptr, src0_sz);
     mmctx->vtcm_src2 = vtcm_seq_alloc(&vtcm_ptr, src2_sz);
+    mmctx->vtcm_dst  = vtcm_seq_alloc(&vtcm_ptr, dst_sz);
 
     octx->src1_spad.src  = NULL;
     octx->src0_spad.src  = NULL;
     octx->src2_spad.src  = NULL;
+    octx->dst_spad.src   = NULL;
 
     mmctx->vtcm_src0_stride = is_repacked ? 0 : src0_row_size_padded;
     mmctx->vtcm_src2_stride = is_repacked ? 0 : src0_row_size_padded;
@@ -3576,13 +3366,15 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
     mmctx->vtcm_src0_size_per_thread = src0_sz_per_thread;
     mmctx->vtcm_src1_size_per_thread = src1_sz_per_thread;
     mmctx->vtcm_src2_size_per_thread = src2_sz_per_thread;
+    mmctx->vtcm_dst_size_per_thread  = dst_sz_per_thread;
 
     if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)
         return HTP_STATUS_OK;
 
-    // Run quantization once
-    mmctx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
-    worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, mmctx, n_quant_jobs);
+    mmctx->n_quant_rows_per_thread = (src1_nrows + n_quant_tasks - 1) / n_quant_tasks;
+    mmctx->quant_task_func = quant_task_func;
+    mmctx->n_quant_tasks = n_quant_tasks;
+    atomic_init(&mmctx->quant_barrier, n_quant_tasks);
 
     // Run fused matmul
     const uint32_t n_matmul_jobs = octx->n_threads;
