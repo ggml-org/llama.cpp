@@ -5351,8 +5351,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_argmax_f32, "argmax_f32", argmax_f32_len, argmax_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_sum_rows_f32, "sum_rows_f32", sum_rows_f32_len, sum_rows_f32_data, "main", 2, sizeof(vk_op_sum_rows_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
-    // Intel Arc B390 was observed segfaulting with this shader.
-    if (device->subgroup_basic && device->subgroup_shuffle && device->vendor_id != VK_VENDOR_ID_INTEL) {
+    if (device->subgroup_basic && device->subgroup_shuffle) {
         int idx = 0;
         for (uint32_t n : {64, 128, 256, 512}) {
             if (device->subgroup_size <= n) {
@@ -5360,8 +5359,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             }
             ++idx;
         }
-    } else if (device->driver_id != vk::DriverId::eIntelProprietaryWindows) {
-        // Disabled on Intel Windows due to a driver bug: https://github.com/ggml-org/llama.cpp/pull/23964#issuecomment-4598226147
+    } else {
         int idx = 0;
         for (uint32_t n : {64, 128, 256, 512}) {
             const uint32_t block_size = std::min(device->subgroup_size, n);
