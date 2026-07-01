@@ -343,18 +343,22 @@ void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 * GGML_RE
     }
 }
 
-void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y, int64_t k) {
+// search > 0 tries UE4M3 scale codes in [base-search, base+search] and keeps the one with the
+// lowest (optionally quant_weights-weighted) error. search == 0 && !quant_weights matches the
+// legacy amax/6 reference. quant_weights is per-column (length k), indexed by column only.
+static void quantize_row_nvfp4_core(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y,
+                                    int64_t k, const float * GGML_RESTRICT quant_weights, int search) {
     static const int qk = QK_NVFP4;
     static const int qk_sub = QK_NVFP4_SUB;
     static const int n_sub = QK_NVFP4 / QK_NVFP4_SUB;
 
     assert(k % qk == 0);
-
     const int nb = k / qk;
 
     for (int i = 0; i < nb; i++) {
         for (int s = 0; s < n_sub; s++) {
             const float * xb = x + i*qk + s*qk_sub;
+            const float * wb = quant_weights ? quant_weights + i*qk + s*qk_sub : NULL;
 
             float amax = 0.0f;
             for (int j = 0; j < qk_sub; j++) {
@@ -363,20 +367,53 @@ void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RE
                 }
             }
 
-            // UE4M3 scale: amax / 6.0 maps the max E2M1 value (6.0) to amax
-            const uint8_t ue = ggml_fp32_to_ue4m3(amax / 6.0f);
-            y[i].d[s] = ue;
-            const float d = ggml_ue4m3_to_fp32(ue);
+            // amax / 6.0 maps the max E2M1 value (6.0) to amax
+            const uint8_t base = ggml_fp32_to_ue4m3(amax / 6.0f);
 
+            uint8_t best_code = 0;
+            float   best_cost = INFINITY;
+            uint8_t best_idx[QK_NVFP4_SUB] = { 0 };
+            const int lo = (int) base - search;
+            const int hi = (int) base + search;
+            for (int c = lo; c <= hi; ++c) {
+                if (c < 1 || c > 0x7E) {
+                    continue;
+                }
+                const float d = ggml_ue4m3_to_fp32((uint8_t) c);
+                if (d <= 0.0f) {
+                    continue;
+                }
+                float   cost = 0.0f;
+                uint8_t idx[QK_NVFP4_SUB];
+                for (int j = 0; j < qk_sub; ++j) {
+                    idx[j] = best_index_mxfp4(xb[j], d);
+                    const float r = kvalues_mxfp4[idx[j]] * d - xb[j];
+                    const float w = wb ? wb[j] : 1.0f;
+                    cost += w * r * r;
+                }
+                if (cost < best_cost) {
+                    best_cost = cost;
+                    best_code = (uint8_t) c;
+                    memcpy(best_idx, idx, sizeof(best_idx));
+                }
+            }
+
+            // no valid code (base == 0 from a sub-normal amax/6) leaves the zero-initialized
+            // best_code / best_idx, encoding a zero block as the reference does
+            y[i].d[s] = best_code;
             for (int j = 0; j < qk_sub/2; ++j) {
-                const uint8_t x0 = best_index_mxfp4(xb[0        + j], d);
-                const uint8_t x1 = best_index_mxfp4(xb[qk_sub/2 + j], d);
-
-                y[i].qs[s*(qk_sub/2) + j] = x0 | (x1 << 4);
+                y[i].qs[s*(qk_sub/2) + j] = best_idx[j] | (best_idx[qk_sub/2 + j] << 4);
             }
         }
     }
 }
+
+void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RESTRICT y, int64_t k) {
+    quantize_row_nvfp4_core(x, y, k, NULL, 0);
+}
+
+// half-window of UE4M3 scale codes searched around the amax/6 baseline
+#define NVFP4_SCALE_SEARCH 12
 
 void dequantize_row_q1_0(const block_q1_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK1_0;
@@ -2234,9 +2271,15 @@ size_t quantize_mxfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
 }
 
 size_t quantize_nvfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    GGML_UNUSED(quant_weights);
-    quantize_row_nvfp4_ref(src, dst, (int64_t)nrow*n_per_row);
-    return nrow * ggml_row_size(GGML_TYPE_NVFP4, n_per_row);
+    const size_t row_size = ggml_row_size(GGML_TYPE_NVFP4, n_per_row);
+    char * qrow = (char *) dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        // quant_weights is shared across rows (one value per column), so it is not advanced
+        quantize_row_nvfp4_core(src, (block_nvfp4 *) qrow, n_per_row, quant_weights, NVFP4_SCALE_SEARCH);
+        src  += n_per_row;
+        qrow += row_size;
+    }
+    return nrow * row_size;
 }
 
 // ====================== Ternary (de)-quantization (BitNet b1.58 and TriLMs)
