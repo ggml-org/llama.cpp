@@ -339,6 +339,24 @@ void server_models::notify_sse(const std::string & event, const std::string & mo
     sse.broadcast(std::move(result));
 }
 
+// Match a preset section to a cached model that the cache may store without a
+// convenience prefix on the quant tag. Quant tags use '_' and never '-', so the
+// token after the last '-' is tried as the base; if it names a cached model,
+// return it so the preset merges in instead of duplicating it, else return "".
+static std::string cached_base_name(const std::string & name, const common_presets & cached_models) {
+    auto colon = name.rfind(':');
+    if (colon == std::string::npos) {
+        return {};
+    }
+    const std::string tag = name.substr(colon + 1);
+    auto dash = tag.find_last_of('-');
+    if (dash == std::string::npos) {
+        return {}; // no prefix to strip; exact-name match is handled by the caller
+    }
+    std::string base = name.substr(0, colon + 1) + tag.substr(dash + 1);
+    return cached_models.find(base) != cached_models.end() ? base : std::string{};
+}
+
 void server_models::load_models() {
     // Phase 1: load presets from all sources - pure I/O, no lock needed
     // 1. cached models
@@ -374,13 +392,26 @@ void server_models::load_models() {
         final_presets[name] = preset;
         source_map[name] = SERVER_MODEL_SOURCE_MODELS_DIR;
     }
+    // custom_names tracks which final entries came (at least partly) from a
+    // custom preset, for the '*' marker in log_available_models
+    std::unordered_set<std::string> custom_names;
     for (const auto & [name, custom] : custom_presets) {
-        if (final_presets.find(name) != final_presets.end()) {
-            final_presets[name].merge(custom);
+        // exact-name match, or match after dropping a quant-tag prefix the
+        // cache already stripped (see cached_base_name)
+        std::string base = cached_base_name(name, cached_models);
+        auto it = final_presets.find(name);
+        if (it == final_presets.end() && !base.empty()) {
+            it = final_presets.find(base);
+        }
+        if (it != final_presets.end()) {
+            it->second.merge(custom);
+            source_map[it->first] = SERVER_MODEL_SOURCE_PRESET;
+            custom_names.insert(it->first);
         } else {
             final_presets[name] = custom;
+            source_map[name] = SERVER_MODEL_SOURCE_PRESET;
+            custom_names.insert(name);
         }
-        source_map[name] = SERVER_MODEL_SOURCE_PRESET;
     }
 
     // overlay router's own CLI args on top of every model preset so that
@@ -394,8 +425,6 @@ void server_models::load_models() {
     };
 
     // Helpers that read `mapping` - must be called while holding the lock.
-    std::unordered_set<std::string> custom_names;
-    for (const auto & [name, preset] : custom_presets) custom_names.insert(name);
     auto join_set = [](const std::set<std::string> & s) {
         std::string result;
         for (const auto & v : s) {
