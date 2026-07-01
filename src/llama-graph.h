@@ -668,6 +668,8 @@ struct llm_graph_params {
 
     llama_ubatch ubatch; // note: intentionally make a copy
 
+    int32_t pos_max;
+
     llm_graph_type gtype;
 
     ggml_backend_sched_t sched;
@@ -732,6 +734,11 @@ struct llm_graph_params {
         }
 
         if (!can_reuse_ubatch) {
+            return false;
+        }
+
+        if ((pos_max       >= (int32_t) hparams.n_ctx_orig_yarn) !=
+            (other.pos_max >= (int32_t) hparams.n_ctx_orig_yarn)) {
             return false;
         }
 
@@ -894,6 +901,8 @@ struct llm_graph_context {
     const int64_t n_tokens;
     const int64_t n_outputs;
     const int32_t n_ctx_orig; // yarn
+
+    const int32_t pos_max;
 
     const enum llama_pooling_type pooling_type;
     const enum llama_rope_type    rope_type;

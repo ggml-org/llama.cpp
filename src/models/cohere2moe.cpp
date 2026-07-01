@@ -186,7 +186,7 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
                     n_embd_head, n_head, n_head_kv, il);
 
             if (is_swa || force_rope) {
-                ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+                ggml_tensor * rope_factors = model.get_rope_factors(cparams, pos_max, il);
 
                 Qcur = ggml_rope_ext(
                         ctx0, Qcur, inp_pos, rope_factors,
@@ -360,7 +360,7 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
     ggml_tensor * ffn_inp = cur;
 
     auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur, n_embd_head, n_head, n_head_kv, il);
-    ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+    ggml_tensor * rope_factors = model.get_rope_factors(cparams, pos_max, il);
     Qcur = ggml_rope_ext(
             ctx0, Qcur, inp_pos, rope_factors,
             n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
