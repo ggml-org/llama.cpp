@@ -681,10 +681,43 @@ static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer_t buffer,
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
+#if defined(GGML_USE_HIP)
+static void * ggml_cuda_host_malloc(size_t size);
+
+// ROCm copies host->device by pinning the source as a userptr for the DMA engine;
+// doing that on a large file-backed (mmap'd) region can stall model loading. Stage
+// through a pinned buffer instead, like the CUDA runtime does for pageable memory.
+static bool ggml_cuda_memcpy_host_to_device_staged(char * dst, const char * src, size_t size, cudaStream_t stream) {
+    const size_t chunk_size = std::min<size_t>(size, 64u * 1024 * 1024);
+
+    void * stage = ggml_cuda_host_malloc(chunk_size);
+    if (stage == nullptr) {
+        return false;
+    }
+
+    for (size_t off = 0; off < size; off += chunk_size) {
+        const size_t n = std::min(chunk_size, size - off);
+        memcpy(stage, src + off, n);
+        CUDA_CHECK(cudaMemcpyAsync(dst + off, stage, n, cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream)); // stage is reused, must not overwrite in-flight copy
+    }
+
+    CUDA_CHECK(cudaFreeHost(stage));
+    return true;
+}
+#endif
+
 static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+#if defined(GGML_USE_HIP)
+    // stage large uploads through pinned memory to avoid pinning a file-backed source (see above)
+    if (size >= 1024 * 1024 &&
+        ggml_cuda_memcpy_host_to_device_staged((char *) tensor->data + offset, (const char *) data, size, cudaStreamPerThread)) {
+        return;
+    }
+#endif
     CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
