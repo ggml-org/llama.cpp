@@ -712,7 +712,17 @@ static inline void hmx_matmul_job_init(hmx_matmul_job_t * job,
 
 // output : fp16 -> f32p
 
-static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16 *restrict vtcm_src, uint32_t start_row, uint32_t n_rows, uint32_t n_cols, uint32_t dst_stride, uint32_t dst_cols) {
+static void transfer_output_chunk_fp16_to_fp32(
+    float *restrict dst,
+    const float *restrict src2,
+    const __fp16 *restrict vtcm_src,
+    uint32_t start_row,
+    uint32_t n_rows,
+    uint32_t n_cols,
+    uint32_t dst_stride,
+    uint32_t src2_stride,
+    uint32_t dst_cols
+) {
     assert(n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
     const size_t tile_row_stride = (n_cols / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -727,6 +737,7 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
         const size_t r1 = (r_idx0 % HTP_MM_HMX_TILE_N_ROWS) / 2;  // index of the row pair within the tile
         const __fp16 *row_base = vtcm_src + r0 * tile_row_stride;
         float *output_row_base = dst + r * dst_stride;  // global memory row base for row r (and r+1)
+        const float *src2_row_base = src2 ? (src2 + r * src2_stride) : NULL;
 
         #pragma unroll(4)
         for (size_t c = 0; c < limit_c_aligned; c += HTP_MM_HMX_TILE_N_COLS) {
@@ -738,9 +749,20 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
             HVX_Vector *pv_out0 = (HVX_Vector *) (output_row_base + c + 0);
             HVX_Vector *pv_out1 = (HVX_Vector *) (output_row_base + c + dst_stride);
 
-            *pv_out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
+            HVX_Vector v_out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
+            if (src2_row_base) {
+                HVX_Vector v_src2_0 = hvx_vmemu(src2_row_base + c + 0);
+                v_out0 = hvx_vec_add_f32_f32(v_out0, v_src2_0);
+            }
+            *pv_out0 = v_out0;
+
             if (r + 1 < n_rows) {
-                *pv_out1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+                HVX_Vector v_out1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+                if (src2_row_base) {
+                    HVX_Vector v_src2_1 = hvx_vmemu(src2_row_base + c + src2_stride);
+                    v_out1 = hvx_vec_add_f32_f32(v_out1, v_src2_1);
+                }
+                *pv_out1 = v_out1;
             }
         }
 
@@ -752,9 +774,20 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
             HVX_Vector v = ((const HVX_Vector *) tile)[r1];
             HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);
 
-            hvx_vec_store_u(output_row_base + c, valid_c * sizeof(float), Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)));
+            HVX_Vector v_out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
+            if (src2_row_base) {
+                HVX_Vector v_src2_0 = hvx_vmemu(src2_row_base + c + 0);
+                v_out0 = hvx_vec_add_f32_f32(v_out0, v_src2_0);
+            }
+            hvx_vec_store_u(output_row_base + c, valid_c * sizeof(float), v_out0);
+
             if (r + 1 < n_rows) {
-                hvx_vec_store_u(output_row_base + c + dst_stride, valid_c * sizeof(float), Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)));
+                HVX_Vector v_out1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+                if (src2_row_base) {
+                    HVX_Vector v_src2_1 = hvx_vmemu(src2_row_base + c + src2_stride);
+                    v_out1 = hvx_vec_add_f32_f32(v_out1, v_src2_1);
+                }
+                hvx_vec_store_u(output_row_base + c + dst_stride, valid_c * sizeof(float), v_out1);
             }
         }
     }
@@ -763,11 +796,13 @@ static void transfer_output_chunk_fp16_to_fp32(float *restrict dst, const __fp16
 typedef struct {
     const __fp16  *vtcm_src;
     float         *dst;
+    const float   *src2;
     uint32_t       n_tasks;
     uint32_t       n_tot_chunks;
     uint32_t       n_chunks_per_task;
     uint32_t       n_cols;
     uint32_t       dst_stride;  // DDR row stride
+    uint32_t       src2_stride; // DDR row stride for residual
     uint32_t       dst_cols;    // Actual output columns
     struct htp_thread_trace * traces;
 } output_transfer_task_state_t;
