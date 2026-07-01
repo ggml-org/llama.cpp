@@ -22,7 +22,7 @@
 #include "hvx-copy.h"
 #include "hvx-reduce.h"
 #include "hvx-flash-attn.h"
-#include "vtcm-utils.h"
+#include "htp-vtcm.h"
 #include "worker-pool.h"
 
 #define GGML_COMMON_DECL_C
@@ -1593,8 +1593,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     // scratch buffer at its computed offset. This is the single source of truth for
     // sizes/offsets/strides -- host and device can no longer disagree.
     _Static_assert(sizeof(HVX_Vector) == HMX_FA_HVX_VECTOR_BYTES, "HVX vector size mismatch");
-    struct hmx_fa_layout L;
-    hmx_fa_layout_build(&L, G, DK, DV, Br, Bc, n_threads, pipeline);
+    struct hmx_fa_vtcm_layout L;
+    hmx_fa_vtcm_layout_build(&L, G, DK, DV, Br, Bc, n_threads, pipeline);
 
     if (L.total_bytes > ctx->vtcm_size) {
         return HTP_STATUS_VTCM_TOO_SMALL;
@@ -1602,30 +1602,30 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
     uint8_t * const base = ctx->vtcm_base;
 
-    factx.vtcm_q_tiles        = (__fp16 *)     (base + L.off_q_tiles);
-    factx.vtcm_o_tiles[0]     = (__fp16 *)     (base + L.off_o_tiles[0]);
-    factx.vtcm_o_tiles[1]     = (__fp16 *)     (base + L.off_o_tiles[1]);
-    factx.vtcm_k_fp16[0]      = (__fp16 *)     (base + L.off_k_fp16[0]);
-    factx.vtcm_k_fp16[1]      = (__fp16 *)     (base + L.off_k_fp16[1]);
-    factx.vtcm_v_fp16[0]      = (__fp16 *)     (base + L.off_v_fp16[0]);
-    factx.vtcm_v_fp16[1]      = (__fp16 *)     (base + L.off_v_fp16[1]);
-    factx.vtcm_k_tiles        = (__fp16 *)     (base + L.off_k_tiles);
-    factx.vtcm_v_tiles[0]     = (__fp16 *)     (base + L.off_v_tiles[0]);
-    factx.vtcm_v_tiles[1]     = pipeline ? (__fp16 *) (base + L.off_v_tiles[1]) : NULL;
-    factx.vtcm_s_tiles        = (__fp16 *)     (base + L.off_s_tiles);
-    factx.vtcm_p_tiles        = (__fp16 *)     (base + L.off_p_tiles);
-    factx.vtcm_d_tiles        = (__fp16 *)     (base + L.off_d_tiles);
-    factx.vtcm_m_vec          = (HVX_Vector *) (base + L.off_m_vec);
-    factx.vtcm_l_vec          = (HVX_Vector *) (base + L.off_l_vec);
-    factx.vtcm_s_rowmax       = (HVX_Vector *) (base + L.off_s_rowmax);
-    factx.vtcm_p_rowsum       = (HVX_Vector *) (base + L.off_p_rowsum);
-    factx.vtcm_row_bufs       = (HVX_Vector *) (base + L.off_row_bufs);
+    factx.vtcm_q_tiles        = VTCM_LAYOUT_PTR(__fp16, base, L.off_q_tiles);
+    factx.vtcm_o_tiles[0]     = VTCM_LAYOUT_PTR(__fp16, base, L.off_o_tiles[0]);
+    factx.vtcm_o_tiles[1]     = VTCM_LAYOUT_PTR(__fp16, base, L.off_o_tiles[1]);
+    factx.vtcm_k_fp16[0]      = VTCM_LAYOUT_PTR(__fp16, base, L.off_k_fp16[0]);
+    factx.vtcm_k_fp16[1]      = VTCM_LAYOUT_PTR(__fp16, base, L.off_k_fp16[1]);
+    factx.vtcm_v_fp16[0]      = VTCM_LAYOUT_PTR(__fp16, base, L.off_v_fp16[0]);
+    factx.vtcm_v_fp16[1]      = VTCM_LAYOUT_PTR(__fp16, base, L.off_v_fp16[1]);
+    factx.vtcm_k_tiles        = VTCM_LAYOUT_PTR(__fp16, base, L.off_k_tiles);
+    factx.vtcm_v_tiles[0]     = VTCM_LAYOUT_PTR(__fp16, base, L.off_v_tiles[0]);
+    factx.vtcm_v_tiles[1]     = VTCM_LAYOUT_PTR_OPTIONAL(__fp16, base, L.off_v_tiles[1], pipeline);
+    factx.vtcm_s_tiles        = VTCM_LAYOUT_PTR(__fp16, base, L.off_s_tiles);
+    factx.vtcm_p_tiles        = VTCM_LAYOUT_PTR(__fp16, base, L.off_p_tiles);
+    factx.vtcm_d_tiles        = VTCM_LAYOUT_PTR(__fp16, base, L.off_d_tiles);
+    factx.vtcm_m_vec          = VTCM_LAYOUT_PTR(HVX_Vector, base, L.off_m_vec);
+    factx.vtcm_l_vec          = VTCM_LAYOUT_PTR(HVX_Vector, base, L.off_l_vec);
+    factx.vtcm_s_rowmax       = VTCM_LAYOUT_PTR(HVX_Vector, base, L.off_s_rowmax);
+    factx.vtcm_p_rowsum       = VTCM_LAYOUT_PTR(HVX_Vector, base, L.off_p_rowsum);
+    factx.vtcm_row_bufs       = VTCM_LAYOUT_PTR(HVX_Vector, base, L.off_row_bufs);
     factx.row_buf_stride      = L.row_buf_stride;
-    factx.vtcm_hmx_scales_id  =                 base + L.off_hmx_scales_id;
-    factx.vtcm_hmx_scales_qk  =                 base + L.off_hmx_scales_qk;
-    factx.vtcm_mask_buf       = (__fp16 *)     (base + L.off_mask_buf);
+    factx.vtcm_hmx_scales_id  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_hmx_scales_id);
+    factx.vtcm_hmx_scales_qk  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_hmx_scales_qk);
+    factx.vtcm_mask_buf       = VTCM_LAYOUT_PTR(__fp16, base, L.off_mask_buf);
     factx.mask_buf_row_stride = L.mask_buf_row_stride;
-    factx.vtcm_slopes         = (__fp16 *)     (base + L.off_slopes);
+    factx.vtcm_slopes         = VTCM_LAYOUT_PTR(__fp16, base, L.off_slopes);
 
     const size_t m_line_bytes = L.m_line_bytes;  // used by the mask DMAs in the KV loop
 

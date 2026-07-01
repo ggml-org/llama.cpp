@@ -7,6 +7,7 @@
 
 #include "hex-fastdiv.h"
 #include "hex-common.h"
+#include "htp-vtcm.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -93,7 +94,7 @@ static_assert(sizeof(struct htp_fa_kernel_params) <= 128, "htp_fa_kernel_params 
 // header stays host-includable. The device casts (base + off_*) to the proper type.
 // An offset of 0 marks a region that is not allocated for this configuration (only
 // off_v_tiles[1], which exists only when pipelining); the device sets such pointers NULL.
-struct hmx_fa_layout {
+struct hmx_fa_vtcm_layout {
     // Byte offsets from vtcm_base for each region.
     size_t off_q_tiles;
     size_t off_o_tiles[2];
@@ -133,7 +134,7 @@ struct hmx_fa_layout {
 
 // Build the VTCM layout. Mirrors the device's vtcm_seq_alloc sequence exactly:
 // a running offset bumped by each region size, with no inter-region alignment.
-static inline void hmx_fa_layout_build(struct hmx_fa_layout * L,
+static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
                                        size_t gqa_factor, size_t DK, size_t DV,
                                        size_t Br, size_t Bc, size_t n_threads, bool pipeline) {
     const size_t g_br         = hex_align_up(gqa_factor * Br, HMX_FP16_TILE_N_ROWS);
@@ -153,32 +154,28 @@ static inline void hmx_fa_layout_build(struct hmx_fa_layout * L,
     const size_t slopes_size  = hex_align_up(g_br * sizeof(__fp16), 128);
 
     size_t off = 0;
-    #define FA_ALLOC(field, sz) do { (L)->field = off; off += (sz); } while (0)
-    #define FA_ALLOC_OPTIONAL(field, sz, cond) do { if (cond) { FA_ALLOC(field, sz); } else { (L)->field = 0; } } while (0)
-    FA_ALLOC(off_q_tiles,       q_tile_size);
-    FA_ALLOC(off_o_tiles[0],    o_tile_size);
-    FA_ALLOC(off_o_tiles[1],    o_tile_size);
-    FA_ALLOC(off_k_fp16[0],     k_dma_size);
-    FA_ALLOC(off_k_fp16[1],     k_dma_size);
-    FA_ALLOC(off_v_fp16[0],     v_dma_size);
-    FA_ALLOC(off_v_fp16[1],     v_dma_size);
-    FA_ALLOC(off_k_tiles,       k_tile_size);
-    FA_ALLOC(off_v_tiles[0],    v_tile_size);
-    FA_ALLOC_OPTIONAL(off_v_tiles[1], v_tile_size, pipeline);
-    FA_ALLOC(off_s_tiles,       s_tile_size);
-    FA_ALLOC(off_p_tiles,       s_tile_size);
-    FA_ALLOC(off_d_tiles,       d_tile_size);
-    FA_ALLOC(off_m_vec,         col_vec_size);
-    FA_ALLOC(off_l_vec,         col_vec_size);
-    FA_ALLOC(off_s_rowmax,      col_vec_size);
-    FA_ALLOC(off_p_rowsum,      col_vec_size);
-    FA_ALLOC(off_row_bufs,      row_vec_size * 2 * n_threads);
-    FA_ALLOC(off_hmx_scales_id, 256);
-    FA_ALLOC(off_hmx_scales_qk, 256);
-    FA_ALLOC(off_mask_buf,      m_buf_size);
-    FA_ALLOC(off_slopes,        slopes_size);
-    #undef FA_ALLOC_OPTIONAL
-    #undef FA_ALLOC
+    VTCM_LAYOUT_ALLOC(off_q_tiles,       q_tile_size);
+    VTCM_LAYOUT_ALLOC(off_o_tiles[0],    o_tile_size);
+    VTCM_LAYOUT_ALLOC(off_o_tiles[1],    o_tile_size);
+    VTCM_LAYOUT_ALLOC(off_k_fp16[0],     k_dma_size);
+    VTCM_LAYOUT_ALLOC(off_k_fp16[1],     k_dma_size);
+    VTCM_LAYOUT_ALLOC(off_v_fp16[0],     v_dma_size);
+    VTCM_LAYOUT_ALLOC(off_v_fp16[1],     v_dma_size);
+    VTCM_LAYOUT_ALLOC(off_k_tiles,       k_tile_size);
+    VTCM_LAYOUT_ALLOC(off_v_tiles[0],    v_tile_size);
+    VTCM_LAYOUT_ALLOC_OPTIONAL(off_v_tiles[1], v_tile_size, pipeline);
+    VTCM_LAYOUT_ALLOC(off_s_tiles,       s_tile_size);
+    VTCM_LAYOUT_ALLOC(off_p_tiles,       s_tile_size);
+    VTCM_LAYOUT_ALLOC(off_d_tiles,       d_tile_size);
+    VTCM_LAYOUT_ALLOC(off_m_vec,         col_vec_size);
+    VTCM_LAYOUT_ALLOC(off_l_vec,         col_vec_size);
+    VTCM_LAYOUT_ALLOC(off_s_rowmax,      col_vec_size);
+    VTCM_LAYOUT_ALLOC(off_p_rowsum,      col_vec_size);
+    VTCM_LAYOUT_ALLOC(off_row_bufs,      row_vec_size * 2 * n_threads);
+    VTCM_LAYOUT_ALLOC(off_hmx_scales_id, 256);
+    VTCM_LAYOUT_ALLOC(off_hmx_scales_qk, 256);
+    VTCM_LAYOUT_ALLOC(off_mask_buf,      m_buf_size);
+    VTCM_LAYOUT_ALLOC(off_slopes,        slopes_size);
 
     L->s_tile_bytes        = s_tile_size;
     L->d_tile_bytes        = d_tile_size;
@@ -192,8 +189,8 @@ static inline void hmx_fa_layout_build(struct hmx_fa_layout * L,
 
 // Exact VTCM usage for a given (gqa_factor, DK, DV, Br, Bc) configuration.
 static inline size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_threads, bool pipeline) {
-    struct hmx_fa_layout L;
-    hmx_fa_layout_build(&L, gqa_factor, DK, DV, Br, Bc, n_threads, pipeline);
+    struct hmx_fa_vtcm_layout L;
+    hmx_fa_vtcm_layout_build(&L, gqa_factor, DK, DV, Br, Bc, n_threads, pipeline);
     return L.total_bytes;
 }
 

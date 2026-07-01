@@ -20,7 +20,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "matmul-ops.h"
-#include "vtcm-utils.h"
+#include "htp-vtcm.h"
 
 static void hvx_tensor_add_f32_grid(
     const struct htp_tensor * restrict dst,
@@ -1514,37 +1514,26 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
             break;
     }
 
-    size_t src0_sz = 0, src1_sz = 0, dst_sz = 0;
-    if (kparams->vtcm_src0_size > 0 || kparams->vtcm_src1_size > 0 || kparams->vtcm_dst_size > 0) {
-        src0_sz = kparams->vtcm_src0_size;
-        src1_sz = kparams->vtcm_src1_size;
-        dst_sz  = kparams->vtcm_dst_size;
-    } else {
-        const uint32_t n_prefetch = kparams->n_prefetch;
-        assert(n_prefetch >= 2 && n_prefetch <= HTP_MM_MAX_PREFETCH && (n_prefetch & (n_prefetch - 1)) == 0);
-        htp_mm_hvx_get_vtcm_sizes(
-            kparams->kernel_type, src0->type, ne10, src1_nrows, octx->n_threads,
-            dst_row_size, src0_row_size, src1_row_size, n_prefetch,
-            &src0_sz, &src1_sz, &dst_sz
-        );
-    }
+    struct htp_mm_hvx_vtcm_layout L;
+    htp_mm_hvx_vtcm_layout_build(&L, kparams->kernel_type, src0->type, ne10, src1_nrows, octx->n_threads,
+                                 dst_row_size, src0_row_size, src1_row_size, kparams->n_prefetch, false, false, false);
 
     if (kparams->kernel_type == HTP_MM_KERNEL_HVX_F16_F16_VTCM ||
         kparams->kernel_type == HTP_MM_KERNEL_HVX_F32_F32_VTCM ||
         kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW ||
         kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
-        mmctx->vtcm_src1_size_per_thread = src1_sz;
+        mmctx->vtcm_src1_size_per_thread = L.src1_bytes;
     } else {
-        mmctx->vtcm_src1_size_per_thread = src1_sz / octx->n_threads;
+        mmctx->vtcm_src1_size_per_thread = L.src1_bytes / octx->n_threads;
     }
 
-    mmctx->vtcm_src0_size_per_thread = src0_sz / octx->n_threads;
-    mmctx->vtcm_dst_size_per_thread  = dst_sz  / octx->n_threads;
+    mmctx->vtcm_src0_size_per_thread = L.src0_bytes / octx->n_threads;
+    mmctx->vtcm_dst_size_per_thread  = L.dst_bytes / octx->n_threads;
 
-    size_t vtcm_size = kparams->vtcm_size > 0 ? (size_t)kparams->vtcm_size : (src1_sz + src0_sz + dst_sz);
+    size_t vtcm_size = kparams->vtcm_size > 0 ? (size_t)kparams->vtcm_size : L.total_bytes;
 
     FARF(HIGH, "matmul-%s : src0-vtcm-size %zu src1-vtcm-size %zu dst-vtcm-size %zu (%zu)\n", mmctx->type,
-         src0_sz, src1_sz, dst_sz, vtcm_size);
+         L.src0_bytes, L.src1_bytes, L.dst_bytes, vtcm_size);
 
     FARF(HIGH, "matmul-%s : %ux%ux%ux%u * %ux%ux%ux%u-> %ux%ux%ux%u (0x%p, 0x%p, 0x%p)\n", mmctx->type, src0->ne[0],
          src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0],
@@ -1556,10 +1545,10 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    uint8_t * vtcm_ptr = (uint8_t *) octx->ctx->vtcm_base;
-    mmctx->vtcm_src1 = vtcm_seq_alloc(&vtcm_ptr, src1_sz);
-    mmctx->vtcm_src0 = vtcm_seq_alloc(&vtcm_ptr, src0_sz);
-    mmctx->vtcm_dst  = vtcm_seq_alloc(&vtcm_ptr, dst_sz);
+    uint8_t * const base = (uint8_t *) octx->ctx->vtcm_base;
+    mmctx->vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src1);
+    mmctx->vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src0);
+    mmctx->vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
 
     octx->src1_spad.src  = NULL;
     octx->src0_spad.src  = NULL;
@@ -2198,44 +2187,29 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
 
     const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
 
-    const size_t act_f32_size     = hex_align_up((size_t)act_threads * HTP_MM_DMA_ACT_MULTIPLIER * k * sizeof(float), HTP_MM_HMX_TILE_SIZE);
+    struct htp_mm_hmx_vtcm_layout L;
+    htp_mm_hmx_vtcm_layout_build(&L, HTP_MM_KERNEL_HMX_2D, weight_type, k, m_chunk_n_rows, n_chunk_n_cols, 1, false, pipeline, act_threads, aligned_tile_size);
 
-    const size_t weight_area_size = is_quant
-        ? hex_align_up((n_chunk_n_cols / 32) * n_k_tiles * aligned_tile_size, HTP_MM_HMX_TILE_SIZE)
-        : hex_align_up(n_chunk_n_cols * row_stride, HTP_MM_HMX_TILE_SIZE);
-    const size_t act_area_size    = hex_align_up(m_chunk_n_rows * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
-    const size_t output_area_size = hex_align_up(m_chunk_n_rows * n_chunk_n_cols * sizeof(__fp16), HTP_MM_HMX_TILE_SIZE);
-
-    size_t scratch0_size, scratch1_size, scratch2_size;
-    scratch0_size = hex_align_up(n_chunk_n_cols * vec_dot_size, HTP_MM_HMX_TILE_SIZE);  // dequant buf 0
-    scratch1_size = pipeline ? scratch0_size : 0;                                 // dequant buf 1
-    scratch2_size = pipeline ? output_area_size : 0;                              // output  buf 1
-
-    uint8_t *vtcm_ptr        = (uint8_t *) ctx->vtcm_base;
-    __fp16  *vtcm_weight_raw[2] = { NULL, NULL };
-    if (weight_area_size) {
-        if (pipeline) {
-            vtcm_weight_raw[0] = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size);
-            vtcm_weight_raw[1] = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size);
-        } else {
-            vtcm_weight_raw[0] = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size);
-        }
-    }
-
-    __fp16  *vtcm_f16_act    = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, act_area_size);
-    float   *vtcm_f32_act    = (float *)  vtcm_seq_alloc(&vtcm_ptr, act_f32_size);
-    __fp16  *vtcm_output     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, output_area_size);
-    void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch0_size);
-    void    *vtcm_scratch1   = scratch1_size ? vtcm_seq_alloc(&vtcm_ptr, scratch1_size) : NULL;
-    void    *vtcm_scratch2   = scratch2_size ? vtcm_seq_alloc(&vtcm_ptr, scratch2_size) : NULL;
-    __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
-
-    vtcm_used = vtcm_ptr - (uint8_t *) ctx->vtcm_base;
+    vtcm_used = L.total_bytes;
     if (vtcm_used > vtcm_budget) {
         FARF(ERROR, "hmx-mm-2d-precomputed: VTCM overflow: used %zu budget %zu, m %d k %d n %d mc %zu nc %zu",
              vtcm_used, vtcm_budget, m, k, n, m_chunk_n_rows, n_chunk_n_cols);
         return -1;
     }
+
+    uint8_t * const base = (uint8_t *) ctx->vtcm_base;
+    __fp16  *vtcm_weight_raw[2] = {
+        VTCM_LAYOUT_PTR(__fp16, base, L.off_weight[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(__fp16, base, L.off_weight[1], pipeline)
+    };
+
+    __fp16  *vtcm_f16_act    = VTCM_LAYOUT_PTR(__fp16, base, L.off_act);
+    float   *vtcm_f32_act    = VTCM_LAYOUT_PTR(float, base, L.off_act_f32);
+    __fp16  *vtcm_output     = VTCM_LAYOUT_PTR(__fp16, base, L.off_dst[0]);
+    void    *vtcm_scratch0   = VTCM_LAYOUT_PTR(void, base, L.off_scratch[0]);
+    void    *vtcm_scratch1   = VTCM_LAYOUT_PTR_OPTIONAL(void, base, L.off_scratch[1], pipeline);
+    void    *vtcm_scratch2   = VTCM_LAYOUT_PTR_OPTIONAL(void, base, L.off_dst[1], pipeline);
+    __fp16  *vtcm_scales     = VTCM_LAYOUT_PTR(__fp16, base, L.off_scales);
 
     hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16
 
@@ -2458,32 +2432,29 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
     size_t n_chunk_n_cols = n_chunk;
     size_t vtcm_used = vtcm_size;
 
-    const size_t act_head_stride      = m_chunk_n_rows * (size_t) params->k;  // fp16 elements between heads
-    const size_t weight_area_size     = hex_align_up(n_chunk_n_cols * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
-    const size_t activation_area_size = hex_align_up(group_size * m_chunk_n_rows * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
-    const size_t output_area_size     = hex_align_up(m_chunk_n_rows * n_chunk_n_cols * sizeof(__fp16), HTP_MM_HMX_TILE_SIZE);
-    const size_t scratch_area_size    = hex_align_up(n_chunk_n_cols * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
+    struct htp_mm_hmx_vtcm_layout L;
+    htp_mm_hmx_vtcm_layout_build(&L, HTP_MM_KERNEL_HMX_F16_BATCHED, HTP_TYPE_F16, params->k, m_chunk_n_rows, n_chunk_n_cols, group_size, use_dma_activation, false, act_threads, 0);
 
-    uint8_t *vtcm_ptr        = (uint8_t *) ctx->vtcm_base;
-    __fp16  *vtcm_weight     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, weight_area_size);
-    __fp16  *vtcm_f16_act    = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, activation_area_size);
-    __fp16  *vtcm_output     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, output_area_size);
-    void    *vtcm_scratch0   = vtcm_seq_alloc(&vtcm_ptr, scratch_area_size);
-    void    *vtcm_scratch1   = vtcm_seq_alloc(&vtcm_ptr, scratch_area_size);
-    __fp16  *vtcm_scales     = (__fp16 *) vtcm_seq_alloc(&vtcm_ptr, 256);
-    float   *vtcm_f32_act    = use_dma_activation ? (float *) vtcm_seq_alloc(&vtcm_ptr, f32_scratch_size) : NULL;
-
-    if ((size_t) (vtcm_ptr - (uint8_t *) ctx->vtcm_base) > vtcm_budget) {
+    if (L.total_bytes > vtcm_budget) {
         FARF(HIGH, "%s: grouped layout overflowed VTCM, falling back to simple batched loop", __func__);
         return hmx_mm_f16_f32_batched_simple(ctx, params, m_chunk, n_chunk, pipeline, n_threads, act_threads, vtcm_size);
     }
+
+    uint8_t * const base = (uint8_t *) ctx->vtcm_base;
+    __fp16  *vtcm_weight     = VTCM_LAYOUT_PTR(__fp16, base, L.off_weight[0]);
+    __fp16  *vtcm_f16_act    = VTCM_LAYOUT_PTR(__fp16, base, L.off_act);
+    __fp16  *vtcm_output     = VTCM_LAYOUT_PTR(__fp16, base, L.off_dst[0]);
+    void    *vtcm_scratch0   = VTCM_LAYOUT_PTR(void, base, L.off_scratch[0]);
+    void    *vtcm_scratch1   = VTCM_LAYOUT_PTR(void, base, L.off_scratch[1]);
+    __fp16  *vtcm_scales     = VTCM_LAYOUT_PTR(__fp16, base, L.off_scales);
+    float   *vtcm_f32_act    = VTCM_LAYOUT_PTR_OPTIONAL(float, base, L.off_act_f32, use_dma_activation);
 
     hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));  // scale: 1.0, bias: 0.0 in FP16
 
     FARF(HIGH, "%s: grouped path m=%d k=%d n=%d group=%d streams=%d mc=%zu nc=%zu vtcm=%zu/%zu",
             __func__, params->m, params->k, params->n, group_size, params->ne13,
             m_chunk_n_rows, n_chunk_n_cols,
-            (size_t) (vtcm_ptr - (uint8_t *) ctx->vtcm_base), vtcm_budget);
+            L.total_bytes, vtcm_budget);
 
     const size_t fp16_row_bytes   = (size_t) params->k * sizeof(__fp16);
     const size_t weight_row_bytes = (size_t) params->weight_stride * sizeof(__fp16);
@@ -2505,7 +2476,7 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
                 // thrashing from HVX loads at large strides.
                 for (int g = 0; g < group_size; ++g) {
                     const float *activation_chunk = hmx_mm_activation_batch_ptr(params, b2_base + g, b3) + mr * params->act_stride;
-                    __fp16 *vtcm_act_g = vtcm_f16_act + (size_t) g * act_head_stride;
+                    __fp16 *vtcm_act_g = vtcm_f16_act + (size_t) g * L.act_head_stride;
                     transfer_activation_chunk_threaded(ctx, vtcm_act_g,
                                                            activation_chunk, (int) n_rows,
                                                            params->k, params->act_stride, act_threads, params->k, vtcm_f32_act);
@@ -2545,7 +2516,7 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
                         struct htp_thread_trace * tr = &ctx->trace[HTP_MAX_NTHREADS];
                         htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, g);
                         {
-                            const __fp16 * vtcm_act_g = vtcm_f16_act + (size_t) g * act_head_stride;
+                            const __fp16 * vtcm_act_g = vtcm_f16_act + (size_t) g * L.act_head_stride;
                             core_dot_chunk_fp16(vtcm_output, vtcm_act_g, vtcm_weight, vtcm_scales, n_row_tiles, n_col_tiles,
                                                 params->k / 32);
                         }
@@ -2960,22 +2931,14 @@ static int hvx_mm_matmul_id(
     }
     size_t src1_row_size  = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
 
-    // Scratchpad sizes are computed on the host (htp_mm_hvx_id_get_vtcm_sizes) and passed in.
-    // The ID layout is routing-independent, so the host has exact visibility -- consume it here
-    // rather than recomputing, to keep host budgeting and device allocation in lockstep.
-    size_t src0_sz = kparams->vtcm_src0_size;
-    size_t src1_sz = kparams->vtcm_src1_size;
-    size_t src2_sz = 0; // mapping lives in DDR
-    size_t dst_sz  = kparams->vtcm_dst_size;
-    size_t vtcm_size = kparams->vtcm_size;
+    struct htp_mm_hvx_vtcm_layout L;
+    htp_mm_hvx_vtcm_layout_build(&L, kparams->kernel_type, src0->type, ne10, src1_nrows, octx->n_threads,
+                                 0, src0_row_size, src1_row_size, kparams->n_prefetch, true, false, false);
 
-    size_t src0_sz_per_thread = src0_sz / octx->n_threads;
-    size_t src1_sz_per_thread = src1_sz;
-    size_t src2_sz_per_thread = 0;
-    size_t dst_sz_per_thread  = dst_sz / octx->n_threads;
+    size_t vtcm_size = kparams->vtcm_size > 0 ? (size_t)kparams->vtcm_size : L.total_bytes;
 
-    FARF(HIGH, "matmul-id-%s : src0-spad-size %zu src1-spad-size %zu src2-spad-size %zu dst-spad-size %zu (%zu)\n", mmctx->type,
-         src0_sz, src1_sz, src2_sz, dst_sz, vtcm_size);
+    FARF(HIGH, "matmul-id-%s : src0-spad-size %zu src1-spad-size %zu src2-spad-size 0 dst-spad-size %zu (%zu)\n", mmctx->type,
+         L.src0_bytes, L.src1_bytes, L.dst_bytes, vtcm_size);
 
     FARF(HIGH, "matmul-id-%s : %ux%ux%ux%u * %ux%ux%ux%u (%ux%ux%ux%u) -> %ux%ux%ux%u (0x%p, 0x%p, 0x%p)\n", mmctx->type,
          src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
@@ -2989,11 +2952,11 @@ static int hvx_mm_matmul_id(
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    uint8_t * vtcm_ptr = (uint8_t *) octx->ctx->vtcm_base;
-    mmctx->vtcm_src1 = vtcm_seq_alloc(&vtcm_ptr, src1_sz);
-    mmctx->vtcm_src0 = vtcm_seq_alloc(&vtcm_ptr, src0_sz);
-    mmctx->vtcm_src2 = vtcm_seq_alloc(&vtcm_ptr, src2_sz);
-    mmctx->vtcm_dst  = vtcm_seq_alloc(&vtcm_ptr, dst_sz);
+    uint8_t * const base = (uint8_t *) octx->ctx->vtcm_base;
+    mmctx->vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src1);
+    mmctx->vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src0);
+    mmctx->vtcm_src2 = NULL;
+    mmctx->vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
 
     octx->src1_spad.src  = NULL;
     octx->src0_spad.src  = NULL;
@@ -3003,10 +2966,10 @@ static int hvx_mm_matmul_id(
     mmctx->vtcm_src0_stride = src0_row_size_padded;
     mmctx->vtcm_src1_stride = src1_row_size;
 
-    mmctx->vtcm_src0_size_per_thread = src0_sz_per_thread;
-    mmctx->vtcm_src1_size_per_thread = src1_sz_per_thread;
-    mmctx->vtcm_src2_size_per_thread = src2_sz_per_thread;
-    mmctx->vtcm_dst_size_per_thread  = dst_sz_per_thread;
+    mmctx->vtcm_src0_size_per_thread = L.src0_bytes / octx->n_threads;
+    mmctx->vtcm_src1_size_per_thread = L.src1_bytes;
+    mmctx->vtcm_src2_size_per_thread = 0;
+    mmctx->vtcm_dst_size_per_thread  = L.dst_bytes / octx->n_threads;
 
     mmctx->n_quant_rows_per_thread = (src1_nrows + n_quant_tasks - 1) / n_quant_tasks;
     mmctx->quant_task_func = quant_task_func;
@@ -3181,19 +3144,11 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
         src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(src1->ne[0]) : htp_mm_q8_0_tiled_row_size(src1->ne[0]);
     }
 
-    // Set up scratchpads using precomputed sizes from the host
-    size_t src0_sz = kparams->vtcm_src0_size;
-    size_t src1_sz = kparams->vtcm_src1_size;
-    size_t src2_sz = kparams->vtcm_src2_size;
-    size_t src3_sz = kparams->vtcm_src3_size;
-    size_t dst_sz  = kparams->vtcm_dst_size;
-    size_t vtcm_size = kparams->vtcm_size;
+    struct htp_mm_hvx_vtcm_layout L;
+    htp_mm_hvx_vtcm_layout_build(&L, kparams->kernel_type, src0->type, src1->ne[0], src1_nrows, octx->n_threads,
+                                 0, src0_row_size, src1_row_size, kparams->n_prefetch, false, true, false);
 
-    size_t src0_sz_per_thread = src0_sz / octx->n_threads;
-    size_t src1_sz_per_thread = src1_sz;
-    size_t src2_sz_per_thread = src2_sz / octx->n_threads;
-    size_t src3_sz_per_thread = src3_sz / octx->n_threads;
-    size_t dst_sz_per_thread  = dst_sz / octx->n_threads;
+    size_t vtcm_size = kparams->vtcm_size > 0 ? (size_t)kparams->vtcm_size : L.total_bytes;
 
     if (octx->ctx->vtcm_size < vtcm_size) {
         FARF(ERROR, "matmul-qkv: current VTCM reservation %zu is too small, needed %zu\n",
@@ -3201,12 +3156,12 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    uint8_t * vtcm_ptr = (uint8_t *) octx->ctx->vtcm_base;
-    mmctx->vtcm_src1 = vtcm_seq_alloc(&vtcm_ptr, src1_sz);
-    mmctx->vtcm_src0 = vtcm_seq_alloc(&vtcm_ptr, src0_sz);
-    mmctx->vtcm_src2 = vtcm_seq_alloc(&vtcm_ptr, src2_sz);
-    mmctx->vtcm_src3 = vtcm_seq_alloc(&vtcm_ptr, src3_sz);
-    mmctx->vtcm_dst  = vtcm_seq_alloc(&vtcm_ptr, dst_sz);
+    uint8_t * const base = (uint8_t *) octx->ctx->vtcm_base;
+    mmctx->vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src1);
+    mmctx->vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src0);
+    mmctx->vtcm_src2 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src2);
+    mmctx->vtcm_src3 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src3);
+    mmctx->vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
 
     octx->src1_spad.src  = NULL;
     octx->src0_spad.src  = NULL;
@@ -3219,11 +3174,11 @@ int op_matmul_qkv(struct htp_ops_context * octx) {
     mmctx->vtcm_src3_stride = is_repacked ? 0 : src0_row_size_padded;
     mmctx->vtcm_src1_stride = src1_row_size;
 
-    mmctx->vtcm_src0_size_per_thread = src0_sz_per_thread;
-    mmctx->vtcm_src1_size_per_thread = src1_sz_per_thread;
-    mmctx->vtcm_src2_size_per_thread = src2_sz_per_thread;
-    mmctx->vtcm_src3_size_per_thread = src3_sz_per_thread;
-    mmctx->vtcm_dst_size_per_thread  = dst_sz_per_thread;
+    mmctx->vtcm_src0_size_per_thread = L.src0_bytes / octx->n_threads;
+    mmctx->vtcm_src1_size_per_thread = L.src1_bytes;
+    mmctx->vtcm_src2_size_per_thread = L.src2_bytes / octx->n_threads;
+    mmctx->vtcm_src3_size_per_thread = L.src3_bytes / octx->n_threads;
+    mmctx->vtcm_dst_size_per_thread  = L.dst_bytes / octx->n_threads;
 
     if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)
         return HTP_STATUS_OK;
@@ -3331,28 +3286,22 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
         src1_row_size = (src0->type == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(src1->ne[0]) : htp_mm_q8_0_tiled_row_size(src1->ne[0]);
     }
 
-    // Set up scratchpads using precomputed sizes from the host
-    size_t src0_sz = kparams->vtcm_src0_size;
-    size_t src1_sz = kparams->vtcm_src1_size;
-    size_t src2_sz = kparams->vtcm_src2_size;
-    size_t dst_sz  = kparams->vtcm_dst_size;
-    size_t vtcm_size = kparams->vtcm_size;
+    struct htp_mm_hvx_vtcm_layout L;
+    htp_mm_hvx_vtcm_layout_build(&L, kparams->kernel_type, src0->type, src1->ne[0], src1_nrows, octx->n_threads,
+                                 0, src0_row_size, src1_row_size, kparams->n_prefetch, false, false, true);
 
-    size_t src0_sz_per_thread = src0_sz / octx->n_threads;
-    size_t src1_sz_per_thread = src1_sz;
-    size_t src2_sz_per_thread = src2_sz / octx->n_threads;
-    size_t dst_sz_per_thread  = dst_sz / octx->n_threads;
+    size_t vtcm_size = kparams->vtcm_size > 0 ? (size_t)kparams->vtcm_size : L.total_bytes;
 
     if (octx->ctx->vtcm_size < vtcm_size) {
         FARF(ERROR, "matmul-ffn: current VTCM reservation %zu is too small, needed %zu\n", octx->ctx->vtcm_size, vtcm_size);
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    uint8_t * vtcm_ptr = (uint8_t *) octx->ctx->vtcm_base;
-    mmctx->vtcm_src1 = vtcm_seq_alloc(&vtcm_ptr, src1_sz);
-    mmctx->vtcm_src0 = vtcm_seq_alloc(&vtcm_ptr, src0_sz);
-    mmctx->vtcm_src2 = vtcm_seq_alloc(&vtcm_ptr, src2_sz);
-    mmctx->vtcm_dst  = vtcm_seq_alloc(&vtcm_ptr, dst_sz);
+    uint8_t * const base = (uint8_t *) octx->ctx->vtcm_base;
+    mmctx->vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src1);
+    mmctx->vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src0);
+    mmctx->vtcm_src2 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src2);
+    mmctx->vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
 
     octx->src1_spad.src  = NULL;
     octx->src0_spad.src  = NULL;
@@ -3363,10 +3312,10 @@ int op_matmul_ffn(struct htp_ops_context * octx) {
     mmctx->vtcm_src2_stride = is_repacked ? 0 : src0_row_size_padded;
     mmctx->vtcm_src1_stride = src1_row_size;
 
-    mmctx->vtcm_src0_size_per_thread = src0_sz_per_thread;
-    mmctx->vtcm_src1_size_per_thread = src1_sz_per_thread;
-    mmctx->vtcm_src2_size_per_thread = src2_sz_per_thread;
-    mmctx->vtcm_dst_size_per_thread  = dst_sz_per_thread;
+    mmctx->vtcm_src0_size_per_thread = L.src0_bytes / octx->n_threads;
+    mmctx->vtcm_src1_size_per_thread = L.src1_bytes;
+    mmctx->vtcm_src2_size_per_thread = L.src2_bytes / octx->n_threads;
+    mmctx->vtcm_dst_size_per_thread  = L.dst_bytes / octx->n_threads;
 
     if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)
         return HTP_STATUS_OK;
