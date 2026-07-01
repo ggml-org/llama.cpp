@@ -201,6 +201,7 @@ llama_model_granite_switch::graph::graph(
 
     const auto & smodel = static_cast<const llama_model_granite_switch &>(model);
 
+    // TODO: support raw embedding input (multimodal / pre-embedded tokens) when needed
     GGML_ASSERT(ubatch.token && "granite-switch requires token input");
 
     const int64_t n_embd_head = hparams.n_embd_head_v();
