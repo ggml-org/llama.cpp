@@ -1,0 +1,33 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Parameters {
+    uint ne0;
+    uint base_total;
+    uint x_offset;
+    uint c_offset;
+    uint w_offset;
+    uint d_offset;
+};
+
+layout(binding = 0) readonly buffer XPrevBuf { A_TYPE x_prev[]; };
+layout(binding = 1) readonly buffer CurBuf { A_TYPE cur[]; };
+layout(binding = 2) readonly buffer WeightBuf { A_TYPE weight[]; };
+layout(binding = 3) buffer DstBuf { D_TYPE dst[]; };
+
+void main() {
+    const uint ibase = gl_GlobalInvocationID.x;
+    if (ibase >= base_total) {
+        return;
+    }
+
+    const uint imix = gl_GlobalInvocationID.y;
+    const uint i0 = ibase % ne0;
+    const A_TYPE c = cur[c_offset + ibase];
+
+    dst[d_offset + imix * base_total + ibase] =
+        D_TYPE(c + (x_prev[x_offset + ibase] - c) * weight[w_offset + imix * ne0 + i0]);
+}

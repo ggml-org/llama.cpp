@@ -1,0 +1,103 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_basic : require
+
+layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
+layout(constant_id = 1) const uint ROWS_PER_WG = 4;
+
+const uint HEAD_SIZE = 64;
+const uint ROWS_PER_LANE = HEAD_SIZE / SUBGROUP_SIZE;
+
+layout(local_size_x_id = 0, local_size_y_id = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Parameters {
+    uint B;
+    uint T;
+    uint C;
+    uint H;
+};
+
+layout(binding = 0) readonly buffer RBuf { A_TYPE r[]; };
+layout(binding = 1) readonly buffer WBuf { A_TYPE w[]; };
+layout(binding = 2) readonly buffer KBuf { A_TYPE k[]; };
+layout(binding = 3) readonly buffer VBuf { A_TYPE v[]; };
+layout(binding = 4) readonly buffer KKBuf { A_TYPE kk[]; };
+layout(binding = 5) readonly buffer ABuf { A_TYPE a[]; };
+layout(binding = 6) readonly buffer RKBuf { A_TYPE r_k[]; };
+layout(binding = 7) readonly buffer StateBuf { A_TYPE state_in[]; };
+layout(binding = 8) buffer DstBuf { A_TYPE dst[]; };
+
+shared A_TYPE _r[HEAD_SIZE], _w[HEAD_SIZE], _k[HEAD_SIZE], _kk[HEAD_SIZE], _a[HEAD_SIZE], _r_k[HEAD_SIZE];
+
+void main() {
+    const uint batch_id = gl_WorkGroupID.x / H;
+    const uint head_id = gl_WorkGroupID.x % H;
+    const uint row = gl_WorkGroupID.y * ROWS_PER_WG + gl_LocalInvocationID.y;
+    const uint lane = gl_SubgroupInvocationID;
+
+    if (batch_id >= B || head_id >= H || row >= HEAD_SIZE) {
+        return;
+    }
+
+    const uint state_size = C * HEAD_SIZE;
+    const uint head_off = head_id * HEAD_SIZE;
+    const uint token_base = batch_id * C + head_off;
+
+    if (gl_LocalInvocationID.y == 0) {
+        [[unroll]] for (uint r_i = 0; r_i < ROWS_PER_LANE; r_i++) {
+            const uint i = r_i * SUBGROUP_SIZE + lane;
+            const uint t = token_base + i;
+            const A_TYPE w_scale = A_TYPE(-0.6065306597126334);
+            _r[i] = r[t];
+            _w[i] = exp(w_scale / (A_TYPE(1.0) + exp(-w[t])));
+            _k[i] = k[t];
+            _kk[i] = kk[t];
+            _a[i] = a[t];
+            _r_k[i] = r_k[head_off + i];
+        }
+    }
+    barrier();
+
+    A_TYPE s_shard[ROWS_PER_LANE];
+    [[unroll]] for (uint r_i = 0; r_i < ROWS_PER_LANE; r_i++) {
+        const uint i = r_i * SUBGROUP_SIZE + lane;
+        s_shard[r_i] = state_in[batch_id * state_size + head_id * HEAD_SIZE * HEAD_SIZE + row * HEAD_SIZE + i];
+    }
+
+    A_TYPE sa_partial = 0.0;
+    A_TYPE rk_partial = 0.0;
+    [[unroll]] for (uint r_i = 0; r_i < ROWS_PER_LANE; r_i++) {
+        const uint i = r_i * SUBGROUP_SIZE + lane;
+        sa_partial += s_shard[r_i] * _kk[i];
+        rk_partial += _r[i] * _k[i] * _r_k[i];
+    }
+
+    const A_TYPE sa = -subgroupAdd(sa_partial);
+    const A_TYPE rk = subgroupAdd(rk_partial);
+
+    const uint t_out = token_base + row;
+    const A_TYPE v_val = v[t_out];
+    A_TYPE y_partial = 0.0;
+
+    [[unroll]] for (uint r_i = 0; r_i < ROWS_PER_LANE; r_i++) {
+        const uint i = r_i * SUBGROUP_SIZE + lane;
+        A_TYPE s = s_shard[r_i];
+        s = s * _w[i] + _k[i] * v_val + sa * _kk[i] * _a[i];
+        s_shard[r_i] = s;
+        y_partial += _r[i] * s;
+    }
+
+    const A_TYPE y = subgroupAdd(y_partial);
+
+    if (lane == 0) {
+        dst[t_out] = y;
+        dst[T * C + t_out] = v_val * rk;
+    }
+
+    [[unroll]] for (uint r_i = 0; r_i < ROWS_PER_LANE; r_i++) {
+        const uint i = r_i * SUBGROUP_SIZE + lane;
+        dst[2 * T * C + batch_id * state_size + head_id * HEAD_SIZE * HEAD_SIZE + row * HEAD_SIZE + i] = s_shard[r_i];
+    }
+}
