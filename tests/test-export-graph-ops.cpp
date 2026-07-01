@@ -5,7 +5,6 @@
 #include "../src/llama-ext.h"
 #include "ggml.h"
 #include "gguf-model-data.h"
-#include "gguf.h"
 #include "ggml-backend.h"
 #include "download.h"
 
@@ -14,7 +13,6 @@
 #include <set>
 #include <fstream>
 #include <iostream>
-#include <random>
 
 // Noop because weights are not needed
 static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
@@ -55,6 +53,7 @@ struct test_object {
     std::vector<int32_t> op_params;
     std::vector<input_tensor> sources;
     std::string name;
+    std::string backend_name;
 
     void serialize(std::ostream& out) const {
         out << op << ' ' << type << ' ';
@@ -78,16 +77,21 @@ struct test_object {
             out << '-';
         }
 
+        if (!backend_name.empty()) {
+            out << ' ' << backend_name;
+        }
+
         out << '\n';
     }
 
     bool operator<(const test_object &b) const {
-        return std::tie(op, type, ne, op_params, sources) <
-               std::tie(b.op, b.type, b.ne, b.op_params, b.sources);
+        return std::tie(op, type, ne, op_params, sources, backend_name) <
+               std::tie(b.op, b.type, b.ne, b.op_params, b.sources, b.backend_name);
     }
 };
 
-static void extract_graph_ops(ggml_cgraph * cgraph, const char * label, std::set<test_object> & tests) {
+static void extract_graph_ops(ggml_cgraph * cgraph, const char * label, std::set<test_object> & tests,
+                               ggml_backend_sched_t sched = nullptr) {
     int n_nodes = ggml_graph_n_nodes(cgraph);
     int n_skipped = 0;
     int n_before = (int) tests.size();
@@ -117,6 +121,14 @@ static void extract_graph_ops(ggml_cgraph * cgraph, const char * label, std::set
         }
 
         test.name = node->name;
+
+        if (sched) {
+            ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, node);
+            if (backend) {
+                test.backend_name = ggml_backend_name(backend);
+            }
+        }
+
         tests.insert(test);
     }
 
@@ -135,11 +147,12 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // Load CPU-only
-    ggml_backend_dev_t cpu_device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    params.devices = { cpu_device, nullptr };
-    params.fit_params = false;
-    params.n_gpu_layers = 0;
+    if (!params.with_backends) {
+        ggml_backend_dev_t cpu_device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        params.devices = { cpu_device, nullptr };
+        params.fit_params = false;
+        params.n_gpu_layers = 0;
+    }
 
     params.warmup = false;
 
@@ -195,19 +208,21 @@ int main(int argc, char ** argv) {
 
     std::set<test_object> tests;
 
+    ggml_backend_sched_t sched = params.with_backends ? llama_context_get_sched(ctx) : nullptr;
+
     auto * gf_pp = llama_graph_reserve(ctx, n_tokens, n_seqs, n_tokens);
     if (!gf_pp) {
         LOG_ERR("failed to reserve prompt processing graph\n");
         return 1;
     }
-    extract_graph_ops(gf_pp, "pp", tests);
+    extract_graph_ops(gf_pp, "pp", tests, sched);
 
     auto * gf_tg = llama_graph_reserve(ctx, n_seqs, n_seqs, n_seqs);
     if (!gf_tg) {
         LOG_ERR("failed to reserve token generation graph\n");
         return 1;
     }
-    extract_graph_ops(gf_tg, "tg", tests);
+    extract_graph_ops(gf_tg, "tg", tests, sched);
 
     LOG_INF("%d unique ops total\n", (int) tests.size());
 

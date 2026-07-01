@@ -92,6 +92,17 @@ void ggml_metal_encoder_memory_barrier(ggml_metal_encoder_t encoder);
 void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder);
 
 //
+// MTLCounterSampleBuffer wrapper (used by the profiler)
+//
+
+typedef struct ggml_metal_sample_buf * ggml_metal_sample_buf_t;
+
+// Insert a GPU timestamp sample on the encoder at the given slot.
+// Caller must ensure (a) the encoder belongs to a command buffer using a counter sample buffer that
+// supports MTLCounterSamplingPointAtDispatchBoundary, and (b) `index` is unique within the buffer.
+void ggml_metal_encoder_sample_timestamp(ggml_metal_encoder_t encoder, ggml_metal_sample_buf_t buf, size_t index);
+
+//
 // MTLLibrary wrapper
 //
 
@@ -292,6 +303,35 @@ void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t
 bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_tensor * op);
 
 const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_device_t dev);
+
+//
+// Profiling helpers
+//
+
+// Returns true if the device supports MTLCounterSamplingPointAtDispatchBoundary on compute encoders
+// AND exposes the MTLCommonCounterSetTimestamp counter set.
+bool ggml_metal_device_supports_profiling(ggml_metal_device_t dev);
+
+// Allocate a counter sample buffer with `sample_count` slots backed by the timestamp counter set.
+// Returns NULL on failure (e.g. unsupported device).
+ggml_metal_sample_buf_t ggml_metal_device_create_sample_buf(ggml_metal_device_t dev, size_t sample_count);
+
+void ggml_metal_sample_buf_free(ggml_metal_sample_buf_t buf);
+
+// Capture correlated CPU/GPU timestamps (both in Mach-absolute units, i.e. nanoseconds on
+// current Apple Silicon; the conversion via mach_timebase_info is applied internally).
+// Used to anchor the GPU timestamp domain to the CPU clock returned by ggml_profiler_time_ns().
+void ggml_metal_device_sample_timestamps(ggml_metal_device_t dev, uint64_t * cpu_ns, uint64_t * gpu_ns);
+
+// Resolve `count` consecutive samples starting at `base` into nanosecond timestamps anchored against
+// `cpu_anchor_ns` / `gpu_anchor_ns` (obtained from ggml_metal_device_sample_timestamps).
+// `out_ns` must hold at least `count` uint64_t entries.
+void ggml_metal_sample_buf_resolve(ggml_metal_sample_buf_t buf,
+                                   size_t   base,
+                                   size_t   count,
+                                   uint64_t cpu_anchor_ns,
+                                   uint64_t gpu_anchor_ns,
+                                   uint64_t * out_ns);
 
 //
 // device buffers

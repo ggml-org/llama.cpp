@@ -5,6 +5,7 @@
 #include "llama-cpp.h"
 
 #include "ggml-opt.h"
+#include "ggml-profiler.h"
 #include "ggml.h"
 
 #include <set>
@@ -475,6 +476,7 @@ struct common_params {
     bool    fit_params         = true;  // whether to fit unset model/context parameters to free device memory
     bool    fit_params_print   = false; // print the estimated required memory to run the model
     int32_t fit_params_min_ctx = 4096;  // minimum context size to set when trying to reduce memory use
+    bool    with_backends      = false; // export graph ops with backend assignments
 
     // margin per device in bytes for fitting parameters to free memory:
     std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
@@ -708,6 +710,10 @@ struct common_params {
     std::string cvector_negative_file = "tools/cvector-generator/negative.txt";
 
     bool spm_infill = false; // suffix/prefix/middle pattern for infill
+
+    // profiling
+    bool        profiling = false;  // enable cross-backend profiling
+    std::string profiling_output;   // path to write profiling JSON output (empty = stdout)
 
     // batched-bench params
     bool batched_bench_output_jsonl = false;

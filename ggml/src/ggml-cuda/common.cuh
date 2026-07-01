@@ -1388,6 +1388,9 @@ struct ggml_cuda_stream_context {
     }
 };
 
+// Forward declaration for profiler state (defined in ggml-cuda.cu)
+struct ggml_cuda_profiler_state;
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -1499,6 +1502,9 @@ struct ggml_backend_cuda_context {
     ggml_cuda_pool & pool() {
         return pool(device);
     }
+
+    // Profiling
+    ggml_cuda_profiler_state * profiler_state = nullptr;
 };
 
 struct ggml_cuda_mm_fusion_args_host {

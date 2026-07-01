@@ -672,6 +672,29 @@ int llama_cli(int argc, char ** argv) {
     ctx_cli.ctx_server.terminate();
     inference_thread.join();
 
+    // Export profiling data if profiling was enabled
+    if (params.profiling) {
+        ggml_backend_sched_t sched = llama_context_get_sched(ctx_cli.ctx_server.get_llama_context());
+        if (sched != nullptr) {
+            if (params.profiling_output.empty()) {
+                ggml_backend_sched_print_profiling(sched);
+            } else {
+                const std::string & path = params.profiling_output;
+                int ret;
+                if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".txt") == 0) {
+                    ret = ggml_backend_sched_export_profiling_text(sched, path.c_str());
+                } else {
+                    ret = ggml_backend_sched_export_profiling_json(sched, path.c_str());
+                }
+                if (ret == 0) {
+                    console::log("\nProfiling data exported to: %s\n", path.c_str());
+                } else {
+                    console::error("\nFailed to export profiling data to: %s\n", path.c_str());
+                }
+            }
+        }
+    }
+
     // bump the log level to display timings
     common_log_set_verbosity_thold(LOG_LEVEL_INFO);
     common_memory_breakdown_print(ctx_cli.ctx_server.get_llama_context());

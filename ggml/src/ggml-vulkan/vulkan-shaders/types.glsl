@@ -6,6 +6,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_control_flow_attributes : require
 
 #if defined(DATA_A_F32)
 #define QUANT_K 1
@@ -1756,7 +1757,9 @@ shared FLOAT_TYPE kvalues_iq4nl[16];
 void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
-    for (uint i = gl_LocalInvocationIndex.x; i < kvalues_iq4nl.length(); i += wgsize.x) {
+    // Use gl_LocalInvocationIndex (uint scalar) directly - each thread loads its portion
+    // with stride equal to workgroup size for coalesced shared memory writes
+    [[unroll]] for (uint i = gl_LocalInvocationIndex; i < kvalues_iq4nl.length(); i += wgsize.x) {
         kvalues_iq4nl[i] = FLOAT_TYPE(kvalues_iq4nl_const[i]);
     }
     barrier();
@@ -1793,11 +1796,12 @@ float ue4m3_to_fp32_build(uint u) {
 void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
-    for (uint i = gl_LocalInvocationIndex.x; i < kvalues_mxfp4.length(); i += wgsize.x) {
+    // Use gl_LocalInvocationIndex (uint scalar) directly for thread-strided initialization
+    [[unroll]] for (uint i = gl_LocalInvocationIndex; i < kvalues_mxfp4.length(); i += wgsize.x) {
         kvalues_mxfp4[i] = kvalues_mxfp4_const[i];
     }
 #if defined(DATA_A_NVFP4)
-    for (uint i = gl_LocalInvocationIndex.x; i < 128u; i += wgsize.x) {
+    [[unroll]] for (uint i = gl_LocalInvocationIndex; i < 128u; i += wgsize.x) {
         ue4m3_fp32_lut[i] = ue4m3_to_fp32_build(i);
     }
 #endif

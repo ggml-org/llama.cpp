@@ -8,6 +8,7 @@
 #include <Metal/Metal.h>
 
 #include <stdatomic.h>
+#include <mach/mach_time.h>
 
 #ifndef TARGET_OS_VISION
 #define TARGET_OS_VISION 0
@@ -515,6 +516,21 @@ void ggml_metal_encoder_memory_barrier(ggml_metal_encoder_t encoder) {
 
 void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder) {
     [encoder->obj endEncoding];
+}
+
+//
+// MTLCounterSampleBuffer wrapper
+//
+
+struct ggml_metal_sample_buf {
+    id<MTLCounterSampleBuffer> obj;
+    size_t sample_count;
+};
+
+void ggml_metal_encoder_sample_timestamp(ggml_metal_encoder_t encoder, ggml_metal_sample_buf_t buf, size_t index) {
+    if (@available(macOS 11.0, iOS 14.0, *)) {
+        [encoder->obj sampleCountersInBuffer:buf->obj atSampleIndex:index withBarrier:YES];
+    }
 }
 
 struct ggml_metal_device {
@@ -1360,6 +1376,139 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
 
 const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_device_t dev) {
     return &dev->props;
+}
+
+//
+// Profiling helpers
+//
+
+// Look up the MTLCommonCounterSetTimestamp counter set, or nil if the device doesn't expose it.
+static id<MTLCounterSet> ggml_metal_device_get_timestamp_counter_set(ggml_metal_device_t dev) {
+    if (@available(macOS 10.15, iOS 14.0, *)) {
+        NSArray<id<MTLCounterSet>> * sets = [dev->mtl_device counterSets];
+        for (id<MTLCounterSet> cs in sets) {
+            if ([[cs name] isEqualToString:MTLCommonCounterSetTimestamp]) {
+                return cs;
+            }
+        }
+    }
+    return nil;
+}
+
+bool ggml_metal_device_supports_profiling(ggml_metal_device_t dev) {
+    if (@available(macOS 11.0, iOS 14.0, *)) {
+        if (![dev->mtl_device supportsCounterSampling:MTLCounterSamplingPointAtDispatchBoundary]) {
+            return false;
+        }
+        return ggml_metal_device_get_timestamp_counter_set(dev) != nil;
+    }
+    return false;
+}
+
+ggml_metal_sample_buf_t ggml_metal_device_create_sample_buf(ggml_metal_device_t dev, size_t sample_count) {
+    if (sample_count == 0) {
+        return NULL;
+    }
+    if (@available(macOS 10.15, iOS 14.0, *)) {
+        id<MTLCounterSet> cs = ggml_metal_device_get_timestamp_counter_set(dev);
+        if (cs == nil) {
+            return NULL;
+        }
+
+        MTLCounterSampleBufferDescriptor * desc = [[MTLCounterSampleBufferDescriptor alloc] init];
+        desc.counterSet = cs;
+        desc.label = @"ggml-metal-profiler";
+        desc.storageMode = MTLStorageModeShared;
+        desc.sampleCount = sample_count;
+
+        NSError * error = nil;
+        id<MTLCounterSampleBuffer> sb = [dev->mtl_device newCounterSampleBufferWithDescriptor:desc error:&error];
+        [desc release];
+
+        if (sb == nil) {
+            GGML_LOG_WARN("%s: failed to create counter sample buffer: %s\n", __func__,
+                          error ? [[error localizedDescription] UTF8String] : "unknown");
+            return NULL;
+        }
+
+        ggml_metal_sample_buf_t res = calloc(1, sizeof(struct ggml_metal_sample_buf));
+        res->obj = sb;
+        res->sample_count = sample_count;
+        return res;
+    }
+    return NULL;
+}
+
+void ggml_metal_sample_buf_free(ggml_metal_sample_buf_t buf) {
+    if (buf == NULL) {
+        return;
+    }
+    [buf->obj release];
+    free(buf);
+}
+
+void ggml_metal_device_sample_timestamps(ggml_metal_device_t dev, uint64_t * cpu_ns, uint64_t * gpu_ns) {
+    if (@available(macOS 10.15, iOS 14.0, *)) {
+        MTLTimestamp cpu_t = 0;
+        MTLTimestamp gpu_t = 0;
+        [dev->mtl_device sampleTimestamps:&cpu_t gpuTimestamp:&gpu_t];
+
+        // Apple docs: both timestamps are in Mach-absolute time units. Convert to nanoseconds.
+        static mach_timebase_info_data_t tb = {0, 0};
+        if (tb.denom == 0) {
+            mach_timebase_info(&tb);
+        }
+        if (cpu_ns) *cpu_ns = (uint64_t)((__uint128_t)cpu_t * tb.numer / tb.denom);
+        if (gpu_ns) *gpu_ns = (uint64_t)((__uint128_t)gpu_t * tb.numer / tb.denom);
+    } else {
+        if (cpu_ns) *cpu_ns = 0;
+        if (gpu_ns) *gpu_ns = 0;
+    }
+}
+
+void ggml_metal_sample_buf_resolve(ggml_metal_sample_buf_t buf,
+                                   size_t   base,
+                                   size_t   count,
+                                   uint64_t cpu_anchor_ns,
+                                   uint64_t gpu_anchor_ns,
+                                   uint64_t * out_ns) {
+    if (buf == NULL || count == 0 || out_ns == NULL) {
+        return;
+    }
+    if (@available(macOS 10.15, iOS 14.0, *)) {
+        NSRange range = NSMakeRange(base, count);
+        NSData * data = [buf->obj resolveCounterRange:range];
+        if (data == nil || [data length] < count * sizeof(MTLCounterResultTimestamp)) {
+            // Failed resolve: fill with zeros so the caller can detect dropped samples.
+            for (size_t i = 0; i < count; ++i) {
+                out_ns[i] = 0;
+            }
+            return;
+        }
+
+        static mach_timebase_info_data_t tb = {0, 0};
+        if (tb.denom == 0) {
+            mach_timebase_info(&tb);
+        }
+
+        const MTLCounterResultTimestamp * src = (const MTLCounterResultTimestamp *) [data bytes];
+        for (size_t i = 0; i < count; ++i) {
+            // MTLCounterErrorValue (~0ULL) marks an unrecorded sample slot; map to 0.
+            if (src[i].timestamp == MTLCounterErrorValue) {
+                out_ns[i] = 0;
+                continue;
+            }
+            const uint64_t gpu_ns = (uint64_t)((__uint128_t) src[i].timestamp * tb.numer / tb.denom);
+            // Anchor to CPU clock returned by ggml_profiler_time_ns().
+            out_ns[i] = (gpu_ns >= gpu_anchor_ns)
+                      ? cpu_anchor_ns + (gpu_ns - gpu_anchor_ns)
+                      : cpu_anchor_ns - (gpu_anchor_ns - gpu_ns);
+        }
+    } else {
+        for (size_t i = 0; i < count; ++i) {
+            out_ns[i] = 0;
+        }
+    }
 }
 
 //
