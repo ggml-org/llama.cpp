@@ -526,6 +526,64 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq(
     return dm4f.x*sumf_d - dm4f.y*sumf_m;
 }
 
+static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_vmmq_layout(
+        const uint4 & packed_q4_lo,
+        const uint4 & packed_q4_hi,
+        const int4 * __restrict__ q8_lo,
+        const int4 * __restrict__ q8_hi,
+        const float2 * __restrict__ ds8,
+        const uint8_t * __restrict__ sc,
+        const uint8_t * __restrict__ m,
+        const half2 & dm4) {
+
+    // Accumulates main dot product term.
+    float sumf_d = 0.0f;
+
+    // Accumulates offset correction term.
+    float sumf_m = 0.0f;
+
+#pragma unroll
+    //typically 2 sub blocks
+    for (int i = 0; i < QR4_K; ++i) {
+        // Each iteration extracts the i-th 4-bit slice from packed Q4 values
+        const int qs_shift = 4*i;
+
+        // Extract 4-bit Q4 values from packed_q4_lo (lower 32 values)
+        // Mask 0x0F0F0F0F keeps only the lower 4 bits of each byte
+        const int v0 = (packed_q4_lo.x >> qs_shift) & 0x0F0F0F0F;
+        const int v1 = (packed_q4_lo.y >> qs_shift) & 0x0F0F0F0F;
+        const int v2 = (packed_q4_lo.z >> qs_shift) & 0x0F0F0F0F;
+        const int v3 = (packed_q4_lo.w >> qs_shift) & 0x0F0F0F0F;
+
+        // Extract 4-bit Q4 values from packed_q4_hi (upper 32 values)
+        const int v4 = (packed_q4_hi.x >> qs_shift) & 0x0F0F0F0F;
+        const int v5 = (packed_q4_hi.y >> qs_shift) & 0x0F0F0F0F;
+        const int v6 = (packed_q4_hi.z >> qs_shift) & 0x0F0F0F0F;
+        const int v7 = (packed_q4_hi.w >> qs_shift) & 0x0F0F0F0F;
+
+        // Accumulate dot product between Q4 values and Q8 values
+        int q_sum = 0;
+        q_sum = ggml_cuda_dp4a(v0, q8_lo[i].x, q_sum);
+        q_sum = ggml_cuda_dp4a(v1, q8_lo[i].y, q_sum);
+        q_sum = ggml_cuda_dp4a(v2, q8_lo[i].z, q_sum);
+        q_sum = ggml_cuda_dp4a(v3, q8_lo[i].w, q_sum);
+        q_sum = ggml_cuda_dp4a(v4, q8_hi[i].x, q_sum);
+        q_sum = ggml_cuda_dp4a(v5, q8_hi[i].y, q_sum);
+        q_sum = ggml_cuda_dp4a(v6, q8_hi[i].z, q_sum);
+        q_sum = ggml_cuda_dp4a(v7, q8_hi[i].w, q_sum);
+
+        // ds8[i].x = Q8 scale (d8), sc[i] = Q4 scale.
+        sumf_d += ds8[i].x * (q_sum * sc[i]);
+
+        // ds8[i].y stores the precomputed Q8 scaled sum.
+        sumf_m += ds8[i].y *   m[i];
+    }
+
+    const float2 dm4f = __half22float2(dm4);
+    // apply global scale and subtract offset correction
+    return dm4f.x*sumf_d - dm4f.y*sumf_m;
+}
+
 // contiguous v/x + u/y values
 static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_mmq(
     const int * __restrict__ v, const int * __restrict__ u, const uint8_t * __restrict__ sc,
@@ -617,6 +675,82 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_mmq(
     return dm4f.x*sumf_d - dm4f.y*sumf_m;
 }
 
+// Q5_K layout dot consumes two consecutive q8_1 sub-blocks per call.
+// qh is shared across the super-block; bit_shift selects the high bit for each sub-block.
+static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_vmmq_layout(
+        const uint4 & packed_q4_lo,
+        const uint4 & packed_q4_hi,
+        const uint4 & qh_lo,
+        const uint4 & qh_hi,
+        const int4 * __restrict__ q8_lo,
+        const int4 * __restrict__ q8_hi,
+        const float2 * __restrict__ ds8,
+        const uint8_t * __restrict__ sc,
+        const uint8_t * __restrict__ m,
+        const int sb_0,
+        const half2 & dm5) {
+
+    float sumf_d = 0.0f;
+    float sumf_m = 0.0f;
+
+#pragma unroll
+    for (int i = 0; i < QR5_K; ++i) {
+        const int qs_shift  = 4*i;
+        const int bit_shift = sb_0 + i;
+
+        // First 16 weights of this sub-block: ql bytes 0..15 + qh bytes 0..15.
+        const int vl0 = (packed_q4_lo.x >> qs_shift) & 0x0F0F0F0F;
+        const int vl1 = (packed_q4_lo.y >> qs_shift) & 0x0F0F0F0F;
+        const int vl2 = (packed_q4_lo.z >> qs_shift) & 0x0F0F0F0F;
+        const int vl3 = (packed_q4_lo.w >> qs_shift) & 0x0F0F0F0F;
+
+        // ((qh >> bit_shift) << 4) & 0x10101010: pluck the 1 hi-bit per byte into bit 4.
+        // 0x10 mask drops any cross-byte spill from the right-shift.
+        const int vh0 = ((qh_lo.x >> bit_shift) << 4) & 0x10101010;
+        const int vh1 = ((qh_lo.y >> bit_shift) << 4) & 0x10101010;
+        const int vh2 = ((qh_lo.z >> bit_shift) << 4) & 0x10101010;
+        const int vh3 = ((qh_lo.w >> bit_shift) << 4) & 0x10101010;
+
+        const int v0 = vl0 | vh0;
+        const int v1 = vl1 | vh1;
+        const int v2 = vl2 | vh2;
+        const int v3 = vl3 | vh3;
+
+        int q_sum = 0;
+        q_sum = ggml_cuda_dp4a(v0, q8_lo[i].x, q_sum);
+        q_sum = ggml_cuda_dp4a(v1, q8_lo[i].y, q_sum);
+        q_sum = ggml_cuda_dp4a(v2, q8_lo[i].z, q_sum);
+        q_sum = ggml_cuda_dp4a(v3, q8_lo[i].w, q_sum);
+
+        // Second 16 weights of this sub-block: ql bytes 16..31 + qh bytes 16..31.
+        const int vl4 = (packed_q4_hi.x >> qs_shift) & 0x0F0F0F0F;
+        const int vl5 = (packed_q4_hi.y >> qs_shift) & 0x0F0F0F0F;
+        const int vl6 = (packed_q4_hi.z >> qs_shift) & 0x0F0F0F0F;
+        const int vl7 = (packed_q4_hi.w >> qs_shift) & 0x0F0F0F0F;
+
+        const int vh4 = ((qh_hi.x >> bit_shift) << 4) & 0x10101010;
+        const int vh5 = ((qh_hi.y >> bit_shift) << 4) & 0x10101010;
+        const int vh6 = ((qh_hi.z >> bit_shift) << 4) & 0x10101010;
+        const int vh7 = ((qh_hi.w >> bit_shift) << 4) & 0x10101010;
+
+        const int v4 = vl4 | vh4;
+        const int v5 = vl5 | vh5;
+        const int v6 = vl6 | vh6;
+        const int v7 = vl7 | vh7;
+
+        q_sum = ggml_cuda_dp4a(v4, q8_hi[i].x, q_sum);
+        q_sum = ggml_cuda_dp4a(v5, q8_hi[i].y, q_sum);
+        q_sum = ggml_cuda_dp4a(v6, q8_hi[i].z, q_sum);
+        q_sum = ggml_cuda_dp4a(v7, q8_hi[i].w, q_sum);
+
+        sumf_d += ds8[i].x * (q_sum * sc[i]);
+        sumf_m += ds8[i].y *   m[i];
+    }
+
+    const float2 dm5f = __half22float2(dm5);
+    return dm5f.x*sumf_d - dm5f.y*sumf_m;
+}
+
 #define VDR_Q6_K_Q8_1_MMVQ 1
 #define VDR_Q6_K_Q8_1_MMQ  8
 
@@ -667,6 +801,80 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_mmq(
         }
 
         sumf_d += d8[i0/4] * (sc_reg[i0/2+0]*sumi_d.x + sc_reg[i0/2+1]*sumi_d.y);
+    }
+
+    return d6 * sumf_d;
+}
+
+// Q6_K layout dot consumes a pair {sub_block_0, sub_block_0 + 2} per call.
+// qh_base_shift selects either pair {0,2}/{4,6} or {1,3}/{5,7} within each half.
+static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_vmmq_layout(
+        const uint4 & ql_lo,
+        const uint4 & ql_hi,
+        const uint4 & qh_lo,
+        const uint4 & qh_hi,
+        const int4 * __restrict__ q8_lo,
+        const int4 * __restrict__ q8_hi,
+        const float2 * __restrict__ ds8,
+        const int8_t * __restrict__ sc,
+        const int qh_base_shift,
+        const float & d6) {
+
+    float sumf_d = 0.0f;
+
+#pragma unroll
+    for (int i = 0; i < QR6_K; ++i) {
+        const int ql_shift = 4*i;
+        const int qh_shift = qh_base_shift + 4*i;
+
+        // First 16 weights of this sub-block: ql_lo + qh_lo against q8_lo[i].
+        const int vl0 = (ql_lo.x >> ql_shift) & 0x0F0F0F0F;
+        const int vl1 = (ql_lo.y >> ql_shift) & 0x0F0F0F0F;
+        const int vl2 = (ql_lo.z >> ql_shift) & 0x0F0F0F0F;
+        const int vl3 = (ql_lo.w >> ql_shift) & 0x0F0F0F0F;
+
+        // ((qh >> shift) << 4) & 0x30303030: pluck 2 hi-bits per byte into bits 4-5.
+        // Cross-byte spill from the right-shift is masked away by 0x30 (only bits 4-5).
+        const int vh0 = ((qh_lo.x >> qh_shift) << 4) & 0x30303030;
+        const int vh1 = ((qh_lo.y >> qh_shift) << 4) & 0x30303030;
+        const int vh2 = ((qh_lo.z >> qh_shift) << 4) & 0x30303030;
+        const int vh3 = ((qh_lo.w >> qh_shift) << 4) & 0x30303030;
+
+        const int v0 = __vsubss4(vl0 | vh0, 0x20202020);
+        const int v1 = __vsubss4(vl1 | vh1, 0x20202020);
+        const int v2 = __vsubss4(vl2 | vh2, 0x20202020);
+        const int v3 = __vsubss4(vl3 | vh3, 0x20202020);
+
+        int q_sum_a = 0;
+        q_sum_a = ggml_cuda_dp4a(v0, q8_lo[i].x, q_sum_a);
+        q_sum_a = ggml_cuda_dp4a(v1, q8_lo[i].y, q_sum_a);
+        q_sum_a = ggml_cuda_dp4a(v2, q8_lo[i].z, q_sum_a);
+        q_sum_a = ggml_cuda_dp4a(v3, q8_lo[i].w, q_sum_a);
+
+        // Second 16 weights of this sub-block: ql_hi + qh_hi against q8_hi[i].
+        const int vl4 = (ql_hi.x >> ql_shift) & 0x0F0F0F0F;
+        const int vl5 = (ql_hi.y >> ql_shift) & 0x0F0F0F0F;
+        const int vl6 = (ql_hi.z >> ql_shift) & 0x0F0F0F0F;
+        const int vl7 = (ql_hi.w >> ql_shift) & 0x0F0F0F0F;
+
+        const int vh4 = ((qh_hi.x >> qh_shift) << 4) & 0x30303030;
+        const int vh5 = ((qh_hi.y >> qh_shift) << 4) & 0x30303030;
+        const int vh6 = ((qh_hi.z >> qh_shift) << 4) & 0x30303030;
+        const int vh7 = ((qh_hi.w >> qh_shift) << 4) & 0x30303030;
+
+        const int v4 = __vsubss4(vl4 | vh4, 0x20202020);
+        const int v5 = __vsubss4(vl5 | vh5, 0x20202020);
+        const int v6 = __vsubss4(vl6 | vh6, 0x20202020);
+        const int v7 = __vsubss4(vl7 | vh7, 0x20202020);
+
+        int q_sum_b = 0;
+        q_sum_b = ggml_cuda_dp4a(v4, q8_hi[i].x, q_sum_b);
+        q_sum_b = ggml_cuda_dp4a(v5, q8_hi[i].y, q_sum_b);
+        q_sum_b = ggml_cuda_dp4a(v6, q8_hi[i].z, q_sum_b);
+        q_sum_b = ggml_cuda_dp4a(v7, q8_hi[i].w, q_sum_b);
+
+        // One Q8 scale per sub-block (ds8[i].x), two Q6_K scales per sub-block.
+        sumf_d += ds8[i].x * (q_sum_a * sc[2*i + 0] + q_sum_b * sc[2*i + 1]);
     }
 
     return d6 * sumf_d;
@@ -734,7 +942,6 @@ static __device__ __forceinline__ float vec_dot_q4_0_q8_1(
 
     return vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMVQ>(v, u, bq4_0->d, bq8_1->ds);
 }
-
 
 static __device__ __forceinline__ float vec_dot_q4_1_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
@@ -907,6 +1114,72 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1(
     return vec_dot_q4_K_q8_1_impl_vmmq(v, u, sc, m, bq4_K->dm, d8);
 }
 
+template<int q8_1_layout_block_size>
+static __device__ __forceinline__ float vec_dot_q4_K_q8_1_layout(
+        const void * __restrict__ vbq,
+        const block_q8_1_layout<q8_1_layout_block_size> * __restrict__ y_layout,
+        const int & kby,
+        const int & kbx,
+        const int subblock_pair) {
+    static_assert(q8_1_layout_block_size % QK8_1 == 0);
+    constexpr int q8_1_blocks = block_q8_1_layout<q8_1_layout_block_size>::q8_1_blocks;
+    constexpr int q8_1_qs_per_block = QK8_1 / sizeof(int32_t);
+    static_assert(q8_1_blocks == 2 || q8_1_blocks == 4 || q8_1_blocks == 8);
+
+    const block_q4_K * bq4_K = (const block_q4_K *) vbq + kbx;
+
+    uint4 v_lo;
+    uint4 v_hi;
+    int4 q8_lo[QR4_K];
+    int4 q8_hi[QR4_K];
+
+    float2 ds8[QR4_K];
+    uint8_t sc[QR4_K];
+    uint8_t m[QR4_K];
+
+    const int subblock0 = 2 * subblock_pair;
+    const int qs_idx = subblock_pair * 8;
+    const uint32_t * q4 = (const uint32_t *) bq4_K->qs + qs_idx;
+
+    v_lo = ((const uint4 *)(q4 + 0))[0];
+    v_hi = ((const uint4 *)(q4 + 4))[0];
+
+    const half2 dm4 = bq4_K->dm;
+
+    const uint32_t scale0 = (uint32_t) get_int_b4(bq4_K->scales, 0);
+    const uint32_t scale4 = (uint32_t) get_int_b4(bq4_K->scales, 1);
+    const uint32_t scale8 = (uint32_t) get_int_b4(bq4_K->scales, 2);
+
+    const uint32_t sc_lo = scale0;
+    const uint32_t mb_lo = scale4;
+    const uint32_t sc_hi = (scale8 & 0x0F0F0F0Fu) | ((scale0 & 0xC0C0C0C0u) >> 2);
+    const uint32_t mb_hi = ((scale8 & 0xF0F0F0F0u) >> 4) | ((scale4 & 0xC0C0C0C0u) >> 2);
+
+#pragma unroll
+    for (int i = 0; i < QR4_K; ++i) {
+        const int subblock = subblock0 + i;
+
+        const int shift = 8 * (subblock & 3);
+        const uint32_t sc_word = subblock < 4 ? sc_lo : sc_hi;
+        const uint32_t mb_word = subblock < 4 ? mb_lo : mb_hi;
+
+        sc[i] = (uint8_t) ((sc_word >> shift) & 0x3Fu);
+        m[i]  = (uint8_t) ((mb_word >> shift) & 0x3Fu);
+
+        const int block_offset = kby + subblock;
+        const int block_outer  = block_offset / q8_1_blocks;
+        const int block_inner  = block_offset % q8_1_blocks;
+        const block_q8_1_layout<q8_1_layout_block_size> * by = y_layout + block_outer;
+        const int4 * q8 = (const int4 *) (by->qs + block_inner * q8_1_qs_per_block);
+
+        q8_lo[i] = q8[0];
+        q8_hi[i] = q8[1];
+        ds8[i] = __half22float2(by->ds[block_inner]);
+    }
+
+    return vec_dot_q4_K_q8_1_impl_vmmq_layout(v_lo, v_hi, q8_lo, q8_hi, ds8, sc, m, dm4);
+}
+
 static __device__ __forceinline__ float vec_dot_q5_K_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
@@ -953,6 +1226,73 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1(
     return vec_dot_q5_K_q8_1_impl_vmmq(vl, vh, u, sc, m, bq5_K->dm, d8);
 }
 
+// Q5_K uses consecutive q8_1 sub-block pairs, matching Q4_K.
+template<int q8_1_layout_block_size>
+static __device__ __forceinline__ float vec_dot_q5_K_q8_1_layout(
+        const void * __restrict__ vbq,
+        const block_q8_1_layout<q8_1_layout_block_size> * __restrict__ y_layout,
+        const int & kby,
+        const int & kbx,
+        const int subblock_pair) {
+    static_assert(q8_1_layout_block_size % QK8_1 == 0);
+    constexpr int q8_1_blocks = block_q8_1_layout<q8_1_layout_block_size>::q8_1_blocks;
+    constexpr int q8_1_qs_per_block = QK8_1 / sizeof(int32_t);
+    static_assert(q8_1_blocks == 2 || q8_1_blocks == 4 || q8_1_blocks == 8);
+
+    const block_q5_K * bq5_K = (const block_q5_K *) vbq + kbx;
+
+    const int p = subblock_pair;
+    const int subblock0 = 2 * p;
+
+    const int qs_idx = p * 8;
+    const uint32_t * q4 = (const uint32_t *) bq5_K->qs + qs_idx;
+    const uint4 packed_q4_lo = ((const uint4 *)(q4 + 0))[0];
+    const uint4 packed_q4_hi = ((const uint4 *)(q4 + 4))[0];
+
+    const uint32_t * qh_ptr = (const uint32_t *) bq5_K->qh;
+    const uint4 qh_lo = ((const uint4 *)(qh_ptr + 0))[0];
+    const uint4 qh_hi = ((const uint4 *)(qh_ptr + 4))[0];
+
+    // Q5_K scales/mins use the same 12-byte packing as Q4_K.
+    const uint32_t scale0 = (uint32_t) get_int_b4(bq5_K->scales, 0);
+    const uint32_t scale4 = (uint32_t) get_int_b4(bq5_K->scales, 1);
+    const uint32_t scale8 = (uint32_t) get_int_b4(bq5_K->scales, 2);
+
+    const uint32_t sc_lo = scale0;
+    const uint32_t mb_lo = scale4;
+    const uint32_t sc_hi = (scale8 & 0x0F0F0F0Fu) | ((scale0 & 0xC0C0C0C0u) >> 2);
+    const uint32_t mb_hi = ((scale8 & 0xF0F0F0F0u) >> 4) | ((scale4 & 0xC0C0C0C0u) >> 2);
+
+    int4    q8_lo[QR5_K];
+    int4    q8_hi[QR5_K];
+    float2  ds8  [QR5_K];
+    uint8_t sc   [QR5_K];
+    uint8_t m    [QR5_K];
+
+#pragma unroll
+    for (int i = 0; i < QR5_K; ++i) {
+        const int subblock = subblock0 + i;
+
+        const int shift = 8 * (subblock & 3);
+        const uint32_t sc_word = subblock < 4 ? sc_lo : sc_hi;
+        const uint32_t mb_word = subblock < 4 ? mb_lo : mb_hi;
+        sc[i] = (uint8_t) ((sc_word >> shift) & 0x3Fu);
+        m[i]  = (uint8_t) ((mb_word >> shift) & 0x3Fu);
+
+        const int block_offset = kby + subblock;
+        const int block_outer  = block_offset / q8_1_blocks;
+        const int block_inner  = block_offset % q8_1_blocks;
+        const block_q8_1_layout<q8_1_layout_block_size> * by = y_layout + block_outer;
+        const int4 * q8 = (const int4 *) (by->qs + block_inner * q8_1_qs_per_block);
+        q8_lo[i] = q8[0];
+        q8_hi[i] = q8[1];
+        ds8[i]   = __half22float2(by->ds[block_inner]);
+    }
+
+    return vec_dot_q5_K_q8_1_impl_vmmq_layout(
+        packed_q4_lo, packed_q4_hi, qh_lo, qh_hi, q8_lo, q8_hi, ds8, sc, m, subblock0, bq5_K->dm);
+}
+
 static __device__ __forceinline__ float vec_dot_q6_K_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
@@ -977,6 +1317,67 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1(
     }
 
     return vec_dot_q6_K_q8_1_impl_mmvq(vl, vh, u, scales, bq6_K->d, d8);
+}
+
+// Q6_K uses interleaved q8_1 sub-block pairs: {0,2}, {1,3}, {4,6}, {5,7}.
+template<int q8_1_layout_block_size>
+static __device__ __forceinline__ float vec_dot_q6_K_q8_1_layout(
+        const void * __restrict__ vbq,
+        const block_q8_1_layout<q8_1_layout_block_size> * __restrict__ y_layout,
+        const int & kby,
+        const int & kbx,
+        const int subblock_pair) {
+    static_assert(q8_1_layout_block_size % QK8_1 == 0);
+    constexpr int q8_1_blocks = block_q8_1_layout<q8_1_layout_block_size>::q8_1_blocks;
+    constexpr int q8_1_qs_per_block = QK8_1 / sizeof(int32_t);
+    static_assert(q8_1_blocks == 2 || q8_1_blocks == 4 || q8_1_blocks == 8);
+
+    const block_q6_K * bq6_K = (const block_q6_K *) vbq + kbx;
+
+    const int p = subblock_pair;
+
+    const int sub_block_0 = (p & 1) + (p >> 1) * 4;
+    const int sub_block_1 = sub_block_0 + 2;
+
+    const int ql_offset_ints = p * 8;
+    const uint32_t * ql_ptr = (const uint32_t *) bq6_K->ql + ql_offset_ints;
+    const uint4 ql_lo = ((const uint4 *)(ql_ptr + 0))[0];
+    const uint4 ql_hi = ((const uint4 *)(ql_ptr + 4))[0];
+
+    const int qh_offset_ints = (p >> 1) * 8;
+    const uint32_t * qh_ptr = (const uint32_t *) bq6_K->qh + qh_offset_ints;
+    const uint4 qh_lo = ((const uint4 *)(qh_ptr + 0))[0];
+    const uint4 qh_hi = ((const uint4 *)(qh_ptr + 4))[0];
+    const int qh_base_shift = (p & 1) * 2;
+
+    // Q6_K has one int8 scale per 16 weights.
+    const int sc_base = 2 * sub_block_0;
+    int8_t sc[4];
+    sc[0] = bq6_K->scales[sc_base + 0];
+    sc[1] = bq6_K->scales[sc_base + 1];
+    sc[2] = bq6_K->scales[sc_base + 4];
+    sc[3] = bq6_K->scales[sc_base + 5];
+
+    int4   q8_lo[QR6_K];
+    int4   q8_hi[QR6_K];
+    float2 ds8  [QR6_K];
+
+    const int sub_blocks_in_pair[QR6_K] = { sub_block_0, sub_block_1 };
+
+#pragma unroll
+    for (int i = 0; i < QR6_K; ++i) {
+        const int block_offset = kby + sub_blocks_in_pair[i];
+        const int block_outer  = block_offset / q8_1_blocks;
+        const int block_inner  = block_offset % q8_1_blocks;
+        const block_q8_1_layout<q8_1_layout_block_size> * by = y_layout + block_outer;
+        const int4 * q8 = (const int4 *) (by->qs + block_inner * q8_1_qs_per_block);
+        q8_lo[i] = q8[0];
+        q8_hi[i] = q8[1];
+        ds8[i]   = __half22float2(by->ds[block_inner]);
+    }
+
+    return vec_dot_q6_K_q8_1_impl_vmmq_layout(
+        ql_lo, ql_hi, qh_lo, qh_hi, q8_lo, q8_hi, ds8, sc, qh_base_shift, bq6_K->d);
 }
 
 #define VDR_IQ2_XXS_Q8_1_MMVQ 2
