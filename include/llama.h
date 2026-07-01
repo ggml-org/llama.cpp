@@ -1257,9 +1257,12 @@ extern "C" {
         // [EXPERIMENTAL]
         // backend sampling interface:
 
-        // return true if the backend supports all ops needed by the sampler
+        // return true if the backend supports all ops needed by the sampler and the requested output mode
         // note: call once per sampler
-        bool (*backend_init)(struct llama_sampler * smpl, ggml_backend_buffer_type_t buft);
+        bool (*backend_init)(
+                struct llama_sampler       * smpl,
+                ggml_backend_buffer_type_t   buft,
+                bool                         require_multi_output);
 
         // call after .backend_apply()
         void (*backend_accept)(
@@ -1274,6 +1277,9 @@ extern "C" {
                 struct ggml_context       * ctx,
                 struct ggml_cgraph        * gf,
                 struct llama_sampler_data * data);
+
+        // called before rebuilding a sampling graph to clear graph-owned tensor references
+        void (*backend_reset)(struct llama_sampler * smpl);
 
         // called before graph execution to set inputs for the current ubatch
         void (*backend_set_input)(struct llama_sampler * smpl);

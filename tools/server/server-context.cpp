@@ -40,18 +40,15 @@ using json = nlohmann::ordered_json;
 constexpr int HTTP_POLLING_SECONDS = 1;
 
 static uint32_t server_n_outputs_max(const common_params & params) {
-    const uint32_t n_batch  = params.n_batch;
-
     if (params.embedding ||
             (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
-        return n_batch;
+        return params.n_batch;
     }
 
-    const uint32_t n_outputs_per_seq = 1 + common_speculative_n_max(&params.speculative);
+    const int32_t n_outputs = common_speculative_n_outputs_max(
+            params.n_batch, params.n_parallel, common_speculative_n_max(&params.speculative));
 
-    const uint64_t n_outputs = (uint64_t) params.n_parallel * n_outputs_per_seq;
-
-    return std::max<uint32_t>(1, std::min<uint64_t>(n_batch, n_outputs));
+    return std::max<int32_t>(1, n_outputs);
 }
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
@@ -268,6 +265,7 @@ struct server_slot {
     json json_schema;
 
     common_sampler_ptr smpl;
+    bool backend_sampling = false;
 
     llama_token sampled; // in speculative mode, this is the last accepted token
 
@@ -323,6 +321,7 @@ struct server_slot {
         task.reset();
 
         llama_set_sampler(ctx_tgt, id, nullptr);
+        backend_sampling = false;
 
         // clear alora start
         alora_invocation_start = -1;
@@ -1762,21 +1761,17 @@ private:
 
             const bool need_pre_sample_logits = task.params.sampling.n_probs > 0 && !task.params.post_sampling_probs;
 
-            bool backend_sampling = true;
-
-            backend_sampling &= task.params.sampling.backend_sampling;
-
-            // TODO: speculative decoding requires multiple samples per batch - not supported yet
-            backend_sampling &= !(slot.can_speculate());
+            bool use_backend_sampling = task.params.sampling.backend_sampling;
 
             // TODO: getting pre sampling logits is not yet supported with backend sampling
-            backend_sampling &= !need_pre_sample_logits;
+            use_backend_sampling &= !need_pre_sample_logits;
 
             // TODO: tmp until backend sampling is fully implemented
-            if (backend_sampling) {
-                llama_set_sampler(ctx_tgt, slot.id, common_sampler_get(slot.smpl.get()));
+            if (use_backend_sampling) {
+                slot.backend_sampling = llama_set_sampler(ctx_tgt, slot.id, common_sampler_get(slot.smpl.get()));
             } else {
                 llama_set_sampler(ctx_tgt, slot.id, nullptr);
+                slot.backend_sampling = false;
             }
 
             SLT_TRC(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
@@ -3843,7 +3838,16 @@ private:
                         }
 
                         slot.prompt.tokens.keep_first(ckpt.n_tokens);
+                        const bool restore_backend_sampler = slot.backend_sampling;
+                        if (restore_backend_sampler) {
+                            llama_set_sampler(slot.ctx_tgt, slot.id, nullptr);
+                        }
+
                         slot.smpl = std::move(smpl_save);
+                        if (restore_backend_sampler) {
+                            slot.backend_sampling = llama_set_sampler(
+                                slot.ctx_tgt, slot.id, common_sampler_get(slot.smpl.get()));
+                        }
 
                         return;
                     }

@@ -2330,6 +2330,11 @@ common_speculative_init_result_ptr common_speculative_init_from_params(common_pa
     return std::make_unique<common_speculative_init_result>(params, model_tgt, ctx_tgt);
 }
 
+int32_t common_speculative_n_outputs_max(int32_t n_batch, int32_t n_parallel, int32_t n_draft) {
+    const int64_t n_outputs = (int64_t) n_parallel * (1 + (int64_t) std::max(0, n_draft));
+    return std::min<int64_t>(n_batch, n_outputs);
+}
+
 // initialization of the speculative decoding system
 //
 common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq) {

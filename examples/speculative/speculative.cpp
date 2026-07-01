@@ -1,6 +1,7 @@
 #include "arg.h"
 #include "common.h"
 #include "sampling.h"
+#include "speculative.h"
 #include "log.h"
 #include "llama.h"
 
@@ -56,6 +57,9 @@ int main(int argc, char ** argv) {
 
     // max number of parallel drafting sequences (i.e. tree branches)
     const int n_seq_dft = params.n_parallel;
+
+    params.n_outputs_max = common_speculative_n_outputs_max(
+            params.n_batch, params.n_parallel, params.speculative.draft.n_max);
 
     // probability threshold for splitting a draft branch (only for n_seq_dft > 1)
     const float p_draft_split = params.speculative.draft.p_split;

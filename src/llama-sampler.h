@@ -15,6 +15,8 @@ struct llama_sampler_chain {
     // has .backend_init() been called?
     bool is_init = false;
 
+    uint32_t n_nodes = 0;
+
     struct info {
         bool is_backend;
 
@@ -32,6 +34,8 @@ struct llama_sampler_chain {
 
     mutable int32_t n_sample;
 };
+
+uint32_t llama_sampler_backend_n_nodes(const llama_sampler * sampler);
 
 struct llama_sampler * llama_sampler_init_dry_testing(
         int32_t context_size,

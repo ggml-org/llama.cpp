@@ -9,10 +9,12 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <random>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -78,7 +80,12 @@ struct test_context {
     std::unordered_map<llama_seq_id, int32_t> seq_positions;
     std::unordered_map<llama_seq_id, int32_t> last_batch_info;
 
-    test_context(const test_params & params, std::vector<llama_sampler_seq_config> & configs, int32_t n_seq_max = -1) {
+    test_context(
+            const test_params & params,
+            std::vector<llama_sampler_seq_config> & configs,
+            int32_t n_seq_max = -1,
+            uint32_t n_outputs_max = 0,
+            uint32_t n_ubatch = 0) {
         auto * model = params.model.get();
 
         GGML_ASSERT(model);
@@ -87,6 +94,10 @@ struct test_context {
         llama_context_params cparams = llama_context_default_params();
         cparams.n_ctx = 512;
         cparams.n_batch = 512;
+        if (n_ubatch > 0) {
+            cparams.n_ubatch = n_ubatch;
+        }
+        cparams.n_outputs_max = n_outputs_max;
         cparams.samplers = configs.data();
         cparams.n_samplers = configs.size();
         cparams.kv_unified = true;
@@ -259,6 +270,65 @@ struct test_context {
         return piece;
     }
 };
+
+struct test_single_output_backend_sampler {
+    bool backend_initialized = false;
+    bool backend_require_multi_output = false;
+    int backend_apply_count = 0;
+    int apply_count = 0;
+};
+
+static const char * test_single_output_backend_sampler_name(const llama_sampler * /*smpl*/) {
+    return "single-output-backend";
+}
+
+static void test_single_output_backend_sampler_apply(
+        llama_sampler * smpl, llama_token_data_array * /*cur_p*/) {
+    auto * ctx = (test_single_output_backend_sampler *) smpl->ctx;
+    ctx->apply_count++;
+}
+
+static void test_single_output_backend_sampler_free(llama_sampler * smpl) {
+    delete (test_single_output_backend_sampler *) smpl->ctx;
+}
+
+static bool test_single_output_backend_sampler_backend_init(
+        llama_sampler * smpl, ggml_backend_buffer_type_t /*buft*/, bool require_multi_output) {
+    auto * ctx = (test_single_output_backend_sampler *) smpl->ctx;
+    ctx->backend_require_multi_output = require_multi_output;
+    if (require_multi_output) {
+        return false;
+    }
+    ctx->backend_initialized = true;
+    return true;
+}
+
+static void test_single_output_backend_sampler_backend_apply(
+        llama_sampler * smpl, ggml_context * /*ctx*/, ggml_cgraph * /*gf*/, llama_sampler_data * /*data*/) {
+    auto * ctx = (test_single_output_backend_sampler *) smpl->ctx;
+    ctx->backend_apply_count++;
+}
+
+static llama_sampler_i test_single_output_backend_sampler_i = {
+    /* .name              = */ test_single_output_backend_sampler_name,
+    /* .accept            = */ nullptr,
+    /* .apply             = */ test_single_output_backend_sampler_apply,
+    /* .reset             = */ nullptr,
+    /* .clone             = */ nullptr,
+    /* .free              = */ test_single_output_backend_sampler_free,
+    /* .backend_init      = */ test_single_output_backend_sampler_backend_init,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ test_single_output_backend_sampler_backend_apply,
+    /* .backend_reset     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+};
+
+static llama_sampler * test_single_output_backend_sampler_init(
+        test_single_output_backend_sampler ** sampler_ctx) {
+    auto * ctx = new test_single_output_backend_sampler;
+    *sampler_ctx = ctx;
+    return llama_sampler_init(&test_single_output_backend_sampler_i, ctx);
+}
 
 static void test_backend_greedy_sampling(const test_params & params) {
     const int seq_id = 0;
@@ -967,43 +1037,270 @@ static void test_backend_cpu_mixed_batch(const test_params & params) {
     printf("backend-cpu mixed batch test PASSED\n");
 }
 
-static void test_backend_max_outputs(const test_params & params) {
-    const int seq_id = 0;
-    const int32_t seed = 88;
+static void test_backend_multi_output_disabled(const test_params & params) {
+    const llama_seq_id seq_id = 0;
 
-    llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
-    llama_sampler_ptr backend_sampler_chain(llama_sampler_chain_init(backend_chain_params));
-    llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_dist(seed));
-    std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain.get() }};
+    llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+    llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(88));
+    std::vector<llama_sampler_seq_config> configs = {{ seq_id, chain.get() }};
+    test_context test_ctx(params, configs, 1, 1);
 
-    test_context test_ctx(params, backend_sampler_configs);
+    llama_batch batch = llama_batch_init(2, 0, 1);
+    common_batch_add(batch, llama_vocab_bos(test_ctx.vocab), 0, { seq_id }, true);
+    common_batch_add(batch, llama_vocab_bos(test_ctx.vocab), 1, { seq_id }, true);
 
-    llama_batch batch = llama_batch_init(512, 0, 1);
-    std::string prompt = "Hello";
-
-    std::vector<llama_token> tokens;
-    tokens.push_back(llama_vocab_bos(test_ctx.vocab));
-
-    std::vector<llama_token> prompt_tokens(32);
-    int n_tokens = llama_tokenize(test_ctx.vocab, prompt.c_str(), prompt.length(),
-                                   prompt_tokens.data(), prompt_tokens.size(),
-                                   false, false);
-    for (int i = 0; i < n_tokens; i++) {
-        tokens.push_back(prompt_tokens[i]);
-    }
-
-    for (size_t i = 0; i < tokens.size(); i++) {
-        // set all tokens as output to trigger error
-        common_batch_add(batch, tokens[i], i, { seq_id }, true);
-    }
-
-    printf(">>> test_max_outputs expected error start:\n");
+    printf(">>> test_backend_multi_output_disabled expected error start:\n");
     const int ret = llama_decode(test_ctx.ctx.get(), batch);
-    GGML_ASSERT(ret != 0 && "llama_decode should not succeed multiple outputs per sequence");
-    printf("<<< test_max_outputs expected error end.\n");
+    GGML_ASSERT(ret != 0 && "llama_decode should reject multiple outputs for one sequence");
+    printf("<<< test_backend_multi_output_disabled expected error end.\n");
+
     llama_batch_free(batch);
 
-    printf("backend max outputs test PASSED\n");
+    printf("backend multi-output disabled test PASSED\n");
+}
+
+// greedy is a stateless terminal selector; verify multi-output backend argmax
+// matches the per-row argmax of the reference logits.
+static void test_backend_multi_output_greedy(const test_params & params) {
+    const llama_seq_id seq_id = 0;
+    const llama_vocab * vocab = llama_model_get_vocab(params.model.get());
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+
+    llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+    llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
+    std::vector<llama_sampler_seq_config> configs = {{ seq_id, chain.get() }};
+    test_context test_ctx(params, configs, 1, 4);
+
+    std::vector<llama_sampler_seq_config> reference_configs;
+    test_context reference_ctx(params, reference_configs, 1, 4);
+
+    llama_batch batch = llama_batch_init(4, 0, 1);
+    for (int i = 0; i < 4; ++i) {
+        common_batch_add(batch, llama_vocab_bos(vocab), i, { seq_id }, true);
+    }
+
+    GGML_ASSERT(llama_decode(test_ctx.ctx.get(), batch) == 0 &&
+            "multi-output backend greedy sampling should succeed");
+    GGML_ASSERT(llama_decode(reference_ctx.ctx.get(), batch) == 0);
+
+    for (int i = 0; i < batch.n_tokens; ++i) {
+        const llama_token backend_token = llama_get_sampled_token_ith(test_ctx.ctx.get(), i);
+        GGML_ASSERT(backend_token >= 0 && backend_token < n_vocab);
+
+        const float * logits = llama_get_logits_ith(reference_ctx.ctx.get(), i);
+        GGML_ASSERT(logits != nullptr);
+        llama_token argmax = 0;
+        for (llama_token t = 1; t < n_vocab; ++t) {
+            if (logits[t] > logits[argmax]) {
+                argmax = t;
+            }
+        }
+        printf("row %d: backend greedy=%d argmax=%d\n", i, backend_token, argmax);
+        GGML_ASSERT(backend_token == argmax);
+    }
+
+    llama_batch_free(batch);
+
+    printf("backend multi-output greedy test PASSED\n");
+}
+
+static void test_backend_multi_output_sampling_chain(const test_params & params) {
+    const llama_seq_id seq_id = 0;
+    const int32_t seed = 88;
+    const llama_vocab * vocab = llama_model_get_vocab(params.model.get());
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    const uint32_t k = std::min<uint32_t>(2048, n_vocab);
+
+    const llama_logit_bias bias = { llama_vocab_bos(vocab), -0.1f };
+
+    auto make_filter_chain = [&]() {
+        llama_sampler_ptr result(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+        llama_sampler_chain_add(result.get(), llama_sampler_init_logit_bias(
+                n_vocab, 1, &bias));
+        llama_sampler_chain_add(result.get(), llama_sampler_init_top_k(k));
+        llama_sampler_chain_add(result.get(), llama_sampler_init_top_p(0.9f, 1));
+        llama_sampler_chain_add(result.get(), llama_sampler_init_min_p(0.01f, 1));
+        llama_sampler_chain_add(result.get(), llama_sampler_init_temp(0.8f));
+        return result;
+    };
+
+    llama_sampler_ptr chain = make_filter_chain();
+    llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(seed));
+    std::vector<llama_sampler_seq_config> configs = {{ seq_id, chain.get() }};
+    test_context test_ctx(params, configs, 1, 4, 2);
+
+    std::vector<llama_sampler_seq_config> reference_configs;
+    test_context reference_ctx(params, reference_configs, 1, 4, 2);
+    llama_sampler_ptr reference_filters = make_filter_chain();
+
+    std::vector<llama_token_data> reference_data(n_vocab);
+    std::mt19937 reference_rng(seed);
+    std::uniform_real_distribution<double> reference_dist(0.0, 1.0);
+    int32_t n_reused_after_first_round = -1;
+
+    for (int round = 0; round < 2; ++round) {
+        llama_batch batch = llama_batch_init(4, 0, 1);
+        for (int i = 0; i < 4; ++i) {
+            common_batch_add(batch, llama_vocab_bos(vocab), round * 4 + i, { seq_id }, true);
+        }
+
+        GGML_ASSERT(llama_decode(test_ctx.ctx.get(), batch) == 0);
+        GGML_ASSERT(llama_decode(reference_ctx.ctx.get(), batch) == 0);
+
+        for (int i = 0; i < batch.n_tokens; ++i) {
+            const llama_token backend_token = llama_get_sampled_token_ith(test_ctx.ctx.get(), i);
+            const float * sampled_logits = llama_get_sampled_logits_ith(test_ctx.ctx.get(), i);
+            const float * sampled_probs = llama_get_sampled_probs_ith(test_ctx.ctx.get(), i);
+            const llama_token * sampled_candidates = llama_get_sampled_candidates_ith(test_ctx.ctx.get(), i);
+            const uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx.get(), i);
+            const uint32_t n_probs = llama_get_sampled_probs_count_ith(test_ctx.ctx.get(), i);
+            const uint32_t n_candidates = llama_get_sampled_candidates_count_ith(test_ctx.ctx.get(), i);
+
+            GGML_ASSERT(backend_token >= 0 && backend_token < n_vocab);
+            GGML_ASSERT(sampled_logits != nullptr);
+            GGML_ASSERT(sampled_probs != nullptr);
+            GGML_ASSERT(sampled_candidates != nullptr);
+            GGML_ASSERT(n_logits == k);
+            GGML_ASSERT(n_probs == n_logits);
+            GGML_ASSERT(n_candidates == n_logits);
+
+            const float * reference_logits = llama_get_logits_ith(reference_ctx.ctx.get(), i);
+            GGML_ASSERT(reference_logits != nullptr);
+
+            for (llama_token token = 0; token < n_vocab; ++token) {
+                reference_data[token] = { token, reference_logits[token], 0.0f };
+            }
+
+            llama_token_data_array reference = {
+                /* .data     = */ reference_data.data(),
+                /* .size     = */ reference_data.size(),
+                /* .selected = */ LLAMA_TOKEN_NULL,
+                /* .sorted   = */ false,
+            };
+            llama_sampler_apply(reference_filters.get(), &reference);
+
+            std::vector<bool> reference_matched(reference.size, false);
+            const llama_token_data * reference_begin = reference.data;
+            const llama_token_data * reference_end = reference.data + reference.size;
+            size_t n_matched = 0;
+            int32_t sampled_index = -1;
+            float prob_sum = 0.0f;
+
+            for (uint32_t j = 0; j < n_logits; ++j) {
+                GGML_ASSERT(std::isfinite(sampled_probs[j]));
+                GGML_ASSERT(sampled_probs[j] >= 0.0f);
+                prob_sum += sampled_probs[j];
+
+                if (sampled_candidates[j] == backend_token) {
+                    sampled_index = j;
+                }
+
+                if (!std::isfinite(sampled_logits[j])) {
+                    GGML_ASSERT(std::isinf(sampled_logits[j]) && sampled_logits[j] < 0.0f);
+                    GGML_ASSERT(sampled_probs[j] == 0.0f);
+                    continue;
+                }
+
+                const llama_token_data * match = std::find_if(reference_begin, reference_end,
+                        [&](const llama_token_data & candidate) {
+                            return candidate.id == sampled_candidates[j];
+                        });
+                GGML_ASSERT(match != reference_end);
+
+                const size_t i_reference = match - reference.data;
+                GGML_ASSERT(!reference_matched[i_reference]);
+
+                const float tolerance = 1e-4f * std::max(1.0f, std::fabs(match->logit));
+                GGML_ASSERT(std::fabs(sampled_logits[j] - match->logit) <= tolerance);
+                reference_matched[i_reference] = true;
+                ++n_matched;
+            }
+
+            GGML_ASSERT(n_matched == reference.size);
+            GGML_ASSERT(sampled_index >= 0);
+            GGML_ASSERT(std::fabs(prob_sum - 1.0f) <= 1e-3f);
+
+            const float rnd = reference_dist(reference_rng);
+            float cumsum_before = 0.0f;
+            for (int32_t j = 0; j < sampled_index; ++j) {
+                cumsum_before += sampled_probs[j];
+            }
+            const float cumsum_sampled = cumsum_before + sampled_probs[sampled_index];
+            GGML_ASSERT(rnd >= cumsum_before - 1e-4f);
+            GGML_ASSERT(rnd <= cumsum_sampled + 1e-4f);
+        }
+
+        llama_batch_free(batch);
+
+        const int32_t n_reused = llama_perf_context(test_ctx.ctx.get()).n_reused;
+        if (round == 0) {
+            n_reused_after_first_round = n_reused;
+        } else {
+            GGML_ASSERT(n_reused > n_reused_after_first_round);
+        }
+    }
+
+    printf("backend multi-output sampling chain test PASSED\n");
+}
+
+static void test_backend_multi_output_cpu_suffix(const test_params & params) {
+    const llama_seq_id seq_id = 0;
+    const int32_t k = 8;
+    const llama_vocab * vocab = llama_model_get_vocab(params.model.get());
+
+    {
+        test_single_output_backend_sampler * sampler_ctx = nullptr;
+        llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_top_k(k));
+        llama_sampler_chain_add(chain.get(), test_single_output_backend_sampler_init(&sampler_ctx));
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(88));
+        std::vector<llama_sampler_seq_config> configs = {{ seq_id, chain.get() }};
+        test_context test_ctx(params, configs, 1, 1);
+
+        llama_batch batch = llama_batch_init(1, 0, 1);
+        common_batch_add(batch, llama_vocab_bos(vocab), 0, { seq_id }, true);
+        GGML_ASSERT(llama_decode(test_ctx.ctx.get(), batch) == 0);
+
+        GGML_ASSERT(sampler_ctx->backend_initialized);
+        GGML_ASSERT(!sampler_ctx->backend_require_multi_output);
+        GGML_ASSERT(sampler_ctx->backend_apply_count > 0);
+        GGML_ASSERT(sampler_ctx->apply_count == 0);
+        GGML_ASSERT(llama_get_sampled_token_ith(test_ctx.ctx.get(), 0) != LLAMA_TOKEN_NULL);
+
+        llama_batch_free(batch);
+    }
+
+    {
+        test_single_output_backend_sampler * sampler_ctx = nullptr;
+        llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_top_k(k));
+        llama_sampler_chain_add(chain.get(), test_single_output_backend_sampler_init(&sampler_ctx));
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(88));
+        std::vector<llama_sampler_seq_config> configs = {{ seq_id, chain.get() }};
+        test_context test_ctx(params, configs, 1, 2);
+
+        llama_batch batch = llama_batch_init(2, 0, 1);
+        for (int i = 0; i < 2; ++i) {
+            common_batch_add(batch, llama_vocab_bos(vocab), i, { seq_id }, true);
+        }
+        GGML_ASSERT(llama_decode(test_ctx.ctx.get(), batch) == 0);
+
+        GGML_ASSERT(!sampler_ctx->backend_initialized);
+        GGML_ASSERT(sampler_ctx->backend_require_multi_output);
+        GGML_ASSERT(sampler_ctx->backend_apply_count == 0);
+        for (int i = 0; i < batch.n_tokens; ++i) {
+            GGML_ASSERT(llama_get_sampled_token_ith(test_ctx.ctx.get(), i) == LLAMA_TOKEN_NULL);
+            GGML_ASSERT(llama_get_sampled_logits_count_ith(test_ctx.ctx.get(), i) == (uint32_t) k);
+            GGML_ASSERT(llama_get_sampled_candidates_count_ith(test_ctx.ctx.get(), i) == (uint32_t) k);
+            const llama_token token = llama_sampler_sample(chain.get(), test_ctx.ctx.get(), i);
+            GGML_ASSERT(token >= 0 && token < llama_vocab_n_tokens(vocab));
+        }
+        GGML_ASSERT(sampler_ctx->apply_count == batch.n_tokens);
+
+        llama_batch_free(batch);
+    }
+
+    printf("backend multi-output CPU suffix test PASSED\n");
 }
 
 struct backend_test_case {
@@ -1022,7 +1319,10 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "dist",            test_backend_dist_sampling,           true  },
     { "dist_and_cpu",    test_backend_dist_sampling_and_cpu,   true  },
     { "set_sampler",     test_backend_set_sampler,             true  },
-    { "max_outputs",     test_backend_max_outputs,             true  },
+    { "multi_output_disabled", test_backend_multi_output_disabled,   true },
+    { "multi_output_greedy",   test_backend_multi_output_greedy,     true },
+    { "multi_output_sampling_chain", test_backend_multi_output_sampling_chain, true },
+    { "multi_output_cpu",      test_backend_multi_output_cpu_suffix, true },
     { "mixed",           test_backend_mixed_sampling,          true  },
     { "min_p",           test_backend_min_p_sampling,          true  },
     { "cpu_mixed",       test_backend_cpu_mixed_batch,         true  },

@@ -192,6 +192,7 @@ static struct llama_sampler_i common_reasoning_budget_i = {
     /* .backend_init      = */ nullptr,
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ nullptr,
+    /* .backend_reset     = */ nullptr,
     /* .backend_set_input = */ nullptr,
 };
 

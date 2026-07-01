@@ -5,6 +5,7 @@
 #include "log.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <clocale>
 #include <cstdio>
 #include <cstring>
@@ -28,6 +29,9 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s: --n-predict must be >= -1\n", __func__);
         return 1;
     }
+
+    params.n_outputs_max = common_speculative_n_outputs_max(
+            params.n_batch, params.n_parallel, common_speculative_n_max(&params.speculative));
 
     // init llama.cpp
     llama_backend_init();
