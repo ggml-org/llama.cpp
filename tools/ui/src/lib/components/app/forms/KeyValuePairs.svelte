@@ -40,9 +40,12 @@
 	let keyInputRefs: (HTMLInputElement | null)[] = $state(pairs.map(() => null));
 
 	async function addPair() {
+		// Capture the target index before mutating so deletions earlier in the
+		// list can't make keyInputRefs.length drift past the newly-appended row.
+		const newIndex = pairs.length;
 		onPairsChange([...pairs, { key: '', value: '' }]);
 		await tick();
-		keyInputRefs[keyInputRefs.length - 1]?.focus();
+		keyInputRefs[newIndex]?.focus();
 	}
 
 	function removePair(index: number) {
