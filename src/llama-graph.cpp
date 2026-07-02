@@ -1270,32 +1270,24 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
 
 bool llm_graph_result::can_reuse(const llm_graph_params & params) {
     if (!this->params.allow_reuse(params)) {
-        if (debug > 1) {
-            LLAMA_LOG_DEBUG("%s: cannot reuse graph due to incompatible graph parameters\n", __func__);
-        }
+        LLAMA_LOG_DEBUG_CONDITION(debug > 1, "%s: cannot reuse graph due to incompatible graph parameters\n", __func__);
 
         return false;
     }
 
-    if (debug > 1) {
-        LLAMA_LOG_DEBUG("%s: checking compatibility of %d inputs:\n", __func__, (int) inputs.size());
-    }
+    LLAMA_LOG_DEBUG_CONDITION(debug > 1, "%s: checking compatibility of %d inputs:\n", __func__, (int) inputs.size());
 
     bool res = true;
 
     for (auto & input : inputs) {
         const bool cur = input->can_reuse(params);
 
-        if (debug > 1) {
-            LLAMA_LOG_DEBUG("%s: can_reuse = %d\n", "placeholder", cur);
-        }
+        LLAMA_LOG_DEBUG_CONDITION(debug > 1, "%s: can_reuse = %d\n", "placeholder", cur);
 
         res = res && cur;
     }
 
-    if (debug > 0) {
-        LLAMA_LOG_DEBUG("%s: can reuse graph = %d\n", __func__, res);
-    }
+    LLAMA_LOG_DEBUG_CONDITION(debug > 1, "%s: can reuse graph = %d\n", __func__, res);
 
     return res;
 }
