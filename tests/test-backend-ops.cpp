@@ -9501,6 +9501,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     test_cases.emplace_back(new test_conv_2d_dw({512, 512, 256, 1}, {3, 3, 1, 256}, 1, 1, 1, false));
     test_cases.emplace_back(new test_conv_2d_dw({512, 512, 256, 1}, {3, 3, 1, 256}, 1, 1, 1, true));
+    test_cases.emplace_back(new test_conv_2d_dw({112, 112, 32,  1}, {3, 3, 1, 32},  1, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({112, 112, 32,  1}, {3, 3, 1, 32},  1, 1, 1, true));
+    test_cases.emplace_back(new test_conv_2d_dw({56,  56,  128, 1}, {5, 5, 1, 128}, 2, 2, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({56,  56,  128, 1}, {5, 5, 1, 128}, 2, 2, 1, true));
 
     for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
         test_cases.emplace_back(new test_conv_transpose_2d({256, 256, 256, 1}, {3, 3, 16, 256}, 1, kernel_type));
