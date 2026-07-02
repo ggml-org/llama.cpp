@@ -25,7 +25,7 @@ describe('RECOMMENDED_MCP_SERVERS', () => {
 
 		for (const id of ids) {
 			expect(id).toMatch(/^[a-z0-9-]+$/);
-			expect(MCP_SERVER_ID_PREFIX).not.toContain(id);
+			expect(id.toLowerCase()).not.toContain(MCP_SERVER_ID_PREFIX.toLowerCase());
 		}
 	});
 
