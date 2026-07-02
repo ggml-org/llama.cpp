@@ -8,7 +8,6 @@
 
 #include <array>
 #include <algorithm>
-#include <cassert>
 #include <cfloat>
 #include <chrono>
 #include <cmath>
@@ -262,6 +261,17 @@ static void llama_log_softmax(float * array, size_t size) {
 }
 */
 
+static float llama_sampler_find_max_logit(const llama_token_data_array * cur_p)
+{
+    float max_l = cur_p->data[0].logit;
+    if (!cur_p->sorted) {
+        for (size_t i = 1; i < cur_p->size; ++i) {
+            max_l = std::max(max_l, cur_p->data[i].logit);
+        }
+    }
+    return max_l;
+}
+
 static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) {
     if (temp <= 0.0f) {
         // find the token with the highest logit and set the rest to -inf
@@ -281,8 +291,9 @@ static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) 
         return;
     }
 
+    const float inv_temp = 1.0f / temp;
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].logit /= temp;
+        cur_p->data[i].logit *= inv_temp;
     }
 }
 
@@ -294,12 +305,7 @@ static void llama_sampler_softmax_impl(llama_token_data_array * cur_p, bool do_s
         llama_token_data_array_partial_sort_inplace(cur_p, cur_p->size);
     }
 
-    float max_l = cur_p->data[0].logit;
-    if (!cur_p->sorted) {
-        for (size_t i = 1; i < cur_p->size; ++i) {
-            max_l = std::max(max_l, cur_p->data[i].logit);
-        }
-    }
+    const float max_l = llama_sampler_find_max_logit(cur_p);
 
     float cum_sum = 0.0f;
 
@@ -309,8 +315,9 @@ static void llama_sampler_softmax_impl(llama_token_data_array * cur_p, bool do_s
         cum_sum += p;
     }
 
+    const float inv_cum_sum = 1.0f / cum_sum;
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].p /= cum_sum;
+        cur_p->data[i].p *= inv_cum_sum;
     }
 }
 
@@ -1050,15 +1057,10 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     }
 
     // max logit for numerical stability
-    float max_l = cur_p->data[0].logit;
-    if (!cur_p->sorted) {
-        for (size_t i = 1; i < cur_p->size; ++i) {
-            max_l = std::max(max_l, cur_p->data[i].logit);
-        }
-    }
+    const float max_l = llama_sampler_find_max_logit(cur_p);
 
     // apply softmax to obtain the probabilities
-    double sum_cum = 0.0f;
+    double sum_cum = 0.0;
     for (size_t i = 0; i < cur_p->size; ++i) {
         float p = expf(cur_p->data[i].logit - max_l);
         cur_p->data[i].p = p;
@@ -1069,12 +1071,13 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     // sample from the obtained probabilities and normalize the probs in a single pass
     // this is ~3x faster on Mac with full gpt-oss vocab than the version below
     //
-    std::uniform_real_distribution<double> dist(0.0f, 1.0f);
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
     const double rnd = dist(ctx->rng);
 
-          double sum_run = 0.0f;
+          double sum_run = 0.0;
     const double sum_tgt = sum_cum*rnd;
 
+    const float inv_sum_cum = static_cast<float>(1.0/sum_cum);
     bool found = false;
     for (size_t i = 0; i < cur_p->size; ++i) {
         if (!found) {
@@ -1087,18 +1090,19 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
         }
 
         // normalize probs
-        cur_p->data[i].p /= sum_cum;
+        cur_p->data[i].p *= inv_sum_cum;
     }
 
     // fallback to the last token (don't think this can happen)
-    assert(found);
+    GGML_ASSERT(found);
     if (!found) {
         cur_p->selected = cur_p->size - 1;
     }
 #else
     // for clarity, this is the same as above but does one pass for normalization and one extra pass for sampling
+    const float inv_sum_cum = static_cast<float>(1.0/sum_cum);
     for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].p /= sum_cum;
+        cur_p->data[i].p *= inv_sum_cum;
     }
 
     cur_p->selected = llama_sample_dist(cur_p, ctx->rng);
@@ -1208,8 +1212,8 @@ static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {
     // std::uniform_real_distribution<double> and
     // std::uniform_real_distribution<float> with same rng will produce
     // different sequences).
-    std::uniform_real_distribution<double> dist(0.0f, 1.0f);
-    const float rnd = dist(sctx->rng);
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    const float rnd = static_cast<float>(dist(sctx->rng));
 
     ggml_backend_tensor_set(sctx->inp_uniform, &rnd, 0, sizeof(float));
 }
@@ -2662,7 +2666,7 @@ static void llama_sampler_penalties_accept(struct llama_sampler * smpl, llama_to
         tmp[ctx->prev.rat(i)]++;
     }
 
-    assert(ctx->token_count == tmp);
+    GGML_ASSERT(ctx->token_count == tmp);
 #endif
 }
 
@@ -2683,7 +2687,7 @@ static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_tok
 
         const int count = token_iter->second;
 
-        assert(count > 0 && count <= ctx->penalty_last_n);
+        GGML_ASSERT(count > 0 && count <= ctx->penalty_last_n);
 
         // The academic publication that described this technique actually just only divided, but that would cause tokens with negative logits to become more likely, which is obviously wrong.
         // This is common fix for this problem, which is to multiply by the penalty instead of dividing.
@@ -2802,14 +2806,16 @@ static void llama_sampler_top_n_sigma_apply(struct llama_sampler * smpl, llama_t
     for (size_t i = 0; i < cur_p->size; ++i) {
         // Skip -infinity in std calculation
         if (cur_p->data[i].logit != -INFINITY) {
-            acc += pow(cur_p->data[i].logit - mean, 2);
+            const float diff = cur_p->data[i].logit - mean;
+            acc += diff * diff;
         }
     }
-    float std = valid_count > 0 ? sqrt(acc/valid_count) : 0;
+    float std = valid_count > 0 ? sqrtf(acc/valid_count) : 0;
 
     // apply mask
+    const float threshold = max - (ctx->n * std);
     for (size_t i = 0; i < cur_p->size; ++i) {
-        if (cur_p->data[i].logit < max - (ctx->n * std)) {
+        if (cur_p->data[i].logit < threshold) {
             cur_p->data[i].logit = -INFINITY;
         }
     }
@@ -3677,14 +3683,14 @@ static void llama_sampler_infill_apply(struct llama_sampler * smpl, llama_token_
             if (len0 < 0) {
                 ctx->buf0.resize(len0);
                 len0 = ctx->vocab->token_to_piece(cur_p->data[i0].id, ctx->buf0.data(), ctx->buf0.size(), 0, false);
-                assert(len0 > 0);
+                GGML_ASSERT(len0 > 0);
             }
 
             int len1 = ctx->vocab->token_to_piece(cur_p->data[i1].id, ctx->buf1.data(), ctx->buf1.size(), 0, false);
             if (len1 < 0) {
                 ctx->buf1.resize(len1);
                 len1 = ctx->vocab->token_to_piece(cur_p->data[i1].id, ctx->buf1.data(), ctx->buf1.size(), 0, false);
-                assert(len1 > 0);
+                GGML_ASSERT(len1 > 0);
             }
 
             // token i0 is a prefix of token i1
