@@ -187,6 +187,9 @@ struct llama_hparams {
     // for Classifiers
     uint32_t n_cls_out = 1;
 
+    // for DSpark: the trained draft block size, in tokens (anchor + n-1 masks)
+    uint32_t n_dspark_block = 0;
+
     // input embedding dimension (0 = use n_embd)
     uint32_t n_embd_inp_impl = 0;
 
