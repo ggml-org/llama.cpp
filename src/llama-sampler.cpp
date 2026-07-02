@@ -3881,3 +3881,144 @@ void llama_perf_sampler_reset(struct llama_sampler * chain) {
     ctx->t_sample_us = 0;
     ctx->n_sample    = 0;
 }
+
+//
+// UTF-8 validity sampler
+// Rejects tokens that would create invalid UTF-8 byte sequences
+// when concatenated with previously accepted tokens.
+// This prevents broken UTF-8 from entering the prompt cache (unlike
+// post-hoc sanitization) and avoids peg-native parse failures.
+//
+
+struct llama_sampler_utf8 {
+    const llama_vocab * vocab;
+    std::string partial; // accumulated valid UTF-8 bytes from accepted tokens
+
+    // last few bytes for boundary checking optimization
+    uint8_t tail[3] = {0, 0, 0};
+    int tail_len = 0;
+};
+
+// Validate that a byte sequence is well-formed UTF-8.
+// Returns the number of valid bytes, or -1 if invalid.
+static int utf8_valid_bytes(const uint8_t * data, size_t len) {
+    size_t i = 0;
+    while (i < len) {
+        uint8_t c = data[i];
+        size_t seq_len = 0;
+        uint32_t cp = 0;
+
+        if (c < 0x80) {
+            i++;
+            continue;
+        } else if ((c & 0xE0) == 0xC0) {
+            seq_len = 2; cp = c & 0x1F;
+        } else if ((c & 0xF0) == 0xE0) {
+            seq_len = 3; cp = c & 0x0F;
+        } else if ((c & 0xF8) == 0xF0) {
+            seq_len = 4; cp = c & 0x07;
+        } else {
+            return -1; // invalid start byte
+        }
+
+        if (i + seq_len > len) {
+            return (int)i; // incomplete sequence at end — valid so far
+        }
+
+        for (size_t j = 1; j < seq_len; j++) {
+            uint8_t cc = data[i + j];
+            if ((cc & 0xC0) != 0x80) return -1;
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+
+        // Overlong / surrogate / out-of-range
+        if ((seq_len == 2 && cp < 0x80) ||
+            (seq_len == 3 && cp < 0x800) ||
+            (seq_len == 4 && cp < 0x10000) ||
+            (cp >= 0xD800 && cp <= 0xDFFF) ||
+            cp > 0x10FFFF) {
+            return -1;
+        }
+
+        i += seq_len;
+    }
+    return (int)i;
+}
+
+static const char * llama_sampler_utf8_name(const struct llama_sampler * smpl) {
+    return "utf8";
+}
+
+static void llama_sampler_utf8_accept(struct llama_sampler * smpl, llama_token token) {
+    auto * ctx = (struct llama_sampler_utf8 *) smpl->ctx;
+    std::string piece = ctx->vocab->detokenize({token}, true);
+
+    // Track tail bytes for boundary optimization
+    ctx->partial += piece;
+    size_t n = ctx->partial.size();
+    ctx->tail_len = 0;
+    for (int j = 0; j < 3 && (int)n - 1 - j >= 0; j++) {
+        uint8_t b = (uint8_t)ctx->partial[n - 1 - j];
+        if ((b & 0xC0) == 0x80) {
+            ctx->tail[2 - j] = b;
+            ctx->tail_len++;
+        } else {
+            ctx->tail[2 - j] = b;
+            ctx->tail_len++;
+            break;
+        }
+    }
+}
+
+static void llama_sampler_utf8_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (struct llama_sampler_utf8 *) smpl->ctx;
+
+    for (size_t i = 0; i < cur_p->size; i++) {
+        std::string piece = ctx->vocab->detokenize({cur_p->data[i].id}, true);
+
+        // Build boundary-check buffer: tail bytes + candidate text
+        std::string check;
+        if (ctx->tail_len > 0) {
+            check.assign((const char *)(ctx->tail + 3 - ctx->tail_len), ctx->tail_len);
+        }
+        check += piece;
+
+        if (utf8_valid_bytes((const uint8_t *)check.data(), check.size()) < 0) {
+            cur_p->data[i].logit = -INFINITY;
+        }
+    }
+}
+
+static void llama_sampler_utf8_reset(struct llama_sampler * smpl) {
+    auto * ctx = (struct llama_sampler_utf8 *) smpl->ctx;
+    ctx->partial.clear();
+    ctx->tail_len = 0;
+    ctx->tail[0] = ctx->tail[1] = ctx->tail[2] = 0;
+}
+
+static struct llama_sampler * llama_sampler_utf8_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (const struct llama_sampler_utf8 *) smpl->ctx;
+    return llama_sampler_init_utf8(ctx->vocab);
+}
+
+static void llama_sampler_utf8_free(struct llama_sampler * smpl) {
+    delete (struct llama_sampler_utf8 *) smpl->ctx;
+}
+
+static struct llama_sampler_i llama_sampler_utf8_i = {
+    /* .name   = */ llama_sampler_utf8_name,
+    /* .accept = */ llama_sampler_utf8_accept,
+    /* .apply  = */ llama_sampler_utf8_apply,
+    /* .reset  = */ llama_sampler_utf8_reset,
+    /* .clone  = */ llama_sampler_utf8_clone,
+    /* .free   = */ llama_sampler_utf8_free,
+    /* .backend_init   = */ nullptr,
+    /* .backend_accept = */ nullptr,
+    /* .backend_apply  = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+};
+
+struct llama_sampler * llama_sampler_init_utf8(const struct llama_vocab * vocab) {
+    auto * ctx = new llama_sampler_utf8{/* .vocab = */ vocab};
+    return llama_sampler_init(&llama_sampler_utf8_i, ctx);
+}

@@ -1378,6 +1378,13 @@ extern "C" {
                           const char * grammar_str,
                           const char * grammar_root);
 
+    /// @details Rejects tokens that would create invalid UTF-8 byte sequences
+    /// when concatenated with previously accepted tokens.
+    /// Prevents corrupt UTF-8 from entering the prompt cache and
+    /// avoids parser failures downstream.
+    LLAMA_API struct llama_sampler * llama_sampler_init_utf8(
+            const struct llama_vocab * vocab);
+
     DEPRECATED(LLAMA_API struct llama_sampler * llama_sampler_init_grammar_lazy(
             const struct llama_vocab * vocab,
                           const char * grammar_str,

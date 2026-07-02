@@ -24,10 +24,11 @@
 #include <optional>
 #include <sstream>
 
-// ── UTF-8 sanitizer ───────────────────────────────────────────────────
-// Replaces invalid UTF-8 byte sequences with U+FFFD (replacement character).
-// This prevents peg-native parse failures when the model's tokenizer
-// produces corrupted byte sequences (e.g. PaddleOCR-VL on certain glyphs).
+// ── UTF-8 safety net ────────────────────────────────────────────────
+// The utf8 sampler (llama_sampler_init_utf8) prevents invalid UTF-8
+// from being generated in normal sampling. This function is a last-resort
+// safety net for any edge cases (tool calls, pre-existing text, etc.)
+// that might bypass the sampler.
 static std::string sanitize_utf8(const std::string & input) {
     std::string out;
     out.reserve(input.size());
