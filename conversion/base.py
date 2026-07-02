@@ -1097,6 +1097,57 @@ class ModelBase:
             raise NotImplementedError(f'Architecture {arch!r} not supported!') from None
 
 
+class MXFP4MoEMixin:
+    """Repack transformers/HF MXFP4 expert blocks into native GGUF MXFP4 tensors.
+
+    Shared by GptOssModel and Gemma4Model. ``transform_nibble_layout`` converts the
+    transformers mxfp4 nibble order into ggml's; ``repack_mxfp4`` prepends the E8M0
+    scale to each block and writes the result straight to the gguf_writer as ggml
+    MXFP4 (no dequantization). ``blocks`` is [..., n_block, 16] uint8 and ``scales``
+    is [..., n_block] uint8.
+    """
+
+    def transform_nibble_layout(self, tensor: Tensor) -> Tensor:
+        assert tensor.dtype == torch.uint8
+        assert tensor.shape[-1] == 16
+        # swap nibbles
+        t_lo = tensor & 0x0F
+        t_hi = tensor & 0xF0
+        t_swapped = (t_lo << 4) | (t_hi >> 4)
+        tensor = t_swapped
+        # transform aaaa...bbbb... to abababab...
+        blk_a, blk_b = tensor.chunk(2, dim=-1)
+        # get a_
+        blk_a0 = (blk_a & 0xF0).view(-1, 1)
+        blk_a1 = (blk_a << 4).view(-1, 1)
+        blk_a = torch.stack((blk_a0, blk_a1), dim=2).view(tensor.shape)
+        # get _b
+        blk_b0 = (blk_b >> 4).view(-1, 1)
+        blk_b1 = (blk_b & 0x0F).view(-1, 1)
+        blk_b = torch.stack((blk_b0, blk_b1), dim=2).view(tensor.shape)
+        # swap once more
+        out = blk_a | blk_b
+        out_h = out & 0xF0
+        out_l = out & 0x0F
+        out = (out_h >> 4) | (out_l << 4)
+        return out
+
+    def repack_mxfp4(self, new_name: str, blocks: Tensor, scales: Tensor):
+        assert blocks.dtype == torch.uint8
+        assert scales.dtype == torch.uint8
+        scales = scales.unsqueeze(-1)
+        assert len(blocks.shape) == 4
+        assert len(scales.shape) == 4
+        blocks = self.transform_nibble_layout(blocks)
+        new_data = torch.concat((scales, blocks), dim=-1)
+        new_shape = [new_data.shape[0], new_data.shape[1], new_data.shape[2] * 32]
+        logger.info(f"Repacked {new_name} with shape {new_shape} and quantization MXFP4")
+        # flatten last dim
+        new_data = new_data.view(new_data.shape[0], new_data.shape[1], new_data.shape[2] * new_data.shape[3])
+        new_data = new_data.numpy()
+        self.gguf_writer.add_tensor(new_name, new_data, raw_dtype=gguf.GGMLQuantizationType.MXFP4)
+
+
 class TextModel(ModelBase):
     model_type = ModelType.TEXT
     hf_arch: str
