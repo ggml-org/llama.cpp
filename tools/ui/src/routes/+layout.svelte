@@ -23,31 +23,23 @@
 	import { Toaster } from 'svelte-sonner';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import {
-		RECOMMENDED_MCP_SERVERS_OPTIN_DIALOG_DELAY,
-		TOOLTIP_DELAY_DURATION
-	} from '$lib/constants';
-	import { getOptedInRecommendationIds } from '$lib/utils';
+	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
+	import { useMcpRecommendations } from '$lib/hooks/use-mcp-recommendations.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { theme } from '$lib/stores/theme.svelte';
 	import { buildInfoStore } from '$lib/stores/build-info.svelte';
 
-	import { MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, RECOMMENDED_MCP_SERVER_IDS, SETTINGS_KEYS } from '$lib/constants';
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	let { children } = $props();
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
-	let mcpRecommendationsDismissed = $state(
-		browser && localStorage.getItem(MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY) === 'true'
-	);
-	let mcpRecommendationsOpen = $state(false);
-	let mcpRecommendationsChecked = $state(false);
-	let mcpRecommendationsTimeout: ReturnType<typeof setTimeout> | null = null;
+	const mcpRecommendations = useMcpRecommendations();
 
 	let chatSidebar:
 		| {
@@ -165,13 +157,6 @@
 		}
 	}
 
-	function dismissMcpRecommendations() {
-		if (browser) {
-			localStorage.setItem(MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, 'true');
-		}
-		mcpRecommendationsDismissed = true;
-	}
-
 	onMount(() => {
 		updateFavicon();
 		// snapshot of every backend running stream on first load, populates the sidebar spinners
@@ -273,40 +258,6 @@
 		}
 	});
 
-	// Prompt the user once to opt-in to suggested MCP servers, after a short delay
-	$effect(() => {
-		if (!browser) return;
-
-		if (mcpRecommendationsOpen || mcpRecommendationsDismissed) {
-			if (mcpRecommendationsTimeout) {
-				clearTimeout(mcpRecommendationsTimeout);
-				mcpRecommendationsTimeout = null;
-			}
-			return;
-		}
-
-		if (mcpRecommendationsChecked) return;
-
-		const optedInIds = getOptedInRecommendationIds(conversationsStore.pendingMcpServerOverrides);
-		// If the user already opted in to any recommendation, don't show the dialog.
-		if (optedInIds.size > 0) {
-			mcpRecommendationsChecked = true;
-			return;
-		}
-
-		const hasRecommendations = mcpStore
-			.getServers()
-			.some((server) => RECOMMENDED_MCP_SERVER_IDS.has(server.id));
-
-		if (hasRecommendations) {
-			mcpRecommendationsTimeout = setTimeout(() => {
-				mcpRecommendationsOpen = true;
-			}, RECOMMENDED_MCP_SERVERS_OPTIN_DIALOG_DELAY);
-		}
-
-		mcpRecommendationsChecked = true;
-	});
-
 	// Monitor API key changes and redirect to error page if removed or changed when required
 	$effect(() => {
 		checkApiKey();
@@ -376,12 +327,8 @@
 	/>
 
 	<DialogMcpServerRecommendations
-		bind:open={mcpRecommendationsOpen}
-		onOpenChange={(open) => {
-			if (!open) {
-				dismissMcpRecommendations();
-			}
-		}}
+		open={mcpRecommendations.open}
+		onOpenChange={mcpRecommendations.handleOpenChange}
 	/>
 </Tooltip.Provider>
 

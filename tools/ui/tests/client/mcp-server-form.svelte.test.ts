@@ -7,13 +7,15 @@ const BEARER_PREFIX = 'Bearer ';
 const BEARER_PLACEHOLDER = 'Paste token here';
 
 /**
- * Client-side tests for the McpServerForm bearer UI added on this branch.
+ * Client-side tests for the McpServerForm bearer UI.
  *
- * The form is the only place where the recommendable `Authorization` header
- * can be written without going through the KV section, so we cover its
- * round-trip here end-to-end: empty state, toggle on, type a token, persist
- * on close, fix non-Bearer values, etc. Equivalent parser coverage lives
- * in `tests/unit/headers.test.ts`.
+ * The dedicated UI only "owns" Authorization headers that already carry a
+ * Bearer scheme (heuristic check on the value). Other Authorization values
+ * stay in the KV section so the user can still edit them verbatim. Storage
+ * always goes through the same custom-headers slot, so a round-trip via this
+ * UI produces exactly one `Authorization: Bearer <token>` entry.
+ *
+ * Equivalent parser coverage lives in `tests/unit/headers.test.ts`.
  */
 describe('McpServerForm - Authorization / bearer UI', () => {
 	function bearerInput(screen: Awaited<ReturnType<typeof render>>) {
@@ -41,7 +43,7 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 		await expect.element(bearerInput(screen)).toBeVisible();
 	});
 
-	it('typing a bearer token writes Authorization row to the headers prop', async () => {
+	it('typing a token writes the Authorization row with the Bearer prefix prepended', async () => {
 		const screen = await render(McpServerFormWrapper, { headers: '' });
 
 		await screen.getByRole('switch', { name: /authorization/i }).click();
@@ -55,7 +57,7 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 			.toHaveAttribute('data-captured-headers', expected);
 	});
 
-	it('pre-existing Bearer header pre-fills the bearer input', async () => {
+	it('pre-existing Bearer header pre-fills the bearer input with the token stripped', async () => {
 		const existing = JSON.stringify({
 			'X-Trace-Id': 'abc',
 			[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}preexisting`
@@ -67,6 +69,56 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 		await expect.element(bearerInput(screen)).toHaveValue('preexisting');
 	});
 
+	it('non-Bearer Authorization is ignored by the dedicated UI and stays in the KV section', async () => {
+		const existing = JSON.stringify({ [AUTHORIZATION_HEADER]: 'Basic czNjcjpwYXNz' });
+
+		const screen = await render(McpServerFormWrapper, { headers: existing });
+
+		// The heuristic only surfaces Bearer-scheme values, so the input stays hidden.
+		await expect.element(bearerInput(screen)).not.toBeInTheDocument();
+
+		// The KV section still exposes Authorization: Basic czNjcjpwYXNz so the
+		// user can keep editing it verbatim.
+		const headerKeyInput = screen.getByPlaceholder('Header name');
+		await expect.element(headerKeyInput).toBeVisible();
+	});
+
+	it('engaging the token UI replaces a non-Bearer Authorization with the Bearer scheme', async () => {
+		const existing = JSON.stringify({ [AUTHORIZATION_HEADER]: 'Basic old' });
+
+		const screen = await render(McpServerFormWrapper, { headers: existing });
+
+		await screen.getByRole('switch', { name: /authorization/i }).click();
+		await bearerInput(screen).fill('new');
+
+		const expected = JSON.stringify({ [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}new` });
+		await expect
+			.element(capturedHeaders(screen))
+			.toHaveAttribute('data-captured-headers', expected);
+	});
+
+	it('toggling Authorization off with no token drops the Bearer row but keeps non-Bearer schemes', async () => {
+		const existing = JSON.stringify({ [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}xyz` });
+		const screen = await render(McpServerFormWrapper, { headers: existing });
+
+		await screen.getByRole('switch', { name: /authorization/i }).click();
+
+		await expect.element(capturedHeaders(screen)).toHaveAttribute('data-captured-headers', '');
+	});
+
+	it('toggling Authorization off when no Bearer row is present leaves headers untouched', async () => {
+		const existing = JSON.stringify({ [AUTHORIZATION_HEADER]: 'Basic czNjcjpwYXNz' });
+		const screen = await render(McpServerFormWrapper, { headers: existing });
+
+		await screen.getByRole('switch', { name: /authorization/i }).click();
+		// Toggle on then off without typing a token.
+		await screen.getByRole('switch', { name: /authorization/i }).click();
+
+		await expect
+			.element(capturedHeaders(screen))
+			.toHaveAttribute('data-captured-headers', existing);
+	});
+
 	it('clearing the bearer input drops the Authorization row', async () => {
 		const existing = JSON.stringify({ [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}xyz` });
 		const screen = await render(McpServerFormWrapper, { headers: existing });
@@ -76,16 +128,7 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 		await expect.element(capturedHeaders(screen)).toHaveAttribute('data-captured-headers', '');
 	});
 
-	it('toggling Authentication off removes the bearer row from headers', async () => {
-		const existing = JSON.stringify({ [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}xyz` });
-		const screen = await render(McpServerFormWrapper, { headers: existing });
-
-		await screen.getByRole('switch', { name: /authorization/i }).click();
-
-		await expect.element(capturedHeaders(screen)).toHaveAttribute('data-captured-headers', '');
-	});
-
-	it('does not surface Authorization in the KV section even when pre-existing', async () => {
+	it('does not surface Bearer Authorization in the KV section even when pre-existing', async () => {
 		const existing = JSON.stringify({ [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}xyz` });
 		const screen = await render(McpServerFormWrapper, { headers: existing });
 

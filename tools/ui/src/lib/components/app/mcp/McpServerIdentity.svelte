@@ -31,26 +31,11 @@
 	let safeWebsiteUrl = $derived(
 		serverInfo?.websiteUrl ? sanitizeExternalUrl(serverInfo.websiteUrl) : null
 	);
-
-	// Track per-URL load failures so a malformed data URL or 404 swaps to the
-	// generic MCP logo fallback. Reset whenever the URL changes.
-	let faviconFailed = $state(false);
-	$effect(() => {
-		void faviconUrl;
-		faviconFailed = false;
-	});
 </script>
 
 <span class="flex min-w-0 items-center gap-1.5">
-	{#if faviconUrl && !faviconFailed}
-		<img
-			src={faviconUrl}
-			alt=""
-			class={['shrink-0 text-foreground', iconRounded, iconClass]}
-			onerror={() => {
-				faviconFailed = true;
-			}}
-		/>
+	{#if faviconUrl}
+		<img src={faviconUrl} alt="" class={['shrink-0 text-foreground', iconRounded, iconClass]} />
 	{:else}
 		<McpLogo class={['shrink-0 text-foreground', iconRounded, iconClass].join(' ')} />
 	{/if}

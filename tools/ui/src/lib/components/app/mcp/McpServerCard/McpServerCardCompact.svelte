@@ -9,7 +9,7 @@
 	import { HealthCheckStatus } from '$lib/enums';
 	import type { MCPServerDisplayInfo, HealthCheckState, MCPServerSettingsEntry } from '$lib/types';
 	import { onMount } from 'svelte';
-	import { MCP_CARD_VISIBLE_TOOL_LIMIT } from '$lib/constants/mcp-form';
+	import { MCP_CARD_VISIBLE_TOOL_LIMIT, NEWLINE } from '$lib/constants';
 
 	interface Props {
 		server: MCPServerDisplayInfo & { description?: string };
@@ -54,7 +54,7 @@
 			return { text: server.description, lines: 2 };
 		}
 		if (!instructions) return null;
-		const firstLine = instructions.split('\n').find((line: string) => line.trim().length > 0);
+		const firstLine = instructions.split(NEWLINE).find((line: string) => line.trim().length > 0);
 		const trimmed = firstLine?.trim();
 		return trimmed ? { text: trimmed, lines: 1 } : null;
 	});

@@ -16,8 +16,6 @@
 	import { PencilRuler, ChevronDown, ChevronRight } from '@lucide/svelte';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { AttachmentAction } from '$lib/enums/attachment.enums';
-	import { getOptedInRecommendationIds } from '$lib/utils';
-	import { RECOMMENDED_MCP_SERVER_IDS } from '$lib/constants';
 
 	interface Props {
 		class?: string;
@@ -76,12 +74,7 @@
 	const sheetItemRowClass =
 		'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent';
 
-	function getEnabledMcpServers() {
-		const optedInIds = getOptedInRecommendationIds(conversationsStore.pendingMcpServerOverrides);
-		return mcpStore
-			.getServersSorted()
-			.filter((s) => s.enabled && (!RECOMMENDED_MCP_SERVER_IDS.has(s.id) || optedInIds.has(s.id)));
-	}
+	let visibleMcpServers = $derived(mcpStore.visibleMcpServers);
 </script>
 
 <div class="flex items-center gap-1 {className}">
@@ -158,13 +151,13 @@
 						<span class="flex-1">MCP Servers</span>
 
 						<span class="text-xs text-muted-foreground">
-							{getEnabledMcpServers().length} server{getEnabledMcpServers().length !== 1 ? 's' : ''}
+							{visibleMcpServers.length} server{visibleMcpServers.length !== 1 ? 's' : ''}
 						</span>
 					</Collapsible.Trigger>
 
 					<Collapsible.Content>
 						<div class="flex flex-col gap-0.5 pl-4">
-							{#each getEnabledMcpServers() as server (server.id)}
+							{#each visibleMcpServers as server (server.id)}
 								{@const healthState = mcpStore.getHealthCheckState(server.id)}
 								{@const hasError = healthState.status === HealthCheckStatus.ERROR}
 								{@const displayName = mcpStore.getServerLabel(server)}
@@ -207,7 +200,7 @@
 								</button>
 							{/each}
 
-							{#if getEnabledMcpServers().length === 0}
+							{#if visibleMcpServers.length === 0}
 								<div class="px-3 py-2 text-center text-sm text-muted-foreground">
 									No MCP servers configured
 								</div>

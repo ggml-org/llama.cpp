@@ -139,7 +139,6 @@ export {
 } from './mcp';
 
 // Predefined MCP recommendation opt-in helpers
-export { getOptedInRecommendationIds } from './recommended-mcp-servers.svelte';
 
 // URI Template utilities
 export {

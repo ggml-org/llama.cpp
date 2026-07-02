@@ -39,39 +39,45 @@
 	let headerPairs = $derived<KeyValuePair[]>(parseHeadersToArray(headers));
 
 	const AUTHORIZATION_HEADER = 'Authorization';
+	const BEARER_PREFIX = 'Bearer ';
 
-	// Detect Authorization by key presence alone, never by value: mid-edit rows
-	// may have an empty value, and an empty Authorization row must remain
-	// reachable so it can be filled in or cleared via the toggle below.
-	let hasAuthorization = $derived(
-		headerPairs.some((p) => p.key.trim().toLowerCase() === AUTHORIZATION_HEADER.toLowerCase())
-	);
+	// Heuristic: this dedicated UI only owns Authorization headers that already
+	// carry a Bearer scheme. Anything else (e.g. Basic, raw tokens) stays in the
+	// KV section so the user can still edit those values verbatim.
+	const matchesAuthorizationKey = (key: string): boolean =>
+		key.trim().toLowerCase() === AUTHORIZATION_HEADER.toLowerCase();
+
+	const isBearerScheme = (value: string): boolean =>
+		value.trim().toLowerCase().startsWith(BEARER_PREFIX.toLowerCase());
+
+	const ownedByBearerUi = (p: KeyValuePair): boolean =>
+		matchesAuthorizationKey(p.key) && isBearerScheme(p.value);
+
+	let hasAuthorization = $derived(headerPairs.some(ownedByBearerUi));
 
 	let wantsAuthorization = $state(false);
 
 	let showAuthorization = $derived(hasAuthorization || wantsAuthorization);
 
 	let urlInput: HTMLInputElement | null = $state(null);
-	let authorizationInput: HTMLInputElement | null = $state(null);
+	let bearerInput: HTMLInputElement | null = $state(null);
 
 	$effect(() => {
 		urlInput?.focus();
 	});
 
 	$effect(() => {
-		if (wantsAuthorization && authorizationInput) {
-			authorizationInput.focus();
+		if (wantsAuthorization && bearerInput) {
+			bearerInput.focus();
 		}
 	});
 
-	// Surface the Authorization header's value verbatim so the exact string that
-	// was persisted round-trips on save, whether it carries a "Bearer " prefix
-	// or uses a different scheme (e.g. Basic, raw token).
-	let authorizationValue = $derived.by(() => {
-		const auth = headerPairs.find(
-			(p) => p.key.trim().toLowerCase() === AUTHORIZATION_HEADER.toLowerCase()
-		);
-		return auth?.value ?? '';
+	// Surface only the token, stripping the "Bearer " prefix this UI writes on
+	// save. Non-Bearer Authorization entries are ignored here.
+	let bearerToken = $derived.by(() => {
+		const auth = headerPairs.find(ownedByBearerUi);
+		if (!auth) return '';
+		return auth.value.trim().slice(BEARER_PREFIX.length).trim();
 	});
 
 	$effect(() => {
@@ -85,15 +91,17 @@
 		onHeadersChange(serializeHeaders(newPairs));
 	}
 
-	function updateAuthorizationValue(value: string) {
-		const filtered = headerPairs.filter(
-			(p) => p.key.trim().toLowerCase() !== AUTHORIZATION_HEADER.toLowerCase()
-		);
+	// The dedicated UI owns the Authorization slot end-to-end when the user
+	// engages it: any prior Authorization row (Bearer or otherwise) is replaced
+	// by exactly one { Authorization: "Bearer <token>" } entry. JSON's last-key
+	// behavior would otherwise pick one arbitrarily, so we strip first.
+	function updateBearerToken(token: string) {
+		const filtered = headerPairs.filter((p) => !matchesAuthorizationKey(p.key));
 
-		const trimmed = value.trim();
+		const trimmed = token.trim();
 
 		if (trimmed) {
-			filtered.push({ key: AUTHORIZATION_HEADER, value: trimmed });
+			filtered.push({ key: AUTHORIZATION_HEADER, value: `${BEARER_PREFIX}${trimmed}` });
 		}
 
 		updateHeaderPairs(filtered);
@@ -103,9 +111,9 @@
 		wantsAuthorization = checked;
 
 		if (!checked) {
-			const filtered = headerPairs.filter(
-				(p) => p.key.trim().toLowerCase() !== AUTHORIZATION_HEADER.toLowerCase()
-			);
+			// Only drop the entry this UI owns; a non-Bearer Authorization row
+			// authored in the KV section must survive a toggle off untouched.
+			const filtered = headerPairs.filter((p) => !ownedByBearerUi(p));
 			updateHeaderPairs(filtered);
 		}
 	}
@@ -143,28 +151,31 @@
 	</label>
 
 	{#if showAuthorization}
-		<div class="mt-2">
+		<div class="relative mt-2">
 			<Input
-				id="authorization-{id}"
+				id="bearer-token-{id}"
 				type="password"
 				autocomplete="off"
-				placeholder="e.g. Bearer eyJhbGci..."
-				value={authorizationValue}
-				oninput={(e) => updateAuthorizationValue(e.currentTarget.value)}
-				bind:ref={authorizationInput}
+				placeholder="Paste token here"
+				value={bearerToken}
+				oninput={(e) => updateBearerToken(e.currentTarget.value)}
+				class="pl-16"
+				bind:ref={bearerInput}
 			/>
+
+			<span
+				class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm font-medium text-foreground"
+			>
+				Bearer
+			</span>
 		</div>
 	{/if}
 
 	<KeyValuePairs
 		class="mt-3"
-		pairs={headerPairs.filter(
-			(p) => p.key.trim().toLowerCase() !== AUTHORIZATION_HEADER.toLowerCase()
-		)}
+		pairs={headerPairs.filter((p) => !ownedByBearerUi(p))}
 		onPairsChange={(pairs) => {
-			const auth = headerPairs.find(
-				(p) => p.key.trim().toLowerCase() === AUTHORIZATION_HEADER.toLowerCase()
-			);
+			const auth = headerPairs.find(ownedByBearerUi);
 			updateHeaderPairs(auth ? [...pairs, auth] : pairs);
 		}}
 		keyPlaceholder="Header name"

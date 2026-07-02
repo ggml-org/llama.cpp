@@ -5,8 +5,6 @@ import {
 } from '$lib/constants/recommended-mcp-servers';
 import { parseMcpServerSettings } from '$lib/utils/mcp';
 import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
-import { getOptedInRecommendationIds } from '$lib/utils/recommended-mcp-servers.svelte';
-import type { McpServerOverride } from '$lib/types/database';
 
 /**
  * Tests for the predefined recommended MCP servers.
@@ -88,62 +86,5 @@ describe('recommended-mcp-servers default value', () => {
 		const entry = parsed[0];
 
 		expect(entry?.requestTimeoutSeconds).toBe(DEFAULT_MCP_CONFIG.requestTimeoutSeconds);
-	});
-});
-
-describe('getOptedInRecommendationIds', () => {
-	const exaId = RECOMMENDED_MCP_SERVERS[0]?.id;
-	const hfId = RECOMMENDED_MCP_SERVERS[1]?.id ?? exaId;
-
-	it('returns an empty set when no pending overrides exist', () => {
-		const ids = getOptedInRecommendationIds([]);
-		expect(ids.size).toBe(0);
-	});
-
-	it('filters only recommended server IDs from pending overrides', () => {
-		const overrides: McpServerOverride[] = [
-			{ serverId: exaId, enabled: true },
-			{ serverId: hfId, enabled: true }
-		];
-
-		const ids = getOptedInRecommendationIds(overrides);
-		expect(ids.size).toBe(2);
-		expect(ids.has(exaId)).toBe(true);
-		expect(ids.has(hfId)).toBe(true);
-	});
-
-	it('excludes disabled overrides', () => {
-		const overrides: McpServerOverride[] = [
-			{ serverId: exaId, enabled: false },
-			{ serverId: hfId, enabled: true }
-		];
-
-		const ids = getOptedInRecommendationIds(overrides);
-		expect(ids.size).toBe(1);
-		expect(ids.has(exaId)).toBe(false);
-		expect(ids.has(hfId)).toBe(true);
-	});
-
-	it('excludes non-recommended server IDs', () => {
-		const overrides: McpServerOverride[] = [
-			{ serverId: 'custom-server-id', enabled: true },
-			{ serverId: exaId, enabled: true }
-		];
-
-		const ids = getOptedInRecommendationIds(overrides);
-		expect(ids.size).toBe(1);
-		expect(ids.has('custom-server-id')).toBe(false);
-		expect(ids.has(exaId)).toBe(true);
-	});
-
-	it('deduplicates when the same server ID appears multiple times', () => {
-		const overrides: McpServerOverride[] = [
-			{ serverId: exaId, enabled: true },
-			{ serverId: exaId, enabled: true },
-			{ serverId: hfId, enabled: true }
-		];
-
-		const ids = getOptedInRecommendationIds(overrides);
-		expect(ids.size).toBe(2);
 	});
 });
