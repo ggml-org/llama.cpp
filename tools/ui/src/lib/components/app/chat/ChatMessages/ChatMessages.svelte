@@ -169,6 +169,20 @@
 		});
 	});
 
+	let siblingInfoByMessageId = $derived.by(() => {
+		const nodeMap = new Map(
+			allConversationMessages.map((msg) => [msg.id, msg] as const)
+		);
+		const siblingMap = new Map<string, ChatMessageSiblingInfo>();
+		for (const msg of allConversationMessages) {
+			const info = getMessageSiblings(nodeMap, msg.id);
+			if (info) {
+				siblingMap.set(msg.id, info);
+			}
+		}
+		return siblingMap;
+	});
+
 	let displayMessages = $derived.by(() => {
 		if (!messages.length) {
 			return [];
@@ -223,18 +237,18 @@
 				}
 			}
 
-			const siblingInfo = getMessageSiblings(allConversationMessages, msg.id);
+			const siblingInfo = siblingInfoByMessageId.get(msg.id) ?? {
+				message: msg,
+				siblingIds: [msg.id],
+				currentIndex: 0,
+				totalSiblings: 1
+			};
 
 			result.push({
 				message: msg,
 				toolMessages,
 				isLastAssistantMessage: false,
-				siblingInfo: siblingInfo || {
-					message: msg,
-					siblingIds: [msg.id],
-					currentIndex: 0,
-					totalSiblings: 1
-				}
+				siblingInfo
 			});
 		}
 

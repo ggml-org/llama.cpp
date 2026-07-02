@@ -25,11 +25,7 @@ export {
 	findMessageById,
 	findLeafNode,
 	findDescendantMessages,
-	getMessageSiblings,
-	getMessageDisplayList,
-	hasMessageSiblings,
-	getNextSibling,
-	getPreviousSibling
+	getMessageSiblings
 } from './branching';
 
 // Code
