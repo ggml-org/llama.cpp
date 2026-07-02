@@ -956,12 +956,10 @@ private:
         GGML_ASSERT(sleeping != new_state);
         if (new_state) {
             if (params_base.sleep_mode == COMMON_SLEEP_MODE_TERMINATE) {
-                SRV_INF("%s", "idle timeout reached, terminating process (--sleep-mode terminate)\n");
+                SRV_INF("%s", "idle timeout reached, terminating process \n");
                 destroy();
                 fflush(stdout);
                 fflush(stderr);
-                // exit immediately: process death returns all resources (incl. GPU memory) to the OS;
-                // a supervisor (router or systemd) is expected to respawn on the next request
                 std::_Exit(0);
             }
             SRV_INF("%s", "server is entering sleeping state\n");
