@@ -916,7 +916,7 @@ std::vector<common_cached_model_info> common_list_cached_models() {
             continue;
         }
         if (seen.insert(f.repo_id + ":" + split.tag).second) {
-            result.push_back({f.repo_id, split.tag});
+            result.push_back({f.repo_id, split.tag, f.path});
         }
     }
 

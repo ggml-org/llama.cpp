@@ -348,7 +348,10 @@ common_presets common_preset_context::load_from_cache() const {
     for (const auto & model : cached_models) {
         common_preset preset;
         preset.name = model.to_string();
-        preset.set_option(*this, "LLAMA_ARG_HF_REPO", model.to_string());
+        preset.set_option(*this, "LLAMA_ARG_HF_REPO", model.repo);
+        if (!model.hf_file.empty()) {
+            preset.set_option(*this, "LLAMA_ARG_HF_FILE", model.hf_file);
+        }
         out[preset.name] = preset;
     }
 
