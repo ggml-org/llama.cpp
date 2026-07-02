@@ -250,6 +250,12 @@ export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFo
 export { default as ChatFormReasoningToggle } from './ChatForm/ChatFormActions/ChatFormReasoningToggle.svelte';
 
 /**
+ * Displays context token usage as a compact pill with tooltip.
+ * Shows percentage, token counts, and a progress bar on hover.
+ */
+export { default as ChatFormContextGauge } from './ChatForm/ChatFormContextGauge/ChatFormContextGauge.svelte';
+
+/**
  * Hidden file input element for programmatic file selection.
  */
 export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileInputInvisible.svelte';

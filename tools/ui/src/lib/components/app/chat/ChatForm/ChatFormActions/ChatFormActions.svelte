@@ -7,7 +7,8 @@
 		ChatFormActionModels,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		ChatFormReasoningToggle
+		ChatFormReasoningToggle,
+		ChatFormContextGauge
 	} from '$lib/components/app';
 	import { FileTypeCategory } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -118,6 +119,8 @@
 	{/if}
 
 	<div class="flex items-center gap-2">
+		<ChatFormContextGauge />
+
 		<ChatFormReasoningToggle />
 
 		{#if showModelSelector}
