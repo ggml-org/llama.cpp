@@ -1368,21 +1368,51 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
     }
 }
 
-void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const {
+std::vector<llama_mapping_range> llama_model_loader::get_mapping_ranges(void ** addr, int idx, ggml_context * ctx) const {
     GGML_ASSERT(!mappings.empty());
     const auto & mapping = mappings.at(idx);
+    std::vector<llama_mapping_range> ranges;
+    std::vector<llama_mapping_range> weight_ranges;
+    // Coalesce nearby ranges if they're closer than this
+    static const size_t coalesce_size = 1024 * 1024;
+    // In case backends prefer their ranges page-aligned
+    // (Might waste a bit on systems with smaller page sizes, but a few kB isn't going to hurt anyone)
+    static const size_t page_mask = 65535;
 
-    *first = mapping->size();
-    *last  = 0;
     *addr = mapping->addr();
     for (ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
         const auto * weight = get_weight(ggml_get_name(tensor));
         if (!weight || weight->idx != idx) {
             continue;
         }
-        *first = std::min(*first, weight->offs);
-        *last  = std::max(*last,  weight->offs + ggml_nbytes(tensor));
+        weight_ranges.push_back({ weight->offs, weight->offs + ggml_nbytes(tensor) });
     }
+
+    if (weight_ranges.empty()) {
+        return ranges;
+    }
+
+    // Coalesce ranges by iterating in memory order and merging each with the previous if it can
+    std::sort(weight_ranges.begin(), weight_ranges.end(), [](llama_mapping_range& a, llama_mapping_range& b){ return a.first < b.first; });
+    auto weight     = weight_ranges.begin();
+    auto weight_end = weight_ranges.end();
+    llama_mapping_range range = *weight;
+
+    for (++weight; weight < weight_end; ++weight) {
+        if (range.last + coalesce_size >= weight->first) {
+            range.last = weight->last;
+        } else {
+            size_t first = range.first & ~page_mask;
+            size_t last  = (range.last + page_mask) & ~page_mask;
+            ranges.push_back({ first, last });
+            range = *weight;
+        }
+    }
+
+    size_t first = range.first & ~page_mask;
+    size_t last  = (range.last + page_mask) & ~page_mask;
+    ranges.push_back({ first, std::min(last, mapping->size()) });
+    return ranges;
 }
 
 void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
@@ -1448,7 +1478,7 @@ bool llama_model_loader::load_all_data(
         }
         // When not using mmaped io use async uploads from pinned memory to GPU memory.
         // First determine if the backend supports the necessary features for async uploads.
-        auto * buf = bufs.count(0) ? bufs.at(0) : nullptr;
+        auto * buf = bufs.count(0) ? bufs.at(0).at(0).buffer : nullptr;
         if (!buf) {
             LLAMA_LOG_DEBUG("%s: no buffer found for async uploads\n", func);
             return nullptr;
@@ -1519,7 +1549,7 @@ bool llama_model_loader::load_all_data(
     if (upload_backend) {
         LLAMA_LOG_DEBUG("%s: using async uploads for device %s, buffer type %s, backend %s\n", __func__,
             ggml_backend_dev_name(ggml_backend_get_device(upload_backend)),
-            ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs.at(0))),
+            ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs.at(0).at(0).buffer)),
             ggml_backend_name(upload_backend));
     }
 
@@ -1542,7 +1572,12 @@ bool llama_model_loader::load_all_data(
             const auto & mapping = mappings.at(weight->idx);
             ggml_backend_buffer_t buf_mmap = nullptr;
             if (bufs.count(weight->idx)) {
-                buf_mmap = bufs.at(weight->idx);
+                const auto & ctx_bufs = bufs.at(weight->idx);
+                auto it = std::lower_bound(ctx_bufs.begin(), ctx_bufs.end(), weight->offs + n_size,
+                                           [](const llama_buf_map_entry & a, size_t b) { return a.range.last < b; });
+                if (it < ctx_bufs.end() && it->range.first <= weight->offs && it->range.last >= weight->offs + n_size) {
+                    buf_mmap = it->buffer;
+                }
             }
             uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
 
