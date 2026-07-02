@@ -2625,9 +2625,6 @@ int32_t llama_model_desc(const llama_model * model, char * buf, size_t buf_size)
 }
 
 llama_ftype llama_model_ftype(const llama_model * model) {
-    if (!model) {
-        return LLAMA_FTYPE_ALL_F32;
-    }
     return model->ftype();
 }
 
