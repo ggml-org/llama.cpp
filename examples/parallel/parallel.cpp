@@ -132,13 +132,11 @@ struct client {
 };
 
 static void print_date_time() {
-    std::time_t current_time = std::time(nullptr);
-    std::tm* local_time = std::localtime(&current_time);
-    char buffer[80];
-    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", local_time);
+    auto current_time = std::chrono::system_clock::now();
+    std::string time_text = common_time_format("%Y-%m-%d %H:%M:%S", current_time);
 
     LOG_INF("\n");
-    LOG_INF("\033[35mrun parameters as of %s\033[0m\n", buffer);
+    LOG_INF("\033[35mrun parameters as of %s\033[0m\n", time_text.c_str());
     LOG_INF("\n");
 }
 
