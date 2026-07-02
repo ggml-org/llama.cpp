@@ -805,13 +805,24 @@ static __global__ void mul_mat_vec_q_moe_nvfp4_repacked(
 
     float tmp[c_rows_per_block] = {0.0f};
 
-    for (int kbx = 0; kbx < blocks_per_row_x; kbx += 8) {
+    int kbx = 0;
+    for (; kbx + 8 <= blocks_per_row_x; kbx += 8) {
         const int ky = kbx * qk;
 
 #pragma unroll
         for (int i = 0; i < c_rows_per_block; ++i) {
             tmp[i] += vec_dot_nvfp4_f32_repacked_subblock(
                 vx, y_f32 + ky, kbx_offset + i*stride_row_x + kbx, blocks_per_matrix_x, threadIdx.x);
+        }
+    }
+    if (kbx < blocks_per_row_x) {
+        const int ky = kbx * qk;
+        const int blocks_remaining = blocks_per_row_x - kbx;
+
+#pragma unroll
+        for (int i = 0; i < c_rows_per_block; ++i) {
+            tmp[i] += vec_dot_nvfp4_f32_repacked_subblock_tail(
+                vx, y_f32 + ky, kbx_offset + i*stride_row_x + kbx, blocks_per_matrix_x, threadIdx.x, blocks_remaining);
         }
     }
 
@@ -903,7 +914,8 @@ static __global__ void mul_mat_vec_q_nvfp4_repacked(
     float tmp[ncols_dst] = {0.0f};
     float tmp_gate[ncols_dst] = {0.0f};
 
-    for (int kbx = 0; kbx < blocks_per_row_x; kbx += 8) {
+    int kbx = 0;
+    for (; kbx + 8 <= blocks_per_row_x; kbx += 8) {
         const int ky = kbx * qk;
 
 #pragma unroll
@@ -914,6 +926,24 @@ static __global__ void mul_mat_vec_q_nvfp4_repacked(
             if constexpr (has_fusion) {
                 if (use_gate) {
                     tmp_gate[j] += vec_dot_nvfp4_f32_repacked_subblock(vgate, y_f32 + j*stride_col_y + ky, kbx_x, blocks_per_matrix_x, threadIdx.x);
+                }
+            }
+        }
+    }
+    if (kbx < blocks_per_row_x) {
+        const int ky = kbx * qk;
+        const int blocks_remaining = blocks_per_row_x - kbx;
+
+#pragma unroll
+        for (int j = 0; j < ncols_dst; ++j) {
+            const uint32_t channel_x_j = has_ids ? ids[channel_dst + j*ids_stride] : channel_x;
+            const int kbx_x = sample_x*stride_sample_x + channel_x_j*stride_channel_x + row*stride_row_x + kbx;
+            tmp[j] += vec_dot_nvfp4_f32_repacked_subblock_tail(
+                vx, y_f32 + j*stride_col_y + ky, kbx_x, blocks_per_matrix_x, threadIdx.x, blocks_remaining);
+            if constexpr (has_fusion) {
+                if (use_gate) {
+                    tmp_gate[j] += vec_dot_nvfp4_f32_repacked_subblock_tail(
+                        vgate, y_f32 + j*stride_col_y + ky, kbx_x, blocks_per_matrix_x, threadIdx.x, blocks_remaining);
                 }
             }
         }
@@ -1550,13 +1580,12 @@ void ggml_cuda_mul_mat_vec_q(
     }
 
     const bool repacked_x = ggml_cuda_tensor_is_repacked_nvfp4(src0);
-    // TODO: add an F32 tail path for repacked NVFP4 when K is not a multiple of 512.
-    const bool src1_f32   = repacked_x && ne00 % (8*QK_NVFP4) == 0;
-    GGML_ASSERT(!repacked_x || src1_f32);
+    const bool src1_f32   = repacked_x;
 
     const int64_t ne10_padded = src1_f32 ? ne10 : GGML_PAD(ne10, MATRIX_ROW_PADDING);
-    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), src1_f32 ? 0 : ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1);
+    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool());
     if (!src1_f32) {
+        src1_q8_1.alloc(ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1);
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
         const int64_t s13 = src1->nb[3] / ts_src1;
@@ -1615,9 +1644,7 @@ void ggml_cuda_op_mul_mat_vec_q(
 
     ggml_cuda_mm_fusion_args_device fusion_local{};
     const bool repacked_x = ggml_cuda_tensor_is_repacked_nvfp4(src0);
-    // TODO: add an F32 tail path for repacked NVFP4 when K is not a multiple of 512.
-    const bool src1_f32   = repacked_x && ne00 % (8*QK_NVFP4) == 0;
-    GGML_ASSERT(!repacked_x || src1_f32);
+    const bool src1_f32   = repacked_x;
     const int stride_row_x = ne00 / ggml_blck_size(src0->type);
     const int stride_col_y = src1_f32 ? src1_padded_row_size : src1_padded_row_size / QK8_1;
     const uint3 blocks_per_matrix_x = init_fastdiv_values(src0->ne[1] * stride_row_x);

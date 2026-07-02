@@ -117,3 +117,18 @@ static __device__ __forceinline__ float vec_dot_nvfp4_f32_repacked_subblock(
 
     return ggml_cuda_ue4m3_to_fp32(d[sub]) * sumf;
 }
+
+static __device__ __forceinline__ float vec_dot_nvfp4_f32_repacked_subblock_tail(
+                                        const void * __restrict__ vbq,
+                                        const float * __restrict__ y,
+                                        const int32_t & kbx,
+                                        const uint3 & blocks_per_matrix,
+                                        const int32_t & lane,
+                                        const int32_t & blocks_remaining) {
+    const int32_t group = lane >> 2;
+    if (group >= blocks_remaining) {
+        return 0.0f;
+    }
+
+    return vec_dot_nvfp4_f32_repacked_subblock(vbq, y, kbx, blocks_per_matrix, lane);
+}
