@@ -7372,7 +7372,7 @@ static int ggml_node_list_find_tensor(const struct ggml_cgraph * cgraph,
 }
 
 static bool ggml_is_constant(const struct ggml_tensor * tensor) {
-    return tensor->buffer != NULL && ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+    return tensor->buffer != NULL && ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS && (tensor->flags & GGML_TENSOR_FLAG_PARAM) == 0;
 }
 
 bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
