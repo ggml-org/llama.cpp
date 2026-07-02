@@ -22,7 +22,7 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_NUM_ADAPTERS,  n_adapters);
     ml.get_key(LLM_KV_MAX_LORA_RANK, max_lora_rank);
-    ml.get_key(LLM_KV_CONTROL_TOKEN_GAIN, router_gain, /* required */ false);
+    ml.get_key(LLM_KV_ROUTER_GAIN, router_gain, /* required */ false);
 
     std::vector<llama_token> token_ids;
     std::vector<llama_token> substitute_ids;

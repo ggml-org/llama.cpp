@@ -163,7 +163,7 @@ class Keys:
         ADAPTER_TOKEN_IDS                 = "{arch}.adapter_token_ids"
         ADAPTER_SUBSTITUTE_TOKEN_IDS      = "{arch}.adapter_substitute_token_ids"
         MAX_LORA_RANK                     = "{arch}.max_lora_rank"
-        CONTROL_TOKEN_GAIN                = "{arch}.control_token_gain"
+        ROUTER_GAIN                       = "{arch}.router_gain"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
