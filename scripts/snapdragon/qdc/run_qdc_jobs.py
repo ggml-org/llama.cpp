@@ -12,7 +12,8 @@ Prerequisites:
 
 Platform is inferred from --device:
   android  Appium + pytest (Android phones: SM8750 / SM8650 / SM8850)
-  linux    BASH (Linux IoT: QCS9075M)
+  linux    BASH (Linux IoT: QCS9075M / QCS9100M)
+  windows  POWERSHELL automated job (X Elite: SC8380XP, X2 Elite: SC8480XP, X Plus: X1P42100)
 
 Required environment variables:
   QDC_API_KEY   API key from QDC UI -> Users -> Settings -> API Keys
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import enum
+import json
 import logging
 import os
 import re
@@ -37,6 +39,7 @@ import tempfile
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -118,6 +121,24 @@ _ADB_SCRIPT_NAMES = [
 _RUN_LINUX_TEMPLATE = _TESTS_DIR / "linux" / "run_linux.sh"
 _LINUX_ENTRY_SCRIPT = "/bin/bash /data/local/tmp/TestContent/run_linux.sh"
 
+# --- Windows (POWERSHELL automated job) assets --------------------------------
+_WINDOWS_DIR = _SCRIPTS_DIR / "windows"
+_WINDOWS_PS1 = _WINDOWS_DIR / "run_tests.ps1"
+_WINDOWS_REQUIREMENTS = _WINDOWS_DIR / "requirements.txt"
+_WINDOWS_HTP_CERT = _WINDOWS_DIR / "ggml-htp-v1.cer"
+_WINDOWS_PYTHON_EMBED_URL = (
+    "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-arm64.zip"
+)
+_WINDOWS_GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
+_WINDOWS_ENTRY_SCRIPT = "C:\\Temp\\TestContent\\run_tests.ps1"
+
+# --- Windows BUILD assets (remote compilation on QDC device) ------------------
+_WINDOWS_BUILD_PS1     = _WINDOWS_DIR / "run_build.ps1"
+_WINDOWS_SETUP_ENV_PS1 = _WINDOWS_DIR / "setup_build_env.ps1"
+_WINDOWS_BUILD_LIB_PS1 = _WINDOWS_DIR / "build_llamacpp.ps1"
+_WINDOWS_BUILD_ENTRY_SCRIPT = "C:\\Temp\\TestContent\\run_build.ps1"
+JOB_TIMEOUT_BUILD = 7200
+
 # =============================================================================
 # Artifact builders (per platform)
 # =============================================================================
@@ -129,6 +150,19 @@ class JobResult:
     tests: dict[str, bool] = field(default_factory=dict)
     raw_logs: dict[str, str] = field(default_factory=dict)
     failure_details: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class BuildResult:
+    passed: bool
+    pkg_zip_path: Path | None = None
+    meta: dict = field(default_factory=dict)
+    raw_logs: dict[str, str] = field(default_factory=dict)
+
+
+class Mode(enum.Enum):
+    TEST = "test"
+    BUILD = "build"
 
 
 def _write_lf(path: Path, content: str) -> None:
@@ -227,6 +261,235 @@ def _build_linux_artifact(
     return Path(f"{zip_base}.zip")
 
 
+def _ensure_windows_python_cached() -> tuple[Path, Path]:
+    """Cache python embed zip and get-pip.py so QDC devices don't need network."""
+    cache_dir = Path(tempfile.gettempdir()) / "llama-cpp-ci-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    embed_zip = cache_dir / "python-embed-arm64.zip"
+    get_pip = cache_dir / "get-pip.py"
+    if not embed_zip.is_file() or embed_zip.stat().st_size < 1_000_000:
+        log.info("Downloading embeddable Python (arm64) ...")
+        urllib.request.urlretrieve(_WINDOWS_PYTHON_EMBED_URL, str(embed_zip))
+    if not get_pip.is_file() or get_pip.stat().st_size < 100_000:
+        log.info("Downloading get-pip.py ...")
+        urllib.request.urlretrieve(_WINDOWS_GET_PIP_URL, str(get_pip))
+    return embed_zip, get_pip
+
+
+def _build_windows_artifact(
+    pkg_dir: Path,
+    stage_dir: Path,
+    test_mode: str,
+    model_url: str | None,
+) -> Path:
+    """Windows zip for the QDC POWERSHELL automated job.
+
+    Zip structure:
+      llama_cpp_bundle/          installed package (bin/, lib/)
+      tests/                     pytest-discoverable test scripts
+      requirements.txt           pip deps
+      pytest.ini                 addopts = --junitxml=results.xml
+      run_tests.ps1              PowerShell entry script
+    """
+    zip_path = stage_dir / "artifact.zip"
+
+    _WIN_TEST_SCRIPTS = {
+        "run_bench_tests_posix.py": ("test_bench.py", ("bench", "all")),
+        "run_backend_ops_posix.py": ("test_backend_ops.py", ("backend-ops", "all")),
+    }
+    _WIN_TEMPLATE_SCRIPTS = {"run_bench_tests_posix.py"}
+
+    with zipfile.ZipFile(
+        zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
+    ) as zf:
+        # llama_cpp_bundle/
+        for src in sorted(pkg_dir.rglob("*")):
+            if src.is_file():
+                arc = f"llama_cpp_bundle/{src.relative_to(pkg_dir).as_posix()}"
+                zf.write(src, arc)
+
+        # tests/ - shared helpers (conftest.py, utils.py)
+        zf.write(_CONFTEST, "tests/conftest.py")
+        zf.write(_UTILS, "tests/utils.py")
+
+        # tests/ - test scripts selected by test_mode
+        for src_name, (dst_name, modes) in _WIN_TEST_SCRIPTS.items():
+            if test_mode not in modes:
+                continue
+            src = _TESTS_DIR / src_name
+            if not src.is_file():
+                continue
+            if src_name in _WIN_TEMPLATE_SCRIPTS:
+                content = (
+                    src.read_text(encoding="utf-8")
+                    .replace("<<MODEL_URL>>", model_url or "")
+                )
+                zf.writestr(f"tests/{dst_name}", content)
+            else:
+                zf.write(src, f"tests/{dst_name}")
+
+        # Root-level files
+        zf.write(_WINDOWS_REQUIREMENTS, "requirements.txt")
+        zf.writestr("pytest.ini", "[pytest]\naddopts = --junitxml=results.xml\n")
+        zf.write(_WINDOWS_PS1, "run_tests.ps1")
+        zf.write(_WINDOWS_HTP_CERT, "ggml-htp-v1.cer")
+
+        # Bundle python so QDC devices without internet/python can run pytest.
+        embed_zip, get_pip = _ensure_windows_python_cached()
+        zf.write(embed_zip, "python-embed-arm64.zip")
+        zf.write(get_pip, "get-pip.py")
+
+    return zip_path
+
+
+def _build_windows_build_artifact(
+    stage_dir: Path,
+    *,
+    llama_cpp_dir: Path,
+    htp_pfx: Path,
+) -> Path:
+    """Windows zip for the QDC POWERSHELL automated BUILD job.
+
+    Layout:
+      llamacpp-src.zip          git archive of llama.cpp HEAD
+      commit_sha.txt            HEAD sha
+      CMakeUserPresets.json     copied from llama.cpp/docs/backend/snapdragon/
+      ggml-htp-v1.cer           public cert
+      ggml-htp-v1.pfx           private cert (sensitive)
+      setup_build_env.ps1
+      build_llamacpp.ps1
+      run_build.ps1             entry script
+    """
+    import subprocess as _sp
+
+    src_zip = stage_dir / "llamacpp-src.zip"
+    result = _sp.run(
+        ["git", "archive", "--format=zip", "-o", str(src_zip), "HEAD"],
+        cwd=str(llama_cpp_dir),
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git archive failed: {result.stderr}")
+
+    sha_result = _sp.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(llama_cpp_dir),
+        capture_output=True, text=True,
+    )
+    sha = sha_result.stdout.strip() if sha_result.returncode == 0 else "unknown"
+    (stage_dir / "commit_sha.txt").write_text(sha)
+
+    preset = llama_cpp_dir / "docs" / "backend" / "snapdragon" / "CMakeUserPresets.json"
+    if preset.is_file():
+        shutil.copy(preset, stage_dir / "CMakeUserPresets.json")
+
+    if not htp_pfx.is_file():
+        raise FileNotFoundError(f"--htp-pfx does not exist: {htp_pfx}")
+
+    shutil.copy(_WINDOWS_HTP_CERT, stage_dir / "ggml-htp-v1.cer")
+    shutil.copy(htp_pfx,           stage_dir / "ggml-htp-v1.pfx")
+
+    for ps1 in (_WINDOWS_SETUP_ENV_PS1, _WINDOWS_BUILD_LIB_PS1, _WINDOWS_BUILD_PS1):
+        if ps1.is_file():
+            shutil.copy(ps1, stage_dir / ps1.name)
+
+    out_zip = stage_dir.parent / "artifact.zip"
+    with zipfile.ZipFile(out_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for f in sorted(stage_dir.rglob("*")):
+            if f.is_file():
+                zf.write(f, f.relative_to(stage_dir).as_posix())
+    return out_zip
+
+
+def _download_all_logs(client, job_id: str, dest_dir: Path) -> list[Path]:
+    """Download all log file zips for a job and return the unpacked file paths."""
+    log_files = qdc_api.get_job_log_files(client, job_id)
+    if not log_files:
+        log.warning("No log files returned for job %s", job_id)
+        return []
+    extracted: list[Path] = []
+    for lf in log_files:
+        zip_path = dest_dir / "downloaded.zip"
+        log.info("Downloading log file: %s", lf.filename)
+        qdc_api.download_job_log_files(client, lf.filename, str(zip_path))
+        try:
+            shutil.unpack_archive(str(zip_path), str(dest_dir), "zip")
+        except Exception as e:
+            log.warning("Could not unpack %s as zip: %s", lf.filename, e)
+        try:
+            zip_path.unlink()
+        except Exception:
+            pass
+    for root_dir, _, files in os.walk(dest_dir):
+        for fname in files:
+            extracted.append(Path(root_dir) / fname)
+    return extracted
+
+
+def fetch_logs_and_parse_build(
+    client, job_id: str, output_dir: Path
+) -> BuildResult:
+    """For build mode: download log files, locate pkg-snapdragon.zip."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        files = _download_all_logs(client, job_id, tmp_dir)
+
+        meta: dict = {}
+        raw_logs: dict[str, str] = {}
+        pkg_dest: Path | None = None
+
+        for f in files:
+            name = f.name.lower()
+            if name == "build_meta.json":
+                try:
+                    meta = json.loads(f.read_text())
+                except Exception as e:
+                    log.warning("could not parse %s: %s", f, e)
+            elif name == "pkg-snapdragon.zip":
+                pkg_dest = output_dir / "pkg-snapdragon.zip"
+                shutil.copy(f, pkg_dest)
+            elif f.suffix == ".log":
+                try:
+                    raw_logs[f.name] = f.read_text(errors="replace")
+                except Exception:
+                    pass
+
+    extracted_ok = False
+    if pkg_dest is not None:
+        extract_root = output_dir / "llama.cpp"
+        if extract_root.exists():
+            shutil.rmtree(extract_root)
+        extract_root.mkdir(parents=True)
+        try:
+            with zipfile.ZipFile(pkg_dest) as zf:
+                for member in zf.infolist():
+                    norm = member.filename.replace("\\", "/")
+                    if norm.endswith("/"):
+                        (extract_root / norm).mkdir(parents=True, exist_ok=True)
+                        continue
+                    target = extract_root / norm
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(member) as src, open(target, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+            extracted_ok = True
+        except Exception as e:
+            log.error("could not extract %s: %s", pkg_dest, e)
+
+    passed = (
+        meta.get("signtool_verify") == "ok"
+        and meta.get("step_failed") in (None, "")
+        and pkg_dest is not None
+        and extracted_ok
+    )
+    return BuildResult(
+        passed=passed,
+        pkg_zip_path=pkg_dest,
+        meta=meta,
+        raw_logs=raw_logs,
+    )
+
+
 # =============================================================================
 # Platform enum + strategy table
 # =============================================================================
@@ -235,6 +498,7 @@ def _build_linux_artifact(
 class Platform(enum.Enum):
     ANDROID = "android"
     LINUX = "linux"
+    WINDOWS = "windows"
 
 
 @dataclass(frozen=True)
@@ -258,6 +522,12 @@ PLATFORM_SPECS: dict[Platform, PlatformSpec] = {
         build_artifact=_build_linux_artifact,
         job_name_fmt="{base} (Linux)",
     ),
+    Platform.WINDOWS: PlatformSpec(
+        test_framework=TestFramework.POWERSHELL,
+        entry_script=_WINDOWS_ENTRY_SCRIPT,
+        build_artifact=_build_windows_artifact,
+        job_name_fmt="{base} (Win)",
+    ),
 }
 
 DEVICE_PLATFORM: dict[str, Platform] = {
@@ -265,6 +535,9 @@ DEVICE_PLATFORM: dict[str, Platform] = {
     "SM8650": Platform.ANDROID,
     "SM8850": Platform.ANDROID,
     "QCS9075M": Platform.LINUX,
+    "SC8380XP": Platform.WINDOWS,
+    "SC8480XP": Platform.WINDOWS,
+    "X1P42100": Platform.WINDOWS,
 }
 
 
@@ -521,23 +794,72 @@ def parse_args() -> argparse.Namespace:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--pkg-dir", required=True, type=Path,
-                   help="Installed llama.cpp package directory (contains bin/ and lib/)")
+    p.add_argument(
+        "--mode",
+        choices=[m.value for m in Mode],
+        default=Mode.TEST.value,
+        help="test (run prebuilt pkg on device) or build (compile source on device).",
+    )
+    p.add_argument("--pkg-dir", type=Path, default=None,
+                   help="[test mode] Installed llama.cpp package directory (contains bin/ and lib/)")
     p.add_argument("--model-url",
-                   help="Direct URL to the GGUF model file (required for --test bench)")
+                   help="[test mode] Direct URL to the GGUF model file (required for --test bench)")
     p.add_argument("--device", required=True,
                    help="QDC chipset name, e.g. SM8750")
     p.add_argument("--test", choices=["bench", "backend-ops", "all"], default="bench",
-                   help="Test suite to run (default: bench)")
-    p.add_argument("--job-timeout", type=int, default=JOB_TIMEOUT, metavar="SECONDS",
+                   help="[test mode] Test suite to run (default: bench)")
+    p.add_argument("--job-timeout", type=int, default=None, metavar="SECONDS",
                    help=f"Max seconds to wait for job completion (default: {JOB_TIMEOUT})")
     p.add_argument("--retries", type=int, default=DEFAULT_RETRIES, metavar="N",
                    help="Number of retries when device is unavailable (default: 0)")
     p.add_argument("--retry-delay", type=int, default=RETRY_DELAY, metavar="SECONDS",
                    help=f"Seconds to wait between retries (default: {RETRY_DELAY})")
+    p.add_argument(
+        "--llama-cpp-dir",
+        type=Path,
+        default=None,
+        help="[build mode] Path to a llama.cpp checkout to bundle into the build artifact.",
+    )
+    p.add_argument(
+        "--htp-pfx",
+        type=Path,
+        default=None,
+        help="[build mode] HTP signing pfx (private key); required to sign libggml-htp.cat.",
+    )
+    p.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("pkg-snapdragon"),
+        help="[build mode] Local dir to drop pkg-snapdragon.zip + extracted llama.cpp/ tree.",
+    )
     args = p.parse_args()
-    if args.test in ("bench", "all") and not args.model_url:
-        p.error("--model-url is required when --test bench or --test all")
+    args.mode_enum = Mode(args.mode)
+
+    platform = DEVICE_PLATFORM.get(args.device)
+    if platform is None:
+        p.error(
+            f"Unknown device {args.device!r}. "
+            f"Known devices: {', '.join(sorted(DEVICE_PLATFORM.keys()))}."
+        )
+    args.platform = platform
+
+    if args.mode_enum is Mode.TEST:
+        if args.pkg_dir is None:
+            p.error("--pkg-dir is required in --mode test")
+        if args.test in ("bench", "all") and not args.model_url:
+            p.error("--model-url is required when --test bench or --test all")
+        if args.job_timeout is None:
+            args.job_timeout = JOB_TIMEOUT
+    else:  # BUILD
+        if platform is not Platform.WINDOWS:
+            p.error(f"--mode build is only supported on Windows devices (got {args.device})")
+        if args.llama_cpp_dir is None or not args.llama_cpp_dir.is_dir():
+            p.error("--llama-cpp-dir is required and must exist in --mode build")
+        if args.htp_pfx is None or not args.htp_pfx.is_file():
+            p.error("--htp-pfx is required and must exist in --mode build")
+        if args.job_timeout is None:
+            args.job_timeout = JOB_TIMEOUT_BUILD
+
     return args
 
 
@@ -553,7 +875,7 @@ def _submit_and_run_job(client, args, spec, target_id, artifact_id) -> JobResult
     except TimeoutError:
         raise DeviceUnavailableError("Capacity wait timed out — device busy")
 
-    job_name = spec.job_name_fmt.format(base="llama.cpp Hexagon tests")
+    job_name = spec.job_name_fmt.format(base="llama.cpp Hexagon tests")[:32]
 
     job_id = qdc_api.submit_job(
         public_api_client=client,
@@ -600,16 +922,97 @@ def _submit_and_run_job(client, args, spec, target_id, artifact_id) -> JobResult
     return JobResult(passed=passed, tests=tests, raw_logs=raw_logs, failure_details=failure_details)
 
 
-def main() -> int:
-    args = parse_args()
+def _make_qdc_client(api_key: str):
+    return qdc_api.get_public_api_client_using_api_key(
+        api_key_header=api_key,
+        app_name_header="llama-cpp-ci",
+        on_behalf_of_header="llama-cpp-ci",
+        client_type_header="Python",
+    )
 
-    platform = DEVICE_PLATFORM.get(args.device)
-    if platform is None:
-        log.error(
-            "Unknown device %r. Known: %s",
-            args.device, ", ".join(sorted(DEVICE_PLATFORM.keys())),
-        )
+
+def main_build(args: argparse.Namespace) -> int:
+    """QDC build mode: compile llama.cpp on a Windows ARM device, return pkg-snapdragon."""
+    api_key = os.environ.get("QDC_API_KEY")
+    if not api_key:
+        log.error("QDC_API_KEY environment variable must be set")
         return 1
+
+    client = _make_qdc_client(api_key)
+    target_id = qdc_api.get_target_id(client, args.device)
+    if target_id is None:
+        log.error("Could not find QDC target for device %r", args.device)
+        return 1
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        log.info("Building windows BUILD artifact ...")
+        stage = Path(tmpdir) / "stage"
+        stage.mkdir()
+        zip_path = _build_windows_build_artifact(
+            stage_dir=stage,
+            llama_cpp_dir=args.llama_cpp_dir,
+            htp_pfx=args.htp_pfx,
+        )
+        log.info("Uploading artifact (%d MB) ...", zip_path.stat().st_size // 1_000_000)
+        artifact_id = qdc_api.upload_file(client, str(zip_path), ArtifactType.TESTSCRIPT)
+
+    if artifact_id is None:
+        log.error("Artifact upload failed")
+        return 1
+
+    wait_for_capacity(client)
+
+    job_name = f"llama-build-{args.device}"[:32]
+    job_id = qdc_api.submit_job(
+        public_api_client=client,
+        target_id=target_id,
+        job_name=job_name,
+        external_job_id=None,
+        job_type=JobType.AUTOMATED,
+        job_mode=JobMode.APPLICATION,
+        timeout=max(1, args.job_timeout // 60),
+        test_framework=TestFramework.POWERSHELL,
+        entry_script=_WINDOWS_BUILD_ENTRY_SCRIPT,
+        job_artifacts=[artifact_id],
+        monkey_events=None,
+        monkey_session_timeout=None,
+        job_parameters=[JobSubmissionParameter.WIFIENABLED],
+    )
+    if job_id is None:
+        log.error("Job submission failed")
+        return 1
+    log.info("Build job submitted: %s  (device=%s)", job_id, args.device)
+
+    try:
+        job_status = wait_for_job(client, job_id, timeout=args.job_timeout)
+    except TimeoutError as e:
+        log.error("%s", e)
+        return 1
+    except Exception as e:
+        log.error("Fatal error polling job %s: %s", job_id, e)
+        return 1
+    log.info("Job %s finished: %s", job_id, job_status)
+
+    wait_for_log_upload(client, job_id)
+    result = fetch_logs_and_parse_build(client, job_id, args.output_dir)
+
+    log.info("=" * 60)
+    log.info("[%s] build on %s: signtool=%s, step_failed=%s, duration=%ss, host=%s",
+             "PASS" if result.passed else "FAIL",
+             args.device,
+             result.meta.get("signtool_verify"),
+             result.meta.get("step_failed"),
+             result.meta.get("duration_s"),
+             result.meta.get("host"))
+    if result.pkg_zip_path:
+        log.info("pkg zip: %s (%d bytes)", result.pkg_zip_path, result.pkg_zip_path.stat().st_size)
+    log.info("=" * 60)
+    return 0 if result.passed else 1
+
+
+def main_test(args: argparse.Namespace) -> int:
+    """QDC test mode: run prebuilt package on a QDC device."""
+    platform: Platform = args.platform
     spec = PLATFORM_SPECS[platform]
 
     api_key = os.environ.get("QDC_API_KEY")
@@ -620,12 +1023,7 @@ def main() -> int:
         log.error("--pkg-dir %s does not exist", args.pkg_dir)
         return 1
 
-    client = qdc_api.get_public_api_client_using_api_key(
-        api_key_header=api_key,
-        app_name_header="llama-cpp-ci",
-        on_behalf_of_header="llama-cpp-ci",
-        client_type_header="Python",
-    )
+    client = _make_qdc_client(api_key)
 
     target_id = qdc_api.get_target_id(client, args.device)
     if target_id is None:
@@ -678,6 +1076,13 @@ def main() -> int:
     write_summary(result, title=title)
 
     return 0 if result.passed else 1
+
+
+def main() -> int:
+    args = parse_args()
+    if args.mode_enum is Mode.BUILD:
+        return main_build(args)
+    return main_test(args)
 
 
 if __name__ == "__main__":

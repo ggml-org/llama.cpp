@@ -3,14 +3,27 @@
 import os
 
 import pytest
-from appium import webdriver
 
-from utils import options, write_qdc_log
+from utils import IS_WINDOWS, write_qdc_log
+
+if IS_WINDOWS:
+    import logging
+    from utils import log_environment
+
+    logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s: %(message)s")
+else:
+    from appium import webdriver
+    from utils import options
 
 
 @pytest.fixture(scope="session", autouse=True)
 def driver():
-    return webdriver.Remote(command_executor="http://127.0.0.1:4723/wd/hub", options=options)
+    if IS_WINDOWS:
+        log_environment()
+        return None
+    return webdriver.Remote(
+        command_executor="http://127.0.0.1:4723/wd/hub", options=options
+    )
 
 
 def pytest_sessionfinish(session, exitstatus):
