@@ -1351,8 +1351,7 @@ UseGgmlGemm1:;
     }
 
     if (ith == 0) {
-        // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
-        atomic_store_explicit(&params->threadpool->current_chunk, nth, memory_order_relaxed);
+        atomic_store_explicit(&params->threadpool->current_chunk, 0, memory_order_relaxed);
     }
 
     ggml_barrier(params->threadpool);
@@ -1414,10 +1413,9 @@ UseGgmlGemm2:;
     const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
     const int64_t dr1 = (nr1 + nchunk1 - 1) / nchunk1;
 
-    // The first chunk comes from our thread_id, the rest will get auto-assigned.
-    int current_chunk = ith;
+    int current_chunk;
 
-    while (current_chunk < nchunk0 * nchunk1) {
+    while ((current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed)) < nchunk0 * nchunk1) {
         const int64_t ith0 = current_chunk % nchunk0;
         const int64_t ith1 = current_chunk / nchunk0;
 
@@ -1436,12 +1434,6 @@ UseGgmlGemm2:;
             num_rows_per_vec_dot = 1;
         }
         ggml_compute_forward_mul_mat_one_chunk(params, dst, src0->type, num_rows_per_vec_dot, ir0_start, ir0_end, ir1_start, ir1_end);
-
-        if (nth >= nchunk0 * nchunk1) {
-            break;
-        }
-
-        current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
     }
 }
 
@@ -1633,7 +1625,7 @@ static void ggml_compute_forward_mul_mat_id(
     // reset current_chunk
     for (int cur_a = ith; cur_a < n_as; cur_a += nth) {
         atomic_int * current_chunk_ctr = (atomic_int *)(atomic_current_chunk + cur_a);
-        *current_chunk_ctr = nth;
+        *current_chunk_ctr = 0;
     }
 
     ggml_barrier(params->threadpool);
@@ -1671,11 +1663,10 @@ static void ggml_compute_forward_mul_mat_id(
         const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
         const int64_t dr1 = (nr1 + nchunk1 - 1) / nchunk1;
 
-        int current_chunk = ith;
-
         atomic_int * current_chunk_ctr = (atomic_int *)(atomic_current_chunk + cur_a);
+        int current_chunk;
 
-        while (current_chunk < nchunk0 * nchunk1) {
+        while ((current_chunk = atomic_fetch_add_explicit(current_chunk_ctr, 1, memory_order_relaxed)) < nchunk0 * nchunk1) {
             const int64_t ith0 = current_chunk % nchunk0;
             const int64_t ith1 = current_chunk / nchunk0;
 
@@ -1690,12 +1681,6 @@ static void ggml_compute_forward_mul_mat_id(
                 ir0_start, ir0_end, ir1_start, ir1_end,
                 src0_cur, matrix_rows, row_size, src1_cont, wdata
             );
-
-            if (nth >= nchunk0 * nchunk1) {
-                break;
-            }
-
-            current_chunk = atomic_fetch_add_explicit(current_chunk_ctr, 1, memory_order_relaxed);
         }
     }
 }
