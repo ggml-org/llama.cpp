@@ -987,6 +987,8 @@ struct llama_model::impl {
 
     std::string desc_str;
 
+    llama_ftype ftype = LLAMA_FTYPE_ALL_F32;
+
     // model memory mapped files
     llama_mmaps mappings;
 
@@ -1199,6 +1201,8 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     pimpl->n_bytes = ml.n_bytes;
 
     pimpl->desc_str = arch_name() + " " + type_name() + " " + ml.ftype_name();
+
+    pimpl->ftype = ml.ftype;
 
     if (hparams.f_max_alibi_bias > 0.0f) {
         hparams.use_alibi = true;
@@ -1644,6 +1648,10 @@ std::string llama_model::type_name() const {
 
 std::string llama_model::desc() const {
     return pimpl->desc_str;
+}
+
+llama_ftype llama_model::ftype() const {
+    return pimpl->ftype;
 }
 
 size_t llama_model::size() const {
@@ -2614,6 +2622,10 @@ int32_t llama_model_meta_val_str_by_index(const llama_model * model, int32_t i, 
 
 int32_t llama_model_desc(const llama_model * model, char * buf, size_t buf_size) {
     return snprintf(buf, buf_size, "%s", model->desc().c_str());
+}
+
+llama_ftype llama_model_ftype(const llama_model * model) {
+    return model->ftype();
 }
 
 uint64_t llama_model_size(const llama_model * model) {
