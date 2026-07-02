@@ -158,9 +158,9 @@ class GraniteSwitchModel(GraniteMoeModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-        # dense model: override any expert counts the llama parent emitted
-        self.gguf_writer.add_expert_count(0)
-        self.gguf_writer.add_expert_used_count(0)
+        # dense: pin expert_used_count to 0 (config carries a leftover num_experts_per_tok)
+        if not self.hparams.get("num_local_experts"):
+            self.gguf_writer.add_expert_used_count(0)
 
         self.gguf_writer.add_num_adapters(self._n_adapters)
         self.gguf_writer.add_max_lora_rank(self._max_lora_rank)
