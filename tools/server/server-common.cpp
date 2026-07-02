@@ -1583,3 +1583,82 @@ server_tokens format_prompt_rerank(
 
     return result;
 }
+
+//
+// threadpool
+//
+
+server_threadpool::~server_threadpool() {
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        stop = true;
+    }
+    cv.notify_all();
+    for (auto & t : threads) t.join();
+}
+
+void server_threadpool::init(int n) {
+    // the caller (main thread) participates as a worker, so spawn n-1 threads
+    const int n_workers = std::max(1, n) - 1;
+    for (int i = 0; i < n_workers; i++) {
+        threads.emplace_back([this]() { run_worker(); });
+    }
+}
+
+void server_threadpool::run_worker() {
+    while (true) {
+        std::function<void()> task;
+        {
+            std::unique_lock<std::mutex> lock(mtx);
+            cv.wait(lock, [this]() { return stop || !tasks.empty(); });
+            if (stop && tasks.empty()) return;
+            task = std::move(tasks.front());
+            tasks.pop();
+        }
+        task();
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            pending--;
+        }
+        cv_done.notify_all();
+    }
+}
+
+void server_threadpool::enqueue(std::function<void()> fn) {
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        GGML_ASSERT(!stop);
+        tasks.push(std::move(fn));
+        pending++;
+    }
+    cv.notify_one();
+}
+
+void server_threadpool::wait_all() {
+    // the calling thread helps drain the queue until no tasks remain pending
+    while (true) {
+        std::function<void()> task;
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            if (pending == 0) {
+                return;
+            }
+            if (!tasks.empty()) {
+                task = std::move(tasks.front());
+                tasks.pop();
+            }
+        }
+        if (task) {
+            task();
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                pending--;
+            }
+            cv_done.notify_all();
+        } else {
+            // no task available right now, but some are still pending (being run by workers)
+            std::unique_lock<std::mutex> lock(mtx);
+            cv_done.wait(lock, [this]() { return pending == 0 || !tasks.empty(); });
+        }
+    }
+}

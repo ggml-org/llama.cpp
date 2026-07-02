@@ -12,6 +12,11 @@
 #include <string>
 #include <vector>
 #include <cinttypes>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <functional>
 
 using json = nlohmann::ordered_json;
 
@@ -373,3 +378,39 @@ server_tokens format_prompt_rerank(
         mtmd_context * mctx,
         const std::string & query,
         const std::string & doc);
+
+//
+// threadpool utils
+// to be used for multi-threaded sampling
+//
+
+// the main thread participates as one of the pool's workers, so init(n)
+// only spawns n-1 background threads (the caller is the nth)
+struct server_threadpool {
+    std::vector<std::thread> threads;
+    std::queue<std::function<void()>> tasks;
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::condition_variable cv_done;
+    int pending = 0;
+    bool stop = false;
+
+    ~server_threadpool();
+    void init(int n);
+
+    template<typename T>
+    void run_all(std::vector<T> & tasks, std::function<void(T&)> handler) {
+        for (auto & item : tasks) {
+            enqueue([&handler, &item]() {
+                handler(item);
+            });
+        }
+        // the calling thread runs tasks too, until all are done
+        wait_all();
+    }
+
+private:
+    void enqueue(std::function<void()> fn);
+    void wait_all();
+    void run_worker();
+};

@@ -484,6 +484,8 @@ struct common_params {
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
 
+    int sampling_n_threads = -1; // number of threads for sampling, used by server
+
     ggml_backend_sched_eval_callback cb_eval = nullptr;
     void * cb_eval_user_data                 = nullptr;
 

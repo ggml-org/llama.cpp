@@ -870,6 +870,9 @@ public:
     // note: chat_params must not be refreshed upon existing sleeping state
     server_chat_params chat_params;
 
+    // threadpool for parallel sampling
+    server_threadpool threadpool;
+
     server_state_callback_t callback_state = [](server_state, json) -> void {};
 
     server_context_impl() {
@@ -1466,6 +1469,16 @@ private:
         });
 
         metrics.init();
+
+        // initialize threadpool
+        {
+            int threadpool_size = params_base.sampling_n_threads;
+            if (threadpool_size <= 0) {
+                threadpool_size = params_base.cpuparams.n_threads;
+            }
+            SRV_DBG("%s: initializing threadpool, size = %d\n", __func__, threadpool_size);
+            threadpool.init(threadpool_size);
+        }
 
         if (params_base.cache_idle_slots) {
             if (params_base.cache_ram_mib == 0) {
@@ -3704,6 +3717,12 @@ private:
         return true;
     }
 
+    struct sampling_task {
+        server_slot * slot = nullptr;
+        int32_t tok_idx = 0;
+        llama_token sampled_id = LLAMA_TOKEN_NULL; // result
+    };
+
     void post_decode(int32_t n_batch_tokens, int32_t off, llama_batch & batch_view) {
         // for checking if a given batch index is inside batch_view
         auto is_inside_view = [&](int32_t idx) {
@@ -3725,7 +3744,13 @@ private:
                 slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
         };
 
+        std::vector<sampling_task> smpl_tasks;
+        smpl_tasks.resize(slots.size());
+        bool need_sampling = false;
+
         iterate(slots, [&](server_slot & slot) {
+            auto & smpl_task = smpl_tasks[slot.id];
+
             // optionally send prompt processing progress
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
                 if (slot.task->params.stream && slot.task->params.return_progress) {
@@ -3770,14 +3795,34 @@ private:
                 return; // sample using speculative decoding
             }
 
-            // shifted according to the current sub-batch
-            const int tok_idx = slot.i_batch - off;
+            // otherwise, we must sample the next token
+            // also shift batch idx according to the current sub-batch
+            smpl_task.slot    = &slot;
+            smpl_task.tok_idx = slot.i_batch - off;
+            need_sampling     = true;
+        });
 
-            llama_token id;
-            {
-                scoped_timer timer(t_sampl, n_sampl);
-                id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+        // run multiple sampling tasks in parallel
+        GGML_ASSERT(smpl_tasks.size() == slots.size());
+        if (need_sampling) {
+            llama_synchronize(ctx_tgt);
+            threadpool.run_all<sampling_task>(smpl_tasks, [](sampling_task & task) {
+                if (task.slot) {
+                    task.sampled_id = common_sampler_sample(task.slot->smpl.get(),
+                                            task.slot->ctx_tgt, task.tok_idx);
+                }
+            });
+        }
+
+        iterate(slots, [&](server_slot & slot) {
+            auto & smpl_task = smpl_tasks[slot.id];
+
+            if (!smpl_task.slot) {
+                return;
             }
+
+            auto tok_idx = smpl_task.tok_idx;
+            auto id = smpl_task.sampled_id;
 
             slot.i_batch = -1;
 
