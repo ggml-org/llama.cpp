@@ -2398,6 +2398,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MMAP"));
     add_opt(common_arg(
+        {"--reclaim-mmap-source"},
+        "drop mmap'd source pages from RSS after they are copied out of the mmap into a separate buffer "
+        "(e.g. CPU weight repacking); saves memory for repack-eligible quants under mmap, no effect with --no-mmap or --mlock (Linux only)",
+        [](common_params & params) {
+            params.reclaim_mmap_source = true;
+        }
+    ).set_env("LLAMA_ARG_RECLAIM_MMAP_SOURCE"));
+    add_opt(common_arg(
         {"-dio", "--direct-io"},
         {"-ndio", "--no-direct-io"},
         string_format("use DirectIO if available. (default: %s)", params.use_direct_io ? "enabled" : "disabled"),
