@@ -186,6 +186,8 @@ int llama_server(int argc, char ** argv) {
         routes.post_apply_template         = models_routes->proxy_post;
         routes.post_chat_completions_tok   = models_routes->proxy_post;
         routes.post_responses_tok_oai      = models_routes->proxy_post;
+        routes.get_cvectors                = models_routes->proxy_get;
+        routes.post_cvectors               = models_routes->proxy_post;
         routes.get_lora_adapters           = models_routes->proxy_get;
         routes.post_lora_adapters          = models_routes->proxy_post;
         routes.get_slots                   = models_routes->proxy_get;
@@ -237,6 +239,9 @@ int llama_server(int argc, char ** argv) {
     ctx_http.post("/responses/input_tokens",           ex_wrapper(routes.post_responses_tok_oai));
     ctx_http.post("/v1/responses/input_tokens",        ex_wrapper(routes.post_responses_tok_oai));
     ctx_http.post("/v1/messages/count_tokens",         ex_wrapper(routes.post_anthropic_count_tokens)); // anthropic token counting
+    // cvectors hotswap
+    ctx_http.get ("/cvectors",                 ex_wrapper(routes.get_cvectors));
+    ctx_http.post("/cvectors",                 ex_wrapper(routes.post_cvectors));
     // LoRA adapters hotswap
     ctx_http.get ("/lora-adapters",            ex_wrapper(routes.get_lora_adapters));
     ctx_http.post("/lora-adapters",            ex_wrapper(routes.post_lora_adapters));

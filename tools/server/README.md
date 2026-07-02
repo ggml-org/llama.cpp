@@ -1161,6 +1161,46 @@ To know the `id` of the adapter, use GET `/lora-adapters`
 ]
 ```
 
+### GET `/cvectors`: Get list of all control vectors
+
+Returns control vectors loaded at startup via `--control-vector` or `--control-vector-scaled`. Returns an empty array if none were loaded.
+
+By default each vector is loaded with scale `1.0`. Vectors omitted from a subsequent POST are set to `0.0`.
+
+**Note:** POST applies the new scale immediately without clearing slot KV caches, matching the behavior of POST `/lora-adapters`.
+
+**Response format**
+
+```json
+[
+    {
+        "id": 0,
+        "path": "my_vector.gguf",
+        "scale": 1.0
+    }
+]
+```
+
+### POST `/cvectors`: Set control vector scales
+
+Updates the strength of loaded control vectors and re-applies them to the model. Vectors not present in the request are set to scale `0.0`.
+
+To find the `id` of a vector, use GET `/cvectors`.
+
+**Request format**
+
+```json
+[
+  {"id": 0, "scale": 0.8}
+]
+```
+
+**Response format**
+
+```json
+{ "success": true }
+```
+
 ## OpenAI-compatible API Endpoints
 
 ### GET `/v1/models`: OpenAI-compatible Model Info API

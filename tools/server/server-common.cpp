@@ -128,6 +128,18 @@ bool lora_should_clear_cache(
         !lora_all_alora(next));
 }
 
+std::map<int, float> parse_cvector_request(const json & data) {
+    std::map<int, float> cvectors;
+
+    for (const auto & entry : data) {
+        int id      = json_value(entry, "id", -1);
+        float scale = json_value(entry, "scale", 0.0f);
+        cvectors[id] = scale;
+    }
+
+    return cvectors;
+}
+
 std::map<int, float> parse_lora_request(const json & data) {
     std::map<int, float> lora;
 

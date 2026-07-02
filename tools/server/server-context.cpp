@@ -2658,6 +2658,13 @@ private:
                     res->n_erased = n_erased;
                     queue_results.send(std::move(res));
                 } break;
+            case SERVER_TASK_TYPE_GET_CVEC:
+                {
+                    auto res = std::make_unique<server_task_result_get_cvector>();
+                    res->id = task.id;
+                    res->cvectors = params_base.control_vectors;
+                    queue_results.send(std::move(res));
+                } break;
             case SERVER_TASK_TYPE_GET_LORA:
                 {
                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
@@ -2694,6 +2701,52 @@ private:
                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
                     params_base.lora_adapters = new_loras;
                     auto res = std::make_unique<server_task_result_apply_lora>();
+                    res->id = task.id;
+                    queue_results.send(std::move(res));
+                } break;
+            case SERVER_TASK_TYPE_SET_CVEC:
+                {
+                    auto new_cvectors = params_base.control_vectors;
+
+                    bool valid = true;
+                    for (const auto & entry : task.set_cvector) {
+                        if (entry.first < 0 || (size_t) entry.first >= new_cvectors.size()) {
+                            send_error(task, "Invalid control vector ID", ERROR_TYPE_INVALID_REQUEST);
+                            valid = false;
+                            break;
+                        }
+                    }
+                    if (!valid) {
+                        break;
+                    }
+
+                    for (size_t i = 0; i < new_cvectors.size(); ++i) {
+                        const auto it = task.set_cvector.find(i);
+                        new_cvectors[i].strength =
+                                it != task.set_cvector.end() ? it->second : 0.0f;
+                    }
+
+                    const auto cvec = common_control_vector_load(new_cvectors);
+                    if (cvec.n_embd == -1) {
+                        send_error(task, "Failed to load control vectors", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    const int err = llama_set_adapter_cvec(
+                            ctx_tgt,
+                            cvec.data.data(),
+                            cvec.data.size(),
+                            cvec.n_embd,
+                            params_base.control_vector_layer_start,
+                            params_base.control_vector_layer_end);
+                    if (err != 0) {
+                        send_error(task, "Failed to apply control vectors");
+                        break;
+                    }
+
+                    params_base.control_vectors = std::move(new_cvectors);
+
+                    auto res = std::make_unique<server_task_result_apply_cvector>();
                     res->id = task.id;
                     queue_results.send(std::move(res));
                 } break;
@@ -5039,6 +5092,34 @@ void server_routes::init_routes() {
         return res;
     };
 
+    this->get_cvectors = [this](const server_http_req & req) {
+        auto res = create_response();
+
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_GET_CVEC);
+            task.id = rd.get_new_id();
+            rd.post_task(std::move(task));
+        }
+
+        // get the result
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        GGML_ASSERT(dynamic_cast<server_task_result_get_cvector*>(result.get()) != nullptr);
+        res->ok(result->to_json());
+        return res;
+    };
+
     this->get_lora_adapters = [this](const server_http_req & req) {
         auto res = create_response();
 
@@ -5097,6 +5178,38 @@ void server_routes::init_routes() {
         }
 
         GGML_ASSERT(dynamic_cast<server_task_result_apply_lora*>(result.get()) != nullptr);
+        res->ok(result->to_json());
+        return res;
+    };
+
+    this->post_cvectors = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+        if (!body.is_array()) {
+            res->error(format_error_response("Request body must be an array", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_SET_CVEC);
+            task.id = rd.get_new_id();
+            task.set_cvector = parse_cvector_request(body);
+            rd.post_task(std::move(task));
+        }
+
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        GGML_ASSERT(dynamic_cast<server_task_result_apply_cvector*>(result.get()) != nullptr);
         res->ok(result->to_json());
         return res;
     };

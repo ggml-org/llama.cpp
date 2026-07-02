@@ -91,6 +91,7 @@ class ServerProcess:
     models_preset: str | None = None
     no_models_autoload: bool | None = None
     lora_files: List[str] | None = None
+    control_vector_files: List[str] | None = None
     enable_ctx_shift: int | None = False
     spec_draft_n_min: int | None = None
     spec_draft_n_max: int | None = None
@@ -217,6 +218,9 @@ class ServerProcess:
         if self.lora_files:
             for lora_file in self.lora_files:
                 server_args.extend(["--lora", lora_file])
+        if self.control_vector_files:
+            for cv_file in self.control_vector_files:
+                server_args.extend(["--control-vector", cv_file])
         if self.enable_ctx_shift:
             server_args.append("--context-shift")
         if self.api_key:
