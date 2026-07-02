@@ -3150,8 +3150,12 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
         }
     }
 
-    // src0 rows must be densely packed so each DMA transfer covers exactly one row
-    if (src0->nb[0] != sizeof(float) || src0->nb[1] != src0->ne[0] * sizeof(float)) {
+    // src0 elements within a row must be contiguous (nb[0] == sizeof(float)).
+    // nb[1] may exceed ne[0]*sizeof(float) when src0 is a half-dim view of a larger tensor
+    if (src0->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (src0->nb[1] < src0->ne[0] * sizeof(float)) {
         return false;
     }
     return true;
