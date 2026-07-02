@@ -5040,6 +5040,103 @@ void quantize_row_iq4_nl_ref(const float * GGML_RESTRICT x, block_iq4_nl * GGML_
     }
 }
 
+// ===================== SQ4: Semantic Quantization 4-bit =====================
+//
+// Per-block percentile-calibrated bands. Each 256-weight block stores its own
+// 8 band means — no global LUT, no calibration data. The block adapts to
+// whatever distribution the weights have.
+//
+// Nibble layout: [sign:1 | band:3], two per byte.
+// Dequant: bands[nibble & 7], negated if bit 3 set.
+
+static inline float sq4_dequant_nibble(const float * bands, uint8_t nibble) {
+    float v = bands[nibble & 0x07];
+    return (nibble & 0x08) ? -v : v;
+}
+
+void dequantize_row_sq4(const block_sq4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_SQ4 == 0);
+    const int64_t nb = k / QK_SQ4;
+
+    for (int i = 0; i < nb; i++) {
+        const float   * bands = x[i].bands;
+        const uint8_t * qs    = x[i].qs;
+
+        for (int j = 0; j < QK_SQ4/2; ++j) {
+            y[j*2 + 0] = sq4_dequant_nibble(bands, qs[j] & 0x0F);
+            y[j*2 + 1] = sq4_dequant_nibble(bands, qs[j] >> 4);
+        }
+        y += QK_SQ4;
+    }
+}
+
+static int sq4_compare_float(const void * a, const void * b) {
+    float fa = *(const float *)a, fb = *(const float *)b;
+    return (fa > fb) - (fa < fb);
+}
+
+// Calibrate 8 percentile bands from sorted absolute values.
+// Writes band means into bands[8] and inter-band boundaries into bounds[7].
+static void sq4_calibrate_bands(const float * sorted, int n, float * bands, float * bounds) {
+    for (int b = 0; b < 8; b++) {
+        int lo = n * b / 8;
+        int hi = n * (b + 1) / 8;
+        double sum = 0.0;
+        for (int v = lo; v < hi; v++) sum += (double)sorted[v];
+        bands[b] = (float)(sum / (double)(hi - lo));
+        if (b < 7) bounds[b] = sorted[hi - 1];
+    }
+}
+
+static inline uint8_t sq4_encode_nibble(float val, float absval, const float * bounds) {
+    int band = 7;
+    for (int b = 0; b < 7; b++) {
+        if (absval <= bounds[b]) { band = b; break; }
+    }
+    int sign = val < 0.0f ? 1 : 0;
+    return (uint8_t)((sign << 3) | band);
+}
+
+void quantize_row_sq4_ref(const float * GGML_RESTRICT x, block_sq4 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_SQ4 == 0);
+    const int64_t nb = k / QK_SQ4;
+
+    float sorted[QK_SQ4];
+
+    for (int i = 0; i < nb; i++) {
+        const float * src = x + i * QK_SQ4;
+
+        for (int j = 0; j < QK_SQ4; j++) {
+            sorted[j] = fabsf(src[j]);
+        }
+        qsort(sorted, QK_SQ4, sizeof(float), sq4_compare_float);
+
+        float bounds[7];
+        sq4_calibrate_bands(sorted, QK_SQ4, y[i].bands, bounds);
+
+        for (int j = 0; j < QK_SQ4/2; ++j) {
+            uint8_t lo = sq4_encode_nibble(src[j*2 + 0], fabsf(src[j*2 + 0]), bounds);
+            uint8_t hi = sq4_encode_nibble(src[j*2 + 1], fabsf(src[j*2 + 1]), bounds);
+            y[i].qs[j] = lo | (hi << 4);
+        }
+    }
+}
+
+size_t quantize_sq4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_UNUSED(quant_weights);
+    GGML_ASSERT(n_per_row % QK_SQ4 == 0);
+    const int64_t nblock = n_per_row / QK_SQ4;
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_sq4_ref(src, (block_sq4 *)qrow, n_per_row);
+        src  += n_per_row;
+        qrow += nblock * sizeof(block_sq4);
+    }
+    return nrow * nblock * sizeof(block_sq4);
+}
+
+// ===================== End SQ4 =====================
+
 size_t quantize_iq4_xs(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     GGML_ASSERT(n_per_row%QK_K == 0);
     int64_t nblock = n_per_row/QK_K;
@@ -5574,6 +5671,18 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_iq4_nl, data, nb);
             } break;
 
+        case GGML_TYPE_SQ4:
+            {
+                const block_sq4 * b = (const block_sq4 *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    for (int j = 0; j < 8; ++j) {
+                        if (!isfinite(b[i].bands[j])) {
+                            fprintf(stderr, "%s: found non-finite band mean at block %zu band %d\n", __func__, i, j);
+                            return false;
+                        }
+                    }
+                }
+            } break;
         case GGML_TYPE_I8:
         case GGML_TYPE_I16:
         case GGML_TYPE_I32:
