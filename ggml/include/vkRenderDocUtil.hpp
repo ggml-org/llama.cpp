@@ -69,22 +69,29 @@ public:
 
     RenderDocUtil(void)
     {
-
-        DynamicLibrary lib(RENDERDOC_LIBRARY_NAME);
-        m_library                   = &lib;
-        using FuncType              = void (*)();
-        ::pRENDERDOC_GetAPI pGetApi = (::pRENDERDOC_GetAPI)m_library->getFunction<FuncType>("RENDERDOC_GetAPI");
-        const int           ret     = pGetApi(eRENDERDOC_API_Version_1_1_2, (void**)&m_api);
-
-        if (ret == 1)
+        // renderdoc.dll is only present when running under RenderDoc; its absence
+        // (e.g. under Nsight or a plain run) must not be fatal
+        try
         {
-            m_api->TriggerCapture();
+            DynamicLibrary lib(RENDERDOC_LIBRARY_NAME);
+            using FuncType              = void (*)();
+            ::pRENDERDOC_GetAPI pGetApi = (::pRENDERDOC_GetAPI)lib.getFunction<FuncType>("RENDERDOC_GetAPI");
+            const int           ret     = pGetApi(eRENDERDOC_API_Version_1_1_2, (void**)&m_api);
 
-            m_valid = true;
+            if (ret == 1)
+            {
+                m_api->TriggerCapture();
+
+                m_valid = true;
+            }
+            else
+            {
+                std::cout << "RENDERDOC_GetAPI returned " << ret << " status, RenderDoc API not available" << std::endl;
+            }
         }
-        else
+        catch (const std::exception& e)
         {
-            std::cout << "RENDERDOC_GetAPI returned " << ret << " status, RenderDoc API not available" << std::endl;
+            std::cout << e.what() << ", RenderDoc capture disabled" << std::endl;
         }
     }
 
@@ -112,9 +119,8 @@ public:
 
 private:
 
-    DynamicLibrary*        m_library;
-    ::RENDERDOC_API_1_1_2* m_api;
-    bool                   m_valid;
+    ::RENDERDOC_API_1_1_2* m_api   = nullptr;
+    bool                   m_valid = false;
 };
 
 #endif // _VKRENDERDOCUTIL_HPP

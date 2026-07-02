@@ -27,6 +27,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdarg>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <list>
@@ -63,6 +64,14 @@ static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_CLI,
     LLAMA_EXAMPLE_TTS,
 };
+
+static void common_set_env(const char * name, const std::string & value) {
+#if defined(_WIN32)
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
 
 static std::string read_file(const std::string & fname) {
     std::ifstream file(fname);
@@ -2886,6 +2895,29 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_MAIN_GPU"));
+    add_opt(common_arg(
+        {"-coopmat", "--coopmat"}, "N",
+        "Vulkan cooperative matrix mode: 0=disable, 1=VK_KHR_cooperative_matrix, 2=VK_NV_cooperative_matrix2, 3=VK_NV_cooperative_matrix2 decode vector",
+        [](common_params &, int value) {
+            if (value < 0 || value > 3) {
+                throw std::invalid_argument("invalid value");
+            }
+            common_set_env("GGML_VK_COOPMAT", std::to_string(value));
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_COOPMAT"));
+    add_opt(common_arg(
+        {"-vulkandebug", "--vulkan-debug"}, "[on|off]",
+        "enable or disable Vulkan debug logging",
+        [](common_params &, const std::string & value) {
+            if (is_truthy(value)) {
+                common_set_env("GGML_VULKAN_DEBUG", "1");
+            } else if (is_falsey(value)) {
+                common_set_env("GGML_VULKAN_DEBUG", "0");
+            } else {
+                throw std::invalid_argument("invalid value");
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_VULKAN_DEBUG"));
     add_opt(common_arg(
         { "-fit", "--fit" }, "[on|off]",
         string_format("whether to adjust unset arguments to fit in device memory ('on' or 'off', default: '%s')", params.fit_params ? "on" : "off"),

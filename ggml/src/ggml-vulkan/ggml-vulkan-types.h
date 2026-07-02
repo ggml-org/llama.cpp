@@ -211,11 +211,19 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
         }                                                           \
     } while (0)
 
+inline bool ggml_vk_debug_enabled() {
+    const char * env = getenv("GGML_VULKAN_DEBUG");
+    if (env != nullptr) {
+        return strcmp(env, "0") != 0 && strcmp(env, "false") != 0 && strcmp(env, "off") != 0 && strcmp(env, "no") != 0;
+    }
 #ifdef GGML_VULKAN_DEBUG
-#define VK_LOG_DEBUG(msg) std::cerr << msg << std::endl
+    return true;
 #else
-#define VK_LOG_DEBUG(msg) ((void) 0)
-#endif // GGML_VULKAN_DEBUG
+    return false;
+#endif
+}
+
+#define VK_LOG_DEBUG(msg) do { if (ggml_vk_debug_enabled()) { std::cerr << msg << std::endl; } } while (0)
 
 #define MAX_PARAMETER_COUNT 12
 

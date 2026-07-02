@@ -4021,6 +4021,22 @@ static bool ggml_vk_host_buffer_import_usable(uint32_t vendor_id) {
     return vendor_id != VK_VENDOR_ID_AMD;
 }
 
+static int ggml_vk_get_coopmat_mode() {
+    const char * mode_env = getenv("GGML_VK_COOPMAT");
+    if (mode_env == nullptr) {
+        return -1;
+    }
+
+    char * end = nullptr;
+    const long mode = strtol(mode_env, &end, 10);
+    if (end == mode_env || *end != '\0' || mode < 0 || mode > 3) {
+        GGML_LOG_DEBUG("ggml_vulkan: invalid GGML_VK_COOPMAT='%s', using automatic cooperative matrix detection\n", mode_env);
+        return -1;
+    }
+
+    return (int) mode;
+}
+
 vk_device ggml_vk_get_device(size_t idx) {
     VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
 
@@ -4067,6 +4083,7 @@ vk_device ggml_vk_get_device(size_t idx) {
         bool pipeline_robustness = false;
         bool coopmat2_support = false;
         bool coopmat2_decode_vector_support = false;
+        const int coopmat_mode = ggml_vk_get_coopmat_mode();
         bool pipeline_executable_properties_support = false;
         bool internally_sync_support = false;
         device->coopmat_support = false;
@@ -4094,7 +4111,7 @@ vk_device ggml_vk_get_device(size_t idx) {
                 device->subgroup_size_control = true;
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
             } else if (strcmp("VK_KHR_cooperative_matrix", properties.extensionName) == 0 &&
-                       !getenv("GGML_VK_DISABLE_COOPMAT")) {
+                       ((coopmat_mode < 0 && !getenv("GGML_VK_DISABLE_COOPMAT")) || coopmat_mode == 1)) {
                 device->coopmat_support = true;
                 device->coopmat_m = 0;
                 device->coopmat_n = 0;
@@ -4102,11 +4119,11 @@ vk_device ggml_vk_get_device(size_t idx) {
 #endif
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
             } else if (strcmp("VK_NV_cooperative_matrix2", properties.extensionName) == 0 &&
-                       !getenv("GGML_VK_DISABLE_COOPMAT2")) {
+                       ((coopmat_mode < 0 && !getenv("GGML_VK_DISABLE_COOPMAT2")) || coopmat_mode >= 2)) {
                 coopmat2_support = true;
 #endif
             } else if (strcmp(VK_NV_COOPERATIVE_MATRIX_DECODE_VECTOR_EXTENSION_NAME, properties.extensionName) == 0 &&
-                       !getenv("GGML_VK_DISABLE_COOPMAT2_DECODE_VECTOR")) {
+                       ((coopmat_mode < 0 && !getenv("GGML_VK_DISABLE_COOPMAT2_DECODE_VECTOR")) || coopmat_mode == 3)) {
                 coopmat2_decode_vector_support = true;
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
             } else if (strcmp("VK_KHR_shader_integer_dot_product", properties.extensionName) == 0 &&
@@ -4982,6 +4999,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     bool coopmat_support = false;
     bool coopmat2_support = false;
     bool coopmat2_decode_vector_support = false;
+    const int coopmat_mode = ggml_vk_get_coopmat_mode();
     bool integer_dot_product = false;
     bool bfloat16_support = false;
     bool dot2_f16_support = false;
@@ -4995,16 +5013,16 @@ static void ggml_vk_print_gpu_info(size_t idx) {
             fp16_compute = true;
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
        } else if (strcmp("VK_KHR_cooperative_matrix", properties.extensionName) == 0 &&
-                   !getenv("GGML_VK_DISABLE_COOPMAT")) {
+                   ((coopmat_mode < 0 && !getenv("GGML_VK_DISABLE_COOPMAT")) || coopmat_mode == 1)) {
             coopmat_support = true;
 #endif
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
         } else if (strcmp("VK_NV_cooperative_matrix2", properties.extensionName) == 0 &&
-                   !getenv("GGML_VK_DISABLE_COOPMAT2")) {
+                   ((coopmat_mode < 0 && !getenv("GGML_VK_DISABLE_COOPMAT2")) || coopmat_mode >= 2)) {
             coopmat2_support = true;
 #endif
         } else if (strcmp(VK_NV_COOPERATIVE_MATRIX_DECODE_VECTOR_EXTENSION_NAME, properties.extensionName) == 0 &&
-                   !getenv("GGML_VK_DISABLE_COOPMAT2_DECODE_VECTOR")) {
+                   ((coopmat_mode < 0 && !getenv("GGML_VK_DISABLE_COOPMAT2_DECODE_VECTOR")) || coopmat_mode == 3)) {
             coopmat2_decode_vector_support = true;
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
         } else if (strcmp("VK_KHR_shader_integer_dot_product", properties.extensionName) == 0 &&
@@ -5201,7 +5219,6 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     GGML_LOG_DEBUG("ggml_vulkan: %zu = %s (%s) | uma: %d | fp16: %s | bf16: %d | fp4: %d | warp size: %zu | shared memory: %d | int dot: %d | matrix cores: %s\n",
               idx, device_name.c_str(), driver_props.driverName.data(), uma, fp16_str, bf16, fp4, subgroup_size,
               props2.properties.limits.maxComputeSharedMemorySize, integer_dot_product, matrix_cores.c_str());
-    std::cout << "======= zztest ======= matrix_cores = " << matrix_cores.c_str() << std::endl;
     if (props2.properties.deviceType == vk::PhysicalDeviceType::eCpu) {
         GGML_LOG_DEBUG("ggml_vulkan: Warning: Device type is CPU. This is probably not the device you want.\n");
     }
