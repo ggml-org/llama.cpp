@@ -194,6 +194,14 @@ llama_context::llama_context(
         cparams.causal_attn = params.attention_type == LLAMA_ATTENTION_TYPE_CAUSAL;
     }
 
+    // Non-causal models (e.g. embedding/classification encoders such as BERT) cannot generate text.
+    // A generation request (bounded n_outputs_max) would otherwise trip GGML_ASSERT in output_reserve();
+    // fail early with a clear message instead of aborting.
+    if (!cparams.causal_attn && !llama_model_has_encoder(&model) && params.n_outputs_max != 0) {
+        throw std::runtime_error("this model is non-causal (e.g. an embedding/classification model) "
+            "and cannot be used for text generation; use the embedding API (e.g. llama-embedding) instead");
+    }
+
     cparams.flash_attn = params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
     cparams.auto_fa    = params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO;
 
