@@ -1313,6 +1313,55 @@ private:
             n_ctx_slot = n_ctx_train;
         }
 
+        // compute per-slot context sizes (may differ when --slot-context is provided)
+        const int n_ctx_total = llama_n_ctx(ctx_tgt);
+        std::vector<int32_t> slot_ctx_vec(params_base.n_parallel, 0);
+
+        if (!params_base.slot_ctx_sizes.empty()) {
+            // validate slot ids and accumulate configured context
+            int32_t configured_sum = 0;
+            for (const auto & kv : params_base.slot_ctx_sizes) {
+                const int id = kv.first;
+                const int32_t sz = kv.second;
+                if (id >= params_base.n_parallel) {
+                    SRV_ERR("--slot-context: slot_id %d is out of range (n_parallel = %d)\n", id, params_base.n_parallel);
+                    return false;
+                }
+                configured_sum += sz;
+                slot_ctx_vec[id] = sz;
+            }
+            if (configured_sum > n_ctx_total) {
+                SRV_ERR("--slot-context: sum of configured slot contexts (%d) exceeds total context (%d)\n", configured_sum, n_ctx_total);
+                return false;
+            }
+            // warn if any slot exceeds the equal-split physical limit without --kv-unified
+            if (!params_base.kv_unified) {
+                for (const auto & kv : params_base.slot_ctx_sizes) {
+                    if (kv.second > n_ctx_slot) {
+                        SRV_WRN("--slot-context: slot %d context (%d) exceeds the physical KV cache limit per slot (%d) -- add --kv-unified to pool the KV cache, otherwise the slot will exhaust at %d tokens\n",
+                                kv.first, kv.second, n_ctx_slot, n_ctx_slot);
+                    }
+                }
+            }
+            // distribute remaining context equally among unconfigured slots
+            const int n_unconfigured = params_base.n_parallel - (int) params_base.slot_ctx_sizes.size();
+            const int n_ctx_remaining = n_ctx_total - configured_sum;
+            const int n_ctx_per_remaining = n_unconfigured > 0 ? n_ctx_remaining / n_unconfigured : 0;
+            for (int i = 0; i < params_base.n_parallel; i++) {
+                if (slot_ctx_vec[i] == 0) {
+                    slot_ctx_vec[i] = n_ctx_per_remaining;
+                }
+                if (slot_ctx_vec[i] > n_ctx_train) {
+                    SRV_WRN("slot %d context (%d) exceeds training context (%d) - capping\n", i, slot_ctx_vec[i], n_ctx_train);
+                    slot_ctx_vec[i] = n_ctx_train;
+                }
+            }
+        } else {
+            for (int i = 0; i < params_base.n_parallel; i++) {
+                slot_ctx_vec[i] = n_ctx_slot;
+            }
+        }
+
         slots.clear();
 
         ctx_tgt_seq_rm_type = common_context_can_seq_rm(ctx_tgt);
@@ -1359,7 +1408,7 @@ private:
             slot.ctx_tgt = ctx_tgt;
             slot.ctx_dft = ctx_dft.get();
             slot.spec    = spec.get();
-            slot.n_ctx   = n_ctx_slot;
+            slot.n_ctx   = slot_ctx_vec[i];
 
             slot.mctx                   = mctx;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
