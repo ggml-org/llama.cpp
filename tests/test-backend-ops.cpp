@@ -2649,6 +2649,59 @@ struct test_argmax : public test_case {
     }
 };
 
+// GGML_OP_ARGMAX with ties: first-occurrence index must match across backends
+struct test_argmax_ties : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_argmax_ties(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {10, 100, 1, 1})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_argmax(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_F32) {
+                // Ramp 0..ne0-1 with the max (ne0) at three positions; the
+                // first occurrence is at a non-zero index so the NMSE metric
+                // (mse(a,b)/mse(a,0)) is well-defined, not 0/0 under -ffast-math.
+                const int64_t ne0 = t->ne[0];
+                const float max_val = (float) ne0;
+                constexpr int64_t first_idx = 3;
+                for (int64_t r = 0; r < ggml_nrows(t); r++) {
+                    std::vector<float> data(ne0);
+                    for (int i = 0; i < ne0; i++) {
+                        data[i] = (float) i;
+                    }
+                    data[first_idx]   = max_val;
+                    data[ne0 / 2]     = max_val;
+                    data[ne0 - 1]     = max_val;
+                    ggml_backend_tensor_set(t, data.data(), r * t->nb[1], ne0 * sizeof(float));
+                }
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+
+    double max_nmse_err() override {
+        return 0.0;
+    }
+};
+
 // GGML_OP_COUNT_EQUAL
 struct test_count_equal : public test_case {
     const ggml_type type;
@@ -8116,6 +8169,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {1024, 12, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {2000, 10, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {5438,  3, 1, 1}));
+
+    // argmax with ties: sizes span per-thread and cross-thread reduction paths
+    test_cases.emplace_back(new test_argmax_ties(GGML_TYPE_F32, {32,    1, 1, 1}));
+    test_cases.emplace_back(new test_argmax_ties(GGML_TYPE_F32, {33,    1, 1, 1}));
+    test_cases.emplace_back(new test_argmax_ties(GGML_TYPE_F32, {100,  10, 1, 1}));
+    test_cases.emplace_back(new test_argmax_ties(GGML_TYPE_F32, {1024, 10, 1, 1}));
+    test_cases.emplace_back(new test_argmax_ties(GGML_TYPE_F32, {2000, 10, 1, 1}));
+    test_cases.emplace_back(new test_argmax_ties(GGML_TYPE_F32, {5438,  3, 1, 1}));
 
     for (int ne3 : {1, 3}) { // CUDA backward pass only supports ne3 == 1
         test_cases.emplace_back(new test_repeat(GGML_TYPE_F32, {10, 5, 4, ne3}, {1, 1, 1, 1}));
