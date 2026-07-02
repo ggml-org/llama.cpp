@@ -84,7 +84,7 @@ struct server_model_meta {
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
-    // bool need_download = false; // whether the model needs to be downloaded before loading // TODO @ngxson: implement this
+    bool need_download = false; // whether the model needs to be downloaded before loading
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -303,6 +303,7 @@ struct server_models_routes {
     void init_routes();
     // handlers using lambda function, so that they can capture `this` without `std::bind`
     server_http_context::handler_t get_router_props;
+    server_http_context::handler_t get_router_metrics;
     server_http_context::handler_t proxy_get;
     server_http_context::handler_t proxy_post;
     server_http_context::handler_t get_router_models;
