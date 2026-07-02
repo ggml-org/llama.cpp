@@ -2171,9 +2171,16 @@ server_http_proxy::server_http_proxy(
 
     // setup Client
     cli->set_follow_location(true);
-    cli->set_connection_timeout(timeout_read, 0); // use --timeout value instead of hardcoded 5 s
-    cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
-    cli->set_read_timeout(timeout_write, 0);
+    // httplib treats {0,0} as immediate select() timeout, but in server terms
+    // timeout_read/timeout_write == 0 means "no timeout". Skip setting in that
+    // case to keep httplib's built-in defaults (connection: 300s, write: 5s, read: 300s).
+    if (timeout_read > 0) {
+        cli->set_connection_timeout(timeout_read, 0);
+        cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
+    }
+    if (timeout_write > 0) {
+        cli->set_read_timeout(timeout_write, 0);
+    }
     this->status = 500; // to be overwritten upon response
     this->cleanup = [pipe]() {
         pipe->close_read();
