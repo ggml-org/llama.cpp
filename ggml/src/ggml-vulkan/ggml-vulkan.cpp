@@ -5453,7 +5453,10 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv6_f32, "rwkv_wkv6_f32", rwkv_wkv6_f32_len, rwkv_wkv6_f32_data, "main", 7, sizeof(vk_op_rwkv_wkv6_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv7_f32, "rwkv_wkv7_f32", rwkv_wkv7_f32_len, rwkv_wkv7_f32_data, "main", 8, sizeof(vk_op_rwkv_wkv7_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
-    if (device->subgroup_arithmetic && device->subgroup_size <= 64 && 64 % device->subgroup_size == 0) {
+    // Intel Windows fails RWKV_WKV7 T=1 correctness with this subgroup shader.
+    if (device->subgroup_arithmetic &&
+            device->driver_id != vk::DriverId::eIntelProprietaryWindows &&
+            device->subgroup_size <= 64 && 64 % device->subgroup_size == 0) {
         const uint32_t rows_per_wg = 4;
         ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv7_t1_f32, "rwkv_wkv7_t1_f32", rwkv_wkv7_t1_f32_len, rwkv_wkv7_t1_f32_data, "main", 8, sizeof(vk_op_rwkv_wkv7_push_constants), {1, rows_per_wg, 1}, {device->subgroup_size, rows_per_wg}, 1, true, true, device->subgroup_size);
     }
