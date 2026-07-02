@@ -1181,6 +1181,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
                 result.push_back(id);
             }
+
+            if (result.size() < (size_t) params.n_min) {
+                result.clear();
+            }
         }
     }
 
