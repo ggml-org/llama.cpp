@@ -2877,7 +2877,9 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
         (sctx->penalty_repeat == 1.0f && sctx->penalty_freq == 0.0f && sctx->penalty_present == 0.0f)) {
         return;
     }
-
+    //builds two parallel host-side arrays — host_token_ids and host_counts of fixed size n_max 
+    //upload to GPU input tensors (inp_token_ids, inp_counts)
+    //fill active entries from the map
     int32_t n_active = 0;
 
     for (const auto & it : sctx->token_count) {
@@ -2886,7 +2888,8 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
         sctx->host_counts   [n_active] = it.second;
         ++n_active;
     }
-
+    
+    // This is required because backend_apply uses ggml_set_rows (a scatter-back operation) 
     std::vector<std::pair<int32_t, int32_t>> entries;
     entries.reserve(n_active);
     for (int32_t i = 0; i < n_active; ++i) {
@@ -2899,7 +2902,10 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
         sctx->host_token_ids[i] = entries[i].first;
         sctx->host_counts   [i] = entries[i].second;
     }
-
+    
+    // Padding: Finds a filler token id that is not present in token_count.
+    // Use it to do padding for the arrays, it avoids resizing every time.
+    // The arrays must always have exactly n_max entries (the GPU tensor is a fixed size).
     int32_t filler = 0;
     if (n_active < sctx->n_max) {
         while (sctx->token_count.find(filler) != sctx->token_count.end()) {
@@ -2909,7 +2915,11 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
             GGML_ASSERT(filler < sctx->n_vocab);
         }
     }
-
+    
+    // Fill the rest of the arrays with the filler token id and count 0.
+    // Inactive slots are padded with a unique dummy token ID (count = 0).
+    // The uniqueness matters because ggml_set_rows with duplicate indices can produce non-deterministic or incorrect results. 
+    // Using a filler token with count 0 that isn't in the active set is safe, because the active_mask step in backend_apply filters them out via ggml_step(counts_f32)
     for (int32_t i = n_active; i < sctx->n_max; ++i) {
         sctx->host_token_ids[i] = filler;
         sctx->host_counts   [i] = 0;
