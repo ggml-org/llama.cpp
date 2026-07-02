@@ -1,5 +1,5 @@
 import { config } from '$lib/stores/settings.svelte';
-import { REDACTED_HEADERS } from '$lib/constants';
+import { CORS_PROXY_HEADER_PREFIX, REDACTED_HEADERS } from '$lib/constants';
 import { redactValue } from './redact';
 
 /**
@@ -52,11 +52,20 @@ export function sanitizeHeaders(
 
 	for (const [key, value] of normalized.entries()) {
 		const normalizedKey = key.toLowerCase();
-		const partialChars = partialRedactHeaders?.get(normalizedKey);
+		const unproxiedKey = normalizedKey.startsWith(CORS_PROXY_HEADER_PREFIX)
+			? normalizedKey.slice(CORS_PROXY_HEADER_PREFIX.length)
+			: normalizedKey;
+		const partialChars =
+			partialRedactHeaders?.get(normalizedKey) ?? partialRedactHeaders?.get(unproxiedKey);
 
 		if (partialChars !== undefined) {
 			sanitized[key] = redactValue(value, partialChars);
-		} else if (REDACTED_HEADERS.has(normalizedKey) || redactedHeaders.has(normalizedKey)) {
+		} else if (
+			REDACTED_HEADERS.has(normalizedKey) ||
+			REDACTED_HEADERS.has(unproxiedKey) ||
+			redactedHeaders.has(normalizedKey) ||
+			redactedHeaders.has(unproxiedKey)
+		) {
 			sanitized[key] = redactValue(value);
 		} else {
 			sanitized[key] = value;

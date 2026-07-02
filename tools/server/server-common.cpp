@@ -12,6 +12,7 @@
 #include <random>
 #include <sstream>
 #include <fstream>
+#include <limits>
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -344,6 +345,14 @@ const mtmd::input_chunk_ptr & server_tokens::find_chunk(size_t idx) const {
     throw std::runtime_error("Chunk not found");
 }
 
+std::pair<const mtmd::input_chunk_ptr *, size_t> server_tokens::find_next_media_chunk(size_t idx) const {
+    auto it = map_idx_to_media.upper_bound(idx);
+    if (it != map_idx_to_media.end()) {
+        return { &it->second, it->first };
+    }
+    return { nullptr, 0 };
+}
+
 void server_tokens::push_back(llama_token tok) {
     if (tok == LLAMA_TOKEN_NULL) {
         throw std::runtime_error("Invalid token");
@@ -509,6 +518,14 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     return max_idx; // all tokens are equal
 }
 
+common_chat_msg_spans server_tokens::find_message_spans(const common_chat_msg_delimiters & delims) const {
+    std::map<size_t, size_t> skips;
+    for (const auto & it : map_idx_to_media) {
+        skips[it.first] = mtmd_input_chunk_get_n_tokens(it.second.get());
+    }
+    return delims.split(tokens, skips);
+}
+
 bool server_tokens::validate(const struct llama_context * ctx) const {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -529,37 +546,6 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
         }
     }
     return true;
-}
-
-int32_t server_tokens::process_chunk(
-            llama_context * ctx,
-            mtmd_context * mctx,
-            size_t idx,
-            llama_pos pos,
-            int32_t seq_id,
-            size_t & n_tokens_out) const {
-    const auto & chunk = find_chunk(idx);
-    const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
-                        ? "image" : "audio";
-    SRV_INF("processing %s...\n", name);
-    int32_t n_batch = llama_n_batch(ctx);
-    int64_t t0 = ggml_time_ms();
-    llama_pos new_n_past; // unused for now
-    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
-        chunk.get(),
-        pos,
-        seq_id,
-        n_batch,
-        true, // logits last
-        &new_n_past);
-    SRV_INF("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
-    if (result != 0) {
-        LOG_ERR("mtmd_helper_eval failed with status %d", result);
-        n_tokens_out = 0;
-        return result;
-    }
-    n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
-    return 0;
 }
 
 server_tokens server_tokens::clone() const {
@@ -701,29 +687,19 @@ size_t validate_utf8(const std::string& text) {
     return len;
 }
 
-// Computes FNV-1a hash of the data
-static std::string fnv_hash(const uint8_t * data, size_t len) {
-    const uint64_t fnv_prime = 0x100000001b3ULL;
-    uint64_t hash = 0xcbf29ce484222325ULL;
-
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= data[i];
-        hash *= fnv_prime;
-    }
-    return std::to_string(hash);
-}
-
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
+server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder) {
+    // these will be freed upon going out of scope
     mtmd::bitmaps bitmaps;
+    std::vector<mtmd_helper::video_ptr> videos;
     for (auto & file : files) {
-        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
-        if (!bmp.ptr) {
+        auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder);
+        if (!out.bitmap) {
             throw std::runtime_error("Failed to load image or audio file");
         }
-        // calculate bitmap hash (for KV caching)
-        std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
-        bmp.set_id(hash.c_str());
-        bitmaps.entries.push_back(std::move(bmp));
+        bitmaps.entries.emplace_back(out.bitmap);
+        if (out.video_ctx) {
+            videos.emplace_back(out.video_ctx);
+        }
     }
     // process prompt
     std::vector<server_tokens> inputs;
@@ -849,12 +825,21 @@ json oaicompat_completion_params_parse(const json & body) {
     return llama_params;
 }
 
-// media_path always end with '/', see arg.cpp
+// url can be
+// - http(s):// for remote files
+// - file:// for local files (only allowed if media_path is set)
+// - data: for base64 encoded data with uri scheme (e.g. data:image/png;base64,...)
+// - raw base64 encoded data
 static void handle_media(
         std::vector<raw_buffer> & out_files,
-        json & media_obj,
-        const std::string & media_path) {
-    std::string url = json_value(media_obj, "url", std::string());
+        const std::string & url,
+        const std::string & media_path,
+        bool accept_base64_uri) {
+    if (!media_path.empty()) {
+        // should already be enforced by arg.cpp, but checking just in case
+        GGML_ASSERT(media_path.back() == DIRECTORY_SEPARATOR);
+    }
+
     if (string_starts_with(url, "http")) {
         // download remote image
         // TODO @ngxson : maybe make these params configurable
@@ -890,20 +875,28 @@ static void handle_media(
         data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         out_files.push_back(data);
 
-    } else {
+    } else if (accept_base64_uri && string_starts_with(url, "data:")) {
         // try to decode base64 image
         std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
         if (parts.size() != 2) {
-            throw std::runtime_error("Invalid url value");
+            throw std::runtime_error("Invalid uri-encoded base64 value");
         } else if (!string_starts_with(parts[0], "data:image/")) {
-            throw std::runtime_error("Invalid url format: " + parts[0]);
+            throw std::runtime_error("Invalid uri format: " + parts[0]);
         } else if (!string_ends_with(parts[0], "base64")) {
-            throw std::runtime_error("url must be base64 encoded");
+            throw std::runtime_error("uri must be base64 encoded");
         } else {
             auto base64_data = parts[1];
             auto decoded_data = base64_decode(base64_data);
             out_files.push_back(decoded_data);
         }
+
+    } else {
+        // try as raw base64 string
+        auto decoded_data = base64_decode(url);
+        if (decoded_data.empty()) {
+            throw std::runtime_error("Invalid base64 value");
+        }
+        out_files.push_back(decoded_data);
     }
 }
 
@@ -989,14 +982,15 @@ json oaicompat_chat_params_parse(
         }
 
         for (auto & p : content) {
-            std::string type      = json_value(p, "type", std::string());
+            std::string type = json_value(p, "type", std::string());
             if (type == "image_url") {
                 if (!opt.allow_image) {
                     throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
                 json image_url = json_value(p, "image_url", json::object());
-                handle_media(out_files, image_url, opt.media_path);
+                std::string url = json_value(image_url, "url", std::string());
+                handle_media(out_files, url, opt.media_path, true);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1007,21 +1001,29 @@ json oaicompat_chat_params_parse(
                     throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
-                json input_audio   = json_value(p, "input_audio", json::object());
-                std::string data   = json_value(input_audio, "data", std::string());
-                std::string format = json_value(input_audio, "format", std::string());
-                // while we also support flac, we don't allow it here so we matches the OAI spec
-                if (format != "wav" && format != "mp3") {
-                    throw std::invalid_argument("input_audio.format must be either 'wav' or 'mp3'");
-                }
-                auto decoded_data = base64_decode(data); // expected to be base64 encoded
-                out_files.push_back(decoded_data);
-
-                // TODO: add audio_url support by reusing handle_media()
+                // note: don't need to validate "format", it's redundant
+                json input_audio = json_value(p, "input_audio", json::object());
+                std::string url  = json_value(input_audio, "data",
+                                        json_value(input_audio, "url", std::string()));
+                handle_media(out_files, url, opt.media_path, false);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
                 p.erase("input_audio");
+
+            } else if (type == "input_video") {
+                if (!opt.allow_video) {
+                    throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                }
+
+                json input_video = json_value(p, "input_video", json::object());
+                std::string url  = json_value(input_video, "data",
+                                        json_value(input_video, "url", std::string()));
+                handle_media(out_files, url, opt.media_path, false);
+
+                p["type"] = "media_marker";
+                p["text"] = get_media_marker();
+                p.erase("input_video");
 
             } else if (type != "text") {
                 throw std::invalid_argument("unsupported content[].type");
@@ -1110,21 +1112,13 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
-    llama_params["message_spans"] = json::array();
-
-    for (const auto & span : chat_params.message_spans) {
-        llama_params["message_spans"].push_back({
-            { "role", span.role },
-            { "pos",  span.pos  },
-            { "len",  span.len  },
-        });
-    }
+    llama_params["message_delimiters"] = chat_params.message_delimiters.to_json();
 
     // Reasoning budget: pass parameters through to sampling layer
     {
-        int reasoning_budget = opt.reasoning_budget;
-        if (reasoning_budget == -1 && body.contains("thinking_budget_tokens")) {
-            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        int reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        if (reasoning_budget == -1) {
+            reasoning_budget = opt.reasoning_budget;
         }
 
         if (!chat_params.thinking_end_tag.empty()) {
@@ -1257,7 +1251,7 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx) {
+std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top) {
     std::vector<llama_token_data> cur;
 
     const auto * logits = llama_get_logits_ith(ctx, idx);
@@ -1276,21 +1270,34 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
         }
     }
 
-    // sort tokens by logits
-    std::sort(cur.begin(), cur.end(), [](const llama_token_data & a, const llama_token_data & b) {
-        return a.logit > b.logit;
-    });
+    // sort tokens by logits (partial: only the leading `n_top` need ordering)
+    if (n_top > cur.size()) {
+        n_top = cur.size();
+    }
+    if (n_top > 0) {
+        std::partial_sort(cur.begin(), cur.begin() + n_top, cur.end(),
+            [](const llama_token_data & a, const llama_token_data & b) {
+                return a.logit > b.logit;
+            });
+    }
 
     // apply softmax
-    float max_l = cur[0].logit;
+    float max_l = -std::numeric_limits<float>::infinity();
+    if (n_top > 0) {
+        max_l = cur[0].logit; // partial_sort guarantees the absolute maximum is at index 0
+    } else {
+        for (const auto & t : cur) {
+            max_l = std::max(max_l, t.logit);
+        }
+    }
     float cum_sum = 0.0f;
-    for (size_t i = 0; i < cur.size(); ++i) {
-        float p = expf(cur[i].logit - max_l);
-        cur[i].p = p;
+    for (auto & t : cur) {
+        float p = expf(t.logit - max_l);
+        t.p = p;
         cum_sum += p;
     }
-    for (size_t i = 0; i < cur.size(); ++i) {
-        cur[i].p /= cum_sum;
+    for (auto & t : cur) {
+        t.p /= cum_sum;
     }
 
     return cur;

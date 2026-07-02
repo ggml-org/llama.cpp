@@ -14,6 +14,7 @@ enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX        = 1,
     LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID        = 2,
     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT = 3, // applied to the router weights instead of the logits
+    LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS  = 4,
 };
 
 enum llama_swa_type {
@@ -45,6 +46,7 @@ struct llama_hparams {
     bool rope_finetuned;
     bool use_par_res;
     bool swin_norm;
+    bool norm_before_residual = false;
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
@@ -185,6 +187,13 @@ struct llama_hparams {
     // for Classifiers
     uint32_t n_cls_out = 1;
 
+    // input embedding dimension (0 = use n_embd)
+    uint32_t n_embd_inp_impl = 0;
+
+    // encoder input embedding dimension (0 = use n_embd_inp())
+    // e.g. the eagle3 encoder fuses target_layers * target_hidden features
+    uint32_t n_embd_inp_enc_impl = 0;
+
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
 
@@ -218,12 +227,23 @@ struct llama_hparams {
     uint32_t indexer_head_size = 0;
     uint32_t indexer_top_k     = 0;
 
+    // DeepSeek-V4
+    uint32_t dsv4_o_group_count        = 0;
+    uint32_t dsv4_o_lora_rank          = 0;
+    uint32_t dsv4_hc_mult              = 0;
+    uint32_t dsv4_hc_sinkhorn_iters    = 0;
+    uint32_t dsv4_hash_layer_count     = 0;
+    float    dsv4_compress_rope_base   = 0.0f;
+    float    dsv4_hc_eps               = 0.0f;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios;
+
     // qwen3vl deepstack
     // When parsed from GGUF, this implies the first N layers consume the first
     // N deepstack embeddings. Use deepstack_mapping_arr if you need a more
     // complex mapping. If using deepstack_mapping_arr, also make sure to set
     // n_deepstack_layers to the number of unique deepstack layers so that
     // n_embd_imp is accurate (see granite.cpp).
+    // TODO: can be expressed via the `new n_embd_inp_impl` and remove this param
     uint32_t n_deepstack_layers = 0;
 
     // deepstack layer array (Granite4 Vision)
@@ -299,6 +319,9 @@ struct llama_hparams {
 
     // dimension of main + auxiliary input embeddings
     uint32_t n_embd_inp() const;
+
+    // dimension of the encoder input embeddings
+    uint32_t n_embd_inp_enc() const;
 
     // dimension of output embeddings
     uint32_t n_embd_out() const;
