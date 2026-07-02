@@ -41,6 +41,7 @@ static std::atomic<bool> compile_failed{false};
 std::locale c_locale("C");
 
 std::string GLSLC = "glslc";
+std::string compiler_type = "glslc";
 std::string input_filepath = "";
 std::string output_dir = "/tmp";
 std::string target_hpp = "";
@@ -193,19 +194,13 @@ int execute_command(std::vector<std::string>& command, std::string& stdout_str, 
 }
 
 bool directory_exists(const std::string& path) {
-    struct stat info;
-    if (stat(path.c_str(), &info) != 0) {
-        return false; // Path doesn't exist or can't be accessed
-    }
-    return (info.st_mode & S_IFDIR) != 0; // Check if it is a directory
+    std::error_code ec;
+    return std::filesystem::is_directory(path, ec);
 }
 
 bool create_directory(const std::string& path) {
-#ifdef _WIN32
-    return _mkdir(path.c_str()) == 0 || errno == EEXIST; // EEXIST means the directory already exists
-#else
-    return mkdir(path.c_str(), 0755) == 0 || errno == EEXIST; // 0755 is the directory permissions
-#endif
+    std::error_code ec;
+    return std::filesystem::create_directories(path, ec) || std::filesystem::is_directory(path, ec);
 }
 
 std::string to_uppercase(const std::string& input) {
@@ -348,23 +343,50 @@ compile_count_guard acquire_compile_slot() {
 }
 
 void string_to_spv_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat, bool dep_file, compile_count_guard slot) {
-    std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
+    std::string target_env = (name.find("_cm2") != std::string::npos) ? "vulkan1.3" : "vulkan1.2";
 
-    #ifdef _WIN32
-        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, "\"" + in_path + "\"", "-o", "\"" + out_path + "\""};
-    #else
-        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, in_path, "-o", out_path};
-    #endif
+    std::string compile_in_path = in_path;
+    if (compiler_type == "glslangValidator") {
+        std::string source = read_binary_file(in_path, true);
+        size_t version_end = source.find('\n');
+        if (version_end != std::string::npos && string_starts_with(source, "#version")) {
+            source.insert(version_end + 1, "#extension GL_GOOGLE_include_directive : require\n");
+        } else {
+            source.insert(0, "#extension GL_GOOGLE_include_directive : require\n");
+        }
+
+        compile_in_path = output_dir + "/" + name + ".glslang.comp";
+        std::ofstream temp_file(compile_in_path, std::ios::binary);
+        if (!temp_file) {
+            throw std::runtime_error("Failed to open temporary shader file for writing: " + compile_in_path);
+        }
+        temp_file << source;
+    }
+
+#ifdef _WIN32
+    std::string quoted_in_path = "\"" + compile_in_path + "\"";
+    std::string quoted_out_path = "\"" + out_path + "\"";
+#else
+    std::string quoted_in_path = compile_in_path;
+    std::string quoted_out_path = out_path;
+#endif
+
+    std::vector<std::string> cmd;
+    if (compiler_type == "glslangValidator") {
+        cmd = {GLSLC, "-V", "-S", "comp", "--target-env", target_env, "-I" + std::filesystem::path(input_filepath).parent_path().string(), "-o", quoted_out_path, quoted_in_path};
+    } else {
+        cmd = {GLSLC, "-fshader-stage=compute", "--target-env=" + target_env, quoted_in_path, "-o", quoted_out_path};
+    }
 
     // disable spirv-opt for coopmat shaders for https://github.com/ggml-org/llama.cpp/issues/10734
     // disable spirv-opt for bf16 shaders for https://github.com/ggml-org/llama.cpp/issues/15344
     // disable spirv-opt for rope shaders for https://github.com/ggml-org/llama.cpp/issues/16860
     // disable spirv-opt for dot2 shaders (spirv-opt doesn't recognize SPV_VALVE_mixed_float_dot_product capability)
-    if (!coopmat && name.find("bf16") == std::string::npos && name.find("rope") == std::string::npos && name.find("_dot2") == std::string::npos) {
+    if (compiler_type == "glslc" && !coopmat && name.find("bf16") == std::string::npos && name.find("rope") == std::string::npos && name.find("_dot2") == std::string::npos) {
         cmd.push_back("-O");
     }
 
-    if (dep_file) {
+    if (compiler_type == "glslc" && dep_file) {
         cmd.push_back("-MD");
         cmd.push_back("-MF");
 #ifdef _WIN32
@@ -406,7 +428,7 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
             return;
         }
 
-        if (dep_file) {
+        if (compiler_type == "glslc" && dep_file) {
             // replace .spv output path with the embed .cpp path which is used as output in CMakeLists.txt
             std::string dep = read_binary_file(target_cpp + ".d", true);
             if (!dep.empty()) {
@@ -1411,7 +1433,13 @@ int main(int argc, char** argv) {
     }
 
     if (args.find("--glslc") != args.end()) {
-        GLSLC = args["--glslc"]; // Path to glslc
+        GLSLC = args["--glslc"]; // Path to glslc or glslangValidator
+    }
+    if (args.find("--compiler-type") != args.end()) {
+        compiler_type = args["--compiler-type"];
+    }
+    if (args.find("--no-dep-file") != args.end()) {
+        generate_dep_file = false;
     }
     if (args.find("--source") != args.end()) {
         input_filepath = args["--source"]; // The shader source file to compile

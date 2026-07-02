@@ -6,7 +6,29 @@ if (POLICY CMP0147)
     cmake_policy(SET CMP0147 NEW)
 endif()
 
-find_package(Vulkan COMPONENTS glslc REQUIRED)
+find_package(Vulkan REQUIRED)
+
+if (NOT Vulkan_GLSLC_EXECUTABLE)
+    find_program(Vulkan_GLSLC_EXECUTABLE NAMES glslc HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin")
+endif()
+
+if (NOT Vulkan_GLSLANG_VALIDATOR_EXECUTABLE)
+    find_program(Vulkan_GLSLANG_VALIDATOR_EXECUTABLE NAMES glslangValidator HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin")
+endif()
+
+if (Vulkan_GLSLC_EXECUTABLE AND NOT Vulkan_GLSLC_EXECUTABLE MATCHES "-NOTFOUND$")
+    set(VULKAN_SHADER_COMPILER_EXECUTABLE ${Vulkan_GLSLC_EXECUTABLE})
+    set(VULKAN_SHADER_COMPILER_TYPE "glslc")
+    set(VULKAN_SHADER_COMPILER_SUPPORTS_DEPFILE ON)
+elseif (Vulkan_GLSLANG_VALIDATOR_EXECUTABLE AND NOT Vulkan_GLSLANG_VALIDATOR_EXECUTABLE MATCHES "-NOTFOUND$")
+    set(VULKAN_SHADER_COMPILER_EXECUTABLE ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE})
+    set(VULKAN_SHADER_COMPILER_TYPE "glslangValidator")
+    set(VULKAN_SHADER_COMPILER_SUPPORTS_DEPFILE OFF)
+else()
+    message(FATAL_ERROR "Vulkan shader compiler not found. Install glslc or glslangValidator, or set Vulkan_GLSLC_EXECUTABLE / Vulkan_GLSLANG_VALIDATOR_EXECUTABLE.")
+endif()
+
+message(STATUS "Vulkan shader compiler: ${VULKAN_SHADER_COMPILER_EXECUTABLE} (${VULKAN_SHADER_COMPILER_TYPE})")
 
 if (DEFINED ENV{VULKAN_SDK})
     list(APPEND CMAKE_PREFIX_PATH "$ENV{VULKAN_SDK}")
@@ -36,17 +58,25 @@ endfunction()
 #  TEST_SHADER_FILE - Path to the test shader file
 #  RESULT_VARIABLE - Name of the variable to set (ON/OFF) based on test result
 function(test_shader_extension_support EXTENSION_NAME TEST_SHADER_FILE RESULT_VARIABLE)
+    set(TEST_SHADER_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${RESULT_VARIABLE}.spv")
+    if (VULKAN_SHADER_COMPILER_TYPE STREQUAL "glslc")
+        set(TEST_SHADER_COMMAND ${VULKAN_SHADER_COMPILER_EXECUTABLE} -o ${TEST_SHADER_OUTPUT} -fshader-stage=compute --target-env=vulkan1.3 "${TEST_SHADER_FILE}")
+    else()
+        set(TEST_SHADER_COMMAND ${VULKAN_SHADER_COMPILER_EXECUTABLE} -V -S comp --target-env vulkan1.3 -o ${TEST_SHADER_OUTPUT} "${TEST_SHADER_FILE}")
+    endif()
+
     execute_process(
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${TEST_SHADER_FILE}"
-        OUTPUT_VARIABLE glslc_output
-        ERROR_VARIABLE glslc_error
+        COMMAND ${TEST_SHADER_COMMAND}
+        RESULT_VARIABLE shader_compile_result
+        OUTPUT_VARIABLE shader_compile_output
+        ERROR_VARIABLE shader_compile_error
     )
 
-    if (${glslc_error} MATCHES ".*extension not supported: ${EXTENSION_NAME}.*")
-        message(STATUS "${EXTENSION_NAME} not supported by glslc")
+    if (NOT shader_compile_result EQUAL 0 OR shader_compile_error MATCHES ".*extension not supported: ${EXTENSION_NAME}.*" OR shader_compile_error MATCHES ".*not supported.*${EXTENSION_NAME}.*")
+        message(STATUS "${EXTENSION_NAME} not supported by ${VULKAN_SHADER_COMPILER_TYPE}")
         set(${RESULT_VARIABLE} OFF PARENT_SCOPE)
     else()
-        message(STATUS "${EXTENSION_NAME} supported by glslc")
+        message(STATUS "${EXTENSION_NAME} supported by ${VULKAN_SHADER_COMPILER_TYPE}")
         set(${RESULT_VARIABLE} ON PARENT_SCOPE)
         add_compile_definitions(${RESULT_VARIABLE})
 
@@ -241,17 +271,28 @@ if (Vulkan_FOUND)
         get_filename_component(file ${file_full} NAME)
         set (_ggml_vk_target_cpp "${CMAKE_CURRENT_BINARY_DIR}/${file}.cpp")
 
+        if (VULKAN_SHADER_COMPILER_SUPPORTS_DEPFILE)
+            set(_ggml_vk_depfile_args DEPFILE ${_ggml_vk_target_cpp}.d)
+            set(_ggml_vk_no_depfile_arg)
+        else()
+            set(_ggml_vk_depfile_args)
+            set(_ggml_vk_no_depfile_arg --no-dep-file)
+        endif()
+
         add_custom_command(
             OUTPUT  ${_ggml_vk_target_cpp}
-            DEPFILE ${_ggml_vk_target_cpp}.d
+            ${_ggml_vk_depfile_args}
             COMMAND ${_ggml_vk_genshaders_cmd}
-                --glslc      ${Vulkan_GLSLC_EXECUTABLE}
-                --source     ${file_full}
-                --output-dir ${_ggml_vk_output_dir}
-                --target-hpp ${_ggml_vk_header}
-                --target-cpp ${_ggml_vk_target_cpp}
+                --glslc         ${VULKAN_SHADER_COMPILER_EXECUTABLE}
+                --compiler-type ${VULKAN_SHADER_COMPILER_TYPE}
+                ${_ggml_vk_no_depfile_arg}
+                --source        ${file_full}
+                --output-dir    ${_ggml_vk_output_dir}
+                --target-hpp    ${_ggml_vk_header}
+                --target-cpp    ${_ggml_vk_target_cpp}
             DEPENDS ${file_full}
                     ${_ggml_vk_shaders_gen_sources}
+                    ${VULKAN_SHADER_COMPILER_EXECUTABLE}
                     vulkan-shaders-gen
             COMMENT "Generate vulkan shaders for ${file}"
         )
