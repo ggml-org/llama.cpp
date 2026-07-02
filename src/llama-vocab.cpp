@@ -25,6 +25,16 @@
 // helpers
 //
 
+static void check_add_special_token(
+        const bool add_token,
+        const llama_token id,
+        const char * add_key,
+        const char * id_key) {
+    if (add_token && id == LLAMA_TOKEN_NULL) {
+        throw std::runtime_error(format("%s is true, but %s is not set", add_key, id_key));
+    }
+}
+
 struct naive_trie {
     naive_trie() : has_value(false), value(0) {
     }
@@ -2411,7 +2421,13 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             word = "[EMPTY_" + std::to_string(i) + "]";
         }
 
-        token_to_id[word] = i;
+        const auto token_to_id_res = token_to_id.emplace(word, i);
+        if (!token_to_id_res.second) {
+            throw std::runtime_error(format(
+                "duplicate token in vocabulary: '%s' has ids %d and %u",
+                word.c_str(), token_to_id_res.first->second, i));
+        }
+
         max_token_len = std::max(max_token_len, (int) word.size());
 
         auto & token_data = id_to_token[i];
@@ -2540,6 +2556,13 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
                 LLAMA_LOG_WARN("%s: override '%s' to 'true' for Gemma4\n", __func__, kv(LLM_KV_TOKENIZER_ADD_BOS).c_str());
             }
+
+            check_add_special_token(add_bos, special_bos_id,
+                    kv(LLM_KV_TOKENIZER_ADD_BOS).c_str(), kv(LLM_KV_TOKENIZER_BOS_ID).c_str());
+            check_add_special_token(add_eos, special_eos_id,
+                    kv(LLM_KV_TOKENIZER_ADD_EOS).c_str(), kv(LLM_KV_TOKENIZER_EOS_ID).c_str());
+            check_add_special_token(add_sep, special_sep_id,
+                    kv(LLM_KV_TOKENIZER_ADD_SEP).c_str(), kv(LLM_KV_TOKENIZER_SEP_ID).c_str());
         }
 
         // BertNormalizer options
