@@ -220,7 +220,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ADAPTER_TOKEN_IDS,                 "%s.adapter_token_ids"                 },
     { LLM_KV_ADAPTER_SUBSTITUTE_TOKEN_IDS,      "%s.adapter_substitute_token_ids"      },
     { LLM_KV_MAX_LORA_RANK,                     "%s.max_lora_rank"                     },
-    { LLM_KV_CONTROL_TOKEN_GAIN,                "%s.control_token_gain"                },
+    { LLM_KV_ROUTER_GAIN,                       "%s.router_gain"                       },
     { LLM_KV_TOKEN_SHIFT_COUNT,                 "%s.token_shift_count"                 },
     { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
     { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"           },

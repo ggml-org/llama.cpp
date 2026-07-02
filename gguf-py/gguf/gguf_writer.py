@@ -904,8 +904,8 @@ class GGUFWriter:
     def add_max_lora_rank(self, rank: int) -> None:
         self.add_uint32(Keys.LLM.MAX_LORA_RANK.format(arch=self.arch), rank)
 
-    def add_control_token_gain(self, gain: float) -> None:
-        self.add_float32(Keys.LLM.CONTROL_TOKEN_GAIN.format(arch=self.arch), gain)
+    def add_router_gain(self, gain: float) -> None:
+        self.add_float32(Keys.LLM.ROUTER_GAIN.format(arch=self.arch), gain)
 
     def add_wkv_head_size(self, size: int) -> None:
         self.add_uint32(Keys.WKV.HEAD_SIZE.format(arch=self.arch), size)
