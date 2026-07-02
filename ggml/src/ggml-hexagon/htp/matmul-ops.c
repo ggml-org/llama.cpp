@@ -1965,6 +1965,43 @@ static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, start_chunk_idx);
 }
 
+typedef struct {
+    const struct mmid_row_mapping  *matrix_rows;
+    __fp16                         *dst;
+    const float                    *src;
+    uint32_t                        n_tasks;
+    uint32_t                        n_tot_chunks;
+    uint32_t                        n_chunks_per_task;
+    uint32_t                        k_block;
+    uint32_t                        cur_a;
+    uint32_t                        mapping_stride;
+    uint32_t                        ne11;
+    struct fastdiv_values           ne11_div;
+    size_t                          nb11;
+    size_t                          nb12;
+    uint32_t                        start_row;
+    uint32_t                        cne1;
+    uint32_t                        k_valid;
+    struct htp_thread_trace        *traces;
+} activation_transfer_gathered_task_state_t;
+
+typedef struct {
+    const struct mmid_row_mapping  *matrix_rows;
+    const __fp16                   *vtcm_src;
+    float                          *dst;
+    uint32_t                        n_tasks;
+    uint32_t                        n_tot_chunks;
+    uint32_t                        n_chunks_per_task;
+    uint32_t                        n_cols;
+    uint32_t                        cur_a;
+    uint32_t                        mapping_stride;
+    size_t                          dst_nb1;
+    size_t                          dst_nb2;
+    uint32_t                        start_row;
+    uint32_t                        cne1;
+    struct htp_thread_trace        *traces;
+} output_transfer_scattered_task_state_t;
+
 static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigned int i, void *data) {
     activation_transfer_gathered_task_state_t *st = data;
     struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
