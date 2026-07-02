@@ -506,7 +506,8 @@ static void dequantize_tiled_weight_to_fp16_task_q8_0(
     }
 }
 
-static void convert_f16_weight_to_fp16_tiles_task(
+static __attribute__((noinline))
+void convert_f16_weight_to_fp16_tiles_task(
         const tiled_dequantize_state_t *state,
         uint32_t start_tile, uint32_t end_tile) {
 
@@ -543,17 +544,13 @@ static void convert_f16_weight_to_fp16_tiles_task(
                 Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HTP_MM_HMX_TILE_SIZE - 1, v_off, v1);
                 v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
             }
-            (void) *(volatile HVX_Vector *)(tile_base);
         }
         ++t; ++kt;
     }
-
-    if (start_tile < end_tile) {
-        (void) *(volatile HVX_Vector *)(state->dst + (end_tile - 1) * HTP_MM_HMX_TILE_N_ELMS);
-    }
 }
 
-static void quantize_f32_weight_to_fp16_tiles_task(
+static __attribute__((noinline))
+void quantize_f32_weight_to_fp16_tiles_task(
         const tiled_dequantize_state_t *state,
         uint32_t start_tile, uint32_t end_tile) {
 
@@ -594,20 +591,18 @@ static void quantize_f32_weight_to_fp16_tiles_task(
                 Q6_vscatter_QRMVwV(q_mask64, (size_t)tile_base, HTP_MM_HMX_TILE_SIZE - 1, v_off, v_out_hi);
                 v_off = Q6_Vw_vadd_VwVw(v_off, v_scat_step);
             }
-            (void) *(volatile HVX_Vector *)(tile_base);
         }
         ++t; ++kt;
-    }
-
-    if (start_tile < end_tile) {
-        (void) *(volatile HVX_Vector *)(state->dst + (end_tile - 1) * HTP_MM_HMX_TILE_N_ELMS);
     }
 }
 
 // --- End tiled dequantizers ---
 
-static void core_dot_chunk_fp16_short(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
-                                      uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
+// dot-chunk functions require external HMX lock
+
+static void core_dot_chunk_fp16_short(__fp16 *restrict output, const __fp16 *restrict activation,
+                                const __fp16 *restrict weight, const __fp16 *restrict scales,
+                                uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
     __builtin_assume(n_row_tiles > 0);
     __builtin_assume(n_col_tiles > 0);
     __builtin_assume(n_dot_tiles > 0);
@@ -633,8 +628,9 @@ static void core_dot_chunk_fp16_short(__fp16 *restrict output, const __fp16 *res
     }
 }
 
-static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
-                                uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
+static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation, 
+                          const __fp16 *restrict weight, const __fp16 *restrict scales,
+                          uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
     if (n_dot_tiles <= 32) {
         core_dot_chunk_fp16_short(output, activation, weight, scales, n_row_tiles, n_col_tiles, n_dot_tiles);
         return;
@@ -658,12 +654,18 @@ static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict 
 
             asm volatile(HMX_CLRACC_F16());
 
-            for (uint32_t k = 0, k_block; k < n_dot_tiles; k += k_block) {
-                k_block = hex_smin(n_dot_tiles - k, 32);
-                const uint32_t range = 2048u * (uint32_t)k_block - 1;
+            const uint32_t n_loops = n_dot_tiles / 32;
+            const uint32_t rem = n_dot_tiles % 32;
+
+            for (uint32_t l = 0; l < n_loops; ++l) {
+                asm volatile(HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0") : : "r"(65535), "r"(row_tiles), "r"(col_tiles));
+                row_tiles += 32 * HTP_MM_HMX_TILE_N_ELMS;
+                col_tiles += 32 * HTP_MM_HMX_TILE_N_ELMS;
+            }
+
+            if (rem > 0) {
+                const uint32_t range = 2048u * rem - 1;
                 asm volatile(HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0") : : "r"(range), "r"(row_tiles), "r"(col_tiles));
-                row_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
-                col_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
             }
 
             asm volatile(HMX_STORE_AFTER_F16("%0", "%1") : : "r"(out_tile), "r"(0) : "memory");
@@ -674,13 +676,52 @@ static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict 
     }
 }
 
-// C += AB
-static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, const __fp16 *restrict b,
+static void core_mma_chunk_fp16_short(__fp16 *restrict c, const __fp16 *restrict a, const __fp16 *restrict b,
                                 const __fp16 *restrict col_scales, const __fp16 *restrict eye_tile,
                                 uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles, bool zero_init) {
     __builtin_assume(n_row_tiles > 0);
     __builtin_assume(n_col_tiles > 0);
     __builtin_assume(n_dot_tiles > 0);
+    __builtin_assume(n_dot_tiles <= 32);
+
+    asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)col_scales));
+
+    const size_t dot_tile_stride = n_dot_tiles * HTP_MM_HMX_TILE_N_ELMS;
+    const uint32_t range = 2048u * n_dot_tiles - 1;
+
+    for (size_t i = 0; i < n_row_tiles; ++i) {
+        const __fp16 *row_base = a + i * dot_tile_stride;
+        __fp16 *res_base = c + i * n_col_tiles * HTP_MM_HMX_TILE_N_ELMS;
+        const __fp16 *col_base = b;
+        __fp16 *accum_tile = res_base;
+
+        for (size_t j = 0; j < n_col_tiles; ++j) {
+            asm volatile(HMX_CLRACC_F16());
+
+            if (!zero_init) {
+                asm volatile(HMX_LOAD_MPY_F16("%1", "%2", "%0") : : "r"(2047), "r"(accum_tile), "r"(eye_tile));
+            }
+
+            asm volatile(HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0") : : "r"(range), "r"(row_base), "r"(col_base));
+
+            asm volatile(HMX_STORE_AFTER_F16("%0", "%1") : : "r"(accum_tile), "r"(0) : "memory");
+
+            col_base   += dot_tile_stride;
+            accum_tile += HTP_MM_HMX_TILE_N_ELMS;
+        }
+    }
+}
+
+static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, const __fp16 *restrict b,
+                          const __fp16 *restrict col_scales, const __fp16 *restrict eye_tile,
+                          uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles, bool zero_init) {
+    if (n_dot_tiles <= 32) {
+        core_mma_chunk_fp16_short(c, a, b, col_scales, eye_tile, n_row_tiles, n_col_tiles, n_dot_tiles, zero_init);
+        return;
+    }
+    __builtin_assume(n_row_tiles > 0);
+    __builtin_assume(n_col_tiles > 0);
+    __builtin_assume(n_dot_tiles > 32);
 
     asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)col_scales));
 
@@ -693,46 +734,30 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
         __fp16 *accum_tile = res_base;
 
         for (size_t j = 0; j < n_col_tiles; ++j) {
-            asm volatile(HMX_CLRACC_F16());
-
             const __fp16 *col_tiles = col_base;
             const __fp16 *row_tiles = row_base;
 
+            asm volatile(HMX_CLRACC_F16());
+
             if (!zero_init) {
-                asm volatile(
-                    HMX_LOAD_MPY_F16("%1", "%2", "%0")
-                    :
-                    : "r"(2047), "r"(accum_tile), "r"(eye_tile)
-                );
+                asm volatile(HMX_LOAD_MPY_F16("%1", "%2", "%0") : : "r"(2047), "r"(accum_tile), "r"(eye_tile));
             }
 
-            if (n_dot_tiles <= 32) {
-                const uint32_t range = 2048u * n_dot_tiles - 1;
-                asm volatile(
-                    HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0")
-                    :
-                    : "r"(range), "r"(row_tiles), "r"(col_tiles)
-                );
-            } else {
-                for (uint32_t k = 0, k_block; k < n_dot_tiles; k += k_block) {
-                    k_block = hex_smin(n_dot_tiles - k, 32);
-                    const uint32_t range = 2048u * k_block - 1;
-                    asm volatile(
-                        HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0")
-                        :
-                        : "r"(range), "r"(row_tiles), "r"(col_tiles)
-                    );
-                    row_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
-                    col_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
-                }
+            const uint32_t n_loops = n_dot_tiles / 32;
+            const uint32_t rem = n_dot_tiles % 32;
+
+            for (uint32_t l = 0; l < n_loops; ++l) {
+                asm volatile(HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0") : : "r"(65535), "r"(row_tiles), "r"(col_tiles));
+                row_tiles += 32 * HTP_MM_HMX_TILE_N_ELMS;
+                col_tiles += 32 * HTP_MM_HMX_TILE_N_ELMS;
             }
 
-            asm volatile(
-                HMX_STORE_AFTER_F16("%0", "%1")
-                :
-                : "r"(accum_tile), "r"(0)
-                : "memory"
-            );
+            if (rem > 0) {
+                const uint32_t range = 2048u * rem - 1;
+                asm volatile(HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0") : : "r"(range), "r"(row_tiles), "r"(col_tiles));
+            }
+
+            asm volatile(HMX_STORE_AFTER_F16("%0", "%1") : : "r"(accum_tile), "r"(0) : "memory");
 
             col_base += dot_tile_stride;
             accum_tile += HTP_MM_HMX_TILE_N_ELMS;
