@@ -702,9 +702,9 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
                 HVX_Vector     v1 = pv_in1 ? pv_in1[d] : Q6_V_vzero();
                 HVX_VectorPair vp = Q6_W_vshuff_VVR(v1, v0, -2);
 
-                __fp16 *     out_dual_tile = out_base + d * HMX_FP16_TILE_N_ELMS * 2;
-                HVX_Vector * pv_out0       = ((HVX_Vector *) out_dual_tile) + r1 / 2;
-                HVX_Vector * pv_out1       = pv_out0 + 16;
+                __fp16 *     out_dtile = out_base + d * HMX_FP16_TILE_N_ELMS * 2;
+                HVX_Vector * pv_out0   = ((HVX_Vector *) out_dtile) + r1 / 2;
+                HVX_Vector * pv_out1   = pv_out0 + 16;
 
                 *pv_out0 = Q6_V_lo_W(vp);
                 *pv_out1 = Q6_V_hi_W(vp);
@@ -798,11 +798,10 @@ static void fa_o_store_thread_f16(unsigned int n, unsigned int i, void * data) {
     fa_o_store_args_t *     args  = (fa_o_store_args_t *) data;
     struct hmx_fa_context * factx = args->factx;
 
-    const size_t n_rows_g = args->n_rows_g;
-    const size_t G        = factx->G;
-    const size_t DV       = factx->DV;
-
+    const size_t n_rows_g   = args->n_rows_g;
     const size_t rows_per_t = args->rows_per_t;
+    const size_t G          = factx->G;
+    const size_t DV         = factx->DV;
     const size_t start      = (size_t) i * rows_per_t;
     const size_t end        = hex_smin(start + rows_per_t, n_rows_g);
 
@@ -831,10 +830,10 @@ static void fa_o_store_thread_f16(unsigned int n, unsigned int i, void * data) {
         const __fp16 * tile_row_base = o_tile_src + r0 * HMX_FP16_TILE_N_ROWS * DV;
 
         for (uint32_t d = 0; d < DV / 64; ++d) {
-            const __fp16 *     in_dual_tile = tile_row_base + d * HMX_FP16_TILE_N_ELMS * 2;
-            const HVX_Vector * pv_in0       = ((const HVX_Vector *) in_dual_tile) + r1 / 2;
-            const HVX_Vector * pv_in1       = pv_in0 + 16;
-            HVX_VectorPair     vp           = Q6_W_vdeal_VVR(*pv_in1, *pv_in0, -2);
+            const __fp16 *     in_dtile = tile_row_base + d * HMX_FP16_TILE_N_ELMS * 2;
+            const HVX_Vector * pv_in0   = ((const HVX_Vector *) in_dtile) + r1 / 2;
+            const HVX_Vector * pv_in1   = pv_in0 + 16;
+            HVX_VectorPair     vp       = Q6_W_vdeal_VVR(*pv_in1, *pv_in0, -2);
             if (r1 % 2 == 0) {
                 *(HVX_UVector *) (out + d * 64) = Q6_V_lo_W(vp);
             } else {
@@ -957,14 +956,14 @@ static inline void fa_softmax_impl(
             if (has_softcap) {
                 const HVX_Vector v_cap = hvx_vec_splat_f16(factx->logit_softcap);
                 for (size_t c = 0; c < kv_rows; c += 64) {
-                    size_t             ci           = c / 64;
-                    const __fp16 *     in_dual_tile = s_ld_base + ci * HMX_FP16_TILE_N_ELMS * 2;
-                    const HVX_Vector * pv_s_in0     = ((const HVX_Vector *) in_dual_tile) + r1 / 2;
-                    const HVX_Vector * pv_s_in1     = pv_s_in0 + 16;
+                    size_t             ci       = c / 64;
+                    const __fp16 *     in_dtile = s_ld_base + ci * HMX_FP16_TILE_N_ELMS * 2;
+                    const HVX_Vector * pv_s_in0 = ((const HVX_Vector *) in_dtile) + r1 / 2;
+                    const HVX_Vector * pv_s_in1 = pv_s_in0 + 16;
 
-                    HVX_VectorPair vp_s_dual_row = Q6_W_vdeal_VVR(*pv_s_in1, *pv_s_in0, -2);
-                    HVX_Vector     v_s_row0      = Q6_V_lo_W(vp_s_dual_row);
-                    HVX_Vector     v_s_row1      = Q6_V_hi_W(vp_s_dual_row);
+                    HVX_VectorPair vp_s_drow = Q6_W_vdeal_VVR(*pv_s_in1, *pv_s_in0, -2);
+                    HVX_Vector     v_s_row0  = Q6_V_lo_W(vp_s_drow);
+                    HVX_Vector     v_s_row1  = Q6_V_hi_W(vp_s_drow);
 
                     HVX_Vector t0   = hvx_vec_tanh_f16(v_s_row0);
                     my_row_buf0[ci] = hvx_vec_mul_f16_f16(t0, v_cap);
@@ -974,14 +973,14 @@ static inline void fa_softmax_impl(
                 }
             } else {
                 for (size_t c = 0; c < kv_rows; c += 64) {
-                    size_t             ci           = c / 64;
-                    const __fp16 *     in_dual_tile = s_ld_base + ci * HMX_FP16_TILE_N_ELMS * 2;
-                    const HVX_Vector * pv_s_in0     = ((const HVX_Vector *) in_dual_tile) + r1 / 2;
-                    const HVX_Vector * pv_s_in1     = pv_s_in0 + 16;
+                    size_t             ci       = c / 64;
+                    const __fp16 *     in_dtile = s_ld_base + ci * HMX_FP16_TILE_N_ELMS * 2;
+                    const HVX_Vector * pv_s_in0 = ((const HVX_Vector *) in_dtile) + r1 / 2;
+                    const HVX_Vector * pv_s_in1 = pv_s_in0 + 16;
 
-                    HVX_VectorPair vp_s_dual_row = Q6_W_vdeal_VVR(*pv_s_in1, *pv_s_in0, -2);
-                    my_row_buf0[ci]              = Q6_V_lo_W(vp_s_dual_row);
-                    my_row_buf1[ci]              = Q6_V_hi_W(vp_s_dual_row);
+                    HVX_VectorPair vp_s_drow = Q6_W_vdeal_VVR(*pv_s_in1, *pv_s_in0, -2);
+                    my_row_buf0[ci]          = Q6_V_lo_W(vp_s_drow);
+                    my_row_buf1[ci]          = Q6_V_hi_W(vp_s_drow);
                 }
             }
 
@@ -1118,9 +1117,9 @@ static inline void fa_softmax_impl(
 
                 HVX_Vector v_p_row0_hf  = hvx_vec_exp2_f16(Q6_Vhf_equals_Vqf16(v_s_minus_m0));
                 HVX_Vector v_p_row1_hf  = hvx_vec_exp2_f16(Q6_Vhf_equals_Vqf16(v_s_minus_m1));
-                __fp16 *     out_dual_tile = p_st_base + (c / 64) * HMX_FP16_TILE_N_ELMS * 2;
-                HVX_Vector * pv_p_out0     = ((HVX_Vector *) out_dual_tile) + r1 / 2;
-                HVX_Vector * pv_p_out1     = pv_p_out0 + 16;
+                __fp16 *     out_dtile  = p_st_base + ci * HMX_FP16_TILE_N_ELMS * 2;
+                HVX_Vector * pv_p_out0  = ((HVX_Vector *) out_dtile) + r1 / 2;
+                HVX_Vector * pv_p_out1  = pv_p_out0 + 16;
 
                 HVX_VectorPair vp_p_dual = Q6_W_vshuff_VVR(v_p_row1_hf, v_p_row0_hf, -2);
                 *pv_p_out0               = Q6_V_lo_W(vp_p_dual);
@@ -1150,7 +1149,7 @@ static inline void fa_softmax_impl(
         }
 
         // Inline fa_ml_update_and_build_d for this vector (lock-free and in parallel)
-        HVX_VectorPair rowmax_acc_pair = hvx_vec_f16_to_f32(rowmax_acc_v);
+        HVX_VectorPair rowmax_acc_pair    = hvx_vec_f16_to_f32(rowmax_acc_v);
         HVX_Vector     v_rowmax_acc_f32_0 = Q6_V_lo_W(rowmax_acc_pair);
         HVX_Vector     v_rowmax_acc_f32_1 = Q6_V_hi_W(rowmax_acc_pair);
 
@@ -1160,7 +1159,7 @@ static inline void fa_softmax_impl(
         HVX_Vector v_m_diff0 = HVX_OP_SUB_F32(m_prev_v0, v_m_curr0);
         HVX_Vector v_m_diff1 = HVX_OP_SUB_F32(m_prev_v1, v_m_curr1);
 
-        HVX_Vector v_m_diff_f16 = hvx_vec_f32_to_f16(v_m_diff0, v_m_diff1);
+        HVX_Vector v_m_diff_f16   = hvx_vec_f32_to_f16(v_m_diff0, v_m_diff1);
         HVX_Vector exp_m_diff_f16 = hvx_vec_exp2_f16(v_m_diff_f16);
 
         HVX_VectorPair exp_m_diff_pair = hvx_vec_f16_to_f32(exp_m_diff_f16);
@@ -1332,13 +1331,16 @@ static void hmx_fa_qk_dot_worker(void * data) {
     __builtin_assume(n_dot_tiles > 0);
 
     Q6_bias_mxmem2_A((void *) job->hmx_scales);
+    const size_t dot_stride = n_dot_tiles * HMX_FP16_TILE_N_ELMS;
     for (size_t r = 0; r < n_row_tiles; ++r) {
-        for (size_t c = 0; c < n_col_tiles; ++c) {
-            const __fp16 * row_tiles = q_tiles + r * HMX_FP16_TILE_N_ROWS * n_dot_tiles * HMX_FP16_TILE_N_COLS;
-            const __fp16 * col_tiles = k_tiles + c * HMX_FP16_TILE_N_COLS * n_dot_tiles * HMX_FP16_TILE_N_COLS;
-            __fp16 *       out_tile  = s_tiles + (r * n_tiles_per_bc + c) * HMX_FP16_TILE_N_ELMS;
+        const __fp16 * row_tiles = q_tiles + r * dot_stride;
+        const __fp16 * col_tiles = k_tiles;
+        __fp16 *       out_tile  = s_tiles + r * n_tiles_per_bc * HMX_FP16_TILE_N_ELMS;
 
+        for (size_t c = 0; c < n_col_tiles; ++c) {
             hmx_fa_qk_dot_tile(row_tiles, col_tiles, out_tile, n_dot_tiles);
+            col_tiles += dot_stride;
+            out_tile  += HMX_FP16_TILE_N_ELMS;
         }
     }
 }
@@ -1374,16 +1376,20 @@ static void hmx_fa_o_update_worker(void * data) {
     __builtin_assume(DV_tiles > 0);
 
     Q6_bias_mxmem2_A((void *) job->hmx_scales);
+    const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
+    const size_t v_stride = n_tiles_per_bc * HMX_FP16_TILE_N_ELMS;
     for (size_t r = 0; r < n_row_tiles; ++r) {
-        for (size_t c = 0; c < DV_tiles; ++c) {
-            // D[r,r] @ O_prev[r,c] — only the diagonal tile
-            const __fp16 * d_diag = d_tiles + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-            const __fp16 * o_rc   = o_prev + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
-            const __fp16 * p_tile_in = p_tiles + (r * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
-            const __fp16 * v_tile_in = v_tiles + (c * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
-            __fp16 * o_tile_out = o_curr + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
+        const __fp16 * d_diag     = d_tiles + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+        const __fp16 * p_tile_in  = p_tiles + (r * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
+        const __fp16 * o_rc       = o_prev + r * HMX_FP16_TILE_N_ELMS;
+        const __fp16 * v_tile_in  = v_tiles;
+        __fp16       * o_tile_out = o_curr + r * HMX_FP16_TILE_N_ELMS;
 
+        for (size_t c = 0; c < DV_tiles; ++c) {
             hmx_fa_o_update_tile(d_diag, o_rc, p_tile_in, v_tile_in, o_tile_out, n_col_tiles);
+            o_rc       += o_stride;
+            v_tile_in  += v_stride;
+            o_tile_out += o_stride;
         }
     }
 }
@@ -1410,13 +1416,16 @@ static void hmx_fa_o_norm_worker(void * data) {
     __builtin_assume(DV_tiles > 0);
 
     Q6_bias_mxmem2_A((void *) job->hmx_scales);
+    const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
     for (size_t r = 0; r < n_row_tiles; ++r) {
-        for (size_t c = 0; c < DV_tiles; ++c) {
-            const __fp16 * d_diag = d_tiles + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-            const __fp16 * o_rc   = o_prev + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
-            __fp16 *       o_out  = o_curr + (r * DV_tiles + c) * HMX_FP16_TILE_N_ELMS;
+        const __fp16 * d_diag = d_tiles + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+        const __fp16 * o_rc = o_prev + r * HMX_FP16_TILE_N_ELMS;
+        __fp16 *       o_out = o_curr + r * DV_tiles * HMX_FP16_TILE_N_ELMS;
 
+        for (size_t c = 0; c < DV_tiles; ++c) {
             hmx_fa_o_norm_tile(d_diag, o_rc, o_out);
+            o_rc  += o_stride;
+            o_out += HMX_FP16_TILE_N_ELMS;
         }
     }
 }
@@ -1871,13 +1880,16 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                             htp_trace_event_start(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
                             Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_qk);
+                            const size_t dot_stride = n_dot_tiles * HMX_FP16_TILE_N_ELMS;
                             for (size_t r = 0; r < n_row_tiles; ++r) {
-                                for (size_t c = 0; c < n_col_tiles; ++c) {
-                                    const __fp16 * row_tiles = q_base + r * HMX_FP16_TILE_N_ROWS * DK;
-                                    const __fp16 * col_tiles = k_base + c * HMX_FP16_TILE_N_COLS * DK;
-                                    __fp16 *       out_tile  = s_base + (r * n_tiles_per_bc + c) * HMX_FP16_TILE_N_ELMS;
+                                const __fp16 * row_tiles = q_base + r * dot_stride;
+                                const __fp16 * col_tiles = k_base;
+                                __fp16 *       out_tile  = s_base + r * n_tiles_per_bc * HMX_FP16_TILE_N_ELMS;
 
+                                for (size_t c = 0; c < n_col_tiles; ++c) {
                                     hmx_fa_qk_dot_tile(row_tiles, col_tiles, out_tile, n_dot_tiles);
+                                    col_tiles += dot_stride;
+                                    out_tile  += HMX_FP16_TILE_N_ELMS;
                                 }
                             }
                             htp_trace_event_stop(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
@@ -1930,15 +1942,20 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                             htp_trace_event_start(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
                             Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_id);
+                            const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
+                            const size_t v_stride = n_tiles_per_bc * HMX_FP16_TILE_N_ELMS;
                             for (size_t r = 0; r < n_row_tiles; ++r) {
-                                for (size_t c = 0; c < DV_tiles; ++c) {
-                                    const __fp16 * d_diag = d_base  + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-                                    const __fp16 * o_rc   = op_base + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
-                                    const __fp16 * p_tile_in = p_base + (r * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
-                                    const __fp16 * v_tile_in = v_base + (c * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
-                                    __fp16 * o_tile_out = oc_base + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
+                                const __fp16 * d_diag = d_base  + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+                                const __fp16 * p_tile_in = p_base + (r * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
+                                const __fp16 * o_rc = op_base + r * HMX_FP16_TILE_N_ELMS;
+                                const __fp16 * v_tile_in = v_base;
+                                __fp16 * o_tile_out = oc_base + r * HMX_FP16_TILE_N_ELMS;
 
+                                for (size_t c = 0; c < DV_tiles; ++c) {
                                     hmx_fa_o_update_tile(d_diag, o_rc, p_tile_in, v_tile_in, o_tile_out, n_col_tiles);
+                                    o_rc += o_stride;
+                                    v_tile_in += v_stride;
+                                    o_tile_out += o_stride;
                                 }
                             }
                             htp_trace_event_stop(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
@@ -1975,13 +1992,16 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                         htp_trace_event_start(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
                         Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_id);
+                        const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
                         for (size_t r = 0; r < n_row_tiles; ++r) {
-                            for (size_t c = 0; c < DV_tiles; ++c) {
-                                const __fp16 * d_diag = d_base  + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-                                const __fp16 * o_rc   = op_base + (c * n_row_tiles_g_br + r) * HMX_FP16_TILE_N_ELMS;
-                                __fp16 *       o_out  = oc_base + (r * DV_tiles + c) * HMX_FP16_TILE_N_ELMS;
+                            const __fp16 * d_diag = d_base  + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+                            const __fp16 * o_rc = op_base + r * HMX_FP16_TILE_N_ELMS;
+                            __fp16 *       o_out = oc_base + r * DV_tiles * HMX_FP16_TILE_N_ELMS;
 
+                            for (size_t c = 0; c < DV_tiles; ++c) {
                                 hmx_fa_o_norm_tile(d_diag, o_rc, o_out);
+                                o_rc  += o_stride;
+                                o_out += HMX_FP16_TILE_N_ELMS;
                             }
                         }
                         htp_trace_event_stop(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
