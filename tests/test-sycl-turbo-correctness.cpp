@@ -178,16 +178,32 @@ static std::vector<float> run_on_backend(
 
     ggml_tensor * out = build(ctx);
 
+    ggml_cgraph * gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, out);
+
     if (supported) {
-        *supported = ggml_backend_supports_op(backend, out);
+        // Walk ALL graph nodes for support, not just the output. A turbo FA
+        // probe wraps flash_attn_ext between WHT nodes; master's
+        // ggml_sycl_op_turbo_wht is a stub abort, so bypassing the FA veto
+        // (via an output-only check that sees a TURBO_WHT node and reports
+        // "supported" because the supports_op for TURBO_WHT returns true on
+        // F32->F32) deterministically aborts the harness at section [5].
+        // Walking all nodes preserves the SKIP contract: the FA veto on turbo
+        // KV makes the graph unsupported regardless of WHT wrapper state, and
+        // once A770-sycl-fix lands and supports_op covers the full chain,
+        // every node is supported -> the probe RUNS.
+        *supported = true;
+        for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
+            if (!ggml_backend_supports_op(backend, ggml_graph_node(gf, i))) {
+                *supported = false;
+                break;
+            }
+        }
         if (!*supported) {
             ggml_free(ctx);
             return {};
         }
     }
-
-    ggml_cgraph * gf = ggml_new_graph(ctx);
-    ggml_build_forward_expand(gf, out);
 
     ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
 

@@ -272,6 +272,8 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-blas.h
     include/ggml-cpp.h
     include/ggml-opt.h
+    include/ggml-sycl.h
+    include/ggml-vulkan.h
     include/ggml-openvino.h
     include/gguf.h)
 
