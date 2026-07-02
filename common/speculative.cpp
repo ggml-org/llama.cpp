@@ -34,6 +34,7 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"draft-eagle3",  COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3},
     {"draft-mtp",     COMMON_SPECULATIVE_TYPE_DRAFT_MTP},
     {"draft-dflash",  COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH},
+    {"draft-dspark",  COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK},
     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -921,8 +922,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     // scratch buffer for concatenated target features [n_tokens, n_embd_enc]
     std::vector<float> features_buf;
 
-    common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, n_seq)
+    common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
+            common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
+        : common_speculative_impl(type, n_seq)
         , params(params.draft)
     {
         auto * ctx_tgt = this->params.ctx_tgt;
@@ -1195,6 +1197,101 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     bool need_embd() const override {
         return false;
+    }
+};
+
+// DSpark: DFlash backbone + a semi-autoregressive Markov head; reuses process(), only draft() differs
+struct common_speculative_impl_draft_dspark : public common_speculative_impl_draft_dflash {
+    common_speculative_impl_draft_dspark(const common_params_speculative & params_in, uint32_t n_seq)
+        : common_speculative_impl_draft_dflash(params_in, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
+    {
+        auto * ctx_dft = params.ctx_dft;
+        const llama_model * model_dft = llama_get_model(ctx_dft);
+
+        {
+            char buf[32] = {};
+            if (llama_model_meta_val_str(model_dft, "dspark.block_size", buf, sizeof(buf)) < 0) {
+                GGML_ABORT("DSpark: missing required metadata key 'dspark.block_size'");
+            }
+            block_size = std::atoi(buf);
+        }
+        if (params.n_max > block_size) {
+            params.n_max = block_size;
+        }
+
+        LOG_INF("%s: adding speculative implementation 'draft-dspark'\n", __func__);
+        LOG_INF("%s: - block_size=%d, n_max=%d\n", __func__, block_size, params.n_max);
+    }
+
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        auto * ctx_dft = params.ctx_dft;
+
+        common_batch_clear(batch);
+
+        std::vector<int32_t> i_block_beg(n_seq, -1);
+        std::vector<int32_t> n_block    (n_seq,  0);
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
+                continue;
+            }
+
+            common_sampler_reset(smpls[seq_id].get());
+
+            const int32_t n = (int32_t) dp.n_past;
+
+            int32_t n_draft = params.n_max;
+            if (dp.n_max > 0) {
+                n_draft = std::min(n_draft, dp.n_max);
+            }
+            n_draft = std::min(n_draft, block_size);
+            if (n_draft <= 0) {
+                continue;
+            }
+
+            // anchor-first block [id_last, <mask> * (block_size-1)]: submit the whole block so the
+            // in-graph Markov head can key anchors off the block boundaries; keep the first n_draft
+            i_block_beg[seq_id] = batch.n_tokens;
+            n_block    [seq_id] = n_draft;
+            for (int32_t i = 0; i < block_size; ++i) {
+                common_batch_add(batch, i == 0 ? dp.id_last : mask_token_id, n + i, { seq_id }, true);
+            }
+        }
+
+        if (batch.n_tokens == 0) {
+            return;
+        }
+
+        if (llama_decode(ctx_dft, batch) != 0) {
+            LOG_WRN("%s: llama_decode failed\n", __func__);
+            return;
+        }
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (i_block_beg[seq_id] < 0) {
+                continue;
+            }
+            auto & dp     = dparams[seq_id];
+            auto & result = *dp.result;
+
+            const int32_t beg = i_block_beg[seq_id];
+            const int32_t nb  = n_block[seq_id]; // drafts to keep (<= block_size)
+
+            auto * smpl = smpls[seq_id].get();
+            // greedily read the predicted block at this sequence's noise positions 1..nb-1
+            for (int32_t i = 0; i < nb; ++i) {
+                common_sampler_sample(smpl, ctx_dft, beg + i, true);
+
+                const auto * cur_p = common_sampler_get_candidates(smpl, true);
+
+                const llama_token id = cur_p->data[0].id;
+
+                common_sampler_accept(smpl, id, true);
+
+                result.push_back(id);
+            }
+        }
     }
 };
 
@@ -2142,6 +2239,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
         case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:  return "draft-dflash";
+        case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:  return "draft-dspark";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram-map-k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram-map-k4v";
@@ -2195,6 +2293,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
             case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
+            case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
                 break;
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
@@ -2339,6 +2438,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         bool has_draft_eagle3 = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3)) && params.draft.ctx_dft != nullptr;
         bool has_draft_mtp    = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP))    && params.draft.ctx_dft != nullptr;
         bool has_draft_dflash = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)) && params.draft.ctx_dft != nullptr;
+        bool has_draft_dspark = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)) && params.draft.ctx_dft != nullptr;
 
 
 
@@ -2349,7 +2449,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         bool has_ngram_mod     = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MOD));
 
         // when adding a new type - update here the logic above
-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 10);
+        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 11);
 
         // this list here defines the priority of the speculators
         // the one with highest priority are listed first
@@ -2382,6 +2482,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         if (has_draft_dflash) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params));
         }
+        if (has_draft_dspark) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params));
+        }
     }
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
@@ -2404,6 +2507,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             }
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH: {
                 impls.push_back(std::make_unique<common_speculative_impl_draft_dflash>(config.params, n_seq));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK: {
+                impls.push_back(std::make_unique<common_speculative_impl_draft_dspark>(config.params, n_seq));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {

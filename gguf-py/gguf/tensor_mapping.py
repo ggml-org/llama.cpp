@@ -1290,6 +1290,18 @@ class TensorNameMap:
             "model.fc", # dflash
         ),
 
+        MODEL_TENSOR.DSPARK_MARKOV_W1: (
+            "model.markov_head.markov_w1", # dspark
+        ),
+
+        MODEL_TENSOR.DSPARK_MARKOV_W2: (
+            "model.markov_head.markov_w2", # dspark
+        ),
+
+        MODEL_TENSOR.DSPARK_CONF_PROJ: (
+            "model.confidence_head.proj", # dspark
+        ),
+
         MODEL_TENSOR.CLS: (
             "classifier",       # jina
             "classifier.dense", # roberta
