@@ -129,6 +129,8 @@ extern "C" {
     GGML_API int64_t        gguf_find_tensor      (const struct gguf_context * ctx, const char * name); // returns -1 if the tensor is not found
     GGML_API size_t         gguf_get_tensor_offset(const struct gguf_context * ctx, int64_t tensor_id);
     GGML_API const char *   gguf_get_tensor_name  (const struct gguf_context * ctx, int64_t tensor_id);
+    GGML_API uint32_t       gguf_get_tensor_n_dims(const struct gguf_context * ctx, int64_t tensor_id); // trailing dims of size 1 are not counted (see ggml_n_dims)
+    GGML_API int64_t        gguf_get_tensor_dim   (const struct gguf_context * ctx, int64_t tensor_id, int dim); // returns ne[dim], which is 1 for dim >= n_dims; requires dim < GGML_MAX_DIMS
     GGML_API enum ggml_type gguf_get_tensor_type  (const struct gguf_context * ctx, int64_t tensor_id);
     GGML_API size_t         gguf_get_tensor_size  (const struct gguf_context * ctx, int64_t tensor_id);
 
