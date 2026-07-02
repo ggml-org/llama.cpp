@@ -23,6 +23,7 @@ struct ggml_backend_meta_device;
 struct ggml_backend_meta_buffer_type;
 struct ggml_backend_meta_buffer;
 struct ggml_backend_meta;
+struct ggml_backend_meta_context;
 
 const char * ggml_backend_meta_split_axis_name(enum ggml_backend_meta_split_axis split_axis) {
     switch (split_axis) {
@@ -408,18 +409,32 @@ struct ggml_backend_meta_simple_tensor_container {
 };
 
 struct ggml_backend_meta_buffer_context {
+    using context_id_t = ggml_backend_meta_context *;
+    static constexpr context_id_t INVALID_CONTEXT_ID = nullptr;
+
     // FIXME
     // Most tensors can simply be stored statically in their own buffer.
     // Externally created views however also need a mapping to simple tensors but they use the buffer of the view source.
     // If external views are simply using that buffer they will slowly deplete its memory.
-    // Current solution: rotating set of 2 "compute" containers to hold external views, works correctly for llama.cpp.
-    // Long-term: tie the lifetime of external views to the meta backend executing the graph instead,
-    //     currently not possible due to graph-external operations in the backend scheduler.
+    // Keep a rotating set of "compute" containers per meta backend context so rebuilding one context does not invalidate
+    // external view registrations that are still referenced by another context's cached shadow graph.
+    struct compute_state {
+        ggml_backend_meta_simple_tensor_container stc[2];
+        int index      = 0;
+        int index_next = 0;
+
+        compute_state(const ggml_init_params & params, int n_simple) : stc{
+                ggml_backend_meta_simple_tensor_container(params, n_simple),
+                ggml_backend_meta_simple_tensor_container(params, n_simple)} {
+        }
+    };
+
     ggml_backend_meta_simple_tensor_container stc_static;
-    ggml_backend_meta_simple_tensor_container stc_compute[2];
-    int stc_compute_index      = 0;
-    int stc_compute_index_next = 0;
+    ggml_init_params params_compute;
+    context_id_t active_context_id = INVALID_CONTEXT_ID;
     std::vector<ggml_backend_buffer_ptr> bufs;
+    std::map<const ggml_tensor *, context_id_t> external_view_context_ids;
+    std::map<context_id_t, compute_state> stc_compute;
 
     // FIXME
     // The size of the split state cache is unbounded and can theoretically grow infinitely large.
@@ -431,10 +446,9 @@ struct ggml_backend_meta_buffer_context {
 
     ggml_backend_meta_buffer_context(
             ggml_backend_meta_simple_tensor_container & stc_static,
-            ggml_backend_meta_simple_tensor_container & stc_compute_0,
-            ggml_backend_meta_simple_tensor_container & stc_compute_1,
+            const ggml_init_params & params_compute,
             const std::vector<ggml_backend_buffer_t> & bufs)
-            : stc_static(std::move(stc_static)), stc_compute{std::move(stc_compute_0), std::move(stc_compute_1)} {
+            : stc_static(std::move(stc_static)), params_compute(params_compute) {
         this->bufs.reserve(bufs.size());
         for (ggml_backend_buffer_t buf : bufs) {
             this->bufs.emplace_back(buf);
@@ -443,17 +457,84 @@ struct ggml_backend_meta_buffer_context {
         debug = GGML_META_DEBUG ? atoi(GGML_META_DEBUG) : 0;
     }
 
+    static std::map<context_id_t, std::set<ggml_backend_meta_buffer_context *>> & context_buffers() {
+        static std::map<context_id_t, std::set<ggml_backend_meta_buffer_context *>> buffers;
+        return buffers;
+    }
+
+    static void remove_context_state(context_id_t context_id) {
+        auto & buffers = context_buffers();
+        auto it = buffers.find(context_id);
+        if (it == buffers.end()) {
+            return;
+        }
+        for (ggml_backend_meta_buffer_context * buf_ctx : it->second) {
+            buf_ctx->erase_compute_state(context_id);
+        }
+        buffers.erase(it);
+    }
+
+    static void unregister_buffer_context(ggml_backend_meta_buffer_context * buf_ctx) {
+        auto & buffers = context_buffers();
+        for (auto it = buffers.begin(); it != buffers.end();) {
+            it->second.erase(buf_ctx);
+            if (it->second.empty()) {
+                it = buffers.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    compute_state & get_compute_state(context_id_t context_id) {
+        auto it = stc_compute.find(context_id);
+        if (it == stc_compute.end()) {
+            it = stc_compute.emplace(std::piecewise_construct,
+                    std::forward_as_tuple(context_id),
+                    std::forward_as_tuple(params_compute, (int) bufs.size())).first;
+            if (context_id != INVALID_CONTEXT_ID) {
+                context_buffers()[context_id].insert(this);
+            }
+        }
+        return it->second;
+    }
+
+    void erase_compute_state(context_id_t context_id) {
+        stc_compute.erase(context_id);
+        for (auto it = external_view_context_ids.begin(); it != external_view_context_ids.end();) {
+            if (it->second == context_id) {
+                it = external_view_context_ids.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        if (active_context_id == context_id) {
+            active_context_id = INVALID_CONTEXT_ID;
+        }
+    }
+
     ggml_backend_meta_simple_tensor_container & get_simple_tensor_container(const ggml_tensor * tensor) {
         if (stc_static.simple_tensors.find(tensor) != stc_static.simple_tensors.end()) {
             return stc_static;
         }
-        return stc_compute[stc_compute_index];
+
+        context_id_t context_id = active_context_id;
+        if (tensor->view_src != nullptr) {
+            auto it = external_view_context_ids.find(tensor);
+            if (it != external_view_context_ids.end() && it->second != INVALID_CONTEXT_ID) {
+                context_id = it->second;
+            }
+        }
+
+        compute_state & compute = get_compute_state(context_id);
+        return compute.stc[compute.index];
     }
 };
 
 static void ggml_backend_meta_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(ggml_backend_buffer_is_meta(buffer));
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) buffer->context;
+    ggml_backend_meta_buffer_context::unregister_buffer_context(buf_ctx);
     delete buf_ctx;
 }
 
@@ -470,6 +551,9 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_simple_buffer(ggml_backend
     return buf_ctx->bufs[index].get();
 }
 
+static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(
+        ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor);
+
 static struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct ggml_tensor * tensor, size_t index) {
     GGML_ASSERT(ggml_backend_buffer_is_meta(tensor->buffer));
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
@@ -478,7 +562,10 @@ static struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct 
     ggml_backend_meta_simple_tensor_container & stc = buf_ctx->get_simple_tensor_container(tensor);
     auto it = stc.simple_tensors.find(tensor);
     if (it == stc.simple_tensors.end()) {
-        return nullptr;
+        const ggml_status status = ggml_backend_meta_buffer_init_tensor_impl(stc, const_cast<ggml_tensor *>(tensor));
+        GGML_ASSERT(status == GGML_STATUS_SUCCESS);
+        it = stc.simple_tensors.find(tensor);
+        GGML_ASSERT(it != stc.simple_tensors.end());
     }
     return it->second[index];
 }
@@ -1053,7 +1140,7 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     const std::pair key = std::make_pair(tensor, assume_sync);
     auto it = buf_ctx->split_state_cache.find(key);
     if (it != buf_ctx->split_state_cache.end() && memcmp(it->second.second, (const char *) tensor, sizeof(it->second.second)) != 0) {
-        buf_ctx->split_state_cache.clear();
+        buf_ctx->split_state_cache.erase(it);
         it = buf_ctx->split_state_cache.end();
     }
 
@@ -1232,6 +1319,10 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
     }
 
     stc.simple_tensors[tensor] = simple_tensors;
+    if (tensor->view_src != nullptr && &stc != &buf_ctx->stc_static &&
+            buf_ctx->active_context_id != ggml_backend_meta_buffer_context::INVALID_CONTEXT_ID) {
+        buf_ctx->external_view_context_ids[tensor] = buf_ctx->active_context_id;
+    }
 
     return GGML_STATUS_SUCCESS;
 }
@@ -1239,7 +1330,11 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
 static enum ggml_status ggml_backend_meta_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     GGML_ASSERT(ggml_backend_buffer_is_meta(buffer));
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) buffer->context;
-    buf_ctx->stc_compute_index = buf_ctx->stc_compute_index_next;
+    auto & compute = buf_ctx->get_compute_state(buf_ctx->active_context_id);
+    compute.index = compute.index_next;
+    if (tensor->view_src != nullptr && buf_ctx->active_context_id != ggml_backend_meta_buffer_context::INVALID_CONTEXT_ID) {
+        buf_ctx->external_view_context_ids[tensor] = buf_ctx->active_context_id;
+    }
     return ggml_backend_meta_buffer_init_tensor_impl(buf_ctx->get_simple_tensor_container(tensor), tensor);
 }
 
@@ -1501,8 +1596,6 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
         /*.no_alloc   =*/ true,
     };
     ggml_backend_meta_simple_tensor_container stc_static;
-    ggml_backend_meta_simple_tensor_container stc_compute_0(params, n_simple_bufts);
-    ggml_backend_meta_simple_tensor_container stc_compute_1(params, n_simple_bufts);
 
     size_t max_size = 0;
     std::vector<ggml_backend_buffer_t> bufs;
@@ -1512,7 +1605,7 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
         GGML_ASSERT(bufs.back() != nullptr);
         max_size = std::max(max_size, ggml_backend_buffer_get_size(bufs.back()));
     }
-    ggml_backend_meta_buffer_context * buf_ctx = new ggml_backend_meta_buffer_context(stc_static, stc_compute_0, stc_compute_1, bufs);
+    ggml_backend_meta_buffer_context * buf_ctx = new ggml_backend_meta_buffer_context(stc_static, params, bufs);
 
     return ggml_backend_buffer_init(buft, ggml_backend_meta_buffer_iface, buf_ctx, max_size);
 }
@@ -1532,11 +1625,9 @@ struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struc
         /*.no_alloc   =*/ true,
     };
     ggml_backend_meta_simple_tensor_container stc_static   (params_static,  n_simple_bufts);
-    ggml_backend_meta_simple_tensor_container stc_compute_0(params_compute, n_simple_bufts);
-    ggml_backend_meta_simple_tensor_container stc_compute_1(params_compute, n_simple_bufts);
 
     std::vector<ggml_backend_buffer_t> bufs(n_simple_bufts, nullptr);
-    ggml_backend_meta_buffer_context * meta_buf_ctx = new ggml_backend_meta_buffer_context(stc_static, stc_compute_0, stc_compute_1, bufs);
+    ggml_backend_meta_buffer_context * meta_buf_ctx = new ggml_backend_meta_buffer_context(stc_static, params_compute, bufs);
 
     ggml_backend_buffer_t meta_buf = ggml_backend_buffer_init(buft, ggml_backend_meta_buffer_iface, meta_buf_ctx, 0);
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
@@ -1668,6 +1759,7 @@ static const char * ggml_backend_meta_get_name(ggml_backend_t backend) {
 static void ggml_backend_meta_free(ggml_backend_t backend) {
     GGML_ASSERT(ggml_backend_is_meta(backend));
     ggml_backend_meta_context * backend_ctx = (ggml_backend_meta_context *) backend->context;
+    ggml_backend_meta_buffer_context::remove_context_state(backend_ctx);
     delete backend_ctx;
     delete backend;
 }
@@ -1773,6 +1865,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     GGML_ASSERT(cgraph->grads == nullptr);
     const size_t n_backends = ggml_backend_meta_n_backends(backend);
     ggml_backend_meta_context * backend_ctx = (ggml_backend_meta_context *) backend->context;
+    ggml_backend_meta_buffer_context::context_id_t context_id = backend_ctx;
 
     // If the previous cgraph had a defined UID it can be used to skip rebuilding the subgraphs per simple backend.
     const bool needs_rebuild = (cgraph->uid == 0) || (cgraph->uid != backend_ctx->uid);
@@ -1803,12 +1896,22 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         }
         for (ggml_backend_buffer_t buf : used_buffers) {
             ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) buf->context;
-            buf_ctx->stc_compute_index_next = buf_ctx->stc_compute_index ^ 1;
-            ggml_backend_meta_simple_tensor_container & stc = buf_ctx->stc_compute[buf_ctx->stc_compute_index_next];
+            buf_ctx->active_context_id = context_id;
+            auto & compute = buf_ctx->get_compute_state(context_id);
+            compute.index_next = compute.index ^ 1;
+            ggml_backend_meta_simple_tensor_container & stc = compute.stc[compute.index_next];
+            for (auto it = buf_ctx->external_view_context_ids.begin(); it != buf_ctx->external_view_context_ids.end();) {
+                if (it->second == context_id) {
+                    it = buf_ctx->external_view_context_ids.erase(it);
+                } else {
+                    ++it;
+                }
+            }
             for (ggml_context_ptr & ctx : stc.ctxs) {
                 ggml_reset(ctx.get());
             }
             stc.simple_tensors.clear();
+            compute.index = compute.index_next;
         }
         size_t n_subgraphs  = 0;
         size_t max_tmp_size = 0;
