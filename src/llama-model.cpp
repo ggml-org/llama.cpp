@@ -638,6 +638,18 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             return {blck_size_perf};
         }
 
+        if (ud->model->arch == LLM_ARCH_STEP35) {
+            GGML_ASSERT(segments.size() == 1);
+            const int64_t max_el      = segments[0].first;
+            if (std::regex_match(tensor_name, pattern_attn_gate_weight)) {
+                if (max_el == 64) {
+                    return { 8 };
+                } else if (max_el == 96) {
+                    return { 12 };
+                }
+            }
+        }
+
         // everything else
         GGML_ASSERT(segments.size() == 1);
         return {1};
