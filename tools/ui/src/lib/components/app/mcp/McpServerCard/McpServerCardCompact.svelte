@@ -9,6 +9,7 @@
 	import { HealthCheckStatus } from '$lib/enums';
 	import type { MCPServerDisplayInfo, HealthCheckState, MCPServerSettingsEntry } from '$lib/types';
 	import { onMount } from 'svelte';
+	import { MCP_CARD_VISIBLE_TOOL_LIMIT } from '$lib/constants/mcp-form';
 
 	interface Props {
 		server: MCPServerDisplayInfo & { description?: string };
@@ -17,8 +18,6 @@
 	}
 
 	let { server, enabled = false, onToggle }: Props = $props();
-
-	const VISIBLE_TOOL_LIMIT = 4;
 
 	onMount(() => {
 		const state = mcpStore.getHealthCheckState(server.id);
@@ -60,8 +59,8 @@
 		return trimmed ? { text: trimmed, lines: 1 } : null;
 	});
 
-	let visibleTools = $derived(tools.slice(0, VISIBLE_TOOL_LIMIT));
-	let hiddenTools = $derived(tools.slice(VISIBLE_TOOL_LIMIT));
+	let visibleTools = $derived(tools.slice(0, MCP_CARD_VISIBLE_TOOL_LIMIT));
+	let hiddenTools = $derived(tools.slice(MCP_CARD_VISIBLE_TOOL_LIMIT));
 	let hiddenToolCount = $derived(hiddenTools.length);
 
 	function handleToggle(checked: boolean) {
