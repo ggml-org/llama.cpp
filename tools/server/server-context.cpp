@@ -4086,6 +4086,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     auto & rd = res->rd;
     auto & params = this->params;
 
+    int32_t sse_ping_interval = params.sse_ping_interval;
+
     try {
         std::vector<server_task> tasks;
 
@@ -4136,6 +4138,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.params.message_spans = task.tokens.find_message_spans(delimiters);
 
             task.id_slot = json_value(data, "id_slot", -1);
+            sse_ping_interval = task.params.sse_ping_interval;
 
             // OAI-compat
             task.params.res_type          = res_type;
@@ -4160,11 +4163,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     }
 
     bool stream = json_value(data, "stream", false);
-
-    // SSE ping cadence is a per-request contract: a client running its own liveness watchdog
-    // (like the WebUI visibility kick) requests the cadence it needs via the request body,
-    // other clients inherit the --sse-ping-interval server default
-    int32_t sse_ping_interval = json_value(data, "sse_ping_interval", params.sse_ping_interval);
 
     if (!stream) {
         // non-stream, wait for the results
