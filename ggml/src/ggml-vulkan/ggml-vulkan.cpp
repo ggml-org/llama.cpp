@@ -3255,9 +3255,9 @@ static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal});
         } else if (device->uma) {
-            // On UMA, prefer host-visible memory so direct tensor borrowing works.
+            // Prefer cached host memory over device-local for UMA to avoid WC read penalties
             // If unavailable, fall back to device-local memory.
-            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
         } else if (device->disable_host_visible_vidmem) {
@@ -7921,18 +7921,53 @@ static bool ggml_vk_buffer_write_async(vk_context subctx, vk_buffer& dst, size_t
     return ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, size, size, size, 1, sync_staging);
 }
 
+static bool ggml_vk_buffer_host_write_direct(const vk_buffer & buf) {
+    if (!(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+        return false;
+    }
+    if (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent) {
+        return true;
+    }
+    return buf->device->uma && (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached);
+}
+
+static bool ggml_vk_buffer_host_read_direct(const vk_buffer & buf) {
+    // Returns true if the buffer can be read directly from the host.
+    // This does NOT imply coherency - for non-coherent memory (e.g. eHostCached),
+    // the caller must handle synchronization (pipeline barrier + invalidateMappedMemoryRanges).
+    if (!(buf->device->uma && (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible))) {
+        return false;
+    }
+    if (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent) {
+        return true;
+    }
+    return static_cast<bool>(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached);
+}
+
 static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t dpitch, size_t width, size_t height) {
     VK_LOG_DEBUG("ggml_vk_buffer_write_2d(" << width << ", " << height << ")");
     // Buffer is already mapped
-    if(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
-        GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
-
+    if (ggml_vk_buffer_host_write_direct(dst)) {
         if (width == spitch && width == dpitch) {
             memcpy((uint8_t *)dst->ptr + offset, src, width * height);
         } else {
             for (size_t i = 0; i < height; i++) {
                 memcpy((uint8_t *)dst->ptr + offset + i * dpitch, (const uint8_t *) src + i * spitch, width);
             }
+        }
+        if (!(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
+            uint64_t atom_size = dst->device->properties.limits.nonCoherentAtomSize;
+            uint64_t aligned_offset = offset & ~(atom_size - 1);
+            uint64_t end_offset = (offset + (uint64_t)dpitch * height + atom_size - 1) & ~(atom_size - 1);
+            uint64_t aligned_size = end_offset - aligned_offset;
+            if (aligned_offset + aligned_size > dst->size) {
+                aligned_size = VK_WHOLE_SIZE;
+            }
+            vk::MappedMemoryRange range;
+            range.memory = dst->device_memory;
+            range.offset = aligned_offset;
+            range.size = aligned_size;
+            dst->device->device.flushMappedMemoryRanges({range});
         }
     } else {
         std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
@@ -8048,9 +8083,7 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
     // If the device is not an UMA device the memory is host-accessible through rebar. While writing
     // through PCIe is sufficient fast reading back data from PCIe is slower than going through
     // the HW device to host copy path.
-    if(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible && src->device->uma) {
-        GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
-
+    if (ggml_vk_buffer_host_read_direct(src)) {
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
         vk_context subctx = ggml_vk_create_temporary_context(src->device->compute_queue.cmd_pool);
         ggml_vk_ctx_begin(src->device, subctx);
@@ -8067,6 +8100,21 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
                  "vk_buffer_read_2d uma waitForFences");
         src->device->device.resetFences({ src->device->fence });
         ggml_vk_queue_command_pools_cleanup(src->device);
+
+        if (!(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
+            uint64_t atom_size = src->device->properties.limits.nonCoherentAtomSize;
+            uint64_t aligned_offset = offset & ~(atom_size - 1);
+            uint64_t end_offset = (offset + (uint64_t)spitch * height + atom_size - 1) & ~(atom_size - 1);
+            uint64_t aligned_size = end_offset - aligned_offset;
+            if (aligned_offset + aligned_size > src->size) {
+                aligned_size = VK_WHOLE_SIZE;
+            }
+            vk::MappedMemoryRange range;
+            range.memory = src->device_memory;
+            range.offset = aligned_offset;
+            range.size = aligned_size;
+            src->device->device.invalidateMappedMemoryRanges({range});
+        }
 
         if (width == spitch && width == dpitch) {
             memcpy(dst, (const uint8_t *) src->ptr + offset, width * height);
