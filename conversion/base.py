@@ -985,7 +985,13 @@ class ModelBase:
 
         total_params, shared_params, expert_params, expert_count = self.gguf_writer.get_total_parameter_count()
 
-        self.metadata = gguf.Metadata.load(self.metadata_override, self.dir_model_card, self.model_name, total_params)
+        self.metadata = gguf.Metadata.load(
+            self.metadata_override,
+            self.dir_model_card,
+            self.model_name,
+            total_params,
+            preserve_model_size_label=self.model_arch == gguf.MODEL_ARCH.MMPROJ,
+        )
 
         # If we are using HF model id, set the metadata name to the model id
         if self.remote_hf_model_id:
