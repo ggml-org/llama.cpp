@@ -75,7 +75,7 @@ cmake --build build --config Release
     cmake --preset arm64-windows-llvm-release -D GGML_OPENMP=OFF
     cmake --build build-arm64-windows-llvm-release
     ```
-    For building with ninja generator and clang compiler as default:
+    For building with ninja generator and clang compiler as default: \
       -set path:set LIB=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\um\x64;C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.41.34120\lib\x64\uwp;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\ucrt\x64
       ```bash
       cmake --preset x64-windows-llvm-release
@@ -499,6 +499,11 @@ First, follow the official LunarG instructions for the installation and setup of
 On Debian / Ubuntu, you can install the required dependencies using:
 ```sh
 sudo apt-get install libvulkan-dev glslc spirv-headers
+```
+
+On Fedora, you can install the required dependencies using:
+```sh
+sudo dnf install vulkan-loader-devel vulkan-headers spirv-headers-devel libshaderc-devel glslc
 ```
 
 SPIRV-Headers (`spirv/unified1/spirv.hpp`) are required for the Vulkan backend and are **not** always pulled in by the Vulkan loader dev package alone. Other distros use names such as `spirv-headers` (Ubuntu / Debian / Arch), or `spirv-headers-devel` (Fedora / openSUSE). On Windows, the LunarG Vulkan SDK’s `Include` directory already contains these headers.
