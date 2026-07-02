@@ -1,11 +1,11 @@
-#include "topk-moe.hpp"
-#include "ggml.h"
-#include "ggml-impl.h"
-#include "ggml-backend-impl.h"
-
 #include <cfloat>
 #include <initializer_list>
 #include <vector>
+
+#include "ggml.h"
+#include "ggml-impl.h"
+#include "ggml-backend-impl.h"
+#include "topk-moe.hpp"
 
 // SYCL port of ggml-cuda/topk-moe.cu. The kernel is a translation of the CUDA no-bias, no-PDL
 // path of topk_moe_cuda; the fusion-detection helpers below are ported near-verbatim from
@@ -539,7 +539,15 @@ static bool ggml_sycl_check_fusion_memory_ranges(const ggml_cgraph * cgraph, con
     return is_ok;
 }
 
-int ggml_sycl_try_fuse_topk_moe(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int i) {
+int ggml_sycl_fuse(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int i) {
+    if (!g_ggml_sycl_enable_fusion) {
+        return 0;
+    }
+
+    return ggml_sycl_fuse_topk_moe(ctx, cgraph, i);
+}
+
+int ggml_sycl_fuse_topk_moe(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int i) {
     ggml_tensor * node = cgraph->nodes[i];
 
     if (node->op != GGML_OP_UNARY && node->op != GGML_OP_SOFT_MAX && node->op != GGML_OP_ARGSORT) {
