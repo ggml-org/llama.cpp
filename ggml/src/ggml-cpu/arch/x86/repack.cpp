@@ -1461,14 +1461,147 @@ void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     ggml_gemv_q4_0_8x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
 }
 
+#if defined(__AVX2__)
+static inline void ggml_gemv_q4_K_unpack_scales_avx2(const uint8_t * scales, uint32_t utmp[32]) {
+    constexpr uint32_t kmask1 = 0x3f3f3f3f;
+    constexpr uint32_t kmask2 = 0x0f0f0f0f;
+    constexpr uint32_t kmask3 = 0x03030303;
+    for (int sb = 0; sb < 8; sb++) {
+        const int src = sb * 12;
+        const int dst = sb * 4;
+        uint32_t s0, s1, s2;
+        memcpy(&s0, scales + src + 0, 4);
+        memcpy(&s1, scales + src + 4, 4);
+        memcpy(&s2, scales + src + 8, 4);
+        utmp[dst + 3] = ((s2 >> 4) & kmask2) | (((s1 >> 6) & kmask3) << 4);
+        const uint32_t uaux = s1 & kmask1;
+        utmp[dst + 1] = (s2 & kmask2) | (((s0 >> 6) & kmask3) << 4);
+        utmp[dst + 2] = uaux;
+        utmp[dst + 0] = s0 & kmask1;
+    }
+}
+
+static void ggml_gemv_q4_K_8x8_q8_K_avx2(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    const int nb = n / QK_K;
+    const block_q4_Kx8 * b_ptr_start = (const block_q4_Kx8 *) vx;
+    const block_q8_K * a_ptr_start = (const block_q8_K *) vy;
+    alignas(32) uint32_t utmp[32];
+    const __m256i mask0f = _mm256_set1_epi8(0x0F);
+    const __m256i perm_idx = _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7);
+    const __m256i ones_i16 = _mm256_set1_epi16(1);
+
+    // Process Q8_K rows one by one
+    for (int y = 0; y < nr; y++) {
+        const block_q8_K * a_ptr = a_ptr_start + y * nb;
+        // Take group of eight interleaved block_q4_K structures at each pass
+        for (int x = 0; x < nc / 8; x++) {
+            const block_q4_Kx8 * b_ptr = b_ptr_start + x * nb;
+
+            // Master FP accumulators
+            __m256 acc_row = _mm256_setzero_ps();
+            __m256 acc_min = _mm256_setzero_ps();
+
+            for (int l = 0; l < nb; l++) {
+                // Unpack scales and mins for the eight interleaved block_q4_K structures
+                ggml_gemv_q4_K_unpack_scales_avx2(b_ptr[l].scales, utmp);
+                __m256i sumi = _mm256_setzero_si256();
+                __m256i smin = _mm256_setzero_si256();
+
+                const int8_t * q8_qs = a_ptr[l].qs;
+                const uint8_t * q4_qs = b_ptr[l].qs;
+
+                // Sum adjacent Q8_K bsums so each value corresponds to one Q4_K sub block
+                __m256i bsums = _mm256_loadu_si256((const __m256i *) a_ptr[l].bsums);
+                __m256i q8sums = _mm256_madd_epi16(bsums, ones_i16);
+
+                // Process four groups of low/high nibbles from the Q4_K block
+                for (int macro_k = 0; macro_k < 4; macro_k++) {
+                    const uint8_t * utmp_bytes = (const uint8_t *) utmp;
+                    // Load scales for the low and high nibbles of the current group
+                    __m256i scales_lo = _mm256_cvtepu8_epi32(
+                        _mm_loadl_epi64((const __m128i *) (utmp_bytes + macro_k * 32)));
+                    __m256i scales_hi = _mm256_cvtepu8_epi32(
+                        _mm_loadl_epi64((const __m128i *) (utmp_bytes + macro_k * 32 + 16)));
+
+                    __m256i acc_a_lo = _mm256_setzero_si256();
+                    __m256i acc_b_lo = _mm256_setzero_si256();
+                    __m256i acc_a_hi = _mm256_setzero_si256();
+                    __m256i acc_b_hi = _mm256_setzero_si256();
+
+                    for (int sub_k = 0; sub_k < 4; sub_k++) {
+                        const int k = macro_k * 4 + sub_k;
+                        const int q8_base = macro_k * 64 + sub_k * 8;
+
+                        // Broadcast one Q8_K slice across the eight interleaved Q4_K columns
+                        __m256i q8_lo = _mm256_broadcastq_epi64(
+                            _mm_loadl_epi64((const __m128i *) (q8_qs + q8_base)));
+                        __m256i q8_hi = _mm256_broadcastq_epi64(
+                            _mm_loadl_epi64((const __m128i *) (q8_qs + q8_base + 32)));
+
+                        // Load the low and high halves of eight interleaved Q4_K columns
+                        __m256i q4_a = _mm256_loadu_si256((const __m256i *) (q4_qs + k * 64));
+                        __m256i q4_b = _mm256_loadu_si256((const __m256i *) (q4_qs + k * 64 + 32));
+
+                        // Extract low and high nibbles as unsigned 4-bit values
+                        __m256i q4_a_lo = _mm256_and_si256(q4_a, mask0f);
+                        __m256i q4_b_lo = _mm256_and_si256(q4_b, mask0f);
+                        __m256i q4_a_hi = _mm256_and_si256(_mm256_srli_epi16(q4_a, 4), mask0f);
+                        __m256i q4_b_hi = _mm256_and_si256(_mm256_srli_epi16(q4_b, 4), mask0f);
+
+                        // Dot product of unsigned Q4_K values with signed Q8_K values
+                        acc_a_lo = mul_sum_us8_pairs_acc_int32x8(acc_a_lo, q4_a_lo, q8_lo);
+                        acc_b_lo = mul_sum_us8_pairs_acc_int32x8(acc_b_lo, q4_b_lo, q8_lo);
+                        acc_a_hi = mul_sum_us8_pairs_acc_int32x8(acc_a_hi, q4_a_hi, q8_hi);
+                        acc_b_hi = mul_sum_us8_pairs_acc_int32x8(acc_b_hi, q4_b_hi, q8_hi);
+                    }
+
+                    // Combine partial sums for the eight output columns
+                    __m256i row_dot_lo = _mm256_hadd_epi32(acc_a_lo, acc_b_lo);
+                    __m256i row_dot_hi = _mm256_hadd_epi32(acc_a_hi, acc_b_hi);
+                    row_dot_lo = _mm256_permutevar8x32_epi32(row_dot_lo, perm_idx);
+                    row_dot_hi = _mm256_permutevar8x32_epi32(row_dot_hi, perm_idx);
+
+                    // Multiply by Q4_K sub-block scales and accumulate
+                    sumi = _mm256_add_epi32(sumi, _mm256_mullo_epi32(scales_lo, row_dot_lo));
+                    sumi = _mm256_add_epi32(sumi, _mm256_mullo_epi32(scales_hi, row_dot_hi));
+                }
+
+                // Accumulate Q4_K min correction using paired Q8_K sub-block sums
+                alignas(16) int32_t q8sum_pairs[4];
+                const __m128i q8sums16 = _mm_packs_epi32(
+                    _mm256_castsi256_si128(q8sums),
+                    _mm256_extracti128_si256(q8sums, 1));
+                _mm_store_si128((__m128i *) q8sum_pairs, q8sums16);
+                for (int sb = 0; sb < 4; sb++) {
+                    const uint8_t * utmp_bytes = (const uint8_t *) utmp;
+                    __m128i mins8 = _mm_unpacklo_epi8(
+                        _mm_loadl_epi64((const __m128i *) (utmp_bytes + 8 + (2 * sb) * 16)),
+                        _mm_loadl_epi64((const __m128i *) (utmp_bytes + 8 + (2 * sb + 1) * 16)));
+                    __m256i mins16 = _mm256_cvtepu8_epi16(mins8);
+                    __m256i q8sum_pair = _mm256_set1_epi32(q8sum_pairs[sb]);
+                    smin = _mm256_add_epi32(smin, _mm256_madd_epi16(mins16, q8sum_pair));
+                }
+
+                // Apply Q8_K row scale and per-column Q4_K scales
+                const __m256 row_scale = _mm256_set1_ps(a_ptr[l].d);
+                const __m256 col_scale = GGML_F32Cx8_LOAD(b_ptr[l].d);
+                const __m256 col_min = GGML_F32Cx8_LOAD(b_ptr[l].dmin);
+                acc_row = _mm256_fmadd_ps(_mm256_cvtepi32_ps(sumi), _mm256_mul_ps(col_scale, row_scale), acc_row);
+                acc_min = _mm256_fmadd_ps(_mm256_cvtepi32_ps(smin), _mm256_mul_ps(col_min, row_scale), acc_min);
+            }
+
+            // Store eight accumulated output columns
+            _mm256_storeu_ps(s + y * bs + x * 8, _mm256_sub_ps(acc_row, acc_min));
+        }
+    }
+}
+#endif
+
 void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
     const int blocklen = 8;
-    static const uint32_t kmask1 = 0x3f3f3f3f;
-    static const uint32_t kmask2 = 0x0f0f0f0f;
-    static const uint32_t kmask3 = 0x03030303;
 
     assert (n % qk == 0);
     assert (nc % ncols_interleaved == 0);
@@ -1484,202 +1617,9 @@ void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(blocklen);
 
 #if defined(__AVX2__)
-    // Lookup table to convert signed nibbles to signed bytes
-    __m256i signextendlut = _mm256_castsi128_si256(_mm_set_epi8(-1, -2, -3, -4, -5, -6, -7, -8, 7, 6, 5, 4, 3, 2, 1, 0));
-    signextendlut = _mm256_permute2f128_si256(signextendlut, signextendlut, 0);
-    // Shuffle masks to rearrange delta and scale values to multiply with appropriate scales
-    __m128i deltamask = _mm_set_epi8(15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0);
-    __m128i scalemask = _mm_set_epi8(7, 7, 3, 3, 6, 6, 2, 2, 5, 5, 1, 1, 4, 4, 0, 0);
-    // Permute mask used for easier vector processing at later stages
-    __m256i finalpermutemask = _mm256_set_epi32(7, 5, 3, 1, 6, 4, 2, 0);
-
-    // Mask to extract nibbles from bytes
-    const __m256i m4b = _mm256_set1_epi8(0x0F);
-
-    int64_t b_nb = n / QK_K;
-
-    const block_q4_Kx8 * b_ptr_start = (const block_q4_Kx8 *)vx;
-    const block_q8_K * a_ptr_start = (const block_q8_K *)vy;
-
-    // Process Q8_K blocks one by one
-    for (int64_t y = 0; y < nr; y++) {
-
-        // Pointers to LHS blocks of block_q8_K format
-        const block_q8_K * a_ptr = a_ptr_start + (y * nb);
-
-        // Take group of eight interleaved block_q4_K structures at each pass of the loop and perform dot product operation
-        for (int64_t x = 0; x < nc / 8; x++) {
-
-            // Pointers to RHS blocks
-            const block_q4_Kx8 * b_ptr = b_ptr_start + (x * b_nb);
-
-            // Master FP accumulators
-            __m256 acc_row = _mm256_setzero_ps();
-            __m256 acc_min_rows = _mm256_setzero_ps();
-
-            for (int64_t b = 0; b < nb; b++) {
-
-                // Load and convert to FP32 scale from block_q8_K
-                const __m256 row_scale_f32 = _mm256_set1_ps((a_ptr[b].d));
-
-                // Load the scale values for the 8 blocks interleaved in block_q4_Kx8
-                // col_scale_f32 rearranged so as to multiply with appropriate quants
-                const __m256 col_scale_f32 = GGML_F32Cx8_REARRANGE_LOAD(b_ptr[b].d, deltamask);
-                const __m256 col_dmin_f32 = GGML_F32Cx8_LOAD(b_ptr[b].dmin);
-
-                __m256i iacc_b = _mm256_setzero_si256();
-                __m256i iacc_min_b = _mm256_setzero_si256();
-
-                const __m256i q8sums = _mm256_loadu_si256((const __m256i * )(a_ptr[b].bsums));
-                __m256i q8s = _mm256_castsi128_si256(_mm_hadd_epi16(_mm256_castsi256_si128(q8sums), _mm256_extracti128_si256(q8sums, 1)));
-                q8s = _mm256_permute2f128_si256(q8s, q8s, 0);
-
-                // Processes two sub blocks from each Q4_K in each iteration
-                for (int sb = 0; sb < QK_K / 64; sb++) {
-
-                    // Load the eight block_q4_K for two sub blocks quantized values interleaved with each other in chunks of eight - B0,B1 ....B6,B7
-                    const __m256i rhs_raw_vec_0123_0 = _mm256_loadu_si256((const __m256i * )(b_ptr[b].qs + sb * 256));
-                    const __m256i rhs_raw_vec_4567_0 = _mm256_loadu_si256((const __m256i * )(b_ptr[b].qs + 32 + sb * 256));
-                    const __m256i rhs_raw_vec_0123_1 = _mm256_loadu_si256((const __m256i * )(b_ptr[b].qs + 64 + sb * 256));
-                    const __m256i rhs_raw_vec_4567_1 = _mm256_loadu_si256((const __m256i * )(b_ptr[b].qs + 96 + sb * 256));
-                    const __m256i rhs_raw_vec_0123_2 = _mm256_loadu_si256((const __m256i * )(b_ptr[b].qs + 128 + sb * 256));
-                    const __m256i rhs_raw_vec_4567_2 = _mm256_loadu_si256((const __m256i * )(b_ptr[b].qs + 160 + sb * 256));
-                    const __m256i rhs_raw_vec_0123_3 = _mm256_loadu_si256((const __m256i * )(b_ptr[b].qs + 192 + sb * 256));
-                    const __m256i rhs_raw_vec_4567_3 = _mm256_loadu_si256((const __m256i * )(b_ptr[b].qs + 224 + sb * 256));
-
-                    // 4-bit -> 8-bit
-                    // Values of the first sub block of eight block_q4_K structures for the sb loop
-                    const __m256i rhs_vec_0123_00 = _mm256_and_si256(rhs_raw_vec_0123_0, m4b);
-                    const __m256i rhs_vec_4567_00 = _mm256_and_si256(rhs_raw_vec_4567_0, m4b);
-                    const __m256i rhs_vec_0123_01 = _mm256_and_si256(rhs_raw_vec_0123_1, m4b);
-                    const __m256i rhs_vec_4567_01 = _mm256_and_si256(rhs_raw_vec_4567_1, m4b);
-                    const __m256i rhs_vec_0123_02 = _mm256_and_si256(rhs_raw_vec_0123_2, m4b);
-                    const __m256i rhs_vec_4567_02 = _mm256_and_si256(rhs_raw_vec_4567_2, m4b);
-                    const __m256i rhs_vec_0123_03 = _mm256_and_si256(rhs_raw_vec_0123_3, m4b);
-                    const __m256i rhs_vec_4567_03 = _mm256_and_si256(rhs_raw_vec_4567_3, m4b);
-
-                    // Values of the second sub block of eight block_q4_K structures when sb = 1
-                    const __m256i rhs_vec_0123_10 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_vec_0123_0, 4), m4b);
-                    const __m256i rhs_vec_4567_10 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_vec_4567_0, 4), m4b);
-                    const __m256i rhs_vec_0123_11 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_vec_0123_1, 4), m4b);
-                    const __m256i rhs_vec_4567_11 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_vec_4567_1, 4), m4b);
-                    const __m256i rhs_vec_0123_12 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_vec_0123_2, 4), m4b);
-                    const __m256i rhs_vec_4567_12 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_vec_4567_2, 4), m4b);
-                    const __m256i rhs_vec_0123_13 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_vec_0123_3, 4), m4b);
-                    const __m256i rhs_vec_4567_13 = _mm256_and_si256(_mm256_srli_epi16(rhs_raw_vec_4567_3, 4), m4b);
-
-                    uint32_t utmp_0[4], utmp_1[4];
-
-                    // Scales and Mins of corresponding sub blocks from different Q8_K structures are stored together
-                    // The below block is for eg to extract first sub block's scales and mins from different Q4_K structures for the sb loop
-                    memcpy(utmp_0, b_ptr[b].scales + 24 * sb, 12);
-                    utmp_0[3] = ((utmp_0[2] >> 4) & kmask2) | (((utmp_0[1] >> 6) & kmask3) << 4);
-                    const uint32_t uaux_0 = utmp_0[1] & kmask1;
-                    utmp_0[1] = (utmp_0[2] & kmask2) | (((utmp_0[0] >> 6) & kmask3) << 4);
-                    utmp_0[2] = uaux_0;
-                    utmp_0[0] &= kmask1;
-
-                    // The below block is for eg to extract second sub block's scales and mins from different Q4_K structures for the sb loop
-                    memcpy(utmp_1, b_ptr[b].scales + 12 + sb * 24, 12);
-                    utmp_1[3] = ((utmp_1[2] >> 4) & kmask2) | (((utmp_1[1] >> 6) & kmask3) << 4);
-                    const uint32_t uaux_1 = utmp_1[1] & kmask1;
-                    utmp_1[1] = (utmp_1[2] & kmask2) | (((utmp_1[0] >> 6) & kmask3) << 4);
-                    utmp_1[2] = uaux_1;
-                    utmp_1[0] &= kmask1;
-
-                    // Scales of first sub block in the sb loop
-                    const __m128i mins_and_scales_0 = _mm_set_epi32(utmp_0[3], utmp_0[2], utmp_0[1], utmp_0[0]);
-                    __m128i scales_rearrange_0 = _mm_shuffle_epi8(mins_and_scales_0, scalemask);
-                    __m256i scales_0 = _mm256_cvtepu8_epi16(scales_rearrange_0);
-
-                    // Scales of second sub block in the sb loop
-                    __m128i mins_and_scales_1 = _mm_set_epi32(utmp_1[3], utmp_1[2], utmp_1[1], utmp_1[0]);
-                    __m128i scales_rearrange_1 = _mm_shuffle_epi8(mins_and_scales_1, scalemask);
-                    __m256i scales_1 = _mm256_cvtepu8_epi16(scales_rearrange_1);
-
-                    // Mins of first and second sub block of Q4_K block are arranged side by side
-                    __m256i mins_01 = _mm256_cvtepu8_epi16(_mm_unpacklo_epi8(_mm_shuffle_epi32(mins_and_scales_0, 78), _mm_shuffle_epi32(mins_and_scales_1, 78)));
-
-                    // Load the two sub block values corresponding to sb in block_q8_K in batches of 16 bytes and replicate the same across 256 bit vector
-                    __m256i lhs_vec_00 = _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)(a_ptr[b].qs + sb * 64)));
-                    __m256i lhs_vec_01 = _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)(a_ptr[b].qs + 16 + sb * 64)));
-                    __m256i lhs_vec_10 = _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)(a_ptr[b].qs + 32 + sb * 64)));
-                    __m256i lhs_vec_11 = _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)(a_ptr[b].qs + 48 + sb * 64)));
-
-                    lhs_vec_00 = _mm256_permute2f128_si256(lhs_vec_00, lhs_vec_00, 0);
-                    lhs_vec_01 = _mm256_permute2f128_si256(lhs_vec_01, lhs_vec_01, 0);
-                    lhs_vec_10 = _mm256_permute2f128_si256(lhs_vec_10, lhs_vec_10, 0);
-                    lhs_vec_11 = _mm256_permute2f128_si256(lhs_vec_11, lhs_vec_11, 0);
-
-                    // Dot product done within 32 bit lanes and accumulated in the same vector
-                    // First done for first sub block and then for second sub block in each sb
-                    // B0(0-3) B4(0-3) B1(0-3) B5(0-3) B2(0-3) B6(0-3) B3(0-3) B7(0-3) with A0(0-3)
-                    // B0(4-7) B4(4-7) B1(4-7) B5(4-7) B2(4-7) B6(4-7) B3(4-7) B7(4-7) with A0(4-7)
-                    // ...........................................................................
-                    // B0(28-31) B4(28-31) B1(28-31) B5(28-31) B2(28-31) B6(28-31) B3(28-31) B7(28-31) with A0(28-31)
-
-
-                    __m256i iacc_0 = _mm256_setzero_si256();
-                    __m256i iacc_1 = _mm256_setzero_si256();
-
-                    iacc_0 = _mm256_add_epi16(iacc_0, _mm256_maddubs_epi16(_mm256_blend_epi32(rhs_vec_0123_00 ,_mm256_shuffle_epi32(rhs_vec_4567_00, 177), 170), _mm256_shuffle_epi32(lhs_vec_00, 0)));
-                    iacc_0 = _mm256_add_epi16(iacc_0, _mm256_maddubs_epi16(_mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_00, 177) ,rhs_vec_4567_00, 170), _mm256_shuffle_epi32(lhs_vec_00, 85)));
-
-                    iacc_0 = _mm256_add_epi16(iacc_0, _mm256_maddubs_epi16(_mm256_blend_epi32(rhs_vec_0123_01 ,_mm256_shuffle_epi32(rhs_vec_4567_01, 177), 170), _mm256_shuffle_epi32(lhs_vec_00, 170)));
-                    iacc_0 = _mm256_add_epi16(iacc_0, _mm256_maddubs_epi16(_mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_01, 177) ,rhs_vec_4567_01, 170), _mm256_shuffle_epi32(lhs_vec_00, 255)));
-
-                    iacc_0 = _mm256_add_epi16(iacc_0, _mm256_maddubs_epi16(_mm256_blend_epi32(rhs_vec_0123_02 ,_mm256_shuffle_epi32(rhs_vec_4567_02, 177), 170), _mm256_shuffle_epi32(lhs_vec_01, 0)));
-                    iacc_0 = _mm256_add_epi16(iacc_0, _mm256_maddubs_epi16(_mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_02, 177) ,rhs_vec_4567_02, 170), _mm256_shuffle_epi32(lhs_vec_01, 85)));
-
-                    iacc_0 = _mm256_add_epi16(iacc_0, _mm256_maddubs_epi16(_mm256_blend_epi32(rhs_vec_0123_03 ,_mm256_shuffle_epi32(rhs_vec_4567_03, 177), 170), _mm256_shuffle_epi32(lhs_vec_01, 170)));
-                    iacc_0 = _mm256_add_epi16(iacc_0, _mm256_maddubs_epi16(_mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_03, 177) ,rhs_vec_4567_03, 170), _mm256_shuffle_epi32(lhs_vec_01, 255)));
-
-                    iacc_0 = _mm256_madd_epi16(iacc_0, scales_0);
-
-                    iacc_1 = _mm256_add_epi16(iacc_1, _mm256_maddubs_epi16(_mm256_blend_epi32(rhs_vec_0123_10 ,_mm256_shuffle_epi32(rhs_vec_4567_10, 177), 170), _mm256_shuffle_epi32(lhs_vec_10, 0)));
-                    iacc_1 = _mm256_add_epi16(iacc_1, _mm256_maddubs_epi16(_mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_10, 177) ,rhs_vec_4567_10, 170), _mm256_shuffle_epi32(lhs_vec_10, 85)));
-
-                    iacc_1 = _mm256_add_epi16(iacc_1, _mm256_maddubs_epi16(_mm256_blend_epi32(rhs_vec_0123_11 ,_mm256_shuffle_epi32(rhs_vec_4567_11, 177), 170), _mm256_shuffle_epi32(lhs_vec_10, 170)));
-                    iacc_1 = _mm256_add_epi16(iacc_1, _mm256_maddubs_epi16(_mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_11, 177) ,rhs_vec_4567_11, 170), _mm256_shuffle_epi32(lhs_vec_10, 255)));
-
-                    iacc_1 = _mm256_add_epi16(iacc_1, _mm256_maddubs_epi16(_mm256_blend_epi32(rhs_vec_0123_12 ,_mm256_shuffle_epi32(rhs_vec_4567_12, 177), 170), _mm256_shuffle_epi32(lhs_vec_11, 0)));
-                    iacc_1 = _mm256_add_epi16(iacc_1, _mm256_maddubs_epi16(_mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_12, 177) ,rhs_vec_4567_12, 170), _mm256_shuffle_epi32(lhs_vec_11, 85)));
-
-                    iacc_1 = _mm256_add_epi16(iacc_1, _mm256_maddubs_epi16(_mm256_blend_epi32(rhs_vec_0123_13 ,_mm256_shuffle_epi32(rhs_vec_4567_13, 177), 170), _mm256_shuffle_epi32(lhs_vec_11, 170)));
-                    iacc_1 = _mm256_add_epi16(iacc_1, _mm256_maddubs_epi16(_mm256_blend_epi32(_mm256_shuffle_epi32(rhs_vec_0123_13, 177) ,rhs_vec_4567_13, 170), _mm256_shuffle_epi32(lhs_vec_11, 255)));
-
-                    iacc_1 = _mm256_madd_epi16(iacc_1, scales_1);
-
-                    // Accumulate the iacc value for one sb
-                    __m256i iacc_sb = _mm256_add_epi32(iacc_0, iacc_1);
-
-                    // Broadcast the bsums of the two sub blocks  of the iteration of Q8_K across the vector
-                    // Multiply-Add with corresponding mins of Q4_Kx8 with bsums
-                    __m256i q8s_sb = _mm256_shuffle_epi32(q8s, 0);
-                    __m256i iacc_min_sb = _mm256_madd_epi16(q8s_sb, mins_01);
-                    q8s = _mm256_bsrli_epi128(q8s, 4);
-
-                    // Accumulate for the complete block
-                    iacc_b = _mm256_add_epi32(iacc_b, iacc_sb);
-                    iacc_min_b = _mm256_add_epi32(iacc_min_b, iacc_min_sb);
-                }
-
-                // Multiply-Add with scale values for the complete super block
-                acc_row = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_b), _mm256_mul_ps(col_scale_f32, row_scale_f32), acc_row);
-                acc_min_rows = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_min_b), _mm256_mul_ps(col_dmin_f32, row_scale_f32), acc_min_rows);
-
-            }
-
-            // Accumulated output values permuted so as to be stored in appropriate order post accumulation
-            acc_row = _mm256_permutevar8x32_ps(acc_row, finalpermutemask);
-            _mm256_storeu_ps(s + (y * nr + x * 8), _mm256_sub_ps(acc_row, acc_min_rows));
-        }
-    }
-
+    ggml_gemv_q4_K_8x8_q8_K_avx2(n, s, bs, vx, vy, nr, nc);
+    return;
 #else
-    UNUSED(kmask1);
-    UNUSED(kmask2);
-    UNUSED(kmask3);
     ggml_gemv_q4_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 #endif
 }
