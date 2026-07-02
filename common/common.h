@@ -428,7 +428,7 @@ enum common_reasoning_format {
 
 enum common_sleep_mode {
     COMMON_SLEEP_MODE_KEEP_ALIVE, // free the model but keep the process alive (fast wakeup)
-    COMMON_SLEEP_MODE_TERMINATE,  // exit the process on idle (frees all resources; requires a supervisor to respawn)
+    COMMON_SLEEP_MODE_TERMINATE,  // exit the process on idle
 };
 
 
