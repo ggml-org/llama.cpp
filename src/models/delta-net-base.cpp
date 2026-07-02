@@ -446,6 +446,51 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     return build_delta_net_chunking(q, k, v, g, b, s, il);
 }
 
+ggml_tensor * llm_build_delta_net_base::build_rs_rollback_carry(
+        llm_graph_input_rs * inp,
+        ggml_tensor *        states_all,
+        ggml_tensor *        current_states,
+        int64_t              state_size,
+        int64_t              n_written,
+        int                  il) {
+    GGML_UNUSED(il);
+
+    const int64_t n_seqs  = ubatch.n_seqs;
+    const int64_t K       = (int64_t) cparams.n_rs_seq + 1;
+    const int64_t n_carry = K - n_written; // deeper planes [n_written, K) not regenerated here
+
+    if (n_carry <= 0) {
+        return nullptr;
+    }
+
+    GGML_ASSERT(current_states != nullptr);
+    GGML_ASSERT(ggml_nelements(current_states) == state_size * n_seqs);
+
+    // slot 0 == the state build_rs() already gathered; reuse it rather than re-read plane 0, which
+    // the extra-cell write may have clobbered (keeps the cache read order-independent)
+    ggml_tensor * cur0 = ggml_is_contiguous(current_states)
+        ? ggml_reshape_3d(ctx0, current_states, state_size, n_seqs, 1)
+        : ggml_cont_3d   (ctx0, current_states, state_size, n_seqs, 1);
+
+    if (n_carry == 1) {
+        return cur0;
+    }
+
+    GGML_ASSERT(inp->s_copy_hist && "rolling-history input missing for MTP rollback writer");
+
+    // deeper slots [1, n_carry): gather planes (idx + c) from the old cache via s_copy_hist (slot 0
+    // lives at offset n_seqs); these planes are untouched by the extra-cell write, so the read is safe
+    ggml_tensor * states_2d = ggml_reshape_2d(ctx0, states_all, state_size, states_all->ne[1]);
+
+    ggml_tensor * hist_idx = ggml_view_1d(ctx0, inp->s_copy_hist,
+            (n_carry - 1) * n_seqs, n_seqs * inp->s_copy_hist->nb[0]);
+
+    ggml_tensor * deeper = ggml_get_rows(ctx0, states_2d, hist_idx); // [state_size, (n_carry-1)*n_seqs]
+    deeper = ggml_reshape_3d(ctx0, deeper, state_size, n_seqs, n_carry - 1);
+
+    return ggml_concat(ctx0, cur0, deeper, 2); // [state_size, n_seqs, n_carry]
+}
+
 ggml_tensor * llm_build_delta_net_base::build_conv_state(
         llm_graph_input_rs * inp,
         ggml_tensor *        conv_states_all,
@@ -460,10 +505,11 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
 
     const int64_t n_seqs = ubatch.n_seqs;
 
-    ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
-    cb(conv_states, "conv_states", il);
+    // keep the raw gathered current state [row_count, n_seqs] for the rollback carry (slot 0)
+    ggml_tensor * conv_states_cur = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
+    cb(conv_states_cur, "conv_states", il);
 
-    conv_states = ggml_reshape_3d(ctx0, conv_states, conv_kernel_size - 1, conv_channels, n_seqs);
+    ggml_tensor * conv_states = ggml_reshape_3d(ctx0, conv_states_cur, conv_kernel_size - 1, conv_channels, n_seqs);
     cb(conv_states, "conv_states_reshaped", il);
 
     qkv_mixed = ggml_transpose(ctx0, qkv_mixed);
@@ -495,30 +541,47 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
 
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
     } else {
-        // [TAG_RECURRENT_ROLLBACK_SPLITS]
-        // TODO: this logic incorrectly assumes that the last (n_rs_seq + 1) tokens of a sequence in a batch are
-        //       inside the same ubatch. currently with `split_equal()` this is not correct
+        // [TAG_RECURRENT_ROLLBACK_SPLITS] split_equal-correct conv-snapshot writer.
+        // conv_input is [d_conv-1 + n_seq_tokens, channels, n_seqs]; ne[0] is per-seq time, so
+        // s_idx is the per-seq relative offset and dim2 walks the n_seqs seqs (find_slot put them
+        // in contiguous cells). only the n_written = min(n_seq_tokens, K) most-recent planes have a
+        // distinct in-window snapshot this ubatch; writing deeper ones would alias plane 0.
+        const int64_t K            = (int64_t) cparams.n_rs_seq + 1;
+        const int64_t n_seq_tokens = conv_input->ne[0] - conv_states->ne[0]; // per-seq time length
+        const int64_t n_written    = std::min<int64_t>(n_seq_tokens, K);
 
-        const int64_t K = (int64_t) cparams.n_rs_seq + 1;
+        // assemble all K planes, then a single cpy; the carry read feeds it, so it's ordered before
+        // the write (no reliance on graph node insertion order). fresh plane s_slot is the conv window
+        // at s_idx = n_seq_tokens - s_slot, flattened to the cache row layout.
+        ggml_tensor * fresh = nullptr;
+        for (int64_t s_slot = 0; s_slot < n_written; ++s_slot) {
+            const int64_t s_idx = n_seq_tokens - s_slot;
+            GGML_ASSERT(s_idx >= 0);
 
-        for (int64_t t = 1; t <= K; ++t) {
-            const int64_t s_idx  = std::max<int64_t>(0, conv_input->ne[0] - conv_states->ne[0] - K + t);
-            const int64_t s_slot = K - t;
-
-            ggml_tensor * conv_state_last =
+            ggml_tensor * win =
                 ggml_view_3d(ctx0, conv_input,
                         conv_kernel_size - 1, conv_channels, n_seqs,
                         conv_input->nb[1], conv_input->nb[2],
                         ggml_row_size(conv_input->type, s_idx));
 
-            ggml_tensor * conv_state_update =
-                ggml_view_2d(ctx0,
-                        conv_states_all, row_count, n_seqs,
-                        conv_states_all->nb[1],
-                        (s_slot * mem_size + kv_head) * row_size);
+            // flatten to a contiguous [row_count, n_seqs, 1] plane matching the cache row layout
+            ggml_tensor * plane = ggml_reshape_3d(ctx0, ggml_cont(ctx0, win), row_count, n_seqs, 1);
 
-            ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
+            fresh = (fresh == nullptr) ? plane : ggml_concat(ctx0, fresh, plane, 2);
         }
+
+        ggml_tensor * carry = build_rs_rollback_carry(inp, conv_states_all, conv_states_cur, row_count, n_written, il);
+        ggml_tensor * all   = (carry == nullptr) ? fresh : ggml_concat(ctx0, fresh, carry, 2);
+
+        GGML_ASSERT(all->ne[2] == K && all->ne[1] == n_seqs);
+
+        ggml_tensor * dst =
+            ggml_view_3d(ctx0, conv_states_all, row_count, n_seqs, all->ne[2],
+                    conv_states_all->nb[1],
+                    (size_t) mem_size * row_size,
+                    (size_t) kv_head * row_size);
+
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, all, dst));
     }
 
     return conv_input;
@@ -587,20 +650,30 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     // op writes the last min(n_seq_tokens, K) snapshots; trailing slots are left unwritten
     const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
 
-    // write the produced snapshots into the recurrent cache (snapshot slot i -> rollback group i)
-    ggml_tensor * src = ggml_view_3d(ctx0, gdn_out,
+    // same single-cpy carry ordering as build_conv_state
+    ggml_tensor * fresh = ggml_view_3d(ctx0, gdn_out,
         D, n_seqs, n_written,
         ggml_row_size(gdn_out->type, D),
         ggml_row_size(gdn_out->type, state_size_per_snap),
         ggml_row_size(gdn_out->type, attn_score_elems));
 
+    ggml_tensor * all = ggml_cont(ctx0, fresh); // [D, n_seqs, n_written]
+
+    // s is the current recurrent state gathered by build_rs() (see the model files); it is carry slot 0.
+    ggml_tensor * carry = build_rs_rollback_carry(inp, ssm_states_all, s, D, n_written, il);
+    if (carry != nullptr) {
+        all = ggml_concat(ctx0, all, carry, 2); // append deeper planes -> [D, n_seqs, K]
+    }
+
+    GGML_ASSERT(all->ne[2] == K && all->ne[1] == n_seqs);
+
     ggml_tensor * dst = ggml_view_3d(ctx0, ssm_states_all,
-        D, n_seqs, n_written,
+        D, n_seqs, all->ne[2],
         ssm_states_all->nb[1],
         (size_t) mem_size * row_size,
         (size_t) kv_head * row_size);
 
-    ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, all, dst));
 
     return output;
 }

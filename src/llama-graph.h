@@ -261,6 +261,11 @@ public:
     ggml_tensor * s_copy_main;   // I32 [n_seqs]
     ggml_tensor * s_copy_extra;  // I32 [n_rs - n_seqs]
 
+    // rolling-history source rows for the recurrent snapshot writers (MTP rollback under equal
+    // splits); carry slot j, seq s -> source row of the state plane (idx_seq + j) tokens deeper than
+    // s_copy_main[s]. I32 [n_rs_seq * n_seqs]; only allocated/used when n_rs_seq > 0.
+    ggml_tensor * s_copy_hist = nullptr;
+
     const llama_memory_recurrent_context * mctx;
 
     // used in view offsets, need to match for valid graph reuse

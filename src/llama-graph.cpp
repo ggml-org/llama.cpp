@@ -343,20 +343,67 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
     }
 }
 
-void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
-    GGML_UNUSED(ubatch);
+// fills s_copy (per-cell source rows) and, when rollback snapshots are enabled, the
+// rolling-history source rows s_copy_hist used by the recurrent snapshot writers.
+static void set_input_s_copy_rs(
+        const llama_memory_recurrent_context * mctx,
+        ggml_tensor * s_copy,
+        ggml_tensor * s_copy_hist,
+        uint32_t n_seqs,
+        uint32_t n_seq_tokens) {
+    if (!s_copy) {
+        return;
+    }
 
-    const int64_t n_rs = mctx->get_n_rs();
+    const uint32_t n_rs     = mctx->get_n_rs();
+    const uint32_t n_rs_seq = mctx->get_n_rs_seq();
+    const uint32_t size     = mctx->get_size();
 
-    if (s_copy) {
-        GGML_ASSERT(ggml_backend_buffer_is_host(s_copy->buffer));
-        int32_t * data = (int32_t *) s_copy->data;
+    GGML_ASSERT(ggml_backend_buffer_is_host(s_copy->buffer));
+    int32_t * data = (int32_t *) s_copy->data;
 
-        // assuming copy destinations ALWAYS happen ONLY on the cells between head and head+n
-        for (uint32_t i = 0; i < n_rs; ++i) {
-            data[i] = mctx->s_copy(i);
+    // hist region is contiguous within s_copy, starting at index n_rs
+    int32_t * hist = (s_copy_hist != nullptr) ? data + n_rs : nullptr;
+
+    // history slots the writers carry this ubatch: K - min(n_seq_tokens, K)
+    const uint32_t K         = n_rs_seq + 1;
+    const uint32_t n_written = std::min(n_seq_tokens, K);
+    const uint32_t n_carry   = (n_written < K) ? (K - n_written) : 0;
+
+    // copy destinations only ever land on cells between head and head+n
+    for (uint32_t i = 0; i < n_rs; ++i) {
+        // active ubatch cells (i < n_seqs) consume the seq's rollback index; extra cells
+        // (i >= n_seqs) bracket live cells of paused seqs not in this ubatch. build_rs() copies only
+        // plane 0 for extras, so s_copy_extra() materializes a relocated extra cell (resets its owners'
+        // rollback metadata) -- after which it can no longer carry a pending rollback into a never-
+        // copied plane.
+        const int32_t base = (i < n_seqs) ? mctx->s_copy(i) : mctx->s_copy_extra(i);
+        data[i] = base;
+
+        if (hist && i < n_seqs) {
+            const int32_t idx  = base / (int32_t) size; // rollback plane the forward read selected
+            const int32_t src0 = base % (int32_t) size; // predecessor cell for this seq
+            // slot 0 is unread by the consumer (it reuses current_states); start at c = 1
+            for (uint32_t c = 1; c < n_carry; ++c) {
+                // clamp to plane 0 when idx+c exceeds valid depth; deeper planes are never rolled back into
+                const int32_t src_plane = (idx + (int32_t) c <= (int32_t) n_rs_seq) ? (idx + (int32_t) c) : 0;
+                hist[c * n_seqs + i] = (int32_t) (src_plane * size) + src0;
+            }
         }
     }
+}
+
+void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
+    const uint32_t n_seqs       = ubatch ? ubatch->n_seqs       : 0;
+    const uint32_t n_seq_tokens = ubatch ? ubatch->n_seq_tokens : 0;
+
+    set_input_s_copy_rs(mctx, s_copy, s_copy_hist, n_seqs, n_seq_tokens);
+}
+
+// expected length of the s_copy input: the n_rs current/extra rows plus the rolling-history region
+static int64_t rs_s_copy_len(const llama_memory_recurrent_context * mctx, int64_t n_seqs) {
+    const int64_t n_hist = mctx->get_n_rs_seq() > 0 ? (int64_t) mctx->get_n_rs_seq() * n_seqs : 0;
+    return mctx->get_n_rs() + n_hist;
 }
 
 bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
@@ -366,7 +413,7 @@ bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
 
     bool res = true;
 
-    res &= s_copy->ne[0] == mctx->get_n_rs();
+    res &= s_copy->ne[0] == rs_s_copy_len(mctx, params.ubatch.n_seqs);
 
     res &= s_copy_main->ne[0]  == params.ubatch.n_seqs;
     res &= s_copy_extra->ne[0] == mctx->get_n_rs() - params.ubatch.n_seqs;
@@ -966,17 +1013,8 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
         mctx->get_attn()->set_input_v_rot(inp_attn->self_v_rot);
     }
 
-    const int64_t n_rs = mctx->get_recr()->get_n_rs();
-
-    if (inp_rs->s_copy) {
-        GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
-        int32_t * data = (int32_t *) inp_rs->s_copy->data;
-
-        // assuming copy destinations ALWAYS happen ONLY on the cells between head and head+n
-        for (uint32_t i = 0; i < n_rs; ++i) {
-            data[i] = mctx->get_recr()->s_copy(i);
-        }
-    }
+    set_input_s_copy_rs(mctx->get_recr(), inp_rs->s_copy, inp_rs->s_copy_hist,
+        ubatch ? ubatch->n_seqs : 0, ubatch ? ubatch->n_seq_tokens : 0);
 }
 
 bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
@@ -991,7 +1029,7 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
 
     res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
 
-    res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
+    res &= inp_rs->s_copy->ne[0] == rs_s_copy_len(mctx->get_recr(), params.ubatch.n_seqs);
 
     res &= inp_rs->s_copy_main->ne[0]  == params.ubatch.n_seqs;
     res &= inp_rs->s_copy_extra->ne[0] == mctx->get_recr()->get_n_rs() - params.ubatch.n_seqs;
@@ -1010,17 +1048,8 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
 
     mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
 
-    const int64_t n_rs = mctx->get_recr()->get_n_rs();
-
-    if (inp_rs->s_copy) {
-        GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
-        int32_t * data = (int32_t *) inp_rs->s_copy->data;
-
-        // assuming copy destinations ALWAYS happen ONLY on the cells between head and head+n
-        for (uint32_t i = 0; i < n_rs; ++i) {
-            data[i] = mctx->get_recr()->s_copy(i);
-        }
-    }
+    set_input_s_copy_rs(mctx->get_recr(), inp_rs->s_copy, inp_rs->s_copy_hist,
+        ubatch ? ubatch->n_seqs : 0, ubatch ? ubatch->n_seq_tokens : 0);
 }
 
 bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
@@ -1034,7 +1063,7 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
 
     res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
 
-    res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
+    res &= inp_rs->s_copy->ne[0] == rs_s_copy_len(mctx->get_recr(), params.ubatch.n_seqs);
 
     res &= inp_rs->s_copy_main->ne[0]  == params.ubatch.n_seqs;
     res &= inp_rs->s_copy_extra->ne[0] == mctx->get_recr()->get_n_rs() - params.ubatch.n_seqs;
@@ -1084,17 +1113,8 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
         attn_ctx->get_swa()->set_input_v_rot(inp_attn->self_v_rot_swa);
     }
 
-    const int64_t n_rs = mctx->get_recr()->get_n_rs();
-
-    if (inp_rs->s_copy) {
-        GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
-        int32_t * data = (int32_t *) inp_rs->s_copy->data;
-
-        // assuming copy destinations ALWAYS happen ONLY on the cells between head and head+n
-        for (uint32_t i = 0; i < n_rs; ++i) {
-            data[i] = mctx->get_recr()->s_copy(i);
-        }
-    }
+    set_input_s_copy_rs(mctx->get_recr(), inp_rs->s_copy, inp_rs->s_copy_hist,
+        ubatch ? ubatch->n_seqs : 0, ubatch ? ubatch->n_seq_tokens : 0);
 }
 
 bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params) {
@@ -1122,7 +1142,7 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
 
     res &= can_reuse_kq_mask(inp_attn->self_kq_mask_swa, attn_ctx->get_swa(), params.ubatch, params.cparams);
 
-    res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
+    res &= inp_rs->s_copy->ne[0] == rs_s_copy_len(mctx->get_recr(), params.ubatch.n_seqs);
 
     res &= inp_rs->s_copy_main->ne[0]  == params.ubatch.n_seqs;
     res &= inp_rs->s_copy_extra->ne[0] == mctx->get_recr()->get_n_rs() - params.ubatch.n_seqs;
@@ -3132,14 +3152,27 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
 
     auto inp = std::make_unique<llm_graph_input_rs>(mctx_cur);
 
-    const int64_t n_rs   = mctx_cur->get_n_rs();
-    const int64_t n_seqs = ubatch.n_seqs;
+    const int64_t n_rs     = mctx_cur->get_n_rs();
+    const int64_t n_seqs   = ubatch.n_seqs;
+    const int64_t n_rs_seq = mctx_cur->get_n_rs_seq();
 
-    inp->s_copy = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rs);
+    // s_copy holds the per-cell source rows [0, n_rs), then (when rollback is enabled) the
+    // rolling-history rows [n_rs, n_rs + n_rs_seq*n_seqs). keeping history in the same input
+    // tensor keeps it always allocated (s_copy is always consumed via s_copy_main), even on
+    // ubatches that build no carry node.
+    const int64_t n_hist = n_rs_seq > 0 ? n_rs_seq * n_seqs : 0;
+
+    inp->s_copy = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rs + n_hist);
     ggml_set_input(inp->s_copy);
 
     inp->s_copy_main  = ggml_view_1d(ctx0, inp->s_copy, n_seqs, 0);
     inp->s_copy_extra = ggml_view_1d(ctx0, inp->s_copy, n_rs - n_seqs, n_seqs * inp->s_copy->nb[0]);
+
+    if (n_hist > 0) {
+        // carry-slot-major [carry_slot c, seq s]: row c*n_seqs + s holds the source row of the
+        // recurrent state plane c tokens of history deeper than s_copy_main[s] (MTP rollback).
+        inp->s_copy_hist = ggml_view_1d(ctx0, inp->s_copy, n_hist, n_rs * inp->s_copy->nb[0]);
+    }
 
     inp->head = mctx_cur->get_head();
     inp->rs_z = mctx_cur->get_rs_z();
