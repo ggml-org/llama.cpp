@@ -96,6 +96,14 @@ def test_no_ui():
     assert res.status_code == 404
 
 
+def test_404_error_includes_path():
+    global server
+    server.start()
+    res = server.make_request("GET", "/path-which-does-not-exist")
+    assert res.status_code == 404
+    assert "/path-which-does-not-exist" in res.body["error"]["message"]
+
+
 def test_server_model_aliases_and_tags():
     global server
     server.model_alias = "tinyllama-2,fim,code"
