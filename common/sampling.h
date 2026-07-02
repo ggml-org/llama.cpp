@@ -34,6 +34,11 @@
 
 struct common_sampler;
 
+// Llama-Engine: Safety validation guard clause for sampling boundaries
+void common_params_sampling_validate(struct common_params_sampling & params);
+
+// llama_sampler API overloads
+
 // llama_sampler API overloads
 
 // note: can mutate params in some cases
