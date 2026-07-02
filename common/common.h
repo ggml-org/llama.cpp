@@ -615,7 +615,7 @@ struct common_params {
     bool    reuse_port          = false;         // allow multiple sockets to bind to the same port
     int32_t timeout_read        = 3600;          // http read timeout in seconds
     int32_t timeout_write       = timeout_read;  // http write timeout in seconds
-    int32_t sse_ping_interval   = 30;            // SSE ping interval in seconds
+    int32_t sse_ping_interval   = 1;             // SSE ping interval in seconds
     int32_t n_threads_http      = -1;    // number of threads to process HTTP requests (TODO: support threadpool)
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
