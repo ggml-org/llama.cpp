@@ -20,9 +20,6 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, /* required */ false);
 
-    // mul_mat_id needs n_expert_used == 1; the GGUF is dense (expert_count = 0)
-    hparams.n_expert_used = 1;
-
     ml.get_key(LLM_KV_NUM_ADAPTERS,  n_adapters);
     ml.get_key(LLM_KV_MAX_LORA_RANK, max_lora_rank);
     ml.get_key(LLM_KV_CONTROL_TOKEN_GAIN, router_gain, /* required */ false);
