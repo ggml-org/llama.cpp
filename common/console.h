@@ -22,6 +22,7 @@ namespace console {
     void cleanup();
     void set_display(display_type display);
     bool readline(std::string & line, bool multiline_input);
+    bool readline_eof();
 
     using completion_callback = std::function<std::vector<std::pair<std::string, size_t>>(std::string_view, size_t)>;
     void set_completion_callback(completion_callback cb);

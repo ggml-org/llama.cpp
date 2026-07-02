@@ -495,6 +495,7 @@ int llama_cli(int argc, char ** argv) {
 
     while (true) {
         std::string buffer;
+        bool input_eof = false;
         console::set_display(DISPLAY_TYPE_USER_INPUT);
         if (params.prompt.empty()) {
             console::log("\n> ");
@@ -502,7 +503,11 @@ int llama_cli(int argc, char ** argv) {
             bool another_line = true;
             do {
                 another_line = console::readline(line, params.multiline_input);
+                input_eof = console::readline_eof();
                 buffer += line;
+                if (input_eof) {
+                    break;
+                }
             } while (another_line);
         } else {
             // process input prompt from args
@@ -538,6 +543,9 @@ int llama_cli(int argc, char ** argv) {
 
         // skip empty messages
         if (buffer.empty()) {
+            if (input_eof) {
+                break;
+            }
             continue;
         }
 
@@ -661,7 +669,7 @@ int llama_cli(int argc, char ** argv) {
             console::set_display(DISPLAY_TYPE_RESET);
         }
 
-        if (params.single_turn) {
+        if (params.single_turn || input_eof) {
             break;
         }
     }
