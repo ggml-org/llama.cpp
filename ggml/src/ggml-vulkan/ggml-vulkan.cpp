@@ -2681,6 +2681,14 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
 
     vk::PipelineShaderStageCreateFlags pipeline_shader_stage_create_flags{};
 
+#ifdef __APPLE__
+    if (device->driver_id == vk::DriverId::eMoltenvk) {
+        // MoltenVK reports subgroupSize=64, but when `eAllowVaryingSubgroupSizeEXT` is used, it reports the
+        // actual subgroup size (32).
+        pipeline_shader_stage_create_flags |= vk::PipelineShaderStageCreateFlagBits::eAllowVaryingSubgroupSizeEXT;
+    }
+#endif
+
     if (device->subgroup_require_full_support && require_full_subgroups) {
         pipeline_shader_stage_create_flags |= vk::PipelineShaderStageCreateFlagBits::eRequireFullSubgroupsEXT;
     }
@@ -5915,12 +5923,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->vendor_id = device->properties.vendorID;
         device->driver_id = driver_props.driverID;
 
-        if (device->driver_id == vk::DriverId::eMoltenvk) {
-            // Disable external_memory_host until https://github.com/KhronosGroup/MoltenVK/pull/2622
-            // is available in the Vulkan SDK.
-            device->external_memory_host = false;
-        }
-
         // Implementing the async backend interfaces seems broken on older Intel HW,
         // see https://github.com/ggml-org/llama.cpp/issues/17302.
         device->support_async = (device->vendor_id != VK_VENDOR_ID_INTEL ||
@@ -5962,6 +5964,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->suballocation_block_size = std::min(device->suballocation_block_size, device->max_memory_allocation_size);
 
         device->subgroup_size = subgroup_props.subgroupSize;
+#ifdef __APPLE__
+        if (device->driver_id == vk::DriverId::eMoltenvk) {
+            // MoltenVK reports subgroupSize=64, but Metal's actual SIMD-group size is 32.
+            device->subgroup_size = std::min(device->subgroup_size, 32u);
+        }
+#endif
         device->subgroup_size_log2 = uint32_t(log2f(float(device->subgroup_size)));
         device->uma = device->properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
         if (sm_builtins) {
@@ -5979,19 +5987,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                                  (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eBasic);
         device->subgroup_arithmetic = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                       (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eArithmetic);
-#ifdef __APPLE__
-        // Workaround for subgroup arithmetic failing on MoltenVK with AMD GPUs (issue 15846)
-        if (device->vendor_id == VK_VENDOR_ID_AMD) {
-            device->subgroup_arithmetic = false;
-        }
-#endif
         device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                    (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
-#ifdef __APPLE__
-        if (device->vendor_id == VK_VENDOR_ID_AMD) {
-            device->subgroup_shuffle = false;
-        }
-#endif
         device->subgroup_clustered = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                      (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eClustered);
 
@@ -6212,6 +6209,13 @@ static vk_device ggml_vk_get_device(size_t idx) {
         if (device->subgroup_size_control) {
             device->subgroup_min_size = subgroup_size_control_props.minSubgroupSize;
             device->subgroup_max_size = subgroup_size_control_props.maxSubgroupSize;
+#ifdef __APPLE__
+            if (device->driver_id == vk::DriverId::eMoltenvk) {
+                // MoltenVK reports subgroupSize=64, but Metal's actual SIMD-group size is 32.
+                device->subgroup_min_size = std::min(device->subgroup_min_size, 32u);
+                device->subgroup_max_size = std::min(device->subgroup_max_size, 32u);
+            }
+#endif
             device_extensions.push_back("VK_EXT_subgroup_size_control");
         }
 
@@ -6766,7 +6770,13 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 #endif
 
     uint32_t default_subgroup_size = get_subgroup_size("", device_architecture);
-    const size_t subgroup_size = (default_subgroup_size != 0) ? default_subgroup_size : subgroup_props.subgroupSize;
+    size_t subgroup_size = (default_subgroup_size != 0) ? default_subgroup_size : subgroup_props.subgroupSize;
+#ifdef __APPLE__
+    if (driver_props.driverID == vk::DriverId::eMoltenvk) {
+        // MoltenVK reports subgroupSize=64, but Metal's actual SIMD-group size is 32.
+        subgroup_size = std::min(subgroup_size, (size_t)32);
+    }
+#endif
     const bool uma = props2.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
 
     integer_dot_product = integer_dot_product
@@ -15941,10 +15951,6 @@ static bool ggml_vk_can_fuse_topk_moe(ggml_backend_vk_context * ctx, const struc
             !ggml_is_contiguous(cgraph->nodes[node_idx + 2]->src[1])) {
             return false;
         }
-        // sigmoid fusion seems to generate infinities on moltenvk
-        if (ctx->device->driver_id == vk::DriverId::eMoltenvk) {
-            return false;
-        }
         break;
     case TOPK_MOE_EARLY_SOFTMAX:
         softmax = cgraph->nodes[node_idx + 0];
@@ -17288,6 +17294,16 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 bool coopmat2 = device->coopmat2;
                 uint32_t HSK = op->src[1]->ne[0];
                 uint32_t HSV = op->src[2]->ne[0];
+
+#ifdef __APPLE__
+                // Subgroup shuffle on MoltenVK seems to only work when HSK and HSV are multiples of 32.
+                if (device->driver_id == vk::DriverId::eMoltenvk) {
+                    if ((HSK % 32) != 0 || (HSV % 32) != 0) {
+                        return false;
+                    }
+                }
+#endif
+
                 if ((HSK % 8) != 0 || (HSV % 8) != 0) {
                     return false;
                 }
@@ -17731,6 +17747,16 @@ static int64_t ggml_vk_get_op_batch_size(const ggml_tensor * op) {
 
 static bool ggml_backend_vk_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_vk_device_context * dev_ctx = (ggml_backend_vk_device_context *)dev->context;
+
+#ifdef __APPLE__
+    const vk_device & device = ggml_vk_get_device(dev_ctx->device);
+    if (device->vendor_id == VK_VENDOR_ID_AMD && device->driver_id == vk::DriverId::eMoltenvk
+            && (op->op == GGML_OP_MUL_MAT_ID)) {
+        // For some reason, MoltenVK on AMD GPUs has a bug that causes garbage output when
+        // MUL_MAT_ID is offloaded (as in MoE models).
+        return false;
+    }
+#endif
 
     return ggml_vk_get_op_batch_size(op) >= dev_ctx->op_offload_min_batch_size;
 }
