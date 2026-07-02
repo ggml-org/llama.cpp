@@ -31,7 +31,6 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 
 		await expect.element(screen.getByRole('textbox', { name: /server url/i })).toBeVisible();
 
-		// No row matches because #if showAuthorization gates the bearer input.
 		await expect.element(bearerInput(screen)).not.toBeInTheDocument();
 	});
 
@@ -74,11 +73,8 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 
 		const screen = await render(McpServerFormWrapper, { headers: existing });
 
-		// The heuristic only surfaces Bearer-scheme values, so the input stays hidden.
 		await expect.element(bearerInput(screen)).not.toBeInTheDocument();
 
-		// The KV section still exposes Authorization: Basic czNjcjpwYXNz so the
-		// user can keep editing it verbatim.
 		const headerKeyInput = screen.getByPlaceholder('Header name');
 		await expect.element(headerKeyInput).toBeVisible();
 	});
@@ -111,7 +107,6 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 		const screen = await render(McpServerFormWrapper, { headers: existing });
 
 		await screen.getByRole('switch', { name: /authorization/i }).click();
-		// Toggle on then off without typing a token.
 		await screen.getByRole('switch', { name: /authorization/i }).click();
 
 		await expect
@@ -132,8 +127,6 @@ describe('McpServerForm - Authorization / bearer UI', () => {
 		const existing = JSON.stringify({ [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}xyz` });
 		const screen = await render(McpServerFormWrapper, { headers: existing });
 
-		// KV rows are keyed by their placeholder; if Authorization leaked
-		// into the KV section we'd see a "Header name" input visible.
 		const headerKeyInput = screen.getByPlaceholder('Header name');
 		await expect.element(headerKeyInput).not.toBeInTheDocument();
 	});

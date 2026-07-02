@@ -41,7 +41,6 @@ export function useMcpRecommendations() {
 	$effect(() => {
 		if (!browser) return;
 
-		// Already showing or dismissed -> cancel any pending trigger and stop.
 		if (open || dismissed) {
 			if (triggerTimeout) {
 				clearTimeout(triggerTimeout);
@@ -55,7 +54,6 @@ export function useMcpRecommendations() {
 		// effect, and we must not wipe the timeout that was just scheduled.
 		if (checked) return;
 
-		// Already opted in to at least one recommendation -> never show the dialog.
 		if (mcpStore.optedInRecommendationIds.size > 0) {
 			checked = true;
 			return;

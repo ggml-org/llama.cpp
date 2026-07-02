@@ -8,8 +8,6 @@
 
 	let { headers = '' }: Props = $props();
 
-	// Mirror the initial prop once. Subsequent prop changes are also
-	// mirrored via the effect so callers can drive the form from outside.
 	let headersState = $state(untrack(() => headers));
 	let lastCapturedHeaders = $state(untrack(() => headers));
 

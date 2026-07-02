@@ -72,8 +72,6 @@
 		}
 	});
 
-	// Surface only the token, stripping the "Bearer " prefix this UI writes on
-	// save. Non-Bearer Authorization entries are ignored here.
 	let bearerToken = $derived.by(() => {
 		const auth = headerPairs.find(ownedByBearerUi);
 		if (!auth) return '';

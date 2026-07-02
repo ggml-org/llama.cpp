@@ -45,10 +45,8 @@
 	);
 	let showSkeleton = $derived(isIdle || isHealthChecking);
 
-	// Recommended servers expose a curated description (clamped to 2 lines).
-	// Custom servers have no curated copy, so fall back to the first non-empty
-	// line of the MCP server's own instructions and clamp to a single line so
-	// the compact card stays scannable.
+	// Curated descriptions get two lines; instructions fallback is one line so the
+	// compact card stays scannable.
 	let description = $derived.by(() => {
 		if (server.description) {
 			return { text: server.description, lines: 2 };

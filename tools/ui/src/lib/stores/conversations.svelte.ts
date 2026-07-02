@@ -90,7 +90,6 @@ class ConversationsStore {
 	/** Global (non-conversation-specific) reasoning effort default */
 	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
 
-	/** Read MCP default overrides from the settings config */
 	private static loadMcpDefaults(): McpServerOverride[] {
 		const raw = config()[SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES];
 		if (typeof raw !== 'string' || raw.length === 0) return [];
@@ -105,7 +104,6 @@ class ConversationsStore {
 		}
 	}
 
-	/** Persist MCP default overrides to the settings config */
 	private saveMcpDefaults(): void {
 		const plain = this.pendingMcpServerOverrides.map((o) => ({
 			serverId: o.serverId,

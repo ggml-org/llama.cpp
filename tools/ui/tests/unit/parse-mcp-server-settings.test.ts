@@ -122,8 +122,6 @@ describe('parseMcpServerSettings', () => {
 	});
 
 	it('passes non-string raw input through the JSON-equality path', () => {
-		// The parser signature accepts `unknown`; an array is the most common
-		// runtime shape after the syncable string parameter is read in.
 		const parsed = parseMcpServerSettings([
 			{ id: 'a', url: 'https://a.test' },
 			{ id: 'b', url: 'https://b.test', enabled: true }

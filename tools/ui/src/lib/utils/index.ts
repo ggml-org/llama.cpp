@@ -138,8 +138,6 @@ export {
 	downloadResourceContent
 } from './mcp';
 
-// Predefined MCP recommendation opt-in helpers
-
 // URI Template utilities
 export {
 	extractTemplateVariables,

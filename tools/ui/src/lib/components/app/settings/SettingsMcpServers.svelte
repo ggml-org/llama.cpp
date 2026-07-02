@@ -21,10 +21,6 @@
 
 	let { class: className }: Props = $props();
 
-	// Predefined recommendations stay in the MCP servers setting as a default,
-	// but they only show up here once the user has accepted them in the
-	// suggestions dialog. Custom servers always pass through. The filter lives
-	// on mcpStore so sheet / submenu / settings stay in sync.
 	let servers = $derived(mcpStore.visibleMcpServers);
 
 	let initialLoadComplete = $state(false);

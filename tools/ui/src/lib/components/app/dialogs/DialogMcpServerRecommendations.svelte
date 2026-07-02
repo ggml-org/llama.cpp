@@ -23,7 +23,6 @@
 		Object.fromEntries(RECOMMENDED_MCP_SERVERS.map((server) => [server.id, false]))
 	);
 
-	// Servers the user added through the edit form during this dialog session.
 	let addedServers = $state<MCPServerSettingsEntry[]>([]);
 
 	let showAddForm = $state(false);
@@ -47,7 +46,6 @@
 			newServerHeaders = '';
 			addedServers = [];
 
-			// Set the flag whenever the dialog closes so it won't reappear
 			localStorage.setItem(MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, 'true');
 		}
 		open = value;
@@ -98,12 +96,10 @@
 
 		conversationsStore.setMcpServerOverride(newServerId, true);
 
-		// Surface the just-saved server in the dialog so the user can see it.
 		if (newServer) {
 			addedServers = [...addedServers, newServer];
 		}
 
-		// Keep the dialog open so the user can still add recommended servers
 		resetAddForm();
 	}
 </script>
