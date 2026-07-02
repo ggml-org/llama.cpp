@@ -27,6 +27,7 @@
 		RECOMMENDED_MCP_SERVERS_OPTIN_DIALOG_DELAY,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
+	import { getOptedInRecommendationIds } from '$lib/utils';
 	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
@@ -37,6 +38,7 @@
 
 	import {
 		MCP_RECOMMENDATIONS_DISMISSED_LOCALSTORAGE_KEY,
+		MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY,
 		RECOMMENDED_MCP_SERVER_IDS,
 		SETTINGS_KEYS
 	} from '$lib/constants';
@@ -46,7 +48,7 @@
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
 	let mcpRecommendationsDismissed = $state(
-		browser && localStorage.getItem(MCP_RECOMMENDATIONS_DISMISSED_LOCALSTORAGE_KEY) === 'true'
+		browser && localStorage.getItem(MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY) === 'true'
 	);
 	let mcpRecommendationsOpen = $state(false);
 	let mcpRecommendationsChecked = $state(false);
@@ -289,6 +291,13 @@
 		}
 
 		if (mcpRecommendationsChecked) return;
+
+		const optedInIds = getOptedInRecommendationIds(conversationsStore.pendingMcpServerOverrides);
+		// If the user already opted in to any recommendation, don't show the dialog.
+		if (optedInIds.size > 0) {
+			mcpRecommendationsChecked = true;
+			return;
+		}
 
 		const hasRecommendations = mcpStore
 			.getServers()

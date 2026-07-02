@@ -7,8 +7,9 @@
 	import { RECOMMENDED_MCP_SERVERS } from '$lib/constants';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { addOptedInRecommendationIds, uuid } from '$lib/utils';
-	import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
+	import { uuid } from '$lib/utils';
+	import { MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, MCP_SERVER_ID_PREFIX } from '$lib/constants';
+	import type { MCPServerSettingsEntry } from '$lib/types';
 	import { Plus } from '@lucide/svelte';
 
 	interface Props {
@@ -21,6 +22,9 @@
 	let selected = $state<Record<string, boolean>>(
 		Object.fromEntries(RECOMMENDED_MCP_SERVERS.map((server) => [server.id, false]))
 	);
+
+	// Servers the user added through the edit form during this dialog session.
+	let addedServers = $state<MCPServerSettingsEntry[]>([]);
 
 	let showAddForm = $state(false);
 	let newServerUrl = $state('');
@@ -41,6 +45,10 @@
 			showAddForm = false;
 			newServerUrl = '';
 			newServerHeaders = '';
+			addedServers = [];
+
+			// Set the flag whenever the dialog closes so it won't reappear
+			localStorage.setItem(MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, 'true');
 		}
 		open = value;
 		onOpenChange?.(value);
@@ -53,17 +61,24 @@
 	}
 
 	function enableSelected() {
-		const acceptedIds: string[] = [];
+		localStorage.setItem(MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, 'true');
+
 		for (const server of RECOMMENDED_MCP_SERVERS) {
 			if (selected[server.id]) {
+				const existing = mcpStore.getServerById(server.id);
+				if (existing) {
+					mcpStore.updateServer(server.id, { enabled: true });
+				} else {
+					mcpStore.addServer({
+						id: server.id,
+						enabled: true,
+						url: server.url,
+						name: server.name
+					});
+				}
 				conversationsStore.setMcpServerOverride(server.id, true);
-				acceptedIds.push(server.id);
 			}
 		}
-		// Persist which recommendations the user accepted so the /mcp-servers
-		// page can surface them; custom servers added below are unaffected
-		// because they are not part of RECOMMENDED_MCP_SERVER_IDS.
-		addOptedInRecommendationIds(acceptedIds);
 		handleOpenChange(false);
 	}
 
@@ -72,7 +87,9 @@
 
 		const newServerId = uuid() ?? `${MCP_SERVER_ID_PREFIX}-${Date.now()}`;
 
-		mcpStore.addServer({
+		localStorage.setItem(MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, 'true');
+
+		const newServer = mcpStore.addServer({
 			id: newServerId,
 			enabled: true,
 			url: newServerUrl.trim(),
@@ -81,21 +98,29 @@
 
 		conversationsStore.setMcpServerOverride(newServerId, true);
 
-		handleOpenChange(false);
+		// Surface the just-saved server in the dialog so the user can see it.
+		if (newServer) {
+			addedServers = [...addedServers, newServer];
+		}
+
+		// Keep the dialog open so the user can still add recommended servers
+		resetAddForm();
 	}
 </script>
 
 <Dialog.Root bind:open onOpenChange={handleOpenChange}>
 	<Dialog.Content class="sm:max-w-lg">
 		<Dialog.Header>
-			<Dialog.Title>Enable suggested MCP servers?</Dialog.Title>
+			<Dialog.Title>Do more with MCP</Dialog.Title>
 			<Dialog.Description>
-				These servers can provide extra tools for your conversations. Choose the ones you want to
-				enable.
+				Power-up your experience by adding tools, resources and more capabilities provided by MCP
+				servers.
 			</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="max-h-[60vh] space-y-4 overflow-y-auto py-4" in:fly={{ y: 16, duration: 300 }}>
+			<h3 class="text-sm font-semibold">Quickly get started with</h3>
+
 			{#each RECOMMENDED_MCP_SERVERS as server (server.id)}
 				<McpServerCardCompact
 					{server}
@@ -104,8 +129,14 @@
 				/>
 			{/each}
 
+			{#if addedServers.length > 0}
+				{#each addedServers as server (server.id)}
+					<McpServerCardCompact {server} enabled={true} />
+				{/each}
+			{/if}
+
 			{#if showAddForm}
-				<Card.Root class="!gap-3 bg-muted/30 p-4">
+				<Card.Root class="gap-3! bg-muted/30 p-4">
 					<McpServerForm
 						url={newServerUrl}
 						headers={newServerHeaders}
@@ -147,7 +178,7 @@
 		<Dialog.Footer>
 			<Button variant="secondary" size="sm" onclick={() => handleOpenChange(false)}>Not now</Button>
 
-			<Button variant="default" size="sm" onclick={enableSelected}>Enable selected</Button>
+			<Button variant="default" size="sm" onclick={enableSelected}>Add selected</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

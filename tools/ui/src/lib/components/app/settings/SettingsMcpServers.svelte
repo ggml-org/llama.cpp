@@ -30,7 +30,8 @@
 			.getServersSorted()
 			.filter(
 				(server) =>
-					!RECOMMENDED_MCP_SERVER_IDS.has(server.id) || getOptedInRecommendationIds().has(server.id)
+					!RECOMMENDED_MCP_SERVER_IDS.has(server.id) ||
+					getOptedInRecommendationIds(conversationsStore.pendingMcpServerOverrides).has(server.id)
 			)
 	);
 

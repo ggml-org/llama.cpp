@@ -16,6 +16,8 @@
 	import { PencilRuler, ChevronDown, ChevronRight } from '@lucide/svelte';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { AttachmentAction } from '$lib/enums/attachment.enums';
+	import { getOptedInRecommendationIds } from '$lib/utils';
+	import { RECOMMENDED_MCP_SERVER_IDS } from '$lib/constants';
 
 	interface Props {
 		class?: string;
@@ -75,7 +77,10 @@
 		'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent';
 
 	function getEnabledMcpServers() {
-		return mcpStore.getServersSorted().filter((s) => s.enabled);
+		const optedInIds = getOptedInRecommendationIds(conversationsStore.pendingMcpServerOverrides);
+		return mcpStore
+			.getServersSorted()
+			.filter((s) => s.enabled && (!RECOMMENDED_MCP_SERVER_IDS.has(s.id) || optedInIds.has(s.id)));
 	}
 </script>
 

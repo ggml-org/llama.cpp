@@ -6,6 +6,8 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { HealthCheckStatus } from '$lib/enums';
+	import { getOptedInRecommendationIds } from '$lib/utils';
+	import { RECOMMENDED_MCP_SERVER_IDS } from '$lib/constants';
 	import type { MCPServerSettingsEntry } from '$lib/types';
 	import { goto } from '$app/navigation';
 	import { ROUTES } from '$lib/constants/routes';
@@ -18,7 +20,14 @@
 
 	let mcpSearchQuery = $state('');
 	let allMcpServers = $derived(mcpStore.getServersSorted());
-	let mcpServers = $derived(allMcpServers.filter((s) => s.enabled));
+	let optedInIds = $derived.by(() =>
+		getOptedInRecommendationIds(conversationsStore.pendingMcpServerOverrides)
+	);
+	let mcpServers = $derived(
+		allMcpServers.filter(
+			(s) => s.enabled && (!RECOMMENDED_MCP_SERVER_IDS.has(s.id) || optedInIds.has(s.id))
+		)
+	);
 	let hasMcpServers = $derived(mcpServers.length > 0);
 	// let hasAnyMcpServers = $derived(allMcpServers.length > 0);
 	let filteredMcpServers = $derived.by(() => {

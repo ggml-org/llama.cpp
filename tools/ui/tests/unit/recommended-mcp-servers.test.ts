@@ -1,55 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
 	RECOMMENDED_MCP_SERVER_IDS,
 	RECOMMENDED_MCP_SERVERS
 } from '$lib/constants/recommended-mcp-servers';
 import { parseMcpServerSettings } from '$lib/utils/mcp';
 import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
-
-// Tell the opt-in helpers they are running in a browser context so they
-// read/write localStorage. Hoisted by vitest before the module under test
-// is imported.
-vi.mock('$app/environment', () => ({ browser: true }));
-
-const RECOMMENDATIONS_OPTIN_KEY = 'LlamaUi.mcpRecommendationsOptedIn';
-type OptInModule = typeof import('$lib/utils/recommended-mcp-servers.svelte');
-
-// Polyfill localStorage - the unit project runs in node with no DOM
-function installLocalStoragePolyfill(): void {
-	if (typeof globalThis.localStorage !== 'undefined') return;
-
-	const store = new Map<string, string>();
-	const polyfill: Storage = {
-		get length() {
-			return store.size;
-		},
-		clear: () => store.clear(),
-		getItem: (k) => (store.has(k) ? (store.get(k) as string) : null),
-		key: (i) => Array.from(store.keys())[i] ?? null,
-		removeItem: (k) => {
-			store.delete(k);
-		},
-		setItem: (k, v) => {
-			store.set(k, String(v));
-		}
-	};
-	(globalThis as unknown as { localStorage: Storage }).localStorage = polyfill;
-}
-
-beforeEach(() => {
-	installLocalStoragePolyfill();
-	localStorage.clear();
-});
-
-// Each test re-imports the helper module so its module-level SvelteSet
-// starts empty. vi.resetModules drops the cached evaluation while
-// vi.doMock re-asserts the browser flag for the fresh module load.
-async function loadOptInModule(): Promise<OptInModule> {
-	vi.resetModules();
-	vi.doMock('$app/environment', () => ({ browser: true }));
-
-	return import('$lib/utils/recommended-mcp-servers.svelte');
-}
+import { getOptedInRecommendationIds } from '$lib/utils/recommended-mcp-servers.svelte';
+import type { McpServerOverride } from '$lib/types/database';
 
 /**
  * Tests for the predefined recommended MCP servers.
@@ -134,158 +91,59 @@ describe('recommended-mcp-servers default value', () => {
 	});
 });
 
-describe('parseOptedInRecommendationIds', () => {
-	it('returns an empty array for null and empty inputs', async () => {
-		const { parseOptedInRecommendationIds } = await loadOptInModule();
-		expect(parseOptedInRecommendationIds(null)).toEqual([]);
-		expect(parseOptedInRecommendationIds('')).toEqual([]);
+describe('getOptedInRecommendationIds', () => {
+	const exaId = RECOMMENDED_MCP_SERVERS[0]?.id;
+	const hfId = RECOMMENDED_MCP_SERVERS[1]?.id ?? exaId;
+
+	it('returns an empty set when no pending overrides exist', () => {
+		const ids = getOptedInRecommendationIds([]);
+		expect(ids.size).toBe(0);
 	});
 
-	it('returns an empty array for non-JSON payloads without throwing', async () => {
-		const { parseOptedInRecommendationIds } = await loadOptInModule();
-		expect(parseOptedInRecommendationIds('not-json')).toEqual([]);
-		expect(parseOptedInRecommendationIds('{')).toEqual([]);
+	it('filters only recommended server IDs from pending overrides', () => {
+		const overrides: McpServerOverride[] = [
+			{ serverId: exaId, enabled: true },
+			{ serverId: hfId, enabled: true }
+		];
+
+		const ids = getOptedInRecommendationIds(overrides);
+		expect(ids.size).toBe(2);
+		expect(ids.has(exaId)).toBe(true);
+		expect(ids.has(hfId)).toBe(true);
 	});
 
-	it('returns an empty array for non-array JSON values', async () => {
-		const { parseOptedInRecommendationIds } = await loadOptInModule();
-		expect(parseOptedInRecommendationIds('"a"')).toEqual([]);
-		expect(parseOptedInRecommendationIds('{"id":"a"}')).toEqual([]);
-		expect(parseOptedInRecommendationIds('42')).toEqual([]);
-	});
+	it('excludes disabled overrides', () => {
+		const overrides: McpServerOverride[] = [
+			{ serverId: exaId, enabled: false },
+			{ serverId: hfId, enabled: true }
+		];
 
-	it('keeps only string entries from a mixed-type array', async () => {
-		const { parseOptedInRecommendationIds } = await loadOptInModule();
-		expect(parseOptedInRecommendationIds('["a", 1, null, "b", true]')).toEqual(['a', 'b']);
-	});
-
-	it('preserves valid entries verbatim', async () => {
-		const { parseOptedInRecommendationIds } = await loadOptInModule();
-		expect(parseOptedInRecommendationIds(JSON.stringify(['exa-web-search']))).toEqual([
-			'exa-web-search'
-		]);
-	});
-});
-
-describe('mcp-recommendation opt-in helpers', () => {
-	const firstRecommendation = RECOMMENDED_MCP_SERVERS[0]?.id;
-	const secondRecommendation = RECOMMENDED_MCP_SERVERS[1]?.id ?? firstRecommendation;
-
-	if (!firstRecommendation) {
-		throw new Error('test setup: missing predefined recommendations');
-	}
-
-	it('hydrates the reactive set from a valid localStorage payload at module load', async () => {
-		localStorage.setItem(RECOMMENDATIONS_OPTIN_KEY, JSON.stringify([firstRecommendation]));
-
-		const { getOptedInRecommendationIds } = await loadOptInModule();
-		expect(getOptedInRecommendationIds().has(firstRecommendation)).toBe(true);
-	});
-
-	it('starts with an empty set when localStorage is empty', async () => {
-		const { getOptedInRecommendationIds } = await loadOptInModule();
-		expect(getOptedInRecommendationIds().size).toBe(0);
-	});
-
-	it('starts with an empty set when localStorage holds a malformed payload', async () => {
-		localStorage.setItem(RECOMMENDATIONS_OPTIN_KEY, 'not-json');
-
-		const { getOptedInRecommendationIds } = await loadOptInModule();
-		expect(getOptedInRecommendationIds().size).toBe(0);
-	});
-
-	it('adds accepted IDs to the reactive set and mirrors them to localStorage', async () => {
-		const { addOptedInRecommendationIds, getOptedInRecommendationIds, isOptedInRecommendation } =
-			await loadOptInModule();
-
-		addOptedInRecommendationIds([firstRecommendation]);
-
-		expect(isOptedInRecommendation(firstRecommendation)).toBe(true);
-		expect(getOptedInRecommendationIds().has(firstRecommendation)).toBe(true);
-
-		const stored = localStorage.getItem(RECOMMENDATIONS_OPTIN_KEY);
-		expect(stored).not.toBeNull();
-
-		const parsed = JSON.parse(stored as string) as unknown;
-		expect(parsed).toEqual([firstRecommendation]);
-	});
-
-	it('drops IDs that are not part of RECOMMENDED_MCP_SERVER_IDS', async () => {
-		const { addOptedInRecommendationIds, getOptedInRecommendationIds } = await loadOptInModule();
-
-		addOptedInRecommendationIds(['not-a-real-recommendation', 123, null] as unknown as string[]);
-
-		expect(getOptedInRecommendationIds().size).toBe(0);
-		// No valid IDs were accepted, so no localStorage write should happen
-		expect(localStorage.getItem(RECOMMENDATIONS_OPTIN_KEY)).toBeNull();
-	});
-
-	it('accepts valid IDs while ignoring invalid ones in the same call', async () => {
-		const { addOptedInRecommendationIds, getOptedInRecommendationIds } = await loadOptInModule();
-
-		addOptedInRecommendationIds([
-			'not-a-real-recommendation',
-			firstRecommendation,
-			123,
-			'another-fake'
-		] as unknown as string[]);
-
-		const ids = getOptedInRecommendationIds();
+		const ids = getOptedInRecommendationIds(overrides);
 		expect(ids.size).toBe(1);
-		expect(ids.has(firstRecommendation)).toBe(true);
+		expect(ids.has(exaId)).toBe(false);
+		expect(ids.has(hfId)).toBe(true);
 	});
 
-	it('is a no-op on the server (browser=false)', async () => {
-		// Override the import-time mock for this single module load so we hit
-		// the `if (!browser) return;` short-circuit. localStorage is still
-		// writable from the polyfill; if the guard regresses we'll see writes
-		// leaking into it.
-		vi.resetModules();
-		vi.doMock('$app/environment', () => ({ browser: false }));
-		const { addOptedInRecommendationIds, getOptedInRecommendationIds } =
-			await import('$lib/utils/recommended-mcp-servers.svelte');
+	it('excludes non-recommended server IDs', () => {
+		const overrides: McpServerOverride[] = [
+			{ serverId: 'custom-server-id', enabled: true },
+			{ serverId: exaId, enabled: true }
+		];
 
-		addOptedInRecommendationIds([firstRecommendation]);
-
-		expect(getOptedInRecommendationIds().size).toBe(0);
-		expect(localStorage.getItem(RECOMMENDATIONS_OPTIN_KEY)).toBeNull();
+		const ids = getOptedInRecommendationIds(overrides);
+		expect(ids.size).toBe(1);
+		expect(ids.has('custom-server-id')).toBe(false);
+		expect(ids.has(exaId)).toBe(true);
 	});
 
-	it('does not hydrate from localStorage when browser=false, even if a payload exists', async () => {
-		// Pre-seed the polyfill with a payload that would normally hydrate the
-		// set on the client. Under SSR (browser=false), the module should
-		// ignore it entirely and start empty.
-		localStorage.setItem(RECOMMENDATIONS_OPTIN_KEY, JSON.stringify([firstRecommendation]));
+	it('deduplicates when the same server ID appears multiple times', () => {
+		const overrides: McpServerOverride[] = [
+			{ serverId: exaId, enabled: true },
+			{ serverId: exaId, enabled: true },
+			{ serverId: hfId, enabled: true }
+		];
 
-		vi.resetModules();
-		vi.doMock('$app/environment', () => ({ browser: false }));
-		const { getOptedInRecommendationIds } =
-			await import('$lib/utils/recommended-mcp-servers.svelte');
-
-		expect(getOptedInRecommendationIds().size).toBe(0);
-	});
-
-	it('merges new accepted IDs without dropping previously stored ones', async () => {
-		// Pre-seed localStorage with a previous session's accepted id
-		localStorage.setItem(RECOMMENDATIONS_OPTIN_KEY, JSON.stringify([firstRecommendation]));
-
-		const { addOptedInRecommendationIds, getOptedInRecommendationIds } = await loadOptInModule();
-
-		addOptedInRecommendationIds([secondRecommendation]);
-
-		const ids = getOptedInRecommendationIds();
-		expect(ids.has(firstRecommendation)).toBe(true);
-		expect(ids.has(secondRecommendation)).toBe(true);
-	});
-
-	it('does not duplicate IDs that are already opted in', async () => {
-		const { addOptedInRecommendationIds, getOptedInRecommendationIds } = await loadOptInModule();
-
-		addOptedInRecommendationIds([firstRecommendation, firstRecommendation]);
-
-		expect(getOptedInRecommendationIds().size).toBe(1);
-		expect(JSON.parse(localStorage.getItem(RECOMMENDATIONS_OPTIN_KEY) as string)).toEqual([
-			firstRecommendation
-		]);
+		const ids = getOptedInRecommendationIds(overrides);
+		expect(ids.size).toBe(2);
 	});
 });

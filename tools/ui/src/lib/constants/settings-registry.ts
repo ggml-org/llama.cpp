@@ -778,6 +778,13 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 		defaultValue: JSON.stringify(RECOMMENDED_MCP_SERVERS),
 		type: SettingsFieldType.INPUT,
 		sync: { serverKey: SETTINGS_KEYS.MCP_SERVERS, paramType: SyncableParameterType.STRING }
+	},
+	{
+		key: SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES,
+		label: 'MCP default server overrides',
+		help: 'Per-server enable/disable defaults inherited by new chats. JSON-serialized list of {serverId, enabled} entries.',
+		defaultValue: '[]',
+		type: SettingsFieldType.INPUT
 	}
 	// {
 	// 	key: SETTINGS_KEYS.PY_INTERPRETER_ENABLED,

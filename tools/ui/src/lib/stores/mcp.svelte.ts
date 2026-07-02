@@ -528,7 +528,7 @@ class MCPStore {
 
 	addServer(
 		serverData: Omit<MCPServerSettingsEntry, 'id' | 'requestTimeoutSeconds'> & { id?: string }
-	): void {
+	): MCPServerSettingsEntry {
 		const servers = this.getServers();
 		const newServer: MCPServerSettingsEntry = {
 			id: serverData.id || (uuid() ?? `server-${Date.now()}`),
@@ -541,6 +541,7 @@ class MCPStore {
 			useProxy: serverData.useProxy
 		};
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));
+		return newServer;
 	}
 
 	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
