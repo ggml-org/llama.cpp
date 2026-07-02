@@ -17,11 +17,13 @@
 // tests (requires -DGGML_SYCL=ON). Run: ./bin/test-sycl-turbo-correctness
 //
 // This is a GATE, not just a diagnostic. Each probe carries an expectation:
-//   GATE  probes (standard f16/q8_0 + turbo WHT/dequant/mul_mat) MUST pass.
-//   XFAIL probes (turbo flash-attention) are known-broken: they SKIP while the
-//         SYCL veto stands and MUST NOT pass yet.
-// Exit code is non-zero iff a GATE probe FAILs OR an XFAIL probe PASSes (XPASS,
-// = the turbo-FA fix has landed -> "promote to GATE"). SKIPs never fail the gate.
+//   GATE  probes MUST pass. This now includes turbo flash-attention (see the
+//         KQ dot contract fix in fattn-common.hpp): turbo FA was XFAIL/vetoed
+//         until that fix landed, and is promoted to GATE here.
+//   XFAIL probes (none currently active) are known-broken: they SKIP and MUST
+//         NOT pass yet. Exit code is non-zero iff a GATE probe FAILs OR an
+//         XFAIL probe PASSes (XPASS = a fix landed -> "promote to GATE").
+//         SKIPs never fail the gate.
 
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -242,6 +244,90 @@ static void probe_dequant(ggml_backend_t cpu, ggml_backend_t sycl,
     probe(label, cpu, sycl, build, set_inputs);
 }
 
+// (2b) SET_ROWS turbo quantize-store path: F32 -> turbo write, on-device.
+// probe_dequant (above) only exercises CPY reading pre-quantized bytes; it
+// never runs the GPU's own quantize kernel (k_set_rows_turbo_generic in
+// set_rows.cpp). This probe writes F32 through ggml_set_rows into a fresh
+// turbo destination on each backend, then dequantizes both results on the
+// CPU (via ggml_get_type_traits) and compares -- isolating the SYCL SET_ROWS
+// quantize kernel from everything else in the KV-cache path.
+static void probe_set_rows_turbo(ggml_backend_t cpu, ggml_backend_t sycl,
+                                 ggml_type type, const char * name, int64_t K, int64_t rows) {
+    auto src_f32 = gen_normal(K * rows, 0x5E70 ^ (uint32_t) type);
+    std::vector<int64_t> idx(rows);
+    for (int64_t i = 0; i < rows; ++i) idx[i] = i;  // identity permutation
+
+    char label[64];
+    snprintf(label, sizeof(label), "set_rows %s (quantize)", name);
+
+    auto build = [=](ggml_context * ctx) -> ggml_tensor * {
+        ggml_tensor * dst = ggml_new_tensor_2d(ctx, type, K, rows);
+        ggml_set_name(dst, "dst");
+        ggml_tensor * src = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, rows);
+        ggml_set_name(src, "src");
+        ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, rows);
+        ggml_set_name(ids, "ids");
+        ggml_tensor * result = ggml_set_rows(ctx, dst, src, ids);
+        // op_params[0] carries the WHT group size for turbo types (see cpy_k
+        // in llama-kv-cache.cpp); mirror that wiring here.
+        int32_t wht_group = (int32_t) K;
+        memcpy(result->op_params, &wht_group, sizeof(int32_t));
+        return result;
+    };
+    auto set_inputs = [=](ggml_context * ctx) {
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "src"), src_f32.data(), 0, src_f32.size() * sizeof(float));
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "ids"), idx.data(), 0, idx.size() * sizeof(int64_t));
+    };
+
+    ggml_init_params p = {
+        ggml_tensor_overhead() * 8 + ggml_graph_overhead() + (1u << 20), nullptr, true
+    };
+
+    bool cpu_ok = true, sycl_ok = true;
+    ggml_context * ctx_cpu = ggml_init(p);
+    ggml_tensor  * out_cpu = build(ctx_cpu);
+    cpu_ok = ggml_backend_supports_op(cpu, out_cpu);
+    std::vector<char> cpu_bytes;
+    if (cpu_ok) {
+        ggml_cgraph * gf = ggml_new_graph(ctx_cpu);
+        ggml_build_forward_expand(gf, out_cpu);
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx_cpu, cpu);
+        set_inputs(ctx_cpu);
+        ggml_backend_graph_compute(cpu, gf);
+        cpu_bytes.resize(ggml_nbytes(out_cpu));
+        ggml_backend_tensor_get(out_cpu, cpu_bytes.data(), 0, cpu_bytes.size());
+        ggml_backend_buffer_free(buf);
+    }
+    ggml_free(ctx_cpu);
+    if (!cpu_ok) { skip(label, "CPU backend lacks op (no reference)"); return; }
+
+    ggml_context * ctx_sycl = ggml_init(p);
+    ggml_tensor  * out_sycl = build(ctx_sycl);
+    sycl_ok = ggml_backend_supports_op(sycl, out_sycl);
+    std::vector<char> sycl_bytes;
+    if (sycl_ok) {
+        ggml_cgraph * gf = ggml_new_graph(ctx_sycl);
+        ggml_build_forward_expand(gf, out_sycl);
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx_sycl, sycl);
+        set_inputs(ctx_sycl);
+        ggml_backend_graph_compute(sycl, gf);
+        sycl_bytes.resize(ggml_nbytes(out_sycl));
+        ggml_backend_tensor_get(out_sycl, sycl_bytes.data(), 0, sycl_bytes.size());
+        ggml_backend_buffer_free(buf);
+    }
+    ggml_free(ctx_sycl);
+    if (!sycl_ok) { skip(label, "SYCL backend reports op unsupported"); return; }
+
+    // Dequantize both raw byte buffers on the CPU with the same to_float fn,
+    // so any divergence in the *quantize* kernels shows up as a float diff.
+    const ggml_type_traits * tt = ggml_get_type_traits(type);
+    std::vector<float> ref(K * rows), test(K * rows);
+    tt->to_float(cpu_bytes.data(),  ref.data(),  K * rows);
+    tt->to_float(sycl_bytes.data(), test.data(), K * rows);
+
+    verdict(label, compare(test, ref), Tol::LOSSY, Exp::GATE);
+}
+
 // (3) mmvq path: y = W_turbo @ x   (single column -> mat-vec kernel).
 static void probe_mul_mat(ggml_backend_t cpu, ggml_backend_t sycl,
                           ggml_type type, const char * name, int64_t K, int64_t M) {
@@ -315,7 +401,19 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         ggml_set_name(v, "v");
         ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv, n_q_pad, 1, 1);
         ggml_set_name(m, "m");
-        return ggml_flash_attn_ext(ctx, q, k, v, m, scale, 0.0f, 0.0f);
+        const bool turbo = (kvt == GGML_TYPE_TURBO2_0 || kvt == GGML_TYPE_TURBO3_0 || kvt == GGML_TYPE_TURBO4_0);
+        // Turbo K/V are stored WHT-rotated (see quantize_row_turbo*_ref). Q must be
+        // forward-rotated into the same basis so KQ scores are preserved (WHT is
+        // orthogonal: (Wq)*(Wk) == q*k); the attention *output* inherits that
+        // rotation from V, so it needs an inverse WHT to compare against the
+        // unrotated F16 CPU reference. Mirrors llama-graph.cpp's turbo KV wiring.
+        ggml_tensor * qq = turbo ? ggml_turbo_wht(ctx, q, 0, 0, nullptr) : q;  // forward, auto group
+        ggml_tensor * o  = ggml_flash_attn_ext(ctx, qq, k, v, m, scale, 0.0f, 0.0f);
+        if (turbo) {
+            const int group = (d % 128 == 0) ? 128 : 64;
+            o = ggml_turbo_wht(ctx, o, 1, group, nullptr);  // inverse
+        }
+        return o;
     };
 
     char label[64];
@@ -353,6 +451,99 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
     }
     // Turbo/quantized KV compared against an f16 reference -> LOSSY (cosine-only).
     verdict(label, compare(test, ref), Tol::LOSSY, exp);
+}
+
+// (4b) Non-FA attention path: mul_mat(k,q) -> softmax -> mul_mat(v,kq).
+// This is a DIFFERENT SYCL kernel chain than flash_attn_ext (mmvq/dequant-mma
+// vs the dedicated FA kernels) and is what turbo actually ran on before this
+// port (FA was vetoed, so -fa off's non-FA path was turbo's ONLY path).
+//
+// XFAIL, not GATE: build_attn_mha's non-FA branch (llama-graph.cpp) does
+// `v = ggml_cont(ggml_transpose(v))` unconditionally when !v_trans. Turbo
+// forces v_trans=false specifically so V stays untransposed in the cache
+// (block-quantized V cannot be validly transposed post-hoc: a block encodes
+// 128 logically-contiguous elements along dim 0, and transposing scrambles
+// that grouping without dequantizing first), but this code path immediately
+// transposes it anyway, corrupting the block layout. Root-caused this session
+// (cosine ~0.0-0.24 vs CPU reference); NOT part of the turbo-FA port (the FA
+// kernels ported here are exercised only via ggml_flash_attn_ext, never this
+// mul_mat/softmax/mul_mat chain). Fixing requires reworking build_attn_mha's
+// non-FA V handling for block-quantized types -- out of scope here, tracked
+// as a follow-up. Use -fa on (turbo's fully-supported path) until fixed.
+static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
+                               ggml_type kv_type, const char * name, int64_t d) {
+    const int64_t n_kv = 256, nh = 1;
+    auto q_f32 = gen_normal(d * 1 * nh, 0xAF01u ^ (uint32_t) kv_type);
+    auto k_f32 = gen_normal(d * n_kv * nh, 0xAF02u ^ (uint32_t) kv_type);
+    auto v_f32 = gen_normal(d * n_kv * nh, 0xAF03u ^ (uint32_t) kv_type);
+
+    std::vector<ggml_fp16_t> k_f16(k_f32.size()), v_f16(v_f32.size());
+    ggml_fp32_to_fp16_row(k_f32.data(), k_f16.data(), k_f32.size());
+    ggml_fp32_to_fp16_row(v_f32.data(), v_f16.data(), v_f32.size());
+
+    auto k_q = quantize_host(kv_type, k_f32, d, n_kv * nh);
+    auto v_q = quantize_host(kv_type, v_f32, d, n_kv * nh);
+
+    const float scale = 1.0f / std::sqrt((float) d);
+
+    char label[64];
+    snprintf(label, sizeof(label), "attn_noflash %s d=%d", name, (int) d);
+
+    auto build = [=](ggml_context * ctx, ggml_type kvt) -> ggml_tensor * {
+        ggml_tensor * q = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d, 1, nh);
+        ggml_set_name(q, "q");
+        ggml_tensor * k = ggml_new_tensor_3d(ctx, kvt, d, n_kv, nh);
+        ggml_set_name(k, "k");
+        ggml_tensor * v = ggml_new_tensor_3d(ctx, kvt, d, n_kv, nh);
+        ggml_set_name(v, "v");
+        const bool turbo = (kvt == GGML_TYPE_TURBO2_0 || kvt == GGML_TYPE_TURBO3_0 || kvt == GGML_TYPE_TURBO4_0);
+        ggml_tensor * qq = turbo ? ggml_turbo_wht(ctx, q, 0, 0, nullptr) : q;
+        // mirrors build_attn_mha's non-FA branch: kq = mul_mat(k, q); softmax; kqv = mul_mat(v_transposed, kq)
+        ggml_tensor * kq = ggml_mul_mat(ctx, k, qq);
+        ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        kq = ggml_soft_max_ext(ctx, kq, nullptr, scale, 0.0f);
+        // v_trans=false for turbo (see llama-model.cpp attn_v_trans), so V is used
+        // directly (not transposed) here, same as build_attn_mha's !v_trans branch:
+        // it still needs the (nkv, dv) x (nkv, nq) -> (dv, nq) contraction, which
+        // requires V^T; ggml_mul_mat(v,kq) computes k^T @ q shape semantics, so
+        // mirror the working code path via cont+transpose on the F32/F16 REFERENCE
+        // only (turbo doesn't hit this since it's tiny nq=1 either way in our test).
+        ggml_tensor * v_t = ggml_cont(ctx, ggml_transpose(ctx, v));
+        ggml_tensor * kqv = ggml_mul_mat(ctx, v_t, kq);
+        if (turbo) {
+            const int group = (d % 128 == 0) ? 128 : 64;
+            kqv = ggml_cont(ctx, kqv);
+            kqv = ggml_turbo_wht(ctx, kqv, 1, group, nullptr);
+        }
+        return kqv;
+    };
+
+    bool cpu_ok = true;
+    std::vector<float> ref = run_on_backend(cpu,
+        [=](ggml_context * ctx) { return build(ctx, GGML_TYPE_F16); },
+        [=](ggml_context * ctx) {
+            ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
+            ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_f16.data(), 0, k_f16.size() * sizeof(ggml_fp16_t));
+            ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_f16.data(), 0, v_f16.size() * sizeof(ggml_fp16_t));
+        }, &cpu_ok);
+    if (!cpu_ok) { skip(label, "CPU lacks f16 non-FA attn ref"); return; }
+
+    bool sok = true;
+    std::vector<float> test = run_on_backend(sycl,
+        [=](ggml_context * ctx) { return build(ctx, kv_type); },
+        [=](ggml_context * ctx) {
+            ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
+            ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_q.data(), 0, k_q.size());
+            ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_q.data(), 0, v_q.size());
+        }, &sok);
+    if (!sok) { skip(label, "SYCL reports non-FA turbo attn op unsupported"); return; }
+
+    if (test.size() != ref.size() || ref.empty()) {
+        printf("  [FAIL] %-28s size mismatch (ref=%zu test=%zu)\n", label, ref.size(), test.size());
+        g_failures++;
+        return;
+    }
+    verdict(label, compare(test, ref), Tol::LOSSY, Exp::XFAIL);
 }
 
 // (5) Baseline: standard f16 KV flash attention, SYCL vs CPU. This is NOT a
@@ -424,7 +615,7 @@ int main() {
 
     // Ordering rule: probes that cannot device-lost run first, so a later FA
     // crash can't mask earlier results. The crash-prone non-turbo VEC path
-    // (n_q=1) runs LAST. Turbo FA is XFAIL (kernel still broken) and d=128 only
+    // (n_q=1) runs LAST. Turbo FA is GATE (kernel fixed) and d=128 only
     // (QK_TURBO{2,3,4}==128 is a hard invariant; see ggml-common.h).
     printf("[1] Walsh-Hadamard rotation (TURBO_WHT)\n");                 // GATE
     probe_wht(cpu, sycl, 128);
@@ -438,12 +629,24 @@ int main() {
         probe_dequant(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", K);
     }
 
+    printf("\n[2b] SET_ROWS quantize-store (F32 -> turbo write, on-device)\n"); // GATE
+    for (int64_t K : {128, 256}) {
+        probe_set_rows_turbo(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", K, 16);
+        probe_set_rows_turbo(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", K, 16);
+        probe_set_rows_turbo(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", K, 16);
+    }
+
     printf("\n[3] mat-vec dot product (mul_mat, turbo weights)\n");      // GATE, +K=256
     for (int64_t K : {128, 256}) {
         probe_mul_mat(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", K, 64);
         probe_mul_mat(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", K, 64);
         probe_mul_mat(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", K, 64);
     }
+
+    printf("\n[3b] non-FA attention (mul_mat/softmax/mul_mat, turbo KV, d=128) - XFAIL: build_attn_mha's non-FA V-transpose is architecturally broken for block-quantized V (see doc comment above probe_attn_noflash); use -fa on\n");
+    probe_attn_noflash(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128);
+    probe_attn_noflash(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128);
+    probe_attn_noflash(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128);
 
     // Head-dim sweep is {64,128}: d=256 reproducibly HANGS the A770 SYCL FA
     // path (device-lost manifesting as a non-terminating compute, not garbage)
@@ -455,17 +658,15 @@ int main() {
     for (int64_t d : {64, 128}) probe_fa_f16(cpu, sycl, d, 8, "tile");
     for (int64_t d : {64, 128}) probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", d, 8, "tile", Exp::GATE, /*force=*/true);
 
-    // Turbo FA is vetoed on SYCL today (routes to the broken VEC kernel; forcing
-    // it HANGS the A770), so these probes SKIP while the veto stands -- green,
-    // deterministic. force=false respects the veto. When the turbo-FA fix relaxes
-    // the veto and corrects the kernel, the probes RUN and PASS -> XPASS (red,
-    // "promote to GATE"): flip those probes' Exp::XFAIL -> Exp::GATE then.
-    printf("\n[5] flash attention turbo KV - XFAIL (SKIP while vetoed; d=128 only)\n");
+    // Turbo FA fix landed (see fattn-common.hpp vec_dot_fattn_vec_KQ_turbo_generic):
+    // the KQ dot now reads Q from the caller's per-thread register slice instead of
+    // treating it as a full D-element row. Promoted from XFAIL to GATE.
+    printf("\n[5] flash attention turbo KV - GATE (d=128 only)\n");
     for (int64_t n_q : {8, 1}) {
         const char * path = (n_q == 8) ? "tile" : "vec"; // label matches the kernel n_q routes to
-        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, path, Exp::XFAIL, /*force=*/false);
-        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::XFAIL, /*force=*/false);
-        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::XFAIL, /*force=*/false);
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, path, Exp::GATE, /*force=*/true);
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::GATE, /*force=*/true);
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::GATE, /*force=*/true);
     }
 
     printf("\n[6] flash attention VEC (n_q=1, decode) - GATE, standard KV across head dims [crash-prone: LAST]\n");
