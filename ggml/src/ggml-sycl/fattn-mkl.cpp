@@ -357,14 +357,45 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     const bool v_interleaved =
         ((int64_t)V->ne[1] * V->nb[1] != V->nb[2]) && V->ne[2] > 1;
 
-    if (K->type != GGML_TYPE_F16) {
-        const size_t bs = ggml_blck_size(K->type);
-        const size_t ts = ggml_type_size(K->type);
-
+    {
+        // Normalize K to dense row-major F16 for GEMM.
+        // F16 is copied via memcpy (strides guaranteed standard by the gate).
         K_f16.alloc(ggml_nelements(K));
 
-        if (ggml_is_contiguously_allocated(K) && !k_interleaved) {
-            // Dense source — flat to_fp16 preserves layout
+        if (K->type == GGML_TYPE_F16) {
+            // F16: always copy to dense for GEMM.
+            // Standard strides guaranteed by gate (nb1 == ne0 * sizeof(half)).
+            if (!k_interleaved) {
+                // Dense row-major F16 — flat memcpy
+                stream->memcpy(K_f16.ptr, K_data, ggml_nelements(K) * sizeof(sycl::half));
+            } else {
+                // Interleaved F16 — strided copy to dense
+                const int64_t ne0 = K->ne[0];
+                const int64_t ne1 = K->ne[1];
+                const int64_t ne23 = (int64_t)K->ne[2] * K->ne[3];
+                const int64_t src_nb1 = (int64_t)nb11;
+                const int64_t src_nb2 = (int64_t)nb12;
+                const sycl::half * src = (const sycl::half *)K_data;
+                sycl::half * dst = K_f16.ptr;
+
+                stream->parallel_for(
+                    sycl::range<3>((size_t)ne23, (size_t)ne1, (size_t)ne0),
+                    [=](sycl::item<3> it) {
+                        int64_t hb = it.get_id(0);
+                        int64_t r  = it.get_id(1);
+                        int64_t c  = it.get_id(2);
+                        const sycl::half * src_row = (const sycl::half *)(
+                            (const char *)src + hb * src_nb2 + r * src_nb1);
+                        dst[(hb * ne1 + r) * ne0 + c] = src_row[c];
+                    });
+
+                nb11 = K->ne[0] * sizeof(sycl::half);
+                nb12 = K->ne[1] * nb11;
+                nb13 = K->ne[2] * nb12;
+            }
+        } else if (ggml_is_contiguously_allocated(K) && !k_interleaved) {
+            const size_t bs = ggml_blck_size(K->type);
+            const size_t ts = ggml_type_size(K->type);
             to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, dst);
             to_fp16(K_data, K_f16.ptr, ggml_nelements(K), stream);
 
@@ -372,30 +403,25 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
             nb12 = nb12 * bs * sizeof(sycl::half) / ts;
             nb13 = nb13 * bs * sizeof(sycl::half) / ts;
         } else {
-            // Interleaved or non-contiguous source — use to_fp16_nc
-            // with PHYSICAL source strides so the output is dense.
+            const size_t bs = ggml_blck_size(K->type);
+            const size_t ts = ggml_type_size(K->type);
             to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type);
 
             int64_t s01, s02, s03;
             if (k_interleaved) {
-                // Interleaved: heads alternate at the row level.
-                // Row r of head h starts at block
-                //   h * blk_per_row + r * n_kv_heads * blk_per_row.
                 const int64_t blk_per_row = (int64_t)K->ne[0] / bs;
-                s01 = (int64_t)n_kv_heads * blk_per_row; // row stride
-                s02 = blk_per_row;                       // head stride
-                s03 = (int64_t)K->ne[1] * s01;           // batch stride
+                s01 = (int64_t)n_kv_heads * blk_per_row;
+                s02 = blk_per_row;
+                s03 = (int64_t)K->ne[1] * s01;
             } else {
                 s01 = nb11 / ts;
                 s02 = nb12 / ts;
                 s03 = nb13 / ts;
             }
-
             to_fp16(K_data, K_f16.ptr,
                     K->ne[0], K->ne[1], K->ne[2], K->ne[3],
                     s01, s02, s03, stream);
 
-            // Output is dense row-major
             nb11 = K->ne[0] * sizeof(sycl::half);
             nb12 = K->ne[1] * nb11;
             nb13 = K->ne[2] * nb12;
@@ -403,19 +429,50 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
         K_data = (char *) K_f16.ptr;
     }
 
-    if (V->type != GGML_TYPE_F16) {
+    {
+        // Normalize V to dense row-major F16 for GEMM.
         if (V_is_K_view) {
+            // V shares K's buffer — reuse the already-normalized dense K data
             V_data = K_data;
             nb21   = nb11;
             nb22   = nb12;
             nb23   = nb13;
         } else {
-            const size_t bs = ggml_blck_size(V->type);
-            const size_t ts = ggml_type_size(V->type);
-
             V_f16.alloc(ggml_nelements(V));
 
-            if (ggml_is_contiguously_allocated(V) && !v_interleaved) {
+            if (V->type == GGML_TYPE_F16) {
+                if (!v_interleaved) {
+                    // Dense row-major F16 — flat memcpy
+                    stream->memcpy(V_f16.ptr, V_data, ggml_nelements(V) * sizeof(sycl::half));
+                } else {
+                    // Interleaved F16 — strided copy to dense
+                    const int64_t ne0 = V->ne[0];
+                    const int64_t ne1 = V->ne[1];
+                    const int64_t ne23 = (int64_t)V->ne[2] * V->ne[3];
+                    const int64_t src_nb1 = (int64_t)nb21;
+                    const int64_t src_nb2 = (int64_t)nb22;
+                    const sycl::half * src = (const sycl::half *)V_data;
+                    sycl::half * dst = V_f16.ptr;
+
+                    stream->parallel_for(
+                        sycl::range<3>((size_t)ne23, (size_t)ne1, (size_t)ne0),
+                        [=](sycl::item<3> it) {
+                            int64_t hb = it.get_id(0);
+                            int64_t r  = it.get_id(1);
+                            int64_t c  = it.get_id(2);
+                            const sycl::half * src_row = (const sycl::half *)(
+                                (const char *)src + hb * src_nb2 + r * src_nb1);
+                            dst[(hb * ne1 + r) * ne0 + c] = src_row[c];
+                        });
+
+                    nb21 = V->ne[0] * sizeof(sycl::half);
+                    nb22 = V->ne[1] * nb21;
+                    nb23 = V->ne[2] * nb22;
+                }
+                V_data = (char *) V_f16.ptr;
+            } else if (ggml_is_contiguously_allocated(V) && !v_interleaved) {
+                const size_t bs = ggml_blck_size(V->type);
+                const size_t ts = ggml_type_size(V->type);
                 to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, dst);
                 to_fp16(V_data, V_f16.ptr, ggml_nelements(V), stream);
                 V_data = (char *) V_f16.ptr;
@@ -424,6 +481,8 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 nb22 = nb22 * bs * sizeof(sycl::half) / ts;
                 nb23 = nb23 * bs * sizeof(sycl::half) / ts;
             } else {
+                const size_t bs = ggml_blck_size(V->type);
+                const size_t ts = ggml_type_size(V->type);
                 to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type);
 
                 int64_t s01, s02, s03;
@@ -437,7 +496,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                     s02 = nb22 / ts;
                     s03 = nb23 / ts;
                 }
-
                 to_fp16(V_data, V_f16.ptr,
                         V->ne[0], V->ne[1], V->ne[2], V->ne[3],
                         s01, s02, s03, stream);
