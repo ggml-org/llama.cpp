@@ -3850,6 +3850,27 @@ struct test_ssm_scan : public test_case {
     }
 };
 
+// GGML_OP_RWKV_LERP
+struct test_rwkv_lerp : public test_case {
+    const int64_t n_embd;
+    const int64_t n_seq_tokens;
+    const int64_t n_mix;
+
+    std::string vars() override {
+        return VARS_TO_STR3(n_embd, n_seq_tokens, n_mix);
+    }
+
+    test_rwkv_lerp(int64_t n_embd = 2048, int64_t n_seq_tokens = 32, int64_t n_mix = 6)
+        : n_embd(n_embd), n_seq_tokens(n_seq_tokens), n_mix(n_mix) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x_prev = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_seq_tokens);
+        ggml_tensor * cur    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_seq_tokens);
+        ggml_tensor * weight = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_embd, 1, 1, n_mix);
+        return ggml_rwkv_lerp(ctx, x_prev, cur, weight);
+    }
+};
+
 // GGML_OP_RWKV_WKV6
 struct test_rwkv_wkv6 : public test_case {
     const ggml_type type;
@@ -3877,6 +3898,36 @@ struct test_rwkv_wkv6 : public test_case {
         ggml_tensor * s   = ggml_new_tensor(ctx, type, 2, std::vector<int64_t>{ head_size * head_size * head_count, n_seqs }.data());
         ggml_tensor * out = ggml_rwkv_wkv6(ctx, k, v, r, tf, td, s);
         return out;
+    }
+};
+
+// GGML_OP_RWKV_RK
+struct test_rwkv_rk : public test_case {
+    const int64_t head_count;
+    const int64_t head_size;
+    const int64_t n_seq_tokens;
+
+    std::string vars() override {
+        return VARS_TO_STR3(head_count, head_size, n_seq_tokens);
+    }
+
+    test_rwkv_rk(int64_t head_count = 32, int64_t head_size = 64, int64_t n_seq_tokens = 32)
+        : head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t n_embd = head_size * head_count;
+        ggml_tensor * cur = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_seq_tokens);
+        ggml_tensor * k   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_seq_tokens);
+        ggml_tensor * r   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_seq_tokens);
+        ggml_tensor * v   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_seq_tokens);
+        ggml_tensor * r_k = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, head_size, head_count);
+        return ggml_rwkv_rk(ctx, cur, k, r, v, r_k);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -0.25f, 0.25f);
+        }
     }
 };
 
@@ -8404,6 +8455,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 32, 4)); // Mamba-2
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 256, 64,  8, 2, 32, 4)); // Falcon-H1
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 128, 4, 4, 16, 2, true)); // x/B/C overlap
+
+    test_cases.emplace_back(new test_rwkv_lerp(2048, 1, 6));
+    test_cases.emplace_back(new test_rwkv_lerp(2048, 32, 6));
+
+    test_cases.emplace_back(new test_rwkv_rk(32, 64, 1));
+    test_cases.emplace_back(new test_rwkv_rk(32, 64, 32));
+    test_cases.emplace_back(new test_rwkv_rk(16, 128, 1));
+    test_cases.emplace_back(new test_rwkv_rk(16, 128, 32));
 
     test_cases.emplace_back(new test_rwkv_wkv6(GGML_TYPE_F32, 32, 64, 1, 1));
     test_cases.emplace_back(new test_rwkv_wkv6(GGML_TYPE_F32, 32, 64, 32, 1));
