@@ -809,6 +809,9 @@ struct server_metrics {
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
 
+    uint64_t n_spec_tokens_drafted_total  = 0;
+    uint64_t n_spec_tokens_accepted_total = 0;
+
     void init() {
         t_start = ggml_time_us();
     }
@@ -827,6 +830,9 @@ struct server_metrics {
         n_tokens_predicted         += slot.n_decoded;
         t_tokens_generation        += slot.t_token_generation;
         t_tokens_generation_total  += slot.t_token_generation;
+
+        n_spec_tokens_drafted_total  += slot.n_draft_total;
+        n_spec_tokens_accepted_total += slot.n_draft_accepted;
     }
 
     void on_decoded(const std::vector<server_slot> & slots) {
@@ -2535,6 +2541,9 @@ private:
 
                     res->n_decode_total          = metrics.n_decode_total;
                     res->n_busy_slots_total      = metrics.n_busy_slots_total;
+
+                    res->n_spec_tokens_drafted_total  = metrics.n_spec_tokens_drafted_total;
+                    res->n_spec_tokens_accepted_total = metrics.n_spec_tokens_accepted_total;
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -4424,6 +4433,14 @@ void server_routes::init_routes() {
                     {"name",  "n_tokens_max"},
                     {"help",  "Largest observed n_tokens."},
                     {"value",  res_task->n_tokens_max}
+            }, {
+                    {"name",  "spec_tokens_drafted_total"},
+                    {"help",  "Number of speculative draft tokens generated."},
+                    {"value",  (uint64_t) res_task->n_spec_tokens_drafted_total}
+            }, {
+                    {"name",  "spec_tokens_accepted_total"},
+                    {"help",  "Number of speculative draft tokens accepted."},
+                    {"value",  (uint64_t) res_task->n_spec_tokens_accepted_total}
             }}},
             {"gauge", {{
                     {"name",  "prompt_tokens_seconds"},
