@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <cinttypes>
 #include <exception>
 #include <memory>
@@ -954,6 +955,15 @@ private:
     void handle_sleeping_state(bool new_state) {
         GGML_ASSERT(sleeping != new_state);
         if (new_state) {
+            if (params_base.sleep_mode == COMMON_SLEEP_MODE_TERMINATE) {
+                SRV_INF("%s", "idle timeout reached, terminating process (--sleep-mode terminate)\n");
+                destroy();
+                fflush(stdout);
+                fflush(stderr);
+                // exit immediately: process death returns all resources (incl. GPU memory) to the OS;
+                // a supervisor (router or systemd) is expected to respawn on the next request
+                std::_Exit(0);
+            }
             SRV_INF("%s", "server is entering sleeping state\n");
             destroy();
         } else {

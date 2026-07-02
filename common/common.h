@@ -426,6 +426,11 @@ enum common_reasoning_format {
     // see: https://github.com/ggml-org/llama.cpp/pull/15408
 };
 
+enum common_sleep_mode {
+    COMMON_SLEEP_MODE_KEEP_ALIVE, // free the model but keep the process alive (fast wakeup)
+    COMMON_SLEEP_MODE_TERMINATE,  // exit the process on idle (frees all resources; requires a supervisor to respawn)
+};
+
 
 struct lr_opt {
     float    lr0          = 1e-5; // learning rate at first epoch
@@ -635,6 +640,7 @@ struct common_params {
     int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
     bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response
     int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
+    common_sleep_mode sleep_mode = COMMON_SLEEP_MODE_KEEP_ALIVE; // what to do when the idle timeout is reached
 
     std::vector<std::string> api_keys;
 

@@ -3383,6 +3383,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--sleep-mode"}, "MODE",
+        "action taken when --sleep-idle-seconds is reached: 'keep-alive' (default, free the model but keep the "
+        "process alive for fast wakeup) or 'terminate' (exit the process to free all resources; requires a "
+        "supervisor such as the router or systemd to respawn on the next request)",
+        [](common_params & params, const std::string & value) {
+            if (value == "keep-alive") {
+                params.sleep_mode = COMMON_SLEEP_MODE_KEEP_ALIVE;
+            } else if (value == "terminate") {
+                params.sleep_mode = COMMON_SLEEP_MODE_TERMINATE;
+            } else {
+                throw std::invalid_argument("invalid value: must be 'keep-alive' or 'terminate'");
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--simple-io"},
         "use basic IO for better compatibility in subprocesses and limited consoles",
         [](common_params & params) {

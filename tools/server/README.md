@@ -228,6 +228,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled) |
 | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
 | `--sleep-idle-seconds SECONDS` | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled) |
+| `--sleep-mode MODE` | action when the idle timeout is reached: `keep-alive` (default, free the model but keep the process alive for fast wakeup) or `terminate` (exit the process to free all resources; requires a supervisor such as the router or systemd to respawn) |
 | `--log-prompts-dir PATH` | Log prompts to directory (only used for debugging, default: disabled) |
 | `--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]` | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_HF_REPO) |
 | `--spec-draft-threads, -td, --threads-draft N` | number of threads to use during generation (default: same as --threads) |
@@ -1989,6 +1990,8 @@ Example of an error:
 The server supports an automatic sleep mode that activates after a specified period of inactivity (no incoming tasks). This feature, introduced in [PR #18228](https://github.com/ggml-org/llama.cpp/pull/18228), can be enabled using the `--sleep-idle-seconds` command-line argument. It works seamlessly in both single-model and multi-model configurations.
 
 When the server enters sleep mode, the model and its associated memory (including the KV cache) are unloaded from RAM to conserve resources. Any new incoming task will automatically trigger the model to reload.
+
+By default (`--sleep-mode keep-alive`) the process stays alive so wakeup only needs to reload the model. Note that a live process still holds a per-process GPU device context (loaded kernels and runtime buffers), so a small amount of VRAM remains reserved while sleeping. To release *all* resources, use `--sleep-mode terminate`: on idle the process exits, and a supervisor respawns it on the next request. In router mode (`--models-preset`) the router already respawns terminated instances on demand; for a standalone server you must provide your own supervisor (e.g. systemd socket activation). `terminate` trades a slower wakeup (full process + backend startup) for zero idle VRAM.
 
 The sleeping status can be retrieved from the `GET /props` endpoint (or `/props?model=(model_name)` in router mode).
 
