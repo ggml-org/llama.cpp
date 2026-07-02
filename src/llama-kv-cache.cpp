@@ -196,6 +196,23 @@ llama_kv_cache::llama_kv_cache(
                 LLAMA_LOG_WARN("%s: layer %3d: sharing with layer %d. k = %p, v = %p\n", __func__, il, il_share,
                         layer_share.k->data, layer_share.v->data);
 
+                if (offload && layer_share.k && layer_share.k->buffer) {
+                    const auto buft_share = ggml_backend_buffer_get_type(layer_share.k->buffer);
+                    const auto buft_this  = ggml_backend_dev_buffer_type(model.dev_layer(il));
+                    if (buft_share != buft_this) {
+                        throw std::runtime_error(format(
+                            "%s: layer %d shares a KV cache tensor allocated on %s but is assigned to %s. "
+                            "MTP speculative decoding cannot share the target KV cache across different backends. "
+                            "Pin the draft model to the target device with --spec-draft-device (matching --device), "
+                            "keep the KV cache on the host with --no-kv-offload (slower), "
+                            "or use a single-backend build. "
+                            "See https://github.com/ggml-org/llama.cpp/issues/24492",
+                            __func__, il,
+                            ggml_backend_buft_name(buft_share),
+                            ggml_backend_buft_name(buft_this)));
+                    }
+                }
+
                 map_layer_ids[il] = layers.size();
 
                 layers.push_back(layer_share);
