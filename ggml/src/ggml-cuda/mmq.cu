@@ -191,12 +191,46 @@ void ggml_cuda_mul_mat_q(
     const int64_t ne12_flat = 1;
     const int64_t ne13_flat = 1;
 
+    // For MoE gate/up the src1 activation is broadcast across the routed experts (ne11 == 1), so
+    // ids_src1 maps every one of a token's n_expert_used slots to the *same* physical row. The
+    // default path (quantize_mmq_*_cuda with ids) therefore re-quantizes each token's activation
+    // n_expert_used times. When src0 is fp4 we instead quantize each unique token row once and write
+    // its blocks to all n_expert_used expert-slots — bit-identical output, ~n_expert_used less quant.
+    // Set GGML_CUDA_NO_MOE_QUANT_DEDUP=1 to force the original per-expert path (for A/B benchmarking).
+    static const bool no_dedup = getenv("GGML_CUDA_NO_MOE_QUANT_DEDUP") != nullptr;
+    const bool dedup_fp4_bcast = use_native_fp4 && ne11 == 1 && n_expert_used > 1 && !no_dedup;
+
     {
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
         const int64_t s13 = src1->nb[3] / ts_src1;
 
-        if (use_native_fp4) {
+        // Default (NVFP4): a single quantize+scatter kernel that quantizes each unique token once and
+        // writes its block straight to all n_expert_used slots. GGML_CUDA_MOE_QUANT_GATHER=1 forces the
+        // two-kernel dedup (quantize-unique + gather) instead; MXFP4 always uses the gather path.
+        static const bool force_gather = getenv("GGML_CUDA_MOE_QUANT_GATHER") != nullptr;
+        if (dedup_fp4_bcast && !force_gather && src0->type == GGML_TYPE_NVFP4) {
+            ggml_cuda_pool_alloc<int32_t> cnt(ctx.pool(), ne12);
+            ggml_cuda_pool_alloc<int32_t> tok2c(ctx.pool(), ne12 * n_expert_used);
+            build_tok2c_cuda(ids_src1.get(), cnt.get(), tok2c.get(), ne11_flat, ne12, n_expert_used, stream);
+            CUDA_CHECK(cudaGetLastError());
+            quantize_scatter_mmq_fp4_cuda(src1_d, tok2c.get(), src1_q8_1.get(), src0->type, ne10,
+                                    /*stride_token=*/s12, ne10_padded, ne12, ne11_flat, n_expert_used, stream);
+        } else if (dedup_fp4_bcast) {
+            const int64_t blocks_per_col = (ne10_padded + QK_K - 1) / QK_K;
+            const size_t nbytes_unique = ne12*blocks_per_col*sizeof(block_fp4_mmq) +
+                get_mmq_x_max_host(cc)*sizeof(block_q8_1_mmq);
+            ggml_cuda_pool_alloc<char> src1_q8_1_unique(ctx.pool(), nbytes_unique);
+
+            // Unique pass: iterate tokens over the channel dim (ne1=1, ne2=ne12); base = token*s12,
+            // which equals ids_src1[i]*s11 for every ne11==1 case (proof: ids_src1[i]=it*(s12/s11)).
+            quantize_mmq_fp4_cuda(src1_d, nullptr, src1_q8_1_unique.get(), src0->type, ne10, s11, s12, s13,
+                                    ne10_padded, /*ne1=*/1, /*ne2=*/ne12, /*ne3=*/1, stream);
+            CUDA_CHECK(cudaGetLastError());
+
+            gather_mmq_fp4_blocks_cuda(src1_q8_1_unique.get(), ids_src1.get(), src1_q8_1.get(),
+                                    ne11_flat, blocks_per_col, stream);
+        } else if (use_native_fp4) {
             quantize_mmq_fp4_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
                                     ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
         } else {

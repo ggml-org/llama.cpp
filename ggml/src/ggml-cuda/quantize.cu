@@ -419,6 +419,178 @@ void quantize_mmq_q8_1_cuda(
     }
 }
 
+// Copy quantized fp4 blocks from a per-token "unique" buffer into the compact expert-sorted MMQ
+// buffer. Both buffers hold block_fp4_mmq (144 B, QK_K=256 values). Layouts differ:
+//   src_unique: row-major   -> block (token, kb) at token*blocks_per_col + kb
+//   dst:        col-block   -> block (row i,  kb) at kb*nrows_dst      + i
+// with token = ids_src1[i]. This reproduces exactly what quantize_mmq_nvfp4/mxfp4 would have
+// written for row i (identical source data, deterministic per-block quantization), so the result
+// is bit-for-bit equal to the gather-then-quantize path while quantizing each token only once.
+static __global__ void gather_mmq_fp4_blocks(
+        const block_fp4_mmq * __restrict__ src, const int32_t * __restrict__ ids_src1,
+        block_fp4_mmq * __restrict__ dst, const int64_t nrows_dst, const int64_t blocks_per_col) {
+    const int64_t i  = blockIdx.x; // destination row (compact expert-sorted index)
+    const int64_t kb = blockIdx.y; // column block
+    if (i >= nrows_dst || kb >= blocks_per_col) {
+        return;
+    }
+
+    const int64_t token = ids_src1[i];
+    const uint32_t * s = reinterpret_cast<const uint32_t *>(src + token*blocks_per_col + kb);
+    uint32_t       * d = reinterpret_cast<uint32_t *>(dst + kb*nrows_dst + i);
+
+    constexpr int nwords = sizeof(block_fp4_mmq) / sizeof(uint32_t); // 36
+#pragma unroll
+    for (int j = threadIdx.x; j < nwords; j += WARP_SIZE) {
+        d[j] = s[j];
+    }
+}
+
+void gather_mmq_fp4_blocks_cuda(
+        const void * src_unique, const int32_t * ids_src1, void * dst,
+        const int64_t nrows_dst, const int64_t blocks_per_col, cudaStream_t stream) {
+    const dim3 num_blocks(nrows_dst, blocks_per_col, 1);
+    const dim3 block_size(WARP_SIZE, 1, 1);
+    gather_mmq_fp4_blocks<<<num_blocks, block_size, 0, stream>>>(
+        (const block_fp4_mmq *) src_unique, ids_src1, (block_fp4_mmq *) dst, nrows_dst, blocks_per_col);
+}
+
+// Fused variant: quantize each unique token once and scatter the block straight to its compact rows.
+static __global__ void build_tok2c_kernel(
+        const int32_t * __restrict__ ids_src1, int32_t * __restrict__ cnt, int32_t * __restrict__ tok2c,
+        const int64_t nrows_dst, const int n_expert_used) {
+    const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nrows_dst) {
+        return;
+    }
+    const int t = ids_src1[i];
+    const int j = atomicAdd(&cnt[t], 1);
+    tok2c[(int64_t) t * n_expert_used + j] = (int) i;
+}
+
+void build_tok2c_cuda(
+        const int32_t * ids_src1, int32_t * cnt, int32_t * tok2c,
+        const int64_t nrows_dst, const int64_t n_tokens, const int n_expert_used, cudaStream_t stream) {
+    CUDA_CHECK(cudaMemsetAsync(cnt,   0x00, n_tokens * sizeof(int32_t),                 stream)); // counters -> 0
+    CUDA_CHECK(cudaMemsetAsync(tok2c, 0xFF, n_tokens * n_expert_used * sizeof(int32_t), stream)); // slots -> -1
+    const int64_t block = 256;
+    const int64_t grid  = (nrows_dst + block - 1) / block;
+    build_tok2c_kernel<<<grid, block, 0, stream>>>(ids_src1, cnt, tok2c, nrows_dst, n_expert_used);
+}
+
+// Same block computation as quantize_mmq_nvfp4, but writes the block to every compact row of the
+// token (tok2c) instead of one slot. blockIdx.x = token, blockIdx.y = column-block group.
+static __global__ void quantize_scatter_mmq_nvfp4(
+        const float * __restrict__ x, const int32_t * __restrict__ tok2c, void * __restrict__ vy,
+        const int64_t ne00, const int64_t stride_token, const int64_t ne0,
+        const int64_t nrows_dst, const int n_expert_used) {
+#if defined(BLACKWELL_MMA_AVAILABLE)
+    const int64_t i0_base = ((int64_t) blockDim.x * blockIdx.y + threadIdx.x) * QK_NVFP4_SUB;
+    if (i0_base >= ne0) {
+        return;
+    }
+
+    const int64_t token   = blockIdx.x;
+    const int64_t k_block = i0_base / QK_K;
+    const int64_t blocks_per_col = (ne0 + QK_K - 1) / QK_K;
+    if (k_block >= blocks_per_col) {
+        return;
+    }
+    const int sub = (i0_base % QK_K) / QK_NVFP4_SUB;
+
+    float vals_raw[QK_NVFP4_SUB];
+    float amax_raw = 0.0f;
+    const int64_t base_idx = token * stride_token;
+#pragma unroll
+    for (int k = 0; k < QK_NVFP4_SUB; k++) {
+        const int64_t i00 = i0_base + k;
+        if (i00 < ne00) {
+            const float v = x[base_idx + i00];
+            vals_raw[k] = v;
+            amax_raw = fmaxf(amax_raw, fabsf(v));
+        } else {
+            vals_raw[k] = 0.0f;
+        }
+    }
+
+    static constexpr int test_offsets[5] = { 0, -1, 1, -2, 2};
+    const int first_fp8_code = (int) ggml_cuda_fp32_to_ue4m3(amax_raw / 6.0f);
+
+    float best_err = FLT_MAX;
+    uint8_t fp8_code = 0;
+    float subblock_scale = 0.0f;
+
+#pragma unroll
+    for (int i = 0; i < 5; i++) {
+        const int test_code = first_fp8_code + test_offsets[i];
+        if (test_code < 0 || test_code > 0x7e) {
+            continue;
+        }
+        const uint8_t code = (uint8_t) test_code;
+        const float test_scale = ggml_cuda_ue4m3_to_fp32(code);
+        const float test_inv_scale = test_scale > 0.0f ? 0.5f / test_scale : 0.0f;
+        float cur_err = 0.0f;
+#pragma unroll
+        for (int k = 0; k < QK_NVFP4_SUB; ++k) {
+            const float v = vals_raw[k];
+            const uint8_t q = ggml_cuda_float_to_fp4_e2m1(v, test_inv_scale);
+            const float err_diff = fabsf(v) - fabsf(kvalues_mxfp4[q & 0x7]) * test_scale;
+            cur_err = fmaf(err_diff, err_diff, cur_err);
+        }
+
+        if (cur_err < best_err) {
+            best_err = cur_err;
+            fp8_code = test_code;
+            subblock_scale = test_scale;
+        }
+    }
+
+    const float inv_scale = subblock_scale > 0.0f ? 0.5f / subblock_scale : 0.0f;
+    uint32_t q0 = 0;
+    uint32_t q1 = 0;
+#pragma unroll
+    for (int k = 0; k < QK_NVFP4_SUB / 4; ++k) {
+        q0 |= (uint32_t) ggml_cuda_float_to_fp4_e2m1(vals_raw[k +  0], inv_scale) << (8 * k);
+        q0 |= (uint32_t) ggml_cuda_float_to_fp4_e2m1(vals_raw[k +  8], inv_scale) << (8 * k + 4);
+        q1 |= (uint32_t) ggml_cuda_float_to_fp4_e2m1(vals_raw[k +  4], inv_scale) << (8 * k);
+        q1 |= (uint32_t) ggml_cuda_float_to_fp4_e2m1(vals_raw[k + 12], inv_scale) << (8 * k + 4);
+    }
+
+    block_fp4_mmq * y = (block_fp4_mmq *) vy;
+#pragma unroll 1
+    for (int j = 0; j < n_expert_used; ++j) {
+        const int64_t i = tok2c[token * n_expert_used + j];
+        if (i < 0) {
+            continue;
+        }
+        block_fp4_mmq * yb = y + (k_block * nrows_dst + i);
+        uint32_t * yqs = reinterpret_cast<uint32_t *>(yb->qs);
+        yqs[2 * sub + 0] = q0;
+        yqs[2 * sub + 1] = q1;
+        reinterpret_cast<uint8_t *>(yb->d4)[sub] = fp8_code;
+    }
+#else
+    GGML_UNUSED(x); GGML_UNUSED(tok2c); GGML_UNUSED(vy);
+    GGML_UNUSED(ne00); GGML_UNUSED(stride_token); GGML_UNUSED(ne0);
+    GGML_UNUSED(nrows_dst); GGML_UNUSED(n_expert_used);
+    NO_DEVICE_CODE; // Blackwell NVFP4 activations only.
+#endif // defined(BLACKWELL_MMA_AVAILABLE)
+}
+
+void quantize_scatter_mmq_fp4_cuda(
+        const float * x, const int32_t * tok2c, void * vy, const ggml_type type_src0,
+        const int64_t ne00, const int64_t stride_token, const int64_t ne0,
+        const int64_t n_tokens, const int64_t nrows_dst, const int n_expert_used, cudaStream_t stream) {
+    GGML_ASSERT(type_src0 == GGML_TYPE_NVFP4);
+    GGML_ASSERT(ne0 > 0 && ne00 % QK_NVFP4 == 0);
+    constexpr int nvfp4_block_size = 128;
+    const int64_t block_num_y = (ne0 + QK_NVFP4_SUB * nvfp4_block_size - 1) / (QK_NVFP4_SUB * nvfp4_block_size);
+    const dim3 block_size(nvfp4_block_size, 1, 1);
+    const dim3 num_blocks(n_tokens, block_num_y, 1);
+    quantize_scatter_mmq_nvfp4<<<num_blocks, block_size, 0, stream>>>(
+        x, tok2c, vy, ne00, stride_token, ne0, nrows_dst, n_expert_used);
+}
+
 void quantize_mmq_fp4_cuda(
         const float * x, const int32_t * ids, void * vy, const ggml_type type_src0,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
