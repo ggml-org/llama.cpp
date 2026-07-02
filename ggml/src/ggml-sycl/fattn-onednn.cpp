@@ -10,23 +10,15 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#include "fattn-onednn.hpp"
-#include "fattn-tile.hpp"
-
 #include <cstdint>
-#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-// GGML_SYCL_FA_ONEDNN=1 (default); route eligible prefill flash-attention through the fused-XMX, oneDNN SDPA.
-// GGML_SYCL_FA_ONEDNN=0; leave it on the existing VEC/TILE (EU-SIMD) kernels.
-static bool fa_onednn_enabled() {
-    static const bool on = [] { const char * e = getenv("GGML_SYCL_FA_ONEDNN"); return !e || atoi(e) != 0; }();
-    return on;
-}
+#include "fattn-onednn.hpp"
+#include "fattn-tile.hpp"
 
 // set minimum query length to treat as prefill (32)
 #define GGML_SYCL_FA_ONEDNN_MIN_Q 32
@@ -36,7 +28,7 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
     GGML_UNUSED(dst);
     return false;
 #else
-    if (!fa_onednn_enabled()) {
+    if (!g_ggml_sycl_fa_onednn) {
         return false;
     }
     const ggml_tensor * Q     = dst->src[0];
@@ -64,13 +56,9 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
     if (max_bias != 0.0f || logit_softcap != 0.0f) {
         return false;
     }
-    // EVERY head_dim in the upstream selector's switch {40,64,72,80,96,112,128,256,512,576}
-    // dispatches to the systolic sdp_primitive_kernel_t (which is flash attetion implementation of oneDNN graph api).
-    // V->ne[0] !=d catches architectures like DeepSeek that has V head_dim 512 != K 576
+    // K and V must share head_dim: the SDPA graph uses a single `d` for both.
     const int64_t d = K->ne[0];
-    const bool d_ok = (d == 40 || d == 64 || d == 72 || d == 80 || d == 96 ||
-                       d == 112 || d == 128 || d == 256 || d == 512);
-    if (!d_ok || V->ne[0] != d || Q->ne[3] != 1) {
+    if (V->ne[0] != d || Q->ne[3] != 1) {
         return false;
     }
     // GQA must divide evenly.
@@ -240,10 +228,9 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
         it = cache.emplace(keyb, build_sdpa(eng, (int) H, (int) Hkv, (int) q, (int) seq, (int) d)).first;
     }
     sdpa_partition & E = it->second;
-    if (!E.ok) {
-        ggml_sycl_flash_attn_ext_tile(ctx, dst);
-        return;
-    }
+    // _supported() is authoritative: if it accepted this op the partition must build.
+    // A failure here is a gap in _supported() -- surface it, don't mask it with a fallback.
+    GGML_ASSERT(E.ok && "oneDNN SDPA partition failed to build for a _supported() shape");
 
     auto id2ptr = [&](size_t r) -> void * {
         if (r == E.id_q)     return Qf.get();
@@ -266,12 +253,6 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
 catch (const std::exception & e) {
     // any oneDNN/SYCL failure is non-fatal: fall back to the existing kernel (strictly additive).
     GGML_LOG_WARN("%s: oneDNN SDPA failed (%s); falling back to TILE kernel\n", __func__, e.what());
-    ggml_sycl_flash_attn_ext_tile(ctx, dst);
-}
-
-#else  // !GGML_SYCL_DNNL
-
-void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_flash_attn_ext_tile(ctx, dst);
 }
 
