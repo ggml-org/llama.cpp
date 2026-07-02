@@ -606,12 +606,42 @@ static void quantize_f32_weight_to_fp16_tiles_task(
 
 // --- End tiled dequantizers ---
 
-// requires external HMX lock
-static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
-                                       uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
+static void core_dot_chunk_fp16_short(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
+                                      uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
     __builtin_assume(n_row_tiles > 0);
     __builtin_assume(n_col_tiles > 0);
     __builtin_assume(n_dot_tiles > 0);
+    __builtin_assume(n_dot_tiles <= 32);
+
+    asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)scales));
+
+    const size_t dot_stride = n_dot_tiles * HTP_MM_HMX_TILE_N_ELMS;
+    const uint32_t range = 2048u * n_dot_tiles - 1;
+
+    for (uint32_t r = 0; r < n_row_tiles; ++r) {
+        const __fp16 *row_base = activation + r * dot_stride;
+        const __fp16 *col_base = weight;
+        __fp16 *out_tile = output + r * n_col_tiles * HTP_MM_HMX_TILE_N_ELMS;
+
+        for (size_t c = 0; c < n_col_tiles; ++c) {
+            asm volatile(HMX_CLRACC_F16());
+            asm volatile(HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0") : : "r"(range), "r"(row_base), "r"(col_base));
+            asm volatile(HMX_STORE_AFTER_F16("%0", "%1") : : "r"(out_tile), "r"(0) : "memory");
+            col_base += dot_stride;
+            out_tile += HTP_MM_HMX_TILE_N_ELMS;
+        }
+    }
+}
+
+static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
+                                uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
+    if (n_dot_tiles <= 32) {
+        core_dot_chunk_fp16_short(output, activation, weight, scales, n_row_tiles, n_col_tiles, n_dot_tiles);
+        return;
+    }
+    __builtin_assume(n_row_tiles > 0);
+    __builtin_assume(n_col_tiles > 0);
+    __builtin_assume(n_dot_tiles > 32);
 
     asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)scales));
 
@@ -628,33 +658,15 @@ static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict 
 
             asm volatile(HMX_CLRACC_F16());
 
-            if (n_dot_tiles <= 32) {
-                const uint32_t range = 2048u * n_dot_tiles - 1;
-                asm volatile(
-                    HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0")
-                    :
-                    : "r"(range), "r"(row_tiles), "r"(col_tiles)
-                );
-            } else {
-                for (uint32_t k = 0, k_block; k < n_dot_tiles; k += k_block) {
-                    k_block = hex_smin(n_dot_tiles - k, 32);
-                    const uint32_t range = 2048u * (uint32_t)k_block - 1;
-                    asm volatile(
-                        HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0")
-                        :
-                        : "r"(range), "r"(row_tiles), "r"(col_tiles)
-                    );
-                    row_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
-                    col_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
-                }
+            for (uint32_t k = 0, k_block; k < n_dot_tiles; k += k_block) {
+                k_block = hex_smin(n_dot_tiles - k, 32);
+                const uint32_t range = 2048u * (uint32_t)k_block - 1;
+                asm volatile(HMX_LOAD_MPY_DEEP_F16("%1", "%2", "%0") : : "r"(range), "r"(row_tiles), "r"(col_tiles));
+                row_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
+                col_tiles += k_block * HTP_MM_HMX_TILE_N_ELMS;
             }
 
-            asm volatile(
-                HMX_STORE_AFTER_F16("%0", "%1")
-                :
-                : "r"(out_tile), "r"(0)
-                : "memory"
-            );
+            asm volatile(HMX_STORE_AFTER_F16("%0", "%1") : : "r"(out_tile), "r"(0) : "memory");
 
             col_base += dot_stride;
             out_tile += HTP_MM_HMX_TILE_N_ELMS;
