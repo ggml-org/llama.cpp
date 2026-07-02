@@ -42,7 +42,7 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 
     // extra single-head attention layer at the END (index n_real) holds the router
     // K/V. reusing n_layer_nextn keeps n_layer() == n_real, so the regular layers
-    // keep their indices and the KV cache shift/defrag skips the router layer.
+    // keep their indices and the KV cache shift/defrag skips the router layer
     const uint32_t n_real = hparams.n_layer();
     hparams.router_layer  = (int32_t) n_real;
     hparams.n_layer_all   = n_real + 1;
@@ -220,7 +220,7 @@ llama_model_granite_switch::graph::graph(
     ggml_tensor * router_q    = inp_switch->router_q;
     res->add_input(std::move(inp_switch));
 
-    // embed the substituted ids directly: build_inp_embd would embed the raw tokens
+    // embed the substituted ids directly; build_inp_embd would embed the raw tokens
     ggml_tensor * inpL = ggml_get_rows(ctx0, model.tok_embd, sub_tokens);
     if (hparams.f_embedding_scale != 0.0f) {
         inpL = ggml_scale(ctx0, inpL, hparams.f_embedding_scale);
@@ -274,7 +274,7 @@ llama_model_granite_switch::graph::graph(
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur,   inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-            // select the same out rows from adapter_ids (2D round-trip for get_rows)
+            // keep adapter_ids aligned to the kept rows (2D round-trip for get_rows)
             const int64_t n_out = inp_out_ids->ne[0];
             adapter_ids = ggml_get_rows(ctx0,
                 ggml_reshape_2d(ctx0, adapter_ids, 1, adapter_ids->ne[0]), inp_out_ids);
@@ -322,7 +322,7 @@ ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(
     const int64_t n_embd_q  = n_embd_head * n_head;
     const int64_t n_embd_kv = n_embd_head * n_head_kv;
 
-    // slice fused qkv into Q/K/V (contiguous so we can add LoRA deltas)
+    // slice fused qkv into Q/K/V, made contiguous so LoRA deltas can be added
     ggml_tensor * Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_q,  qkv->ne[1], qkv->nb[1], 0));
     ggml_tensor * Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], n_embd_q*ggml_element_size(qkv)));
     ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], (n_embd_q + n_embd_kv)*ggml_element_size(qkv)));
