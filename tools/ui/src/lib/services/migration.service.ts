@@ -495,7 +495,9 @@ const customJsonKeyMigration: Migration = {
 	}
 };
 
-// Migration: Move mcpDefaultEnabled from localStorage to config
+// Migration: Copy mcpDefaultEnabled from localStorage into settings config
+// Non-destructive: legacy keys are preserved for downgrade compatibility, matching the
+// convention of every other migration in this service.
 
 const MCP_DEFAULT_ENABLED_MIGRATION_ID = 'mcp-default-enabled-to-config-v1';
 
@@ -506,16 +508,14 @@ const DEPRECATED_LEGACY_MCP_DEFAULT_ENABLED_KEY = `${STORAGE_APP_NAME_DEPRECATED
 const mcpDefaultEnabledMigration: Migration = {
 	id: MCP_DEFAULT_ENABLED_MIGRATION_ID,
 	description:
-		'Move mcpDefaultEnabled localStorage key into settings config (destructive on old key)',
+		'Copy mcpDefaultEnabled localStorage key into settings config (preserves legacy keys)',
 
 	async run(): Promise<void> {
 		const raw =
 			localStorage.getItem(LEGACY_MCP_DEFAULT_ENABLED_KEY) ??
 			localStorage.getItem(DEPRECATED_LEGACY_MCP_DEFAULT_ENABLED_KEY);
 
-		// Always clean up the legacy keys — the data is now sourced from the config.
-		localStorage.removeItem(LEGACY_MCP_DEFAULT_ENABLED_KEY);
-		localStorage.removeItem(DEPRECATED_LEGACY_MCP_DEFAULT_ENABLED_KEY);
+		// Legacy keys intentionally left in place so a downgrade keeps reading them.
 
 		if (raw === null) {
 			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)

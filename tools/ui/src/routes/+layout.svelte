@@ -36,12 +36,7 @@
 	import { theme } from '$lib/stores/theme.svelte';
 	import { buildInfoStore } from '$lib/stores/build-info.svelte';
 
-	import {
-		MCP_RECOMMENDATIONS_DISMISSED_LOCALSTORAGE_KEY,
-		MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY,
-		RECOMMENDED_MCP_SERVER_IDS,
-		SETTINGS_KEYS
-	} from '$lib/constants';
+	import { MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, RECOMMENDED_MCP_SERVER_IDS, SETTINGS_KEYS } from '$lib/constants';
 
 	let { children } = $props();
 	let innerHeight = $state<number | undefined>();
@@ -172,7 +167,7 @@
 
 	function dismissMcpRecommendations() {
 		if (browser) {
-			localStorage.setItem(MCP_RECOMMENDATIONS_DISMISSED_LOCALSTORAGE_KEY, 'true');
+			localStorage.setItem(MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, 'true');
 		}
 		mcpRecommendationsDismissed = true;
 	}
