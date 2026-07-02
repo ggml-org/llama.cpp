@@ -4161,6 +4161,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
     bool stream = json_value(data, "stream", false);
 
+    // SSE ping cadence is a per-request contract: a client running its own liveness watchdog
+    // (like the WebUI visibility kick) requests the cadence it needs via the request body,
+    // other clients inherit the --sse-ping-interval server default
+    int32_t sse_ping_interval = json_value(data, "sse_ping_interval", params.sse_ping_interval);
+
     if (!stream) {
         // non-stream, wait for the results
         auto all_results = rd.wait_for_all(req.should_stop);
@@ -4225,7 +4230,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         }
         res->status = 200;
         res->content_type = "text/event-stream";
-        res->next = [res_this = res.get(), res_type, &req, &params](std::string & output) -> bool {
+        res->next = [res_this = res.get(), res_type, sse_ping_interval, &req](std::string & output) -> bool {
             static auto format_error = [](task_response_type res_type, const json & res_json) {
                 if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                     return format_anthropic_sse({
@@ -4274,10 +4279,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 // receive subsequent results
                 bool timeout = false;
                 int64_t start_time = ggml_time_ms();
-                auto result = rd.next([&timeout, &start_time, &params, &effective_should_stop]() {
+                auto result = rd.next([&timeout, &start_time, sse_ping_interval, &effective_should_stop]() {
                     if (effective_should_stop()) {
                         return true; // should_stop condition met
-                    } else if (params.sse_ping_interval > 0 && ggml_time_ms() - start_time > (int64_t)params.sse_ping_interval * 1000) {
+                    } else if (sse_ping_interval > 0 && ggml_time_ms() - start_time > (int64_t)sse_ping_interval * 1000) {
                         timeout = true;
                         return true; // timeout
                     }
