@@ -23,6 +23,75 @@
 
 #include <optional>
 #include <sstream>
+
+// ── UTF-8 sanitizer ───────────────────────────────────────────────────
+// Replaces invalid UTF-8 byte sequences with U+FFFD (replacement character).
+// This prevents peg-native parse failures when the model's tokenizer
+// produces corrupted byte sequences (e.g. PaddleOCR-VL on certain glyphs).
+static std::string sanitize_utf8(const std::string & input) {
+    std::string out;
+    out.reserve(input.size());
+    for (size_t i = 0; i < input.size(); ) {
+        unsigned char c = static_cast<unsigned char>(input[i]);
+        size_t len = 0;
+        uint32_t cp = 0;
+
+        if (c < 0x80) {
+            len = 1;
+            cp = c;
+        } else if ((c & 0xE0) == 0xC0) {
+            len = 2;
+            cp = c & 0x1F;
+        } else if ((c & 0xF0) == 0xE0) {
+            len = 3;
+            cp = c & 0x0F;
+        } else if ((c & 0xF8) == 0xF0) {
+            len = 4;
+            cp = c & 0x07;
+        } else {
+            // Invalid start byte — replace
+            out += "\xEF\xBF\xBD";
+            i++;
+            continue;
+        }
+
+        if (i + len > input.size()) {
+            // Truncated sequence
+            out += "\xEF\xBF\xBD";
+            i++;
+            continue;
+        }
+
+        bool valid = true;
+        for (size_t j = 1; j < len; j++) {
+            unsigned char cc = static_cast<unsigned char>(input[i + j]);
+            if ((cc & 0xC0) != 0x80) {
+                valid = false;
+                break;
+            }
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+
+        if (!valid) {
+            out += "\xEF\xBF\xBD";
+            i++;
+            continue;
+        }
+
+        // Reject overlong encodings and surrogates
+        if ((len == 2 && cp < 0x80) ||
+            (len == 3 && cp < 0x800) ||
+            (len == 4 && cp < 0x10000) ||
+            (cp >= 0xD800 && cp <= 0xDFFF) ||
+            cp > 0x10FFFF) {
+            out += "\xEF\xBF\xBD";
+        } else {
+            out.append(input, i, len);
+        }
+        i += len;
+    }
+    return out;
+}
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -2848,9 +2917,14 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         LOG_DBG("No parser definition detected, assuming pure content parser.");
     }
 
-    const std::string effective_input = params.generation_prompt.empty()
+    const std::string raw_input = params.generation_prompt.empty()
         ? input
         : params.generation_prompt + input;
+
+    // Sanitize invalid UTF-8 before peg parsing.
+    // PaddleOCR-VL tokenizer can produce corrupted byte sequences on certain glyphs,
+    // which would cause peg-native parse failures (HTTP 500).
+    std::string effective_input = sanitize_utf8(raw_input);
 
     //LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.c_str());
 
@@ -2883,8 +2957,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             }
             return msg;
         }
-        LOG_WRN("%s: unparsed %s output: %s\n", __func__, common_chat_format_name(params.format), effective_input.substr(result.end).c_str());
-        LOG_DBG("%s: full %s output triggering error:\n=== BEGIN ===\n%s\n=== END ===\n", __func__, common_chat_format_name(params.format), effective_input.c_str());
+        LOG_WRN("%s: unparsed %s output: %s\n", __func__, common_chat_format_name(params.format), raw_input.substr(result.end).c_str());
+        LOG_DBG("%s: full %s output triggering error:\n=== BEGIN ===\n%s\n=== END ===\n", __func__, common_chat_format_name(params.format), raw_input.c_str());
         throw std::runtime_error(std::string("The model produced output that does not match the expected ") + common_chat_format_name(params.format) + " format");
     }
 
