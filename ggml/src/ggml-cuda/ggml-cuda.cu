@@ -3648,26 +3648,26 @@ static bool ggml_cuda_should_fuse_add_mul(
     return true;
 }
 
-static bool ggml_cuda_tensors_overlap(const ggml_tensor * a, const ggml_tensor * b) {
-    if (a == nullptr || b == nullptr || a->buffer == nullptr || b->buffer == nullptr) {
-        return false;
-    }
-
-    const uintptr_t a_start = reinterpret_cast<uintptr_t>(a->data);
-    const uintptr_t b_start = reinterpret_cast<uintptr_t>(b->data);
-    const uintptr_t a_end   = a_start + ggml_backend_buft_get_alloc_size(a->buffer->buft, a);
-    const uintptr_t b_end   = b_start + ggml_backend_buft_get_alloc_size(b->buffer->buft, b);
-
-    return a_start < b_end && b_start < a_end;
-}
-
-static bool ggml_cuda_add_mul_memory_ok(
+static bool ggml_cuda_check_elementwise_aliasing(
         const ggml_tensor * src0,
         const ggml_tensor * src1,
         const ggml_tensor * scale,
         const ggml_tensor * dst) {
-    const auto can_read_write_inplace = [dst](const ggml_tensor * src) {
-        return !ggml_cuda_tensors_overlap(dst, src) || ggml_are_same_layout(dst, src);
+    const auto tensors_overlap = [](const ggml_tensor * a, const ggml_tensor * b) {
+        if (a == nullptr || b == nullptr || a->buffer == nullptr || b->buffer == nullptr) {
+            return false;
+        }
+
+        const uintptr_t a_start = reinterpret_cast<uintptr_t>(a->data);
+        const uintptr_t b_start = reinterpret_cast<uintptr_t>(b->data);
+        const uintptr_t a_end   = a_start + ggml_backend_buft_get_alloc_size(a->buffer->buft, a);
+        const uintptr_t b_end   = b_start + ggml_backend_buft_get_alloc_size(b->buffer->buft, b);
+
+        return a_start < b_end && b_start < a_end;
+    };
+
+    const auto can_read_write_inplace = [dst, &tensors_overlap](const ggml_tensor * src) {
+        return !tensors_overlap(dst, src) || ggml_are_same_layout(dst, src);
     };
 
     return can_read_write_inplace(src0) &&
@@ -4078,7 +4078,7 @@ static int ggml_cuda_try_fuse(
         const ggml_tensor * scale = nullptr;
 
         if (ggml_cuda_should_fuse_add_mul(cgraph->nodes[i], cgraph->nodes[i + 1], &src0, &src1, &scale)) {
-            if (ggml_cuda_add_mul_memory_ok(src0, src1, scale, cgraph->nodes[i + 1])) {
+            if (ggml_cuda_check_elementwise_aliasing(src0, src1, scale, cgraph->nodes[i + 1])) {
                 ggml_cuda_op_add_mul_fused(*cuda_ctx, src0, src1, scale, cgraph->nodes[i + 1]);
                 return 1;
             }
