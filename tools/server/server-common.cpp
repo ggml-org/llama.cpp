@@ -846,7 +846,13 @@ static void handle_media(
         common_remote_params params;
         params.max_size = 1024 * 1024 * 10; // 10MB
         params.timeout  = 10; // seconds
-        SRV_INF("downloading image from '%s'\n", url.c_str());
+        // Log only scheme://host[:port] at INFO to avoid leaking
+        // attacker-controlled path / query strings into operator log pipelines.
+        // The full URL is preserved at DEBUG for incident response.
+        auto url_origin_end = url.find('/', url.find("://") + 3);
+        std::string url_origin = (url_origin_end == std::string::npos) ? url : url.substr(0, url_origin_end);
+        SRV_INF("downloading image from '%s'\n", url_origin.c_str());
+        SRV_DBG("downloading image full URL '%s'\n", url.c_str());
         auto res = common_remote_get_content(url, params);
         if (200 <= res.first && res.first < 300) {
             SRV_INF("downloaded %zu bytes\n", res.second.size());
