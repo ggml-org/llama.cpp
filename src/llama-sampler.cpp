@@ -2837,12 +2837,13 @@ static void llama_sampler_penalties_backend_apply(
         ggml_tensor * pos_mask = ggml_step(ctx, penalized);
         ggml_tensor * neg_mask = ggml_sub(ctx, ggml_fill(ctx, pos_mask, 1.0f), pos_mask);
 
-        ggml_tensor * pos_scaled = ggml_scale(ctx, penalized, 1.0f/sctx->penalty_repeat);
-        ggml_tensor * neg_scaled = ggml_scale(ctx, penalized, sctx->penalty_repeat);
+        ggml_tensor * pos_scale = ggml_scale(ctx, pos_mask, 1.0f/sctx->penalty_repeat);
+        ggml_tensor * neg_scale = ggml_scale(ctx, neg_mask, sctx->penalty_repeat);
+        ggml_tensor * repeat_scale = ggml_add(ctx, pos_scale, neg_scale);
 
-        pos_scaled = ggml_mul(ctx, pos_scaled, pos_mask);
-        neg_scaled = ggml_mul(ctx, neg_scaled, neg_mask);
-        penalized = ggml_add(ctx, pos_scaled, neg_scaled);
+        repeat_scale = ggml_mul(ctx, repeat_scale, active_mask);
+        repeat_scale = ggml_add(ctx, repeat_scale, inactive_mask);
+        penalized = ggml_mul(ctx, penalized, repeat_scale);
     }
 
     if (sctx->penalty_freq != 0.0f) {
@@ -2855,15 +2856,11 @@ static void llama_sampler_penalties_backend_apply(
         penalized = ggml_sub(ctx, penalized, penalty_present);
     }
 
-    ggml_tensor * active_values = ggml_mul(ctx, penalized, active_mask);
-    ggml_tensor * inactive_values = ggml_mul(ctx, gathered, inactive_mask);
-    ggml_tensor * scatter_values = ggml_add(ctx, active_values, inactive_values);
-
     if (sctx->has_candidates) {
-        data->logits = scatter_values;
+        data->logits = penalized;
     } else {
         ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, ggml_nelements(data->logits));
-        ggml_tensor * scatter_rows = ggml_reshape_2d(ctx, scatter_values, 1, sctx->n_max);
+        ggml_tensor * scatter_rows = ggml_reshape_2d(ctx, penalized, 1, sctx->n_max);
         logits_rows = ggml_set_rows(ctx, logits_rows, scatter_rows, sctx->inp_token_ids);
         data->logits = ggml_reshape_1d(ctx, logits_rows, ggml_nelements(data->logits));
     }
