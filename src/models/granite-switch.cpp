@@ -85,22 +85,22 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
 
         auto & sl = layer.switch_lora;
 
-        sl.a_q = create_tensor(tn(LLM_TENSOR_ATTN_Q_LORA_A, i), {n_embd,  n_rank, n_slots_i64}, 0);
-        sl.b_q = create_tensor(tn(LLM_TENSOR_ATTN_Q_LORA_B, i), {n_rank, n_embd_q, n_slots_i64}, 0);
-        sl.a_k = create_tensor(tn(LLM_TENSOR_ATTN_K_LORA_A, i), {n_embd,  n_rank, n_slots_i64}, 0);
-        sl.b_k = create_tensor(tn(LLM_TENSOR_ATTN_K_LORA_B, i), {n_rank, n_embd_kv, n_slots_i64}, 0);
-        sl.a_v = create_tensor(tn(LLM_TENSOR_ATTN_V_LORA_A, i), {n_embd,  n_rank, n_slots_i64}, 0);
-        sl.b_v = create_tensor(tn(LLM_TENSOR_ATTN_V_LORA_B, i), {n_rank, n_embd_kv, n_slots_i64}, 0);
+        sl.a_q = create_tensor(tn(LLM_TENSOR_ATTN_Q, "lora_a", i), {n_embd,  n_rank, n_slots_i64}, 0);
+        sl.b_q = create_tensor(tn(LLM_TENSOR_ATTN_Q, "lora_b", i), {n_rank, n_embd_q, n_slots_i64}, 0);
+        sl.a_k = create_tensor(tn(LLM_TENSOR_ATTN_K, "lora_a", i), {n_embd,  n_rank, n_slots_i64}, 0);
+        sl.b_k = create_tensor(tn(LLM_TENSOR_ATTN_K, "lora_b", i), {n_rank, n_embd_kv, n_slots_i64}, 0);
+        sl.a_v = create_tensor(tn(LLM_TENSOR_ATTN_V, "lora_a", i), {n_embd,  n_rank, n_slots_i64}, 0);
+        sl.b_v = create_tensor(tn(LLM_TENSOR_ATTN_V, "lora_b", i), {n_rank, n_embd_kv, n_slots_i64}, 0);
 
-        sl.a_o = create_tensor(tn(LLM_TENSOR_ATTN_OUT_LORA_A, i), {n_embd_q, n_rank, n_slots_i64}, 0);
-        sl.b_o = create_tensor(tn(LLM_TENSOR_ATTN_OUT_LORA_B, i), {n_rank,   n_embd, n_slots_i64}, 0);
+        sl.a_o = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "lora_a", i), {n_embd_q, n_rank, n_slots_i64}, 0);
+        sl.b_o = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "lora_b", i), {n_rank,   n_embd, n_slots_i64}, 0);
 
-        sl.a_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE_LORA_A, i), {n_embd, n_rank, n_slots_i64}, 0);
-        sl.b_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE_LORA_B, i), {n_rank,  n_ff,  n_slots_i64}, 0);
-        sl.a_up   = create_tensor(tn(LLM_TENSOR_FFN_UP_LORA_A,   i), {n_embd, n_rank, n_slots_i64}, 0);
-        sl.b_up   = create_tensor(tn(LLM_TENSOR_FFN_UP_LORA_B,   i), {n_rank,  n_ff,  n_slots_i64}, 0);
-        sl.a_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN_LORA_A, i), {  n_ff, n_rank, n_slots_i64}, 0);
-        sl.b_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN_LORA_B, i), {n_rank, n_embd, n_slots_i64}, 0);
+        sl.a_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "lora_a", i), {n_embd, n_rank, n_slots_i64}, 0);
+        sl.b_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "lora_b", i), {n_rank,  n_ff,  n_slots_i64}, 0);
+        sl.a_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "lora_a", i), {n_embd, n_rank, n_slots_i64}, 0);
+        sl.b_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "lora_b", i), {n_rank,  n_ff,  n_slots_i64}, 0);
+        sl.a_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "lora_a", i), {  n_ff, n_rank, n_slots_i64}, 0);
+        sl.b_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "lora_b", i), {n_rank, n_embd, n_slots_i64}, 0);
     }
 }
 
