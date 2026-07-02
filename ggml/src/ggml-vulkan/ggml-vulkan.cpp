@@ -62,7 +62,6 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #include <map>
 #include <set>
 #include <unordered_map>
-#include <unordered_set>
 #include <shared_mutex>
 #include <mutex>
 #include <future>
@@ -2177,10 +2176,8 @@ struct ggml_backend_vk_context {
     // If there's no fusion, bit 0 is still set.
     int fused_ops_write_mask {};
     bool fused_add_mul {};
-    int fused_add_mul_dst_idx {-1};
     bool fused_lerp {};
     bool fused_rwkv_rk {};
-    int fused_rwkv_rk_dst_idx {-1};
     topk_moe_mode fused_topk_moe_mode {};
     bool fused_topk_moe_scale {};
 
@@ -11940,8 +11937,7 @@ static void ggml_vk_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
 static void ggml_vk_add_mul(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_cgraph * cgraph, int node_idx) {
     const ggml_tensor * add = cgraph->nodes[node_idx];
-    const int dst_idx = ctx->fused_add_mul_dst_idx >= 0 ? ctx->fused_add_mul_dst_idx : node_idx + 1;
-    ggml_tensor * dst = cgraph->nodes[dst_idx];
+    ggml_tensor * dst = cgraph->nodes[node_idx + 1];
     const ggml_tensor * scale = dst->src[0] == add ? dst->src[1] : dst->src[0];
     const ggml_tensor * src0 = add->src[0];
     const ggml_tensor * src1 = add->src[1];
@@ -12006,6 +12002,8 @@ static bool ggml_vk_should_fuse_rwkv_rk(
         const ggml_tensor ** v,
         const ggml_tensor ** r_k);
 
+static bool ggml_vk_add_mul_memory_ok(const ggml_tensor * add, const ggml_tensor * mul);
+
 static int ggml_vk_find_single_consumer(const ggml_cgraph * cgraph, int node_idx);
 
 static void ggml_vk_lerp_fused(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_cgraph * cgraph, int node_idx) {
@@ -12057,7 +12055,7 @@ static void ggml_vk_rwkv_rk_fused(ggml_backend_vk_context * ctx, vk_context& sub
     const ggml_tensor * sum_rows  = cgraph->nodes[sum_rows_idx];
     const ggml_tensor * mul_v_rk  = cgraph->nodes[mul_v_rk_idx];
     const ggml_tensor * reshape   = cgraph->nodes[reshape_idx];
-    ggml_tensor *       dst       = cgraph->nodes[ctx->fused_rwkv_rk_dst_idx];
+    ggml_tensor *       dst       = cgraph->nodes[node_idx + ctx->num_additional_fused_ops];
 
     const ggml_tensor * cur = nullptr;
     const ggml_tensor * k   = nullptr;
@@ -14844,11 +14842,12 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
             return false;
         };
 
-        if (ctx->fused_rwkv_rk && ctx->fused_rwkv_rk_dst_idx >= 0) {
+        if (ctx->fused_rwkv_rk) {
             const int mul_kr_rk_idx = ggml_vk_find_single_consumer(cgraph, node_idx);
             const int sum_rows_idx  = ggml_vk_find_single_consumer(cgraph, mul_kr_rk_idx);
             const int mul_v_rk_idx  = ggml_vk_find_single_consumer(cgraph, sum_rows_idx);
             const int reshape_idx   = ggml_vk_find_single_consumer(cgraph, mul_v_rk_idx);
+            const int add_idx       = node_idx + ctx->num_additional_fused_ops;
 
             const ggml_tensor * cur = nullptr;
             const ggml_tensor * k   = nullptr;
@@ -14857,27 +14856,12 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
             const ggml_tensor * r_k = nullptr;
             GGML_ASSERT(ggml_vk_should_fuse_rwkv_rk(ctx, node, cgraph->nodes[mul_kr_rk_idx], cgraph->nodes[sum_rows_idx],
                                                     cgraph->nodes[mul_v_rk_idx], cgraph->nodes[reshape_idx],
-                                                    cgraph->nodes[ctx->fused_rwkv_rk_dst_idx], &cur, &k, &r, &v, &r_k));
+                                                    cgraph->nodes[add_idx], &cur, &k, &r, &v, &r_k));
 
-            const ggml_tensor * dst = cgraph->nodes[ctx->fused_rwkv_rk_dst_idx];
+            const ggml_tensor * dst = cgraph->nodes[add_idx];
             const ggml_tensor * fused_srcs[] = { cur, k, r, v, r_k };
 
             if (overlaps_unsynced(dst, ctx->unsynced_nodes_read) || overlaps_unsynced(dst, ctx->unsynced_nodes_written)) {
-                need_sync = true;
-            }
-            for (const ggml_tensor * src : fused_srcs) {
-                if (src && overlaps_unsynced(src, ctx->unsynced_nodes_written)) {
-                    need_sync = true;
-                    break;
-                }
-            }
-        } else if (ctx->fused_add_mul && ctx->fused_add_mul_dst_idx >= 0) {
-            const ggml_tensor * add = node;
-            const ggml_tensor * mul = cgraph->nodes[ctx->fused_add_mul_dst_idx];
-            const ggml_tensor * scale = mul->src[0] == add ? mul->src[1] : mul->src[0];
-            const ggml_tensor * fused_srcs[] = { add->src[0], add->src[1], scale };
-
-            if (overlaps_unsynced(mul, ctx->unsynced_nodes_read) || overlaps_unsynced(mul, ctx->unsynced_nodes_written)) {
                 need_sync = true;
             }
             for (const ggml_tensor * src : fused_srcs) {
@@ -14924,11 +14908,12 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
                 ggml_vk_sync_buffers(ctx, compute_ctx);
             }
         }
-        if (ctx->fused_rwkv_rk && ctx->fused_rwkv_rk_dst_idx >= 0) {
+        if (ctx->fused_rwkv_rk) {
             const int mul_kr_rk_idx = ggml_vk_find_single_consumer(cgraph, node_idx);
             const int sum_rows_idx  = ggml_vk_find_single_consumer(cgraph, mul_kr_rk_idx);
             const int mul_v_rk_idx  = ggml_vk_find_single_consumer(cgraph, sum_rows_idx);
             const int reshape_idx   = ggml_vk_find_single_consumer(cgraph, mul_v_rk_idx);
+            const int add_idx       = node_idx + ctx->num_additional_fused_ops;
 
             const ggml_tensor * cur = nullptr;
             const ggml_tensor * k   = nullptr;
@@ -14937,22 +14922,14 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
             const ggml_tensor * r_k = nullptr;
             GGML_ASSERT(ggml_vk_should_fuse_rwkv_rk(ctx, node, cgraph->nodes[mul_kr_rk_idx], cgraph->nodes[sum_rows_idx],
                                                     cgraph->nodes[mul_v_rk_idx], cgraph->nodes[reshape_idx],
-                                                    cgraph->nodes[ctx->fused_rwkv_rk_dst_idx], &cur, &k, &r, &v, &r_k));
+                                                    cgraph->nodes[add_idx], &cur, &k, &r, &v, &r_k));
 
-            ctx->unsynced_nodes_written.push_back(cgraph->nodes[ctx->fused_rwkv_rk_dst_idx]);
+            ctx->unsynced_nodes_written.push_back(cgraph->nodes[add_idx]);
             ctx->unsynced_nodes_read.push_back(cur);
             ctx->unsynced_nodes_read.push_back(k);
             ctx->unsynced_nodes_read.push_back(r);
             ctx->unsynced_nodes_read.push_back(v);
             ctx->unsynced_nodes_read.push_back(r_k);
-        } else if (ctx->fused_add_mul && ctx->fused_add_mul_dst_idx >= 0) {
-            const ggml_tensor * add = node;
-            const ggml_tensor * mul = cgraph->nodes[ctx->fused_add_mul_dst_idx];
-            const ggml_tensor * scale = mul->src[0] == add ? mul->src[1] : mul->src[0];
-            ctx->unsynced_nodes_written.push_back(mul);
-            ctx->unsynced_nodes_read.push_back(add->src[0]);
-            ctx->unsynced_nodes_read.push_back(add->src[1]);
-            ctx->unsynced_nodes_read.push_back(scale);
         } else {
             // Add all fused nodes to the unsynchronized lists.
             for (int32_t i = 0; i < ctx->num_additional_fused_ops + 1; ++i) {
@@ -16348,7 +16325,8 @@ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct g
             return false;
         }
     } else if (ops.size() == 2 && ops.begin()[0] == GGML_OP_ADD && ops.begin()[1] == GGML_OP_MUL) {
-        if (!ggml_vk_should_fuse_add_mul(ctx, cgraph->nodes[node_idx], cgraph->nodes[node_idx + 1])) {
+        if (!ggml_vk_should_fuse_add_mul(ctx, cgraph->nodes[node_idx], cgraph->nodes[node_idx + 1]) ||
+                !ggml_vk_add_mul_memory_ok(cgraph->nodes[node_idx], cgraph->nodes[node_idx + 1])) {
             return false;
         }
     } else if (ops.size() == 2 && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
@@ -16819,6 +16797,18 @@ static bool ggml_vk_can_fuse_rwkv_rk(
         return false;
     }
 
+    for (int i = node_idx + 1; i < found_add_idx; ++i) {
+        if (i == mul_kr_rk_idx || i == sum_rows_idx || i == mul_v_rk_idx || i == reshape_idx) {
+            continue;
+        }
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (!ggml_is_empty(node) && node->op != GGML_OP_RESHAPE && node->op != GGML_OP_TRANSPOSE &&
+                node->op != GGML_OP_VIEW && node->op != GGML_OP_PERMUTE && node->op != GGML_OP_NONE &&
+                (node->flags & GGML_TENSOR_FLAG_COMPUTE) != 0) {
+            return false;
+        }
+    }
+
     const ggml_tensor * cur = nullptr;
     const ggml_tensor * k   = nullptr;
     const ggml_tensor * r   = nullptr;
@@ -17023,14 +17013,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     uint64_t batch_flops = 0;
     uint64_t total_flops = 0;
     uint64_t flops_per_submit = std::min(uint64_t(200'000'000'000), ctx->last_total_flops / 40u);
-    std::unordered_set<const ggml_tensor *> fused_noncontiguous_nodes;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (first_node_in_batch) {
             submit_node_idx = i;
-        }
-
-        if (fused_noncontiguous_nodes.erase(cgraph->nodes[i]) > 0) {
-            continue;
         }
 
         {
@@ -17048,10 +17033,8 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ctx->fused_topk_moe_mode = TOPK_MOE_COUNT;
         ctx->fused_topk_moe_scale = false;
         ctx->fused_add_mul = false;
-        ctx->fused_add_mul_dst_idx = -1;
         ctx->fused_lerp = false;
         ctx->fused_rwkv_rk = false;
-        ctx->fused_rwkv_rk_dst_idx = -1;
         const char *fusion_string {};
         int rwkv_rk_add_idx = -1;
         if (!ctx->device->disable_fusion) {
@@ -17115,20 +17098,11 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                 fusion_string = "ADD_MUL";
                 op_srcs_fused_elementwise[0] = true;
                 op_srcs_fused_elementwise[1] = true;
-            } else if (cgraph->nodes[i]->op == GGML_OP_ADD) {
-                const int mul_idx = ggml_vk_find_single_consumer(cgraph, i);
-                if (mul_idx > i &&
-                    cgraph->nodes[mul_idx]->op == GGML_OP_MUL &&
-                    ggml_vk_should_fuse_add_mul(ctx, cgraph->nodes[i], cgraph->nodes[mul_idx]) &&
-                    ggml_vk_add_mul_memory_ok(cgraph->nodes[i], cgraph->nodes[mul_idx])) {
-                    ctx->fused_add_mul = true;
-                    ctx->fused_add_mul_dst_idx = mul_idx;
-                    fusion_string = "ADD_MUL";
-                }
             } else if (cgraph->nodes[i]->op == GGML_OP_MUL && ggml_vk_can_fuse_rwkv_rk(ctx, cgraph, i, &rwkv_rk_add_idx)) {
                 ctx->fused_rwkv_rk = true;
-                ctx->fused_rwkv_rk_dst_idx = rwkv_rk_add_idx;
+                ctx->num_additional_fused_ops = rwkv_rk_add_idx - i;
                 fusion_string = "RWKV_RK";
+                std::fill_n(op_srcs_fused_elementwise, ctx->num_additional_fused_ops + 1, false);
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD })) {
                 ctx->num_additional_fused_ops = 2;
                 fusion_string = "NORM_MUL_ADD";
@@ -17298,10 +17272,8 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                 ctx->fused_topk_moe_mode = TOPK_MOE_COUNT;
                 ctx->fused_topk_moe_scale = false;
                 ctx->fused_add_mul = false;
-                ctx->fused_add_mul_dst_idx = -1;
                 ctx->fused_lerp = false;
                 ctx->fused_rwkv_rk = false;
-                ctx->fused_rwkv_rk_dst_idx = -1;
             }
         }
 
@@ -17330,20 +17302,6 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         }
 
         if (enqueued) {
-            if (ctx->fused_rwkv_rk_dst_idx >= 0) {
-                const int mul_kr_rk_idx = ggml_vk_find_single_consumer(cgraph, i);
-                const int sum_rows_idx  = ggml_vk_find_single_consumer(cgraph, mul_kr_rk_idx);
-                const int mul_v_rk_idx  = ggml_vk_find_single_consumer(cgraph, sum_rows_idx);
-                const int reshape_idx   = ggml_vk_find_single_consumer(cgraph, mul_v_rk_idx);
-                fused_noncontiguous_nodes.insert(cgraph->nodes[mul_kr_rk_idx]);
-                fused_noncontiguous_nodes.insert(cgraph->nodes[sum_rows_idx]);
-                fused_noncontiguous_nodes.insert(cgraph->nodes[mul_v_rk_idx]);
-                fused_noncontiguous_nodes.insert(cgraph->nodes[reshape_idx]);
-                fused_noncontiguous_nodes.insert(cgraph->nodes[ctx->fused_rwkv_rk_dst_idx]);
-            }
-            if (ctx->fused_add_mul_dst_idx >= 0) {
-                fused_noncontiguous_nodes.insert(cgraph->nodes[ctx->fused_add_mul_dst_idx]);
-            }
             ++submitted_nodes;
 
 #ifndef GGML_VULKAN_CHECK_RESULTS
@@ -17366,10 +17324,8 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ctx->num_additional_fused_ops = 0;
         ctx->fused_ops_write_mask = 0;
         ctx->fused_add_mul = false;
-        ctx->fused_add_mul_dst_idx = -1;
         ctx->fused_lerp = false;
         ctx->fused_rwkv_rk = false;
-        ctx->fused_rwkv_rk_dst_idx = -1;
     }
 
     ctx->last_total_flops = total_flops;

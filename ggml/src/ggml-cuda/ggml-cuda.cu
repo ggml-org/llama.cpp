@@ -87,7 +87,6 @@
 #include <cstdlib>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -4150,13 +4149,11 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 }
 
 // Try and fuse nodes. A positive return value is the number of following
-// contiguous nodes to skip; -1 means the current node was handled but no
-// following nodes can be skipped because the fused consumer is non-contiguous.
+// contiguous nodes to skip.
 static int ggml_cuda_try_fuse(
         ggml_backend_cuda_context * cuda_ctx,
         ggml_cgraph * cgraph,
-        int i,
-        std::unordered_set<const ggml_tensor *> & fused_noncontiguous_nodes) {
+        int i) {
 
     static bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
     if (disable_fusion) {
@@ -4292,25 +4289,17 @@ static int ggml_cuda_try_fuse(
         }
     }
 
-    // Elementwise gate: (a + b) * scale. RWKV builds this as ADD consumed by
-    // a later MUL, with unrelated view nodes often scheduled between them.
-    if (node->op == GGML_OP_ADD) {
-        const int mul_idx = ggml_cuda_find_single_consumer(cgraph, i);
+    // Elementwise gate: (a + b) * scale.
+    if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_ADD, GGML_OP_MUL }, { i + 1 })) {
         const ggml_tensor * src0  = nullptr;
         const ggml_tensor * src1  = nullptr;
         const ggml_tensor * scale = nullptr;
 
-        const bool should_fuse = mul_idx > i && cgraph->nodes[mul_idx]->op == GGML_OP_MUL &&
-            ggml_cuda_should_fuse_add_mul(cgraph->nodes[i], cgraph->nodes[mul_idx], &src0, &src1, &scale);
-        const bool memory_ok = should_fuse && ggml_cuda_add_mul_memory_ok(src0, src1, scale, cgraph->nodes[mul_idx]);
-
-        if (memory_ok) {
-            ggml_cuda_op_add_mul_fused(*cuda_ctx, src0, src1, scale, cgraph->nodes[mul_idx]);
-            if (mul_idx == i + 1) {
+        if (ggml_cuda_should_fuse_add_mul(cgraph->nodes[i], cgraph->nodes[i + 1], &src0, &src1, &scale)) {
+            if (ggml_cuda_add_mul_memory_ok(src0, src1, scale, cgraph->nodes[i + 1])) {
+                ggml_cuda_op_add_mul_fused(*cuda_ctx, src0, src1, scale, cgraph->nodes[i + 1]);
                 return 1;
             }
-            fused_noncontiguous_nodes.insert(cgraph->nodes[mul_idx]);
-            return -1;
         }
     }
 
@@ -4776,8 +4765,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 stream_ctx.concurrent_events.clear();
             }
 
-            std::unordered_set<const ggml_tensor *> fused_noncontiguous_nodes;
-
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
                 if (is_concurrent_event_active) {
@@ -4826,16 +4813,10 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     continue;
                 }
 
-                if (fused_noncontiguous_nodes.erase(node) > 0) {
-                    continue;
-                }
-
-                int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i, fused_noncontiguous_nodes);
+                int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
 
                 if (nodes_to_skip != 0) {
-                    if (nodes_to_skip > 0) {
-                        i += nodes_to_skip;
-                    }
+                    i += nodes_to_skip;
                     continue;
                 }
 #ifndef NDEBUG
