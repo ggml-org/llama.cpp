@@ -6,6 +6,12 @@
 // TODO: become function constants
 
 #define SZ_SIMDGROUP 16
+
+typedef struct {
+    uint64_t plane; // ne0*ne1 elements per (im, split) plane
+    uint64_t total; // ne0*ne1*ne12*ne13 output elements
+    int32_t  nsk;   // number of K splits
+} ggml_metal_kargs_mul_mm_sk_reduce;
 #define N_MM_NK 2
 #define N_MM_NK_TOTAL (SZ_SIMDGROUP * N_MM_NK)
 
