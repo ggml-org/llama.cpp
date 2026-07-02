@@ -2378,6 +2378,18 @@ static void func_args_not_string(json & messages) {
     }
 }
 
+static void trim_all_content(json & messages) {
+    GGML_ASSERT(messages.is_array());
+    for (auto & message : messages) {
+        if (message.contains("reasoning_content")) {
+            message["reasoning_content"] = trim_whitespace(message["reasoning_content"]);
+        }
+        if (message.contains("content")) {
+            message["content"] = trim_whitespace(message["content"]);
+        }
+    }
+}
+
 }
 
 // MiniCPM5 format:
@@ -2683,6 +2695,11 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
 
     if (tmpl.original_caps().supports_object_arguments) {
         workaround::func_args_not_string(params.messages);
+    }
+
+    if (tmpl.src.find("You have access to the following functions in JSONSchema format") != std::string::npos) {
+        // StepFun: we need to trim all contents and reasoning contents before passing them to the template
+        workaround::trim_all_content(params.messages);
     }
 
     params.extra_context = common_chat_extra_context();
