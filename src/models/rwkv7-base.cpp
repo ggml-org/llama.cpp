@@ -48,11 +48,7 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
 
     bool has_gating = layer.time_mix_g1 && layer.time_mix_g2;
 
-    ggml_tensor * sx    = ggml_sub(ctx0, x_prev, cur);
-    ggml_tensor * dummy = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_embd, n_seq_tokens, n_seqs, has_gating ? 6 : 5);
-    sx                  = ggml_repeat(ctx0, sx, dummy);
-
-    ggml_tensor * xxx = ggml_add(ctx0, ggml_mul(ctx0, sx, layer.time_mix_lerp_fused), cur);
+    ggml_tensor * xxx = ggml_rwkv_lerp(ctx0, x_prev, cur, layer.time_mix_lerp_fused);
 
     ggml_tensor * xr = ggml_view_2d(ctx0, xxx, n_embd, n_tokens, xxx->nb[1], 0);
     ggml_tensor * xw = ggml_view_2d(ctx0, xxx, n_embd, n_tokens, xxx->nb[1], n_embd * n_tokens * sizeof(float));
@@ -124,8 +120,7 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
     } else {
         cur = ggml_reshape_2d(ctx0, cur, n_embd, n_tokens);
     }
-    ggml_tensor * rk = ggml_sum_rows(ctx0, ggml_mul(ctx0, ggml_mul(ctx0, k, r), r_k));
-    cur = ggml_add(ctx0, cur, ggml_reshape_2d(ctx0, ggml_mul(ctx0, v, rk), n_embd, n_tokens));
+    cur = ggml_rwkv_rk(ctx0, cur, k, r, v, r_k);
 
     if (has_gating) {
         cur = ggml_mul(ctx0, cur, g);

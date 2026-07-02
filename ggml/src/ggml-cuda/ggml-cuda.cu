@@ -3093,6 +3093,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_TRI:
             ggml_cuda_op_tri(ctx, dst);
             break;
+        case GGML_OP_RWKV_LERP:
+            ggml_cuda_op_lerp_fused(ctx, dst->src[0], dst->src[1], dst->src[2], dst);
+            break;
+        case GGML_OP_RWKV_RK:
+            ggml_cuda_op_rwkv_rk_fused(ctx, dst->src[0], dst->src[1], dst->src[2], dst->src[3], dst->src[4], dst);
+            break;
         case GGML_OP_RWKV_WKV6:
             ggml_cuda_op_rwkv_wkv6(ctx, dst);
             break;
@@ -3551,69 +3557,6 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
     return true;
 }
 
-static bool ggml_cuda_should_fuse_lerp(
-        const ggml_tensor * sub,
-        const ggml_tensor * repeat,
-        const ggml_tensor * mul,
-        const ggml_tensor * add,
-        const ggml_tensor ** x_prev,
-        const ggml_tensor ** cur,
-        const ggml_tensor ** weight) {
-    if (sub->op != GGML_OP_SUB || mul->op != GGML_OP_MUL || add->op != GGML_OP_ADD) {
-        return false;
-    }
-
-    const ggml_tensor * sx = sub;
-    if (repeat) {
-        if (repeat->op != GGML_OP_REPEAT || repeat->src[0] != sub) {
-            return false;
-        }
-        sx = repeat;
-    }
-
-    const ggml_tensor * w = nullptr;
-    if (mul->src[0] == sx) {
-        w = mul->src[1];
-    } else if (mul->src[1] == sx) {
-        w = mul->src[0];
-    } else {
-        return false;
-    }
-
-    const ggml_tensor * add_cur = nullptr;
-    if (add->src[0] == mul) {
-        add_cur = add->src[1];
-    } else if (add->src[1] == mul) {
-        add_cur = add->src[0];
-    } else {
-        return false;
-    }
-
-    if (add_cur != sub->src[1]) {
-        return false;
-    }
-
-    const ggml_tensor * xp = sub->src[0];
-    const ggml_tensor * c  = sub->src[1];
-
-    if (xp->type != GGML_TYPE_F32 || c->type != GGML_TYPE_F32 || w->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32) {
-        return false;
-    }
-
-    if (!ggml_can_repeat(xp, add) || !ggml_can_repeat(c, add) || !ggml_can_repeat(w, add)) {
-        return false;
-    }
-
-    if (!ggml_is_contiguous(xp) || !ggml_is_contiguous(c) || !ggml_is_contiguous(w) || !ggml_is_contiguous(add)) {
-        return false;
-    }
-
-    *x_prev = xp;
-    *cur    = c;
-    *weight = w;
-    return true;
-}
-
 static bool ggml_cuda_should_fuse_mul_sub_add(
         const ggml_tensor * mul,
         const ggml_tensor * sub,
@@ -3705,118 +3648,6 @@ static bool ggml_cuda_should_fuse_add_mul(
     return true;
 }
 
-static bool ggml_cuda_should_fuse_rwkv_rk(
-        const ggml_tensor * mul_kr,
-        const ggml_tensor * mul_kr_rk,
-        const ggml_tensor * sum_rows,
-        const ggml_tensor * mul_v_rk,
-        const ggml_tensor * reshape,
-        const ggml_tensor * add,
-        const ggml_tensor ** cur,
-        const ggml_tensor ** k,
-        const ggml_tensor ** r,
-        const ggml_tensor ** v,
-        const ggml_tensor ** r_k) {
-    if (mul_kr->op != GGML_OP_MUL || mul_kr_rk->op != GGML_OP_MUL ||
-            sum_rows->op != GGML_OP_SUM_ROWS || mul_v_rk->op != GGML_OP_MUL ||
-            reshape->op != GGML_OP_RESHAPE || add->op != GGML_OP_ADD) {
-        return false;
-    }
-
-    if (sum_rows->src[0] != mul_kr_rk || reshape->src[0] != mul_v_rk) {
-        return false;
-    }
-
-    const ggml_tensor * rk_weight = nullptr;
-    if (mul_kr_rk->src[0] == mul_kr) {
-        rk_weight = mul_kr_rk->src[1];
-    } else if (mul_kr_rk->src[1] == mul_kr) {
-        rk_weight = mul_kr_rk->src[0];
-    } else {
-        return false;
-    }
-
-    const ggml_tensor * value = nullptr;
-    if (mul_v_rk->src[0] == sum_rows) {
-        value = mul_v_rk->src[1];
-    } else if (mul_v_rk->src[1] == sum_rows) {
-        value = mul_v_rk->src[0];
-    } else {
-        return false;
-    }
-
-    const ggml_tensor * add_cur = nullptr;
-    if (add->src[0] == reshape) {
-        add_cur = add->src[1];
-    } else if (add->src[1] == reshape) {
-        add_cur = add->src[0];
-    } else {
-        return false;
-    }
-
-    const ggml_tensor * key = mul_kr->src[0];
-    const ggml_tensor * rec = mul_kr->src[1];
-    if (key->type != GGML_TYPE_F32 || rec->type != GGML_TYPE_F32 || value->type != GGML_TYPE_F32 ||
-            rk_weight->type != GGML_TYPE_F32 || add_cur->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32) {
-        return false;
-    }
-
-    if (!ggml_is_contiguous(key) || !ggml_is_contiguous(rec) || !ggml_is_contiguous(value) ||
-            !ggml_is_contiguous(rk_weight) || !ggml_is_contiguous(add_cur) || !ggml_is_contiguous(add)) {
-        return false;
-    }
-
-    if (!ggml_are_same_shape(key, rec) || !ggml_are_same_shape(key, value)) {
-        return false;
-    }
-
-    const int64_t head_size = key->ne[0];
-    const int64_t heads     = key->ne[1];
-    const int64_t n_tokens  = key->ne[2];
-    const int64_t n_embd    = head_size * heads;
-
-    if (head_size != 64 && head_size != 128) {
-        return false;
-    }
-    if (rk_weight->ne[0] != head_size || rk_weight->ne[1] != heads || ggml_nelements(rk_weight) != head_size * heads) {
-        return false;
-    }
-    if (sum_rows->ne[0] != 1 || sum_rows->ne[1] != heads || sum_rows->ne[2] != n_tokens) {
-        return false;
-    }
-    if (add->ne[0] != n_embd || add->ne[1] != n_tokens || ggml_nelements(add) != n_embd * n_tokens) {
-        return false;
-    }
-    if (!ggml_are_same_shape(add_cur, add) || ggml_nelements(reshape) != ggml_nelements(add)) {
-        return false;
-    }
-
-    *cur = add_cur;
-    *k   = key;
-    *r   = rec;
-    *v   = value;
-    *r_k = rk_weight;
-    return true;
-}
-
-static int ggml_cuda_find_single_consumer(const ggml_cgraph * cgraph, int node_idx) {
-    if (ggml_node_get_use_count(cgraph, node_idx) != 1) {
-        return -1;
-    }
-
-    const ggml_tensor * node = cgraph->nodes[node_idx];
-    for (int i = node_idx + 1; i < cgraph->n_nodes; ++i) {
-        const ggml_tensor * consumer = cgraph->nodes[i];
-        for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
-            if (consumer->src[src_idx] == node) {
-                return i;
-            }
-        }
-    }
-
-    return -1;
-}
-
 static bool ggml_cuda_tensors_overlap(const ggml_tensor * a, const ggml_tensor * b) {
     if (a == nullptr || b == nullptr || a->buffer == nullptr || b->buffer == nullptr) {
         return false;
@@ -3842,23 +3673,6 @@ static bool ggml_cuda_add_mul_memory_ok(
     return can_read_write_inplace(src0) &&
            can_read_write_inplace(src1) &&
            can_read_write_inplace(scale);
-}
-
-static bool ggml_cuda_rwkv_rk_memory_ok(
-        const ggml_tensor * cur,
-        const ggml_tensor * k,
-        const ggml_tensor * r,
-        const ggml_tensor * v,
-        const ggml_tensor * r_k,
-        const ggml_tensor * dst) {
-    if (ggml_cuda_tensors_overlap(dst, cur) && !ggml_are_same_layout(dst, cur)) {
-        return false;
-    }
-
-    return !ggml_cuda_tensors_overlap(dst, k) &&
-           !ggml_cuda_tensors_overlap(dst, r) &&
-           !ggml_cuda_tensors_overlap(dst, v) &&
-           !ggml_cuda_tensors_overlap(dst, r_k);
 }
 
 // returns whether the write (out) nodes overwrite the read nodes in operation
@@ -4241,38 +4055,6 @@ static int ggml_cuda_try_fuse(
         return 2;
     }
 
-    // RWKV lerp: cur + (x_prev - cur) * weight. Time-mix has an extra REPEAT
-    // between SUB and MUL; channel-mix uses SUB directly.
-    if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_SUB, GGML_OP_REPEAT, GGML_OP_MUL, GGML_OP_ADD }, { i + 3 })) {
-        const ggml_tensor * x_prev = nullptr;
-        const ggml_tensor * cur    = nullptr;
-        const ggml_tensor * weight = nullptr;
-
-        if (ggml_cuda_should_fuse_lerp(cgraph->nodes[i], cgraph->nodes[i + 1], cgraph->nodes[i + 2], cgraph->nodes[i + 3],
-                                       &x_prev, &cur, &weight)) {
-            const int out_nodes[] = { i + 3 };
-            if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, 4, out_nodes, 1)) {
-                ggml_cuda_op_lerp_fused(*cuda_ctx, x_prev, cur, weight, cgraph->nodes[i + 3]);
-                return 3;
-            }
-        }
-    }
-
-    if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_SUB, GGML_OP_MUL, GGML_OP_ADD }, { i + 2 })) {
-        const ggml_tensor * x_prev = nullptr;
-        const ggml_tensor * cur    = nullptr;
-        const ggml_tensor * weight = nullptr;
-
-        if (ggml_cuda_should_fuse_lerp(cgraph->nodes[i], nullptr, cgraph->nodes[i + 1], cgraph->nodes[i + 2],
-                                       &x_prev, &cur, &weight)) {
-            const int out_nodes[] = { i + 2 };
-            if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, 3, out_nodes, 1)) {
-                ggml_cuda_op_lerp_fused(*cuda_ctx, x_prev, cur, weight, cgraph->nodes[i + 2]);
-                return 2;
-            }
-        }
-    }
-
     // RWKV key update: k + (a * ka - ka).
     if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_MUL, GGML_OP_SUB, GGML_OP_ADD }, { i + 2 })) {
         const ggml_tensor * base  = nullptr;
@@ -4299,49 +4081,6 @@ static int ggml_cuda_try_fuse(
             if (ggml_cuda_add_mul_memory_ok(src0, src1, scale, cgraph->nodes[i + 1])) {
                 ggml_cuda_op_add_mul_fused(*cuda_ctx, src0, src1, scale, cgraph->nodes[i + 1]);
                 return 1;
-            }
-        }
-    }
-
-    // RWKV r_k correction:
-    //   cur + reshape(v * sum_rows((k * r) * r_k))
-    if (node->op == GGML_OP_MUL) {
-        const int mul_kr_rk_idx = ggml_cuda_find_single_consumer(cgraph, i);
-        const int sum_rows_idx  = mul_kr_rk_idx > i ? ggml_cuda_find_single_consumer(cgraph, mul_kr_rk_idx) : -1;
-        const int mul_v_rk_idx  = sum_rows_idx  > i ? ggml_cuda_find_single_consumer(cgraph, sum_rows_idx)  : -1;
-        const int reshape_idx   = mul_v_rk_idx  > i ? ggml_cuda_find_single_consumer(cgraph, mul_v_rk_idx)  : -1;
-        const int add_idx       = reshape_idx   > i ? ggml_cuda_find_single_consumer(cgraph, reshape_idx)   : -1;
-        const ggml_tensor * cur = nullptr;
-        const ggml_tensor * k   = nullptr;
-        const ggml_tensor * r   = nullptr;
-        const ggml_tensor * v   = nullptr;
-        const ggml_tensor * r_k = nullptr;
-
-        const bool chain_ok = add_idx > i &&
-            cgraph->nodes[mul_kr_rk_idx]->op == GGML_OP_MUL &&
-            cgraph->nodes[sum_rows_idx]->op  == GGML_OP_SUM_ROWS &&
-            cgraph->nodes[mul_v_rk_idx]->op  == GGML_OP_MUL &&
-            cgraph->nodes[reshape_idx]->op   == GGML_OP_RESHAPE &&
-            cgraph->nodes[add_idx]->op       == GGML_OP_ADD;
-
-        bool range_ok = chain_ok;
-        for (int j = i + 1; range_ok && j < add_idx; ++j) {
-            if (j == mul_kr_rk_idx || j == sum_rows_idx || j == mul_v_rk_idx || j == reshape_idx) {
-                continue;
-            }
-            const ggml_tensor * n = cgraph->nodes[j];
-            range_ok = ggml_is_empty(n) || n->op == GGML_OP_RESHAPE || n->op == GGML_OP_TRANSPOSE ||
-                       n->op == GGML_OP_VIEW || n->op == GGML_OP_PERMUTE || n->op == GGML_OP_NONE ||
-                       (n->flags & GGML_TENSOR_FLAG_COMPUTE) == 0;
-        }
-
-        if (range_ok &&
-                ggml_cuda_should_fuse_rwkv_rk(cgraph->nodes[i], cgraph->nodes[mul_kr_rk_idx], cgraph->nodes[sum_rows_idx],
-                                              cgraph->nodes[mul_v_rk_idx], cgraph->nodes[reshape_idx], cgraph->nodes[add_idx],
-                                              &cur, &k, &r, &v, &r_k)) {
-            if (ggml_cuda_rwkv_rk_memory_ok(cur, k, r, v, r_k, cgraph->nodes[add_idx])) {
-                ggml_cuda_op_rwkv_rk_fused(*cuda_ctx, cur, k, r, v, r_k, cgraph->nodes[add_idx]);
-                return add_idx - i;
             }
         }
     }
@@ -5859,6 +5598,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_LEAKY_RELU:
+        case GGML_OP_RWKV_LERP:
+        case GGML_OP_RWKV_RK:
         case GGML_OP_RWKV_WKV6:
         case GGML_OP_GATED_LINEAR_ATTN:
         case GGML_OP_RWKV_WKV7:

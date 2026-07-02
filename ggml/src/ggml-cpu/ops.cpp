@@ -10263,6 +10263,160 @@ void ggml_compute_forward_add_rel_pos(
     }
 }
 
+// ggml_compute_forward_rwkv_lerp
+
+static void ggml_compute_forward_rwkv_lerp_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * x_prev = dst->src[0];
+    const ggml_tensor * cur    = dst->src[1];
+    const ggml_tensor * weight = dst->src[2];
+
+    GGML_ASSERT(ggml_is_contiguous(x_prev));
+    GGML_ASSERT(ggml_is_contiguous(cur));
+    GGML_ASSERT(ggml_is_contiguous(weight));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t n = ggml_nelements(dst);
+    const int64_t dr = (n + nth - 1) / nth;
+    const int64_t i0 = dr * ith;
+    const int64_t i1 = MIN(i0 + dr, n);
+
+    const float * x = (const float *) x_prev->data;
+    const float * c = (const float *) cur->data;
+    const float * w = (const float *) weight->data;
+    float * d = (float *) dst->data;
+
+    const int64_t base_total = ggml_nelements(x_prev);
+    const int64_t n_mix = dst->ne[3];
+    if (ggml_are_same_shape(x_prev, cur) &&
+            dst->ne[0] == x_prev->ne[0] &&
+            dst->ne[1] == x_prev->ne[1] &&
+            dst->ne[2] == x_prev->ne[2] &&
+            n == base_total * n_mix &&
+            weight->ne[0] == dst->ne[0] &&
+            weight->ne[1] == 1 &&
+            weight->ne[2] == 1 &&
+            weight->ne[3] == n_mix &&
+            ggml_nelements(weight) == dst->ne[0] * n_mix) {
+        for (int64_t i = i0; i < i1; ++i) {
+            const int64_t ibase = i % base_total;
+            const int64_t imix  = i / base_total;
+            const int64_t iembd = ibase % dst->ne[0];
+            const float cv = c[ibase];
+            d[i] = cv + (x[ibase] - cv) * w[imix * dst->ne[0] + iembd];
+        }
+        return;
+    }
+
+    const int64_t ne0 = dst->ne[0];
+    const int64_t ne1 = dst->ne[1];
+    const int64_t ne2 = dst->ne[2];
+
+    const auto index = [](const ggml_tensor * t, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+        const int64_t j0 = i0 % t->ne[0];
+        const int64_t j1 = i1 % t->ne[1];
+        const int64_t j2 = i2 % t->ne[2];
+        const int64_t j3 = i3 % t->ne[3];
+        return (((size_t) j3 * t->ne[2] + j2) * t->ne[1] + j1) * t->ne[0] + j0;
+    };
+
+    for (int64_t i = i0; i < i1; ++i) {
+        const int64_t d0 = i % ne0;
+        const int64_t q1 = i / ne0;
+        const int64_t d1 = q1 % ne1;
+        const int64_t q2 = q1 / ne1;
+        const int64_t d2 = q2 % ne2;
+        const int64_t d3 = q2 / ne2;
+
+        const size_t ix = index(x_prev, d0, d1, d2, d3);
+        const size_t ic = index(cur,    d0, d1, d2, d3);
+        const size_t iw = index(weight, d0, d1, d2, d3);
+
+        const float cv = c[ic];
+        d[i] = cv + (x[ix] - cv) * w[iw];
+    }
+}
+
+void ggml_compute_forward_rwkv_lerp(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            ggml_compute_forward_rwkv_lerp_f32(params, dst);
+            break;
+        default:
+            GGML_ABORT("fatal error");
+    }
+}
+
+// ggml_compute_forward_rwkv_rk
+
+static void ggml_compute_forward_rwkv_rk_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * cur = dst->src[0];
+    const ggml_tensor * k   = dst->src[1];
+    const ggml_tensor * r   = dst->src[2];
+    const ggml_tensor * v   = dst->src[3];
+    const ggml_tensor * r_k = dst->src[4];
+
+    GGML_ASSERT(ggml_is_contiguous(cur));
+    GGML_ASSERT(ggml_is_contiguous(k));
+    GGML_ASSERT(ggml_is_contiguous(r));
+    GGML_ASSERT(ggml_is_contiguous(v));
+    GGML_ASSERT(ggml_is_contiguous(r_k));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    const int64_t head_size = k->ne[0];
+    const int64_t H         = k->ne[1];
+    const int64_t T         = k->ne[2];
+    const int64_t C         = head_size * H;
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+    const int64_t n_rows = H * T;
+    const int64_t dr = (n_rows + nth - 1) / nth;
+    const int64_t ir0 = dr * ith;
+    const int64_t ir1 = MIN(ir0 + dr, n_rows);
+
+    const float * cur_data = (const float *) cur->data;
+    const float * k_data   = (const float *) k->data;
+    const float * r_data   = (const float *) r->data;
+    const float * v_data   = (const float *) v->data;
+    const float * rk_data  = (const float *) r_k->data;
+    float * dst_data = (float *) dst->data;
+
+    for (int64_t row = ir0; row < ir1; ++row) {
+        const int64_t h = row % H;
+        const int64_t t = row / H;
+        const int64_t off = t * C + h * head_size;
+
+        float rk = 0.0f;
+        for (int64_t i = 0; i < head_size; ++i) {
+            rk += k_data[off + i] * r_data[off + i] * rk_data[h * head_size + i];
+        }
+        for (int64_t i = 0; i < head_size; ++i) {
+            dst_data[off + i] = cur_data[off + i] + v_data[off + i] * rk;
+        }
+    }
+}
+
+void ggml_compute_forward_rwkv_rk(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            ggml_compute_forward_rwkv_rk_f32(params, dst);
+            break;
+        default:
+            GGML_ABORT("fatal error");
+    }
+}
+
 // ggml_compute_forward_rwkv_wkv6
 
 static void ggml_compute_forward_rwkv_wkv6_f32(

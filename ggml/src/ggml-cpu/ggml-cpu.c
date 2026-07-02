@@ -2031,6 +2031,14 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_add_rel_pos(params, tensor);
             } break;
+        case GGML_OP_RWKV_LERP:
+            {
+                ggml_compute_forward_rwkv_lerp(params, tensor);
+            } break;
+        case GGML_OP_RWKV_RK:
+            {
+                ggml_compute_forward_rwkv_rk(params, tensor);
+            } break;
         case GGML_OP_RWKV_WKV6:
             {
                 ggml_compute_forward_rwkv_wkv6(params, tensor);
@@ -2371,6 +2379,11 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_FLASH_ATTN_BACK:
         case GGML_OP_SSM_CONV:
         case GGML_OP_SSM_SCAN:
+            {
+                n_tasks = n_threads;
+            } break;
+        case GGML_OP_RWKV_LERP:
+        case GGML_OP_RWKV_RK:
             {
                 n_tasks = n_threads;
             } break;

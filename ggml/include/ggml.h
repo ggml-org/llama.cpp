@@ -563,6 +563,8 @@ extern "C" {
         GGML_OP_WIN_UNPART,
         GGML_OP_GET_REL_POS,
         GGML_OP_ADD_REL_POS,
+        GGML_OP_RWKV_LERP,
+        GGML_OP_RWKV_RK,
         GGML_OP_RWKV_WKV6,
         GGML_OP_GATED_LINEAR_ATTN,
         GGML_OP_RWKV_WKV7,
@@ -2500,6 +2502,20 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * pw,
             struct ggml_tensor  * ph);
+
+    GGML_API struct ggml_tensor * ggml_rwkv_lerp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x_prev,
+            struct ggml_tensor  * cur,
+            struct ggml_tensor  * weight);
+
+    GGML_API struct ggml_tensor * ggml_rwkv_rk(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * cur,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * r,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * r_k);
 
     GGML_API struct ggml_tensor * ggml_rwkv_wkv6(
             struct ggml_context * ctx,
