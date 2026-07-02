@@ -568,6 +568,10 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head_kv    (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa        (const struct llama_model * model);
 
+    // Number of MTP / NextN draft head layers bundled with the model (0 if none).
+    // Used by callers (e.g. imatrix) that need to know whether the model carries an MTP head.
+    LLAMA_API int32_t llama_model_n_nextn    (const struct llama_model * model);
+
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 
