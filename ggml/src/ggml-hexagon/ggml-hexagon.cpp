@@ -3147,8 +3147,12 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
 
     int mode = op_params[2];
 
+    // n_dims == ne0/2, so the rotation spans the full row
     if (mode == GGML_ROPE_TYPE_VISION) {
-        return false;
+        const int n_dims = op_params[1];
+        if (n_dims != (int) (op->src[0]->ne[0] / 2)) {
+            return false;
+        }
     }
     if (mode & 1) {
         return false;
@@ -3179,16 +3183,19 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
     }
 
     if (src2) {
-        if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(src2) ||
-            !ggml_is_contiguous(dst)) {
+        if (!ggml_is_contiguous(src1) || !ggml_is_contiguous(src2) || !ggml_is_contiguous(dst)) {
             return false;
         }
     } else {
-        if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+        if (!ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
             return false;
         }
     }
 
+    // src0 rows must be densely packed so each DMA transfer covers exactly one row
+    if (src0->nb[0] != sizeof(float) || src0->nb[1] != src0->ne[0] * sizeof(float)) {
+        return false;
+    }
     return true;
 }
 

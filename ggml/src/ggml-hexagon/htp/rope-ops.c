@@ -23,6 +23,7 @@
 #define HTP_ROPE_TYPE_NORMAL 0
 #define HTP_ROPE_TYPE_NEOX   2
 #define HTP_ROPE_TYPE_MROPE  8
+#define HTP_ROPE_TYPE_VISION 24
 #define HTP_ROPE_TYPE_IMROPE 40
 
 #define HTP_ROPE_SPAD_NROWS  16
@@ -210,6 +211,7 @@ static __attribute__((noinline)) void mrope_cache_init(const float    pos_t,
                              const float    pos_e,
                              const int32_t  sections[4],
                              const bool     is_imrope,
+                             const bool     indep_sects,
                              const float    freq_scale,
                              const float *  freq_factors,
                              float *        corr_dims,
@@ -230,6 +232,14 @@ static __attribute__((noinline)) void mrope_cache_init(const float    pos_t,
     for (uint32_t i0 = 0; i0 < ne0; i0 += 2) {
         const float ff     = freq_factors ? freq_factors[i0 / 2] : 1.0f;
         const int   sector = (i0 / 2) % sect_dims;
+
+        if (indep_sects) {
+            // Reset theta when crossing into a new section.
+            if      (sector == 0)           { theta_t = pos_t; }
+            else if (sector == sections[0]) { theta_h = pos_h; }
+            else if (sector == sec_w)       { theta_w = pos_w; }
+            else if (sector == sec_e)       { theta_e = pos_e; }
+        }
 
         float theta;
         if (is_imrope) {
@@ -422,6 +432,17 @@ static void inline rope_neox_f32(struct htp_rope_context * rctx, uint8_t * restr
     }
 }
 
+static void inline rope_vision_f32(struct htp_rope_context * rctx, uint8_t * restrict dst, uint8_t * restrict src,
+                   uint32_t nr, uint32_t ne0, const float * restrict theta_cache) {
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nr; i++) {
+        float * d = (float *) (dst + i * rctx->dst_row_size_aligned);
+        float * s = (float *) (src + i * rctx->src0_row_size_aligned);
+
+        hvx_rope_neox_f32_aa(d, s, ne0, theta_cache);
+    }
+}
+
 static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     struct htp_rope_context * rctx = (struct htp_rope_context *) data;
     struct htp_ops_context * octx = rctx->octx;
@@ -447,8 +468,9 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     uint64_t tt = HAP_perf_get_qtimer_count();
 
     const int32_t mode    = rctx->mode;
-    // MROPE and IMROPE use NEOX-style pairing for the rotation
+    // MROPE, IMROPE and VISION use NEOX-style pairing for the rotation
     const bool    is_neox = (mode & HTP_ROPE_TYPE_NEOX) || (mode & HTP_ROPE_TYPE_MROPE);
+    const bool    is_vision = (mode == HTP_ROPE_TYPE_VISION);
 
     // VTCM setup
     uint8_t * src0_spad_base = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
@@ -516,7 +538,7 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                             (float) pos[i2 + ne2],
                             (float) pos[i2 + ne2 * 2],
                             (float) pos[i2 + ne2 * 3],
-                            rctx->sections, is_imrope,
+                            rctx->sections, is_imrope, is_vision,
                             rctx->freq_scale, freq_factors, rctx->corr_dims,
                             ne0, rctx->ext_factor, rctx->attn_factor,
                             theta_cache, rctx->theta_scale);
@@ -542,7 +564,9 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                     // FARF(HIGH, "rope-compute %u: ir %u i1 %u i2 %u i3 %u src-spad %p cnr %u : usec %u", ith, ir, i1, i2, i3, src_spad, cnr,
                     //         (unsigned) HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - rctx->t_start));
 
-                    if (is_neox) {
+                    if (is_vision) {
+                        rope_vision_f32(rctx, dst_spad, src_spad, cnr, ne0, theta_cache);
+                    } else if (is_neox) {
                         rope_neox_f32(rctx, dst_spad, src_spad, cnr, ne0, theta_cache);
                     } else {
                         rope_basic_f32(rctx, dst_spad, src_spad, cnr, ne0, theta_cache);
