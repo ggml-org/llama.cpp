@@ -968,7 +968,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         for (auto & s : smpls) {
             common_params_sampling sparams;
             sparams.no_perf  = false;
-            sparams.top_k    = 1;
+            sparams.top_k    = 10;
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
             s.reset(common_sampler_init(model_dft, sparams));
         }
@@ -1172,6 +1172,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 }
 
                 const llama_token id = cur_p->data[0].id;
+
+                if (cur_p->data[0].p < params.p_min) {
+                    break;
+                }
 
                 common_sampler_accept(smpl, id, true);
 
