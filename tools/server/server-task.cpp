@@ -910,7 +910,8 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
                         {"content_block", {
                             {"type", "tool_use"},
                             {"id", full_tool_call.id},
-                            {"name", full_tool_call.name}
+                            {"name", full_tool_call.name},
+                            {"input", json::object()}
                         }}
                     }}
                 });
@@ -1427,7 +1428,8 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
                         {"content_block", {
                             {"type", "tool_use"},
                             {"id", diff.tool_call_delta.id},
-                            {"name", diff.tool_call_delta.name}
+                            {"name", diff.tool_call_delta.name},
+                            {"input", json::object()}
                         }}
                     }}
                 });
