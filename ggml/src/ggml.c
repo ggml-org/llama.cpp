@@ -1781,6 +1781,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
         /*.padding      =*/ { 0 },
+        /*.org_src       =*/ NULL,
     };
 
     // TODO: this should not be needed as long as we don't rely on aligned SIMD loads
