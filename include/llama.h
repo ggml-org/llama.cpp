@@ -774,6 +774,15 @@ extern "C" {
     // Check if the memory supports shifting
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
+    typedef struct llama_memory_kv_cache_stats {
+        uint64_t used_cells;
+        uint64_t total_cells;
+    } llama_memory_kv_cache_stats;
+
+    // Returns KV cache cell usage.
+    // For models without a KV cache, both values are 0.
+    LLAMA_API llama_memory_kv_cache_stats llama_memory_get_kv_cache_stats(llama_memory_t mem);
+
     //
     // State / sessions
     //

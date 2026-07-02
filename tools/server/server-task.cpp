@@ -1524,6 +1524,9 @@ json server_task_result_metrics::to_json() {
         { "n_decode_total",                  n_decode_total },
         { "n_busy_slots_total",              n_busy_slots_total },
 
+        { "kv_cache_used_cells",             kv_cache_used_cells },
+        { "kv_cache_total_cells",            kv_cache_total_cells },
+
         { "slots",                           slots_data },
     };
 }

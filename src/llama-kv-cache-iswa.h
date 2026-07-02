@@ -64,6 +64,7 @@ public:
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
     bool get_can_shift() const override;
+    llama_memory_kv_cache_stats get_kv_cache_stats() const override;
 
     void clear(bool data) override;
 

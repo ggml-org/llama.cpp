@@ -700,6 +700,10 @@ bool llama_memory_recurrent::get_can_shift() const {
     return true;
 }
 
+llama_memory_kv_cache_stats llama_memory_recurrent::get_kv_cache_stats() const {
+    return {};
+}
+
 size_t llama_memory_recurrent::total_size() const {
     size_t size = 0;
     for (const auto & [_, buf] : ctxs_bufs) {
