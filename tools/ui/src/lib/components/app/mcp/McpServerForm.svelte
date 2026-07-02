@@ -39,12 +39,12 @@
 	let headerPairs = $derived<KeyValuePair[]>(parseHeadersToArray(headers));
 
 	const AUTHORIZATION_HEADER = 'Authorization';
-	const BEARER_PREFIX = 'Bearer ';
 
+	// Detect Authorization by key presence alone, never by value: mid-edit rows
+	// may have an empty value, and an empty Authorization row must remain
+	// reachable so it can be filled in or cleared via the toggle below.
 	let hasAuthorization = $derived(
-		headerPairs.some(
-			(p) => p.key.trim().toLowerCase() === AUTHORIZATION_HEADER.toLowerCase() && p.value.trim()
-		)
+		headerPairs.some((p) => p.key.trim().toLowerCase() === AUTHORIZATION_HEADER.toLowerCase())
 	);
 
 	let wantsAuthorization = $state(false);
@@ -52,31 +52,26 @@
 	let showAuthorization = $derived(hasAuthorization || wantsAuthorization);
 
 	let urlInput: HTMLInputElement | null = $state(null);
-	let bearerInput: HTMLInputElement | null = $state(null);
+	let authorizationInput: HTMLInputElement | null = $state(null);
 
 	$effect(() => {
 		urlInput?.focus();
 	});
 
 	$effect(() => {
-		if (wantsAuthorization && bearerInput) {
-			bearerInput.focus();
+		if (wantsAuthorization && authorizationInput) {
+			authorizationInput.focus();
 		}
 	});
 
-	let bearerToken = $derived.by(() => {
+	// Surface the Authorization header's value verbatim so the exact string that
+	// was persisted round-trips on save, whether it carries a "Bearer " prefix
+	// or uses a different scheme (e.g. Basic, raw token).
+	let authorizationValue = $derived.by(() => {
 		const auth = headerPairs.find(
 			(p) => p.key.trim().toLowerCase() === AUTHORIZATION_HEADER.toLowerCase()
 		);
-		if (!auth) return '';
-
-		const value = auth.value.trim();
-
-		if (value.toLowerCase().startsWith(BEARER_PREFIX.toLowerCase())) {
-			return value.slice(BEARER_PREFIX.length).trim();
-		}
-
-		return value;
+		return auth?.value ?? '';
 	});
 
 	$effect(() => {
@@ -90,15 +85,15 @@
 		onHeadersChange(serializeHeaders(newPairs));
 	}
 
-	function updateBearerToken(token: string) {
+	function updateAuthorizationValue(value: string) {
 		const filtered = headerPairs.filter(
 			(p) => p.key.trim().toLowerCase() !== AUTHORIZATION_HEADER.toLowerCase()
 		);
 
-		const trimmed = token.trim();
+		const trimmed = value.trim();
 
 		if (trimmed) {
-			filtered.push({ key: AUTHORIZATION_HEADER, value: `${BEARER_PREFIX}${trimmed}` });
+			filtered.push({ key: AUTHORIZATION_HEADER, value: trimmed });
 		}
 
 		updateHeaderPairs(filtered);
@@ -148,23 +143,16 @@
 	</label>
 
 	{#if showAuthorization}
-		<div class="relative mt-2">
+		<div class="mt-2">
 			<Input
-				id="bearer-token-{id}"
+				id="authorization-{id}"
 				type="password"
 				autocomplete="off"
-				placeholder="Paste token here"
-				value={bearerToken}
-				oninput={(e) => updateBearerToken(e.currentTarget.value)}
-				class="pl-16"
-				bind:ref={bearerInput}
+				placeholder="e.g. Bearer eyJhbGci..."
+				value={authorizationValue}
+				oninput={(e) => updateAuthorizationValue(e.currentTarget.value)}
+				bind:ref={authorizationInput}
 			/>
-
-			<span
-				class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm font-medium text-foreground"
-			>
-				Bearer
-			</span>
 		</div>
 	{/if}
 
