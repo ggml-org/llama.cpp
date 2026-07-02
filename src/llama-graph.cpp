@@ -2172,8 +2172,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_soft_max_add_sinks(kq, sinks);
         cb(kq, "kq_soft_max", il);
 
+        // original KV-cache V type: v is reassigned below (dequant + transpose),
+        // and the inverse-WHT gate after the kqv contraction must key on the
+        // type the values were stored as, not the post-cast F32.
+        const ggml_type v_type_kv = v->type;
+
         if (!v_trans) {
             // note: avoid this branch
+            //
+            // Block-quantized V (e.g. TurboQuant KV) is stored untransposed and
+            // cannot be validly transposed post-hoc: each block encodes a run of
+            // logically contiguous elements along dim 0, and ggml_cont on a
+            // transposed view reinterprets raw block bytes with element-level
+            // strides, scrambling the layout. Dequantize to F32 first (row-wise,
+            // layout-preserving); for turbo the values stay in the WHT-rotated
+            // domain, which is exactly what the kqv contraction expects -- the
+            // inverse WHT on kqv below undoes the rotation.
+            if (ggml_is_quantized(v->type)) {
+                v = ggml_cast(ctx0, v, GGML_TYPE_F32);
+                cb(v, "v_dequant", il);
+            }
             v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
             cb(v, "v_cont", il);
         }
@@ -2182,10 +2200,13 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         cb(kqv, "kqv", il);
 
         // TurboQuant: inverse WHT on attention output (non-FA path)
-        if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0 || v->type == GGML_TYPE_TURBO2_0) {
+        if (v_type_kv == GGML_TYPE_TURBO3_0 || v_type_kv == GGML_TYPE_TURBO4_0 || v_type_kv == GGML_TYPE_TURBO2_0) {
             const bool k_is_turbo = (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0);
-            const ggml_tensor * group_src = k_is_turbo ? k : v;
-            const int turbo_group = (group_src->ne[0] % 128 == 0) ? 128 : 64;
+            // group from K when K is turbo (MLA: V is a view of K with different
+            // ne[0]); otherwise from the head dim. v is post-transpose here
+            // (ne[0] = n_kv), so use kqv->ne[0] (== V's pre-transpose ne[0]).
+            const int64_t group_dim = k_is_turbo ? k->ne[0] : kqv->ne[0];
+            const int turbo_group = (group_dim % 128 == 0) ? 128 : 64;
             if (kqv->ne[0] % turbo_group == 0) {
                 if (!ggml_is_contiguous(kqv)) { kqv = ggml_cont(ctx0, kqv); }
                 ggml_tensor * innerq_scale = mctx ? mctx->get_turbo_innerq_scale_inv() : nullptr;

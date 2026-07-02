@@ -2008,7 +2008,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
     const bool attn_v_trans = !cparams.flash_attn && !turbo_v;
 
     if (!cparams.flash_attn && turbo_v) {
-        LLAMA_LOG_WARN("%s: using non-transposed V cache for %s without flash_attn; the transposed V update path is not implemented for block-quantized V caches\n",
+        LLAMA_LOG_WARN("%s: using non-transposed V cache for %s without flash_attn; the transposed V update path is not implemented for block-quantized V caches, so V is dequantized to F32 in the attention graph instead\n",
                 __func__, ggml_type_name(params.type_v));
     }
 

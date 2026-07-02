@@ -112,6 +112,20 @@ template <dequantize_kernel_t dequant, int qk> static void cpy_blck_q_f32(const 
     }
 }
 
+// Variant of cpy_blck_q_f32 for quantized types whose dequantize kernel
+// returns CONSECUTIVE element pairs (iqs, iqs+1) — e.g. the turbo types —
+// instead of q4/q5-style split halves (iqs, iqs + qk/2).
+template <dequantize_kernel_t dequant, int qk> static void cpy_blck_q_f32_consec(const char * cxi, char * cdsti) {
+    float * cdstf = (float *) (cdsti);
+
+    for (int j = 0; j < qk; j += 2) {
+        dfloat2 dq;
+        dequant(cxi, 0, j, dq);
+        cdstf[j + 0] = dq.x();
+        cdstf[j + 1] = dq.y();
+    }
+}
+
 
 template <typename T, int qk>
 static void cpy_q_q(const char * cx, char * cdst, const int ne, const int ne00, const int ne01, const int ne02,
@@ -542,6 +556,20 @@ static void ggml_cpy_turbo2_0_turbo2_0(const char * cx, char * cdst, const int n
         });
 }
 
+template <cpy_kernel_t cpy_blck, int qk>
+static void ggml_cpy_turbo_f32_sycl(const char * cx, char * cdst, const int ne, const int ne00, const int ne01,
+                                    const int ne02, const int nb00, const int nb01, const int nb02, const int nb03,
+                                    const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
+                                    const int nb12, const int nb13, queue_ptr stream) {
+    // one workitem per quantized block (cpy_q_f32 computes i = wi * qk)
+    const int num_blocks = ceil_div(ne, qk);
+    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks), sycl::range<3>(1, 1, 1)),
+                         [=](sycl::nd_item<3> item_ct1) {
+                             cpy_q_f32<cpy_blck, qk>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                                                     ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
+                         });
+}
+
 void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1) try {
     // Unlike other operators ggml_sycl_cpy takes 2 distinct tensors instead of a dst ggml_tensor and rely on its src field
     scope_op_debug_print scope_dbg_print(__func__, src1, /*num_src=*/0, debug_get_tensor_str("\tsrc0", src0));
@@ -625,6 +653,15 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
         ggml_cpy_turbo3_0_turbo3_0(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
     } else if (src0->type == GGML_TYPE_TURBO4_0 && src1->type == GGML_TYPE_TURBO4_0) {
         ggml_cpy_turbo4_0_turbo4_0(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+    } else if (src0->type == GGML_TYPE_TURBO2_0 && src1->type == GGML_TYPE_F32) {
+        ggml_cpy_turbo_f32_sycl<cpy_blck_q_f32_consec<dequantize_turbo2_0, QK_TURBO2>, QK_TURBO2>(
+            src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+    } else if (src0->type == GGML_TYPE_TURBO3_0 && src1->type == GGML_TYPE_F32) {
+        ggml_cpy_turbo_f32_sycl<cpy_blck_q_f32_consec<dequantize_turbo3_0, QK_TURBO3>, QK_TURBO3>(
+            src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+    } else if (src0->type == GGML_TYPE_TURBO4_0 && src1->type == GGML_TYPE_F32) {
+        ggml_cpy_turbo_f32_sycl<cpy_blck_q_f32_consec<dequantize_turbo4_0, QK_TURBO4>, QK_TURBO4>(
+            src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
     } else {
         GGML_LOG_ERROR("%s: unsupported type combination (%s to %s)\n", __func__, ggml_type_name(src0->type),
                        ggml_type_name(src1->type));

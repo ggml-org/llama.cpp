@@ -5446,6 +5446,10 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 if(src0_type == GGML_TYPE_Q4_1 && src1_type == GGML_TYPE_Q4_1) {
                     return true;
                 }
+                if ((src0_type == GGML_TYPE_TURBO2_0 || src0_type == GGML_TYPE_TURBO3_0 ||
+                     src0_type == GGML_TYPE_TURBO4_0) && src1_type == GGML_TYPE_F32) {
+                    return true;
+                }
                 return false;
             }
         case GGML_OP_REPEAT_BACK:

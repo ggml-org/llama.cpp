@@ -458,18 +458,17 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
 // vs the dedicated FA kernels) and is what turbo actually ran on before this
 // port (FA was vetoed, so -fa off's non-FA path was turbo's ONLY path).
 //
-// XFAIL, not GATE: build_attn_mha's non-FA branch (llama-graph.cpp) does
-// `v = ggml_cont(ggml_transpose(v))` unconditionally when !v_trans. Turbo
-// forces v_trans=false specifically so V stays untransposed in the cache
-// (block-quantized V cannot be validly transposed post-hoc: a block encodes
-// 128 logically-contiguous elements along dim 0, and transposing scrambles
-// that grouping without dequantizing first), but this code path immediately
-// transposes it anyway, corrupting the block layout. Root-caused this session
-// (cosine ~0.0-0.24 vs CPU reference); NOT part of the turbo-FA port (the FA
-// kernels ported here are exercised only via ggml_flash_attn_ext, never this
-// mul_mat/softmax/mul_mat chain). Fixing requires reworking build_attn_mha's
-// non-FA V handling for block-quantized types -- out of scope here, tracked
-// as a follow-up. Use -fa on (turbo's fully-supported path) until fixed.
+// GATE (was XFAIL): build_attn_mha's non-FA branch used to do
+// `v = ggml_cont(ggml_transpose(v))` unconditionally when !v_trans, which is
+// invalid for block-quantized V (a block encodes 128 logically-contiguous
+// elements along dim 0; transposing scrambles that grouping without
+// dequantizing first). Fixed in llama-graph.cpp by dequantizing quantized V
+// to F32 (ggml_cast) BEFORE the transpose; the dequantized values stay in the
+// WHT-rotated domain, and the inverse WHT on kqv (keyed on the original
+// KV-cache V type) undoes the rotation after the contraction. This probe
+// mirrors that fixed graph: turbo V -> cast F32 -> cont(transpose) ->
+// mul_mat -> inverse WHT. Exercises the SYCL turbo->f32 CPY kernel (cpy.cpp)
+// plus the mmvq turbo-K path on device.
 static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
                                ggml_type kv_type, const char * name, int64_t d) {
     const int64_t n_kv = 256, nh = 1;
@@ -502,13 +501,12 @@ static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
         ggml_tensor * kq = ggml_mul_mat(ctx, k, qq);
         ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
         kq = ggml_soft_max_ext(ctx, kq, nullptr, scale, 0.0f);
-        // v_trans=false for turbo (see llama-model.cpp attn_v_trans), so V is used
-        // directly (not transposed) here, same as build_attn_mha's !v_trans branch:
-        // it still needs the (nkv, dv) x (nkv, nq) -> (dv, nq) contraction, which
-        // requires V^T; ggml_mul_mat(v,kq) computes k^T @ q shape semantics, so
-        // mirror the working code path via cont+transpose on the F32/F16 REFERENCE
-        // only (turbo doesn't hit this since it's tiny nq=1 either way in our test).
-        ggml_tensor * v_t = ggml_cont(ctx, ggml_transpose(ctx, v));
+        // Mirror build_attn_mha's FIXED !v_trans branch: block-quantized V
+        // cannot be transposed post-hoc, so quantized V is dequantized to F32
+        // first (stays in the WHT-rotated domain), THEN cont+transpose'd. The
+        // f16 reference path keeps the plain cont+transpose.
+        ggml_tensor * v_lin = ggml_is_quantized(kvt) ? ggml_cast(ctx, v, GGML_TYPE_F32) : v;
+        ggml_tensor * v_t = ggml_cont(ctx, ggml_transpose(ctx, v_lin));
         ggml_tensor * kqv = ggml_mul_mat(ctx, v_t, kq);
         if (turbo) {
             const int group = (d % 128 == 0) ? 128 : 64;
@@ -543,7 +541,7 @@ static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
         g_failures++;
         return;
     }
-    verdict(label, compare(test, ref), Tol::LOSSY, Exp::XFAIL);
+    verdict(label, compare(test, ref), Tol::LOSSY, Exp::GATE);
 }
 
 // (5) Baseline: standard f16 KV flash attention, SYCL vs CPU. This is NOT a
@@ -643,7 +641,7 @@ int main() {
         probe_mul_mat(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", K, 64);
     }
 
-    printf("\n[3b] non-FA attention (mul_mat/softmax/mul_mat, turbo KV, d=128) - XFAIL: build_attn_mha's non-FA V-transpose is architecturally broken for block-quantized V (see doc comment above probe_attn_noflash); use -fa on\n");
+    printf("\n[3b] non-FA attention (mul_mat/softmax/mul_mat, turbo KV, d=128) - GATE: mirrors build_attn_mha's fixed !v_trans branch (dequant V to F32 before transpose; see doc comment above probe_attn_noflash)\n");
     probe_attn_noflash(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128);
     probe_attn_noflash(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128);
     probe_attn_noflash(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128);

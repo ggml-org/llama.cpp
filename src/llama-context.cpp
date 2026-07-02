@@ -3562,7 +3562,7 @@ llama_context * llama_init_from_model(
     if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED &&
         (params.type_k == GGML_TYPE_TURBO2_0 || params.type_k == GGML_TYPE_TURBO3_0 || params.type_k == GGML_TYPE_TURBO4_0 ||
          params.type_v == GGML_TYPE_TURBO2_0 || params.type_v == GGML_TYPE_TURBO3_0 || params.type_v == GGML_TYPE_TURBO4_0)) {
-        LLAMA_LOG_WARN("%s: turbo cache types perform best with flash_attn — falling back to MUL_MAT attention\n", __func__);
+        LLAMA_LOG_WARN("%s: turbo cache types perform best with flash_attn — falling back to MUL_MAT attention (V is dequantized to F32 at attention time)\n", __func__);
     }
 
     if (ggml_is_quantized(params.type_v) && params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED &&
