@@ -156,6 +156,29 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     }
 }
 
+static void unset_reserved_env(std::vector<std::string> & env) {
+    auto unset_env = [&env](const char * key) {
+        const std::string prefix = std::string(key) + "=";
+        env.erase(
+            std::remove_if(env.begin(), env.end(), [&prefix](const std::string & item) {
+                return item.rfind(prefix, 0) == 0;
+            }),
+            env.end());
+    };
+
+    unset_env("LLAMA_ARG_SSL_KEY_FILE");
+    unset_env("LLAMA_ARG_SSL_CERT_FILE");
+    unset_env("LLAMA_API_KEY");
+    unset_env("LLAMA_ARG_MODELS_DIR");
+    unset_env("LLAMA_ARG_MODELS_MAX");
+    unset_env("LLAMA_ARG_MODELS_PRESET");
+    unset_env("LLAMA_ARG_MODELS_AUTOLOAD");
+    unset_env("LLAMA_ARG_MODEL");
+    unset_env("LLAMA_ARG_MMPROJ");
+    unset_env("LLAMA_ARG_ALIAS");
+    unset_env("LLAMA_ARG_HF_REPO");
+}
+
 #ifdef _WIN32
 static std::string wide_to_utf8(const wchar_t * ws) {
     if (!ws || !*ws) {
@@ -890,6 +913,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
 
         std::vector<std::string> child_args = inst.meta.args; // copy
         std::vector<std::string> child_env  = base_env; // copy
+        unset_reserved_env(child_env);
         child_env.push_back("LLAMA_SERVER_ROUTER_PORT=" + std::to_string(base_params.port));
 
         if (opts.mode == SERVER_CHILD_MODE_DOWNLOAD) {
