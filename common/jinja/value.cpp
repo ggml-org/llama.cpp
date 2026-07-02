@@ -1,3 +1,4 @@
+#include "common.h"
 #include "runtime.h"
 #include "unicode.h"
 #include "value.h"
@@ -372,12 +373,11 @@ const func_builtins & global_builtins() {
             std::string format = args.get_pos(0)->as_string().str();
             // get current time
             // TODO: make sure this is the same behavior as Python's strftime
-            char buf[100];
-            if (std::strftime(buf, sizeof(buf), format.c_str(), std::localtime(&args.ctx.current_time))) {
-                return mk_val<value_string>(std::string(buf));
-            } else {
+            std::string result = common_time_format(format.c_str(), args.ctx.current_time);
+            if (result.empty()) {
                 throw raised_exception("strftime_now: failed to format time");
             }
+            return mk_val<value_string>(result);
         }},
         {"range", [](const func_args & args) -> value {
             args.ensure_count(1, 3);

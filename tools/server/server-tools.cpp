@@ -722,9 +722,7 @@ struct server_tool_get_datetime : server_tool {
 
     json invoke(json) override {
         auto now = std::chrono::system_clock::now();
-        auto time = std::chrono::system_clock::to_time_t(now);
-
-        return {{"result", std::ctime(&time)}};
+        return {{"result", common_time_format("%c", now)}};
     }
 };
 
