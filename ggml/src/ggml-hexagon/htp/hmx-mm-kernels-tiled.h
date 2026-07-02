@@ -607,13 +607,13 @@ static void quantize_f32_weight_to_fp16_tiles_task(
 // --- End tiled dequantizers ---
 
 // requires external HMX lock
-static inline void core_dot_chunk_fp16_inline(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
-                                              uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
+static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
+                                       uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
     __builtin_assume(n_row_tiles > 0);
     __builtin_assume(n_col_tiles > 0);
     __builtin_assume(n_dot_tiles > 0);
 
-    asm volatile(HMX_SET_BIAS("%0") :: "r"(scales));
+    asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)scales));
 
     const size_t dot_stride = n_dot_tiles * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -662,12 +662,6 @@ static inline void core_dot_chunk_fp16_inline(__fp16 *restrict output, const __f
     }
 }
 
-static __attribute__((noinline))
-void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
-                         uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
-    core_dot_chunk_fp16_inline(output, activation, weight, scales, n_row_tiles, n_col_tiles, n_dot_tiles);
-}
-
 // C += AB
 static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, const __fp16 *restrict b,
                                 const __fp16 *restrict col_scales, const __fp16 *restrict eye_tile,
@@ -676,7 +670,7 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
     __builtin_assume(n_col_tiles > 0);
     __builtin_assume(n_dot_tiles > 0);
 
-    asm volatile(HMX_SET_BIAS("%0") :: "r"(col_scales));
+    asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)col_scales));
 
     const size_t dot_tile_stride = n_dot_tiles * HTP_MM_HMX_TILE_N_ELMS;
 
@@ -732,41 +726,6 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
             accum_tile += HTP_MM_HMX_TILE_N_ELMS;
         }
     }
-}
-
-// --- Async HMX matmul job (for pipeline overlap) ---
-
-typedef struct {
-    __fp16 *       output;
-    const __fp16 * activation;
-    const __fp16 * weight;
-    const __fp16 * scales;
-    uint32_t       n_row_tiles;
-    uint32_t       n_col_tiles;
-    uint32_t       n_dot_tiles;
-} hmx_matmul_job_t;
-
-static void hmx_matmul_worker_fn(void * data) {
-    hmx_matmul_job_t * job = (hmx_matmul_job_t *) data;
-    FARF(HIGH, "hmx-mm-job: n_row_tiles %u n_col_tiles %u n_dot_tiles %u", job->n_row_tiles, job->n_col_tiles, job->n_dot_tiles);
-    core_dot_chunk_fp16(job->output, job->activation, job->weight, job->scales, job->n_row_tiles, job->n_col_tiles, job->n_dot_tiles);
-}
-
-static inline void hmx_matmul_job_init(hmx_matmul_job_t * job,
-                                       __fp16 *           output,
-                                       const __fp16 *     activation,
-                                       const __fp16 *     weight,
-                                       const __fp16 *     scales,
-                                       uint32_t           n_row_tiles,
-                                       uint32_t           n_col_tiles,
-                                       uint32_t           n_dot_tiles) {
-    job->output      = output;
-    job->activation  = activation;
-    job->weight      = weight;
-    job->scales      = scales;
-    job->n_row_tiles = n_row_tiles;
-    job->n_col_tiles = n_col_tiles;
-    job->n_dot_tiles = n_dot_tiles;
 }
 
 // output : fp16 -> f32p

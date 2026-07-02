@@ -115,7 +115,7 @@ static void hmx_fa_qk_dot_tile(
     );
 }
 
-static inline void hmx_fa_o_update_tile(
+static void hmx_fa_o_update_tile(
     const __fp16 * d_diag,
     const __fp16 * o_rc,
     const __fp16 * p_tile_in,

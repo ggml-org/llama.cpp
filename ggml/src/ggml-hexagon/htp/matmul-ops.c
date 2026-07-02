@@ -2127,6 +2127,40 @@ static void transfer_activation_chunk_threaded(
         worker_pool_run_func(ctx->worker_pool, transfer_activation_chunk_worker_fn, &state, n_tasks);
     }
 }
+// --- Async HMX matmul job (for pipeline overlap) ---
+
+typedef struct {
+    __fp16 *       output;
+    const __fp16 * activation;
+    const __fp16 * weight;
+    const __fp16 * scales;
+    uint32_t       n_row_tiles;
+    uint32_t       n_col_tiles;
+    uint32_t       n_dot_tiles;
+} hmx_matmul_job_t;
+
+static void hmx_matmul_worker_fn(void * data) {
+    hmx_matmul_job_t * job = (hmx_matmul_job_t *) data;
+    FARF(HIGH, "hmx-mm-job: n_row_tiles %u n_col_tiles %u n_dot_tiles %u", job->n_row_tiles, job->n_col_tiles, job->n_dot_tiles);
+    core_dot_chunk_fp16(job->output, job->activation, job->weight, job->scales, job->n_row_tiles, job->n_col_tiles, job->n_dot_tiles);
+}
+
+static inline void hmx_matmul_job_init(hmx_matmul_job_t * job,
+                                       __fp16 *           output,
+                                       const __fp16 *     activation,
+                                       const __fp16 *     weight,
+                                       const __fp16 *     scales,
+                                       uint32_t           n_row_tiles,
+                                       uint32_t           n_col_tiles,
+                                       uint32_t           n_dot_tiles) {
+    job->output      = output;
+    job->activation  = activation;
+    job->weight      = weight;
+    job->scales      = scales;
+    job->n_row_tiles = n_row_tiles;
+    job->n_col_tiles = n_col_tiles;
+    job->n_dot_tiles = n_dot_tiles;
+}
 
 static int hmx_mm_2d_f32(struct htp_context *ctx,
                                   float *restrict dst,
