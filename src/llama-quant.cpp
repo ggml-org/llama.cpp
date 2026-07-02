@@ -290,51 +290,52 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     return quantize;
 }
 
+// mapping from an incompatible target type to its block-size-32 substitute
+static ggml_type fallback_type_for(const ggml_type target_type) {
+    switch (target_type) {
+        // types on the left, block size 256; types on the right, block size 32
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ4_XS: return GGML_TYPE_IQ4_NL;
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_TQ1_0:
+        case GGML_TYPE_TQ2_0:  return GGML_TYPE_Q4_0;
+        case GGML_TYPE_Q4_K:   return GGML_TYPE_Q5_0;
+        case GGML_TYPE_Q5_K:   return GGML_TYPE_Q5_1;
+        case GGML_TYPE_Q6_K:   return GGML_TYPE_Q8_0;
+        default:
+            throw std::runtime_error(format("no tensor type fallback is defined for type %s", ggml_type_name(target_type)));
+    }
+}
+
 // incompatible tensor shapes are handled here - fallback to a compatible type
 static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tensor * t, const ggml_type target_type) {
-    ggml_type fallback_type = target_type;
     const int64_t ncols = t->ne[0];
     const int64_t qk_k = ggml_blck_size(target_type);
+    if (ncols % qk_k == 0) { return target_type; } // this tensor's shape is compatible with this quant
+    ++qs.n_fallback;
+    LLAMA_LOG_WARN("warning: %-36s - ncols %6" PRId64 " not divisible by %3" PRId64 " (required for type %7s) ",
+        t->name, ncols, qk_k, ggml_type_name(target_type));
 
-    if (ncols % qk_k != 0) { // this tensor's shape is incompatible with this quant
-        LLAMA_LOG_WARN("warning: %-36s - ncols %6" PRId64 " not divisible by %3" PRId64 " (required for type %7s) ",
-            t->name, ncols, qk_k, ggml_type_name(target_type));
-
-        ++qs.n_fallback;
-
-        switch (target_type) {
-            // types on the left, block size 256; types on the right, block size 32
-            case GGML_TYPE_IQ1_S:
-            case GGML_TYPE_IQ1_M:
-            case GGML_TYPE_IQ2_XXS:
-            case GGML_TYPE_IQ2_XS:
-            case GGML_TYPE_IQ2_S:
-            case GGML_TYPE_IQ3_XXS:
-            case GGML_TYPE_IQ3_S:
-            case GGML_TYPE_IQ4_XS: fallback_type = GGML_TYPE_IQ4_NL; break;
-            case GGML_TYPE_Q2_K:
-            case GGML_TYPE_Q3_K:
-            case GGML_TYPE_TQ1_0:
-            case GGML_TYPE_TQ2_0:  fallback_type = GGML_TYPE_Q4_0; break;
-            case GGML_TYPE_Q4_K:   fallback_type = GGML_TYPE_Q5_0; break;
-            case GGML_TYPE_Q5_K:   fallback_type = GGML_TYPE_Q5_1; break;
-            case GGML_TYPE_Q6_K:   fallback_type = GGML_TYPE_Q8_0; break;
-            default:
-                throw std::runtime_error(format("no tensor type fallback is defined for type %s", ggml_type_name(target_type)));
-        }
-        if (ncols % ggml_blck_size(fallback_type) != 0) {
-            //
-            // the fallback return type is still not compatible for this tensor!
-            //
-            // most likely, this tensor's first dimension is not divisible by 32.
-            // this is very rare. we can either abort the quantization, or
-            // fallback to F16 / F32.
-            //
-            LLAMA_LOG_WARN("(WARNING: must use F16 due to unusual shape) ");
-            fallback_type = GGML_TYPE_F16;
-        }
-        LLAMA_LOG_WARN("-> falling back to %7s\n", ggml_type_name(fallback_type));
+    ggml_type fallback_type = fallback_type_for(target_type);
+    if (ncols % ggml_blck_size(fallback_type) != 0) {
+        //
+        // the fallback return type is still not compatible for this tensor!
+        //
+        // most likely, this tensor's first dimension is not divisible by 32.
+        // this is very rare. we can either abort the quantization, or
+        // fallback to F16 / F32.
+        //
+        LLAMA_LOG_WARN("(WARNING: must use F16 due to unusual shape) ");
+        fallback_type = GGML_TYPE_F16;
     }
+    LLAMA_LOG_WARN("-> falling back to %7s\n", ggml_type_name(fallback_type));
 
     return fallback_type;
 }
@@ -754,7 +755,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     // Get suitable fallback for type
     auto make_compatible = [&](const ggml_tensor * gt, const ggml_type gq) -> ggml_type {
         if (is_compatible(gt, gq)) { return gq; }
-        const ggml_type fb = tensor_type_fallback(qs, gt, gq);
+        const ggml_type fb = fallback_type_for(gq);
         return is_compatible(gt, fb) ? fb : GGML_TYPE_F16;
     };
 
@@ -2131,7 +2132,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             const std::string name = ggml_get_name(tn.w->tensor);
             auto lt = locked_tensors->find(name);
             if (lt != locked_tensors->end()) {
-                const ggml_type mc = make_compatible(tn.w->tensor, lt->second);
+                const ggml_type mc = tensor_type_fallback(qs, tn.w->tensor, lt->second);
                 int idx = -1;
                 for (int j = 0; j < (int)tn.candidates.size(); ++j) {
                     if (tn.candidates[j].type == mc) {
