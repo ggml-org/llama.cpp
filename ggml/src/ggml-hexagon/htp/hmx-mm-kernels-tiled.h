@@ -607,8 +607,8 @@ static void quantize_f32_weight_to_fp16_tiles_task(
 // --- End tiled dequantizers ---
 
 // requires external HMX lock
-static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
-                                uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
+static inline void core_dot_chunk_fp16_inline(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
+                                              uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
     __builtin_assume(n_row_tiles > 0);
     __builtin_assume(n_col_tiles > 0);
     __builtin_assume(n_dot_tiles > 0);
@@ -660,6 +660,12 @@ static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict 
             out_tile += HTP_MM_HMX_TILE_N_ELMS;
         }
     }
+}
+
+static __attribute__((noinline))
+void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation, const __fp16 *restrict weight, const __fp16 *restrict scales,
+                         uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
+    core_dot_chunk_fp16_inline(output, activation, weight, scales, n_row_tiles, n_col_tiles, n_dot_tiles);
 }
 
 // C += AB

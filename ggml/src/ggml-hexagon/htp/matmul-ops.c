@@ -2517,8 +2517,7 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
                         htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, g);
                         {
                             const __fp16 * vtcm_act_g = vtcm_f16_act + (size_t) g * L.act_head_stride;
-                            core_dot_chunk_fp16(vtcm_output, vtcm_act_g, vtcm_weight, vtcm_scales, n_row_tiles, n_col_tiles,
-                                                params->k / 32);
+                            core_dot_chunk_fp16(vtcm_output, vtcm_act_g, vtcm_weight, vtcm_scales, n_row_tiles, n_col_tiles, params->k / 32);
                         }
                         htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, g);
 
@@ -2527,7 +2526,8 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
                             const float *src2_chunk = params->src2 ? (hmx_mm_src2_batch_ptr(params, b2_base + g, b3) + mr * params->src2_stride + nc) : NULL;
                             int chunk_dst_cols = params->n - (int)nc;
                             if (chunk_dst_cols > 0) {
-                                transfer_output_chunk_threaded(ctx, output, src2_chunk, vtcm_output, (int) n_rows, (int) n_cols, params->dst_stride, params->src2_stride, chunk_dst_cols, ctx->n_threads);
+                                transfer_output_chunk_threaded(ctx, output, src2_chunk, vtcm_output, (int) n_rows, (int) n_cols,
+                                                               params->dst_stride, params->src2_stride, chunk_dst_cols, ctx->n_threads);
                             }
                         }
                     }

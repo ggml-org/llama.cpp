@@ -1330,7 +1330,7 @@ static void hmx_fa_qk_dot_worker(void * data) {
     __builtin_assume(n_col_tiles > 0);
     __builtin_assume(n_dot_tiles > 0);
 
-    Q6_bias_mxmem2_A((void *) job->hmx_scales);
+    asm volatile(HMX_SET_BIAS("%0") :: "r"(job->hmx_scales));
     const size_t dot_stride = n_dot_tiles * HMX_FP16_TILE_N_ELMS;
     for (size_t r = 0; r < n_row_tiles; ++r) {
         const __fp16 * row_tiles = q_tiles + r * dot_stride;
@@ -1375,7 +1375,7 @@ static void hmx_fa_o_update_worker(void * data) {
     __builtin_assume(n_col_tiles > 0);
     __builtin_assume(DV_tiles > 0);
 
-    Q6_bias_mxmem2_A((void *) job->hmx_scales);
+    asm volatile(HMX_SET_BIAS("%0") :: "r"(job->hmx_scales));
     const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
     const size_t v_stride = n_tiles_per_bc * HMX_FP16_TILE_N_ELMS;
     for (size_t r = 0; r < n_row_tiles; ++r) {
@@ -1415,7 +1415,7 @@ static void hmx_fa_o_norm_worker(void * data) {
     __builtin_assume(n_row_tiles > 0);
     __builtin_assume(DV_tiles > 0);
 
-    Q6_bias_mxmem2_A((void *) job->hmx_scales);
+    asm volatile(HMX_SET_BIAS("%0") :: "r"(job->hmx_scales));
     const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
     for (size_t r = 0; r < n_row_tiles; ++r) {
         const __fp16 * d_diag = d_tiles + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
@@ -1879,7 +1879,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             __builtin_assume(n_dot_tiles > 0);
 
                             htp_trace_event_start(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
-                            Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_qk);
+                            asm volatile(HMX_SET_BIAS("%0") :: "r"(factx.vtcm_hmx_scales_qk));
                             const size_t dot_stride = n_dot_tiles * HMX_FP16_TILE_N_ELMS;
                             for (size_t r = 0; r < n_row_tiles; ++r) {
                                 const __fp16 * row_tiles = q_base + r * dot_stride;
@@ -1941,7 +1941,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             __builtin_assume(DV_tiles > 0);
 
                             htp_trace_event_start(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
-                            Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_id);
+                            asm volatile(HMX_SET_BIAS("%0") :: "r"(factx.vtcm_hmx_scales_id));
                             const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
                             const size_t v_stride = n_tiles_per_bc * HMX_FP16_TILE_N_ELMS;
                             for (size_t r = 0; r < n_row_tiles; ++r) {
@@ -1991,7 +1991,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         __builtin_assume(DV_tiles > 0);
 
                         htp_trace_event_start(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
-                        Q6_bias_mxmem2_A((void *) factx.vtcm_hmx_scales_id);
+                        asm volatile(HMX_SET_BIAS("%0") :: "r"(factx.vtcm_hmx_scales_id));
                         const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
                         for (size_t r = 0; r < n_row_tiles; ++r) {
                             const __fp16 * d_diag = d_base  + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
