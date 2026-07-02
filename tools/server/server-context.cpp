@@ -3955,10 +3955,10 @@ bool server_context::load_model(common_params & params) {
 void server_context::start_loop() {
     auto & params = impl->params_base;
     int64_t sleep_ms = params.sleep_idle_seconds * 1000;
-    if (params.no_sleep_seconds > 0) {
-        sleep_ms = -1;  // --no-sleep wins — disable idle sleep
+    if (params.gpu_heartbeat_seconds > 0) {
+        sleep_ms = -1;  // --gpu-heartbeat disables idle sleep
     }
-    impl->queue_tasks.start_loop(sleep_ms, params.no_sleep_seconds * 1000);
+    impl->queue_tasks.start_loop(sleep_ms, params.gpu_heartbeat_seconds * 1000);
 }
 
 void server_context::terminate() {
