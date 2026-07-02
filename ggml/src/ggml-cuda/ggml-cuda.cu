@@ -3251,6 +3251,11 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
     GGML_UNUSED(backend);
 }
 
+static bool ggml_cuda_is_view_or_noop(const ggml_tensor * t) {
+    return ggml_is_empty(t) || t->op == GGML_OP_RESHAPE || t->op == GGML_OP_TRANSPOSE ||
+           t->op == GGML_OP_VIEW || t->op == GGML_OP_PERMUTE || t->op == GGML_OP_NONE;
+}
+
 #ifdef USE_CUDA_GRAPH
 static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 
@@ -3260,7 +3265,7 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
 
-        if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+        if (ggml_cuda_is_view_or_noop(node)) {
             continue;
         }
 
@@ -3403,31 +3408,15 @@ static bool ggml_cuda_should_fuse_rope_set_rows(const ggml_tensor * rope,
     return true;
 }
 
-struct ggml_cuda_gdn_cache_fusion {
-    ggml_cuda_gated_delta_net_fused_cache cache;
-    int nodes_to_skip = 0;
-};
-
-static bool ggml_cuda_tensor_on_cuda_device(const ggml_backend_cuda_context * cuda_ctx, const ggml_tensor * t) {
-    const ggml_backend_buffer_t buf = t->buffer ? t->buffer : (t->view_src ? t->view_src->buffer : nullptr);
-    return buf != nullptr && buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device);
-}
-
-static bool ggml_cuda_is_view_or_noop(const ggml_tensor * t) {
-    return ggml_is_empty(t) || t->op == GGML_OP_RESHAPE || t->op == GGML_OP_TRANSPOSE ||
-           t->op == GGML_OP_VIEW || t->op == GGML_OP_PERMUTE || t->op == GGML_OP_NONE;
-}
-
 // match gated_delta_net + the strided cpy that scatters its state snapshots into the cache
 // (slot i -> rollback group i, slot 0 newest), so the kernel can write them and skip the cpy.
-static bool ggml_cuda_try_gdn_cache_fusion(
-        const ggml_backend_cuda_context * cuda_ctx, const ggml_cgraph * cgraph, int node_idx,
-        ggml_cuda_gdn_cache_fusion & out) {
+static int ggml_cuda_try_gdn_cache_fusion(
+        const ggml_cgraph * cgraph, int node_idx, ggml_cuda_gated_delta_net_fused_cache & fused_state_cpy) {
     const ggml_tensor * gdn = cgraph->nodes[node_idx];
     // the kernel skips the snapshot tail, so the gdn output must not be a graph output
     if (gdn->op != GGML_OP_GATED_DELTA_NET || gdn->type != GGML_TYPE_F32 ||
-        (gdn->flags & GGML_TENSOR_FLAG_OUTPUT) || !ggml_cuda_tensor_on_cuda_device(cuda_ctx, gdn)) {
-        return false;
+        (gdn->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+        return 0;
     }
 
     const ggml_tensor * src_v     = gdn->src[2];
@@ -3451,13 +3440,13 @@ static bool ggml_cuda_try_gdn_cache_fusion(
             continue;
         }
         if (n->op != GGML_OP_CPY || (n->flags & GGML_TENSOR_FLAG_OUTPUT)) {
-            return false;
+            return 0;
         }
         cpy  = n;
         skip = j - node_idx;
     }
     if (cpy == nullptr) {
-        return false;
+        return 0;
     }
 
     const ggml_tensor * src = cpy->src[0]; // view of the gdn snapshot tail
@@ -3466,22 +3455,21 @@ static bool ggml_cuda_try_gdn_cache_fusion(
     // src must be this gdn's snapshot tail (contiguous, at the tail offset)
     if (src->op != GGML_OP_VIEW || src->view_src != gdn || src->view_offs != tail_off ||
         !ggml_is_contiguous(src)) {
-        return false;
+        return 0;
     }
 
     // dst is the [D, n_seqs, n_written] cache view; require nb[1] == D (the per-seq stride the kernel
     // assumes). ggml_cpy pins src to the same element count.
+    const std::array<int64_t, GGML_MAX_DIMS> expected_ne = { D, n_seqs, n_written, 1 };
     if (dst->op != GGML_OP_VIEW || dst->type != GGML_TYPE_F32 || dst->data == nullptr ||
-        !ggml_cuda_tensor_on_cuda_device(cuda_ctx, dst) ||
-        dst->ne[0] != D || dst->ne[1] != n_seqs || dst->ne[2] != n_written || dst->ne[3] != 1 ||
+        !std::equal(expected_ne.begin(), expected_ne.end(), dst->ne) ||
         dst->nb[0] != ggml_type_size(GGML_TYPE_F32) || dst->nb[1] != (size_t) ggml_row_size(GGML_TYPE_F32, D)) {
-        return false;
+        return 0;
     }
 
-    out.cache.data        = (float *) dst->data; // rollback group 0 (newest)
-    out.cache.slot_stride = K > 1 ? (int64_t) (dst->nb[2] / sizeof(float)) : 0;
-    out.nodes_to_skip     = skip;
-    return true;
+    fused_state_cpy.data        = (float *) dst->data; // rollback group 0 (newest)
+    fused_state_cpy.slot_stride = K > 1 ? (int64_t) (dst->nb[2] / sizeof(float)) : 0;
+    return skip;
 }
 
 static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int node_idx, ggml_cuda_topk_moe_args & args) {
@@ -3927,14 +3915,15 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     // gated_delta_net -> cpy: scatter recurrent-state snapshots into the cache
     if (node->op == GGML_OP_GATED_DELTA_NET) {
-        ggml_cuda_gdn_cache_fusion gdn_fusion;
-        if (ggml_cuda_try_gdn_cache_fusion(cuda_ctx, cgraph, i, gdn_fusion)) {
+        ggml_cuda_gated_delta_net_fused_cache fused_state_cpy;
+        const int nodes_to_skip = ggml_cuda_try_gdn_cache_fusion(cgraph, i, fused_state_cpy);
+        if (nodes_to_skip > 0) {
 #ifdef GGML_CUDA_DEBUG
             GGML_LOG_INFO("%s: fused gated_delta_net snapshot copies for %s (skipped %d nodes)\n",
-                          __func__, node->name, gdn_fusion.nodes_to_skip);
+                          __func__, node->name, nodes_to_skip);
 #endif
-            ggml_cuda_op_gated_delta_net_fused_cache(*cuda_ctx, node, gdn_fusion.cache);
-            return gdn_fusion.nodes_to_skip;
+            ggml_cuda_op_gated_delta_net_fused_cache(*cuda_ctx, node, fused_state_cpy);
+            return nodes_to_skip;
         }
     }
 
@@ -4466,7 +4455,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 #endif
                 prev_i = i;
 
-                if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+                if (ggml_cuda_is_view_or_noop(node)) {
                     continue;
                 }
 
