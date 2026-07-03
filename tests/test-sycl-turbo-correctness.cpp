@@ -24,6 +24,9 @@
 //         NOT pass yet. Exit code is non-zero iff a GATE probe FAILs OR an
 //         XFAIL probe PASSes (XPASS = a fix landed -> "promote to GATE").
 //         SKIPs never fail the gate.
+// Turbo FA probes additionally sit behind LLAMA_TEST_TURBO_FA=1: a broken turbo
+// kernel can hang the device/JIT outright, and a hang cannot be SKIPped at
+// runtime, so the default run stays off the turbo FA path entirely.
 
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -144,6 +147,15 @@ static void verdict(const char * label, const err_stats & s, Tol tol, Exp exp) {
 static void skip(const char * label, const char * why) {
     printf("  [SKIP] %-28s (%s)\n", label, why);
     g_skips++;
+}
+
+// Turbo FA opt-in: default runs keep the turbo FA probes gated off because a
+// broken kernel can hang the device/JIT outright, which no runtime support
+// check can turn into a SKIP -- and this gate must always terminate.
+static bool turbo_fa_enabled() {
+    const char * v = getenv("LLAMA_TEST_TURBO_FA");
+    // exact match: values like "false"/"off" must not enable a hang-prone path
+    return v != nullptr && strcmp(v, "1") == 0;
 }
 
 // Run a single-output graph on `backend`. `build` creates the graph (naming any
@@ -782,7 +794,7 @@ int main() {
     // cannot be caught or skipped at runtime -- so gate these probes behind an opt-in
     // env var. Default runs skip [5] to keep CI un-wedgeable; developers set
     // LLAMA_TEST_TURBO_FA=1 to exercise the turbo FA kernels. (Restores PR #5's gate.)
-    if (getenv("LLAMA_TEST_TURBO_FA")) {
+    if (turbo_fa_enabled()) {
         printf("\n[5] flash attention turbo KV - GATE (d=128, plus d=256 turbo3)\n");
         for (int64_t n_q : {8, 1}) {
             const char * path = (n_q == 8) ? "tile" : "vec"; // label matches the kernel n_q routes to
