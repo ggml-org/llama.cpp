@@ -269,8 +269,9 @@ static void probe_set_rows_turbo(ggml_backend_t cpu, ggml_backend_t sycl,
         ggml_set_name(ids, "ids");
         ggml_tensor * result = ggml_set_rows(ctx, dst, src, ids);
         // op_params[0] carries the WHT group size for turbo types (see cpy_k
-        // in llama-kv-cache.cpp); mirror that wiring here.
-        int32_t wht_group = (int32_t) K;
+        // in llama-kv-cache.cpp, which always writes 128: with zero-padding
+        // all groups are full 128-element WHT groups); mirror that wiring.
+        int32_t wht_group = 128;
         memcpy(result->op_params, &wht_group, sizeof(int32_t));
         return result;
     };

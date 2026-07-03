@@ -113,13 +113,15 @@ template <dequantize_kernel_t dequant, int qk> static void cpy_blck_q_f32(const 
 }
 
 // Variant of cpy_blck_q_f32 for quantized types whose dequantize kernel
-// returns CONSECUTIVE element pairs (iqs, iqs+1) — e.g. the turbo types —
+// returns CONSECUTIVE element pairs (iqs, iqs+1) -- e.g. the turbo types --
 // instead of q4/q5-style split halves (iqs, iqs + qk/2).
 template <dequantize_kernel_t dequant, int qk> static void cpy_blck_q_f32_consec(const char * cxi, char * cdsti) {
     float * cdstf = (float *) (cdsti);
 
     for (int j = 0; j < qk; j += 2) {
         dfloat2 dq;
+        // second arg is the block index within cxi; it is 0 here because cxi
+        // already points at the block, same as cpy_blck_q_f32 above
         dequant(cxi, 0, j, dq);
         cdstf[j + 0] = dq.x();
         cdstf[j + 1] = dq.y();

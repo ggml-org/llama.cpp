@@ -70,24 +70,6 @@ static void k_turbo_wht_f32_sycl(
     dst[base + t] = result;
 }
 
-static void k_turbo_wht_copy_tail_sycl(
-        const float * __restrict__ src,
-        float * __restrict__ dst,
-        const int64_t n_heads,
-        const int64_t head_dim,
-        const int64_t tail_offset,
-        const int64_t tail_size,
-        const sycl::nd_item<1> &item_ct1) {
-
-    const int64_t i = (int64_t)item_ct1.get_global_linear_id();
-    if (i >= n_heads * tail_size) return;
-
-    const int64_t head_idx  = i / tail_size;
-    const int64_t tail_elem = i % tail_size;
-    const int64_t offset    = head_idx * head_dim + tail_offset + tail_elem;
-
-    dst[offset] = src[offset];
-}
 
 void ggml_sycl_op_turbo_wht(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src = dst->src[0];
@@ -107,10 +89,10 @@ void ggml_sycl_op_turbo_wht(ggml_backend_sycl_context & ctx, ggml_tensor * dst) 
     const int64_t n_heads         = ggml_nelements(src) / head_dim;
 
     GGML_ASSERT(group_size == 32 || group_size == 64 || group_size == 128);
+    // same invariant as ggml_turbo_wht(); a tail would silently bypass the WHT
+    GGML_ASSERT(head_dim % group_size == 0);
     const int64_t groups_per_head = head_dim / group_size;
-    const int64_t tail_size       = head_dim % group_size;
     const int64_t n_groups        = groups_per_head * n_heads;
-    const int64_t tail_offset     = groups_per_head * group_size;
 
     queue_ptr stream = ctx.stream();
 
@@ -219,24 +201,5 @@ void ggml_sycl_op_turbo_wht(ggml_backend_sycl_context & ctx, ggml_tensor * dst) 
                 });
             }
         }
-    }
-
-    if (tail_size > 0) {
-        const int64_t total_tail = n_heads * tail_size;
-        const int block_sz = 256;
-        const int n_blocks = (int)((total_tail + block_sz - 1) / block_sz);
-
-        stream->submit([&](sycl::handler &h) {
-            h.parallel_for(
-                sycl::nd_range<1>(n_blocks * block_sz, block_sz),
-                [=](sycl::nd_item<1> item_ct1) {
-                    k_turbo_wht_copy_tail_sycl(
-                        src_ptr, dst_ptr,
-                        n_heads, head_dim, tail_offset, tail_size,
-                        item_ct1
-                    );
-                }
-            );
-        });
     }
 }

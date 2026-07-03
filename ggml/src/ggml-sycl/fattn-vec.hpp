@@ -10,7 +10,6 @@
 #include "common.hpp"
 #include "ggml.h"
 #include "fattn-common.hpp"
-#include "turbo-wht.hpp"
 #include <cmath>
 #include <float.h>
 
@@ -640,11 +639,23 @@ void ggml_sycl_flash_attn_ext_vec_case(ggml_backend_sycl_context & ctx, ggml_ten
     extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q5_0); \
     extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q5_1); \
     extern DECL_FATTN_VEC_CASE(D, type_K, GGML_TYPE_Q8_0);
-// NB: the TURBO* KV types are intentionally NOT extern-declared here. They are
-// instantiated implicitly in fattn.cpp's dispatch (same as turbo2_0/turbo4_0).
-// Declaring (K, TURBO3_0)/(TURBO3_0, V) extern without providing matching
-// instance definitions caused undefined references once linked statically
-// (GGML_BACKEND_DL=OFF); it only "worked" as a lazily-resolved DL module.
+// NB: only the same-type TURBO* pairs below are extern-declared: those are the
+// ones defined in template-instances/fattn-vec-instance-tq*.cpp. Mixed turbo
+// pairs (K != V) are instantiated implicitly in fattn.cpp's dispatch.
+// Declaring a turbo pair extern without a matching instance definition causes
+// undefined references once linked statically (GGML_BACKEND_DL=OFF); it only
+// "worked" as a lazily-resolved DL module.
+// D=64 is omitted: turbo blocks span 128 elements, so dispatch requires
+// D % 128 == 0 (see FATTN_VEC_CASES_TURBO_D and the static_asserts in
+// vec_dot_fattn_vec_KQ_turbo_generic).
+#define EXTERN_DECL_FATTN_VEC_TURBO_CASES(type_KV)              \
+    extern DECL_FATTN_VEC_CASE(128, type_KV, type_KV);          \
+    extern DECL_FATTN_VEC_CASE(256, type_KV, type_KV);          \
+    extern DECL_FATTN_VEC_CASE(512, type_KV, type_KV);
+
+EXTERN_DECL_FATTN_VEC_TURBO_CASES(GGML_TYPE_TURBO2_0)
+EXTERN_DECL_FATTN_VEC_TURBO_CASES(GGML_TYPE_TURBO3_0)
+EXTERN_DECL_FATTN_VEC_TURBO_CASES(GGML_TYPE_TURBO4_0)
 
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_F16)
 EXTERN_DECL_FATTN_VEC_CASES( 64, GGML_TYPE_Q4_0)

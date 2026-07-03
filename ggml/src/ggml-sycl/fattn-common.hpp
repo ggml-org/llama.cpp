@@ -307,6 +307,15 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_turbo_generic(const char * __r
     constexpr int cpy_nb = ggml_sycl_get_max_cpy_bytes();
     constexpr int cpy_ne = cpy_nb / 4;
 
+    // Layout invariants: the loop below walks element pairs (i0, i0+1) and
+    // maps them to blocks via division/modulo by QK, with each of nthreads
+    // lanes covering cpy_ne pairs per outer step. Head sizes that do not
+    // tile exactly would read out of bounds (see FATTN_VEC_CASES_TURBO_D).
+    static_assert(D % 2 == 0, "D must be even to process element pairs");
+    static_assert(QK % 2 == 0, "QK must be even: (iqs, iqs+1) must stay in one block");
+    static_assert(D % QK == 0, "rows must be a whole number of turbo blocks");
+    static_assert((D/2) % (nthreads*cpy_ne) == 0, "pairs must tile exactly across lanes");
+
     // Q_v is this thread's register slice of Q, not the full row: cpy_ne consecutive
     // half2/float2 pairs per outer step (same layout as vec_dot_fattn_vec_KQ_f16).
     // Dequantize the matching K elements and let the caller's warp_reduce_sum
