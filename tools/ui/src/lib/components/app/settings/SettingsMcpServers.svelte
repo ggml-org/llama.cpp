@@ -21,7 +21,7 @@
 
 	let { class: className }: Props = $props();
 
-	let servers = $derived(mcpStore.getServersSorted());
+	let servers = $derived(mcpStore.visibleMcpServers);
 
 	let initialLoadComplete = $state(false);
 	let isAddingServer = $state(false);

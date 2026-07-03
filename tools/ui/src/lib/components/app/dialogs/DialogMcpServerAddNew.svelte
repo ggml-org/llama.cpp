@@ -4,7 +4,7 @@
 	import { McpServerForm } from '$lib/components/app/mcp';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { uuid } from '$lib/utils';
+	import { parseHeadersToArray, uuid } from '$lib/utils';
 	import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
 
 	interface Props {
@@ -26,6 +26,10 @@
 			return 'Invalid URL format';
 		}
 	});
+	let newServerHeaderPairsValid = $derived(
+		parseHeadersToArray(newServerHeaders).every((p) => p.key.trim() && p.value.trim())
+	);
+	let canSave = $derived(!newServerUrlError && newServerHeaderPairsValid);
 
 	function handleOpenChange(value: boolean) {
 		if (!value) {
@@ -37,7 +41,7 @@
 	}
 
 	function saveNewServer() {
-		if (newServerUrlError) return;
+		if (!canSave) return;
 
 		const newServerId = uuid() ?? `${MCP_SERVER_ID_PREFIX}-${Date.now()}`;
 
@@ -52,6 +56,11 @@
 
 		handleOpenChange(false);
 	}
+
+	function handleSubmit(event: SubmitEvent) {
+		event.preventDefault();
+		saveNewServer();
+	}
 </script>
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
@@ -60,29 +69,27 @@
 			<Dialog.Title>Add New Server</Dialog.Title>
 		</Dialog.Header>
 
-		<div class="space-y-4 py-4">
-			<McpServerForm
-				url={newServerUrl}
-				headers={newServerHeaders}
-				onUrlChange={(v) => (newServerUrl = v)}
-				onHeadersChange={(v) => (newServerHeaders = v)}
-				urlError={newServerUrl ? newServerUrlError : null}
-				id="new-server"
-			/>
-		</div>
+		<form onsubmit={handleSubmit} class="contents">
+			<div class="space-y-4 py-4">
+				<McpServerForm
+					url={newServerUrl}
+					headers={newServerHeaders}
+					onUrlChange={(v) => (newServerUrl = v)}
+					onHeadersChange={(v) => (newServerHeaders = v)}
+					urlError={newServerUrl ? newServerUrlError : null}
+					id="new-server"
+				/>
+			</div>
 
-		<Dialog.Footer>
-			<Button variant="secondary" size="sm" onclick={() => handleOpenChange(false)}>Cancel</Button>
+			<Dialog.Footer>
+				<Button variant="secondary" size="sm" onclick={() => handleOpenChange(false)}>
+					Cancel
+				</Button>
 
-			<Button
-				variant="default"
-				size="sm"
-				onclick={saveNewServer}
-				disabled={!!newServerUrlError}
-				aria-label="Save"
-			>
-				Add
-			</Button>
-		</Dialog.Footer>
+				<Button variant="default" size="sm" type="submit" disabled={!canSave} aria-label="Save">
+					Add
+				</Button>
+			</Dialog.Footer>
+		</form>
 	</Dialog.Content>
 </Dialog.Root>
