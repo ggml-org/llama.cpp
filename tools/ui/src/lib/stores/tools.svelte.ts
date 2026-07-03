@@ -3,6 +3,7 @@ import { ToolsService } from '$lib/services/tools.service';
 import { TokenizeService } from '$lib/services/tokenize.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { hashString } from '$lib/utils/hash';
+import { normalizeJsonSchema } from '$lib/utils/json-schema';
 import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
 import {
@@ -86,7 +87,7 @@ class ToolsStore {
 	}
 
 	get mcpTools(): OpenAIToolDefinition[] {
-		return mcpStore.getToolDefinitionsForLLM();
+		return this.mcpEntries().map((e) => e.definition);
 	}
 
 	get frontendTools(): OpenAIToolDefinition[] {
@@ -128,11 +129,22 @@ class ToolsStore {
 			for (const [serverId, connection] of connections) {
 				const serverName = mcpStore.getServerDisplayName(serverId);
 				for (const tool of connection.tools) {
-					const schema = (tool.inputSchema as Record<string, unknown>) ?? undefined;
+					const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
+						type: JsonSchemaType.OBJECT,
+						properties: {},
+						required: []
+					};
 					out.push({
 						serverId,
 						serverName,
-						definition: mcpDefinition(tool.name, tool.description, schema)
+						definition: {
+							type: ToolCallType.FUNCTION,
+							function: {
+								name: tool.name,
+								description: tool.description,
+								parameters: normalizeJsonSchema(rawSchema)
+							}
+						}
 					});
 				}
 			}
@@ -237,7 +249,8 @@ class ToolsStore {
 
 	/**
 	 * Enabled tool definitions for sending to the LLM.
-	 * MCP tools keep their normalized schemas from mcpStore.
+	 * MCP tool schemas are normalized here so the wire payload is consistent
+	 * across all four sources (built-in, frontend/sandbox, MCP, custom JSON).
 	 * The API identifies tools by name, so a name is sent at most once.
 	 */
 	getEnabledToolsForLLM(): OpenAIToolDefinition[] {
@@ -260,7 +273,10 @@ class ToolsStore {
 
 		for (const def of this._builtinTools) take(def);
 		for (const def of this.frontendTools) take(def);
-		for (const def of mcpStore.getToolDefinitionsForLLM()) take(def);
+		// Use mcpEntries() (not mcpStore directly) so we own the wire shape:
+		// - normalized JSON schema before sending
+		// - same health-check fallback as the rest of the tools UI sees
+		for (const entry of this.mcpEntries()) take(entry.definition);
 		for (const def of this.customTools) take(def);
 
 		return result;

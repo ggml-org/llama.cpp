@@ -12,9 +12,12 @@
  * - Lifecycle management (initialize, shutdown)
  * - Multi-server coordination
  * - Tool name conflict detection and resolution
- * - OpenAI-compatible tool definition generation
  * - Automatic tool-to-server routing
  * - Health checks
+ *
+ * MCP connection state and raw `Tool[]` per server are owned here; the
+ * OpenAI-compatible wire format for those tools is built in `toolsStore`
+ * (see {@link toolsStore.mcpEntries} / {@link toolsStore.getEnabledToolsForLLM}).
  *
  * @see MCPService in services/mcp.service.ts for protocol operations
  */
@@ -40,9 +43,7 @@ import {
 	HealthCheckStatus,
 	MCPRefType,
 	ColorMode,
-	UrlProtocol,
-	JsonSchemaType,
-	ToolCallType
+	UrlProtocol
 } from '$lib/enums';
 import {
 	DEFAULT_CACHE_TTL_MS,
@@ -58,7 +59,6 @@ import {
 } from '$lib/constants';
 import type {
 	MCPToolCall,
-	OpenAIToolDefinition,
 	ServerStatus,
 	ToolExecutionResult,
 	MCPClientConfig,
@@ -977,73 +977,6 @@ class MCPStore {
 				this.autoReconnect(serverName);
 			}
 		}
-	}
-
-	getToolDefinitionsForLLM(): OpenAIToolDefinition[] {
-		const tools: OpenAIToolDefinition[] = [];
-
-		for (const connection of this.connections.values()) {
-			for (const tool of connection.tools) {
-				const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
-					type: JsonSchemaType.OBJECT,
-					properties: {},
-					required: []
-				};
-
-				tools.push({
-					type: ToolCallType.FUNCTION as const,
-					function: {
-						name: tool.name,
-						description: tool.description,
-						parameters: this.normalizeSchemaProperties(rawSchema)
-					}
-				});
-			}
-		}
-
-		return tools;
-	}
-
-	private normalizeSchemaProperties(schema: Record<string, unknown>): Record<string, unknown> {
-		if (!schema || typeof schema !== 'object') {
-			return schema;
-		}
-
-		const normalized = { ...schema };
-		if (normalized.properties && typeof normalized.properties === 'object') {
-			const props = normalized.properties as Record<string, Record<string, unknown>>;
-			const normalizedProps: Record<string, Record<string, unknown>> = {};
-			for (const [key, prop] of Object.entries(props)) {
-				if (!prop || typeof prop !== 'object') {
-					normalizedProps[key] = prop;
-					continue;
-				}
-				const normalizedProp = { ...prop };
-				if (!normalizedProp.type && normalizedProp.default !== undefined) {
-					const defaultVal = normalizedProp.default;
-					if (typeof defaultVal === 'string') normalizedProp.type = 'string';
-					else if (typeof defaultVal === 'number')
-						normalizedProp.type = Number.isInteger(defaultVal) ? 'integer' : 'number';
-					else if (typeof defaultVal === 'boolean') normalizedProp.type = 'boolean';
-					else if (Array.isArray(defaultVal)) normalizedProp.type = 'array';
-					else if (typeof defaultVal === 'object' && defaultVal !== null)
-						normalizedProp.type = 'object';
-				}
-				if (normalizedProp.properties)
-					Object.assign(
-						normalizedProp,
-						this.normalizeSchemaProperties(normalizedProp as Record<string, unknown>)
-					);
-				if (normalizedProp.items && typeof normalizedProp.items === 'object')
-					normalizedProp.items = this.normalizeSchemaProperties(
-						normalizedProp.items as Record<string, unknown>
-					);
-				normalizedProps[key] = normalizedProp;
-			}
-			normalized.properties = normalizedProps;
-		}
-
-		return normalized;
 	}
 
 	getToolNames(): string[] {
