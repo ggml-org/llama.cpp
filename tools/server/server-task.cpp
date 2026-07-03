@@ -71,10 +71,10 @@ json task_params::to_json(bool only_metrics) const {
             {"stream",                    stream},
             {"n_probs",                   sampling.n_probs},
             {"min_keep",                  sampling.min_keep},
-            {"chat_format",               common_chat_format_name(chat_parser_params.format)},
-            {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
-            {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
-            {"generation_prompt",         chat_parser_params.generation_prompt},
+            {"chat_format",               common_chat_format_name(chat_parser_params->format)},
+            {"reasoning_format",          common_reasoning_format_name(chat_parser_params->reasoning_format)},
+            {"reasoning_in_content",      chat_parser_params->reasoning_in_content},
+            {"generation_prompt",         chat_parser_params->generation_prompt},
             {"samplers",                  samplers},
             {"speculative.types",         common_speculative_type_name_str(speculative.types)},
             {"timings_per_token",         timings_per_token},
@@ -128,10 +128,10 @@ json task_params::to_json(bool only_metrics) const {
         {"grammar_lazy",              sampling.grammar_lazy},
         {"grammar_triggers",          grammar_triggers},
         {"preserved_tokens",          sampling.preserved_tokens},
-        {"chat_format",               common_chat_format_name(chat_parser_params.format)},
-        {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
-        {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
-        {"generation_prompt",         chat_parser_params.generation_prompt},
+        {"chat_format",               common_chat_format_name(chat_parser_params->format)},
+        {"reasoning_format",          common_reasoning_format_name(chat_parser_params->reasoning_format)},
+        {"reasoning_in_content",      chat_parser_params->reasoning_in_content},
+        {"generation_prompt",         chat_parser_params->generation_prompt},
         {"samplers",                  samplers},
         {"speculative.types",         common_speculative_type_name_str(speculative.types)},
         {"timings_per_token",         timings_per_token},
@@ -144,14 +144,14 @@ json task_params::to_json(bool only_metrics) const {
 //
 // task_result_state
 //
-task_result_state::task_result_state(const common_chat_parser_params & chat_parser_params)
-    : chat_parser_params(chat_parser_params)
+task_result_state::task_result_state(std::shared_ptr<common_chat_parser_params> chat_parser_params)
+    : chat_parser_params(std::move(chat_parser_params))
     , oai_resp_id("resp_" + random_string())
     , oai_resp_reasoning_id("rs_" + random_string())
     , oai_resp_message_id("msg_" + random_string()) {
-    if (chat_parser_params.is_continuation && !chat_parser_params.echo) {
+    if (this->chat_parser_params->is_continuation && !this->chat_parser_params->echo) {
         // initialize chat_msg to avoid emitting a delta containing the assistant prefill
-        chat_msg = common_chat_parse("", true, chat_parser_params);
+        chat_msg = common_chat_parse("", true, *this->chat_parser_params);
     }
 }
 
@@ -166,7 +166,7 @@ common_chat_msg task_result_state::update_chat_msg(
     auto new_msg = common_chat_parse(
         generated_text,
         is_partial,
-        chat_parser_params);
+        *chat_parser_params);
     if (!new_msg.empty()) {
         new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
         chat_msg = new_msg;

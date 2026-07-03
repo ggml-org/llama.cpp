@@ -1820,6 +1820,7 @@ private:
                 send_error(task, err_msg, ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
+            task.params.chat_parser_params->generation_prompt = task.params.sampling.generation_prompt;
 
             const bool need_pre_sample_logits = task.params.sampling.n_probs > 0 && !task.params.post_sampling_probs;
 

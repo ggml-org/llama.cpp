@@ -91,10 +91,10 @@ struct cli_context {
             task.cli        = true;
 
             // chat template settings
-            task.params.chat_parser_params = common_chat_parser_params(chat_params);
-            task.params.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+            task.params.chat_parser_params = std::make_shared<common_chat_parser_params>(common_chat_parser_params(chat_params));
+            task.params.chat_parser_params->reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
             if (!chat_params.parser.empty()) {
-                task.params.chat_parser_params.parser.load(chat_params.parser);
+                task.params.chat_parser_params->parser.load(chat_params.parser);
             }
 
             // Copy the preserved tokens into the sampling params
