@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.48.0"
-#define CPPHTTPLIB_VERSION_NUM "0x003000"
+#define CPPHTTPLIB_VERSION "0.49.0"
+#define CPPHTTPLIB_VERSION_NUM "0x003100"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -309,7 +309,6 @@ using socket_t = int;
 #include <array>
 #include <atomic>
 #include <cassert>
-#include <cctype>
 #include <chrono>
 #include <climits>
 #include <condition_variable>
@@ -540,6 +539,21 @@ make_unique(std::size_t n) {
   return std::unique_ptr<T>(new RT[n]);
 }
 
+// Locale-independent ASCII character classification. The <cctype>
+// counterparts (std::isalnum, std::isdigit, ...) consult the global C locale,
+// so e.g. std::isalnum(0xC5) can return true once an embedder calls
+// setlocale(). HTTP grammars are defined over ASCII, so raw bytes must be
+// classified without regard to the locale.
+inline bool is_ascii_digit(char c) { return '0' <= c && c <= '9'; }
+
+inline bool is_ascii_alpha(char c) {
+  return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z');
+}
+
+inline bool is_ascii_alnum(char c) {
+  return is_ascii_digit(c) || is_ascii_alpha(c);
+}
+
 namespace case_ignore {
 
 inline unsigned char to_lower(int c) {
@@ -661,7 +675,7 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
   for (; p != last; ++p) {
     char c = *p;
     int digit = -1;
-    if ('0' <= c && c <= '9') {
+    if (is_ascii_digit(c)) {
       digit = c - '0';
     } else if ('a' <= c && c <= 'z') {
       digit = c - 'a' + 10;
@@ -733,14 +747,14 @@ inline from_chars_result<double> from_chars(const char *first, const char *last,
     return false;
   };
 
-  for (; p != last && '0' <= *p && *p <= '9'; ++p) {
+  for (; p != last && is_ascii_digit(*p); ++p) {
     seen_digit = true;
     accumulate(*p);
   }
 
   if (p != last && *p == '.') {
     ++p;
-    for (; p != last && '0' <= *p && *p <= '9'; ++p) {
+    for (; p != last && is_ascii_digit(*p); ++p) {
       seen_digit = true;
       if (frac_digits < max_frac_digits && accumulate(*p)) { ++frac_digits; }
     }
@@ -803,8 +817,8 @@ inline bool parse_url(const std::string &url, UrlComponents &uc) {
       // IPv6 host must be [a-fA-F0-9:]+ only
       if (uc.host.empty()) { return false; }
       for (auto c : uc.host) {
-        if (!((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') ||
-              (c >= '0' && c <= '9') || c == ':')) {
+        if (!(is_ascii_digit(c) || (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F') || c == ':')) {
           return false;
         }
       }
@@ -1541,7 +1555,9 @@ public:
 
 class ThreadPool final : public TaskQueue {
 public:
-  explicit ThreadPool(size_t n, size_t max_n = 0, size_t mqr = 0);
+  explicit ThreadPool(
+      size_t n, size_t max_n = 0, size_t mqr = 0,
+      time_t idle_timeout_sec = CPPHTTPLIB_THREAD_POOL_IDLE_TIMEOUT);
   ThreadPool(const ThreadPool &) = delete;
   ~ThreadPool() override = default;
 
@@ -1556,6 +1572,7 @@ private:
   size_t base_thread_count_;
   size_t max_thread_count_;
   size_t max_queued_requests_;
+  time_t idle_timeout_sec_;
   size_t idle_thread_count_;
 
   bool shutdown_;
@@ -1679,6 +1696,35 @@ make_multipart_content_provider(const UploadFormDataItems &items,
                                 const std::string &boundary);
 
 } // namespace detail
+
+bool is_valid_multipart_boundary(const std::string &boundary);
+
+// Serializer for multipart/form-data request bodies. The boundary is owned
+// by the writer so that per-part framing and the final terminator always
+// agree. Field names and filenames are escaped following the WHATWG HTML
+// standard ('"' -> %22, CR -> %0D, LF -> %0A); CR and LF are also escaped
+// in content types.
+class MultipartFormDataWriter {
+public:
+  MultipartFormDataWriter();
+  // precondition: is_valid_multipart_boundary(boundary)
+  explicit MultipartFormDataWriter(std::string boundary);
+
+  const std::string &boundary() const;
+  std::string content_type() const;
+
+  // In-memory items -> whole body (known length)
+  std::string serialize(const UploadFormDataItems &items) const;
+  size_t content_length(const UploadFormDataItems &items) const;
+
+  // Per-part framing for streaming via a content provider
+  std::string item_begin(const UploadFormData &item) const;
+  static std::string item_end();
+  std::string finish() const;
+
+private:
+  std::string boundary_;
+};
 
 class Server {
 public:
@@ -2897,9 +2943,7 @@ template <size_t N> inline constexpr size_t str_len(const char (&)[N]) {
 }
 
 inline bool is_numeric(const std::string &str) {
-  return !str.empty() &&
-         std::all_of(str.cbegin(), str.cend(),
-                     [](unsigned char c) { return std::isdigit(c); });
+  return !str.empty() && std::all_of(str.cbegin(), str.cend(), is_ascii_digit);
 }
 
 inline size_t get_header_value_u64(const Headers &headers,
