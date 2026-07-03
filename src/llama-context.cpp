@@ -9,6 +9,7 @@
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-moe-stream.h"
 #include "llama-ext.h"
 #include "llama.h"
 
@@ -210,6 +211,28 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+
+    if (model.moe_stream() && hparams.n_expert_used > 0) {
+        // one mul_mat_id needs every expert a ubatch touches resident at once, so a ubatch may
+        // not select more experts than the cache holds (worst case n_ubatch*n_expert_used)
+        const uint32_t n_ubatch_max = std::max(1u, model.moe_stream()->n_slots / hparams.n_expert_used);
+        if (cparams.n_ubatch > n_ubatch_max) {
+            LLAMA_LOG_WARN("%s: n_ubatch reduced from %u to %u so that a ubatch cannot select more experts than the %u-slot streaming cache\n",
+                    __func__, cparams.n_ubatch, n_ubatch_max, model.moe_stream()->n_slots);
+            cparams.n_ubatch = n_ubatch_max;
+        }
+
+        // op offload snapshots host weights to the device per graph split, which assumes they do
+        // not change during the graph - streamed caches are rewritten on demand
+        bool cache_on_host = false;
+        for (const auto & buf : model.moe_stream()->bufs) {
+            cache_on_host = cache_on_host || ggml_backend_buffer_is_host(buf.get());
+        }
+        if (cache_on_host && cparams.op_offload) {
+            LLAMA_LOG_WARN("%s: disabling op offload: the expert streaming cache is in host memory\n", __func__);
+            cparams.op_offload = false;
+        }
+    }
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -2415,6 +2438,7 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        /*.mstream     =*/ model.moe_stream(),
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -4094,6 +4118,10 @@ void llama_perf_context_print(const llama_context * ctx) {
             __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
     LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
     LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
+
+    if (const auto * mstream = ctx->get_model().moe_stream()) {
+        mstream->print_stats();
+    }
 }
 
 void llama_perf_context_reset(llama_context * ctx) {

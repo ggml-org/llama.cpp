@@ -28,6 +28,12 @@ enum llama_fver {
 
 const char * llama_file_version_name(llama_fver version);
 
+// check if the buffer type of the given device supports op with the tensor as its weight
+bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w, ggml_op op, ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev);
+
+// find the first buffer type in the list that can use the tensor
+ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op, const buft_list_t * buft_list);
+
 struct llama_model_loader {
     // Holds information on a model weight
     struct llama_tensor_weight {
@@ -67,6 +73,7 @@ struct llama_model_loader {
     static const int TENSOR_DUPLICATED      = 1 << 1;
     static const int TENSOR_SKIP            = 1 << 2;
     static const int TENSOR_SKIP_IF_VIRTUAL = 1 << 3;
+    static const int TENSOR_STREAMED        = 1 << 4;
 
     int n_kv      = 0;
     int n_tensors = 0;
@@ -81,6 +88,7 @@ struct llama_model_loader {
     bool no_alloc;
 
     llama_files files;
+    std::vector<std::string> file_paths; // same order as files; empty string for FILE*-based loading
     llama_ftype ftype;
     llama_fver  fver;
 

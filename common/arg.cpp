@@ -2477,6 +2477,50 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
+    add_opt(common_arg(
+        {"--moe-stream"},
+        "stream Mixture of Experts (MoE) routed expert weights from disk on demand",
+        [](common_params & params) {
+            params.moe_stream = true;
+        }
+    ).set_env("LLAMA_ARG_MOE_STREAM"));
+    add_opt(common_arg(
+        {"--moe-stream-cache"}, "<NG|Ns>",
+        "expert cache for --moe-stream: memory budget in GiB (e.g. 40) or exact slots per layer with an 's' suffix (e.g. 64s); implies --moe-stream (default: auto)",
+        [](common_params & params, const std::string & value) {
+            params.moe_stream = true;
+            size_t pos = 0;
+            const uint64_t n = std::stoull(value, &pos);
+            std::string suffix = value.substr(pos);
+            for (auto & c : suffix) {
+                c = std::tolower(c);
+            }
+            if (suffix == "s" || suffix == "slot" || suffix == "slots") {
+                params.moe_stream_slots = n;
+            } else if (suffix.empty() || suffix == "g" || suffix == "gb" || suffix == "gib") {
+                params.moe_stream_budget = n * 1024ull * 1024ull * 1024ull;
+            } else {
+                throw std::invalid_argument("invalid value");
+            }
+        }
+    ).set_env("LLAMA_ARG_MOE_STREAM_CACHE"));
+    add_opt(common_arg(
+        {"--moe-stream-io-threads"}, "N",
+        "I/O threads for --moe-stream expert loads; implies --moe-stream (default: auto)",
+        [](common_params & params, int value) {
+            params.moe_stream = true;
+            params.moe_stream_io_threads = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_STREAM_IO_THREADS"));
+    add_opt(common_arg(
+        {"--moe-stream-direct"},
+        "use O_DIRECT for --moe-stream expert reads (bypass the page cache); implies --moe-stream. "
+        "falls back to buffered reads if O_DIRECT is unsupported by the OS or filesystem",
+        [](common_params & params) {
+            params.moe_stream = true;
+            params.moe_stream_direct = true;
+        }
+    ).set_env("LLAMA_ARG_MOE_STREAM_DIRECT"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",

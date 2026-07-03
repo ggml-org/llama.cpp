@@ -315,6 +315,13 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
+        // SSD streaming of MoE routed expert weights (experts are paged from the GGUF on demand
+        // into a per-layer cache of moe_stream_slots experts; requires moe_stream = true)
+        uint32_t moe_stream_slots;      // expert cache slots per streamed layer (0 = auto)
+        uint64_t moe_stream_budget;     // total cache byte budget, used when slots == 0 (0 = auto heuristic)
+        int32_t  moe_stream_io_threads; // expert load I/O threads (<= 0 = default)
+        bool     moe_stream_direct;     // use O_DIRECT for expert reads (bypass page cache); falls back if unsupported
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool use_mmap;        // use mmap if possible
@@ -324,6 +331,7 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+        bool moe_stream;      // stream MoE routed expert weights from disk on demand
     };
 
     struct llama_sampler_seq_config {
@@ -1548,6 +1556,9 @@ extern "C" {
     LLAMA_API struct llama_perf_sampler_data llama_perf_sampler      (const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
+
+    // print MoE expert streaming statistics (no-op when streaming is not enabled)
+    LLAMA_API void llama_moe_stream_print_stats(const struct llama_model * model);
 
     //
     // training

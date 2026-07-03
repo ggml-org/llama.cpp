@@ -279,6 +279,13 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
 static std::pair<int, llama_model *> llama_model_load(struct gguf_context * metadata, llama_model_set_tensor_data_t set_tensor_data, void * set_tensor_data_ud,
         const std::string & fname, std::vector<std::string> & splits, FILE * file, llama_model_params & params) {
     try {
+        if (params.moe_stream && params.use_mmap) {
+            // mmap prefetches the whole file into RAM (MAP_POPULATE / MADV_WILLNEED), which loads
+            // the streamed experts too and defeats streaming - forcing an OOM on a model >> RAM
+            LLAMA_LOG_WARN("%s: disabling mmap because MoE expert streaming is enabled\n", __func__);
+            params.use_mmap = false;
+        }
+
         llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.use_mmap, params.use_direct_io,
             params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
 
