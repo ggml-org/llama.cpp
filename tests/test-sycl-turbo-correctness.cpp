@@ -456,16 +456,23 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv, n_q_pad, 1, 1);
         ggml_set_name(m, "m");
         const bool turbo = (kvt == GGML_TYPE_TURBO2_0 || kvt == GGML_TYPE_TURBO3_0 || kvt == GGML_TYPE_TURBO4_0);
+        // InnerQ scale_inv: matches llama-graph.cpp / llama-kv-cache.cpp
+        // production value (1D F32, 128 floats, all-1.0 at init). Passing
+        // nullptr takes a different ggml_turbo_wht kernel path ("NULL = no
+        // scaling" in ggml.c); pass a matching tensor so the probe exercises
+        // the same op as the model. The tensor is filled with 1.0f by set_inputs.
+        ggml_tensor * innerq_scale = turbo ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 128) : nullptr;
+        if (innerq_scale) ggml_set_name(innerq_scale, "innerq_scale");
         // Turbo K/V are stored WHT-rotated (see quantize_row_turbo*_ref). Q must be
         // forward-rotated into the same basis so KQ scores are preserved (WHT is
         // orthogonal: (Wq)*(Wk) == q*k); the attention *output* inherits that
         // rotation from V, so it needs an inverse WHT to compare against the
         // unrotated F16 CPU reference. Mirrors llama-graph.cpp's turbo KV wiring.
-        ggml_tensor * qq = turbo ? ggml_turbo_wht(ctx, q, 0, 0, nullptr) : q;  // forward, auto group
+        ggml_tensor * qq = turbo ? ggml_turbo_wht(ctx, q, 0, 0, innerq_scale) : q;  // forward, auto group
         ggml_tensor * o  = ggml_flash_attn_ext(ctx, qq, k, v, m, scale, 0.0f, 0.0f);
         if (turbo) {
             const int group = (d % 128 == 0) ? 128 : 64;
-            o = ggml_turbo_wht(ctx, o, 1, group, nullptr);  // inverse
+            o = ggml_turbo_wht(ctx, o, 1, group, innerq_scale);  // inverse
         }
         return o;
     };
@@ -479,6 +486,11 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         [=](ggml_context * ctx) { return build(ctx, GGML_TYPE_F16); },
         [=](ggml_context * ctx) {
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
+            if (ggml_tensor * is = ggml_get_tensor(ctx, "innerq_scale"); is != nullptr) {
+                float innerq_ones[128];
+                for (int ii = 0; ii < 128; ++ii) innerq_ones[ii] = 1.0f;
+                ggml_backend_tensor_set(is, innerq_ones, 0, sizeof(innerq_ones));
+            }
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_f16.data(), 0, k_f16.size() * sizeof(ggml_fp16_t));
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_f16.data(), 0, v_f16.size() * sizeof(ggml_fp16_t));
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "m"), mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
@@ -492,6 +504,11 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         [=](ggml_context * ctx) { return build(ctx, kv_type); },
         [=](ggml_context * ctx) {
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
+            if (ggml_tensor * is = ggml_get_tensor(ctx, "innerq_scale"); is != nullptr) {
+                float innerq_ones[128];
+                for (int ii = 0; ii < 128; ++ii) innerq_ones[ii] = 1.0f;
+                ggml_backend_tensor_set(is, innerq_ones, 0, sizeof(innerq_ones));
+            }
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_q.data(), 0, k_q.size());
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_q.data(), 0, v_q.size());
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "m"), mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
@@ -550,7 +567,13 @@ static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
         ggml_tensor * v = ggml_new_tensor_3d(ctx, kvt, d, n_kv, nh);
         ggml_set_name(v, "v");
         const bool turbo = (kvt == GGML_TYPE_TURBO2_0 || kvt == GGML_TYPE_TURBO3_0 || kvt == GGML_TYPE_TURBO4_0);
-        ggml_tensor * qq = turbo ? ggml_turbo_wht(ctx, q, 0, 0, nullptr) : q;
+        // InnerQ scale_inv: matches production (1D F32, 128 floats, all-1.0 at
+        // init). Passing nullptr takes a different ggml_turbo_wht kernel path
+        // ("NULL = no scaling" in ggml.c); pass a matching tensor so the probe
+        // exercises the same op as the model. Filled with 1.0f by set_inputs.
+        ggml_tensor * innerq_scale = turbo ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 128) : nullptr;
+        if (innerq_scale) ggml_set_name(innerq_scale, "innerq_scale");
+        ggml_tensor * qq = turbo ? ggml_turbo_wht(ctx, q, 0, 0, innerq_scale) : q;
         // mirrors build_attn_mha's non-FA branch: kq = mul_mat(k, q); softmax; kqv = mul_mat(v_transposed, kq)
         ggml_tensor * kq = ggml_mul_mat(ctx, k, qq);
         ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
@@ -565,7 +588,7 @@ static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
         if (turbo) {
             const int group = (d % 128 == 0) ? 128 : 64;
             kqv = ggml_cont(ctx, kqv);
-            kqv = ggml_turbo_wht(ctx, kqv, 1, group, nullptr);
+            kqv = ggml_turbo_wht(ctx, kqv, 1, group, innerq_scale);
         }
         return kqv;
     };
@@ -575,6 +598,11 @@ static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
         [=](ggml_context * ctx) { return build(ctx, GGML_TYPE_F16); },
         [=](ggml_context * ctx) {
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
+            if (ggml_tensor * is = ggml_get_tensor(ctx, "innerq_scale"); is != nullptr) {
+                float innerq_ones[128];
+                for (int ii = 0; ii < 128; ++ii) innerq_ones[ii] = 1.0f;
+                ggml_backend_tensor_set(is, innerq_ones, 0, sizeof(innerq_ones));
+            }
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_f16.data(), 0, k_f16.size() * sizeof(ggml_fp16_t));
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_f16.data(), 0, v_f16.size() * sizeof(ggml_fp16_t));
         }, &cpu_ok);
@@ -585,6 +613,11 @@ static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
         [=](ggml_context * ctx) { return build(ctx, kv_type); },
         [=](ggml_context * ctx) {
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
+            if (ggml_tensor * is = ggml_get_tensor(ctx, "innerq_scale"); is != nullptr) {
+                float innerq_ones[128];
+                for (int ii = 0; ii < 128; ++ii) innerq_ones[ii] = 1.0f;
+                ggml_backend_tensor_set(is, innerq_ones, 0, sizeof(innerq_ones));
+            }
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_q.data(), 0, k_q.size());
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_q.data(), 0, v_q.size());
         }, &sok);
