@@ -21,6 +21,11 @@ export const API_TOOLS = {
 	EXECUTE: '/tools'
 };
 
+// tokenizer round-trip, used to attribute static tool-definition cost to the context gauge
+export const API_TOKENIZE = {
+	BASE: '/tokenize'
+};
+
 // resumable stream routes, the conv::model identity is appended as a path segment
 export const API_STREAM = {
 	BASE: './v1/stream',
