@@ -312,7 +312,7 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
             ggml_cuda_kernel_launch(topk_moe_cuda<256, has_bias>, launch_params,
                 logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
-        case 288:
+        case 288: // StepFun 3.7
             ggml_cuda_kernel_launch(topk_moe_cuda<288, has_bias>, launch_params,
                 logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
