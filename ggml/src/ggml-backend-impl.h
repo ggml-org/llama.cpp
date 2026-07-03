@@ -236,6 +236,8 @@ extern "C" {
     // Optional: obtain a score for the backend based on the system configuration
     // Higher scores are preferred, 0 means the backend is not supported in the current system
     typedef int                (*ggml_backend_score_t)(void);
+    // Optional: release all resources held by the backend (before unloading the dynamic library)
+    typedef void               (*ggml_backend_reg_free_t)(ggml_backend_reg_t reg);
 
 #ifdef GGML_BACKEND_DL
 #    ifdef __cplusplus
@@ -253,6 +255,13 @@ extern "C" {
             int ggml_backend_score(void) {                 \
                 return score_fn();                         \
             }
+#        define GGML_BACKEND_DL_FREE_IMPL(free_fn)                                \
+            extern "C" {                                                          \
+            GGML_BACKEND_API void ggml_backend_reg_free(ggml_backend_reg_t reg); \
+            }                                                                     \
+            void ggml_backend_reg_free(ggml_backend_reg_t reg) {                  \
+                free_fn(reg);                                                     \
+            }
 #    else
 #        define GGML_BACKEND_DL_IMPL(reg_fn)                              \
             GGML_BACKEND_API ggml_backend_reg_t ggml_backend_init(void);  \
@@ -264,10 +273,16 @@ extern "C" {
             int                  ggml_backend_score(void) { \
                 return score_fn();                          \
             }
+#        define GGML_BACKEND_DL_FREE_IMPL(free_fn)                                \
+            GGML_BACKEND_API void ggml_backend_reg_free(ggml_backend_reg_t reg); \
+            void                  ggml_backend_reg_free(ggml_backend_reg_t reg) { \
+                free_fn(reg);                                                     \
+            }
 #    endif
 #else
 #    define GGML_BACKEND_DL_IMPL(reg_fn)
 #    define GGML_BACKEND_DL_SCORE_IMPL(score_fn)
+#    define GGML_BACKEND_DL_FREE_IMPL(free_fn)
 #endif
 
 #ifdef  __cplusplus

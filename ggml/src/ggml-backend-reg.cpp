@@ -277,6 +277,14 @@ struct ggml_backend_registry {
                             [reg](ggml_backend_dev_t dev) { return ggml_backend_dev_backend_reg(dev) == reg; }),
             devices.end());
 
+        // if backend supports free(), use it
+        if (it->handle) {
+            auto * free_fn = (ggml_backend_reg_free_t) dl_get_sym(it->handle.get(), "ggml_backend_reg_free");
+            if (free_fn) {
+                free_fn(reg);
+            }
+        }
+
         // remove backend
         backends.erase(it);
     }

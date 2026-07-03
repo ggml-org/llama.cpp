@@ -115,6 +115,10 @@ void llama_numa_init(enum ggml_numa_strategy numa) {
 
 void llama_backend_free(void) {
     ggml_quantize_free();
+    while (ggml_backend_reg_count() > 0) {
+        auto * reg = ggml_backend_reg_get(0);
+        ggml_backend_unload(reg);
+    }
 }
 
 int64_t llama_time_us(void) {
