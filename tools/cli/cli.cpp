@@ -202,7 +202,7 @@ struct cli_context {
 
     // TODO: support remote files in the future (http, https, etc)
     std::string load_input_file(const std::string & fname, bool is_media) {
-        std::ifstream file(fname, std::ios::binary);
+        std::ifstream file = fs_open_ifstream(fname, std::ios::binary);
         if (!file) {
             return "";
         }
@@ -448,6 +448,9 @@ int llama_cli(int argc, char ** argv) {
     console::log("%s\n", LLAMA_ASCII_LOGO);
     console::log("build      : %s\n", inf.build_info.c_str());
     console::log("model      : %s\n", inf.model_name.c_str());
+    if (!inf.model_ftype.empty()) {
+        console::log("ftype      : %s\n", inf.model_ftype.c_str());
+    }
     console::log("modalities : %s\n", modalities.c_str());
     if (!params.system_prompt.empty()) {
         console::log("using custom system prompt\n");

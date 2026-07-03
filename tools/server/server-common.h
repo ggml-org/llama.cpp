@@ -218,17 +218,11 @@ public:
 
     size_t get_common_prefix(const server_tokens & b) const;
 
+    // split the tokens into message spans, skipping over media chunks
+    common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
+
     // make sure all text tokens are within the vocab range
     bool validate(const struct llama_context * ctx) const;
-
-    // encode and decode the image chunk
-    int32_t process_chunk(
-                llama_context * ctx,
-                mtmd_context * mctx,
-                size_t idx,
-                llama_pos pos,
-                int32_t seq_id,
-                size_t & n_tokens_out) const;
 
     server_tokens clone() const;
 };
@@ -335,7 +329,7 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx);
+std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top);
 
 std::string safe_json_to_str(const json & data);
 

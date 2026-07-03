@@ -20,6 +20,7 @@
 import Dexie from 'dexie';
 import {
 	STORAGE_APP_NAME,
+	STORAGE_APP_NAME_DEPRECATED,
 	DB_APP_NAME_DEPRECATED,
 	CONFIG_LOCALSTORAGE_KEY,
 	IDXDB_TABLES,
@@ -494,12 +495,69 @@ const customJsonKeyMigration: Migration = {
 	}
 };
 
+const MCP_DEFAULT_ENABLED_MIGRATION_ID = 'mcp-default-enabled-to-config-v1';
+
+const LEGACY_MCP_DEFAULT_ENABLED_KEY = `${STORAGE_APP_NAME}.mcpDefaultEnabled`;
+const DEPRECATED_LEGACY_MCP_DEFAULT_ENABLED_KEY = `${STORAGE_APP_NAME_DEPRECATED}.mcpDefaultEnabled`;
+
+const mcpDefaultEnabledMigration: Migration = {
+	id: MCP_DEFAULT_ENABLED_MIGRATION_ID,
+	description:
+		'Copy mcpDefaultEnabled localStorage key into settings config (preserves legacy keys)',
+
+	async run(): Promise<void> {
+		const raw =
+			localStorage.getItem(LEGACY_MCP_DEFAULT_ENABLED_KEY) ??
+			localStorage.getItem(DEPRECATED_LEGACY_MCP_DEFAULT_ENABLED_KEY);
+
+		// Legacy keys intentionally left in place so a downgrade keeps reading them.
+
+		if (raw === null) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] MCP default enabled: no legacy key found, skipping');
+			return;
+		}
+
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+		const config = configRaw ? JSON.parse(configRaw) : {};
+
+		// Don't overwrite an existing config entry — current data wins.
+		if (SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES in config) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] MCP default enabled: config already has overrides, skipping');
+			return;
+		}
+
+		try {
+			const parsed = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return;
+			const valid = parsed.every(
+				(o) =>
+					typeof o === 'object' &&
+					o !== null &&
+					typeof (o as Record<string, unknown>).serverId === 'string' &&
+					typeof (o as Record<string, unknown>).enabled === 'boolean'
+			);
+			if (!valid) return;
+		} catch {
+			return;
+		}
+
+		config[SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES] = raw;
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] MCP default enabled: moved legacy key into config');
+	}
+};
+
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
 	legacyMessageMigration,
 	themeMigration,
-	customJsonKeyMigration
+	customJsonKeyMigration,
+	mcpDefaultEnabledMigration
 ];
 
 export const MigrationService = {

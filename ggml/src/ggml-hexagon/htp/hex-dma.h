@@ -5,6 +5,9 @@
 #include <hexagon_types.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include "hex-utils.h"
+
+#include "hex-profile.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -88,6 +91,7 @@ typedef struct {
     uint32_t            pop_idx;
     uint32_t            capacity;
     uint32_t            idx_mask;
+    struct htp_thread_trace * trace;
 } dma_queue;
 
 dma_queue * dma_queue_create(size_t capacity);
@@ -124,13 +128,8 @@ static inline dma_ptr dma_make_ptr(void *dst, const void *src)
     return p;
 }
 
-#if __HVX_ARCH__ < 73
-static const uint32_t dma_src_l2_bypass_on = 1;
-static const uint32_t dma_dst_l2_bypass_on = 0;
-#else
 static const uint32_t dma_src_l2_bypass_on = 1;
 static const uint32_t dma_dst_l2_bypass_on = 1;
-#endif
 
 static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t size) {
     if (((q->push_idx + 1) & q->idx_mask) == q->pop_idx) {
@@ -139,26 +138,28 @@ static inline bool dma_queue_push_single_1d(dma_queue * q, dma_ptr dptr, size_t 
     }
 
     dma_descriptor_1d * desc = (dma_descriptor_1d *) &q->desc[q->push_idx];
-    desc->next       = NULL;
-    desc->desc_size  = 0; // 1D mode
-    desc->src_bypass = dma_src_l2_bypass_on;
-    desc->dst_bypass = dma_dst_l2_bypass_on;
-    desc->order      = 0;
-    desc->done       = 0;
-    desc->src        = (void *) dptr.src;
-    desc->dst        = (void *) dptr.dst;
-    desc->size       = size;
+    desc->src  = (void *) dptr.src;
+    desc->dst  = (void *) dptr.dst;
+    desc->size = size;
 
     q->dptr[q->push_idx] = dptr;
 
     if (size) {
+        desc->next       = NULL;
+        desc->desc_size  = 0; // 1D mode
+        desc->src_bypass = dma_src_l2_bypass_on;
+        desc->dst_bypass = dma_dst_l2_bypass_on;
+        desc->order      = 0;
+        desc->done       = 0;
+
+        htp_trace_event_start(q->trace, HTP_TRACE_EVT_DMA, q->push_idx);
         dmlink(q->tail, desc);
         q->tail = (dma_descriptor_2d *) desc;
     } else {
-        desc->done = 1;
+        desc->desc_size = 0;
+        desc->done      = 1;
     }
 
-    // FARF(ERROR, "dma-push: i %u row-size %u nrows %d dst %p src %p\n", q->push_idx, row_size, nrows, dptr.dst, dptr.src);
     q->push_idx = (q->push_idx + 1) & q->idx_mask;
     return true;
 }
@@ -202,6 +203,7 @@ static inline bool dma_queue_push_single_2d(dma_queue * q, dma_ptr dptr, size_t 
     q->dptr[q->push_idx] = dptr;
 
     if (nrows) {
+        htp_trace_event_start(q->trace, HTP_TRACE_EVT_DMA, q->push_idx);
         dmlink(q->tail, desc);
         q->tail = desc;
     } else {
@@ -223,10 +225,12 @@ static inline dma_ptr dma_queue_pop(dma_queue * q) {
     dma_descriptor_2d * desc = &q->desc[q->pop_idx];
 
     // Wait for desc to complete
-    while (!desc->done) {
-        // FARF(ERROR, "dma-pop: waiting for DMA : %u\n", q->pop_idx);
-        dmpoll();
+    if (!desc->done) {
+        while (!desc->done) {
+            dmpoll();
+        }
     }
+    htp_trace_event_stop(q->trace, HTP_TRACE_EVT_DMA, q->pop_idx);
 
     dptr = q->dptr[q->pop_idx];
 
@@ -317,7 +321,7 @@ static inline bool dma_queue_push_vtcm_to_ddr(dma_queue * q, dma_ptr dptr, size_
     return dma_queue_push(q, dptr, dst_row_size, src_row_size, dst_row_size, nrows);
 }
 
-#define DMA_CACHE_MAX_SIZE 64U
+#define DMA_CACHE_MAX_SIZE 256U
 
 typedef struct {
     uint8_t *base;
@@ -349,20 +353,19 @@ static inline bool dma_cache_push(dma_queue *q, dma_cache *c, const uint8_t * sr
         if (c->src[i] == (uint32_t) src) {
             c->age[i] = 0;
             dst = c->base + (i * c->line_size); nrows = 0; // dummy dma
-            // FARF(ERROR, "dma-cache: found %p", src);
         } else {
             c->age[i]++;
             if (c->age[i] > o_age) { o_age = c->age[i]; o_idx = i; }
         }
     }
     if (!dst) {
-        // FARF(ERROR, "dma-cache: replacing #%u : age %u %p -> %p", o_idx, c->age[o_idx], (void *) c->src[o_idx], src);
         c->age[o_idx] = 0;
         c->src[o_idx] = (uint32_t) src;
         dst = c->base + o_idx * c->line_size; // normal nrows dma
+        return dma_queue_push(q, dma_make_ptr(dst, src), dst_stride, src_stride, row_size, nrows);
     }
 
-    return dma_queue_push(q, dma_make_ptr(dst, src), dst_stride, src_stride, row_size, nrows);
+    return dma_queue_push_single_1d(q, dma_make_ptr(dst, src), 0);
 }
 
 #ifdef __cplusplus

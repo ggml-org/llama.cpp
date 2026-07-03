@@ -21,7 +21,7 @@ ggml_cgraph * clip_graph_llava::build() {
 
         // If we set explicit vision feature layers, only go up to the deepest one
         // NOTE: only used by granite-vision models for now
-        for (const auto & feature_layer : hparams.vision_feature_layer) {
+        for (const auto & feature_layer : hparams.feature_layers) {
             if (feature_layer > deepest_feature_layer) {
                 deepest_feature_layer = feature_layer;
             }
@@ -59,7 +59,7 @@ ggml_cgraph * clip_graph_llava::build() {
 
         // If this is an embedding feature layer, save the output.
         // NOTE: 0 index here refers to the input to the encoder.
-        if (hparams.is_vision_feature_layer(il)) {
+        if (hparams.is_feature_layer(il)) {
             embedding_stack.push_back(cur);
         }
 
@@ -134,7 +134,7 @@ ggml_cgraph * clip_graph_llava::build() {
     // process vision feature layers (used by granite)
     {
         // final layer is a vision feature layer
-        if (hparams.is_vision_feature_layer(max_feature_layer)) {
+        if (hparams.is_feature_layer(max_feature_layer)) {
             embedding_stack.push_back(inpL);
         }
 
