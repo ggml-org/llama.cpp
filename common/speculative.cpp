@@ -2271,11 +2271,12 @@ common_speculative_init_result::common_speculative_init_result(
 
     if (spec_mtp) {
         cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    } else {
+        cparams.n_rs_seq = 0;
     }
 
     // note: for small models maybe we can set this to the maximum possible draft from all speculative types
     //       the extra memory for small models is likely negligible?
-    cparams.n_rs_seq  = 0;
     cparams.ctx_other = ctx_tgt;
 
     std::string model_path;

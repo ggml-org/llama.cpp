@@ -1097,8 +1097,11 @@ private:
                 auto cparams_dft = common_context_params_to_llama(params_dft);
                 if (spec_mtp) {
                     cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+                    cparams_dft.type_k   = params_base.speculative.draft.cache_type_k;
+                    cparams_dft.type_v   = params_base.speculative.draft.cache_type_v;
+                } else {
+                    cparams_dft.n_rs_seq = 0;
                 }
-                cparams_dft.n_rs_seq = 0;
 
                 std::vector<ggml_backend_dev_t> devs;
                 uint32_t hp_ngl = 0;
@@ -3246,18 +3249,49 @@ private:
                                 }
 
                                 if (pos_min >= pos_min_thold) {
+                                    const auto checkpoint_rs_rollback = [&](const auto & cur) -> llama_pos {
+                                        if (n_swa != 0 || cur.pos_max < pos_min_thold) {
+                                            return 0;
+                                        }
+
+                                        const llama_pos rollback_to = std::max<llama_pos>(0, pos_min_thold - 1);
+                                        return cur.pos_max > rollback_to ? cur.pos_max - rollback_to : 0;
+                                    };
+
+                                    const auto can_restore_with_rs_rollback = [&](const auto & cur) {
+                                        const llama_pos n_rollback = checkpoint_rs_rollback(cur);
+                                        if (n_rollback <= 0) {
+                                            return false;
+                                        }
+
+                                        if (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
+                                            n_rollback > (llama_pos) llama_n_rs_seq(ctx_tgt)) {
+                                            return false;
+                                        }
+
+                                        if (ctx_dft &&
+                                            (ctx_dft_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
+                                             n_rollback > (llama_pos) llama_n_rs_seq(ctx_dft.get()))) {
+                                            return false;
+                                        }
+
+                                        return true;
+                                    };
+
                                     // search for a context checkpoint
                                     const auto it = std::find_if(
                                         slot.prompt.checkpoints.rbegin(),
                                         slot.prompt.checkpoints.rend(),
                                         [&](const auto & cur) {
                                             // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
-                                            SLT_TRC(slot, "checking checkpoint with [%d, %d] against %d...\n", cur.pos_min, cur.pos_max, pos_min_thold);
+                                            const llama_pos n_rs_rollback = checkpoint_rs_rollback(cur);
+                                            SLT_TRC(slot, "checking checkpoint with [%d, %d] against %d, rs rollback = %d...\n",
+                                                    cur.pos_min, cur.pos_max, pos_min_thold, n_rs_rollback);
                                             // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
-                                            if (cur.pos_max > pos_next) {
+                                            if (cur.pos_max > pos_next && !can_restore_with_rs_rollback(cur)) {
                                                 return false;
                                             }
-                                            return cur.pos_min < pos_min_thold || cur.pos_min == 0;
+                                            return cur.pos_min < pos_min_thold || cur.pos_min == 0 || can_restore_with_rs_rollback(cur);
                                         }
                                     );
 
