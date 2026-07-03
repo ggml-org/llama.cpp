@@ -184,9 +184,9 @@
 
 	let contextLabelColor = $derived.by(() => {
 		if (contextPercent === null) return 'text-muted-foreground';
-		if (contextPercent >= 90) return 'text-red-400';
-		if (contextPercent >= 75) return 'text-amber-400';
-		return 'text-green-400';
+		if (contextPercent >= 95) return 'text-red-400';
+		if (contextPercent >= 80) return 'text-amber-400';
+		return 'text-muted-foreground';
 	});
 
 	async function handleLoadModel() {
@@ -239,24 +239,22 @@
 </script>
 
 <HoverCard.Root>
-	<HoverCard.Trigger class="flex h-7 w-7 cursor-default items-center justify-center">
-		<svg viewBox="0 0 32 32" fill="none" class="h-6 w-6">
+	<HoverCard.Trigger class="flex h-5 w-5 cursor-default items-center justify-center">
+		<svg viewBox="0 0 32 32" fill="none" class="h-5 w-5">
 			<!-- Background track -->
-			<circle cx="16" cy="16" r="11" stroke="currentColor" stroke-opacity="0.1" stroke-width="2" />
+			<circle cx="16" cy="16" r="11" stroke="currentColor" stroke-opacity="0.1" stroke-width="3" />
 			<!-- Progress arc -->
 			<circle
 				cx="16"
 				cy="16"
 				r="11"
 				class="transition-colors duration-300"
-				class:text-green-400={contextPercent !== null && contextPercent < 75}
-				class:text-amber-400={contextPercent !== null &&
-					contextPercent >= 75 &&
-					contextPercent < 90}
-				class:text-red-400={contextPercent !== null && contextPercent >= 90}
+				class:text-foreground={contextPercent !== null && contextPercent < 80}
+				class:text-amber-400={contextPercent !== null && contextPercent >= 80 && contextPercent < 95}
+				class:text-red-400={contextPercent !== null && contextPercent >= 95}
 				class:text-muted-foreground={contextPercent === null}
 				stroke="currentColor"
-				stroke-width="2"
+				stroke-width="3"
 				stroke-linecap="round"
 				stroke-dasharray={CIRCUMFERENCE}
 				stroke-dashoffset={contextPercent !== null
@@ -301,11 +299,9 @@
 				<div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
 					<div
 						class="h-full rounded-full transition-all duration-300"
-						class:bg-green-500={contextPercent !== null && contextPercent < 75}
-						class:bg-amber-500={contextPercent !== null &&
-							contextPercent >= 75 &&
-							contextPercent < 90}
-						class:bg-red-500={contextPercent !== null && contextPercent >= 90}
+						class:bg-green-500={contextPercent !== null && contextPercent < 80}
+						class:bg-amber-500={contextPercent !== null && contextPercent >= 80 && contextPercent < 95}
+						class:bg-red-500={contextPercent !== null && contextPercent >= 95}
 						style="width: {contextPercent}%"
 					></div>
 				</div>
@@ -334,7 +330,7 @@
 						/>
 					</Collapsible.Trigger>
 
-					<Collapsible.Content class="flex flex-col gap-2 text-xs pt-2">
+					<Collapsible.Content class="flex flex-col gap-2 text-xs pt-4">
 					{#if enabledToolsTokenCount !== null && enabledToolsTokenCount > 0}
 						<div class="flex items-baseline justify-between">
 							<span class="text-muted-foreground">Tool definitions</span>
