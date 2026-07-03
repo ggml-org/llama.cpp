@@ -1887,7 +1887,6 @@ static void test_role_markers_all_templates(testing & t) {
         { "Qwen-Qwen3-0.6B.jinja",                           "<|im_start|>user",       "<|im_start|>assistant"      },
         { "Qwen-QwQ-32B.jinja",                              "<|im_start|>user",       "<|im_start|>assistant"      },
         { "StepFun3.5-Flash.jinja",                          "<|im_start|>user",       "<|im_start|>assistant"      },
-        { "stepfun-ai-Step-3.5-Flash.jinja",                 "<|im_start|>user",       "<|im_start|>assistant"      },
 
         // DeepSeek family
         { "deepseek-ai-DeepSeek-R1-Distill-Llama-8B.jinja",  "<｜User｜>",                "<｜Assistant｜>"             },

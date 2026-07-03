@@ -3155,6 +3155,59 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 }
             }
         }
+
+        {
+            // StepFun trimming regression test (see https://github.com/ggml-org/llama.cpp/pull/25238)
+            auto tmpls = read_templates("models/templates/StepFun3.5-Flash.jinja");
+
+            common_chat_msg message_chatbot = simple_assist_msg("Let me check.\n\n", "I am thinking.\n\n");
+
+            {
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_chatbot };
+                inputs.add_generation_prompt = true;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (params.prompt.find("Let me check.\n\n") != std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: content not trimmed");
+                }
+
+                if (params.prompt.find("I am thinking.\n\n") != std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: reasoning_content not trimmed");
+                }
+            }
+
+            {
+                // Trimming must also reach typed (text) content parts, not just string content
+                // (see https://github.com/ggml-org/llama.cpp/pull/25238)
+                common_chat_msg message_parts;
+                message_parts.role          = "user";
+                message_parts.content_parts = {
+                    { /* .type = */ "text", /* .text = */ "First part.\n\n" },
+                    { /* .type = */ "media_marker", /* .text = */ "<__media__>" },
+                    { /* .type = */ "text", /* .text = */ "Second part.\n\n" },
+                };
+
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_parts };
+                inputs.add_generation_prompt = true;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (params.prompt.find("First part.\n\n") != std::string::npos ||
+                    params.prompt.find("Second part.\n\n") != std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: text content parts not trimmed");
+                }
+
+                // the trimmed text itself must still be present
+                if (params.prompt.find("First part.") == std::string::npos ||
+                    params.prompt.find("Second part.") == std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: text content parts missing after trim");
+                }
+            }
+        }
+
     }
 
     {
