@@ -379,6 +379,13 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_hard_limits(-1, INT32_MAX)
         ->set_desc("Number of tokens in the reasoning budget (-1 = disabled)"));
 
+    add((new field_num("reasoning_budget_warn_offset", params.sampling.reasoning_budget_warn_offset))
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("Number of tokens before budget exhaustion to show reasoning budget message")
+        ->set_handler([&](field_eval_context & ctx, const json & data) {
+            ctx.params.sampling.reasoning_budget_warn_offset = data.at("reasoning_budget_warn_offset").get<int>();
+        }));
+
     add((new field_str("reasoning_budget_start_tag"))
         ->set_desc("Token string marking the start of the reasoning budget section")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
@@ -400,6 +407,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             GGML_ASSERT(ctx.vocab != nullptr);
             std::string end_tag = json_value(data, "reasoning_budget_end_tag", std::string());
             std::string message = data.at("reasoning_budget_message").get<std::string>();
+            ctx.params.sampling.reasoning_budget_message = message;
             ctx.params.sampling.reasoning_budget_forced = common_tokenize(ctx.vocab, message + end_tag, false, true);
         }));
 
@@ -541,8 +549,8 @@ task_params eval_llama_cmpl_schema(
     // debugging
     {
         auto budget = params.sampling.reasoning_budget_tokens;
-        SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
-                budget, params.sampling.generation_prompt.c_str(),
+        SRV_DBG("reasoning budget: tokens=%d, warn_offset=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
+                budget, params.sampling.reasoning_budget_warn_offset, params.sampling.generation_prompt.c_str(),
                 params.sampling.reasoning_budget_start.size(),
                 params.sampling.reasoning_budget_end.size(),
                 params.sampling.reasoning_budget_forced.size());

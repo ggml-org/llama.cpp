@@ -26,7 +26,9 @@ static void test_reasoning_budget(
     int32_t budget,
     common_reasoning_budget_state initial_state,
     size_t expected_force_start,   // token index where forcing should start (SIZE_MAX = never)
-    size_t expected_force_end      // token index where forcing should end (after this, no more forcing)
+    size_t expected_force_end,     // token index where forcing should end (after this, no more forcing)
+    int32_t warn_offset = 0,
+    const std::vector<llama_token> & forced_message_tokens = {}
 ) {
     // Find the maximum token ID to ensure our vocab covers all tokens
     llama_token max_token = 0;
@@ -44,7 +46,9 @@ static void test_reasoning_budget(
         end_tokens,
         forced_tokens,
         budget,
-        initial_state
+        initial_state,
+        warn_offset,
+        forced_message_tokens
     );
 
     // Create a test token data array for checking forcing behavior
@@ -254,6 +258,141 @@ static void test_reasoning_budget_force_manual() {
     fprintf(stderr, "  Test 'manual force transition' passed\n");
 }
 
+static void test_reasoning_budget_warn_offset() {
+    const std::vector<llama_token> start = {100};
+    const std::vector<llama_token> end = {101};
+    const std::vector<llama_token> forced = {102, 101};
+    const std::vector<llama_token> forced_message = {102};
+    const std::vector<llama_token> sequence = {100, 50, 51, 52, 53, 54, 55, 56};
+
+    auto * sampler = common_reasoning_budget_init(
+        nullptr,
+        start,
+        end,
+        forced,
+        5, // budget
+        REASONING_BUDGET_IDLE,
+        2, // warn_offset
+        forced_message
+    );
+
+    std::vector<llama_token_data> cur = {
+        {(llama_token)100, logf(101.0f), 0.0f},
+        {(llama_token)101, logf(102.0f), 0.0f},
+        {(llama_token)102, logf(103.0f), 0.0f},
+        {(llama_token)50, logf(51.0f), 0.0f},
+        {(llama_token)51, logf(52.0f), 0.0f},
+        {(llama_token)52, logf(53.0f), 0.0f},
+        {(llama_token)53, logf(54.0f), 0.0f},
+        {(llama_token)54, logf(55.0f), 0.0f},
+        {(llama_token)55, logf(56.0f), 0.0f},
+        {(llama_token)56, logf(57.0f), 0.0f},
+    };
+    llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+
+    auto check_forcing = [&](llama_token expected_forced) {
+        for (size_t j = 0; j < cur.size(); j++) {
+            cur[j].logit = logf((float)(j+1));
+        }
+        llama_sampler_apply(sampler, &cur_p);
+        size_t finite_count = 0;
+        llama_token finite_token = -1;
+        for (size_t j = 0; j < cur.size(); j++) {
+            if (std::isfinite(cur[j].logit)) {
+                finite_count++;
+                finite_token = cur[j].id;
+            }
+        }
+        if (expected_forced == -1) {
+            GGML_ASSERT(finite_count == cur.size()); // no forcing
+        } else {
+            GGML_ASSERT(finite_count == 1);
+            GGML_ASSERT(finite_token == expected_forced);
+        }
+    };
+
+    // i=0: idle -> accept(100) -> COUNTING
+    check_forcing(-1);
+    llama_sampler_accept(sampler, 100);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_COUNTING);
+
+    // i=1: accept(50) -> remaining=4
+    check_forcing(-1);
+    llama_sampler_accept(sampler, 50);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_COUNTING);
+
+    // i=2: accept(51) -> remaining=3
+    check_forcing(-1);
+    llama_sampler_accept(sampler, 51);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_COUNTING);
+
+    // i=3: accept(52) -> remaining=2 (trigger limit) -> FORCING_MESSAGE
+    check_forcing(-1);
+    llama_sampler_accept(sampler, 52);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_FORCING_MESSAGE);
+
+    // i=4: apply forces warning message (102). accept(53) -> CONCLUDING with remaining=2
+    check_forcing(102);
+    llama_sampler_accept(sampler, 53); // warning message token accepted
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_CONCLUDING);
+
+    // i=5: accept(54) -> remaining=1
+    check_forcing(-1);
+    llama_sampler_accept(sampler, 54);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_CONCLUDING);
+
+    // i=6: accept(55) -> remaining=0 (trigger limit) -> FORCING_END
+    check_forcing(-1);
+    llama_sampler_accept(sampler, 55);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_FORCING_END);
+
+    // i=7: apply forces end (101). accept(56) -> DONE
+    check_forcing(101);
+    llama_sampler_accept(sampler, 56);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
+
+    llama_sampler_free(sampler);
+    fprintf(stderr, "  Test 'reasoning budget warn offset' passed\n");
+}
+
+static void test_reasoning_budget_warn_offset_natural_end() {
+    const std::vector<llama_token> start = {100};
+    const std::vector<llama_token> end = {101};
+    const std::vector<llama_token> forced = {102, 101};
+    const std::vector<llama_token> forced_message = {102};
+
+    auto * sampler = common_reasoning_budget_init(
+        nullptr,
+        start,
+        end,
+        forced,
+        5, // budget
+        REASONING_BUDGET_IDLE,
+        2, // warn_offset
+        forced_message
+    );
+
+    // i=0: accept(100) -> COUNTING. rem=5
+    llama_sampler_accept(sampler, 100);
+    // i=1: accept(50) -> rem=4
+    llama_sampler_accept(sampler, 50);
+    // i=2: accept(51) -> rem=3
+    llama_sampler_accept(sampler, 51);
+    // i=3: accept(52) -> remaining=2 (trigger limit) -> FORCING_MESSAGE
+    llama_sampler_accept(sampler, 52);
+    // i=4: accept(53) (warning token) -> CONCLUDING. rem=2
+    llama_sampler_accept(sampler, 53);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_CONCLUDING);
+
+    // i=5: accept(101) (natural end token) -> DONE
+    llama_sampler_accept(sampler, 101);
+    GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
+
+    llama_sampler_free(sampler);
+    fprintf(stderr, "  Test 'reasoning budget warn offset natural end' passed\n");
+}
+
+
 // UTF-8 boundary detection unit test
 // Tests common_utf8_is_complete() from reasoning-budget.h
 static void test_utf8_boundary_detection() {
@@ -383,8 +522,10 @@ int main(void) {
     test_reasoning_budget_clone_mid_counting();
     test_reasoning_budget_clone_mid_forcing();
     test_reasoning_budget_force_manual();
+    test_reasoning_budget_warn_offset();
+    test_reasoning_budget_warn_offset_natural_end();
 
-    printf("OK (9 tests passed)\n");
+    printf("OK (11 tests passed)\n");
 
     printf("Testing UTF-8 boundary detection... ");
     test_utf8_boundary_detection();

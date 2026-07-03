@@ -6,11 +6,14 @@
 #include <vector>
 
 enum common_reasoning_budget_state {
-    REASONING_BUDGET_IDLE,         // waiting for start sequence
-    REASONING_BUDGET_COUNTING,     // counting down tokens
-    REASONING_BUDGET_FORCING,      // forcing budget message + end sequence
-    REASONING_BUDGET_WAITING_UTF8, // budget exhausted, waiting for UTF-8 completion
-    REASONING_BUDGET_DONE,         // passthrough forever
+    REASONING_BUDGET_IDLE,            // waiting for start sequence
+    REASONING_BUDGET_COUNTING,        // counting down tokens
+    REASONING_BUDGET_FORCING,         // forcing budget message + end sequence (legacy / warn_offset = 0)
+    REASONING_BUDGET_FORCING_MESSAGE, // forcing warning message only (warn_offset > 0)
+    REASONING_BUDGET_CONCLUDING,      // concluding phase after warning (warn_offset > 0)
+    REASONING_BUDGET_FORCING_END,     // forcing end sequence only (warn_offset > 0)
+    REASONING_BUDGET_WAITING_UTF8,    // budget exhausted, waiting for UTF-8 completion
+    REASONING_BUDGET_DONE,            // passthrough forever
 };
 
 // Creates a reasoning budget sampler that limits token generation inside a
@@ -30,6 +33,8 @@ enum common_reasoning_budget_state {
 //   forced_tokens  - token sequence forced when budget expires
 //   budget         - max tokens allowed in the reasoning block
 //   initial_state  - initial state
+//   warn_offset    - offset before budget exhaustion to show message
+//   forced_message_tokens - message-only tokens forced when warn_offset reached
 //
 struct llama_sampler * common_reasoning_budget_init(
         const struct llama_vocab       * vocab,
@@ -37,10 +42,13 @@ struct llama_sampler * common_reasoning_budget_init(
         const std::vector<llama_token> & end_tokens,
         const std::vector<llama_token> & forced_tokens,
         int32_t                          budget,
-        common_reasoning_budget_state    initial_state = REASONING_BUDGET_IDLE);
+        common_reasoning_budget_state    initial_state = REASONING_BUDGET_IDLE,
+        int32_t                          warn_offset = 0,
+        const std::vector<llama_token> & forced_message_tokens = {});
 
 common_reasoning_budget_state common_reasoning_budget_get_state(const struct llama_sampler * smpl);
 
 // Manually transition the reasoning budget sampler into the FORCING state.
 // Returns true if the transition occurred.
+// (Note: in warn_offset > 0, manual forcing transitions to FORCING_END)
 bool common_reasoning_budget_force(struct llama_sampler * smpl);
