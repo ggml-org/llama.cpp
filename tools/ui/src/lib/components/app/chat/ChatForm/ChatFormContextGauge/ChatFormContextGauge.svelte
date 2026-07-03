@@ -229,7 +229,7 @@
 
 <HoverCard.Root>
 	<HoverCard.Trigger class="flex h-7 w-7 cursor-default items-center justify-center">
-		<svg viewBox="0 0 32 32" fill="none" class="h-7 w-7">
+		<svg viewBox="0 0 32 32" fill="none" class="h-6 w-6">
 			<!-- Background track -->
 			<circle cx="16" cy="16" r="11" stroke="currentColor" stroke-opacity="0.1" stroke-width="2" />
 			<!-- Progress arc -->

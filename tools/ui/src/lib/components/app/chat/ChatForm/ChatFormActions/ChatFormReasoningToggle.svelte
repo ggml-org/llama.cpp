@@ -81,15 +81,17 @@
 			<Tooltip.Trigger>
 				<DropdownMenu.Trigger
 					class={[
-						'flex h-6 w-6 cursor-pointer items-center justify-center rounded-full p-0 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-						thinkingEnabled ? 'bg-amber-400/10 hover:bg-amber-400/20' : 'bg-muted'
-					]}
+						'flex md:h-8 md:w-8 h-9 w-9 cursor-pointer items-center justify-center rounded-full p-0 transition-colors shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+						thinkingEnabled
+							? 'bg-amber-400/10 hover:bg-amber-400/20 text-foreground dark:text-secondary-foreground'
+							: 'bg-background dark:bg-muted-foreground/15 text-foreground hover:bg-muted-foreground/20 dark:hover:bg-muted-foreground/25'
+						]}
 					aria-label={`${tooltipText}. Click to configure.`}
 				>
 					{#if thinkingEnabled}
-						<Lightbulb class="h-3 w-3 text-amber-400" />
+						<Lightbulb class="h-4 w-4 text-amber-400" />
 					{:else}
-						<LightbulbOff class="h-3 w-3 text-muted-foreground" />
+						<LightbulbOff class="h-4 w-4 text-muted-foreground" />
 					{/if}
 				</DropdownMenu.Trigger>
 			</Tooltip.Trigger>

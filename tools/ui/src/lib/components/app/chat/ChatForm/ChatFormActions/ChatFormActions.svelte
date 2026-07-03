@@ -10,12 +10,18 @@
 		ChatFormReasoningToggle,
 		ChatFormContextGauge
 	} from '$lib/components/app';
-	import { FileTypeCategory } from '$lib/enums';
+	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
+	import {
+		activeProcessingState,
+		isChatStreaming,
+		isLoading as chatIsLoading
+	} from '$lib/stores/chat.svelte';
 	import { getFileTypeCategory } from '$lib/utils';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
@@ -94,6 +100,40 @@
 	let activeMessage = $derived(
 		conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1]
 	);
+
+	// Context gauge stays out of the form on the start screen and on a fresh
+	// /chat/[id] page until at least one read or predicted token has been
+	// processed. The historical scan mirrors ChatFormContextGauge's
+	// conversationStats aggregation (agentic.llm rollup beats plain timings
+	// when present); the live branch adds the in-flight processing state so
+	// the gauge flips in as soon as the first timing event lands, instead of
+	// waiting for the whole turn to finish.
+	let hasProcessedTokens = $derived.by(() => {
+		if (!page.params.id) return false;
+
+		const messages = activeMessages() as DatabaseMessage[];
+		let historical = 0;
+		for (const m of messages) {
+			if (m.role !== MessageRole.ASSISTANT) continue;
+			const t = m.timings;
+			if (!t) continue;
+			const llm = t.agentic?.llm;
+			if (llm?.prompt_n != null || llm?.predicted_n != null) {
+				historical += (llm?.prompt_n ?? 0) + (llm?.predicted_n ?? 0);
+			} else {
+				historical += (t.prompt_n ?? 0) + (t.predicted_n ?? 0);
+			}
+		}
+		if (historical > 0) return true;
+
+		if (!chatIsLoading() && !isChatStreaming()) return false;
+
+		const live = activeProcessingState();
+		if (!live) return false;
+		const liveRead = Math.max(live.promptTokens ?? 0, live.promptProgress?.processed ?? 0);
+		const liveOut = live.outputTokensUsed ?? 0;
+		return liveRead > 0 || liveOut > 0;
+	});
 </script>
 
 <div
@@ -101,7 +141,7 @@
 	style="container-type: inline-size"
 >
 	{#if showAddButton}
-		<div class="mr-auto flex items-center gap-3">
+		<div class="mr-auto flex items-center gap-2">
 			<ChatFormActionsAdd
 				{disabled}
 				{hasAudioModality}
@@ -115,13 +155,14 @@
 				{onMcpResourcesClick}
 				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}
 			/>
-		</div>
+			<ChatFormReasoningToggle />
+			</div>
 	{/if}
 
-	<div class="flex items-center gap-2">
-		<ChatFormContextGauge />
-
-		<ChatFormReasoningToggle />
+	<div class="flex items-center gap-1.5">
+		{#if hasProcessedTokens}
+			<ChatFormContextGauge />
+		{/if}
 
 		{#if showModelSelector}
 			<ChatFormActionModels
