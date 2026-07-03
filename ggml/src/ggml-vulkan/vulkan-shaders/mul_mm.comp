@@ -313,16 +313,12 @@ void main() {
 #ifdef MUL_MAT_ID
         if (warp_c < required_warp_c) {
 #endif
-        coopmat<FLOAT_TYPE, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[cms_per_row];
-        coopmat<FLOAT_TYPE, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b[cms_per_col];
         [[unroll]] for (uint i = 0; i < BK; i += TK) {
+            coopmat<FLOAT_TYPE, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[cms_per_row];
+            coopmat<FLOAT_TYPE, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b[cms_per_col];
             [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
                 // Load from shared into cache
-                if (!APPLY_SLM_A_RESHAPE) {
-                    coopMatLoad(cache_a[cm_row], buf_a, (warp_r * WM + cm_row * TM) * SHMEM_STRIDE + i / 2, SHMEM_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
-                } else {
-                    coopMatLoad(cache_a[cm_row], buf_a, (warp_r * WM + cm_row * TM) * TK / 2 + i * BM / 2, TK / 2, gl_CooperativeMatrixLayoutRowMajor);
-                }
+                coopMatLoad(cache_a[cm_row], buf_a, a_shmem_index(warp_r * WM + cm_row * TM, i / 2), a_shmem_stride(), gl_CooperativeMatrixLayoutRowMajor);
             }
 
             [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
