@@ -955,10 +955,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         LOG_INF("%s: - block_size=%d, mask_token_id=%d, n_extract=%u\n", __func__, block_size, mask_token_id, target_layer_ids_n);
 
         // DFlash input is [id_last, <mask> * (block_size-1)], so it can draft at most block_size-1 tokens per step
-        if (this->params.n_max > block_size - 1) {
-            LOG_WRN("%s: requested draft size %d exceeds the trained DFlash block size %d -- clamping to %d draft tokens per step\n",
-                    __func__, this->params.n_max, block_size - 1, block_size - 1);
-            this->params.n_max = block_size - 1;
+        if (this->params.n_max > block_size - 1 || this->params.n_min > block_size - 1) {
+            LOG_WRN("%s: requested draft size (n_max=%d, n_min=%d) exceeds the trained DFlash block size %d -- clamping to %d\n",
+                    __func__, this->params.n_max, this->params.n_min, block_size, block_size - 1);
+            this->params.n_max = std::min(this->params.n_max, block_size - 1);
+            this->params.n_min = std::min(this->params.n_min, block_size - 1);
         }
 
         batch        = llama_batch_init(llama_n_batch(ctx_dft), 0,          n_seq);
@@ -968,7 +969,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         for (auto & s : smpls) {
             common_params_sampling sparams;
             sparams.no_perf  = false;
-            sparams.top_k    = 1;
+            sparams.top_k    = 10;
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
             s.reset(common_sampler_init(model_dft, sparams));
         }
@@ -1173,9 +1174,17 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
                 const llama_token id = cur_p->data[0].id;
 
+                if (cur_p->data[0].p < params.p_min) {
+                    break;
+                }
+
                 common_sampler_accept(smpl, id, true);
 
                 result.push_back(id);
+            }
+
+            if (result.size() < (size_t) params.n_min) {
+                result.clear();
             }
         }
     }
