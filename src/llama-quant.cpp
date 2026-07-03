@@ -445,6 +445,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // do not quantize relative position bias (T5)
     quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
+    // do not quantize DeepSeek4 absolute position embeddings (attn/indexer compressor APE):
+    // these are position tables added via get_rows, not matmul weights, so they carry no imatrix
+    quantize &= name.find("compressor_ape") == std::string::npos;
+
     // do not quantize specific multimodal tensors
     quantize &= name.find(".position_embd") == std::string::npos;
     quantize &= name.find("sam.pos_embd")   == std::string::npos;
@@ -1116,6 +1120,7 @@ struct pass1_setup {
                     tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
         quantize &= name.find("_norm.weight")        == std::string::npos;
         quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
+        quantize &= name.find("compressor_ape")      == std::string::npos;  // position embeddings, not weights
         if (!quantize) {
             return false;
         }
