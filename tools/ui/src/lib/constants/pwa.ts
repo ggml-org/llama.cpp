@@ -288,9 +288,7 @@ export const API_CACHING_PATTERNS = {
 } as const;
 
 // SvelteKit PWA plugin options
-export const PWA_KIT_OPTIONS = {
-	NAVIGATE_FALLBACK: './'
-} as const;
+export const PWA_KIT_OPTIONS = {} as const;
 
 export const APPLE_META_TAGS = {
 	MOBILE_WEB_APP_CAPABLE: { name: 'apple-mobile-web-app-capable', content: 'yes' },
@@ -322,6 +320,14 @@ export const SVELTEKIT_PWA_OPTIONS: SvelteKitPWAOptions = {
 		globIgnores: GLOB_IGNORES,
 		maximumFileSizeToCacheInBytes: CACHE_SETTINGS.MAX_FILE_SIZE_BYTES,
 
+		// Prevent @vite-pwa/sveltekit from auto-adding a NavigationRoute by
+		// setting navigateFallback to empty string. This keeps the service
+		// worker from intercepting direct browser navigation to server API
+		// endpoints (e.g. /slots, /models, /v1/models) which should return
+		// JSON, not the SPA HTML shell. The server's own static-file fallback
+		// handles non-API navigation to index.html for the SPA router.
+		navigateFallback: '',
+
 		// Runtime caching for API calls - use NetworkFirst so APIs are always fresh
 		runtimeCaching: [
 			{
@@ -351,10 +357,7 @@ export const SVELTEKIT_PWA_OPTIONS: SvelteKitPWAOptions = {
 
 	devOptions: {
 		enabled: true,
-		suppressWarnings: true,
-		// Use PWA_KIT_OPTIONS.NAVIGATE_FALLBACK to match production SW behaviour
-		// (navigateFallback defaults to the configured base path, which is '/' for this SPA).
-		navigateFallback: PWA_KIT_OPTIONS.NAVIGATE_FALLBACK
+		suppressWarnings: true
 	},
 
 	// SvelteKit-specific options

@@ -1,4 +1,5 @@
 #include "server-common.h"
+#include "http.h"
 #include "server-models.h"
 #include "server-context.h"
 #include "server-stream.h"
@@ -1983,7 +1984,10 @@ void server_models_routes::init_routes() {
             cli.set_read_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
             cli.set_write_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
             auto resp = cli.Delete(child_path.c_str());
-            (void) resp; // best effort, 404 and network errors are equivalent to no op
+            (void) resp; // the child logs its own miss when the session is unknown there
+        } else {
+            SRV_WRN("router stop for unknown conv_id=%s, no owning child in the conv map\n",
+                    conv_id.c_str());
         }
         // drop the tracking entry, the session is being torn down
         models.conv_models.forget(conv_id);
@@ -2260,7 +2264,8 @@ server_http_proxy::server_http_proxy(
             }
             if (lowered == "host") {
                 bool is_default_port = (scheme == "https" && port == 443) || (scheme == "http" && port == 80);
-                req.set_header(key, is_default_port ? host : host + ":" + std::to_string(port));
+                const std::string url_host = common_http_format_host(host);
+                req.set_header(key, is_default_port ? url_host : url_host + ":" + std::to_string(port));
             } else {
                 req.set_header(key, value);
             }

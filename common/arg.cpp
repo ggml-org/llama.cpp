@@ -467,7 +467,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         // the first part is what gets loaded, so point params.model.path at it
         if (!url_tasks.empty()) {
             std::string first_path = url_tasks.front().local_path;
-            url_tasks.front().on_done = [&]() { params.model.path = first_path; };
+            url_tasks.front().on_done = [&, first_path]() { params.model.path = first_path; };
         }
         for (auto & task : url_tasks) {
             tasks.push_back(std::move(task));
@@ -496,13 +496,15 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     }
 
     // handle hf_plan tasks
-    auto add_tasks = [&opts, &tasks](const hf_cache::hf_files & model_files, common_params_model & model) {
+    auto add_tasks = [&opts, &tasks](const hf_cache::hf_files  & model_files,
+                                    const hf_cache::hf_file    & primary,
+                                    common_params_model        & model) {
         for (size_t i = 0; i < model_files.size(); ++i) {
             auto & model_file = model_files[i];
-            bool is_first = (i == 0);
-            tasks.emplace_back(model_file, opts, [&, is_first]() {
-                if (is_first) {
-                    // only use first part as model path
+            bool is_primary = (model_file.path == primary.path);
+            tasks.emplace_back(model_file, opts, [&, is_primary]() {
+                if (is_primary) {
+                    // the primary file is the first split (00001-of), use it as model path
                     model.path = hf_cache::finalize_file(model_file);
                 } else {
                     hf_cache::finalize_file(model_file);
@@ -511,7 +513,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         }
     };
     if (!plan.model_files.empty()) {
-        add_tasks(plan.model_files, params.model);
+        add_tasks(plan.model_files, plan.primary, params.model);
     }
     if (!plan.mmproj.local_path.empty()) {
         tasks.emplace_back(plan.mmproj, opts, [&]() {
@@ -539,12 +541,12 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 
     // handle plan_spec (e.g. --spec-draft-hf)
     if (!plan_spec.model_files.empty()) {
-        add_tasks(plan_spec.model_files, params.speculative.draft.mparams);
+        add_tasks(plan_spec.model_files, plan_spec.primary, params.speculative.draft.mparams);
     }
 
     // handle vocoder plan (e.g. --hf-repo-v)
     if (!plan_voc.model_files.empty()) {
-        add_tasks(plan_voc.model_files, params.vocoder.model);
+        add_tasks(plan_voc.model_files, plan_voc.primary, params.vocoder.model);
     }
 
     // run all tasks in parallel
@@ -3297,6 +3299,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_MESSAGE"));
     add_opt(common_arg(
+        {"--reasoning-preserve"},
+        {"--no-reasoning-preserve"},
+        "preserve reasoning trace in the full history, not just the last assistant message (default: template default)\n"
+        "compatible with certain templates having 'supports_preserve_reasoning' capability\n"
+        "example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking",
+        [](common_params & params, bool value) {
+            if (value) {
+                params.default_template_kwargs["preserve_reasoning"] = "true";
+            } else {
+                params.default_template_kwargs["preserve_reasoning"] = "false";
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING_PRESERVE"));
+    add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
             "set custom jinja chat template (default: template taken from model's metadata)\n"
@@ -3471,7 +3487,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.offline = true;
         }
-    ).set_env("LLAMA_ARG_OFFLINE"));
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_OFFLINE"));
     add_opt(common_arg(
         {"-lv", "--verbosity", "--log-verbosity"}, "N",
         string_format("Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:\n"
