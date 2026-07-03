@@ -1937,13 +1937,81 @@ static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, start_chunk_idx);
 }
 
+typedef struct {
+    const struct mmid_row_mapping  *matrix_rows;
+    __fp16      *dst;
+    const float *src;
+    uint32_t     n_tasks;
+    uint32_t     n_tot_chunks;
+    uint32_t     n_chunks_per_task;
+    uint32_t     k_block;
+    uint32_t     k_stride;
+    uint32_t     k_valid;
+    struct htp_thread_trace * traces;
+    struct htp_context * ctx;
+    float              * vtcm_f32_act;
+} activation_transfer_task_state_t;
+
+static void transfer_activation_chunk_fp32_to_fp16_dma_pipelined(
+        dma_queue *dma_q,
+        __fp16 *restrict vtcm_dst,
+        const float *restrict src,
+        uint32_t n_rows,
+        uint32_t k_block,
+        uint32_t k_stride,
+        uint32_t k_valid,
+        float *thread_f32_act,
+        struct htp_thread_trace *tr) {
+
+    const uint32_t R = HTP_MM_DMA_ACT_ROWS_PER_STEP;
+    const uint32_t n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
+
+    const uint32_t n_steps = n_rows_padded / R;
+
+    // pre-fetch step 0
+    if (n_steps > 0 && n_rows > 0) {
+        uint32_t nrows_to_fetch = hex_smin(n_rows, R);
+        dma_queue_push(dma_q, dma_make_ptr(thread_f32_act, src),
+                       k_block * sizeof(float), k_stride * sizeof(float), k_valid * sizeof(float), nrows_to_fetch);
+    }
+
+    for (uint32_t s = 0; s < n_steps; ++s) {
+        uint32_t r = R * s;
+        float *curr_buf = thread_f32_act + (s % 2) * R * k_block;
+
+        if (r < n_rows) {
+            dma_queue_pop(dma_q);
+        }
+
+        uint32_t next_s = s + 1;
+        uint32_t next_r = R * next_s;
+        if (next_r < n_rows) {
+            uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, R);
+            const float *next_src = src + next_r * k_stride;
+            float *next_buf = thread_f32_act + (next_s % 2) * R * k_block;
+            dma_queue_push(dma_q, dma_make_ptr(next_buf, next_src),
+                           k_block * sizeof(float), k_stride * sizeof(float), k_valid * sizeof(float), nrows_to_fetch);
+        }
+
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, r);
+        transfer_activation_row_pair_fp32_to_fp16(
+            vtcm_dst,
+            curr_buf,
+            curr_buf + k_block,
+            r,
+            k_block,
+            k_valid,
+            (r < n_rows),
+            ((r + 1) < n_rows)
+        );
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, r);
+    }
+}
+
 static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
     activation_transfer_task_state_t *st = (activation_transfer_task_state_t *) data;
 
     struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
-
-    int start_chunk_idx = i * st->n_chunks_per_task;
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, start_chunk_idx);
 
     for (unsigned int task_id = i; task_id < (unsigned int)st->n_tasks; task_id += n) {
         int    chunk_idx  = task_id * st->n_chunks_per_task;
@@ -1955,14 +2023,14 @@ static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, 
         if (st->vtcm_f32_act) {
             float *thread_f32_act = st->vtcm_f32_act + i * HTP_MM_DMA_ACT_MULTIPLIER * st->k_block;
             transfer_activation_chunk_fp32_to_fp16_dma_pipelined(
-                st->ctx->dma[i], dst, src, chunk_size, st->k_block, st->k_stride, st->k_valid, thread_f32_act
+                st->ctx->dma[i], dst, src, chunk_size, st->k_block, st->k_stride, st->k_valid, thread_f32_act, tr
             );
         } else {
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
             transfer_activation_chunk_fp32_to_fp16(dst, src, chunk_size, st->k_block, st->k_stride, st->k_valid);
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
         }
     }
-
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, start_chunk_idx);
 }
 
 typedef struct {
