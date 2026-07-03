@@ -1068,6 +1068,85 @@ static const float * resolve_level_imatrix(
     return nullptr;  // genuine size mismatch - train without imatrix (unchanged)
 }
 
+// Shared driver for the pass-1 per-tensor trainers (Q3_PT/Q3_KPT/Q4_DPT/Q2_KPT/
+// IQ2_TQ/IQ3_TQ/IQ1_BN). Holds the reusable dequant scratch, and for each tensor
+// decides whether it will be quantized to `want_type`; if so it loads and
+// dequantizes it to f32 and resolves its (possibly grouped) imatrix. Keeps the
+// seven trainer loops down to their genuinely type-specific work.
+struct pass1_setup {
+    quantize_state_impl &                                       qs;
+    const llama_model_quantize_params *                         params;
+    llama_model_loader &                                        ml;
+    ggml_type                                                   default_type;
+    llama_ftype                                                 ftype;
+    int                                                         nthread;
+    const std::map<int, std::string> &                          mapped;
+    const std::unordered_map<std::string, std::vector<float>> * imatrix_data;
+
+    // reusable scratch
+    std::vector<no_init<uint8_t>> read_data;
+    std::vector<no_init<float>>   f32_buf;
+    std::vector<std::thread>      workers;
+
+    // outputs, valid only when prepare() returns true
+    std::string        name;
+    float *            f32_data  = nullptr;
+    const float *      imatrix   = nullptr;
+    std::vector<float> imatrix_buf;
+    int64_t            n_per_row = 0;
+    int64_t            nrows     = 0;
+
+    pass1_setup(quantize_state_impl & qs_, const llama_model_quantize_params * params_,
+                llama_model_loader & ml_, ggml_type default_type_, llama_ftype ftype_, int nthread_,
+                const std::map<int, std::string> & mapped_,
+                const std::unordered_map<std::string, std::vector<float>> * imatrix_data_)
+        : qs(qs_), params(params_), ml(ml_), default_type(default_type_), ftype(ftype_),
+          nthread(nthread_), mapped(mapped_), imatrix_data(imatrix_data_) {
+        workers.reserve(nthread);
+    }
+
+    // returns true if `tensor` will be quantized to `want_type` and is now loaded as f32
+    bool prepare(ggml_tensor * tensor, ggml_type want_type) {
+        name = ggml_get_name(tensor);
+
+        // mirror the pass-2 quantize gate
+        bool quantize = name.rfind("weight") == name.size() - 6;
+        quantize &= (ggml_n_dims(tensor) >= 2);
+        quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
+                    tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
+        quantize &= name.find("_norm.weight")        == std::string::npos;
+        quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
+        if (!quantize) {
+            return false;
+        }
+        if (resolve_tensor_type(qs, params, tensor, default_type, ftype, name) != want_type) {
+            return false;
+        }
+
+        // load tensor data
+        const size_t tsz = ggml_nbytes(tensor);
+        if (!ml.use_mmap) {
+            if (read_data.size() < tsz) { read_data.resize(tsz); }
+            tensor->data = read_data.data();
+        }
+        ml.load_data_for(tensor);
+
+        // dequantize to f32 if needed
+        const int64_t nelements = ggml_nelements(tensor);
+        if (tensor->type == GGML_TYPE_F32) {
+            f32_data = (float *) tensor->data;
+        } else {
+            llama_tensor_dequantize_impl(tensor, f32_buf, workers, nelements, nthread);
+            f32_data = (float *) f32_buf.data();
+        }
+
+        imatrix   = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
+        n_per_row = tensor->ne[0];
+        nrows     = tensor->ne[1];
+        return true;
+    }
+};
+
 //
 // main quantization driver
 //
@@ -1321,6 +1400,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         ::zeros(fout, meta_size);
     };
 
+    // shared driver for all pass-1 per-tensor trainers below (dequant scratch + gate + imatrix)
+    pass1_setup p1(qs, params, ml, default_type, ftype, nthread, mapped, imatrix_data);
+
     // Q3_PT two-pass approach: train all per-tensor levels BEFORE opening the output
     // file, so the levels KV entry is already populated at the time of the metadata placeholder.
     static const size_t Q3PT_N_LEVELS = 8;
@@ -1329,58 +1411,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         LLAMA_LOG_INFO("%s: Q3_PT pass 1: training per-tensor levels...\n", __func__);
         q3pt_all_levels.assign(tensors.size() * Q3PT_N_LEVELS, 0.0f);
 
-        // Temporary dequant buffer for pass 1 (reuse f32_conv_buf / read_data declared below)
-        std::vector<no_init<uint8_t>> p1_read_data;
-        std::vector<no_init<float>>   p1_f32_buf;
-        std::vector<std::thread>      p1_workers;
-        p1_workers.reserve(nthread);
-
         for (size_t ti = 0; ti < tensors.size(); ++ti) {
             ggml_tensor * tensor = tensors[ti]->tensor;
-            const std::string tname = ggml_get_name(tensor);
-
-            // Determine whether this tensor will be Q3_PT (mirror the pass-2 logic)
-            bool quantize = tname.rfind("weight") == tname.size() - 6;
-            quantize &= (ggml_n_dims(tensor) >= 2);
-            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
-                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
-            quantize &= tname.find("_norm.weight")        == std::string::npos;
-            quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
-            if (!quantize) { continue; }
-
-            ggml_type new_type = default_type;
-            if (!params->pure) {
-                new_type = llama_tensor_get_type_impl(qs, new_type, tensor, ftype, tensor_get_category(tname));
-            }
-            if (new_type != GGML_TYPE_Q3_PT) { continue; }
-
-            // Load tensor data
-            const size_t tsz = ggml_nbytes(tensor);
-            if (!ml.use_mmap) {
-                if (p1_read_data.size() < tsz) { p1_read_data.resize(tsz); }
-                tensor->data = p1_read_data.data();
-            }
-            ml.load_data_for(tensor);
-
-            // Dequantize to f32 if needed
-            const int64_t nelements = ggml_nelements(tensor);
-            float * f32_data;
-            if (tensor->type == GGML_TYPE_F32) {
-                f32_data = (float *) tensor->data;
-            } else {
-                llama_tensor_dequantize_impl(tensor, p1_f32_buf, p1_workers, nelements, nthread);
-                f32_data = (float *) p1_f32_buf.data();
-            }
-
-            // Resolve imatrix
-            std::vector<float> imatrix_buf;
-            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
-
-            const int64_t n_per_row = tensor->ne[0];
-            const int64_t nrows     = tensor->ne[1];
+            if (!p1.prepare(tensor, GGML_TYPE_Q3_PT)) { continue; }
 
             LLAMA_LOG_INFO("%s: Q3_PT levels for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
-            q3pt_train_levels(f32_data, nrows, n_per_row, imatrix,
+            q3pt_train_levels(p1.f32_data, p1.nrows, p1.n_per_row, p1.imatrix,
                                q3pt_all_levels.data() + ti * Q3PT_N_LEVELS);
         }
 
@@ -1401,65 +1437,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         LLAMA_LOG_INFO("%s: Q3_KPT pass 1: training per-tensor levels...\n", __func__);
         q3kpt_all_levels.assign(tensors.size() * Q3KPT_N_LEVELS, 0.0f);
 
-        // Temporary dequant buffer for pass 1
-        std::vector<no_init<uint8_t>> p1_read_data;
-        std::vector<no_init<float>>   p1_f32_buf;
-        std::vector<std::thread>      p1_workers;
-        p1_workers.reserve(nthread);
-
         for (size_t ti = 0; ti < tensors.size(); ++ti) {
             ggml_tensor * tensor = tensors[ti]->tensor;
-            const std::string tname = ggml_get_name(tensor);
-
-            // Determine whether this tensor will be Q3_KPT (mirror the pass-2 logic)
-            bool quantize = tname.rfind("weight") == tname.size() - 6;
-            quantize &= (ggml_n_dims(tensor) >= 2);
-            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
-                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
-            quantize &= tname.find("_norm.weight")        == std::string::npos;
-            quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
-            if (!quantize) { continue; }
-
-            ggml_type new_type = default_type;
-            if (!params->pure) {
-                new_type = llama_tensor_get_type_impl(qs, new_type, tensor, ftype, tensor_get_category(tname));
-            }
-            if (params->token_embedding_type < GGML_TYPE_COUNT &&
-                (tname == "token_embd.weight" || tname == "per_layer_token_embd.weight")) {
-                new_type = params->token_embedding_type;
-            }
-            if (params->output_tensor_type < GGML_TYPE_COUNT && tname == "output.weight") {
-                new_type = params->output_tensor_type;
-            }
-            if (new_type != GGML_TYPE_Q3_KPT) { continue; }
-
-            // Load tensor data
-            const size_t tsz = ggml_nbytes(tensor);
-            if (!ml.use_mmap) {
-                if (p1_read_data.size() < tsz) { p1_read_data.resize(tsz); }
-                tensor->data = p1_read_data.data();
-            }
-            ml.load_data_for(tensor);
-
-            // Dequantize to f32 if needed
-            const int64_t nelements = ggml_nelements(tensor);
-            float * f32_data;
-            if (tensor->type == GGML_TYPE_F32) {
-                f32_data = (float *) tensor->data;
-            } else {
-                llama_tensor_dequantize_impl(tensor, p1_f32_buf, p1_workers, nelements, nthread);
-                f32_data = (float *) p1_f32_buf.data();
-            }
-
-            // Resolve imatrix
-            std::vector<float> imatrix_buf;
-            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
-
-            const int64_t n_per_row = tensor->ne[0];
-            const int64_t nrows     = tensor->ne[1];
+            if (!p1.prepare(tensor, GGML_TYPE_Q3_KPT)) { continue; }
 
             LLAMA_LOG_INFO("%s: Q3_KPT levels for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
-            q3kpt_train_levels(f32_data, nrows, n_per_row, imatrix,
+            q3kpt_train_levels(p1.f32_data, p1.nrows, p1.n_per_row, p1.imatrix,
                                q3kpt_all_levels.data() + ti * Q3KPT_N_LEVELS);
         }
 
@@ -1485,60 +1468,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const int64_t t_start_p1 = ggml_time_us();
         LLAMA_LOG_INFO("%s: Q4_DPT pass 1: training per-tensor int8 levels...\n", __func__);
 
-        std::vector<no_init<uint8_t>> p1_read_data;
-        std::vector<no_init<float>>   p1_f32_buf;
-        std::vector<std::thread>      p1_workers;
-        p1_workers.reserve(nthread);
-
         for (size_t ti = 0; ti < tensors.size(); ++ti) {
             ggml_tensor * tensor = tensors[ti]->tensor;
-            const std::string tname = ggml_get_name(tensor);
-
-            bool quantize = tname.rfind("weight") == tname.size() - 6;
-            quantize &= (ggml_n_dims(tensor) >= 2);
-            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
-                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
-            quantize &= tname.find("_norm.weight")        == std::string::npos;
-            quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
-            if (!quantize) { continue; }
-
-            ggml_type new_type = resolve_tensor_type(qs, params, tensor, default_type, ftype, tname);
-            if (new_type != GGML_TYPE_Q4_DPT) { continue; }
-
-            // Load tensor data
-            const size_t tsz = ggml_nbytes(tensor);
-            if (!ml.use_mmap) {
-                if (p1_read_data.size() < tsz) { p1_read_data.resize(tsz); }
-                tensor->data = p1_read_data.data();
-            }
-            ml.load_data_for(tensor);
-
-            // Dequantize to f32 if needed
-            const int64_t nelements = ggml_nelements(tensor);
-            float * f32_data;
-            if (tensor->type == GGML_TYPE_F32) {
-                f32_data = (float *) tensor->data;
-            } else {
-                llama_tensor_dequantize_impl(tensor, p1_f32_buf, p1_workers, nelements, nthread);
-                f32_data = (float *) p1_f32_buf.data();
-            }
-
-            // Resolve imatrix
-            std::vector<float> imatrix_buf;
-            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
-
-            const int64_t n_per_row = tensor->ne[0];
-            const int64_t nrows     = tensor->ne[1];
+            if (!p1.prepare(tensor, GGML_TYPE_Q4_DPT)) { continue; }
 
             LLAMA_LOG_INFO("%s: Q4_DPT levels for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
 
             q4dpt_meta meta;
-            meta.tensor_name = tname;
-            q4dpt_train_levels(f32_data, nrows, n_per_row, imatrix, meta.levels);
+            meta.tensor_name = p1.name;
+            q4dpt_train_levels(p1.f32_data, p1.nrows, p1.n_per_row, p1.imatrix, meta.levels);
             q4dpt_all_meta.push_back(meta);
 
             // Save to GGUF
-            std::string levels_key = "q4dpt.levels." + tname;
+            std::string levels_key = "q4dpt.levels." + p1.name;
             gguf_set_arr_data(ctx_outs[0].get(), levels_key.c_str(), GGUF_TYPE_INT8, meta.levels, Q4DPT_N_LEVELS);
         }
         const int64_t t_end_p1 = ggml_time_us();
@@ -1557,66 +1499,14 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     if (ftype == LLAMA_FTYPE_MOSTLY_Q2_KPT && !params->dry_run) {
         LLAMA_LOG_INFO("%s: Q2_KPT pass 1: training per-block levels...\n", __func__);
 
-        std::vector<no_init<uint8_t>> p1_read_data;
-        std::vector<no_init<float>>   p1_f32_buf;
-        std::vector<std::thread>      p1_workers;
-        p1_workers.reserve(nthread);
-
         for (size_t ti = 0; ti < tensors.size(); ++ti) {
             ggml_tensor * tensor = tensors[ti]->tensor;
-            const std::string tname = ggml_get_name(tensor);
-
-            // Determine whether this tensor will be Q2_KPT (mirror the pass-2 logic)
-            bool quantize = tname.rfind("weight") == tname.size() - 6;
-            quantize &= (ggml_n_dims(tensor) >= 2);
-            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
-                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
-            quantize &= tname.find("_norm.weight")        == std::string::npos;
-            quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
-            if (!quantize) { continue; }
-
-            ggml_type new_type = default_type;
-            if (!params->pure) {
-                new_type = llama_tensor_get_type_impl(qs, new_type, tensor, ftype, tensor_get_category(tname));
-            }
-            if (params->token_embedding_type < GGML_TYPE_COUNT &&
-                (tname == "token_embd.weight" || tname == "per_layer_token_embd.weight")) {
-                new_type = params->token_embedding_type;
-            }
-            if (params->output_tensor_type < GGML_TYPE_COUNT && tname == "output.weight") {
-                new_type = params->output_tensor_type;
-            }
-            if (new_type != GGML_TYPE_Q2_KPT) { continue; }
-
-            // Load tensor data
-            const size_t tsz = ggml_nbytes(tensor);
-            if (!ml.use_mmap) {
-                if (p1_read_data.size() < tsz) { p1_read_data.resize(tsz); }
-                tensor->data = p1_read_data.data();
-            }
-            ml.load_data_for(tensor);
-
-            // Dequantize to f32 if needed
-            const int64_t nelements = ggml_nelements(tensor);
-            float * f32_data;
-            if (tensor->type == GGML_TYPE_F32) {
-                f32_data = (float *) tensor->data;
-            } else {
-                llama_tensor_dequantize_impl(tensor, p1_f32_buf, p1_workers, nelements, nthread);
-                f32_data = (float *) p1_f32_buf.data();
-            }
-
-            // Resolve imatrix
-            std::vector<float> imatrix_buf;
-            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
-
-            const int64_t n_per_row = tensor->ne[0];
-            const int64_t nrows     = tensor->ne[1];
+            if (!p1.prepare(tensor, GGML_TYPE_Q2_KPT)) { continue; }
 
             // Allocate levels buffer for this tensor
-            const int nb = n_per_row / QK_K;
-            const size_t n_levels = (size_t)nrows * tensor->ne[2] * nb * Q2KPT_N_LEVELS;
-            q2kpt_all_levels.push_back({tname, std::vector<float>(n_levels)});
+            const int nb = p1.n_per_row / QK_K;
+            const size_t n_levels = (size_t)p1.nrows * tensor->ne[2] * nb * Q2KPT_N_LEVELS;
+            q2kpt_all_levels.push_back({p1.name, std::vector<float>(n_levels)});
 
             LLAMA_LOG_INFO("%s: Q2_KPT levels for [%zu/%zu] %s (%zu floats)\n",
                            __func__, ti+1, tensors.size(), tensor->name, n_levels);
@@ -1624,21 +1514,21 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // Train levels by running quantization internally
             // We need to quantize to f32 -> Q2_KPT -> f32 to get the trained levels
             std::vector<no_init<uint8_t>> p1_qbuf(ggml_nbytes(tensor));
-            const size_t row_size = ggml_row_size(GGML_TYPE_Q2_KPT, n_per_row);
+            const size_t row_size = ggml_row_size(GGML_TYPE_Q2_KPT, p1.n_per_row);
 
             // Prepare levels buffer for this tensor
             q2kpt_free_levels();
-            q2kpt_prepare_levels(nrows * tensor->ne[2], n_per_row);
+            q2kpt_prepare_levels(p1.nrows * tensor->ne[2], p1.n_per_row);
 
             // Quantize each expert slice
             const int64_t nelements_matrix = tensor->ne[0] * tensor->ne[1];
             for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
-                const float * f32_data_03 = f32_data + i03 * nelements_matrix;
-                void * q_data_03 = (char *)p1_qbuf.data() + row_size * i03 * nrows;
-                const float * imatrix_03 = imatrix ? imatrix + i03 * n_per_row : nullptr;
+                const float * f32_data_03 = p1.f32_data + i03 * nelements_matrix;
+                void * q_data_03 = (char *)p1_qbuf.data() + row_size * i03 * p1.nrows;
+                const float * imatrix_03 = p1.imatrix ? p1.imatrix + i03 * p1.n_per_row : nullptr;
 
                 // start_row must be the absolute row index for correct levels indexing
-                ggml_quantize_chunk(GGML_TYPE_Q2_KPT, f32_data_03, q_data_03, i03 * nrows, nrows, n_per_row, imatrix_03);
+                ggml_quantize_chunk(GGML_TYPE_Q2_KPT, f32_data_03, q_data_03, i03 * p1.nrows, p1.nrows, p1.n_per_row, imatrix_03);
             }
 
             // Copy trained levels to our storage
@@ -1671,60 +1561,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const int64_t t_start_p1 = ggml_time_us();
         LLAMA_LOG_INFO("%s: IQ2_TQ pass 1: training per-tensor grids...\n", __func__);
 
-        std::vector<no_init<uint8_t>> p1_read_data;
-        std::vector<no_init<float>>   p1_f32_buf;
-        std::vector<std::thread>      p1_workers;
-        p1_workers.reserve(nthread);
-
         for (size_t ti = 0; ti < tensors.size(); ++ti) {
             ggml_tensor * tensor = tensors[ti]->tensor;
-            const std::string tname = ggml_get_name(tensor);
-
-            bool quantize = tname.rfind("weight") == tname.size() - 6;
-            quantize &= (ggml_n_dims(tensor) >= 2);
-            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
-                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
-            quantize &= tname.find("_norm.weight")        == std::string::npos;
-            quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
-            if (!quantize) { continue; }
-
-            ggml_type new_type = resolve_tensor_type(qs, params, tensor, default_type, ftype, tname);
-            if (new_type != GGML_TYPE_IQ2_TQ) { continue; }
-
-            // Load tensor data
-            const size_t tsz = ggml_nbytes(tensor);
-            if (!ml.use_mmap) {
-                if (p1_read_data.size() < tsz) { p1_read_data.resize(tsz); }
-                tensor->data = p1_read_data.data();
-            }
-            ml.load_data_for(tensor);
-
-            // Dequantize to f32 if needed
-            const int64_t nelements = ggml_nelements(tensor);
-            float * f32_data;
-            if (tensor->type == GGML_TYPE_F32) {
-                f32_data = (float *) tensor->data;
-            } else {
-                llama_tensor_dequantize_impl(tensor, p1_f32_buf, p1_workers, nelements, nthread);
-                f32_data = (float *) p1_f32_buf.data();
-            }
-
-            // Resolve imatrix
-            std::vector<float> imatrix_buf;
-            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
-
-            const int64_t n_per_row = tensor->ne[0];
-            const int64_t nrows     = tensor->ne[1];
+            if (!p1.prepare(tensor, GGML_TYPE_IQ2_TQ)) { continue; }
 
             LLAMA_LOG_INFO("%s: IQ2_TQ grid for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
 
             iq2tq_meta meta;
-            meta.tensor_name = tname;
-            iq2tq_train_grid(f32_data, nrows, n_per_row, imatrix, meta.grid);
+            meta.tensor_name = p1.name;
+            iq2tq_train_grid(p1.f32_data, p1.nrows, p1.n_per_row, p1.imatrix, meta.grid);
             iq2tq_all_meta.push_back(meta);
 
             // Save to GGUF
-            std::string grid_key = "iq2tq.grid." + tname;
+            std::string grid_key = "iq2tq.grid." + p1.name;
             gguf_set_arr_data(ctx_outs[0].get(), grid_key.c_str(), GGUF_TYPE_INT8, meta.grid, 64);
         }
         const int64_t t_end_p1 = ggml_time_us();
@@ -1742,56 +1591,18 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const int64_t t_start_p1 = ggml_time_us();
         LLAMA_LOG_INFO("%s: IQ3_TQ pass 1: training per-tensor grids...\n", __func__);
 
-        std::vector<no_init<uint8_t>> p1_read_data;
-        std::vector<no_init<float>>   p1_f32_buf;
-        std::vector<std::thread>      p1_workers;
-        p1_workers.reserve(nthread);
-
         for (size_t ti = 0; ti < tensors.size(); ++ti) {
             ggml_tensor * tensor = tensors[ti]->tensor;
-            const std::string tname = ggml_get_name(tensor);
-
-            bool quantize = tname.rfind("weight") == tname.size() - 6;
-            quantize &= (ggml_n_dims(tensor) >= 2);
-            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
-                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
-            quantize &= tname.find("_norm.weight")        == std::string::npos;
-            quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
-            if (!quantize) { continue; }
-
-            ggml_type new_type = resolve_tensor_type(qs, params, tensor, default_type, ftype, tname);
-            if (new_type != GGML_TYPE_IQ3_TQ) { continue; }
-
-            const size_t tsz = ggml_nbytes(tensor);
-            if (!ml.use_mmap) {
-                if (p1_read_data.size() < tsz) { p1_read_data.resize(tsz); }
-                tensor->data = p1_read_data.data();
-            }
-            ml.load_data_for(tensor);
-
-            const int64_t nelements = ggml_nelements(tensor);
-            float * f32_data;
-            if (tensor->type == GGML_TYPE_F32) {
-                f32_data = (float *) tensor->data;
-            } else {
-                llama_tensor_dequantize_impl(tensor, p1_f32_buf, p1_workers, nelements, nthread);
-                f32_data = (float *) p1_f32_buf.data();
-            }
-
-            std::vector<float> imatrix_buf;
-            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
-
-            const int64_t n_per_row = tensor->ne[0];
-            const int64_t nrows     = tensor->ne[1];
+            if (!p1.prepare(tensor, GGML_TYPE_IQ3_TQ)) { continue; }
 
             LLAMA_LOG_INFO("%s: IQ3_TQ grid for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
 
             iq3tq_meta meta;
-            meta.tensor_name = tname;
-            iq3tq_train_grid(f32_data, nrows, n_per_row, imatrix, meta.grid);
+            meta.tensor_name = p1.name;
+            iq3tq_train_grid(p1.f32_data, p1.nrows, p1.n_per_row, p1.imatrix, meta.grid);
             iq3tq_all_meta.push_back(meta);
 
-            std::string grid_key = "iq3tq.grid." + tname;
+            std::string grid_key = "iq3tq.grid." + p1.name;
             gguf_set_arr_data(ctx_outs[0].get(), grid_key.c_str(), GGUF_TYPE_INT8, meta.grid, 128);
         }
         const int64_t t_end_p1 = ggml_time_us();
@@ -1809,66 +1620,18 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         const int64_t t_start_p1 = ggml_time_us();
         LLAMA_LOG_INFO("%s: IQ1_BN pass 1: training per-tensor codebooks...\n", __func__);
 
-        std::vector<no_init<uint8_t>> p1_read_data;
-        std::vector<no_init<float>>   p1_f32_buf;
-        std::vector<std::thread>      p1_workers;
-        p1_workers.reserve(nthread);
-
         for (size_t ti = 0; ti < tensors.size(); ++ti) {
             ggml_tensor * tensor = tensors[ti]->tensor;
-            const std::string tname = ggml_get_name(tensor);
-
-            bool quantize = tname.rfind("weight") == tname.size() - 6;
-            quantize &= (ggml_n_dims(tensor) >= 2);
-            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
-                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
-            quantize &= tname.find("_norm.weight")        == std::string::npos;
-            quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
-            if (!quantize) { continue; }
-
-            ggml_type new_type = default_type;
-            if (!params->pure) {
-                new_type = llama_tensor_get_type_impl(qs, new_type, tensor, ftype, tensor_get_category(tname));
-            }
-            if (params->token_embedding_type < GGML_TYPE_COUNT &&
-                (tname == "token_embd.weight" || tname == "per_layer_token_embd.weight")) {
-                new_type = params->token_embedding_type;
-            }
-            if (params->output_tensor_type < GGML_TYPE_COUNT && tname == "output.weight") {
-                new_type = params->output_tensor_type;
-            }
-            if (new_type != GGML_TYPE_IQ1_BN) { continue; }
-
-            const size_t tsz = ggml_nbytes(tensor);
-            if (!ml.use_mmap) {
-                if (p1_read_data.size() < tsz) { p1_read_data.resize(tsz); }
-                tensor->data = p1_read_data.data();
-            }
-            ml.load_data_for(tensor);
-
-            const int64_t nelements = ggml_nelements(tensor);
-            float * f32_data;
-            if (tensor->type == GGML_TYPE_F32) {
-                f32_data = (float *) tensor->data;
-            } else {
-                llama_tensor_dequantize_impl(tensor, p1_f32_buf, p1_workers, nelements, nthread);
-                f32_data = (float *) p1_f32_buf.data();
-            }
-
-            std::vector<float> imatrix_buf;
-            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
-
-            const int64_t n_per_row = tensor->ne[0];
-            const int64_t nrows     = tensor->ne[1];
+            if (!p1.prepare(tensor, GGML_TYPE_IQ1_BN)) { continue; }
 
             LLAMA_LOG_INFO("%s: IQ1_BN codebook for [%zu/%zu] %s\n", __func__, ti+1, tensors.size(), tensor->name);
 
             iq1bn_meta meta;
-            meta.tensor_name = tname;
-            iq1bn_train_codebook(f32_data, nrows, n_per_row, imatrix, meta.aux, nthread);
+            meta.tensor_name = p1.name;
+            iq1bn_train_codebook(p1.f32_data, p1.nrows, p1.n_per_row, p1.imatrix, meta.aux, nthread);
             iq1bn_all_meta.push_back(meta);
 
-            std::string aux_key = "iq1bn.aux." + tname;
+            std::string aux_key = "iq1bn.aux." + p1.name;
             gguf_set_arr_data(ctx_outs[0].get(), aux_key.c_str(), GGUF_TYPE_INT8, meta.aux, 32768);
         }
         const int64_t t_end_p1 = ggml_time_us();
