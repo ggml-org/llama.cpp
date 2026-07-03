@@ -76,20 +76,26 @@
 				<LightbulbOff class="h-4 w-4 shrink-0 text-muted-foreground" />
 			{/if}
 
-			<span>Reasoning</span>
+			<!-- {#if thinkingEnabled} -->
+				<span class="text-sm inline-flex gap-2 {!thinkingEnabled ? 'text-muted-foreground' : ''}">
+    				Reasoning
 
-			{#if thinkingEnabled}
-				<span class="ml-auto text-xs text-muted-foreground">{currentEffort}</span>
-			{:else}
-				<span class="ml-auto text-xs text-muted-foreground">off</span>
-			{/if}
+    				<span class="capitalize text-muted-foreground">
+						{thinkingEnabled ? currentEffort : 'off'}
+					</span>
+				</span>
+			<!-- {:else}
+				<span class="capitalize text-muted-foreground text-sm">
+					No Reasoning
+				</span>
+			{/if} -->
 		</DropdownMenu.SubTrigger>
 
-		<DropdownMenu.SubContent class="w-60 rounded-xl bg-popover p-3 text-popover-foreground shadow-md outline-none">
+		<DropdownMenu.SubContent class="w-60 bg-popover p-1.5 text-popover-foreground shadow-md outline-none">
 			{#each REASONING_EFFORT_LEVELS as level (level.value)}
 				<button
 					type="button"
-					class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-accent"
+					class="flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.75 text-left text-sm transition-colors hover:bg-accent"
 					class:bg-accent={isSelected(level)}
 					onclick={() => handleSelection(level)}
 				>

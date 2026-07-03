@@ -93,7 +93,7 @@
 			</Tooltip.Content>
 		</Tooltip.Root>
 
-		<DropdownMenu.Content align="start" class="w-48">
+		<DropdownMenu.Content align="start" class="w-52">
 			<ChatFormActionAddReasoningSubmenu />
 
 			<DropdownMenu.Separator />
