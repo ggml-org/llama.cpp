@@ -259,7 +259,6 @@ llama_kv_cache::llama_kv_cache(
         }
 
         const uint32_t n_embd_k_idx = hparams.n_embd_k_idx(il);
-        // Indexer keys share the SAME buffer as k/v for this layer.
         ggml_tensor * k_idx = n_embd_k_idx > 0
             ? ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_k_idx, kv_size, n_stream)
             : nullptr;
@@ -327,11 +326,21 @@ llama_kv_cache::llama_kv_cache(
     {
         const size_t memory_size_k = size_k_bytes();
         const size_t memory_size_v = size_v_bytes();
+        const size_t memory_size_k_idx = size_k_idx_bytes();
+        const size_t memory_size_total = memory_size_k + memory_size_v + memory_size_k_idx;
 
-        LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
-                (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
+        if (memory_size_k_idx > 0) {
+            LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB, K_idx (%s): %7.2f MiB\n", __func__,
+                (float)memory_size_total / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
+                ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
+                ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f),
+                ggml_type_name(GGML_TYPE_F32), (float)memory_size_k_idx / (1024.0f * 1024.0f));
+        } else {
+            LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
+                (float)memory_size_total / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
                 ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+        }
     }
 
     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
@@ -878,6 +887,10 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
                 if (layer.v_stream[ssrc]) {
                     ggml_backend_tensor_copy(layer.v_stream[ssrc], layer.v_stream[sdst]);
                 }
+                if (layer.k_idx_stream[ssrc]) {
+                    GGML_ASSERT(layer.k_idx_stream[sdst]);
+                    ggml_backend_tensor_copy(layer.k_idx_stream[ssrc], layer.k_idx_stream[sdst]);
+                }
             }
         }
     }
@@ -1207,6 +1220,12 @@ bool llama_kv_cache::get_can_shift() const {
     }
     if (hparams.n_pos_per_embd() > 1) {
         return false;
+    }
+    // shifting would leave k_idx stale
+    for (const auto & layer : layers) {
+        if (layer.k_idx) {
+            return false;
+        }
     }
     return true;
 }
@@ -1898,6 +1917,18 @@ size_t llama_kv_cache::size_v_bytes() const {
     return size_v_bytes;
 }
 
+size_t llama_kv_cache::size_k_idx_bytes() const {
+    size_t size_k_idx_bytes = 0;
+
+    for (const auto & layer : layers) {
+        if (layer.k_idx) {
+            size_k_idx_bytes += ggml_nbytes(layer.k_idx);
+        }
+    }
+
+    return size_k_idx_bytes;
+}
+
 ggml_tensor * llama_kv_cache::build_rope_shift(
         const llama_cparams & cparams,
                ggml_context * ctx,
@@ -2205,6 +2236,36 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
         }
     }
 
+    if (size_k_idx_bytes() > 0) {
+        const uint32_t has_k_idx_u32 = 1;
+        io.write(&has_k_idx_u32, sizeof(has_k_idx_u32));
+
+        for (const auto & layer : layers) {
+            const uint32_t layer_has_k_idx = layer.k_idx ? 1 : 0;
+            io.write(&layer_has_k_idx, sizeof(layer_has_k_idx));
+
+            if (!layer_has_k_idx) {
+                continue;
+            }
+
+            GGML_ASSERT(layer.k_idx_stream[cr.strm]);
+
+            const int32_t k_idx_type_i = (int32_t) layer.k_idx->type;
+            io.write(&k_idx_type_i, sizeof(k_idx_type_i));
+
+            const uint64_t k_idx_size_row = ggml_row_size(layer.k_idx->type, layer.k_idx->ne[0]);
+            io.write(&k_idx_size_row, sizeof(k_idx_size_row));
+
+            for (const auto & range : cr.data) {
+                const size_t range_size = range.second - range.first;
+                const size_t buf_size   = range_size * k_idx_size_row;
+                const size_t offset     = range.first * k_idx_size_row;
+
+                io.write_tensor(layer.k_idx_stream[cr.strm], offset, buf_size);
+            }
+        }
+    }
+
     if (!v_trans) {
         for (const auto & layer : layers) {
             const uint32_t il = layer.il;
@@ -2448,6 +2509,68 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
                 for (uint32_t i = 0; i < cell_count; ++i) {
                     const size_t dst_offset = sinfo.idxs[0][i] * k_size_row;
                     io.read_tensor(k, dst_offset, k_size_row);
+                }
+            }
+        }
+    }
+
+    if (size_k_idx_bytes() > 0) {
+        uint32_t has_k_idx_u32 = 0;
+        io.read(&has_k_idx_u32, sizeof(has_k_idx_u32));
+
+        if (has_k_idx_u32 != 1) {
+            LLAMA_LOG_ERROR("%s: missing k_idx data in KV cache state\n", __func__);
+            return false;
+        }
+
+        for (const auto & layer : layers) {
+            uint32_t layer_has_k_idx = 0;
+            io.read(&layer_has_k_idx, sizeof(layer_has_k_idx));
+
+            const uint32_t expected_layer_has_k_idx = layer.k_idx ? 1 : 0;
+
+            if (layer_has_k_idx != expected_layer_has_k_idx) {
+                LLAMA_LOG_ERROR(
+                    "%s: mismatched k_idx state for layer: got %u, expected %u\n",
+                    __func__, layer_has_k_idx, expected_layer_has_k_idx);
+                return false;
+            }
+
+            if (!layer_has_k_idx) {
+                continue;
+            }
+
+            GGML_ASSERT(layer.k_idx_stream[strm]);
+
+            int32_t k_idx_type_i = -1;
+            io.read(&k_idx_type_i, sizeof(k_idx_type_i));
+
+            if (k_idx_type_i != (int32_t) layer.k_idx->type) {
+                LLAMA_LOG_ERROR(
+                    "%s: mismatched k_idx type: got %d, expected %d\n",
+                    __func__, k_idx_type_i, (int32_t) layer.k_idx->type);
+                return false;
+            }
+
+            uint64_t k_idx_size_row = 0;
+            io.read(&k_idx_size_row, sizeof(k_idx_size_row));
+
+            const uint64_t expected_k_idx_size_row = ggml_row_size(layer.k_idx->type, layer.k_idx->ne[0]);
+
+            if (k_idx_size_row != expected_k_idx_size_row) {
+                LLAMA_LOG_ERROR(
+                    "%s: mismatched k_idx row size: got %zu, expected %zu\n",
+                    __func__, (size_t) k_idx_size_row, (size_t) expected_k_idx_size_row);
+                return false;
+            }
+
+            if (cell_count) {
+                if (sinfo.is_contiguous()) {
+                    io.read_tensor(layer.k_idx_stream[strm], sinfo.head() * k_idx_size_row, cell_count * k_idx_size_row);
+                } else {
+                    for (uint32_t i = 0; i < cell_count; ++i) {
+                        io.read_tensor(layer.k_idx_stream[strm], sinfo.idxs[0][i] * k_idx_size_row, k_idx_size_row);
+                    }
                 }
             }
         }

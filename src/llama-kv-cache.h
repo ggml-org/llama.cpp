@@ -295,6 +295,7 @@ private:
 
     size_t size_k_bytes() const;
     size_t size_v_bytes() const;
+    size_t size_k_idx_bytes() const;
 
     ggml_tensor * build_rope_shift(
             const llama_cparams & cparams,
