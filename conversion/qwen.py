@@ -625,3 +625,51 @@ class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReor
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
 class Qwen3_5MoeTextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
+
+
+@ModelBase.register("DFlashDraftModel")
+class DFlashModel(Qwen3Model):
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def set_vocab(self):
+        if self.target_model_dir is None:
+            raise ValueError(
+                "DFlash draft model requires --target-model-dir to be specified. "
+                "Please provide the path to the target model directory containing the tokenizer."
+            )
+        logger.info(f"DFlash: Using tokenizer from target model: {self.target_model_dir}")
+        original_dir = self.dir_model
+        self.dir_model = self.target_model_dir
+        super().set_vocab()
+        self.dir_model = original_dir
+
+        mask_token_id = self.hparams.get("dflash_config", {}).get("mask_token_id")
+        if mask_token_id is not None:
+            self.gguf_writer.add_mask_token_id(mask_token_id)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        block_size = self.hparams.get("block_size", 16)
+        self.gguf_writer.add_block_size(block_size)
+        dflash_config = self.hparams.get("dflash_config", {})
+
+        target_layer_ids = dflash_config.get("target_layer_ids", [])
+        if target_layer_ids:
+            extract_layer_ids = [i + 1 for i in target_layer_ids]
+            self.gguf_writer.add_target_layers(extract_layer_ids)
+
+        use_sliding_window = self.hparams.get("use_sliding_window", False)
+        sliding_window = self.hparams.get("sliding_window")
+        layer_types = self.hparams.get("layer_types")
+        if use_sliding_window and sliding_window and layer_types:
+            is_swa = [lt == "sliding_attention" for lt in layer_types]
+            self.gguf_writer.add_sliding_window(sliding_window)
+            self.gguf_writer.add_sliding_window_pattern(is_swa)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if not name.startswith("model."):
+            name = "model." + name
+        return super().filter_tensors((name, gen))
