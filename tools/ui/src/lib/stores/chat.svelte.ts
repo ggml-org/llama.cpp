@@ -2334,7 +2334,8 @@ class ChatStore {
 		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
 
 		apiOptions.enableThinking = conversationsStore.getThinkingEnabled();
-		apiOptions.reasoningEffort = conversationsStore.getReasoningEffort();
+		const effort = conversationsStore.getReasoningEffort();
+		if (effort !== 'off') apiOptions.reasoningEffort = effort;
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);

@@ -241,13 +241,15 @@ export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormAct
 export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddMcpServersSubmenu.svelte';
 
 /**
- * **ChatFormReasoningToggle** - Thinking toggle button with effort dropdown
+ * Dropdown submenu for selecting reasoning effort level.
  *
- * A toggle button with lightbulb icon that indicates thinking status.
- * Shows the reasoning effort dropdown when clicked.
+ * Shows a "Reasoning" sub-menu item with a lightbulb icon indicating
+ * thinking status, and a nested list of effort levels.
  * Only visible when the current model supports thinking.
  */
-export { default as ChatFormReasoningToggle } from './ChatForm/ChatFormActions/ChatFormReasoningToggle.svelte';
+export {
+	default as ChatFormActionAddReasoningSubmenu
+} from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddReasoningSubmenu.svelte';
 
 /**
  * Displays context token usage as a compact pill with tooltip.

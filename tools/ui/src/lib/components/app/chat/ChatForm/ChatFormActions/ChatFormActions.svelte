@@ -7,7 +7,6 @@
 		ChatFormActionModels,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		ChatFormReasoningToggle,
 		ChatFormContextGauge
 	} from '$lib/components/app';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
@@ -155,7 +154,6 @@
 				{onMcpResourcesClick}
 				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}
 			/>
-			<ChatFormReasoningToggle />
 			</div>
 	{/if}
 
