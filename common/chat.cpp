@@ -2134,11 +2134,12 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
                         p.tool_arg_name(p.literal(param_name)) +
                         p.literal(">")) +
                     (is_string
-                         ? p.tool_arg_string_value(p.until(p_close))
+                         ? p.ac(p.tool_arg_string_value(p.until(p_close)) +
+                                p.tool_arg_close(p.literal(p_close)), p_close)
                          : p.tool_arg_json_value(p.schema(p.json(),
                                                           "tool-" + name + "-arg-" + param_name + "-schema",
-                                                          param_schema, false))) +
-                    p.tool_arg_close(p.literal(p_close)));
+                                                          param_schema, false)) +
+                           p.tool_arg_close(p.literal(p_close))));
 
                 auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
                 if (is_required) {
