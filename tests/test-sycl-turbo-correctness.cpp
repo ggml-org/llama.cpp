@@ -487,9 +487,8 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         [=](ggml_context * ctx) {
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
             if (ggml_tensor * is = ggml_get_tensor(ctx, "innerq_scale"); is != nullptr) {
-                float innerq_ones[128];
-                for (int ii = 0; ii < 128; ++ii) innerq_ones[ii] = 1.0f;
-                ggml_backend_tensor_set(is, innerq_ones, 0, sizeof(innerq_ones));
+                std::vector<float> innerq_ones(128, 1.0f);
+                ggml_backend_tensor_set(is, innerq_ones.data(), 0, innerq_ones.size() * sizeof(float));
             }
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_f16.data(), 0, k_f16.size() * sizeof(ggml_fp16_t));
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_f16.data(), 0, v_f16.size() * sizeof(ggml_fp16_t));
@@ -505,9 +504,8 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         [=](ggml_context * ctx) {
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
             if (ggml_tensor * is = ggml_get_tensor(ctx, "innerq_scale"); is != nullptr) {
-                float innerq_ones[128];
-                for (int ii = 0; ii < 128; ++ii) innerq_ones[ii] = 1.0f;
-                ggml_backend_tensor_set(is, innerq_ones, 0, sizeof(innerq_ones));
+                std::vector<float> innerq_ones(128, 1.0f);
+                ggml_backend_tensor_set(is, innerq_ones.data(), 0, innerq_ones.size() * sizeof(float));
             }
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_q.data(), 0, k_q.size());
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_q.data(), 0, v_q.size());
@@ -599,9 +597,8 @@ static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
         [=](ggml_context * ctx) {
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
             if (ggml_tensor * is = ggml_get_tensor(ctx, "innerq_scale"); is != nullptr) {
-                float innerq_ones[128];
-                for (int ii = 0; ii < 128; ++ii) innerq_ones[ii] = 1.0f;
-                ggml_backend_tensor_set(is, innerq_ones, 0, sizeof(innerq_ones));
+                std::vector<float> innerq_ones(128, 1.0f);
+                ggml_backend_tensor_set(is, innerq_ones.data(), 0, innerq_ones.size() * sizeof(float));
             }
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_f16.data(), 0, k_f16.size() * sizeof(ggml_fp16_t));
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_f16.data(), 0, v_f16.size() * sizeof(ggml_fp16_t));
@@ -614,9 +611,8 @@ static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
         [=](ggml_context * ctx) {
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
             if (ggml_tensor * is = ggml_get_tensor(ctx, "innerq_scale"); is != nullptr) {
-                float innerq_ones[128];
-                for (int ii = 0; ii < 128; ++ii) innerq_ones[ii] = 1.0f;
-                ggml_backend_tensor_set(is, innerq_ones, 0, sizeof(innerq_ones));
+                std::vector<float> innerq_ones(128, 1.0f);
+                ggml_backend_tensor_set(is, innerq_ones.data(), 0, innerq_ones.size() * sizeof(float));
             }
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_q.data(), 0, k_q.size());
             ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_q.data(), 0, v_q.size());
