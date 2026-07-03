@@ -20,9 +20,9 @@
 		agenticInjectSteeringMessage
 	} from '$lib/stores/agentic.svelte';
 	import {
+		buildSiblingInfoMap,
 		copyToClipboard,
 		formatMessageForClipboard,
-		getMessageSiblings,
 		hasAgenticContent
 	} from '$lib/utils';
 
@@ -169,6 +169,8 @@
 		});
 	});
 
+	let siblingInfoByMessageId = $derived(buildSiblingInfoMap(allConversationMessages));
+
 	let displayMessages = $derived.by(() => {
 		if (!messages.length) {
 			return [];
@@ -223,18 +225,18 @@
 				}
 			}
 
-			const siblingInfo = getMessageSiblings(allConversationMessages, msg.id);
+			const siblingInfo = siblingInfoByMessageId.get(msg.id) ?? {
+				message: msg,
+				siblingIds: [msg.id],
+				currentIndex: 0,
+				totalSiblings: 1
+			};
 
 			result.push({
 				message: msg,
 				toolMessages,
 				isLastAssistantMessage: false,
-				siblingInfo: siblingInfo || {
-					message: msg,
-					siblingIds: [msg.id],
-					currentIndex: 0,
-					totalSiblings: 1
-				}
+				siblingInfo
 			});
 		}
 
