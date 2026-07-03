@@ -686,24 +686,60 @@ static void * ggml_cuda_host_malloc(size_t size);
 
 // ROCm copies host->device by pinning the source as a userptr for the DMA engine;
 // doing that on a large file-backed (mmap'd) region can stall model loading. Stage
-// through a pinned buffer instead, like the CUDA runtime does for pageable memory.
-static bool ggml_cuda_memcpy_host_to_device_staged(char * dst, const char * src, size_t size, cudaStream_t stream) {
-    const size_t chunk_size = std::min<size_t>(size, 64u * 1024 * 1024);
+// through pinned bounce buffers instead, like the CUDA runtime does for pageable
+// memory. The source is described as n_rows of row_size bytes (row_size == size,
+// n_rows == 1 for a plain contiguous upload), so the same path serves the 1D and
+// strided/2D tensor uploads.
+//
+// Two staging buffers are used with one event each: while the DMA engine drains
+// one buffer the CPU fills the other (double buffering), so the host copies and
+// the device copies overlap instead of running strictly one after another.
+static bool ggml_cuda_memcpy_host_to_device_staged(
+        char * dst, size_t stride_dst,
+        const char * src, size_t stride_src,
+        size_t row_size, size_t n_rows, cudaStream_t stream) {
+    const size_t chunk_size = std::min<size_t>(row_size, 64u * 1024 * 1024);
 
-    void * stage = ggml_cuda_host_malloc(chunk_size);
-    if (stage == nullptr) {
-        return false;
+    void *      stage[2] = { nullptr, nullptr };
+    cudaEvent_t sync [2] = { nullptr, nullptr };
+    bool        used [2] = { false,   false   };
+
+    bool ok = true;
+    for (int i = 0; i < 2; i++) {
+        stage[i] = ggml_cuda_host_malloc(chunk_size);
+        ok = ok && stage[i] != nullptr &&
+             cudaEventCreateWithFlags(&sync[i], cudaEventDisableTiming) == cudaSuccess;
     }
 
-    for (size_t off = 0; off < size; off += chunk_size) {
-        const size_t n = std::min(chunk_size, size - off);
-        memcpy(stage, src + off, n);
-        CUDA_CHECK(cudaMemcpyAsync(dst + off, stage, n, cudaMemcpyHostToDevice, stream));
-        CUDA_CHECK(cudaStreamSynchronize(stream)); // stage is reused, must not overwrite in-flight copy
+    if (ok) {
+        int slot = 0;
+        for (size_t r = 0; r < n_rows; r++) {
+            for (size_t off = 0; off < row_size; off += chunk_size) {
+                const size_t n = std::min(chunk_size, row_size - off);
+                if (used[slot]) {
+                    // wait for the DMA that last read this buffer before refilling it
+                    CUDA_CHECK(cudaEventSynchronize(sync[slot]));
+                }
+                memcpy(stage[slot], src + r*stride_src + off, n);
+                CUDA_CHECK(cudaMemcpyAsync(dst + r*stride_dst + off, stage[slot], n, cudaMemcpyHostToDevice, stream));
+                CUDA_CHECK(cudaEventRecord(sync[slot], stream));
+                used[slot] = true;
+                slot ^= 1;
+            }
+        }
+        CUDA_CHECK(cudaStreamSynchronize(stream));
     }
 
-    CUDA_CHECK(cudaFreeHost(stage));
-    return true;
+    for (int i = 0; i < 2; i++) {
+        if (sync[i] != nullptr) {
+            CUDA_CHECK(cudaEventDestroy(sync[i]));
+        }
+        if (stage[i] != nullptr) {
+            CUDA_CHECK(cudaFreeHost(stage[i]));
+        }
+    }
+
+    return ok;
 }
 #endif
 
@@ -714,7 +750,8 @@ static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
 #if defined(GGML_USE_HIP)
     // stage large uploads through pinned memory to avoid pinning a file-backed source (see above)
     if (size >= 1024 * 1024 &&
-        ggml_cuda_memcpy_host_to_device_staged((char *) tensor->data + offset, (const char *) data, size, cudaStreamPerThread)) {
+        ggml_cuda_memcpy_host_to_device_staged(
+            (char *) tensor->data + offset, size, (const char *) data, size, size, 1, cudaStreamPerThread)) {
         return;
     }
 #endif
@@ -735,6 +772,14 @@ static void ggml_backend_cuda_buffer_set_tensor_2d(ggml_backend_buffer_t buffer,
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+#if defined(GGML_USE_HIP)
+    // stage large uploads through pinned memory to avoid pinning a file-backed source (see above)
+    if (size * n_copies >= 1024 * 1024 &&
+        ggml_cuda_memcpy_host_to_device_staged(
+            (char *) tensor->data + offset, stride_tensor, (const char *) data, stride_data, size, n_copies, cudaStreamPerThread)) {
+        return;
+    }
+#endif
     CUDA_CHECK(cudaMemcpy2DAsync(
         (char *) tensor->data + offset, stride_tensor, data, stride_data, size, n_copies, cudaMemcpyHostToDevice, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
@@ -1043,6 +1088,14 @@ static void ggml_backend_cuda_split_buffer_set_tensor(ggml_backend_buffer_t buff
         }
 
         const char * buf_host = (const char *)data + offset_split;
+#if defined(GGML_USE_HIP)
+        // stage large uploads through pinned memory to avoid pinning a file-backed source (see above)
+        if (original_size >= 1024 * 1024 &&
+            ggml_cuda_memcpy_host_to_device_staged(
+                (char *) extra->data_device[id], original_size, buf_host, original_size, original_size, 1, cudaStreamPerThread)) {
+            continue;
+        }
+#endif
         CUDA_CHECK(cudaMemcpyAsync(extra->data_device[id], buf_host, original_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
     }
 
