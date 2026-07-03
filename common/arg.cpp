@@ -32,7 +32,6 @@
 #include <regex>
 #include <set>
 #include <string>
-#include <thread> // for hardware_concurrency
 #include <vector>
 
 #ifndef __EMSCRIPTEN__
@@ -1274,22 +1273,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP}));
     add_opt(common_arg(
         {"-t", "--threads"}, "N",
-        string_format("number of CPU threads to use during generation (default: %d)", params.cpuparams.n_threads),
+        string_format("number of CPU threads to use during generation (default: %d, -1 = number of math cores)", params.cpuparams.n_threads),
         [](common_params & params, int value) {
-            params.cpuparams.n_threads = value;
-            if (params.cpuparams.n_threads <= 0) {
-                params.cpuparams.n_threads = std::thread::hardware_concurrency();
-            }
+            // <= 0: resolved in postprocess_cpu_params (ref: https://github.com/ggml-org/llama.cpp/issues/19110)
+            params.cpuparams.n_threads = value > 0 ? value : -1;
         }
     ).set_env("LLAMA_ARG_THREADS"));
     add_opt(common_arg(
         {"-tb", "--threads-batch"}, "N",
         "number of threads to use during batch and prompt processing (default: same as --threads)",
         [](common_params & params, int value) {
-            params.cpuparams_batch.n_threads = value;
-            if (params.cpuparams_batch.n_threads <= 0) {
-                params.cpuparams_batch.n_threads = std::thread::hardware_concurrency();
-            }
+            params.cpuparams_batch.n_threads = value > 0 ? value : -1;
         }
     ));
     add_opt(common_arg(
@@ -3535,20 +3529,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--spec-draft-threads", "-td", "--threads-draft"}, "N",
         "number of threads to use during generation (default: same as --threads)",
         [](common_params & params, int value) {
-            params.speculative.draft.cpuparams.n_threads = value;
-            if (params.speculative.draft.cpuparams.n_threads <= 0) {
-                params.speculative.draft.cpuparams.n_threads = std::thread::hardware_concurrency();
-            }
+            params.speculative.draft.cpuparams.n_threads = value > 0 ? value : -1;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--spec-draft-threads-batch", "-tbd", "--threads-batch-draft"}, "N",
         "number of threads to use during batch and prompt processing (default: same as --threads-draft)",
         [](common_params & params, int value) {
-            params.speculative.draft.cpuparams_batch.n_threads = value;
-            if (params.speculative.draft.cpuparams_batch.n_threads <= 0) {
-                params.speculative.draft.cpuparams_batch.n_threads = std::thread::hardware_concurrency();
-            }
+            params.speculative.draft.cpuparams_batch.n_threads = value > 0 ? value : -1;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
