@@ -5600,6 +5600,7 @@ static bool ggml_backend_cuda_device_reset(ggml_backend_dev_t dev) {
     auto & device = dev_ctx->device;
     CUDA_CHECK(cudaSetDevice(device));
     CUDA_CHECK(cudaDeviceReset());
+    return true;
 }
 
 static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
