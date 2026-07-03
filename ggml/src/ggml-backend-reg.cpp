@@ -278,11 +278,8 @@ struct ggml_backend_registry {
             devices.end());
 
         // if backend supports free(), use it
-        if (it->handle) {
-            auto * free_fn = (ggml_backend_reg_free_t) dl_get_sym(it->handle.get(), "ggml_backend_reg_free");
-            if (free_fn) {
-                free_fn(reg);
-            }
+        if (reg->iface.free) {
+            reg->iface.free(reg);
         }
 
         // remove backend

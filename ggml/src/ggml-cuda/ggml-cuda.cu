@@ -5722,17 +5722,40 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     return nullptr;
 }
 
+static bool ggml_backend_cuda_reg_initialized = false;
+
+static void ggml_backend_cuda_reg_free(ggml_backend_reg_t reg) {
+    ggml_backend_cuda_reg_context * ctx = (ggml_backend_cuda_reg_context *) reg->context;
+
+    for (ggml_backend_dev_t dev : ctx->devices) {
+        int device = ((ggml_backend_cuda_device_context *) dev->context)->device;
+        delete (ggml_backend_cuda_device_context *) dev->context;
+        delete dev;
+
+        cudaError_t err = cudaSetDevice(device);
+        if (err == cudaSuccess) {
+            cudaDeviceReset();
+        }
+    }
+
+    delete ctx;
+    reg->context = nullptr;
+
+    ggml_backend_cuda_reg_initialized = false;
+}
+
 static const ggml_backend_reg_i ggml_backend_cuda_reg_interface = {
     /* .get_name          = */ ggml_backend_cuda_reg_get_name,
     /* .get_device_count  = */ ggml_backend_cuda_reg_get_device_count,
     /* .get_device        = */ ggml_backend_cuda_reg_get_device,
     /* .get_proc_address  = */ ggml_backend_cuda_reg_get_proc_address,
+    /* .free              = */ ggml_backend_cuda_reg_free,
 };
 
 // backend registry
 ggml_backend_reg_t ggml_backend_cuda_reg() {
     static ggml_backend_reg reg;
-    static bool initialized = false;
+    bool & initialized = ggml_backend_cuda_reg_initialized;
 
     {
         static std::mutex mutex;
@@ -5779,23 +5802,6 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
     return &reg;
 }
 
-static void ggml_backend_cuda_reg_free(ggml_backend_reg_t reg) {
-    ggml_backend_cuda_reg_context * ctx = (ggml_backend_cuda_reg_context *) reg->context;
-
-    for (ggml_backend_dev_t dev : ctx->devices) {
-        int device = ((ggml_backend_cuda_device_context *) dev->context)->device;
-        delete (ggml_backend_cuda_device_context *) dev->context;
-        delete dev;
-
-        cudaError_t err = cudaSetDevice(device);
-        if (err == cudaSuccess) {
-            cudaDeviceReset();
-        }
-    }
-
-    delete ctx;
-}
-
 ggml_backend_t ggml_backend_cuda_init(int device) {
     if (device < 0 || device >= ggml_backend_cuda_get_device_count()) {
         GGML_LOG_ERROR("%s: invalid device %d\n", __func__, device);
@@ -5819,4 +5825,3 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
 }
 
 GGML_BACKEND_DL_IMPL(ggml_backend_cuda_reg)
-GGML_BACKEND_DL_FREE_IMPL(ggml_backend_cuda_reg_free)
