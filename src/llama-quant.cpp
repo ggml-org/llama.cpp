@@ -387,6 +387,14 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // quantize only 2D and 3D tensors (experts)
     if (ggml_n_dims(tensor) < 2) return false;
 
+    // never quantize integer tensors: these are id/index tables, not weights
+    // (e.g. MoE routing maps like ffn_gate_tid2eid / ffn_gate_eid2tid) and cannot
+    // be dequantized/converted - pass them through unchanged
+    if (tensor->type == GGML_TYPE_I8  || tensor->type == GGML_TYPE_I16 ||
+        tensor->type == GGML_TYPE_I32 || tensor->type == GGML_TYPE_I64) {
+        return false;
+    }
+
     const std::string name = ggml_get_name(tensor);
 
     // This used to be a regex, but <regex> has an extreme cost to compile times.
@@ -1334,6 +1342,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // Determine whether this tensor will be Q3_PT (mirror the pass-2 logic)
             bool quantize = tname.rfind("weight") == tname.size() - 6;
             quantize &= (ggml_n_dims(tensor) >= 2);
+            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
+                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
             quantize &= tname.find("_norm.weight")        == std::string::npos;
             quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
             if (!quantize) { continue; }
@@ -1404,6 +1414,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // Determine whether this tensor will be Q3_KPT (mirror the pass-2 logic)
             bool quantize = tname.rfind("weight") == tname.size() - 6;
             quantize &= (ggml_n_dims(tensor) >= 2);
+            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
+                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
             quantize &= tname.find("_norm.weight")        == std::string::npos;
             quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
             if (!quantize) { continue; }
@@ -1484,6 +1496,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             bool quantize = tname.rfind("weight") == tname.size() - 6;
             quantize &= (ggml_n_dims(tensor) >= 2);
+            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
+                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
             quantize &= tname.find("_norm.weight")        == std::string::npos;
             quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
             if (!quantize) { continue; }
@@ -1555,6 +1569,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // Determine whether this tensor will be Q2_KPT (mirror the pass-2 logic)
             bool quantize = tname.rfind("weight") == tname.size() - 6;
             quantize &= (ggml_n_dims(tensor) >= 2);
+            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
+                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
             quantize &= tname.find("_norm.weight")        == std::string::npos;
             quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
             if (!quantize) { continue; }
@@ -1666,6 +1682,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             bool quantize = tname.rfind("weight") == tname.size() - 6;
             quantize &= (ggml_n_dims(tensor) >= 2);
+            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
+                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
             quantize &= tname.find("_norm.weight")        == std::string::npos;
             quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
             if (!quantize) { continue; }
@@ -1735,6 +1753,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             bool quantize = tname.rfind("weight") == tname.size() - 6;
             quantize &= (ggml_n_dims(tensor) >= 2);
+            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
+                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
             quantize &= tname.find("_norm.weight")        == std::string::npos;
             quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
             if (!quantize) { continue; }
@@ -1800,6 +1820,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             bool quantize = tname.rfind("weight") == tname.size() - 6;
             quantize &= (ggml_n_dims(tensor) >= 2);
+            quantize &= tensor->type != GGML_TYPE_I8  && tensor->type != GGML_TYPE_I16 &&
+                        tensor->type != GGML_TYPE_I32 && tensor->type != GGML_TYPE_I64;
             quantize &= tname.find("_norm.weight")        == std::string::npos;
             quantize &= tname.find("ffn_gate_inp.weight") == std::string::npos;
             if (!quantize) { continue; }
