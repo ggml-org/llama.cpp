@@ -550,10 +550,15 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             GGML_ASSERT(tensor->ne[axis] == n_embd + 2*n_embd_gqa);
             return {{n_embd, 1}, {n_embd_gqa, 2}};
         }
-        if ((std::regex_match(tensor_name, pattern_ffn_up_gate_weight) ||
-             std::regex_match(tensor_name, pattern_ffn_up_gate_bias)) &&
-                tensor->ne[axis] == 2*hparams.n_ff(il)) {
-            return {{hparams.n_ff(il), 2}};
+        // phi3 and modern-bert pack gate|up into a dense ffn_up of width 2*n_ff;
+        // ordinary separate ffn_up/ffn_gate stay at n_ff, so this stays a guard
+        // that falls through to the default even split rather than an assert.
+        if (std::regex_match(tensor_name, pattern_ffn_up_gate_weight) ||
+            std::regex_match(tensor_name, pattern_ffn_up_gate_bias)) {
+            const int64_t n_ff = hparams.n_ff(il);
+            if (n_ff != 0 && tensor->ne[axis] == 2*n_ff) {
+                return {{n_ff, 2}};
+            }
         }
         if (std::regex_match(tensor_name, pattern_ffn_gate_up_weight)) {
             const int64_t n_ff_exp = hparams.n_ff_exp;
