@@ -783,14 +783,8 @@ struct llm_tokenizer_ugm : llm_tokenizer {
 
             // First four bytes of precompiled_charsmap contains length of binary
             // blob containing XOR-compressed compact double array (XCDA) entries
-            if (precompiled_charsmap.size() < sizeof(uint32_t)) {
-                throw std::runtime_error("precompiled_charsmap too small for xcda_blob_size header!");
-            }
             uint32_t xcda_blob_size = *(const uint32_t *) &precompiled_charsmap[0];
             charsmap_offset += sizeof(xcda_blob_size);
-            if (xcda_blob_size + charsmap_offset >= precompiled_charsmap.size()) {
-                throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
-            }
 
             // Next xcda_blob_size bytes contain entries of XOR-compressed compact
             // double array (XCDA). Each entry is bit-packed into a 32-bit integer.
@@ -1804,11 +1798,18 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 const size_t n_precompiled_charsmap = gguf_get_arr_n(ctx, precompiled_charsmap_keyidx);
                 const char * pc = (const char *) gguf_get_arr_data(ctx, precompiled_charsmap_keyidx);
                 precompiled_charsmap.assign(pc, pc + n_precompiled_charsmap);
+                if (precompiled_charsmap.size() < sizeof(uint32_t)) {
+                    throw std::runtime_error("precompiled_charsmap too small for xcda_blob_size header!");
+                }
+                uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+                *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
+#endif
+                if (*xcda_blob_size + sizeof(uint32_t) >= precompiled_charsmap.size()) {
+                    throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
+                }
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
                 // correct endiannes of data in precompiled_charsmap binary blob
-                uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
-                *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
-                assert(*xcda_blob_size + sizeof(uint32_t) < n_precompiled_charsmap);
                 size_t xcda_array_size = *xcda_blob_size / sizeof(uint32_t);
                 uint32_t * xcda_array = (uint32_t *) &precompiled_charsmap[sizeof(uint32_t)];
                 for (size_t i = 0; i < xcda_array_size; ++i) {
