@@ -5597,12 +5597,9 @@ static void ggml_backend_cuda_device_event_synchronize(ggml_backend_dev_t dev, g
 
 static bool ggml_backend_cuda_device_reset(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
-
-    if (cudaSetDevice(dev_ctx->device) != cudaSuccess) {
-        return false;
-    }
-
-    return cudaDeviceReset() == cudaSuccess;
+    auto & device = dev_ctx->device;
+    CUDA_CHECK(cudaSetDevice(device));
+    CUDA_CHECK(cudaDeviceReset());
 }
 
 static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
