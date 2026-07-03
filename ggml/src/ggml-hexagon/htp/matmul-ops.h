@@ -45,7 +45,7 @@ extern "C" {
 
 // --- DMA Activation Transfer Configuration ---
 #define HTP_MM_DMA_ACT_ROWS_PER_STEP 2
-#define HTP_MM_DMA_ACT_MULTIPLIER    4
+#define HTP_MM_DMA_ACT_MULTIPLIER    (2 * HTP_MM_DMA_ACT_ROWS_PER_STEP)
 
 enum htp_mm_kernel_type {
     HTP_MM_KERNEL_UNSUPPORTED = 0,

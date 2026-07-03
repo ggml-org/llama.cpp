@@ -1968,29 +1968,30 @@ static void transfer_activation_chunk_fp32_to_fp16_dma_pipelined(
 
     const uint32_t n_steps = n_rows_padded / R;
 
-    // pre-fetch step 0
+    // Push step 0
     if (n_steps > 0 && n_rows > 0) {
         uint32_t nrows_to_fetch = hex_smin(n_rows, R);
         dma_queue_push(dma_q, dma_make_ptr(thread_f32_act, src),
                        k_block * sizeof(float), k_stride * sizeof(float), k_valid * sizeof(float), nrows_to_fetch);
     }
-
-    for (uint32_t s = 0; s < n_steps; ++s) {
-        uint32_t r = R * s;
-        float *curr_buf = thread_f32_act + (s % 2) * R * k_block;
-
-        if (r < n_rows) {
-            dma_queue_pop(dma_q);
-        }
-
-        uint32_t next_s = s + 1;
-        uint32_t next_r = R * next_s;
+    // Push step 1 (if valid)
+    if (n_steps > 1) {
+        uint32_t next_r = R * 1;
         if (next_r < n_rows) {
             uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, R);
             const float *next_src = src + next_r * k_stride;
-            float *next_buf = thread_f32_act + (next_s % 2) * R * k_block;
+            float *next_buf = thread_f32_act + 1 * R * k_block;
             dma_queue_push(dma_q, dma_make_ptr(next_buf, next_src),
                            k_block * sizeof(float), k_stride * sizeof(float), k_valid * sizeof(float), nrows_to_fetch);
+        }
+    }
+
+    for (uint32_t s = 0; s < n_steps; ++s) {
+        uint32_t r = R * s;
+        float *curr_buf = NULL;
+
+        if (r < n_rows) {
+            curr_buf = (float *) dma_queue_pop(dma_q).dst;
         }
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, r);
@@ -2005,6 +2006,16 @@ static void transfer_activation_chunk_fp32_to_fp16_dma_pipelined(
             ((r + 1) < n_rows)
         );
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, r);
+
+        // Push step s + 2
+        uint32_t next_s = s + 2;
+        uint32_t next_r = R * next_s;
+        if (next_r < n_rows) {
+            uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, R);
+            const float *next_src = src + next_r * k_stride;
+            dma_queue_push(dma_q, dma_make_ptr(curr_buf, next_src),
+                           k_block * sizeof(float), k_stride * sizeof(float), k_valid * sizeof(float), nrows_to_fetch);
+        }
     }
 }
 
