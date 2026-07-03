@@ -4,15 +4,17 @@ on:
   push:
     paths:
       - '.github/workflows/python-type-check.yml'
-      - 'pyrightconfig.json'
+      - 'ty.toml'
       - '**.py'
       - '**/requirements*.txt'
+      # - 'pyrightconfig.json'
   pull_request:
     paths:
       - '.github/workflows/python-type-check.yml'
-      - 'pyrightconfig.json'
+      - 'ty.toml'
       - '**.py'
       - '**/requirements*.txt'
+      # - 'pyrightconfig.json'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -20,21 +22,22 @@ concurrency:
 
 jobs:
   python-type-check:
-    runs-on: ubuntu-latest
-    name: pyright type-check
+    runs-on: [self-hosted, fast]
+    name: python type-check
     steps:
       - name: Check out source repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Set up Python environment
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - name: Install Python dependencies
-        # TODO: use a venv
-        run: pip install -r requirements/requirements-all.txt
-      - name: Type-check with Pyright
-        uses: jakebailey/pyright-action@v2
-        with:
-          version: 1.1.382
-          level: warning
-          warnings: true
+          pip-install: -r requirements/requirements-all.txt ty==0.0.35
+      # - name: Type-check with Pyright
+      #   uses: jakebailey/pyright-action@v2
+      #   with:
+      #     version: 1.1.382
+      #     level: warning
+      #     warnings: true
+      - name: Type-check with ty
+        run: |
+            ty check --output-format=github

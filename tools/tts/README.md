@@ -4,7 +4,7 @@ This example demonstrates the Text To Speech feature. It uses a
 [outeai](https://www.outeai.com/).
 
 ## Quickstart
-If you have built llama.cpp with `-DLLAMA_CURL=ON` you can simply run the
+If you have built llama.cpp with SSL support you can simply run the
 following command and the required models will be downloaded automatically:
 ```console
 $ build/bin/llama-tts --tts-oute-default -p "Hello world" && aplay output.wav
@@ -34,7 +34,7 @@ $ build/bin/llama-quantize models/outetts-0.2-0.5B-f16.gguf \
 ```
 The quantized model will be `models/outetts-0.2-0.5B-q8_0.gguf`.
 
-Next we do something simlar for the audio decoder. First download or checkout
+Next we do something similar for the audio decoder. First download or checkout
 the model for the voice decoder:
 ```console
 $ pushd models
@@ -42,7 +42,7 @@ $ git clone --branch main --single-branch --depth 1 https://huggingface.co/novat
 $ cd WavTokenizer-large-speech-75token && git lfs install && git lfs pull
 $ popd
 ```
-This model file is PyTorch checkpoint (.ckpt) and we first need to convert it to
+This model file is a PyTorch checkpoint (.ckpt) and we first need to convert it to
 huggingface format:
 ```console
 (venv) python tools/tts/convert_pt_to_hf.py \

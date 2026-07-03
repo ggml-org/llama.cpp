@@ -12,6 +12,7 @@
 #include <random>
 #include <sstream>
 #include <fstream>
+#include <limits>
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -82,6 +83,18 @@ std::string gen_chatcmplid() {
 
 std::string gen_tool_call_id() {
     return random_string();
+}
+
+const char * get_media_marker() {
+    static const std::string marker = []() {
+        // allow user to pin a reproducible marker via env var
+        const char * env = getenv("LLAMA_MEDIA_MARKER");
+        if (env && env[0] != '\0') {
+            return std::string(env);
+        }
+        return std::string("<__media_") + random_string() + "__>";
+    }();
+    return marker.c_str();
 }
 
 //
@@ -231,19 +244,77 @@ server_tokens::server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd) : 
 server_tokens::server_tokens(const llama_tokens & tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {
 }
 
-llama_pos server_tokens::pos_next() const {
+llama_pos server_tokens::pos_next(int64_t n_tokens) const {
     if (!has_mtmd) {
-        return tokens.size();
+        if (n_tokens < 0) {
+            return tokens.size();
+        }
+
+        return n_tokens;
     }
 
-    llama_pos res = tokens.size();
+    if (n_tokens < 0) {
+        llama_pos res = tokens.size();
 
-    for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
-        const auto & chunk = it->second;
-        res += mtmd_input_chunk_get_n_pos(chunk.get()) - mtmd_input_chunk_get_n_tokens(chunk.get());
+        for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
+            const auto & chunk = it->second;
+            res += mtmd_input_chunk_get_n_pos(chunk.get()) - mtmd_input_chunk_get_n_tokens(chunk.get());
+        }
+
+        return res;
     }
 
-    return res;
+    int64_t idx = 0;
+    llama_pos pos = 0;
+
+    GGML_ASSERT(n_tokens <= (int64_t)tokens.size());
+
+    while (idx < n_tokens) {
+        const auto media_it = map_idx_to_media.find(idx);
+        if (media_it != map_idx_to_media.end()) {
+            const auto & chunk = media_it->second;
+            const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+            const size_t n_tok = mtmd_input_chunk_get_n_tokens(chunk.get());
+
+            pos += n_pos;
+            idx += n_tok;
+        } else {
+            pos++;
+            idx++;
+        }
+    }
+
+    return pos;
+}
+
+size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
+    if (!has_mtmd) {
+        return std::min((size_t)max_pos, tokens.size());
+    }
+
+    size_t idx = 0;
+    llama_pos pos = 0;
+
+    while (idx < tokens.size()) {
+        const auto media_it = map_idx_to_media.find(idx);
+        if (media_it != map_idx_to_media.end()) {
+            const auto & chunk = media_it->second;
+            const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+            const size_t n_tok = mtmd_input_chunk_get_n_tokens(chunk.get());
+
+            pos += n_pos;
+            idx += n_tok;
+        } else {
+            pos++;
+            idx++;
+        }
+
+        if (pos >= max_pos) {
+            break;
+        }
+    }
+
+    return idx;
 }
 
 std::string server_tokens::str() const {
@@ -272,6 +343,14 @@ const mtmd::input_chunk_ptr & server_tokens::find_chunk(size_t idx) const {
         return it->second;
     }
     throw std::runtime_error("Chunk not found");
+}
+
+std::pair<const mtmd::input_chunk_ptr *, size_t> server_tokens::find_next_media_chunk(size_t idx) const {
+    auto it = map_idx_to_media.upper_bound(idx);
+    if (it != map_idx_to_media.end()) {
+        return { &it->second, it->first };
+    }
+    return { nullptr, 0 };
 }
 
 void server_tokens::push_back(llama_token tok) {
@@ -321,13 +400,23 @@ void server_tokens::push_back(server_tokens & tokens) {
 }
 
 void server_tokens::insert(const llama_tokens & inp_tokens) {
-    GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
     tokens.insert(tokens.end(), inp_tokens.begin(), inp_tokens.end());
 }
 
-const llama_tokens & server_tokens::get_text_tokens() const {
-    GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
+const llama_tokens & server_tokens::get_tokens() const {
+    GGML_ASSERT(!has_mtmd);
     return tokens;
+}
+
+llama_tokens server_tokens::get_text_tokens() const {
+    llama_tokens res;
+    res.reserve(tokens.size());
+    for (llama_token t : tokens) {
+        if (t != LLAMA_TOKEN_NULL) {
+            res.push_back(t);
+        }
+    }
+    return res;
 }
 
 void server_tokens::set_token(llama_pos pos, llama_token id) {
@@ -429,6 +518,14 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     return max_idx; // all tokens are equal
 }
 
+common_chat_msg_spans server_tokens::find_message_spans(const common_chat_msg_delimiters & delims) const {
+    std::map<size_t, size_t> skips;
+    for (const auto & it : map_idx_to_media) {
+        skips[it.first] = mtmd_input_chunk_get_n_tokens(it.second.get());
+    }
+    return delims.split(tokens, skips);
+}
+
 bool server_tokens::validate(const struct llama_context * ctx) const {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -449,37 +546,6 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
         }
     }
     return true;
-}
-
-int32_t server_tokens::process_chunk(
-            llama_context * ctx,
-            mtmd_context * mctx,
-            size_t idx,
-            llama_pos pos,
-            int32_t seq_id,
-            size_t & n_tokens_out) const {
-    const auto & chunk = find_chunk(idx);
-    const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
-                        ? "image" : "audio";
-    SRV_INF("processing %s...\n", name);
-    int32_t n_batch = llama_n_batch(ctx);
-    int64_t t0 = ggml_time_ms();
-    llama_pos new_n_past; // unused for now
-    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
-        chunk.get(),
-        pos,
-        seq_id,
-        n_batch,
-        true, // logits last
-        &new_n_past);
-    SRV_INF("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
-    if (result != 0) {
-        LOG_ERR("mtmd_helper_eval failed with status %d", result);
-        n_tokens_out = 0;
-        return result;
-    }
-    n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
-    return 0;
 }
 
 server_tokens server_tokens::clone() const {
@@ -621,29 +687,19 @@ size_t validate_utf8(const std::string& text) {
     return len;
 }
 
-// Computes FNV-1a hash of the data
-static std::string fnv_hash(const uint8_t * data, size_t len) {
-    const uint64_t fnv_prime = 0x100000001b3ULL;
-    uint64_t hash = 0xcbf29ce484222325ULL;
-
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= data[i];
-        hash *= fnv_prime;
-    }
-    return std::to_string(hash);
-}
-
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
+server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder) {
+    // these will be freed upon going out of scope
     mtmd::bitmaps bitmaps;
+    std::vector<mtmd_helper::video_ptr> videos;
     for (auto & file : files) {
-        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
-        if (!bmp.ptr) {
+        auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder);
+        if (!out.bitmap) {
             throw std::runtime_error("Failed to load image or audio file");
         }
-        // calculate bitmap hash (for KV caching)
-        std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
-        bmp.set_id(hash.c_str());
-        bitmaps.entries.push_back(std::move(bmp));
+        bitmaps.entries.emplace_back(out.bitmap);
+        if (out.video_ctx) {
+            videos.emplace_back(out.video_ctx);
+        }
     }
     // process prompt
     std::vector<server_tokens> inputs;
@@ -769,17 +825,25 @@ json oaicompat_completion_params_parse(const json & body) {
     return llama_params;
 }
 
-// media_path always end with '/', see arg.cpp
+// url can be
+// - http(s):// for remote files
+// - file:// for local files (only allowed if media_path is set)
+// - data: for base64 encoded data with uri scheme (e.g. data:image/png;base64,...)
+// - raw base64 encoded data
 static void handle_media(
         std::vector<raw_buffer> & out_files,
-        json & media_obj,
-        const std::string & media_path) {
-    std::string url = json_value(media_obj, "url", std::string());
+        const std::string & url,
+        const std::string & media_path,
+        bool accept_base64_uri) {
+    if (!media_path.empty()) {
+        // should already be enforced by arg.cpp, but checking just in case
+        GGML_ASSERT(media_path.back() == DIRECTORY_SEPARATOR);
+    }
+
     if (string_starts_with(url, "http")) {
         // download remote image
         // TODO @ngxson : maybe make these params configurable
         common_remote_params params;
-        params.headers.push_back({"User-Agent", "llama.cpp/" + build_info});
         params.max_size = 1024 * 1024 * 10; // 10MB
         params.timeout  = 10; // seconds
         SRV_INF("downloading image from '%s'\n", url.c_str());
@@ -811,27 +875,35 @@ static void handle_media(
         data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         out_files.push_back(data);
 
-    } else {
+    } else if (accept_base64_uri && string_starts_with(url, "data:")) {
         // try to decode base64 image
         std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
         if (parts.size() != 2) {
-            throw std::runtime_error("Invalid url value");
+            throw std::runtime_error("Invalid uri-encoded base64 value");
         } else if (!string_starts_with(parts[0], "data:image/")) {
-            throw std::runtime_error("Invalid url format: " + parts[0]);
+            throw std::runtime_error("Invalid uri format: " + parts[0]);
         } else if (!string_ends_with(parts[0], "base64")) {
-            throw std::runtime_error("url must be base64 encoded");
+            throw std::runtime_error("uri must be base64 encoded");
         } else {
             auto base64_data = parts[1];
             auto decoded_data = base64_decode(base64_data);
             out_files.push_back(decoded_data);
         }
+
+    } else {
+        // try as raw base64 string
+        auto decoded_data = base64_decode(url);
+        if (decoded_data.empty()) {
+            throw std::runtime_error("Invalid base64 value");
+        }
+        out_files.push_back(decoded_data);
     }
 }
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
-    const oaicompat_parser_options & opt,
+    const server_chat_params & opt,
     std::vector<raw_buffer> & out_files)
 {
     json llama_params;
@@ -868,7 +940,9 @@ json oaicompat_chat_params_parse(
         json response_format      = json_value(body, "response_format", json::object());
         std::string response_type = json_value(response_format, "type", std::string());
         if (response_type == "json_object") {
-            json_schema = json_value(response_format, "schema", json::object());
+            if (response_format.contains("schema") || json_schema.empty()) {
+                json_schema = json_value(response_format, "schema", json::object());
+            }
         } else if (response_type == "json_schema") {
             auto schema_wrapper = json_value(response_format, "json_schema", json::object());
             json_schema = json_value(schema_wrapper, "schema", json::object());
@@ -908,18 +982,18 @@ json oaicompat_chat_params_parse(
         }
 
         for (auto & p : content) {
-            std::string type      = json_value(p, "type", std::string());
+            std::string type = json_value(p, "type", std::string());
             if (type == "image_url") {
                 if (!opt.allow_image) {
                     throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
                 json image_url = json_value(p, "image_url", json::object());
-                handle_media(out_files, image_url, opt.media_path);
+                std::string url = json_value(image_url, "url", std::string());
+                handle_media(out_files, url, opt.media_path, true);
 
-                // replace this chunk with a marker
-                p["type"] = "text";
-                p["text"] = mtmd_default_marker();
+                p["type"] = "media_marker";
+                p["text"] = get_media_marker();
                 p.erase("image_url");
 
             } else if (type == "input_audio") {
@@ -927,22 +1001,29 @@ json oaicompat_chat_params_parse(
                     throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
-                json input_audio   = json_value(p, "input_audio", json::object());
-                std::string data   = json_value(input_audio, "data", std::string());
-                std::string format = json_value(input_audio, "format", std::string());
-                // while we also support flac, we don't allow it here so we matches the OAI spec
-                if (format != "wav" && format != "mp3") {
-                    throw std::invalid_argument("input_audio.format must be either 'wav' or 'mp3'");
-                }
-                auto decoded_data = base64_decode(data); // expected to be base64 encoded
-                out_files.push_back(decoded_data);
+                // note: don't need to validate "format", it's redundant
+                json input_audio = json_value(p, "input_audio", json::object());
+                std::string url  = json_value(input_audio, "data",
+                                        json_value(input_audio, "url", std::string()));
+                handle_media(out_files, url, opt.media_path, false);
 
-                // TODO: add audio_url support by reusing handle_media()
-
-                // replace this chunk with a marker
-                p["type"] = "text";
-                p["text"] = mtmd_default_marker();
+                p["type"] = "media_marker";
+                p["text"] = get_media_marker();
                 p.erase("input_audio");
+
+            } else if (type == "input_video") {
+                if (!opt.allow_video) {
+                    throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                }
+
+                json input_video = json_value(p, "input_video", json::object());
+                std::string url  = json_value(input_video, "data",
+                                        json_value(input_video, "url", std::string()));
+                handle_media(out_files, url, opt.media_path, false);
+
+                p["type"] = "media_marker";
+                p["text"] = get_media_marker();
+                p.erase("input_video");
 
             } else if (type != "text") {
                 throw std::invalid_argument("unsupported content[].type");
@@ -950,20 +1031,36 @@ json oaicompat_chat_params_parse(
         }
     }
 
+    auto caps = common_chat_templates_get_caps(opt.tmpls.get());
+
     common_chat_templates_inputs inputs;
-    inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
-    inputs.tools                 = common_chat_tools_parse_oaicompat(tools);
-    inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(tool_choice);
-    inputs.json_schema           = json_schema.is_null() ? "" : json_schema.dump();
-    inputs.grammar               = grammar;
-    inputs.use_jinja             = opt.use_jinja;
-    inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
-    inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
-    inputs.reasoning_format      = opt.reasoning_format;
+    inputs.messages               = common_chat_msgs_parse_oaicompat(messages);
+    inputs.tools                  = common_chat_tools_parse_oaicompat(tools);
+    inputs.tool_choice            = common_chat_tool_choice_parse_oaicompat(tool_choice);
+    inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
+    inputs.grammar                = grammar;
+    inputs.use_jinja              = opt.use_jinja;
+    inputs.parallel_tool_calls    = json_value(body, "parallel_tool_calls", caps["supports_parallel_tool_calls"]);
+    inputs.add_generation_prompt  = json_value(body, "add_generation_prompt", true);
+    inputs.continue_final_message = body.contains("continue_final_message") ?
+        common_chat_continuation_parse(body.at("continue_final_message")) :
+        COMMON_CHAT_CONTINUATION_NONE;
+    if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_NONE && opt.prefill_assistant
+        && !inputs.messages.empty() && inputs.messages.back().role == "assistant") {
+        if (inputs.messages.size() >= 2 && inputs.messages[inputs.messages.size() - 2].role == "assistant") {
+            throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
+        }
+        inputs.continue_final_message = COMMON_CHAT_CONTINUATION_AUTO;
+        inputs.add_generation_prompt  = false;
+    }
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && inputs.add_generation_prompt) {
+        throw std::invalid_argument("Cannot set both add_generation_prompt and continue_final_message to true.");
+    }
+    inputs.reasoning_format = opt.reasoning_format;
     if (body.contains("reasoning_format")) {
         inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
     }
-    inputs.enable_thinking       = opt.enable_thinking;
+    inputs.enable_thinking = opt.enable_thinking;
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
         if (body.contains("grammar")) {
             throw std::invalid_argument("Cannot use custom grammar constraints with tools.");
@@ -988,62 +1085,49 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
-    // if the assistant message appears at the end of list, we do not add end-of-turn token
-    // for ex. this can be useful to modify the reasoning process in reasoning models
-    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
-    common_chat_msg last_message;
-    if (prefill_assistant_message) {
-        last_message = inputs.messages.back();
-        inputs.messages.pop_back();
-
-        /* sanity check, max one assistant message at the end of the list */
-        if (!inputs.messages.empty() && inputs.messages.back().role == "assistant"){
-            throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
-        }
-
-        /* TODO: test this properly */
-        inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
-
-        if ( inputs.enable_thinking ) {
-            throw std::invalid_argument("Assistant response prefill is incompatible with enable_thinking.");
-        }
-
-        inputs.add_generation_prompt = true;
-    }
+    inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
-    auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
+    auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
 
-    /* Append assistant prefilled message */
-    if (prefill_assistant_message) {
-        if (!last_message.content_parts.empty()) {
-            for (auto & p : last_message.content_parts) {
-                chat_params.prompt += p.text;
-            }
-        } else {
-            chat_params.prompt += last_message.content;
-        }
-    }
-
-    llama_params["chat_format"]      = static_cast<int>(chat_params.format);
-    llama_params["prompt"]           = chat_params.prompt;
+    llama_params["chat_format"] = static_cast<int>(chat_params.format);
+    llama_params["prompt"]      = chat_params.prompt;
     if (!chat_params.grammar.empty()) {
-        llama_params["grammar"] = chat_params.grammar;
+        llama_params["grammar"]      = chat_params.grammar;
+        llama_params["grammar_type"] = std::string("tool_calls");
     }
-    llama_params["grammar_lazy"]     = chat_params.grammar_lazy;
-    auto grammar_triggers = json::array();
+    llama_params["grammar_lazy"] = chat_params.grammar_lazy;
+    auto grammar_triggers        = json::array();
     for (const auto & trigger : chat_params.grammar_triggers) {
         server_grammar_trigger ct(trigger);
         grammar_triggers.push_back(ct.to_json());
     }
-    llama_params["grammar_triggers"] = grammar_triggers;
-    llama_params["preserved_tokens"] = chat_params.preserved_tokens;
-    llama_params["thinking_forced_open"]     = chat_params.thinking_forced_open;
+    llama_params["grammar_triggers"]  = grammar_triggers;
+    llama_params["preserved_tokens"]  = chat_params.preserved_tokens;
+    llama_params["generation_prompt"] = chat_params.generation_prompt;
     for (const auto & stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }
     if (!chat_params.parser.empty()) {
         llama_params["chat_parser"] = chat_params.parser;
+    }
+
+    llama_params["message_delimiters"] = chat_params.message_delimiters.to_json();
+
+    // Reasoning budget: pass parameters through to sampling layer
+    {
+        int reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        if (reasoning_budget == -1) {
+            reasoning_budget = opt.reasoning_budget;
+        }
+
+        if (!chat_params.thinking_end_tag.empty()) {
+            llama_params["reasoning_budget_tokens"] = reasoning_budget;
+            llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
+            llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
+            llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+            llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
+        }
     }
 
     // Handle "logprobs" field
@@ -1068,222 +1152,6 @@ json oaicompat_chat_params_parse(
     }
 
     return llama_params;
-}
-
-json convert_anthropic_to_oai(const json & body) {
-    json oai_body;
-
-    // Convert system prompt
-    json oai_messages = json::array();
-    auto system_param = json_value(body, "system", json());
-    if (!system_param.is_null()) {
-        std::string system_content;
-
-        if (system_param.is_string()) {
-            system_content = system_param.get<std::string>();
-        } else if (system_param.is_array()) {
-            for (const auto & block : system_param) {
-                if (json_value(block, "type", std::string()) == "text") {
-                    system_content += json_value(block, "text", std::string());
-                }
-            }
-        }
-
-        oai_messages.push_back({
-            {"role", "system"},
-            {"content", system_content}
-        });
-    }
-
-    // Convert messages
-    if (!body.contains("messages")) {
-        throw std::runtime_error("'messages' is required");
-    }
-    const json & messages = body.at("messages");
-    if (messages.is_array()) {
-        for (const auto & msg : messages) {
-            std::string role = json_value(msg, "role", std::string());
-
-            if (!msg.contains("content")) {
-                if (role == "assistant") {
-                    continue;
-                }
-                oai_messages.push_back(msg);
-                continue;
-            }
-
-            const json & content = msg.at("content");
-
-            if (content.is_string()) {
-                oai_messages.push_back(msg);
-                continue;
-            }
-
-            if (!content.is_array()) {
-                oai_messages.push_back(msg);
-                continue;
-            }
-
-            json tool_calls = json::array();
-            json converted_content = json::array();
-            json tool_results = json::array();
-            bool has_tool_calls = false;
-
-            for (const auto & block : content) {
-                std::string type = json_value(block, "type", std::string());
-
-                if (type == "text") {
-                    converted_content.push_back(block);
-                } else if (type == "image") {
-                    json source = json_value(block, "source", json::object());
-                    std::string source_type = json_value(source, "type", std::string());
-
-                    if (source_type == "base64") {
-                        std::string media_type = json_value(source, "media_type", std::string("image/jpeg"));
-                        std::string data = json_value(source, "data", std::string());
-                        std::ostringstream ss;
-                        ss << "data:" << media_type << ";base64," << data;
-
-                        converted_content.push_back({
-                            {"type", "image_url"},
-                            {"image_url", {
-                                {"url", ss.str()}
-                            }}
-                        });
-                    } else if (source_type == "url") {
-                        std::string url = json_value(source, "url", std::string());
-                        converted_content.push_back({
-                            {"type", "image_url"},
-                            {"image_url", {
-                                {"url", url}
-                            }}
-                        });
-                    }
-                } else if (type == "tool_use") {
-                    tool_calls.push_back({
-                        {"id", json_value(block, "id", std::string())},
-                        {"type", "function"},
-                        {"function", {
-                            {"name", json_value(block, "name", std::string())},
-                            {"arguments", json_value(block, "input", json::object()).dump()}
-                        }}
-                    });
-                    has_tool_calls = true;
-                } else if (type == "tool_result") {
-                    std::string tool_use_id = json_value(block, "tool_use_id", std::string());
-
-                    auto result_content = json_value(block, "content", json());
-                    std::string result_text;
-                    if (result_content.is_string()) {
-                        result_text = result_content.get<std::string>();
-                    } else if (result_content.is_array()) {
-                        for (const auto & c : result_content) {
-                            if (json_value(c, "type", std::string()) == "text") {
-                                result_text += json_value(c, "text", std::string());
-                            }
-                        }
-                    }
-
-                    tool_results.push_back({
-                        {"role", "tool"},
-                        {"tool_call_id", tool_use_id},
-                        {"content", result_text}
-                    });
-                }
-            }
-
-            if (!converted_content.empty() || has_tool_calls) {
-                json new_msg = {{"role", role}};
-                if (!converted_content.empty()) {
-                    new_msg["content"] = converted_content;
-                } else if (has_tool_calls) {
-                    new_msg["content"] = "";
-                }
-                if (!tool_calls.empty()) {
-                    new_msg["tool_calls"] = tool_calls;
-                }
-                oai_messages.push_back(new_msg);
-            }
-
-            for (const auto & tool_msg : tool_results) {
-                oai_messages.push_back(tool_msg);
-            }
-        }
-    }
-
-    oai_body["messages"] = oai_messages;
-
-    // Convert tools
-    if (body.contains("tools")) {
-        const json & tools = body.at("tools");
-        if (tools.is_array()) {
-            json oai_tools = json::array();
-            for (const auto & tool : tools) {
-                oai_tools.push_back({
-                    {"type", "function"},
-                    {"function", {
-                        {"name", json_value(tool, "name", std::string())},
-                        {"description", json_value(tool, "description", std::string())},
-                        {"parameters", tool.contains("input_schema") ? tool.at("input_schema") : json::object()}
-                    }}
-                });
-            }
-            oai_body["tools"] = oai_tools;
-        }
-    }
-
-    // Convert tool_choice
-    if (body.contains("tool_choice")) {
-        const json & tc = body.at("tool_choice");
-        if (tc.is_object()) {
-            std::string type = json_value(tc, "type", std::string());
-            if (type == "auto") {
-                oai_body["tool_choice"] = "auto";
-            } else if (type == "any" || type == "tool") {
-                oai_body["tool_choice"] = "required";
-            }
-        }
-    }
-
-    // Convert stop_sequences to stop
-    if (body.contains("stop_sequences")) {
-        oai_body["stop"] = body.at("stop_sequences");
-    }
-
-    // Handle max_tokens (required in Anthropic, but we're permissive)
-    if (body.contains("max_tokens")) {
-        oai_body["max_tokens"] = body.at("max_tokens");
-    } else {
-        oai_body["max_tokens"] = 4096;
-    }
-
-    // Pass through common params
-    for (const auto & key : {"temperature", "top_p", "top_k", "stream"}) {
-        if (body.contains(key)) {
-            oai_body[key] = body.at(key);
-        }
-    }
-
-    // Handle Anthropic-specific thinking param
-    if (body.contains("thinking")) {
-        json thinking = json_value(body, "thinking", json::object());
-        std::string thinking_type = json_value(thinking, "type", std::string());
-        if (thinking_type == "enabled") {
-            int budget_tokens = json_value(thinking, "budget_tokens", 10000);
-            oai_body["thinking_budget_tokens"] = budget_tokens;
-        }
-    }
-
-    // Handle Anthropic-specific metadata param
-    if (body.contains("metadata")) {
-        json metadata = json_value(body, "metadata", json::object());
-        std::string user_id = json_value(metadata, "user_id", std::string());
-        if (!user_id.empty()) {
-            oai_body["__metadata_user_id"] = user_id;
-        }
-    }
-
-    return oai_body;
 }
 
 json format_embeddings_response_oaicompat(
@@ -1383,7 +1251,7 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx) {
+std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top) {
     std::vector<llama_token_data> cur;
 
     const auto * logits = llama_get_logits_ith(ctx, idx);
@@ -1402,21 +1270,34 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
         }
     }
 
-    // sort tokens by logits
-    std::sort(cur.begin(), cur.end(), [](const llama_token_data & a, const llama_token_data & b) {
-        return a.logit > b.logit;
-    });
+    // sort tokens by logits (partial: only the leading `n_top` need ordering)
+    if (n_top > cur.size()) {
+        n_top = cur.size();
+    }
+    if (n_top > 0) {
+        std::partial_sort(cur.begin(), cur.begin() + n_top, cur.end(),
+            [](const llama_token_data & a, const llama_token_data & b) {
+                return a.logit > b.logit;
+            });
+    }
 
     // apply softmax
-    float max_l = cur[0].logit;
+    float max_l = -std::numeric_limits<float>::infinity();
+    if (n_top > 0) {
+        max_l = cur[0].logit; // partial_sort guarantees the absolute maximum is at index 0
+    } else {
+        for (const auto & t : cur) {
+            max_l = std::max(max_l, t.logit);
+        }
+    }
     float cum_sum = 0.0f;
-    for (size_t i = 0; i < cur.size(); ++i) {
-        float p = expf(cur[i].logit - max_l);
-        cur[i].p = p;
+    for (auto & t : cur) {
+        float p = expf(t.logit - max_l);
+        t.p = p;
         cum_sum += p;
     }
-    for (size_t i = 0; i < cur.size(); ++i) {
-        cur[i].p /= cum_sum;
+    for (auto & t : cur) {
+        t.p /= cum_sum;
     }
 
     return cur;
@@ -1470,6 +1351,24 @@ std::string format_oai_sse(const json & data) {
         ss << "data: " <<
             safe_json_to_str(data) <<
             "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
+    };
+
+    if (data.is_array()) {
+        for (const auto & item : data) {
+            send_single(item);
+        }
+    } else {
+        send_single(data);
+    }
+
+    return ss.str();
+}
+
+std::string format_oai_resp_sse(const json & data) {
+    std::ostringstream ss;
+    auto send_single = [&ss](const json & event_obj) {
+        ss << "event: " << event_obj.at("event").get<std::string>() << "\n";
+        ss << "data: " << safe_json_to_str(event_obj.at("data")) << "\n\n";
     };
 
     if (data.is_array()) {

@@ -58,6 +58,10 @@ static enum ggml_status ggml_zdnn_graph_compute(ggml_backend_t backend, ggml_cgr
             continue;
         }
 
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+            continue;
+        }
+
         bool ok = ggml_zdnn_compute_forward(ctx, node);
         if (!ok) {
             GGML_LOG_ERROR("%s: unsupported op %s (%s)\n",
@@ -309,6 +313,8 @@ static ggml_backend_buffer_i ggml_backend_zdnn_buffer_i = {
     /* .memset_tensor = */ ggml_backend_zdnn_buffer_memset_tensor,
     /* .set_tensor    = */ ggml_backend_zdnn_buffer_set_tensor,
     /* .get_tensor    = */ ggml_backend_zdnn_buffer_get_tensor,
+    /* .set_tensor_2d = */ NULL,
+    /* .get_tensor_2d = */ NULL,
     /* .cpy_tensor    = */ NULL,
     /* .clear         = */ ggml_backend_zdnn_buffer_clear,
     /* .reset         = */ NULL,
@@ -368,7 +374,8 @@ static size_t ggml_backend_zdnn_buffer_type_get_alignment(ggml_backend_buffer_ty
 }
 
 static bool ggml_backend_zdnn_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
-    return true;
+    /* while it resides in host memory, additional transformation is needed */
+    return false;
 
     GGML_UNUSED(buft);
 }
@@ -412,20 +419,22 @@ static enum ggml_status ggml_backend_zdnn_graph_compute(ggml_backend_t backend, 
 }
 
 static ggml_backend_i ggml_backend_zdnn_i = {
-    /* .get_name           = */ ggml_backend_zdnn_name,
-    /* .free               = */ ggml_backend_zdnn_free,
-    /* .set_tensor_async   = */ NULL,
-    /* .get_tensor_async   = */ NULL,
-    /* .cpy_tensor_async   = */ NULL,
-    /* .synchronize        = */ NULL,
-    /* .graph_plan_create  = */ NULL,
-    /* .graph_plan_free    = */ NULL,
-    /* .graph_plan_update  = */ NULL,
-    /* .graph_plan_compute = */ NULL,
-    /* .graph_compute      = */ ggml_backend_zdnn_graph_compute,
-    /* .event_record       = */ NULL,
-    /* .event_wait         = */ NULL,
-    /* .graph_optimize     = */ NULL,
+    /* .get_name               = */ ggml_backend_zdnn_name,
+    /* .free                   = */ ggml_backend_zdnn_free,
+    /* .set_tensor_async       = */ NULL,
+    /* .get_tensor_async       = */ NULL,
+    /* .set_tensor_2d_async    = */ NULL,
+    /* .get_tensor_2d_async    = */ NULL,
+    /* .cpy_tensor_async       = */ NULL,
+    /* .synchronize            = */ NULL,
+    /* .graph_plan_create      = */ NULL,
+    /* .graph_plan_free        = */ NULL,
+    /* .graph_plan_update      = */ NULL,
+    /* .graph_plan_compute     = */ NULL,
+    /* .graph_compute          = */ ggml_backend_zdnn_graph_compute,
+    /* .event_record           = */ NULL,
+    /* .event_wait             = */ NULL,
+    /* .graph_optimize         = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_zdnn_guid(void) {

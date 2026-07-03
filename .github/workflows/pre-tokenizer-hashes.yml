@@ -3,23 +3,23 @@ name: Check Pre-Tokenizer Hashes
 on:
     push:
         paths:
-            - 'convert_hf_to_gguf.py'
+            - 'conversion/base.py'
             - 'convert_hf_to_gguf_update.py'
     pull_request:
         paths:
-            - 'convert_hf_to_gguf.py'
+            - 'conversion/base.py'
             - 'convert_hf_to_gguf_update.py'
 
 jobs:
     pre-tokenizer-hashes:
-        runs-on: ubuntu-latest
+        runs-on: [self-hosted, fast]
 
         steps:
         - name: Checkout repository
-          uses: actions/checkout@v4
+          uses: actions/checkout@v6
 
         - name: Set up Python
-          uses: actions/setup-python@v5
+          uses: actions/setup-python@v6
           with:
               python-version: '3.11'
 
@@ -30,16 +30,16 @@ jobs:
 
         - name: Update pre-tokenizer hashes
           run: |
-              cp convert_hf_to_gguf.py /tmp
+              cp conversion/base.py /tmp
               .venv/bin/python convert_hf_to_gguf_update.py --check-missing
 
         - name: Check if committed pre-tokenizer hashes matches generated version
           run: |
-              if ! diff -q convert_hf_to_gguf.py /tmp/convert_hf_to_gguf.py; then
-                  echo "Model pre-tokenizer hashes (in convert_hf_to_gguf.py) do not match generated hashes (from convert_hf_to_gguf_update.py)."
-                  echo "To fix: run ./convert_hf_to_gguf_update.py and commit the updated convert_hf_to_gguf.py along with your changes"
+              if ! diff -q conversion/base.py /tmp/base.py; then
+                  echo "Model pre-tokenizer hashes (in conversion/base.py) do not match generated hashes (from convert_hf_to_gguf_update.py)."
+                  echo "To fix: run ./convert_hf_to_gguf_update.py and commit the updated conversion/base.py along with your changes"
                   echo "Differences found:"
-                  diff convert_hf_to_gguf.py /tmp/convert_hf_to_gguf.py || true
+                  diff conversion/base.py /tmp/base.py || true
                   exit 1
               fi
               echo "Model pre-tokenizer hashes are up to date."

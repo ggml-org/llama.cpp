@@ -5,6 +5,7 @@
 #include "sampling.h"
 
 #include <algorithm>
+#include <clocale>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -16,16 +17,18 @@ static void print_usage(int, char ** argv) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.prompt = "Hello my name is";
     params.n_predict = 32;
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON, print_usage)) {
+    common_init();
+
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_BATCHED, print_usage)) {
         return 1;
     }
-
-    common_init();
 
     // number of parallel batches
     int n_parallel = params.n_parallel;
@@ -81,7 +84,6 @@ int main(int argc, char ** argv) {
         sampler_configs.push_back({ i, smpl });
     }
 
-    // TODO: temporarily gated behind a flag
     if (params.sampling.backend_sampling) {
         ctx_params.samplers   = sampler_configs.data();
         ctx_params.n_samplers = sampler_configs.size();

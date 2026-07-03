@@ -1,4 +1,4 @@
-// ref: https://github.com/ggerganov/llama.cpp/issues/4952#issuecomment-1892864763
+// ref: https://github.com/ggml-org/llama.cpp/issues/4952#issuecomment-1892864763
 
 #include <cstdio>
 #include <string>

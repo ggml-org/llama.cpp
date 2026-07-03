@@ -93,7 +93,7 @@ if (BLAS_FOUND)
     endif()
 
     target_link_libraries     (ggml-blas PRIVATE ${BLAS_LIBRARIES})
-    target_include_directories(ggml-blas PRIVATE ${BLAS_INCLUDE_DIRS})
+    target_include_directories(ggml-blas SYSTEM PRIVATE ${BLAS_INCLUDE_DIRS})
 else()
     message(FATAL_ERROR "BLAS not found, please refer to "
                         "https://cmake.org/cmake/help/latest/module/FindBLAS.html#blas-lapack-vendors"

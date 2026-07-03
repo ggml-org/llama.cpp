@@ -9,6 +9,7 @@ sys.path.insert(0, str(path))
 
 from utils import *
 from enum import Enum
+from typing import TypedDict
 
 server: ServerProcess
 
@@ -29,56 +30,73 @@ class CompletionMode(Enum):
     NORMAL = "normal"
     STREAMED = "streamed"
 
-TEST_TOOL = {
-    "type":"function",
-    "function": {
-        "name": "test",
-        "description": "",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "success": {"type": "boolean", "const": True},
-            },
-            "required": ["success"]
-        }
-    }
-}
+class ToolParameters(TypedDict):
+    type: str
+    properties: dict[str, dict]
+    required: list[str]
 
-PYTHON_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "python",
-        "description": "Runs code in an ipython interpreter and returns the result of the execution after 60 seconds.",
-        "parameters": {
-            "type": "object",
-            "properties": {
+class ToolFunction(TypedDict):
+    name: str
+    description: str
+    parameters: ToolParameters
+
+class ToolDefinition(TypedDict):
+    type: str
+    function: ToolFunction
+
+TEST_TOOL = ToolDefinition(
+    type = "function",
+    function = ToolFunction(
+        name = "test",
+        description = "",
+        parameters = ToolParameters(
+            type = "object",
+            properties = {
+                "success": {
+                    "type": "boolean",
+                    "const": True,
+                },
+            },
+            required = ["success"],
+        ),
+    ),
+)
+
+PYTHON_TOOL = ToolDefinition(
+    type = "function",
+    function = ToolFunction(
+        name = "python",
+        description = "Runs code in an ipython interpreter and returns the result of the execution after 60 seconds.",
+        parameters = ToolParameters(
+            type = "object",
+            properties = {
                 "code": {
                     "type": "string",
-                    "description": "The code to run in the ipython interpreter."
-                }
+                    "description": "The code to run in the ipython interpreter.",
+                },
             },
-            "required": ["code"]
-        }
-    }
-}
+            required = ["code"],
+        ),
+    ),
+)
 
-WEATHER_TOOL = {
-  "type":"function",
-  "function":{
-    "name":"get_current_weather",
-    "description":"Get the current weather in a given location",
-    "parameters":{
-      "type":"object",
-      "properties":{
-        "location":{
-          "type":"string",
-          "description":"The city and country/state, e.g. 'San Francisco, CA', or 'Paris, France'"
-        }
-      },
-      "required":["location"]
-    }
-  }
-}
+WEATHER_TOOL = ToolDefinition(
+    type = "function",
+    function = ToolFunction(
+        name = "get_current_weather",
+        description = "Get the current weather in a given location",
+        parameters = ToolParameters(
+            type = "object",
+            properties = {
+                "location": {
+                    "type": "string",
+                    "description": "The city and country/state, e.g. 'San Francisco, CA', or 'Paris, France'",
+                },
+            },
+            required = ["location"],
+        ),
+    ),
+)
 
 def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict, argument_key: str | None, n_predict, **kwargs):
     body = server.make_any_request("POST", "/v1/chat/completions", data={
@@ -100,76 +118,78 @@ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict
     assert choice["message"].get("content") in (None, ""), f'Expected no content in {choice["message"]}'
     # assert len(tool_call.get("id", "")) > 0, f'Expected non empty tool call id in {tool_call}'
     expected_function_name = "python" if tool["type"] == "code_interpreter" else tool["function"]["name"]
-    assert expected_function_name == tool_call["function"]["name"]
+    assert expected_function_name == tool_call["function"]["name"], f'Expected tool name to be {tool_call["function"]["name"]} in {choice["message"]}'
     actual_arguments = tool_call["function"]["arguments"]
-    assert isinstance(actual_arguments, str)
+    assert isinstance(actual_arguments, dict) or isinstance(actual_arguments, str), f'Expected arguments to be a dict or str, got: {actual_arguments}'
     if argument_key is not None:
-        actual_arguments = json.loads(actual_arguments)
-        assert argument_key in actual_arguments, f"tool arguments: {json.dumps(actual_arguments)}, expected: {argument_key}"
+        if (isinstance(actual_arguments, str)):
+            actual_arguments = json.loads(actual_arguments)
+        assert argument_key in actual_arguments, f"tool arguments: {actual_arguments}, expected: {argument_key}"
 
+# PR #22654: commented out since we're now allowing content before tool calls in tool_call: required, so we can't force this
+# in the tiny model just by using the grammar
+#
+# @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+# @pytest.mark.parametrize("template_name,tool,argument_key", [
+#     ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
+#     ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
+#     ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
+#     ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
+#     ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),
+#     ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),
+# ])
+# def test_completion_with_required_tool_tiny_fast(template_name: str, tool: dict, argument_key: str | None, stream: CompletionMode):
+#     global server
+#     n_predict = 1024
+#     # server = ServerPreset.stories15m_moe()
+#     server.jinja = True
+#     server.n_predict = n_predict
+#     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
+#     server.start()
+#     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED, temperature=0.0, top_k=1, top_p=1.0)
 
-@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
-@pytest.mark.parametrize("template_name,tool,argument_key", [
-    ("google-gemma-2-2b-it",                          TEST_TOOL,            "success"),
-    ("google-gemma-2-2b-it",                          TEST_TOOL,            "success"),
-    ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
-    ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
-    ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),
-    ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),
-])
-def test_completion_with_required_tool_tiny_fast(template_name: str, tool: dict, argument_key: str | None, stream: CompletionMode):
-    global server
-    n_predict = 1024
-    # server = ServerPreset.stories15m_moe()
-    server.jinja = True
-    server.n_predict = n_predict
-    server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start()
-    do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED, temperature=0.0, top_k=1, top_p=1.0)
+# @pytest.mark.slow
+# @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+# @pytest.mark.parametrize("template_name,tool,argument_key", [
+#     ("meta-llama-Llama-3.1-8B-Instruct",              TEST_TOOL,            "success"),
+#     ("meta-llama-Llama-3.1-8B-Instruct",              PYTHON_TOOL,          "code"),
 
+#     ("meetkai-functionary-medium-v3.1",               TEST_TOOL,            "success"),
+#     ("meetkai-functionary-medium-v3.1",               PYTHON_TOOL,          "code"),
 
-@pytest.mark.slow
-@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
-@pytest.mark.parametrize("template_name,tool,argument_key", [
-    ("meta-llama-Llama-3.1-8B-Instruct",              TEST_TOOL,            "success"),
-    ("meta-llama-Llama-3.1-8B-Instruct",              PYTHON_TOOL,          "code"),
+#     ("meetkai-functionary-medium-v3.2",               TEST_TOOL,            "success"),
+#     # Functionary v3.2 format supports raw python content, which w/ a dummy stories model will never end on its own.
+#     # ("meetkai-functionary-medium-v3.2",               PYTHON_TOOL,          "code"),
 
-    ("meetkai-functionary-medium-v3.1",               TEST_TOOL,            "success"),
-    ("meetkai-functionary-medium-v3.1",               PYTHON_TOOL,          "code"),
+#     ("NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use", TEST_TOOL,            "success"),
+#     ("NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use", PYTHON_TOOL,          "code"),
 
-    ("meetkai-functionary-medium-v3.2",               TEST_TOOL,            "success"),
-    # Functionary v3.2 format supports raw python content, which w/ a dummy stories model will never end on its own.
-    # ("meetkai-functionary-medium-v3.2",               PYTHON_TOOL,          "code"),
+#     ("meta-llama-Llama-3.2-3B-Instruct",              TEST_TOOL,            "success"),
+#     ("meta-llama-Llama-3.2-3B-Instruct",              PYTHON_TOOL,          "code"),
 
-    ("NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use", TEST_TOOL,            "success"),
-    ("NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use", PYTHON_TOOL,          "code"),
+#     ("mistralai-Mistral-Nemo-Instruct-2407",          TEST_TOOL,            "success"),
+#     ("mistralai-Mistral-Nemo-Instruct-2407",          PYTHON_TOOL,          "code"),
 
-    ("meta-llama-Llama-3.2-3B-Instruct",              TEST_TOOL,            "success"),
-    ("meta-llama-Llama-3.2-3B-Instruct",              PYTHON_TOOL,          "code"),
+#     ("NousResearch-Hermes-3-Llama-3.1-8B-tool_use",   TEST_TOOL,            "success"),
+#     ("NousResearch-Hermes-3-Llama-3.1-8B-tool_use",   PYTHON_TOOL,          "code"),
 
-    ("mistralai-Mistral-Nemo-Instruct-2407",          TEST_TOOL,            "success"),
-    ("mistralai-Mistral-Nemo-Instruct-2407",          PYTHON_TOOL,          "code"),
+#     ("deepseek-ai-DeepSeek-R1-Distill-Llama-8B",      TEST_TOOL,            "success"),
+#     ("deepseek-ai-DeepSeek-R1-Distill-Llama-8B",      PYTHON_TOOL,          "code"),
 
-    ("NousResearch-Hermes-3-Llama-3.1-8B-tool_use",   TEST_TOOL,            "success"),
-    ("NousResearch-Hermes-3-Llama-3.1-8B-tool_use",   PYTHON_TOOL,          "code"),
+#     ("fireworks-ai-llama-3-firefunction-v2",          TEST_TOOL,            "success"),
+#     # ("fireworks-ai-llama-3-firefunction-v2",          PYTHON_TOOL,          "codeFalse), True),
+#     # ("fireworks-ai-llama-3-firefunction-v2",          PYTHON_TOOL,          "code"),
 
-    ("deepseek-ai-DeepSeek-R1-Distill-Llama-8B",      TEST_TOOL,            "success"),
-    ("deepseek-ai-DeepSeek-R1-Distill-Llama-8B",      PYTHON_TOOL,          "code"),
-
-    ("fireworks-ai-llama-3-firefunction-v2",          TEST_TOOL,            "success"),
-    # ("fireworks-ai-llama-3-firefunction-v2",          PYTHON_TOOL,          "codeFalse), True),
-    # ("fireworks-ai-llama-3-firefunction-v2",          PYTHON_TOOL,          "code"),
-
-])
-def test_completion_with_required_tool_tiny_slow(template_name: str, tool: dict, argument_key: str | None, stream: CompletionMode):
-    global server
-    n_predict = 512
-    # server = ServerPreset.stories15m_moe()
-    server.jinja = True
-    server.n_predict = n_predict
-    server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_START_SLOW)
-    do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED)
+# ])
+# def test_completion_with_required_tool_tiny_slow(template_name: str, tool: dict, argument_key: str | None, stream: CompletionMode):
+#     global server
+#     n_predict = 512
+#     # server = ServerPreset.stories15m_moe()
+#     server.jinja = True
+#     server.n_predict = n_predict
+#     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
+#     server.start(timeout_seconds=TIMEOUT_START_SLOW)
+#     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED)
 
 
 @pytest.mark.slow

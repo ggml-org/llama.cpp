@@ -1,0 +1,89 @@
+name: AI review (issues)
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  find-related:
+    if: github.event.action == 'opened'
+    runs-on: [self-hosted, opencode]
+
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Find related
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENCODE_PERMISSION: |
+            {
+              "bash": {
+                "*": "deny",
+                "gh issue view*": "allow",
+                "gh issue list*": "allow",
+                "gh issue comment*": "allow",
+                "gh search issues*": "allow"
+              },
+              "webfetch": "deny"
+            }
+        run: |
+          rm AGENTS.md
+          rm CLAUDE.md
+
+          timeout 5m opencode run -m llama.cpp-dgx/ai-review-issues-find-similar --thinking "A new issue has been created:
+
+          Issue number: ${{ github.event.issue.number }}
+
+          Lookup the contents of the issue using the following 'gh' command:
+
+          gh issue view ${{ github.event.issue.number }} --json title,body,url,number
+
+          Next, perform the following task and then post a SINGLE comment (if needed).
+
+          ---
+
+          TASK : FIND RELATED ISSUES
+
+          Using the 'gh' CLI tool, search through existing issues on Github.
+          Find related or similar issues to the newly created one and list them.
+          Do not list the new issue itself (it is #${{ github.event.issue.number }}).
+
+          Consider:
+          1. Similar titles or descriptions
+          2. Same error messages or symptoms
+          3. Related functionality or components
+          4. Similar feature requests
+
+          ---
+
+          POSTING YOUR COMMENT:
+
+          Based on your findings, post a SINGLE comment on issue #${{ github.event.issue.number }}. Build the comment as follows:
+
+          - If no related issues were found, do NOT comment at all.
+          - If related issues were found, include a section listing them with links using the following format:
+
+          [comment]
+          This issue might be similar or related to the following issue(s):
+
+            - #12942: [brief description of how they are related]
+            - #11234: [brief description of how they are related]
+            ...
+
+          _This comment was auto-generated locally using **$GA_ENGINE** on **$GA_MACHINE**_
+          [/comment]
+
+          Remember:
+            - Do not include the comment tags in your actual comment.
+            - Post at most ONE comment combining all findings.
+            - If you didn't find issues that are related enough, post nothing.
+            - You have access only to the 'gh' CLI tool - don't try to use other tools.
+            - If the output from a tool call is too long, try to limit down the search.
+          "

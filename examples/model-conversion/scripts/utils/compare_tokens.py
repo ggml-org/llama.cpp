@@ -2,7 +2,7 @@
 
 import argparse
 import sys
-from common import compare_tokens  # type: ignore
+from common import compare_tokens  # type: ignore[import-not-found, ty:unresolved-import]
 
 
 def parse_arguments():

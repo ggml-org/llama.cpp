@@ -40,6 +40,14 @@
 #include <TargetConditionals.h>
 #endif
 
+#ifdef _WIN32
+#    define llama_mmap_ftell _ftelli64
+#    define llama_mmap_fseek _fseeki64
+#else
+#    define llama_mmap_ftell ftello
+#    define llama_mmap_fseek fseeko
+#endif
+
 // TODO: consider moving to llama-impl.h if needed in more places
 #if defined(_WIN32)
 static std::string llama_format_win_err(DWORD err) {
@@ -80,6 +88,14 @@ struct llama_file::impl {
         if (fp == NULL) {
             throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
         }
+        fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
+        seek(0, SEEK_END);
+        size = tell();
+        seek(0, SEEK_SET);
+    }
+
+    impl(FILE * file) : owns_fp(false) {
+        fp = file;
         fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
         seek(0, SEEK_END);
         size = tell();
@@ -159,7 +175,7 @@ struct llama_file::impl {
     }
 
     ~impl() {
-        if (fp) {
+        if (fp && owns_fp) {
             std::fclose(fp);
         }
     }
@@ -209,9 +225,16 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
+    impl(FILE * file) : fname("(file*)"), owns_fp(false) {
+        fp = file;
+        seek(0, SEEK_END);
+        size = tell();
+        seek(0, SEEK_SET);
+    }
+
     size_t tell() const {
         if (fd == -1) {
-            long ret = std::ftell(fp);
+            off_t ret = llama_mmap_ftell(fp);
             if (ret == -1) {
                 throw std::runtime_error(format("ftell error: %s", strerror(errno)));
             }
@@ -229,7 +252,7 @@ struct llama_file::impl {
     void seek(size_t offset, int whence) const {
         off_t ret = 0;
         if (fd == -1) {
-            ret = std::fseek(fp, (long) offset, whence);
+            ret = llama_mmap_fseek(fp, offset, whence);
         } else {
             ret = lseek(fd, offset, whence);
         }
@@ -244,11 +267,14 @@ struct llama_file::impl {
         }
         errno = 0;
         if (fd == -1) {
-            std::size_t ret = std::fread(ptr, len, 1, fp);
+            const size_t curr_off = tell();
+            const size_t to_read = std::min(len, size - curr_off);
+
+            std::size_t ret = std::fread(ptr, to_read, 1, fp);
             if (ferror(fp)) {
                 throw std::runtime_error(format("read error: %s", strerror(errno)));
             }
-            if (ret != 1) {
+            if (to_read > 0 && ret != 1) {
                 throw std::runtime_error("unexpectedly reached end of file");
             }
         } else {
@@ -262,7 +288,8 @@ struct llama_file::impl {
                         continue;  // Interrupted by signal, retry
                     }
                     // Fallback to std::fread in case the DMA controller cannot access the buffer
-                    if (errno == EFAULT) {
+                    if (errno == EFAULT || errno == EINVAL) {
+                        LLAMA_LOG_WARN("%s: Falling back to buffered IO due to %s\n", __func__, strerror(errno));
                         auto curr_off = tell();
                         close(fd);
                         fd = -1;
@@ -349,7 +376,7 @@ struct llama_file::impl {
     ~impl() {
         if (fd != -1) {
             close(fd);
-        } else {
+        } else if (owns_fp) {
             std::fclose(fp);
         }
     }
@@ -365,10 +392,14 @@ struct llama_file::impl {
 
     FILE * fp{};
     size_t size{};
+    bool owns_fp = true;
 };
 
 llama_file::llama_file(const char * fname, const char * mode, const bool use_direct_io) :
     pimpl(std::make_unique<impl>(fname, mode, use_direct_io)) {}
+
+llama_file::llama_file(FILE * file) : pimpl(std::make_unique<impl>(file)) {}
+
 llama_file::~llama_file() = default;
 
 size_t llama_file::tell() const { return pimpl->tell(); }
@@ -381,6 +412,9 @@ int llama_file::file_id() const {
 #ifdef _WIN32
     return _fileno(pimpl->fp);
 #else
+    if (pimpl->fd != -1) {
+        return pimpl->fd;
+    }
 #if defined(fileno)
     return fileno(pimpl->fp);
 #else
@@ -497,6 +531,8 @@ struct llama_mmap::impl {
         }
     }
 #elif defined(_WIN32)
+    HANDLE hMapping = nullptr;
+
     impl(struct llama_file * file, size_t prefetch, bool numa) {
         GGML_UNUSED(numa);
 
@@ -504,7 +540,7 @@ struct llama_mmap::impl {
 
         HANDLE hFile = (HANDLE) _get_osfhandle(file->file_id());
 
-        HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+        hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
 
         if (hMapping == NULL) {
             DWORD error = GetLastError();
@@ -513,9 +549,9 @@ struct llama_mmap::impl {
 
         addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
         DWORD error = GetLastError();
-        CloseHandle(hMapping);
 
         if (addr == NULL) {
+            CloseHandle(hMapping);
             throw std::runtime_error(format("MapViewOfFile failed: %s", llama_format_win_err(error).c_str()));
         }
 
@@ -547,9 +583,17 @@ struct llama_mmap::impl {
     }
 
     ~impl() {
-        if (!UnmapViewOfFile(addr)) {
-            LLAMA_LOG_WARN("warning: UnmapViewOfFile failed: %s\n",
-                    llama_format_win_err(GetLastError()).c_str());
+        if (hMapping) {
+            if (addr) {
+                if (!UnmapViewOfFile(addr)) {
+                    LLAMA_LOG_WARN("warning: UnmapViewOfFile failed: %s\n",
+                            llama_format_win_err(GetLastError()).c_str());
+                }
+            }
+            if (!CloseHandle(hMapping)) {
+                LLAMA_LOG_WARN("warning: CloseHandle failed: %s\n",
+                        llama_format_win_err(GetLastError()).c_str());
+            }
         }
     }
 #else
@@ -611,9 +655,9 @@ struct llama_mlock::impl {
 
         char* errmsg = std::strerror(errno);
         bool suggest = (errno == ENOMEM);
-#if defined(TARGET_OS_VISION) || defined(TARGET_OS_TV) || defined(_AIX)
-        // visionOS/tvOS dont't support RLIMIT_MEMLOCK
-        // Skip resource limit checks on visionOS/tvOS
+#if defined(TARGET_OS_VISION) || defined(TARGET_OS_TV) || defined(_AIX) || defined(__HAIKU__)
+        // visionOS/tvOS/Haiku don't support RLIMIT_MEMLOCK
+        // Skip resource limit checks on these platforms
         suggest = false;
 #else
         struct rlimit lock_limit;

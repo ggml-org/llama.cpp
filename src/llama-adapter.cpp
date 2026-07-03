@@ -41,7 +41,7 @@ bool llama_adapter_cvec::init(const llama_model & model) {
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
-                /*.mem_size   =*/ hparams.n_layer*ggml_tensor_overhead(),
+                /*.mem_size   =*/ hparams.n_layer()*ggml_tensor_overhead(),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -61,9 +61,9 @@ bool llama_adapter_cvec::init(const llama_model & model) {
     };
 
     // make tensors
-    tensors.reserve(hparams.n_layer);
+    tensors.reserve(hparams.n_layer());
     tensors.push_back(nullptr); // there's never a tensor for layer 0
-    for (size_t il = 1; il < hparams.n_layer; il++) {
+    for (size_t il = 1; il < hparams.n_layer(); il++) {
         ggml_backend_buffer_type_t buft = model.select_buft(il);
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
@@ -121,7 +121,7 @@ bool llama_adapter_cvec::apply(
     layer_start = il_start;
     layer_end   = il_end;
 
-    for (size_t il = 1; il < hparams.n_layer; il++) {
+    for (size_t il = 1; il < hparams.n_layer(); il++) {
         assert(tensors[il] != nullptr);
 
         const size_t off = n_embd * (il - 1); // buffer doesn't have data for layer 0, since it's never present
@@ -146,10 +146,8 @@ llama_adapter_lora_weight * llama_adapter_lora::get_weight(ggml_tensor * w) {
     return nullptr;
 }
 
-static void llama_adapter_lora_init_impl(const char * path_lora, llama_adapter_lora & adapter) {
+static void llama_adapter_lora_init_impl(llama_model & model, const char * path_lora, llama_adapter_lora & adapter) {
     LLAMA_LOG_INFO("%s: loading lora adapter from '%s' ...\n", __func__, path_lora);
-
-    llama_model & model = adapter.model;
 
     ggml_context * ctx_init;
     gguf_init_params meta_gguf_params = {
@@ -296,7 +294,7 @@ static void llama_adapter_lora_init_impl(const char * path_lora, llama_adapter_l
     }
 
     // get extra buffer types of the CPU
-    // TODO: a more general solution for non-CPU extra buft should be imlpemented in the future
+    // TODO: a more general solution for non-CPU extra buft should be implemented in the future
     //       ref: https://github.com/ggml-org/llama.cpp/pull/12593#pullrequestreview-2718659948
     std::vector<ggml_backend_buffer_type_t> buft_extra;
     {
@@ -413,17 +411,17 @@ static void llama_adapter_lora_init_impl(const char * path_lora, llama_adapter_l
         }
     }
 
-    // update number of nodes used
-    model.n_lora_nodes += adapter.get_n_nodes();
+    // register adapter with model
+    model.loras.insert(&adapter);
 
     LLAMA_LOG_INFO("%s: loaded %zu tensors from lora file\n", __func__, adapter.ab_map.size()*2);
 }
 
 llama_adapter_lora * llama_adapter_lora_init(llama_model * model, const char * path_lora) {
-    llama_adapter_lora * adapter = new llama_adapter_lora(*model);
+    llama_adapter_lora * adapter = new llama_adapter_lora(model);
 
     try {
-        llama_adapter_lora_init_impl(path_lora, *adapter);
+        llama_adapter_lora_init_impl(*model, path_lora, *adapter);
         return adapter;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to apply lora adapter: %s\n", __func__, err.what());
@@ -474,9 +472,14 @@ int32_t llama_adapter_meta_val_str_by_index(const llama_adapter_lora * adapter, 
 }
 
 void llama_adapter_lora_free(llama_adapter_lora * adapter) {
-    // update number of nodes used
-    GGML_ASSERT(adapter->model.n_lora_nodes >= adapter->get_n_nodes());
-    adapter->model.n_lora_nodes -= adapter->get_n_nodes();
+    if (adapter == nullptr) {
+        return;
+    }
+
+    if (adapter->model != nullptr) {
+        adapter->model->loras.erase(adapter);
+        adapter->model = nullptr;
+    }
 
     delete adapter;
 }

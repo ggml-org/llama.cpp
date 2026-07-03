@@ -5,7 +5,7 @@ from utils import *
 
 server = ServerPreset.stories15m_moe()
 
-MODEL_DRAFT_FILE_URL = "https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories15M-q4_0.gguf"
+MODEL_DRAFT_FILE_URL = "https://huggingface.co/ggml-org/tiny-llamas/resolve/main/stories15M-q4_0.gguf"
 
 def create_server():
     global server
@@ -30,6 +30,7 @@ def test_with_and_without_draft():
         "prompt": "I believe the meaning of life is",
         "temperature": 0.0,
         "top_k": 1,
+        "n_predict": 16,
     })
     assert res.status_code == 200
     content_no_draft = res.body["content"]
@@ -42,6 +43,7 @@ def test_with_and_without_draft():
         "prompt": "I believe the meaning of life is",
         "temperature": 0.0,
         "top_k": 1,
+        "n_predict": 16,
     })
     assert res.status_code == 200
     content_draft = res.body["content"]
@@ -68,6 +70,7 @@ def test_different_draft_min_draft_max():
             "prompt": "I believe the meaning of life is",
             "temperature": 0.0,
             "top_k": 1,
+            "n_predict": 16,
         })
         assert res.status_code == 200
         if last_content is not None:
