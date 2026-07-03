@@ -106,6 +106,8 @@ static std::string path_str(const fs::path & path) {
 struct ggml_backend_reg_entry {
     ggml_backend_reg_t reg;
     dl_handle_ptr handle;
+    // we won't actually unload the backend because dlclose() may cause issues on some backends (e.g. CUDA), so we mark it here and reuse the handle later
+    bool unloaded = false;
 };
 
 struct ggml_backend_registry {
@@ -113,6 +115,10 @@ struct ggml_backend_registry {
     std::vector<ggml_backend_dev_t> devices;
 
     ggml_backend_registry() {
+        load_all_static();
+    }
+
+    void load_all_static() {
 #ifdef GGML_USE_CUDA
         register_backend(ggml_backend_cuda_reg());
 #endif
@@ -183,6 +189,13 @@ struct ggml_backend_registry {
 
         for (auto & entry : backends) {
             if (entry.reg == reg) {
+                if (entry.unloaded) {
+                    // reuse if needed
+                    entry.unloaded = false;
+                    for (size_t i = 0; i < ggml_backend_reg_dev_count(reg); i++) {
+                        register_device(ggml_backend_reg_dev_get(reg, i));
+                    }
+                }
                 return;
             }
         }
@@ -267,11 +280,16 @@ struct ggml_backend_registry {
             return;
         }
 
+        if (it->unloaded) {
+            return;
+        }
+
         if (!silent) {
             GGML_LOG_DEBUG("%s: unloading %s backend\n", __func__, ggml_backend_reg_name(reg));
         }
 
-        // remove devices
+        // remove devices from the registry's bookkeeping
+        // note: the ggml_backend_dev_t objects are kept so the backend can be resumed later
         devices.erase(
             std::remove_if(devices.begin(), devices.end(),
                             [reg](ggml_backend_dev_t dev) { return ggml_backend_dev_backend_reg(dev) == reg; }),
@@ -282,8 +300,8 @@ struct ggml_backend_registry {
             reg->iface.free(reg);
         }
 
-        // remove backend
-        backends.erase(it);
+        // mark as unloaded, so the handle can be reused later
+        it->unloaded = true;
     }
 };
 
@@ -558,6 +576,7 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
 }
 
 void ggml_backend_load_all() {
+    get_reg().load_all_static();
     ggml_backend_load_all_from_path(nullptr);
 }
 

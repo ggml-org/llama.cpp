@@ -96,9 +96,7 @@ void llama_backend_init(void) {
         ggml_free(ctx);
     }
 
-    if (!ggml_backend_reg_count()) {
-        ggml_backend_load_all();
-    }
+    ggml_backend_load_all();
 }
 
 void llama_numa_init(enum ggml_numa_strategy numa) {
@@ -115,9 +113,8 @@ void llama_numa_init(enum ggml_numa_strategy numa) {
 
 void llama_backend_free(void) {
     ggml_quantize_free();
-    while (ggml_backend_reg_count() > 0) {
-        auto * reg = ggml_backend_reg_get(0);
-        ggml_backend_unload(reg);
+    for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
+        ggml_backend_unload(ggml_backend_reg_get(i));
     }
 }
 

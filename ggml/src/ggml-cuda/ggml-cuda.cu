@@ -5729,19 +5729,12 @@ static void ggml_backend_cuda_reg_free(ggml_backend_reg_t reg) {
 
     for (ggml_backend_dev_t dev : ctx->devices) {
         int device = ((ggml_backend_cuda_device_context *) dev->context)->device;
-        delete (ggml_backend_cuda_device_context *) dev->context;
-        delete dev;
 
         cudaError_t err = cudaSetDevice(device);
         if (err == cudaSuccess) {
             cudaDeviceReset();
         }
     }
-
-    delete ctx;
-    reg->context = nullptr;
-
-    ggml_backend_cuda_reg_initialized = false;
 }
 
 static const ggml_backend_reg_i ggml_backend_cuda_reg_interface = {
