@@ -114,14 +114,13 @@ class ConversationsStore {
 
 	/** Load thinking-enabled default from localStorage */
 	private static loadThinkingDefaults(): boolean {
-		if (typeof globalThis.localStorage === 'undefined') return false;
+		if (typeof globalThis.localStorage === 'undefined') return true;
 		try {
 			const raw = localStorage.getItem(THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY);
-			if (!raw) return false;
-			const parsed = raw === 'true';
-			return typeof parsed === 'boolean' ? parsed : false;
+			if (!raw) return true;
+			return raw === 'true';
 		} catch {
-			return false;
+			return true;
 		}
 	}
 
@@ -333,7 +332,7 @@ class ConversationsStore {
 			}
 
 			this.pendingMcpServerOverrides = [];
-			this.pendingThinkingEnabled = false;
+			this.pendingThinkingEnabled = ConversationsStore.loadThinkingDefaults();
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
