@@ -291,9 +291,11 @@ int llama_server(int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
         ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+        ctx_http.del ("/cors-proxy",      ex_wrapper(proxy_handler_delete));
     } else {
         ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
         ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
+        ctx_http.del ("/cors-proxy",      ex_wrapper(res_403));
     }
 
     // EXPERIMENTAL built-in tools

@@ -81,3 +81,17 @@ static server_http_context::handler_t proxy_handler_post = [](const server_http_
 static server_http_context::handler_t proxy_handler_get = [](const server_http_req & req) -> server_http_res_ptr {
     return proxy_request(req, "GET");
 };
+
+static server_http_context::handler_t proxy_handler_delete = [](const server_http_req &) -> server_http_res_ptr {
+    // MCP streamable-http clients send DELETE to terminate a session. Some hosted
+    // upstreams (e.g. Exa) reject DELETE, which makes the UI health check fail and
+    // disables the server for conversations. Session teardown is pure cleanup, so
+    // answer 200 directly instead of forwarding.
+    auto res = std::make_unique<server_http_res>();
+    res->status = 200;
+    res->headers["Access-Control-Allow-Origin"] = "*";
+    res->headers["Access-Control-Allow-Headers"] = "*";
+    res->headers["Access-Control-Allow-Methods"] = "GET,POST,DELETE,OPTIONS";
+    res->headers["Access-Control-Expose-Headers"] = "*";
+    return res;
+};
