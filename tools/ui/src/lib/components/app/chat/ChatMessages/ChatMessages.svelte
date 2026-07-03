@@ -20,9 +20,9 @@
 		agenticInjectSteeringMessage
 	} from '$lib/stores/agentic.svelte';
 	import {
+		buildSiblingInfoMap,
 		copyToClipboard,
 		formatMessageForClipboard,
-		getMessageSiblings,
 		hasAgenticContent
 	} from '$lib/utils';
 
@@ -169,19 +169,7 @@
 		});
 	});
 
-	let siblingInfoByMessageId = $derived.by(() => {
-		const nodeMap = new Map(
-			allConversationMessages.map((msg) => [msg.id, msg] as const)
-		);
-		const siblingMap = new Map<string, ChatMessageSiblingInfo>();
-		for (const msg of allConversationMessages) {
-			const info = getMessageSiblings(nodeMap, msg.id);
-			if (info) {
-				siblingMap.set(msg.id, info);
-			}
-		}
-		return siblingMap;
-	});
+	let siblingInfoByMessageId = $derived(buildSiblingInfoMap(allConversationMessages));
 
 	let displayMessages = $derived.by(() => {
 		if (!messages.length) {

@@ -121,10 +121,7 @@ function findLeafNodeInMap(
  * @param messageId - Starting message ID to find leaf for
  * @returns The leaf node ID, or the original messageId if no children
  */
-export function findLeafNode(
-	messages: readonly DatabaseMessage[],
-	messageId: string
-): string {
+export function findLeafNode(messages: readonly DatabaseMessage[], messageId: string): string {
 	const nodeMap = new Map(messages.map((msg) => [msg.id, msg] as const));
 	return findLeafNodeInMap(nodeMap, messageId);
 }
@@ -224,4 +221,25 @@ export function getMessageSiblings(
 		currentIndex,
 		totalSiblings: siblingIds.length
 	};
+}
+
+/**
+ * Builds sibling information for every message in a conversation.
+ * A single node map is shared across all lookups for O(1) access.
+ *
+ * @param messages - All messages in the conversation
+ * @returns Map of message ID to its sibling information
+ */
+export function buildSiblingInfoMap(
+	messages: readonly DatabaseMessage[]
+): Map<string, ChatMessageSiblingInfo> {
+	const nodeMap = new Map(messages.map((msg) => [msg.id, msg] as const));
+	const siblingMap = new Map<string, ChatMessageSiblingInfo>();
+	for (const msg of messages) {
+		const info = getMessageSiblings(nodeMap, msg.id);
+		if (info) {
+			siblingMap.set(msg.id, info);
+		}
+	}
+	return siblingMap;
 }
