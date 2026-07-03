@@ -255,6 +255,7 @@ export class ChatService {
 			}),
 			stream,
 			return_progress: stream ? true : undefined,
+			sse_ping_interval: stream ? 1 : undefined,
 			tools: tools && tools.length > 0 ? tools : undefined
 		};
 

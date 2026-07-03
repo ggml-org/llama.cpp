@@ -265,6 +265,7 @@ export interface ApiChatCompletionRequest {
 	stream?: boolean;
 	model?: string;
 	return_progress?: boolean;
+	sse_ping_interval?: number;
 	tools?: ApiChatCompletionTool[];
 	// Reasoning parameters
 	reasoning_format?: string;

@@ -37,6 +37,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_bool("return_progress", params.return_progress))
         ->set_desc("Include prompt processing progress events in stream mode"));
 
+    add((new field_num("sse_ping_interval", params.sse_ping_interval))
+        ->set_hard_limits(-1, INT32_MAX)
+        ->set_desc("Interval in seconds between SSE comment pings emitted while the stream stays silent, -1 disables pings"));
+
     add((new field_num("n_predict", params.n_predict))
         ->set_hard_limits(-1, INT32_MAX)
         ->add_alias("max_completion_tokens")
@@ -504,6 +508,7 @@ task_params eval_llama_cmpl_schema(
     params.n_cache_reuse = params_base.n_cache_reuse;
     params.cache_prompt  = params_base.cache_prompt;
     params.antiprompt    = params_base.antiprompt;
+    params.sse_ping_interval = params_base.sse_ping_interval;
 
     // enabling this will output extra debug information in the HTTP responses from the server
     params.verbose       = params_base.verbosity > 9;
