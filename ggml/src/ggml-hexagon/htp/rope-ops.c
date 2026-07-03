@@ -71,6 +71,7 @@ struct htp_rope_context {
     struct htp_ops_context * octx;
 
     size_t src0_row_size;
+    size_t src0_row_stride;
     size_t dst_row_size;
     size_t src0_row_size_aligned;
     size_t dst_row_size_aligned;
@@ -518,8 +519,10 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
 
                     const uint8_t * src_addr = (const uint8_t *) src0->data + i3 * nb03 + i2 * nb02 + pi1 * nb01;
                           uint8_t * src_spad = src0_spad_base + pr * rctx->src0_row_size_aligned;
-                    dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src_spad, src_addr),
-                        rctx->src0_row_size_aligned, rctx->src0_row_size, pnr);
+
+                    // Copy only the row payload while striding the DDR
+                    dma_queue_push(dma_queue, dma_make_ptr(src_spad, src_addr),
+                        rctx->src0_row_size_aligned, rctx->src0_row_stride, rctx->src0_row_size, pnr);
 
                     // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p pnr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
                 }
@@ -582,8 +585,8 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                         uint32_t pir = ir + HTP_ROPE_SPAD_NROWS;
 
                         const uint8_t * src_addr = (const uint8_t *) src0->data + i3 * nb03 + i2 * nb02 + pi1 * nb01;
-                        dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src_spad, src_addr),
-                            rctx->src0_row_size_aligned, rctx->src0_row_size, pnr);
+                        dma_queue_push(dma_queue, dma_make_ptr(src_spad, src_addr),
+                            rctx->src0_row_size_aligned, rctx->src0_row_stride, rctx->src0_row_size, pnr);
 
                         // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p pnr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
                     }
@@ -622,7 +625,8 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
     const uint32_t n_threads = MIN(octx->n_threads, src0_nrows);
 
-    const size_t src0_row_size = src0->nb[1];
+    const size_t src0_row_size   = src0->ne[0] * sizeof(float);
+    const size_t src0_row_stride = src0->nb[1];
     const size_t dst_row_size  = dst->nb[1];
 
     // Aligned row sizes for VTCM
@@ -676,7 +680,8 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 
     rope_corr_dims(rctx.n_dims, rctx.n_ctx_orig, rctx.freq_base, rctx.beta_fast, rctx.beta_slow, rctx.corr_dims);
 
-    rctx.src0_row_size = src0_row_size;
+    rctx.src0_row_size   = src0_row_size;
+    rctx.src0_row_stride = src0_row_stride;
     rctx.dst_row_size  = dst_row_size;
     rctx.src0_row_size_aligned = src0_row_size_aligned;
     rctx.dst_row_size_aligned  = dst_row_size_aligned;
