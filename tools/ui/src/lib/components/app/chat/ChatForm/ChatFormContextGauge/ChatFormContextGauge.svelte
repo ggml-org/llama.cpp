@@ -5,6 +5,7 @@
 	import { Loader2 } from '@lucide/svelte';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
+	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { activeConversation, activeMessages } from '$lib/stores/conversations.svelte';
 	import {
 		modelsStore,
@@ -142,6 +143,28 @@
 					!detail.includes(STATS_UNITS.TOKENS_PER_SECOND)
 			)
 	);
+
+	// Tool definitions token count - via llama-server /tokenize (cached in
+	// toolsStore per "<model>:<enabledDefList>" hash, no-op when nothing
+	// changed). null means the value hasn't been measured yet; 0 means no
+	// tools are enabled.
+	let enabledToolsTokenCount = $derived(toolsStore.enabledToolsTokenCount);
+
+	// Refresh once on mount, then again whenever the active model switches or
+	// the enabled tool set changes. getEnabledToolsForLLM reads $state from
+	// every source (built-in list, sandbox toggle, MCP connections, custom
+	// JSON, disabled set), so this single read subscribes to all of them.
+	$effect(() => {
+		const modelId = activeModelId;
+		untrack(() => {
+			// Single read covers all 4 input sources + disabled-tools set.
+			const enabled = toolsStore.getEnabledToolsForLLM();
+			void enabled;
+			toolsStore.refreshEnabledToolsTokenCount(modelId).catch((err) => {
+				console.warn('[ChatFormContextGauge] Failed to refresh tools token count:', err);
+			});
+		});
+	});
 
 	let contextPercent = $derived.by(() => {
 		if (contextTotal === null || contextTotal <= 0) return null;
@@ -288,8 +311,19 @@
 				<div class="text-xs text-muted-foreground">No context info available</div>
 			{/if}
 
-			{#if conversationStats.readTokens > 0 || conversationStats.outputTokens > 0 || conversationStats.averageTokensPerSecond !== null || transientDetails.length > 0}
+			{#if (enabledToolsTokenCount !== null && enabledToolsTokenCount > 0) || conversationStats.readTokens > 0 || conversationStats.outputTokens > 0 || conversationStats.averageTokensPerSecond !== null || transientDetails.length > 0}
 				<div class="mt-1 flex flex-col gap-1 border-t border-border/50 pt-2 text-xs">
+					{#if enabledToolsTokenCount !== null && enabledToolsTokenCount > 0}
+						<div class="flex items-baseline justify-between">
+							<span class="text-muted-foreground">Tool definitions</span>
+							<span class="font-mono text-muted-foreground">
+								{formatParameters(enabledToolsTokenCount)}
+							</span>
+						</div>
+						<div class="text-[10px] leading-tight text-muted-foreground/70">
+							Sent on every turn, cached after the first
+						</div>
+					{/if}
 					{#if conversationStats.readTokens > 0}
 						<div class="flex items-baseline justify-between">
 							<span class="text-muted-foreground">Reading</span>
