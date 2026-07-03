@@ -1016,6 +1016,50 @@ static void init_quantize_state_counters(quantize_state_impl & qs, std::vector<t
     qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)qs.model.hparams.n_layer_all;
 }
 
+// Resolve the importance vector for a pass-1 per-tensor level/grid/codebook trainer
+// that consumes a single vector of length ne[0]. Mirrors the pass-2 acceptance of a
+// grouped imatrix: a 2D weight used as a grouped matmul (e.g. DeepSeek4 attn_output_a)
+// stores one vector per group, so the groups are averaged into one representative
+// vector. Returns nullptr when there is no usable imatrix (train without one).
+static const float * resolve_level_imatrix(
+        const std::unordered_map<std::string, std::vector<float>> * imatrix_data,
+        const std::string & name, const ggml_tensor * tensor, std::vector<float> & buf) {
+    if (!imatrix_data) {
+        return nullptr;
+    }
+    auto it = imatrix_data->find(name);
+    if (it == imatrix_data->end()) {
+        return nullptr;
+    }
+    const std::vector<float> & imx = it->second;
+    const size_t n_per_row  = (size_t) tensor->ne[0];
+    const size_t slice_size = n_per_row * (size_t) tensor->ne[2];
+    if (slice_size == 0) {
+        return nullptr;
+    }
+    if (imx.size() == slice_size) {
+        return imx.data();  // one vector per ne[2] slice - existing behaviour
+    }
+    // grouped-matmul weight: the imatrix holds n_groups vectors over a 2D weight;
+    // average them into a single per-column vector for the per-tensor trainer
+    if (tensor->ne[2] == 1 && imx.size() % n_per_row == 0 &&
+        (size_t) tensor->ne[1] % (imx.size() / n_per_row) == 0) {
+        const size_t n_groups = imx.size() / n_per_row;
+        buf.assign(n_per_row, 0.0f);
+        for (size_t g = 0; g < n_groups; ++g) {
+            for (size_t j = 0; j < n_per_row; ++j) {
+                buf[j] += imx[g * n_per_row + j];
+            }
+        }
+        const float inv = 1.0f / (float) n_groups;
+        for (size_t j = 0; j < n_per_row; ++j) {
+            buf[j] *= inv;
+        }
+        return buf.data();
+    }
+    return nullptr;  // genuine size mismatch - train without imatrix (unchanged)
+}
+
 //
 // main quantization driver
 //
@@ -1319,14 +1363,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
 
             // Resolve imatrix
-            const float * imatrix = nullptr;
-            if (imatrix_data) {
-                auto it2 = imatrix_data->find(remap_imatrix(tensor->name, mapped));
-                if (it2 != imatrix_data->end() &&
-                    it2->second.size() == (size_t)tensor->ne[0] * tensor->ne[2]) {
-                    imatrix = it2->second.data();
-                }
-            }
+            std::vector<float> imatrix_buf;
+            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
 
             const int64_t n_per_row = tensor->ne[0];
             const int64_t nrows     = tensor->ne[1];
@@ -1402,14 +1440,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
 
             // Resolve imatrix
-            const float * imatrix = nullptr;
-            if (imatrix_data) {
-                auto it2 = imatrix_data->find(remap_imatrix(tensor->name, mapped));
-                if (it2 != imatrix_data->end() &&
-                    it2->second.size() == (size_t)tensor->ne[0] * tensor->ne[2]) {
-                    imatrix = it2->second.data();
-                }
-            }
+            std::vector<float> imatrix_buf;
+            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
 
             const int64_t n_per_row = tensor->ne[0];
             const int64_t nrows     = tensor->ne[1];
@@ -1478,14 +1510,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
 
             // Resolve imatrix
-            const float * imatrix = nullptr;
-            if (imatrix_data) {
-                auto it2 = imatrix_data->find(remap_imatrix(tensor->name, mapped));
-                if (it2 != imatrix_data->end() &&
-                    it2->second.size() == (size_t)tensor->ne[0] * tensor->ne[2]) {
-                    imatrix = it2->second.data();
-                }
-            }
+            std::vector<float> imatrix_buf;
+            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
 
             const int64_t n_per_row = tensor->ne[0];
             const int64_t nrows     = tensor->ne[1];
@@ -1565,14 +1591,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
 
             // Resolve imatrix
-            const float * imatrix = nullptr;
-            if (imatrix_data) {
-                auto it2 = imatrix_data->find(remap_imatrix(tensor->name, mapped));
-                if (it2 != imatrix_data->end() &&
-                    it2->second.size() == (size_t)tensor->ne[0] * tensor->ne[2]) {
-                    imatrix = it2->second.data();
-                }
-            }
+            std::vector<float> imatrix_buf;
+            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
 
             const int64_t n_per_row = tensor->ne[0];
             const int64_t nrows     = tensor->ne[1];
@@ -1672,14 +1692,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
 
             // Resolve imatrix
-            const float * imatrix = nullptr;
-            if (imatrix_data) {
-                auto it2 = imatrix_data->find(remap_imatrix(tensor->name, mapped));
-                if (it2 != imatrix_data->end() &&
-                    it2->second.size() == (size_t)tensor->ne[0] * tensor->ne[2]) {
-                    imatrix = it2->second.data();
-                }
-            }
+            std::vector<float> imatrix_buf;
+            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
 
             const int64_t n_per_row = tensor->ne[0];
             const int64_t nrows     = tensor->ne[1];
@@ -1744,14 +1758,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 f32_data = (float *) p1_f32_buf.data();
             }
 
-            const float * imatrix = nullptr;
-            if (imatrix_data) {
-                auto it2 = imatrix_data->find(remap_imatrix(tensor->name, mapped));
-                if (it2 != imatrix_data->end() &&
-                    it2->second.size() == (size_t)tensor->ne[0] * tensor->ne[2]) {
-                    imatrix = it2->second.data();
-                }
-            }
+            std::vector<float> imatrix_buf;
+            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
 
             const int64_t n_per_row = tensor->ne[0];
             const int64_t nrows     = tensor->ne[1];
@@ -1825,14 +1833,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 f32_data = (float *) p1_f32_buf.data();
             }
 
-            const float * imatrix = nullptr;
-            if (imatrix_data) {
-                auto it2 = imatrix_data->find(remap_imatrix(tensor->name, mapped));
-                if (it2 != imatrix_data->end() &&
-                    it2->second.size() == (size_t)tensor->ne[0] * tensor->ne[2]) {
-                    imatrix = it2->second.data();
-                }
-            }
+            std::vector<float> imatrix_buf;
+            const float * imatrix = resolve_level_imatrix(imatrix_data, remap_imatrix(tensor->name, mapped), tensor, imatrix_buf);
 
             const int64_t n_per_row = tensor->ne[0];
             const int64_t nrows     = tensor->ne[1];
