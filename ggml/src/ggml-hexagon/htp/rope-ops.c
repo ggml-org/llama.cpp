@@ -73,6 +73,7 @@ struct htp_rope_context {
     size_t src0_row_size;
     size_t src0_row_stride;
     size_t dst_row_size;
+    size_t dst_row_stride;
     size_t src0_row_size_aligned;
     size_t dst_row_size_aligned;
     size_t theta_cache_offset;
@@ -520,7 +521,7 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                     const uint8_t * src_addr = (const uint8_t *) src0->data + i3 * nb03 + i2 * nb02 + pi1 * nb01;
                           uint8_t * src_spad = src0_spad_base + pr * rctx->src0_row_size_aligned;
 
-                    // Copy only the row payload while striding the DDR
+                    // Copy only the row payload while striding the DDR source
                     dma_queue_push(dma_queue, dma_make_ptr(src_spad, src_addr),
                         rctx->src0_row_size_aligned, rctx->src0_row_stride, rctx->src0_row_size, pnr);
 
@@ -576,7 +577,10 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                     }
 
                     uint8_t * dst_addr = (uint8_t *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1;
-                    dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(dst_addr, dst_spad), rctx->dst_row_size, rctx->dst_row_size_aligned, cnr);
+
+                    // Write only the row payload while striding the DDR dst
+                    dma_queue_push(dma_queue, dma_make_ptr(dst_addr, dst_spad),
+                        rctx->dst_row_stride, rctx->dst_row_size_aligned, rctx->dst_row_size, cnr);
 
                     // Prefetch more rows (if any)
                     if ((cr + HTP_ROPE_SPAD_NROWS) < nrows) {
@@ -627,7 +631,8 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 
     const size_t src0_row_size   = src0->ne[0] * sizeof(float);
     const size_t src0_row_stride = src0->nb[1];
-    const size_t dst_row_size  = dst->nb[1];
+    const size_t dst_row_size    = dst->ne[0] * sizeof(float);
+    const size_t dst_row_stride  = dst->nb[1];
 
     // Aligned row sizes for VTCM
     const size_t src0_row_size_aligned    = hex_round_up(src0_row_size, VLEN);
@@ -683,6 +688,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     rctx.src0_row_size   = src0_row_size;
     rctx.src0_row_stride = src0_row_stride;
     rctx.dst_row_size  = dst_row_size;
+    rctx.dst_row_stride  = dst_row_stride;
     rctx.src0_row_size_aligned = src0_row_size_aligned;
     rctx.dst_row_size_aligned  = dst_row_size_aligned;
     rctx.theta_cache_offset    = theta_cache_size_aligned;
