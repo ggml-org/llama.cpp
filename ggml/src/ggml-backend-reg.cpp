@@ -59,7 +59,7 @@ static std::string path_str(const fs::path & path) {
 #if defined(__cpp_lib_char8_t)
         // C++20+ char_traits<char8_t>: u8string() returns std::u8string.
         const std::u8string u8str = path.u8string();
-        return std::string(reinterpret_cast<const char *>(u8str.data()), u8str.size());
+        return std::string(u8str.begin(), u8str.end());
 #else
         // C++17: u8string() returns std::string
         return path.u8string();
