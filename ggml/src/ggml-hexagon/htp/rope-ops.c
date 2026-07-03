@@ -636,7 +636,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 
     // Aligned row sizes for VTCM
     const size_t src0_row_size_aligned    = hex_round_up(src0_row_size, VLEN);
-    const size_t dst_row_size_aligned     = hex_round_up(dst_row_size, VLEN);
+    const size_t dst_row_size_aligned     = hex_round_up(dst_row_stride, VLEN);
     const size_t theta_cache_size_aligned = hex_round_up(src0->ne[0] * sizeof(float), 256);
 
     // Calculate spad sizes per thread
@@ -687,7 +687,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 
     rctx.src0_row_size   = src0_row_size;
     rctx.src0_row_stride = src0_row_stride;
-    rctx.dst_row_size  = dst_row_size;
+    rctx.dst_row_size    = dst_row_size;
     rctx.dst_row_stride  = dst_row_stride;
     rctx.src0_row_size_aligned = src0_row_size_aligned;
     rctx.dst_row_size_aligned  = dst_row_size_aligned;
