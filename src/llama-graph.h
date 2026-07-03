@@ -45,6 +45,7 @@ enum llm_ffn_op_type : int {
     LLM_FFN_SWIGLU,
     LLM_FFN_GEGLU,
     LLM_FFN_REGLU,
+    LLM_FFN_SWIGLU_OAI,
     LLM_FFN_SWIGLU_OAI_MOE,
 };
 

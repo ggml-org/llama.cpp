@@ -56,21 +56,15 @@ class MiniMaxM2Model(TextModel):
 
 @ModelBase.register("MiniMaxM3SparseForCausalLM", "MiniMaxM3SparseForConditionalGeneration")
 class MiniMaxM3Model(TextModel):
-    # Text-only MiniMax-M3 (minimax_m3_vl): MiniMax-M2 style GQA (per-head QK-norm, partial
-    # rotary) + DeepSeek-V3 shared experts / leading dense, swigluoai activation. Sparse
-    # attention, vision tower and MTP heads are dropped.
+    # Text-only MiniMax-M3: MiniMax-M2 GQA + DeepSeek-V3 shared/leading-dense experts (swigluoai).
     model_arch = gguf.MODEL_ARCH.MINIMAXM3
     _experts_cache: dict[int, dict[str, Tensor]] = {}
 
     def set_gguf_parameters(self):
-        # dense layers use dense_intermediate_size, experts use intermediate_size. Base
-        # writes feed_forward_length from intermediate_size, so swap in the dense width
-        # and emit the expert width separately.
-        expert_ff = self.find_hparam(["intermediate_size"])
-        self.hparams["intermediate_size"] = self.find_hparam(["dense_intermediate_size"])
+        # feed_forward_length comes from dense_intermediate_size (base); experts use intermediate_size.
         super().set_gguf_parameters()
 
-        self.gguf_writer.add_expert_feed_forward_length(expert_ff)
+        self.gguf_writer.add_expert_feed_forward_length(self.find_hparam(["intermediate_size"]))
         self.gguf_writer.add_rope_dimension_count(self.find_hparam(["rotary_dim"]))
         self.gguf_writer.add_expert_shared_count(self.find_hparam(["n_shared_experts"]))
         self.gguf_writer.add_expert_weights_scale(self.find_hparam(["routed_scaling_factor"]))
@@ -87,20 +81,15 @@ class MiniMaxM3Model(TextModel):
         self.gguf_writer.add_leading_dense_block_count(n_dense)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        # text-only: drop vision, projector, patch-merge and sparse-attention index tensors
-        if name.startswith(("vision_tower", "multi_modal_projector", "patch_merge_mlp")) or ".index_" in name:
-            return
-
-        # strip VL wrapper prefix to match tensor_mapping names
+        # index_* (sparse-attn indexer) tensors are preserved but unused; the loader skips them
         if name.startswith("language_model."):
             name = name[len("language_model."):]
 
-        # Gemma-style (1 + w) RMSNorm: bake the +1 in so llama.cpp can use plain RMSNorm
+        # Gemma-style (1+w) RMSNorm: bake +1 in so llama.cpp can use plain RMSNorm
         if name.endswith("norm.weight"):
             data_torch = data_torch + 1.0
 
-        # merge routed experts (w1=gate, w2=down, w3=up), like MiniMax-M2. shared_experts.*
-        # does not match here and maps straight through to the *_shexp tensors.
+        # merge routed experts (w1/w2/w3); shared_experts.* passes through to *_shexp
         if "block_sparse_moe.experts." in name:
             n_experts = self.find_hparam(["num_local_experts", "num_experts"])
             assert bid is not None
@@ -109,7 +98,6 @@ class MiniMaxM3Model(TextModel):
             expert_cache[name] = data_torch
             expert_weights = ["w1", "w2", "w3"]
 
-            # not enough expert weights to merge yet
             if len(expert_cache) < n_experts * len(expert_weights):
                 return
 

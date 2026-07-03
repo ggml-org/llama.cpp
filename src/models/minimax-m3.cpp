@@ -1,8 +1,7 @@
 #include "models.h"
 
-// MiniMax-M3, text-only: MiniMax-M2 style GQA (per-head QK-norm, partial rotary) with
-// DeepSeek-V3 leading-dense + routed/shared experts (sigmoid gating, routed scaling) and
-// swigluoai activation. Sparse attention falls back to dense; vision tower and MTP are dropped.
+// MiniMax-M3, text-only: MiniMax-M2 GQA (per-head QK-norm, partial rotary) + DeepSeek-V3
+// leading-dense/routed/shared experts (swigluoai). Sparse attn -> dense; vision + MTP dropped.
 
 void llama_model_minimax_m3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -11,9 +10,12 @@ void llama_model_minimax_m3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
-    ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
+    ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
 
-    type = LLM_TYPE_UNKNOWN;
+    switch (hparams.n_layer()) {
+        case 60: type = LLM_TYPE_428B_A23B; break;
+        default: type = LLM_TYPE_UNKNOWN;
+    }
 }
 
 void llama_model_minimax_m3::load_arch_tensors(llama_model_loader &) {
@@ -23,7 +25,6 @@ void llama_model_minimax_m3::load_arch_tensors(llama_model_loader &) {
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
-    // output
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
 
@@ -34,26 +35,33 @@ void llama_model_minimax_m3::load_arch_tensors(llama_model_loader &) {
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
-        // per-head QK-norm: a single head_dim vector applied to every head
+        // per-head QK-norm (one head_dim vector)
         layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+
+        // sparse-attn indexer (unused): GGML_OP_NONE -> loader skips; NOT_REQUIRED -> older GGUFs still load;
+        // SKIP_IF_VIRTUAL -> no-file loader (test-llama-archs) skips them too
+        const int64_t n_index_head = 4;    // sparse_num_index_heads
+        const int64_t d_index      = 128;  // sparse_index_dim
+        const int idx_flags = TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL;
+        create_tensor(tn(LLM_TENSOR_ATTN_INDEX_Q,      "weight", i), {n_embd, n_index_head * d_index}, idx_flags);
+        create_tensor(tn(LLM_TENSOR_ATTN_INDEX_K,      "weight", i), {n_embd, d_index},                idx_flags);
+        create_tensor(tn(LLM_TENSOR_ATTN_INDEX_Q_NORM, "weight", i), {d_index},                        idx_flags);
+        create_tensor(tn(LLM_TENSOR_ATTN_INDEX_K_NORM, "weight", i), {d_index},                        idx_flags);
 
         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
         if (i < (int) hparams.n_layer_dense_lead) {
-            // leading dense layers
             layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
         } else {
-            // routed experts
             layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, 0);
             layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, 0);
             layer.ffn_gate_exps   = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS,   "weight", i), {n_embd, n_ff_exp, n_expert}, 0);
             layer.ffn_down_exps   = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS,   "weight", i), {n_ff_exp, n_embd, n_expert}, 0);
             layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,     "weight", i), {n_embd, n_ff_exp, n_expert}, 0);
 
-            // shared expert
             layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
             layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd}, 0);
             layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
@@ -70,10 +78,6 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
     // partial rotary: head_dim != n_rot, so don't assert n_embd_head == n_rot
-
-    // swigluoai params, shared by dense and expert FFNs
-    const float swiglu_alpha = 1.702f;
-    const float swiglu_limit = 7.0f;
 
     ggml_tensor * cur;
     ggml_tensor * inpL;
@@ -92,24 +96,15 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
             cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
 
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            cb(Qcur, "Qcur", il);
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            cb(Kcur, "Kcur", il);
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-            cb(Vcur, "Vcur", il);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
-            // per-head QK RMSNorm (weights already include Gemma's +1)
+            // per-head QK RMSNorm (weights include Gemma +1)
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
             cb(Kcur, "Kcur_normed", il);
 
-            // partial rotary: only the first n_rot dims are rotated
             Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, nullptr,
                 n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
@@ -142,14 +137,16 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
         cb(cur, "ffn_norm", il);
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
-            // leading dense FFN (swigluoai)
-            ggml_tensor * g = build_lora_mm(model.layers[il].ffn_gate, cur);
-            ggml_tensor * u = build_lora_mm(model.layers[il].ffn_up,   cur);
-            g   = ggml_swiglu_oai(ctx0, g, u, swiglu_alpha, swiglu_limit);
-            cur = build_lora_mm(model.layers[il].ffn_down, g);
+            // leading dense
+            cur = build_ffn(cur,
+                    model.layers[il].ffn_up,   NULL, NULL,
+                    model.layers[il].ffn_gate, NULL, NULL,
+                    model.layers[il].ffn_down, NULL, NULL,
+                    NULL,
+                    LLM_FFN_SWIGLU_OAI, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         } else {
-            // routed experts (swigluoai MoE)
+            // routed experts
             ggml_tensor * moe_out = build_moe_ffn(cur,
                     model.layers[il].ffn_gate_inp,
                     model.layers[il].ffn_up_exps,
@@ -163,11 +160,13 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                     il);
             cb(moe_out, "ffn_moe_out", il);
 
-            // shared expert (swigluoai)
-            ggml_tensor * sg = build_lora_mm(model.layers[il].ffn_gate_shexp, cur);
-            ggml_tensor * su = build_lora_mm(model.layers[il].ffn_up_shexp,   cur);
-            sg = ggml_swiglu_oai(ctx0, sg, su, swiglu_alpha, swiglu_limit);
-            ggml_tensor * ffn_shexp = build_lora_mm(model.layers[il].ffn_down_shexp, sg);
+            // shared expert
+            ggml_tensor * ffn_shexp = build_ffn(cur,
+                    model.layers[il].ffn_up_shexp,   NULL, NULL,
+                    model.layers[il].ffn_gate_shexp, NULL, NULL,
+                    model.layers[il].ffn_down_shexp, NULL, NULL,
+                    NULL,
+                    LLM_FFN_SWIGLU_OAI, LLM_FFN_PAR, il);
             cb(ffn_shexp, "ffn_shexp", il);
 
             cur = ggml_add(ctx0, moe_out, ffn_shexp);

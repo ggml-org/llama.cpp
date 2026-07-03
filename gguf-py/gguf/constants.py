@@ -596,6 +596,10 @@ class MODEL_TENSOR(IntEnum):
     MOE_LATENT_UP        = auto() # nemotron 3 super
     ATTN_Q_NORM          = auto()
     ATTN_K_NORM          = auto()
+    ATTN_INDEX_Q         = auto() # minimax-m3 sparse-attn indexer (unused)
+    ATTN_INDEX_K         = auto()
+    ATTN_INDEX_Q_NORM    = auto()
+    ATTN_INDEX_K_NORM    = auto()
     LAYER_OUT_NORM       = auto()
     LAYER_OUT_SCALE      = auto()
     PER_LAYER_TOKEN_EMBD = auto() # gemma3n
@@ -1124,6 +1128,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_GATE:                 "blk.{bid}.attn_gate",
     MODEL_TENSOR.ATTN_Q_NORM:               "blk.{bid}.attn_q_norm",
     MODEL_TENSOR.ATTN_K_NORM:               "blk.{bid}.attn_k_norm",
+    MODEL_TENSOR.ATTN_INDEX_Q:              "blk.{bid}.attn_index_q",
+    MODEL_TENSOR.ATTN_INDEX_K:              "blk.{bid}.attn_index_k",
+    MODEL_TENSOR.ATTN_INDEX_Q_NORM:         "blk.{bid}.attn_index_q_norm",
+    MODEL_TENSOR.ATTN_INDEX_K_NORM:         "blk.{bid}.attn_index_k_norm",
     MODEL_TENSOR.ATTN_OUT_NORM:             "blk.{bid}.attn_output_norm",
     MODEL_TENSOR.ATTN_POST_NORM:            "blk.{bid}.post_attention_norm",
     MODEL_TENSOR.FFN_GATE_INP:              "blk.{bid}.ffn_gate_inp",
@@ -4051,6 +4059,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_Q_NORM,
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_INDEX_Q,
+        MODEL_TENSOR.ATTN_INDEX_K,
+        MODEL_TENSOR.ATTN_INDEX_Q_NORM,
+        MODEL_TENSOR.ATTN_INDEX_K_NORM,
         MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.FFN_NORM,

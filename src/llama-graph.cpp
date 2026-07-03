@@ -1385,6 +1385,16 @@ ggml_tensor * llm_graph_context::build_ffn(
                 cur = ggml_reglu(ctx0, cur);
                 cb(cur, "ffn_reglu", il);
             } break;
+        case LLM_FFN_SWIGLU_OAI:
+            {
+                // clamped SwiGLU: parallel gate path (cur=gate, tmp=up)
+                GGML_ASSERT(gate && type_gate == LLM_FFN_PAR);
+                constexpr float alpha = 1.702f;
+                constexpr float limit = 7.0f;
+                cur = ggml_swiglu_oai(ctx0, cur, tmp, alpha, limit);
+                cb(cur, "ffn_swiglu_oai", il);
+                type_gate = LLM_FFN_SEQ; // gate*up already fused; skip the par multiply
+            } break;
         default:
             GGML_ABORT("fatal error");
     }

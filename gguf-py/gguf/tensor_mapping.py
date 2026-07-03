@@ -717,6 +717,22 @@ class TensorNameMap:
             "model.layers.{bid}.attention.key_layernorm",                     # apertus
         ),
 
+        MODEL_TENSOR.ATTN_INDEX_Q: (
+            "model.layers.{bid}.self_attn.index_q_proj",                      # minimax-m3 (sparse-attn indexer)
+        ),
+
+        MODEL_TENSOR.ATTN_INDEX_K: (
+            "model.layers.{bid}.self_attn.index_k_proj",                      # minimax-m3
+        ),
+
+        MODEL_TENSOR.ATTN_INDEX_Q_NORM: (
+            "model.layers.{bid}.self_attn.index_q_norm",                      # minimax-m3
+        ),
+
+        MODEL_TENSOR.ATTN_INDEX_K_NORM: (
+            "model.layers.{bid}.self_attn.index_k_norm",                      # minimax-m3
+        ),
+
         MODEL_TENSOR.ROPE_FREQS: (
             "encoder.layers.{bid}.self_attention.rotary_emb.inv_freq",  # persimmon
         ),
