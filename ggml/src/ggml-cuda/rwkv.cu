@@ -1,4 +1,4 @@
-#include "fused-ops.cuh"
+#include "rwkv.cuh"
 
 #include <cstdint>
 #include <limits>
