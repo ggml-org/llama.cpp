@@ -937,7 +937,7 @@ private:
 
     int64_t t_last_load_progress_ms = 0;
 
-    void destroy() {
+    void destroy(bool reset_devices = false) {
         spec.reset();
         ctx_dft.reset();
         model_dft.reset();
@@ -949,13 +949,20 @@ private:
 
         mtmd_free(mctx);
         mctx = nullptr;
+
+        // in sleep mode, we need to reset the devices to free up memory
+        if (reset_devices) {
+            for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                ggml_backend_dev_reset(ggml_backend_dev_get(i));
+            }
+        }
     }
 
     void handle_sleeping_state(bool new_state) {
         GGML_ASSERT(sleeping != new_state);
         if (new_state) {
             SRV_INF("%s", "server is entering sleeping state\n");
-            destroy();
+            destroy(true);
         } else {
             SRV_INF("%s", "server is exiting sleeping state\n");
             if (!load_model(params_base)) {

@@ -199,6 +199,10 @@ extern "C" {
         ggml_backend_event_t (*event_new)         (ggml_backend_dev_t dev);
         void                 (*event_free)        (ggml_backend_dev_t dev, ggml_backend_event_t event);
         void                 (*event_synchronize) (ggml_backend_dev_t dev, ggml_backend_event_t event);
+
+        // (optional) release all resources held for this device (eg. GPU memory/context), the device must remain usable afterwards
+        // returns false if unsupported
+        bool (*reset)(ggml_backend_dev_t dev);
     };
 
     struct ggml_backend_device {
