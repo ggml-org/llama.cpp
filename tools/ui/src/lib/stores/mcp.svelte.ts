@@ -20,11 +20,13 @@
  */
 
 import { browser } from '$app/environment';
+import { SvelteSet } from 'svelte/reactivity';
 import { SETTINGS_KEYS } from '$lib/constants';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mode } from 'mode-watcher';
 import {
 	parseMcpServerSettings,
@@ -48,10 +50,11 @@ import {
 	EXPECTED_THEMED_ICON_PAIR_COUNT,
 	MCP_ALLOWED_ICON_MIME_TYPES,
 	MCP_SERVER_ID_PREFIX,
-	MCP_RECONNECT_INITIAL_DELAY,
 	MCP_RECONNECT_BACKOFF_MULTIPLIER,
+	MCP_RECONNECT_INITIAL_DELAY,
 	MCP_RECONNECT_MAX_DELAY,
-	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS
+	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS,
+	RECOMMENDED_MCP_SERVER_IDS
 } from '$lib/constants';
 import type {
 	MCPToolCall,
@@ -70,6 +73,7 @@ import type {
 	Tool,
 	HealthCheckState,
 	MCPServerSettingsEntry,
+	MCPServerDisplayInfo,
 	MCPServerConfig,
 	MCPResourceIcon,
 	MCPResourceAttachment,
@@ -365,7 +369,7 @@ class MCPStore {
 		return this.connections;
 	}
 
-	getServerLabel(server: MCPServerSettingsEntry): string {
+	getServerLabel(server: MCPServerDisplayInfo): string {
 		const healthState = this.getHealthCheckState(server.id);
 
 		if (healthState?.status === HealthCheckStatus.SUCCESS)
@@ -527,7 +531,7 @@ class MCPStore {
 
 	addServer(
 		serverData: Omit<MCPServerSettingsEntry, 'id' | 'requestTimeoutSeconds'> & { id?: string }
-	): void {
+	): MCPServerSettingsEntry {
 		const servers = this.getServers();
 		const newServer: MCPServerSettingsEntry = {
 			id: serverData.id || (uuid() ?? `server-${Date.now()}`),
@@ -540,6 +544,7 @@ class MCPStore {
 			useProxy: serverData.useProxy
 		};
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));
+		return newServer;
 	}
 
 	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
@@ -574,6 +579,33 @@ class MCPStore {
 		return this.getServers().filter((server) => {
 			return this.#checkServerEnabled(server, perChatOverrides);
 		});
+	}
+
+	/**
+	 * Recommended MCP server IDs the user opted in to via per-chat overrides.
+	 * Single source of truth for "which recommendations has the user accepted",
+	 * shared by the recommendations hook and the visible-servers getter.
+	 */
+	get optedInRecommendationIds(): ReadonlySet<string> {
+		const ids = new SvelteSet<string>();
+		for (const override of conversationsStore.pendingMcpServerOverrides) {
+			if (RECOMMENDED_MCP_SERVER_IDS.has(override.serverId) && override.enabled) {
+				ids.add(override.serverId);
+			}
+		}
+		return ids;
+	}
+
+	/**
+	 * MCP servers selectable in chat-add UIs and the settings page:
+	 * enabled in settings and either non-recommended or explicitly opted in.
+	 */
+	get visibleMcpServers(): MCPServerSettingsEntry[] {
+		const optedIn = this.optedInRecommendationIds;
+		return this.getServersSorted().filter(
+			(server) =>
+				server.enabled && (!RECOMMENDED_MCP_SERVER_IDS.has(server.id) || optedIn.has(server.id))
+		);
 	}
 
 	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {

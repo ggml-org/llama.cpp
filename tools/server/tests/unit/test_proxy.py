@@ -16,7 +16,7 @@ def test_mcp_no_proxy():
     server.start()
 
     res = server.make_request("GET", "/cors-proxy")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_mcp_proxy():
