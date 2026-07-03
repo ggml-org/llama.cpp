@@ -1928,16 +1928,29 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 const int64_t nelements = ggml_nelements(tensor);
 
                 const float * imatrix = nullptr;
+                // number of importance-matrix row-groups. Normally one vector per ne[2] slice (3D experts),
+                // but a weight that is reshaped into groups before its matmul (e.g. DeepSeek4 attn_output_a,
+                // stored 2D but used as a grouped matmul) contributes one vector per group, so the imatrix
+                // can be an integer multiple of the per-slice size ne[0]*ne[2].
+                int64_t imatrix_n_groups = tensor->ne[2];
                 if (imatrix_data) {
                     auto it = imatrix_data->find(tm.remapped_imatrix_name);
                     if (it == imatrix_data->end()) {
                         LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
                     } else {
-                        if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
+                        const size_t imx_size   = it->second.size();
+                        const size_t slice_size = (size_t) tensor->ne[0] * tensor->ne[2];
+                        // accept an imatrix whose size is a whole multiple of the per-slice size, provided the
+                        // resulting groups tile the tensor rows evenly - each group then covers a contiguous
+                        // block of ne[1]*ne[2]/n_groups rows, matching how the grouped matmul collected them
+                        const bool size_ok = slice_size > 0 && imx_size % slice_size == 0 &&
+                            (size_t)(tensor->ne[1]*tensor->ne[2]) % (imx_size / (size_t)tensor->ne[0]) == 0;
+                        if (size_ok) {
                             imatrix = it->second.data();
+                            imatrix_n_groups = (int64_t)(imx_size / (size_t)tensor->ne[0]);
                         } else {
                             LLAMA_LOG_INFO("\n====== %s: imatrix size %d is different from tensor size %d for %s\n", __func__,
-                                    int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name);
+                                    int(imx_size), int(slice_size), tensor->name);
 
                             // this can happen when quantizing an old mixtral model with split tensors with a new incompatible imatrix
                             // this is a significant error and it may be good idea to abort the process if this happens,
@@ -1945,7 +1958,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                             // tok_embd should be ignored in this case, since it always causes this warning
                             if (!tensor_name_match_token_embd(tensor->name)) {
                                 throw std::runtime_error(format("imatrix size %d is different from tensor size %d for %s",
-                                        int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name));
+                                        int(imx_size), int(slice_size), tensor->name));
                             }
                         }
                     }
@@ -2066,14 +2079,20 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     q2kpt_prepare_levels(total_rows, n_per_row);  // Allocate for this tensor
                 }
 
-                // quantize each expert separately since they have different importance matrices
+                // quantize each imatrix group separately since they have different importance matrices.
+                // for 3D experts this is one group per ne[2] slice; for a grouped-matmul weight like
+                // attn_output_a it is one group per matmul group (imatrix_n_groups > ne[2]), each covering
+                // a contiguous block of rows. when no imatrix is present, fall back to per-ne[2]-slice.
+                const int64_t n_groups_q     = imatrix ? imatrix_n_groups : tensor->ne[2];
+                const int64_t n_rows_total   = tensor->ne[1] * tensor->ne[2];
+                const int64_t rows_per_group = n_rows_total / n_groups_q;
                 new_size = 0;
-                for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
-                    const float * f32_data_03 = f32_data + i03 * nelements_matrix;
-                    void * new_data_03 = (char *)new_data + ggml_row_size(new_type, n_per_row) * i03 * nrows;
-                    const float * imatrix_03 = imatrix ? imatrix + i03 * n_per_row : nullptr;
+                for (int64_t ig = 0; ig < n_groups_q; ++ig) {
+                    const float * f32_data_g = f32_data + ig * rows_per_group * n_per_row;
+                    void * new_data_g = (char *)new_data + ggml_row_size(new_type, n_per_row) * ig * rows_per_group;
+                    const float * imatrix_g = imatrix ? imatrix + ig * n_per_row : nullptr;
 
-                    new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
+                    new_size += llama_tensor_quantize_impl(new_type, f32_data_g, new_data_g, chunk_size, rows_per_group, n_per_row, imatrix_g, workers, nthread_use);
                 }
                 LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
             }
