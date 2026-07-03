@@ -881,6 +881,9 @@ private:
 struct llm_tokenizer_ugm : llm_tokenizer {
     llm_tokenizer_ugm(const llama_vocab & vocab, const std::vector<char> & precompiled_charsmap) {
         if (precompiled_charsmap.size() > 0) {
+            if (precompiled_charsmap.size() < sizeof(uint32_t)) {
+                throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
+            }
             size_t charsmap_offset = 0;
 
             // First four bytes of precompiled_charsmap contains length of binary
@@ -2020,13 +2023,15 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 precompiled_charsmap.assign(pc, pc + n_precompiled_charsmap);
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
                 // correct endianness of data in precompiled_charsmap binary blob
-                uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
-                *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
-                assert(*xcda_blob_size + sizeof(uint32_t) < n_precompiled_charsmap);
-                size_t xcda_array_size = *xcda_blob_size / sizeof(uint32_t);
-                uint32_t * xcda_array = (uint32_t *) &precompiled_charsmap[sizeof(uint32_t)];
-                for (size_t i = 0; i < xcda_array_size; ++i) {
-                    xcda_array[i] = __builtin_bswap32(xcda_array[i]);
+                if (n_precompiled_charsmap >= sizeof(uint32_t)) {
+                    uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
+                    *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
+                    assert(*xcda_blob_size + sizeof(uint32_t) < n_precompiled_charsmap);
+                    size_t xcda_array_size = *xcda_blob_size / sizeof(uint32_t);
+                    uint32_t * xcda_array = (uint32_t *) &precompiled_charsmap[sizeof(uint32_t)];
+                    for (size_t i = 0; i < xcda_array_size; ++i) {
+                        xcda_array[i] = __builtin_bswap32(xcda_array[i]);
+                    }
                 }
 #endif
             }
