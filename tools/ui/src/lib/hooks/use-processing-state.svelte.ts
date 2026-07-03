@@ -1,5 +1,4 @@
 import { activeProcessingState } from '$lib/stores/chat.svelte';
-import { config } from '$lib/stores/settings.svelte';
 import { STATS_UNITS } from '$lib/constants';
 import type { ApiProcessingState, LiveProcessingStats, LiveGenerationStats } from '$lib/types';
 
@@ -46,7 +45,8 @@ export function useProcessingState(): UseProcessingStateReturn {
 		return activeProcessingState();
 	});
 
-	// Track last known state for keepStatsVisible functionality
+	// Track last known state so the gauge can still render after a generation
+	// finishes and chatStore clears activeProcessingState
 	$effect(() => {
 		if (processingState && isMonitoring) {
 			lastKnownState = processingState;
@@ -89,13 +89,9 @@ export function useProcessingState(): UseProcessingStateReturn {
 	function stopMonitoring(): void {
 		if (!isMonitoring) return;
 		isMonitoring = false;
-
-		// Only clear last known state if keepStatsVisible is disabled
-		const currentConfig = config();
-		if (!currentConfig.keepStatsVisible) {
-			lastKnownState = null;
-			lastKnownProcessingStats = null;
-		}
+		// lastKnownState / lastKnownProcessingStats are intentionally retained so the
+		// gauge continues to show the latest stats after chatStore clears
+		// activeProcessingState on stream completion
 	}
 
 	function getProcessingMessage(): string {

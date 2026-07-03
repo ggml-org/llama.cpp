@@ -676,14 +676,6 @@ export { default as ChatScreenDragOverlay } from './ChatScreen/ChatScreenDragOve
 export { default as ChatScreenForm } from './ChatScreen/ChatScreenForm.svelte';
 
 /**
- * Processing info display during generation. Shows real-time statistics:
- * tokens per second, prompt/completion token counts, and elapsed time.
- * Data sourced from slotsService polling during active generation.
- * Only visible when `isCurrentConversationLoading` is true.
- */
-export { default as ChatScreenProcessingInfo } from './ChatScreen/ChatScreenProcessingInfo.svelte';
-
-/**
  * Server error alert displayed when the server is unreachable.
  * Shows the error message with a retry button.
  * Rendered inside ChatScreen when `serverError` store has a value.
