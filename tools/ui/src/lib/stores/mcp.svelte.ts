@@ -75,7 +75,7 @@ import type {
 	MCPResourceAttachment,
 	MCPResourceContent
 } from '$lib/types';
-import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
+import type { ListChangedHandlers, Prompt } from '@modelcontextprotocol/sdk/types.js';
 import type { DatabaseMessageExtraMcpResource, McpServerOverride } from '$lib/types/database';
 import type { SettingsConfigType } from '$lib/types/settings';
 
@@ -85,6 +85,11 @@ class MCPStore {
 	private _toolCount = $state(0);
 	private _connectedServers = $state<string[]>([]);
 	private _healthChecks = $state<Record<string, HealthCheckState>>({});
+
+	// Reactive cache of MCP prompts by server, mirrored from `connection.prompts`.
+	// Kept as a $state object so Svelte tracks per-server updates even though
+	// the underlying `connections: Map` is not reactive on its own.
+	private _promptsByServer = $state<Record<string, MCPPromptInfo[]>>({});
 
 	private connections = new Map<string, MCPConnection>();
 	private toolsIndex = new Map<string, string>();
@@ -527,12 +532,16 @@ class MCPStore {
 
 	addServer(
 		serverData: Omit<MCPServerSettingsEntry, 'id' | 'requestTimeoutSeconds'> & { id?: string }
-	): void {
+	): boolean {
 		const servers = this.getServers();
+		const normalizedUrl = serverData.url.trim();
+		if (servers.some((s) => s.url.trim() === normalizedUrl)) {
+			return false;
+		}
 		const newServer: MCPServerSettingsEntry = {
 			id: serverData.id || (uuid() ?? `server-${Date.now()}`),
 			enabled: serverData.enabled,
-			url: serverData.url.trim(),
+			url: normalizedUrl,
 			name: serverData.name,
 			headers: serverData.headers?.trim() || undefined,
 			requestTimeoutSeconds:
@@ -540,25 +549,60 @@ class MCPStore {
 			useProxy: serverData.useProxy
 		};
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));
+		return true;
 	}
 
-	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
+	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): boolean {
 		const servers = this.getServers();
+		if (updates.url) {
+			const normalizedUrl = updates.url.trim();
+			const duplicate = servers.some((s) => s.id !== id && s.url.trim() === normalizedUrl);
+			if (duplicate) return false;
+			updates = { ...updates, url: normalizedUrl };
+		}
 		settingsStore.updateConfig(
 			SETTINGS_KEYS.MCP_SERVERS,
 			JSON.stringify(
 				servers.map((server) => (server.id === id ? { ...server, ...updates } : server))
 			)
 		);
+		return true;
 	}
 
-	removeServer(id: string): void {
+	async removeServer(id: string): Promise<void> {
 		const servers = this.getServers();
 		settingsStore.updateConfig(
 			SETTINGS_KEYS.MCP_SERVERS,
 			JSON.stringify(servers.filter((s) => s.id !== id))
 		);
 		this.clearHealthCheck(id);
+
+		// Drop any active connection so its tools no longer surface in the UI
+		// after the server config entry is gone.
+		const connection = this.connections.get(id);
+		if (connection) {
+			this.connections.delete(id);
+			this.serverConfigs.delete(id);
+			for (const tool of connection.tools) {
+				if (this.toolsIndex.get(tool.name) === id) this.toolsIndex.delete(tool.name);
+			}
+			// eslint-disable-next-line @typescript-eslint/no-unused-vars
+			const { [id]: _removedPrompts, ...restPrompts } = this._promptsByServer;
+			this._promptsByServer = restPrompts;
+			this.updateState({
+				toolCount: this.toolsIndex.size,
+				connectedServers: Array.from(this.connections.keys())
+			});
+			await MCPService.disconnect(connection).catch((error) =>
+				console.warn(`[MCPStore] Error disconnecting removed server ${id}:`, error)
+			);
+		}
+	}
+
+	hasServerWithUrl(url: string): boolean {
+		const normalized = url.trim();
+		if (!normalized) return false;
+		return this.getServers().some((s) => s.url.trim() === normalized);
 	}
 
 	hasAvailableServers(): boolean {
@@ -668,6 +712,8 @@ class MCPStore {
 						);
 					this.toolsIndex.set(tool.name, name);
 				}
+
+				this.#setPromptsForServer(name, connection.prompts ?? []);
 			} else {
 				console.error(`[MCPStore] Failed to connect:`, result.reason);
 			}
@@ -709,14 +755,46 @@ class MCPStore {
 				}
 			},
 			prompts: {
-				onChanged: (error: Error | null) => {
+				onChanged: (error: Error | null, prompts: Prompt[] | null) => {
 					if (error) {
 						console.warn(`[MCPStore][${serverName}] Prompts list changed error:`, error);
 						return;
 					}
+					this.handlePromptsListChanged(serverName, prompts ?? []);
 				}
 			}
 		};
+	}
+
+	/**
+	 * Mirror `connection.prompts` into the reactive `_promptsByServer` cache.
+	 * Svelte does not track mutations on the `connections` Map directly, so
+	 * the `Record` copy is what the UI components subscribe to.
+	 */
+	#setPromptsForServer(serverName: string, prompts: MCPPromptInfo[]): void {
+		const connection = this.connections.get(serverName);
+		if (connection) connection.prompts = prompts;
+		this._promptsByServer = { ...this._promptsByServer, [serverName]: prompts };
+	}
+
+	private handlePromptsListChanged(serverName: string, prompts: Prompt[]): void {
+		const connection = this.connections.get(serverName);
+		if (!connection) return;
+
+		this.#setPromptsForServer(
+			serverName,
+			prompts.map((prompt) => ({
+				name: prompt.name,
+				description: prompt.description,
+				title: prompt.title,
+				serverName,
+				arguments: prompt.arguments?.map((arg) => ({
+					name: arg.name,
+					description: arg.description,
+					required: arg.required
+				}))
+			}))
+		);
 	}
 
 	private handleToolsListChanged(serverName: string, tools: Tool[]): void {
@@ -782,6 +860,7 @@ class MCPStore {
 		this.connections.clear();
 		this.toolsIndex.clear();
 		this.serverConfigs.clear();
+		this._promptsByServer = {};
 		this.configSignature = null;
 		this.updateState({
 			isInitializing: false,
@@ -835,6 +914,7 @@ class MCPStore {
 		for (const tool of connection.tools) {
 			this.toolsIndex.set(tool.name, serverName);
 		}
+		this.#setPromptsForServer(serverName, connection.prompts ?? []);
 
 		console.log(`[MCPStore][${serverName}] Session recovered successfully`);
 	}
@@ -926,6 +1006,7 @@ class MCPStore {
 					for (const tool of connection.tools) {
 						this.toolsIndex.set(tool.name, serverName);
 					}
+					this.#setPromptsForServer(serverName, connection.prompts ?? []);
 
 					console.log(`[MCPStore][${serverName}] Reconnected successfully`);
 					break;
@@ -1097,30 +1178,27 @@ class MCPStore {
 		return false;
 	}
 
-	async getAllPrompts(): Promise<MCPPromptInfo[]> {
-		const results: MCPPromptInfo[] = [];
-
-		for (const [serverName, connection] of this.connections) {
-			if (!connection.serverCapabilities?.prompts) continue;
-
-			const prompts = await MCPService.listPrompts(connection);
-
-			for (const prompt of prompts) {
-				results.push({
-					name: prompt.name,
-					description: prompt.description,
-					title: prompt.title,
-					serverName,
-					arguments: prompt.arguments?.map((arg) => ({
-						name: arg.name,
-						description: arg.description,
-						required: arg.required
-					}))
-				});
-			}
+	/**
+	 * Reactive snapshot of every prompt from every connected server.
+	 * Mirrored from `connection.prompts` into `_promptsByServer` on every
+	 * connection lifecycle change list-changed notification, so the UI can
+	 * render without waiting on the wire.
+	 */
+	get allPrompts(): MCPPromptInfo[] {
+		const out: MCPPromptInfo[] = [];
+		for (const serverName of Object.keys(this._promptsByServer)) {
+			out.push(...this._promptsByServer[serverName]);
 		}
 
-		return results;
+		return out;
+	}
+
+	/**
+	 * Synchronous read of the same prompt cache. Kept as a method (matching
+	 * `getAllResources` ergonomics) for callers that prefer the explicit form.
+	 */
+	getAllPrompts(): MCPPromptInfo[] {
+		return this.allPrompts;
 	}
 
 	async getPrompt(
@@ -1508,6 +1586,7 @@ class MCPStore {
 
 		// Add to active connections
 		this.connections.set(serverId, connection);
+		this.#setPromptsForServer(serverId, connection.prompts ?? []);
 
 		// Update state
 		this.updateState({
@@ -1947,6 +2026,7 @@ export const mcpError = () => mcpStore.error;
 export const mcpIsEnabled = () => mcpStore.isEnabled;
 export const mcpIsProxyAvailable = () => mcpStore.isProxyAvailable;
 export const mcpAvailableTools = () => mcpStore.availableTools;
+export const mcpAllPrompts = () => mcpStore.allPrompts;
 export const mcpConnectedServerCount = () => mcpStore.connectedServerCount;
 export const mcpConnectedServerNames = () => mcpStore.connectedServerNames;
 export const mcpToolCount = () => mcpStore.toolCount;

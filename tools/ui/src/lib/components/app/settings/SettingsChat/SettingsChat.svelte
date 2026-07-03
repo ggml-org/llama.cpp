@@ -148,6 +148,7 @@
 				<div class="grid">
 					<div class="mb-6 flex items-center gap-2 border-b border-border/30 pb-6 md:flex">
 						<currentSection.icon class="h-5 w-5" />
+
 						<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 					</div>
 

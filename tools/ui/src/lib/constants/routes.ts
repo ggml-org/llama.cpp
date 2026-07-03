@@ -22,6 +22,8 @@ export const ROUTES = {
 	CHAT: '#/chat',
 	/** MCP servers. */
 	MCP_SERVERS: '#/mcp-servers',
+	/** Skills (formerly "prompts"). */
+	SKILLS: '#/skills',
 	/** Settings base — for dynamic settings URLs use RouterService. */
 	SETTINGS: '#/settings',
 	/** Search — mobile-only full-page conversation search. */

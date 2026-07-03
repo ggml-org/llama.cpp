@@ -111,7 +111,13 @@ class ToolsStore {
 		}
 	}
 
-	/** Normalize MCP tools from live connections when available, fall back to health check data */
+	/**
+	 * Normalize MCP tools from live connections when available, fall back to health check data.
+	 *
+	 * Sources from the canonical list of enabled servers (config-driven) so additions and
+	 * removals take effect immediately, even before connections are refreshed. Removed
+	 * servers with lingering connections are filtered out automatically.
+	 */
 	private mcpEntries(): {
 		serverId: string;
 		serverName: string;
@@ -119,27 +125,32 @@ class ToolsStore {
 	}[] {
 		const out: { serverId: string; serverName: string; definition: OpenAIToolDefinition }[] = [];
 
+		const enabledServers = mcpStore.getServersSorted().filter((s) => s.enabled && s.url.trim());
 		const connections = mcpStore.getConnections();
-		if (connections.size > 0) {
-			for (const [serverId, connection] of connections) {
-				const serverName = mcpStore.getServerDisplayName(serverId);
+
+		for (const server of enabledServers) {
+			const connection = connections.get(server.id);
+			if (connection) {
+				const serverName = mcpStore.getServerDisplayName(server.id);
 				for (const tool of connection.tools) {
 					const schema = (tool.inputSchema as Record<string, unknown>) ?? undefined;
 					out.push({
-						serverId,
+						serverId: server.id,
 						serverName,
 						definition: mcpDefinition(tool.name, tool.description, schema)
 					});
 				}
-			}
-		} else {
-			for (const { serverId, serverName, tools } of this.getMcpToolsFromHealthChecks()) {
-				for (const tool of tools) {
-					out.push({
-						serverId,
-						serverName,
-						definition: mcpDefinition(tool.name, tool.description)
-					});
+			} else {
+				const health = mcpStore.getHealthCheckState(server.id);
+				if (health.status === HealthCheckStatus.SUCCESS && health.tools.length > 0) {
+					const serverName = mcpStore.getServerLabel(server);
+					for (const tool of health.tools) {
+						out.push({
+							serverId: server.id,
+							serverName,
+							definition: mcpDefinition(tool.name, tool.description)
+						});
+					}
 				}
 			}
 		}
@@ -323,26 +334,6 @@ class ToolsStore {
 
 	isGroupFullyEnabled(group: ToolGroup): boolean {
 		return group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.key));
-	}
-
-	/** Get MCP tools from health check data, used when live connections aren't established yet */
-	private getMcpToolsFromHealthChecks(): {
-		serverId: string;
-		serverName: string;
-		tools: { name: string; description?: string }[];
-	}[] {
-		const result: ReturnType<ToolsStore['getMcpToolsFromHealthChecks']> = [];
-		for (const server of mcpStore.getServersSorted().filter((s) => s.enabled)) {
-			const health = mcpStore.getHealthCheckState(server.id);
-			if (health.status === HealthCheckStatus.SUCCESS && health.tools.length > 0) {
-				result.push({
-					serverId: server.id,
-					serverName: mcpStore.getServerLabel(server),
-					tools: health.tools
-				});
-			}
-		}
-		return result;
 	}
 
 	/** First canonical entry matching a tool name, runtime tool calls resolve by name */

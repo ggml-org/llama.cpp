@@ -2,6 +2,7 @@
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { autoResizeTextarea } from '$lib/utils';
 	import { onMount } from 'svelte';
+	import { CHAT_FORM_PLACEHOLDER } from '$lib/constants';
 
 	interface Props {
 		class?: string;
@@ -19,7 +20,7 @@
 		onInput,
 		onKeydown,
 		onPaste,
-		placeholder = 'Ask anything...',
+		placeholder = CHAT_FORM_PLACEHOLDER.DEFAULT,
 		value = $bindable('')
 	}: Props = $props();
 

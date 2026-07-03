@@ -35,6 +35,9 @@ export {
 // Code
 export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from './code';
 
+// Diff
+export { computeLineDiff, formatUnifiedDiff, hasContentDiff, type DiffHunk } from './diff';
+
 // Config helpers
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 
@@ -135,7 +138,9 @@ export {
 	getResourceIcon,
 	getResourceTextContent,
 	getResourceBlobContent,
-	downloadResourceContent
+	downloadResourceContent,
+	buildMcpPromptId,
+	parseMcpPromptId
 } from './mcp';
 
 // URI Template utilities
@@ -194,3 +199,21 @@ export { uuid } from './uuid';
 
 // CSS utilities
 export { remToPx } from './css';
+
+// SKILL.md-compatible YAML frontmatter utilities
+export { parseFrontmatter, serializeFrontmatter } from './frontmatter';
+
+// Skill / SKILL.md round-trip helpers
+export {
+	SKILL_FRONTMATTER_KEYS,
+	skillToMarkdown,
+	markdownToSkill,
+	composeSystemPromptWithAlwaysOnSkills,
+	normalizeSkillName,
+	validateSkillName,
+	validateSkillDescription,
+	type SkillFrontmatter
+} from './skill-format';
+
+// Skill archive helpers (zip of <name>/SKILL.md files — same layout Pi loads)
+export { skillsToArchive, archiveToSkills, archiveToSkillRows } from './skill-archive';

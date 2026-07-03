@@ -23,7 +23,11 @@
 		buttonVariant?: ButtonVariant;
 		buttonClass?: string;
 		wrapperClass?: string;
-		summary?: { show: boolean; verb: string; items: DatabaseConversation[] };
+		summary?: {
+			show: boolean;
+			verb: string;
+			items: Array<{ id: string; title?: string; name?: string }>;
+		};
 	} = $props();
 
 	let sectionButtonClass = $derived(buttonClass ?? 'justify-start justify-self-start md:w-auto');
@@ -45,12 +49,12 @@
 		<div class="mt-4 grid overflow-x-auto rounded-lg border border-border/50 bg-muted/30 p-4">
 			<h5 class="mb-2 text-sm font-medium">
 				{summary.verb}
-				{summary.items.length} conversation{summary.items.length === 1 ? '' : 's'}
+				{summary.items.length} item{summary.items.length === 1 ? '' : 's'}
 			</h5>
 
 			<ul class="space-y-1 text-sm text-muted-foreground">
-				{#each summary.items.slice(0, 10) as conv (conv.id)}
-					<li class="truncate">• {conv.name || 'Untitled conversation'}</li>
+				{#each summary.items.slice(0, 10) as item (item.id)}
+					<li class="truncate">• {item.title ?? item.name ?? item.id}</li>
 				{/each}
 
 				{#if summary.items.length > 10}

@@ -43,6 +43,7 @@ import type {
 	ChatMessageTimings,
 	// Database types
 	DatabaseConversation,
+	DatabaseSkill,
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	DatabaseMessageExtraAudioFile,
@@ -112,6 +113,7 @@ declare global {
 		ChatUploadedFile,
 		// Database types
 		DatabaseConversation,
+		DatabaseSkill,
 		DatabaseMessage,
 		DatabaseMessageExtra,
 		DatabaseMessageExtraAudioFile,

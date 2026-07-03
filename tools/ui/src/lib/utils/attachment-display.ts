@@ -67,6 +67,9 @@ export function getAttachmentDisplayItems(
 
 	// Add stored attachments (ChatMessage)
 	for (const [index, attachment] of attachments.entries()) {
+		// Skip skill attachments — they're displayed differently in the UI
+		if (attachment.type === AttachmentType.SKILL) continue;
+
 		const isImage = isImageFile(attachment);
 
 		items.push({
