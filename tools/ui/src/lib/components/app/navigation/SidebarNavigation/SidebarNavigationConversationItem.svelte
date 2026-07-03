@@ -39,6 +39,7 @@
 		depth = 0
 	}: Props = $props();
 
+	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
 
 	let isLoading = $derived(getAllLoadingChats().includes(conversation.id));
@@ -70,9 +71,25 @@
 		}
 	}
 
+	function handleMouseLeave() {
+		if (!dropdownOpen) {
+			renderActionsDropdown = false;
+		}
+	}
+
+	function handleMouseOver() {
+		renderActionsDropdown = true;
+	}
+
 	function handleSelect() {
 		onSelect?.(conversation.id);
 	}
+
+	$effect(() => {
+		if (!dropdownOpen) {
+			renderActionsDropdown = false;
+		}
+	});
 
 	onMount(() => {
 		document.addEventListener('edit-active-conversation', handleGlobalEditEvent as EventListener);
@@ -86,19 +103,23 @@
 	});
 </script>
 
-<div
-	class="conversation-item group relative flex min-h-9 w-full items-center justify-between space-x-3 rounded-lg py-1.5 transition-colors hover:bg-foreground/10 {isActive
+<!-- svelte-ignore a11y_mouse_events_have_key_events -->
+<button
+	class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
 		? 'bg-foreground/5 text-accent-foreground'
 		: ''} px-3"
+	onclick={handleSelect}
+	onmouseover={handleMouseOver}
+	onmouseleave={handleMouseLeave}
+	onfocusin={handleMouseOver}
+	onfocusout={(e) => {
+		if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+			handleMouseLeave();
+		}
+	}}
 >
-	<button
-		class="absolute inset-0 z-0 cursor-pointer rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-		onclick={handleSelect}
-		aria-label={conversation.name}
-	>
-	</button>
 	<div
-		class="pointer-events-none relative z-10 flex min-w-0 flex-1 items-center gap-2"
+		class="flex min-w-0 flex-1 items-center gap-2"
 		style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px"
 	>
 		{#if depth > 0}
@@ -109,7 +130,7 @@
 						<a
 							{...props}
 							href={RouterService.chat(conversation.forkedFromConversationId)}
-							class="pointer-events-auto flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
+							class="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
 						>
 							<GitBranch class="h-3.5 w-3.5" />
 						</a>
@@ -125,15 +146,18 @@
 		{#if isLoading}
 			<Tooltip.Root>
 				<Tooltip.Trigger>
-					<button
-						class="stop-button pointer-events-auto flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
+					<div
+						class="stop-button flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
 						onclick={handleStop}
+						onkeydown={(e) => e.key === 'Enter' && handleStop(e)}
+						role="button"
+						tabindex="0"
 						aria-label="Stop generation"
 					>
 						<Loader2 class="loading-icon h-3.5 w-3.5 animate-spin" />
 
 						<Square class="stop-icon hidden h-3 w-3 fill-current text-destructive" />
-					</button>
+					</div>
 				</Tooltip.Trigger>
 
 				<Tooltip.Content>
@@ -145,50 +169,52 @@
 		<TruncatedText text={conversation.name} class="text-sm font-medium" showTooltip={false} />
 	</div>
 
-	<div class="actions pointer-events-auto relative z-20 flex items-center">
-		<DropdownMenuActions
-			triggerIcon={MoreHorizontal}
-			triggerTooltip="More actions"
-			bind:open={dropdownOpen}
-			actions={[
-				{
-					icon: conversation.pinned ? PinOff : Pin,
-					label: conversation.pinned ? 'Unpin' : 'Pin',
-					onclick: (e: Event) => {
-						e.stopPropagation();
-						handleTogglePin();
-					}
-				},
-				{
-					icon: Pencil,
-					label: 'Edit',
-					onclick: handleEdit,
-					shortcut: ['shift', 'cmd', 'e']
-				},
-				{
-					icon: Download,
-					label: 'Export',
-					onclick: (e: Event) => {
-						e.stopPropagation();
-						conversationsStore.downloadConversation(conversation.id);
+	{#if renderActionsDropdown}
+		<div class="actions flex items-center">
+			<DropdownMenuActions
+				triggerIcon={MoreHorizontal}
+				triggerTooltip="More actions"
+				bind:open={dropdownOpen}
+				actions={[
+					{
+						icon: conversation.pinned ? PinOff : Pin,
+						label: conversation.pinned ? 'Unpin' : 'Pin',
+						onclick: (e: Event) => {
+							e.stopPropagation();
+							handleTogglePin();
+						}
 					},
-					shortcut: ['shift', 'cmd', 's']
-				},
-				{
-					icon: Trash2,
-					label: 'Delete',
-					onclick: handleDelete,
-					variant: 'destructive',
-					shortcut: ['shift', 'cmd', 'd'],
-					separator: true
-				}
-			]}
-		/>
-	</div>
-</div>
+					{
+						icon: Pencil,
+						label: 'Edit',
+						onclick: handleEdit,
+						shortcut: ['shift', 'cmd', 'e']
+					},
+					{
+						icon: Download,
+						label: 'Export',
+						onclick: (e: Event) => {
+							e.stopPropagation();
+							conversationsStore.downloadConversation(conversation.id);
+						},
+						shortcut: ['shift', 'cmd', 's']
+					},
+					{
+						icon: Trash2,
+						label: 'Delete',
+						onclick: handleDelete,
+						variant: 'destructive',
+						shortcut: ['shift', 'cmd', 'd'],
+						separator: true
+					}
+				]}
+			/>
+		</div>
+	{/if}
+</button>
 
 <style>
-	.conversation-item {
+	button {
 		:global([data-slot='dropdown-menu-trigger']:not([data-state='open'])) {
 			opacity: 0;
 		}
@@ -213,8 +239,7 @@
 			}
 		}
 
-		&:is(:hover) .stop-button,
-		&:focus-within .stop-button {
+		&:is(:hover) .stop-button {
 			:global(.stop-icon) {
 				display: block;
 			}

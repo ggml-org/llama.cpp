@@ -1584,6 +1584,36 @@ static void test_array_methods(testing & t) {
         "6"
     );
 
+    test_template(t, "array|min",
+        "{{ [tool_calls_count, tool_sep_count]|min }}",
+        {{"tool_calls_count", 2}, {"tool_sep_count", 1}},
+        "1"
+    );
+
+    test_template(t, "array|max",
+        "{{ [tool_calls_count, tool_sep_count]|max }}",
+        {{"tool_calls_count", 2}, {"tool_sep_count", 1}},
+        "2"
+    );
+
+    test_template(t, "array|min attribute",
+        "{{ items|min(attribute='x') }}",
+        {{"items", json::array({
+            json({{"x", 2}}),
+            json({{"x", 1}}),
+        })}},
+        "{'x': 1}"
+    );
+
+    test_template(t, "array|max attribute",
+        "{{ items|max(attribute='x') }}",
+        {{"items", json::array({
+            json({{"x", 2}}),
+            json({{"x", 1}}),
+        })}},
+        "{'x': 2}"
+    );
+
     // not used by any chat templates
     // test_template(t, "array.insert()",
     //     "{% set _ = arr.insert(1, 'x') %}{{ arr|join(',') }}",

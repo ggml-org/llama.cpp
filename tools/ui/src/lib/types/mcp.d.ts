@@ -209,16 +209,31 @@ export type MCPToolCall = {
 	};
 };
 
-export type MCPServerSettingsEntry = {
+/**
+ * Minimum fields needed to display or identify an MCP server.
+ */
+export interface MCPServerDisplayInfo {
 	id: string;
-	enabled: boolean;
+	name?: string;
 	url: string;
+}
+
+export type MCPServerSettingsEntry = MCPServerDisplayInfo & {
+	enabled: boolean;
 	requestTimeoutSeconds: number;
 	headers?: string;
-	name?: string;
 	iconUrl?: string;
 	useProxy?: boolean;
 };
+
+/**
+ * Pre-defined recommended MCP server shown to the user in onboarding/picker UIs.
+ */
+export interface RecommendedMCPServer extends MCPServerDisplayInfo {
+	description: string;
+	enabled: boolean;
+	requestTimeoutSeconds: number;
+}
 
 export interface MCPHostManagerConfig {
 	servers: MCPClientConfig['servers'];

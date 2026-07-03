@@ -60,6 +60,7 @@ enum htp_op_code {
     HTP_OP_MUL_MAT_ID,
     HTP_OP_MUL_MAT_QKV,
     HTP_OP_MUL_MAT_FFN,
+    HTP_OP_MUL_MAT_ADD,
     HTP_OP_RMS_NORM,
     HTP_OP_RMS_NORM_MUL,
     HTP_OP_UNARY_SILU,
@@ -175,6 +176,11 @@ enum htp_trace_event_id {
     HTP_TRACE_EVT_HVX_W_DEQUANT       = 23,
     HTP_TRACE_EVT_HVX_W_PREP          = 24,
     HTP_TRACE_EVT_HVX_O_PROC          = 25,
+    HTP_TRACE_EVT_HVX_FA_QK           = 26,
+    HTP_TRACE_EVT_HVX_FA_SFM          = 27,
+    HTP_TRACE_EVT_HVX_FA_Q_PREP       = 28,
+    HTP_TRACE_EVT_HVX_FA_K_PREP       = 29,
+    HTP_TRACE_EVT_HVX_FA_V_PREP       = 30,
 
     HTP_TRACE_EVT_HMX_COMP            = 40,
 };

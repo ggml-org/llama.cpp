@@ -23,7 +23,7 @@ import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
-import { config } from '$lib/stores/settings.svelte';
+import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
@@ -46,7 +46,7 @@ import {
 	ISO_TIME_SEPARATOR_REPLACEMENT,
 	NON_ALPHANUMERIC_REGEX,
 	MULTIPLE_UNDERSCORE_REGEX,
-	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY,
+	SETTINGS_KEYS,
 	THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY,
 	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY
 } from '$lib/constants';
@@ -90,12 +90,10 @@ class ConversationsStore {
 	/** Global (non-conversation-specific) reasoning effort default */
 	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
 
-	/** Load MCP default overrides from localStorage */
 	private static loadMcpDefaults(): McpServerOverride[] {
-		if (typeof globalThis.localStorage === 'undefined') return [];
+		const raw = config()[SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES];
+		if (typeof raw !== 'string' || raw.length === 0) return [];
 		try {
-			const raw = localStorage.getItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
-			if (!raw) return [];
 			const parsed = JSON.parse(raw);
 			if (!Array.isArray(parsed)) return [];
 			return parsed.filter(
@@ -106,30 +104,23 @@ class ConversationsStore {
 		}
 	}
 
-	/** Persist MCP default overrides to localStorage */
 	private saveMcpDefaults(): void {
-		if (typeof globalThis.localStorage === 'undefined') return;
 		const plain = this.pendingMcpServerOverrides.map((o) => ({
 			serverId: o.serverId,
 			enabled: o.enabled
 		}));
-		if (plain.length > 0) {
-			localStorage.setItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY, JSON.stringify(plain));
-		} else {
-			localStorage.removeItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
-		}
+		settingsStore.updateConfig(SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES, JSON.stringify(plain));
 	}
 
 	/** Load thinking-enabled default from localStorage */
 	private static loadThinkingDefaults(): boolean {
-		if (typeof globalThis.localStorage === 'undefined') return false;
+		if (typeof globalThis.localStorage === 'undefined') return true;
 		try {
 			const raw = localStorage.getItem(THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY);
-			if (!raw) return false;
-			const parsed = raw === 'true';
-			return typeof parsed === 'boolean' ? parsed : false;
+			if (!raw) return true;
+			return raw === 'true';
 		} catch {
-			return false;
+			return true;
 		}
 	}
 
@@ -188,6 +179,10 @@ class ConversationsStore {
 
 		try {
 			await MigrationService.runAllMigrations();
+
+			// Re-read defaults after migrations: a migration may have populated
+			// the settings config (e.g. moved legacy MCP overrides into it).
+			this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
 
 			await this.loadConversations();
 			this.isInitialized = true;
@@ -337,7 +332,7 @@ class ConversationsStore {
 			}
 
 			this.pendingMcpServerOverrides = [];
-			this.pendingThinkingEnabled = false;
+			this.pendingThinkingEnabled = ConversationsStore.loadThinkingDefaults();
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
