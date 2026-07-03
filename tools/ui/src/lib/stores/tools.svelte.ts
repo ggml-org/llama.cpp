@@ -8,6 +8,7 @@ import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$li
 import { config } from '$lib/stores/settings.svelte';
 import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
+	RECOMMENDED_MCP_SERVER_IDS,
 	SANDBOX_TOOL_DEFINITION,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
@@ -126,7 +127,13 @@ class ToolsStore {
 
 		const connections = mcpStore.getConnections();
 		if (connections.size > 0) {
+			const optedIn = mcpStore.optedInRecommendationIds;
 			for (const [serverId, connection] of connections) {
+				if (
+					RECOMMENDED_MCP_SERVER_IDS.has(serverId) && !optedIn.has(serverId)
+				) {
+					continue;
+				}
 				const serverName = mcpStore.getServerDisplayName(serverId);
 				for (const tool of connection.tools) {
 					const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
@@ -399,7 +406,7 @@ class ToolsStore {
 		tools: { name: string; description?: string }[];
 	}[] {
 		const result: ReturnType<ToolsStore['getMcpToolsFromHealthChecks']> = [];
-		for (const server of mcpStore.getServersSorted().filter((s) => s.enabled)) {
+		for (const server of mcpStore.visibleMcpServers) {
 			const health = mcpStore.getHealthCheckState(server.id);
 			if (health.status === HealthCheckStatus.SUCCESS && health.tools.length > 0) {
 				result.push({

@@ -1,8 +1,9 @@
 <script lang="ts">
+	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as HoverCard from '$lib/components/ui/hover-card';
 	import { Button } from '$lib/components/ui/button';
 	import { untrack } from 'svelte';
-	import { Loader2 } from '@lucide/svelte';
+	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
@@ -171,6 +172,16 @@
 		return Math.round((contextUsed / contextTotal) * 100);
 	});
 
+	let detailsOpen = $state(false);
+
+	let hasDetails = $derived(
+		enabledToolsTokenCount !== null && enabledToolsTokenCount > 0 ||
+			conversationStats.readTokens > 0 ||
+			conversationStats.outputTokens > 0 ||
+			conversationStats.averageTokensPerSecond !== null ||
+			transientDetails.length > 0
+	);
+
 	let contextLabelColor = $derived.by(() => {
 		if (contextPercent === null) return 'text-muted-foreground';
 		if (contextPercent >= 90) return 'text-red-400';
@@ -311,8 +322,19 @@
 				<div class="text-xs text-muted-foreground">No context info available</div>
 			{/if}
 
-			{#if (enabledToolsTokenCount !== null && enabledToolsTokenCount > 0) || conversationStats.readTokens > 0 || conversationStats.outputTokens > 0 || conversationStats.averageTokensPerSecond !== null || transientDetails.length > 0}
-				<div class="mt-1 flex flex-col gap-1 border-t border-border/50 pt-2 text-xs">
+			{#if hasDetails}
+				<Collapsible.Root bind:open={detailsOpen} class="mt-3 border-t border-border/50 pt-4">
+					<Collapsible.Trigger
+						class="flex w-full cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+					>
+						<span>Token usage details</span>
+
+						<ChevronDown
+							class={'ml-auto h-3 w-3 transition-transform' + (detailsOpen ? ' rotate-180' : '')}
+						/>
+					</Collapsible.Trigger>
+
+					<Collapsible.Content class="flex flex-col gap-2 text-xs pt-2">
 					{#if enabledToolsTokenCount !== null && enabledToolsTokenCount > 0}
 						<div class="flex items-baseline justify-between">
 							<span class="text-muted-foreground">Tool definitions</span>
@@ -352,7 +374,8 @@
 					{#each transientDetails as detail (detail)}
 						<div class="font-mono text-muted-foreground">{detail}</div>
 					{/each}
-				</div>
+				</Collapsible.Content>
+				</Collapsible.Root>
 			{/if}
 		</div>
 	</HoverCard.Content>
