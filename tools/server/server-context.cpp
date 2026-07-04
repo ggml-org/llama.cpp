@@ -970,11 +970,17 @@ private:
         std::string stage;
         std::vector<std::string> stages;
         int64_t t_last_load_progress_ms = 0;
+        llama_progress_callback orig_cb = nullptr;
+        void *                  orig_ud = nullptr;
         load_progress_data(server_context_impl * ctx, const std::string & stage) : ctx(ctx), stage(stage) {}
     };
     static bool load_progress_callback(float progress, void * user_data) {
         auto * d = static_cast<load_progress_data *>(user_data);
         GGML_ASSERT(d);
+        // chain the caller-provided callback unthrottled
+        if (d->orig_cb && !d->orig_cb(progress, d->orig_ud)) {
+            return false;
+        }
         // always emit the first and final sample; throttle the rest to one per 200ms
         {
             auto & t_last = d->t_last_load_progress_ms;
@@ -1008,6 +1014,13 @@ private:
 
         params_base = params;
         params_base.n_outputs_max = server_n_outputs_max(params_base);
+
+        load_progress_text.orig_cb   = params.load_progress_callback;
+        load_progress_text.orig_ud   = params.load_progress_callback_user_data;
+        load_progress_mmproj.orig_cb = params.load_progress_callback;
+        load_progress_mmproj.orig_ud = params.load_progress_callback_user_data;
+        load_progress_spec.orig_cb   = params.load_progress_callback;
+        load_progress_spec.orig_ud   = params.load_progress_callback_user_data;
 
         const bool has_mmproj = !params.mmproj.path.empty();
         const bool has_draft = params.speculative.has_dft();
