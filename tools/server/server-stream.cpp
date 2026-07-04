@@ -218,6 +218,13 @@ void stream_session_manager::evict_and_cancel(const std::string & conversation_i
         std::unique_lock<std::shared_mutex> lock(map_mu);
         auto it = sessions.find(conversation_id);
         if (it == sessions.end()) {
+            std::string live;
+            for (const auto & kv : sessions) {
+                if (!live.empty()) live += ", ";
+                live += kv.first;
+            }
+            SRV_WRN("stop on unknown stream session, conv_id=%s matched nothing, %zu live: [%s]\n",
+                    conversation_id.c_str(), sessions.size(), live.c_str());
             return;
         }
         s = it->second;
@@ -339,11 +346,11 @@ void stream_pipe_producer::close() {
     // httplib bails its content provider the moment is_peer_alive() goes false, so pump the rest
     // of the generation into the ring buffer here. a DELETE flips is_cancelled and cuts it short
     if (done_ || session_->is_cancelled()) {
-        SRV_INF("stream_pipe close: skip drain (done=%d cancelled=%d) conv=%s\n",
+        SRV_TRC("stream_pipe close: skip drain (done=%d cancelled=%d) conv=%s\n",
                 done_ ? 1 : 0, session_->is_cancelled() ? 1 : 0, session_->conversation_id.c_str());
         return;
     }
-    SRV_INF("stream_pipe close: draining conv=%s\n", session_->conversation_id.c_str());
+    SRV_TRC("stream_pipe close: draining conv=%s\n", session_->conversation_id.c_str());
     size_t drained = 0;
     std::string chunk;
     while (true) {
@@ -357,7 +364,7 @@ void stream_pipe_producer::close() {
             break;
         }
     }
-    SRV_INF("stream_pipe close: drain ended conv=%s bytes=%zu\n", session_->conversation_id.c_str(), drained);
+    SRV_TRC("stream_pipe close: drain ended conv=%s bytes=%zu\n", session_->conversation_id.c_str(), drained);
 }
 
 std::shared_ptr<stream_pipe_producer> stream_pipe_producer::create(stream_session_ptr session,
@@ -520,7 +527,7 @@ server_http_context::handler_t make_stream_delete_handler() {
         if (conv_id.empty()) {
             return make_error_response(400, "Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST);
         }
-        SRV_INF("DELETE /v1/stream/%s -> evict_and_cancel\n", conv_id.c_str());
+        SRV_TRC("DELETE /v1/stream/%s -> evict_and_cancel\n", conv_id.c_str());
         g_stream_sessions.evict_and_cancel(conv_id);
         auto res = std::make_unique<server_http_res>();
         res->status = 204;
@@ -550,8 +557,7 @@ std::string stream_conv_id_from_headers(const std::map<std::string, std::string>
 
 void stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers) {
     std::string conversation_id = stream_conv_id_from_headers(headers);
-    SRV_INF("stream_session_attach_pipe: conv_id=%s (empty=%d)\n",
-            conversation_id.c_str(), conversation_id.empty() ? 1 : 0);
+    SRV_TRC("conv_id=%s (empty=%d)\n", conversation_id.c_str(), conversation_id.empty() ? 1 : 0);
     if (conversation_id.empty()) {
         return;
     }

@@ -108,9 +108,11 @@ describe('PWA Build Output', () => {
 			expect(swContent).toMatch(/"manifest\.webmanifest"/);
 		});
 
-		it('has navigation route registered', () => {
+		it('no navigation route — API endpoints bypass PWA', () => {
 			expect(swContent).toBeTruthy();
-			expect(swContent).toMatch(/NavigationRoute/);
+			// NavigationRoute is intentionally absent so direct browser
+			// navigation to server API endpoints returns JSON, not HTML.
+			expect(swContent).not.toMatch(/NavigationRoute/);
 		});
 
 		it('has runtime caching for API routes', () => {

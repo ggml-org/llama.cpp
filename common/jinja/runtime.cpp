@@ -954,4 +954,50 @@ value keyword_argument_expression::execute_impl(context & ctx) {
     return mk_val<value_kwarg>(k, v);
 }
 
+std::string runtime::debug_dump_program(const program & prog, const std::string & src) {
+    std::ostringstream oss;
+    size_t lvl = 0;
+    context ctx;
+    ctx.src.reset(new std::string(src));
+
+    auto indent = [](size_t lvl) -> std::string {
+        return std::string(lvl * 2, ' ');
+    };
+
+    ctx.visitor = [&](bool is_leaf, statement * node, std::vector<visitor_pair> children) {
+        oss << indent(lvl) << node->type() << ":\n";
+        lvl++;
+        if (is_leaf) {
+            const auto & pos = node->pos;
+            oss << indent(lvl) << "(leaf) at " << get_line_col(src, pos) << " in source:\n";
+            std::string snippet = peak_source(src, pos);
+            string_replace_all(snippet, "\n", "\n" + indent(lvl));
+            oss << indent(lvl) << snippet << "\n";
+        } else {
+            for (auto & [label, children_vec] : children) {
+                oss << indent(lvl) << label << ":\n";
+                lvl++;
+                if (children_vec.empty()) {
+                    oss << indent(lvl) << "<empty>\n\n";
+                } else {
+                    for (auto * child : children_vec) {
+                        if (!child) {
+                            continue;
+                        }
+                        child->visit(ctx);
+                    }
+                }
+                lvl--;
+            }
+        }
+        lvl--;
+    };
+
+    for (const auto & stmt : prog.body) {
+        stmt->visit(ctx);
+    }
+
+    return oss.str();
+}
+
 } // namespace jinja

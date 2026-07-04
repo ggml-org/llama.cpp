@@ -1563,6 +1563,7 @@ class ggml_webgpu_shader_lib {
                         case GGML_TYPE_IQ1_S:
                         case GGML_TYPE_IQ4_NL:
                         case GGML_TYPE_MXFP4:
+                        case GGML_TYPE_NVFP4:
                             {
                                 // Quantized types using u32 buffers for portability.
                                 defines.push_back("SRC_TYPE=u32");
@@ -1593,6 +1594,8 @@ class ggml_webgpu_shader_lib {
                     } else if ((key.src_type >= GGML_TYPE_Q4_0 && key.src_type <= GGML_TYPE_Q8_1) ||
                                key.src_type == GGML_TYPE_IQ4_NL || key.src_type == GGML_TYPE_MXFP4) {
                         defines.push_back("BLOCK_SIZE=32u");
+                    } else if (key.src_type == GGML_TYPE_NVFP4) {
+                        defines.push_back("BLOCK_SIZE=64u");
                     } else if (key.src_type >= GGML_TYPE_Q2_K) {
                         defines.push_back("BLOCK_SIZE=256u");
                     } else {
@@ -1960,6 +1963,7 @@ class ggml_webgpu_shader_lib {
                             defines.push_back(type_upper + "_TABLES");
                             break;
                         case GGML_TYPE_MXFP4:
+                        case GGML_TYPE_NVFP4:
                             defines.push_back(type_upper + "_LUT");
                             break;
                         default:
@@ -2103,6 +2107,7 @@ class ggml_webgpu_shader_lib {
                             defines.push_back(type_upper + "_TABLES");
                             break;
                         case GGML_TYPE_MXFP4:
+                        case GGML_TYPE_NVFP4:
                             defines.push_back(type_upper + "_LUT");
                             break;
                         default:
@@ -2274,6 +2279,7 @@ class ggml_webgpu_shader_lib {
                             defines.push_back(type_upper + "_TABLES");
                             break;
                         case GGML_TYPE_MXFP4:
+                        case GGML_TYPE_NVFP4:
                             defines.push_back(type_upper + "_LUT");
                             break;
                         default:
@@ -2394,6 +2400,7 @@ class ggml_webgpu_shader_lib {
                             defines.push_back(type_upper + "_TABLES");
                             break;
                         case GGML_TYPE_MXFP4:
+                        case GGML_TYPE_NVFP4:
                             defines.push_back(type_upper + "_LUT");
                             break;
                         default:

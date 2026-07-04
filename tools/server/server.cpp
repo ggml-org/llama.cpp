@@ -124,7 +124,7 @@ int llama_server(int argc, char ** argv) {
         }
 
         if (params.n_parallel < 0) {
-            SRV_INF("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
+            SRV_TRC("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
 
             params.n_parallel = 4;
             params.kv_unified = true;
@@ -338,7 +338,7 @@ int llama_server(int argc, char ** argv) {
     std::function<void()> clean_up;
 
     if (is_router_server) {
-        SRV_INF("%s", "starting router server, no model will be loaded in this process\n");
+        SRV_INF("%s", "starting server in router mode. models will be automatically loaded on-demand\n");
 
         clean_up = [&models_routes]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
@@ -391,9 +391,6 @@ int llama_server(int argc, char ** argv) {
             });
         }
 
-        // load the model
-        SRV_INF("%s", "loading model\n");
-
         if (!ctx_server.load_model(params)) {
             clean_up();
             if (ctx_http.thread.joinable()) {
@@ -429,8 +426,9 @@ int llama_server(int argc, char ** argv) {
     SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
 
+    SRV_INF("listening on %s\n", ctx_http.listening_address.c_str());
+
     if (is_router_server) {
-        SRV_INF("router server is listening on %s\n", ctx_http.listening_address.c_str());
         SRV_WRN("%s", "NOTE: router mode is experimental\n");
         SRV_WRN("%s", "      it is not recommended to use this mode in untrusted environments\n");
 
@@ -446,8 +444,6 @@ int llama_server(int argc, char ** argv) {
         // when the HTTP server stops, clean up and exit
         clean_up();
     } else {
-        SRV_INF("server is listening on %s\n", ctx_http.listening_address.c_str());
-
         // optionally, notify router server that this instance is ready
         std::thread monitor_thread;
         if (child.is_child()) {

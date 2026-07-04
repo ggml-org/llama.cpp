@@ -241,7 +241,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
 #endif // INIT_SRC0_SHMEM_Q8_1
 
 #if defined(INIT_SRC0_SHMEM_MXFP4)
-            let block_byte_base = src0_idx * 17u;
+            let block_byte_base = src0_idx * 17u; // BLOCK_SIZE_BYTES = 17u;
             let eu8 = get_byte(load_u32_at_src0_aligned(block_byte_base), block_byte_base & 3u);
             let e = ldexp(1.0, i32(eu8) - 128);
 
@@ -262,6 +262,47 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
     }
 }
 #endif // legacy-quants
+
+#if defined(INIT_SRC0_SHMEM_NVFP4)
+const BLOCK_SIZE = 64u;
+const BLOCK_SIZE_BYTES = 36u;
+const SUB_BLOCK_SIZE = 16u; // elements sharing one UE4M3 scale
+const NQ = 16u;
+const BYTES_PER_THREAD = 8u;
+const BYTES_PER_INNER_LOOP = 4u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var i = thread_id * NQ; i < TILE_SRC0_SHMEM; i += TOTAL_WORKGROUP_SIZE * NQ) {
+        let tile_m = i / TILE_K;
+        let tile_k_start = i % TILE_K;
+        let global_m = offset_m + tile_m;
+        let global_k_start = k_outer + tile_k_start;
+
+        if (global_m >= params.m) {
+            break;
+        }
+
+        let block_k  = global_k_start / BLOCK_SIZE;
+        let sub_block      = (global_k_start % BLOCK_SIZE) / SUB_BLOCK_SIZE;
+        let src0_idx = batch_offset + global_m * params.stride_01 + block_k;
+
+        let block_byte_base = src0_idx * BLOCK_SIZE_BYTES;
+        let d_byte_base     = block_byte_base;
+        let qs_byte_base    = block_byte_base + 4u;
+
+        let d = ue4m3_to_fp32(get_byte(load_u32_at_src0_aligned(d_byte_base), sub_block)) * 0.5;
+
+        for (var j = 0u; j < BYTES_PER_THREAD / BYTES_PER_INNER_LOOP; j++) {
+            let q_packed = load_u32_at_src0_aligned(qs_byte_base + sub_block * 8u + j * 4u);
+            for (var k = 0u; k < BYTES_PER_INNER_LOOP; k++) {
+                let q_byte = get_byte(q_packed, k);
+                shmem[i + j * BYTES_PER_INNER_LOOP + k]      = f16(f32(kvalues_mxfp4[q_byte & 0xF]) * d);
+                shmem[i + j * BYTES_PER_INNER_LOOP + k + 8u] = f16(f32(kvalues_mxfp4[(q_byte >> 4) & 0xF]) * d);
+            }
+        }
+    }
+}
+#endif // INIT_SRC0_SHMEM_NVFP4
 
 // k-quants
 #if defined(INIT_SRC0_SHMEM_Q2_K) || defined(INIT_SRC0_SHMEM_Q3_K) || defined(INIT_SRC0_SHMEM_Q4_K) || defined(INIT_SRC0_SHMEM_Q5_K) || defined(INIT_SRC0_SHMEM_Q6_K)
