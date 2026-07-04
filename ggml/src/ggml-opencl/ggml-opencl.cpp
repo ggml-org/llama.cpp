@@ -19369,7 +19369,8 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 }
 
                 kernel = backend_ctx->kernel_mul_mm_q4_k_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
+                // (BM*BN)/(TM*TN): Intel uses an 8x8 microtile (WG=64), others 4x8 (WG=128)
+                nth0 = (backend_ctx->gpu_family == INTEL) ? 64 : 128;
 
                 int batch_stride_a = ne00*ne01;
                 int batch_stride_b = ne10*ne11;
