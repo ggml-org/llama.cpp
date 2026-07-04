@@ -7550,7 +7550,6 @@
 "SYCL0","MUL_MAT","type_a=bf16,type_b=f32,m=128,n=1,k=1056,bs=[1,3],nr=[4,1],per=[0,1,2,3],k_v=2112,o=1","support","1","yes","SYCL"
 "SYCL0","MUL_MAT","type_a=f32,type_b=f32,m=1056,n=1,k=128,bs=[1,3],nr=[4,1],per=[0,2,1,3],k_v=0,o=1","support","1","yes","SYCL"
 "SYCL0","MUL_MAT","type_a=f32,type_b=f32,m=128,n=1,k=1056,bs=[1,3],nr=[4,1],per=[0,1,2,3],k_v=2112,o=1","support","1","yes","SYCL"
-zjy 2
 "SYCL0","MUL_MAT","type_a=f16,type_b=f32,m=1056,n=1,k=129,bs=[1,3],nr=[4,1],per=[0,2,1,3],k_v=0,o=1","support","0","no","SYCL"
 "SYCL0","MUL_MAT","type_a=f16,type_b=f32,m=128,n=1,k=1057,bs=[1,3],nr=[4,1],per=[0,1,2,3],k_v=2113,o=1","support","1","yes","SYCL"
 "SYCL0","MUL_MAT","type_a=bf16,type_b=f32,m=1056,n=1,k=129,bs=[1,3],nr=[4,1],per=[0,2,1,3],k_v=0,o=1","support","1","yes","SYCL"
@@ -7563,7 +7562,6 @@ zjy 2
 "SYCL0","MUL_MAT","type_a=bf16,type_b=f32,m=129,n=1,k=1056,bs=[1,3],nr=[4,1],per=[0,1,2,3],k_v=2112,o=1","support","1","yes","SYCL"
 "SYCL0","MUL_MAT","type_a=f32,type_b=f32,m=1057,n=1,k=128,bs=[1,3],nr=[4,1],per=[0,2,1,3],k_v=0,o=1","support","1","yes","SYCL"
 "SYCL0","MUL_MAT","type_a=f32,type_b=f32,m=129,n=1,k=1056,bs=[1,3],nr=[4,1],per=[0,1,2,3],k_v=2112,o=1","support","1","yes","SYCL"
-zjy 2
 "SYCL0","MUL_MAT","type_a=f16,type_b=f32,m=1057,n=1,k=129,bs=[1,3],nr=[4,1],per=[0,2,1,3],k_v=0,o=1","support","0","no","SYCL"
 "SYCL0","MUL_MAT","type_a=f16,type_b=f32,m=129,n=1,k=1057,bs=[1,3],nr=[4,1],per=[0,1,2,3],k_v=2113,o=1","support","1","yes","SYCL"
 "SYCL0","MUL_MAT","type_a=bf16,type_b=f32,m=1057,n=1,k=129,bs=[1,3],nr=[4,1],per=[0,2,1,3],k_v=0,o=1","support","1","yes","SYCL"
