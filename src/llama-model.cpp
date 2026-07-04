@@ -1532,24 +1532,57 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         std::vector<ggml_backend_buffer_ptr> bufs;
         if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
             GGML_ASSERT(!ml.no_alloc);
+            struct mmap_span {
+                size_t first;
+                size_t last;
+            };
+            constexpr size_t mmap_coalesce_gap = 64ull * 1024ull * 1024ull;
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
-                // only the mmap region containing the tensors in the model is mapped to the backend buffer
-                // this is important for metal with apple silicon: if the entire model could be mapped to a metal buffer,
-                //     then we could just use metal for all layers
-                // this allows using partial offloading when the model size exceeds the metal buffer size, but not the RAM size
                 void * addr = nullptr;
                 size_t first, last; // NOLINT
                 ml.get_mapping_range(&first, &last, &addr, idx, ctx);
                 if (first >= last) {
                     continue;
                 }
-                const size_t max_size = ggml_get_max_tensor_size(ctx);
-                ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(dev, (char *) addr + first, last - first, max_size);
-                if (buf == nullptr) {
-                    throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+
+                std::vector<mmap_span> spans;
+                for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                    const auto * weight = ml.get_weight(ggml_get_name(t));
+                    if (!weight || weight->idx != idx) {
+                        continue;
+                    }
+                    spans.push_back({ weight->offs, weight->offs + ggml_nbytes(t) });
                 }
-                bufs.emplace_back(buf);
-                buf_map.emplace(idx, buf);
+                std::sort(spans.begin(), spans.end(), [](const mmap_span & a, const mmap_span & b) {
+                    return a.first < b.first;
+                });
+
+                std::vector<mmap_span> ranges;
+                for (const mmap_span & span : spans) {
+                    if (ranges.empty() || span.first > ranges.back().last + mmap_coalesce_gap) {
+                        ranges.push_back(span);
+                    } else {
+                        ranges.back().last = std::max(ranges.back().last, span.last);
+                    }
+                }
+
+                const size_t max_size = ggml_get_max_tensor_size(ctx);
+                if (ranges.size() > 1) {
+                    LLAMA_LOG_INFO("%s: mapping %zu sparse mmap ranges for %s file %u instead of one %.2f GiB span\n",
+                            __func__, ranges.size(), ggml_backend_buft_name(buft), idx, (last - first) / 1024.0 / 1024.0 / 1024.0);
+                }
+                for (const mmap_span & range : ranges) {
+                    ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(dev, (char *) addr + range.first, range.last - range.first, max_size);
+                    if (buf == nullptr) {
+                        throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+                    }
+                    bufs.emplace_back(buf);
+                    llama_buf_map_add(buf_map, idx, buf, range.first, range.last);
+                    LLAMA_LOG_INFO("%s: mapped %s mmap range file %u offset %.2f GiB size %.2f MiB\n",
+                            __func__, ggml_backend_buft_name(buft), idx,
+                            range.first / 1024.0 / 1024.0 / 1024.0,
+                            (range.last - range.first) / 1024.0 / 1024.0);
+                }
             }
         } else {
             ggml_backend_buffer_t buf;
@@ -1572,7 +1605,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
             bufs.emplace_back(buf);
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
-                buf_map.emplace(idx, buf);
+                llama_buf_map_add(buf_map, idx, buf);
             }
         }
 
