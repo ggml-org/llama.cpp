@@ -362,7 +362,12 @@ private:
             auto s = ls.first;
             return is_literal ? "\"" + s + "\"" : s;
         };
-        std::function<literal_or_rule()> transform = [&]() -> literal_or_rule {
+        const int MAX_PATTERN_NESTING = 100;
+        std::function<literal_or_rule(int)> transform = [&](int depth) -> literal_or_rule {
+            if (depth > MAX_PATTERN_NESTING) {
+                _errors.push_back("Pattern nesting too deep");
+                return std::make_pair("", false);
+            }
             size_t start = i;
             std::vector<literal_or_rule> seq;
 
@@ -436,7 +441,7 @@ private:
                             continue;
                         }
                     }
-                    seq.emplace_back("(" + to_rule(transform()) + ")", false);
+                    seq.emplace_back("(" + to_rule(transform(depth + 1)) + ")", false);
                 } else if (c == ')') {
                     i++;
                     if (start > 0 && sub_pattern[start - 1] != '(' && (start < 2 || sub_pattern[start - 2] != '?' || sub_pattern[start - 1] != ':')) {
@@ -465,8 +470,13 @@ private:
                     seq.emplace_back("|", false);
                     i++;
                 } else if (c == '*' || c == '+' || c == '?') {
-                    seq.back() = std::make_pair(to_rule(seq.back()) + c, false);
-                    i++;
+                    if (seq.empty()) {
+                        _errors.push_back("Quantifier with nothing to repeat");
+                        i++;
+                    } else {
+                        seq.back() = std::make_pair(to_rule(seq.back()) + c, false);
+                        i++;
+                    }
                 } else if (c == '{') {
                     std::string curly_brackets = std::string(1, c);
                     i++;
@@ -497,6 +507,10 @@ private:
                         }
                     } catch (const std::invalid_argument & e) {
                         _errors.push_back("Invalid number in curly brackets");
+                        return std::make_pair("", false);
+                    }
+                    if (seq.empty()) {
+                        _errors.push_back("Repetition with nothing to repeat");
                         return std::make_pair("", false);
                     }
                     auto &last = seq.back();
@@ -551,7 +565,7 @@ private:
             }
             return join_seq();
         };
-        return _add_rule(name, "\"\\\"\" (" + to_rule(transform()) + ") \"\\\"\"");
+        return _add_rule(name, "\"\\\"\" (" + to_rule(transform(0)) + ") \"\\\"\"");
     }
 
     /*
