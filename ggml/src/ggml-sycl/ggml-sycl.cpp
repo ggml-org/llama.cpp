@@ -5675,7 +5675,11 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
             return true;
         case GGML_OP_COL2IM_1D:
             return ggml_is_contiguous(op->src[0]) &&
-                   (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16) &&
+		   (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16
+#ifdef GGML_SYCL_HAS_BF16
+                    || op->type == GGML_TYPE_BF16
+#endif
+                   ) &&
                    op->src[0]->type == op->type;
         case GGML_OP_CONV_3D:
             return op->type == GGML_TYPE_F32 &&
