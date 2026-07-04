@@ -2235,16 +2235,7 @@ static void transfer_activation_chunk_threaded(
     if (vtcm_f32_act && vtcm_f32_act_bytes > 0 && k_block > 0) {
         size_t thread_scratch_elements = vtcm_f32_act_bytes / (n_threads * sizeof(float));
         size_t dma_step_rows_max = (thread_scratch_elements / 2) / k_block;
-        if (dma_step_rows_max >= 32) {
-            dma_step_rows = 32;
-            dma_step_rows_shift = 5;
-        } else if (dma_step_rows_max >= 16) {
-            dma_step_rows = 16;
-            dma_step_rows_shift = 4;
-        } else if (dma_step_rows_max >= 8) {
-            dma_step_rows = 8;
-            dma_step_rows_shift = 3;
-        } else if (dma_step_rows_max >= 4) {
+        if (dma_step_rows_max >= 4) {
             dma_step_rows = 4;
             dma_step_rows_shift = 2;
         } else {
