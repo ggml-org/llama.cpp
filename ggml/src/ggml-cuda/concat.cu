@@ -147,25 +147,13 @@ static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml
         T *       dst_d  = (T *) dst->data;
 
         if (dim != 3) {
-            if (ggml_is_quantized(src0->type)) {
-                // treat both tensors as byte tensors with ne[0] equal to nb[1]
-                for (int64_t i3 = 0; i3 < dst->ne[3]; i3++) {
-                    concat_cont_cuda(
-                            src0_d + i3*(src0->nb[3] / sizeof(T)),
-                            src1_d + i3*(src1->nb[3] / sizeof(T)),
-                            dst_d  + i3*( dst->nb[3] / sizeof(T)),
-                            src0->nb[1], src0->ne[1], src0->ne[2],
-                            dst->nb[1],  dst->ne[1],  dst->ne[2], dim, stream);
-                }
-            } else {
-                for (int64_t i3 = 0; i3 < dst->ne[3]; i3++) {
-                    concat_cont_cuda(
-                            src0_d + i3*(src0->nb[3] / sizeof(T)),
-                            src1_d + i3*(src1->nb[3] / sizeof(T)),
-                            dst_d  + i3*( dst->nb[3] / sizeof(T)),
-                            src0->ne[0], src0->ne[1], src0->ne[2],
-                            dst->ne[0],  dst->ne[1],  dst->ne[2], dim, stream);
-                }
+            for (int64_t i3 = 0; i3 < dst->ne[3]; i3++) {
+                concat_cont_cuda(
+                        src0_d + i3*(src0->nb[3] / sizeof(T)),
+                        src1_d + i3*(src1->nb[3] / sizeof(T)),
+                        dst_d  + i3*( dst->nb[3] / sizeof(T)),
+                        ggml_row_size(src0->type, src0->ne[0])/sizeof(T), src0->ne[1], src0->ne[2],
+                        ggml_row_size(dst->type, dst->ne[0])/sizeof(T),  dst->ne[1],  dst->ne[2], dim, stream);
             }
         } else {
             const size_t size0 = ggml_nbytes(src0);
