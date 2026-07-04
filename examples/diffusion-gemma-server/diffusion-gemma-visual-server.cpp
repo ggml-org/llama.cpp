@@ -306,6 +306,9 @@ int main(int argc, char ** argv) {
             std::vector<common_chat_msg> messages = common_chat_msgs_parse_oaicompat(req.at("messages"));
             common_chat_templates_inputs inputs;
             inputs.messages              = messages;
+            if (req.contains("tools")) {
+                inputs.tools = common_chat_tools_parse_oaicompat(req.at("tools"));
+            }
             inputs.add_generation_prompt = true;
             const std::string prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
             prefix = common_tokenize(vocab, prompt, /*add special*/ true, /*parse special*/ true);
