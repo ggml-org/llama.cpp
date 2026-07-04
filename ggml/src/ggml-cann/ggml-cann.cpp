@@ -1595,12 +1595,13 @@ static bool ggml_backend_cann_buffer_type_is_host(ggml_backend_buffer_type_t buf
  * memory for CANN buffer types in the GGML backend.
  */
 static const ggml_backend_buffer_type_i ggml_backend_cann_buffer_type_interface = {
-    /* .get_name         = */ ggml_backend_cann_buffer_type_name,
-    /* .alloc_buffer     = */ ggml_backend_cann_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_cann_buffer_type_get_alignment,
-    /* .get_max_size     = */ NULL,  // defaults to SIZE_MAX
-    /* .get_alloc_size   = */ ggml_backend_cann_buffer_type_get_alloc_size,
-    /* .is_host          = */ ggml_backend_cann_buffer_type_is_host,
+    /* .get_name       = */ ggml_backend_cann_buffer_type_name,
+    /* .alloc_buffer   = */ ggml_backend_cann_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n = */ NULL,
+    /* .get_alignment  = */ ggml_backend_cann_buffer_type_get_alignment,
+    /* .get_max_size   = */ NULL,  // defaults to SIZE_MAX
+    /* .get_alloc_size = */ ggml_backend_cann_buffer_type_get_alloc_size,
+    /* .is_host        = */ ggml_backend_cann_buffer_type_is_host,
 };
 
 /**
@@ -1742,12 +1743,13 @@ static ggml_backend_buffer_t ggml_backend_cann_host_buffer_type_alloc_buffer(ggm
 ggml_backend_buffer_type_t ggml_backend_cann_host_buffer_type() {
     static struct ggml_backend_buffer_type ggml_backend_cann_buffer_type_host = {
         /* .iface    = */ {
-                           /* .get_name         = */ ggml_backend_cann_host_buffer_type_name,
-                           /* .alloc_buffer     = */ ggml_backend_cann_host_buffer_type_alloc_buffer,
-                           /* .get_alignment    = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
-                           /* .get_max_size     = */ NULL,  // defaults to SIZE_MAX
-            /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
-                           /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+                           /* .get_name       = */ ggml_backend_cann_host_buffer_type_name,
+                           /* .alloc_buffer   = */ ggml_backend_cann_host_buffer_type_alloc_buffer,
+                           /* .alloc_buffer_n = */ NULL,
+                           /* .get_alignment  = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
+                           /* .get_max_size   = */ NULL,  // defaults to SIZE_MAX
+                           /* .get_alloc_size = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
+                           /* .is_host        = */ ggml_backend_cpu_buffer_type()->iface.is_host,
                            },
         /* .device   = */
         ggml_backend_reg_dev_get(ggml_backend_cann_reg(), 0),

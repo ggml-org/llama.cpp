@@ -4015,6 +4015,7 @@ static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_buffer_type(ggm
         /* .iface = */ {
                         /* .get_name       = */ ggml_backend_webgpu_buffer_type_get_name,
                         /* .alloc_buffer   = */ ggml_backend_webgpu_buffer_type_alloc_buffer,
+                        /* .alloc_buffer_n = */ NULL,
                         /* .get_alignment  = */ ggml_backend_webgpu_buffer_type_get_alignment,
                         /* .get_max_size   = */ ggml_backend_webgpu_buffer_type_get_max_size,
                         /* .get_alloc_size = */ ggml_backend_webgpu_buffer_type_get_alloc_size,

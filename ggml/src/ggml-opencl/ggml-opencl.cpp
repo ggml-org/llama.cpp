@@ -9325,12 +9325,13 @@ static bool ggml_backend_opencl_buffer_type_supports_backend(ggml_backend_buffer
 }
 
 static ggml_backend_buffer_type_i ggml_backend_opencl_buffer_type_interface = {
-    /* .get_name         = */ ggml_backend_opencl_buffer_type_get_name,
-    /* .alloc_buffer     = */ ggml_backend_opencl_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_opencl_buffer_type_get_alignment,
-    /* .get_max_size     = */ ggml_backend_opencl_buffer_type_get_max_size,
-    /* .get_alloc_size   = */ NULL,
-    /* .is_host          = */ NULL,
+    /* .get_name       = */ ggml_backend_opencl_buffer_type_get_name,
+    /* .alloc_buffer   = */ ggml_backend_opencl_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n = */ NULL,
+    /* .get_alignment  = */ ggml_backend_opencl_buffer_type_get_alignment,
+    /* .get_max_size   = */ ggml_backend_opencl_buffer_type_get_max_size,
+    /* .get_alloc_size = */ NULL,
+    /* .is_host        = */ NULL,
 };
 
 //

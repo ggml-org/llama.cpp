@@ -4821,12 +4821,13 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
 ggml_backend_buffer_type_t ggml_backend_cpu_repack_buffer_type(void) {
     static struct ggml_backend_buffer_type ggml_backend_cpu_buffer_type_repack = {
         /* .iface    = */ {
-                           /* .get_name         = */ ggml_backend_cpu_repack_buffer_type_get_name,
-                           /* .alloc_buffer     = */ ggml_backend_cpu_repack_buffer_type_alloc_buffer,
-                           /* .get_alignment    = */ ggml_backend_cpu_repack_buffer_type_get_alignment,
-                           /* .get_max_size     = */ nullptr,  // defaults to SIZE_MAX
-                           /* .get_alloc_size   = */ nullptr,  // defaults to ggml_nbytes
-                           /* .is_host          = */ nullptr,
+                           /* .get_name       = */ ggml_backend_cpu_repack_buffer_type_get_name,
+                           /* .alloc_buffer   = */ ggml_backend_cpu_repack_buffer_type_alloc_buffer,
+                           /* .alloc_buffer_n = */ nullptr,
+                           /* .get_alignment  = */ ggml_backend_cpu_repack_buffer_type_get_alignment,
+                           /* .get_max_size   = */ nullptr,  // defaults to SIZE_MAX
+                           /* .get_alloc_size = */ nullptr,  // defaults to ggml_nbytes
+                           /* .is_host        = */ nullptr,
                            },
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
         /* .context = */ new ggml::cpu::repack::extra_buffer_type(),

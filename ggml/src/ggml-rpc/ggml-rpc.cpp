@@ -629,12 +629,13 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
 }
 
 static ggml_backend_buffer_type_i ggml_backend_rpc_buffer_type_interface = {
-    /* .get_name         = */ ggml_backend_rpc_buffer_type_name,
-    /* .alloc_buffer     = */ ggml_backend_rpc_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_rpc_buffer_type_get_alignment,
-    /* .get_max_size     = */ ggml_backend_rpc_get_max_size,
-    /* .get_alloc_size   = */ ggml_backend_rpc_buffer_type_get_alloc_size,
-    /* .is_host          = */ NULL,
+    /* .get_name       = */ ggml_backend_rpc_buffer_type_name,
+    /* .alloc_buffer   = */ ggml_backend_rpc_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n = */ NULL,
+    /* .get_alignment  = */ ggml_backend_rpc_buffer_type_get_alignment,
+    /* .get_max_size   = */ ggml_backend_rpc_get_max_size,
+    /* .get_alloc_size = */ ggml_backend_rpc_buffer_type_get_alloc_size,
+    /* .is_host        = */ NULL,
 };
 
 static const char * ggml_backend_rpc_name(ggml_backend_t backend) {

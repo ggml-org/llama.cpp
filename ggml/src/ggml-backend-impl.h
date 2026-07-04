@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-    #define GGML_BACKEND_API_VERSION 2
+    #define GGML_BACKEND_API_VERSION 3
 
     //
     // Backend buffer type
@@ -18,6 +18,8 @@ extern "C" {
         const char *          (*get_name)      (ggml_backend_buffer_type_t buft);
         // allocate a buffer of this type
         ggml_backend_buffer_t (*alloc_buffer)  (ggml_backend_buffer_type_t buft, size_t size);
+        // (optional) allocate tensors from a list into a buffer of this type (defaults to alloc_buffer + linear allocator)
+        ggml_backend_buffer_t (*alloc_buffer_n)(ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors);
         // tensor alignment
         size_t                (*get_alignment) (ggml_backend_buffer_type_t buft);
         // (optional) max buffer size that can be allocated (defaults to SIZE_MAX)
@@ -94,9 +96,6 @@ extern "C" {
 
     GGML_API size_t         ggml_backend_meta_n_backends    (ggml_backend_t meta_backend);
     GGML_API ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, size_t index);
-
-    // temporary workaround to statically allocate tensors from a context in a deduplicated way:
-    GGML_API struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
 
     //
     // Backend (stream)
