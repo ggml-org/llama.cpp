@@ -82,7 +82,6 @@ llama_context::llama_context(
     if (cparams.n_seq_max > LLAMA_MAX_SEQ) {
         throw std::runtime_error("n_seq_max must be <= " + std::to_string(LLAMA_MAX_SEQ));
     }
-    cparams.sampler_backend_require_multi_output = params.n_outputs_max > cparams.n_seq_max;
 
     cparams.n_rs_seq = params.n_rs_seq;
     if (cparams.n_rs_seq > 0 && !llm_arch_supports_rs_rollback(model.arch)) {
@@ -139,25 +138,6 @@ llama_context::llama_context(
                 throw std::runtime_error(model.arch_name() + " requires ctx_other to be set (this warning is normal during memory fitting)");
             }
             cparams.ctx_other = params.ctx_other;
-        }
-    }
-
-    // Initialize backend samplers here so they are part of the sampling graph
-    // before the reserve passes run later in this function. This avoids a later
-    // re-reserve when graph nodes change.
-    if (params.samplers != nullptr && params.n_samplers > 0) {
-        for (size_t i = 0; i < params.n_samplers; ++i) {
-            const auto & config = params.samplers[i];
-
-            if (llama_sampler_chain_get(config.sampler, -1) == nullptr) {
-                throw std::runtime_error("the backend samplers must be of type llama_sampler_chain");
-            }
-
-            if (set_sampler(config.seq_id, config.sampler)) {
-                const int n_samplers = llama_sampler_chain_n(config.sampler);
-
-                LLAMA_LOG_INFO("%s: setting backend sampler for seq_id %d (n = %d)\n", __func__, config.seq_id, n_samplers);
-            }
         }
     }
 
@@ -243,6 +223,27 @@ llama_context::llama_context(
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
+    cparams.n_sampling_outputs_per_seq_max = params.n_sampling_outputs_per_seq_max == 0 ?
+            cparams.n_outputs_max : std::min(params.n_sampling_outputs_per_seq_max, cparams.n_outputs_max);
+
+    // Initialize backend samplers here so they are part of the sampling graph
+    // before the reserve passes run later in this function. This avoids a later
+    // re-reserve when graph nodes change.
+    if (params.samplers != nullptr && params.n_samplers > 0) {
+        for (size_t i = 0; i < params.n_samplers; ++i) {
+            const auto & config = params.samplers[i];
+
+            if (llama_sampler_chain_get(config.sampler, -1) == nullptr) {
+                throw std::runtime_error("the backend samplers must be of type llama_sampler_chain");
+            }
+
+            if (set_sampler(config.seq_id, config.sampler)) {
+                const int n_samplers = llama_sampler_chain_n(config.sampler);
+
+                LLAMA_LOG_INFO("%s: setting backend sampler for seq_id %d (n = %d)\n", __func__, config.seq_id, n_samplers);
+            }
+        }
+    }
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
@@ -290,6 +291,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq      = %u\n",   __func__, cparams.n_rs_seq);
     LLAMA_LOG_INFO("%s: n_outputs_max = %u\n",   __func__, cparams.n_outputs_max);
+    LLAMA_LOG_INFO("%s: n_sampling_outputs_per_seq_max = %u\n", __func__, cparams.n_sampling_outputs_per_seq_max);
 
     if (cparams.n_ctx_seq < hparams.n_ctx_train) {
         LLAMA_LOG_INFO("%s: n_ctx_seq (%u) < n_ctx_train (%u) -- the full capacity of the model will not be utilized\n",
@@ -1198,7 +1200,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     if (sampler && can_offload) {
         auto * buft = ggml_backend_dev_buffer_type(model.dev_output());
 
-        sampler->iface->backend_init(sampler, buft, cparams.sampler_backend_require_multi_output);
+        sampler->iface->backend_init(sampler, buft, cparams.n_sampling_outputs_per_seq_max);
 
         sampling.samplers[seq_id] = sampler;
 
@@ -1634,11 +1636,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
                 seq_output_count[seq_id]++;
                 auto sampler = sampling.samplers.find(seq_id);
-                if (seq_output_count[seq_id] > 1 &&
-                        sampler != sampling.samplers.end() &&
-                        !cparams.sampler_backend_require_multi_output) {
-                    LLAMA_LOG_ERROR("%s: backend sampling requires at most one output token per sequence (seq_id %d had %d)\n",
-                            __func__, seq_id, seq_output_count[seq_id]);
+                if (sampler != sampling.samplers.end() &&
+                        seq_output_count[seq_id] > (int32_t) cparams.n_sampling_outputs_per_seq_max) {
+                    LLAMA_LOG_ERROR("%s: backend sampling supports at most %u outputs per sequence "
+                            "(seq_id %d had %d)\n", __func__, cparams.n_sampling_outputs_per_seq_max,
+                            seq_id, seq_output_count[seq_id]);
                     return -1;
                 }
             }
@@ -2254,7 +2256,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     for (const auto & [seq_id, sampler] : sampling.samplers) {
         const uint32_t n_nodes = llama_sampler_backend_n_nodes(sampler);
         n_sampling_nodes += n_nodes;
-        if (cparams.sampler_backend_require_multi_output) {
+        if (cparams.n_sampling_outputs_per_seq_max > 1) {
             n_sampling_nodes_max = std::max(n_sampling_nodes_max, n_nodes);
         }
     }
@@ -2310,7 +2312,7 @@ ggml_cgraph * llama_context::graph_reserve(
         for (uint32_t s = 0; s < n_seqs && n_outputs_set < n_outputs; ++s) {
             const auto sampler = sampling.samplers.find(s);
             if (t > 0 && (sampler == sampling.samplers.end() ||
-                    !cparams.sampler_backend_require_multi_output)) {
+                    cparams.n_sampling_outputs_per_seq_max == 1)) {
                 continue;
             }
 
@@ -3403,6 +3405,7 @@ llama_context_params llama_context_default_params() {
         /*.n_seq_max                   =*/ 1,
         /*.n_rs_seq                    =*/ 0,
         /*.n_outputs_max               =*/ 0,
+        /*.n_sampling_outputs_per_seq_max =*/ 1,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
         /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,

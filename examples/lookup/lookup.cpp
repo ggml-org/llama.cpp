@@ -30,6 +30,7 @@ int main(int argc, char ** argv){
     const int n_draft = params.speculative.draft.n_max;
 
     params.n_outputs_max = common_speculative_n_outputs_max(params.n_batch, params.n_parallel, n_draft);
+    params.n_sampling_outputs_per_seq_max = common_speculative_n_outputs_per_seq_max(params.n_batch, n_draft);
 
     // init llama.cpp
     llama_backend_init();

@@ -22,6 +22,12 @@ static void test(void) {
             std::numeric_limits<int32_t>::max(),
             std::numeric_limits<int32_t>::max(),
             std::numeric_limits<int32_t>::max()) == std::numeric_limits<int32_t>::max());
+    assert(common_speculative_n_outputs_per_seq_max(16, 3) == 4);
+    assert(common_speculative_n_outputs_per_seq_max(16, -1) == 1);
+    assert(common_speculative_n_outputs_per_seq_max(2, 3) == 2);
+    assert(common_speculative_n_outputs_per_seq_max(
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max()) == std::numeric_limits<int32_t>::max());
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {

@@ -85,7 +85,8 @@ struct test_context {
             std::vector<llama_sampler_seq_config> & configs,
             int32_t n_seq_max = -1,
             uint32_t n_outputs_max = 0,
-            uint32_t n_ubatch = 0) {
+            uint32_t n_ubatch = 0,
+            uint32_t n_sampling_outputs_per_seq_max = 1) {
         auto * model = params.model.get();
 
         GGML_ASSERT(model);
@@ -98,6 +99,7 @@ struct test_context {
             cparams.n_ubatch = n_ubatch;
         }
         cparams.n_outputs_max = n_outputs_max;
+        cparams.n_sampling_outputs_per_seq_max = n_sampling_outputs_per_seq_max;
         cparams.samplers = configs.data();
         cparams.n_samplers = configs.size();
         cparams.kv_unified = true;
@@ -273,7 +275,7 @@ struct test_context {
 
 struct test_single_output_backend_sampler {
     bool backend_initialized = false;
-    bool backend_require_multi_output = false;
+    uint32_t backend_outputs_per_seq_max = 0;
     int backend_apply_count = 0;
     int apply_count = 0;
 };
@@ -293,10 +295,10 @@ static void test_single_output_backend_sampler_free(llama_sampler * smpl) {
 }
 
 static bool test_single_output_backend_sampler_backend_init(
-        llama_sampler * smpl, ggml_backend_buffer_type_t /*buft*/, bool require_multi_output) {
+        llama_sampler * smpl, ggml_backend_buffer_type_t /*buft*/, uint32_t n_outputs_per_seq_max) {
     auto * ctx = (test_single_output_backend_sampler *) smpl->ctx;
-    ctx->backend_require_multi_output = require_multi_output;
-    if (require_multi_output) {
+    ctx->backend_outputs_per_seq_max = n_outputs_per_seq_max;
+    if (n_outputs_per_seq_max > 1) {
         return false;
     }
     ctx->backend_initialized = true;
@@ -1037,26 +1039,27 @@ static void test_backend_cpu_mixed_batch(const test_params & params) {
     printf("backend-cpu mixed batch test PASSED\n");
 }
 
-static void test_backend_multi_output_disabled(const test_params & params) {
+static void test_backend_multi_output_limit(const test_params & params) {
     const llama_seq_id seq_id = 0;
 
     llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
     llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(88));
     std::vector<llama_sampler_seq_config> configs = {{ seq_id, chain.get() }};
-    test_context test_ctx(params, configs, 1, 1);
+    test_context test_ctx(params, configs, 1, 3, 0, 2);
 
-    llama_batch batch = llama_batch_init(2, 0, 1);
-    common_batch_add(batch, llama_vocab_bos(test_ctx.vocab), 0, { seq_id }, true);
-    common_batch_add(batch, llama_vocab_bos(test_ctx.vocab), 1, { seq_id }, true);
+    llama_batch batch = llama_batch_init(3, 0, 1);
+    for (int i = 0; i < 3; ++i) {
+        common_batch_add(batch, llama_vocab_bos(test_ctx.vocab), i, { seq_id }, true);
+    }
 
-    printf(">>> test_backend_multi_output_disabled expected error start:\n");
+    printf(">>> test_backend_multi_output_limit expected error start:\n");
     const int ret = llama_decode(test_ctx.ctx.get(), batch);
-    GGML_ASSERT(ret != 0 && "llama_decode should reject multiple outputs for one sequence");
-    printf("<<< test_backend_multi_output_disabled expected error end.\n");
+    GGML_ASSERT(ret != 0 && "llama_decode should reject outputs above the per-sequence limit");
+    printf("<<< test_backend_multi_output_limit expected error end.\n");
 
     llama_batch_free(batch);
 
-    printf("backend multi-output disabled test PASSED\n");
+    printf("backend multi-output limit test PASSED\n");
 }
 
 // greedy is a stateless terminal selector; verify multi-output backend argmax
@@ -1069,7 +1072,7 @@ static void test_backend_multi_output_greedy(const test_params & params) {
     llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
     llama_sampler_chain_add(chain.get(), llama_sampler_init_greedy());
     std::vector<llama_sampler_seq_config> configs = {{ seq_id, chain.get() }};
-    test_context test_ctx(params, configs, 1, 4);
+    test_context test_ctx(params, configs, 4, 4, 0, 4);
 
     std::vector<llama_sampler_seq_config> reference_configs;
     test_context reference_ctx(params, reference_configs, 1, 4);
@@ -1127,7 +1130,7 @@ static void test_backend_multi_output_sampling_chain(const test_params & params)
     llama_sampler_ptr chain = make_filter_chain();
     llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(seed));
     std::vector<llama_sampler_seq_config> configs = {{ seq_id, chain.get() }};
-    test_context test_ctx(params, configs, 1, 4, 2);
+    test_context test_ctx(params, configs, 1, 4, 2, 4);
 
     std::vector<llama_sampler_seq_config> reference_configs;
     test_context reference_ctx(params, reference_configs, 1, 4, 2);
@@ -1255,14 +1258,14 @@ static void test_backend_multi_output_cpu_suffix(const test_params & params) {
         llama_sampler_chain_add(chain.get(), test_single_output_backend_sampler_init(&sampler_ctx));
         llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(88));
         std::vector<llama_sampler_seq_config> configs = {{ seq_id, chain.get() }};
-        test_context test_ctx(params, configs, 1, 1);
+        test_context test_ctx(params, configs, 1, 1, 0, 4);
 
         llama_batch batch = llama_batch_init(1, 0, 1);
         common_batch_add(batch, llama_vocab_bos(vocab), 0, { seq_id }, true);
         GGML_ASSERT(llama_decode(test_ctx.ctx.get(), batch) == 0);
 
         GGML_ASSERT(sampler_ctx->backend_initialized);
-        GGML_ASSERT(!sampler_ctx->backend_require_multi_output);
+        GGML_ASSERT(sampler_ctx->backend_outputs_per_seq_max == 1);
         GGML_ASSERT(sampler_ctx->backend_apply_count > 0);
         GGML_ASSERT(sampler_ctx->apply_count == 0);
         GGML_ASSERT(llama_get_sampled_token_ith(test_ctx.ctx.get(), 0) != LLAMA_TOKEN_NULL);
@@ -1277,7 +1280,7 @@ static void test_backend_multi_output_cpu_suffix(const test_params & params) {
         llama_sampler_chain_add(chain.get(), test_single_output_backend_sampler_init(&sampler_ctx));
         llama_sampler_chain_add(chain.get(), llama_sampler_init_dist(88));
         std::vector<llama_sampler_seq_config> configs = {{ seq_id, chain.get() }};
-        test_context test_ctx(params, configs, 1, 2);
+        test_context test_ctx(params, configs, 1, 2, 0, 0);
 
         llama_batch batch = llama_batch_init(2, 0, 1);
         for (int i = 0; i < 2; ++i) {
@@ -1286,7 +1289,7 @@ static void test_backend_multi_output_cpu_suffix(const test_params & params) {
         GGML_ASSERT(llama_decode(test_ctx.ctx.get(), batch) == 0);
 
         GGML_ASSERT(!sampler_ctx->backend_initialized);
-        GGML_ASSERT(sampler_ctx->backend_require_multi_output);
+        GGML_ASSERT(sampler_ctx->backend_outputs_per_seq_max == 2);
         GGML_ASSERT(sampler_ctx->backend_apply_count == 0);
         for (int i = 0; i < batch.n_tokens; ++i) {
             GGML_ASSERT(llama_get_sampled_token_ith(test_ctx.ctx.get(), i) == LLAMA_TOKEN_NULL);
@@ -1319,7 +1322,7 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "dist",            test_backend_dist_sampling,           true  },
     { "dist_and_cpu",    test_backend_dist_sampling_and_cpu,   true  },
     { "set_sampler",     test_backend_set_sampler,             true  },
-    { "multi_output_disabled", test_backend_multi_output_disabled,   true },
+    { "multi_output_limit",    test_backend_multi_output_limit,      true },
     { "multi_output_greedy",   test_backend_multi_output_greedy,     true },
     { "multi_output_sampling_chain", test_backend_multi_output_sampling_chain, true },
     { "multi_output_cpu",      test_backend_multi_output_cpu_suffix, true },

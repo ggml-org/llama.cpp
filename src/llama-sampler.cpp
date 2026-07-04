@@ -464,10 +464,10 @@ static void llama_sampler_empty_free(struct llama_sampler * smpl) {
 static bool llama_sampler_empty_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft,
-        bool                         require_multi_output) {
+        uint32_t                     n_outputs_per_seq_max) {
     GGML_UNUSED(smpl);
     GGML_UNUSED(buft);
-    GGML_UNUSED(require_multi_output);
+    GGML_UNUSED(n_outputs_per_seq_max);
 
     return true;
 }
@@ -711,7 +711,7 @@ static void llama_sampler_chain_free(struct llama_sampler * smpl) {
 static bool llama_sampler_chain_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft,
-        bool                         require_multi_output) {
+        uint32_t                     n_outputs_per_seq_max) {
     auto * chain = (llama_sampler_chain *) smpl->ctx;
 
     GGML_ASSERT(chain->is_init == false && "llama_sampler_chain_backend_init() called twice");
@@ -727,9 +727,9 @@ static bool llama_sampler_chain_backend_init(
         // to be able to run a sampler on the backend, it has to:
         // - have the .backend_init() API implemented
         // - return true during .backend_init()
-        // - support the requested output mode
+        // - support the requested per-sequence output limit
         if (res_cur && smpl.ptr->iface->backend_init) {
-            if (!smpl.ptr->iface->backend_init(smpl.ptr, buft, require_multi_output)) {
+            if (!smpl.ptr->iface->backend_init(smpl.ptr, buft, n_outputs_per_seq_max)) {
                 res_cur = false;
             }
         } else {
@@ -1021,9 +1021,9 @@ static void llama_sampler_greedy_apply(struct llama_sampler * /*smpl*/, llama_to
 static bool llama_sampler_greedy_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft,
-        bool                         require_multi_output) {
+        uint32_t                     n_outputs_per_seq_max) {
     auto * sctx = (llama_sampler_greedy *) smpl->ctx;
-    GGML_UNUSED(require_multi_output);
+    GGML_UNUSED(n_outputs_per_seq_max);
 
     const bool res = llama_sampler_backend_support(smpl, buft);
 
@@ -1185,9 +1185,9 @@ static void llama_sampler_dist_free(struct llama_sampler * smpl) {
 static bool llama_sampler_dist_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft,
-        bool                         require_multi_output) {
+        uint32_t                     n_outputs_per_seq_max) {
     auto * sctx = (llama_sampler_dist *) smpl->ctx;
-    GGML_UNUSED(require_multi_output);
+    GGML_UNUSED(n_outputs_per_seq_max);
 
     const bool res = llama_sampler_backend_support(smpl, buft);
 
@@ -1341,9 +1341,9 @@ static void llama_sampler_top_k_free(struct llama_sampler * smpl) {
 static bool llama_sampler_top_k_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft,
-        bool                         require_multi_output) {
+        uint32_t                     n_outputs_per_seq_max) {
     auto * sctx = (llama_sampler_top_k *) smpl->ctx;
-    GGML_UNUSED(require_multi_output);
+    GGML_UNUSED(n_outputs_per_seq_max);
 
     const bool res = llama_sampler_backend_support(smpl, buft);
 
@@ -1490,9 +1490,9 @@ static void llama_sampler_top_p_free(struct llama_sampler * smpl) {
 static bool llama_sampler_top_p_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft,
-        bool                         require_multi_output) {
+        uint32_t                     n_outputs_per_seq_max) {
     auto * sctx = (llama_sampler_top_p *) smpl->ctx;
-    GGML_UNUSED(require_multi_output);
+    GGML_UNUSED(n_outputs_per_seq_max);
 
     const bool res = llama_sampler_backend_support(smpl, buft);
 
@@ -1684,9 +1684,9 @@ static void llama_sampler_min_p_free(struct llama_sampler * smpl) {
 static bool llama_sampler_min_p_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft,
-        bool                         require_multi_output) {
+        uint32_t                     n_outputs_per_seq_max) {
     auto * sctx = (llama_sampler_min_p *) smpl->ctx;
-    GGML_UNUSED(require_multi_output);
+    GGML_UNUSED(n_outputs_per_seq_max);
 
     const bool res = llama_sampler_backend_support(smpl, buft);
 
@@ -1932,9 +1932,9 @@ static void llama_sampler_backend_temp_sampling(
 static bool llama_sampler_temp_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft,
-        bool                         require_multi_output) {
+        uint32_t                     n_outputs_per_seq_max) {
     auto * sctx = (llama_sampler_temp *) smpl->ctx;
-    GGML_UNUSED(require_multi_output);
+    GGML_UNUSED(n_outputs_per_seq_max);
 
     const bool res = llama_sampler_backend_support(smpl, buft);
 
@@ -2078,9 +2078,9 @@ static void llama_sampler_temp_ext_free(struct llama_sampler * smpl) {
 static bool llama_sampler_temp_ext_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft,
-        bool                         require_multi_output) {
+        uint32_t                     n_outputs_per_seq_max) {
     auto * sctx = (llama_sampler_temp_ext *) smpl->ctx;
-    GGML_UNUSED(require_multi_output);
+    GGML_UNUSED(n_outputs_per_seq_max);
 
     const bool res = llama_sampler_backend_support(smpl, buft);
 
@@ -3646,9 +3646,9 @@ static void llama_sampler_logit_bias_backend_reset(struct llama_sampler * smpl) 
 static bool llama_sampler_logit_bias_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft,
-        bool                         require_multi_output) {
+        uint32_t                     n_outputs_per_seq_max) {
     GGML_UNUSED(buft);
-    GGML_UNUSED(require_multi_output);
+    GGML_UNUSED(n_outputs_per_seq_max);
 
     auto * sctx = (llama_sampler_logit_bias *) smpl->ctx;
 

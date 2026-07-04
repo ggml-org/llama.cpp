@@ -344,6 +344,7 @@ extern "C" {
         uint32_t n_seq_max;         // max number of sequences (i.e. distinct states for recurrent models)
         uint32_t n_rs_seq;          // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
         uint32_t n_outputs_max;     // max outputs in a ubatch (0 = n_batch)
+        uint32_t n_sampling_outputs_per_seq_max; // max outputs per sequence with backend sampling (0 = n_outputs_max)
         int32_t  n_threads;         // number of threads to use for generation
         int32_t  n_threads_batch;   // number of threads to use for batch processing
 
@@ -1262,7 +1263,7 @@ extern "C" {
         bool (*backend_init)(
                 struct llama_sampler       * smpl,
                 ggml_backend_buffer_type_t   buft,
-                bool                         require_multi_output);
+                uint32_t                     n_outputs_per_seq_max);
 
         // call after .backend_apply()
         void (*backend_accept)(
