@@ -3165,13 +3165,12 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                               (a->ne[2]   == 1 && a->ne[3]   == 1);
         const bool shape_ok = ggml_are_same_shape(a, inv_b) && a->ne[0] == 1 && a->ne[1] == x->ne[1];
 
-        // x must be in the supported whitelist and every operand / intermediate
-        // result must share x's type, since launch_snake casts a / inv_b as
-        // float and templates the kernel on a single T. Mixed precision chains
-        // fall back to the naive path.
+        // x is in the supported whitelist and every chain intermediate shares
+        // x's type. launch_snake reads a and inv_b as const float *, so they
+        // stay F32.
         const ggml_tensor * sin1 = cgraph->nodes[i + 1];
         const bool types_ok = (x->type == GGML_TYPE_F32 || x->type == GGML_TYPE_F16 || x->type == GGML_TYPE_BF16) &&
-                              (a->type    == x->type) && (inv_b->type == x->type) &&
+                              (a->type    == GGML_TYPE_F32) && (inv_b->type == GGML_TYPE_F32) &&
                               (mul0->type == x->type) && (sin1->type  == x->type) &&
                               (sqr->type  == x->type) && (mul1->type  == x->type) &&
                               (add->type  == x->type);
