@@ -923,7 +923,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     std::vector<float> features_buf;
 
     common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
-            common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
+            common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,
+            bool draft_at_anchor = false)
         : common_speculative_impl(type, n_seq)
         , params(params.draft)
     {
@@ -942,26 +943,31 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         n_embd_dec    = llama_model_n_embd(model_dft);
         n_embd_enc    = (int32_t) target_layer_ids_n * n_embd_tgt;
 
-        // read the trained block size from the dflash.block_size metadata key
+        // read the trained block size from the <arch>.block_size metadata key
         block_size = 16;
         {
+            char arch[64] = {};
+            llama_model_meta_val_str(model_dft, "general.architecture", arch, sizeof(arch));
+
             char buf[32] = {};
-            if (llama_model_meta_val_str(model_dft, "dflash.block_size", buf, sizeof(buf)) >= 0) {
+            if (llama_model_meta_val_str(model_dft, (std::string(arch) + ".block_size").c_str(), buf, sizeof(buf)) >= 0) {
                 block_size = std::atoi(buf);
             }
         }
         mask_token_id = llama_vocab_mask(llama_model_get_vocab(model_dft));
 
-        LOG_INF("%s: adding speculative implementation 'draft-dflash'\n", __func__);
+        LOG_INF("%s: adding speculative implementation '%s'\n", __func__, common_speculative_type_to_str(type).c_str());
         LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%.2f\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min);
         LOG_INF("%s: - block_size=%d, mask_token_id=%d, n_extract=%u\n", __func__, block_size, mask_token_id, target_layer_ids_n);
 
-        // DFlash input is [id_last, <mask> * (block_size-1)], so it can draft at most block_size-1 tokens per step
-        if (this->params.n_max > block_size - 1 || this->params.n_min > block_size - 1) {
-            LOG_WRN("%s: requested draft size (n_max=%d, n_min=%d) exceeds the trained DFlash block size %d -- clamping to %d\n",
-                    __func__, this->params.n_max, this->params.n_min, block_size, block_size - 1);
-            this->params.n_max = std::min(this->params.n_max, block_size - 1);
-            this->params.n_min = std::min(this->params.n_min, block_size - 1);
+        // the input block is [id_last, <mask> * (block_size-1)], so a step drafts at most block_size-1
+        // tokens from the mask positions, plus one more when the head also drafts at the anchor position
+        const int32_t n_draft_max = draft_at_anchor ? block_size : block_size - 1;
+        if (this->params.n_max > n_draft_max || this->params.n_min > n_draft_max) {
+            LOG_WRN("%s: requested draft size (n_max=%d, n_min=%d) exceeds the trained block size %d -- clamping to %d\n",
+                    __func__, this->params.n_max, this->params.n_min, block_size, n_draft_max);
+            this->params.n_max = std::min(this->params.n_max, n_draft_max);
+            this->params.n_min = std::min(this->params.n_min, n_draft_max);
         }
 
         batch        = llama_batch_init(llama_n_batch(ctx_dft), 0,          n_seq);
@@ -1202,26 +1208,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
 // DSpark: DFlash backbone + a semi-autoregressive Markov head; reuses process(), only draft() differs
 struct common_speculative_impl_draft_dspark : public common_speculative_impl_draft_dflash {
-    common_speculative_impl_draft_dspark(const common_params_speculative & params_in, uint32_t n_seq)
-        : common_speculative_impl_draft_dflash(params_in, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
-    {
-        auto * ctx_dft = params.ctx_dft;
-        const llama_model * model_dft = llama_get_model(ctx_dft);
-
-        {
-            char buf[32] = {};
-            if (llama_model_meta_val_str(model_dft, "dspark.block_size", buf, sizeof(buf)) < 0) {
-                GGML_ABORT("DSpark: missing required metadata key 'dspark.block_size'");
-            }
-            block_size = std::atoi(buf);
-        }
-        if (params.n_max > block_size) {
-            params.n_max = block_size;
-        }
-
-        LOG_INF("%s: adding speculative implementation 'draft-dspark'\n", __func__);
-        LOG_INF("%s: - block_size=%d, n_max=%d\n", __func__, block_size, params.n_max);
-    }
+    common_speculative_impl_draft_dspark(const common_params_speculative & params, uint32_t n_seq)
+        : common_speculative_impl_draft_dflash(params, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, /*draft_at_anchor*/ true) {}
 
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto * ctx_dft = params.ctx_dft;
