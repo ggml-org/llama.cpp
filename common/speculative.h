@@ -28,6 +28,9 @@ common_params common_base_params_to_speculative(const common_params & params);
 // return the max number of outputs needed for speculative decoding
 int32_t common_speculative_n_outputs_max(int32_t n_batch, int32_t n_parallel, int32_t n_draft);
 
+// return the max number of outputs per sequence needed for speculative decoding
+int32_t common_speculative_n_outputs_per_seq_max(int32_t n_batch, int32_t n_draft);
+
 common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq);
 
 void common_speculative_free(common_speculative * spec);
