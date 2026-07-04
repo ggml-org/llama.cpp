@@ -213,17 +213,13 @@ llama_context::llama_context(
     cparams.kv_unified = params.kv_unified;
 
     if (model.moe_stream() && hparams.n_expert_used > 0) {
-        // one mul_mat_id needs every expert a ubatch touches resident at once, so a ubatch may
-        // not select more experts than the cache holds (worst case n_ubatch*n_expert_used)
-        const uint32_t n_ubatch_max = std::max(1u, model.moe_stream()->n_slots / hparams.n_expert_used);
-        if (cparams.n_ubatch > n_ubatch_max) {
-            LLAMA_LOG_WARN("%s: n_ubatch reduced from %u to %u so that a ubatch cannot select more experts than the %u-slot streaming cache\n",
-                    __func__, cparams.n_ubatch, n_ubatch_max, model.moe_stream()->n_slots);
-            cparams.n_ubatch = n_ubatch_max;
-        }
+        // ubatches that touch more experts than the streaming cache holds run the expert GEMMs in
+        // multiple waves, so no ubatch size restriction is needed
+        LLAMA_LOG_INFO("%s: MoE expert streaming with %u cache slots, n_ubatch = %u\n",
+                __func__, model.moe_stream()->n_slots, cparams.n_ubatch);
 
         // op offload snapshots host weights to the device per graph split, which assumes they do
-        // not change during the graph - streamed caches are rewritten on demand
+        // not change during the graph - streamed caches are rewritten between waves
         bool cache_on_host = false;
         for (const auto & buf : model.moe_stream()->bufs) {
             cache_on_host = cache_on_host || ggml_backend_buffer_is_host(buf.get());
@@ -2344,16 +2340,27 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
+    uint32_t res;
     if (model.arch == LLM_ARCH_QWEN3NEXT ||
         model.arch == LLM_ARCH_KIMI_LINEAR ||
         model.arch == LLM_ARCH_QWEN35 ||
         model.arch == LLM_ARCH_QWEN35MOE ||
         model.arch == LLM_ARCH_DEEPSEEK4) {
-        return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+        res = std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+    } else {
+        res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
+        for (const auto & lora : model.loras) {
+            res += lora->get_n_nodes();
+        }
     }
-    uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
-    for (const auto & lora : model.loras) {
-        res += lora->get_n_nodes();
+    if (const auto * mstream = model.moe_stream()) {
+        // multi-pass streamed prefill adds a bounded number of extra nodes per wave per streamed layer
+        const uint32_t n_eu = model.hparams.n_expert_used;
+        uint32_t cap = mstream->n_slots > n_eu ? (mstream->n_slots - n_eu)/2 : 0;
+        cap = std::max<uint32_t>(cap, 1);
+        const uint32_t n_touch_max = std::min<uint32_t>(model.hparams.n_expert, n_tokens*n_eu);
+        const uint32_t n_waves = (n_touch_max + cap - 1)/cap;
+        res += 24u*n_waves*(uint32_t) mstream->layers.size();
     }
     return res;
 }

@@ -47,6 +47,14 @@ struct llama_moe_stream_weight {
     size_t   nb_expert = 0; // bytes per expert slab
 };
 
+struct llama_moe_stream_layer;
+
+// userdata of one wave's custom ops (multi-pass prefill): identifies which pass this is
+struct llama_moe_stream_wave {
+    llama_moe_stream_layer * sl   = nullptr;
+    int32_t                  wave = -1;
+};
+
 // per-layer streaming state - also the userdata of the id-remapping custom op
 struct llama_moe_stream_layer {
     llama_moe_stream * mgr = nullptr;
@@ -74,6 +82,20 @@ struct llama_moe_stream_layer {
     std::vector<uint8_t> touched;
     std::vector<uint8_t> keep;         // [n_slots] slots the current call must not evict
     std::vector<int32_t> demand_slots; // slots the current call waits on
+
+    // wave plan for multi-pass prefill (guarded by mgr->mtx): the touched experts are split into
+    // plan_n_waves passes of at most plan_capacity experts each, run one pass at a time
+    uint32_t plan_capacity  = 0;  // experts per wave, set at graph build
+    uint32_t plan_n_waves   = 0;  // waves of the current call
+    int32_t  plan_next_wave = -1; // wave expected to run next (ordering guard)
+    std::vector<uint8_t> expert_wave; // [n_expert] wave each touched expert belongs to, 0xff = untouched
+    std::vector<int32_t> plan_pool;   // resident slots the masked-out pairs of this wave park on
+    std::vector<int32_t> pool_used;   // scratch: pool slots already used in the current token row
+
+    std::vector<std::unique_ptr<llama_moe_stream_wave>> wave_ud; // stable per-wave op userdata
+
+    // stable userdata for wave w (grows lazily); called at graph build time only
+    llama_moe_stream_wave * wave_userdata(int32_t wave, uint32_t capacity);
 
     // whether the exps tensors passed to build_moe_ffn are this layer's cache tensors
     // (e.g. grovemoe evaluates a second, unstreamed expert group on the same layer index)
@@ -148,6 +170,12 @@ struct llama_moe_stream {
         int64_t n_miss      = 0; // demand loads issued
         int64_t n_miss_cold = 0; // first-ever touch of an expert
         int64_t t_stall_us  = 0; // wait time in miss handling
+
+        int64_t n_wave_calls     = 0; // wave-ids invocations (>= n_calls under multi-pass prefill)
+        int64_t n_waves_run      = 0; // non-empty waves
+        int64_t n_preload_issued = 0; // next-wave loads started during a wave's compute
+        int64_t n_preload_ready  = 0; // wave experts already resident from the previous preload
+        int64_t t_stall_wave_us  = 0; // wait time in wave miss handling
     } stats;
 
     // internals
@@ -155,7 +183,19 @@ struct llama_moe_stream {
     void worker_loop();
     int32_t pick_victim_locked(llama_moe_stream_layer & sl, const uint8_t * keep) const;
     void reserve_slot_locked(llama_moe_stream_layer & sl, int32_t expert, int32_t slot);
+
+    // multi-pass prefill helpers (called by llama_moe_stream_wave_ids, all under mtx)
+    void plan_waves_locked(llama_moe_stream_layer & sl, const int32_t * ids, int64_t n); // wave 0: build the plan
+    void stage_wave_locked(std::unique_lock<std::mutex> & lk, llama_moe_stream_layer & sl, int32_t w, uint32_t n_ids); // make wave w resident + preload next
+    void emit_wave_slots(llama_moe_stream_layer & sl, const int32_t * ids, int32_t * out, int32_t w, uint32_t n_ids, int64_t n_tok); // write the slot ids
 };
 
 // callback of the id-remapping custom op inserted by build_moe_ffn
 void llama_moe_stream_remap(ggml_tensor * dst, const ggml_tensor * a, int ith, int nth, void * userdata);
+
+// callbacks of the multi-pass prefill custom ops inserted by build_moe_ffn when a ubatch touches
+// more experts than the cache holds; each src[0] is the contiguous selected ids
+//   wave_ids:  makes wave w's expert slice resident and emits slot ids (masked pairs park on a pool)
+//   wave_mask: emits 1.0 for pairs belonging to wave w, 0.0 otherwise
+void llama_moe_stream_wave_ids (ggml_tensor * dst, int ith, int nth, void * userdata);
+void llama_moe_stream_wave_mask(ggml_tensor * dst, int ith, int nth, void * userdata);
