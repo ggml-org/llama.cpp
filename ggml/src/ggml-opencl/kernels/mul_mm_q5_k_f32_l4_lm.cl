@@ -1,13 +1,23 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
 
+#ifdef cl_intel_required_subgroup_size
+#define INTEL_GPU 1
+#endif
+
 #define LOAD_VEC_A 4
 #define LOAD_VEC_B 4
 
 #define BM 64
 #define BN 64
 #define BK 32
+#ifdef INTEL_GPU
+// Intel Xe iGPU: 8x8 microtile (WG=64)
+#define TM 8
+#define TN 8
+#else
 #define TM 4
 #define TN 8
+#endif
 
 kernel void kernel_mul_mm_q5_k_f32_l4_lm(
     global uchar4 * src0_q,
