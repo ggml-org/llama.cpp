@@ -78,6 +78,32 @@ See:
 
 - #22105
 
+### DSpark (`draft-dspark`)
+
+DSpark extends DFlash with a semi-autoregressive _Markov head_: the draft still emits a whole
+block per forward pass, but each block position's logits are biased by a low-rank term keyed on
+the previous token, chained in-graph across the block. This keeps drafting at one decode per
+block while recovering some of the left-to-right signal that pure block diffusion loses.
+
+The draft is a small DeepSpec checkpoint trained for a specific target (for example
+[`deepseek-ai/dspark_qwen3_4b_block7`](https://huggingface.co/deepseek-ai/dspark_qwen3_4b_block7)
+for `Qwen/Qwen3-4B`). Convert it with `--target-model-dir` so it inherits the target's tokenizer
+and token embeddings:
+
+```bash
+python convert_hf_to_gguf.py deepseek-ai/dspark_qwen3_4b_block7 \
+    --target-model-dir Qwen/Qwen3-4B --outtype bf16 --outfile Qwen3-4B-DSpark.gguf
+
+llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DSpark.gguf \
+    --spec-type draft-dspark --spec-draft-n-max 7 -fa on --jinja
+```
+
+`--spec-draft-n-max` is clamped to the draft model's trained block size.
+
+See:
+
+- #25173
+
 ### n-gram Cache (`ngram-cache`)
 
 An n-gram is a sequence of n tokens. The n-gram cache implementation maintains statistics about short n-gram sequences.
@@ -173,7 +199,7 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 ### General Speculative Parameters
 
 ```
---spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+--spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
                                         comma-separated list of types of speculative decoding to use
                                         (default: none)
                                         (env: LLAMA_ARG_SPEC_TYPE)
@@ -314,6 +340,7 @@ Specifies a comma-separated list of speculative decoding types to use.
 | `draft-simple` | Use a simple draft model for speculation |
 | `draft-eagle3` | Use an EAGLE-3 draft model that reads the target's hidden states |
 | `draft-dflash` | Use a DFlash block-diffusion draft model that emits a block per step |
+| `draft-dspark` | Use a DSpark draft model (DFlash backbone + semi-autoregressive Markov head) |
 | `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |
 | `ngram-cache` | Use n-gram cache lookup |
 | `ngram-simple` | Use simple n-gram pattern matching |
