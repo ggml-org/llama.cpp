@@ -1,16 +1,13 @@
 #include "col2im_1d.cuh"
 
 
-
-
-// 1. Kernel body
 template <typename T>
 static __global__ void col2im_1d_kernel(
         const T * src, T * dst,
         int64_t T_out, int64_t T_in, int64_t K, int64_t OC, int64_t K_OC,
         int s0, int p0) {
     
-    const int64_t i = threadIdx.x + blockIdx.x * blockDim.x;
+    const int64_t i = (int64_t)threadIdx.x + blockIdx.x * blockDim.x;
     if (i >= T_out * OC) {
         return; // Guard out-of-bounds threads
     }
@@ -26,11 +23,10 @@ static __global__ void col2im_1d_kernel(
     int64_t t_in_min = (t_abs - K + 1 + s0 - 1) / s0; 
     if (t_in_min < 0) t_in_min = 0;
     
-    int64_t t_in_max = t_abs / s0;
-    if (t_in_max >= T_in) t_in_max = T_in - 1;
-
     float sum = 0.0f; // Accumulate in fp32
-    for (int64_t t_in = t_in_min; t_in <= t_in_max; t_in++) {
+
+
+    for (int64_t t_in = t_in_min; t_in * s0 <= t_abs && t_in < T_in; t_in++) {
         int64_t k = t_abs - t_in * s0;
         
         // src layout: [K_OC, T_in] -> element (oc * K + k) at column t_in
@@ -72,7 +68,7 @@ void ggml_cuda_op_col2im_1d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
         col2im_1d_kernel<float><<<num_blocks, block_size, 0, stream>>>(
             (const float *)src->data, (float *)dst->data, T_out, T_in, K, OC, K_OC, s0, p0);
     } else if (src->type == GGML_TYPE_F16) {
-        col2im_1d_kernel<half><<<num_blocks, block_size, 0, stream>>>(
+        col2im_1d_kernel<half><<<num_blocks, block_size, 0, stream >>>(
             (const half *)src->data, (half *)dst->data, T_out, T_in, K, OC, K_OC, s0, p0);
     } else if (src->type == GGML_TYPE_BF16) {
         col2im_1d_kernel<nv_bfloat16><<<num_blocks, block_size, 0, stream>>>(
