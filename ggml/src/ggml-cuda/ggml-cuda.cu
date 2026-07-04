@@ -3188,58 +3188,40 @@ static void ggml_backend_cuda_get_tensor_2d_async(ggml_backend_t backend, const 
         data, stride_data, (const char *) tensor->data + offset, stride_tensor, size, n_copies, cudaMemcpyDeviceToHost, cuda_ctx->stream()));
 }
 
-static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
+static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_copy, ggml_backend_t backend_wait, const ggml_tensor * src, ggml_tensor * dst) {
+    GGML_ASSERT(ggml_backend_is_cuda(backend_copy));
+    if (backend_wait && !ggml_backend_is_cuda(backend_wait)) {
+        return false;
+    }
+
     ggml_backend_buffer_t buf_src = src->view_src ? src->view_src->buffer : src->buffer;
     ggml_backend_buffer_t buf_dst = dst->view_src ? dst->view_src->buffer : dst->buffer;
 
-    if (!ggml_backend_is_cuda(backend_src) || !ggml_backend_is_cuda(backend_dst)) {
+    if (!ggml_backend_buffer_is_cuda(buf_src) && !ggml_backend_buffer_is_host(buf_src)) {
+        return false;
+    }
+    if (!ggml_backend_buffer_is_cuda(buf_dst) && !ggml_backend_buffer_is_host(buf_dst)) {
         return false;
     }
 
-    if (!ggml_backend_buffer_is_cuda(buf_src) || !ggml_backend_buffer_is_cuda(buf_dst)) {
-        return false;
+    ggml_backend_cuda_context * cuda_ctx_copy = (ggml_backend_cuda_context *) backend_copy->context;
+    CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDefault, cuda_ctx_copy->stream()));
+
+    // Optionally record an event on the copy stream after the copy and wait for it:
+
+    if (!backend_wait) {
+        return true;
     }
 
-    // device -> device copy
-    ggml_backend_cuda_context * cuda_ctx_src = (ggml_backend_cuda_context *) backend_src->context;
-    ggml_backend_cuda_context * cuda_ctx_dst = (ggml_backend_cuda_context *) backend_dst->context;
-
-    ggml_backend_cuda_buffer_context * buf_ctx_src = (ggml_backend_cuda_buffer_context *) buf_src->context;
-    ggml_backend_cuda_buffer_context * buf_ctx_dst = (ggml_backend_cuda_buffer_context *) buf_dst->context;
-
-    if (cuda_ctx_src->device != buf_ctx_src->device || cuda_ctx_dst->device != buf_ctx_dst->device) {
-#ifndef NDEBUG
-        GGML_LOG_DEBUG("%s: backend and buffer devices do not match\n", __func__);
-#endif // NDEBUG
-        return false;
+    if (!cuda_ctx_copy->copy_event) {
+        ggml_cuda_set_device(cuda_ctx_copy->device);
+        CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx_copy->copy_event, cudaEventDisableTiming));
     }
 
-    if (backend_src != backend_dst) {
-        // copy on src stream
-        if (cuda_ctx_src->device == cuda_ctx_dst->device) {
-            CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
-        } else {
-#ifdef GGML_CUDA_NO_PEER_COPY
-            return false;
-#else
-            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
-#endif // GGML_CUDA_NO_PEER_COPY
-        }
+    ggml_backend_cuda_context * cuda_ctx_wait = (ggml_backend_cuda_context *) backend_wait->context;
+    CUDA_CHECK(cudaEventRecord(cuda_ctx_copy->copy_event, cuda_ctx_copy->stream()));
+    CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx_wait->stream(), cuda_ctx_copy->copy_event, 0));
 
-        // record event on src stream after the copy
-        if (!cuda_ctx_src->copy_event) {
-            ggml_cuda_set_device(cuda_ctx_src->device);
-            CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx_src->copy_event, cudaEventDisableTiming));
-        }
-
-        CUDA_CHECK(cudaEventRecord(cuda_ctx_src->copy_event, cuda_ctx_src->stream()));
-
-        // wait on dst stream for the copy to complete
-        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx_dst->stream(), cuda_ctx_src->copy_event, 0));
-    } else {
-        // src and dst are on the same backend
-        CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
-    }
     return true;
 }
 
@@ -4607,29 +4589,24 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     return GGML_STATUS_SUCCESS;
 }
 
-static void ggml_backend_cuda_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
-    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
-
-    CUDA_CHECK(cudaEventRecord((cudaEvent_t)event->context, cuda_ctx->stream()));
+static bool ggml_backend_cuda_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
+    if (!ggml_backend_dev_is_cuda(event->device)) {
+        return false;
+    }
+    GGML_ASSERT(ggml_backend_is_cuda(backend));
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+    CUDA_CHECK(cudaEventRecord((cudaEvent_t) event->context, cuda_ctx->stream()));
+    return true;
 }
 
-static void ggml_backend_cuda_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
-    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
-
-    if (ggml_backend_is_cuda(backend)) {
-        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), (cudaEvent_t)event->context, 0));
-    } else {
-#if 0
-        // untested
-        auto wait_fn = [](void * user_data) {
-            ggml_backend_event_t event = (ggml_backend_event_t)user_data;
-            ggml_backend_event_synchronize(event);
-        };
-
-        CUDA_CHECK(cudaLaunchHostFunc(cuda_ctx->stream(), wait_fn, event));
-#endif
-        GGML_ABORT("fatal error");
+static bool ggml_backend_cuda_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
+    if (!ggml_backend_dev_is_cuda(event->device)) {
+        return false;
     }
+    GGML_ASSERT(ggml_backend_is_cuda(backend));
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+    CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), (cudaEvent_t)event->context, 0));
+    return true;
 }
 
 static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph) {
@@ -5612,6 +5589,10 @@ static const ggml_backend_device_i ggml_backend_cuda_device_interface = {
     /* .event_free              = */ ggml_backend_cuda_device_event_free,
     /* .event_synchronize       = */ ggml_backend_cuda_device_event_synchronize,
 };
+
+bool ggml_backend_dev_is_cuda(ggml_backend_dev_t dev) {
+    return dev->iface.get_name == ggml_backend_cuda_device_get_name;
+}
 
 // backend reg
 
