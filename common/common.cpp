@@ -216,8 +216,9 @@ int32_t common_cpu_get_num_math() {
     int32_t smt_factor = 1;
     int phy_cpus = common_cpu_get_num_physical_cores();
     int logical_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    if (phy_cpus > 0 && logical_cpus > phy_cpus)
+    if (phy_cpus > 0 && logical_cpus > phy_cpus) {
         smt_factor = logical_cpus / phy_cpus;
+    }
     return phy_cpus * std::min(smt_factor, 2);
 #endif
     return common_cpu_get_num_physical_cores();
