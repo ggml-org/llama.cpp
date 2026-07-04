@@ -55,6 +55,10 @@
 #include <pwd.h>
 #endif
 
+#if defined(_AIX)
+#include <sys/systemcfg.h>
+#endif
+
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
@@ -73,7 +77,6 @@ common_time_meas::~common_time_meas() {
 
 int32_t common_cpu_get_num_physical_cores() {
 #if defined(_AIX)
-    #include <sys/systemcfg.h>
     int32_t logical_cpus = _system_configuration.ncpus;
     int32_t smt_threads = _system_configuration.smt_threads;
     if (smt_threads > 0) {
