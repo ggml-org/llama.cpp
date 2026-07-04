@@ -356,26 +356,43 @@ static inline void htp_mm_hmx_vtcm_layout_build(
         const size_t activation_area_size = hex_align_up(group_size * act_head_stride * sizeof(uint16_t), HTP_MM_HMX_TILE_SIZE);
         const size_t output_area_size  = hex_align_up(group_size * mc * nc * sizeof(uint16_t), HTP_MM_HMX_TILE_SIZE);
         const size_t scratch_area_size = hex_align_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
-        const size_t f32_scratch_size = use_dma_activation
-            ? hex_align_up(act_threads * HTP_MM_DMA_ACT_MULTIPLIER * k * sizeof(float), HTP_MM_HMX_TILE_SIZE) : 0;
+        const size_t min_f32_size = use_dma_activation
+            ? hex_align_up(act_threads * HTP_MM_DMA_ACT_MULTIPLIER * k * sizeof(float), 128) : 0;
 
-        VTCM_LAYOUT_ALLOC(off_weight[0], weight_area_size);
-        L->off_weight[1] = 0;
-        VTCM_LAYOUT_ALLOC(off_act, activation_area_size);
-        VTCM_LAYOUT_ALLOC(off_dst[0], output_area_size);
-        L->off_dst[1] = 0;
-        VTCM_LAYOUT_ALLOC(off_scratch[0], scratch_area_size);
-        VTCM_LAYOUT_ALLOC(off_scratch[1], scratch_area_size);
-        VTCM_LAYOUT_ALLOC(off_scales, 256);
-        VTCM_LAYOUT_ALLOC_OPTIONAL(off_act_f32, f32_scratch_size, use_dma_activation);
+        // Group A: Permanent activation tiles and scales
+        size_t off_group_a = 0;
+        VTCM_LAYOUT_ALLOC(off_group_a, off_act, activation_area_size);
+        VTCM_LAYOUT_ALLOC(off_group_a, off_scales, HTP_MM_HMX_TILE_SIZE); // Padded to 2K for alignment and future persistent data
+
+        // Group B: Compute-only buffers (starts at off_group_a)
+        size_t off_group_b = off_group_a;
+        VTCM_LAYOUT_ALLOC(off_group_b, off_weight[0], weight_area_size);
+        VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_b, off_weight[1], weight_area_size, false);
+        VTCM_LAYOUT_ALLOC(off_group_b, off_dst[0], output_area_size);
+        VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_b, off_dst[1], output_area_size, false);
+        VTCM_LAYOUT_ALLOC(off_group_b, off_scratch[0], scratch_area_size);
+        VTCM_LAYOUT_ALLOC(off_group_b, off_scratch[1], scratch_area_size);
+
+        const size_t group_b_size = off_group_b - off_group_a;
+
+        // Group C: Activation prep temporary buffer (overlaps Group B, starting at off_group_a)
+        const size_t max_f32_size = act_threads * 64 * k * sizeof(float);
+        const size_t act_f32_size = use_dma_activation
+            ? hex_align_up(hex_smin(max_f32_size, hex_smax(min_f32_size, group_b_size)), 128) : 0;
+        size_t off_group_c = off_group_a;
+        VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_c, off_act_f32, act_f32_size, use_dma_activation);
+
+        const size_t group_c_size = off_group_c - off_group_a;
 
         L->weight_area_bytes = weight_area_size;
         L->act_area_bytes    = activation_area_size;
-        L->act_f32_bytes     = f32_scratch_size;
+        L->act_f32_bytes     = act_f32_size;
         L->output_area_bytes = output_area_size;
         L->scratch_bytes[0]  = scratch_area_size;
         L->scratch_bytes[1]  = scratch_area_size;
         L->act_head_stride   = act_head_stride;
+
+        off = off_group_a + hex_smax(group_b_size, group_c_size);
     } else {
         // HTP_MM_KERNEL_HMX_2D
         const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32);
@@ -383,7 +400,7 @@ static inline void htp_mm_hmx_vtcm_layout_build(
         const size_t vec_dot_size = k * sizeof(uint16_t);
         const uint32_t n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
 
-        const size_t act_f32_size = hex_align_up(act_threads * HTP_MM_DMA_ACT_MULTIPLIER * k * sizeof(float), HTP_MM_HMX_TILE_SIZE);
+        const size_t min_f32_size = hex_align_up(act_threads * HTP_MM_DMA_ACT_MULTIPLIER * k * sizeof(float), 128);
         const size_t weight_area_size = is_quant
             ? hex_align_up((nc / 32) * n_k_tiles * aligned_tile_size, HTP_MM_HMX_TILE_SIZE)
             : hex_align_up(nc * row_stride, HTP_MM_HMX_TILE_SIZE);
@@ -393,15 +410,29 @@ static inline void htp_mm_hmx_vtcm_layout_build(
         const size_t scratch0_size = hex_align_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
         const size_t scratch1_size = pipeline ? scratch0_size : 0;
 
-        VTCM_LAYOUT_ALLOC(off_weight[0], weight_area_size);
-        VTCM_LAYOUT_ALLOC_OPTIONAL(off_weight[1], weight_area_size, pipeline);
-        VTCM_LAYOUT_ALLOC(off_act, act_area_size);
-        VTCM_LAYOUT_ALLOC_OPTIONAL(off_act_f32, act_f32_size, true);
-        VTCM_LAYOUT_ALLOC(off_dst[0], output_area_size);
-        VTCM_LAYOUT_ALLOC(off_scratch[0], scratch0_size);
-        VTCM_LAYOUT_ALLOC_OPTIONAL(off_scratch[1], scratch0_size, pipeline);
-        VTCM_LAYOUT_ALLOC_OPTIONAL(off_dst[1], output_area_size, pipeline);
-        VTCM_LAYOUT_ALLOC(off_scales, 256);
+        // Group A:  Scales and activation tiles (must not overlap with Group B or C)
+        size_t off_group_a = 0;
+        VTCM_LAYOUT_ALLOC(off_group_a, off_scales, HTP_MM_HMX_TILE_SIZE); // Padded to 2K for alignment and future persistent data
+        VTCM_LAYOUT_ALLOC(off_group_a, off_act, act_area_size);
+
+        // Group B: Compute-only buffers (starts at off_group_a)
+        size_t off_group_b = off_group_a;
+        VTCM_LAYOUT_ALLOC(off_group_b, off_weight[0], weight_area_size);
+        VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_b, off_weight[1], weight_area_size, pipeline);
+        VTCM_LAYOUT_ALLOC(off_group_b, off_dst[0], output_area_size);
+        VTCM_LAYOUT_ALLOC(off_group_b, off_scratch[0], scratch0_size);
+        VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_b, off_scratch[1], scratch0_size, pipeline);
+        VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_b, off_dst[1], output_area_size, pipeline);
+
+        const size_t group_b_size = off_group_b - off_group_a;
+
+        // Group C: Activation prep temporary buffer (overlaps Group B, starting at off_group_a)
+        const size_t max_f32_size = act_threads * 64 * k * sizeof(float);
+        const size_t act_f32_size = hex_align_up(hex_smin(max_f32_size, hex_smax(min_f32_size, group_b_size)), 128);
+        size_t off_group_c = off_group_a;
+        VTCM_LAYOUT_ALLOC(off_group_c, off_act_f32, act_f32_size);
+
+        const size_t group_c_size = off_group_c - off_group_a;
 
         L->weight_area_bytes = weight_area_size;
         L->act_area_bytes    = act_area_size;
@@ -410,6 +441,8 @@ static inline void htp_mm_hmx_vtcm_layout_build(
         L->scratch_bytes[0]  = scratch0_size;
         L->scratch_bytes[1]  = scratch1_size;
         L->act_head_stride   = 0;
+
+        off = off_group_a + hex_smax(group_b_size, group_c_size);
     }
 
     L->total_bytes = off;
@@ -452,7 +485,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
             uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
             uint32_t n_k_tiles = hex_round_up(ne10, 32) / 32;
             uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
-            
+
             src0_sz_per_thread = hex_round_up(n_prefetch * tile_row_size, 128);
             src2_sz_per_thread = hex_round_up(n_prefetch * tile_row_size, 128);
             if (is_fused_qkv) {
@@ -468,7 +501,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
 
         size_t flat_src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
         size_t tiled_src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
-        
+
         if (kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT) {
             src1_sz = hex_round_up(flat_src1_row_size * src1_nrows, 128);
         } else {
@@ -580,11 +613,11 @@ static inline void htp_mm_hvx_vtcm_layout_build(
     }
 
     size_t off = 0;
-    VTCM_LAYOUT_ALLOC(off_src1, src1_sz);
-    VTCM_LAYOUT_ALLOC(off_src0, src0_sz);
-    VTCM_LAYOUT_ALLOC(off_src2, src2_sz);
-    VTCM_LAYOUT_ALLOC(off_src3, src3_sz);
-    VTCM_LAYOUT_ALLOC(off_dst,  dst_sz);
+    VTCM_LAYOUT_ALLOC(off, off_src1, src1_sz);
+    VTCM_LAYOUT_ALLOC(off, off_src0, src0_sz);
+    VTCM_LAYOUT_ALLOC(off, off_src2, src2_sz);
+    VTCM_LAYOUT_ALLOC(off, off_src3, src3_sz);
+    VTCM_LAYOUT_ALLOC(off, off_dst,  dst_sz);
 
     L->src0_bytes = src0_sz;
     L->src1_bytes = src1_sz;
