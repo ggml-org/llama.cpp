@@ -172,6 +172,7 @@ endif ()
 # llama_context state tests: KV and recurrent state save, load, copy, rollback
 set(LLAMA_CONTEXT_TEST_SRC
     test-llama-context.cpp
+    llama-context/cases-gigachat.cpp
     llama-context/cases-kv.cpp
     llama-context/cases-rs.cpp
     llama-context/test-case.cpp
@@ -192,6 +193,10 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-batch-alloc.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-kv-cache.cpp LABEL behavior)
     target_include_directories(test-kv-cache PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    llama_build_and_test(test-model-saver.cpp LABEL behavior LINK llama)
+    target_include_directories(test-model-saver PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    llama_build_and_test(test-moe-ffn.cpp LABEL behavior LINK llama)
+    target_include_directories(test-moe-ffn PRIVATE ${PROJECT_SOURCE_DIR}/src)
     llama_build_and_test(test-chat.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
     target_link_libraries(test-chat PRIVATE server-context)
@@ -305,6 +310,12 @@ llama_test_cmd(python3
     LABEL "python behavior"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     ARGS -m unittest discover -s tests -p test_conversion_fp8.py -v
+)
+llama_test_cmd(python3
+    NAME test-conversion-mtp
+    LABEL "python behavior"
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    ARGS -m unittest discover -s tests -p test_conversion_mtp.py -v
 )
 llama_test_cmd(python3
     NAME test-kv-cache-scales

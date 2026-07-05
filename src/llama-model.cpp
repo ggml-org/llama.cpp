@@ -405,6 +405,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_kolibri1(params);
         case LLM_ARCH_DOMYN_EDGE:
             return new llama_model_domyn_edge(params);
+        case LLM_ARCH_GIGACHAT35:
+            return new llama_model_gigachat35(params);
         default:
             throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
     }
@@ -614,6 +616,16 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             }
         }
 
+        if (ud->model->arch == LLM_ARCH_GIGACHAT35 &&
+                (std::regex_match(tensor_name, pattern_kv_cache) || std::regex_match(tensor_name, pattern_q_weight) ||
+                 std::regex_match(tensor_name, pattern_attn_gate_weight) || std::regex_match(tensor_name, pattern_attn_out_weight))) {
+            // MLA has one compressed KV head, so its cache and attention projections stay mirrored
+            const tensor_config tc = get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            if (!hparams.is_recr(tc.il)) {
+                return tc;
+            }
+        }
+
         // the qsa indexer has one key head and its projections are mirrored, so its cache cannot be split
         if (std::regex_match(tensor_name, pattern_idx_cache)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
@@ -741,7 +753,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         // TODO: deduplicate condition [TAG_SPLIT_QGATE_QWEN]
         // zonos3 has the qwen35 GDN layout, its attention layers have no fused qkv
         if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE || ud->model->arch == LLM_ARCH_CLEF || ud->model->arch == LLM_ARCH_CLOVER_MOE ||
-                ud->model->arch == LLM_ARCH_QWEN4EXP || ud->model->arch == LLM_ARCH_ZONOS3) {
+                ud->model->arch == LLM_ARCH_QWEN4EXP || ud->model->arch == LLM_ARCH_ZONOS3 ||
+                (ud->model->arch == LLM_ARCH_GIGACHAT35 && hparams.is_recr(il))) {
 
             // fused full attention layers with Q gate tensors that need n_embd doubled:
             if (!hparams.is_recr(il) && (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_qkv_bias))) {
@@ -762,7 +775,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             // both Qwen 3 Next and Qwen 3.5 support n_v_heads > n_k_heads but the broadcasting pattern is different:
             //   - Qwen 3 Next: [k0_v0, k0_v1, k1_v2, k1_v3] (this is the default split pattern)
             //   - Qwen 3.5:    [k0_v0, k1_v1, k0_v2, k1_v3] (needs segmenting of V on the scale of K to get the correct pattern)
-            if (ud->model->arch == LLM_ARCH_QWEN3NEXT) {
+            if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_GIGACHAT35) {
                 if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_ssm_conv1d)) {
                     GGML_ASSERT(tensor->ne[axis] == 2*key_dim + value_dim);
                     return {{key_dim, 2}, {value_dim, 1}};
@@ -896,9 +909,18 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             }
         } else if (hparams.is_recr(il)) {
             // linear attention
-            const int64_t head_dim        = hparams.ssm_d_state;
-            const int64_t blck_size_perf  = std::lcm(blck_size, 128);
-            const int64_t granularity_qkv = std::lcm(blck_size_perf, head_dim);
+            const int64_t head_dim         = hparams.ssm_d_state;
+            const int64_t blck_size_perf   = std::lcm(blck_size, 128);
+            const int64_t head_ratio       = ud->model->arch == LLM_ARCH_GIGACHAT35 ? hparams.ssm_dt_rank / hparams.ssm_n_group : 1;
+            const int64_t granularity_head = std::lcm(blck_size_perf, head_dim);
+            const int64_t granularity_qkv  = granularity_head * head_ratio;
+            if (ud->model->arch == LLM_ARCH_GIGACHAT35 &&
+                    (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_ssm_conv1d) ||
+                     std::regex_match(tensor_name, pattern_r_cache))) {
+                // keep each K head with its group of V heads, including when some devices receive no heads
+                const int64_t scale = std::regex_match(tensor_name, pattern_r_cache) ? hparams.ssm_d_conv - 1 : 1;
+                return {granularity_head * scale, granularity_qkv * scale};
+            }
             if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_attn_gate_weight) ||
                     std::regex_match(tensor_name, pattern_ssm_conv1d) || std::regex_match(tensor_name, pattern_ssm_out_weight) ||
                     std::regex_match(tensor_name, pattern_qkv_gate_weight)) {
@@ -1236,6 +1258,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_310B_A15B:     return "310B.A15B";
         case LLM_TYPE_355B_A32B:     return "355B.A32B";
         case LLM_TYPE_397B_A17B:     return "397B.A17B";
+        case LLM_TYPE_432B_A28B:     return "432B.A28B";
         case LLM_TYPE_685B_A37B:     return "685B.A37B";
         case LLM_TYPE_744B_A40B:     return "744B.A40B";
         case LLM_TYPE_2_8T_A50B:     return "2.8T.A50B";
@@ -3353,7 +3376,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 const bool mtp_on_hybrid_qwen =
                     params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
                     (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE ||
-                     arch == LLM_ARCH_BAILINGMOE3);
+                     arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_GIGACHAT35);
 
                 const bool mtp_on_hybrid_nemotron =
                     params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && arch == LLM_ARCH_NEMOTRON_H_MOE;
@@ -3402,7 +3425,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             return hparams.is_recr(il) && hparams.n_ff(il) == 0;
                         };
                     } else if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_MINIMAX_01 ||
-                               arch == LLM_ARCH_ZONOS3) {
+                               arch == LLM_ARCH_ZONOS3 || arch == LLM_ARCH_GIGACHAT35) {
                         filter_attn = [&](uint32_t il) {
                             return il < hparams.n_layer() && !hparams.is_recr(il);
                         };
@@ -3825,6 +3848,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ZONOS3:
         case LLM_ARCH_LIMITE:
         case LLM_ARCH_TINY_VOCA:
+        case LLM_ARCH_GIGACHAT35:
             return LLAMA_ROPE_TYPE_NORM;
         case LLM_ARCH_BAILINGMOE3:
             // VL files carry mrope sections; text-only files keep NORM rope

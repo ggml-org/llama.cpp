@@ -58,16 +58,15 @@ void llama_model_saver::add_kv(const enum llm_kv key, const char value) {
 }
 
 template <typename Container>
-void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, const bool per_layer) {
-    GGML_ASSERT(model != nullptr || !per_layer);
-    const size_t n_values = per_layer ? size_t(model->hparams.n_layer()) : value.size();
+void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, const int64_t n_layer) {
+    const size_t n_values = n_layer >= 0 ? size_t(n_layer) : value.size();
     GGML_ASSERT(n_values <= value.size());
 
     if (n_values == 0) {
         return;
     }
 
-    if (per_layer) {
+    if (n_layer >= 0) {
         bool all_values_the_same = true;
         for (size_t i = 1; i < n_values; ++i) {
             if (value[i] != value[0]) {
@@ -198,8 +197,8 @@ void llama_model_saver::add_kv_from_model() {
     }
     add_kv(LLM_KV_BLOCK_COUNT,                       hparams.n_layer_all);
     add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
-    add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
-    add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp_arr, true);
+    add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, hparams.n_layer_all);
+    add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp_arr, hparams.n_layer_all);
     add_kv(LLM_KV_EXPERT_LATENT_LENGTH,              hparams.n_expert_latent);
     add_kv(LLM_KV_MOE_LATENT_SIZE,                   hparams.moe_latent_size);
     add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
@@ -213,7 +212,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,             hparams.use_par_res);
     // add_kv(LLM_KV_TENSOR_DATA_LAYOUT,                ???);
     add_kv(LLM_KV_EXPERT_COUNT,                      hparams.n_expert);
-    add_kv(LLM_KV_EXPERT_USED_COUNT,                 hparams.n_expert_used());
+    add_kv(LLM_KV_EXPERT_USED_COUNT,                 hparams.n_expert_used_arr, hparams.n_layer_all);
     add_kv(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared);
     add_kv(LLM_KV_EXPERT_GROUP_COUNT,                hparams.n_expert_groups);
     add_kv(LLM_KV_EXPERT_GROUP_USED_COUNT,           hparams.n_group_used);
@@ -262,8 +261,8 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
     // add_kv(LLM_KV_FULL_ATTENTION_INTERVAL,           ???); // saved as LLM_KV_ATTENTION_RECURRENT_LAYERS instead
 
-    add_kv(LLM_KV_ATTENTION_HEAD_COUNT,              hparams.n_head_arr, true);
-    add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV,           hparams.n_head_kv_arr, true);
+    add_kv(LLM_KV_ATTENTION_HEAD_COUNT,              hparams.n_head_arr, hparams.n_layer_all);
+    add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV,           hparams.n_head_kv_arr, hparams.n_layer_all);
     add_kv(LLM_KV_ATTENTION_MAX_ALIBI_BIAS,          hparams.f_max_alibi_bias);
     add_kv(LLM_KV_ATTENTION_CLAMP_KQV,               hparams.f_clamp_kqv);
     add_kv(LLM_KV_ATTENTION_KEY_LENGTH,              hparams.n_embd_head_k_full);
@@ -272,6 +271,9 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
     add_kv(LLM_KV_POST_NORM_EPS,                     hparams.f_post_norm_eps);
     add_kv(LLM_KV_ATTENTION_LATENT_NORM_RMS_EPS,     hparams.f_norm_rms_eps_latent);
+    if (hparams.n_norm_gate_rank > 0) {
+        add_kv(LLM_KV_NORM_GATE_RANK,               hparams.n_norm_gate_rank);
+    }
     add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,           hparams.f_norm_group_eps);
     add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,        hparams.n_norm_groups);
     add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      hparams.n_value_expert);
@@ -284,7 +286,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_VALUE_RESIDUAL_MIX_LORA_RANK, hparams.n_lora_value_res_mix);
     add_kv(LLM_KV_ATTENTION_GATE_LORA_RANK,          hparams.n_lora_gate);
     add_kv(LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT,  hparams.n_rel_attn_bkts);
-    add_kv(LLM_KV_ATTENTION_ROPE_PATTERN,            hparams.rope_pattern, true);
+    add_kv(LLM_KV_ATTENTION_ROPE_PATTERN,            hparams.rope_pattern, hparams.n_layer());
     add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
         // never collapsed to a scalar: the loaders read a scalar as a period
@@ -311,18 +313,18 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_INDEXER_KPOOL,           hparams.indexer_kpool);
     add_kv(LLM_KV_ATTENTION_INDEXER_KPOOL_SELECT_TAIL, hparams.indexer_kpool_select_tail);
     add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,    hparams.indexer_local_blocks);
-    add_kv(LLM_KV_ATTENTION_INDEXER_TYPES,           hparams.is_indexer_full_impl, true);
+    add_kv(LLM_KV_ATTENTION_INDEXER_TYPES,           hparams.is_indexer_full_impl, hparams.n_layer());
     if (hparams.n_layer_kv_from_start >= 0) {
         add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS,    uint32_t(hparams.n_layer_all - hparams.n_layer_kv_from_start));
     } else {
         for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
             if (hparams.kv_source(il) != il) {
-                add_kv(LLM_KV_ATTENTION_KV_SOURCE_MAP, hparams.kv_source_impl, true);
+                add_kv(LLM_KV_ATTENTION_KV_SOURCE_MAP, hparams.kv_source_impl, hparams.n_layer());
                 break;
             }
         }
     }
-    add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
+    add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, hparams.n_layer_all);
     if (hparams.n_relative > 0) {
         add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH,     hparams.n_relative);
         add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT,     hparams.n_relative_extent);
@@ -341,7 +343,7 @@ void llama_model_saver::add_kv_from_model() {
                 hparams.dsv4_compress_ratios.begin(), hparams.dsv4_compress_ratios.begin() + hparams.n_layer_all);
         add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,         compress_ratios);
     } else {
-        add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,         hparams.dsv4_compress_ratios, true);
+        add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,         hparams.dsv4_compress_ratios, hparams.n_layer_all);
     }
     add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.dsv4_hc_mult);
     add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
@@ -409,6 +411,19 @@ void llama_model_saver::add_kv_from_model() {
     }
 
     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
+    // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
+    float rope_yarn_log_mul = hparams.rope_yarn_log_mul;
+    switch (model->arch) {
+        case LLM_ARCH_DEEPSEEK2:
+        case LLM_ARCH_DEEPSEEK32:
+        case LLM_ARCH_GIGACHAT35:
+        case LLM_ARCH_MISTRAL4:
+        case LLM_ARCH_XING4_0:
+            rope_yarn_log_mul *= 0.1f;
+            break;
+        default:
+            break;
+    }
 
     add_kv(LLM_KV_ROPE_DIMENSION_COUNT,              hparams.n_rot_full);
     add_kv(LLM_KV_ROPE_DIMENSION_COUNT_SWA,          hparams.n_rot_swa);
@@ -422,7 +437,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ROPE_SCALING_ATTN_FACTOR,          hparams.rope_attn_factor);
     add_kv(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN,         hparams.n_ctx_orig_yarn);
     add_kv(LLM_KV_ROPE_SCALING_FINETUNED,            hparams.rope_finetuned);
-    add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,         hparams.rope_yarn_log_mul);
+    add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,         rope_yarn_log_mul);
     add_kv(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR,      hparams.yarn_ext_factor);
     add_kv(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR,     hparams.yarn_attn_factor);
     add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,       hparams.yarn_beta_fast);
@@ -528,6 +543,8 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->tok_norm_b);
     add_tensor(model->output_norm);
     add_tensor(model->output_norm_b);
+    add_tensor(model->output_norm_gate_up);
+    add_tensor(model->output_norm_gate_down);
     add_tensor(model->output);
     add_tensor(model->output_b);
     add_tensor(model->output_norm_enc);
