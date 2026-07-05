@@ -809,6 +809,10 @@ struct server_metrics {
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
 
+    uint64_t n_draft_tokens_total    = 0;
+    uint64_t n_draft_tokens_accepted = 0;
+    uint64_t n_draft_verify_steps    = 0;
+
     void init() {
         t_start = ggml_time_us();
     }
@@ -827,6 +831,12 @@ struct server_metrics {
         n_tokens_predicted         += slot.n_decoded;
         t_tokens_generation        += slot.t_token_generation;
         t_tokens_generation_total  += slot.t_token_generation;
+    }
+
+    void on_draft_stats(const server_slot & slot) {
+        n_draft_tokens_total    += (uint64_t) slot.n_draft_total;
+        n_draft_tokens_accepted += (uint64_t) slot.n_draft_accepted;
+        n_draft_verify_steps    += (uint64_t) slot.n_draft_verif_steps;
     }
 
     void on_decoded(const std::vector<server_slot> & slots) {
@@ -2184,6 +2194,8 @@ private:
 
         res->generation_params = slot.task->params; // copy the parameters
 
+        metrics.on_draft_stats(slot);
+
         queue_results.send(std::move(res));
     }
 
@@ -2535,6 +2547,10 @@ private:
 
                     res->n_decode_total          = metrics.n_decode_total;
                     res->n_busy_slots_total      = metrics.n_busy_slots_total;
+
+                    res->n_draft_tokens_total    = metrics.n_draft_tokens_total;
+                    res->n_draft_tokens_accepted = metrics.n_draft_tokens_accepted;
+                    res->n_draft_verify_steps    = metrics.n_draft_verify_steps;
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -4430,6 +4446,18 @@ void server_routes::init_routes() {
                     {"name",  "n_tokens_max"},
                     {"help",  "Largest observed n_tokens."},
                     {"value",  res_task->n_tokens_max}
+            }, {
+                    {"name",  "draft_tokens_total"},
+                    {"help",  "Speculative decoding: number of draft tokens proposed."},
+                    {"value",  res_task->n_draft_tokens_total}
+            }, {
+                    {"name",  "draft_tokens_accepted_total"},
+                    {"help",  "Speculative decoding: number of draft tokens accepted by the target model."},
+                    {"value",  res_task->n_draft_tokens_accepted}
+            }, {
+                    {"name",  "draft_verify_steps_total"},
+                    {"help",  "Speculative decoding: number of draft verification steps."},
+                    {"value",  res_task->n_draft_verify_steps}
             }}},
             {"gauge", {{
                     {"name",  "prompt_tokens_seconds"},
@@ -4451,6 +4479,14 @@ void server_routes::init_routes() {
                     {"name",  "n_busy_slots_per_decode"},
                     {"help",  "Average number of busy slots per llama_decode() call"},
                     {"value",  (float) res_task->n_busy_slots_total / std::max((float) res_task->n_decode_total, 1.f)}
+            },{
+                    {"name",  "draft_acceptance_rate"},
+                    {"help",  "Speculative decoding: accepted / proposed draft tokens."},
+                    {"value",  res_task->n_draft_tokens_total ? (double) res_task->n_draft_tokens_accepted / (double) res_task->n_draft_tokens_total : 0.}
+            },{
+                    {"name",  "draft_mean_accept_len"},
+                    {"help",  "Speculative decoding: mean accepted sequence length per verification step, including the sampled token."},
+                    {"value",  res_task->n_draft_verify_steps ? 1.0 + (double) res_task->n_draft_tokens_accepted / (double) res_task->n_draft_verify_steps : 0.}
             }}}
         };
 

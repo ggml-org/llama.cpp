@@ -51,6 +51,30 @@ def test_with_and_without_draft():
     assert content_no_draft == content_draft
 
 
+def test_metrics():
+    global server
+    server.server_metrics = True
+    server.spec_type = "draft-simple"
+    server.spec_draft_n_min = 1
+    server.spec_draft_n_max = 4
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "top_k": 1,
+        "n_predict": 16,
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("GET", "/metrics")
+    assert res.status_code == 200
+    assert match_regex(r"llamacpp:draft_tokens_total\s+[1-9]", res.body)
+    assert match_regex(r"llamacpp:draft_tokens_accepted_total\s+\d+", res.body)
+    assert match_regex(r"llamacpp:draft_verify_steps_total\s+[1-9]", res.body)
+    assert "llamacpp:draft_acceptance_rate" in res.body
+    assert "llamacpp:draft_mean_accept_len" in res.body
+
+
 def test_different_draft_min_draft_max():
     global server
     test_values = [
