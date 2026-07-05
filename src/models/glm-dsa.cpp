@@ -198,6 +198,9 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+    // Difference vs Deepseek 3.2: shared indexer layers reuse the top_k from the previous full indexer layers
+    // See https://huggingface.co/zai-org/GLM-5.2/blob/main/config.json#L30
+    ggml_tensor * prev_top_k = nullptr;
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
@@ -216,7 +219,8 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
             ggml_tensor * top_k = nullptr;
 
             // lightning indexer
-            {
+            if (model.layers[il].indexer_attn_q_b != nullptr) {
+                // "full" layer
                 ggml_tensor * indexer_q = ggml_mul_mat(ctx0, model.layers[il].indexer_attn_q_b, qr);
                 cb(indexer_q, "indexer_q", il);
 
@@ -338,6 +342,11 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
                 // get indices of top k indexer scores
                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
                 top_k = ggml_cont(ctx0, ggml_top_k(ctx0, indexer_score, n_top_k));
+                prev_top_k = top_k;
+                cb(top_k, "top_k", il);
+            } else {
+                // "shared" indexer layer - reuse from previous
+                top_k = prev_top_k;
                 cb(top_k, "top_k", il);
             }
 
