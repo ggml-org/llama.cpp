@@ -543,12 +543,42 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             // the memory allocation handle is no longer needed after mapping
             CU_CHECK(cuMemRelease(handle));
 
-            // set access
-            CUmemAccessDesc access = {};
-            access.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-            access.location.id = device;
-            access.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-            CU_CHECK(cuMemSetAccess((CUdeviceptr)((char *)(pool_addr) + pool_size), reserve_size, &access, 1));
+            // VMM Bug fix for P2P access if GGML_CUDA_P2P is set, or if NCCL build
+            bool use_peer_access = getenv("GGML_CUDA_P2P") != nullptr;
+#if defined(GGML_USE_NCCL)
+            use_peer_access = true;
+#endif // defined(GGML_USE_NCCL)
+
+            if (use_peer_access) {
+                // NCCL implicitly enables peer access (cudaDeviceEnablePeerAccess), and
+                // GGML_CUDA_P2P enables it explicitly. Unlike cudaMalloc buffers, VMM
+                // allocations do not become peer-accessible from that alone, so access
+                // must be granted explicitly here.
+                std::vector<CUmemAccessDesc> access_descs;
+                const int device_count = ggml_cuda_info().device_count;
+                for (int id = 0; id < device_count; ++id) {
+                    if (id != device) {
+                        int can_access_peer = 0;
+                        CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, id, device));
+                        if (!can_access_peer) {
+                            continue;
+                        }
+                    }
+                    CUmemAccessDesc access = {};
+                    access.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+                    access.location.id = id;
+                    access.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+                    access_descs.push_back(access);
+                }
+                CU_CHECK(cuMemSetAccess(start_ptr, reserve_size, access_descs.data(), access_descs.size()));
+            } else {
+                // set access for non P2P
+                CUmemAccessDesc access = {};
+                access.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+                access.location.id = device;
+                access.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+                CU_CHECK(cuMemSetAccess(start_ptr, reserve_size, &access, 1));
+            }
 
             // add to the pool
             pool_size += reserve_size;
