@@ -240,7 +240,7 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
                 cb(indexer_q_nope, "indexer_q_nope", il);
 
                 indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_rot,
-                                     LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
+                                     LLAMA_ROPE_TYPE_NORM, n_ctx_orig, freq_base, freq_scale,
                                      ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(indexer_q_pe, "indexer_q_pe", il);
 
@@ -270,7 +270,7 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
                 cb(indexer_k_nope, "indexer_k_nope", il);
 
                 indexer_k_pe = ggml_rope_ext(ctx0, indexer_k_pe, inp_pos, nullptr, n_rot,
-                                     LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
+                                     LLAMA_ROPE_TYPE_NORM, n_ctx_orig, freq_base, freq_scale,
                                      ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(indexer_k_pe, "indexer_k_pe", il);
 
