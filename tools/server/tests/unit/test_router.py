@@ -103,6 +103,26 @@ def _load_model_and_wait(
     _wait_for_model_status(model_id, {"loaded"}, timeout=timeout)
 
 
+def test_router_metrics_fanout():
+    global server
+    server.server_metrics = True
+    server.models_max = 1
+    server.start()
+    model_id = "ggml-org/test-model-stories260K:F32"
+
+    _load_model_and_wait(model_id, timeout=120)
+
+    res = server.make_request("GET", "/metrics")
+    assert res.status_code == 200
+    assert match_regex(r"llamacpp_router:model_up\{model=\"ggml-org/test-model-stories260K:F32\"\}\s+1", res.body)
+    assert match_regex(r"llamacpp_router:model_loaded\{model=\"ggml-org/test-model-stories260K:F32\"\}\s+1", res.body)
+    assert match_regex(r"llamacpp:prompt_tokens_total\{model=\"ggml-org/test-model-stories260K:F32\"\}\s+\d+", res.body)
+
+    res = server.make_request("GET", f"/metrics?model={model_id}")
+    assert res.status_code == 200
+    assert "llamacpp_router:model_up" not in res.body
+
+
 def test_router_unload_model():
     global server
     server.start()

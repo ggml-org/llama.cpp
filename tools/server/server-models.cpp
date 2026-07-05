@@ -23,6 +23,7 @@
 #include <atomic>
 #include <chrono>
 #include <queue>
+#include <set>
 #include <filesystem>
 #include <random>
 #include <sstream>
@@ -1609,6 +1610,20 @@ static std::string encode_qs(const std::string & in) {
 // populated when the POST was routed. single map lookup then a meta lookup, no polling, no
 // parsing of the conv id. returns nullopt when nothing maps, the caller answers not found and
 // the client recovers
+static std::string prometheus_escape_label_value(const std::string & value) {
+    std::string out;
+    out.reserve(value.size());
+    for (const char c : value) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\n': out += "\\n";  break;
+            default:   out += c;       break;
+        }
+    }
+    return out;
+}
+
 static std::optional<server_model_meta> resolve_child_for_conv(
         server_models & models, const std::string & conversation_id) {
     if (conversation_id.empty()) {
@@ -1626,6 +1641,101 @@ static std::optional<server_model_meta> resolve_child_for_conv(
 }
 
 void server_models_routes::init_routes() {
+    this->get_router_metrics = [this](const server_http_req & req) {
+        if (!req.get_param("model").empty()) {
+            return proxy_get(req);
+        }
+
+        auto res = std::make_unique<server_http_res>();
+        if (!params.endpoint_metrics) {
+            res_err(res, format_error_response("This server does not support metrics endpoint. Start it with `--metrics`", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        const auto all_models = models.get_all_meta();
+
+        std::stringstream out;
+        out << "# HELP llamacpp_router:model_up 1 if the model instance is running.\n";
+        out << "# TYPE llamacpp_router:model_up gauge\n";
+        for (const auto & model : all_models) {
+            out << "llamacpp_router:model_up{model=\"" << prometheus_escape_label_value(model.name) << "\"} "
+                << (model.is_running() ? 1 : 0) << "\n";
+        }
+
+        out << "# HELP llamacpp_router:model_loaded 1 if the model is loaded and ready.\n";
+        out << "# TYPE llamacpp_router:model_loaded gauge\n";
+        for (const auto & model : all_models) {
+            out << "llamacpp_router:model_loaded{model=\"" << prometheus_escape_label_value(model.name) << "\"} "
+                << (model.is_ready() ? 1 : 0) << "\n";
+        }
+
+        out << "# HELP llamacpp_router:model_last_used_seconds Unix time when the model last handled a routed request.\n";
+        out << "# TYPE llamacpp_router:model_last_used_seconds gauge\n";
+        for (const auto & model : all_models) {
+            if (model.last_used > 0) {
+                out << "llamacpp_router:model_last_used_seconds{model=\"" << prometheus_escape_label_value(model.name) << "\"} "
+                    << (double) model.last_used / 1.e3 << "\n";
+            }
+        }
+
+        std::set<std::string> seen_meta;
+        for (const auto & model : all_models) {
+            if (!model.is_ready()) {
+                continue;
+            }
+
+            httplib::Client cli(CHILD_ADDR, model.port);
+            cli.set_connection_timeout(2, 0);
+            cli.set_read_timeout(3, 0);
+
+            auto child_res = cli.Get("/metrics");
+            if (!child_res || child_res->status != 200) {
+                continue;
+            }
+
+            const std::string model_label = prometheus_escape_label_value(model.name);
+            std::stringstream body(child_res->body);
+            std::string line;
+            while (std::getline(body, line)) {
+                if (line.empty()) {
+                    continue;
+                }
+                if (line.rfind("# HELP ", 0) == 0 || line.rfind("# TYPE ", 0) == 0) {
+                    const size_t name_start = 7;
+                    const size_t name_end   = line.find(' ', name_start);
+                    const std::string key   = name_end == std::string::npos ? line : line.substr(0, name_end);
+                    if (seen_meta.insert(key).second) {
+                        out << line << "\n";
+                    }
+                    continue;
+                }
+                if (line[0] == '#') {
+                    continue;
+                }
+
+                const size_t value_sep = line.rfind(' ');
+                if (value_sep == std::string::npos) {
+                    continue;
+                }
+
+                const std::string series = line.substr(0, value_sep);
+                const std::string value  = line.substr(value_sep + 1);
+                const size_t labels_pos = series.find('{');
+                if (labels_pos == std::string::npos) {
+                    out << series << "{model=\"" << model_label << "\"} " << value << "\n";
+                } else {
+                    out << series.substr(0, labels_pos + 1)
+                        << "model=\"" << model_label << "\"," << series.substr(labels_pos + 1)
+                        << " " << value << "\n";
+                }
+            }
+        }
+
+        res->content_type = "text/plain; version=0.0.4";
+        res->data = out.str();
+        return res;
+    };
+
     this->get_router_props = [this](const server_http_req & req) {
         std::string name = req.get_param("model");
         if (name.empty()) {
