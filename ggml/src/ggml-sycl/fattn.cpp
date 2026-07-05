@@ -17,7 +17,9 @@
 #include "fattn-common.hpp"
 #include "fattn-tile.hpp"
 #include "fattn-vec.hpp"
+#include "fattn-xmx.hpp"
 #include "fattn.hpp"
+#include <cstdlib>
 
 
 #define FATTN_VEC_CASE(D, type_K, type_V)                                                                        \
@@ -155,6 +157,7 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_NONE     =   0,
     BEST_FATTN_KERNEL_VEC      = 100,
     BEST_FATTN_KERNEL_TILE     = 200,
+    BEST_FATTN_KERNEL_XMX      = 300,
 };
 
 static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
@@ -263,7 +266,15 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
-    // Todo: Use the XMX kernel if possible:
+    // XMX (DPAS) path -- opt-in via GGML_SYCL_FA_XMX. First-cut scope: f16 KV,
+    // D==128, no explicit mask. The math is validated (docs/research/xmx_fa_*.cpp);
+    // ggml correctness is still under harness bring-up, so it is off by default.
+    if (getenv("GGML_SYCL_FA_XMX") &&
+        K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
+        Q->ne[0] == 128 && dst->src[3] == nullptr) {
+        return BEST_FATTN_KERNEL_XMX;
+    }
+
 
     // If there are no tensor cores available, use the generic tile kernel:
     if (can_use_vector_kernel) {
@@ -292,6 +303,9 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             break;
         case BEST_FATTN_KERNEL_VEC:
             ggml_sycl_flash_attn_ext_vec(ctx, dst);
+            break;
+        case BEST_FATTN_KERNEL_XMX:
+            ggml_sycl_flash_attn_ext_xmx(ctx, dst);
             break;
     }
 }
