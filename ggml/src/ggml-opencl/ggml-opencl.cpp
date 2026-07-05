@@ -6608,10 +6608,10 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                     return false;
                 }
                 if (q->ne[1] == 1) {
-                    // decode-only program (q1 / q1_vec / q1_split / merge)
-                    if (!ggml_opencl_ensure_fa_variant(backend_ctx, dk, dv, FA_VARIANT_F32_F16)) {
-                        return false;
-                    }
+                    // DK=512 decode is bandwidth-bound and slower on the GPU
+                    // than on the CPU; decline it here so it runs on the CPU.
+                    // Prefill (n_q > 1) stays on the GPU.
+                    return false;
                 } else {
                     // prefill, BM-tile in its own FA_PREFILL_ONLY program
                     if (!ggml_opencl_ensure_fa_f32_f16_prefill_512(backend_ctx, /*split=*/false)) {
