@@ -546,7 +546,7 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             bool use_peer_access = getenv("GGML_CUDA_P2P") != nullptr;
 #if defined(GGML_USE_NCCL)
             use_peer_access = true;
-#endif
+#endif // defined(GGML_USE_NCCL)
 
             if (use_peer_access) {
                 // NCCL implicitly enables peer access (cudaDeviceEnablePeerAccess), and
