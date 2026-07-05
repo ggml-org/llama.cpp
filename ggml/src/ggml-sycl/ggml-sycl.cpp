@@ -5577,9 +5577,13 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             return op->src[0]->ne[0] <= SYCL_SOLVE_TRI_MAX_N && op->src[1]->ne[0] <= SYCL_SOLVE_TRI_MAX_K;
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_sycl_flash_attn_ext_supported(device, op);
-        case GGML_OP_TURBO_WHT:
+        case GGML_OP_TURBO_WHT: {
+            int wht_group_size;
+            memcpy(&wht_group_size, op->op_params + sizeof(int), sizeof(int));
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
-                   op->src[0]->ne[0] % 32 == 0;
+                   (wht_group_size == 32 || wht_group_size == 64 || wht_group_size == 128) &&
+                   op->src[0]->ne[0] % wht_group_size == 0;
+        }
         default:
             return false;
     }

@@ -562,8 +562,7 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
     const int d  = QK_TURBO4;
 
 #if TURBO4_USE_4BIT
-    /* 4-bit PolarQuant: nibble unpack → centroid → inverse rotate → scale */
-    /* TODO: add proper 4-bit centroid table to C code (currently only in Metal) */
+    /* 4-bit PolarQuant: nibble unpack -> centroid -> inverse rotate -> scale */
     static const float CENTROIDS_4BIT[16] = {
         -0.241529f, -0.182877f, -0.143016f, -0.111036f,
         -0.083292f, -0.058050f, -0.034299f, -0.011349f,
