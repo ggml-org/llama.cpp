@@ -329,6 +329,18 @@ static inline int32x4_t ggml_nvfp4_dot8(const int8x8_t q4_lo, const int8x8_t q8_
     return vaddq_s32(sum_lo, sum_hi);
 }
 
+// e4m3 -> f32 (4 lanes)
+static inline float32x4_t ggml_e4m3_decode_4_neon(uint32x4_t b) {
+    const uint32x4_t mag   = vandq_u32(b, vdupq_n_u32(0x7F));
+    const uint32x4_t man   = vandq_u32(b, vdupq_n_u32(0x7));
+    const uint32x4_t nbits = vaddq_u32(vshlq_n_u32(mag, 20), vdupq_n_u32(120u << 23));
+    float32x4_t val = vbslq_f32(vceqq_u32(vandq_u32(b, vdupq_n_u32(0x78)), vdupq_n_u32(0)),
+                                vmulq_f32(vcvtq_f32_u32(man), vdupq_n_f32(1.0f / 512.0f)),
+                                vreinterpretq_f32_u32(nbits));
+    val = vbslq_f32(vceqq_u32(mag, vdupq_n_u32(0x7F)), vdupq_n_f32(NAN), val);
+    return vreinterpretq_f32_u32(vorrq_u32(vreinterpretq_u32_f32(val), vshlq_n_u32(vandq_u32(b, vdupq_n_u32(0x80)), 24)));
+}
+
 #endif // defined(__ARM_NEON)
 
 #ifdef __wasm_simd128__
@@ -343,6 +355,21 @@ static inline int32x4_t ggml_nvfp4_dot8(const int8x8_t q4_lo, const int8x8_t q8_
 #include <intrin.h>
 #elif defined(__SSE__) || defined(__SSE3__) || defined(__SSSE3__) || defined(__AVX__) || defined(__F16C__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__AVX512BF16__)
 #include <immintrin.h>
+#endif
+
+#if defined(__AVX2__)
+static inline __m256 ggml_e4m3_decode_8_avx2(const uint8_t * p) {
+    const __m256i b     = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)p));
+    const __m256i mag   = _mm256_and_si256(b, _mm256_set1_epi32(0x7F));
+    const __m256i man   = _mm256_and_si256(b, _mm256_set1_epi32(0x7));
+    const __m256i nbits = _mm256_add_epi32(_mm256_slli_epi32(mag, 20), _mm256_set1_epi32(120 << 23));
+    __m256 val = _mm256_blendv_ps(_mm256_castsi256_ps(nbits),
+                                  _mm256_mul_ps(_mm256_cvtepi32_ps(man), _mm256_set1_ps(1.0f / 512.0f)),
+                                  _mm256_castsi256_ps(_mm256_cmpeq_epi32(_mm256_and_si256(b, _mm256_set1_epi32(0x78)), _mm256_setzero_si256())));
+    val = _mm256_blendv_ps(val, _mm256_castsi256_ps(_mm256_set1_epi32(0x7FC00000)),
+                           _mm256_castsi256_ps(_mm256_cmpeq_epi32(mag, _mm256_set1_epi32(0x7F))));
+    return _mm256_or_ps(val, _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_and_si256(b, _mm256_set1_epi32(0x80)), 24)));
+}
 #endif
 
 #ifdef __riscv_v_intrinsic

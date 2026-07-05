@@ -62,6 +62,10 @@ void quantize_row_nvfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, i
     quantize_row_nvfp4_ref(x, y, k);
 }
 
+void quantize_row_e4m3(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_e4m3_ref(x, y, k);
+}
+
 //
 // 2-6 bit quantization in super-blocks
 //
@@ -358,6 +362,34 @@ void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 
             sumf += dy * d * (sumi_lo + sumi_hi);
         }
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_e4m3_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_E4M3 == 0);
+    static_assert(QK_E4M3 == QK8_0, "QK_E4M3 and QK8_0 must be the same");
+
+    const block_e4m3 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_E4M3;
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d);
+
+        float sumi = 0;
+        for (int j = 0; j < QK_E4M3; ++j) {
+            sumi += GGML_CPU_E4M3_TO_FP32(x[ib].qs[j]) * y[ib].qs[j];
+        }
+        sumf += d * sumi;
     }
     *s = sumf;
 }
