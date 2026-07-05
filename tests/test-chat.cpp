@@ -4016,6 +4016,73 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // GigaChat 3.5 tests - format uses GCML markup inside the assistant message:
+    //   <｜GCML｜tool_calls>
+    //   <｜GCML｜invoke name="foo">
+    //   <｜GCML｜parameter name="bar" string="true|false">value</｜GCML｜parameter>
+    //   </｜GCML｜invoke>
+    //   </｜GCML｜tool_calls>
+    {
+        auto tst = peg_tester("models/templates/GigaChat3.5.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .expect_reconstruction()
+            .run();
+
+        tst.test("I'm\nthinking</think>\n\nHello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test(
+               "<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"special_function\">\n"
+               "<｜GCML｜parameter name=\"arg1\" string=\"false\">1</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "</｜GCML｜tool_calls>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+               "Let me check</think>\n\n"
+               "<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"get_time\">\n"
+               "<｜GCML｜parameter name=\"city\" string=\"true\">Tokyo</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "</｜GCML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check"))
+            .run();
+
+        tst.test(
+               "Calling both</think>\n\n"
+               "<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"get_time\">\n"
+               "<｜GCML｜parameter name=\"city\" string=\"true\">Paris</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "<｜GCML｜invoke name=\"get_weather\">\n"
+               "<｜GCML｜parameter name=\"city\" string=\"true\">Paris</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "</｜GCML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .run();
+    }
+
     // GLM-4.6 tests - format: <tool_call>function_name\n<arg_key>...</arg_key>\n<arg_value>...</arg_value>\n</tool_call>
     {
         auto tst = peg_tester("models/templates/GLM-4.6.jinja", detailed_debug);

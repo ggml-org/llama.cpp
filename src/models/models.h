@@ -2030,6 +2030,70 @@ struct llama_model_qwen35moe : public llama_model_base {
 };
 
 
+struct llama_model_gigachat35 : public llama_model_base {
+    llama_model_gigachat35(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph_common : public llm_build_delta_net_base {
+        graph_common(const llama_model & model, const llm_graph_params & params) :
+            llm_build_delta_net_base(params), model(model) {}
+
+    protected:
+        ggml_tensor * build_zero_centered_norm(
+                    ggml_tensor * input,
+                    ggml_tensor * weight,
+                            int   il);
+
+        ggml_tensor * build_zero_centered_gated_norm(
+                    ggml_tensor * input,
+                    ggml_tensor * weight,
+                    ggml_tensor * gate_up,
+                    ggml_tensor * gate_down,
+                            int   il);
+
+        ggml_tensor * build_layer_attn_mla(
+        llm_graph_input_attn_k * inp_attn,
+                    ggml_tensor * cur,
+                    ggml_tensor * inp_pos,
+                          float   kq_scale,
+                            int   il);
+
+        const llama_model & model;
+    };
+
+    struct graph : public graph_common {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+    private:
+        ggml_tensor * build_linear_output_norm(
+                    ggml_tensor * input,
+                    ggml_tensor * weight,
+                    ggml_tensor * gate,
+                            int   il);
+
+        ggml_tensor * build_layer_attn_linear(
+             llm_graph_input_rs * inp,
+                    ggml_tensor * cur,
+                            int   il);
+
+        ggml_tensor * build_layer_ffn(
+                    ggml_tensor * cur,
+                            int   il);
+
+        std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(
+                    ggml_tensor * input,
+                            int   il);
+    };
+
+    struct graph_mtp : public graph_common {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_mistral3 : public llama_model_base {
     llama_model_mistral3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
