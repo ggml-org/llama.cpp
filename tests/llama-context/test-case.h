@@ -53,6 +53,9 @@ struct ctx_test {
     // the case compares against the logits produced by the baseline case
     virtual bool needs_baseline() const { return false; }
 
+    // the case requires MTP tensors to be loaded
+    virtual bool needs_mtp(const std::string & /* model_path */) const { return false; }
+
     // the case is also run against a cache pre-filled with a known pattern, so that a restore
     // reading cells it never wrote cannot pass
     virtual bool uses_fill() const { return group() == TEST_GROUP_RS; }
@@ -78,6 +81,7 @@ using ctx_test_ptr = std::unique_ptr<const ctx_test>;
 // the cases of one source file, in table order
 std::vector<ctx_test_ptr> make_kv_cases();  // cases-kv.cpp
 std::vector<ctx_test_ptr> make_rs_cases();  // cases-rs.cpp
+std::vector<ctx_test_ptr> make_gigachat_cases(); // cases-gigachat.cpp
 
 // all cases, in table order
 const std::vector<ctx_test_ptr> & test_cases();

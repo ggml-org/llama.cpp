@@ -134,6 +134,8 @@ static model_result run_model(const std::string & model_path,
 
     struct common_params model_params = params;
     model_params.model.path = model_path;
+    model_params.load_mtp = params.load_mtp || std::any_of(cases.begin(), cases.end(),
+            [&](const ctx_test * tc) { return tc->needs_mtp(model_path); });
 
     // a model that cannot be loaded is a failure of every case, not a skip - the cases never
     //   run, so their verdicts are recorded here

@@ -170,6 +170,7 @@ endif ()
 # llama_context state tests: KV and recurrent state save, load, copy, rollback
 set(LLAMA_CONTEXT_TEST_SRC
     test-llama-context.cpp
+    llama-context/cases-gigachat.cpp
     llama-context/cases-kv.cpp
     llama-context/cases-rs.cpp
     llama-context/test-case.cpp

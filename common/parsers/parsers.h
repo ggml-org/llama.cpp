@@ -23,6 +23,10 @@ void foreach_function(const json & tools, const std::function<void(size_t, const
 // iterate over the parameters of a function tool, passing each parameter with its index and the document that owns it
 void foreach_parameter(const json & function, const std::function<void(size_t, const common_chat_schema_property &, const common_chat_schema_document_ptr &)> & fn);
 
+common_peg_parser build_chat_peg_tool_calls(
+    common_chat_peg_builder & p, const json & tools, const std::string & marker, const std::string & block,
+    bool parallel_tool_calls, bool allow_json_for_string);
+
 // render a template; the override arguments let a parser feed in messages, tools or context it has rewritten
 common_chat_prompt common_chat_template_direct_apply_impl(
     const common_chat_template & tmpl,
@@ -54,6 +58,8 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
 common_chat_params common_chat_params_init_functionary_v3_2(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_gemma4(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+
+common_chat_params common_chat_params_init_gigachat35(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_gigachat_v3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
