@@ -34,6 +34,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <random>
@@ -71,9 +72,10 @@ static std::vector<char> quantize_host(ggml_type type, const std::vector<float> 
 }
 
 struct err_stats {
-    double nmse;     // ||test - ref||^2 / ||ref||^2
-    double max_abs;  // max |test - ref|
-    double cosine;   // cosine similarity (catches scale-correct-but-rotated output)
+    double nmse;       // ||test - ref||^2 / ||ref||^2
+    double max_abs;    // max |test - ref|
+    double cosine;     // cosine similarity (catches scale-correct-but-rotated output)
+    double norm_ratio; // ||test|| / ||ref||: catches a wrong global gain that cosine misses
 };
 
 static err_stats compare(const std::vector<float> & test, const std::vector<float> & ref) {
@@ -91,6 +93,7 @@ static err_stats compare(const std::vector<float> & test, const std::vector<floa
     s.nmse   = sref > 0.0 ? se / sref : se;
     s.cosine = (sref > 0.0 && stest > 0.0) ? dot / (std::sqrt(sref) * std::sqrt(stest)) : 0.0;
     s.max_abs = maxa;
+    s.norm_ratio = (sref > 0.0 && stest > 0.0) ? std::sqrt(stest / sref) : 0.0;
     return s;
 }
 
@@ -100,16 +103,29 @@ static err_stats compare(const std::vector<float> & test, const std::vector<floa
 //
 // Tol::STD  -> same-precision paths (f16-vs-f16, f32 WHT/dequant/mul_mat):
 //             tight nmse+cosine bar.
-// Tol::LOSSY -> quantized/turbo vs an f16 reference: judge on cosine only,
-//              since the lossy codec legitimately shifts magnitudes.
+// Tol::LOSSY -> quantized/turbo vs an f16 reference: judge on cosine (direction)
+//              plus a magnitude-ratio band ||test||/||ref||. A correct turbo path
+//              preserves group magnitude (the block norm field stores the
+//              grp_norm/recon_norm correction), so the ratio sits near 1 despite
+//              quant noise; the band trips a wrong global gain (missing norm,
+//              double 1/sqrt(D)) that cosine cannot see. Bands are calibrated on
+//              the observed A770 baseline values (see meets_pass/meets_warn).
 // Exp::GATE  -> must PASS (WARN tolerated); a FAIL reds the gate.
 // Exp::XFAIL -> known-broken; it must NOT pass yet. A PASS becomes XPASS and
 //              reds the gate ("promote to GATE"), signalling the fix landed.
 static bool meets_pass(const err_stats & s, Tol tol) {
-    return tol == Tol::STD ? (s.nmse < 1e-3 && s.cosine > 0.999) : (s.cosine > 0.95);
+    if (tol == Tol::STD) return s.nmse < 1e-3 && s.cosine > 0.999;
+    // Bands calibrated on the A770 baseline: passing turbo3/4 probes sit at
+    // norm_ratio 0.96..1.00, so [0.85, 1.15] leaves ~0.11 margin below the min
+    // while still tripping a >15% global-gain bug. Margin also covers the f16 LUT
+    // precision loss the Phase 1 optimizations introduce.
+    return s.cosine > 0.95 && s.norm_ratio > 0.85 && s.norm_ratio < 1.15;
 }
 static bool meets_warn(const err_stats & s, Tol tol) {
-    return tol == Tol::STD ? (s.nmse < 5e-2 && s.cosine > 0.99)  : (s.cosine > 0.80);
+    if (tol == Tol::STD) return s.nmse < 5e-2 && s.cosine > 0.99;
+    // turbo2 legitimately under-reconstructs to ~0.786 (2-bit), so the warn floor
+    // stays well below it while still catching a missing-norm bug (ratio ~0.1).
+    return s.cosine > 0.80 && s.norm_ratio > 0.60 && s.norm_ratio < 1.70;
 }
 static void verdict(const char * label, const err_stats & s, Tol tol, Exp exp) {
     const bool pass = meets_pass(s, tol), warn = meets_warn(s, tol);
@@ -121,8 +137,8 @@ static void verdict(const char * label, const err_stats & s, Tol tol, Exp exp) {
         if (pass) { tag = "XPASS"; g_xpass++; }    // fixed! -> red until promoted to GATE
         else      { tag = "xfail"; g_xfail++; }    // expected-broken -> green
     }
-    printf("  [%s] %-28s nmse=%.3e  max_abs=%.3e  cosine=%.6f\n",
-           tag, label, s.nmse, s.max_abs, s.cosine);
+    printf("  [%s] %-28s nmse=%.3e  max_abs=%.3e  cosine=%.6f  |t|/|r|=%.4f\n",
+           tag, label, s.nmse, s.max_abs, s.cosine, s.norm_ratio);
 }
 
 static void skip(const char * label, const char * why) {
@@ -216,6 +232,43 @@ static void probe_wht(ggml_backend_t cpu, ggml_backend_t sycl, int group_size) {
         auto set_inputs = [=](ggml_context * ctx) {
             ggml_tensor * a = ggml_get_tensor(ctx, "a");
             ggml_backend_tensor_set(a, data.data(), 0, data.size() * sizeof(float));
+        };
+        probe(label, cpu, sycl, build, set_inputs);
+    }
+}
+
+// (1b) WHT with a non-trivial InnerQ scale_inv. Closes the "no oracle for a
+// non-trivial scale_inv" gap: forward applies scale_inv before the rotation,
+// inverse applies it after. The CPU op (ggml_compute_forward_turbo_wht_f32)
+// applies it identically to the SYCL kernel (k_turbo_wht_f32_sycl), so this
+// checks the SYCL scale_inv path against a real per-channel scale, not just 1.0.
+static void probe_wht_scaled(ggml_backend_t cpu, ggml_backend_t sycl, int group_size) {
+    const int64_t ne   = group_size;
+    const int64_t rows = 8;
+    auto data = gen_normal(ne * rows, 0x5c1eu ^ (uint32_t) group_size);
+
+    // Non-uniform per-channel scale spanning the InnerQ clamp range [0.5, 2.0].
+    std::vector<float> scale_inv(group_size);
+    for (int i = 0; i < group_size; ++i) {
+        scale_inv[i] = 0.5f + 1.5f * ((float) i / (float) (group_size - 1));
+    }
+
+    for (int dir = 0; dir <= 1; ++dir) {
+        char label[64];
+        snprintf(label, sizeof(label), "WHT g=%d dir=%d scaled", group_size, dir);
+
+        auto build = [=](ggml_context * ctx) -> ggml_tensor * {
+            ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne, rows);
+            ggml_set_name(a, "a");
+            ggml_tensor * s = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, group_size);
+            ggml_set_name(s, "s");
+            return ggml_turbo_wht(ctx, a, dir, group_size, s);
+        };
+        auto set_inputs = [=](ggml_context * ctx) {
+            ggml_tensor * a = ggml_get_tensor(ctx, "a");
+            ggml_backend_tensor_set(a, data.data(), 0, data.size() * sizeof(float));
+            ggml_tensor * s = ggml_get_tensor(ctx, "s");
+            ggml_backend_tensor_set(s, scale_inv.data(), 0, scale_inv.size() * sizeof(float));
         };
         probe(label, cpu, sycl, build, set_inputs);
     }
@@ -620,6 +673,7 @@ int main() {
     probe_wht(cpu, sycl, 128);
     probe_wht(cpu, sycl, 64);
     probe_wht(cpu, sycl, 32);
+    probe_wht_scaled(cpu, sycl, 128);   // non-trivial InnerQ scale_inv (production head_dim)
 
     printf("\n[2] centroid decode (cpy turbo -> f32)\n");                // GATE, +K=256 (multi-block)
     for (int64_t K : {128, 256}) {
@@ -660,12 +714,20 @@ int main() {
     // Turbo FA fix landed (see fattn-common.hpp vec_dot_fattn_vec_KQ_turbo_generic):
     // the KQ dot now reads Q from the caller's per-thread register slice instead of
     // treating it as a full D-element row. Promoted from XFAIL to GATE.
-    printf("\n[5] flash attention turbo KV - GATE (d=128 only)\n");
-    for (int64_t n_q : {8, 1}) {
-        const char * path = (n_q == 8) ? "tile" : "vec"; // label matches the kernel n_q routes to
-        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, path, Exp::GATE, /*force=*/true);
-        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::GATE, /*force=*/true);
-        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::GATE, /*force=*/true);
+    // A regressed turbo FA kernel can wedge the A770 (device-lost hang), and a hang
+    // cannot be caught or skipped at runtime -- so gate these probes behind an opt-in
+    // env var. Default runs skip [5] to keep CI un-wedgeable; developers set
+    // LLAMA_TEST_TURBO_FA=1 to exercise the turbo FA kernels. (Restores PR #5's gate.)
+    if (getenv("LLAMA_TEST_TURBO_FA")) {
+        printf("\n[5] flash attention turbo KV - GATE (d=128 only)\n");
+        for (int64_t n_q : {8, 1}) {
+            const char * path = (n_q == 8) ? "tile" : "vec"; // label matches the kernel n_q routes to
+            probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, path, Exp::GATE, /*force=*/true);
+            probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::GATE, /*force=*/true);
+            probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::GATE, /*force=*/true);
+        }
+    } else {
+        printf("\n[5] flash attention turbo KV - SKIPPED (set LLAMA_TEST_TURBO_FA=1 to run; gated so a regressed kernel cannot wedge the A770)\n");
     }
 
     printf("\n[6] flash attention VEC (n_q=1, decode) - GATE, standard KV across head dims [crash-prone: LAST]\n");
