@@ -70,6 +70,36 @@ static void k_turbo_wht_f32_sycl(
     dst[base + t] = result;
 }
 
+template <int direction, int group_size>
+static void submit_turbo_wht_f32_sycl(
+        queue_ptr      stream,
+        const float  * src_ptr,
+        float        * dst_ptr,
+        const float  * scale_inv_ptr,
+        const int64_t  n_groups,
+        const int64_t  head_dim,
+        const int64_t  groups_per_head) {
+    // One work-item per group element, so the work-group size and the shared-memory
+    // length both equal group_size; kept as separate names for their distinct roles.
+    constexpr int block_size = group_size;   // nd_range local (work-group) size
+    constexpr int shared_len = group_size;   // per-group WHT reduction scratch
+
+    stream->submit([&](sycl::handler & h) {
+        sycl::local_accessor<float, 1> shared_mem(sycl::range<1>(shared_len), h);
+        h.parallel_for(
+            sycl::nd_range<1>(n_groups * block_size, block_size),
+            [=](sycl::nd_item<1> item_ct1) {
+                k_turbo_wht_f32_sycl<direction, group_size>(
+                    src_ptr, dst_ptr, scale_inv_ptr,
+                    n_groups, head_dim, groups_per_head,
+                    item_ct1,
+                    shared_mem.get_multi_ptr<sycl::access::decorated::no>().get()
+                );
+            }
+        );
+    });
+}
+
 
 void ggml_sycl_op_turbo_wht(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src = dst->src[0];
@@ -85,12 +115,19 @@ void ggml_sycl_op_turbo_wht(ggml_backend_sycl_context & ctx, ggml_tensor * dst) 
     memcpy(&direction, dst->op_params + 0, sizeof(int));
     memcpy(&group_size, dst->op_params + sizeof(int), sizeof(int));
 
+    GGML_ASSERT(direction == 0 || direction == 1);
+
     const int64_t head_dim        = src->ne[0];
     const int64_t n_heads         = ggml_nelements(src) / head_dim;
 
     GGML_ASSERT(group_size == 32 || group_size == 64 || group_size == 128);
     // same invariant as ggml_turbo_wht(); a tail would silently bypass the WHT
     GGML_ASSERT(head_dim % group_size == 0);
+    if (scale_tensor) {
+        GGML_ASSERT(scale_tensor->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_is_contiguous(scale_tensor));
+        GGML_ASSERT(ggml_nelements(scale_tensor) >= group_size);
+    }
     const int64_t groups_per_head = head_dim / group_size;
     const int64_t n_groups        = groups_per_head * n_heads;
 
@@ -102,103 +139,22 @@ void ggml_sycl_op_turbo_wht(ggml_backend_sycl_context & ctx, ggml_tensor * dst) 
 
     if (n_groups > 0) {
         if (group_size == 128) {
-            constexpr int D = 128;
             if (direction == 0) {
-                stream->submit([&](sycl::handler &h) {
-                    sycl::local_accessor<float, 1> shared_mem(sycl::range<1>(D), h);
-                    h.parallel_for(
-                        sycl::nd_range<1>(n_groups * D, D),
-                        [=](sycl::nd_item<1> item_ct1) {
-                            k_turbo_wht_f32_sycl<0, D>(
-                                src_ptr, dst_ptr, scale_inv_ptr,
-                                n_groups, head_dim, groups_per_head,
-                                item_ct1,
-                                shared_mem.get_multi_ptr<sycl::access::decorated::no>().get()
-                            );
-                        }
-                    );
-                });
+                submit_turbo_wht_f32_sycl<0, 128>(stream, src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
             } else {
-                stream->submit([&](sycl::handler &h) {
-                    sycl::local_accessor<float, 1> shared_mem(sycl::range<1>(D), h);
-                    h.parallel_for(
-                        sycl::nd_range<1>(n_groups * D, D),
-                        [=](sycl::nd_item<1> item_ct1) {
-                            k_turbo_wht_f32_sycl<1, D>(
-                                src_ptr, dst_ptr, scale_inv_ptr,
-                                n_groups, head_dim, groups_per_head,
-                                item_ct1,
-                                shared_mem.get_multi_ptr<sycl::access::decorated::no>().get()
-                            );
-                        }
-                    );
-                });
+                submit_turbo_wht_f32_sycl<1, 128>(stream, src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
             }
         } else if (group_size == 64) {
-            constexpr int D = 64;
             if (direction == 0) {
-                stream->submit([&](sycl::handler &h) {
-                    sycl::local_accessor<float, 1> shared_mem(sycl::range<1>(D), h);
-                    h.parallel_for(
-                        sycl::nd_range<1>(n_groups * D, D),
-                        [=](sycl::nd_item<1> item_ct1) {
-                            k_turbo_wht_f32_sycl<0, D>(
-                                src_ptr, dst_ptr, scale_inv_ptr,
-                                n_groups, head_dim, groups_per_head,
-                                item_ct1,
-                                shared_mem.get_multi_ptr<sycl::access::decorated::no>().get()
-                            );
-                        }
-                    );
-                });
+                submit_turbo_wht_f32_sycl<0, 64>(stream, src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
             } else {
-                stream->submit([&](sycl::handler &h) {
-                    sycl::local_accessor<float, 1> shared_mem(sycl::range<1>(D), h);
-                    h.parallel_for(
-                        sycl::nd_range<1>(n_groups * D, D),
-                        [=](sycl::nd_item<1> item_ct1) {
-                            k_turbo_wht_f32_sycl<1, D>(
-                                src_ptr, dst_ptr, scale_inv_ptr,
-                                n_groups, head_dim, groups_per_head,
-                                item_ct1,
-                                shared_mem.get_multi_ptr<sycl::access::decorated::no>().get()
-                            );
-                        }
-                    );
-                });
+                submit_turbo_wht_f32_sycl<1, 64>(stream, src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
             }
         } else {
-            constexpr int D = 32;
             if (direction == 0) {
-                stream->submit([&](sycl::handler &h) {
-                    sycl::local_accessor<float, 1> shared_mem(sycl::range<1>(D), h);
-                    h.parallel_for(
-                        sycl::nd_range<1>(n_groups * D, D),
-                        [=](sycl::nd_item<1> item_ct1) {
-                            k_turbo_wht_f32_sycl<0, D>(
-                                src_ptr, dst_ptr, scale_inv_ptr,
-                                n_groups, head_dim, groups_per_head,
-                                item_ct1,
-                                shared_mem.get_multi_ptr<sycl::access::decorated::no>().get()
-                            );
-                        }
-                    );
-                });
+                submit_turbo_wht_f32_sycl<0, 32>(stream, src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
             } else {
-                stream->submit([&](sycl::handler &h) {
-                    sycl::local_accessor<float, 1> shared_mem(sycl::range<1>(D), h);
-                    h.parallel_for(
-                        sycl::nd_range<1>(n_groups * D, D),
-                        [=](sycl::nd_item<1> item_ct1) {
-                            k_turbo_wht_f32_sycl<1, D>(
-                                src_ptr, dst_ptr, scale_inv_ptr,
-                                n_groups, head_dim, groups_per_head,
-                                item_ct1,
-                                shared_mem.get_multi_ptr<sycl::access::decorated::no>().get()
-                            );
-                        }
-                    );
-                });
+                submit_turbo_wht_f32_sycl<1, 32>(stream, src_ptr, dst_ptr, scale_inv_ptr, n_groups, head_dim, groups_per_head);
             }
         }
     }
