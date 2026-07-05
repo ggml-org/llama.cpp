@@ -1383,7 +1383,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq(
     const global char * k_base = (const global char *) k_void + k_offset;
     const global char * v_base = (const global char *) v_void + v_offset;
     global       char * o_base = (global       char *) o_void + o_offset;
-.
+
     __local ACC_TYPE4 q_shared[MQ_GQA * DK_VEC];
     for (int i = tid; i < MQ_GQA * DK_VEC; i += MQ_WG_SIZE) {
         const int h        = i / DK_VEC;
