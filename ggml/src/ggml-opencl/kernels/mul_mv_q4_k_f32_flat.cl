@@ -40,7 +40,7 @@ typedef struct {
 #undef N_SIMDWIDTH
 
 #ifdef INTEL_GPU
-#define N_DST 8 // number of rows each SIMD group works on (Intel: 4->8 for 2x activation reuse, matching fast q4_0 kernel)
+#define N_DST 16 // number of rows each SIMD group works on (Intel: 8->16, 2x further activation reuse; 32 spills registers)
 #define N_SIMDGROUP 1 // number of SIMD groups in a thread group
 #define N_SIMDWIDTH 16 // SIMD group size
 #elif defined (ADRENO_GPU)

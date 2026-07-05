@@ -20219,7 +20219,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             if (backend_ctx->gpu_family == INTEL) {
                 nth0 = 16;
                 nth1 = 1;
-                ndst = 8; // 4->8 rows per subgroup (2x activation reuse) — matches N_DST in mul_mv_q4_k_f32_flat.cl
+                ndst = 16; // 8->16 rows per subgroup — matches N_DST in mul_mv_q4_k_f32_flat.cl (32 spills)
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
                 nth1 = 2;
