@@ -769,6 +769,26 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
   - Good: Builds quickly, smaller size of binary file.
   - Bad: The startup is slow (JIT) in first time, but subsequent performance is unaffected.
 
+- Intel Arc A770 (DG2 / Xe-HPG) known-good stack (verified 2026-07, JIT build):
+  oneAPI 2026.0 (icx/icpx), Intel Graphics Compiler (IGC) 2.36.3, intel-compute-runtime
+  26.22.x, level-zero-loader 1.28.6. `sycl-ls` should list the Arc under `level_zero:gpu`.
+
+- IGC internal compiler error on `joint_matrix` (XMX). Bleeding-edge IGC (e.g. the 2.38.x
+  git builds) can crash with `IGC: Internal Compiler Error: Floating point exception` when
+  JIT-compiling any `joint_matrix` kernel on DG2. Use a stable IGC release (2.36.3 verified).
+
+- XMX `joint_matrix` on DG2 requires sub-group size 8, not 16. Forcing
+  `[[sycl::reqd_sub_group_size(16)]]` on a `joint_matrix` kernel triggers the IGC ICE above;
+  the DG2 XMX systolic depth is 8 (the device reports N=8 in `matrix_combinations`). A
+  correct SG=8 kernel lowers to real `dpas` and runs several x scalar FMA. Note the rest of
+  the ggml-sycl backend uses sub-group 16 (`GGML_SYCL_WARP_SIZE=16`), so any XMX matmul
+  region must run in an SG=8 scope.
+
+- Host build-flag injection corrupts the SYCL device pipeline. When packaging (e.g. Arch
+  `makepkg`), disable injected compiler flags (`options=(!buildflags)`); host `-march`
+  microarch flags leaking into the device compile can produce garbage GPU output. Do not add
+  host CFLAGS to the SYCL build.
+
 ## Q&A
 
 - Error:  `error while loading shared libraries: libsycl.so: cannot open shared object file: No such file or directory`.
