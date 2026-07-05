@@ -1091,7 +1091,7 @@ static cl_program build_program_from_source_ex(cl_context ctx, cl_device_id dev,
         program_log = (char*) malloc(log_size + 1);
         program_log[log_size] = '\0';
         clGetProgramBuildInfo(p, dev, CL_PROGRAM_BUILD_LOG, log_size + 1, program_log, NULL);
-        GGML_LOG_ERROR("ggml_opencl: kernel compile error (err=%d):\n\n%s\n", err, program_log);
+        GGML_LOG_ERROR("ggml_opencl: kernel compile error (err=%d)%s%s:\n\n%s\n", err, tag ? " building " : "", tag ? tag : "", program_log);
         free(program_log);
         clReleaseProgram(p);
         if (fatal) {
@@ -4595,8 +4595,10 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
                 }
             }
 
-            // second compile of the same source with -DMQ_GQA=8
-            const std::string opts_g8 = opts + " -D MQ_GQA=8 -D MQ_NSG=3 -D MQ_NSG_SPLIT=3";
+            // second compile of the same source with -DMQ_GQA=8.
+            // FA_MQ_ONLY keeps only the vec_mq kernels so that the program
+            // compiles within the Adreno compiler's memory budget at DK>=256.
+            const std::string opts_g8 = opts + " -D MQ_GQA=8 -D MQ_NSG=3 -D MQ_NSG_SPLIT=3 -D FA_MQ_ONLY";
             cl_program prog_g8 = fa_decode_only ? nullptr : build_program_from_source_ex(
                 backend_ctx->context, backend_ctx->device, src.c_str(), opts_g8,
                 /*fatal=*/false, "fa f32_f16 MQ_GQA=8", backend_ctx->queue);

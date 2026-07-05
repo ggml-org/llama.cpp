@@ -90,7 +90,7 @@ inline float get_alibi_slope(
 
 // Adreno compiler crashes when attempting to compile the entire program for DK=512,
 // FA_DECODE_ONLY allows bypass the encoding kernel.
-#ifndef FA_DECODE_ONLY
+#if !defined(FA_DECODE_ONLY) && !defined(FA_MQ_ONLY)
 #ifndef FA_TILE_NAME
 #define FA_TILE_NAME flash_attn_f32_f16
 #endif
@@ -620,6 +620,7 @@ __kernel void FA_TILE_NAME(
 
 // allow bypassing decode kernels to avoid compiler crash for DK=512 on Adreno GPUs
 #ifndef FA_PREFILL_ONLY
+#ifndef FA_MQ_ONLY  // q1 excluded from the MQ-only (g8) program
 REQD_FA_SG
 __kernel void flash_attn_f32_f16_q1(
     const global void * q_void, ulong q_offset,
@@ -776,13 +777,14 @@ __kernel void flash_attn_f32_f16_q1(
     }
 }
 
+#endif  // !FA_MQ_ONLY (q1)
 // decode variant for large DV (e.g. Gemma-4 DK=DV=512 global layers).
 #define VEC_NSG          4
 #define VEC_WG_SIZE      (Q1_WG_SIZE * VEC_NSG)
 #define Q1V_DV_PER_THREAD ((DV_VEC + Q1_WG_SIZE - 1) / Q1_WG_SIZE)
 
 // allow bypassing the kernel to avoid compiler crash for DK=512 on Adreno GPUs
-#ifndef FA_DECODE_MINIMAL
+#if !defined(FA_DECODE_MINIMAL) && !defined(FA_MQ_ONLY)
 REQD_SUBGROUP_SIZE_64
 __kernel void flash_attn_f32_f16_q1_vec(
     const global void * q_void, ulong q_offset,
@@ -976,6 +978,7 @@ __kernel void flash_attn_f32_f16_q1_vec(
 #define LT_KC 32
 #define LT_WG 128
 
+#ifndef FA_MQ_ONLY  // q1_local_tile excluded from the MQ-only (g8) program
 REQD_SUBGROUP_SIZE_64
 __kernel void flash_attn_f32_f16_q1_local_tile(
     const global void * q_void, ulong q_offset,
@@ -1123,6 +1126,7 @@ __kernel void flash_attn_f32_f16_q1_local_tile(
 #define LMQ_KC  32
 #define LMQ_DPL 2   // DK / LMQ_WG at DK=128
 
+#endif  // !FA_MQ_ONLY (q1_local_tile)
 #ifndef MQ_GQA
 #define MQ_GQA 4
 #endif
@@ -1131,6 +1135,7 @@ __kernel void flash_attn_f32_f16_q1_local_tile(
 #define FA_PARTIAL_FLOATS (2 + DV)
 #endif
 
+#ifndef FA_MQ_ONLY  // q1_local_mq_split excluded from the MQ-only (g8) program
 REQD_SUBGROUP_SIZE_64
 __kernel void flash_attn_f32_f16_q1_local_mq_split(
     const global void * q_void, ulong q_offset,
@@ -1329,6 +1334,7 @@ __kernel void flash_attn_f32_f16_q1_local_mq_split(
     }
 }
 
+#endif  // !FA_MQ_ONLY (q1_local_mq_split)
 #ifndef MQ_NSG
 #define MQ_NSG 4
 #endif
@@ -2031,6 +2037,7 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split_k_img(
 }
 #endif  // !FA_DECODE_ONLY
 
+#ifndef FA_MQ_ONLY  // q1_split + merge excluded from the MQ-only (g8) program
 __kernel void flash_attn_f32_f16_q1_split(
     const global void * q_void, ulong q_offset,
     const global void * k_void, ulong k_offset,
@@ -2261,4 +2268,5 @@ __kernel void flash_attn_f32_merge(
     global O_DATA_TYPE4 * o_row = (global O_DATA_TYPE4 *) ((global char *) o_void + o_offset + o_row_offset);
     o_row[lane] = CONVERT_O_DATA4(o);
 }
+#endif  // !FA_MQ_ONLY (q1_split + merge)
 #endif  // !FA_PREFILL_ONLY (decode kernels)
