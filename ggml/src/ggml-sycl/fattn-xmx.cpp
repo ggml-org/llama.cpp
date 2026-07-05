@@ -86,8 +86,13 @@ static void flash_attn_ext_xmx_kernel(
         // dequantizing q8_0/turbo blocks on the fly (rotated domain for turbo).
         for (int idx = lane; idx < Bc * D; idx += XMX_SG) {
             const int j = idx / D, d = idx % D;
-            Kt_sh[d * Bc + j] = xmx_load_kv<KK>(K_base + (kv0 + j) * nb11, d);
-            V_sh [j * D + d]  = xmx_load_kv<VK>(V_base + (kv0 + j) * nb21, d);
+            if (kv0 + j < n_kv) {
+                Kt_sh[d * Bc + j] = xmx_load_kv<KK>(K_base + (kv0 + j) * nb11, d);
+                V_sh [j * D + d]  = xmx_load_kv<VK>(V_base + (kv0 + j) * nb21, d);
+            } else {  // tail past n_kv (n_kv % Bc != 0): pad 0, excluded from softmax below
+                Kt_sh[d * Bc + j] = sycl::half(0.0f);
+                V_sh [j * D + d]  = sycl::half(0.0f);
+            }
         }
         sycl::group_barrier(sg);
 
@@ -110,8 +115,13 @@ static void flash_attn_ext_xmx_kernel(
         // masked/scaled score back so the exp pass reuses it. (slope=1: ALiBi TODO.)
         float rmax = -1e30f;
         for (int j = 0; j < Bc; ++j) {
-            float sj = S_sh[lane * Bc + j] * scale;
-            if (maskh) sj += (float) maskh[kv0 + j];
+            float sj;
+            if (kv0 + j < n_kv) {                 // valid key: scale + additive mask
+                sj = S_sh[lane * Bc + j] * scale;
+                if (maskh) sj += (float) maskh[kv0 + j];
+            } else {
+                sj = -1e30f;                      // padded tail: exp() -> 0, out of softmax
+            }
             S_sh[lane * Bc + j] = sj;
             rmax = sycl::fmax(rmax, sj);
         }
@@ -145,7 +155,8 @@ static void flash_attn_ext_xmx_kernel(
     // write output: ggml FA dst is [D, n_head, n_q(*seq)] contiguous.
     if (qr < ne1) {
         float * o = dst + (int64_t)(qr) * (D * it.get_group_range(1)) + head * D;
-        for (int d = 0; d < D; ++d) o[d] = O_sh[lane * D + d] / l_sh[lane];
+        const float den = l_sh[lane] > 0.0f ? l_sh[lane] : 1.0f;  // n_kv==0 -> avoid 0/0
+        for (int d = 0; d < D; ++d) o[d] = O_sh[lane * D + d] / den;
     }
 }
 
@@ -156,6 +167,10 @@ static void submit_xmx(queue_ptr stream,
         int64_t nb01, int64_t nb02, int64_t nb11, int64_t nb12, int64_t nb21, int64_t nb22,
         int ne1, int n_head, int q_blocks, const char * maskb, int64_t mask_nb1) {
     sycl::range<3> global(1, n_head, q_blocks * XMX_SG);
+    // local size == XMX_SG: exactly one sub-group per work-group. The kernel's
+    // sub-group barriers therefore synchronize the whole work-group (SLM sync is
+    // correct). If this ever grows past one sub-group, switch those barriers to
+    // work-group scope (sycl::group_barrier(it.get_group())).
     sycl::range<3> local (1, 1, XMX_SG);
     stream->submit([&](sycl::handler & h) {
         sycl::local_accessor<sycl::half, 1> Qh   (Br * D, h);
