@@ -2536,6 +2536,12 @@ private:
                     res->n_decode_total          = metrics.n_decode_total;
                     res->n_busy_slots_total      = metrics.n_busy_slots_total;
 
+                    if (model_tgt != nullptr) {
+                        res->model_size_bytes = llama_model_size(model_tgt);
+                        res->model_n_params   = llama_model_n_params(model_tgt);
+                    }
+                    res->n_ctx_total = (uint64_t) n_ctx;
+
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
                     }
@@ -4451,6 +4457,18 @@ void server_routes::init_routes() {
                     {"name",  "n_busy_slots_per_decode"},
                     {"help",  "Average number of busy slots per llama_decode() call"},
                     {"value",  (float) res_task->n_busy_slots_total / std::max((float) res_task->n_decode_total, 1.f)}
+            },{
+                    {"name",  "model_size_bytes"},
+                    {"help",  "Model weights size in bytes."},
+                    {"value",  res_task->model_size_bytes}
+            },{
+                    {"name",  "model_n_params"},
+                    {"help",  "Number of model parameters."},
+                    {"value",  res_task->model_n_params}
+            },{
+                    {"name",  "n_ctx"},
+                    {"help",  "Total context size across all slots."},
+                    {"value",  res_task->n_ctx_total}
             }}}
         };
 
