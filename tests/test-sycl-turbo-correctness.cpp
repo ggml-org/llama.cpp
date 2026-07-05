@@ -645,7 +645,8 @@ static void probe_fa_f16(ggml_backend_t cpu, ggml_backend_t sycl,
 }
 
 // XMX bring-up: f16 FA with a NULL mask (full, non-causal attention). Routes to the
-// XMX (DPAS) path when GGML_SYCL_FA_XMX is set, whose router gate requires mask==null.
+// XMX (DPAS) path when GGML_SYCL_FA_XMX is set (the router accepts a null mask or an
+// additive f16 mask with ne[2]==1; this probe exercises the null-mask case).
 // The CPU reference uses the same null mask, so both compute full attention.
 static void probe_fa_f16_nomask(ggml_backend_t cpu, ggml_backend_t sycl, int64_t d, int64_t n_q, int64_t nh, int64_t n_kv = 256) {
     const int64_t nh_kv = 1;

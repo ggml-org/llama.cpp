@@ -181,6 +181,15 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     float max_bias = 0.0f;
     memcpy(&max_bias, (const float *) KQV->op_params + 1, sizeof(float));
 
+    float logit_softcap = 0.0f;
+    memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+    // The XMX FA kernel ignores ALiBi (max_bias), logit soft-capping, attention
+    // sinks (src[4]) and multi-sequence batches (ne[3] > 1). Route any of those to
+    // the existing VEC/TILE kernels so GGML_SYCL_FA_XMX cannot silently change results.
+    const bool xmx_features_ok =
+        max_bias == 0.0f && logit_softcap == 0.0f && dst->src[4] == nullptr &&
+        Q->ne[3] == 1 && K->ne[3] == 1 && V->ne[3] == 1 && (mask == nullptr || mask->ne[3] == 1);
+
     bool gqa_opt_applies = gqa_ratio >= 2 && mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
     for (const ggml_tensor * t : {Q, K, V, mask}) {
         if (t == nullptr || ggml_is_quantized(t->type)) {
@@ -264,7 +273,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         // {128, 256}. The DPAS kernel dequants turbo blocks into its staging tiles
         // (rotated domain, same as VEC). D=512 exceeds the 64KB SLM budget, and
         // mixed turbo or turbo+f16 KV stay on VEC.
-        if (getenv("GGML_SYCL_FA_XMX") && K->type == V->type && (K->ne[0] == 128 || K->ne[0] == 256)) {
+        if (getenv("GGML_SYCL_FA_XMX") && xmx_features_ok && K->type == V->type && (K->ne[0] == 128 || K->ne[0] == 256)) {
             return BEST_FATTN_KERNEL_XMX;
         }
         return BEST_FATTN_KERNEL_VEC;
@@ -278,7 +287,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // (docs/research/xmx_fa_*.cpp) and oracle-gated; off by default. D=512 is
     // excluded (staging tiles exceed the 64KB SLM budget).
     const bool xmx_kv_ok = (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0) && K->type == V->type;
-    if (getenv("GGML_SYCL_FA_XMX") && xmx_kv_ok && (Q->ne[0] == 128 || Q->ne[0] == 256)) {
+    if (getenv("GGML_SYCL_FA_XMX") && xmx_features_ok && xmx_kv_ok && (Q->ne[0] == 128 || Q->ne[0] == 256)) {
         return BEST_FATTN_KERNEL_XMX;
     }
 

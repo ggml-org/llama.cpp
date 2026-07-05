@@ -63,7 +63,9 @@ static void flash_attn_ext_xmx_kernel(
     const int q0     = it.get_group(2) * Br;               // first query row of this block
     const int kv_head = head / gqa_ratio;
     const int qr = q0 + lane;                              // this lane's query row
-    const sycl::half * maskh = maskb ? (const sycl::half *)(maskb + (size_t) qr * mask_nb1) : nullptr;
+    // guard qr < ne1: lanes past the query count would index a mask row that
+    // does not exist (their output is discarded by the qr < ne1 store below).
+    const sycl::half * maskh = (maskb && qr < ne1) ? (const sycl::half *)(maskb + (size_t) qr * mask_nb1) : nullptr;
 
     const char * Qh_base = Q + head * nb02;                // this head's Q
     const char * K_base  = K + kv_head * nb12;
@@ -240,6 +242,10 @@ void ggml_sycl_flash_attn_ext_xmx(ggml_backend_sycl_context & ctx, ggml_tensor *
     GGML_ASSERT(kk == vk && "XMX FA: mixed K/V types not supported");
     const int Dq = Q->ne[0];
     GGML_ASSERT((Dq == 128 || Dq == 256) && "XMX FA: only D=128/256 (D=512 exceeds 64KB SLM)");
+    // Backstop the router feature gate: the kernel ignores multi-sequence batches
+    // and attention sinks, so it must never be dispatched with them.
+    GGML_ASSERT(Q->ne[3] == 1 && K->ne[3] == 1 && V->ne[3] == 1 && "XMX FA: ne[3] > 1 not supported");
+    GGML_ASSERT(dst->src[4] == nullptr && "XMX FA: attention sinks not supported");
     if (mask) {
         GGML_ASSERT(mask->type == GGML_TYPE_F16 && "XMX FA: mask must be f16");
         GGML_ASSERT(mask->ne[2] == 1 && "XMX FA: per-head mask not yet supported");
