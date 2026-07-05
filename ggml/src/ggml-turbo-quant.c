@@ -182,21 +182,21 @@ static int nearest_centroid_3bit(float val) {
 
 static int nearest_centroid_4bit(float val) {
     /* 16 centroids, optimal for N(0, 1/sqrt(128)), find nearest via midpoints */
-    if (val < -0.145560f) return 0;
-    if (val < -0.103361f) return 1;
-    if (val < -0.079142f) return 2;
-    if (val < -0.060009f) return 3;
-    if (val < -0.043430f) return 4;
-    if (val < -0.028293f) return 5;
-    if (val < -0.013963f) return 6;
+    if (val < -0.212203f) return 0;
+    if (val < -0.162947f) return 1;
+    if (val < -0.127026f) return 2;
+    if (val < -0.097164f) return 3;
+    if (val < -0.070671f) return 4;
+    if (val < -0.046174f) return 5;
+    if (val < -0.022824f) return 6;
     if (val <  0.000000f) return 7;
-    if (val <  0.013963f) return 8;
-    if (val <  0.028293f) return 9;
-    if (val <  0.043430f) return 10;
-    if (val <  0.060009f) return 11;
-    if (val <  0.079142f) return 12;
-    if (val <  0.103361f) return 13;
-    if (val <  0.145560f) return 14;
+    if (val <  0.022824f) return 8;
+    if (val <  0.046174f) return 9;
+    if (val <  0.070671f) return 10;
+    if (val <  0.097164f) return 11;
+    if (val <  0.127026f) return 12;
+    if (val <  0.162947f) return 13;
+    if (val <  0.212203f) return 14;
     return 15;
 }
 
@@ -476,10 +476,10 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
 #if TURBO4_USE_4BIT
         /* Step 3: 4-bit quantization (16 centroids) */
         static const float CENTROIDS_4BIT[16] = {
-            -0.173926f, -0.117195f, -0.089527f, -0.068756f,
-            -0.051262f, -0.035597f, -0.020989f, -0.006938f,
-             0.006938f,  0.020989f,  0.035597f,  0.051262f,
-             0.068756f,  0.089527f,  0.117195f,  0.173926f
+            -0.241529f, -0.182877f, -0.143016f, -0.111036f,
+            -0.083292f, -0.058050f, -0.034299f, -0.011349f,
+             0.011349f,  0.034299f,  0.058050f,  0.083292f,
+             0.111036f,  0.143016f,  0.182877f,  0.241529f
         };
         uint8_t indices[TURBO_D];
         for (int i = 0; i < d; i++) {
@@ -565,10 +565,10 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
     /* 4-bit PolarQuant: nibble unpack → centroid → inverse rotate → scale */
     /* TODO: add proper 4-bit centroid table to C code (currently only in Metal) */
     static const float CENTROIDS_4BIT[16] = {
-        -0.173926f, -0.117195f, -0.089527f, -0.068756f,
-        -0.051262f, -0.035597f, -0.020989f, -0.006938f,
-         0.006938f,  0.020989f,  0.035597f,  0.051262f,
-         0.068756f,  0.089527f,  0.117195f,  0.173926f
+        -0.241529f, -0.182877f, -0.143016f, -0.111036f,
+        -0.083292f, -0.058050f, -0.034299f, -0.011349f,
+         0.011349f,  0.034299f,  0.058050f,  0.083292f,
+         0.111036f,  0.143016f,  0.182877f,  0.241529f
     };
     for (int block = 0; block < nb; block++) {
         float norm = GGML_FP16_TO_FP32(x[block].norm);
