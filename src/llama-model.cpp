@@ -1486,7 +1486,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
         }
     }
-    ml.done_getting_tensors();
+    // Ollama-exported qwen35/qwen35moe GGUFs bundle vision (v.*) and MTP (mtp.*)
+    // sibling tensors the text model does not use
+    ml.done_getting_tensors(arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE);
 
     // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
     // If sidecar scales exist, the output weight must be an actual output tensor.
