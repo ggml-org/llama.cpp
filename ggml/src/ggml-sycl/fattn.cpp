@@ -260,10 +260,11 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         if (K->ne[0] % 128 != 0) {
             return BEST_FATTN_KERNEL_NONE;
         }
-        // XMX turbo (opt-in, off by default): same turbo type on K and V, D==128.
-        // The DPAS kernel dequants turbo blocks into its staging tiles (rotated
-        // domain, same as VEC). Mixed turbo or turbo+f16 KV stay on VEC.
-        if (getenv("GGML_SYCL_FA_XMX") && K->type == V->type && K->ne[0] == 128) {
+        // XMX turbo (opt-in, off by default): same turbo type on K and V, D in
+        // {128, 256}. The DPAS kernel dequants turbo blocks into its staging tiles
+        // (rotated domain, same as VEC). D=512 exceeds the 64KB SLM budget, and
+        // mixed turbo or turbo+f16 KV stay on VEC.
+        if (getenv("GGML_SYCL_FA_XMX") && K->type == V->type && (K->ne[0] == 128 || K->ne[0] == 256)) {
             return BEST_FATTN_KERNEL_XMX;
         }
         return BEST_FATTN_KERNEL_VEC;
@@ -272,12 +273,12 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
-    // XMX (DPAS) path -- opt-in via GGML_SYCL_FA_XMX. First-cut scope: f16 KV,
-    // D==128, no explicit mask. The math is validated (docs/research/xmx_fa_*.cpp);
-    // ggml correctness is still under harness bring-up, so it is off by default.
+    // XMX (DPAS) path -- opt-in via GGML_SYCL_FA_XMX. Scope: f16 or q8_0 KV,
+    // D in {128, 256}, additive mask (ne[2]==1). The math is validated
+    // (docs/research/xmx_fa_*.cpp) and oracle-gated; off by default. D=512 is
+    // excluded (staging tiles exceed the 64KB SLM budget).
     const bool xmx_kv_ok = (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0) && K->type == V->type;
-    if (getenv("GGML_SYCL_FA_XMX") && xmx_kv_ok && Q->ne[0] == 128) {
-        // f16 or q8_0 KV (K==V type); masks with ne[2] != 1 already returned NONE above.
+    if (getenv("GGML_SYCL_FA_XMX") && xmx_kv_ok && (Q->ne[0] == 128 || Q->ne[0] == 256)) {
         return BEST_FATTN_KERNEL_XMX;
     }
 

@@ -184,6 +184,25 @@ static void submit_xmx(queue_ptr stream,
     });
 }
 
+// Runtime kind -> compile-time kind dispatch for a fixed D (K/V share a kind).
+template <int D, int Br, int Bc>
+static void dispatch_xmx_kind(int kk, queue_ptr stream,
+        const char * Qd, const char * Kd, const char * Vd, float * Od,
+        float scale, int n_kv, int gqa_ratio,
+        int64_t nb01, int64_t nb02, int64_t nb11, int64_t nb12, int64_t nb21, int64_t nb22,
+        int ne1, int n_head, int q_blocks, const char * maskb, int64_t mask_nb1) {
+#define XMX_ARGS stream, Qd, Kd, Vd, Od, scale, n_kv, gqa_ratio, nb01, nb02, nb11, nb12, nb21, nb22, ne1, n_head, q_blocks, maskb, mask_nb1
+    switch (kk) {
+        case XMX_F16:    submit_xmx<D, Br, Bc, XMX_F16,    XMX_F16   >(XMX_ARGS); break;
+        case XMX_Q8_0:   submit_xmx<D, Br, Bc, XMX_Q8_0,   XMX_Q8_0  >(XMX_ARGS); break;
+        case XMX_TURBO2: submit_xmx<D, Br, Bc, XMX_TURBO2, XMX_TURBO2>(XMX_ARGS); break;
+        case XMX_TURBO3: submit_xmx<D, Br, Bc, XMX_TURBO3, XMX_TURBO3>(XMX_ARGS); break;
+        case XMX_TURBO4: submit_xmx<D, Br, Bc, XMX_TURBO4, XMX_TURBO4>(XMX_ARGS); break;
+        default: GGML_ABORT("XMX FA: unreachable KV kind");
+    }
+#undef XMX_ARGS
+}
+
 void ggml_sycl_flash_attn_ext_xmx(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
@@ -204,13 +223,14 @@ void ggml_sycl_flash_attn_ext_xmx(ggml_backend_sycl_context & ctx, ggml_tensor *
     const int vk = kv_kind(V->type);
     GGML_ASSERT(kk >= 0 && vk >= 0 && "XMX FA: unsupported KV type");
     GGML_ASSERT(kk == vk && "XMX FA: mixed K/V types not supported");
-    GGML_ASSERT(Q->ne[0] == 128);
+    const int Dq = Q->ne[0];
+    GGML_ASSERT((Dq == 128 || Dq == 256) && "XMX FA: only D=128/256 (D=512 exceeds 64KB SLM)");
     if (mask) {
         GGML_ASSERT(mask->type == GGML_TYPE_F16 && "XMX FA: mask must be f16");
         GGML_ASSERT(mask->ne[2] == 1 && "XMX FA: per-head mask not yet supported");
     }
 
-    constexpr int D = 128, Br = 8, Bc = 16;
+    constexpr int Br = 8, Bc = 16;
     float scale = 1.0f;
     memcpy(&scale, (const float *) dst->op_params + 0, sizeof(float));
 
@@ -234,18 +254,13 @@ void ggml_sycl_flash_attn_ext_xmx(ggml_backend_sycl_context & ctx, ggml_tensor *
 
     if (getenv("GGML_SYCL_FA_XMX_DEBUG")) {
         fprintf(stderr, "[XMX-FA] D=%d kk=%d vk=%d n_q=%d n_head=%d n_kv=%d mask=%d\n",
-                D, kk, vk, ne1, n_head, n_kv, maskb ? 1 : 0);
+                Dq, kk, vk, ne1, n_head, n_kv, maskb ? 1 : 0);
     }
 
     queue_ptr stream = ctx.stream();
-#define XMX_LAUNCH_ARGS stream, Qd, Kd, Vd, Od, scale, n_kv, gqa_ratio, nb01, nb02, nb11, nb12, nb21, nb22, ne1, n_head, q_blocks, maskb, mask_nb1
-    switch (kk) {  // kk == vk (asserted above)
-        case XMX_F16:    submit_xmx<D, Br, Bc, XMX_F16,    XMX_F16   >(XMX_LAUNCH_ARGS); break;
-        case XMX_Q8_0:   submit_xmx<D, Br, Bc, XMX_Q8_0,   XMX_Q8_0  >(XMX_LAUNCH_ARGS); break;
-        case XMX_TURBO2: submit_xmx<D, Br, Bc, XMX_TURBO2, XMX_TURBO2>(XMX_LAUNCH_ARGS); break;
-        case XMX_TURBO3: submit_xmx<D, Br, Bc, XMX_TURBO3, XMX_TURBO3>(XMX_LAUNCH_ARGS); break;
-        case XMX_TURBO4: submit_xmx<D, Br, Bc, XMX_TURBO4, XMX_TURBO4>(XMX_LAUNCH_ARGS); break;
-        default: GGML_ABORT("XMX FA: unreachable KV kind");
-    }
+#define XMX_LAUNCH_ARGS kk, stream, Qd, Kd, Vd, Od, scale, n_kv, gqa_ratio, nb01, nb02, nb11, nb12, nb21, nb22, ne1, n_head, q_blocks, maskb, mask_nb1
+    if      (Dq == 128) dispatch_xmx_kind<128, Br, Bc>(XMX_LAUNCH_ARGS);
+    else if (Dq == 256) dispatch_xmx_kind<256, Br, Bc>(XMX_LAUNCH_ARGS);
+    else GGML_ABORT("XMX FA: unsupported D");
 #undef XMX_LAUNCH_ARGS
 }

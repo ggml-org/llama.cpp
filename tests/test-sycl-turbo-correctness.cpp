@@ -753,12 +753,18 @@ int main() {
     // env var. Default runs skip [5] to keep CI un-wedgeable; developers set
     // LLAMA_TEST_TURBO_FA=1 to exercise the turbo FA kernels. (Restores PR #5's gate.)
     if (getenv("LLAMA_TEST_TURBO_FA")) {
-        printf("\n[5] flash attention turbo KV - GATE (d=128 only)\n");
+        printf("\n[5] flash attention turbo KV - GATE (d=128, plus d=256 turbo3)\n");
         for (int64_t n_q : {8, 1}) {
             const char * path = (n_q == 8) ? "tile" : "vec"; // label matches the kernel n_q routes to
             probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, path, Exp::GATE, /*force=*/true);
             probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::GATE, /*force=*/true);
             probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::GATE, /*force=*/true);
+        }
+        // D=256 turbo (2 blocks per row): exercises the XMX D=256 instantiation
+        // (under GGML_SYCL_FA_XMX) and the VEC D=256 turbo path otherwise.
+        for (int64_t n_q : {8, 1}) {
+            const char * path = (n_q == 8) ? "tile" : "vec";
+            probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 256, n_q, path, Exp::GATE, /*force=*/true);
         }
     } else {
         printf("\n[5] flash attention turbo KV - SKIPPED (set LLAMA_TEST_TURBO_FA=1 to run; gated so a regressed kernel cannot wedge the A770)\n");
@@ -771,10 +777,14 @@ int main() {
     // [7] XMX (DPAS) flash-attention bring-up. Only runs with GGML_SYCL_FA_XMX set
     // (else the router keeps these on VEC). d=128 f16, null mask, decode + GQA-pack.
     if (getenv("GGML_SYCL_FA_XMX")) {
-        printf("\n[7] XMX flash attention (f16, null mask, D=128) - GATE\n");
+        printf("\n[7] XMX flash attention (f16, null mask) - GATE\n");
         probe_fa_f16_nomask(cpu, sycl, 128, 1, 1);   // decode, 1 head
         probe_fa_f16_nomask(cpu, sycl, 128, 8, 1);   // 8 queries (fills the tile)
         probe_fa_f16_nomask(cpu, sycl, 128, 1, 8);   // GQA: 8 query heads, 1 kv head
+        probe_fa_f16_nomask(cpu, sycl, 128, 16, 1);  // prefill: 2 query blocks (n_q>Br)
+        probe_fa_f16_nomask(cpu, sycl, 128, 32, 1);  // prefill: 4 query blocks
+        probe_fa_f16_nomask(cpu, sycl, 256, 1, 1);   // D=256 decode
+        probe_fa_f16_nomask(cpu, sycl, 256, 8, 1);   // D=256 prefill (1 block)
     }
 
     printf("\n== summary: %d GATE-FAIL, %d XPASS (promote to GATE!), %d xfail (expected-broken), %d SKIP ==\n",
