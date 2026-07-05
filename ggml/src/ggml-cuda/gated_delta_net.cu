@@ -34,7 +34,7 @@ gated_delta_net_cuda(const float * q,
     const int      lane     = threadIdx.x;
     const int      col      = blockIdx.z * blockDim.y + threadIdx.y;
 
-    const uint32_t iq1 = fastmodulo(h_idx, neqk1_magic);
+    const uint32_t iq1 = fastdiv(h_idx, neqk1_magic);
     const uint32_t iq3 = fastdiv(sequence, rq3_magic);
 
     float *       attn_data        = dst;
@@ -245,7 +245,7 @@ static void ggml_cuda_op_gated_delta_net_impl(
     const bool kda = (src_g->ne[0] == S_v);
 
     GGML_ASSERT(neq1 == nek1);
-    const int64_t neqk1 = neq1;
+    const int64_t neqk1 = nev1 / neq1;
 
     const int64_t rq3 = nev3 / neq3;
 
