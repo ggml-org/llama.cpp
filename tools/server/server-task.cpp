@@ -233,395 +233,7 @@ common_chat_msg task_result_state::update_chat_msg(
 }
 
 //
-// server_task
-//
 
-task_params server_task::params_from_json_cmpl(
-        const llama_vocab * vocab,
-        const common_params & params_base,
-        const int n_ctx_slot,
-        const std::vector<llama_logit_bias> & logit_bias_eog,
-        const json & data) {
-    task_params params;
-
-    // Sampling parameter defaults are loaded from the global server context (but individual requests can still them)
-    task_params defaults;
-    defaults.sampling      = params_base.sampling;
-    defaults.speculative   = params_base.speculative;
-    defaults.n_keep        = params_base.n_keep;
-    defaults.n_predict     = params_base.n_predict;
-    defaults.n_cache_reuse = params_base.n_cache_reuse;
-    defaults.cache_prompt  = params_base.cache_prompt;
-    defaults.antiprompt    = params_base.antiprompt;
-
-    // enabling this will output extra debug information in the HTTP responses from the server
-    params.verbose           = params_base.verbosity > 9;
-    params.timings_per_token = json_value(data, "timings_per_token", false);
-
-    params.stream           = json_value(data,       "stream",             false);
-    auto stream_opt         = json_value(data,       "stream_options",     json::object());
-    params.include_usage    = json_value(stream_opt, "include_usage",      false);
-    params.cache_prompt     = json_value(data,       "cache_prompt",       defaults.cache_prompt);
-    params.return_tokens    = json_value(data,       "return_tokens",      false);
-    params.return_progress  = json_value(data,       "return_progress",    false);
-    auto max_tokens         = json_value(data,       "max_tokens",         defaults.n_predict);
-    params.n_predict        = json_value(data,       "n_predict",          json_value(data, "max_completion_tokens", max_tokens));
-    params.n_indent         = json_value(data,       "n_indent",           defaults.n_indent);
-    params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
-    params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
-    params.n_discard        = std::max(0, params.n_discard);
-    params.n_cmpl           = json_value(data,       "n_cmpl",             json_value(data, "n", 1));
-    params.n_cache_reuse    = json_value(data,       "n_cache_reuse",      defaults.n_cache_reuse);
-    //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
-    params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
-    params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
-
-    params.sampling.top_k              = json_value(data, "top_k",               defaults.sampling.top_k);
-    params.sampling.top_p              = json_value(data, "top_p",               defaults.sampling.top_p);
-    params.sampling.min_p              = json_value(data, "min_p",               defaults.sampling.min_p);
-    params.sampling.top_n_sigma        = json_value(data, "top_n_sigma",         defaults.sampling.top_n_sigma);
-    params.sampling.xtc_probability    = json_value(data, "xtc_probability",     defaults.sampling.xtc_probability);
-    params.sampling.xtc_threshold      = json_value(data, "xtc_threshold",       defaults.sampling.xtc_threshold);
-    params.sampling.typ_p              = json_value(data, "typical_p",           defaults.sampling.typ_p);
-    params.sampling.temp               = json_value(data, "temperature",         defaults.sampling.temp);
-    params.sampling.dynatemp_range     = json_value(data, "dynatemp_range",      defaults.sampling.dynatemp_range);
-    params.sampling.dynatemp_exponent  = json_value(data, "dynatemp_exponent",   defaults.sampling.dynatemp_exponent);
-    params.sampling.penalty_last_n     = json_value(data, "repeat_last_n",       defaults.sampling.penalty_last_n);
-    params.sampling.penalty_repeat     = json_value(data, "repeat_penalty",      defaults.sampling.penalty_repeat);
-    params.sampling.penalty_freq       = json_value(data, "frequency_penalty",   defaults.sampling.penalty_freq);
-    params.sampling.penalty_present    = json_value(data, "presence_penalty",    defaults.sampling.penalty_present);
-    params.sampling.dry_multiplier     = json_value(data, "dry_multiplier",      defaults.sampling.dry_multiplier);
-    params.sampling.dry_base           = json_value(data, "dry_base",            defaults.sampling.dry_base);
-    params.sampling.dry_allowed_length = json_value(data, "dry_allowed_length",  defaults.sampling.dry_allowed_length);
-    params.sampling.dry_penalty_last_n = json_value(data, "dry_penalty_last_n",  defaults.sampling.dry_penalty_last_n);
-    params.sampling.mirostat           = json_value(data, "mirostat",            defaults.sampling.mirostat);
-    params.sampling.mirostat_tau       = json_value(data, "mirostat_tau",        defaults.sampling.mirostat_tau);
-    params.sampling.mirostat_eta       = json_value(data, "mirostat_eta",        defaults.sampling.mirostat_eta);
-    params.sampling.adaptive_target    = json_value(data, "adaptive_target",     defaults.sampling.adaptive_target);
-    params.sampling.adaptive_decay     = json_value(data, "adaptive_decay",      defaults.sampling.adaptive_decay);
-    params.sampling.seed               = json_value(data, "seed",                defaults.sampling.seed);
-    params.sampling.n_probs            = json_value(data, "n_probs",             defaults.sampling.n_probs);
-    params.sampling.min_keep           = json_value(data, "min_keep",            defaults.sampling.min_keep);
-    params.sampling.backend_sampling   = json_value(data, "backend_sampling",    defaults.sampling.backend_sampling);
-    params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
-
-    params.speculative = defaults.speculative;
-
-    // TODO: to keep things simple, we disable speculative parameter adjustments for now
-#if 0
-    // TODO: for now, be able to adjust only the draft-model based speculative parameters
-    params.speculative.draft.n_min = json_value(data, "speculative.n_min", defaults.speculative.draft.n_min);
-    params.speculative.draft.n_max = json_value(data, "speculative.n_max", defaults.speculative.draft.n_max);
-    params.speculative.draft.p_min = json_value(data, "speculative.p_min", defaults.speculative.draft.p_min);
-
-    params.speculative.draft.n_min = std::min(params.speculative.draft.n_max, params.speculative.draft.n_min);
-    params.speculative.draft.n_min = std::max(params.speculative.draft.n_min, 0);
-    params.speculative.draft.n_max = std::max(params.speculative.draft.n_max, 0);
-
-    // for debugging and research purposes
-    params.speculative.type = common_speculative_type_from_name(json_value(data, "speculative.type", common_speculative_type_to_str(defaults.speculative.type)));
-
-    params.speculative.ngram_size_n     = json_value(data, "speculative.ngram_size_n", defaults.speculative.ngram_size_n);
-    params.speculative.ngram_size_m     = json_value(data, "speculative.ngram_size_m", defaults.speculative.ngram_size_m);
-    params.speculative.ngram_min_hits   = json_value(data, "speculative.ngram_m_hits", defaults.speculative.ngram_min_hits);
-
-    params.speculative.ngram_size_n     = std::max(std::min(1, (int) params.speculative.ngram_size_n),     1024);
-    params.speculative.ngram_size_m     = std::max(std::min(1, (int) params.speculative.ngram_size_m),     1024);
-    params.speculative.ngram_min_hits   = std::max(std::min(1, (int) params.speculative.ngram_min_hits),   1024);
-#endif
-
-    // Use OpenAI API logprobs only if n_probs wasn't provided
-    if (data.contains("logprobs") && params.sampling.n_probs == defaults.sampling.n_probs){
-        params.sampling.n_probs = json_value(data, "logprobs", defaults.sampling.n_probs);
-    }
-
-    if (data.contains("lora")) {
-        if (data.at("lora").is_array()) {
-            params.lora = parse_lora_request(data.at("lora"));
-        } else {
-            throw std::runtime_error("Error: 'lora' must be an array of objects with 'id' and 'scale' fields");
-        }
-    } else {
-        params.lora = {};
-    }
-
-    // TODO: add more sanity checks for the input parameters
-
-    if (params.sampling.penalty_last_n < -1) {
-        throw std::runtime_error("Error: repeat_last_n must be >= -1");
-    }
-
-    if (params.sampling.dry_penalty_last_n < -1) {
-        throw std::runtime_error("Error: dry_penalty_last_n must be >= -1");
-    }
-
-    if (params.sampling.penalty_last_n == -1) {
-        // note: should be the slot's context and not the full context, but it's ok
-        params.sampling.penalty_last_n = n_ctx_slot;
-    }
-
-    if (params.sampling.dry_penalty_last_n == -1) {
-        params.sampling.dry_penalty_last_n = n_ctx_slot;
-    }
-
-    if (params.sampling.dry_base < 1.0f) {
-        params.sampling.dry_base = defaults.sampling.dry_base;
-    }
-
-    // sequence breakers for DRY
-    {
-        // Currently, this is not compatible with TextGen WebUI, Koboldcpp and SillyTavern format
-        // Ref: https://github.com/oobabooga/text-generation-webui/blob/d1af7a41ade7bd3c3a463bfa640725edb818ebaf/extensions/openai/typing.py#L39
-
-        if (data.contains("dry_sequence_breakers")) {
-            params.sampling.dry_sequence_breakers = json_value(data, "dry_sequence_breakers", std::vector<std::string>());
-            if (params.sampling.dry_sequence_breakers.empty()) {
-                throw std::runtime_error("Error: dry_sequence_breakers must be a non-empty array of strings");
-            }
-        }
-    }
-
-    // process "json_schema" and "grammar"
-    if (data.contains("json_schema") && !data.contains("grammar")) {
-        try {
-            auto schema                  = json_value(data, "json_schema", json::object());
-            SRV_DBG("JSON schema: %s\n", schema.dump(2).c_str());
-            std::string grammar_str      = json_schema_to_grammar(schema);
-            SRV_DBG("Converted grammar: %s\n", grammar_str.c_str());
-            params.sampling.grammar      = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, std::move(grammar_str)};
-        } catch (const std::exception & e) {
-            throw std::runtime_error(std::string("\"json_schema\": ") + e.what());
-        }
-    } else {
-        params.sampling.grammar = defaults.sampling.grammar;
-
-        std::string grammar_str = json_value(data, "grammar", std::string());
-        if (!grammar_str.empty()) {
-            // grammar_type key is set by the server when converting chat template grammars
-            std::string grammar_type = json_value(data, "grammar_type", std::string());
-            if (grammar_type == "tool_calls") {
-                params.sampling.grammar = {COMMON_GRAMMAR_TYPE_TOOL_CALLS, std::move(grammar_str)};
-            } else {
-                // explicit grammar from the user (API field "grammar")
-                params.sampling.grammar = {COMMON_GRAMMAR_TYPE_USER, std::move(grammar_str)};
-            }
-            SRV_DBG("Grammar (%s): %s\n", grammar_type.c_str(), common_grammar_value(params.sampling.grammar).c_str());
-        }
-        params.sampling.grammar_lazy = json_value(data, "grammar_lazy", defaults.sampling.grammar_lazy);
-        SRV_DBG("Grammar lazy: %s\n", params.sampling.grammar_lazy ? "true" : "false");
-    }
-
-    {
-        auto it = data.find("chat_format");
-        if (it != data.end()) {
-            params.chat_parser_params.format = static_cast<common_chat_format>(it->get<int>());
-            SRV_INF("Chat format: %s\n", common_chat_format_name(params.chat_parser_params.format));
-        } else {
-            params.chat_parser_params.format = defaults.chat_parser_params.format;
-        }
-        common_reasoning_format reasoning_format = params_base.reasoning_format;
-        if (data.contains("reasoning_format")) {
-            reasoning_format = common_reasoning_format_from_name(data.at("reasoning_format").get<std::string>());
-        }
-        params.chat_parser_params.reasoning_format = reasoning_format;
-        params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
-        params.chat_parser_params.generation_prompt = json_value(data, "generation_prompt", std::string());
-        params.sampling.generation_prompt = params.chat_parser_params.generation_prompt;
-        SRV_DBG("Generation prompt: '%s'\n", params.chat_parser_params.generation_prompt.c_str());
-        params.chat_parser_params.parse_tool_calls = json_value(data, "parse_tool_calls", false);
-        if (data.contains("chat_parser")) {
-            params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
-        }
-        if (data.contains("continue_final_message")) {
-            auto continuation = common_chat_continuation_parse(data.at("continue_final_message"));
-            params.chat_parser_params.is_continuation = continuation != COMMON_CHAT_CONTINUATION_NONE;
-        }
-        params.chat_parser_params.echo = json_value(data, "echo", false);
-    }
-
-    {
-        const auto preserved_tokens = data.find("preserved_tokens");
-        if (preserved_tokens != data.end()) {
-            for (const auto & t : *preserved_tokens) {
-                auto ids = common_tokenize(vocab, t.get<std::string>(), /* add_special= */ false, /* parse_special= */ true);
-                if (ids.size() == 1) {
-                    SRV_DBG("Preserved token: %d\n", ids[0]);
-                    params.sampling.preserved_tokens.insert(ids[0]);
-                } else {
-                    // This may happen when using a tool call style meant for a model with special tokens to preserve on a model without said tokens.
-                    SRV_DBG("Not preserved because more than 1 token: %s\n", t.get<std::string>().c_str());
-                }
-            }
-        }
-        const auto grammar_triggers = data.find("grammar_triggers");
-        if (grammar_triggers != data.end()) {
-            for (const auto & t : *grammar_triggers) {
-                server_grammar_trigger ct(t);
-                if (ct.value.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
-                    const auto & word = ct.value.value;
-                    auto ids = common_tokenize(vocab, word, /* add_special= */ false, /* parse_special= */ true);
-                    if (ids.size() == 1) {
-                        auto token = ids[0];
-                        if (std::find(params.sampling.preserved_tokens.begin(), params.sampling.preserved_tokens.end(), (llama_token) token) == params.sampling.preserved_tokens.end()) {
-                            throw std::runtime_error("Grammar trigger word should be marked as preserved token: " + word);
-                        }
-                        SRV_DBG("Grammar trigger token: %d (`%s`)\n", token, word.c_str());
-                        common_grammar_trigger trigger;
-                        trigger.type = COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN;
-                        trigger.value = word;
-                        trigger.token = token;
-                        params.sampling.grammar_triggers.push_back(std::move(trigger));
-                    } else {
-                        SRV_DBG("Grammar trigger word: `%s`\n", word.c_str());
-                        params.sampling.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, word});
-                    }
-                } else {
-                    if (ct.value.type == COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN) {
-                        SRV_DBG("Grammar trigger pattern: `%s`\n", ct.value.value.c_str());
-                    } else if (ct.value.type == COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL) {
-                        SRV_DBG("Grammar trigger pattern full: `%s`\n", ct.value.value.c_str());
-                    } else {
-                        throw std::runtime_error("Unknown grammar trigger type");
-                    }
-                    params.sampling.grammar_triggers.emplace_back(std::move(ct.value));
-                }
-            }
-        }
-        if (params.sampling.grammar_lazy && params.sampling.grammar_triggers.empty()) {
-            throw std::runtime_error("Error: no triggers set for lazy grammar!");
-        }
-    }
-
-    // Parse reasoning budget sampler parameters
-    {
-        const int32_t budget = json_value(data, "reasoning_budget_tokens", (int32_t) -1);
-        const auto start_tag = json_value(data, "reasoning_budget_start_tag", std::string());
-        const auto end_tag   = json_value(data, "reasoning_budget_end_tag", std::string());
-        const auto message   = json_value(data, "reasoning_budget_message", std::string());
-        params.sampling.reasoning_budget_tokens = budget;
-        params.sampling.reasoning_control = json_value(data, "reasoning_control", false);
-
-        if (!start_tag.empty()) {
-            params.sampling.reasoning_budget_start = common_tokenize(vocab, start_tag, false, true);
-        }
-        if (!end_tag.empty()) {
-            params.sampling.reasoning_budget_end = common_tokenize(vocab, end_tag, false, true);
-            params.sampling.reasoning_budget_forced = common_tokenize(vocab, message + end_tag, false, true);
-
-            SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
-                budget, params.sampling.generation_prompt.c_str(),
-                params.sampling.reasoning_budget_start.size(),
-                params.sampling.reasoning_budget_end.size(),
-                params.sampling.reasoning_budget_forced.size());
-        }
-    }
-
-    {
-        params.sampling.logit_bias.clear();
-
-        const auto & logit_bias = data.find("logit_bias");
-        if (logit_bias != data.end() && logit_bias->is_array()) {
-            const int n_vocab = llama_vocab_n_tokens(vocab);
-            for (const auto & el : *logit_bias) {
-                // TODO: we may want to throw errors here, in case "el" is incorrect
-                if (el.is_array() && el.size() == 2) {
-                    float bias;
-                    if (el[1].is_number()) {
-                        bias = el[1].get<float>();
-                    } else if (el[1].is_boolean() && !el[1].get<bool>()) {
-                        bias = -INFINITY;
-                    } else {
-                        continue;
-                    }
-
-                    if (el[0].is_number_integer()) {
-                        llama_token tok = el[0].get<llama_token>();
-                        if (tok >= 0 && tok < n_vocab) {
-                            params.sampling.logit_bias.push_back({tok, bias});
-                        }
-                    } else if (el[0].is_string()) {
-                        auto toks = common_tokenize(vocab, el[0].get<std::string>(), false);
-                        for (auto tok : toks) {
-                            params.sampling.logit_bias.push_back({tok, bias});
-                        }
-                    }
-                }
-            }
-        } else if (logit_bias != data.end() && logit_bias->is_object()) {
-            const int n_vocab = llama_vocab_n_tokens(vocab);
-            for (const auto & el : logit_bias->items()) {
-                float bias;
-                const auto & key = el.key();
-                const auto & value = el.value();
-                if (value.is_number()) {
-                    bias = value.get<float>();
-                } else if (value.is_boolean() && !value.get<bool>()) {
-                    bias = -INFINITY;
-                } else {
-                    continue;
-                }
-
-                char *end;
-                llama_token tok = strtol(key.c_str(), &end, 10);
-                if (*end == 0) {
-                    if (tok >= 0 && tok < n_vocab) {
-                        params.sampling.logit_bias.push_back({tok, bias});
-                    }
-                } else {
-                    auto toks = common_tokenize(vocab, key, false);
-                    for (auto tok : toks) {
-                        params.sampling.logit_bias.push_back({tok, bias});
-                    }
-                }
-            }
-        }
-
-        params.sampling.ignore_eos = json_value(data, "ignore_eos", params_base.sampling.ignore_eos);
-        if (params.sampling.ignore_eos) {
-            params.sampling.logit_bias.insert(
-                    params.sampling.logit_bias.end(),
-                    logit_bias_eog.begin(), logit_bias_eog.end());
-        }
-    }
-
-    {
-        params.antiprompt.clear();
-
-        const auto & stop = data.find("stop");
-        if (stop != data.end() && stop->is_array()) {
-            for (const auto & word : *stop) {
-                if (!word.empty()) {
-                    params.antiprompt.push_back(word);
-                }
-            }
-        }
-        // set reverse prompt from cli args if not set in the request
-        if (params.antiprompt.empty()) {
-            params.antiprompt = defaults.antiprompt;
-        }
-    }
-
-    {
-        const auto samplers = data.find("samplers");
-        if (samplers != data.end()) {
-            if (samplers->is_array()) {
-                params.sampling.samplers = common_sampler_types_from_names(*samplers);
-            } else if (samplers->is_string()){
-                params.sampling.samplers = common_sampler_types_from_chars(samplers->get<std::string>());
-            }
-        } else {
-            params.sampling.samplers = defaults.sampling.samplers;
-        }
-    }
-
-    if (params.n_cmpl > params_base.n_parallel) {
-        throw std::runtime_error("n_cmpl cannot be greater than the number of slots, please increase -np");
-    }
-
-    return params;
-}
-
-//
 // result_timings
 //
 
@@ -979,10 +591,11 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
 
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
         output.push_back(json {
+            {"id",        "fc_" + tool_call.id},
             {"type",      "function_call"},
             {"status",    "completed"},
             {"arguments", tool_call.arguments},
-            {"call_id",   "fc_" + tool_call.id},
+            {"call_id",   "call_" + tool_call.id},
             {"name",      tool_call.name},
         });
     }
@@ -1078,10 +691,11 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
 
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
         const json output_item = {
+            {"id",        "fc_" + tool_call.id},
             {"type",      "function_call"},
             {"status",    "completed"},
             {"arguments", tool_call.arguments},
-            {"call_id",   "fc_" + tool_call.id},
+            {"call_id",   "call_" + tool_call.id},
             {"name",      tool_call.name}
         };
         server_sent_events.push_back(json {
@@ -1665,8 +1279,9 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                 {"data", json {
                     {"type",  "response.output_item.added"},
                     {"item", json {
+                        {"id",        "fc_" + diff.tool_call_delta.id},
                         {"arguments", ""},
-                        {"call_id",   "fc_" + diff.tool_call_delta.id},
+                        {"call_id",   "call_" + diff.tool_call_delta.id},
                         {"name",      diff.tool_call_delta.name},
                         {"type",      "function_call"},
                         {"status",    "in_progress"},
@@ -2011,7 +1626,7 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
         const int cur_lcp_len = it->tokens.get_common_prefix(prompt.tokens);
 
         if (cur_lcp_len == (int) prompt.tokens.size()) {
-            SRV_INF("%s", " - prompt is already in the cache, skipping\n");
+            SRV_TRC("%s", " - prompt is already in the cache, skipping\n");
             return nullptr;
         }
     }
@@ -2021,7 +1636,7 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
         const int len = it->tokens.get_common_prefix(prompt.tokens);
 
         if (len == (int) it->tokens.size()) {
-            SRV_WRN(" - removing obsolete cached prompt with length %d\n", len);
+            SRV_TRC(" - removing obsolete cached prompt with length %d\n", len);
 
             it = states.erase(it);
         } else {
@@ -2066,7 +1681,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
     float sim_best    = float(lcp_best) / tokens_new.size();
 
-    SRV_INF(" - looking for better prompt, base f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+    SRV_TRC(" - looking for better prompt, base f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
 
     auto it_best = states.end();
 
@@ -2091,7 +1706,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     }
 
     if (it_best != states.end()) {
-        SRV_INF(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+        SRV_TRC(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
 
         {
             auto & data = it_best->data.main;
@@ -2168,11 +1783,11 @@ void server_prompt_cache::update() {
         }
     }
 
-    SRV_INF(" - cache state: %zu prompts, %.3f MiB (limits: %.3f MiB, %zu tokens, %zu est)\n",
+    SRV_TRC(" - cache state: %zu prompts, %.3f MiB (limits: %.3f MiB, %zu tokens, %zu est)\n",
             states.size(), size() / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0), limit_tokens, limit_tokens_cur);
 
     for (const auto & state : states) {
-        SRV_INF("   - prompt %p: %7d tokens, checkpoints: %2zu, %9.3f MiB\n",
+        SRV_TRC("   - prompt %p: %7d tokens, checkpoints: %2zu, %9.3f MiB\n",
                 (const void *)&state, state.n_tokens(), state.checkpoints.size(), state.size() / (1024.0 * 1024.0));
     }
 }

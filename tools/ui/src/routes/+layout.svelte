@@ -6,16 +6,14 @@
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
-	import { fade } from 'svelte/transition';
 
-	import {
-		DesktopIconStrip,
-		DialogConversationTitleUpdate,
-		SidebarNavigation
-	} from '$lib/components/app';
+	import { SidebarNavigation, DialogConversationTitleUpdate } from '$lib/components/app';
+	import { DialogMcpServerRecommendations } from '$lib/components/app/dialogs';
+	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
+	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -26,18 +24,22 @@
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
-	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
+	import { usePwa } from '$lib/hooks/use-pwa.svelte';
+	import { useMcpRecommendations } from '$lib/hooks/use-mcp-recommendations.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { theme } from '$lib/stores/theme.svelte';
+	import { buildInfoStore } from '$lib/stores/build-info.svelte';
+
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	let { children } = $props();
-	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
-	let isDesktop = $derived(!isMobile.current);
-	let sidebarOpen = $state(false);
-	let mounted = $state(false);
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
+
+	const mcpRecommendations = useMcpRecommendations();
 
 	let chatSidebar:
 		| {
@@ -46,11 +48,30 @@
 		  }
 		| undefined = $state();
 
+	let showBuildVersion = $derived(config()[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean);
+
 	let titleUpdateDialogOpen = $state(false);
 	let titleUpdateCurrentTitle = $state('');
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
-	const panelNav = useSettingsNavigation();
+
+	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
+	const pwa = usePwa();
+	const { needRefresh, updateServiceWorker } = pwa;
+
+	function updateFavicon() {
+		const dark = theme.isSystemDark;
+
+		let icoLink = document.querySelector(FAVICON_SELECTORS.ICO_48X48) as HTMLLinkElement | null;
+		if (icoLink) {
+			icoLink.href = dark ? FAVICON_PATHS.ICO_DARK : FAVICON_PATHS.ICO_LIGHT;
+		}
+
+		let svgLink = document.querySelector(FAVICON_SELECTORS.SVG_ANY) as HTMLLinkElement | null;
+		if (svgLink) {
+			svgLink.href = dark ? FAVICON_PATHS.SVG_DARK : FAVICON_PATHS.SVG_LIGHT;
+		}
+	}
 
 	function navigateToConversation(direction: -1 | 1) {
 		const allConvs = conversations();
@@ -137,15 +158,23 @@
 	}
 
 	onMount(() => {
-		mounted = true;
+		updateFavicon();
+		// snapshot of every backend running stream on first load, populates the sidebar spinners
+		// so the user sees each conv that has a live inference, even ones not opened yet
+		void chatStore.syncRemoteRunningStreams();
 	});
 
-	$effect(() => {
-		if (alwaysShowSidebarOnDesktop && isDesktop) {
-			sidebarOpen = true;
+	// refresh that snapshot when the tab returns to the foreground, a stream may have advanced
+	// or ended while it was hidden. snapshot only, no polling
+	function handleVisibilityChange() {
+		if (document.visibilityState !== 'visible') return;
+		void chatStore.syncRemoteRunningStreams();
+	}
 
-			return;
-		}
+	$effect(() => {
+		void theme.isSystemDark;
+
+		updateFavicon();
 	});
 
 	// Initialize server properties on app load (run once)
@@ -195,6 +224,20 @@
 		}
 	});
 
+	// Live model status and load progress via the /models/sse feed (router mode)
+	$effect(() => {
+		if (!browser) return;
+		if (!isRouterMode()) return;
+
+		untrack(() => {
+			modelsStore.subscribeStatus();
+		});
+
+		return () => {
+			modelsStore.unsubscribeStatus();
+		};
+	});
+
 	// Background MCP server health checks on app load
 	// Fetch enabled servers from settings and run health checks in background
 	$effect(() => {
@@ -236,13 +279,43 @@
 </script>
 
 <svelte:head>
+	{#if pwaAssetsHead.themeColor}
+		<meta name="theme-color" content={pwaAssetsHead.themeColor.content} />
+	{/if}
+
 	{#if config().customCss}
 		<style use:customCss></style>
 	{/if}
+
+	{#each pwaAssetsHead.links as link (link.href)}
+		<link {...link} />
+	{/each}
+
+	<PwaMetaTags />
 </svelte:head>
 
+<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<svelte:document onvisibilitychange={handleVisibilityChange} />
+
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
+	<div class="flex flex-col md:flex-row">
+		<SidebarNavigation
+			onSearchClick={() => {
+				if (isMobile.current) {
+					goto(ROUTES.SEARCH);
+				} else if (chatSidebar?.activateSearchMode) {
+					chatSidebar.activateSearchMode();
+				}
+			}}
+		/>
+
+		<div class="flex-1">
+			{@render children?.()}
+		</div>
+	</div>
+
 	<ModeWatcher />
+
 	<Toaster richColors />
 
 	<DialogConversationTitleUpdate
@@ -253,43 +326,21 @@
 		onCancel={handleTitleUpdateCancel}
 	/>
 
-	<Sidebar.Provider bind:open={sidebarOpen}>
-		<div class="flex h-dvh w-full">
-			<Sidebar.Root variant="floating" class="h-full"
-				><SidebarNavigation bind:this={chatSidebar} /></Sidebar.Root
-			>
-
-			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}
-				{#if mounted}
-					<div in:fade={{ duration: 200 }}>
-						<Sidebar.Trigger
-							class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
-								? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
-								: 'left-0!'}"
-							style="translate: 1rem 1rem;"
-						/>
-					</div>
-				{/if}
-			{/if}
-
-			{#if isDesktop && !alwaysShowSidebarOnDesktop}
-				<DesktopIconStrip
-					{sidebarOpen}
-					onSearchClick={() => {
-						if (chatSidebar?.activateSearchMode) {
-							chatSidebar.activateSearchMode();
-						}
-
-						sidebarOpen = true;
-					}}
-				/>
-			{/if}
-
-			<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden"
-				>{@render children?.()}</Sidebar.Inset
-			>
-		</div>
-	</Sidebar.Provider>
+	<DialogMcpServerRecommendations
+		open={mcpRecommendations.open}
+		onOpenChange={mcpRecommendations.handleOpenChange}
+	/>
 </Tooltip.Provider>
 
-<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<!-- PWA update prompt + version -->
+<div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
+	{#if showBuildVersion && buildInfoStore.value}
+		<span class="text-[10px] tabular-nums text-muted-foreground">{buildInfoStore.value}</span>
+	{/if}
+
+	<PwaRefreshAlert
+		needRefresh={$needRefresh || pwa.needRefreshByStorage}
+		forceReload={pwa.needRefreshByStorage}
+		{updateServiceWorker}
+	/>
+</div>

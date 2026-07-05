@@ -46,11 +46,13 @@ jobs:
 
     steps:
       - id: check
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "should_release=true" >> $GITHUB_OUTPUT
           elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/master" ]]; then
-            if echo "${{ github.event.head_commit.message }}" | grep -q '\[no release\]'; then
+            if echo "$COMMIT_MESSAGE" | grep -q '\[no release\]'; then
               echo "should_release=false" >> $GITHUB_OUTPUT
             else
               echo "should_release=true" >> $GITHUB_OUTPUT
@@ -59,8 +61,31 @@ jobs:
             echo "should_release=false" >> $GITHUB_OUTPUT
           fi
 
+  get-version:
+    runs-on: ubuntu-slim
+    outputs:
+      ui_version: ${{ steps.version.outputs.ui_version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: version
+        run: |
+          # Resolve UI version: BUILD_NUMBER from cmake/build-info.cmake > git hash + epoch > fallback
+          version=""
+          if grep -q "BUILD_NUMBER" cmake/build-info.cmake; then
+            build_number=$(grep "set(BUILD_NUMBER" cmake/build-info.cmake | grep -oP '\d+')
+            if [ -n "$build_number" ] && [ "$build_number" -gt 0 ]; then
+              version="b${build_number}"
+            fi
+          fi
+          if [ -z "$version" ]; then
+            version=$(git rev-parse --short HEAD)-$(date +%s)
+          fi
+          echo "ui_version=${version}" >> $GITHUB_OUTPUT
+
   macos-cpu:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
@@ -116,6 +141,7 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_BUILD_BORINGSSL=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
@@ -141,7 +167,7 @@ jobs:
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
 
   ubuntu-cpu:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
@@ -201,6 +227,7 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -227,7 +254,7 @@ jobs:
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
   ubuntu-vulkan:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     strategy:
@@ -287,6 +314,7 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -312,7 +340,7 @@ jobs:
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
   android-arm64:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
@@ -379,6 +407,7 @@ jobs:
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_BORINGSSL=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -404,7 +433,7 @@ jobs:
           name: llama-bin-android-arm64.tar.gz
 
   ubuntu-24-openvino:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
@@ -416,9 +445,9 @@ jobs:
       openvino_version: ${{ steps.openvino_version.outputs.value }}
 
     env:
-      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.0"
-      OPENVINO_VERSION_FULL: "2026.0.0.20965.c6d6a13a886"
+      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.2.1"
+      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
 
     steps:
       - name: Set OpenVINO version output
@@ -476,8 +505,12 @@ jobs:
           source ./openvino_toolkit/setupvars.sh
           cmake -B build/ReleaseOV -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_OPENVINO=ON
-          cmake --build build/ReleaseOV --config Release -j $(nproc)
+            -DGGML_OPENVINO=ON \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build/ReleaseOV --config Release --parallel
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
@@ -491,14 +524,161 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          cp LICENSE ./build/ReleaseOV/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/ReleaseOV/bin .
+          dest=./build/ReleaseOV/bin
+          OPENVINO_ROOT=./openvino_toolkit
+          ov_lib="$OPENVINO_ROOT/runtime/lib/intel64"
+
+          # Bundle OpenVINO runtime libs + TBB. Binaries built with RPATH=$ORIGIN
+          # load these siblings without setupvars.sh / LD_LIBRARY_PATH.
+          cp -P "$ov_lib"/libopenvino.so* \
+                "$ov_lib"/libopenvino_c.so* \
+                "$ov_lib"/libopenvino_*_plugin.so \
+                "$ov_lib"/libopenvino_intel_npu_compiler*.so \
+                "$OPENVINO_ROOT"/runtime/3rdparty/tbb/lib/*.so* \
+                "$dest"
+          cp -P /usr/lib/x86_64-linux-gnu/libOpenCL.so.1* "$dest" 2>/dev/null || true
+          cp "$ov_lib"/cache.json "$dest" 2>/dev/null || true
+
+          # OpenVINO licensing
+          cp -r "$OPENVINO_ROOT"/docs/licensing "$dest"/openvino-licensing
+
+          cp LICENSE "$dest"
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C "$dest" .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
           name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
+
+  windows-openvino:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
+    runs-on: windows-2022
+
+    outputs:
+      openvino_version: ${{ steps.openvino_version.outputs.value }}
+
+    env:
+      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.2.1"
+      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+
+    steps:
+      - name: Set OpenVINO version output
+        id: openvino_version
+        shell: bash
+        run: echo "value=${{ env.OPENVINO_VERSION_MAJOR }}" >> $GITHUB_OUTPUT
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+            fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/ui/package-lock.json"
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-windows-2022-openvino
+          variant: ccache
+          evict-old-files: 1d
+
+      - name: Setup Cache
+        uses: actions/cache@v5
+        id: cache-openvino
+        with:
+          path: ./openvino_toolkit
+          key: cache-gha-openvino-toolkit-v${{ env.OPENVINO_VERSION_FULL }}-${{ runner.os }}
+
+      - name: Setup OpenVINO Toolkit
+        if: steps.cache-openvino.outputs.cache-hit != 'true'
+        uses: ./.github/actions/windows-setup-openvino
+        with:
+          path: ./openvino_toolkit
+          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+          version_full: ${{ env.OPENVINO_VERSION_FULL }}
+
+      - name: Install OpenCL using vcpkg
+        shell: powershell
+        run: |
+          git clone https://github.com/microsoft/vcpkg C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg install opencl
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        run: |
+          REM Find extracted OpenVINO folder dynamically
+          for /d %%i in (openvino_toolkit\*) do set OPENVINO_ROOT=%%i
+
+          if not exist "%OPENVINO_ROOT%\runtime\cmake\OpenVINOConfig.cmake" (
+              echo ERROR: OpenVINOConfig.cmake not found
+              exit /b 1
+          )
+
+          call "%OPENVINO_ROOT%\setupvars.bat"
+
+          cmake -B build\ReleaseOV -G "Visual Studio 17 2022" ^
+            -A x64 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DGGML_OPENVINO=ON ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake ^
+            ${{ env.CMAKE_ARGS }}
+
+          cmake --build build\ReleaseOV --config Release -- /m
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-openvino
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        shell: powershell
+        run: |
+          # Locate the extracted OpenVINO toolkit root (same pattern as the Build step).
+          $OPENVINO_ROOT = (Get-ChildItem -Directory openvino_toolkit | Select-Object -First 1).FullName
+          if (-not $OPENVINO_ROOT) {
+            Write-Error "OpenVINO toolkit folder not found under .\openvino_toolkit"
+            exit 1
+          }
+
+          $dest = ".\build\ReleaseOV\bin\Release"
+
+          $ovBin = Join-Path $OPENVINO_ROOT 'runtime\bin\intel64\Release'
+          Copy-Item -Path (Join-Path $ovBin '*.dll')       -Destination $dest -Force
+          Copy-Item -Path (Join-Path $ovBin 'cache.json')  -Destination $dest -Force
+
+          $tbbBin = Join-Path $OPENVINO_ROOT 'runtime\3rdparty\tbb\bin'
+          Copy-Item -Path (Join-Path $tbbBin 'tbb*.dll') -Destination $dest -Force
+
+          # OpenVINO licensing
+          $licensingDest = Join-Path $dest 'openvino-licensing'
+          New-Item -ItemType Directory -Force -Path $licensingDest | Out-Null
+          Copy-Item -Path (Join-Path $OPENVINO_ROOT 'docs\licensing\*') -Destination $licensingDest -Recurse -Force
+
+          Copy-Item LICENSE $dest
+          7z a -snl llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip $dest\*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
+          name: llama-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
 
   windows-cpu:
     needs: [check-release]
@@ -754,213 +934,209 @@ jobs:
           path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
           name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
 
-# TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23705)
-#       in order to enable it again, we have to provision dedicated runners  to run it
-#  windows-sycl:
-#
-#    runs-on: windows-2022
-#
-#    defaults:
-#      run:
-#        shell: bash
-#
-#    env:
-#      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
-#      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
-#      LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.28.2/level-zero-win-sdk-1.28.2.zip
-#      ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
-#      ONEAPI_INSTALLER_VERSION: "2025.3.3"
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v6
-#
-#      - name: Use oneAPI Installation Cache
-#        uses: actions/cache@v5
-#        id: cache-sycl
-#        with:
-#          path: ${{ env.ONEAPI_ROOT }}
-#          key: cache-gha-oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
-#
-#      - name: Download & Install oneAPI
-#        shell: bash
-#        if: steps.cache-sycl.outputs.cache-hit != 'true'
-#        run: |
-#          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
-#
-#      - name: Install Level Zero SDK
-#        shell: pwsh
-#        run: |
-#          Invoke-WebRequest -Uri "${{ env.LEVEL_ZERO_SDK_URL }}" -OutFile "level-zero-win-sdk.zip"
-#          Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
-#          "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
-#
-#      - name: Setup Node.js
-#        uses: actions/setup-node@v6
-#        with:
-#          node-version: "24"
-#          cache: "npm"
-#          cache-dependency-path: "tools/ui/package-lock.json"
-#
-#      - name: ccache
-#        uses: ggml-org/ccache-action@v1.2.21
-#        with:
-#          key: release-windows-2022-x64-sycl
-#
-#      - name: Build
-#        id: cmake_build
-#        shell: cmd
-#        run: |
-#          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
-#          cmake -G "Ninja" -B build ^
-#            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx ^
-#            -DCMAKE_BUILD_TYPE=Release ^
-#            -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
-#            -DGGML_CPU=OFF -DGGML_SYCL=ON ^
-#            -DLLAMA_BUILD_BORINGSSL=ON
-#          cmake --build build --target ggml-sycl -j
-#
-#      - name: Build the release package
-#        id: pack_artifacts
-#        run: |
-#          echo "cp oneAPI running time dll files in ${{ env.ONEAPI_ROOT }} to ./build/bin"
-#
-#          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_sycl_blas.5.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_core.2.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_tbb_thread.2.dll" ./build/bin
-#
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero_v2.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_opencl.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_loader.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_win_proxy_loader.dll" ./build/bin
-#          ZE_LOADER_DLL=$(find "${{ env.ONEAPI_ROOT }}" "$LEVEL_ZERO_V1_SDK_PATH" -iname ze_loader.dll -print -quit 2>/dev/null || true)
-#          if [ -n "$ZE_LOADER_DLL" ]; then
-#            echo "Using Level Zero loader: $ZE_LOADER_DLL"
-#            cp "$ZE_LOADER_DLL" ./build/bin
-#          else
-#            echo "Level Zero loader DLL not found in oneAPI or SDK; relying on system driver/runtime"
-#          fi
-#
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl8.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/svml_dispmd.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libmmd.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libiomp5md.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl-ls.exe" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-fallback-bfloat16.spv" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-native-bfloat16.spv" ./build/bin
-#
-#          cp "${{ env.ONEAPI_ROOT }}/dnnl/latest/bin/dnnl.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/tbb/latest/bin/tbb12.dll" ./build/bin
-#
-#          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/tcm.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/libhwloc-15.dll" ./build/bin
-#          cp "${{ env.ONEAPI_ROOT }}/umf/latest/bin/umf.dll" ./build/bin
-#
-#          echo "cp oneAPI running time dll files to ./build/bin done"
-#          7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
-#
-#      - name: Upload the release package
-#        uses: actions/upload-artifact@v6
-#        with:
-#          path: llama-bin-win-sycl-x64.zip
-#          name: llama-bin-win-sycl-x64.zip
+  windows-sycl:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-# TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23705)
-#       in order to enable it again, we have to provision dedicated runners  to run it
-#  ubuntu-24-sycl:
-#
-#    strategy:
-#      matrix:
-#        build: [fp32]
-#        include:
-#          - build: fp32
-#            fp16: OFF
-#
-#    runs-on: ubuntu-24.04
-#
-#    env:
-#      ONEAPI_ROOT: /opt/intel/oneapi/
-#      ONEAPI_INSTALLER_VERSION: "2025.3.3"
-#      LEVEL_ZERO_VERSION: "1.28.2"
-#      LEVEL_ZERO_UBUNTU_VERSION: "u24.04"
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v6
-#        with:
-#          fetch-depth: 0
-#
-#      - name: Use oneAPI Installation Cache
-#        uses: actions/cache@v5
-#        id: cache-sycl
-#        with:
-#          path: ${{ env.ONEAPI_ROOT }}
-#          key: cache-gha-oneAPI-${{ env.ONEAPI_INSTALLER_VERSION }}-${{ runner.os }}
-#
-#      - name: Download & Install oneAPI
-#        shell: bash
-#        if: steps.cache-sycl.outputs.cache-hit != 'true'
-#        run: |
-#          cd /tmp
-#          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh -O intel-deep-learning-essentials_offline.sh
-#          sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
-#
-#      - name: Install Level Zero SDK
-#        shell: bash
-#        run: |
-#          cd /tmp
-#          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero.deb
-#          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb
-#          sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
-#
-#      - name: Setup Node.js
-#        uses: actions/setup-node@v6
-#        with:
-#          node-version: "24"
-#          cache: "npm"
-#          cache-dependency-path: "tools/ui/package-lock.json"
-#
-#      - name: ccache
-#        uses: ggml-org/ccache-action@v1.2.21
-#        with:
-#          key: release-ubuntu-24.04-sycl
-#
-#      - name: Build
-#        id: cmake_build
-#        run: |
-#          source /opt/intel/oneapi/setvars.sh
-#          cmake -B build \
-#            -G "Ninja" \
-#            -DCMAKE_BUILD_TYPE=Release \
-#            -DGGML_SYCL=ON \
-#            -DCMAKE_C_COMPILER=icx \
-#            -DCMAKE_CXX_COMPILER=icpx \
-#            -DLLAMA_OPENSSL=OFF \
-#            -DGGML_NATIVE=OFF \
-#            -DGGML_SYCL_F16=${{ matrix.fp16 }}
-#          time cmake --build build --config Release -j $(nproc)
-#
-#      - name: Determine tag name
-#        id: tag
-#        uses: ./.github/actions/get-tag-name
-#
-#      - name: Pack artifacts
-#        id: pack_artifacts
-#        run: |
-#          cp LICENSE ./build/bin/
-#          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
-#
-#      - name: Upload artifacts
-#        uses: actions/upload-artifact@v6
-#        with:
-#          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
-#          name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
+    runs-on: windows-2022
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b60765d1-2b85-4e85-86b6-cb0e9563a699/intel-deep-learning-essentials-2025.3.3.18_offline.exe
+      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
+      LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.28.2/level-zero-win-sdk-1.28.2.zip
+      ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
+      ONEAPI_INSTALLER_VERSION: "2025.3.3"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Download & Install oneAPI
+        shell: bash
+        run: |
+          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
+
+      - name: Install Level Zero SDK
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "${{ env.LEVEL_ZERO_SDK_URL }}" -OutFile "level-zero-win-sdk.zip"
+          Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
+          "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/ui/package-lock.json"
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-windows-2022-x64-sycl
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
+          cmake -G "Ninja" -B build ^
+            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
+            -DGGML_CPU=OFF -DGGML_SYCL=ON ^
+            -DLLAMA_BUILD_BORINGSSL=ON
+          cmake --build build --target ggml-sycl -j %NUMBER_OF_PROCESSORS%
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-x64-sycl
+
+      - name: Build the release package
+        id: pack_artifacts
+        run: |
+          echo "cp oneAPI running time dll files in ${{ env.ONEAPI_ROOT }} to ./build/bin"
+
+          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_sycl_blas.5.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_core.2.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_tbb_thread.2.dll" ./build/bin
+
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero_v2.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_opencl.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_loader.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_win_proxy_loader.dll" ./build/bin
+          ZE_LOADER_DLL=$(find "${{ env.ONEAPI_ROOT }}" "$LEVEL_ZERO_V1_SDK_PATH" -iname ze_loader.dll -print -quit 2>/dev/null || true)
+          if [ -n "$ZE_LOADER_DLL" ]; then
+            echo "Using Level Zero loader: $ZE_LOADER_DLL"
+            cp "$ZE_LOADER_DLL" ./build/bin
+          else
+            echo "Level Zero loader DLL not found in oneAPI or SDK; relying on system driver/runtime"
+          fi
+
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl8.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/svml_dispmd.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libmmd.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libiomp5md.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl-ls.exe" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-fallback-bfloat16.spv" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libsycl-native-bfloat16.spv" ./build/bin
+
+          cp "${{ env.ONEAPI_ROOT }}/dnnl/latest/bin/dnnl.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/tbb/latest/bin/tbb12.dll" ./build/bin
+
+          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/tcm.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/libhwloc-15.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/umf/latest/bin/umf.dll" ./build/bin
+
+          echo "cp oneAPI running time dll files to ./build/bin done"
+          7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
+
+      - name: Upload the release package
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-bin-win-sycl-x64.zip
+          name: llama-bin-win-sycl-x64.zip
+
+  ubuntu-24-sycl:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
+    strategy:
+      matrix:
+        build: [fp32, fp16]
+        include:
+          - build: fp32
+            fp16: OFF
+          - build: fp16
+            fp16: ON
+
+    runs-on: ubuntu-24.04
+
+    env:
+      ONEAPI_ROOT: /opt/intel/oneapi/
+      ONEAPI_INSTALLER_VERSION: "2025.3.3"
+      LEVEL_ZERO_VERSION: "1.28.2"
+      LEVEL_ZERO_UBUNTU_VERSION: "u24.04"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download & Install oneAPI
+        shell: bash
+        run: |
+          cd /tmp
+          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/56f7923a-adb8-43f3-8b02-2b60fcac8cab/intel-deep-learning-essentials-2025.3.3.16_offline.sh -O intel-deep-learning-essentials_offline.sh
+          sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
+
+      - name: Install Level Zero SDK
+        shell: bash
+        run: |
+          cd /tmp
+          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero.deb
+          wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb
+          sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/ui/package-lock.json"
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-ubuntu-24.04-sycl-${{ matrix.build }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          cmake -B build \
+            -G "Ninja" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_SYCL=ON \
+            -DCMAKE_C_COMPILER=icx \
+            -DCMAKE_CXX_COMPILER=icpx \
+            -DLLAMA_OPENSSL=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_SYCL_F16=${{ matrix.fp16 }}
+          time cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-24.04-sycl-${{ matrix.build }}
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
+          name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
   ubuntu-22-rocm:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-22.04
@@ -1052,6 +1228,7 @@ jobs:
             -DGGML_HIP=ON \
             -DHIP_PLATFORM=amd \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -1080,7 +1257,7 @@ jobs:
           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
 
   windows-hip:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
@@ -1176,6 +1353,7 @@ jobs:
             -DGPU_TARGETS="${{ matrix.gpu_targets }}" `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} `
             -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --target ggml-hip -j ${env:NUMBER_OF_PROCESSORS}
           md "build\bin\rocblas\library\"
@@ -1203,7 +1381,7 @@ jobs:
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
   ios-xcode:
-    needs: [check-release]
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     runs-on: macos-26
 
@@ -1232,7 +1410,8 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
       - name: xcodebuild for swift package
@@ -1352,10 +1531,12 @@ jobs:
 #          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 #          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
-  ui:
-    needs: [check-release]
+  ui-build:
+    needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
+    with:
+      hf_ui_version: ${{ needs.get-version.outputs.ui_version }}
 
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -1368,11 +1549,13 @@ jobs:
     runs-on: ubuntu-slim
 
     needs:
+      - get-version
       - windows
       - windows-cpu
       - windows-cuda
       #- windows-sycl
       - windows-hip
+      - windows-openvino
       - ubuntu-22-rocm
       - ubuntu-cpu
       - ubuntu-vulkan
@@ -1382,7 +1565,7 @@ jobs:
       - macos-cpu
       - ios-xcode
       #- openEuler-cann
-      - ui
+      - ui-build
 
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}
@@ -1482,7 +1665,8 @@ jobs:
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
             - [Ubuntu x64 (ROCm 7.2)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.2-x64.tar.gz)
             - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
-            - Ubuntu x64 (SYCL FP32) [DISABLED](https://github.com/ggml-org/llama.cpp/pull/23705)
+            - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)
+            - [Ubuntu x64 (SYCL FP16)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp16-x64.tar.gz)
 
             **Android:**
             - [Android arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-android-arm64.tar.gz)
@@ -1490,10 +1674,12 @@ jobs:
             **Windows:**
             - [Windows x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-x64.zip)
             - [Windows arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-arm64.zip)
+            - [Windows arm64 (OpenCL Adreno)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-opencl-adreno-arm64.zip)
             - [Windows x64 (CUDA 12)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-12.4-x64.zip) - [CUDA 12.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-12.4-x64.zip)
             - [Windows x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.3-x64.zip) - [CUDA 13.3 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.3-x64.zip)
             - [Windows x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-vulkan-x64.zip)
-            - Windows x64 (SYCL) [DISABLED](https://github.com/ggml-org/llama.cpp/pull/23705)
+            - [Windows x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ needs.windows-openvino.outputs.openvino_version }}-x64.zip)
+            - [Windows x64 (SYCL)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip)
             - [Windows x64 (HIP)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-hip-radeon-x64.zip)
 
             **openEuler:**

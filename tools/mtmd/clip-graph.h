@@ -54,6 +54,10 @@ struct clip_graph {
     virtual ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const;
     // TODO: build_mm(w, b, x) to support bias
 
+    virtual bool support_batch() const {
+        return false;
+    }
+
     //
     // utility functions
     //

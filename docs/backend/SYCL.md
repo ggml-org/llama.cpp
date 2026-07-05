@@ -161,6 +161,64 @@ You could update your test result in it directly.
 
 Please refer to [Docker with SYCL](../docker.md#docker-with-sycl) for details.
 
+## Quick Development WOW
+
+This chapter is for quick development & try with SYCL backend on Intel GPU.
+
+You need to install following sofeware before development:
+   - Intel GPU driver
+   - oneAPI package
+   - other development tools.
+
+Please refer to [Linux](#linux) or [Windows](#windows-1) for above installation and resolve the trouble in usage. There are the detailed guide.
+
+- Linux
+
+```
+## build from source code
+./examples/sycl/build.sh
+
+## run CONV_2D_DW unit test cases
+./build/bin/test-backend-ops -b SYCL0 -o CONV_2D_DW
+
+## run all unit test cases
+./build/bin/test-backend-ops -b SYCL0
+
+## run with LLM on the first GPU
+./examples/sycl/test.sh -mg 0 -m xxxx.gguf
+
+## run service with LLM on the first GPU
+export ONEAPI_DEVICE_SELECTOR="level_zero:0"
+./examples/sycl/start-svr.sh -m xxxx.gguf
+
+## update the docs/ops.md for new/update OPs
+./examples/sycl/update-ops-doc.sh
+```
+
+- Windows
+
+```
+## build from source code
+examples\sycl\win-build-sycl.bat
+
+## run CONV_2D_DW unit test cases
+build\bin\test-backend-ops.exe -b SYCL0 -o CONV_2D_DW
+
+## run all unit test cases
+build\bin\test-backend-ops.exe -b SYCL0
+
+## run LLM on the first GPU
+examples\sycl\win-test.bat -mg 0 -m xxxx.gguf
+
+## run service with LLM on the first GPU
+set ONEAPI_DEVICE_SELECTOR="level_zero:0"
+examples\sycl\win-start-svr.bat -m xxxx.gguf
+
+## update the docs/ops.md for new/update OPs
+examples\sycl\win-update-ops-doc.bat
+```
+
+
 ## Linux
 
 ### I. Setup Environment
@@ -253,6 +311,7 @@ When targeting an intel GPU, the user should expect one or more devices among th
 #### Intel GPU
 
 ```sh
+# Uses FP32, consider using FP16 for better performance in most cases
 ./examples/sycl/build.sh
 ```
 
@@ -262,11 +321,11 @@ or
 # Export relevant ENV variables
 source /opt/intel/oneapi/setvars.sh
 
-# Option 1: Use FP32 (recommended for better performance in most cases)
-cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
-
-# Option 2: Use FP16
+# Option 1: Use FP16 (recommended for better performance in most cases)
 cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON
+
+# Option 2: Use FP32
+cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
 
 # build all binary
 cmake --build build --config Release -j -v
@@ -354,6 +413,15 @@ In two device selection modes, the default SYCL backend is level_zero, you can c
 |------------------|----------------------------------------|
 | Single device    | --split-mode none --main-gpu DEVICE_ID |
 | Multiple devices | --split-mode layer (default)           |
+| Multiple devices | --split-mode tensor (tensor parallelism) |
+
+`--split-mode tensor` (tensor parallelism) shards each layer across the selected
+GPUs. It requires flash attention, which is auto-enabled when `--flash-attn` is
+left at its default `auto`, so `--split-mode tensor` works out of the box.
+Passing `--flash-attn off` together with `--split-mode tensor` is rejected at
+context creation. The default `f16` KV cache is recommended. Tensor parallelism
+is currently optimized for 2 GPUs; other device counts fall back to a generic
+all-reduce.
 
 Examples:
 
@@ -469,6 +537,7 @@ Choose one of following methods to build from source code.
 ##### Option 1: Script
 
 ```sh
+# Uses FP32, consider using FP16 for better performance in most cases
 .\examples\sycl\win-build-sycl.bat
 ```
 
@@ -479,11 +548,11 @@ On the oneAPI command line window, step into the llama.cpp main directory and ru
 ```
 @call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
 
-# Option 1: Use FP32 (recommended for better performance in most cases)
-cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx  -DCMAKE_BUILD_TYPE=Release
+# Option 1: Use FP16 (recommended for better performance in most cases)
+cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx -DCMAKE_BUILD_TYPE=Release -DGGML_SYCL_F16=ON
 
-# Option 2: Or FP16
-cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx  -DCMAKE_BUILD_TYPE=Release -DGGML_SYCL_F16=ON
+# Option 2: Or FP32
+cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx -DCMAKE_BUILD_TYPE=Release
 
 cmake --build build --config Release -j
 ```
@@ -491,10 +560,10 @@ cmake --build build --config Release -j
 Or, use CMake presets to build:
 
 ```sh
-cmake --preset x64-windows-sycl-release
+cmake -DGGML_SYCL_F16=ON --preset x64-windows-sycl-release
 cmake --build build-x64-windows-sycl-release -j --target llama-completion
 
-cmake -DGGML_SYCL_F16=ON --preset x64-windows-sycl-release
+cmake --preset x64-windows-sycl-release
 cmake --build build-x64-windows-sycl-release -j --target llama-completion
 
 cmake --preset x64-windows-sycl-debug
@@ -655,6 +724,15 @@ In two device selection modes, the default SYCL backend is level_zero, you can c
 |------------------|----------------------------------------|
 | Single device    | --split-mode none --main-gpu DEVICE_ID |
 | Multiple devices | --split-mode layer (default)           |
+| Multiple devices | --split-mode tensor (tensor parallelism) |
+
+`--split-mode tensor` (tensor parallelism) shards each layer across the selected
+GPUs. It requires flash attention, which is auto-enabled when `--flash-attn` is
+left at its default `auto`, so `--split-mode tensor` works out of the box.
+Passing `--flash-attn off` together with `--split-mode tensor` is rejected at
+context creation. The default `f16` KV cache is recommended. Tensor parallelism
+is currently optimized for 2 GPUs; other device counts fall back to a generic
+all-reduce.
 
 Examples:
 
@@ -699,7 +777,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_GRAPH    | ON *(default)* \|OFF *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
 | GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
-| GGML_SYCL_SUPPORT_LEVEL_ZERO | ON *(default)* \|OFF *(Optional)* | Enable Level Zero API for device memory allocation. Requires Level Zero headers/library at build time and Intel GPU driver (Level Zero runtime) at run time. Reduces system RAM usage during multi-GPU inference. |
+| GGML_SYCL_SUPPORT_LEVEL_ZERO_API | ON *(default)* \|OFF *(Optional)* | Support to use Level Zero API for device memory allocation. Requires Level Zero headers/library at build time and Intel GPU driver (Level Zero runtime) at run time. Reduces system RAM usage during multi-GPU inference. SYCL backend always runs on Level Zero running time even if it's set as OFF (The SYCL api will be usage for memory allocation).|
 | CMAKE_C_COMPILER   | `icx` *(Linux)*, `icx/cl` *(Windows)* | Set `icx` compiler for SYCL code path.      |
 | CMAKE_CXX_COMPILER | `icpx` *(Linux)*, `icx` *(Windows)*   | Set `icpx/icx` compiler for SYCL code path. |
 
@@ -710,14 +788,16 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | Name              | Value            | Function                                                                                                                  |
 |-------------------|------------------|---------------------------------------------------------------------------------------------------------------------------|
 | GGML_SYCL_DEBUG   | 0 (default) or 1 | Enable log function by macro: GGML_SYCL_DEBUG                                                                             |
+| GGML_SYCL_DEV2DEV_MEMCPY | 0 (default) or 1 | Choose the SYCL or L0 API in dev2dev memory copy.<br>Value: <br>*  0: SYCL API (default)<br>* 1: L0 API -- L0 API is found to lead to abnormal crash in some case. This debug flag is used to check the issue.|
 | GGML_SYCL_ENABLE_FLASH_ATTN | 1 (default) or 0| Enable Flash-Attention. It can reduce memory usage. The performance impact depends on the LLM.|
 | GGML_SYCL_DISABLE_OPT | 0 (default) or 1 | Disable optimize features for Intel GPUs. (Recommended to 1 for Intel devices older than Gen 10) |
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because SYCL Graph is still on development, no better performance. |
-| GGML_SYCL_ENABLE_LEVEL_ZERO | 1 (default) or 0 | Use Level Zero API for device memory allocation instead of SYCL. Reduces system RAM usage on Intel dGPUs by avoiding DMA-buf/TTM host memory staging. Requires GGML_SYCL_SUPPORT_LEVEL_ZERO=ON at build time. |
+| GGML_SYCL_USE_LEVEL_ZERO_API | 1 (default) or 0 | Use Level Zero API for device memory allocation instead of SYCL. Reduces system RAM usage on Intel dGPUs by avoiding DMA-buf/TTM host memory staging. Requires GGML_SYCL_SUPPORT_LEVEL_ZERO_API=ON at build time. SYCL backend always runs on Level Zero running time even if it's set as OFF (The SYCL api will be usage for memory allocation).|
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
 | GGML_SYCL_ENABLE_VMM | 0 or 1 (default) | Enable the virtual-memory device pool. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
+| GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
 
 ## Compile-time Flags
 
@@ -727,6 +807,7 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
 |-----------------|----------------------------------------------------------------------------------|
 | DEBUG_SYCL_POOL | Enable device memory pool logging on teardown. Useful for profiling allocations. |
 | DEBUG_SYCL_MALLOC | Enable verbose per-call logging of device pool alloc/free operations. |
+
 
 ## Design Rule
 
