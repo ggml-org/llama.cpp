@@ -1195,6 +1195,10 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         // Consume any unsolicited tool calls, e.g. builtin functions
         auto unsolicited = p.rule("unsolicited", p.atomic(p.optional(channel) + p.literal(" to=") + content + end));
 
+        // gpt-oss can emit a final with no channel markup, which the strict arms
+        // above reject; instead, treat the unmarked trailing content as the final (#25321).
+        auto bare_final = p.rule("bare-final", p.content(content));
+
         auto any = p.rule("any", preamble | analysis);
 
         if (has_response_format) {
@@ -1238,7 +1242,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
             return p.zero_or_more(start + any) + start + (tool_call | final_msg);
         }
 
-        return p.zero_or_more(start + any) + start + (final_msg | unsolicited);
+        return p.zero_or_more(start + any) + start + (final_msg | unsolicited | bare_final);
     });
 
     data.parser = parser.save();

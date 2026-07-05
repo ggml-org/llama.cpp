@@ -5210,6 +5210,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         // Basic content only - commentary channel
         tst.test("<|channel|>commentary<|message|>Hello, world!\nWhat's up?").expect(message_assist).run();
 
+        // Bare final with no channel markup (#25321): the non-streaming path must
+        // degrade to plain content instead of throwing 500.
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        // Bare final that is a strict-JSON object with no channel markup.
+        tst.test(R"({"ok": true})").expect_content(R"({"ok": true})").run();
+
         // Analysis channel (reasoning) with final channel (content)
         tst.test(
                "<|channel|>analysis<|message|>I'm\nthinking<|end|><|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's "
