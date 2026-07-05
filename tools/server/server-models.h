@@ -179,6 +179,10 @@ private:
     // unload least recently used models if the limit is reached
     void unload_lru();
 
+    // pick the least-recently-used running model to evict on a failed load
+    // (e.g. due to VRAM pressure), excluding the model we are trying to load
+    std::string pick_lru_running_model(const std::string & exclude) const;
+
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
 

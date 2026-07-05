@@ -798,6 +798,25 @@ std::vector<server_model_meta> server_models::get_all_meta() {
     return result;
 }
 
+std::string server_models::pick_lru_running_model(const std::string & exclude) const {
+    // Returns the name of the least-recently-used model that is currently
+    // running (loaded/loading/sleeping), excluding the given name. Returns ""
+    // if there is no such model. Used to find a victim to evict when a load
+    // fails, which most often means there is not enough VRAM to coexist.
+    std::string lru_name;
+    int64_t     lru_last_used = ggml_time_ms();
+    for (const auto & m : mapping) {
+        if (m.first == exclude) {
+            continue;
+        }
+        if (m.second.meta.is_running() && m.second.meta.last_used < lru_last_used) {
+            lru_name      = m.first;
+            lru_last_used = m.second.meta.last_used;
+        }
+    }
+    return lru_name;
+}
+
 void server_models::unload_lru() {
     if (base_params.models_max <= 0) {
         return; // no limit
@@ -1261,9 +1280,33 @@ bool server_models::ensure_model_ready(const std::string & name) {
         return false;
     });
 
-    // check final status
+    // If the load failed and there are other models still resident, the most
+    // common cause is VRAM exhaustion from trying to coexist with them. The
+    // router's existing eviction is count-based (unload_lru only fires when the
+    // resident count reaches models_max), so it does not catch the case where a
+    // single large model leaves no room for a second one. Evict the
+    // least-recently-used resident model and retry the load once.
     if (!meta.has_value() || meta->is_failed()) {
-        throw std::runtime_error("model name=" + name + " failed to load");
+        std::string victim = pick_lru_running_model(/* exclude = */ name);
+        if (!victim.empty()) {
+            SRV_WRN("model name=%s failed to load, evicting resident model name=%s to free memory and retrying\n",
+                    name.c_str(), victim.c_str());
+            unload(victim);
+            wait(victim, [](const server_model_meta & m) {
+                return m.status == SERVER_MODEL_STATUS_UNLOADED;
+            });
+            load(name);
+            wait(name, [&meta](const server_model_meta & new_meta) {
+                if (new_meta.status != SERVER_MODEL_STATUS_LOADING) {
+                    meta = new_meta;
+                    return true;
+                }
+                return false;
+            });
+        }
+        if (!meta.has_value() || meta->is_failed()) {
+            throw std::runtime_error("model name=" + name + " failed to load");
+        }
     }
 
     return true;
