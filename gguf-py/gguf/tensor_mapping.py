@@ -123,6 +123,14 @@ class TensorNameMap:
             "model.embedding_norm",                    # lfm3
         ),
 
+        MODEL_TENSOR.OUTPUT_NORM_GATE_UP: (
+            "model.norm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.OUTPUT_NORM_GATE_DOWN: (
+            "model.norm.gate_down_projection",  # gigachat35
+        ),
+
         # Rope frequencies
         MODEL_TENSOR.ROPE_FREQS: (
             "rope.freqs",  # llama-pth
@@ -260,6 +268,14 @@ class TensorNameMap:
             "model.layers.{bid}.attention_layernorm",               # apertus
             "model.layers.{bid}.pre_attention_layernorm",           # kormo
             "head.layers.{bid}.norm1",  # laya
+        ),
+
+        MODEL_TENSOR.ATTN_NORM_GATE_UP: (
+            "model.layers.{bid}.input_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.ATTN_NORM_GATE_DOWN: (
+            "model.layers.{bid}.input_layernorm.gate_down_projection",  # gigachat35
         ),
 
         # Attention norm 2
@@ -426,6 +442,14 @@ class TensorNameMap:
             "model.layers.{bid}.post_operator_norm",             # lfm3
         ),
 
+        MODEL_TENSOR.ATTN_POST_NORM_GATE_UP: (
+            "model.layers.{bid}.post_self_attn_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.ATTN_POST_NORM_GATE_DOWN: (
+            "model.layers.{bid}.post_self_attn_layernorm.gate_down_projection",  # gigachat35
+        ),
+
         # Rotary embeddings
         MODEL_TENSOR.ATTN_ROT_EMBD: (
             "model.layers.{bid}.self_attn.rotary_emb.inv_freq",        # llama-hf
@@ -486,6 +510,14 @@ class TensorNameMap:
             "head.layers.{bid}.norm2",  # laya
         ),
 
+        MODEL_TENSOR.FFN_NORM_GATE_UP: (
+            "model.layers.{bid}.post_attention_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.FFN_NORM_GATE_DOWN: (
+            "model.layers.{bid}.post_attention_layernorm.gate_down_projection",  # gigachat35
+        ),
+
         # Pre feed-forward norm
         MODEL_TENSOR.FFN_PRE_NORM: (
             "model.layers.{bid}.pre_feedforward_layernorm", # gemma2
@@ -516,6 +548,14 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.up_proj",
             "model.layers.{bid}.post_moe_norm",               # grok-2
             "model.layers.{bid}.post_ffn_norm",               # lfm3
+        ),
+
+        MODEL_TENSOR.FFN_POST_NORM_GATE_UP: (
+            "model.layers.{bid}.post_feedforward_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.FFN_POST_NORM_GATE_DOWN: (
+            "model.layers.{bid}.post_feedforward_layernorm.gate_down_projection",  # gigachat35
         ),
 
         MODEL_TENSOR.FFN_POST_NORM_1: (
@@ -1351,10 +1391,26 @@ class TensorNameMap:
             "layers.{bid}.attention.q_a_norm",            # mistral-large
         ),
 
+        MODEL_TENSOR.ATTN_Q_A_NORM_GATE_UP: (
+            "model.layers.{bid}.self_attn.q_a_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.ATTN_Q_A_NORM_GATE_DOWN: (
+            "model.layers.{bid}.self_attn.q_a_layernorm.gate_down_projection",  # gigachat35
+        ),
+
         MODEL_TENSOR.ATTN_KV_A_NORM: (
             "model.layers.{bid}.self_attn.kv_a_layernorm", # deepseek2
             "model.layers.{bid}.attention.kv_a_layernorm", # bailingmoe3
             "layers.{bid}.attention.kv_a_norm",            # mistral-large
+        ),
+
+        MODEL_TENSOR.ATTN_KV_A_NORM_GATE_UP: (
+            "model.layers.{bid}.self_attn.kv_a_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.ATTN_KV_A_NORM_GATE_DOWN: (
+            "model.layers.{bid}.self_attn.kv_a_layernorm.gate_down_projection",  # gigachat35
         ),
 
         MODEL_TENSOR.ATTN_SUB_NORM: (
@@ -3206,8 +3262,24 @@ class TensorNameMap:
             "model.layers.{bid}.enorm",
         ),
 
+        MODEL_TENSOR.NEXTN_ENORM_GATE_UP: (
+            "model.layers.{bid}.enorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.NEXTN_ENORM_GATE_DOWN: (
+            "model.layers.{bid}.enorm.gate_down_projection",  # gigachat35
+        ),
+
         MODEL_TENSOR.NEXTN_HNORM: (
             "model.layers.{bid}.hnorm",
+        ),
+
+        MODEL_TENSOR.NEXTN_HNORM_GATE_UP: (
+            "model.layers.{bid}.hnorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.NEXTN_HNORM_GATE_DOWN: (
+            "model.layers.{bid}.hnorm.gate_down_projection",  # gigachat35
         ),
 
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD: (
@@ -3216,6 +3288,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
             "model.layers.{bid}.shared_head.norm",
+        ),
+
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_UP: (
+            "model.layers.{bid}.shared_head.norm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_DOWN: (
+            "model.layers.{bid}.shared_head.norm.gate_down_projection",  # gigachat35
         ),
 
         MODEL_TENSOR.ATTN_V_GATE: (
@@ -3306,6 +3386,17 @@ class TensorNameMap:
                 "model.layers.{bid}.ple.conv1d",
             ),
         },
+        MODEL_ARCH.GIGACHAT35: {
+            MODEL_TENSOR.SSM_CONV1D: (
+                "model.layers.{bid}.self_attn.conv1d",
+            ),
+            MODEL_TENSOR.SSM_NORM: (
+                "model.layers.{bid}.self_attn.norm",
+            ),
+            MODEL_TENSOR.SSM_OUT: (
+                "model.layers.{bid}.self_attn.out_proj",
+            ),
+        },
     }
 
     mapping: dict[str, tuple[MODEL_TENSOR, str]]
@@ -3319,10 +3410,11 @@ class TensorNameMap:
             self.mapping[tensor_name] = (tensor, tensor_name)
             for key in keys:
                 self.mapping[key] = (tensor, tensor_name)
+        block_mappings_cfg = self.block_mappings_cfg.copy()
         if arch in self.arch_block_mappings_cfg:
-            self.block_mappings_cfg.update(self.arch_block_mappings_cfg[arch])
+            block_mappings_cfg.update(self.arch_block_mappings_cfg[arch])
         for bid in range(n_blocks):
-            for tensor, keys in self.block_mappings_cfg.items():
+            for tensor, keys in block_mappings_cfg.items():
                 if tensor not in MODEL_TENSORS[arch]:
                     continue
 

@@ -57,7 +57,7 @@ void llama_model_saver::add_kv(const enum llm_kv key, const char value) {
 template <typename Container>
 void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, const bool per_layer) {
     GGML_ASSERT(model != nullptr || !per_layer);
-    const size_t n_values = per_layer ? size_t(model->hparams.n_layer()) : value.size();
+    const size_t n_values = per_layer ? size_t(model->arch == LLM_ARCH_GIGACHAT35 ? model->hparams.n_layer_all : model->hparams.n_layer()) : value.size();
     GGML_ASSERT(n_values <= value.size());
 
     if (n_values == 0) {
@@ -276,6 +276,9 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,           hparams.f_norm_eps);
     add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
     add_kv(LLM_KV_POST_NORM_EPS,                     hparams.f_post_norm_eps);
+    if (hparams.n_norm_gate_rank > 0) {
+        add_kv(LLM_KV_NORM_GATE_RANK,               hparams.n_norm_gate_rank);
+    }
     add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,           hparams.f_norm_group_eps);
     add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,        hparams.n_norm_groups);
     add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      hparams.n_value_expert);
@@ -396,6 +399,8 @@ void llama_model_saver::add_kv_from_model() {
     }
 
     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
+    // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
+    const float rope_yarn_log_mul = model->arch == LLM_ARCH_GIGACHAT35 ? 0.1f * hparams.rope_yarn_log_mul : hparams.rope_yarn_log_mul;
 
     add_kv(LLM_KV_ROPE_DIMENSION_COUNT,              hparams.n_rot_full);
     add_kv(LLM_KV_ROPE_DIMENSION_COUNT_SWA,          hparams.n_rot_swa);
@@ -409,7 +414,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ROPE_SCALING_ATTN_FACTOR,          hparams.rope_attn_factor);
     add_kv(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN,         hparams.n_ctx_orig_yarn);
     add_kv(LLM_KV_ROPE_SCALING_FINETUNED,            hparams.rope_finetuned);
-    add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,         hparams.rope_yarn_log_mul);
+    add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,         rope_yarn_log_mul);
     add_kv(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR,      hparams.yarn_ext_factor);
     add_kv(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR,     hparams.yarn_attn_factor);
     add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,       hparams.yarn_beta_fast);
@@ -515,6 +520,8 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->tok_norm_b);
     add_tensor(model->output_norm);
     add_tensor(model->output_norm_b);
+    add_tensor(model->output_norm_gate_up);
+    add_tensor(model->output_norm_gate_down);
     add_tensor(model->output);
     add_tensor(model->output_b);
     add_tensor(model->output_norm_enc);
