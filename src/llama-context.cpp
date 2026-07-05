@@ -1634,6 +1634,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
             for (int32_t s = 0; s < ns; ++s) {
                 const llama_seq_id seq_id = batch_inp.seq_id ? batch_inp.seq_id[i][s] : 0;
 
+                if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max) {
+                    continue;
+                }
+
                 seq_output_count[seq_id]++;
                 auto sampler = sampling.samplers.find(seq_id);
                 if (sampler != sampling.samplers.end() &&
@@ -2261,9 +2265,13 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         }
     }
 
+    const uint32_t n_sampling_outputs_max = std::min<uint64_t>(
+            std::min(n_tokens, cparams.n_outputs_max),
+            (uint64_t) cparams.n_seq_max * cparams.n_sampling_outputs_per_seq_max);
+
     res += n_sampling_nodes;
-    if (cparams.n_outputs_max > 1) {
-        res += (cparams.n_outputs_max - 1) * n_sampling_nodes_max;
+    if (n_sampling_outputs_max > 1) {
+        res += (n_sampling_outputs_max - 1) * n_sampling_nodes_max;
     }
     return res;
 }
@@ -2312,7 +2320,7 @@ ggml_cgraph * llama_context::graph_reserve(
         for (uint32_t s = 0; s < n_seqs && n_outputs_set < n_outputs; ++s) {
             const auto sampler = sampling.samplers.find(s);
             if (t > 0 && (sampler == sampling.samplers.end() ||
-                    cparams.n_sampling_outputs_per_seq_max == 1)) {
+                    t >= cparams.n_sampling_outputs_per_seq_max)) {
                 continue;
             }
 
