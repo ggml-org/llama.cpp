@@ -29,6 +29,7 @@ static void flash_attn_ext_xmx_kernel(
         const int64_t nb11, const int64_t nb12,          // K row / head strides (bytes)
         const int64_t nb21, const int64_t nb22,          // V row / head strides (bytes)
         const int     ne1,                               // n_q (query count for this head)
+        const char * __restrict__ maskb, const int64_t mask_nb1,  // additive mask (f16) or null
         const sycl::nd_item<3> & it,
         sycl::half * Qh, sycl::half * Kt_sh, sycl::half * V_sh,
         float * S_sh, sycl::half * P_sh, float * PV_sh, float * O_sh, float * m_sh, float * l_sh) {
@@ -38,6 +39,8 @@ static void flash_attn_ext_xmx_kernel(
     const int head   = it.get_group(1);                    // query head
     const int q0     = it.get_group(2) * Br;               // first query row of this block
     const int kv_head = head / gqa_ratio;
+    const int qr = q0 + lane;                              // this lane's query row
+    const sycl::half * maskh = maskb ? (const sycl::half *)(maskb + (size_t) qr * mask_nb1) : nullptr;
 
     const char * Qh_base = Q + head * nb02;                // this head's Q
     const char * K_base  = K + kv_head * nb12;
@@ -80,13 +83,19 @@ static void flash_attn_ext_xmx_kernel(
         }
         sycl::group_barrier(sg);
 
-        // online softmax (lane owns row)
+        // online softmax (lane owns row). Fold in scale + additive mask, store the
+        // masked/scaled score back so the exp pass reuses it. (slope=1: ALiBi TODO.)
         float rmax = -1e30f;
-        for (int j = 0; j < Bc; ++j) rmax = sycl::fmax(rmax, S_sh[lane * Bc + j] * scale);
+        for (int j = 0; j < Bc; ++j) {
+            float sj = S_sh[lane * Bc + j] * scale;
+            if (maskh) sj += (float) maskh[kv0 + j];
+            S_sh[lane * Bc + j] = sj;
+            rmax = sycl::fmax(rmax, sj);
+        }
         const float m_new = sycl::fmax(m_sh[lane], rmax);
         const float corr  = sycl::native::exp(m_sh[lane] - m_new);
         float psum = 0.0f;
-        for (int j = 0; j < Bc; ++j) { const float p = sycl::native::exp(S_sh[lane * Bc + j] * scale - m_new); P_sh[lane * Bc + j] = sycl::half(p); psum += p; }
+        for (int j = 0; j < Bc; ++j) { const float p = sycl::native::exp(S_sh[lane * Bc + j] - m_new); P_sh[lane * Bc + j] = sycl::half(p); psum += p; }
         l_sh[lane] = l_sh[lane] * corr + psum;
         for (int d = 0; d < D; ++d) O_sh[lane * D + d] *= corr;
         m_sh[lane] = m_new;
@@ -111,7 +120,6 @@ static void flash_attn_ext_xmx_kernel(
     }
 
     // write output: ggml FA dst is [D, n_head, n_q(*seq)] contiguous.
-    const int qr = q0 + lane;
     if (qr < ne1) {
         float * o = dst + (int64_t)(qr) * (D * it.get_group_range(1)) + head * D;
         for (int d = 0; d < D; ++d) o[d] = O_sh[lane * D + d] / l_sh[lane];
@@ -127,7 +135,10 @@ void ggml_sycl_flash_attn_ext_xmx(ggml_backend_sycl_context & ctx, ggml_tensor *
     // First cut: f16 KV, D==128, no explicit mask. Everything else is a follow-up.
     GGML_ASSERT(K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16);
     GGML_ASSERT(Q->ne[0] == 128);
-    GGML_ASSERT(mask == nullptr && "XMX FA: explicit mask not yet supported");
+    if (mask) {
+        GGML_ASSERT(mask->type == GGML_TYPE_F16 && "XMX FA: mask must be f16");
+        GGML_ASSERT(mask->ne[2] == 1 && "XMX FA: per-head mask not yet supported");
+    }
 
     constexpr int D = 128, Br = 8, Bc = 16;
     float scale = 1.0f;
@@ -148,6 +159,8 @@ void ggml_sycl_flash_attn_ext_xmx(ggml_backend_sycl_context & ctx, ggml_tensor *
     const int64_t nb01 = Q->nb[1], nb02 = Q->nb[2];
     const int64_t nb11 = K->nb[1], nb12 = K->nb[2];
     const int64_t nb21 = V->nb[1], nb22 = V->nb[2];
+    const char * maskb     = mask ? (const char *) mask->data : nullptr;
+    const int64_t mask_nb1 = mask ? mask->nb[1] : 0;
 
     queue_ptr stream = ctx.stream();
     // grid: (1, n_head, q_blocks); local: (1, 1, XMX_SG).
@@ -167,7 +180,7 @@ void ggml_sycl_flash_attn_ext_xmx(ggml_backend_sycl_context & ctx, ggml_tensor *
         h.parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> it) [[sycl::reqd_sub_group_size(XMX_SG)]] {
             flash_attn_ext_xmx_kernel<D, Br, Bc>(
                 Qd, Kd, Vd, Od, scale, n_kv, gqa_ratio,
-                nb01, nb02, nb11, nb12, nb21, nb22, ne1, it,
+                nb01, nb02, nb11, nb12, nb21, nb22, ne1, maskb, mask_nb1, it,
                 Qh.get_multi_ptr<sycl::access::decorated::no>().get(),
                 Kt_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
                 V_sh.get_multi_ptr<sycl::access::decorated::no>().get(),

@@ -271,7 +271,8 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // ggml correctness is still under harness bring-up, so it is off by default.
     if (getenv("GGML_SYCL_FA_XMX") &&
         K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
-        Q->ne[0] == 128 && dst->src[3] == nullptr) {
+        Q->ne[0] == 128) {
+        // masks with ne[2] != 1 already returned NONE above; ne[2]==1 is handled.
         return BEST_FATTN_KERNEL_XMX;
     }
 
