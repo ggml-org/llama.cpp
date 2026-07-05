@@ -644,6 +644,40 @@ static void probe_fa_f16(ggml_backend_t cpu, ggml_backend_t sycl,
     verdict(label, compare(test, ref), Tol::STD, Exp::GATE);
 }
 
+// XMX bring-up: f16 FA with a NULL mask (full, non-causal attention). Routes to the
+// XMX (DPAS) path when GGML_SYCL_FA_XMX is set, whose router gate requires mask==null.
+// The CPU reference uses the same null mask, so both compute full attention.
+static void probe_fa_f16_nomask(ggml_backend_t cpu, ggml_backend_t sycl, int64_t d, int64_t n_q, int64_t nh) {
+    const int64_t n_kv = 256, nh_kv = 1;
+    auto q_f32 = gen_normal(d * n_q * nh, 0x7A1u);
+    auto k_f32 = gen_normal(d * n_kv * nh_kv, 0x7A2u);
+    auto v_f32 = gen_normal(d * n_kv * nh_kv, 0x7A3u);
+    std::vector<ggml_fp16_t> k_f16(k_f32.size()), v_f16(v_f32.size());
+    ggml_fp32_to_fp16_row(k_f32.data(), k_f16.data(), k_f32.size());
+    ggml_fp32_to_fp16_row(v_f32.data(), v_f16.data(), v_f32.size());
+    const float scale = 1.0f / std::sqrt((float) d);
+    auto build = [=](ggml_context * ctx) -> ggml_tensor * {
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d, n_q,  nh,    1); ggml_set_name(q, "q");
+        ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, n_kv, nh_kv, 1); ggml_set_name(k, "k");
+        ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, n_kv, nh_kv, 1); ggml_set_name(v, "v");
+        return ggml_flash_attn_ext(ctx, q, k, v, nullptr, scale, 0.0f, 0.0f);
+    };
+    auto set = [=](ggml_context * ctx) {
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "q"), q_f32.data(), 0, q_f32.size() * sizeof(float));
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "k"), k_f16.data(), 0, k_f16.size() * sizeof(ggml_fp16_t));
+        ggml_backend_tensor_set(ggml_get_tensor(ctx, "v"), v_f16.data(), 0, v_f16.size() * sizeof(ggml_fp16_t));
+    };
+    char label[64];
+    snprintf(label, sizeof(label), "flash_attn f16 nomask [xmx nq=%d nh=%d]", (int) n_q, (int) nh);
+    bool cok = true, sok = true;
+    auto ref = run_on_backend(cpu, build, set, &cok);
+    if (!cok) { skip(label, "CPU lacks f16 FA (null mask)"); return; }
+    auto test = run_on_backend(sycl, build, set, &sok);
+    if (!sok) { skip(label, "SYCL reports f16 FA unsupported (null mask)"); return; }
+    if (test.size() != ref.size() || ref.empty()) { printf("  [FAIL] %-28s size mismatch\n", label); g_failures++; return; }
+    verdict(label, compare(test, ref), Tol::STD, Exp::GATE);
+}
+
 // ---------------------------------------------------------------------------
 
 int main() {
@@ -733,6 +767,15 @@ int main() {
     printf("\n[6] flash attention VEC (n_q=1, decode) - GATE, standard KV across head dims [crash-prone: LAST]\n");
     for (int64_t d : {64, 128}) probe_fa_f16(cpu, sycl, d, 1, "vec");
     for (int64_t d : {64, 128}) probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", d, 1, "vec", Exp::GATE, /*force=*/true);
+
+    // [7] XMX (DPAS) flash-attention bring-up. Only runs with GGML_SYCL_FA_XMX set
+    // (else the router keeps these on VEC). d=128 f16, null mask, decode + GQA-pack.
+    if (getenv("GGML_SYCL_FA_XMX")) {
+        printf("\n[7] XMX flash attention (f16, null mask, D=128) - GATE\n");
+        probe_fa_f16_nomask(cpu, sycl, 128, 1, 1);   // decode, 1 head
+        probe_fa_f16_nomask(cpu, sycl, 128, 8, 1);   // 8 queries (fills the tile)
+        probe_fa_f16_nomask(cpu, sycl, 128, 1, 8);   // GQA: 8 query heads, 1 kv head
+    }
 
     printf("\n== summary: %d GATE-FAIL, %d XPASS (promote to GATE!), %d xfail (expected-broken), %d SKIP ==\n",
            g_failures, g_xpass, g_xfail, g_skips);
