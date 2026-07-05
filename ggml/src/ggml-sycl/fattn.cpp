@@ -18,6 +18,8 @@
 #include "fattn-tile.hpp"
 #include "fattn-vec.hpp"
 #include "fattn.hpp"
+#include "fattn-onednn.hpp"
+#include "fattn-hybrid.hpp"
 
 
 #define FATTN_VEC_CASE(D, type_K, type_V)                                                                        \
@@ -96,7 +98,9 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
 enum best_fattn_kernel {
     BEST_FATTN_KERNEL_NONE     =   0,
     BEST_FATTN_KERNEL_VEC      = 100,
+    BEST_FATTN_KERNEL_ONEDNN   = 150, // oneDNN SDPA: native F16 (PR #25222)
     BEST_FATTN_KERNEL_TILE     = 200,
+    BEST_FATTN_KERNEL_HYBRID   = 250, // dequant + oneDNN SDPA (frankenmerge)
     BEST_FATTN_KERNEL_MKL      = 300,
 };
 
@@ -115,6 +119,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
+    const ggml_tensor * sinks = dst->src[4];
 
     const int gqa_ratio = Q->ne[2] / K->ne[2];
     GGML_ASSERT(Q->ne[2] % K->ne[2] == 0);
@@ -136,11 +141,27 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // Set GGML_SYCL_ENABLE_MKL_FA=0 to force TILE/VEC path for A/B testing.
     // Example: GGML_SYCL_ENABLE_MKL_FA=0 llama-cli -m model.gguf -fa -ngl 99 ...
     // Note: MKL GEMM calls are incompatible with SYCL graph capture replay.
+
+    // XMX-accelerated paths (prefill only, Q >= 32).
+    // Dispatch order: native-F16 oneDNN SDPA → hybrid dequant+SDPA → MKL GEMM.
+
+    // Path 1: oneDNN SDPA for native F16 KV (from PR #25222).
+    if (ggml_sycl_flash_attn_ext_onednn_supported(dst)) {
+        return BEST_FATTN_KERNEL_ONEDNN;
+    }
+
+    // Path 2: Hybrid — dequantize K/V to F16, then oneDNN SDPA.
+    if (ggml_sycl_flash_attn_ext_hybrid_supported(dst)) {
+        return BEST_FATTN_KERNEL_HYBRID;
+    }
+
+    // Path 3: MKL GEMM — handles SDPA-incompatible shapes (no mask, ALiBi, etc.).
     static int mkl_enable = -1;
     if (mkl_enable < 0) {
         mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
     }
-    if (mkl_enable == 1 && Q->ne[1] >= 32 && K->ne[1] >= 1024 &&
+    if (mkl_enable == 1 && Q->ne[0] >= 64 && mask && !sinks &&
+        Q->ne[1] >= 32 && K->ne[1] >= 1024 &&
         max_bias == 0.0f && logit_softcap == 0.0f &&
         (Q->ne[3] == K->ne[3] || K->ne[3] == 1)) {
         // F16 K/V strides must be a multiple of ne[0]*2 (the natural row size
@@ -228,8 +249,6 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
-    // Todo: Use the XMX kernel if possible:
-
     // If there are no tensor cores available, use the generic tile kernel:
     if (can_use_vector_kernel) {
         if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
@@ -283,7 +302,8 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
                 (long long)V_dbg->ne[1]);
     }
 
-    switch (ggml_sycl_get_best_fattn_kernel(ggml_sycl_get_device(), dst)) {
+    const best_fattn_kernel fk = ggml_sycl_get_best_fattn_kernel(ggml_sycl_get_device(), dst);
+    switch (fk) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("Not support Flash-Attention");
         case BEST_FATTN_KERNEL_TILE:
@@ -292,55 +312,19 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
         case BEST_FATTN_KERNEL_VEC:
             ggml_sycl_flash_attn_ext_vec(ctx, dst);
             break;
+#if GGML_SYCL_DNNL
+        case BEST_FATTN_KERNEL_ONEDNN:
+            ggml_sycl_flash_attn_ext_onednn(ctx, dst);
+            break;
+        case BEST_FATTN_KERNEL_HYBRID:
+            ggml_sycl_flash_attn_ext_hybrid(ctx, dst);
+            break;
+#endif
         case BEST_FATTN_KERNEL_MKL:
             ggml_sycl_flash_attn_ext_mkl(ctx, dst);
             break;
     }
 
-    // --- Output fingerprint (GGML_SYCL_MKL_FA_DIAG=1) ---
-    // Copy first 64 float output values to host for fingerprinting.
-    // Compare MKL vs TILE (GGML_SYCL_ENABLE_MKL_FA=0) to detect divergence.
-    // Only fingerprints the first 6 FA calls with n_kv >= 1024.
-    static int fa_diag = -1;
-    static int fa_diag_count = 0;
-    if (fa_diag < 0) {
-        fa_diag = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DIAG", 0);
-    }
-    if (fa_diag == 1 && fa_diag_count < 6) {
-        const ggml_tensor * K_diag = dst->src[1];
-        const ggml_tensor * V_diag = dst->src[2];
-        const ggml_tensor * Q_diag = dst->src[0];
-        if (K_diag->ne[1] >= 1024) {
-            fa_diag_count++;
-            float diag_buf[64];
-            dpct::queue_ptr q = ctx.stream();
-            q->memcpy(diag_buf, dst->data, 64 * sizeof(float));
-            q->wait();
-            const char * kname = "???";
-            best_fattn_kernel kb = ggml_sycl_get_best_fattn_kernel(ctx.device, dst);
-            if (kb == BEST_FATTN_KERNEL_MKL) kname = "MKL";
-            if (kb == BEST_FATTN_KERNEL_TILE) kname = "TILE";
-            if (kb == BEST_FATTN_KERNEL_VEC) kname = "VEC";
-            GGML_LOG_INFO("[FA-DIAG] #%d %s D=%d n_kv=%lld n_q=%lld "
-                    "n_qh=%lld n_kvh=%lld K=%s V=%s "
-                    "nb1=%zu nb2=%zu first 64 floats:\n",
-                    fa_diag_count, kname,
-                    (int)K_diag->ne[0], (long long)K_diag->ne[1],
-                    (long long)Q_diag->ne[1],
-                    (long long)Q_diag->ne[2], (long long)K_diag->ne[2],
-                    ggml_type_name(K_diag->type),
-                    ggml_type_name(V_diag->type),
-                    K_diag->nb[1], K_diag->nb[2]);
-            for (int i = 0; i < 64; i += 8) {
-                GGML_LOG_INFO("  [%2d] %08x %08x %08x %08x %08x %08x %08x %08x\n",
-                        i,
-                        *(unsigned *)&diag_buf[i+0], *(unsigned *)&diag_buf[i+1],
-                        *(unsigned *)&diag_buf[i+2], *(unsigned *)&diag_buf[i+3],
-                        *(unsigned *)&diag_buf[i+4], *(unsigned *)&diag_buf[i+5],
-                        *(unsigned *)&diag_buf[i+6], *(unsigned *)&diag_buf[i+7]);
-            }
-        }
-    }
 }
 
 bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst) {
