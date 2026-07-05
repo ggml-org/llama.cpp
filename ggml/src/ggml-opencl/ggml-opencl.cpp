@@ -4391,7 +4391,12 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
             break;
         }
         case FA_VARIANT_F32_F16: {
-            if (backend_ctx->fa.f32_f16.count(dk_dv)) {
+            // The DK=512 decode-only program does not create the f32_f16
+            // prefill kernel; check the q1 kernel instead so that repeated
+            // calls return a consistent result.
+            const bool decode_only = (dk == 512);
+            if (decode_only ? (backend_ctx->fa.f32_f16_q1.count(dk_dv) > 0)
+                            : (backend_ctx->fa.f32_f16.count(dk_dv)    > 0)) {
                 return true;
             }
             break;
@@ -13476,9 +13481,12 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     const int block_m = n_q > 1
         ? (is_mixed ? backend_ctx->fa.f32_f16_bm.at(dk_dv) : backend_ctx->fa.bm.at(dk_dv))
         : 0;
-    const int block_n = is_mixed
-        ? backend_ctx->fa.f32_f16_bn.at(dk_dv)
-        : backend_ctx->fa.bn.at(dk_dv);
+    // block_n is only used by the n_q > 1 prefill path; its map is not
+    // populated for DK=512 decode, so do not read it for decode.
+    const int block_n = (n_q > 1)
+        ? (is_mixed ? backend_ctx->fa.f32_f16_bn.at(dk_dv)
+                    : backend_ctx->fa.bn.at(dk_dv))
+        : 0;
     // Pick split variant only when n_kv crosses the per-(dk,dv) threshold.
     // the N_SPLIT>1 prefill tile reduces DK partials via subgroup shuffle,
     // on Intel it uses the non-split BM tile and does not depend on subgroup size
@@ -13824,7 +13832,7 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     const bool use_fd = (fd_k_split != NULL);
 
     const int n_q_blocks = n_q > 1 ? (n_q + block_m - 1) / block_m : 0;
-    const int n_kv_blocks = n_kv > 0 ? (n_kv + block_n - 1) / block_n : 0;
+    const int n_kv_blocks = (n_kv > 0 && block_n > 0) ? (n_kv + block_n - 1) / block_n : 0;
     // KV pad + blk prepass are pure overhead when FD will fire — skip them.
     const bool use_mixed_prepass = is_mixed && n_q > 1 && !use_fd;
     // make sure prepass kernels are compiled
