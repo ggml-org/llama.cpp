@@ -5387,12 +5387,24 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 ggml_type src1_type = op->src[1]->type;
                 return src0_type == src1_type &&
                        src0_type == op->type &&
-                       !ggml_is_quantized(src0_type) &&
-                       ggml_blck_size(src0_type) == 1 &&
-                       (ggml_type_size(src0_type) == 1 ||
-                        ggml_type_size(src0_type) == 2 ||
-                        ggml_type_size(src0_type) == 4 ||
-                        ggml_type_size(src0_type) == 8);
+                       (
+                           (
+                               ggml_is_quantized(src0_type) &&
+                               ggml_is_contiguous(op->src[0]) &&
+                               ggml_is_contiguous(op->src[1]) &&
+                               op->src[0]->ne[0] % ggml_blck_size(src0_type) == 0 &&
+                               op->src[1]->ne[0] % ggml_blck_size(src0_type) == 0
+                           ) || (
+                               !ggml_is_quantized(src0_type) &&
+                               ggml_blck_size(src0_type) == 1 &&
+                               (
+                                   ggml_type_size(src0_type) == 1 ||
+                                   ggml_type_size(src0_type) == 2 ||
+                                   ggml_type_size(src0_type) == 4 ||
+                                   ggml_type_size(src0_type) == 8
+                               )
+                           )
+                       );
             } break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             {
