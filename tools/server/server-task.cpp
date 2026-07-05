@@ -167,6 +167,15 @@ common_chat_msg task_result_state::update_chat_msg(
         new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
         chat_msg = new_msg;
         auto all_diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, chat_msg);
+        if (!filter_tool_calls && !thinking_block_started && chat_msg.has_reasoning_content() &&
+            std::none_of(all_diffs.begin(), all_diffs.end(), [](const common_chat_msg_diff & diff) {
+                return diff.has_reasoning_content();
+            })) {
+            // A reasoning prefill still needs a block header; Realtime does not emit these blocks.
+            common_chat_msg_diff header;
+            header.reasoning_content_present = true;
+            all_diffs.insert(all_diffs.begin(), std::move(header));
+        }
 
         if (!filter_tool_calls) {
             diffs = std::move(all_diffs);
@@ -528,7 +537,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
 
     std::vector<json> output;
 
-    if (msg.reasoning_content != "") {
+    if (msg.has_reasoning_content()) {
         output.push_back(json {
             {"id",      "rs_" + random_string()},
             {"summary", json::array()},
@@ -593,7 +602,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     std::vector<json> output;
     size_t output_index = 0;
 
-    if (oaicompat_msg.reasoning_content != "") {
+    if (oaicompat_msg.has_reasoning_content()) {
         const size_t item_output_index = output_index++;
         const json output_item = json {
             {"id",      oai_resp_reasoning_id},
@@ -748,7 +757,7 @@ json server_task_result_cmpl_final::to_json_anthropic() {
     }
 
     // thinking block comes first (Anthropic extended thinking format)
-    if (!msg.reasoning_content.empty()) {
+    if (msg.has_reasoning_content()) {
         content_blocks.push_back({
             {"type", "thinking"},
             {"thinking", msg.reasoning_content},
@@ -805,7 +814,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
     }
 
-    bool has_thinking = !oaicompat_msg.reasoning_content.empty();
+    bool has_thinking = oaicompat_msg.has_reasoning_content();
     bool has_text     = !oaicompat_msg.content.empty();
     size_t num_tool_calls = oaicompat_msg.tool_calls.size();
 
@@ -819,7 +828,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
 
     for (const auto & diff : oaicompat_msg_diffs) {
         // handle thinking/reasoning content
-        if (!diff.reasoning_content_delta.empty()) {
+        if (diff.has_reasoning_content()) {
             if (!thinking_block_started) {
                 events.push_back({
                     {"event", "content_block_start"},
@@ -993,7 +1002,9 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     if (is_begin) {
         return; // begin marker only flushes headers, skip parsing
     }
-    state.update_chat_msg(content, true, oaicompat_msg_diffs);
+    if (!is_progress) {
+        state.update_chat_msg(content, true, oaicompat_msg_diffs);
+    }
 
     // Copy current state for use in to_json_*() (reflects state BEFORE this chunk)
     thinking_block_started = state.thinking_block_started;
@@ -1006,7 +1017,7 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     oai_resp_fc_id         = state.oai_resp_fc_id;
 
     // track if the accumulated message has any reasoning content
-    anthropic_has_reasoning = !state.chat_msg.reasoning_content.empty();
+    anthropic_has_reasoning = state.chat_msg.has_reasoning_content();
 
     if (res_type == TASK_RESPONSE_TYPE_OAI_RESP && !state.oai_resp_created && (is_progress || n_decoded == 1)) {
         state.oai_resp_created = true;
@@ -1014,7 +1025,7 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
 
     // Pre-compute state updates based on diffs (for next chunk)
     for (const common_chat_msg_diff & diff : oaicompat_msg_diffs) {
-        if (!diff.reasoning_content_delta.empty() && !state.thinking_block_started) {
+        if (diff.has_reasoning_content() && !state.thinking_block_started) {
             state.thinking_block_started = true;
         }
         if (!diff.content_delta.empty() && !state.text_block_started) {
@@ -1207,7 +1218,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
     }
 
     for (const common_chat_msg_diff & diff : oaicompat_msg_diffs) {
-        if (!diff.reasoning_content_delta.empty()) {
+        if (diff.has_reasoning_content()) {
             if (!thinking_block_started) {
                 events.push_back(json {
                     {"event", "response.output_item.added"},
@@ -1375,7 +1386,7 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
 
     for (const auto & diff : oaicompat_msg_diffs) {
         // handle thinking/reasoning content
-        if (!diff.reasoning_content_delta.empty()) {
+        if (diff.has_reasoning_content()) {
             if (!thinking_started) {
                 events.push_back({
                     {"event", "content_block_start"},

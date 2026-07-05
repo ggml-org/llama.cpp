@@ -468,13 +468,14 @@ class DeepseekV2Model(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("DeepseekV32ForCausalLM")
-@ModelBase.example("deepseek-ai/DeepSeek-V3.2-Exp")
-class DeepseekV32Model(DeepseekV2Model):
-    model_arch = gguf.MODEL_ARCH.DEEPSEEK32
+class DeepseekV2MTPModel(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.DEEPSEEK2
     skip_mtp = False
     supports_mtp_export = True
     _n_main_layers: int | None = None
+    mtp_shared_tensors = (
+        "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -493,22 +494,26 @@ class DeepseekV32Model(DeepseekV2Model):
             return None
         name, gen = titem
 
-        # DeepSeek V3.2 appends the NextN/MTP block past num_hidden_layers
-        # (model.layers.61 -> blk.61 in the 62-block file).
+        # MTP blocks are appended after the main layers.
         assert cls._n_main_layers is not None
         is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
-
-        # --no-mtp: drop the appended NextN block entirely.
         if is_mtp and cls.no_mtp:
             return None
-        # --mtp: keep ONLY NextN-block tensors plus the shared embeddings/
-        # norm/lm_head (so the resulting GGUF carries just the draft head).
-        if cls.mtp_only and not is_mtp and name not in (
-            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
-        ):
+        if cls.mtp_only and not is_mtp and name not in cls.mtp_shared_tensors:
             return None
 
         return name, gen
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if not self.no_mtp and (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
+
+
+@ModelBase.register("DeepseekV32ForCausalLM")
+@ModelBase.example("deepseek-ai/DeepSeek-V3.2-Exp")
+class DeepseekV32Model(DeepseekV2MTPModel):
+    model_arch = gguf.MODEL_ARCH.DEEPSEEK32
 
     def set_vocab(self):
         from transformers import AutoTokenizer
@@ -518,10 +523,6 @@ class DeepseekV32Model(DeepseekV2Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-
-        # NextN/MTP prediction layers
-        if not self.no_mtp and (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
-            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
 
         # DSA indexer parameters
         self.gguf_writer.add_indexer_head_count(self.hparams["index_n_heads"])

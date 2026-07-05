@@ -5,6 +5,7 @@
 #include "../tools/server/server-decision.h"
 #include "../tools/server/server-schema.h"
 #include "../tools/server/server-slot-sched.h"
+#include "../tools/server/server-task.h"
 
 #include <algorithm>
 #include <cmath>
@@ -936,6 +937,175 @@ static void test_pcm_f32_to_s16(testing & t) {
     t.assert_true ("empty",          pcm_f32_to_s16(nullptr, 0).empty());
 }
 
+static void test_chat_reasoning_presence(testing & t) {
+    common_chat_msg previous;
+    previous.role = "assistant";
+    auto current = previous;
+    current.reasoning_content_present = true;
+    const auto diffs = common_chat_msg_diff::compute_diffs(previous, current);
+    t.assert_equal("one empty reasoning delta", (size_t) 1, diffs.size());
+    if (diffs.size() != 1) {
+        return;
+    }
+    const auto delta = server_chat_msg_diff_to_json_oaicompat(diffs[0]);
+    t.assert_true("empty reasoning field is present", delta == json({ { "reasoning_content", "" } }));
+    t.assert_true("unchanged presence has no delta", common_chat_msg_diff::compute_diffs(current, current).empty());
+
+    previous = current;
+    current.content = "<think>Visible content</think>";
+    auto streamed = delta;
+    streamed["role"] = "assistant";
+    for (const auto & diff : common_chat_msg_diff::compute_diffs(previous, current)) {
+        const auto chunk = server_chat_msg_diff_to_json_oaicompat(diff);
+        for (const auto & [key, value] : chunk.items()) {
+            streamed[key] = value;
+        }
+    }
+    const auto history = common_chat_msgs_parse_oaicompat(json::array({ streamed }));
+    t.assert_true("streamed and complete messages agree", history[0] == current);
+
+    previous = current;
+    current.reasoning_content = "Thought";
+    const auto reasoning_diffs = common_chat_msg_diff::compute_diffs(previous, current);
+    t.assert_equal("one reasoning text delta", (size_t) 1, reasoning_diffs.size());
+    if (reasoning_diffs.size() == 1) {
+        t.assert_true("reasoning deltas compare text", !(diffs[0] == reasoning_diffs[0]));
+        t.assert_true("reasoning text is serialized", server_chat_msg_diff_to_json_oaicompat(reasoning_diffs[0]) ==
+                      json({ { "reasoning_content", "Thought" } }));
+    }
+}
+
+static void test_chat_empty_reasoning_formats(testing & t) {
+    const std::string source =
+        "{# GCML tool_calls #}{% for m in messages %}"
+        "{{ m.role + '<|role_sep|>\n' + m.content + '<|message_sep|>\n\n' }}{% endfor %}"
+        "{% if add_generation_prompt %}assistant<|role_sep|>\n<think>{% endif %}";
+    common_chat_templates_ptr templates(common_chat_templates_init(nullptr, source));
+    common_chat_templates_inputs inputs;
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    const std::string text = "<think>Visible content</think>\n\nAnswer";
+    for (bool with_content : { false, true }) {
+        task_result_state state(common_chat_session(templates.get(), nullptr, inputs));
+        server_task_result_cmpl_partial partial{};
+        partial.res_type = TASK_RESPONSE_TYPE_OAI_RESP;
+        partial.n_decoded = 1;
+        partial.content = common_chat_input("</think>\n\n");
+        partial.update(state);
+        t.assert_true("empty reasoning updates state", state.chat_msg.has_reasoning_content());
+        t.assert_true("thinking block started", state.thinking_block_started);
+
+        auto anthropic_blocks = json::array();
+        for (int step = 0; step < (with_content ? 2 : 1); ++step) {
+            if (step == 1) {
+                partial.content = common_chat_input(text);
+                partial.n_decoded = 2;
+                partial.update(state);
+            }
+            const auto anthropic_events = partial.to_json_anthropic();
+            for (const auto & event : anthropic_events) {
+                const auto & data = event.at("data");
+                if (event.at("event") == "content_block_start") {
+                    t.assert_equal("Anthropic block index", anthropic_blocks.size(), data.at("index").get<size_t>());
+                    anthropic_blocks.push_back(data.at("content_block"));
+                } else if (event.at("event") == "content_block_delta") {
+                    const auto & delta = data.at("delta");
+                    const char * key = delta.at("type") == "thinking_delta" ? "thinking" : "text";
+                    anthropic_blocks[data.at("index").get<size_t>()][key] = delta.at(key);
+                }
+            }
+            const auto response_events = partial.to_json_oaicompat_resp();
+            int added_items = 0;
+            for (const auto & event : response_events) {
+                if (event.at("event") == "response.output_item.added") {
+                    ++added_items;
+                    t.assert_equal("Responses item index", step, event.at("data").at("output_index").get<int>());
+                    t.assert_true("Responses item type", event.at("data").at("item").at("type") ==
+                                  (step == 0 ? "reasoning" : "message"));
+                }
+            }
+            t.assert_equal("Responses starts each item", 1, added_items);
+        }
+
+        server_task_result_cmpl_final result{};
+        result.update(state);
+        const auto final_events = result.to_json_anthropic_stream();
+        for (const auto & event : final_events) {
+            if (event.at("event") == "content_block_delta") {
+                const auto & data = event.at("data");
+                if (data.at("delta").at("type") == "signature_delta") {
+                    anthropic_blocks[data.at("index").get<size_t>()]["signature"] = data.at("delta").at("signature");
+                }
+            }
+        }
+        const auto anthropic = result.to_json_anthropic();
+        t.assert_true("Anthropic stream preserves empty block", anthropic_blocks == anthropic.at("content"));
+        const auto messages = server_chat_convert_anthropic_to_oai({ { "messages", json::array({ anthropic }) } });
+        const auto history = common_chat_msgs_parse_oaicompat(messages.at("messages"));
+        t.assert_equal("Anthropic history size", (size_t) 1, history.size());
+        t.assert_true("Anthropic history keeps reasoning field", history[0].has_reasoning_content());
+        t.assert_equal("Anthropic history keeps text", with_content ? text : "", history[0].render_content());
+
+        const auto complete_events = result.to_json_oaicompat_resp_stream();
+        const auto streamed = complete_events.back().at("data").at("response");
+        for (const auto & response : { result.to_json_oaicompat_resp(), streamed }) {
+            const auto converted = server_chat_convert_responses_to_chatcmpl({ { "input", response.at("output") } });
+            const auto response_history = common_chat_msgs_parse_oaicompat(converted.at("messages"));
+            t.assert_equal("Responses history size", (size_t) 1, response_history.size());
+            t.assert_true("Responses history keeps reasoning field", response_history[0].has_reasoning_content());
+            t.assert_equal("Responses history keeps text", with_content ? text : "", response_history[0].render_content());
+        }
+    }
+
+    common_chat_msg prefill;
+    prefill.role = "assistant";
+    prefill.content = "Hello";
+    prefill.reasoning_content_present = true;
+    inputs.messages = { prefill };
+    inputs.continue_final_message = COMMON_CHAT_CONTINUATION_CONTENT;
+    task_result_state state(common_chat_session(templates.get(), nullptr, inputs));
+    server_task_result_cmpl_partial progress{};
+    progress.res_type = TASK_RESPONSE_TYPE_OAI_RESP;
+    progress.is_progress = true;
+    progress.update(state);
+    t.assert_true("prompt progress has no chat deltas", progress.oaicompat_msg_diffs.empty());
+    t.assert_true("prompt progress leaves thinking unopened", !state.thinking_block_started);
+    t.assert_true("Anthropic prompt progress has no content events", progress.to_json_anthropic().empty());
+    const auto progress_events = progress.to_json_oaicompat_resp();
+    t.assert_true("Responses prompt progress creates response", progress_events[0].at("event") == "response.created");
+    t.assert_true("Responses prompt progress is retained", progress_events.back().at("data").contains("prompt_progress"));
+    server_task_result_cmpl_partial partial{};
+    partial.res_type = TASK_RESPONSE_TYPE_OAI_RESP;
+    partial.n_decoded = 1;
+    partial.content = common_chat_input(" world");
+    partial.update(state);
+    const auto anthropic_events = partial.to_json_anthropic();
+    t.assert_true("Anthropic message starts before content blocks", anthropic_events[0].at("event") == "message_start");
+    const auto response_events = partial.to_json_oaicompat_resp();
+    size_t added_items = 0;
+    for (const auto & event : response_events) {
+        if (event.at("event") == "response.output_item.added") {
+            t.assert_equal("continued Responses item index", added_items++, event.at("data").at("output_index").get<size_t>());
+        }
+    }
+    t.assert_equal("continued Responses starts reasoning and text", (size_t) 2, added_items);
+    size_t started_blocks = 0;
+    for (const auto & event : anthropic_events) {
+        if (event.at("event") == "content_block_start") {
+            t.assert_equal("continued Anthropic block index", started_blocks++, event.at("data").at("index").get<size_t>());
+        }
+    }
+    t.assert_equal("continued Anthropic starts reasoning and text", (size_t) 2, started_blocks);
+
+    task_result_state realtime(common_chat_session(templates.get(), nullptr, inputs));
+    std::vector<common_chat_msg_diff> realtime_diffs;
+    realtime.update_chat_msg(common_chat_input(" world"), true, realtime_diffs, true);
+    t.assert_equal("Realtime has only the content delta", (size_t) 1, realtime_diffs.size());
+    if (realtime_diffs.size() == 1) {
+        t.assert_equal("Realtime continuation text", std::string(" world"), realtime_diffs[0].content_delta);
+        t.assert_true("Realtime has no synthetic reasoning header", !realtime_diffs[0].has_reasoning_content());
+    }
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -965,6 +1135,8 @@ int main(int argc, char ** argv) {
     t.test("stop_strings",    test_stop_strings);
     t.test("speech_convert",  test_speech_convert);
     t.test("pcm_f32_to_s16",  test_pcm_f32_to_s16);
+    t.test("chat_reasoning_presence", test_chat_reasoning_presence);
+    t.test("chat_empty_reasoning_formats", test_chat_empty_reasoning_formats);
 
     return t.summary();
 }
