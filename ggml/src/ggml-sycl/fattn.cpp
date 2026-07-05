@@ -260,6 +260,12 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         if (K->ne[0] % 128 != 0) {
             return BEST_FATTN_KERNEL_NONE;
         }
+        // XMX turbo (opt-in, off by default): same turbo type on K and V, D==128.
+        // The DPAS kernel dequants turbo blocks into its staging tiles (rotated
+        // domain, same as VEC). Mixed turbo or turbo+f16 KV stay on VEC.
+        if (getenv("GGML_SYCL_FA_XMX") && K->type == V->type && K->ne[0] == 128) {
+            return BEST_FATTN_KERNEL_XMX;
+        }
         return BEST_FATTN_KERNEL_VEC;
     }
 

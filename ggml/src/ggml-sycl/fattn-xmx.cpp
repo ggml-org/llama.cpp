@@ -18,7 +18,30 @@ namespace sycl_matrix = sycl::ext::oneapi::experimental::matrix;
 // DPAS tile + the mandatory DG2 sub-group (8, NOT the backend WARP_SIZE 16).
 static constexpr int XMX_TM = 8, XMX_TN = 8, XMX_TK = 16, XMX_SG = 8;
 
-template <int D, int Br, int Bc, bool K_Q8, bool V_Q8>
+// Per-operand KV kind (template param). K and V must share a kind (see entry).
+enum xmx_kv_kind : int { XMX_F16 = 0, XMX_Q8_0 = 1, XMX_TURBO2 = 2, XMX_TURBO3 = 3, XMX_TURBO4 = 4 };
+
+// Dequant one KV element (block base already offset to (kv0+j)'s row start; d in 0..D-1).
+template <int KIND>
+static inline sycl::half xmx_load_kv(const char * row, int d) {
+    if constexpr (KIND == XMX_Q8_0) {
+        const block_q8_0 * b = (const block_q8_0 *) row + d / QK8_0;
+        return sycl::half((float) b->d * (float) b->qs[d % QK8_0]);
+    } else if constexpr (KIND == XMX_TURBO2) {
+        const block_turbo2_0 * b = (const block_turbo2_0 *) row + d / QK_TURBO2;
+        return sycl::half(dequantize_turbo2_0(b, d % QK_TURBO2, (float) b->norm));
+    } else if constexpr (KIND == XMX_TURBO3) {
+        const block_turbo3_0 * b = (const block_turbo3_0 *) row + d / QK_TURBO3;
+        return sycl::half(dequantize_turbo3_0(b, d % QK_TURBO3, (float) b->norm));
+    } else if constexpr (KIND == XMX_TURBO4) {
+        const block_turbo4_0 * b = (const block_turbo4_0 *) row + d / QK_TURBO4;
+        return sycl::half(dequantize_turbo4_0(b, d % QK_TURBO4, (float) b->norm));
+    } else {  // XMX_F16
+        return ((const sycl::half *) row)[d];
+    }
+}
+
+template <int D, int Br, int Bc, int KK, int VK>
 static void flash_attn_ext_xmx_kernel(
         const char * __restrict__ Q, const char * __restrict__ K, const char * __restrict__ V,
         float * __restrict__ dst,
@@ -59,24 +82,12 @@ static void flash_attn_ext_xmx_kernel(
     sycl::group_barrier(sg);
 
     for (int kv0 = 0; kv0 < n_kv; kv0 += Bc) {
-        // stage K-block transposed [D,Bc] and V-block [Bc,D] into SLM (f16, strided)
+        // stage K-block transposed [D,Bc] and V-block [Bc,D] into SLM as f16,
+        // dequantizing q8_0/turbo blocks on the fly (rotated domain for turbo).
         for (int idx = lane; idx < Bc * D; idx += XMX_SG) {
             const int j = idx / D, d = idx % D;
-            sycl::half kv, vv;
-            if constexpr (K_Q8) {
-                const block_q8_0 * b = (const block_q8_0 *) (K_base + (kv0 + j) * nb11) + d / QK8_0;
-                kv = sycl::half((float) b->d * (float) b->qs[d % QK8_0]);
-            } else {
-                kv = ((const sycl::half *) (K_base + (kv0 + j) * nb11))[d];
-            }
-            if constexpr (V_Q8) {
-                const block_q8_0 * b = (const block_q8_0 *) (V_base + (kv0 + j) * nb21) + d / QK8_0;
-                vv = sycl::half((float) b->d * (float) b->qs[d % QK8_0]);
-            } else {
-                vv = ((const sycl::half *) (V_base + (kv0 + j) * nb21))[d];
-            }
-            Kt_sh[d * Bc + j] = kv;
-            V_sh [j * D + d]  = vv;
+            Kt_sh[d * Bc + j] = xmx_load_kv<KK>(K_base + (kv0 + j) * nb11, d);
+            V_sh [j * D + d]  = xmx_load_kv<VK>(V_base + (kv0 + j) * nb21, d);
         }
         sycl::group_barrier(sg);
 
@@ -138,7 +149,7 @@ static void flash_attn_ext_xmx_kernel(
     }
 }
 
-template <int D, int Br, int Bc, bool K_Q8, bool V_Q8>
+template <int D, int Br, int Bc, int KK, int VK>
 static void submit_xmx(queue_ptr stream,
         const char * Qd, const char * Kd, const char * Vd, float * Od,
         float scale, int n_kv, int gqa_ratio,
@@ -157,7 +168,7 @@ static void submit_xmx(queue_ptr stream,
         sycl::local_accessor<float,    1>  m_sh (Br, h);
         sycl::local_accessor<float,    1>  l_sh (Br, h);
         h.parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> it) [[sycl::reqd_sub_group_size(XMX_SG)]] {
-            flash_attn_ext_xmx_kernel<D, Br, Bc, K_Q8, V_Q8>(
+            flash_attn_ext_xmx_kernel<D, Br, Bc, KK, VK>(
                 Qd, Kd, Vd, Od, scale, n_kv, gqa_ratio,
                 nb01, nb02, nb11, nb12, nb21, nb22, ne1, maskb, mask_nb1, it,
                 Qh.get_multi_ptr<sycl::access::decorated::no>().get(),
@@ -179,9 +190,20 @@ void ggml_sycl_flash_attn_ext_xmx(ggml_backend_sycl_context & ctx, ggml_tensor *
     const ggml_tensor * V = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
 
-    const bool kq8 = K->type == GGML_TYPE_Q8_0;
-    const bool vq8 = V->type == GGML_TYPE_Q8_0;
-    GGML_ASSERT((K->type == GGML_TYPE_F16 || kq8) && (V->type == GGML_TYPE_F16 || vq8));
+    auto kv_kind = [](ggml_type t) -> int {
+        switch (t) {
+            case GGML_TYPE_F16:      return XMX_F16;
+            case GGML_TYPE_Q8_0:     return XMX_Q8_0;
+            case GGML_TYPE_TURBO2_0: return XMX_TURBO2;
+            case GGML_TYPE_TURBO3_0: return XMX_TURBO3;
+            case GGML_TYPE_TURBO4_0: return XMX_TURBO4;
+            default:                 return -1;
+        }
+    };
+    const int kk = kv_kind(K->type);
+    const int vk = kv_kind(V->type);
+    GGML_ASSERT(kk >= 0 && vk >= 0 && "XMX FA: unsupported KV type");
+    GGML_ASSERT(kk == vk && "XMX FA: mixed K/V types not supported");
     GGML_ASSERT(Q->ne[0] == 128);
     if (mask) {
         GGML_ASSERT(mask->type == GGML_TYPE_F16 && "XMX FA: mask must be f16");
@@ -211,14 +233,19 @@ void ggml_sycl_flash_attn_ext_xmx(ggml_backend_sycl_context & ctx, ggml_tensor *
     const int64_t mask_nb1 = mask ? mask->nb[1] : 0;
 
     if (getenv("GGML_SYCL_FA_XMX_DEBUG")) {
-        fprintf(stderr, "[XMX-FA] D=%d kq8=%d vq8=%d n_q=%d n_head=%d n_kv=%d mask=%d\n",
-                D, (int) kq8, (int) vq8, ne1, n_head, n_kv, maskb ? 1 : 0);
+        fprintf(stderr, "[XMX-FA] D=%d kk=%d vk=%d n_q=%d n_head=%d n_kv=%d mask=%d\n",
+                D, kk, vk, ne1, n_head, n_kv, maskb ? 1 : 0);
     }
 
     queue_ptr stream = ctx.stream();
 #define XMX_LAUNCH_ARGS stream, Qd, Kd, Vd, Od, scale, n_kv, gqa_ratio, nb01, nb02, nb11, nb12, nb21, nb22, ne1, n_head, q_blocks, maskb, mask_nb1
-    if      (!kq8 && !vq8) submit_xmx<D, Br, Bc, false, false>(XMX_LAUNCH_ARGS);
-    else if ( kq8 &&  vq8) submit_xmx<D, Br, Bc, true,  true >(XMX_LAUNCH_ARGS);
-    else GGML_ABORT("XMX FA: mixed f16/q8_0 KV not yet supported");
+    switch (kk) {  // kk == vk (asserted above)
+        case XMX_F16:    submit_xmx<D, Br, Bc, XMX_F16,    XMX_F16   >(XMX_LAUNCH_ARGS); break;
+        case XMX_Q8_0:   submit_xmx<D, Br, Bc, XMX_Q8_0,   XMX_Q8_0  >(XMX_LAUNCH_ARGS); break;
+        case XMX_TURBO2: submit_xmx<D, Br, Bc, XMX_TURBO2, XMX_TURBO2>(XMX_LAUNCH_ARGS); break;
+        case XMX_TURBO3: submit_xmx<D, Br, Bc, XMX_TURBO3, XMX_TURBO3>(XMX_LAUNCH_ARGS); break;
+        case XMX_TURBO4: submit_xmx<D, Br, Bc, XMX_TURBO4, XMX_TURBO4>(XMX_LAUNCH_ARGS); break;
+        default: GGML_ABORT("XMX FA: unreachable KV kind");
+    }
 #undef XMX_LAUNCH_ARGS
 }
