@@ -18,7 +18,7 @@ namespace sycl_matrix = sycl::ext::oneapi::experimental::matrix;
 // DPAS tile + the mandatory DG2 sub-group (8, NOT the backend WARP_SIZE 16).
 static constexpr int XMX_TM = 8, XMX_TN = 8, XMX_TK = 16, XMX_SG = 8;
 
-template <int D, int Br, int Bc>
+template <int D, int Br, int Bc, bool K_Q8, bool V_Q8>
 static void flash_attn_ext_xmx_kernel(
         const char * __restrict__ Q, const char * __restrict__ K, const char * __restrict__ V,
         float * __restrict__ dst,
@@ -62,9 +62,21 @@ static void flash_attn_ext_xmx_kernel(
         // stage K-block transposed [D,Bc] and V-block [Bc,D] into SLM (f16, strided)
         for (int idx = lane; idx < Bc * D; idx += XMX_SG) {
             const int j = idx / D, d = idx % D;
-            const sycl::half kv = ((const sycl::half *) (K_base + (kv0 + j) * nb11))[d];
+            sycl::half kv, vv;
+            if constexpr (K_Q8) {
+                const block_q8_0 * b = (const block_q8_0 *) (K_base + (kv0 + j) * nb11) + d / QK8_0;
+                kv = sycl::half((float) b->d * (float) b->qs[d % QK8_0]);
+            } else {
+                kv = ((const sycl::half *) (K_base + (kv0 + j) * nb11))[d];
+            }
+            if constexpr (V_Q8) {
+                const block_q8_0 * b = (const block_q8_0 *) (V_base + (kv0 + j) * nb21) + d / QK8_0;
+                vv = sycl::half((float) b->d * (float) b->qs[d % QK8_0]);
+            } else {
+                vv = ((const sycl::half *) (V_base + (kv0 + j) * nb21))[d];
+            }
             Kt_sh[d * Bc + j] = kv;
-            V_sh [j * D + d]  = ((const sycl::half *) (V_base + (kv0 + j) * nb21))[d];
+            V_sh [j * D + d]  = vv;
         }
         sycl::group_barrier(sg);
 
@@ -126,14 +138,50 @@ static void flash_attn_ext_xmx_kernel(
     }
 }
 
+template <int D, int Br, int Bc, bool K_Q8, bool V_Q8>
+static void submit_xmx(queue_ptr stream,
+        const char * Qd, const char * Kd, const char * Vd, float * Od,
+        float scale, int n_kv, int gqa_ratio,
+        int64_t nb01, int64_t nb02, int64_t nb11, int64_t nb12, int64_t nb21, int64_t nb22,
+        int ne1, int n_head, int q_blocks, const char * maskb, int64_t mask_nb1) {
+    sycl::range<3> global(1, n_head, q_blocks * XMX_SG);
+    sycl::range<3> local (1, 1, XMX_SG);
+    stream->submit([&](sycl::handler & h) {
+        sycl::local_accessor<sycl::half, 1> Qh   (Br * D, h);
+        sycl::local_accessor<sycl::half, 1> Kt_sh(D * Bc, h);
+        sycl::local_accessor<sycl::half, 1> V_sh (Bc * D, h);
+        sycl::local_accessor<float,    1>  S_sh (Br * Bc, h);
+        sycl::local_accessor<sycl::half, 1> P_sh (Br * Bc, h);
+        sycl::local_accessor<float,    1>  PV_sh(Br * D,  h);
+        sycl::local_accessor<float,    1>  O_sh (Br * D,  h);
+        sycl::local_accessor<float,    1>  m_sh (Br, h);
+        sycl::local_accessor<float,    1>  l_sh (Br, h);
+        h.parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> it) [[sycl::reqd_sub_group_size(XMX_SG)]] {
+            flash_attn_ext_xmx_kernel<D, Br, Bc, K_Q8, V_Q8>(
+                Qd, Kd, Vd, Od, scale, n_kv, gqa_ratio,
+                nb01, nb02, nb11, nb12, nb21, nb22, ne1, maskb, mask_nb1, it,
+                Qh.get_multi_ptr<sycl::access::decorated::no>().get(),
+                Kt_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
+                V_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
+                S_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
+                P_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
+                PV_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
+                O_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
+                m_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
+                l_sh.get_multi_ptr<sycl::access::decorated::no>().get());
+        });
+    });
+}
+
 void ggml_sycl_flash_attn_ext_xmx(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
 
-    // First cut: f16 KV, D==128, no explicit mask. Everything else is a follow-up.
-    GGML_ASSERT(K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16);
+    const bool kq8 = K->type == GGML_TYPE_Q8_0;
+    const bool vq8 = V->type == GGML_TYPE_Q8_0;
+    GGML_ASSERT((K->type == GGML_TYPE_F16 || kq8) && (V->type == GGML_TYPE_F16 || vq8));
     GGML_ASSERT(Q->ne[0] == 128);
     if (mask) {
         GGML_ASSERT(mask->type == GGML_TYPE_F16 && "XMX FA: mask must be f16");
@@ -162,34 +210,15 @@ void ggml_sycl_flash_attn_ext_xmx(ggml_backend_sycl_context & ctx, ggml_tensor *
     const char * maskb     = mask ? (const char *) mask->data : nullptr;
     const int64_t mask_nb1 = mask ? mask->nb[1] : 0;
 
-    queue_ptr stream = ctx.stream();
-    // grid: (1, n_head, q_blocks); local: (1, 1, XMX_SG).
-    sycl::range<3> global(1, n_head, q_blocks * XMX_SG);
-    sycl::range<3> local (1, 1, XMX_SG);
+    if (getenv("GGML_SYCL_FA_XMX_DEBUG")) {
+        fprintf(stderr, "[XMX-FA] D=%d kq8=%d vq8=%d n_q=%d n_head=%d n_kv=%d mask=%d\n",
+                D, (int) kq8, (int) vq8, ne1, n_head, n_kv, maskb ? 1 : 0);
+    }
 
-    stream->submit([&](sycl::handler & h) {
-        sycl::local_accessor<sycl::half, 1> Qh   (Br * D, h);
-        sycl::local_accessor<sycl::half, 1> Kt_sh(D * Bc, h);
-        sycl::local_accessor<sycl::half, 1> V_sh (Bc * D, h);
-        sycl::local_accessor<float,    1>  S_sh (Br * Bc, h);
-        sycl::local_accessor<sycl::half, 1> P_sh (Br * Bc, h);
-        sycl::local_accessor<float,    1>  PV_sh(Br * D,  h);
-        sycl::local_accessor<float,    1>  O_sh (Br * D,  h);
-        sycl::local_accessor<float,    1>  m_sh (Br, h);
-        sycl::local_accessor<float,    1>  l_sh (Br, h);
-        h.parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> it) [[sycl::reqd_sub_group_size(XMX_SG)]] {
-            flash_attn_ext_xmx_kernel<D, Br, Bc>(
-                Qd, Kd, Vd, Od, scale, n_kv, gqa_ratio,
-                nb01, nb02, nb11, nb12, nb21, nb22, ne1, maskb, mask_nb1, it,
-                Qh.get_multi_ptr<sycl::access::decorated::no>().get(),
-                Kt_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
-                V_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
-                S_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
-                P_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
-                PV_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
-                O_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
-                m_sh.get_multi_ptr<sycl::access::decorated::no>().get(),
-                l_sh.get_multi_ptr<sycl::access::decorated::no>().get());
-        });
-    });
+    queue_ptr stream = ctx.stream();
+#define XMX_LAUNCH_ARGS stream, Qd, Kd, Vd, Od, scale, n_kv, gqa_ratio, nb01, nb02, nb11, nb12, nb21, nb22, ne1, n_head, q_blocks, maskb, mask_nb1
+    if      (!kq8 && !vq8) submit_xmx<D, Br, Bc, false, false>(XMX_LAUNCH_ARGS);
+    else if ( kq8 &&  vq8) submit_xmx<D, Br, Bc, true,  true >(XMX_LAUNCH_ARGS);
+    else GGML_ABORT("XMX FA: mixed f16/q8_0 KV not yet supported");
+#undef XMX_LAUNCH_ARGS
 }

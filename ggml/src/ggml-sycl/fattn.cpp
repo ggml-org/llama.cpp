@@ -269,10 +269,9 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // XMX (DPAS) path -- opt-in via GGML_SYCL_FA_XMX. First-cut scope: f16 KV,
     // D==128, no explicit mask. The math is validated (docs/research/xmx_fa_*.cpp);
     // ggml correctness is still under harness bring-up, so it is off by default.
-    if (getenv("GGML_SYCL_FA_XMX") &&
-        K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 &&
-        Q->ne[0] == 128) {
-        // masks with ne[2] != 1 already returned NONE above; ne[2]==1 is handled.
+    const bool xmx_kv_ok = (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0) && K->type == V->type;
+    if (getenv("GGML_SYCL_FA_XMX") && xmx_kv_ok && Q->ne[0] == 128) {
+        // f16 or q8_0 KV (K==V type); masks with ne[2] != 1 already returned NONE above.
         return BEST_FATTN_KERNEL_XMX;
     }
 
