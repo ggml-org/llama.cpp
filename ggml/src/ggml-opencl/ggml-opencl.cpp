@@ -13376,6 +13376,8 @@ static bool ggml_cl_flash_attn_convert_f16_to_f32(
 // (d_head <= FD_MAX_DK_MULTI) and capped at FD_MAX_N_Q_MULTI queries.
 static constexpr int FD_MIN_N_KV      = 2048;
 static constexpr int FD_KV_PER_SPLIT  = 2048;
+// f16 KV decode wants more splits than the 2048 default; quantized KV keeps 2048.
+static constexpr int FD_KV_PER_SPLIT_F16 = 512;
 static constexpr int FD_MIN_SPLITS    = 2;
 static constexpr int FD_MAX_SPLITS    = 16;
 static constexpr int FD_MAX_DK        = 128;
@@ -13949,7 +13951,8 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
             return (e && e[0]) ? atoi(e) : 0;
         }();
 
-        int fd_kv_per_split = use_fd_mq ? FD_MQ_KV_PER_SPLIT : FD_KV_PER_SPLIT;
+        int fd_kv_per_split = use_fd_mq ? FD_MQ_KV_PER_SPLIT
+                                        : (is_mixed ? FD_KV_PER_SPLIT_F16 : FD_KV_PER_SPLIT);
         int fd_max_splits   = use_fd_mq ? FD_MQ_MAX_SPLITS   : FD_MAX_SPLITS;
         if (fd_env_kv_per_split > 0) { fd_kv_per_split = fd_env_kv_per_split; }
         if (fd_env_max_splits   > 0) { fd_max_splits   = fd_env_max_splits; }
