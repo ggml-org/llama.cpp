@@ -18,7 +18,7 @@
 #include "fattn-tile.hpp"
 #include "fattn-vec.hpp"
 #include "fattn.hpp"
-#include "fattn-onednn.hpp"
+// #include "fattn-onednn.hpp" // from PR #25222 — add when merged
 #include "fattn-hybrid.hpp"
 
 
@@ -98,9 +98,9 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
 enum best_fattn_kernel {
     BEST_FATTN_KERNEL_NONE     =   0,
     BEST_FATTN_KERNEL_VEC      = 100,
-    BEST_FATTN_KERNEL_ONEDNN   = 150, // oneDNN SDPA: native F16 (PR #25222)
+    // BEST_FATTN_KERNEL_ONEDNN   = 150, // native F16 SDPA — reserved for PR #25222
     BEST_FATTN_KERNEL_TILE     = 200,
-    BEST_FATTN_KERNEL_HYBRID   = 250, // dequant + oneDNN SDPA (frankenmerge)
+    BEST_FATTN_KERNEL_HYBRID   = 250, // dequant K/V → oneDNN SDPA
     BEST_FATTN_KERNEL_MKL      = 300,
 };
 
@@ -143,19 +143,16 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // Note: MKL GEMM calls are incompatible with SYCL graph capture replay.
 
     // XMX-accelerated paths (prefill only, Q >= 32).
-    // Dispatch order: native-F16 oneDNN SDPA → hybrid dequant+SDPA → MKL GEMM.
+    // Dispatch order: HYBRID (dequant→SDPA) → MKL GEMM.
+    // When PR #25222 merges, add ONEDNN path above HYBRID:
+    //   if (ggml_sycl_flash_attn_ext_onednn_supported(dst)) return BEST_FATTN_KERNEL_ONEDNN;
 
-    // Path 1: oneDNN SDPA for native F16 KV (from PR #25222).
-    if (ggml_sycl_flash_attn_ext_onednn_supported(dst)) {
-        return BEST_FATTN_KERNEL_ONEDNN;
-    }
-
-    // Path 2: Hybrid — dequantize K/V to F16, then oneDNN SDPA.
+    // Path 1: Hybrid — dequantize K/V to F16, then oneDNN SDPA.
     if (ggml_sycl_flash_attn_ext_hybrid_supported(dst)) {
         return BEST_FATTN_KERNEL_HYBRID;
     }
 
-    // Path 3: MKL GEMM — handles SDPA-incompatible shapes (no mask, ALiBi, etc.).
+    // Path 2: MKL GEMM — handles SDPA-incompatible shapes (no mask, ALiBi, etc.).
     static int mkl_enable = -1;
     if (mkl_enable < 0) {
         mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
@@ -269,39 +266,6 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
 void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_set_device(ctx.device);
 
-    // n_kv watchdog: log when n_kv differs from the last FA call with
-    // the same D — helps detect cache-truncation issues.
-    static int nkv_debug = -1;
-    if (nkv_debug < 0) {
-        nkv_debug = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DEBUG", 0);
-    }
-    if (nkv_debug == 1) {
-        const ggml_tensor * K_dbg = dst->src[1];
-        const ggml_tensor * V_dbg = dst->src[2];
-        static int64_t last_nkv_d256 = 0, last_nkv_d512 = 0;
-        static int fa_call_seq = 0;
-        fa_call_seq++;
-        int64_t cur_nkv = K_dbg->ne[1];
-        int Dk = (int)K_dbg->ne[0];
-        const char * kname = "TILE";
-        best_fattn_kernel k = ggml_sycl_get_best_fattn_kernel(ctx.device, dst);
-        if (k == BEST_FATTN_KERNEL_MKL)  kname = "MKL";
-        if (k == BEST_FATTN_KERNEL_VEC)  kname = "VEC";
-        int64_t delta = 0;
-        if (Dk == 256) {
-            delta = cur_nkv - last_nkv_d256;
-            last_nkv_d256 = cur_nkv;
-        } else if (Dk == 512) {
-            delta = cur_nkv - last_nkv_d512;
-            last_nkv_d512 = cur_nkv;
-        }
-        GGML_LOG_INFO("[FA-DISP] #%d %s D=%d n_kv=%lld delta=%lld "
-                "V_ne1=%lld\n",
-                fa_call_seq, kname, Dk,
-                (long long)cur_nkv, (long long)delta,
-                (long long)V_dbg->ne[1]);
-    }
-
     const best_fattn_kernel fk = ggml_sycl_get_best_fattn_kernel(ggml_sycl_get_device(), dst);
     switch (fk) {
         case BEST_FATTN_KERNEL_NONE:
@@ -313,9 +277,10 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             ggml_sycl_flash_attn_ext_vec(ctx, dst);
             break;
 #if GGML_SYCL_DNNL
-        case BEST_FATTN_KERNEL_ONEDNN:
-            ggml_sycl_flash_attn_ext_onednn(ctx, dst);
-            break;
+        // ONEDNN dispatch reserved for PR #25222:
+        // case BEST_FATTN_KERNEL_ONEDNN:
+        //     ggml_sycl_flash_attn_ext_onednn(ctx, dst);
+        //     break;
         case BEST_FATTN_KERNEL_HYBRID:
             ggml_sycl_flash_attn_ext_hybrid(ctx, dst);
             break;

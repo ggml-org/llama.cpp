@@ -23,4 +23,21 @@ bool ggml_sycl_flash_attn_ext_hybrid_supported(const ggml_tensor * dst);
 // Falls back to MKL GEMM on failure.
 void ggml_sycl_flash_attn_ext_hybrid(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
+#if GGML_SYCL_DNNL
+#include "dnnl.hpp"
+#include "dnnl_sycl.hpp"
+#include "oneapi/dnnl/dnnl_graph.hpp"
+
+// Compiled SDPA partition — caches the fused MatMul+SoftMax kernel.
+struct sdpa_partition {
+    dnnl::graph::compiled_partition          cp;
+    std::vector<dnnl::graph::logical_tensor> ins;
+    dnnl::graph::logical_tensor              out;
+    size_t id_q = 0, id_k = 0, id_v = 0, id_scale = 0, id_mask = 0;
+    bool   ok = false;
+};
+
+sdpa_partition build_sdpa(const dnnl::engine & eng, int H, int Hkv, int q, int seq, int d);
+#endif
+
 #endif // GGML_SYCL_FATTN_HYBRID_HPP
