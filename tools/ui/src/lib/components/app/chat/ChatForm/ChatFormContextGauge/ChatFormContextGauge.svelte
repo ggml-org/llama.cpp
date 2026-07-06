@@ -98,9 +98,11 @@
 		return used + (enabledToolsTokenCount ?? 0);
 	});
 
-	// Track the last known prompt + cache token counts from the preparing phase.
+	// Track the last known prompt_n and cache_n from the preparing phase.
 	// The server resets prompt_n to 0 during generation (pre_decode), so we
 	// preserve the final counts from when promptProgress disappears.
+	// IMPORTANT: prompt_n and cache_n are separate fields — do NOT add them
+	// together here. The "reading" (prompt + cache) is computed in currentRead.
 	let lastKnownPromptTokens = $state(0);
 	let lastKnownCacheTokens = $state(0);
 
@@ -118,12 +120,12 @@
 
 		if (live?.promptProgress) {
 			// Update while prompt processing is ongoing.
-			lastKnownPromptTokens = Math.max(live.promptTokens ?? 0, live.promptProgress.processed ?? 0);
+			lastKnownPromptTokens = live.promptTokens ?? 0;
 			lastKnownCacheTokens = live.cacheTokens ?? 0;
 		} else if (live?.status === 'generating' && lastKnownPromptTokens === 0) {
 			// Prompt processing just finished — lock in whatever we have before
 			// the server zeroes prompt_n during generation.
-			lastKnownPromptTokens = Math.max(live.promptTokens ?? 0, 0);
+			lastKnownPromptTokens = live.promptTokens ?? 0;
 			lastKnownCacheTokens = live.cacheTokens ?? 0;
 		}
 	});
@@ -199,10 +201,10 @@
 		return Math.round((contextUsed / contextTotal) * 100);
 	});
 
-	// Current request's Reading: prompt + cache for the active request.
+	// Current request's Reading: prompt_n + cache_n for the active request.
 	// Falls back to lastKnown values during generation (server zeroes prompt_n).
 	let currentRead = $derived.by(() => {
-		if (lastKnownPromptTokens > 0) return lastKnownPromptTokens + lastKnownCacheTokens;
+		if (lastKnownPromptTokens > 0) return (lastKnownPromptTokens ?? 0) + (lastKnownCacheTokens ?? 0);
 		const messages = activeMessages() as DatabaseMessage[];
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const msg = messages[i];
