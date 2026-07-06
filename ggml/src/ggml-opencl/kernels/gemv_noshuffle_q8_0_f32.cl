@@ -174,7 +174,7 @@ __kernel void kernel_gemv_noshuffle_q8_0_f32(
         regA.s6 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
         regA.s7 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
 
-        dequantizeBlockAccum_ns_sgbroadcast_1(totalSum, regA, regS, regB);
+        dequantizeBlockAccum_ns_sgbroadcast_1(totalSum, regA, convert_float(regS), regB);
     }
 
     // reduction in local memory, assumes #wave=4

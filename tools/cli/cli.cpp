@@ -448,6 +448,9 @@ int llama_cli(int argc, char ** argv) {
     console::log("%s\n", LLAMA_ASCII_LOGO);
     console::log("build      : %s\n", inf.build_info.c_str());
     console::log("model      : %s\n", inf.model_name.c_str());
+    if (!inf.model_ftype.empty()) {
+        console::log("ftype      : %s\n", inf.model_ftype.c_str());
+    }
     console::log("modalities : %s\n", modalities.c_str());
     if (!params.system_prompt.empty()) {
         console::log("using custom system prompt\n");
