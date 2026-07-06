@@ -1345,9 +1345,7 @@ struct test_case {
 
         if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
-            if (ctx_weights) {
-                ggml_free(ctx_weights);
-            }
+            ggml_free(ctx_weights);
             ggml_free(ctx);
             return test_status_t::SKIPPED;
         }
@@ -1370,9 +1368,7 @@ struct test_case {
 
             print_test_result_locked(output_printer, result);
 
-            if (ctx_weights) {
-                ggml_free(ctx_weights);
-            }
+            ggml_free(ctx_weights);
             ggml_free(ctx);
             return test_status_t::NOT_SUPPORTED;
         }
@@ -1400,10 +1396,8 @@ struct test_case {
 
         if (buf == NULL) {
             printf("failed to allocate tensors [%s] ", ggml_backend_name(backend1));
-            if (ctx_weights) {
-                ggml_backend_buffer_free(buf_weights);
-                ggml_free(ctx_weights);
-            }
+            ggml_backend_buffer_free(buf_weights);
+            ggml_free(ctx_weights);
             ggml_free(ctx);
             return test_status_t::FAIL;
         }
@@ -1506,10 +1500,8 @@ struct test_case {
                                                                fused_nodes_to_verify.size());
 
         ggml_backend_buffer_free(buf);
-        if (ctx_weights) {
-            ggml_backend_buffer_free(buf_weights);
-            ggml_free(ctx_weights);
-        }
+        ggml_backend_buffer_free(buf_weights);
+        ggml_free(ctx_weights);
         ggml_free(ctx);
 
         // Create test result
