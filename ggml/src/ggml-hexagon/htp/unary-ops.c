@@ -42,6 +42,7 @@ struct htp_unary_context {
     uint32_t                  src0_nrows;
     uint32_t                  src0_nrows_per_thread;
     uint32_t                  nc;
+    uint32_t                  col_tile;            // wide-row mode
     bool                      broadcast_weight;
 };
 
@@ -847,6 +848,201 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
          dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
+// Apply a pointwise unary op to one column tile that is already in VTCM.
+static inline void unary_apply_tile_f32(int htp_op, const uint8_t * restrict src, uint8_t * restrict dst,
+                                        uint32_t tile_elems, int32_t * op_params) {
+    switch (htp_op) {
+        case HTP_OP_SCALE: {
+            float scale = 0.f, bias = 0.f;
+            memcpy(&scale, &op_params[0], sizeof(float));
+            memcpy(&bias,  &op_params[1], sizeof(float));
+            hvx_scale_offset_f32_aa(dst, src, tile_elems, scale, bias);
+            break;
+        }
+        case HTP_OP_SQR:            hvx_sqr_f32_aa(dst, src, tile_elems); break;
+        case HTP_OP_SQRT:           hvx_sqrt_f32_aa(dst, src, tile_elems); break;
+        case HTP_OP_UNARY_NEG:      hvx_scale_f32_aa(dst, src, tile_elems, -1.0f); break;
+        case HTP_OP_UNARY_EXP:      hvx_exp_f32(dst, src, tile_elems, false); break;
+        case HTP_OP_UNARY_SIGMOID:  hvx_sigmoid_f32_aa(dst, src, tile_elems); break;
+        case HTP_OP_UNARY_TANH:     hvx_tanh_f32_aa(dst, src, tile_elems); break;
+        case HTP_OP_UNARY_SOFTPLUS: {
+            const float * restrict sf = (const float *) src;
+            float * restrict df       = (float *) dst;
+            for (uint32_t i = 0; i < tile_elems; i++) {
+                float x = sf[i];
+                df[i] = (x > 20.0f) ? x : logf(1.0f + expf(x));
+            }
+            break;
+        }
+        default: break;
+    }
+}
+
+// Triangular mask applied to one column tile. Boundary is an absolute column index, so
+// each vector compares against its absolute column position (col_start + i*VLEN_FP32).
+static inline void tri_apply_tile_f32(const uint8_t * restrict src, uint8_t * restrict dst,
+                                      uint32_t tile_elems, uint32_t col_start, uint32_t i01,
+                                      uint32_t ne0, int32_t ttype) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+    const HVX_Vector zero = hvx_vec_splat_f32(0.0f);
+
+    uint32_t boundary;
+    int      keep_left;
+    switch (ttype) {
+        case 0: boundary = i01;     keep_left = 0; break;
+        case 1: boundary = i01 + 1; keep_left = 0; break;
+        case 2: boundary = i01 + 1; keep_left = 1; break;
+        case 3: boundary = i01;     keep_left = 1; break;
+        default: boundary = 0; keep_left = 0; break;
+    }
+    if (boundary > ne0) boundary = ne0;
+
+    const uint32_t nvec = tile_elems / VLEN_FP32;
+    const uint32_t nloe = tile_elems % VLEN_FP32;
+
+    for (uint32_t i = 0; i < nvec; i++) {
+        const uint32_t abs_start = col_start + i * VLEN_FP32;
+        const uint32_t abs_end   = abs_start + VLEN_FP32;
+        if (keep_left) {
+            if (abs_end <= boundary) {
+                v_dst[i] = v_src[i];
+            } else if (abs_start >= boundary) {
+                v_dst[i] = zero;
+            } else {
+                HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - abs_start) * sizeof(float));
+                v_dst[i]            = Q6_V_vmux_QVV(mask, v_src[i], zero);
+            }
+        } else {
+            if (abs_end <= boundary) {
+                v_dst[i] = zero;
+            } else if (abs_start >= boundary) {
+                v_dst[i] = v_src[i];
+            } else {
+                HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - abs_start) * sizeof(float));
+                v_dst[i]            = Q6_V_vmux_QVV(mask, zero, v_src[i]);
+            }
+        }
+    }
+
+    if (nloe > 0) {
+        const uint32_t abs_start = col_start + nvec * VLEN_FP32;
+        const uint32_t abs_end   = abs_start + nloe;
+        HVX_Vector     tail_val;
+        if (keep_left) {
+            if (abs_end <= boundary) {
+                tail_val = v_src[nvec];
+            } else if (abs_start >= boundary) {
+                tail_val = zero;
+            } else {
+                HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - abs_start) * sizeof(float));
+                tail_val            = Q6_V_vmux_QVV(mask, v_src[nvec], zero);
+            }
+        } else {
+            if (abs_end <= boundary) {
+                tail_val = zero;
+            } else if (abs_start >= boundary) {
+                tail_val = v_src[nvec];
+            } else {
+                HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - abs_start) * sizeof(float));
+                tail_val            = Q6_V_vmux_QVV(mask, zero, v_src[nvec]);
+            }
+        }
+        hvx_vec_store_a(&v_dst[nvec], nloe * sizeof(float), tail_val);
+    }
+}
+
+// Wide-row mode: a single pointwise row is too large to fit double-buffered in VTCM, so
+// each row is processed as a sequence of column tiles, in one double-buffered pass.
+static void unary_job_f32_wide_row_per_thread(unsigned int nth, unsigned int ith, void * data) {
+    const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
+    struct htp_ops_context * octx = uctx->octx;
+    const struct htp_tensor * src = octx->src[0];
+    const struct htp_tensor * dst = octx->dst;
+
+    htp_unary_preamble;
+
+    const int      htp_op    = octx->op;
+    int32_t *      op_params = octx->op_params;
+    const uint32_t col_tile  = uctx->col_tile;
+
+    const uint32_t src0_nrows     = uctx->src0_nrows;
+    const uint32_t src0_start_row = uctx->src0_nrows_per_thread * ith;
+    const uint32_t src0_end_row   = MIN(src0_start_row + uctx->src0_nrows_per_thread, src0_nrows);
+
+    if (src0_start_row >= src0_end_row) {
+        return;
+    }
+
+    uint64_t t1 = HAP_perf_get_qtimer_count();
+
+    const uint8_t * restrict data_src  = uctx->data_src0;
+    uint8_t * restrict       data_dst  = uctx->data_dst;
+
+    uint8_t * src0_spad_data = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
+    uint8_t * dst_spad_data  = octx->dst_spad.data  + (ith * octx->dst_spad.size_per_thread);
+
+    const size_t src0_half = uctx->src0_spad_half_size;
+    const size_t dst_half  = uctx->dst_spad_half_size;
+
+    dma_queue * dmaq = octx->ctx->dma[ith];
+
+    const uint32_t tiles_per_row = (ne0 + col_tile - 1) / col_tile;
+    const int32_t  tri_ttype     = (htp_op == HTP_OP_TRI) ? op_params[0] : 0;
+
+    // Single-pass pointwise pipeline, flattened over all (row, tile) pairs so tiles
+    // stream continuously across row boundaries. 
+    const uint32_t total_tiles = (src0_end_row - src0_start_row) * tiles_per_row;
+
+    for (uint32_t t = 0, spad_idx = 0; t < total_tiles && spad_idx < 2; t++, spad_idx++) {
+        const uint32_t row  = src0_start_row + t / tiles_per_row;
+        const uint32_t col  = (t % tiles_per_row) * col_tile;
+        const uint32_t tw   = MIN(col_tile, ne0 - col);
+        const size_t   tb   = (size_t) tw * sizeof(float);
+        const size_t   soff = unary_row_offset(row, ne01, ne02, nb01, nb02, nb03) + (size_t) col * sizeof(float);
+
+        dma_queue_push(dmaq, dma_make_ptr(data_dst, dst_spad_data + (spad_idx * dst_half)), 0, 0, 0, 0);
+        dma_queue_push(dmaq, dma_make_ptr(src0_spad_data + (spad_idx * src0_half), data_src + soff), tb, tb, tb, 1);
+    }
+
+    for (uint32_t t = 0; t < total_tiles; t++) {
+        uint8_t * dst_spad = (uint8_t *) dma_queue_pop(dmaq).src;
+        uint8_t * src_spad = (uint8_t *) dma_queue_pop(dmaq).dst;
+
+        const uint32_t row = src0_start_row + t / tiles_per_row;
+        const uint32_t col = (t % tiles_per_row) * col_tile;
+        const uint32_t tw  = MIN(col_tile, ne0 - col);
+
+        if (htp_op == HTP_OP_TRI) {
+            const uint32_t i01 = row % ne01;
+            tri_apply_tile_f32(src_spad, dst_spad, tw, col, i01, ne0, tri_ttype);
+        } else {
+            unary_apply_tile_f32(htp_op, src_spad, dst_spad, tw, op_params);
+        }
+
+        const size_t doff = unary_row_offset(row, ne1, ne2, nb1, nb2, nb3) + (size_t) col * sizeof(float);
+        const size_t tb   = (size_t) tw * sizeof(float);
+        dma_queue_push(dmaq, dma_make_ptr(data_dst + doff, dst_spad), tb, tb, tb, 1);
+
+        const uint32_t pt = t + 2;
+        if (pt < total_tiles) {
+            const uint32_t prow = src0_start_row + pt / tiles_per_row;
+            const uint32_t pcol = (pt % tiles_per_row) * col_tile;
+            const uint32_t ptw  = MIN(col_tile, ne0 - pcol);
+            const size_t   ptb  = (size_t) ptw * sizeof(float);
+            const size_t   psoff = unary_row_offset(prow, ne01, ne02, nb01, nb02, nb03) + (size_t) pcol * sizeof(float);
+            dma_queue_push(dmaq, dma_make_ptr(src_spad, data_src + psoff), ptb, ptb, ptb, 1);
+        }
+    }
+
+    dma_queue_flush(dmaq);
+
+    uint64_t t2 = HAP_perf_get_qtimer_count();
+    FARF(HIGH, "unary-f32-wide %d/%d: %ux%ux%ux%u (%u:%u) col_tile %u usec %u\n", ith, nth, src->ne[0],
+         src->ne[1], src->ne[2], src->ne[3], src0_start_row, src0_end_row, col_tile,
+         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+}
+
 static int execute_op_unary_f32(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
@@ -949,29 +1145,54 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
         vtcm_row_per_thread = (octx->ctx->vtcm_size)/ (n_threads * spad_size_per_row);
     }
 
-    // Make sure the reserved vtcm size is sufficient
-    if (vtcm_row_per_thread == 0) {
-        FARF(ERROR, "unary-%s : current VTCM reservation %zu is too small, needed %zu\n", op_type, octx->ctx->vtcm_size,
-             spad_size_per_row * n_threads);
-        return HTP_STATUS_VTCM_TOO_SMALL;
-    }
+    // Column-tile width for wide-row mode; 0 means row-block mode.
+    // Reduction ops not supported yet as they need 2 pass approach.
+    const bool is_reduction = (octx->op == HTP_OP_NORM || octx->op == HTP_OP_RMS_NORM ||
+                               octx->op == HTP_OP_RMS_NORM_MUL || octx->op == HTP_OP_L2_NORM);
+    uint32_t col_tile = 0;
 
-    octx->src0_spad.size_per_thread = src0_row_size_aligned * vtcm_row_per_thread * 2;
-    octx->dst_spad.size_per_thread  = dst_row_size_aligned * vtcm_row_per_thread * 2;
+    if (vtcm_row_per_thread == 0 && !is_reduction) {
+        const size_t per_thread_budget = octx->ctx->vtcm_size / n_threads;
+        const size_t col_tile_bytes = hex_align_down(per_thread_budget / 4, VLEN);  // 2 bufs, double-buffered
+        col_tile = (uint32_t) (col_tile_bytes / sizeof(float));
 
-    octx->src0_spad.size = n_threads * octx->src0_spad.size_per_thread;
-    octx->dst_spad.size  = n_threads * octx->dst_spad.size_per_thread;
-
-    if (octx->op == HTP_OP_RMS_NORM_MUL) {
-        if (broadcast_weight) {
-            octx->src1_spad.size_per_thread = src1_row_size_aligned;
-        } else {
-            octx->src1_spad.size_per_thread = src1_row_size_aligned * vtcm_row_per_thread * 2;
+        if (col_tile == 0) {
+            FARF(ERROR, "unary-%s : current VTCM reservation %zu is too small, needed %zu\n", op_type,
+                 octx->ctx->vtcm_size, spad_size_per_row * n_threads);
+            return HTP_STATUS_VTCM_TOO_SMALL;
         }
-        octx->src1_spad.size = n_threads * octx->src1_spad.size_per_thread;
-    } else {
+
+        // All spads are sized to one double-buffered column tile.
+        octx->src0_spad.size_per_thread = col_tile_bytes * 2;
+        octx->dst_spad.size_per_thread  = col_tile_bytes * 2;
+        octx->src0_spad.size = n_threads * octx->src0_spad.size_per_thread;
+        octx->dst_spad.size  = n_threads * octx->dst_spad.size_per_thread;
         octx->src1_spad.size = 0;
         octx->src1_spad.size_per_thread = 0;
+    } else {
+        if (vtcm_row_per_thread == 0) {
+            FARF(ERROR, "unary-%s : current VTCM reservation %zu is too small, needed %zu\n", op_type,
+                  octx->ctx->vtcm_size, spad_size_per_row * n_threads);
+            return HTP_STATUS_VTCM_TOO_SMALL;
+        }
+
+        octx->src0_spad.size_per_thread = src0_row_size_aligned * vtcm_row_per_thread * 2;
+        octx->dst_spad.size_per_thread  = dst_row_size_aligned * vtcm_row_per_thread * 2;
+
+        octx->src0_spad.size = n_threads * octx->src0_spad.size_per_thread;
+        octx->dst_spad.size  = n_threads * octx->dst_spad.size_per_thread;
+
+        if (octx->op == HTP_OP_RMS_NORM_MUL) {
+            if (broadcast_weight) {
+                octx->src1_spad.size_per_thread = src1_row_size_aligned;
+            } else {
+                octx->src1_spad.size_per_thread = src1_row_size_aligned * vtcm_row_per_thread * 2;
+            }
+            octx->src1_spad.size = n_threads * octx->src1_spad.size_per_thread;
+        } else {
+            octx->src1_spad.size = 0;
+            octx->src1_spad.size_per_thread = 0;
+        }
     }
 
     octx->src0_spad.data = octx->ctx->vtcm_base;
@@ -1012,12 +1233,17 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
             .src1_spad_half_size   = (octx->op == HTP_OP_RMS_NORM_MUL) ? (octx->src1_spad.size_per_thread / (broadcast_weight ? 1 : 2)) : 0,
             .dst_spad_half_size    = octx->dst_spad.size_per_thread / 2,
 
-            .block                 = (octx->src0_spad.size_per_thread / 2) / src0_row_size_aligned,
+            .block                 = col_tile ? 0 : ((octx->src0_spad.size_per_thread / 2) / src0_row_size_aligned),
             .nc                    = src0->ne[0],
+            .col_tile              = col_tile,
             .broadcast_weight      = broadcast_weight,
         };
 
-        worker_pool_run_func(octx->ctx->worker_pool, unary_job_f32_per_thread, &uctx, n_threads);
+        FARF(HIGH, "%s: %s mode (col_tile %u)\n", op_type, col_tile ? "wide-row" : "row-block", col_tile);
+
+        worker_pool_run_func(octx->ctx->worker_pool,
+                             col_tile ? unary_job_f32_wide_row_per_thread : unary_job_f32_per_thread,
+                             &uctx, n_threads);
     }
 
     return err;
