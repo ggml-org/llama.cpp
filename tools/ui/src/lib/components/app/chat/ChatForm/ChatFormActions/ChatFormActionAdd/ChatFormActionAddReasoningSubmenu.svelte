@@ -76,7 +76,6 @@
 				<LightbulbOff class="h-4 w-4 shrink-0 text-muted-foreground" />
 			{/if}
 
-			<!-- {#if thinkingEnabled} -->
 			<span class="text-sm inline-flex gap-2 {!thinkingEnabled ? 'text-muted-foreground' : ''}">
 				Reasoning
 
@@ -84,11 +83,6 @@
 					{thinkingEnabled ? currentEffort : 'off'}
 				</span>
 			</span>
-			<!-- {:else}
-				<span class="capitalize text-muted-foreground text-sm">
-					No Reasoning
-				</span>
-			{/if} -->
 		</DropdownMenu.SubTrigger>
 
 		<DropdownMenu.SubContent

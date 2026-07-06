@@ -45,8 +45,6 @@ export function useProcessingState(): UseProcessingStateReturn {
 		return activeProcessingState();
 	});
 
-	// Track last known state so the gauge can still render after a generation
-	// finishes and chatStore clears activeProcessingState
 	$effect(() => {
 		if (processingState && isMonitoring) {
 			lastKnownState = processingState;
@@ -88,10 +86,8 @@ export function useProcessingState(): UseProcessingStateReturn {
 
 	function stopMonitoring(): void {
 		if (!isMonitoring) return;
+
 		isMonitoring = false;
-		// lastKnownState / lastKnownProcessingStats are intentionally retained so the
-		// gauge continues to show the latest stats after chatStore clears
-		// activeProcessingState on stream completion
 	}
 
 	function getProcessingMessage(): string {

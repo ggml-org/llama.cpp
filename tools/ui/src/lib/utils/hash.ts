@@ -6,11 +6,16 @@
  * properties. Choose hex output so the value is short, readable in logs, and
  * stable across re-implementations.
  */
+
+const FNV_OFFSET_BASIS = 0x811c9dc5;
+const FNV_PRIME = 0x01000193;
+const FNV_RADIX = 16;
+
 export function hashString(input: string): string {
-	let hash = 0x811c9dc5;
+	let hash = FNV_OFFSET_BASIS;
 	for (let i = 0; i < input.length; i++) {
 		hash ^= input.charCodeAt(i);
-		hash = Math.imul(hash, 0x01000193);
+		hash = Math.imul(hash, FNV_PRIME);
 	}
-	return (hash >>> 0).toString(16);
+	return (hash >>> 0).toString(FNV_RADIX);
 }

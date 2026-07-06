@@ -6,6 +6,7 @@
 	import { REASONING_EFFORT_TOKENS } from '$lib/constants/reasoning-effort-tokens';
 	import { REASONING_EFFORT_LEVELS } from '$lib/constants/reasoning-effort';
 	import type { ReasoningEffortLevel } from '$lib/types';
+	import { DIALOG_SUBMENU_CONTENT } from '$lib/constants/css-classes';
 	import {
 		modelsStore,
 		checkModelSupportsThinking,
@@ -87,7 +88,7 @@
 			{/if}
 		</DropdownMenu.SubTrigger>
 
-		<DropdownMenu.SubContent class="w-60">
+		<DropdownMenu.SubContent class={DIALOG_SUBMENU_CONTENT}>
 			{#each REASONING_EFFORT_LEVELS as level (level.value)}
 				<button
 					type="button"
