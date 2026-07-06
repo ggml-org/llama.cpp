@@ -48,7 +48,7 @@
 			newServerHeaders = '';
 
 			if (!didAddAny) {
-				settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, '[]');
+				settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, []);
 			}
 
 			localStorage.setItem(MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, 'true');

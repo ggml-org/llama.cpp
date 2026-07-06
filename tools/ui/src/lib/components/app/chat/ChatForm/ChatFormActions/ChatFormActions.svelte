@@ -100,38 +100,34 @@
 		conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1]
 	);
 
-	// Context gauge stays out of the form on the start screen and on a fresh
-	// /chat/[id] page until at least one read or predicted token has been
-	// processed. The historical scan mirrors ChatFormContextGauge's
-	// conversationStats aggregation (agentic.llm rollup beats plain timings
-	// when present); the live branch adds the in-flight processing state so
-	// the gauge flips in as soon as the first timing event lands, instead of
-	// waiting for the whole turn to finish.
 	let hasProcessedTokens = $derived.by(() => {
 		if (!page.params.id) return false;
 
 		const messages = activeMessages() as DatabaseMessage[];
-		let historical = 0;
+		let totalHistoricalTokens = 0;
 		for (const m of messages) {
 			if (m.role !== MessageRole.ASSISTANT) continue;
-			const t = m.timings;
-			if (!t) continue;
-			const llm = t.agentic?.llm;
-			if (llm?.prompt_n != null || llm?.predicted_n != null) {
-				historical += (llm?.prompt_n ?? 0) + (llm?.predicted_n ?? 0);
+			const timings = m.timings;
+			if (!timings) continue;
+			const agenticLlm = timings.agentic?.llm;
+			if (agenticLlm?.prompt_n != null || agenticLlm?.predicted_n != null) {
+				totalHistoricalTokens += (agenticLlm?.prompt_n ?? 0) + (agenticLlm?.predicted_n ?? 0);
 			} else {
-				historical += (t.prompt_n ?? 0) + (t.predicted_n ?? 0);
+				totalHistoricalTokens += (timings.prompt_n ?? 0) + (timings.predicted_n ?? 0);
 			}
 		}
-		if (historical > 0) return true;
+		if (totalHistoricalTokens > 0) return true;
 
 		if (!chatIsLoading() && !isChatStreaming()) return false;
 
-		const live = activeProcessingState();
-		if (!live) return false;
-		const liveRead = Math.max(live.promptTokens ?? 0, live.promptProgress?.processed ?? 0);
-		const liveOut = live.outputTokensUsed ?? 0;
-		return liveRead > 0 || liveOut > 0;
+		const processingState = activeProcessingState();
+		if (!processingState) return false;
+		const livePromptTokens = Math.max(
+			processingState.promptTokens ?? 0,
+			processingState.promptProgress?.processed ?? 0
+		);
+		const liveOutputTokens = processingState.outputTokensUsed ?? 0;
+		return livePromptTokens > 0 || liveOutputTokens > 0;
 	});
 </script>
 

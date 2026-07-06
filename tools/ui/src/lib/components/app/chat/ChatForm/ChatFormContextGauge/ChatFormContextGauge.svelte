@@ -8,6 +8,7 @@
 	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { activeConversation, activeMessages } from '$lib/stores/conversations.svelte';
+	import ContextGaugeDetailRow from './ContextGaugeDetailRow.svelte';
 	import {
 		modelsStore,
 		modelOptions,
@@ -52,8 +53,8 @@
 	// yet in the cache, so n_ctx becomes available without sending a chat request.
 	$effect(() => {
 		if (activeModelId && isActiveModelLoaded) {
-			const cached = modelsStore.getModelProps(activeModelId);
-			if (!cached) {
+			const cachedProps = modelsStore.getModelProps(activeModelId);
+			if (!cachedProps) {
 				void modelsStore.fetchModelProps(activeModelId);
 			}
 		}
@@ -69,61 +70,30 @@
 
 	let contextUsed = $derived(processingState.processingState?.contextUsed ?? 0);
 
-	// Two scopes for the token-usage breakdown so the rows line up with the
-	// context bar AND also reveal how much LLM compute the full run spent:
-	//   - currentStats: the most recent assistant message's last-iter prefill
-	//     (prompt_n + cache_n). For agentic flows that's the LAST tool-loop
-	//     iteration; for plain flows it's the single call. Matches
-	//     contextUsed - last iter output, so the user can sanity-check the
-	//     gauge against the breakdown.
-	//   - cumulativeStats: sum across every assistant message × tool-loop
-	//     iteration. For agentic messages prefer the agentic.llm rollup
-	//     (covers every iter); for plain messages the top-level timings
-	//     already describe the full turn. Avg speed uses this scope since
-	//     it makes more sense as a run-wide throughput.
-	//
-	// Live processingState feeds both. For current we MAX the last persisted
-	// value with the live reading because the in-flight iter hasn't been
-	// written yet; for cumulative we ADD the live on top of the persisted
-	// rollup (the rollup only sums COMPLETED iters per agentic.svelte.ts,
-	// so there's no double-count with the live in-flight value).
 	let currentStats = $derived.by(() => {
 		const messages = activeMessages() as DatabaseMessage[];
-		const live = processingState.processingState;
-		const isLive = isLoading() || isChatStreaming();
+		const liveProcessingState = processingState.processingState;
+		const isStreaming = isLoading() || isChatStreaming();
 
 		let read = 0;
 		let output = 0;
 
-		// Walk backward to the most recent assistant message with timings so
-		// an active stream on a fresh message falls back to the prior turn;
-		// the live override below still drives the value when nothing is
-		// persisted yet.
 		for (let i = messages.length - 1; i >= 0; i--) {
-			const m = messages[i];
-			if (m.role !== MessageRole.ASSISTANT) continue;
-			const t = m.timings;
-			if (!t) continue;
-			// Top-level timings are the LAST iter's values regardless of
-			// whether the agentic rollup is attached (buildFinalTimings sets
-			// prompt_n from capturedTimings, see agentic.svelte.ts). The
-			// agentic.llm fields sum across iters and would over-report here.
-			read = (t.prompt_n ?? 0) + (t.cache_n ?? 0);
-			output = t.predicted_n ?? 0;
+			const message = messages[i];
+			if (message.role !== MessageRole.ASSISTANT) continue;
+			const timings = message.timings;
+			if (!timings) continue;
+			read = (timings.prompt_n ?? 0) + (timings.cache_n ?? 0);
+			output = timings.predicted_n ?? 0;
 			break;
 		}
 
-		if (isLive && live) {
-			// promptTokens grows during the read phase, but SSE also emits
-			// prompt_progress events separately from timings, so during the
-			// pure reading phase promptTokens can be 0 even though reading is
-			// actively progressing. fall back to promptProgress.processed in
-			// that case (canonical server-reported read counter).
-			const livePromptProgress = live.promptProgress?.processed ?? 0;
-			const liveRead = Math.max(live.promptTokens ?? 0, livePromptProgress);
-			if (liveRead > 0) read = Math.max(read, liveRead);
-			const liveOut = live.outputTokensUsed ?? 0;
-			if (liveOut > 0) output = Math.max(output, liveOut);
+		if (isStreaming && liveProcessingState) {
+			const livePromptProgress = liveProcessingState.promptProgress?.processed ?? 0;
+			const livePromptTokens = Math.max(liveProcessingState.promptTokens ?? 0, livePromptProgress);
+			if (livePromptTokens > 0) read = Math.max(read, livePromptTokens);
+			const liveOutputTokens = liveProcessingState.outputTokensUsed ?? 0;
+			if (liveOutputTokens > 0) output = Math.max(output, liveOutputTokens);
 		}
 
 		return { read, output };
@@ -131,42 +101,44 @@
 
 	let cumulativeStats = $derived.by(() => {
 		const messages = activeMessages() as DatabaseMessage[];
-		const live = processingState.processingState;
-		const isLive = isLoading() || isChatStreaming();
+		const liveProcessingState = processingState.processingState;
+		const isStreaming = isLoading() || isChatStreaming();
 
 		let read = 0;
 		let output = 0;
 		let outputMs = 0;
 
-		for (const m of messages) {
-			if (m.role !== MessageRole.ASSISTANT) continue;
-			const t = m.timings;
-			if (!t) continue;
+		for (const message of messages) {
+			if (message.role !== MessageRole.ASSISTANT) continue;
+			const timings = message.timings;
+			if (!timings) continue;
 
-			const llm = t.agentic?.llm;
+			const agenticLlm = timings.agentic?.llm;
 			if (
-				t.agentic &&
-				(llm?.prompt_n != null || llm?.predicted_n != null || llm?.predicted_ms != null)
+				timings.agentic &&
+				(agenticLlm?.prompt_n != null ||
+					agenticLlm?.predicted_n != null ||
+					agenticLlm?.predicted_ms != null)
 			) {
-				read += llm?.prompt_n ?? 0;
-				output += llm?.predicted_n ?? 0;
-				outputMs += llm?.predicted_ms ?? 0;
+				read += agenticLlm?.prompt_n ?? 0;
+				output += agenticLlm?.predicted_n ?? 0;
+				outputMs += agenticLlm?.predicted_ms ?? 0;
 			} else {
-				read += t.prompt_n ?? 0;
-				output += t.predicted_n ?? 0;
-				outputMs += t.predicted_ms ?? 0;
+				read += timings.prompt_n ?? 0;
+				output += timings.predicted_n ?? 0;
+				outputMs += timings.predicted_ms ?? 0;
 			}
 		}
 
-		if (isLive && live) {
-			const livePromptProgress = live.promptProgress?.processed ?? 0;
-			const liveRead = Math.max(live.promptTokens ?? 0, livePromptProgress);
-			if (liveRead > 0) read += liveRead;
-			const liveOut = live.outputTokensUsed ?? 0;
-			if (liveOut > 0) output += liveOut;
-			const liveTps = live.tokensPerSecond ?? 0;
-			if (liveTps > 0 && liveOut > 0) {
-				outputMs += (liveOut / liveTps) * 1000;
+		if (isStreaming && liveProcessingState) {
+			const livePromptProgress = liveProcessingState.promptProgress?.processed ?? 0;
+			const livePromptTokens = Math.max(liveProcessingState.promptTokens ?? 0, livePromptProgress);
+			if (livePromptTokens > 0) read += livePromptTokens;
+			const liveOutputTokens = liveProcessingState.outputTokensUsed ?? 0;
+			if (liveOutputTokens > 0) output += liveOutputTokens;
+			const liveTokensPerSecond = liveProcessingState.tokensPerSecond ?? 0;
+			if (liveTokensPerSecond > 0 && liveOutputTokens > 0) {
+				outputMs += (liveOutputTokens / liveTokensPerSecond) * 1000;
 			}
 		}
 
@@ -175,38 +147,26 @@
 		return { read, output, averageTokensPerSecond };
 	});
 
-	// Per-message output: do NOT show (replaced by currentStats.output /
-	// cumulativeStats.output).
-	// Per-message t/s: do NOT show (replaced by cumulativeStats.averageTokensPerSecond).
-	// Context: shown elsewhere in the hover card; speculative decoding is server-level
-	// and worth keeping as a single flag.
+	const TRANSIENT_DETAILS_EXCLUDED_PREFIXES = ['Context:', 'Output:'];
+
 	let transientDetails = $derived(
-		processingState
-			.getTechnicalDetails()
-			.filter(
-				(detail) =>
-					!detail.startsWith('Context:') &&
-					!detail.startsWith('Output:') &&
-					!detail.includes(STATS_UNITS.TOKENS_PER_SECOND)
-			)
+		processingState.getTechnicalDetails().filter((technicalDetail) => {
+			if (
+				TRANSIENT_DETAILS_EXCLUDED_PREFIXES.some((prefix) => technicalDetail.startsWith(prefix))
+			) {
+				return false;
+			}
+			return !technicalDetail.includes(STATS_UNITS.TOKENS_PER_SECOND);
+		})
 	);
 
-	// Tool definitions token count - via llama-server /tokenize (cached in
-	// toolsStore per "<model>:<enabledDefList>" hash, no-op when nothing
-	// changed). null means the value hasn't been measured yet; 0 means no
-	// tools are enabled.
 	let enabledToolsTokenCount = $derived(toolsStore.enabledToolsTokenCount);
 
-	// Refresh once on mount, then again whenever the active model switches or
-	// the enabled tool set changes. getEnabledToolsForLLM reads $state from
-	// every source (built-in list, sandbox toggle, MCP connections, custom
-	// JSON, disabled set), so this single read subscribes to all of them.
 	$effect(() => {
 		const modelId = activeModelId;
 		untrack(() => {
-			// Single read covers all 4 input sources + disabled-tools set.
-			const enabled = toolsStore.getEnabledToolsForLLM();
-			void enabled;
+			const enabledToolsForLLM = toolsStore.getEnabledToolsForLLM();
+			void enabledToolsForLLM;
 			toolsStore.refreshEnabledToolsTokenCount(modelId).catch((err) => {
 				console.warn('[ChatFormContextGauge] Failed to refresh tools token count:', err);
 			});
@@ -249,38 +209,30 @@
 
 	const CIRCUMFERENCE = 2 * Math.PI * 11;
 
-	// keep chatStore.activeProcessingState aligned with the active conversation
 	$effect(() => {
-		const conversation = activeConversation();
+		const currentConversation = activeConversation();
 
-		untrack(() => chatStore.setActiveProcessingConversation(conversation?.id ?? null));
+		untrack(() => chatStore.setActiveProcessingConversation(currentConversation?.id ?? null));
 	});
 
-	// Populate contextUsed from the start of having a conversation:
-	// - during streaming the processing state is updated live from SSE timing events
-	// - on a finished conversation the last assistant message owns its prompt /
-	//   cache / predicted tokens via its timings, so restore from those
-	// - on an empty (fresh) conversation, clear so the gauge doesn't carry over
-	//   stale lastKnownState from a previous conversation
 	$effect(() => {
-		const conversation = activeConversation();
-		const messages = activeMessages() as DatabaseMessage[];
+		const currentConversation = activeConversation();
+		const conversationMessages = activeMessages() as DatabaseMessage[];
 
-		if (!conversation) return;
+		if (!currentConversation) return;
 
-		// live stream takes precedence over any restoration
 		if (isLoading() || isChatStreaming()) return;
 
-		if (messages.length === 0) {
-			untrack(() => chatStore.clearProcessingState(conversation.id));
+		if (conversationMessages.length === 0) {
+			untrack(() => chatStore.clearProcessingState(currentConversation.id));
 			return;
 		}
 
-		untrack(() => chatStore.restoreProcessingStateFromMessages(messages, conversation.id));
+		untrack(() =>
+			chatStore.restoreProcessingStateFromMessages(conversationMessages, currentConversation.id)
+		);
 	});
 
-	// start the monitor once; chatStore clears activeProcessingState on stream
-	// end, and useProcessingState keeps lastKnownState around for after-stream display
 	$effect(() => {
 		processingState.startMonitoring();
 	});
@@ -384,50 +336,35 @@
 
 					<Collapsible.Content class="flex flex-col gap-2 text-xs pt-4">
 						{#if enabledToolsTokenCount !== null && enabledToolsTokenCount > 0}
-							<div class="flex items-baseline justify-between">
-								<span class="text-muted-foreground">Tool definitions</span>
-								<span class="font-mono text-muted-foreground">
-									{formatParameters(enabledToolsTokenCount)}
-								</span>
-							</div>
-							<div class="text-[10px] leading-tight text-muted-foreground/70">
-								Sent on every turn, cached after the first
-							</div>
+							<ContextGaugeDetailRow
+								label="Tool definitions"
+								value={formatParameters(enabledToolsTokenCount)}
+								subtitle="Sent on every turn, cached after the first"
+							/>
 						{/if}
 						{#if currentStats.read > 0}
-							<div class="flex items-baseline justify-between">
-								<span class="text-muted-foreground">Reading</span>
-								<span class="font-mono text-muted-foreground">
-									{currentStats.read.toLocaleString()} tok
-								</span>
-							</div>
-							{#if cumulativeStats.read > currentStats.read}
-								<div class="-mt-1.5 pl-2 text-[10px] leading-tight text-muted-foreground/70">
-									{cumulativeStats.read.toLocaleString()} total across the conversation
-								</div>
-							{/if}
+							<ContextGaugeDetailRow
+								label="Reading"
+								value={`${currentStats.read.toLocaleString()} tok`}
+								subtitle={cumulativeStats.read > currentStats.read
+									? `${cumulativeStats.read.toLocaleString()} total across the conversation`
+									: undefined}
+							/>
 						{/if}
 						{#if cumulativeStats.output > 0}
-							<div class="flex items-baseline justify-between">
-								<span class="text-muted-foreground">Output</span>
-								<span class="font-mono text-muted-foreground">
-									{cumulativeStats.output.toLocaleString()} tok
-								</span>
-							</div>
-							{#if currentStats.output > 0 && currentStats.output < cumulativeStats.output}
-								<div class="-mt-1.5 pl-2 text-[10px] leading-tight text-muted-foreground/70">
-									{currentStats.output.toLocaleString()} in the last response
-								</div>
-							{/if}
+							<ContextGaugeDetailRow
+								label="Output"
+								value={`${cumulativeStats.output.toLocaleString()} tok`}
+								subtitle={currentStats.output > 0 && currentStats.output < cumulativeStats.output
+									? `${currentStats.output.toLocaleString()} in the last response`
+									: undefined}
+							/>
 						{/if}
 						{#if cumulativeStats.averageTokensPerSecond !== null}
-							<div class="flex items-baseline justify-between">
-								<span class="text-muted-foreground">Avg speed</span>
-								<span class="font-mono text-muted-foreground">
-									{cumulativeStats.averageTokensPerSecond.toFixed(1)}
-									{STATS_UNITS.TOKENS_PER_SECOND}
-								</span>
-							</div>
+							<ContextGaugeDetailRow
+								label="Avg speed"
+								value={`${cumulativeStats.averageTokensPerSecond.toFixed(1)}${STATS_UNITS.TOKENS_PER_SECOND}`}
+							/>
 						{/if}
 						{#each transientDetails as detail (detail)}
 							<div class="font-mono text-muted-foreground">{detail}</div>

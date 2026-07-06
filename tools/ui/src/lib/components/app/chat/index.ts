@@ -251,7 +251,15 @@ export { default as ChatFormActionAddReasoningSubmenu } from './ChatForm/ChatFor
 
 /**
  * Displays context token usage as a compact pill with tooltip.
- * Shows percentage, token counts, and a progress bar on hover.
+ *
+ * Features a donut chart showing context percentage, an active model
+ * resolver (explicit selection > conversation model > single model), and
+ * a collapsible detail panel with per-turn breakdowns: tool definition
+ * tokens, current/cumulative reading and output counts, average tokens
+ * per second, and transient diagnostic details. Auto-fetches /props when
+ * the active model is loaded but props are missing from the cache.
+ * Shows load/progress states when the model is not yet loaded or is
+ * currently loading.
  */
 export { default as ChatFormContextGauge } from './ChatForm/ChatFormContextGauge/ChatFormContextGauge.svelte';
 
