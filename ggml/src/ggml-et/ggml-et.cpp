@@ -661,7 +661,8 @@ static ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cg
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
 
-        if (node->op == GGML_OP_NONE) {
+        if (node->op == GGML_OP_NONE || node->op == GGML_OP_VIEW || node->op == GGML_OP_RESHAPE ||
+            node->op == GGML_OP_PERMUTE || node->op == GGML_OP_TRANSPOSE) {
             continue;
         }
 
@@ -832,13 +833,6 @@ static ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cg
 
             case GGML_OP_GATED_DELTA_NET:
                 ggml_et_op_gated_delta_net(dev_ctx, node);
-                break;
-
-            case GGML_OP_RESHAPE:
-            case GGML_OP_VIEW:
-            case GGML_OP_PERMUTE:
-            case GGML_OP_TRANSPOSE:
-                // These are metadata-only operations that require no computation
                 break;
 
             default:
@@ -1059,19 +1053,18 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             // Support F32 x I32 -> F32 RoPE for the modes implemented by rope_f32.
             if (op->type == GGML_TYPE_F32 && op->src[0] && op->src[0]->type == GGML_TYPE_F32 && op->src[1] &&
                 op->src[1]->type == GGML_TYPE_I32 && ggml_is_contiguous(op) && et_ggml_is_row_contiguous(op->src[0])) {
-                const int mode       = ggml_get_op_params_i32(op, 2);
-                const int ndims      = ggml_get_op_params_i32(op, 1);
-                const bool is_normal = mode == GGML_ROPE_TYPE_NORMAL;
-                const bool is_neox   = mode == GGML_ROPE_TYPE_NEOX;
-                const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
+                const int  mode             = ggml_get_op_params_i32(op, 2);
+                const int  ndims            = ggml_get_op_params_i32(op, 1);
+                const bool is_normal        = mode == GGML_ROPE_TYPE_NORMAL;
+                const bool is_neox          = mode == GGML_ROPE_TYPE_NEOX;
+                const bool is_imrope        = mode == GGML_ROPE_TYPE_IMROPE;
                 const bool zero_view_offset = op->src[0]->view_src == nullptr || op->src[0]->view_offs == 0;
-                const bool has_sections =
-                    ggml_get_op_params_i32(op, 11) > 0 || ggml_get_op_params_i32(op, 12) > 0 ||
-                    ggml_get_op_params_i32(op, 13) > 0;
+                const bool has_sections = ggml_get_op_params_i32(op, 11) > 0 || ggml_get_op_params_i32(op, 12) > 0 ||
+                                          ggml_get_op_params_i32(op, 13) > 0;
 
-                supported = zero_view_offset && ndims <= 512 &&
-                            (is_normal || (is_neox && ndims % 16 == 0) ||
-                             (is_imrope && ndims % 16 == 0 && has_sections));
+                supported =
+                    zero_view_offset && ndims <= 512 &&
+                    (is_normal || (is_neox && ndims % 16 == 0) || (is_imrope && ndims % 16 == 0 && has_sections));
             } else {
                 supported = false;
             }
