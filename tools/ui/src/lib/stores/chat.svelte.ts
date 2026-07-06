@@ -23,9 +23,12 @@ import { mcpStore } from '$lib/stores/mcp.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
+	singleModelName,
 	modelsStore,
 	selectedModelContextSize
 } from '$lib/stores/models.svelte';
+import { toolsStore } from '$lib/stores/tools.svelte';
+import { formatParameters } from '$lib/utils/formatters';
 import {
 	normalizeModelName,
 	filterByLeafNodeId,
@@ -1197,6 +1200,7 @@ class ChatStore {
 				timings: ChatMessageTimings | undefined,
 				toolCalls: import('$lib/types/api').ApiChatCompletionToolCall[] | undefined
 			) => {
+				this.logResponseStats(timings);
 				const updateData: Record<string, unknown> = {
 					content,
 					reasoningContent: reasoningContent || undefined,
@@ -1280,6 +1284,7 @@ class ChatStore {
 				return msg;
 			},
 			onFlowComplete: (finalTimings?: ChatMessageTimings) => {
+				this.logFlowSummary();
 				if (finalTimings) {
 					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 
@@ -1404,6 +1409,8 @@ class ChatStore {
 					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
 					await conversationsStore.updateCurrentNode(currentMessageId);
 					cleanupStreamingState();
+					this.logResponseStats(timings);
+					this.logFlowSummary();
 					if (onComplete) await onComplete(content);
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 
@@ -1942,6 +1949,9 @@ class ChatStore {
 
 						conversationsStore.updateConversationTimestamp();
 
+						this.logResponseStats(timings);
+						this.logFlowSummary();
+
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);
 						this.setProcessingState(msg.convId, null);
@@ -2284,6 +2294,272 @@ class ChatStore {
 			promptMs,
 			cacheTokens
 		};
+	}
+
+	private logResponseStats(timings: ChatMessageTimings | undefined): void {
+		const assistantMessages = (conversationsStore.activeMessages as DatabaseMessage[]).filter(
+			(m) => m.role === MessageRole.ASSISTANT
+		);
+		const index = assistantMessages.length;
+		const prompt = timings?.prompt_n ?? 0;
+		const predicted = timings?.predicted_n ?? 0;
+		console.log(
+			`[ChatStore] response #${index}: ${prompt} reading / ${predicted} generation`
+		);
+	}
+
+	private logFlowSummary(): void {
+		const messages = conversationsStore.activeMessages as DatabaseMessage[];
+		const assistantMessages = messages.filter((m) => m.role === MessageRole.ASSISTANT);
+		const agenticMessages = assistantMessages.filter(
+			(m) => m.timings?.agentic?.llm?.predicted_n != null
+		);
+
+		// Derive context from message data (activeProcessingState may be stale by now).
+		// For agentic flows, the accumulated agentic.llm values represent the full KV cache.
+		// Non-agentic: use lastMsg.prompt_n + cache_n + predicted_n (current request KV footprint).
+		// Include tools in contextUsed so the group title matches the gauge display.
+		let contextUsed = 0;
+		let tools = toolsStore.enabledToolsTokenCount ?? 0;
+		if (agenticMessages.length > 0) {
+			const lastAgentic = agenticMessages[agenticMessages.length - 1];
+			const agg = lastAgentic.timings?.agentic?.llm;
+			contextUsed = (agg?.prompt_n ?? 0) + (agg?.predicted_n ?? 0);
+		} else if (assistantMessages.length > 0) {
+			const lastMsg = assistantMessages[assistantMessages.length - 1];
+			contextUsed =
+				(lastMsg.timings?.prompt_n ?? 0) +
+				(lastMsg.timings?.cache_n ?? 0) +
+				(lastMsg.timings?.predicted_n ?? 0);
+		}
+		contextUsed += tools;
+		const contextTotal = modelsStore.getModelContextSize(singleModelName() ?? '');
+		const contextPercent = contextTotal && contextTotal > 0
+			? Math.round((contextUsed / contextTotal) * 100)
+			: null;
+
+		console.group(`[ChatStore] --- TOKEN AUDIT --- Context: ${formatParameters(contextUsed)} / ${contextTotal !== null ? formatParameters(contextTotal) : '—'} (${contextPercent !== null ? contextPercent + '%' : '?'})`);
+
+		// For agentic flows, use agentic.llm (accumulated across turns).
+		// Base timings.predicted_n/prompt_n are overwritten by buildFinalTimings
+		// with the last turn's values, so per-message summation would double-count.
+		let totalRead = 0;
+		let totalOutput = 0;
+		let agg: { prompt_n?: number; predicted_n?: number } | undefined;
+
+		if (agenticMessages.length > 0) {
+			const lastAgentic = agenticMessages[agenticMessages.length - 1];
+			agg = lastAgentic.timings?.agentic?.llm;
+			totalRead = agg?.prompt_n ?? 0;
+			totalOutput = agg?.predicted_n ?? 0;
+
+			// Log each message for reference
+			assistantMessages.forEach((msg, idx) => {
+				const t = msg.timings;
+				const modelLabel = msg.model ? ` [${msg.model}]` : '';
+				if (t?.agentic?.llm?.predicted_n != null) {
+					console.log(
+						`  #${idx + 1}: agentic (llm.predicted_n=${t.agentic.llm.predicted_n}, llm.prompt_n=${t.agentic.llm.prompt_n}) ${modelLabel}`
+					);
+				} else {
+					const read = (t?.prompt_n ?? 0) + (t?.cache_n ?? 0);
+					const output = t?.predicted_n ?? 0;
+					console.log(
+						`  #${idx + 1}: prompt=${t?.prompt_n ?? 0} cache=${t?.cache_n ?? 0} reading=${read} | output=${output} ${modelLabel}`
+					);
+				}
+			});
+		} else {
+			assistantMessages.forEach((msg, idx) => {
+				const t = msg.timings;
+				const read = (t?.prompt_n ?? 0) + (t?.cache_n ?? 0);
+				const output = t?.predicted_n ?? 0;
+				totalRead += read;
+				totalOutput += output;
+				const modelLabel = msg.model ? ` [${msg.model}]` : '';
+				console.log(
+					`  #${idx + 1}: prompt=${t?.prompt_n ?? 0} cache=${t?.cache_n ?? 0} reading=${read} | output=${output} ${modelLabel}`
+				);
+			});
+		}
+
+		// Current request values (what's in KV cache now)
+		const lastMsg = assistantMessages[assistantMessages.length - 1];
+		const currentRead = agenticMessages.length > 0
+			? (agg?.prompt_n ?? 0)
+			: (lastMsg?.timings
+				? (lastMsg.timings.prompt_n ?? 0) + (lastMsg.timings.cache_n ?? 0)
+				: 0);
+		const currentOutput = agenticMessages.length > 0
+			? (agg?.predicted_n ?? 0)
+			: (lastMsg?.timings?.predicted_n ?? 0);
+
+		// Cumulative totals
+		console.log('%cCumulative (all responses):', 'font-weight: bold');
+		console.log(`  Reading:   ${formatParameters(totalRead)} tok`);
+		console.log(`  Output:    ${formatParameters(totalOutput)} tok`);
+
+		// Current (in KV cache)
+		console.log('%cCurrent (KV cache):', 'font-weight: bold');
+		console.log(`  Reading:   ${formatParameters(currentRead)} tok`);
+		if (tools > 0) {
+			console.log(`  Tools:     ${formatParameters(tools)} tok`);
+		}
+		console.log(`  Output:    ${formatParameters(currentOutput)} tok`);
+		console.log(`  ─────────────────────`);
+		console.log(`  KV total:  ${formatParameters(currentRead + currentOutput + tools)} tok`);
+
+		console.groupEnd();
+	}
+
+	/**
+	 * Debug: full token usage audit for a conversation. Call from browser console:
+	 *   chatStore.debugTokenUsage()            // active conversation
+	 *   chatStore.debugTokenUsage('conv-id')   // specific conversation
+	 */
+	async debugTokenUsage(convIdOrUndefined?: string): Promise<void> {
+		let convId = convIdOrUndefined;
+		if (!convId) {
+			const active = conversationsStore.activeConversation;
+			if (!active) {
+				console.log('[Debug] No active conversation');
+				return;
+			}
+			convId = active.id;
+		}
+
+		const messages = await DatabaseService.getConversationMessages(convId as string);
+		const assistantMessages = messages.filter((m) => m.role === MessageRole.ASSISTANT);
+		const agenticMessages = assistantMessages.filter(
+			(m) => m.timings?.agentic?.llm?.predicted_n != null
+		);
+
+		// Derive context from message data. Include tools for consistency with gauge.
+		let contextUsed = 0;
+		let debugTools = toolsStore.enabledToolsTokenCount ?? 0;
+		if (agenticMessages.length > 0) {
+			const lastAgentic = agenticMessages[agenticMessages.length - 1];
+			const agg2 = lastAgentic.timings?.agentic?.llm;
+			contextUsed = (agg2?.prompt_n ?? 0) + (agg2?.predicted_n ?? 0);
+		} else if (assistantMessages.length > 0) {
+			const lastMsg = assistantMessages[assistantMessages.length - 1];
+			contextUsed =
+				(lastMsg.timings?.prompt_n ?? 0) +
+				(lastMsg.timings?.cache_n ?? 0) +
+				(lastMsg.timings?.predicted_n ?? 0);
+		}
+		contextUsed += debugTools;
+		const contextTotal = modelsStore.getModelContextSize(singleModelName() ?? '');
+		const contextPercent = contextTotal && contextTotal > 0
+			? Math.round((contextUsed / contextTotal) * 100)
+			: null;
+
+		console.group(`[Debug] Token audit: ${convId} (${assistantMessages.length} responses) Context: ${formatParameters(contextUsed)} / ${contextTotal !== null ? formatParameters(contextTotal) : '—'} (${contextPercent !== null ? contextPercent + '%' : '?'})`);
+
+		// Per-message breakdown
+		console.log('%cPer-message token usage:', 'font-weight: bold');
+		let totalRead = 0;
+		let totalOutput = 0;
+		let totalCache = 0;
+		let agg: { prompt_n?: number; predicted_n?: number } | undefined;
+
+		if (agenticMessages.length > 0) {
+			// Agentic: use accumulated values from the last agentic message
+			const lastAgentic = agenticMessages[agenticMessages.length - 1];
+			agg = lastAgentic.timings?.agentic?.llm;
+			totalRead = agg?.prompt_n ?? 0;
+			totalOutput = agg?.predicted_n ?? 0;
+
+			assistantMessages.forEach((msg, idx) => {
+				const t = msg.timings;
+				const modelLabel = msg.model ? ` [${msg.model}]` : '';
+				if (t?.agentic?.llm?.predicted_n != null) {
+					console.log(
+						`  #${idx + 1}: agentic (llm.predicted_n=${t.agentic.llm.predicted_n}, llm.prompt_n=${t.agentic.llm.prompt_n}) ${modelLabel}`
+					);
+				} else {
+					const read = (t?.prompt_n ?? 0) + (t?.cache_n ?? 0);
+					const output = t?.predicted_n ?? 0;
+					console.log(
+						`  #${idx + 1}: prompt=${t?.prompt_n ?? 0} cache=${t?.cache_n ?? 0} reading=${read} | output=${output} ${modelLabel}`
+					);
+				}
+			});
+		} else {
+			assistantMessages.forEach((msg, idx) => {
+				const t = msg.timings;
+				const read = (t?.prompt_n ?? 0) + (t?.cache_n ?? 0);
+				const output = t?.predicted_n ?? 0;
+				const cache = t?.cache_n ?? 0;
+				totalRead += read;
+				totalOutput += output;
+				totalCache += cache;
+
+				const modelLabel = msg.model ? ` [${msg.model}]` : '';
+				console.log(
+					`  #${idx + 1}: prompt=${t?.prompt_n ?? 0} cache=${cache} reading=${read} | output=${output} ${modelLabel}`
+				);
+			});
+		}
+
+		// Tools
+		const tools = toolsStore.enabledToolsTokenCount ?? 0;
+		if (tools > 0) {
+			console.log(`%cTools: ${formatParameters(tools)} tok`, 'color: #f59e0b');
+		}
+
+		// Calculated totals
+		const calculatedContextUsed = totalRead + totalOutput;
+
+		// Current request values (what's in KV cache now)
+		const lastMsg = assistantMessages[assistantMessages.length - 1];
+		const currentRead = agenticMessages.length > 0
+			? (agg?.prompt_n ?? 0)
+			: (lastMsg?.timings
+				? (lastMsg.timings.prompt_n ?? 0) + (lastMsg.timings.cache_n ?? 0)
+				: 0);
+		const currentOutput = agenticMessages.length > 0
+			? (agg?.predicted_n ?? 0)
+			: (lastMsg?.timings?.predicted_n ?? 0);
+
+		console.log('%cCumulative (all responses):', 'font-weight: bold');
+		console.log(`  Reading:   ${formatParameters(totalRead)} tok`);
+		console.log(`  Output:    ${formatParameters(totalOutput)} tok`);
+
+		console.log('%cCurrent (KV cache):', 'font-weight: bold');
+		if (tools > 0) {
+			console.log(`  Reading:   ${formatParameters(currentRead)} tok`);
+			console.log(`  Tools:     ${formatParameters(tools)} tok`);
+		} else {
+			console.log(`  Reading:   ${formatParameters(currentRead)} tok`);
+		}
+		console.log(`  Output:    ${formatParameters(currentOutput)} tok`);
+
+		// Compare with live gauge values (if server state is still available)
+		const serverContext = this.activeProcessingState?.contextUsed ?? 0;
+		console.log('%cLive gauge values:', 'font-weight: bold');
+		console.log(`  contextUsed (server):        ${formatParameters(serverContext)} tok`);
+		console.log(`  contextTotal (model):        ${formatParameters(
+			isRouterMode()
+				? selectedModelContextSize() ?? 'unknown'
+				: singleModelName()
+					? modelsStore.getModelContextSize(singleModelName()!)
+					: 'unknown'
+		)} tok`);
+
+		if (serverContext > 0 && currentRead > 0) {
+			const diff = serverContext - (currentRead + currentOutput + tools);
+			if (diff !== 0) {
+				console.log(
+					`  Server vs calculated delta: ${formatParameters(diff)} tok`,
+					diff > 0 ? '(system prompt + overhead)' : ''
+				);
+			} else {
+				console.log('  ✓ Server and calculated context match');
+			}
+		}
+
+		console.groupEnd();
 	}
 
 	restoreProcessingStateFromMessages(messages: DatabaseMessage[], conversationId: string): void {
