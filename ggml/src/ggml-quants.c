@@ -7973,7 +7973,38 @@ size_t quantize_iq1_bn(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst
 }
 
 // Thread work structs for parallel K-means
+// Cross-platform threading shim: use pthreads on POSIX and a thin Win32
+// wrapper elsewhere (mirrors the shim in ggml-cpu.c) so this file also
+// builds on Windows, where <pthread.h> is unavailable.
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+typedef HANDLE pthread_t;
+typedef DWORD  thread_ret_t;
+static int pthread_create(pthread_t * out, void * unused, thread_ret_t (*func)(void *), void * arg) {
+    (void) unused;
+    HANDLE handle = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE) func, arg, 0, NULL);
+    if (handle == NULL) {
+        return -1;
+    }
+    *out = handle;
+    return 0;
+}
+static int pthread_join(pthread_t thread, void * unused) {
+    (void) unused;
+    int ret = (int) WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+    return ret;
+}
+#else
 #include <pthread.h>
+typedef void * thread_ret_t;
+#endif
 
 // Worker for K-means++ min_dist update (parallel over samples)
 typedef struct {
@@ -7985,7 +8016,7 @@ typedef struct {
     int dim;
 } iq1bn_kmpp_work_t;
 
-static void * iq1bn_kmpp_worker(void * arg) {
+static thread_ret_t iq1bn_kmpp_worker(void * arg) {
     iq1bn_kmpp_work_t * w = (iq1bn_kmpp_work_t *)arg;
     const float * cc = w->centroid;
     const int dim = w->dim;
@@ -8000,7 +8031,7 @@ static void * iq1bn_kmpp_worker(void * arg) {
         }
         if (dist < w->min_dist[i]) w->min_dist[i] = dist;
     }
-    return NULL;
+    return (thread_ret_t) 0;
 }
 
 // Worker for K-means iteration (parallel over samples)
@@ -8018,7 +8049,7 @@ typedef struct {
     int changed;
 } iq1bn_kmeans_work_t;
 
-static void * iq1bn_kmeans_worker(void * arg) {
+static thread_ret_t iq1bn_kmeans_worker(void * arg) {
     iq1bn_kmeans_work_t * w = (iq1bn_kmeans_work_t *)arg;
     const int K = w->K;
     const int dim = w->dim;
@@ -8056,7 +8087,7 @@ static void * iq1bn_kmeans_worker(void * arg) {
         w->cwt[best_c] += wt;
     }
     w->changed = changed;
-    return NULL;
+    return (thread_ret_t) 0;
 }
 
 // K-means codebook training (K=4096, random init)
