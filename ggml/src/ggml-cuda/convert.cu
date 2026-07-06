@@ -632,6 +632,7 @@ void ggml_cuda_set_q3kpt_levels(const float * levels, cudaStream_t stream) {
 }
 
 void ggml_cuda_set_q2kpt_levels(const float * levels, size_t n_levels, cudaStream_t stream) {
+    GGML_UNUSED(n_levels);
     // levels is a device pointer to the per-block levels array
     // q2kpt_levels_cuda_ptr is a device symbol that holds the pointer
     CUDA_CHECK(cudaMemcpyToSymbolAsync(q2kpt_levels_cuda_ptr, &levels, sizeof(float *), 0, cudaMemcpyHostToDevice, stream));

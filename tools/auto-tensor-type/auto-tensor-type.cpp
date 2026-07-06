@@ -40,6 +40,11 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(_WIN32)
+// strcasecmp is POSIX; MSVC/clang-windows provide _stricmp via the CRT.
+#define strcasecmp _stricmp
+#endif
+
 // ============================================================================
 // Section 1: Extern C declarations for special quant types
 // ============================================================================

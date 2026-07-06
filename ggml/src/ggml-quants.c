@@ -8169,8 +8169,10 @@ void iq1bn_train_codebook(const float * data, int64_t nrow, int64_t n_per_row,
     }
 
     // Full K-means++ initialization with parallel min_dist update
-    if (nthread < 1) nthread = 1;
+    // Clamp to n_samples first, then floor to 1 so nthread is provably >= 1
+    // (a negative n_samples must not leak a negative count into calloc()).
     if (nthread > n_samples) nthread = n_samples;
+    if (nthread < 1) nthread = 1;
 
     // Set up thread pool for K-means++ min_dist update
     pthread_t * threads = (pthread_t *)calloc(nthread, sizeof(pthread_t));

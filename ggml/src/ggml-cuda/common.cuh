@@ -607,10 +607,13 @@ template <typename T> struct block_reduce_policy<block_reduce_method::MAX, T> {
     }
 
     static __device__ T sentinel() {
+        // Use the lowest finite value of each type as the max-reduction identity.
+        // Avoids the INFINITY macro, which is rejected under -ffast-math /
+        // -ffinite-math-only (e.g. the HIP build) via -Werror,-Wnan-infinity-disabled.
         if constexpr (std::is_same_v<T, float>) {
-            return -INFINITY;
+            return -FLT_MAX;
         } else if constexpr (std::is_same_v<T, half2>) {
-            return make_half2(-INFINITY, -INFINITY);
+            return make_half2(-65504.0f, -65504.0f); // -HALF_MAX
         } else {
             static_assert(ggml_cuda_dependent_false_v<T>, "Unsupported type for block reduce max");
         }
