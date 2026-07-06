@@ -314,7 +314,6 @@ def _wait_for_sse_event(collected: list, event_type: str, model: str, timeout: i
     return False
 
 
-@pytest.mark.skip(reason="sse_thread sometimes hangs on GH actions, to be investigated")
 def test_router_download_model():
     """Case 1: download a model, verify SSE events and GET /models."""
     global server
@@ -358,7 +357,6 @@ def test_router_download_model():
     assert MODEL_DOWNLOAD_ID in ids, f"{MODEL_DOWNLOAD_ID} not found in /models after download"
 
 
-@pytest.mark.skip(reason="sse_thread sometimes hangs on GH actions, to be investigated")
 def test_router_delete_model():
     """Case 2: delete the downloaded model, verify it disappears from GET /models."""
     global server
