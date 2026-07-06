@@ -17386,9 +17386,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                         default:
                             return false;
                     }
-                } else {
-                    return false;
                 }
+                return false;
             }
         case GGML_OP_CONT:
         case GGML_OP_CPY:
