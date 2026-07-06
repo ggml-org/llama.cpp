@@ -62,6 +62,7 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <shared_mutex>
 #include <mutex>
 #include <future>
@@ -2348,6 +2349,7 @@ static void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
 static constexpr uint32_t kSpvOpCooperativeMatrixLoadTensorNV = 5367;
 static constexpr uint32_t kSpvCapabilityCooperativeMatrixDecodeVectorNV = 5447;
 static constexpr uint32_t kSpvTensorAddressingDecodeVectorFuncBit = 0x4;
+static constexpr uint32_t kSpvMemoryAccessNonTemporalMask = 0x0040;
 
 // Remove SPV_NV_cooperative_matrix_decode_vector usage from a SPIR-V module so it
 // can be loaded on drivers that only support SPV_NV_cooperative_matrix2. Drops the
@@ -2554,6 +2556,110 @@ static bool ggml_vk_roll_bk_loop(const uint32_t * code, size_t word_count, std::
     return true;
 }
 
+
+// Add SPIR-V NonTemporal (SLC=1) memory-access hints to loads that read from the
+// weight buffer (descriptor Binding 0). GLSL has no way to express NonTemporal, but
+// RADV maps the SPIR-V NonTemporal bit to SLC=1 on the underlying memory ops, which
+// on RDNA2 streams weight data through L2 without polluting it. Returns true when the
+// module was modified (and `out` holds the patched copy); false otherwise (out untouched).
+static bool ggml_vk_mark_nontemporal_weight_loads(const uint32_t * code, size_t word_count, std::vector<uint32_t> & out) {
+    if (word_count < 5) {
+        return false;
+    }
+
+    // --- Pass 1: find the variable(s) decorated Binding 0 and the transitive set of
+    //             pointer IDs derived from those variables via OpAccessChain family. ---
+    std::unordered_set<uint32_t> binding0_vars;
+    for (size_t pos = 5; pos < word_count; ) {
+        uint32_t word = code[pos];
+        uint32_t wc   = word >> spv::WordCountShift;
+        uint32_t op   = word & spv::OpCodeMask;
+        GGML_ASSERT(wc > 0 && pos + wc <= word_count);
+        if (op == spv::OpDecorate && wc >= 4 &&
+            code[pos + 2] == spv::DecorationBinding && code[pos + 3] == 0) {
+            binding0_vars.insert(code[pos + 1]);
+        }
+        pos += wc;
+    }
+
+    if (binding0_vars.empty()) {
+        return false;
+    }
+
+    std::unordered_set<uint32_t> weight_ptrs(binding0_vars.begin(), binding0_vars.end());
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (size_t pos = 5; pos < word_count; ) {
+            uint32_t word = code[pos];
+            uint32_t wc   = word >> spv::WordCountShift;
+            uint32_t op   = word & spv::OpCodeMask;
+            GGML_ASSERT(wc > 0 && pos + wc <= word_count);
+            if ((op == spv::OpAccessChain ||
+                 op == spv::OpInBoundsAccessChain ||
+                 op == spv::OpPtrAccessChain) && wc >= 4) {
+                uint32_t result_id = code[pos + 2];
+                uint32_t base_id   = code[pos + 3];
+                if (weight_ptrs.count(base_id) && !weight_ptrs.count(result_id)) {
+                    weight_ptrs.insert(result_id);
+                    changed = true;
+                }
+            }
+            pos += wc;
+        }
+    }
+
+    // --- Pass 2: OR the NonTemporal bit into every OpLoad reading a weight pointer. ---
+    out.clear();
+    out.reserve(word_count + 16);
+    out.insert(out.end(), code, code + 5);
+
+    bool modified = false;
+    size_t run_start = 5;
+    auto flush_run = [&](size_t up_to) {
+        if (up_to > run_start) {
+            out.insert(out.end(), code + run_start, code + up_to);
+        }
+    };
+
+    for (size_t pos = 5; pos < word_count; ) {
+        uint32_t word = code[pos];
+        uint32_t wc   = word >> spv::WordCountShift;
+        uint32_t op   = word & spv::OpCodeMask;
+        GGML_ASSERT(wc > 0 && pos + wc <= word_count);
+
+        if (op == spv::OpLoad && wc >= 4 && weight_ptrs.count(code[pos + 3])) {
+            flush_run(pos);
+            if (wc == 4) {
+                out.push_back((5u << spv::WordCountShift) | spv::OpLoad);
+                out.push_back(code[pos + 1]);
+                out.push_back(code[pos + 2]);
+                out.push_back(code[pos + 3]);
+                out.push_back(kSpvMemoryAccessNonTemporalMask);
+            } else {
+                out.insert(out.end(), code + pos, code + pos + wc);
+                size_t mask_idx = out.size() - wc + 4;
+                out[mask_idx] |= kSpvMemoryAccessNonTemporalMask;
+            }
+            modified = true;
+            pos += wc;
+            run_start = pos;
+            continue;
+        }
+
+        pos += wc;
+    }
+
+    if (!modified) {
+        return false;
+    }
+
+    VK_LOG_DEBUG("ggml_vk_mark_nontemporal_weight_loads: patched " << weight_ptrs.size() << " weight pointer(s)");
+
+    flush_run(word_count);
+    return true;
+}
+
 static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipeline, size_t spv_size, const void* spv_data, const std::string entrypoint,
                                          uint32_t parameter_count, std::array<uint32_t, 3> wg_denoms, std::vector<uint32_t> specialization_constants,
                                          bool disable_robustness, bool require_full_subgroups, uint32_t required_subgroup_size) {
@@ -2652,6 +2758,24 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         }
     }
 #endif
+
+
+    // Add NonTemporal (SLC=1) hints to weight-buffer loads on AMD for L2 cache
+    // optimization. Gated behind GGML_VK_NONTEMPORAL_WEIGHTS for A/B testing, and
+    // restricted to the pipelines that stream large weight tensors.
+    if (device->vendor_id == VK_VENDOR_ID_AMD &&
+        getenv("GGML_VK_NONTEMPORAL_WEIGHTS") &&
+        (pipeline->name.find("matmul") != std::string::npos ||
+         pipeline->name.find("mul_mat_vec") != std::string::npos ||
+         pipeline->name.find("flash_attn") != std::string::npos)) {
+        const uint32_t * src   = spirv.empty() ? reinterpret_cast<const uint32_t *>(spv_data) : spirv.data();
+        size_t           src_n = spirv.empty() ? spv_size / sizeof(uint32_t) : spirv.size();
+        std::vector<uint32_t> patched;
+        if (ggml_vk_mark_nontemporal_weight_loads(src, src_n, patched)) {
+            spirv = std::move(patched);
+            shader_module_create_info = vk::ShaderModuleCreateInfo({}, spirv.size() * sizeof(uint32_t), spirv.data());
+        }
+    }
 
     pipeline->shader_module = device->device.createShaderModule(shader_module_create_info);
 
