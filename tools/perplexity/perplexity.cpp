@@ -348,6 +348,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
 
     int count = 0;
     double nll = 0.0;
+    double nll2 = 0.0;
 
     const int n_seq = std::max(1, n_batch / n_ctx);
     LOG_INF("%s: computing over %d chunks, n_ctx=%d, batch_size=%d, n_seq=%d\n", __func__, n_chunk, n_ctx, n_batch, n_seq);
@@ -426,7 +427,9 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
             logit_history[start + j + 1] = tok_logits[tokens[start + j + 1]];
             prob_history[start + j + 1]  = prob;
 
-            nll += -std::log(prob);
+            const double log_p = -std::log(prob);
+            nll += log_p;
+            nll2 += log_p * log_p;
             ++count;
         }
         // perplexity is e^(average negative log-likelihood)
@@ -438,7 +441,18 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
     }
     LOG("\n");
 
-    return {tokens, std::exp(nll / count), logit_history, prob_history};
+    double final_nll = nll / count;
+    double final_nll2 = nll2 / count;
+    const double ppl = exp(final_nll);
+    final_nll2 -= final_nll * final_nll;
+    if (final_nll2 > 0) {
+        final_nll2 = std::sqrt(final_nll2 / (count - 1));
+        LOG_INF("Final estimate: PPL = %.4lf +/- %.5lf\n", ppl, final_nll2 * ppl);
+    } else {
+        LOG_ERR("Unexpected negative standard deviation of log(prob)\n");
+    }
+
+    return {tokens, ppl, logit_history, prob_history};
 }
 
 static results_perplexity perplexity(llama_context * ctx, const common_params & params, const int32_t n_ctx) {
