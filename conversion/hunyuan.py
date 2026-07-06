@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from pathlib import Path
 from typing import Callable, Iterable, TYPE_CHECKING
@@ -286,6 +287,112 @@ class HunYuanModel(TextModel):
                 return
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("HYV3ForCausalLM")
+class HYV3Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.HY_V3
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # block_count includes the NextN/MTP prediction layer
+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_vocab(self):
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        # The stock chat template builds special-token names with '<...{}...>'.format(HYTK)
+        # where HYTK is a literal constant; jinja engines without str.format() (e.g. minja
+        # in llama.cpp) fail to parse it. Resolve those calls statically before embedding.
+        if isinstance(special_vocab.chat_template, str) and ".format(HYTK)" in special_vocab.chat_template:
+            hytk = re.search(r"set\s+HYTK\s*=\s*(['\"])(.*?)\1", special_vocab.chat_template)
+            if hytk is not None:
+                special_vocab.chat_template = re.sub(
+                    r"(['\"])([^'\"]*)\{\}([^'\"]*)\1\.format\(HYTK\)",
+                    lambda m: f"{m.group(1)}{m.group(2)}{hytk.group(2)}{m.group(3)}{m.group(1)}",
+                    special_vocab.chat_template,
+                )
+            if ".format(HYTK)" in special_vocab.chat_template:
+                logger.warning("chat template still contains .format(HYTK) calls after static resolution; "
+                               "the embedded template will not parse with jinja engines lacking str.format()")
+        special_vocab.add_to_gguf(self.gguf_writer)
+        # EOS stays <|hy_eos|> (eos_token_id, ends assistant turns per the chat template);
+        # eod_token_id marks document boundaries and is registered as an additional stop.
+        if (eod_token_id := self.hparams.get("eod_token_id")) is not None:
+            self.gguf_writer.add_eot_token_id(eod_token_id)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+
+        # Full rotation RoPE (no partial_rotary_factor)
+        if (head_dim := hparams.get("head_dim")) is None:
+            head_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+        self.gguf_writer.add_rope_dimension_count(head_dim)
+
+        # both keys are read as required by the C++ loader: fail here rather than at load time
+        self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_shared_count(hparams["num_shared_experts"])
+
+        # Leading dense block count: prefer first_k_dense_replace, fall back to mlp_layer_types
+        if (first_k_dense := hparams.get("first_k_dense_replace")) is not None:
+            self.gguf_writer.add_leading_dense_block_count(first_k_dense)
+        elif (mlp_layer_types := hparams.get("mlp_layer_types")) is not None:
+            dense_count = next((i for i, t in enumerate(mlp_layer_types) if t != "dense"), len(mlp_layer_types))
+            self.gguf_writer.add_leading_dense_block_count(dense_count)
+
+        # Router: sigmoid gating, normalised weights, scaling factor 2.826
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        if (router_scale := hparams.get("router_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(router_scale)
+        if (route_norm := hparams.get("route_norm")) is not None:
+            self.gguf_writer.add_expert_weights_norm(route_norm)
+
+        # NextN/MTP prediction layers
+        if (num_nextn := hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(num_nextn)
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # lm_head is untied (tie_word_embeddings=false), no need to skip it
+        # Accumulate and stack per-expert tensors into a single 3D tensor per layer
+        if "mlp.experts" in name:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+                    data_torch = torch.stack(datas, dim=0)
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                    yield from super().modify_tensors(data_torch, merged_name, bid)
+                return
+            else:
+                return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")

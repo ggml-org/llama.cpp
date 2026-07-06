@@ -437,6 +437,19 @@ class ModelBase:
                         tensors_to_remove.append(name)
                         if self._fp8_as_q8:
                             self._fp8_dequantized.add(weight_name)
+                    # per-tensor static FP8 (e.g. AngelSlim: Hy3-FP8): scalar weight_scale multiplier
+                    if name.endswith(".weight_scale"):
+                        weight_name = name.removesuffix("_scale")
+                        w = self.model_tensors[weight_name]
+                        s = self.model_tensors[name]
+                        # scalar scale: never block-expanded, even if the quant config
+                        # declares weight_block_size for its block-wise tensors
+                        self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), None)
+                        tensors_to_remove.append(name)
+                        if self._fp8_as_q8:
+                            self._fp8_dequantized.add(weight_name)
+                    if name.endswith(".input_scale"):  # static activation scale, unused
+                        tensors_to_remove.append(name)
                     if name.endswith(".activation_scale"):  # unused
                         tensors_to_remove.append(name)
                     if name.endswith("_activation_scale"):  # Mistral-Small-4-119B-2602, unused
@@ -1248,6 +1261,9 @@ class TextModel(ModelBase):
                 pass
             elif rope_type.lower() == "llama3":
                 # Handled in generate_extra_tensors
+                pass
+            elif rope_type == "default":
+                # standard rope_parameters value for plain RoPE without scaling
                 pass
             else:
                 logger.warning(f"Unknown RoPE type: {rope_type}")

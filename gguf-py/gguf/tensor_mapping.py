@@ -2415,6 +2415,13 @@ class TensorNameMap:
 
     # architecture-specific block mappings
     arch_block_mappings_cfg: dict[MODEL_ARCH, dict[MODEL_TENSOR, tuple[str, ...]]] = {
+        # hy-v3 reuses final_layernorm for the NextN shared head norm; keep the
+        # mapping arch-scoped because bailingmoe2 maps the same source name to FFN_NORM
+        MODEL_ARCH.HY_V3: {
+            MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
+                "model.layers.{bid}.final_layernorm",
+            ),
+        },
         MODEL_ARCH.ARCTIC: {
             MODEL_TENSOR.FFN_NORM: (
                 "model.layers.{bid}.residual_layernorm",
@@ -2437,7 +2444,9 @@ class TensorNameMap:
             for key in keys:
                 self.mapping[key] = (tensor, tensor_name)
         if arch in self.arch_block_mappings_cfg:
-            self.block_mappings_cfg.update(self.arch_block_mappings_cfg[arch])
+            # merge into an instance-level copy: updating the class-level dict in place
+            # would leak arch-specific mappings into maps built later in the same process
+            self.block_mappings_cfg = {**self.block_mappings_cfg, **self.arch_block_mappings_cfg[arch]}
         for bid in range(n_blocks):
             for tensor, keys in self.block_mappings_cfg.items():
                 if tensor not in MODEL_TENSORS[arch]:

@@ -86,6 +86,7 @@ enum llm_arch {
     LLM_ARCH_CHATGLM,
     LLM_ARCH_GLM4,
     LLM_ARCH_GLM4_MOE,
+    LLM_ARCH_HY_V3,
     LLM_ARCH_GLM_DSA,
     LLM_ARCH_BITNET,
     LLM_ARCH_T5,
