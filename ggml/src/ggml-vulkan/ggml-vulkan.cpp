@@ -3673,8 +3673,14 @@ static std::vector<uint32_t> calc_specialization_constant_intel_xe2_warptile(con
     GGML_ASSERT(current.size() == 12); // assuming *_warptile constants
     std::vector<uint32_t> output = current;
     // replacing subgroup_size_8 with current subgroup size
-    output[4] = config.subgroup_size;
-    output[10] = config.subgroup_size;
+    output[4] = config.subgroup_size; // WM
+    output[10] = config.subgroup_size; // WARP
+    // Recalculate BLOCK_SIZE to maintain NUM_WARPS = (BM/WM) * (BN/WN).
+    const uint32_t BM = current[1];
+    const uint32_t BN = current[2];
+    const uint32_t WN = current[5];
+    const uint32_t num_warps = (BM / output[4]) * (BN / WN);
+    output[0] = num_warps * output[10];
     return output;
 }
 
