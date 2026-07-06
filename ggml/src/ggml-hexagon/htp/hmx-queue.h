@@ -18,7 +18,12 @@ extern "C" {
 #endif
 
 #define HMX_QUEUE_THREAD_STACK_SIZE (16 * 1024)
-#define HMX_QUEUE_POLL_COUNT        2000
+
+#if __HVX_ARCH__ > 79
+#define HMX_QUEUE_POLL_COUNT 2000
+#else
+#define HMX_QUEUE_POLL_COUNT 1
+#endif
 
 typedef void (*hmx_queue_func)(void *);
 

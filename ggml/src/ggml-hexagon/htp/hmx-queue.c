@@ -6,6 +6,7 @@
 
 #include <qurt_thread.h>
 #include <qurt_futex.h>
+#include <qurt_hvx.h>
 
 #include <HAP_compute_res.h>
 
@@ -66,14 +67,19 @@ static void hmx_queue_thread(void * arg) {
 
     bool killed = false;
 
-    unsigned int poll_cnt  = 1; // HMX_QUEUE_POLL_COUNT;
+    unsigned int poll_cnt  = HMX_QUEUE_POLL_COUNT;
     unsigned int prev_seqn = 0;
     while (!killed) {
         unsigned int seqn = atomic_load(&q->seqn);
         if (seqn == prev_seqn) {
+            // drop HVX context while spinning
+            if (poll_cnt > 1 && poll_cnt == HMX_QUEUE_POLL_COUNT) {
+                qurt_hvx_unlock();
+            }
             if (--poll_cnt) { hex_pause(); continue; }
             FARF(HIGH, "hmx-queue-thread: sleeping");
             qurt_futex_wait(&q->seqn, prev_seqn);
+            poll_cnt = HMX_QUEUE_POLL_COUNT;
             continue;
         }
         prev_seqn = seqn;
