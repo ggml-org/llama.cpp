@@ -6273,6 +6273,19 @@ static inline bool use_flat_gemv_for_large_m_q6_K(const ggml_tensor *tensor) {
     // threshold is well above typical hidden/FFN dims, but below typical vocab sizes.
     // q6_K flat gemv is worse for smaller K; 2048 seems to be a reasonable threshold.
     // note that this forces large M weights to use LM GEMM.
+    // The noshuffle (transposed-weight) layout packs 2 rows per 32-bit texel and the
+    // gemv reads it with a ne01/2 texel stride and an exact-cover dispatch of
+    // ceil(ne01/2 / 64)*64 work-items with no store guard; the gemm uses 4-row tiles.
+    // It is therefore only correct for ne01 % 128 == 0: an odd ne01 (e.g. granitemoe
+    // lm_head [1536, 49155] -- odd vocab) truncates the texel stride, misaligning every
+    // odd column of the transposed layout (gross garbage) and dropping the last row;
+    // other non-multiples over-dispatch and write past the end of dst. Route such
+    // tensors to the flat GEMV + regular convert; the matching GEMM (ne1>1) falls back
+    // to CPU (see supports_op). All standard even-vocab/hidden dims are multiples of
+    // 128 and keep the noshuffle path.
+    if ((tensor->ne[1] % 128 != 0) && tensor->ne[2] == 1 && tensor->ne[3] == 1) {
+        return true;
+    }
     return tensor->ne[1] >= 32768 && tensor->ne[0] >= 2048 && tensor->ne[2] == 1 && tensor->ne[3] == 1;
 }
 
@@ -6479,6 +6492,15 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                        op->src[0]->type == GGML_TYPE_Q4_K  ||
                        op->src[0]->type == GGML_TYPE_Q5_K  ||
                        op->src[0]->type == GGML_TYPE_Q6_K) {
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+                // q6_K GEMM (ne1>1) for weights routed off the noshuffle path because
+                // ne01 % 128 != 0 (see use_flat_gemv_for_large_m_q6_K): the flat convert
+                // has no verified small-batch GEMM kernel for these shapes (l4_lm drifts
+                // at small K). Fall back to CPU; decode (ne1==1) stays on the flat GEMV.
+                if (op->src[0]->type == GGML_TYPE_Q6_K && op->ne[1] > 1 && op->src[0]->ne[1] % 128 != 0) {
+                    return false;
+                }
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
                 return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
             } else if (op->src[0]->type == GGML_TYPE_Q8_0) {
                 return op->src[1]->type == GGML_TYPE_F32;
