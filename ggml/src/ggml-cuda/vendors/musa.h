@@ -62,6 +62,7 @@
 #define cudaGetErrorString musaGetErrorString
 #define cudaGetLastError musaGetLastError
 #define cudaGetSymbolAddress musaGetSymbolAddress
+#define cudaMemcpyToSymbolAsync musaMemcpyToSymbolAsync
 #define cudaHostRegister musaHostRegister
 #define cudaHostRegisterPortable musaHostRegisterPortable
 #define cudaHostRegisterReadOnly musaHostRegisterReadOnly

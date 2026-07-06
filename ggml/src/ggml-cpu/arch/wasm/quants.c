@@ -239,6 +239,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     UNUSED(bx);
     UNUSED(by);
     UNUSED(bs);
+    GGML_UNUSED(levels);
 
     const block_q4_0 * GGML_RESTRICT x = vx;
     const block_q8_0 * GGML_RESTRICT y = vy;
