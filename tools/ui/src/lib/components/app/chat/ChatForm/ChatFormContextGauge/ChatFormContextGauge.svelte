@@ -69,55 +69,101 @@
 
 	let contextUsed = $derived(processingState.processingState?.contextUsed ?? 0);
 
-	// Aggregate reading tokens, output tokens, and average generation speed over
-	// every assistant message in the active conversation so the gauge reflects
-	// the cumulative LLM work across the whole conversation, not just the most
-	// recent step. For agentic messages we use the agentic.llm rollup (covers
-	// every tool-loop iteration); for plain messages the top-level timings
-	// already describe the full turn. The live processingState is added on top
-	// during streaming — chat.sendMessage.onComplete always clears
-	// processingState on stream end, so mid-flight the live values for the
-	// current running turn never overlap with any message's persisted timings
-	// (and the agentic.llm rollup only sums COMPLETED turns anyway).
-	let conversationStats = $derived.by(() => {
+	// Two scopes for the token-usage breakdown so the rows line up with the
+	// context bar AND also reveal how much LLM compute the full run spent:
+	//   - currentStats: the most recent assistant message's last-iter prefill
+	//     (prompt_n + cache_n). For agentic flows that's the LAST tool-loop
+	//     iteration; for plain flows it's the single call. Matches
+	//     contextUsed - last iter output, so the user can sanity-check the
+	//     gauge against the breakdown.
+	//   - cumulativeStats: sum across every assistant message × tool-loop
+	//     iteration. For agentic messages prefer the agentic.llm rollup
+	//     (covers every iter); for plain messages the top-level timings
+	//     already describe the full turn. Avg speed uses this scope since
+	//     it makes more sense as a run-wide throughput.
+	//
+	// Live processingState feeds both. For current we MAX the last persisted
+	// value with the live reading because the in-flight iter hasn't been
+	// written yet; for cumulative we ADD the live on top of the persisted
+	// rollup (the rollup only sums COMPLETED iters per agentic.svelte.ts,
+	// so there's no double-count with the live in-flight value).
+	let currentStats = $derived.by(() => {
 		const messages = activeMessages() as DatabaseMessage[];
 		const live = processingState.processingState;
 		const isLive = isLoading() || isChatStreaming();
 
-		let readTokens = 0;
-		let outputTokens = 0;
+		let read = 0;
+		let output = 0;
+
+		// Walk backward to the most recent assistant message with timings so
+		// an active stream on a fresh message falls back to the prior turn;
+		// the live override below still drives the value when nothing is
+		// persisted yet.
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const m = messages[i];
+			if (m.role !== MessageRole.ASSISTANT) continue;
+			const t = m.timings;
+			if (!t) continue;
+			// Top-level timings are the LAST iter's values regardless of
+			// whether the agentic rollup is attached (buildFinalTimings sets
+			// prompt_n from capturedTimings, see agentic.svelte.ts). The
+			// agentic.llm fields sum across iters and would over-report here.
+			read = (t.prompt_n ?? 0) + (t.cache_n ?? 0);
+			output = t.predicted_n ?? 0;
+			break;
+		}
+
+		if (isLive && live) {
+			// promptTokens grows during the read phase, but SSE also emits
+			// prompt_progress events separately from timings, so during the
+			// pure reading phase promptTokens can be 0 even though reading is
+			// actively progressing. fall back to promptProgress.processed in
+			// that case (canonical server-reported read counter).
+			const livePromptProgress = live.promptProgress?.processed ?? 0;
+			const liveRead = Math.max(live.promptTokens ?? 0, livePromptProgress);
+			if (liveRead > 0) read = Math.max(read, liveRead);
+			const liveOut = live.outputTokensUsed ?? 0;
+			if (liveOut > 0) output = Math.max(output, liveOut);
+		}
+
+		return { read, output };
+	});
+
+	let cumulativeStats = $derived.by(() => {
+		const messages = activeMessages() as DatabaseMessage[];
+		const live = processingState.processingState;
+		const isLive = isLoading() || isChatStreaming();
+
+		let read = 0;
+		let output = 0;
 		let outputMs = 0;
 
 		for (const m of messages) {
 			if (m.role !== MessageRole.ASSISTANT) continue;
-			const timings = m.timings;
-			if (!timings) continue;
+			const t = m.timings;
+			if (!t) continue;
 
-			const llm = timings.agentic?.llm;
-			if (llm?.prompt_n != null || llm?.predicted_n != null || llm?.predicted_ms != null) {
-				readTokens += llm?.prompt_n ?? 0;
-				outputTokens += llm?.predicted_n ?? 0;
+			const llm = t.agentic?.llm;
+			if (
+				t.agentic &&
+				(llm?.prompt_n != null || llm?.predicted_n != null || llm?.predicted_ms != null)
+			) {
+				read += llm?.prompt_n ?? 0;
+				output += llm?.predicted_n ?? 0;
 				outputMs += llm?.predicted_ms ?? 0;
 			} else {
-				readTokens += timings.prompt_n ?? 0;
-				outputTokens += timings.predicted_n ?? 0;
-				outputMs += timings.predicted_ms ?? 0;
+				read += t.prompt_n ?? 0;
+				output += t.predicted_n ?? 0;
+				outputMs += t.predicted_ms ?? 0;
 			}
 		}
 
-		// Live contribution from the in-flight turn: promptTokens grows during
-		// the read phase, outputTokensUsed grows during the gen phase. SSE
-		// emits prompt_progress events separately from timings, so during the
-		// pure reading phase promptTokens can be 0 even though reading is
-		// actively progressing — fall back to promptProgress.processed in
-		// that case (it's the canonical server-reported read counter). Max
-		// keeps us from double-adding when both are populated.
 		if (isLive && live) {
 			const livePromptProgress = live.promptProgress?.processed ?? 0;
 			const liveRead = Math.max(live.promptTokens ?? 0, livePromptProgress);
+			if (liveRead > 0) read += liveRead;
 			const liveOut = live.outputTokensUsed ?? 0;
-			if (liveRead > 0) readTokens += liveRead;
-			if (liveOut > 0) outputTokens += liveOut;
+			if (liveOut > 0) output += liveOut;
 			const liveTps = live.tokensPerSecond ?? 0;
 			if (liveTps > 0 && liveOut > 0) {
 				outputMs += (liveOut / liveTps) * 1000;
@@ -125,13 +171,14 @@
 		}
 
 		const averageTokensPerSecond =
-			outputMs > 0 && outputTokens > 0 ? (outputTokens / outputMs) * 1000 : null;
+			outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
 
-		return { readTokens, outputTokens, averageTokensPerSecond };
+		return { read, output, averageTokensPerSecond };
 	});
 
-	// Per-message output: do NOT show (replaced by conversationStats.outputTokens).
-	// Per-message t/s: do NOT show (replaced by conversationStats.averageTokensPerSecond).
+	// Per-message output: do NOT show (replaced by currentStats.output /
+	// cumulativeStats.output).
+	// Per-message t/s: do NOT show (replaced by cumulativeStats.averageTokensPerSecond).
 	// Context: shown elsewhere in the hover card; speculative decoding is server-level
 	// and worth keeping as a single flag.
 	let transientDetails = $derived(
@@ -176,9 +223,11 @@
 
 	let hasDetails = $derived(
 		enabledToolsTokenCount !== null && enabledToolsTokenCount > 0 ||
-			conversationStats.readTokens > 0 ||
-			conversationStats.outputTokens > 0 ||
-			conversationStats.averageTokensPerSecond !== null ||
+			currentStats.read > 0 ||
+			cumulativeStats.read > 0 ||
+			currentStats.output > 0 ||
+			cumulativeStats.output > 0 ||
+			cumulativeStats.averageTokensPerSecond !== null ||
 			transientDetails.length > 0
 	);
 
@@ -342,27 +391,37 @@
 							Sent on every turn, cached after the first
 						</div>
 					{/if}
-					{#if conversationStats.readTokens > 0}
+					{#if currentStats.read > 0}
 						<div class="flex items-baseline justify-between">
 							<span class="text-muted-foreground">Reading</span>
 							<span class="font-mono text-muted-foreground">
-								{conversationStats.readTokens.toLocaleString()} tok
+								{currentStats.read.toLocaleString()} tok
 							</span>
 						</div>
+						{#if cumulativeStats.read > currentStats.read}
+							<div class="-mt-1.5 pl-2 text-[10px] leading-tight text-muted-foreground/70">
+								{cumulativeStats.read.toLocaleString()} total across the conversation
+							</div>
+						{/if}
 					{/if}
-					{#if conversationStats.outputTokens > 0}
+					{#if cumulativeStats.output > 0}
 						<div class="flex items-baseline justify-between">
-							<span class="text-muted-foreground">Total output</span>
+							<span class="text-muted-foreground">Output</span>
 							<span class="font-mono text-muted-foreground">
-								{conversationStats.outputTokens.toLocaleString()} tok
+								{cumulativeStats.output.toLocaleString()} tok
 							</span>
 						</div>
+						{#if currentStats.output > 0 && currentStats.output < cumulativeStats.output}
+							<div class="-mt-1.5 pl-2 text-[10px] leading-tight text-muted-foreground/70">
+								{currentStats.output.toLocaleString()} in the last response
+							</div>
+						{/if}
 					{/if}
-					{#if conversationStats.averageTokensPerSecond !== null}
+					{#if cumulativeStats.averageTokensPerSecond !== null}
 						<div class="flex items-baseline justify-between">
 							<span class="text-muted-foreground">Avg speed</span>
 							<span class="font-mono text-muted-foreground">
-								{conversationStats.averageTokensPerSecond.toFixed(1)}
+								{cumulativeStats.averageTokensPerSecond.toFixed(1)}
 								{STATS_UNITS.TOKENS_PER_SECOND}
 							</span>
 						</div>
