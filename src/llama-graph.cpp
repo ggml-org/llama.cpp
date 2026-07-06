@@ -2086,7 +2086,18 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             GGML_ABORT("fatal error");
     }
 
-    experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s); // [n_embd, n_expert_used, n_tokens]
+    // Metal's MUL_MAT_ID casts src1 (the SwiGLU activation) to f16, which overflows to NaN when a
+    // value exceeds the f16 max of 65504 (some models reach ~1e6 here). ggml has no max-reduce, so
+    // scale each (expert,token) column by its L2 norm: L2 >= the largest element, so the f16 cast
+    // stays in range; when the overflow comes from a single outlier, L2 ~= that element.
+    // Mathematically a per-column identity, so it only shifts the result by ~1 ULP (the rescale
+    // factor is not a power of two).
+    const float f16_safe = 32768.0f; // stay well under the f16 max of 65504
+    ggml_tensor * col_l2 = ggml_sqrt(ctx0, ggml_sum_rows(ctx0, ggml_sqr(ctx0, cur))); // [1, n_expert_used, n_tokens]
+    col_l2 = ggml_clamp(ctx0, col_l2, 1e-8f, 1e30f); // guard empty columns against div-by-zero
+    ggml_tensor * cur_s = ggml_div(ctx0, ggml_scale(ctx0, cur, f16_safe), col_l2);
+    experts = build_lora_mm_id(down_exps, cur_s, selected_experts, down_exps_s); // [n_embd, n_expert_used, n_tokens]
+    experts = ggml_scale(ctx0, ggml_mul(ctx0, experts, col_l2), 1.0f/f16_safe);
     cb(experts, "ffn_moe_down", il);
 
     if (down_exps_s) {
