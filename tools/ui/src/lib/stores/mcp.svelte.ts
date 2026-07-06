@@ -54,8 +54,7 @@ import {
 	MCP_RECONNECT_BACKOFF_MULTIPLIER,
 	MCP_RECONNECT_INITIAL_DELAY,
 	MCP_RECONNECT_MAX_DELAY,
-	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS,
-	RECOMMENDED_MCP_SERVER_IDS
+	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS
 } from '$lib/constants';
 import type {
 	MCPToolCall,
@@ -582,30 +581,10 @@ class MCPStore {
 	}
 
 	/**
-	 * Recommended MCP server IDs the user opted in to via per-chat overrides.
-	 * Single source of truth for "which recommendations has the user accepted",
-	 * shared by the recommendations hook and the visible-servers getter.
-	 */
-	get optedInRecommendationIds(): ReadonlySet<string> {
-		const ids = new SvelteSet<string>();
-		for (const override of conversationsStore.pendingMcpServerOverrides) {
-			if (RECOMMENDED_MCP_SERVER_IDS.has(override.serverId) && override.enabled) {
-				ids.add(override.serverId);
-			}
-		}
-		return ids;
-	}
-
-	/**
-	 * MCP servers selectable in chat-add UIs and the settings page:
-	 * enabled in settings and either non-recommended or explicitly opted in.
+	 * MCP servers selectable in chat-add UIs and the settings page.
 	 */
 	get visibleMcpServers(): MCPServerSettingsEntry[] {
-		const optedIn = this.optedInRecommendationIds;
-		return this.getServersSorted().filter(
-			(server) =>
-				server.enabled && (!RECOMMENDED_MCP_SERVER_IDS.has(server.id) || optedIn.has(server.id))
-		);
+		return this.getServersSorted().filter((server) => server.enabled);
 	}
 
 	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {

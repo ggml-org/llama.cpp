@@ -27,6 +27,21 @@
 	let addedServers = $state<MCPServerSettingsEntry[]>([]);
 	let didAddAny = $state(false);
 
+	let selectedRecommendedCount = $derived.by(() =>
+		RECOMMENDED_MCP_SERVERS.filter((server) => selected[server.id]).length
+	);
+
+	let footerLabel = $derived.by(() => {
+		const recommended = selectedRecommendedCount;
+		const custom = addedServers.length;
+		const total = recommended + custom;
+
+		if (total === 0) return 'Continue';
+		if (recommended === 0) return custom === 1 ? 'Add server' : `Add ${custom} servers`;
+		if (custom === 0) return recommended === 1 ? 'Add server' : `Add ${recommended} servers`;
+		return `Add ${recommended} servers and ${custom} custom`;
+	});
+
 	let showAddForm = $state(false);
 	let newServerUrl = $state('');
 	let newServerHeaders = $state('');
@@ -184,7 +199,7 @@
 		<Dialog.Footer>
 			<Button variant="secondary" size="sm" onclick={() => handleOpenChange(false)}>Not now</Button>
 
-			<Button variant="default" size="sm" onclick={enableSelected}>Add selected</Button>
+			<Button variant="default" size="sm" onclick={enableSelected} disabled={footerLabel === 'Continue'}>{footerLabel}</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
