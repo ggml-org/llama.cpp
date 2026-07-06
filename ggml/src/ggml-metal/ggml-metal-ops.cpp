@@ -2373,7 +2373,6 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_BF16 ||
            op->src[0]->type == GGML_TYPE_Q1_0 ||
            op->src[0]->type == GGML_TYPE_Q2_0 ||
-           op->src[0]->type == GGML_TYPE_Q4_0 ||
            op->src[0]->type == GGML_TYPE_Q4_1 ||
            op->src[0]->type == GGML_TYPE_Q5_0 ||
            op->src[0]->type == GGML_TYPE_Q5_1 ||
@@ -2381,6 +2380,13 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_MXFP4 ||
            op->src[0]->type == GGML_TYPE_IQ4_NL ||
            false) && (ne11 >= 2 && ne11 <= 8)
+         ) ||
+         (
+          // for Q4_0 the mat-mv kernels are compute-bound and scale ~linearly with the batch size,
+          // so hand over to the 64x8 mul_mm tiles earlier (see ggml_metal_op_mul_mat_use_mm)
+          (
+           op->src[0]->type == GGML_TYPE_Q4_0 ||
+           false) && (ne11 >= 2 && ne11 <= 4)
          ) ||
          (
           (

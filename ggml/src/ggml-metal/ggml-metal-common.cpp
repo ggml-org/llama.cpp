@@ -10,9 +10,16 @@ bool ggml_metal_op_mul_mat_use_mm(const struct ggml_tensor * op, bool has_simdgr
     const int64_t ne00 = op->src[0]->ne[0];
     const int64_t ne11 = op->src[1]->ne[1];
 
+    // break-even point where the matrix-matrix kernel becomes more efficient compared
+    // to the matrix-vector kernel
+    // for Q4_0 the mat-mv kernels are compute-bound and scale ~linearly with the batch size,
+    // so hand over to the 64x8 mul_mm tiles earlier
+    const int64_t ne11_mm_min = op->src[0]->type == GGML_TYPE_Q4_0 &&
+                                op->src[1]->type == GGML_TYPE_F32 ? 4 : 8;
+
     return !ggml_is_transposed(op->src[0]) &&
            !ggml_is_transposed(op->src[1]) &&
-           has_simdgroup_mm && ne00 >= 64 && ne11 > 8;
+           has_simdgroup_mm && ne00 >= 64 && ne11 > ne11_mm_min;
 }
 
 bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm) {
