@@ -270,6 +270,17 @@ std::vector<segment> segmentize_markers(const std::string & text) {
     std::vector<segment> retval;
     bool in_marker = false;
     char marker_opener = '\0';
+    // For multi-byte UTF-8 openers (e.g. ◁/▷ used by Kimi-VL-Thinking), marker_opener
+    // is '\0' and marker_closer_bytes holds the expected closing byte sequence.
+    std::string marker_closer_bytes;
+
+    // UTF-8 byte sequences for ◁ (U+25C1) and ▷ (U+25B7)
+    static const std::string utf8_triangle_open  = "\xe2\x97\x81"; // ◁
+    static const std::string utf8_triangle_close = "\xe2\x96\xb7"; // ▷
+
+    auto starts_with_bytes = [&](size_t pos, const std::string & bytes) -> bool {
+        return text.compare(pos, bytes.size(), bytes) == 0;
+    };
 
     auto is_marker_opener = [](char c) -> bool { return c == '<' || c == '['; };
     auto is_marker_closer = [](char op, char c) -> bool { return (op == '<' && c == '>') || (op == '[' && c == ']'); };
@@ -284,12 +295,28 @@ std::vector<segment> segmentize_markers(const std::string & text) {
             last_border = cur_pos;
             in_marker = true;
             marker_opener = text[cur_pos];
+        } else if (!in_marker && starts_with_bytes(cur_pos, utf8_triangle_open)) {
+            if (last_border < cur_pos) {
+                retval.push_back(segment(segment_type::TEXT, text.substr(last_border, cur_pos - last_border)));
+            }
+            last_border = cur_pos;
+            in_marker = true;
+            marker_opener = '\0';
+            marker_closer_bytes = utf8_triangle_close;
+            cur_pos += utf8_triangle_open.size() - 1;
         } else if (in_marker && is_marker_closer(marker_opener, text[cur_pos])) {
             // no need to check because last_border will always be smaller
                 retval.push_back(segment(segment_type::MARKER, text.substr(last_border, cur_pos - last_border + 1)));
             last_border = cur_pos + 1;
             in_marker = false;
             marker_opener = '\0';
+        } else if (in_marker && marker_opener == '\0' && starts_with_bytes(cur_pos, marker_closer_bytes)) {
+            size_t end = cur_pos + marker_closer_bytes.size();
+            retval.push_back(segment(segment_type::MARKER, text.substr(last_border, end - last_border)));
+            last_border = end;
+            in_marker = false;
+            marker_closer_bytes.clear();
+            cur_pos = end - 1;
         }
     }
     if (last_border < text.length()) {
