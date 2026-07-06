@@ -68,78 +68,101 @@
 		return null;
 	});
 
-	let contextUsed = $derived(processingState.processingState?.contextUsed ?? 0);
-
-	let currentStats = $derived.by(() => {
+	// Derive context from message data (same approach as logFlowSummary).
+	// Do NOT use processingState.processingState?.contextUsed — it is cleared during
+	// streaming and only restored after the response finishes, making it always one
+	// message behind.
+	let contextUsed = $derived.by(() => {
 		const messages = activeMessages() as DatabaseMessage[];
-		const liveProcessingState = processingState.processingState;
-		const isStreaming = isLoading() || isChatStreaming();
+		const agenticMessages = messages.filter(
+			(m) => m.role === MessageRole.ASSISTANT && m.timings?.agentic?.llm?.predicted_n != null
+		);
 
-		let read = 0;
-		let output = 0;
+		let used = 0;
+		if (agenticMessages.length > 0) {
+			const lastAgentic = agenticMessages[agenticMessages.length - 1];
+			const agg = lastAgentic.timings?.agentic?.llm;
+			used = (agg?.prompt_n ?? 0) + (agg?.predicted_n ?? 0);
+		} else if (messages.length > 0) {
+			for (let i = messages.length - 1; i >= 0; i--) {
+				const msg = messages[i];
+				if (msg.role === MessageRole.ASSISTANT && msg.timings) {
+					used =
+						(msg.timings.prompt_n ?? 0) +
+						(msg.timings.cache_n ?? 0) +
+						(msg.timings.predicted_n ?? 0);
+					break;
+				}
+			}
+		}
+		return used + (enabledToolsTokenCount ?? 0);
+	});
 
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i];
-			if (message.role !== MessageRole.ASSISTANT) continue;
-			const timings = message.timings;
-			if (!timings) continue;
-			read = (timings.prompt_n ?? 0) + (timings.cache_n ?? 0);
-			output = timings.predicted_n ?? 0;
-			break;
+	// Track the last known prompt + cache token counts from the preparing phase.
+	// The server resets prompt_n to 0 during generation (pre_decode), so we
+	// preserve the final counts from when promptProgress disappears.
+	let lastKnownPromptTokens = $state(0);
+	let lastKnownCacheTokens = $state(0);
+
+	$effect(() => {
+		const live = processingState.processingState;
+
+		// Reset at the start of a fresh preparing phase (new request).
+		if (live?.status === 'preparing') {
+			const pp = live.promptProgress;
+			if (pp && pp.total > 0 && pp.processed === 0) {
+				lastKnownPromptTokens = 0;
+				lastKnownCacheTokens = 0;
+			}
 		}
 
-		if (isStreaming && liveProcessingState) {
-			const livePromptProgress = liveProcessingState.promptProgress?.processed ?? 0;
-			const livePromptTokens = Math.max(liveProcessingState.promptTokens ?? 0, livePromptProgress);
-			if (livePromptTokens > 0) read = Math.max(read, livePromptTokens);
-			const liveOutputTokens = liveProcessingState.outputTokensUsed ?? 0;
-			if (liveOutputTokens > 0) output = Math.max(output, liveOutputTokens);
+		if (live?.promptProgress) {
+			// Update while prompt processing is ongoing.
+			lastKnownPromptTokens = Math.max(live.promptTokens ?? 0, live.promptProgress.processed ?? 0);
+			lastKnownCacheTokens = live.cacheTokens ?? 0;
+		} else if (live?.status === 'generating' && lastKnownPromptTokens === 0) {
+			// Prompt processing just finished — lock in whatever we have before
+			// the server zeroes prompt_n during generation.
+			lastKnownPromptTokens = Math.max(live.promptTokens ?? 0, 0);
+			lastKnownCacheTokens = live.cacheTokens ?? 0;
 		}
-
-		return { read, output };
 	});
 
 	let cumulativeStats = $derived.by(() => {
 		const messages = activeMessages() as DatabaseMessage[];
-		const liveProcessingState = processingState.processingState;
-		const isStreaming = isLoading() || isChatStreaming();
 
 		let read = 0;
 		let output = 0;
 		let outputMs = 0;
+		let hasAgenticFlow = false;
 
+		// Find agentic messages. agentic.llm.predicted_n/prompt_n is accumulated across
+		// the entire flow and shared on ALL assistant messages, so we count it only once
+		// (from the last agentic message which has the complete accumulated totals).
+		const agenticMessages = messages.filter(
+			(m) => m.role === MessageRole.ASSISTANT && m.timings?.agentic?.llm?.predicted_n != null
+		);
+		if (agenticMessages.length > 0) {
+			hasAgenticFlow = true;
+			const lastAgentic = agenticMessages[agenticMessages.length - 1];
+			read += lastAgentic.timings.agentic.llm.prompt_n ?? 0;
+			read += lastAgentic.timings.agentic.llm.prompt_ms != null
+				? 0 // agentic llm doesn't track cache_n separately; prompt_n is the full prompt
+				: 0;
+			output += lastAgentic.timings.agentic.llm.predicted_n ?? 0;
+			outputMs += lastAgentic.timings.agentic.llm.predicted_ms ?? 0;
+		}
+
+		// Non-agentic assistant messages: use per-message timings directly.
 		for (const message of messages) {
 			if (message.role !== MessageRole.ASSISTANT) continue;
 			const timings = message.timings;
 			if (!timings) continue;
-
-			const agenticLlm = timings.agentic?.llm;
-			if (
-				timings.agentic &&
-				(agenticLlm?.prompt_n != null ||
-					agenticLlm?.predicted_n != null ||
-					agenticLlm?.predicted_ms != null)
-			) {
-				read += agenticLlm?.prompt_n ?? 0;
-				output += agenticLlm?.predicted_n ?? 0;
-				outputMs += agenticLlm?.predicted_ms ?? 0;
-			} else {
-				read += timings.prompt_n ?? 0;
-				output += timings.predicted_n ?? 0;
-				outputMs += timings.predicted_ms ?? 0;
-			}
-		}
-
-		if (isStreaming && liveProcessingState) {
-			const livePromptProgress = liveProcessingState.promptProgress?.processed ?? 0;
-			const livePromptTokens = Math.max(liveProcessingState.promptTokens ?? 0, livePromptProgress);
-			if (livePromptTokens > 0) read += livePromptTokens;
-			const liveOutputTokens = liveProcessingState.outputTokensUsed ?? 0;
-			if (liveOutputTokens > 0) output += liveOutputTokens;
-			const liveTokensPerSecond = liveProcessingState.tokensPerSecond ?? 0;
-			if (liveTokensPerSecond > 0 && liveOutputTokens > 0) {
-				outputMs += (liveOutputTokens / liveTokensPerSecond) * 1000;
-			}
+			if (hasAgenticFlow && timings.agentic?.llm?.predicted_n != null) continue;
+			read += timings.prompt_n ?? 0;
+			read += timings.cache_n ?? 0;
+			output += timings.predicted_n ?? 0;
+			outputMs += timings.predicted_ms ?? 0;
 		}
 
 		const averageTokensPerSecond = outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
@@ -164,12 +187,10 @@
 
 	$effect(() => {
 		const modelId = activeModelId;
-		untrack(() => {
-			const enabledToolsForLLM = toolsStore.getEnabledToolsForLLM();
-			void enabledToolsForLLM;
-			toolsStore.refreshEnabledToolsTokenCount(modelId).catch((err) => {
-				console.warn('[ChatFormContextGauge] Failed to refresh tools token count:', err);
-			});
+		const enabledToolsTokenCount = (toolsStore as any)._enabledToolsTokenCount;
+		void enabledToolsTokenCount;
+		toolsStore.refreshEnabledToolsTokenCount(modelId).catch((err) => {
+			console.warn('[ChatFormContextGauge] Failed to refresh tools token count:', err);
 		});
 	});
 
@@ -178,17 +199,57 @@
 		return Math.round((contextUsed / contextTotal) * 100);
 	});
 
+	// Current request's Reading: prompt + cache for the active request.
+	// Falls back to lastKnown values during generation (server zeroes prompt_n).
+	let currentRead = $derived.by(() => {
+		if (lastKnownPromptTokens > 0) return lastKnownPromptTokens + lastKnownCacheTokens;
+		const messages = activeMessages() as DatabaseMessage[];
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const msg = messages[i];
+			if (msg.role === MessageRole.ASSISTANT && msg.timings) {
+				return (msg.timings.prompt_n ?? 0) + (msg.timings.cache_n ?? 0);
+			}
+		}
+		return 0;
+	});
+
+	// Current request's Output: what's being generated right now.
+	let currentOutput = $derived.by(() => {
+		const live = processingState.processingState;
+		if (live && (live.status === 'preparing' || live.status === 'generating')) {
+			const liveOutputTokens = live.outputTokensUsed ?? 0;
+			if (liveOutputTokens > 0) return liveOutputTokens;
+		}
+		const messages = activeMessages() as DatabaseMessage[];
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const msg = messages[i];
+			if (msg.role === MessageRole.ASSISTANT && msg.timings) {
+				return msg.timings.predicted_n ?? 0;
+			}
+		}
+		return 0;
+	});
+
+	// KV total = current request's Reading + Output + Tool definitions.
+	let kvTotal = $derived(currentRead + currentOutput + (enabledToolsTokenCount ?? 0));
+
 	let detailsOpen = $state(false);
 
 	let hasDetails = $derived(
-		(enabledToolsTokenCount !== null && enabledToolsTokenCount > 0) ||
-			currentStats.read > 0 ||
-			cumulativeStats.read > 0 ||
-			currentStats.output > 0 ||
+		cumulativeStats.read > 0 ||
 			cumulativeStats.output > 0 ||
+			currentRead > 0 ||
+			currentOutput > 0 ||
+			(enabledToolsTokenCount ?? 0) > 0 ||
 			cumulativeStats.averageTokensPerSecond !== null ||
 			transientDetails.length > 0
 	);
+
+	// Auto-expand details during streaming so live token counts are visible.
+	$effect(() => {
+		const live = processingState.processingState;
+		detailsOpen = !!(live && (live.status === 'preparing' || live.status === 'generating'));
+	});
 
 	let contextLabelColor = $derived.by(() => {
 		if (contextPercent === null) return 'text-muted-foreground';
@@ -334,37 +395,71 @@
 						/>
 					</Collapsible.Trigger>
 
-					<Collapsible.Content class="flex flex-col gap-2 text-xs pt-4">
-						{#if enabledToolsTokenCount !== null && enabledToolsTokenCount > 0}
-							<ContextGaugeDetailRow
-								label="Tool definitions"
-								value={formatParameters(enabledToolsTokenCount)}
-								subtitle="Sent on every turn, cached after the first"
-							/>
+					<Collapsible.Content class="flex flex-col gap-3 text-xs pt-4">
+						{#if cumulativeStats.read > 0 || cumulativeStats.output > 0}
+							<div>
+								<div class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-1">
+									Cumulative (all responses)
+								</div>
+								<div class="flex flex-col gap-0.5">
+									{#if cumulativeStats.read > 0}
+										<ContextGaugeDetailRow
+											label="Reading"
+											value={`${cumulativeStats.read.toLocaleString()} tok`}
+										/>
+									{/if}
+									{#if cumulativeStats.output > 0}
+										<ContextGaugeDetailRow
+											label="Output"
+											value={`${cumulativeStats.output.toLocaleString()} tok`}
+										/>
+									{/if}
+								</div>
+							</div>
 						{/if}
-						{#if currentStats.read > 0}
-							<ContextGaugeDetailRow
-								label="Reading"
-								value={`${currentStats.read.toLocaleString()} tok`}
-								subtitle={cumulativeStats.read > currentStats.read
-									? `${cumulativeStats.read.toLocaleString()} total across the conversation`
-									: undefined}
-							/>
+
+						{#if currentRead > 0 || currentOutput > 0 || (enabledToolsTokenCount ?? 0) > 0}
+							<div>
+								<div class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-1">
+									Current request (KV cache)
+								</div>
+								<div class="flex flex-col gap-0.5">
+									{#if currentRead > 0}
+										<ContextGaugeDetailRow
+											label="Reading"
+											value={`${currentRead.toLocaleString()} tok`}
+										/>
+									{/if}
+									{#if enabledToolsTokenCount ?? 0 > 0}
+										<ContextGaugeDetailRow
+											label="Tool definitions"
+											value={`${(enabledToolsTokenCount ?? 0).toLocaleString()} tok`}
+											subtitle="Sent on every turn, cached after the first"
+										/>
+									{/if}
+									{#if currentOutput > 0}
+										<ContextGaugeDetailRow
+											label="Output"
+											value={`${currentOutput.toLocaleString()} tok`}
+										/>
+									{/if}
+									<div class="pt-1 mt-0.5 border-t border-border/30">
+										<div class="flex justify-between">
+											<span class="text-muted-foreground">KV total</span>
+											<span class="font-mono font-medium">{kvTotal.toLocaleString()} tok</span>
+										</div>
+									</div>
+								</div>
+							</div>
 						{/if}
-						{#if cumulativeStats.output > 0}
-							<ContextGaugeDetailRow
-								label="Output"
-								value={`${cumulativeStats.output.toLocaleString()} tok`}
-								subtitle={currentStats.output > 0 && currentStats.output < cumulativeStats.output
-									? `${currentStats.output.toLocaleString()} in the last response`
-									: undefined}
-							/>
-						{/if}
+
 						{#if cumulativeStats.averageTokensPerSecond !== null}
-							<ContextGaugeDetailRow
-								label="Avg speed"
-								value={`${cumulativeStats.averageTokensPerSecond.toFixed(1)}${STATS_UNITS.TOKENS_PER_SECOND}`}
-							/>
+							<div class="pt-1.5 mt-1 border-t border-border/30">
+								<ContextGaugeDetailRow
+									label="Avg speed"
+									value={`${cumulativeStats.averageTokensPerSecond.toFixed(1)}${STATS_UNITS.TOKENS_PER_SECOND}`}
+								/>
+							</div>
 						{/if}
 						{#each transientDetails as detail (detail)}
 							<div class="font-mono text-muted-foreground">{detail}</div>
