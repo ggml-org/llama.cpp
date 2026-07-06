@@ -1657,10 +1657,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
     const size_t qo_element_size = factx.is_q_fp32 ? sizeof(float) : sizeof(__fp16);
 
-    // ======== HMX lock strategy ========
-    if (!factx.pipeline) {
-        HAP_compute_res_hmx_lock(ctx->vtcm_rctx);
-    }
 
     // ======== Reusable job descriptors for pipeline ========
     hmx_fa_qk_job_t       qk_job;
@@ -1870,29 +1866,17 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         fa_phase_k_interleave(&factx, kv_rows, k_src_stride, buf_idx, kv_start);
 
                         {
-                            const size_t n_dot_tiles       = (size_t) (DK / 32);
-                            const __fp16 * restrict q_base = factx.vtcm_q_tiles;
-                            const __fp16 * restrict k_base = factx.vtcm_k_tiles;
-                            __fp16 * restrict s_base       = factx.vtcm_s_tiles;
-                            __builtin_assume(n_row_tiles > 0);
-                            __builtin_assume(n_col_tiles > 0);
-                            __builtin_assume(n_dot_tiles > 0);
+                            qk_job.q_tiles        = factx.vtcm_q_tiles;
+                            qk_job.k_tiles        = factx.vtcm_k_tiles;
+                            qk_job.s_tiles        = factx.vtcm_s_tiles;
+                            qk_job.n_row_tiles    = n_row_tiles;
+                            qk_job.n_col_tiles    = n_col_tiles;
+                            qk_job.n_dot_tiles    = (size_t) (DK / 32);
+                            qk_job.n_tiles_per_bc = n_tiles_per_bc;
+                            qk_job.hmx_scales     = factx.vtcm_hmx_scales_qk;
 
-                            htp_trace_event_start(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
-                            asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)factx.vtcm_hmx_scales_qk));
-                            const size_t dot_stride = n_dot_tiles * HMX_FP16_TILE_N_ELMS;
-                            for (size_t r = 0; r < n_row_tiles; ++r) {
-                                const __fp16 * row_tiles = q_base + r * dot_stride;
-                                const __fp16 * col_tiles = k_base;
-                                __fp16 *       out_tile  = s_base + r * n_tiles_per_bc * HMX_FP16_TILE_N_ELMS;
-
-                                for (size_t c = 0; c < n_col_tiles; ++c) {
-                                    hmx_fa_qk_dot_tile(row_tiles, col_tiles, out_tile, n_dot_tiles);
-                                    col_tiles += dot_stride;
-                                    out_tile  += HMX_FP16_TILE_N_ELMS;
-                                }
-                            }
-                            htp_trace_event_stop(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
+                            hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_fa_qk_dot_worker, &qk_job));
+                            hmx_queue_pop(ctx->hmx_queue);
                         }
 
                         // ---- Phase 3: softmax + build_D ----
@@ -1930,35 +1914,21 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         fa_phase_v_interleave(&factx, kv_rows, v_src_stride, buf_idx, n_tiles_per_bc, kv_start);
 
                         {
-                            const size_t DV_tiles           = (size_t) (DV / 32);
-                            const __fp16 * restrict d_base  = factx.vtcm_d_tiles;
-                            const __fp16 * restrict p_base  = factx.vtcm_p_tiles;
-                            const __fp16 * restrict v_base  = factx.vtcm_v_tiles[0];
-                            const __fp16 * restrict op_base = o_tile_prev;
-                            __fp16 * restrict oc_base       = o_tile_curr;
-                            __builtin_assume(n_row_tiles > 0);
-                            __builtin_assume(n_col_tiles > 0);
-                            __builtin_assume(DV_tiles > 0);
+                            ou_job.o_curr           = o_tile_curr;
+                            ou_job.o_prev           = o_tile_prev;
+                            ou_job.p_tiles          = factx.vtcm_p_tiles;
+                            ou_job.v_tiles          = factx.vtcm_v_tiles[0];
+                            ou_job.d_tiles          = factx.vtcm_d_tiles;
+                            ou_job.hmx_scales       = factx.vtcm_hmx_scales_id;
+                            ou_job.n_row_tiles      = n_row_tiles;
+                            ou_job.n_col_tiles      = n_col_tiles;
+                            ou_job.n_row_tiles_g_br = n_row_tiles_g_br;
+                            ou_job.n_tiles_per_bc   = n_tiles_per_bc;
+                            ou_job.DV               = DV;
 
-                            htp_trace_event_start(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
-                            asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)factx.vtcm_hmx_scales_id));
-                            const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
-                            const size_t v_stride = n_tiles_per_bc * HMX_FP16_TILE_N_ELMS;
-                            for (size_t r = 0; r < n_row_tiles; ++r) {
-                                const __fp16 * d_diag = d_base  + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-                                const __fp16 * p_tile_in = p_base + (r * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
-                                const __fp16 * o_rc = op_base + r * HMX_FP16_TILE_N_ELMS;
-                                const __fp16 * v_tile_in = v_base;
-                                __fp16 * o_tile_out = oc_base + r * HMX_FP16_TILE_N_ELMS;
+                            hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_fa_o_update_worker, &ou_job));
+                            hmx_queue_pop(ctx->hmx_queue);
 
-                                for (size_t c = 0; c < DV_tiles; ++c) {
-                                    hmx_fa_o_update_tile(d_diag, o_rc, p_tile_in, v_tile_in, o_tile_out, n_col_tiles);
-                                    o_rc += o_stride;
-                                    v_tile_in += v_stride;
-                                    o_tile_out += o_stride;
-                                }
-                            }
-                            htp_trace_event_stop(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
                             hex_swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
                         }
 
@@ -1972,40 +1942,15 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                     fa_build_d_diag_inv_l(&factx, n_row_tiles, n_row_tiles_g_br);
                     htp_trace_event_stop(tr_hvx, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) q_start);
 
-                    if (factx.pipeline) {
-                        on_job.o_curr           = o_tile_curr;
-                        on_job.o_prev           = o_tile_prev;
-                        on_job.d_tiles          = factx.vtcm_d_tiles;
-                        on_job.hmx_scales       = factx.vtcm_hmx_scales_id;
-                        on_job.n_row_tiles      = n_row_tiles;
-                        on_job.n_row_tiles_g_br = n_row_tiles_g_br;
-                        on_job.DV               = DV;
-                        hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_fa_o_norm_worker, &on_job));
-                        hmx_queue_pop(ctx->hmx_queue);
-                    } else {
-                        const size_t DV_tiles           = (size_t) (DV / 32);
-                        const __fp16 * restrict d_base  = factx.vtcm_d_tiles;
-                        const __fp16 * restrict op_base = o_tile_prev;
-                        __fp16 * restrict oc_base       = o_tile_curr;
-                        __builtin_assume(n_row_tiles > 0);
-                        __builtin_assume(DV_tiles > 0);
-
-                        htp_trace_event_start(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
-                        asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)factx.vtcm_hmx_scales_id));
-                        const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
-                        for (size_t r = 0; r < n_row_tiles; ++r) {
-                            const __fp16 * d_diag = d_base  + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
-                            const __fp16 * o_rc = op_base + r * HMX_FP16_TILE_N_ELMS;
-                            __fp16 *       o_out = oc_base + r * DV_tiles * HMX_FP16_TILE_N_ELMS;
-
-                            for (size_t c = 0; c < DV_tiles; ++c) {
-                                hmx_fa_o_norm_tile(d_diag, o_rc, o_out);
-                                o_rc  += o_stride;
-                                o_out += HMX_FP16_TILE_N_ELMS;
-                            }
-                        }
-                        htp_trace_event_stop(tr_hmx, HTP_TRACE_EVT_HMX_COMP, (uint16_t) q_start);
-                    }
+                    on_job.o_curr           = o_tile_curr;
+                    on_job.o_prev           = o_tile_prev;
+                    on_job.d_tiles          = factx.vtcm_d_tiles;
+                    on_job.hmx_scales       = factx.vtcm_hmx_scales_id;
+                    on_job.n_row_tiles      = n_row_tiles;
+                    on_job.n_row_tiles_g_br = n_row_tiles_g_br;
+                    on_job.DV               = DV;
+                    hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_fa_o_norm_worker, &on_job));
+                    hmx_queue_pop(ctx->hmx_queue);
                 }
 
                 // ---- Store O block ----
@@ -2014,11 +1959,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
         }
     }
 
-    if (factx.pipeline) {
-        hmx_queue_suspend(ctx->hmx_queue);
-    } else {
-        HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
-    }
+    hmx_queue_suspend(ctx->hmx_queue);
 
     return HTP_STATUS_OK;
 }

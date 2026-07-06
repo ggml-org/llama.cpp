@@ -2476,10 +2476,9 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                 }
             }
         }
-        hmx_queue_suspend(ctx->hmx_queue);
     } else {
         // --- Synchronous Un-pipelined loop (m <= 32 or fallback) ---
-        HAP_compute_res_hmx_lock(ctx->vtcm_rctx);
+        hmx_matmul_job_t job;
         for (size_t mr = 0; mr < m; mr += m_chunk_n_rows) {
             const size_t n_rows = hex_smin(m - mr, m_chunk_n_rows);
 
@@ -2502,8 +2501,10 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                     n_cols, k, row_stride, weight_type,
                     n_k_tiles, n_k_tiles_div, dequant_worker_fn, n_threads);
 
-                // C: HMX Compute (Synchronous)
-                core_dot_chunk_fp16(vtcm_output, vtcm_f16_act, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HTP_MM_HMX_TILE_N_ROWS);
+                // C: HMX Compute (Queue-based)
+                hmx_matmul_job_init(&job, vtcm_output, vtcm_f16_act, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HTP_MM_HMX_TILE_N_ROWS);
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job));
+                hmx_queue_pop(ctx->hmx_queue);
 
                 // D: Output Store
                 float *output_chunk = dst + (mr * dst_stride + nc);
@@ -2514,8 +2515,9 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                 }
             }
         }
-        HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
     }
+
+    hmx_queue_suspend(ctx->hmx_queue);
 
     return 0;
 }
@@ -2634,7 +2636,7 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
     const size_t fp16_row_bytes   = (size_t) params->k * sizeof(__fp16);
     const size_t weight_row_bytes = (size_t) params->weight_stride * sizeof(__fp16);
 
-    HAP_compute_res_hmx_lock(ctx->vtcm_rctx);
+    hmx_matmul_job_t job;
 
     for (int b3 = 0; b3 < params->ne13; ++b3) {
         for (int b2_base = 0; b2_base < params->ne12; b2_base += group_size) {
@@ -2688,13 +2690,12 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
 
                     // Reuse the interleaved weight for every q_head in this GQA group
                     for (int g = 0; g < group_size; ++g) {
-                        struct htp_thread_trace * tr = &ctx->trace[HTP_MAX_NTHREADS];
-                        htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, g);
                         {
                             const __fp16 * vtcm_act_g = vtcm_f16_act + (size_t) g * L.act_head_stride;
-                            core_dot_chunk_fp16(vtcm_output, vtcm_act_g, vtcm_weight, vtcm_scales, n_row_tiles, n_col_tiles, params->k / 32);
+                            hmx_matmul_job_init(&job, vtcm_output, vtcm_act_g, vtcm_weight, vtcm_scales, n_row_tiles, n_col_tiles, params->k / 32);
+                            hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job));
+                            hmx_queue_pop(ctx->hmx_queue);
                         }
-                        htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, g);
 
                         {
                             float *output = hmx_mm_dst_batch_ptr(params, b2_base + g, b3) + mr * params->dst_stride + nc;
@@ -2710,8 +2711,6 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
             }
         }
     }
-
-    HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
 
     return 0;
 }
@@ -2904,7 +2903,7 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
 
     hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00));
 
-    HAP_compute_res_hmx_lock(ctx->vtcm_rctx);
+    hmx_matmul_job_t job;
 
     for (size_t mr = 0; mr < (size_t) m_padded; mr += m_chunk_n_rows) {
         const size_t n_rows = hex_smin(m_padded - mr, m_chunk_n_rows);
@@ -2929,10 +2928,9 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
                 n_k_tiles, n_k_tiles_div, dequant_worker_fn, n_threads
             );
 
-            struct htp_thread_trace * tr = &ctx->trace[HTP_MAX_NTHREADS];
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HMX_COMP, nc);
-            core_dot_chunk_fp16(vtcm_output, vtcm_f16_act, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HTP_MM_HMX_TILE_N_ROWS);
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HMX_COMP, nc);
+            hmx_matmul_job_init(&job, vtcm_output, vtcm_f16_act, vtcm_scratch0, vtcm_scales, n_row_tiles, n_col_tiles, k / HTP_MM_HMX_TILE_N_ROWS);
+            hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_matmul_worker_fn, &job));
+            hmx_queue_pop(ctx->hmx_queue);
 
             transfer_output_chunk_scattered_threaded(
                 ctx, dst + nc, vtcm_output, (int) mr, (int) n_rows, (int) n_cols,
@@ -2940,7 +2938,8 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
         }
     }
 
-    HAP_compute_res_hmx_unlock(ctx->vtcm_rctx);
+    hmx_queue_suspend(ctx->hmx_queue);
+
     return 0;
 }
 
