@@ -2601,6 +2601,55 @@ struct test_rms_norm_mul_rope : public test_case {
     }
 };
 
+// GGML_OP_RMS_NORM + GGML_OP_MUL -> Q8_1 + GGML_OP_MUL_MAT (fused quantize path)
+struct test_rms_norm_mul_q8_1_mul_mat : public test_case {
+    const ggml_type weight_type;  // quantized weight type for MUL_MAT src0
+    const int64_t   k;            // hidden dim (ne[0] of input and weight)
+    const int64_t   m;            // output rows  (ne[1] of MUL_MAT src0)
+    const int64_t   n_tokens;     // batch size   (ne[1] of input; must be <= MMVQ_MAX_BATCH_SIZE)
+    const float     eps;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RMS_NORM_MUL_Q8_1_MUL_MAT";
+    }
+
+    std::string vars() override { return VARS_TO_STR5(weight_type, k, m, n_tokens, eps); }
+
+    double max_nmse_err() override { return 5e-4; }
+
+    bool run_whole_graph() override { return true; }
+
+    test_rms_norm_mul_q8_1_mul_mat(ggml_type weight_type = GGML_TYPE_Q4_K,
+                                   int64_t   k           = 2048,
+                                   int64_t   m           = 512,
+                                   int64_t   n_tokens    = 1,
+                                   float     eps         = 1e-6f) :
+        weight_type(weight_type),
+        k(k),
+        m(m),
+        n_tokens(n_tokens),
+        eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n_tokens);
+        ggml_set_name(x, "x");
+
+        ggml_tensor * norm_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, k);
+        ggml_set_name(norm_w, "norm_w");
+
+        ggml_tensor * mm_w = ggml_new_tensor_2d(ctx, weight_type, k, m);
+        ggml_set_name(mm_w, "mm_w");
+
+        ggml_tensor * rms = ggml_rms_norm(ctx, x, eps);
+        ggml_tensor * mul = ggml_mul(ctx, rms, norm_w);
+        ggml_tensor * out = ggml_mul_mat(ctx, mm_w, mul);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_ARGMAX
 struct test_argmax : public test_case {
     const ggml_type type;
@@ -8368,6 +8417,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+    // RMS_NORM + MUL -> Q8_1 fused quantize + MUL_MAT
+    for (ggml_type wt : { GGML_TYPE_Q4_K, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0 }) {
+        for (int64_t n_tokens : { 1, 4, 8 }) {
+            test_cases.emplace_back(new test_rms_norm_mul_q8_1_mul_mat(wt, 512, 256, n_tokens));
+            test_cases.emplace_back(new test_rms_norm_mul_q8_1_mul_mat(wt, 2048, 512, n_tokens));
+        }
+    }
+
     for (int64_t d_conv : {3, 4, 9}) {
         for (int64_t d_inner: {1024, 1536, 2048}) {
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}));

@@ -647,6 +647,101 @@ void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
                           eps, stream);
 }
 
+template <int block_size>
+static __global__ __launch_bounds__(block_size) void rms_norm_mul_q8_1_f32(const float * __restrict__ x,
+                                             const float * __restrict__ weight,
+                                             block_q8_1 * __restrict__ dst,
+                                             const int     ncols,
+                                             const int64_t stride_row,
+                                             const int64_t stride_channel,
+                                             const int64_t stride_sample,
+                                             const float   eps) {
+    const int nrows     = gridDim.x;
+    const int nchannels = gridDim.y;
+
+    const int row     = blockIdx.x;
+    const int channel = blockIdx.y;
+    const int sample  = blockIdx.z;
+    const int tid     = threadIdx.x;
+
+    x += sample * stride_sample + channel * stride_channel + row * stride_row;
+    dst += ((sample * nchannels + channel) * nrows + row) * (ncols / QK8_1);
+
+    float partial_sum_sq = 0.0f;
+    for (int col = tid; col < ncols; col += block_size) {
+        const float xi = x[col];
+        partial_sum_sq += xi * xi;
+    }
+
+    extern __shared__ float s_sum[];
+    float                   sum_sq = block_reduce<block_reduce_method::SUM, block_size>(partial_sum_sq, s_sum);
+    const float             scale  = rsqrtf(sum_sq / ncols + eps);
+
+    const int warp_id    = tid / WARP_SIZE;
+    const int lane_id    = tid % WARP_SIZE;
+    const int nwarps     = block_size / WARP_SIZE;
+    const int nq8_blocks = ncols / QK8_1;
+
+    for (int b = warp_id; b < nq8_blocks; b += nwarps) {
+        const int   col = b * QK8_1 + lane_id;
+        const float val = scale * x[col] * weight[col];
+
+        float amax = fabsf(val);
+        float fsum = val;
+
+        amax = warp_reduce_max<QK8_1>(amax);
+        fsum = warp_reduce_sum<QK8_1>(fsum);
+
+        const float  d = amax / 127.0f;
+        const int8_t q = amax == 0.0f ? 0 : roundf(val / d);
+
+        dst[b].qs[lane_id] = q;
+
+        if (lane_id == 0) {
+            dst[b].ds = make_half2(d, fsum);
+        }
+    }
+}
+
+void ggml_cuda_op_rms_norm_mul_q8_1(ggml_backend_cuda_context & ctx,
+                                    ggml_tensor *               rms_norm_node,
+                                    ggml_tensor *               mul_node) {
+    const ggml_tensor * src    = rms_norm_node->src[0];
+    const ggml_tensor * weight = (mul_node->src[0] == rms_norm_node) ? mul_node->src[1] : mul_node->src[0];
+
+    const float * src_d    = (const float *) src->data;
+    const float * weight_d = (const float *) weight->data;
+
+    block_q8_1 * dst_d  = (block_q8_1 *) mul_node->data;
+    cudaStream_t stream = ctx.stream();
+
+    float eps;
+    memcpy(&eps, rms_norm_node->op_params, sizeof(float));
+
+    const int64_t ne00 = src->ne[0];
+    const int64_t ne01 = src->ne[1];
+    const int64_t ne02 = src->ne[2];
+    const int64_t ne03 = src->ne[3];
+
+    GGML_ASSERT(ne00 % QK8_1 == 0);
+    GGML_ASSERT(src->nb[0] == sizeof(float));
+    GGML_ASSERT(weight->ne[0] == ne00 && weight->ne[1] == 1 && weight->ne[2] == 1 && weight->ne[3] == 1);
+    GGML_ASSERT(weight->nb[0] == sizeof(float));
+
+    const int64_t s01 = src->nb[1] / sizeof(float);
+    const int64_t s02 = src->nb[2] / sizeof(float);
+    const int64_t s03 = src->nb[3] / sizeof(float);
+
+    const dim3 blocks_num(ne01, ne02, ne03);
+    if (ne00 < 1024) {
+        rms_norm_mul_q8_1_f32<256>
+            <<<blocks_num, dim3(256), 32 * sizeof(float), stream>>>(src_d, weight_d, dst_d, ne00, s01, s02, s03, eps);
+    } else {
+        rms_norm_mul_q8_1_f32<1024>
+            <<<blocks_num, dim3(1024), 32 * sizeof(float), stream>>>(src_d, weight_d, dst_d, ne00, s01, s02, s03, eps);
+    }
+}
+
 void ggml_cuda_op_rms_norm_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * grad  = dst->src[0]; // gradients
     const ggml_tensor * src0f = dst->src[1]; // src0 from forward pass
