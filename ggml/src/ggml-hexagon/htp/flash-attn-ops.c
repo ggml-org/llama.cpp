@@ -1728,6 +1728,17 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             }
                         }
 
+                        // Prefetch next KV block early
+                        if (kv_blk + 1 < factx.n_kv_blocks) {
+                            const uint32_t  prefetch_start = (kv_blk + 1) * Bc;
+                            const uint32_t  prefetch_rows  = hex_smin(Bc, nek1 - prefetch_start);
+                            const size_t    prefetch_buf   = 1 - buf_idx;
+                            const uint8_t * k_prefetch_src = (const uint8_t *) k->data + prefetch_start * k->nb[1] + ik2 * k->nb[2] + ik3 * k->nb[3];
+                            dma_queue_push(dma, dma_make_ptr(factx.vtcm_k_fp16[prefetch_buf], k_prefetch_src), size_k_row_padded, k->nb[1], size_k_row, prefetch_rows);
+                            const uint8_t * v_prefetch_src = (const uint8_t *) v->data + prefetch_start * v->nb[1] + iv2 * v->nb[2] + iv3 * v->nb[3];
+                            dma_queue_push(dma, dma_make_ptr(factx.vtcm_v_fp16[prefetch_buf], v_prefetch_src), size_v_row_padded, v->nb[1], size_v_row, prefetch_rows);
+                        }
+
                         // Wait for current KV DMA
                         dma_queue_pop(dma);  // K
                         dma_queue_pop(dma);  // V
@@ -1759,16 +1770,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         qk_job.n_tiles_per_bc = n_tiles_per_bc;
                         qk_job.hmx_scales     = factx.vtcm_hmx_scales_qk;
                         hmx_queue_push(hmx_q, hmx_queue_make_desc(hmx_fa_qk_dot_worker, &qk_job));
-
-                        if (kv_blk + 1 < factx.n_kv_blocks) {
-                            const uint32_t  prefetch_start = (kv_blk + 1) * Bc;
-                            const uint32_t  prefetch_rows  = hex_smin(Bc, nek1 - prefetch_start);
-                            const size_t    prefetch_buf   = 1 - buf_idx;
-                            const uint8_t * k_prefetch_src = (const uint8_t *) k->data + prefetch_start * k->nb[1] + ik2 * k->nb[2] + ik3 * k->nb[3];
-                            dma_queue_push(dma, dma_make_ptr(factx.vtcm_k_fp16[prefetch_buf], k_prefetch_src), size_k_row_padded, k->nb[1], size_k_row, prefetch_rows);
-                            const uint8_t * v_prefetch_src = (const uint8_t *) v->data + prefetch_start * v->nb[1] + iv2 * v->nb[2] + iv3 * v->nb[3];
-                            dma_queue_push(dma, dma_make_ptr(factx.vtcm_v_fp16[prefetch_buf], v_prefetch_src), size_v_row_padded, v->nb[1], size_v_row, prefetch_rows);
-                        }
                         fa_phase_v_interleave(&factx, kv_rows, v_src_stride, buf_idx, n_tiles_per_bc, kv_start);
 
                         if (kv_blk > 0) {
@@ -1843,8 +1844,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         const uint32_t kv_start    = kv_blk * Bc;
                         const uint32_t kv_rows     = hex_smin(Bc, nek1 - kv_start);
                         const size_t   n_col_tiles = hmx_ceil_div(kv_rows, HMX_FP16_TILE_N_COLS);
-                        dma_queue_pop(dma);  // K
-                        dma_queue_pop(dma);  // V
 
                         if (mask) {
                             if (__builtin_expect(factx.mask_broadcast, true)) {
@@ -1854,6 +1853,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                                 fa_push_mask_dma_gqa(dma, mask, q_start, im3, kv_start, kv_head, G, m_line_bytes, kv_rows, n_q_rows, &factx);
                             }
                         }
+
                         if (kv_blk + 1 < factx.n_kv_blocks) {
                             const uint32_t  prefetch_start = (kv_blk + 1) * Bc;
                             const uint32_t  prefetch_rows  = hex_smin(Bc, nek1 - prefetch_start);
@@ -1863,6 +1863,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             const uint8_t * v_prefetch_src = (const uint8_t *) v->data + prefetch_start * v->nb[1] + iv2 * v->nb[2] + iv3 * v->nb[3];
                             dma_queue_push(dma, dma_make_ptr(factx.vtcm_v_fp16[prefetch_buf], v_prefetch_src), size_v_row_padded, v->nb[1], size_v_row, prefetch_rows);
                         }
+
+                        dma_queue_pop(dma);  // K
+                        dma_queue_pop(dma);  // V
+
                         fa_phase_k_interleave(&factx, kv_rows, k_src_stride, buf_idx, kv_start);
 
                         {
