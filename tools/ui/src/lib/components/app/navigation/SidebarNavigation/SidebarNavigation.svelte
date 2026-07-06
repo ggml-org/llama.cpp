@@ -27,7 +27,10 @@
 
 	let { onSearchClick = () => {} }: Props = $props();
 
-	const { handleKeydown } = useKeyboardShortcuts({ activateSearchMode: () => onSearchClick() });
+	const { handleKeydown } = useKeyboardShortcuts({
+		activateSearchMode: () => onSearchClick(),
+		toggleSidebar: () => toggleExpandedMode()
+	});
 
 	let isExpandedMode = $state(false);
 	let hoveredTooltip = $state<string | null>(null);
