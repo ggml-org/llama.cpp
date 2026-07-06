@@ -5143,12 +5143,16 @@ void ggml_compute_forward_set_rows(
             } break;
         case GGML_TYPE_F16:
             {
-                if (src1->type == GGML_TYPE_I64) {
-                    ggml_compute_forward_set_rows_f16<int64_t>(params, dst);
-                } else if (src1->type == GGML_TYPE_I32) {
-                    ggml_compute_forward_set_rows_f16<int32_t>(params, dst);
+                if (dst->type == GGML_TYPE_F16) {
+                    if (src1->type == GGML_TYPE_I64) {
+                        ggml_compute_forward_set_rows_f16<int64_t>(params, dst);
+                    } else if (src1->type == GGML_TYPE_I32) {
+                        ggml_compute_forward_set_rows_f16<int32_t>(params, dst);
+                    } else {
+                        GGML_ABORT("src1->type = %d (%s) not supported", src1->type, ggml_type_name(src1->type));
+                    }
                 } else {
-                    GGML_ABORT("src1->type = %d (%s) not supported", src1->type, ggml_type_name(src1->type));
+                    GGML_ABORT("dst->type = %d (%s) not supported with src0->type = %d (%s)", dst->type, ggml_type_name(dst->type), src0->type, ggml_type_name(src0->type));
                 }
             } break;
         default:
