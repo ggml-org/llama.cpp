@@ -2,6 +2,30 @@
 
 #include "llama-kv-cache-dsa.h"
 
+// https://huggingface.co/zai-org/GLM-5.2/blob/main/config.json#L26
+const std::array<uint32_t, LLAMA_MAX_LAYERS> GLM_DSA_DEFAULT_INDEXER_TYPES = {
+    1, 1,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+    1, 0, 0, 0,
+};
+
 void llama_model_glm_dsa::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,     hparams.n_ff_exp);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,    hparams.f_norm_rms_eps);
@@ -24,9 +48,12 @@ void llama_model_glm_dsa::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
 
     // DSA parameters
-    ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
-    ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
-    ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
+    ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,  hparams.indexer_n_head);
+    ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,  hparams.indexer_head_size);
+    ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,       hparams.indexer_top_k);
+
+    hparams.is_indexer_full_impl = GLM_DSA_DEFAULT_INDEXER_TYPES;
+    ml.get_key_or_arr(LLM_KV_ATTENTION_INDEXER_TYPES, hparams.is_indexer_full_impl, hparams.n_layer(), false);
 
     // Expert gating function (GLM-4.5 uses sigmoid)
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
@@ -219,7 +246,7 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
             ggml_tensor * top_k = nullptr;
 
             // lightning indexer
-            if (model.layers[il].indexer_attn_q_b != nullptr) {
+            if (hparams.is_indexer_full(il)) {
                 // "full" layer
                 ggml_tensor * indexer_q = ggml_mul_mat(ctx0, model.layers[il].indexer_attn_q_b, qr);
                 cb(indexer_q, "indexer_q", il);
