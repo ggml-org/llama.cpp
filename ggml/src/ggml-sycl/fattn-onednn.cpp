@@ -19,8 +19,10 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
     if (!g_ggml_sycl_fa_onednn) {
         return false;
     }
-    // Battlemage (Xe2) only: the sole architecture validated for this path (single B70 here; dual
-    // Arc B60 for the multi-device case). Other archs fall back to the existing FA kernel.
+    // Battlemage (Xe2) only, for now. On other Intel archs oneDNN's fused SDPA returns wrong results
+    // for some shapes (e.g. head_dim=64 on Arc / xe_hpg) -- an oneDNN bug tracked upstream at
+    // https://github.com/uxlfoundation/oneDNN/issues/5510. Remove this hardware limitation once that
+    // is fixed; until then non-BMG archs fall back to the existing FA kernel.
     const gpu_arch arch = ggml_sycl_info().devices[ggml_sycl_get_device()].hw_info.arch;
     if (arch != gpu_arch::intel_gpu_bmg_g21 && arch != gpu_arch::intel_gpu_bmg_g31) {
         return false;
