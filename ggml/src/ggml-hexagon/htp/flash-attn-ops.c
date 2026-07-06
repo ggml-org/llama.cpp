@@ -1740,6 +1740,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                     // Pipeline path
                     // ==================================================================
                     struct hmx_queue * hmx_q = ctx->hmx_queue;
+                    hmx_queue_wakeup(hmx_q);
 
                     for (uint32_t kv_blk = 0; kv_blk < factx.n_kv_blocks; ++kv_blk) {
                         const uint32_t kv_start    = kv_blk * Bc;
