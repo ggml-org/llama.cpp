@@ -12,6 +12,18 @@
 #define HAS_SUBGROUP_SHUFFLE 1
 #endif
 
+#ifdef cl_qcom_subgroup_shuffle
+#pragma OPENCL EXTENSION cl_qcom_subgroup_shuffle : enable
+
+#undef sub_group_shuffle_xor
+#define sub_group_shuffle_xor(val, mask) \
+    qcom_sub_group_shuffle_xor( \
+        (val), \
+        (mask), \
+        CLK_SUB_GROUP_SHUFFLE_WIDTH_WAVE_SIZE_QCOM, \
+        0.0f)
+#endif
+
 // Flash attention: Q=f32, K=q4_0, V=q4_0.
 // Block = half d + uchar qs[16]; qs[j] low/high nibble -> elem j / j+16.
 // Dequant: val[i] = d * (nibble_i - 8). dp4a path runs on raw 0..15 nibbles
