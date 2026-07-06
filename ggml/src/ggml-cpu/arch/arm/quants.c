@@ -812,10 +812,10 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         const float dy0 = GGML_CPU_FP16_TO_FP32(y[2*ib].d);
         const float dy1 = GGML_CPU_FP16_TO_FP32(y[2*ib+1].d);
         const float32x4_t nvsc = {
-            ggml_ue4m3_to_fp32(x[ib].d[0]),
-            ggml_ue4m3_to_fp32(x[ib].d[1]),
-            ggml_ue4m3_to_fp32(x[ib].d[2]),
-            ggml_ue4m3_to_fp32(x[ib].d[3])
+            GGML_CPU_UE4M3_TO_FP32(x[ib].d[0]),
+            GGML_CPU_UE4M3_TO_FP32(x[ib].d[1]),
+            GGML_CPU_UE4M3_TO_FP32(x[ib].d[2]),
+            GGML_CPU_UE4M3_TO_FP32(x[ib].d[3])
         };
         const float32x4_t scales = vmulq_f32(nvsc, (float32x4_t){dy0, dy0, dy1, dy1});
 
