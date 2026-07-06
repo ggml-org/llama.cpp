@@ -2304,7 +2304,7 @@ ggml_cgraph * llama_context::graph_reserve(
     llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
     llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
 
-    // spread the outputs across all sequences to reserve the largest sampling graph
+    // select sampler outputs first to reserve the largest valid sampling graph
     std::vector<llama_seq_id> seq_ids(n_seqs);
     for (uint32_t s = 0; s < n_seqs; ++s) {
         seq_ids[s] = s;
@@ -2316,11 +2316,50 @@ ggml_cgraph * llama_context::graph_reserve(
     }
 
     uint32_t n_outputs_set = 0;
+
+    std::vector<uint32_t> sampler_seqs;
+    std::vector<bool> has_sampler(n_seqs, false);
+    for (const auto & entry : sampling.samplers) {
+        const llama_seq_id seq_id = entry.first;
+        if (seq_id < 0 || (uint32_t) seq_id >= n_seqs) {
+            continue;
+        }
+
+        sampler_seqs.push_back(seq_id);
+        has_sampler[seq_id] = true;
+    }
+
+    const uint32_t n_sampling_outputs_per_seq = std::min(
+            ubatch.n_seq_tokens, cparams.n_sampling_outputs_per_seq_max);
+
+    // activate each configured sampler once
+    if (n_sampling_outputs_per_seq > 0) {
+        for (uint32_t s : sampler_seqs) {
+            if (n_outputs_set >= n_outputs) {
+                break;
+            }
+
+            ubatch.output[s * ubatch.n_seq_tokens] = true;
+            ++n_outputs_set;
+        }
+    }
+
+    // add the remaining valid sampling rows
+    for (uint32_t t = 1; t < n_sampling_outputs_per_seq && n_outputs_set < n_outputs; ++t) {
+        for (uint32_t s : sampler_seqs) {
+            if (n_outputs_set >= n_outputs) {
+                break;
+            }
+
+            ubatch.output[s * ubatch.n_seq_tokens + t] = true;
+            ++n_outputs_set;
+        }
+    }
+
+    // use sequences without samplers for any remaining outputs
     for (uint32_t t = 0; t < ubatch.n_seq_tokens && n_outputs_set < n_outputs; ++t) {
         for (uint32_t s = 0; s < n_seqs && n_outputs_set < n_outputs; ++s) {
-            const auto sampler = sampling.samplers.find(s);
-            if (t > 0 && (sampler == sampling.samplers.end() ||
-                    t >= cparams.n_sampling_outputs_per_seq_max)) {
+            if (has_sampler[s]) {
                 continue;
             }
 

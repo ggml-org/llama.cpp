@@ -1083,8 +1083,6 @@ struct llama_sampler_dist : public llama_sampler_backend {
 
     // inputs for the current sampling graph
     std::vector<ggml_tensor *> inp_uniforms;
-
-    bool copy_candidates = false;
 };
 
 static const char * llama_sampler_dist_name(const struct llama_sampler * smpl) {
@@ -1193,8 +1191,7 @@ static bool llama_sampler_dist_backend_init(
         ggml_backend_buffer_type_t   buft,
         uint32_t                     n_outputs_per_seq_max) {
     auto * sctx = (llama_sampler_dist *) smpl->ctx;
-
-    sctx->copy_candidates = n_outputs_per_seq_max > 1;
+    GGML_UNUSED(n_outputs_per_seq_max);
 
     const bool res = llama_sampler_backend_support(smpl, buft);
 
@@ -1258,12 +1255,6 @@ static void llama_sampler_dist_backend_apply(
 
         sampled_token = ggml_get_rows(ctx, candidates, idx);
         ggml_set_name(sampled_token, "dist_sampled_token");
-
-        if (sctx->copy_candidates) {
-            // candidates may be a view whose backing storage can be reused
-            data->candidates = ggml_cont(ctx, data->candidates);
-            ggml_set_name(data->candidates, "dist_candidates_out");
-        }
     }
 
     data->sampled = sampled_token;
