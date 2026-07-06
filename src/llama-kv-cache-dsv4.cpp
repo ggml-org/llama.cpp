@@ -17,9 +17,6 @@
 
 static constexpr uint32_t DSV4_CSA_RATIO = 4;
 static constexpr uint32_t DSV4_HCA_RATIO = 128;
-// [TAG_DSV4_CACHE_PAD]
-// matches MATRIX_ROW_PADDING used by backends for quantized row padding
-static constexpr uint32_t DSV4_CACHE_PAD = 512;
 
 static constexpr uint32_t DSV4_STATE_MAGIC         = 0x34565344; // DSV4
 static constexpr uint32_t DSV4_STATE_VERSION       = 1;
@@ -522,7 +519,7 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
                 overlap_cur_reads.begin(), overlap_cur_reads.end());
     }
 
-    plan.n_kv = GGML_PAD(plan.n_kv, DSV4_CACHE_PAD);
+    plan.n_kv = GGML_PAD(plan.n_kv, 256u);
 
     std::sort(persist_rows.begin(), persist_rows.end(),
             [](const persist_row & a, const persist_row & b) {
@@ -953,16 +950,13 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     // Keep DSV4 KV/state streams per sequence even when public KV mode is unified.
     const bool unified_raw = false;
 
-    const uint32_t kv_size_raw = GGML_PAD(kv_size, DSV4_CACHE_PAD);
-    const uint32_t n_pad_raw   = std::max(n_pad, DSV4_CACHE_PAD);
-
     LLAMA_LOG_INFO("%s: creating DSV4 raw KV cache\n", __func__);
 
     dsv4_make_k_only(hparams_raw);
 
     kv_raw = std::make_unique<llama_kv_cache_iswa>(
             model, hparams_raw, type_k, type_v,
-            v_trans, offload, swa_full, unified_raw, kv_size_raw, n_seq_max, n_ubatch, n_pad_raw,
+            v_trans, offload, swa_full, unified_raw, kv_size, n_seq_max, n_ubatch, n_pad,
             nullptr, filter_raw, reuse, nullptr);
 
     dsv4_make_k_only(hparams_csa);
@@ -995,27 +989,27 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     const bool unified_compressed = false;
 
     LLAMA_LOG_INFO("%s: creating DSV4 CSA compressed KV cache, size = %u cells\n",
-            __func__, dsv4_comp_size(kv_size_raw, DSV4_CSA_RATIO));
+            __func__, dsv4_comp_size(kv_size, DSV4_CSA_RATIO));
 
     kv_csa = std::make_unique<llama_kv_cache>(
             model, hparams_csa, type_k, type_v,
-            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size_raw, DSV4_CSA_RATIO), DSV4_CACHE_PAD), n_seq_max, n_pad,
+            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, DSV4_CSA_RATIO), 256u), n_seq_max, n_pad,
             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_csa, nullptr, nullptr);
 
     LLAMA_LOG_INFO("%s: creating DSV4 HCA compressed KV cache, size = %u cells\n",
-            __func__, dsv4_comp_size(kv_size_raw, DSV4_HCA_RATIO));
+            __func__, dsv4_comp_size(kv_size, DSV4_HCA_RATIO));
 
     kv_hca = std::make_unique<llama_kv_cache>(
             model, hparams_hca, type_k, type_v,
-            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size_raw, DSV4_HCA_RATIO), DSV4_CACHE_PAD), n_seq_max, n_pad,
+            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, DSV4_HCA_RATIO), 256u), n_seq_max, n_pad,
             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_hca, nullptr, nullptr);
 
     LLAMA_LOG_INFO("%s: creating DSV4 lightning-indexer KV cache, size = %u cells\n",
-            __func__, dsv4_comp_size(kv_size_raw, DSV4_CSA_RATIO));
+            __func__, dsv4_comp_size(kv_size, DSV4_CSA_RATIO));
 
     kv_lid = std::make_unique<llama_kv_cache>(
             model, hparams_lid, type_k, type_v,
-            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size_raw, DSV4_CSA_RATIO), DSV4_CACHE_PAD), n_seq_max, n_pad,
+            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, DSV4_CSA_RATIO), 256u), n_seq_max, n_pad,
             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_csa, nullptr, nullptr);
 
     LLAMA_LOG_INFO("%s: creating DSV4 CSA compressor state\n", __func__);
