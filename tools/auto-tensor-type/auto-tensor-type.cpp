@@ -140,14 +140,26 @@ struct mul_mat_capture {
     // Weight tensor metadata (needed to read data from file later)
     ggml_type weight_type;
     int64_t weight_ne0, weight_ne1;  // ne0=input features, ne1=output features
+    int64_t weight_ne2 = 1;          // n_expert (>1 only for MUL_MAT_ID experts)
 
-    // Captured MUL_MAT input (src[1]) — always F32 after the kernel
+    // True if this capture is a GGML_OP_MUL_MAT_ID (MoE routed experts). The
+    // replay path then uses ggml_mul_mat_id with the captured input + ids.
+    bool is_id = false;
+
+    // Captured MUL_MAT input (src[1]) — always F32 after the kernel.
+    // For MUL_MAT_ID this is 3D: [ne0=weight_ne0, ne1 (1 or n_expert_used), ne2=n_tokens].
     std::vector<float> input_data;
-    int64_t input_ne0, input_ne1;  // [ne0=weight_ne0, ne1=n_tokens]
+    int64_t input_ne0, input_ne1;
+    int64_t input_ne2 = 1;
 
-    // Captured reference MUL_MAT output — always F32
+    // Expert-selection ids (src[2]) for MUL_MAT_ID — I32, shape [n_expert_used, n_tokens].
+    std::vector<int32_t> ids_data;
+    int64_t ids_ne0 = 0, ids_ne1 = 0;
+
+    // Captured reference MUL_MAT output — always F32. Flattened to rows of ref_ne0:
+    // ref_ne1 = total_elements / ref_ne0 (covers the 3D MUL_MAT_ID output too).
     std::vector<float> ref_output_data;
-    int64_t ref_ne0, ref_ne1;      // [ne0=weight_ne1, ne1=n_tokens]
+    int64_t ref_ne0, ref_ne1;
 };
 
 // Cost of assigning a specific quant type to a (role, bucket)
@@ -196,10 +208,11 @@ static int compute_bucket(int pos_in_class, int n_in_class, int n_buckets) {
 static std::string extract_role(const std::string & name) {
     // "blk.0.attn_q.weight" -> "attn_q"
     // "blk.0.ffn_gate.weight" -> "ffn_gate"
+    // "blk.0.indexer.proj.weight" -> "indexer.proj"  (role portion may contain dots)
     // "output.weight" -> "output"
     // "token_embd.weight" -> "token_embd"
-    static const std::regex layer_re("blk\\.\\d+\\.([^.]+)\\.weight");
-    static const std::regex global_re("([^.]+)\\.weight");
+    static const std::regex layer_re("blk\\.\\d+\\.(.+)\\.weight");
+    static const std::regex global_re("(.+)\\.weight");
 
     std::smatch m;
     if (std::regex_match(name, m, layer_re) && m.size() > 1) {
@@ -220,9 +233,25 @@ static bool is_matrix_weight(const tensor_info & ti) {
     return true;
 }
 
+// 3D stacked-expert weight (MoE routed experts): one 2D matrix per expert along
+// ne[2], e.g. blk.N.ffn_down_exps.weight [n_in, n_out, n_expert]. These flow
+// through GGML_OP_MUL_MAT_ID (not MUL_MAT) and are usually the bulk of a MoE
+// model's parameters, so they must be measured and optimized like any other
+// weight — not booked as fixed-precision overhead.
+static bool is_expert_weight(const tensor_info & ti) {
+    if (ti.name.size() < 8 || ti.name.substr(ti.name.size() - 7) != ".weight") return false;
+    if (ti.ne[3] != 1) return false;
+    if (ti.ne[2] <= 1) return false;   // must have >1 expert stacked along ne[2]
+    if (ti.ne[0] <= 1 || ti.ne[1] <= 1) return false;
+    return true;
+}
+
 static bool is_quantizable_weight(const tensor_info & ti, int64_t min_elements) {
-    // Must be a 2D matrix weight…
-    if (!is_matrix_weight(ti)) return false;
+    // Must be a 2D matrix weight or a 3D stacked-expert weight…
+    if (!is_matrix_weight(ti) && !is_expert_weight(ti)) return false;
+    // The DeepSeek4 sparse-attention indexer projection is kept native by
+    // llama-quantize (too sensitive to quantize), so don't measure or emit it.
+    if (ti.name.find("indexer.proj") != std::string::npos) return false;
     // …and large enough to justify per-role KLD measurement.
     if ((int64_t)ti.n_elements < min_elements) return false;
     return true;
@@ -542,15 +571,43 @@ struct capture_state {
     int captured = 0;
 };
 
+// Copy a tensor's logical (de-strided) contents into `dst`, which must hold
+// ggml_nelements(t) elements. Captured src tensors may be non-contiguous views:
+// e.g. ggml_argsort_top_k slices the expert ids to [n_expert_used, n_tokens] but
+// keeps the parent argsort's row stride (n_expert), so a flat
+// ggml_backend_tensor_get would read interleaved garbage. We gather row-by-row
+// honoring nb[] so the destination is tightly packed [ne0, ne1, ne2, ne3].
+// Assumes the innermost dim is contiguous (nb[0] == element size), which holds
+// for every tensor this tool captures (MUL_MAT/MUL_MAT_ID inputs, ids, outputs).
+static void capture_tensor_get(const ggml_tensor * t, void * dst) {
+    if (ggml_is_contiguous(t)) {
+        ggml_backend_tensor_get(t, dst, 0, ggml_nbytes(t));
+        return;
+    }
+    const size_t row_bytes = (size_t) t->ne[0] * ggml_type_size(t->type);
+    char * d = (char *) dst;
+    for (int64_t i3 = 0; i3 < t->ne[3]; i3++) {
+        for (int64_t i2 = 0; i2 < t->ne[2]; i2++) {
+            for (int64_t i1 = 0; i1 < t->ne[1]; i1++) {
+                size_t off = i1 * t->nb[1] + i2 * t->nb[2] + i3 * t->nb[3];
+                ggml_backend_tensor_get(t, d, off, row_bytes);
+                d += row_bytes;
+            }
+        }
+    }
+}
+
 static bool capture_callback(ggml_tensor * t, bool ask, void * user_data) {
     auto * state = (capture_state *) user_data;
 
-    if (t->op != GGML_OP_MUL_MAT) return false;
+    if (t->op != GGML_OP_MUL_MAT && t->op != GGML_OP_MUL_MAT_ID) return false;
     if (!t->src[0] || !t->src[1]) return false;
+    const bool is_id = (t->op == GGML_OP_MUL_MAT_ID);
+    if (is_id && !t->src[2]) return false;
 
     const char * weight_name = t->src[0]->name;
 
-    // Check if this MUL_MAT uses one of our target weight tensors
+    // Check if this MUL_MAT(_ID) uses one of our target weight tensors
     if (state->target_weight_names.find(weight_name) == state->target_weight_names.end()) {
         return false;  // Not interested
     }
@@ -567,45 +624,39 @@ static bool capture_callback(ggml_tensor * t, bool ask, void * user_data) {
     cap.weight_type = t->src[0]->type;
     cap.weight_ne0  = t->src[0]->ne[0];
     cap.weight_ne1  = t->src[0]->ne[1];
+    cap.weight_ne2  = t->src[0]->ne[2];   // n_expert (1 for plain MUL_MAT)
+    cap.is_id       = is_id;
     const int cap_bucket = state->weight_to_bucket.count(weight_name)
         ? state->weight_to_bucket[weight_name] : (cap.layer < 0 ? -1 : 0);
 
-    // Capture input (src[1])
+    // Capture input (src[1]) — may be a non-contiguous view, so de-stride.
     {
-        size_t nbytes = ggml_nbytes(t->src[1]);
-        const float * src_ptr = nullptr;
-        std::vector<float> host_copy;
-
-        if (ggml_backend_buffer_is_host(t->src[1]->buffer)) {
-            src_ptr = (const float *) t->src[1]->data;
-        } else {
-            host_copy.resize(nbytes / sizeof(float));
-            ggml_backend_tensor_get(t->src[1], host_copy.data(), 0, nbytes);
-            src_ptr = host_copy.data();
-        }
-
         cap.input_ne0 = t->src[1]->ne[0];
         cap.input_ne1 = t->src[1]->ne[1];
-        cap.input_data.assign(src_ptr, src_ptr + (nbytes / sizeof(float)));
+        cap.input_ne2 = t->src[1]->ne[2];
+        cap.input_data.resize(ggml_nelements(t->src[1]));
+        capture_tensor_get(t->src[1], cap.input_data.data());
     }
 
-    // Capture reference output
+    // Capture expert-selection ids (src[2]) for MUL_MAT_ID — always I32.
+    // selected_experts (ggml_argsort_top_k) is a sliced view with the parent's
+    // row stride, so de-striding here is essential to capture the real routing.
+    if (is_id) {
+        ggml_tensor * idt = t->src[2];
+        cap.ids_ne0 = idt->ne[0];
+        cap.ids_ne1 = idt->ne[1];
+        cap.ids_data.resize(ggml_nelements(idt));
+        capture_tensor_get(idt, cap.ids_data.data());
+    }
+
+    // Capture reference output. For MUL_MAT_ID the output is 3D
+    // [n_out, n_expert_used, n_tokens]; flatten everything past ne0 into rows so
+    // compute_avg_kld measures per-(output-row) relative-L2 uniformly.
     {
-        size_t nbytes = ggml_nbytes(t);
-        const float * src_ptr = nullptr;
-        std::vector<float> host_copy;
-
-        if (ggml_backend_buffer_is_host(t->buffer)) {
-            src_ptr = (const float *) t->data;
-        } else {
-            host_copy.resize(nbytes / sizeof(float));
-            ggml_backend_tensor_get(t, host_copy.data(), 0, nbytes);
-            src_ptr = host_copy.data();
-        }
-
         cap.ref_ne0 = t->ne[0];
-        cap.ref_ne1 = t->ne[1];
-        cap.ref_output_data.assign(src_ptr, src_ptr + (nbytes / sizeof(float)));
+        cap.ref_ne1 = ggml_nelements(t) / t->ne[0];
+        cap.ref_output_data.resize(ggml_nelements(t));
+        capture_tensor_get(t, cap.ref_output_data.data());
     }
 
     state->captures_by_role[make_rb_key(cap.role, cap_bucket)].push_back(std::move(cap));
@@ -696,13 +747,43 @@ struct quant_result {
 };
 
 // Train per-tensor params and quantize a weight tensor to the target type.
+//
+// n_expert > 1 selects the stacked-expert path (MUL_MAT_ID weights): the tensor
+// is [n_per_row, nrows, n_expert] and each expert slice is quantized
+// independently — matching llama-quantize's per-expert loop (src/llama-quant.cpp).
+// imatrix_per_expert indicates the imatrix holds one n_per_row row per expert
+// (length n_per_row*n_expert); otherwise the same imatrix row is reused for all
+// experts. Per-tensor-trained quant types are not supported for experts and
+// return an empty result (signals "skip this qtype for this role").
 static quant_result quantize_weight_to_type(
         ggml_type target_type,
         const float * f32_data,
         int64_t nrows,
         int64_t n_per_row,
-        const float * imatrix) {
+        const float * imatrix,
+        int64_t n_expert = 1,
+        bool imatrix_per_expert = false) {
     quant_result result;
+
+    if (n_expert > 1) {
+        if (requires_training(target_type)) {
+            // Per-tensor-trained types carry per-tensor grids/levels that the
+            // MUL_MAT_ID replay path can't thread per-expert. Leave empty.
+            return result;
+        }
+        const size_t row_size = ggml_row_size(target_type, n_per_row);
+        result.data.resize(row_size * (size_t)nrows * (size_t)n_expert);
+        ggml_quantize_init(target_type);
+        const int64_t nelements_matrix = nrows * n_per_row;
+        for (int64_t i03 = 0; i03 < n_expert; ++i03) {
+            const float * imat03 =
+                imatrix ? (imatrix_per_expert ? imatrix + i03 * n_per_row : imatrix) : nullptr;
+            ggml_quantize_chunk(target_type, f32_data, result.data.data(),
+                                i03 * nelements_matrix, nrows, n_per_row, imat03);
+        }
+        return result;
+    }
+
     size_t quant_size = nrows * ggml_row_size(target_type, n_per_row);
     result.data.resize(quant_size);
 
@@ -843,6 +924,72 @@ static bool eval_mul_mat(ggml_type weight_type, const void * weight_data,
     return true;
 }
 
+// Run MUL_MAT_ID (MoE routed experts): result = mul_mat_id(weights, input, ids)
+//   weights: [w_ne0, w_ne1, n_expert] in a quantized type (all experts stacked)
+//   input:   [w_ne0, in_ne1, n_tokens] in F32 (in_ne1 is 1 or n_expert_used)
+//   ids:     [n_expert_used, n_tokens] in I32
+//   result:  [w_ne1, n_expert_used, n_tokens] in F32
+// Mirrors eval_mul_mat but builds the 3-input MUL_MAT_ID node.
+static bool eval_mul_mat_id(ggml_type weight_type, const void * weight_data,
+                            int64_t w_ne0, int64_t w_ne1, int64_t w_ne2,
+                            const float * input_data, int64_t in_ne0, int64_t in_ne1, int64_t in_ne2,
+                            const int32_t * ids_data, int64_t ids_ne0, int64_t ids_ne1,
+                            std::vector<float> & result_data,
+                            ggml_backend_t backend) {
+    size_t weight_bytes = ggml_row_size(weight_type, w_ne0) * (size_t)w_ne1 * (size_t)w_ne2;
+    size_t input_bytes  = (size_t)in_ne0 * in_ne1 * in_ne2 * sizeof(float);
+    size_t ids_bytes    = (size_t)ids_ne0 * ids_ne1 * sizeof(int32_t);
+
+    size_t ctx_size = ggml_tensor_overhead() * 16 + ggml_graph_overhead_custom(GGML_DEFAULT_GRAPH_SIZE, false) + 4096;
+    struct ggml_init_params params = {(size_t) ctx_size, NULL, /*.no_alloc =*/ true};
+    struct ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        LOG_ERR("Failed to create ggml context for MUL_MAT_ID eval\n");
+        return false;
+    }
+
+    struct ggml_tensor * w   = ggml_new_tensor_3d(ctx, weight_type, w_ne0, w_ne1, w_ne2);
+    struct ggml_tensor * x   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, in_ne0, in_ne1, in_ne2);
+    struct ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, ids_ne0, ids_ne1);
+    struct ggml_tensor * result = ggml_mul_mat_id(ctx, w, x, ids);
+
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    if (!buf) {
+        LOG_ERR("Failed to allocate tensors for MUL_MAT_ID eval (weight %s [%lld,%lld,%lld])\n",
+                ggml_type_name(weight_type), (long long)w_ne0, (long long)w_ne1, (long long)w_ne2);
+        ggml_free(ctx);
+        return false;
+    }
+    if (!w->buffer || !x->buffer || !ids->buffer || !result->buffer) {
+        LOG_ERR("Tensor buffers not set after allocation (MUL_MAT_ID)\n");
+        ggml_backend_buffer_free(buf);
+        ggml_free(ctx);
+        return false;
+    }
+
+    ggml_backend_tensor_set(w,   weight_data, 0, weight_bytes);
+    ggml_backend_tensor_set(x,   input_data,  0, input_bytes);
+    ggml_backend_tensor_set(ids, ids_data,    0, ids_bytes);
+
+    struct ggml_cgraph * graph = ggml_new_graph_custom(ctx, GGML_DEFAULT_GRAPH_SIZE, false);
+    ggml_build_forward_expand(graph, result);
+
+    enum ggml_status status = ggml_backend_graph_compute(backend, graph);
+    if (status != GGML_STATUS_SUCCESS) {
+        LOG_ERR("ggml_backend_graph_compute failed (MUL_MAT_ID): %d\n", status);
+        ggml_backend_buffer_free(buf);
+        ggml_free(ctx);
+        return false;
+    }
+
+    result_data.resize(ggml_nelements(result));
+    ggml_backend_tensor_get(result, result_data.data(), 0, ggml_nbytes(result));
+
+    ggml_backend_buffer_free(buf);
+    ggml_free(ctx);
+    return true;
+}
+
 // Build the cost matrix: for each (role, quant_type), compute average KLD
 // Quant types are evaluated in parallel per capture (each type has its own
 // global state so they don't interfere with each other).
@@ -863,35 +1010,90 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
 
     const int n_parallel = std::max(1, cfg.n_threads);
 
-    // Create a pool of backends — try CUDA first, fall back to CPU
-    // Each thread gets its own backend to avoid contention (VMM pool requires LIFO alloc/free).
+    // Create a pool of backends — spread across all GPUs with free memory, else CPU.
+    // Each concurrent eval needs its own backend (the CUDA VMM pool is a per-backend
+    // LIFO stack allocator), so the pool must hold at least as many backends as the
+    // peak eval concurrency. MUL_MAT_ID expert weights are large (all experts stacked,
+    // ~200-300 MiB each), and each backend's CUDA pool caches freed blocks for the
+    // duration of Phase 3 — so piling every backend onto device 0 exhausts it. Round-
+    // robin the backends over every GPU that has free headroom instead.
     struct backend_pool {
         std::vector<ggml_backend_t> backends;
         std::atomic<int> next_idx{0};
         std::string backend_name;
 
         backend_pool(int count) {
-            // Initialize first backend to determine type
-            ggml_backend_t be = ggml_backend_init_best();
-            if (!be) {
-                LOG_ERR("Failed to init any backend\n");
-                return;
-            }
-            backend_name = ggml_backend_name(be);
-            backends.push_back(be);
-
-            // Create separate backends for remaining threads
-            // This is required because the CUDA VMM pool is a stack allocator
-            // that requires strict LIFO allocation/deallocation order per pool.
-            for (int i = 1; i < count; i++) {
-                ggml_backend_t be_i = ggml_backend_init_best();
-                if (be_i) {
-                    backends.push_back(be_i);
-                } else {
-                    LOG_WRN("Failed to init backend %d, reusing backend 0\n", i);
-                    backends.push_back(be);  // Fallback to sharing
+            // Determine the preferred backend registry (e.g. CUDA) from the best
+            // device, so we don't mix backend types or double-count a physical GPU
+            // that is also exposed through another backend (e.g. the same cards
+            // showing up as both CUDA* and Vulkan*).
+            std::string pref_reg;
+            {
+                ggml_backend_t probe = ggml_backend_init_best();
+                if (probe) {
+                    ggml_backend_dev_t d = ggml_backend_get_device(probe);
+                    ggml_backend_reg_t r = d ? ggml_backend_dev_backend_reg(d) : nullptr;
+                    if (r) pref_reg = ggml_backend_reg_name(r);
+                    ggml_backend_free(probe);
                 }
             }
+
+            // Collect GPU devices (of the preferred registry) with enough free
+            // memory to hold a few expert weights.
+            std::vector<ggml_backend_dev_t> gpu_devs;
+            const size_t min_free = (size_t) 1024 * 1024 * 1024; // 1 GiB headroom
+            for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) continue;
+                if (!pref_reg.empty()) {
+                    ggml_backend_reg_t r = ggml_backend_dev_backend_reg(dev);
+                    if (!r || pref_reg != ggml_backend_reg_name(r)) continue;
+                }
+                size_t free = 0, total = 0;
+                ggml_backend_dev_memory(dev, &free, &total);
+                if (free < min_free) {
+                    LOG_WRN("Phase 3: skipping %s (%.0f MiB free < 1 GiB)\n",
+                            ggml_backend_dev_name(dev), free / 1048576.0);
+                    continue;
+                }
+                gpu_devs.push_back(dev);
+            }
+
+            if (!gpu_devs.empty()) {
+                std::string devs;
+                for (auto d : gpu_devs) {
+                    if (!devs.empty()) devs += ", ";
+                    devs += ggml_backend_dev_name(d);
+                }
+                LOG("Phase 3: %zu GPU(s) with free memory [%s]\n", gpu_devs.size(), devs.c_str());
+                for (int i = 0; i < count; i++) {
+                    ggml_backend_dev_t dev = gpu_devs[i % gpu_devs.size()];
+                    ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
+                    if (be) {
+                        backends.push_back(be);
+                    } else if (!backends.empty()) {
+                        LOG_WRN("Failed to init backend %d on %s, sharing backend 0\n",
+                                i, ggml_backend_dev_name(dev));
+                        backends.push_back(backends[0]);
+                    }
+                }
+            }
+
+            if (backends.empty()) {
+                // No eligible GPU — fall back to best available (typically CPU).
+                ggml_backend_t be = ggml_backend_init_best();
+                if (!be) {
+                    LOG_ERR("Failed to init any backend\n");
+                    return;
+                }
+                backends.push_back(be);
+                for (int i = 1; i < count; i++) {
+                    ggml_backend_t be_i = ggml_backend_init_best();
+                    backends.push_back(be_i ? be_i : be);
+                }
+            }
+
+            backend_name = ggml_backend_name(backends[0]);
         }
         ~backend_pool() {
             // Free all unique backends
@@ -907,9 +1109,13 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
         }
     };
 
-    backend_pool pool(n_parallel);
-    LOG("Phase 3 backend: %s (%d parallel)\n",
-        pool.backend_name.c_str(), n_parallel);
+    // The eval/quantize inner loops never run more than n_types tasks at once
+    // (they stop at ti < n_types), so the pool only needs that many backends —
+    // creating one per CPU thread would just spread idle CUDA pools over every GPU.
+    const int pool_size = std::max(1, std::min(n_parallel, (int) cfg.quant_types.size()));
+    backend_pool pool(pool_size);
+    LOG("Phase 3 backend: %s (%d eval backends, %d parallel quantize threads)\n",
+        pool.backend_name.c_str(), pool_size, n_parallel);
 
     // For each role that has captures
     for (auto & [role, captures] : captures_by_role) {
@@ -935,13 +1141,81 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
             }
 
             const mul_mat_capture & first_cap = *caps_for_weight.front();
-            auto imat = get_imatrix_for_tensor(imatrix_data, weight_name, first_cap.weight_ne0);
+            const bool    is_id    = first_cap.is_id;
+            const int64_t n_expert = is_id ? first_cap.weight_ne2 : 1;
 
-            // Quantize each qtype once for this weight (parallel across qtypes).
-            // Different qtypes use disjoint per-type globals, so parallel training is safe.
+            // Resolve the imatrix. Plain weights want one n_per_row row; expert
+            // weights may carry one row per expert (length n_per_row*n_expert) —
+            // if so, quantize each expert with its own row, else broadcast a
+            // uniform row to all experts.
+            std::vector<float> imat;
+            bool imat_per_expert = false;
+            if (is_id) {
+                auto it = imatrix_data.find(weight_name);
+                if (it != imatrix_data.end() &&
+                    (int64_t)it->second.size() >= first_cap.weight_ne0 * n_expert) {
+                    imat = it->second;
+                    imat_per_expert = true;
+                } else {
+                    imat.assign(first_cap.weight_ne0, 1.0f);
+                }
+            } else {
+                imat = get_imatrix_for_tensor(imatrix_data, weight_name, first_cap.weight_ne0);
+            }
+
+            // Quantize each qtype once for this weight; the result is reused across
+            // all of this weight's captures in the eval loop below.
             std::unordered_map<ggml_type, quant_result> quant_cache;
             std::mutex quant_cache_mutex;
-            {
+            if (is_id && n_expert > 1) {
+                // Expert (MUL_MAT_ID) weights dominate cost and are huge: quantizing all
+                // n_expert slices for one qtype serially, while only parallelizing across
+                // the ~11 qtypes, leaves most cores idle. Expert slices never use the
+                // trained-quant path (quantize_weight_to_type bails on requires_training),
+                // so this is pure per-slice ggml_quantize_chunk — fan out over the full
+                // (qtype x expert) grid so all n_parallel threads are used.
+                const int64_t nrows      = first_cap.weight_ne1;
+                const int64_t n_per_row  = first_cap.weight_ne0;
+                const int64_t nel_matrix = nrows * n_per_row;
+
+                // Pre-size each non-trained qtype's buffer and init its tables once,
+                // serially (ggml_quantize_init is not safe to call concurrently; the
+                // grids it fills are read-only during quantization).
+                std::vector<ggml_type> etypes;
+                std::vector<uint8_t *> out;    // resolved dst pointers (no map lookup in workers)
+                for (ggml_type qt : cfg.quant_types) {
+                    if (requires_training(qt)) continue;  // unsupported for experts (forbidden sentinel)
+                    const size_t row_size = ggml_row_size(qt, n_per_row);
+                    quant_result qr;
+                    qr.data.resize(row_size * (size_t) nrows * (size_t) n_expert);
+                    ggml_quantize_init(qt);
+                    auto res = quant_cache.emplace(qt, std::move(qr));
+                    etypes.push_back(qt);
+                    out.push_back(res.first->second.data.data());
+                }
+
+                // Flat task pool over (qtype, expert): workers pull from an atomic counter.
+                // Each task writes a disjoint slice, so no locking is needed.
+                const int64_t n_tasks = (int64_t) etypes.size() * n_expert;
+                std::atomic<int64_t> next{0};
+                auto worker = [&]() {
+                    for (int64_t k = next.fetch_add(1); k < n_tasks; k = next.fetch_add(1)) {
+                        const int64_t ci = k / n_expert;
+                        const int64_t e  = k % n_expert;
+                        const float * imat_e = imat.empty() ? nullptr
+                            : (imat_per_expert ? imat.data() + e * n_per_row : imat.data());
+                        ggml_quantize_chunk(etypes[ci], weight_f32.data(), out[ci],
+                                            e * nel_matrix, nrows, n_per_row, imat_e);
+                    }
+                };
+                std::vector<std::future<void>> ws;
+                ws.reserve(n_parallel);
+                for (int p = 0; p < n_parallel; p++) ws.push_back(std::async(std::launch::async, worker));
+                for (auto & f : ws) f.get();
+            } else {
+                // Plain weights: parallelize across qtypes. Different qtypes use disjoint
+                // per-type trained globals, so cross-type parallelism is safe; a single
+                // plain matrix is small enough that per-qtype parallelism suffices.
                 std::vector<std::future<void>> qfutures;
                 qfutures.reserve(n_parallel);
                 for (size_t ti = 0; ti < n_types; /* advanced inside */) {
@@ -949,10 +1223,16 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
                     for (int p = 0; p < n_parallel && ti < n_types; p++, ti++) {
                         ggml_type qtype = cfg.quant_types[ti];
                         qfutures.push_back(std::async(std::launch::async,
-                            [&first_cap, &weight_f32, &imat, qtype, &quant_cache, &quant_cache_mutex]() {
+                            [&first_cap, &weight_f32, &imat, qtype, n_expert, imat_per_expert,
+                             &quant_cache, &quant_cache_mutex]() {
                                 auto qres = quantize_weight_to_type(
                                     qtype, weight_f32.data(),
-                                    first_cap.weight_ne1, first_cap.weight_ne0, imat.data());
+                                    first_cap.weight_ne1, first_cap.weight_ne0, imat.data(),
+                                    n_expert, imat_per_expert);
+                                // Empty data = qtype unsupported for this weight (e.g. a
+                                // trained quant on experts); leave it out of the cache so
+                                // the cost entry falls back to the forbidden sentinel.
+                                if (qres.data.empty()) return;
                                 std::lock_guard<std::mutex> lock(quant_cache_mutex);
                                 quant_cache.emplace(qtype, std::move(qres));
                             }));
@@ -982,12 +1262,21 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
                         futures.push_back(std::async(std::launch::async,
                             [&cap, qtype, qres, backend]() -> std::pair<ggml_type, double> {
                                 std::vector<float> quant_output;
-                                if (!eval_mul_mat(qtype, qres->data.data(),
-                                                  cap.weight_ne0, cap.weight_ne1,
-                                                  cap.input_data.data(), cap.input_ne0, cap.input_ne1,
-                                                  qres->levels,
-                                                  quant_output,
-                                                  backend)) {
+                                bool ok;
+                                if (cap.is_id) {
+                                    ok = eval_mul_mat_id(qtype, qres->data.data(),
+                                                         cap.weight_ne0, cap.weight_ne1, cap.weight_ne2,
+                                                         cap.input_data.data(), cap.input_ne0, cap.input_ne1, cap.input_ne2,
+                                                         cap.ids_data.data(), cap.ids_ne0, cap.ids_ne1,
+                                                         quant_output, backend);
+                                } else {
+                                    ok = eval_mul_mat(qtype, qres->data.data(),
+                                                      cap.weight_ne0, cap.weight_ne1,
+                                                      cap.input_data.data(), cap.input_ne0, cap.input_ne1,
+                                                      qres->levels,
+                                                      quant_output, backend);
+                                }
+                                if (!ok) {
                                     return {qtype, std::numeric_limits<double>::quiet_NaN()};
                                 }
                                 return {qtype, compute_avg_kld(cap.ref_output_data.data(), quant_output.data(),
@@ -1722,7 +2011,7 @@ static bool save_cost_matrix_cache(
         LOG_ERR("Failed to open cost-matrix cache for writing: %s\n", path.c_str());
         return false;
     }
-    out << "# auto-tensor-type cost matrix cache v1\n";
+    out << "# auto-tensor-type cost matrix cache v2\n";
     out << "model_path " << cfg.model_path << "\n";
     out << "model_size " << file_size_or_neg(cfg.model_path) << "\n";
     out << "model_mtime " << file_mtime_or_neg(cfg.model_path) << "\n";
@@ -1765,7 +2054,7 @@ static bool load_cost_matrix_cache(
     if (!in) return false;
 
     std::string line;
-    if (!std::getline(in, line) || line != "# auto-tensor-type cost matrix cache v1") {
+    if (!std::getline(in, line) || line != "# auto-tensor-type cost matrix cache v2") {
         LOG_WRN("Cost-matrix cache %s: bad header; ignoring\n", path.c_str());
         return false;
     }
@@ -1920,7 +2209,7 @@ int main(int argc, char ** argv) {
             quantizable.push_back(ti);
         }
     }
-    LOG("Found %zu quantizable weight tensors (>= %lld elements, 2D)\n",
+    LOG("Found %zu quantizable weight tensors (>= %lld elements, 2D or 3D-expert)\n",
         quantizable.size(), (long long)cfg.min_elements);
 
     // Get unique roles
@@ -2339,17 +2628,34 @@ int main(int argc, char ** argv) {
         }
     }
 
+    // token_embd is a get_rows lookup table with no imatrix and is highly sensitive;
+    // never quantize it below Q5_K, regardless of the target bpw or --quants list.
+    if (compute_bpw(token_embd_type) < compute_bpw(GGML_TYPE_Q5_K)) {
+        LOG("token_embd type %s (%.4f bpw) is below Q5_K; flooring to Q5_K\n",
+            ggml_type_name(token_embd_type), compute_bpw(token_embd_type));
+        token_embd_type = GGML_TYPE_Q5_K;
+    }
+
     // Add global tensors (bucket -1) to the cost matrix with their fixed types.
     // KLD=0 since they're not optimized — we just need their BPW in the budget.
+    // token_embd_type may have been floored to a type outside cfg.quant_types
+    // (Q5_K), so make sure it is always a selectable option for that tensor.
     const std::string key_tok_embd = make_rb_key("token_embd", -1);
     const std::string key_output   = make_rb_key("output",     -1);
-    for (ggml_type qtype : cfg.quant_types) {
+    std::vector<ggml_type> tok_embd_types = cfg.quant_types;
+    if (std::find(tok_embd_types.begin(), tok_embd_types.end(), token_embd_type) == tok_embd_types.end()) {
+        tok_embd_types.push_back(token_embd_type);
+    }
+    for (ggml_type qtype : tok_embd_types) {
         cost_entry e;
         e.kld = (qtype == token_embd_type) ? 0.0 : 1e30;
         e.bpw = compute_bpw(qtype);
         cost_matrix[key_tok_embd][qtype] = e;
-
+    }
+    for (ggml_type qtype : cfg.quant_types) {
+        cost_entry e;
         e.kld = (qtype == output_type) ? 0.0 : 1e30;
+        e.bpw = compute_bpw(qtype);
         cost_matrix[key_output][qtype] = e;
     }
     LOG("Global tensors: token_embd=%s (%.4f bpw), output=%s (%.4f bpw)\n",

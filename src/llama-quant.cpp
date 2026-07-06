@@ -449,6 +449,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // these are position tables added via get_rows, not matmul weights, so they carry no imatrix
     quantize &= name.find("compressor_ape") == std::string::npos;
 
+    // do not quantize the DeepSeek4 sparse-attention indexer projection: it selects which
+    // tokens attention attends to, has no redundancy, and is highly sensitive - keep it native
+    quantize &= name.find("indexer.proj") == std::string::npos;
+
     // do not quantize specific multimodal tensors
     quantize &= name.find(".position_embd") == std::string::npos;
     quantize &= name.find("sam.pos_embd")   == std::string::npos;
@@ -1121,6 +1125,7 @@ struct pass1_setup {
         quantize &= name.find("_norm.weight")        == std::string::npos;
         quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
         quantize &= name.find("compressor_ape")      == std::string::npos;  // position embeddings, not weights
+        quantize &= name.find("indexer.proj")        == std::string::npos;  // sparse-attn selector, keep native
         if (!quantize) {
             return false;
         }
