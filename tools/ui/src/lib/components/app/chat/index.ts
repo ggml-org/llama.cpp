@@ -247,9 +247,7 @@ export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFo
  * thinking status, and a nested list of effort levels.
  * Only visible when the current model supports thinking.
  */
-export {
-	default as ChatFormActionAddReasoningSubmenu
-} from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddReasoningSubmenu.svelte';
+export { default as ChatFormActionAddReasoningSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddReasoningSubmenu.svelte';
 
 /**
  * Displays context token usage as a compact pill with tooltip.

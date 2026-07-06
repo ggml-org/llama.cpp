@@ -129,9 +129,7 @@ class ToolsStore {
 		if (connections.size > 0) {
 			const optedIn = mcpStore.optedInRecommendationIds;
 			for (const [serverId, connection] of connections) {
-				if (
-					RECOMMENDED_MCP_SERVER_IDS.has(serverId) && !optedIn.has(serverId)
-				) {
+				if (RECOMMENDED_MCP_SERVER_IDS.has(serverId) && !optedIn.has(serverId)) {
 					continue;
 				}
 				const serverName = mcpStore.getServerDisplayName(serverId);

@@ -87,7 +87,9 @@ class ConversationsStore {
 	pendingThinkingEnabled = $state(false);
 
 	/** Global (non-conversation-specific) reasoning effort default */
-	pendingReasoningEffort = $state<ReasoningEffort | 'off'>(ConversationsStore.loadReasoningEffortDefault());
+	pendingReasoningEffort = $state<ReasoningEffort | 'off'>(
+		ConversationsStore.loadReasoningEffortDefault()
+	);
 
 	/** Last non-off reasoning effort, restored when re-enabling thinking globally */
 	private lastNonOffEffort: ReasoningEffort | null = null;

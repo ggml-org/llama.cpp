@@ -77,13 +77,13 @@
 			{/if}
 
 			<!-- {#if thinkingEnabled} -->
-				<span class="text-sm inline-flex gap-2 {!thinkingEnabled ? 'text-muted-foreground' : ''}">
-    				Reasoning
+			<span class="text-sm inline-flex gap-2 {!thinkingEnabled ? 'text-muted-foreground' : ''}">
+				Reasoning
 
-    				<span class="capitalize text-muted-foreground">
-						{thinkingEnabled ? currentEffort : 'off'}
-					</span>
+				<span class="capitalize text-muted-foreground">
+					{thinkingEnabled ? currentEffort : 'off'}
 				</span>
+			</span>
 			<!-- {:else}
 				<span class="capitalize text-muted-foreground text-sm">
 					No Reasoning
@@ -91,7 +91,9 @@
 			{/if} -->
 		</DropdownMenu.SubTrigger>
 
-		<DropdownMenu.SubContent class="w-60 bg-popover p-1.5 text-popover-foreground shadow-md outline-none">
+		<DropdownMenu.SubContent
+			class="w-60 bg-popover p-1.5 text-popover-foreground shadow-md outline-none"
+		>
 			{#each REASONING_EFFORT_LEVELS as level (level.value)}
 				<button
 					type="button"

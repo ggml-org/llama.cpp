@@ -154,7 +154,7 @@
 				{onMcpResourcesClick}
 				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}
 			/>
-			</div>
+		</div>
 	{/if}
 
 	<div class="flex items-center gap-1.5">

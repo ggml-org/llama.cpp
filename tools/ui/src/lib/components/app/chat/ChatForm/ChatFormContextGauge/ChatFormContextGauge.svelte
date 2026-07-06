@@ -170,8 +170,7 @@
 			}
 		}
 
-		const averageTokensPerSecond =
-			outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
+		const averageTokensPerSecond = outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
 
 		return { read, output, averageTokensPerSecond };
 	});
@@ -222,7 +221,7 @@
 	let detailsOpen = $state(false);
 
 	let hasDetails = $derived(
-		enabledToolsTokenCount !== null && enabledToolsTokenCount > 0 ||
+		(enabledToolsTokenCount !== null && enabledToolsTokenCount > 0) ||
 			currentStats.read > 0 ||
 			cumulativeStats.read > 0 ||
 			currentStats.output > 0 ||
@@ -299,7 +298,9 @@
 				r="11"
 				class="transition-colors duration-300"
 				class:text-foreground={contextPercent !== null && contextPercent < 80}
-				class:text-amber-400={contextPercent !== null && contextPercent >= 80 && contextPercent < 95}
+				class:text-amber-400={contextPercent !== null &&
+					contextPercent >= 80 &&
+					contextPercent < 95}
 				class:text-red-400={contextPercent !== null && contextPercent >= 95}
 				class:text-muted-foreground={contextPercent === null}
 				stroke="currentColor"
@@ -349,7 +350,9 @@
 					<div
 						class="h-full rounded-full transition-all duration-300"
 						class:bg-green-500={contextPercent !== null && contextPercent < 80}
-						class:bg-amber-500={contextPercent !== null && contextPercent >= 80 && contextPercent < 95}
+						class:bg-amber-500={contextPercent !== null &&
+							contextPercent >= 80 &&
+							contextPercent < 95}
 						class:bg-red-500={contextPercent !== null && contextPercent >= 95}
 						style="width: {contextPercent}%"
 					></div>
@@ -380,56 +383,56 @@
 					</Collapsible.Trigger>
 
 					<Collapsible.Content class="flex flex-col gap-2 text-xs pt-4">
-					{#if enabledToolsTokenCount !== null && enabledToolsTokenCount > 0}
-						<div class="flex items-baseline justify-between">
-							<span class="text-muted-foreground">Tool definitions</span>
-							<span class="font-mono text-muted-foreground">
-								{formatParameters(enabledToolsTokenCount)}
-							</span>
-						</div>
-						<div class="text-[10px] leading-tight text-muted-foreground/70">
-							Sent on every turn, cached after the first
-						</div>
-					{/if}
-					{#if currentStats.read > 0}
-						<div class="flex items-baseline justify-between">
-							<span class="text-muted-foreground">Reading</span>
-							<span class="font-mono text-muted-foreground">
-								{currentStats.read.toLocaleString()} tok
-							</span>
-						</div>
-						{#if cumulativeStats.read > currentStats.read}
-							<div class="-mt-1.5 pl-2 text-[10px] leading-tight text-muted-foreground/70">
-								{cumulativeStats.read.toLocaleString()} total across the conversation
+						{#if enabledToolsTokenCount !== null && enabledToolsTokenCount > 0}
+							<div class="flex items-baseline justify-between">
+								<span class="text-muted-foreground">Tool definitions</span>
+								<span class="font-mono text-muted-foreground">
+									{formatParameters(enabledToolsTokenCount)}
+								</span>
+							</div>
+							<div class="text-[10px] leading-tight text-muted-foreground/70">
+								Sent on every turn, cached after the first
 							</div>
 						{/if}
-					{/if}
-					{#if cumulativeStats.output > 0}
-						<div class="flex items-baseline justify-between">
-							<span class="text-muted-foreground">Output</span>
-							<span class="font-mono text-muted-foreground">
-								{cumulativeStats.output.toLocaleString()} tok
-							</span>
-						</div>
-						{#if currentStats.output > 0 && currentStats.output < cumulativeStats.output}
-							<div class="-mt-1.5 pl-2 text-[10px] leading-tight text-muted-foreground/70">
-								{currentStats.output.toLocaleString()} in the last response
+						{#if currentStats.read > 0}
+							<div class="flex items-baseline justify-between">
+								<span class="text-muted-foreground">Reading</span>
+								<span class="font-mono text-muted-foreground">
+									{currentStats.read.toLocaleString()} tok
+								</span>
+							</div>
+							{#if cumulativeStats.read > currentStats.read}
+								<div class="-mt-1.5 pl-2 text-[10px] leading-tight text-muted-foreground/70">
+									{cumulativeStats.read.toLocaleString()} total across the conversation
+								</div>
+							{/if}
+						{/if}
+						{#if cumulativeStats.output > 0}
+							<div class="flex items-baseline justify-between">
+								<span class="text-muted-foreground">Output</span>
+								<span class="font-mono text-muted-foreground">
+									{cumulativeStats.output.toLocaleString()} tok
+								</span>
+							</div>
+							{#if currentStats.output > 0 && currentStats.output < cumulativeStats.output}
+								<div class="-mt-1.5 pl-2 text-[10px] leading-tight text-muted-foreground/70">
+									{currentStats.output.toLocaleString()} in the last response
+								</div>
+							{/if}
+						{/if}
+						{#if cumulativeStats.averageTokensPerSecond !== null}
+							<div class="flex items-baseline justify-between">
+								<span class="text-muted-foreground">Avg speed</span>
+								<span class="font-mono text-muted-foreground">
+									{cumulativeStats.averageTokensPerSecond.toFixed(1)}
+									{STATS_UNITS.TOKENS_PER_SECOND}
+								</span>
 							</div>
 						{/if}
-					{/if}
-					{#if cumulativeStats.averageTokensPerSecond !== null}
-						<div class="flex items-baseline justify-between">
-							<span class="text-muted-foreground">Avg speed</span>
-							<span class="font-mono text-muted-foreground">
-								{cumulativeStats.averageTokensPerSecond.toFixed(1)}
-								{STATS_UNITS.TOKENS_PER_SECOND}
-							</span>
-						</div>
-					{/if}
-					{#each transientDetails as detail (detail)}
-						<div class="font-mono text-muted-foreground">{detail}</div>
-					{/each}
-				</Collapsible.Content>
+						{#each transientDetails as detail (detail)}
+							<div class="font-mono text-muted-foreground">{detail}</div>
+						{/each}
+					</Collapsible.Content>
 				</Collapsible.Root>
 			{/if}
 		</div>
