@@ -285,13 +285,16 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
 static size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft);
 static size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft);
 static size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor);
+static bool vk_uma_dual_access_enabled();
+static bool ggml_backend_vk_buffer_type_is_host(ggml_backend_buffer_type_t buft);
+
 static ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface = {
     /* .get_name         = */ ggml_backend_vk_buffer_type_name,
     /* .alloc_buffer     = */ ggml_backend_vk_buffer_type_alloc_buffer,
     /* .get_alignment    = */ ggml_backend_vk_buffer_type_get_alignment,
     /* .get_max_size     = */ ggml_backend_vk_buffer_type_get_max_size,
     /* .get_alloc_size   = */ ggml_backend_vk_buffer_type_get_alloc_size,
-    /* .is_host          = */ NULL,
+    /* .is_host          = */ ggml_backend_vk_buffer_type_is_host,
 };
 
 class vk_memory_logger;
@@ -2164,11 +2167,36 @@ struct ggml_backend_vk_context {
 
 static void * const vk_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
 
-static uint64_t vk_tensor_offset(const ggml_tensor * tensor) {
-    if (tensor->view_src) {
-        return (uint8_t *) tensor->view_src->data - (uint8_t *) vk_ptr_base;
+static bool vk_uma_dual_access_checked = false;
+static bool vk_uma_dual_access_val = false;
+static bool vk_uma_dual_access_enabled() {
+    if (!vk_uma_dual_access_checked) {
+        vk_uma_dual_access_val = getenv("GGML_VK_UMA_DUAL_ACCESS") != nullptr;
+        vk_uma_dual_access_checked = true;
     }
-    return (uint8_t *) tensor->data - (uint8_t *) vk_ptr_base;
+    return vk_uma_dual_access_val;
+}
+
+static bool ggml_backend_vk_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
+    if (!vk_uma_dual_access_enabled()) {
+        return false;
+    }
+    ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *)buft->context;
+    return ctx->device->uma;
+}
+
+static uint64_t vk_tensor_offset(const ggml_tensor * tensor) {
+    const void * base = vk_ptr_base;
+    if (vk_uma_dual_access_enabled() && tensor->buffer) {
+        void * buf_base = ggml_backend_buffer_get_base(tensor->buffer);
+        if (buf_base != vk_ptr_base) {
+            base = buf_base;
+        }
+    }
+    if (tensor->view_src) {
+        return (const uint8_t *) tensor->view_src->data - (const uint8_t *) base;
+    }
+    return (const uint8_t *) tensor->data - (const uint8_t *) base;
 }
 
 static uint32_t get_misalign_bytes(const ggml_backend_vk_context * ctx, const ggml_tensor * t)
@@ -15176,6 +15204,13 @@ static void ggml_backend_vk_buffer_free_buffer(ggml_backend_buffer_t buffer) {
 }
 
 static void * ggml_backend_vk_buffer_get_base(ggml_backend_buffer_t buffer) {
+    if (vk_uma_dual_access_enabled()) {
+        ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *)buffer->context;
+        auto dev = ctx->device.lock();
+        if (dev && dev->uma && ctx->dev_buffer && ctx->dev_buffer->ptr) {
+            return ctx->dev_buffer->ptr;
+        }
+    }
     return vk_ptr_base;
 
     UNUSED(buffer);
