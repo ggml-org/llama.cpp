@@ -463,7 +463,7 @@ typedef struct {
     struct hmx_fa_context * factx;
     uint32_t                kv_rows;
     size_t                  src_stride;
-    size_t                  buf_idx;
+    void *                  curr_k;
     uint32_t                kv_start;
     uint32_t                rows_per_t;
 } fa_k_int_args_t;
@@ -483,19 +483,19 @@ static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) 
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_K_PREP, (uint16_t) (args->kv_start + start));
-    hmx_interleave_rows_to_tiles(factx->vtcm_k_tiles, factx->vtcm_k_fp16[args->buf_idx], total_rows, factx->DK,
+    hmx_interleave_rows_to_tiles(factx->vtcm_k_tiles, (const __fp16 *) args->curr_k, total_rows, factx->DK,
                              args->src_stride, start, end);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_K_PREP, (uint16_t) (args->kv_start + start));
 }
 
-static void fa_phase_k_interleave(struct hmx_fa_context * factx, uint32_t kv_rows, size_t src_stride, size_t buf_idx, uint32_t kv_start) {
+static void fa_phase_k_interleave(struct hmx_fa_context * factx, uint32_t kv_rows, size_t src_stride, void * curr_k, uint32_t kv_start) {
     worker_pool_context_t wp = factx->octx->ctx->worker_pool;
     uint32_t n = 1;
     if (factx->n_threads > 1 && kv_rows >= factx->n_threads * 2) {
         n = factx->n_threads;
     }
     uint32_t rows_per_t = hex_align_up(hmx_ceil_div(kv_rows, n), 2);
-    fa_k_int_args_t args = { factx, kv_rows, src_stride, buf_idx, kv_start, rows_per_t };
+    fa_k_int_args_t args = { factx, kv_rows, src_stride, curr_k, kv_start, rows_per_t };
     if (n > 1) {
         worker_pool_run_func(wp, fa_k_interleave_thread, &args, n);
     } else {
@@ -507,6 +507,7 @@ typedef struct {
     struct hmx_fa_context * factx;
     uint32_t                kv_rows;
     size_t                  src_stride;
+    void *                  curr_v;
     size_t                  buf_idx;
     size_t                  n_col_tiles;
     uint32_t                kv_start;
@@ -530,7 +531,7 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, (uint16_t) (args->kv_start + start));
-    hmx_interleave_cols_to_tiles(v_tiles_dest, factx->vtcm_v_fp16[args->buf_idx], total_rows, factx->DV,
+    hmx_interleave_cols_to_tiles(v_tiles_dest, (const __fp16 *) args->curr_v, total_rows, factx->DV,
                              args->src_stride, (uint32_t) args->n_col_tiles, start, end);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, (uint16_t) (args->kv_start + start));
 }
@@ -538,6 +539,7 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
 static void fa_phase_v_interleave(struct hmx_fa_context * factx,
                                   uint32_t                kv_rows,
                                   size_t                  src_stride,
+                                  void *                  curr_v,
                                   size_t                  buf_idx,
                                   size_t                  n_col_tiles,
                                   uint32_t                kv_start) {
@@ -547,7 +549,7 @@ static void fa_phase_v_interleave(struct hmx_fa_context * factx,
         n = factx->n_threads;
     }
     uint32_t rows_per_t = hex_align_up(hmx_ceil_div(kv_rows, n), 2);
-    fa_v_int_args_t args = { factx, kv_rows, src_stride, buf_idx, n_col_tiles, kv_start, rows_per_t };
+    fa_v_int_args_t args = { factx, kv_rows, src_stride, curr_v, buf_idx, n_col_tiles, kv_start, rows_per_t };
     if (n > 1) {
         worker_pool_run_func(wp, fa_v_interleave_thread, &args, n);
     } else {
@@ -1739,10 +1741,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             dma_queue_push(dma, dma_make_ptr(factx.vtcm_v_fp16[prefetch_buf], v_prefetch_src), size_v_row_padded, v->nb[1], size_v_row, prefetch_rows);
                         }
 
-                        // Wait for current KV DMA
-                        dma_queue_pop(dma);  // K
-                        dma_queue_pop(dma);  // V
-
                         // ---- Phase 1: K_int ----
                         if (kv_blk > 0) {
                             ou_job.o_curr           = o_tile_curr;
@@ -1758,7 +1756,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             ou_job.DV               = DV;
                             hmx_queue_push(hmx_q, hmx_queue_make_desc(hmx_fa_o_update_worker, &ou_job));
                         }
-                        fa_phase_k_interleave(&factx, kv_rows, k_src_stride, buf_idx, kv_start);
+
+                        // Wait for current K DMA and interleave
+                        void * curr_k = dma_queue_pop(dma).dst;
+                        fa_phase_k_interleave(&factx, kv_rows, k_src_stride, curr_k, kv_start);
 
                         // ---- Phase 2: qk_dot ----
                         qk_job.q_tiles        = factx.vtcm_q_tiles;
@@ -1770,7 +1771,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         qk_job.n_tiles_per_bc = n_tiles_per_bc;
                         qk_job.hmx_scales     = factx.vtcm_hmx_scales_qk;
                         hmx_queue_push(hmx_q, hmx_queue_make_desc(hmx_fa_qk_dot_worker, &qk_job));
-                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, buf_idx, n_tiles_per_bc, kv_start);
+
+                        // Wait for current V DMA and interleave
+                        void * curr_v = dma_queue_pop(dma).dst;
+                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, curr_v, buf_idx, n_tiles_per_bc, kv_start);
 
                         if (kv_blk > 0) {
                             hmx_queue_pop(hmx_q);
@@ -1864,10 +1868,9 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             dma_queue_push(dma, dma_make_ptr(factx.vtcm_v_fp16[prefetch_buf], v_prefetch_src), size_v_row_padded, v->nb[1], size_v_row, prefetch_rows);
                         }
 
-                        dma_queue_pop(dma);  // K
-                        dma_queue_pop(dma);  // V
-
-                        fa_phase_k_interleave(&factx, kv_rows, k_src_stride, buf_idx, kv_start);
+                        // Wait for current K DMA and interleave
+                        void * curr_k = dma_queue_pop(dma).dst;
+                        fa_phase_k_interleave(&factx, kv_rows, k_src_stride, curr_k, kv_start);
 
                         {
                             qk_job.q_tiles        = factx.vtcm_q_tiles;
@@ -1882,6 +1885,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_fa_qk_dot_worker, &qk_job));
                             hmx_queue_pop(ctx->hmx_queue);
                         }
+
+                        // Wait for current V DMA and interleave
+                        void * curr_v = dma_queue_pop(dma).dst;
+                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, curr_v, buf_idx, n_tiles_per_bc, kv_start);
 
                         // ---- Phase 3: softmax + build_D ----
                         __fp16 * current_mask_vtcm = NULL;
@@ -1915,7 +1922,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         sargs.mask_vtcm_row_stride = factx.mask_buf_row_stride;
                         sargs.slopes               = factx.vtcm_slopes;
                         fa_phase_softmax_and_build_d(&factx, &sargs, n_row_tiles, n_row_tiles_g_br);
-                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, buf_idx, n_tiles_per_bc, kv_start);
 
                         {
                             ou_job.o_curr           = o_tile_curr;
