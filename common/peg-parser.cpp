@@ -1465,7 +1465,9 @@ common_peg_parser common_peg_parser_builder::python_value() {
 common_peg_parser common_peg_parser_builder::marker() {
     auto sharp_bracket_parser = literal("<") + until(">") + literal(">");
     auto square_bracket_parser = literal("[") + until("]") + literal("]");
-    return choice({ sharp_bracket_parser, square_bracket_parser });
+    // UTF-8 triangle brackets ◁ (U+25C1) and ▷ (U+25B7), used by e.g. Kimi-VL-Thinking
+    auto triangle_bracket_parser = literal("\xe2\x97\x81") + until("\xe2\x96\xb7") + literal("\xe2\x96\xb7");
+    return choice({ sharp_bracket_parser, square_bracket_parser, triangle_bracket_parser });
 }
 
 common_peg_parser common_peg_parser_builder::json_member(const std::string & key, const common_peg_parser & p) {
