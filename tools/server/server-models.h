@@ -11,7 +11,10 @@
 #include <condition_variable>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
+#include <string>
+#include <unordered_map>
 
 /**
  * state diagram:
@@ -38,6 +41,11 @@ enum server_model_source {
     SERVER_MODEL_SOURCE_PRESET,
     SERVER_MODEL_SOURCE_MODELS_DIR,
     SERVER_MODEL_SOURCE_CACHE,
+};
+
+enum server_child_mode {
+    SERVER_CHILD_MODE_NORMAL,   // load the model and run normally
+    SERVER_CHILD_MODE_DOWNLOAD, // download the model and exit
 };
 
 static std::string server_model_status_to_string(server_model_status status) {
@@ -105,7 +113,6 @@ private:
         std::shared_ptr<server_subproc> subproc; // shared between main thread and monitoring thread
         std::thread th;
         server_model_meta meta;
-        FILE * stdin_file = nullptr;
     };
 
     std::mutex mutex;
@@ -121,6 +128,44 @@ private:
 
     // if true, the next get_meta() will trigger a reload of model list
     bool need_reload = false;
+
+    // conv_id -> model name that currently serves its stream session, lets the resumable stream
+    // routes go straight to the owning child instead of polling every one. populated when
+    // proxy_request forwards a POST carrying an X-Conversation-Id. best effort: a stale entry just
+    // makes the child answer not found and the client recovers. owns its lock, one mutex per struct
+    struct conv_model_tracker {
+        void remember(const std::string & conv_id, const std::string & model) {
+            if (conv_id.empty() || model.empty()) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(mu);
+            map[conv_id] = model;
+        }
+
+        std::optional<std::string> lookup(const std::string & conv_id) {
+            if (conv_id.empty()) {
+                return std::nullopt;
+            }
+            std::lock_guard<std::mutex> lock(mu);
+            auto it = map.find(conv_id);
+            if (it == map.end()) {
+                return std::nullopt;
+            }
+            return it->second;
+        }
+
+        void forget(const std::string & conv_id) {
+            if (conv_id.empty()) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(mu);
+            map.erase(conv_id);
+        }
+
+      private:
+        std::mutex                                   mu;
+        std::unordered_map<std::string, std::string> map;
+    };
 
     common_preset_context ctx_preset;
 
@@ -141,6 +186,9 @@ private:
     void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
 
 public:
+    // conv_id -> model tracker for the resumable stream routes, owns its lock
+    conv_model_tracker conv_models;
+
     server_models(const common_params & params, int argc, char ** argv);
 
     server_response sse; // for real-time updates via SSE endpoint
@@ -161,15 +209,18 @@ public:
     // return a copy of all model metadata (thread-safe)
     std::vector<server_model_meta> get_all_meta();
 
+    struct load_options {
+        server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
+        // used for spawning a downloading child process
+        std::optional<server_model_meta> custom_meta = std::nullopt;
+    };
+
     // load and unload model instances
     // these functions are thread-safe
     void load(const std::string & name);
+    void load(const std::string & name, const load_options & opts);
     void unload(const std::string & name);
     void unload_all();
-
-    // download a new model, progress is reported via SSE
-    // to stop the download, call unload()
-    void download(common_params_model && model, common_download_opts && opts);
 
     struct update_status_args {
         server_model_status status;
@@ -213,9 +264,12 @@ public:
 struct server_child {
     // serializes the notify_to_router writes
     std::mutex mtx_stdout;
+    std::atomic<bool> is_finished_downloading = false; // set by run_download
 
     // return true if the current process is a child server instance
     bool is_child();
+    server_child_mode get_mode();
+    int run_download(common_params & params);
 
     // register the shutdown_handler to be called by the router
     // return the monitoring thread (to be joined by the caller)
@@ -258,6 +312,12 @@ struct server_models_routes {
     server_http_context::handler_t get_router_models_sse;
     server_http_context::handler_t post_router_models;
     server_http_context::handler_t del_router_models;
+
+    // router side handlers for the resumable streaming routes. each resolves the child that owns
+    // a conversation through the conv_id -> model map, no probing or fan out
+    server_http_context::handler_t router_stream_get;
+    server_http_context::handler_t router_streams_lookup;
+    server_http_context::handler_t router_stream_delete;
 };
 
 /**

@@ -181,6 +181,16 @@ export { default as McpServerCardDeleteDialog } from './McpServerCard/McpServerC
 export { default as McpServerCardSkeleton } from './McpServerCardSkeleton.svelte';
 
 /**
+ * **McpServerCardCompact** - Condensed MCP server card
+ *
+ * Compact alternative to McpServerCard tailored for picker-style UIs.
+ * Shows the server identity, status, and a flex-wrapped list of available tools.
+ * Tool names are rendered as badges; hovering a badge shows its description in a tooltip.
+ * Does not show connection logs or server instructions.
+ */
+export { default as McpServerCardCompact } from './McpServerCard/McpServerCardCompact.svelte';
+
+/**
  * **McpServerIdentity** - Server identity display (icon, name, version)
  *
  * Reusable headless component for displaying server name, favicon/icon, and version badge.

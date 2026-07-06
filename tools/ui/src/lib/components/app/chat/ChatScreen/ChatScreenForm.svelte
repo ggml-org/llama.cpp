@@ -2,6 +2,7 @@
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
@@ -32,7 +33,30 @@
 	}: Props = $props();
 
 	let chatFormRef: ChatForm | undefined = $state(undefined);
+	let formWrapperEl: HTMLDivElement | undefined = $state();
 	let chatId = $derived(page.params.id as string | undefined);
+
+	$effect(() => {
+		if (!formWrapperEl) return;
+
+		const formEl = formWrapperEl.querySelector('form') as HTMLElement | null;
+		if (!formEl) return;
+
+		const updateHeight = () => {
+			const height = Math.round(formEl.getBoundingClientRect().height);
+			document.documentElement.style.setProperty('--chat-form-height', `${height}px`);
+		};
+
+		updateHeight();
+
+		const resizeObserver = new ResizeObserver(updateHeight);
+		resizeObserver.observe(formEl);
+
+		return () => {
+			resizeObserver.disconnect();
+			document.documentElement.style.removeProperty('--chat-form-height');
+		};
+	});
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let message = $derived(initialMessage);
 	let previousIsLoading = $derived(isLoading);
@@ -83,12 +107,14 @@
 	}
 
 	onMount(() => {
-		setTimeout(() => chatFormRef?.focus(), 10);
+		if (!isMobile.current) {
+			setTimeout(() => chatFormRef?.focus(), 100);
+		}
 	});
 
 	afterNavigate((navigation) => {
-		if (navigation?.from != null) {
-			setTimeout(() => chatFormRef?.focus(), 10);
+		if (navigation?.from != null && !isMobile.current) {
+			setTimeout(() => chatFormRef?.focus(), 100);
 		}
 	});
 
@@ -108,12 +134,12 @@
 	});
 </script>
 
-<div class="relative mx-auto max-w-[48rem]">
+<div class="chat-screen-form-wrapper" bind:this={formWrapperEl}>
 	<ChatForm
+		class="mx-auto max-w-3xl {className}"
 		bind:this={chatFormRef}
 		bind:value={message}
 		bind:uploadedFiles
-		class={className}
 		{disabled}
 		{isLoading}
 		showMcpPromptButton

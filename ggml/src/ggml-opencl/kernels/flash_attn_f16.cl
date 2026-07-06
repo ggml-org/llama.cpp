@@ -4,13 +4,25 @@
 #define ACC_TYPE4 float4
 #define DATA_TYPE half
 #define DATA_TYPE4 half4
-#define CONVERT_ACC4(x) convert_float4(x)
-#define CONVERT_DATA4(x) convert_half4(x)
+#define CONVERT_ACC4(x) ((float4)((float)(x).s0, (float)(x).s1, (float)(x).s2, (float)(x).s3))
+#define CONVERT_DATA4(x) ((half4)((half)(x).s0, (half)(x).s1, (half)(x).s2, (half)(x).s3))
 
 #define DK_VEC (DK/4)
 #define DV_VEC (DV/4)
 #define WG_SIZE (BLOCK_M)
 #define Q1_WG_SIZE 64
+
+// The kernels are built with -cl-finite-math-only. On some older Adreno GPUs,
+// infinite operand can cause undefined behavior and miscompilation for exp.
+// Therefore, a large negative value is used instead.
+#define FA_M_INIT (-3.0e38f)
+
+// Drop full unroll at DK>=192 — Adreno compiler host-memory budget.
+#if DK >= 192
+#define FA_UNROLL
+#else
+#define FA_UNROLL _Pragma("unroll")
+#endif
 
 inline float get_alibi_slope(
     const float max_bias, const uint h, const uint n_head_log2, const float m0, const float m1
@@ -81,18 +93,18 @@ __kernel void flash_attn_f16(
     if (my_query_row < n_q) {
         const ulong q_row_offset = batch_idx * q_nb3 + head_idx * q_nb2 + my_query_row * q_nb1;
         const global DATA_TYPE4* q_ptr = (const global DATA_TYPE4*)(q_base + q_row_offset);
-        #pragma unroll
+        FA_UNROLL
         for (int i = 0; i < DK_VEC; ++i) {
             q_priv[i] = CONVERT_ACC4(q_ptr[i]);
         }
     }
 
     ACC_TYPE4 o_acc[DV_VEC];
-    #pragma unroll
+    FA_UNROLL
     for (int i = 0; i < DV_VEC; ++i) {
         o_acc[i] = (ACC_TYPE4)(0.0f);
     }
-    ACC_TYPE m_i = -INFINITY;
+    ACC_TYPE m_i = FA_M_INIT;
     ACC_TYPE l_i = 0.0f;
 
     float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
@@ -125,49 +137,72 @@ __kernel void flash_attn_f16(
             continue;
         }
 
-        for (int j = 0; j < BLOCK_N; j += 2) {
+        for (int j = 0; j < BLOCK_N; j += 4) {
             const int k_row0 = k_start + j;
             const int k_row1 = k_start + j + 1;
+            const int k_row2 = k_start + j + 2;
+            const int k_row3 = k_start + j + 3;
 
             ACC_TYPE4 dot_acc0 = (ACC_TYPE4)(0.0f);
             ACC_TYPE4 dot_acc1 = (ACC_TYPE4)(0.0f);
-            #pragma unroll
+            ACC_TYPE4 dot_acc2 = (ACC_TYPE4)(0.0f);
+            ACC_TYPE4 dot_acc3 = (ACC_TYPE4)(0.0f);
+            FA_UNROLL
             for (int k = 0; k < DK_VEC; k++) {
-                dot_acc0 = mad(q_priv[k], CONVERT_ACC4(l_k[j][k]), dot_acc0);
-                dot_acc1 = mad(q_priv[k], CONVERT_ACC4(l_k[j+1][k]), dot_acc1);
+                const ACC_TYPE4 qk = q_priv[k];
+                dot_acc0 = mad(qk, CONVERT_ACC4(l_k[j][k]),   dot_acc0);
+                dot_acc1 = mad(qk, CONVERT_ACC4(l_k[j+1][k]), dot_acc1);
+                dot_acc2 = mad(qk, CONVERT_ACC4(l_k[j+2][k]), dot_acc2);
+                dot_acc3 = mad(qk, CONVERT_ACC4(l_k[j+3][k]), dot_acc3);
             }
-            ACC_TYPE score0 = (dot_acc0.s0 + dot_acc0.s1 + dot_acc0.s2 + dot_acc0.s3) * scale;
-            ACC_TYPE score1 = (dot_acc1.s0 + dot_acc1.s1 + dot_acc1.s2 + dot_acc1.s3) * scale;
+            ACC_TYPE s0 = (dot_acc0.s0 + dot_acc0.s1 + dot_acc0.s2 + dot_acc0.s3) * scale;
+            ACC_TYPE s1 = (dot_acc1.s0 + dot_acc1.s1 + dot_acc1.s2 + dot_acc1.s3) * scale;
+            ACC_TYPE s2 = (dot_acc2.s0 + dot_acc2.s1 + dot_acc2.s2 + dot_acc2.s3) * scale;
+            ACC_TYPE s3 = (dot_acc3.s0 + dot_acc3.s1 + dot_acc3.s2 + dot_acc3.s3) * scale;
 
             if (is_causal) {
-                if (k_row0 > (n_kv - n_q + my_query_row)) score0 = -INFINITY;
-                if (k_row1 > (n_kv - n_q + my_query_row)) score1 = -INFINITY;
+                const int causal_limit = n_kv - n_q + my_query_row;
+                if (k_row0 > causal_limit) s0 = FA_M_INIT;
+                if (k_row1 > causal_limit) s1 = FA_M_INIT;
+                if (k_row2 > causal_limit) s2 = FA_M_INIT;
+                if (k_row3 > causal_limit) s3 = FA_M_INIT;
             }
-
-            if (k_row0 >= n_kv) score0 = -INFINITY;
-            if (k_row1 >= n_kv) score1 = -INFINITY;
+            if (k_row0 >= n_kv) s0 = FA_M_INIT;
+            if (k_row1 >= n_kv) s1 = FA_M_INIT;
+            if (k_row2 >= n_kv) s2 = FA_M_INIT;
+            if (k_row3 >= n_kv) s3 = FA_M_INIT;
 
             if (mask_base != NULL) {
                 const global DATA_TYPE* mask_ptr = (const global DATA_TYPE*)(mask_base + my_query_row * mask_nb1);
-                if (k_row0 < n_kv) score0 += slope * (ACC_TYPE)mask_ptr[k_row0];
-                if (k_row1 < n_kv) score1 += slope * (ACC_TYPE)mask_ptr[k_row1];
+                if (k_row0 < n_kv) s0 += slope * (ACC_TYPE)mask_ptr[k_row0];
+                if (k_row1 < n_kv) s1 += slope * (ACC_TYPE)mask_ptr[k_row1];
+                if (k_row2 < n_kv) s2 += slope * (ACC_TYPE)mask_ptr[k_row2];
+                if (k_row3 < n_kv) s3 += slope * (ACC_TYPE)mask_ptr[k_row3];
             }
 
             if (logit_softcap > 0.0f) {
-                score0 = logit_softcap * tanh(score0 / logit_softcap);
-                score1 = logit_softcap * tanh(score1 / logit_softcap);
+                s0 = logit_softcap * tanh(s0 / logit_softcap);
+                s1 = logit_softcap * tanh(s1 / logit_softcap);
+                s2 = logit_softcap * tanh(s2 / logit_softcap);
+                s3 = logit_softcap * tanh(s3 / logit_softcap);
             }
 
-            const ACC_TYPE m_new = max(m_i, max(score0, score1));
-            const ACC_TYPE p0 = exp(score0 - m_new);
-            const ACC_TYPE p1 = exp(score1 - m_new);
-            const ACC_TYPE scale_prev = exp(m_i - m_new);
+            const ACC_TYPE m_new      = max(m_i, max(max(s0, s1), max(s2, s3)));
+            const ACC_TYPE scale_prev = native_exp(m_i - m_new);
+            const ACC_TYPE p0         = native_exp(s0 - m_new);
+            const ACC_TYPE p1         = native_exp(s1 - m_new);
+            const ACC_TYPE p2         = native_exp(s2 - m_new);
+            const ACC_TYPE p3         = native_exp(s3 - m_new);
 
-            #pragma unroll
+            FA_UNROLL
             for (int i = 0; i < DV_VEC; ++i) {
-                o_acc[i] = o_acc[i] * scale_prev + p0 * CONVERT_ACC4(l_v[j][i]) + p1 * CONVERT_ACC4(l_v[j+1][i]);
+                o_acc[i] = mad(p3, CONVERT_ACC4(l_v[j+3][i]),
+                           mad(p2, CONVERT_ACC4(l_v[j+2][i]),
+                           mad(p1, CONVERT_ACC4(l_v[j+1][i]),
+                           mad(p0, CONVERT_ACC4(l_v[j][i]),
+                           o_acc[i] * scale_prev))));
             }
-            l_i = l_i * scale_prev + p0 + p1;
+            l_i = l_i * scale_prev + p0 + p1 + p2 + p3;
             m_i = m_new;
         }
     }
@@ -179,7 +214,7 @@ __kernel void flash_attn_f16(
             const ACC_TYPE m_final = max(m_i, m_sink);
 
             const ACC_TYPE scale_o = exp(m_i - m_final);
-            #pragma unroll
+            FA_UNROLL
             for (int i = 0; i < DV_VEC; ++i) {
                 o_acc[i] *= scale_o;
             }
@@ -191,12 +226,12 @@ __kernel void flash_attn_f16(
         global DATA_TYPE4 *o_row = (global DATA_TYPE4 *)(o_base + o_row_offset);
         if (l_i > 0.0f) {
             const ACC_TYPE l_inv = 1.0f / l_i;
-            #pragma unroll
+            FA_UNROLL
             for (int i = 0; i < DV_VEC; ++i) {
                 o_row[i] = CONVERT_DATA4(o_acc[i] * l_inv);
             }
         } else {
-            #pragma unroll
+            FA_UNROLL
             for (int i = 0; i < DV_VEC; ++i) {
                 o_row[i] = (DATA_TYPE4)(0.0f);
             }
@@ -258,7 +293,7 @@ __kernel void flash_attn_f16_q1(
     ACC_TYPE4 q_priv[DK_VEC];
     const ulong q_row_offset = batch_idx * q_nb3 + head_idx * q_nb2;
     const global DATA_TYPE4* q_ptr = (const global DATA_TYPE4*)(q_base + q_row_offset);
-    #pragma unroll
+    FA_UNROLL
     for (int i = 0; i < DK_VEC; ++i) {
         q_priv[i] = CONVERT_ACC4(q_ptr[i]);
     }
@@ -270,12 +305,12 @@ __kernel void flash_attn_f16_q1(
         sinks_ptr = (const global ACC_TYPE*)((const global char*)sinks_void + sinks_offset);
     }
 
-    ACC_TYPE m_i = (sinks_ptr != NULL) ? sinks_ptr[head_idx] : -INFINITY;
+    ACC_TYPE m_i = (sinks_ptr != NULL) ? sinks_ptr[head_idx] : FA_M_INIT;
     for (int k_idx = tid; k_idx < n_kv; k_idx += Q1_WG_SIZE) {
         const ulong k_row_offset = batch_idx * k_nb3 + head_kv_idx * k_nb2 + k_idx * k_nb1;
         const global DATA_TYPE4* k_ptr = (const global DATA_TYPE4*)(k_base + k_row_offset);
         ACC_TYPE4 dot_acc = (ACC_TYPE4)(0.0f);
-        #pragma unroll
+        FA_UNROLL
         for (int k = 0; k < DK_VEC; k++) {
             dot_acc = mad(q_priv[k], CONVERT_ACC4(k_ptr[k]), dot_acc);
         }
@@ -293,7 +328,7 @@ __kernel void flash_attn_f16_q1(
     __local ACC_TYPE local_m[Q1_WG_SIZE];
     local_m[tid] = m_i;
     barrier(CLK_LOCAL_MEM_FENCE);
-    #pragma unroll
+    FA_UNROLL
     for (int s = Q1_WG_SIZE / 2; s > 0; s >>= 1) {
         if (tid < s) local_m[tid] = max(local_m[tid], local_m[tid + s]);
         barrier(CLK_LOCAL_MEM_FENCE);
@@ -301,7 +336,7 @@ __kernel void flash_attn_f16_q1(
     const ACC_TYPE m_final = local_m[0];
 
     ACC_TYPE4 o_acc[DV_VEC];
-    #pragma unroll
+    FA_UNROLL
     for (int i = 0; i < DV_VEC; ++i) o_acc[i] = (ACC_TYPE4)(0.0f);
     ACC_TYPE l_i = 0.0f;
 
@@ -311,7 +346,7 @@ __kernel void flash_attn_f16_q1(
         const global DATA_TYPE4* k_ptr = (const global DATA_TYPE4*)(k_base + k_row_offset);
         const global DATA_TYPE4* v_ptr = (const global DATA_TYPE4*)(v_base + v_row_offset);
         ACC_TYPE4 dot_acc = (ACC_TYPE4)(0.0f);
-        #pragma unroll
+        FA_UNROLL
         for (int k = 0; k < DK_VEC; k++) {
             dot_acc = mad(q_priv[k], CONVERT_ACC4(k_ptr[k]), dot_acc);
         }
@@ -325,7 +360,7 @@ __kernel void flash_attn_f16_q1(
         }
         const ACC_TYPE p = exp(score - m_final);
         l_i += p;
-        #pragma unroll
+        FA_UNROLL
         for (int i = 0; i < DV_VEC; i++) {
             o_acc[i] = mad(p, CONVERT_ACC4(v_ptr[i]), o_acc[i]);
         }
@@ -335,7 +370,7 @@ __kernel void flash_attn_f16_q1(
     __local ACC_TYPE4 local_o_comp[Q1_WG_SIZE];
     local_l[tid] = l_i;
     barrier(CLK_LOCAL_MEM_FENCE);
-    #pragma unroll
+    FA_UNROLL
     for (int s = Q1_WG_SIZE / 2; s > 0; s >>= 1) {
         if (tid < s) local_l[tid] += local_l[tid + s];
         barrier(CLK_LOCAL_MEM_FENCE);
@@ -354,7 +389,7 @@ __kernel void flash_attn_f16_q1(
         for (int i = 0; i < DV_VEC; i++) {
             local_o_comp[tid] = o_acc[i];
             barrier(CLK_LOCAL_MEM_FENCE);
-            #pragma unroll
+            FA_UNROLL
             for (int s = Q1_WG_SIZE / 2; s > 0; s >>= 1) {
                 if (tid < s) local_o_comp[tid] += local_o_comp[tid + s];
                 barrier(CLK_LOCAL_MEM_FENCE);
@@ -364,7 +399,7 @@ __kernel void flash_attn_f16_q1(
             }
         }
     } else if (tid == 0) {
-        #pragma unroll
+        FA_UNROLL
         for (int i = 0; i < DV_VEC; ++i) o_row[i] = (DATA_TYPE4)(0.0f);
     }
 }

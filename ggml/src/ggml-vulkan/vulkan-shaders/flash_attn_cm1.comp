@@ -352,6 +352,7 @@ void main() {
                 }
                 rowmaxf = max(rowmaxf, float(sfsh[r_vec + (c * cols_per_iter + col_tid) * sfshstride][r_comp]));
             }
+            rowmaxf += FATTN_KQ_MAX_OFFSET;
             float Moldf = Mf[r];
 
             // Compute max across the row

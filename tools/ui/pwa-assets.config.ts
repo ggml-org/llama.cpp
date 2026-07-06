@@ -5,15 +5,32 @@ import {
 } from '@vite-pwa/assets-generator/config';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { THEME_COLORS, PWA_GENERATOR_DEVICES, PWA_ASSET_GENERATOR } from './src/lib/constants/pwa';
+import {
+	THEME_COLORS,
+	PWA_GENERATOR_DEVICES,
+	PWA_ASSET_GENERATOR,
+	FAVICON_COLORS
+} from './src/lib/constants/pwa';
 import { SplashOrientation } from './src/lib/enums/splash.enums';
+import { writeThemeFavicons } from './scripts/favicon-colorize';
+
+writeThemeFavicons(FAVICON_COLORS.LIGHT, FAVICON_COLORS.DARK, {
+	padding: PWA_ASSET_GENERATOR.FAVICON_PADDING
+});
 
 export default defineConfig({
 	headLinkOptions: {
 		preset: PWA_ASSET_GENERATOR.LINK_PRESET
 	},
 	preset: combinePresetAndAppleSplashScreens(
-		minimal2023Preset,
+		{
+			...minimal2023Preset,
+			// tiny margin so favicon.ico / pwa-*.png breathe inside the canvas
+			transparent: {
+				...minimal2023Preset.transparent,
+				padding: PWA_ASSET_GENERATOR.FAVICON_PADDING
+			}
+		},
 		{
 			padding: PWA_ASSET_GENERATOR.SPLASH_PADDING,
 			resizeOptions: {

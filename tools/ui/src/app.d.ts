@@ -19,6 +19,10 @@ import type {
 	ApiErrorResponse,
 	ApiLlamaCppServerProps,
 	ApiModelDataEntry,
+	ApiModelLoadStage,
+	ApiModelsSseProgress,
+	ApiModelsSseData,
+	ApiModelsSseEvent,
 	ApiModelListResponse,
 	ApiProcessingState,
 	ApiRouterModelMeta,
@@ -52,6 +56,7 @@ import type {
 	// Model types
 	ModelModalities,
 	ModelOption,
+	ModelLoadProgress,
 	// Settings types
 	SettingsChatServiceOptions,
 	SettingsConfigValue,
@@ -83,6 +88,10 @@ declare global {
 		ApiErrorResponse,
 		ApiLlamaCppServerProps,
 		ApiModelDataEntry,
+		ApiModelLoadStage,
+		ApiModelsSseProgress,
+		ApiModelsSseData,
+		ApiModelsSseEvent,
 		ApiModelListResponse,
 		ApiProcessingState,
 		ApiRouterModelMeta,
@@ -120,6 +129,7 @@ declare global {
 		// Model types
 		ModelModalities,
 		ModelOption,
+		ModelLoadProgress,
 		// Settings types
 		SettingsChatServiceOptions,
 		SettingsConfigValue,

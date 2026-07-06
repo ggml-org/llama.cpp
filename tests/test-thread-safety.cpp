@@ -146,6 +146,8 @@ int main(int argc, char ** argv) {
                 }
 
                 LOG_INF("Model %d/%d, Context %d/%d: %s\n\n", m + 1, num_models, c + 1, num_contexts, result.c_str());
+
+                llama_synchronize(ctx.get());
             });
         }
     }

@@ -28,18 +28,19 @@ enum htp_data_type {
     HTP_TYPE_MXFP4  = 39,
 
     // types used internally for repack, dyn.quant, etc
-    HTP_TYPE_Q4_0x4x2 = 200,
-    HTP_TYPE_Q4_1x4x2,
-    HTP_TYPE_Q8_0x4x2,
-    HTP_TYPE_MXFP4x4x2,
+    HTP_TYPE_Q4_0_TILED = 200,
+    HTP_TYPE_Q4_1_TILED,
+    HTP_TYPE_Q8_0_TILED,
+    HTP_TYPE_MXFP4_TILED,
 
     HTP_TYPE_INVALID
 };
 
 // Constats for internal types
-#define QK_Q4_0x4x2  256  // 4x Q4_0  blocks packed with next 4x Q4_0 blocks (size in bytes 128)
-#define QK_Q8_0x4x2  256  // 4x Q8_0  blocks concat with next 4x Q8_0 blocks
-#define QK_MXFP4x4x2 256  // 4x MXFP4 blocks concat with next 4x MXFP4 blocks
+#define QK_Q4_0_TILED  256  // 32x32 Q4_0 tiled layout
+#define QK_Q8_0_TILED  128  // 32x32 Q8_0 tiled layout
+#define QK_MXFP4_TILED 256  // 32x32 MXFP4 tiled layout
+
 
 
 // Mask to enable various stages of the Ops.
@@ -57,6 +58,9 @@ enum htp_op_code {
     HTP_OP_DIV = 3,
     HTP_OP_MUL_MAT,
     HTP_OP_MUL_MAT_ID,
+    HTP_OP_MUL_MAT_QKV,
+    HTP_OP_MUL_MAT_FFN,
+    HTP_OP_MUL_MAT_ADD,
     HTP_OP_RMS_NORM,
     HTP_OP_RMS_NORM_MUL,
     HTP_OP_UNARY_SILU,
@@ -99,7 +103,9 @@ enum htp_op_code {
 
 #define HTP_OP_MAX_DIMS    4    // aka GGML_MAX_DIMS
 #define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
+#define HTP_OP_MAX_OUTPUTS 4
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
+#define HTP_OP_MAX_KERN_PARAMS 32
 
 #define HTP_OP_MAX_BUFS    16
 #define HTP_OP_MAX_REQS    256
@@ -142,8 +148,10 @@ struct htp_op_desc {
     uint32_t opcode;                    // GGML/HTP Op
     uint32_t flags;                     // Op flags
     int32_t  params[HTP_OP_MAX_PARAMS]; // Params for the op, e.g. epsilon of RMS norm
+    int32_t  kernel_params[HTP_OP_MAX_KERN_PARAMS]; // generic blob for host-precomputed parameters
     uint16_t src[HTP_OP_MAX_INPUTS];    // Input tensors indices
-    uint16_t dst;                       // Output tensor index
+    uint16_t dst[HTP_OP_MAX_OUTPUTS];   // Output tensor indices
+    uint16_t pad[2];                    // padding to align to 64 bits
 };
 
 #ifndef HTP_MAX_NTHREADS
@@ -168,6 +176,11 @@ enum htp_trace_event_id {
     HTP_TRACE_EVT_HVX_W_DEQUANT       = 23,
     HTP_TRACE_EVT_HVX_W_PREP          = 24,
     HTP_TRACE_EVT_HVX_O_PROC          = 25,
+    HTP_TRACE_EVT_HVX_FA_QK           = 26,
+    HTP_TRACE_EVT_HVX_FA_SFM          = 27,
+    HTP_TRACE_EVT_HVX_FA_Q_PREP       = 28,
+    HTP_TRACE_EVT_HVX_FA_K_PREP       = 29,
+    HTP_TRACE_EVT_HVX_FA_V_PREP       = 30,
 
     HTP_TRACE_EVT_HMX_COMP            = 40,
 };

@@ -1035,25 +1035,23 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
 
     if (!params.hf_repo.empty()) {
         for (size_t i = 0; i < params.hf_repo.size(); i++) {
-            common_params_model model;
-
-            if (params.hf_file.empty() || params.hf_file[i].empty()) {
-                model.hf_repo = params.hf_repo[i];
-            } else {
-                model.hf_repo = params.hf_repo[i];
-                model.hf_file = params.hf_file[i];
+            common_params p;
+            p.hf_token      = params.hf_token;
+            p.offline       = params.offline;
+            p.model.hf_repo = params.hf_repo[i];
+            if (!params.hf_file.empty() && !params.hf_file[i].empty()) {
+                p.model.hf_file = params.hf_file[i];
             }
 
-            common_download_opts opts;
-            opts.bearer_token = params.hf_token;
-            opts.offline         = params.offline;
-            auto download_result = common_download_model(model, opts);
-            if (download_result.model_path.empty()) {
+            // only the text model file is needed
+            common_models_handler models_handler = common_models_handler_init(p, LLAMA_EXAMPLE_BENCH);
+            common_models_handler_apply(models_handler, p);
+            if (p.model.path.empty()) {
                 fprintf(stderr, "error: failed to download model from HuggingFace\n");
                 exit(1);
             }
 
-            params.model.push_back(download_result.model_path);
+            params.model.push_back(p.model.path);
         }
     }
 

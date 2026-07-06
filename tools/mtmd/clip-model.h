@@ -55,8 +55,7 @@ struct clip_hparams {
     int32_t n_head = 0;
     int32_t n_head_kv = 0;
     int32_t n_layer = 0;
-    // idefics3
-    int32_t n_merge = 0; // number of patch merges **per-side**
+    int32_t n_merge = 1; // number of patch merges **per-side**
 
     // for preprocessor
     int32_t image_longest_edge = 0;
@@ -91,7 +90,7 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
-    std::vector<int32_t> vision_feature_layer;
+    std::vector<int32_t> feature_layers;
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
     std::unordered_set<int32_t> wa_layer_indexes; // explicit layer indexes that use full attention (for irregular patterns like YoutuVL)
@@ -135,8 +134,7 @@ struct clip_hparams {
     int32_t custom_image_max_tokens = -1;
 
     void set_limit_image_tokens(int n_tokens_min, int n_tokens_max) {
-        const int cur_merge = n_merge == 0 ? 1 : n_merge;
-        const int patch_area = patch_size * patch_size * cur_merge * cur_merge;
+        const int patch_area = patch_size * patch_size * n_merge * n_merge;
         image_min_pixels = (custom_image_min_tokens > 0 ? custom_image_min_tokens : n_tokens_min) * patch_area;
         image_max_pixels = (custom_image_max_tokens > 0 ? custom_image_max_tokens : n_tokens_max) * patch_area;
         warmup_image_size = static_cast<int>(std::sqrt(image_max_pixels));
@@ -145,8 +143,7 @@ struct clip_hparams {
     void set_warmup_n_tokens(int n_tokens) {
         int n_tok_per_side = static_cast<int>(std::sqrt(n_tokens));
         GGML_ASSERT(n_tok_per_side * n_tok_per_side == n_tokens && "n_tokens must be n*n");
-        const int cur_merge = n_merge == 0 ? 1 : n_merge;
-        warmup_image_size = n_tok_per_side * patch_size * cur_merge;
+        warmup_image_size = n_tok_per_side * patch_size * n_merge;
         // TODO: support warmup size for custom token numbers
     }
     // sam vit deepseek-ocr
@@ -165,8 +162,8 @@ struct clip_hparams {
         return false;
     }
 
-    bool is_vision_feature_layer(int32_t layer) const {
-        return std::find(vision_feature_layer.begin(), vision_feature_layer.end(), layer) != vision_feature_layer.end();
+    bool is_feature_layer(int32_t layer) const {
+        return std::find(feature_layers.begin(), feature_layers.end(), layer) != feature_layers.end();
     }
 };
 

@@ -40,6 +40,7 @@ struct debug_options {
     bool               enable_reasoning  = true;
     bool               debug_jinja       = false;
     bool               force_tool_call   = false;
+    bool               parallel_tool_calls = true;
     output_mode        mode              = output_mode::BOTH;
     input_message_type input_message     = input_message_type::NONE;
 };
@@ -87,6 +88,7 @@ static void print_usage(const char * program_name) {
     LOG_ERR("\nOptions:\n");
     LOG_ERR("  --no-tools              Disable tool definitions\n");
     LOG_ERR("  --force-tool-call       Set tool calls to forced\n");
+    LOG_ERR("  --parallel-tool-calls=0|1 Set parallel_tool_calls (default: 1)\n");
     LOG_ERR("  --generation-prompt=0|1 Set add_generation_prompt (default: 1)\n");
     LOG_ERR("  --enable-reasoning=0|1  Enable reasoning parsing (default: 1)\n");
     LOG_ERR("  --output=MODE           Output mode: analysis, template, both (default: both)\n");
@@ -121,6 +123,8 @@ static bool parse_options(int argc, char ** argv, debug_options & opts) {
             opts.debug_jinja = true;
         } else if (arg == "--no-tools") {
             opts.with_tools = false;
+        } else if (arg.rfind("--parallel-tool-calls=", 0) == 0) {
+            opts.parallel_tool_calls = parse_bool_option(arg.substr(22));
         } else if (arg.rfind("--generation-prompt=", 0) == 0) {
             opts.generation_prompt = parse_bool_option(arg.substr(20));
         } else if (arg.rfind("--enable-reasoning=", 0) == 0) {
@@ -349,7 +353,7 @@ static autoparser::generation_params prepare_params(const debug_options & opts, 
         params.tools       = json();
         params.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
     }
-    params.parallel_tool_calls = false;
+    params.parallel_tool_calls = opts.parallel_tool_calls;
     return params;
 }
 

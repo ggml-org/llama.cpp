@@ -8,12 +8,13 @@
 		ariaLabel?: string;
 		class?: string;
 		disabled?: boolean;
+		href?: string;
 		icon: Component;
 		iconSize?: string;
-		onclick: (e?: MouseEvent) => void;
+		onclick?: (e?: MouseEvent) => void;
 		size?: ButtonSize;
 		stopPropagationOnClick?: boolean;
-		tooltip: string;
+		tooltip?: string;
 		variant?: ButtonVariant;
 		tooltipSide?: TooltipSide;
 	}
@@ -22,6 +23,7 @@
 		icon,
 		tooltip,
 		variant = 'ghost',
+		href = '',
 		size = 'sm',
 		class: className = '',
 		disabled = false,
@@ -31,34 +33,49 @@
 		onclick,
 		ariaLabel
 	}: Props = $props();
+
+	let innerWidth = $state(0);
+	const showTooltip = $derived(!!tooltip && innerWidth > 768);
 </script>
 
-<Tooltip.Root>
-	<Tooltip.Trigger>
-		<!-- prevent another nested button element -->
-		{#snippet child({ props })}
-			<Button
-				{...props}
-				{variant}
-				{size}
-				{disabled}
-				onclick={(e: MouseEvent) => {
-					if (stopPropagationOnClick) e.stopPropagation();
+{#snippet button(props = {})}
+	<Button
+		{...props}
+		{href}
+		{variant}
+		{size}
+		{disabled}
+		onclick={(e: MouseEvent) => {
+			if (stopPropagationOnClick) e.stopPropagation();
 
-					onclick?.(e);
-				}}
-				class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
-				aria-label={ariaLabel || tooltip}
-			>
-				{#if icon}
-					{@const IconComponent = icon}
-					<IconComponent class={iconSize} />
-				{/if}
-			</Button>
-		{/snippet}
-	</Tooltip.Trigger>
+			onclick?.(e);
+		}}
+		class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
+		aria-label={ariaLabel || tooltip}
+	>
+		{#if icon}
+			{@const IconComponent = icon}
 
-	<Tooltip.Content side={tooltipSide}>
-		<p>{tooltip}</p>
-	</Tooltip.Content>
-</Tooltip.Root>
+			<IconComponent class={iconSize} />
+		{/if}
+	</Button>
+{/snippet}
+
+{#if showTooltip}
+	<Tooltip.Root>
+		<Tooltip.Trigger>
+			<!-- prevent another nested button element -->
+			{#snippet child({ props })}
+				{@render button(props)}
+			{/snippet}
+		</Tooltip.Trigger>
+
+		<Tooltip.Content side={tooltipSide}>
+			<p>{tooltip}</p>
+		</Tooltip.Content>
+	</Tooltip.Root>
+{:else}
+	{@render button({ href })}
+{/if}
+
+<svelte:window bind:innerWidth />

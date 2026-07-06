@@ -256,15 +256,45 @@ def test_router_reload_models():
         os.remove(preset_path)
 
 
+def test_router_remote_preset():
+    global server
+    server.model_hf_repo = "ggml-org/test-preset-ci"
+    server.model_hf_file = None
+    server.offline = False
+    server.start()
+
+    # Should see preset models in GET /models
+    res = server.make_request("GET", "/models")
+    assert res.status_code == 200
+    ids = {item["id"] for item in res.body.get("data", [])}
+    assert "tinygemma3-preset" in ids
+    assert "stories260K-test" in ids
+
+    # Should be able to load a preset model
+    model_id = "tinygemma3-preset"
+    _load_model_and_wait(model_id)
+
+
 MODEL_DOWNLOAD_ID = "ggml-org/test-model-router-download:F16"
-MODEL_DOWNLOAD_TIMEOUT = 300
+MODEL_DOWNLOAD_TIMEOUT = 30
 
 
-def _listen_sse(server: ServerProcess, collected: list, stop: threading.Event):
-    """Collect /models/sse events into `collected` until `stop` is set."""
+def _listen_sse(
+    server: ServerProcess, collected: list, stop: threading.Event, ready: threading.Event | None = None
+):
+    """Collect /models/sse events into `collected` until `stop` is set.
+
+    When `ready` is provided, it is set once the streaming response is open,
+    i.e. the server has accepted the connection and registered us as a
+    subscriber. Callers that trigger one-shot events (e.g. download_finished)
+    must wait on `ready` before acting, otherwise the event can be broadcast
+    before this client is subscribed and be lost.
+    """
     url = f"http://{server.server_host}:{server.server_port}/models/sse"
     try:
         with requests.get(url, stream=True, timeout=MODEL_DOWNLOAD_TIMEOUT) as resp:
+            if ready is not None:
+                ready.set()
             for line_bytes in resp.iter_lines():
                 if stop.is_set():
                     break
@@ -294,10 +324,16 @@ def test_router_download_model():
 
     sse_events: list = []
     stop = threading.Event()
+    sse_ready = threading.Event()
     sse_thread = threading.Thread(
-        target=_listen_sse, args=(server, sse_events, stop), daemon=True
+        target=_listen_sse, args=(server, sse_events, stop, sse_ready), daemon=True
     )
     sse_thread.start()
+
+    # wait for the SSE client to be subscribed before triggering the download,
+    # otherwise the one-shot download_finished event can be broadcast before
+    # this client is registered and be lost
+    assert sse_ready.wait(10), "SSE client failed to connect"
 
     # Trigger the download
     res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
@@ -328,13 +364,17 @@ def test_router_delete_model():
 
     # Ensure the model exists (download it if needed)
     if MODEL_DOWNLOAD_ID not in _get_model_ids(is_reload=False):
-        res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
-        assert res.status_code == 200
         sse_events: list = []
         stop = threading.Event()
+        sse_ready = threading.Event()
         threading.Thread(
-            target=_listen_sse, args=(server, sse_events, stop), daemon=True
+            target=_listen_sse, args=(server, sse_events, stop, sse_ready), daemon=True
         ).start()
+        # subscribe before triggering the download so the one-shot
+        # download_finished event is not lost (see test_router_download_model)
+        assert sse_ready.wait(10), "SSE client failed to connect"
+        res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
+        assert res.status_code == 200
         finished = _wait_for_sse_event(
             sse_events, "download_finished", MODEL_DOWNLOAD_ID, MODEL_DOWNLOAD_TIMEOUT
         )

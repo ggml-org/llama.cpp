@@ -348,6 +348,34 @@ class GraniteSpeechMmprojModel(MmprojModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("GraniteSpeechPlusForConditionalGeneration")
+class GraniteSpeechPlusMmprojModel(GraniteSpeechMmprojModel):
+    """Conversion for GraniteSpeechPlus - extends GraniteSpeech with feature layer concatenation"""
+    has_vision_encoder = False
+    has_audio_encoder = True
+
+    def set_gguf_parameters(self):
+        assert self.hparams_audio is not None
+        super().set_gguf_parameters()
+
+        # Add feature_layer if present in encoder config
+        if feature_layers := self.hparams_audio.get("cat_hidden_layers"):
+            self.gguf_writer.add_audio_feature_layers(feature_layers)
+            logger.info(f"gguf: audio feature_layers = {feature_layers}")
+
+            # Validate projector dimension matches concatenated encoder output
+            hidden_dim = self.hparams_audio["hidden_dim"]
+            expected_dim = hidden_dim * (len(feature_layers) + 1)
+            projector_dim = self.global_config["projector_config"]["encoder_hidden_size"]
+
+            if projector_dim != expected_dim:
+                raise ValueError(
+                    f"Projector encoder_hidden_size ({projector_dim}) does not match "
+                    f"expected concatenated dimension ({expected_dim}). "
+                    f"Expected: hidden_dim ({hidden_dim}) * (len(feature_layers) + 1) = {expected_dim}"
+                )
+
+
 @ModelBase.register("Granite4VisionForConditionalGeneration")
 class Granite4VisionMmprojModel(MmprojModel):
     has_vision_encoder = True

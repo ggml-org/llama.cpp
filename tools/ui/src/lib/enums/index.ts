@@ -10,6 +10,7 @@ export { AgenticSectionType, ContinueIntentKind, ToolCallType } from './agentic.
 
 export {
 	ChatMessageStatsView,
+	StreamConnectionState,
 	ContentPartType,
 	ConversationSelectionMode,
 	ErrorDialogType,
@@ -54,7 +55,7 @@ export {
 
 export { ModelModality } from './model.enums';
 
-export { ServerRole, ServerModelStatus } from './server.enums';
+export { ServerRole, ServerModelStatus, ServerModelsSseEventType } from './server.enums';
 
 export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings.enums';
 
