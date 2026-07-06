@@ -112,7 +112,7 @@ static int test_vec_dot_f32(bool verbose) {
         generate_data(1.0, n, b.data());
 
         float result = 0.0f;
-        f32->vec_dot(n, &result, 0, a.data(), 0, b.data(), 0, 1);
+        f32->vec_dot(n, &result, 0, a.data(), 0, b.data(), 0, 1, nullptr);
         const float ref = dot_product(a.data(), b.data(), n);
         const float error = fabsf(result - ref) / n;
 
