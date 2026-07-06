@@ -2477,7 +2477,7 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
             }
         }
     } else {
-        // --- Synchronous Un-pipelined loop (m <= 32 or fallback) ---
+        // --- Synchronous loop (m <= 32 or fallback) ---
         hmx_matmul_job_t job;
         for (size_t mr = 0; mr < m; mr += m_chunk_n_rows) {
             const size_t n_rows = hex_smin(m - mr, m_chunk_n_rows);
@@ -2491,8 +2491,7 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
 
                 // A: Weight DMA (Synchronous)
                 const uint32_t height = is_quant ? (n_cols / 32) * n_k_tiles : n_cols;
-                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[0], weight + nc * weight_stride),
-                               dma_dst_stride, dma_src_stride, dma_width_bytes, height);
+                dma_queue_push(ctx->dma[0], dma_make_ptr(vtcm_weight_raw[0], weight + nc * weight_stride), dma_dst_stride, dma_src_stride, dma_width_bytes, height);
                 dma_queue_pop(ctx->dma[0]);
 
                 // B: Weight Dequantize (Threaded)
