@@ -464,12 +464,6 @@ std::string autoparser::detect_tool_response_start_marker(const common_chat_temp
     }
 
     auto ast_prefix = usermsg.substr(0, usermsg.find(TOOL_MSG));
-    if (!reasoning.start.empty() && ast_prefix.find(trim_whitespace(reasoning.start)) != std::string::npos) {
-        ast_prefix = ast_prefix.substr(0, ast_prefix.find(trim_whitespace(reasoning.start)));
-    }
-    if (!reasoning.end.empty() && ast_prefix.find(trim_whitespace(reasoning.end)) != std::string::npos) {
-        ast_prefix = ast_prefix.substr(0, ast_prefix.find(trim_whitespace(reasoning.end)));
-    }
     return trim_whitespace(ast_prefix);
 }
 
