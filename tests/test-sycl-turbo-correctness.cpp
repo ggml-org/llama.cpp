@@ -816,6 +816,52 @@ int main() {
     } else {
         printf("\n[7] flash attention d=256 - SKIPPED (set LLAMA_TEST_FA256=1 to opt in; gated, A770 SYCL FA reproducibly hangs at d=256)\n");
     }
+    // (summary print moved below after the [8] InnerQ skeleton section so the
+    //  g_skips++ for the InnerQ SKIP is reflected in the final tally.)
+
+    // [8] InnerQ host-side state machine skeleton (P3.2.1 hook).
+    //
+    // This section is a placeholder only -- the real InnerQ probes land in P3.2.2 (Qwen3-MoE
+    // turbo3 rescue, with Early Kill Gate at chunk 8) and P3.2.3 (full state machine + device K^2
+    // accumulation across the rest of the policy-eligible shapes). The hook exists today so that:
+    //   (a) LLAMA_TEST_INNERQ=1 toggles a clearly-visible "skeleton present, no probes yet" line,
+    //       rather than silently emitting nothing;
+    //   (b) g_failures stays 0 in both env states (the default loop turn must remain green);
+    //   (c) the env gate mirrors LLAMA_TEST_TURBO_FA / LLAMA_TEST_FA256 exactly so a future
+    //       InnerQ probe drops into this section without changing the surrounding harness
+    //       contracts.
+    //
+    // The P3.2 policy contract this hook respects is in RALPH_TASKS.md, section P3.2:
+    //   - validation corpus  : 3-model validation fleet, head_dim=128 only (turbo invariant),
+    //                           GQA 4:1 + 8:1; d=256 stays behind the existing opt-in gate;
+    //   - failure modes      : hard-abort on NaN/Inf/DEVICE_LOST/exponential PPL drift;
+    //                           soft-abort on >1% PPL regression or breaking turbo4 < q4_0;
+    //                           recalibration policy = 1 retry on init-only anomalies, no retry
+    //                           on mid-stream NaN;
+    //   - rollback           : fail the InnerQ path specifically; fall back to static turbo4;
+    //                           freeze at last-known-good scales on recovered runs;
+    //   - scope              : turbo-only (initially turbo4-first); f16/q8_0/q4_0 stay as
+    //                           evaluation baselines + fallback targets; V-only calibration
+    //                           under GQA 8:1 auto-asymmetric (K upgrades to q8_0);
+    //   - default state      : off by default in the live service (gated behind
+    //                           LLAMA_ENABLE_INNERQ=1); transition to "on by default" is
+    //                           blocked until full validation fleet passes AND the <=2%
+    //                           decode regression guardrail is satisfied.
+    //
+    // For the engineering-side context (header-only spec of ggml_innerq_state /
+    // ggml_innerq_probe / ggml_innerq_host, the SYCL-backend touchpoint list, and the
+    // lifecycle semantics), see docs/research/innerq-host-state-machine-spec-2026-07-07.md
+    // (P3.2.1 spec).
+    if (getenv("LLAMA_TEST_INNERQ")) {
+        printf("\n[8] InnerQ FA skeleton (OPT-IN, P3.2.1 hook only -- real probes land in P3.2.2/3)\n");
+        printf("   policy contract: see RALPH_TASKS.md (section P3.2) + docs/research/innerq-host-state-machine-spec-2026-07-07.md\n");
+        printf("   real InnerQ probes: NOT YET IMPLEMENTED (P3.2.2 / P3.2.3)\n");
+        g_skips++;  // [8] is a documented SKIP today; will become GATE probes once P3.2.2 lands.
+        skip("[8] InnerQ FA skeleton", "real probes land in P3.2.2/3; P3.2.1 ships the spec + harness hook");
+    } else {
+        printf("\n[8] InnerQ FA - SKIPPED (set LLAMA_TEST_INNERQ=1 to opt in; default OFF per P3.2 section 5 default-state)\n");
+    }
+
     printf("\n== summary: %d GATE-FAIL, %d XPASS (promote to GATE!), %d xfail (expected-broken), %d SKIP ==\n",
            g_failures, g_xpass, g_xfail, g_skips);
 
