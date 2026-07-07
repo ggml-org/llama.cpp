@@ -1137,3 +1137,52 @@ Enriched CSV: `docs/ppl-results/qwen3-coder-30b-a3b/sweep_enriched.csv`.
 Remaining: sub-task 3 (correctness).
 
 ---
+
+## 2026-07-07 — P1 [model 3 — Qwen3] sub-task 3 — Correctness smoke-test
+
+Re-ran `test-sycl-turbo-correctness` on the Qwen3 fleet config
+(GQA 8:1, d=128, 48 layers, MoE, n_expert=128/n_expert_used=8) to
+confirm the P0 sub-task 2 GQA extension probes still PASS at the
+real model shape.
+
+Default env (covers [1]-[4] + [3c]/[4b]/[6]/[6b] GQA):
+  summary: 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP — 1.20 s wall time
+  - WHT g={32,64,128} dir={0,1,scaled}: 8 probes, all PASS
+  - cpy turbo{2,3,4}_0 -> f32: 6 probes, all PASS
+  - set_rows turbo{2,3,4}_0: 6 probes, all PASS
+  - mul_mat turbo{2,3,4}_0: 6 probes, all PASS
+  - attn_noflash turbo{3,4} d=128 (vanilla + GQA 4:1 + 8:1): all PASS
+  - attn_noflash turbo2 d=128: WARN (cosine=0.89, same XFAIL pattern)
+  - flash_attn f16/q8_0 d={64,128} [tile nq=8] [vec nq=1]: all PASS
+  - flash_attn f16/q8_0 d=128 [GQA 4:1] [GQA 8:1]: all PASS
+  - **flash_attn turbo2/3/4 d=128 [GQA 8:1] SKIPPED (gated under
+    LLAMA_TEST_TURBO_FA=0)**
+
+LLAMA_TEST_TURBO_FA=1 (exercises [5b] SYCL FA on turbo types):
+  summary: 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP — 1.07 s wall time
+  - **flash_attn turbo3/4 d=128 [GQA 8:1] (tile + vec): all PASS
+    (cosine 0.96-0.99)** — the Qwen3 MoE + GQA 8:1 path is GATE-clean
+  - flash_attn turbo2 d=128 [GQA 8:1]: WARN (cosine=0.90, same XFAIL
+    pattern; 2-bit precision at the edge)
+
+Harness output archived in
+`docs/ppl-results/qwen3-coder-30b-a3b/harness/`.
+
+P1 [model 3 — Qwen3-Coder-30B-A3B MoE] is now COMPLETE on all 3
+sub-tasks:
+  - sub-task 1: PPL matrix (f16=9.70, q4_0=9.87, q8_0=9.70,
+    turbo4=8.91 directional, turbo2/3 KILLED) — RESOLVED commit
+    2a1d8690f
+  - sub-task 2: Capacity matrix (f16=15248, q8_0=28964, q4_0=54872,
+    turbo2/3/4 CPU-FA at c=524288; 12.7 GB model = 80% of VRAM;
+    capacity-gain ratio model-invariant 1.90x/3.60x) — RESOLVED
+    commit 39df3c112
+  - sub-task 3: Correctness smoke-test (harness GATE clean) —
+    RESOLVED this turn
+
+P1 [capacity validation] is now COMPLETE on all 3 models. Next
+in queue: P2 [consolidation deliverable] (the
+`docs/research/turbo-capacity-validation.md` doc that ties the 3
+models together with the cross-model invariant-ratio finding).
+
+---
