@@ -34,7 +34,8 @@ export type {
 	ApiRouterModelsListResponse,
 	ApiRouterModelsUnloadRequest,
 	ApiRouterModelsUnloadResponse,
-	AudioInputFormat
+	AudioInputFormat,
+	ApiStreamSession
 } from './api';
 
 // Chat types
@@ -126,6 +127,8 @@ export type {
 	MCPServerConfig,
 	MCPClientConfig,
 	MCPServerSettingsEntry,
+	MCPServerDisplayInfo,
+	RecommendedMCPServer,
 	MCPToolCall,
 	OpenAIToolDefinition,
 	ServerStatus,

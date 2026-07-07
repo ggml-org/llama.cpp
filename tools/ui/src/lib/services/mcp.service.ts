@@ -314,6 +314,30 @@ export class MCPService {
 					)
 				);
 
+				if (method === 'DELETE' && url.includes(CORS_PROXY_ENDPOINT)) {
+					const response = new Response(null, { status: 200, statusText: 'OK' });
+
+					logIfEnabled(
+						this.createLog(
+							MCPConnectionPhase.INITIALIZING,
+							`HTTP 200 ${method} ${url} (fake response)`,
+							MCPLogLevel.INFO,
+							{
+								response: {
+									url,
+									status: response.status,
+									statusText: response.statusText,
+									durationMs: 0,
+									isFake: true
+								}
+							}
+						)
+					);
+
+					// fake response, bypass real fetch()
+					return response;
+				}
+
 				try {
 					const response = await fetch(input, {
 						...baseInit,
@@ -628,19 +652,20 @@ export class MCPService {
 		);
 
 		const runtimeErrorHandler = (error: Error) => {
-			// Ignore errors that are expected when the SDK's transport is closed,
-			// or when connecting to servers that don't support SSE (stateless-only
-			// endpoints returning 405). The SDK wraps the original AbortError in
-			// a new Error with the message "SSE stream disconnected: AbortError",
-			// and also produces "Cannot cancel a stream locked by a reader".
-			// DOMException is thrown by the browser when aborting fetch requests.
-			const msg = error.message || String(error);
+			// the SDK reports any post initialize error here, including the abort we trigger
+			// ourselves on the next health check cycle, on tab unload, or on server teardown.
+			// these are lifecycle aborts, not actionable errors, so we keep them out of the red console.
+			// the SDK wraps the original AbortError in a generic Error like
+			//   "SSE stream disconnected: AbortError: The operation was aborted."
+			// which isAbortError cannot recognize by name alone, so we also pattern match on the message
+			if (isAbortError(error)) {
+				return;
+			}
+			const msg = error?.message ?? '';
 			if (
-				error.name === 'AbortError' ||
-				error instanceof DOMException ||
-				msg.includes('SSE stream disconnected') ||
-				msg.includes('stream locked by a reader') ||
-				msg.includes('The operation was aborted')
+				/SSE stream disconnected:.*AbortError/i.test(msg) ||
+				/AbortError: .*aborted/i.test(msg) ||
+				/stream locked by a reader/i.test(msg)
 			) {
 				return;
 			}

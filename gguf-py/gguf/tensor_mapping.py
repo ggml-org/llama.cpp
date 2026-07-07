@@ -1283,6 +1283,11 @@ class TensorNameMap:
         MODEL_TENSOR.ENC_OUTPUT_NORM: (
             "encoder.final_layer_norm", # t5
             "layer_norm",               # neobert
+            "model.hidden_norm",        # dflash
+        ),
+
+        MODEL_TENSOR.FC: (
+            "model.fc", # dflash
         ),
 
         MODEL_TENSOR.CLS: (
