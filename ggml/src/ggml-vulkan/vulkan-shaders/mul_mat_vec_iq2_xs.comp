@@ -31,7 +31,7 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint itid, 
             const uint qs = data_a[ibi].qs[2 * itid + l];
             sign_vals[l] = qs >> 9;
             sign7_vals[l] = bitCount(sign_vals[l]);
-            const uvec2 grid_data = iq2xs_grid[qs & 511];
+            const uvec2 grid_data = iq2_grid[qs & 511];
             grid0_vals[l] = vec4(unpack8(grid_data.x));
             grid1_vals[l] = vec4(unpack8(grid_data.y));
         }
