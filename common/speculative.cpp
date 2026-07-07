@@ -1382,6 +1382,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             // renumber the draft KV draft-local so a vision gap leaves no position jump:
             // a 1-axis RoPE draft keeps consecutive positions (Y = X + 1) across the gap
+            // FIXME: fix this properly with vision support in the draft context
             auto * mem_dft = llama_get_memory(ctx_dft);
             std::vector<llama_pos> dbase(n_seq, 0);
             for (llama_seq_id s = 0; s < (llama_seq_id) n_seq; ++s) {
