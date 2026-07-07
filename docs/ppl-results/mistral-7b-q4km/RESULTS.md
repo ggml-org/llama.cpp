@@ -35,7 +35,7 @@ The 2026-07-02 doc identifies the cause and the blessed fallback:
 > — `docs/research/Intel-Arc-A770-llama-cpp-turboquant-SYCL-Turbo-FA-Port-KQ-Dot-Fix-SET_ROWS-Bug-Plus-Non-FA-V-Transpose-Architectural-Limitation-20260702.md`,
 > §"Lessons Learned" §4 "Non-FA ≠ Valid Baseline for Turbo", L396-400.
 
-**The CPU-FA re-run (full 642 chunks, both paths where applicable) is now
+**The CPU-FA re-run (full 564 chunks, both paths where applicable) is now
 complete.** All GPU -fa off numbers are SUPERSEDED. The CPU-FA matrix is
 the canonical reference.
 
@@ -71,16 +71,16 @@ the canonical reference.
 
 | KV type | Path | PPL | ± | Δ vs CPU-FA f16 | Δ % | chunks | wall-time | status |
 |---------|------|-----|---|------------------|-----|--------|-----------|--------|
-| f16     | CPU-FA    | **7.6328** | 0.048 | (ref) | — | 642 | 16 min | canonical |
-| q8_0    | GPU       | 7.6332 | 0.048 | +0.0004 | +0.01% | 642 | 4 min 43 s | valid baseline (non-turbo KV; -fa off path OK for q4_0/q8_0/f16) |
-| q4_0    | CPU-FA    | **7.6913** | 0.049 | +0.0585 | +0.77% | 642 | 12 min | canonical |
-| q4_0    | GPU       | 7.6901 | 0.049 | +0.0573 | +0.75% | 642 | 4 min 43 s | valid baseline (non-turbo KV) |
-| **turbo2** | **CPU-FA** | **8.1216** | 0.051 | **+0.4888** | **+6.40%** | 642 | 24 min | **canonical** |
-| **turbo3** | **CPU-FA** | **7.7298** | 0.049 | **+0.0970** | **+1.27%** | 642 | 17 min | **canonical** |
-| **turbo4** | **CPU-FA** | **7.6534** | 0.048 | **+0.0206** | **+0.27%** | 642 | 17 min | **canonical (gate)** |
-| ~~turbo2~~ | ~~GPU -fa off~~ | ~~8.1166~~ | 0.051 | ~~+0.4838~~ | ~~+6.34%~~ | 642 | ~~5 min 01 s~~ | **SUPERSEDED** (rule violation; CPU-FA 8.1216 is canonical) |
-| ~~turbo3~~ | ~~GPU -fa off~~ | ~~7.7275~~ | 0.049 | ~~+0.0947~~ | ~~+1.24%~~ | 642 | ~~5 min 02 s~~ | **SUPERSEDED** (CPU-FA 7.7298 is canonical) |
-| ~~turbo4~~ | ~~GPU -fa off~~ | ~~7.6563~~ | 0.049 | ~~+0.0235~~ | ~~+0.31%~~ | 642 | ~~5 min 01 s~~ | **SUPERSEDED** (CPU-FA 7.6534 is canonical) |
+| f16     | CPU-FA    | **7.6328** | 0.048 | (ref) | — | 564 | 16 min | canonical |
+| q8_0    | GPU       | 7.6332 | 0.048 | +0.0004 | +0.01% | 564 | 4 min 43 s | valid baseline (non-turbo KV; -fa off path OK for q4_0/q8_0/f16) |
+| q4_0    | CPU-FA    | **7.6913** | 0.049 | +0.0585 | +0.77% | 564 | 12 min | canonical |
+| q4_0    | GPU       | 7.6901 | 0.049 | +0.0573 | +0.75% | 564 | 4 min 43 s | valid baseline (non-turbo KV) |
+| **turbo2** | **CPU-FA** | **8.1216** | 0.051 | **+0.4888** | **+6.40%** | 564 | 24 min | **canonical** |
+| **turbo3** | **CPU-FA** | **7.7298** | 0.049 | **+0.0970** | **+1.27%** | 564 | 17 min | **canonical** |
+| **turbo4** | **CPU-FA** | **7.6534** | 0.048 | **+0.0206** | **+0.27%** | 564 | 17 min | **canonical (gate)** |
+| ~~turbo2~~ | ~~GPU -fa off~~ | ~~8.1166~~ | 0.051 | ~~+0.4838~~ | ~~+6.34%~~ | 564 | ~~5 min 01 s~~ | **SUPERSEDED** (rule violation; CPU-FA 8.1216 is canonical) |
+| ~~turbo3~~ | ~~GPU -fa off~~ | ~~7.7275~~ | 0.049 | ~~+0.0947~~ | ~~+1.24%~~ | 564 | ~~5 min 02 s~~ | **SUPERSEDED** (CPU-FA 7.7298 is canonical) |
+| ~~turbo4~~ | ~~GPU -fa off~~ | ~~7.6563~~ | 0.049 | ~~+0.0235~~ | ~~+0.31%~~ | 564 | ~~5 min 01 s~~ | **SUPERSEDED** (CPU-FA 7.6534 is canonical) |
 
 CPU-FA per-type wall times vary (16-24 min) because the per-chunk compute
 varies with KV type (f16/turbo4 are similar; turbo3 is slightly faster;
@@ -176,11 +176,11 @@ turbo2 is slightly slower due to more dequant work per token).
 
 ## Status (closed for model 1 sub-task 1)
 
-- [x] f16 KV (CPU-FA 642 chunks) — canonical baseline
-- [x] q8_0 KV (GPU 642 chunks) — valid baseline (non-turbo KV)
-- [x] q4_0 KV (CPU-FA 642 chunks) — canonical baseline
-- [x] turbo2 KV (CPU-FA 642 chunks) — canonical
-- [x] turbo3 KV (CPU-FA 642 chunks) — canonical
-- [x] turbo4 KV (CPU-FA 642 chunks) — **canonical; gate PASS**
+- [x] f16 KV (CPU-FA 564 chunks) — canonical baseline
+- [x] q8_0 KV (GPU 564 chunks) — valid baseline (non-turbo KV)
+- [x] q4_0 KV (CPU-FA 564 chunks) — canonical baseline
+- [x] turbo2 KV (CPU-FA 564 chunks) — canonical
+- [x] turbo3 KV (CPU-FA 564 chunks) — canonical
+- [x] turbo4 KV (CPU-FA 564 chunks) — **canonical; gate PASS**
 - [x] GPU -fa off rows — preserved for the non-FA vs FA comparison;
       SUPERSEDED for canonical citation

@@ -1,13 +1,13 @@
 # P1 [model 2 — llama31-8b] sub-task 1 — PPL matrix (llama31-8b-heretic Q4_K_M)
 
-**Result (2026-07-07, RESOLVED):** Full 642-chunk CPU-FA PPL matrix on
+**Result (2026-07-07, RESOLVED):** Full 564-chunk CPU-FA PPL matrix on
 `llama31-8b-heretic Q4_K_M` (context_length=131072, head_dim=128, GQA 4:1).
 **Gate PASS:** turbo4 = 7.6625 < q4_0 = 7.7722 (Δ = -0.1097, -1.41% relative).
 Same pattern as mistral-7b (turbo4 7.6534 < q4_0 7.6913, -0.49%) — turbo4
 beats q4_0 on both models. llama31-8b shows a larger gap (-1.41% vs
 -0.49%), meaning turbo4 is a stronger win on this model.
 
-## PPL matrix (ctx=512, 642 chunks wikitext-2 test)
+## PPL matrix (ctx=512, 564 chunks wikitext-2 test)
 
 | KV type | PPL | ± | Δ vs f16 | Δ % | wall (s) | path |
 |---|---:|---:|---:|---:|---:|---|
@@ -78,11 +78,11 @@ f16 on mistral-7b, +1.58% on llama31-8b — still well under q4_0's
 - Model: `/mnt/mrgr/models/llama31-8b-heretic/Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf`
   (4.6 GB, context_length=131072, head_dim=128, GQA 4:1, 32 layers).
 - Flags: `-m $MODEL -f wikitext-2-raw/wiki.test.raw -c 512 -b 512 -ub 512
-  -ngl $NGL --flash-attn auto -ctk $KV -ctv $KV --chunks 642`.
+  -ngl $NGL --flash-attn auto -ctk $KV -ctv $KV --chunks 564`.
   - GPU-FA types (f16, q8_0, q4_0): `-ngl 99`.
   - CPU-FA types (turbo2/3/4): `-ngl 0`.
 - PPL corpus: `/mnt/mrgr/projects/llama-cpp-turboquant/wikitext-2-raw/wiki.test.raw`
-  (full test split, 642 chunks).
+  (full test split, 564 chunks).
 - Each type run as a separate background job with file redirect
   (`ppl_${kv}_ngl${NGL}.log`). Long CPU-FA jobs detached from the
   bash wrapper using `setsid nohup ... < /dev/null & disown` to
