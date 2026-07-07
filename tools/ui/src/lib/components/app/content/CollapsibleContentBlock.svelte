@@ -13,7 +13,8 @@
 		class?: string;
 		icon?: Component;
 		iconClass?: string;
-		title: string;
+		title?: string;
+		titleSnippet?: Snippet;
 		subtitle?: string;
 		preview?: string;
 		rawContent?: string;
@@ -28,7 +29,8 @@
 		class: className = '',
 		icon: IconComponent,
 		iconClass = 'h-4 w-4',
-		title,
+		title = '',
+		titleSnippet,
 		subtitle,
 		preview,
 		rawContent,
@@ -69,7 +71,13 @@
 				<IconComponent class={cn('shrink-0 text-muted-foreground/60', iconClass)} />
 			{/if}
 
-			<span class={cn('text-sm font-medium', shimmerTitle ? 'shimmer-text' : 'text-foreground/80')}>{title}</span>
+			<span class={cn('text-sm font-medium', shimmerTitle ? 'shimmer-text' : 'text-foreground/80')}>
+				{#if titleSnippet}
+					{@render titleSnippet()}
+				{:else}
+					{title}
+				{/if}
+			</span>
 
 			{#if subtitle}
 				<span class="text-xs italic text-muted-foreground/70">{subtitle}</span>

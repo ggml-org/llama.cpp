@@ -23,6 +23,7 @@
 	import {
 		deriveAgenticSections,
 		formatJsonPretty,
+		getFileTypeByExtension,
 		parseToolResultWithImages,
 		type AgenticSection,
 		type ToolResultLine
@@ -190,6 +191,51 @@
 			llm: stats.llm
 		};
 	}
+
+	type ReadFileMeta = {
+		fileName: string;
+		lineRange: { start: number; end: number } | null;
+		language: string;
+	};
+
+	function parseReadFileMeta(toolName: string | undefined, toolArgsString: string | undefined): ReadFileMeta | null {
+		if (toolName !== 'read_file' || !toolArgsString) return null;
+
+		let args: Record<string, unknown>;
+		try {
+			const parsed: unknown = JSON.parse(toolArgsString);
+			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+			args = parsed as Record<string, unknown>;
+		} catch {
+			return null;
+		}
+
+		const rawPath = args.path ?? args.file_path ?? args.filePath;
+		if (typeof rawPath !== 'string' || !rawPath) return null;
+
+		const fileName = rawPath.split(/[\\/]/).pop() || rawPath;
+
+		const startRaw = args.start_line ?? args.line_start ?? args.startLine ?? args.from_line;
+		const endRaw = args.end_line ?? args.line_end ?? args.endLine ?? args.to_line;
+		const countRaw = args.line_count ?? args.count ?? args.num_lines;
+
+		let lineRange: { start: number; end: number } | null = null;
+		const sNum = Number(startRaw);
+		const eNum = Number(endRaw);
+		if (startRaw != null && endRaw != null && Number.isFinite(sNum) && Number.isFinite(eNum)) {
+			lineRange = { start: sNum, end: eNum };
+		} else if (startRaw != null && countRaw != null) {
+			const cNum = Number(countRaw);
+			if (Number.isFinite(sNum) && Number.isFinite(cNum)) {
+				lineRange = { start: sNum, end: sNum + cNum - 1 };
+			}
+		}
+
+		const fileType = getFileTypeByExtension(fileName);
+		const language = fileType ? fileType.replace(/^text:/, '') : 'text';
+
+		return { fileName, lineRange, language };
+	}
 </script>
 
 {#snippet renderSection(section: (typeof sectionsParsed)[number], index: number)}
@@ -240,13 +286,25 @@
 		{@const isPending = section.type === AgenticSectionType.TOOL_CALL_PENDING}
 		{@const toolIcon = isPending ? Loader2 : Wrench}
 		{@const toolIconClass = isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'}
+		{@const readFileMeta = parseReadFileMeta(section.toolName, section.toolArgs)}
+
+		{#snippet readFileTitle()}
+			<span class="text-muted-foreground">Read file </span>
+			<span class="font-mono">{readFileMeta?.fileName}</span>
+			{#if readFileMeta?.lineRange}
+				<span class="text-muted-foreground"
+					>{' '}(lines {readFileMeta.lineRange.start}-{readFileMeta.lineRange.end})</span
+				>
+			{/if}
+		{/snippet}
 
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
 			class="my-2"
 			icon={toolIcon}
 			iconClass={toolIconClass}
-			title={section.toolName || ''}
+			title={readFileMeta ? '' : section.toolName || ''}
+			titleSnippet={readFileMeta ? readFileTitle : undefined}
 			subtitle={isPending ? 'executing...' : undefined}
 			isStreaming={isPending}
 			onToggle={() => toggleExpanded(index, section)}
@@ -274,21 +332,29 @@
 						Waiting for result...
 					</div>
 				{:else if section.toolResult}
-					<div class="overflow-auto">
-						{#each section.parsedLines as line, i (i)}
-							<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-								{line.text}
-							</div>
-							{#if line.image}
-								<img
-									src={line.image.base64Url}
-									alt={line.image.name}
-									class="mt-2 mb-2 h-auto max-w-full rounded-lg"
-									loading="lazy"
-								/>
-							{/if}
-						{/each}
-					</div>
+					{#if readFileMeta}
+						<SyntaxHighlightedCode
+							code={section.toolResult}
+							language={readFileMeta.language}
+							maxHeight="22rem"
+						/>
+					{:else}
+						<div class="overflow-auto">
+							{#each section.parsedLines as line, i (i)}
+								<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+									{line.text}
+								</div>
+								{#if line.image}
+									<img
+										src={line.image.base64Url}
+										alt={line.image.name}
+										class="mt-2 mb-2 h-auto max-w-full rounded-lg"
+										loading="lazy"
+									/>
+								{/if}
+							{/each}
+						</div>
+					{/if}
 				{:else}
 					<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No output</div>
 				{/if}
