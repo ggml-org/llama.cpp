@@ -26,7 +26,6 @@ import {
 	modelsStore,
 	selectedModelContextSize
 } from '$lib/stores/models.svelte';
-import { logResponseStats, logFlowSummary, debugTokenUsage } from '$lib/utils/token-audit';
 import {
 	normalizeModelName,
 	filterByLeafNodeId,
@@ -1198,7 +1197,6 @@ class ChatStore {
 				timings: ChatMessageTimings | undefined,
 				toolCalls: import('$lib/types/api').ApiChatCompletionToolCall[] | undefined
 			) => {
-				logResponseStats(timings);
 				const updateData: Record<string, unknown> = {
 					content,
 					reasoningContent: reasoningContent || undefined,
@@ -1282,7 +1280,6 @@ class ChatStore {
 				return msg;
 			},
 			onFlowComplete: (finalTimings?: ChatMessageTimings) => {
-				logFlowSummary();
 				if (finalTimings) {
 					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 
@@ -1407,8 +1404,6 @@ class ChatStore {
 					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
 					await conversationsStore.updateCurrentNode(currentMessageId);
 					cleanupStreamingState();
-					logResponseStats(timings);
-					logFlowSummary();
 					if (onComplete) await onComplete(content);
 					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 
@@ -1947,9 +1942,6 @@ class ChatStore {
 
 						conversationsStore.updateConversationTimestamp();
 
-						logResponseStats(timings);
-						logFlowSummary();
-
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);
 						this.setProcessingState(msg.convId, null);
@@ -2292,15 +2284,6 @@ class ChatStore {
 			promptMs,
 			cacheTokens
 		};
-	}
-
-	/**
-	 * Debug: full token usage audit for a conversation. Call from browser console:
-	 *   chatStore.debugTokenUsage()            // active conversation
-	 *   chatStore.debugTokenUsage('conv-id')   // specific conversation
-	 */
-	async debugTokenUsage(convIdOrUndefined?: string): Promise<void> {
-		await debugTokenUsage(this.activeProcessingState, convIdOrUndefined);
 	}
 
 	restoreProcessingStateFromMessages(messages: DatabaseMessage[], conversationId: string): void {
