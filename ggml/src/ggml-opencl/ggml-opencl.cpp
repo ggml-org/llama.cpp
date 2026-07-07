@@ -7541,12 +7541,17 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
         // GEMVs and the GLU into one dispatch. q4_K only (guarded below); the
         // fused kernel uses the same accumulation/reduction order and the same
         // scalar GLU formula -> coherent. Default on, opt-out GGML_OPENCL_FUSE_MM_GLU=0.
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        // The fused executor (ggml_cl_mul_mat_q4_k_glu_fused) is image-path /
+        // Adreno-only (GGML_ABORT on the non-Adreno #else); gate the dispatch to
+        // match so the FFN GLU subgraph stays dormant on Intel/other drivers.
         if (backend_ctx->fuse_mm_glu && !backend_ctx->disable_fusion &&
             ggml_opencl_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT, GGML_OP_GLU })) {
             ggml_cl_mul_mat_q4_k_glu_fused(backend, node, cgraph->nodes[i+1], cgraph->nodes[i+2]);
             i += 2;
             continue;
         }
+#endif
 
         bool ok = ggml_cl_compute_forward(backend, node);
         if (!ok) {
