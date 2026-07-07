@@ -458,3 +458,30 @@ confirm it satisfies P1.5" entry is fine. After P1.5, the open P1 model-2
 and model-3 sub-tasks become the next real work.
 
 ---
+
+## 2026-07-07 — P1.5 — Turbo FA correctness (no-op confirmation)
+
+P1.5 was REVISED upstream to defer to P0.2: "if P0.2 confirms A770-sycl-fix
+has it working, this task becomes port/rebase onto turbo-sycl-opt, not diagnose
+and fix." P0.2 closed 2026-07-07 with the A770-sycl-fix tree-equivalent finding
+(commit `205077ae8` range), so P1.5 sub-bullet 1 closes with no further work.
+
+**What ran:** live `git log` of turbo-sycl-opt to re-confirm the three rebased
+SHAs (`dbf32f863` KQ-dot+SET_ROWS, `0d518a2ec` non-FA V+turbo->f32 CPY,
+`db8f61726` PR#7 review threads) are still on the branch HEAD ancestry. All
+three are reachable from `turbo-sycl-opt` HEAD. Harness evidence: the P0
+GQA-shape extension task ran the `[5b] FA TURBO GQA` sweep on this same
+HEAD — d=128 × GQA {4:1, 8:1} × {turbo2/3/4} × {tile+vec} — 0 GATE-FAIL,
+55 s wall time, every verdict within FMA noise of baseline. So the fix is
+in-tree AND live-verified on the canonical branch.
+
+**Result:** P1.5 sub-bullet 1 closed (no port/rebase needed; canonical branch
+= turbo-sycl-opt). P1.5 sub-bullet 2 (HARD RULE) adopted as a permanent
+operating rule — already enforced by the loop prompt, demonstrated by the
+P1 [model 1] `-fa off` violation + CPU-FA re-run, and cross-referenced to
+the 2026-07-02 source doc §4 L396-400.
+
+**No new tasks.** Next open `[ ]` in priority order is P1.6 (MoE dispatch
+check for model #3) — separate turn.
+
+---
