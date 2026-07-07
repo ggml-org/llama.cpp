@@ -150,7 +150,8 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
     // router server never loads a model and must not touch the GPU
     const bool is_router_server = params.model.path.empty()
                                && params.model.hf_repo.empty()
-                               && params.model.docker_repo.empty();
+                               && params.model.docker_repo.empty()
+                               && params.model.ms_repo.empty();
 
     // skip device enumeration so the CUDA primary context stays uncreated
     common_params_print_info(params, !is_router_server);
