@@ -1122,16 +1122,10 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         // tensors with "bias" suffix are always used with GGML_OP_ADD or GGML_OP_ADD_ID;
         // tensors with ".lora_a"/".lora_b" suffix are always used with GGML_OP_MUL_MAT_ID
         ggml_op op;
-        bool bias = tn.suffix != nullptr && strcmp(tn.suffix, "bias") == 0;
-        bool lora = tn.suffix != nullptr &&
-            (strcmp(tn.suffix, "lora_a") == 0 || strcmp(tn.suffix, "lora_b") == 0);
-        if (bias) {
-            if (info.op == GGML_OP_MUL_MAT_ID) {
-                op = GGML_OP_ADD_ID;
-            } else {
-                op = GGML_OP_ADD;
-            }
-        } else if (lora) {
+        if (tn.suffix != nullptr && strcmp(tn.suffix, "bias") == 0) {
+            op = info.op == GGML_OP_MUL_MAT_ID ? GGML_OP_ADD_ID : GGML_OP_ADD;
+        } else if (tn.suffix != nullptr &&
+                (strcmp(tn.suffix, "lora_a") == 0 || strcmp(tn.suffix, "lora_b") == 0)) {
             op = GGML_OP_MUL_MAT_ID;
         } else {
             op = info.op;
