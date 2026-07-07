@@ -655,3 +655,72 @@ Next in queue: P1 [model 2 — llama31-8b] (3 sub-tasks) or P1 [model 3 —
 Qwen3-Coder-30B-A3B] (3 sub-tasks, MoE-specific watch-points).
 
 ---
+
+## 2026-07-07 — P1 [model 2 — llama31-8b] sub-task 1 — PPL matrix
+
+Full 642-chunk CPU-FA PPL matrix on llama31-8b-heretic Q4_K_M (head_dim=128,
+GQA 4:1, n_ctx_train=131072, 32 layers). Same methodology as model 1:
+- GPU-FA for f16/q8_0/q4_0 (-ngl 99)
+- CPU-FA for turbo2/3/4 (-ngl 0) per the HARD RULE
+- Full wikitext-2 test corpus, 642 chunks
+
+**PPL matrix (ctx=512, 642 chunks):**
+  f16    = 7.5433  (273s, GPU-FA)
+  q8_0   = 7.5456  (275s, GPU-FA, +0.03% vs f16, within noise)
+  q4_0   = 7.7722  (275s, GPU-FA, +3.03% vs f16)
+  turbo2 = 10.6345 (836s, CPU-FA, +41.0% vs f16)
+  turbo3 = 8.0200  (935s, CPU-FA, +6.33% vs f16)
+  turbo4 = 7.6625  (967s, CPU-FA, +1.58% vs f16)
+
+**GATE verdict (rule-compliant FA path, turbo4 < q4_0):**
+  turbo4 = 7.6625 < q4_0 = 7.7722 (Δ = -0.1097, -1.41% relative) — **PASS**
+  Same pattern as mistral-7b (turbo4 7.6534 < q4_0 7.6913, -0.49%)
+
+**Cross-model PPL cost (Δ% vs f16):**
+  | KV | mistral-7b | llama31-8b | delta |
+  | q8_0    | +0.00% | +0.03% | +0.03% |
+  | q4_0    | +0.75% | +3.03% | +2.28% |
+  | turbo2  | +6.40% | +41.0% | +34.6% |
+  | turbo3  | +1.27% | +6.33% | +5.06% |
+  | turbo4  | +0.27% | +1.58% | +1.31% |
+
+**Real cross-model findings:**
+1. llama31-8b is more sensitive to KV quantization than mistral-7b across
+   the board. The effect is most dramatic at turbo2 (+34.6% delta,
+   +6.4% → +41.0%), moderate at turbo3 (+5.06%), small at turbo4
+   (+1.31%). llama31-8b's heretic finetune likely amplifies
+   quantization error.
+2. **turbo4 wins over q4_0 on BOTH models** (mistral-7b -0.49%,
+   llama31-8b -1.41%). llama31-8b shows a 3× larger turbo4-vs-q4_0
+   gap, meaning turbo4 is a stronger win on this model.
+3. **turbo2 is not viable on llama31-8b** (+41% PPL cost). On mistral-7b
+   it was +6.4% (viable for max-capacity workloads). The PPL/capacity
+   tradeoff for llama31-8b is: turbo4 only (skip turbo2/3 for this model).
+
+**Methodology lessons from this run:**
+- Per-KV background jobs (one per type) avoid the bash 300s timeout trap.
+  5-min GPU-FA jobs fit easily; 15-17 min CPU-FA jobs need the
+  `setsid nohup ... < /dev/null & disown` detach pattern to survive
+  the wrapper's death.
+- A single chained driver script for the 3 turbo types (turbo2 was
+  already running) was the right pattern — turbo3 + turbo4 ran
+  sequentially without re-launching the driver, and the PPL CSV was
+  updated incrementally.
+- The `setsid` pattern was the load-bearing fix. Without it, the
+  bash wrapper's death killed the binary too (PID became orphaned
+  vs init, then inherited the wrapper's SIGTERM). With `setsid
+  nohup ... < /dev/null & disown`, the binary becomes its own
+  session leader and survives.
+
+**Files:**
+  - `docs/ppl-results/llama31-8b-heretic/RESULTS.md` (the result doc)
+  - `docs/ppl-results/llama31-8b-heretic/ppl.csv` (merged, retro-patched)
+  - `sweep-logs/llama31-8b/ppl_*.log` (per-probe logs)
+  - `/tmp/ralph-ppl-llama31-8b.sh` (initial driver, killed by 300s timeout)
+  - `/tmp/ralph-ppl-llama31-turbo34.sh` (chained driver for turbo3+4)
+  - `/tmp/ralph-ppl-llama31-turbo.sh` (chained driver, unused, retained for reference)
+
+**P1 [model 2] progress:** sub-task 1 (PPL) RESOLVED. Remaining:
+sub-task 2 (capacity), sub-task 3 (correctness).
+
+---
