@@ -219,6 +219,80 @@ void ggml_vec_dot_q1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
+void ggml_vec_dot_q2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK2_0;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q2_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+
+#if defined(__ARM_NEON)
+    // Replicate pattern: each byte repeated 4 times
+    static const uint8_t tbl_idx_lo[16] = {0,0,0,0, 1,1,1,1, 2,2,2,2, 3,3,3,3};
+    static const uint8_t tbl_idx_hi[16] = {4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7};
+    // Right-shift amounts: 0,2,4,6 repeated for each group of 4
+    static const int8_t shift_vals[16] = {0,-2,-4,-6, 0,-2,-4,-6, 0,-2,-4,-6, 0,-2,-4,-6};
+
+    const uint8x16_t idx_lo  = vld1q_u8(tbl_idx_lo);
+    const uint8x16_t idx_hi  = vld1q_u8(tbl_idx_hi);
+    const int8x16_t  shifts  = vld1q_s8(shift_vals);
+    const uint8x16_t mask2   = vdupq_n_u8(0x03);
+    const int8x16_t  one     = vdupq_n_s8(1);
+
+    float32x4_t sumv = vdupq_n_f32(0.0f);
+
+    for (int i = 0; i < nb; i++) {
+        const float d0 = GGML_CPU_FP16_TO_FP32(x[i].d);
+
+        // group 64: one Q2_0 block (64 weights) maps to two Q8_0 blocks (2 * 32 = 64)
+        for (int k = 0; k < 2; k++) {
+            const block_q8_0 * GGML_RESTRICT yb = &y[i * 2 + k];
+            const float d1 = GGML_CPU_FP16_TO_FP32(yb->d);
+
+            // Load 8 bytes of packed 2-bit values
+            const uint8x8_t raw = vld1_u8(&x[i].qs[k * 8]);
+            const uint8x16_t raw16 = vcombine_u8(raw, raw);
+
+            // First 16 elements: replicate bytes 0-3, shift, mask, subtract 1
+            uint8x16_t bytes0 = vqtbl1q_u8(raw16, idx_lo);
+            int8x16_t qv0 = vsubq_s8(
+                vreinterpretq_s8_u8(vandq_u8(vshlq_u8(bytes0, shifts), mask2)),
+                one);
+
+            // Second 16 elements: replicate bytes 4-7, shift, mask, subtract 1
+            uint8x16_t bytes1 = vqtbl1q_u8(raw16, idx_hi);
+            int8x16_t qv1 = vsubq_s8(
+                vreinterpretq_s8_u8(vandq_u8(vshlq_u8(bytes1, shifts), mask2)),
+                one);
+
+            // Load Q8_0 values and dot product
+            const int8x16_t y0 = vld1q_s8(yb->qs);
+            const int8x16_t y1 = vld1q_s8(yb->qs + 16);
+
+            int32x4_t p0 = ggml_vdotq_s32(vdupq_n_s32(0), qv0, y0);
+            int32x4_t p1 = ggml_vdotq_s32(p0, qv1, y1);
+
+            sumv = vmlaq_n_f32(sumv, vcvtq_f32_s32(p1), d0 * d1);
+        }
+    }
+
+    sumf = vaddvq_f32(sumv);
+#else
+    ggml_vec_dot_q2_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+    return;
+#endif
+
+    *s = sumf;
+}
 
 void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
