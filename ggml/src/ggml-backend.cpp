@@ -1242,28 +1242,6 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         GGML_ASSERT(*cur_backend_id != -1);
     }
 
-    // OpenVINO currently uses ggml tensor names as graph indices. Some models (e.g. gpt-oss and
-    // llama4) can contain duplicate ggml tensor names, so we append node ids here to keep names
-    // unique. This is a temporary workaround and will be further optimized away in the future.
-    {
-        bool has_openvino_backend = false;
-        for (int i = 0; i < sched->n_backends; i++) {
-            if (strcmp(ggml_backend_name(sched->backends[i]), "OPENVINO") == 0) {
-                has_openvino_backend = true;
-                break;
-            }
-        }
-
-        if (has_openvino_backend) {
-            for (int i = 0; i < graph->n_nodes; i++) {
-                struct ggml_tensor * node = graph->nodes[i];
-                char                 new_name[128];
-                snprintf(new_name, sizeof(new_name), "%s#%d", node->name, i);
-                ggml_format_name(node, "%s", new_name);
-            }
-        }
-    }
-
     // pass 5: split graph, find tensors that need to be copied
     {
         int i_split = 0;
