@@ -435,6 +435,10 @@ typedef union {
 
 // Non-linear quants
 #define QK4_NL 32
+
+// Semantic quantization
+#define QK_SQ4 256
+
 typedef struct {
     ggml_half d;
     uint8_t qs[QK4_NL/2];
@@ -447,6 +451,15 @@ typedef struct {
     uint8_t  scales_l[QK_K/64];
     uint8_t  qs[QK_K/2];
 } block_iq4_xs;
+
+// SQ4: Semantic Quantization 4-bit. Per-block percentile-calibrated bands.
+// 8 band means (32 bytes) + packed nibbles [sign:1|band:3] (128 bytes) = 160 bytes for 256 weights.
+// 5.0 bits/weight effective. No global LUT — each block has its own distribution.
+typedef struct {
+    float bands[8];            // 8 band reconstruction means
+    uint8_t qs[QK_SQ4/2];     // [sign:1|band:3] nibbles, 2 per byte
+} block_sq4;
+static_assert(sizeof(block_sq4) == 8*sizeof(float) + QK_SQ4/2, "wrong sq4 block size/padding");
 static_assert(sizeof(block_iq4_xs) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/64 + QK_K/2, "wrong iq4_xs block size/padding");
 
 #endif // GGML_COMMON_DECL
