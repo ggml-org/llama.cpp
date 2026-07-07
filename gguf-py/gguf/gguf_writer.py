@@ -793,6 +793,10 @@ class GGUFWriter:
     def add_indexer_top_k(self, top_k: int) -> None:
         self.add_uint32(Keys.Attention.Indexer.TOP_K.format(arch=self.arch), top_k)
 
+    def add_indexer_types(self, value: Sequence[bool]) -> None:
+        key = Keys.Attention.Indexer.TYPES.format(arch=self.arch)
+        self.add_array(key, value)
+
     def add_max_alibi_bias(self, bias: float) -> None:
         self.add_float32(Keys.Attention.MAX_ALIBI_BIAS.format(arch=self.arch), bias)
 

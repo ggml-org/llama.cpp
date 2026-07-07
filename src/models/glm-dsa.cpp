@@ -52,9 +52,6 @@ void llama_model_glm_dsa::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,  hparams.indexer_head_size);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,       hparams.indexer_top_k);
 
-    hparams.is_indexer_full_impl = GLM_DSA_DEFAULT_INDEXER_TYPES;
-    ml.get_key_or_arr(LLM_KV_ATTENTION_INDEXER_TYPES, hparams.is_indexer_full_impl, hparams.n_layer(), false);
-
     // Expert gating function (GLM-4.5 uses sigmoid)
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
     if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE) {
@@ -64,6 +61,9 @@ void llama_model_glm_dsa::load_arch_hparams(llama_model_loader & ml) {
     // NextN/MTP parameters
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
     GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_all");
+
+    hparams.is_indexer_full_impl = GLM_DSA_DEFAULT_INDEXER_TYPES;
+    ml.get_key_or_arr(LLM_KV_ATTENTION_INDEXER_TYPES, hparams.is_indexer_full_impl, hparams.n_layer(), false);
 
     switch (hparams.n_layer()) {
         case 78: type = LLM_TYPE_744B_A40B; break;
