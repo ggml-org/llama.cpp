@@ -1233,3 +1233,21 @@ P1 [capacity validation] + P2 [sub-tasks 1 + 2] COMPLETE. Remaining:
 P2 sub-task 3 (commit history squash). P3 parked.
 
 ---
+
+## 2026-07-07 — P2 [consolidation] sub-task 3 — commit history squash
+
+Created local branch `turbo-sycl-opt-squashed` from `turbo-sycl-opt`
+HEAD, reset --soft to pre-RALPH base (`58a8c5ba`), and re-committed
+the 24 RALPH commits as 3 logical squashed commits:
+  1. ace7381c6 ralph(harness): P0 GQA extension + d=256 gate
+  2. 6111d816c ralph(capacity-docs): per-model PPL + capacity + correctness
+  3. 2b6aeba71 ralph(meta): topology pin + RALPH iteration log
+
+Total: 2,476 +37 lines across 3 commits. Local-only (per the
+"never pushed upstream" rule); turbo-sycl-opt branch untouched
+(still has the 24 individual RALPH commits for fine-grained history).
+
+P1 + P2 [sub-tasks 1+2+3] COMPLETE. P3 parked. P1.8 (concurrent
+capacity) is the load-bearing follow-up bullet.
+
+---
