@@ -195,10 +195,26 @@ bool cli_context::list_and_ask_models() {
         throw std::runtime_error("invalid response from /v1/models");
     }
     std::vector<std::string> models;
+    std::vector<std::string> models_display;
     for (const auto & m : resp.at("data")) {
-        if (m.contains("id") && m.at("id").is_string()) {
-            models.push_back(m.at("id").get<std::string>());
+        if (!m.contains("id") || !m.at("id").is_string()) {
+            continue;
         }
+        std::string name = m.at("id").get<std::string>();
+        std::string display = name;
+        if (m.contains("aliases") && m.at("aliases").is_array()) {
+            std::vector<std::string> aliases;
+            for (const auto & a : m.at("aliases")) {
+                if (a.is_string()) {
+                    aliases.push_back(a.get<std::string>());
+                }
+            }
+            if (!aliases.empty()) {
+                display += " (" + string_join(aliases, ", ") + ")";
+            }
+        }
+        models.push_back(name);
+        models_display.push_back(display);
     }
 
     // only one model: use it without asking
@@ -209,10 +225,8 @@ bool cli_context::list_and_ask_models() {
     }
 
     std::string message = "\nAvailable models:";
-    if (!models.empty()) {
-        for (size_t i = 0; i < models.size(); ++i) {
-            message += "\n  " + std::to_string(i + 1) + ". " + models[i];
-        }
+    for (size_t i = 0; i < models_display.size(); ++i) {
+        message += "\n  " + std::to_string(i + 1) + ". " + models_display[i];
     }
     message += "\n";
     ui::show_message(message);
