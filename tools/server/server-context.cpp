@@ -1574,8 +1574,13 @@ private:
                 }
             }
 
-            if (ret != nullptr) {
-                const float f_keep = (sim_best*task.tokens.size()) / ret->prompt.tokens.size();
+            // if ret->task_prev is null, /slots/restore was used, and partial information was restored,
+            // we can not proceed here
+            if (ret != nullptr && ret->task_prev != nullptr) {
+                // use last prompt, ignore tokens generated since, so it does not confuse how much to keep
+                const int32_t n_prompt_prev = ret->task_prev->n_tokens();
+
+                const float f_keep = (sim_best*task.tokens.size()) / std::max(1, n_prompt_prev);
 
                 if (task.id_slot == -1) {
                     SLT_INF(*ret, "selected slot by LCP similarity, sim_best = %.3f (> %.3f thold), f_keep = %.3f\n",
