@@ -119,10 +119,13 @@ layout (constant_id = 3) const uint BK = 16;  // Assumed to be 32 if working wit
 #endif
 
 #ifdef COOPMAT
-#define SHMEM_STRIDE (BK / 2 + 4)
+layout(constant_id = 12) const uint SHMEM_STRIDE_PAD = 4;
+layout(constant_id = 13) const bool APPLY_SLM_A_RESHAPE = false;
 #else
-#define SHMEM_STRIDE (BK / 2 + 1)
+const uint SHMEM_STRIDE_PAD = 1;
+const bool APPLY_SLM_A_RESHAPE = false;
 #endif
+#define SHMEM_STRIDE (BK / 2 + SHMEM_STRIDE_PAD)
 
 shared FLOAT_TYPEV2 buf_a[BM * SHMEM_STRIDE];
 shared FLOAT_TYPEV2 buf_b[BN * SHMEM_STRIDE];
@@ -302,7 +305,7 @@ void main() {
         [[unroll]] for (uint i = 0; i < BK; i += TK) {
             [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
                 // Load from shared into cache
-                coopMatLoad(cache_a, buf_a, (warp_r * WM + cm_row * TM) * SHMEM_STRIDE + i / 2, SHMEM_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+                coopMatLoad(cache_a, buf_a, a_shmem_index(warp_r * WM + cm_row * TM, i / 2), a_shmem_stride(), gl_CooperativeMatrixLayoutRowMajor);
 
                 [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
                     coopMatLoad(cache_b, buf_b, (warp_c * WN + cm_col * TN) * SHMEM_STRIDE + i / 2, SHMEM_STRIDE, gl_CooperativeMatrixLayoutColumnMajor);
