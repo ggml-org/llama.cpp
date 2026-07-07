@@ -31,13 +31,15 @@ holds is determined by KV bits per token.
 ## turbo2 Boundary V caveat (load-bearing for the reframe)
 
 The binary **silently auto-enables "Boundary V mode 7" for turbo2**:
-first 2 and last 2 transformer layers use  V-cache, the rest
+first 2 and last 2 transformer layers use `q8_0` V-cache, the rest
 (28 of 32 layers = 87.5%) use pure turbo2 V-cache. The K-cache is
 pure turbo2 across all 32 layers. Triggered at init time (see
- L753:
+`sweep-logs/llama31-8b-cap/turbo2_np1_c*.log` L753):
 
-and
-).
+```
+llama_kv_cache: Boundary V auto-enabled for turbo2-V (opt-out: TURBO_LAYER_ADAPTIVE=0)
+llama_kv_cache: Boundary V mode 7: first2+last2 V=q8_0, rest V=turbo2
+```
 
 **Implications for the capacity-gain claim:**
 - The 6.38× turbo2/f16 capacity ratio is for the **auto-mode** (first/last
