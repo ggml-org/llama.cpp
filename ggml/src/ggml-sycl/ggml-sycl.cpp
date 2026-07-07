@@ -2113,11 +2113,148 @@ static int next_power_of_2(int x) {
     return n;
 }
 
+static void init_argsort_indices_padded(
+        int * idx,
+        const int nrows,
+        const int ncols_pad,
+        const sycl::nd_item<1> & item_ct1) {
+    const size_t gid = item_ct1.get_local_range(0) * item_ct1.get_group(0) + item_ct1.get_local_id(0);
+    const size_t total = (size_t) nrows * (size_t) ncols_pad;
+
+    if (gid >= total) {
+        return;
+    }
+
+    idx[gid] = (int) (gid % (size_t) ncols_pad);
+}
+
+template <ggml_sort_order order>
+static void argsort_f32_i32_global_pass(const float *            x,
+                                        int *                    idx,
+                                        const int                ncols,
+                                        const int                nrows,
+                                        const int                ncols_pad,
+                                        const int                j,
+                                        const int                k,
+                                        const sycl::nd_item<1> & item_ct1) {
+    const size_t gid   = item_ct1.get_local_range(0) * item_ct1.get_group(0) + item_ct1.get_local_id(0);
+    const size_t total = (size_t) nrows * (size_t) ncols_pad;
+
+    if (gid >= total) {
+        return;
+    }
+
+    const int row = (int) (gid / (size_t) ncols_pad);
+    const int col = (int) (gid % (size_t) ncols_pad);
+    const int ixj = col ^ j;
+
+    if (ixj <= col || ixj >= ncols_pad) {
+        return;
+    }
+
+    const size_t base  = (size_t) row * (size_t) ncols_pad;
+    const size_t pos_a = base + (size_t) col;
+    const size_t pos_b = base + (size_t) ixj;
+
+    const int a = idx[pos_a];
+    const int b = idx[pos_b];
+
+    bool do_swap = false;
+
+    if ((col & k) == 0) {
+        if (a >= ncols ||
+            (b < ncols &&
+             (order == GGML_SORT_ORDER_ASC ?
+                  x[(size_t) row * (size_t) ncols + (size_t) a] > x[(size_t) row * (size_t) ncols + (size_t) b] :
+                  x[(size_t) row * (size_t) ncols + (size_t) a] < x[(size_t) row * (size_t) ncols + (size_t) b]))) {
+            do_swap = true;
+        }
+    } else {
+        if (b >= ncols ||
+            (a < ncols &&
+             (order == GGML_SORT_ORDER_ASC ?
+                  x[(size_t) row * (size_t) ncols + (size_t) a] < x[(size_t) row * (size_t) ncols + (size_t) b] :
+                  x[(size_t) row * (size_t) ncols + (size_t) a] > x[(size_t) row * (size_t) ncols + (size_t) b]))) {
+            do_swap = true;
+        }
+    }
+
+    if (do_swap) {
+        idx[pos_a] = b;
+        idx[pos_b] = a;
+    }
+}
+
+static void copy_argsort_indices_unpadded(const int *              idx_padded,
+                                          int *                    dst,
+                                          const int                nrows,
+                                          const int                ncols,
+                                          const int                ncols_pad,
+                                          const sycl::nd_item<1> & item_ct1) {
+    const size_t gid   = item_ct1.get_local_range(0) * item_ct1.get_group(0) + item_ct1.get_local_id(0);
+    const size_t total = (size_t) nrows * (size_t) ncols;
+
+    if (gid >= total) {
+        return;
+    }
+
+    const int row = (int) (gid / (size_t) ncols);
+    const int col = (int) (gid % (size_t) ncols);
+
+    dst[(size_t) row * (size_t) ncols + (size_t) col] = idx_padded[(size_t) row * (size_t) ncols_pad + (size_t) col];
+}
+
 static void argsort_f32_i32_sycl(const float *x, int *dst, const int ncols,
                                  const int nrows, ggml_sort_order order,
-                                 queue_ptr stream, int device) {
+                                 queue_ptr stream, int device, ggml_sycl_pool & pool) {
     // bitonic sort requires ncols to be power of 2
     const int ncols_pad = next_power_of_2(ncols);
+    const size_t shared_mem = (size_t) ncols_pad * sizeof(int);
+    const size_t smpbo = ggml_sycl_info().devices[device].smpbo;
+
+    if (shared_mem > smpbo) {
+        ggml_sycl_pool_alloc<int> idx_padded_alloc(pool, (size_t) nrows * (size_t) ncols_pad);
+        int *                     idx_padded = idx_padded_alloc.get();
+
+        constexpr size_t block_size     = 256;
+        const size_t     total_padded   = (size_t) nrows * (size_t) ncols_pad;
+        const size_t     nblocks_padded = (total_padded + block_size - 1) / block_size;
+
+        stream->parallel_for(
+            sycl::nd_range<1>(sycl::range<1>(nblocks_padded * block_size), sycl::range<1>(block_size)),
+            [=](sycl::nd_item<1> item_ct1) { init_argsort_indices_padded(idx_padded, nrows, ncols_pad, item_ct1); });
+
+        for (int k = 2; k <= ncols_pad; k *= 2) {
+            for (int j = k / 2; j > 0; j /= 2) {
+                if (order == GGML_SORT_ORDER_ASC) {
+                    stream->parallel_for(
+                        sycl::nd_range<1>(sycl::range<1>(nblocks_padded * block_size), sycl::range<1>(block_size)),
+                        [=](sycl::nd_item<1> item_ct1) {
+                            argsort_f32_i32_global_pass<GGML_SORT_ORDER_ASC>(x, idx_padded, ncols, nrows, ncols_pad, j,
+                                                                             k, item_ct1);
+                        });
+                } else if (order == GGML_SORT_ORDER_DESC) {
+                    stream->parallel_for(
+                        sycl::nd_range<1>(sycl::range<1>(nblocks_padded * block_size), sycl::range<1>(block_size)),
+                        [=](sycl::nd_item<1> item_ct1) {
+                            argsort_f32_i32_global_pass<GGML_SORT_ORDER_DESC>(x, idx_padded, ncols, nrows, ncols_pad, j,
+                                                                              k, item_ct1);
+                        });
+                } else {
+                    GGML_ABORT("invalid sort order");
+                }
+            }
+        }
+
+        const size_t total   = (size_t) nrows * (size_t) ncols;
+        const size_t nblocks = (total + block_size - 1) / block_size;
+        stream->parallel_for(sycl::nd_range<1>(sycl::range<1>(nblocks * block_size), sycl::range<1>(block_size)),
+                             [=](sycl::nd_item<1> item_ct1) {
+                                 copy_argsort_indices_unpadded(idx_padded, dst, nrows, ncols, ncols_pad, item_ct1);
+                             });
+
+        return;
+    }
 
     int nth = 1;
     int max_block_size = ggml_sycl_info().max_work_group_sizes[device];
@@ -2130,8 +2267,6 @@ static void argsort_f32_i32_sycl(const float *x, int *dst, const int ncols,
 
     const sycl::range<3> block_dims(1, 1, nth);
     const sycl::range<3> block_nums(1, nrows, 1);
-    const size_t shared_mem = ncols_pad * sizeof(int);
-    GGML_ASSERT(shared_mem<=ggml_sycl_info().devices[device].smpbo);
 
     if (order == GGML_SORT_ORDER_ASC) {
         stream->submit([&](sycl::handler &cgh) {
@@ -2650,7 +2785,7 @@ inline void ggml_sycl_op_argsort(ggml_backend_sycl_context & ctx, ggml_tensor * 
     enum ggml_sort_order order = (enum ggml_sort_order) dst->op_params[0];
 
     argsort_f32_i32_sycl(src0_dd, (int *)dst_dd, ncols, nrows, order,
-                         main_stream, ctx.device);
+                         main_stream, ctx.device, ctx.pool());
 }
 
 static void ggml_sycl_op_top_k(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -5705,8 +5840,7 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_MEAN:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_ARGSORT:
-            return op->src[0]->ne[0] * sizeof(int) <=
-                   ggml_sycl_info().devices[device].smpbo;
+            return true;
         case GGML_OP_TOP_K: {
             const ggml_tensor * src0 = op->src[0];
             const int k = op->ne[0];
