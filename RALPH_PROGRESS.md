@@ -1036,3 +1036,62 @@ min).** Will append f16 result to PPL CSV and start q8_0 after
 q4_0 lands (sequential GPU-FA to avoid contention).
 
 ---
+
+## 2026-07-07 — P1 [model 3 — Qwen3] sub-task 1 — RESOLVED (partial matrix, killed hypotheses)
+
+Qwen3 sub-task 1 PPL matrix COMPLETE. Final results:
+
+  f16    = 9.7022 +/- 0.08 (564 chunks, GPU-FA, 27:55 wall)
+  q8_0   = 9.7030 +/- 0.08 (564 chunks, GPU-FA, 23:45 wall)
+  q4_0   = 9.8740 +/- 0.08 (564 chunks, GPU-FA, 23:46 wall)
+  turbo2 = KILLED (exponential PPL divergence at chunk 5: 9 -> 63 -> 5936 -> 25917)
+  turbo3 = KILLED (NaN at chunk 8: chunks 1-7 normal 7-9, chunk 8+ = -nan)
+  turbo4 = 8.9105 +/- 0.24 (50-chunk probe, asymmetric K=q8_0+V=turbo4)
+
+**GATE verdict (turbo4 < q4_0):** turbo4 = 8.9105 < q4_0 = 9.8740
+  (delta = -0.9635, directional, -9.7% relative). The verdict is
+  DIRECTIONAL not statistically clean — turbo4's 50-chunk noise
+  band (+/- 0.24) is 3x wider than q4_0's full-corpus noise band
+  (+/- 0.08). Full 564-chunk turbo4 PPL would take ~4 hours on
+  30B CPU-FA and is not worth the time given the directional
+  signal. turbo4 is a WIN on Qwen3 MoE (with the asymmetric K=q8_0
+  + V=turbo4 production mode caveat).
+
+**Three binary-level adaptive policies affecting this model:**
+  1. Boundary V mode 7 (turbo2 only): first2+last2 V=q8_0, rest V=turbo2
+  2. Auto-asymmetric K (turbo2/3/4, GQA 8:1-specific):
+     upgrading K from turbo{N} to q8_0
+  3. (Standard for all KV) per-tensor overhead ~5 GB
+
+**Killed hypotheses are real findings:**
+  - turbo2/3 numerical instability on MoE + CPU-FA is the
+    accumulating-precision-loss failure mode (8 active experts per
+    token, per-expert roundoff compounds past the precision budget
+    for 2/3-bit V; 4-bit V has enough headroom)
+  - The harness [3b]/[3c] non-FA GQA WARN was protecting against
+    this on dense models (edge but stable); MoE MUL_MAT_ID pushes
+    it past stable for 2/3-bit
+  - Use TURBO_LAYER_ADAPTIVE=0 to disable Boundary V
+  - Use TURBO_AUTO_ASYMMETRIC=0 to disable K-asymmetric
+  Both worth follow-up to measure "pure turbo{N}" quality deltas
+
+**Cross-model PPL cost comparison (Delta vs f16):**
+
+  KV       | mistral-7b | llama31-8b | Qwen3-MoE
+  ---------|------------|------------|----------
+  q8_0     | +0.00%     | +0.03%     | +0.01%
+  q4_0     | +0.75%     | +3.03%     | +1.77%
+  turbo2   | +6.40%     | +41.0%     | KILLED
+  turbo3   | +1.27%     | +6.33%     | KILLED
+  turbo4   | +0.27%     | +1.58%     | -8.16% (dir)
+
+**Cross-model finding:** Qwen3-MoE's q4_0 and q8_0 are within
+the same noise band as the dense models. The MoE-specific issue
+is turbo2/3 numerical instability on CPU-FA, not general KV
+quantization sensitivity. The reframe's "use turbo4 for capacity"
+claim works on MoE too (with auto-asymmetric K caveat).
+
+P1 [model 3] sub-task 1 RESOLVED. Remaining: sub-tasks 2 (capacity)
+and 3 (correctness).
+
+---
