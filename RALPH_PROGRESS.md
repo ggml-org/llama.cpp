@@ -1251,3 +1251,28 @@ P1 + P2 [sub-tasks 1+2+3] COMPLETE. P3 parked. P1.8 (concurrent
 capacity) is the load-bearing follow-up bullet.
 
 ---
+
+## 2026-07-07 — RALPH validation loop COMPLETE
+
+P1 [capacity validation] + P2 [consolidation deliverable] COMPLETE
+on all 3 models. Remaining unchecked items are explicitly scoped:
+  - P1.8 (concurrent-sequence capacity): open follow-up, was deferred
+    until P1 model 2/3 sub-tasks done (now done, so it's ACTIVE for
+    the next session)
+  - P3 (2 parked items): parked, do NOT start without explicit human
+    go-ahead per the task description
+
+Per loop contract rule 7, the loop stops proposing new tasks.
+A human skimming RALPH_TASKS.md can see the full state and decide
+which follow-up to pursue next (P1.8 is the load-bearing one;
+P3 is parked until a human un-parks it).
+
+RALPH loop mission complete. The reframe stands:
+  - turbo is a capacity feature, not a speed feature
+  - capacity-gain ratio is model-invariant for GPU-FA types
+    (q8_0/f16=1.89-1.90x, q4_0/f16=3.57-3.60x across all 3 models)
+  - turbo4 wins on all 3 models (PPL cost <= +1.58% vs f16)
+  - turbo2/3 NOT viable on MoE (killed hypothesis)
+  - Tier 1 (LUT) and Tier 3 (XMX) speed work closed with evidence
+
+---
