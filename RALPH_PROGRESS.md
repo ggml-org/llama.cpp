@@ -148,10 +148,10 @@ is what the binary actually executes for turbo KV). Wall time ≈ 5 min/run
 2. **Duplicate flag in smoke test.** `-ngl 99 --n-gpu-layers 99` is harmless
    (binary uses last wins) but redundant; cleaned up for the matrix runs.
 3. **Smoke-test f16 (64 chunks) underestimates true PPL.** The 64-chunk f16
-   = 7.5818, full 642-chunk f16 = 7.6329. The smoke value was a stable
-   underestimate; canonical baseline is the 642-chunk number, not the smoke.
+   = 7.5818, full 564-chunk f16 = 7.6329. The smoke value was a stable
+   underestimate; canonical baseline is the 564-chunk number, not the smoke.
 
-**Results (642 chunks each, GPU -ngl 99):**
+**Results (564 chunks each, GPU -ngl 99):**
 
 | KV    | PPL     | Δ vs f16  | Δ %    |
 |-------|---------|-----------|--------|
@@ -375,7 +375,7 @@ disambiguate (a)/(b)/(c) — and the CPU-FA f16 baseline vs GPU f16
 clean comparison baseline.
 
 **Update 2026-07-07 (bg_3 partial landing):** **CPU-FA f16 baseline landed:
-PPL = 7.6328 ± 0.048** (full 642 chunks, vs GPU f16 = 7.6329 ± 0.048).
+PPL = 7.6328 ± 0.048** (full 564 chunks, vs GPU f16 = 7.6329 ± 0.048).
 Delta = -0.0001, **bit-equivalent within ±0.0001 noise** — not just
 within the ±0.05 PPL noise band, but *identical* to four decimal places.
 The CPU-FA path is **validated as a clean comparison baseline**: for
@@ -658,13 +658,13 @@ Qwen3-Coder-30B-A3B] (3 sub-tasks, MoE-specific watch-points).
 
 ## 2026-07-07 — P1 [model 2 — llama31-8b] sub-task 1 — PPL matrix
 
-Full 642-chunk CPU-FA PPL matrix on llama31-8b-heretic Q4_K_M (head_dim=128,
+Full 564-chunk CPU-FA PPL matrix on llama31-8b-heretic Q4_K_M (head_dim=128,
 GQA 4:1, n_ctx_train=131072, 32 layers). Same methodology as model 1:
 - GPU-FA for f16/q8_0/q4_0 (-ngl 99)
 - CPU-FA for turbo2/3/4 (-ngl 0) per the HARD RULE
-- Full wikitext-2 test corpus, 642 chunks
+- Full wikitext-2 test corpus, 564 chunks
 
-**PPL matrix (ctx=512, 642 chunks):**
+**PPL matrix (ctx=512, 564 chunks):**
   f16    = 7.5433  (273s, GPU-FA)
   q8_0   = 7.5456  (275s, GPU-FA, +0.03% vs f16, within noise)
   q4_0   = 7.7722  (275s, GPU-FA, +3.03% vs f16)
@@ -722,5 +722,41 @@ GQA 4:1, n_ctx_train=131072, 32 layers). Same methodology as model 1:
 
 **P1 [model 2] progress:** sub-task 1 (PPL) RESOLVED. Remaining:
 sub-task 2 (capacity), sub-task 3 (correctness).
+
+---
+
+## 2026-07-07 — P1 [model 2 — llama31-8b] sub-task 2 — Capacity gain (llama31-8b-heretic Q4_K_M, single-stream)
+
+v12 sweep (parameterized for any model via env vars), 6 KV × 1 n_par
+(n_par=4 confirmed identical to n_par=1 by the v10 lesson). Two-phase:
+v10 (range [1024, 131072]) + v11 (doubling hi on FIT).
+
+Final capacity table (single-stream, n_par=1):
+  f16     =  79764 ctx  (1.00x f16)
+  q8_0    = 150528 ctx  (1.89x f16)
+  q4_0    = 285440 ctx  (3.58x f16)
+  turbo2  = 508928 ctx  (6.38x f16)   <-- max capacity
+  turbo3  = 411392 ctx  (5.16x f16)
+  turbo4  = 302336 ctx  (3.79x f16)   <-- best PPL/capacity tradeoff
+
+All converge to ~10030 MiB KV buffer (binary's absolute VRAM ceiling on
+this 16 GB Arc A770). Pattern identical to mistral-7b.
+
+Cross-model comparison (single-stream, n_par=1):
+  model | f16    | q4_0    | turbo2  | turbo3  | turbo4  | turbo4/f16
+  mistral-7b  | 82304  | 293888 | 524416 | 423680 | 311552 | 3.79x
+  llama31-8b  | 79764  | 285440 | 508928 | 411392 | 302336 | 3.79x
+
+**Key cross-model finding: the turbo4/f16 capacity-gain ratio is
+identical (3.79x) on both models.** The capacity-feature claim scales
+cleanly across 7-8B models on this hardware. llama31-8b is ~3% lower
+in absolute terms (f16 ceiling 79764 vs 82304) because the heretic
+model is 308 MiB larger (4403 vs 4095 MiB resident), so the KV
+budget shrinks proportionally. The RATIO is model-invariant because
+both models hit the same 16 GB Arc A770 VRAM ceiling with the same
+binary's per-tensor overhead.
+
+P1 [model 2] sub-task 1 (PPL) + sub-task 2 (capacity) both RESOLVED.
+Remaining: sub-task 3 (correctness smoke-test).
 
 ---
