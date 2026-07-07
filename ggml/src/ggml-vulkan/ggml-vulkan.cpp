@@ -1941,7 +1941,7 @@ static uint64_t ggml_vk_get_node_flops(const ggml_tensor * node) {
 
 class vk_perf_logger {
   public:
-    void print_timings(bool force = false) {
+    void print_timings(const char * device_name = nullptr, bool force = false) {
         if (timings.empty()) {
             return;
         }
@@ -1951,7 +1951,7 @@ class vk_perf_logger {
         }
         print_count = 0;
         uint64_t total_all_op_times = 0;
-        std::cerr << "----------------\nVulkan Timings:" << std::endl;
+        std::cerr << "----------------\nVulkan Timings (" << (device_name ? device_name : "unknown device") << "):" << std::endl;
         for (const auto & t : timings) {
             uint64_t total_op_times = 0;
             for (const auto & time : t.second) {
@@ -15137,7 +15137,7 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
         ctx->transfer_cmd_pool.destroy(ctx->device->device);
     }
     if (vk_perf_logger_enabled) {
-        ctx->perf_logger->print_timings(true);
+        ctx->perf_logger->print_timings(ctx->device->name.c_str(), true);
     }
 }
 
@@ -16281,6 +16281,12 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         std::fill(ctx->query_nodes.begin(), ctx->query_nodes.end(), nullptr);
         std::fill(ctx->query_node_idx.begin(), ctx->query_node_idx.end(), 0);
 
+        // A compute context can be left open by an async cross-device tensor
+        // copy (multi-GPU split). The logger needs the graph in a fresh
+        // command buffer for the timestamp queries, so flush it first.
+        if (!ctx->compute_ctx.expired()) {
+            ggml_vk_synchronize(ctx);
+        }
         GGML_ASSERT(ctx->compute_ctx.expired());
         compute_ctx = ggml_vk_get_compute_ctx(ctx);
         ctx->query_idx = 0;
@@ -16617,7 +16623,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                 ctx->perf_logger->log_timing(nodes, names, uint64_t((timestamps[i] - timestamps[i-1]) * ctx->device->properties.limits.timestampPeriod));
             }
         }
-        ctx->perf_logger->print_timings();
+        ctx->perf_logger->print_timings(ctx->device->name.c_str());
     }
 
     if (!ctx->device->support_async) {
