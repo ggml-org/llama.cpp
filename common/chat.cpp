@@ -1782,7 +1782,7 @@ static autoparser::generation_params common_chat_gigachat35_render_inputs(
         render_inputs.extra_context = json::object();
     }
     if (!render_inputs.extra_context.contains("reasoning")) {
-        render_inputs.extra_context["reasoning"] = render_inputs.enable_thinking;
+        render_inputs.extra_context["reasoning"] = false;
     }
     return render_inputs;
 }
