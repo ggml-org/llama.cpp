@@ -132,7 +132,7 @@ void main() {
 
         // Q8_0 K only needs (qd, _); the asymmetric Q4_*/Q5_* family also stores
         // the row-sum scaled by qd, used in k_dot_correction.
-        if (FaTypeK == FA_TYPE_Q8_0) {
+        if (FaTypeK == GGML_TYPE_Q8_0) {
             if (buf_iqs == 0) {
                 Qf[buf_ib].ds = FLOAT_TYPEV2(qd, 0.0);
             }
@@ -365,7 +365,7 @@ void main() {
                 // Q4_*/Q5_* take the block-8 fast path when one step covers a full
                 // block; Q8_0 always goes through the per-int get_k_qs* helpers
                 // (its qs is byte-packed, not nibble-packed).
-                const bool block8_fast = (d_per_step == 8) && (FaTypeK != FA_TYPE_Q8_0);
+                const bool block8_fast = (d_per_step == 8) && (FaTypeK != GGML_TYPE_Q8_0);
 
                 if (SHMEM_STAGING != 0) {
                     const uint k_block_idx = (d_tid * (HSK_per_thread / 4) + d_block) / 8;
@@ -373,7 +373,7 @@ void main() {
                     k_dm = ACC_TYPEV2(kblocksh[buf_ib].dm);
 
                     if (block8_fast) {
-                        const bool has_qh = (FaTypeK == FA_TYPE_Q5_0) || (FaTypeK == FA_TYPE_Q5_1);
+                        const bool has_qh = (FaTypeK == GGML_TYPE_Q5_0) || (FaTypeK == GGML_TYPE_Q5_1);
                         [[unroll]] for (uint32_t d = 0; d < 4; d++) {
                             uint vui = kblocksh[buf_ib].qs[d];
                             k_quants[d    ] = int32_t( vui       & 0x0F0F0F0F);
