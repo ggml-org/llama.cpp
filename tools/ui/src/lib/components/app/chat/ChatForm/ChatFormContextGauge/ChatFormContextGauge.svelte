@@ -94,108 +94,6 @@
 		};
 	});
 
-	// Derive context from message data, plus live in-flight tokens when present.
-	//
-	// KV cache in memory = sum across all committed assistant turns of
-	// (timings.prompt_n + timings.predicted_n). Cache hits are excluded because
-	// they reference tokens already counted by a prior turn's prompt_n.
-	//
-	// During streaming of a new turn, the previous cumulative total still
-	// represents the slot's KV. The live "fresh" addition (= this turn's new
-	// prompt_n) and the live output are added on top — that's the running
-	// delta between committed state and the in-flight request.
-	//
-	// Edge case: there's a brief window between commitMessageAtIndex(...) (the
-	// assistant timings land in activeMessages) and cleanupStreamingState()
-	// (processingState clears). During that window the same turn's data lives
-	// in BOTH the committed array and the live state, so adding live on top of
-	// sum would double-count. Guard against that by skipping live additions
-	// whenever the last entry in activeMessages is already a committed
-	// assistant — the live state at that moment is just the same delta.
-	let contextUsed = $derived.by(() => {
-		const messages = activeMessages() as DatabaseMessage[];
-
-		let used = 0;
-		for (const msg of messages) {
-			if (msg.role !== MessageRole.ASSISTANT || !msg.timings) continue;
-			used += (msg.timings.prompt_n ?? 0) + (msg.timings.predicted_n ?? 0);
-		}
-
-		const live = liveStats;
-		const lastMsg = messages[messages.length - 1];
-		const liveTurnAlreadyCommitted =
-			!!lastMsg && lastMsg.role === MessageRole.ASSISTANT && !!lastMsg.timings;
-		if (live && !liveTurnAlreadyCommitted) {
-			used += live.freshTokens + live.outputTokens;
-		}
-
-		return used;
-	});
-
-	let cumulativeStats = $derived.by(() => {
-		const messages = activeMessages() as DatabaseMessage[];
-
-		let read = 0;
-		let output = 0;
-		let outputMs = 0;
-		let cacheTotal = 0;
-		let hasAgenticFlow = false;
-
-		// Sum the committed assistant message timings only. The "Cumulative
-		// (all responses)" rows deliberately reflect completed turns, so live
-		// in-flight tokens are not layered on top - that double-counts whenever
-		// a new turn starts after one has already committed. Live reactivity is
-		// handled by the "Current request (KV cache)" section below, which reads
-		// the same liveStats source directly.
-		const agenticMessages = messages.filter(
-			(m) => m.role === MessageRole.ASSISTANT && m.timings?.agentic?.llm?.predicted_n != null
-		);
-		hasAgenticFlow = agenticMessages.length > 0;
-		if (hasAgenticFlow) {
-			// agentic.llm.predicted_n/prompt_n accumulates across the entire flow
-			// and is shared on all assistant messages, so count it from the latest
-			// agentic message once. agentic flows don't surface per-turn cache_n,
-			// so cacheTotal stays 0.
-			const lastAgentic = agenticMessages[agenticMessages.length - 1];
-			read += lastAgentic.timings.agentic.llm.prompt_n ?? 0;
-			output += lastAgentic.timings.agentic.llm.predicted_n ?? 0;
-			outputMs += lastAgentic.timings.agentic.llm.predicted_ms ?? 0;
-		} else {
-			for (const message of messages) {
-				if (message.role !== MessageRole.ASSISTANT) continue;
-				const timings = message.timings;
-				if (!timings) continue;
-				read += timings.prompt_n ?? 0;
-				read += timings.cache_n ?? 0;
-				cacheTotal += timings.cache_n ?? 0;
-				output += timings.predicted_n ?? 0;
-				outputMs += timings.predicted_ms ?? 0;
-			}
-		}
-
-		const averageTokensPerSecond = outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
-
-		return { read, output, cacheTotal, averageTokensPerSecond };
-	});
-
-	const TRANSIENT_DETAILS_EXCLUDED_PREFIXES = ['Context:', 'Output:'];
-
-	let transientDetails = $derived(
-		processingState.getTechnicalDetails().filter((technicalDetail) => {
-			if (
-				TRANSIENT_DETAILS_EXCLUDED_PREFIXES.some((prefix) => technicalDetail.startsWith(prefix))
-			) {
-				return false;
-			}
-			return !technicalDetail.includes(STATS_UNITS.TOKENS_PER_SECOND);
-		})
-	);
-
-	let contextPercent = $derived.by(() => {
-		if (contextTotal === null || contextTotal <= 0) return null;
-		return Math.round((contextUsed / contextTotal) * 100);
-	});
-
 	// Current request's Reading: prompt_n + cache_n for the in-flight request.
 	// During preparing, live.promptTokens tracks prompt processing; during
 	// generating, the server zeros prompt_n (pre_decode) but liveStats still
@@ -288,6 +186,75 @@
 	// KV total = current request's Reading + Output. The model's prompt_n + cache_n
 	// already includes tool definitions rendered into the prompt by the chat template.
 	let kvTotal = $derived(currentRead + currentOutput);
+
+	// Context budget = everything currently stored in the KV cache: the full
+	// prompt this turn (fresh + cached prefix) plus any generated tokens.
+	// Cache hits save compute time but still occupy slots, so they must be
+	// counted toward the context window.
+	let contextUsed = $derived(currentRead + currentOutput);
+
+	let cumulativeStats = $derived.by(() => {
+		const messages = activeMessages() as DatabaseMessage[];
+
+		let read = 0;
+		let output = 0;
+		let outputMs = 0;
+		let cacheTotal = 0;
+		let hasAgenticFlow = false;
+
+		// Sum the committed assistant message timings only. The "Cumulative
+		// (all responses)" rows deliberately reflect completed turns, so live
+		// in-flight tokens are not layered on top - that double-counts whenever
+		// a new turn starts after one has already committed. Live reactivity is
+		// handled by the "Current request (KV cache)" section below, which reads
+		// the same liveStats source directly.
+		const agenticMessages = messages.filter(
+			(m) => m.role === MessageRole.ASSISTANT && m.timings?.agentic?.llm?.predicted_n != null
+		);
+		hasAgenticFlow = agenticMessages.length > 0;
+		if (hasAgenticFlow) {
+			// agentic.llm.predicted_n/prompt_n accumulates across the entire flow
+			// and is shared on all assistant messages, so count it from the latest
+			// agentic message once. agentic flows don't surface per-turn cache_n,
+			// so cacheTotal stays 0.
+			const lastAgentic = agenticMessages[agenticMessages.length - 1];
+			read += lastAgentic.timings.agentic.llm.prompt_n ?? 0;
+			output += lastAgentic.timings.agentic.llm.predicted_n ?? 0;
+			outputMs += lastAgentic.timings.agentic.llm.predicted_ms ?? 0;
+		} else {
+			for (const message of messages) {
+				if (message.role !== MessageRole.ASSISTANT) continue;
+				const timings = message.timings;
+				if (!timings) continue;
+				read += timings.prompt_n ?? 0;
+				cacheTotal += timings.cache_n ?? 0;
+				output += timings.predicted_n ?? 0;
+				outputMs += timings.predicted_ms ?? 0;
+			}
+		}
+
+		const averageTokensPerSecond = outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
+
+		return { read, output, cacheTotal, averageTokensPerSecond };
+	});
+
+	const TRANSIENT_DETAILS_EXCLUDED_PREFIXES = ['Context:', 'Output:'];
+
+	let transientDetails = $derived(
+		processingState.getTechnicalDetails().filter((technicalDetail) => {
+			if (
+				TRANSIENT_DETAILS_EXCLUDED_PREFIXES.some((prefix) => technicalDetail.startsWith(prefix))
+			) {
+				return false;
+			}
+			return !technicalDetail.includes(STATS_UNITS.TOKENS_PER_SECOND);
+		})
+	);
+
+	let contextPercent = $derived.by(() => {
+		if (contextTotal === null || contextTotal <= 0) return null;
+		return Math.round((contextUsed / contextTotal) * 100);
+	});
 
 	let detailsOpen = $state(false);
 
@@ -456,10 +423,10 @@
 								<div class="flex flex-col gap-2">
 									{#if cumulativeStats.read > 0}
 										<ContextGaugeDetailRow
-											label="Prompts sent"
+											label="Prompt tokens evaluated"
 											value={`${cumulativeStats.read.toLocaleString()} tok`}
 											subtitle={cumulativeStats.cacheTotal > 0
-												? `${cumulativeStats.cacheTotal.toLocaleString()} of these were cached (KV hit)`
+												? `${cumulativeStats.cacheTotal.toLocaleString()} reused from KV cache`
 												: undefined}
 										/>
 									{/if}

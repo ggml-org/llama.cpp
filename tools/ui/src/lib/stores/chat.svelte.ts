@@ -2484,7 +2484,7 @@ class ChatStore {
 
 				const modelLabel = msg.model ? ` [${msg.model}]` : '';
 				console.log(
-					`  #${idx + 1}: prompt=${t?.prompt_n ?? 0} cache=${cache} reading=${read} | output=${output} ${modelLabel}`
+					`  #${idx + 1}: prompt=${t?.prompt_n ?? 0} cache=${t?.cache_n ?? 0} reading=${read} | output=${output} ${modelLabel}`
 				);
 			});
 		}
