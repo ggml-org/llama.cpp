@@ -541,3 +541,72 @@ P1 [model 3] run shows MUL_MAT_ID actually falling back to CPU at
 scale, add the port task then — speculation is not scope.
 
 ---
+
+## 2026-07-07 — P1 [model 1] sub-task 2 — Capacity gain (mistral-7b Q4_K_M, single-stream)
+
+Binary-search sweep across all 6 KV types (v10 found the lower bound at
+c=131072 corpus cap; v11 pushed the dense KV types to their real OOM
+ceilings). Final capacity matrix (single-stream, n_par=1):
+
+  f16    =  82304 ctx  (1.00x f16)
+  q8_0   = 155648 ctx  (1.89x f16)
+  q4_0   = 293888 ctx  (3.57x f16)
+  turbo2 = 524416 ctx  (6.37x f16)   <-- max capacity
+  turbo3 = 423680 ctx  (5.15x f16)
+  turbo4 = 311552 ctx  (3.79x f16)   <-- best PPL/capacity tradeoff
+
+All KV types converge to the same absolute KV buffer ceiling of ~10330
+MiB. Capacity difference is purely 10330 MiB / bytes_per_token — the
+KV compression IS the capacity gain. The 16 GB Arc A770 has a single
+VRAM limit; how much context that holds is determined by KV bits per
+token.
+
+Combined PPL + capacity story (from sub-task 1 + this task):
+  turbo4: 3.79x more context for +0.27% PPL cost (within noise)
+  turbo2: 6.37x more context for +6.40% PPL cost (real)
+The user picks the point on the tradeoff that matches their workload —
+turbo4 is the near-free option, turbo2 is max capacity.
+
+Methodology:
+  - binary: llama-perplexity with --chunks 0 --no-warmup (init only,
+    avoids the hours-per-probe PPL cost at large ctx)
+  - OOM oracle: "failed to fit params" in log = binary refused KV alloc
+  - FIT oracle: rc=0 + common_memory_breakdown_print line present
+  - VRAM oracle: breakdown's "(total = free + (used = model + context + compute))"
+  - Two sweep rounds: v10 (1024-131072) + v11 (131072-1M, doubling hi on FIT)
+  - retro-patched init_vram_free_mib + model_mib from raw logs after sweep
+
+Framework overhead (the L181 answer): ~5 GB (model 4095 + scratch +
+KV rounding ~1100). Constant across KV types — so the relative gain
+matches theoretical ratio within ~5% rounding error.
+
+Caveats: concurrent-sequences axis (L180 second half) was deferred
+to P1.8 — llama-perplexity -b N is logical batch, not n_parallel
+(verified by 1/1 seqs in the breakdown at -b 4); real concurrent capacity
+needs llama-server --parallel N. P1.8 added as a follow-up bullet in
+RALPH_TASKS.md. Quality at extended ctx (past n_ctx_train=32768) is out
+of scope — capacity is VRAM residency, not compute correctness.
+
+Files:
+  - docs/ppl-results/mistral-7b-q4km/capacity-RESULTS.md (the result doc)
+  - docs/ppl-results/mistral-7b-q4km/sweep_final.csv (merged v10+v11, retro-patched)
+  - sweep-logs/mistral-7b-cap/sweep_v10.log, sweep_v11.log (raw sweep output)
+  - sweep-logs/mistral-7b-cap/*.log (per-probe logs)
+  - /tmp/ralph-cap-mistral.sh (v10 sweep driver)
+  - /tmp/ralph-cap-mistral-v11.sh (v11 sweep driver, extend hi on FIT)
+  - /tmp/ralph-cap-finalize.py (merge + retro-patch)
+
+Lessons learned (worth capturing for future sessions):
+  - llama-perplexity -b N is logical batch, NOT n_parallel. The binary
+    allocates 1/1 seqs regardless of -b. Real concurrent capacity needs
+    llama-server --parallel N. (Documented in TOPOLOGY.md for future.)
+  - --chunks 0 with -f $CORPUS triggers the memory breakdown line and
+    avoids hours-per-probe PPL cost at large ctx. The init-only oracle
+    is the right tool for capacity work, not PPL.
+  - v10's bsearch() early-exits when hi-probe FITS; for the dense KV
+    types (q8_0/q4_0/turbo*) the hi cap was the reported ceiling instead
+    of the real OOM. v11's doubling-hi-on-FIT pattern is the right fix.
+  - VRAM residency data is in the raw probe logs even when the inline
+    parser fails. Retro-patching from logs is faster than re-running.
+
+---
