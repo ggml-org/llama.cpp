@@ -771,6 +771,52 @@ struct ggml_backend_sched_split {
     struct ggml_cgraph graph;
 };
 
+// Snapshot of a tensor's execution-relevant metadata, used to detect whether
+// a split's subgraph is unchanged between submissions so its uid can be kept
+// stable. Tensor DATA may change between submissions (inputs are updated via
+// set_tensor); everything a backend would compile/serialize from must not.
+struct ggml_backend_sched_tensor_snapshot {
+    const struct ggml_tensor * tensor;
+    ggml_backend_buffer_t      buffer;
+    void                     * data;
+    struct ggml_tensor       * view_src;
+    size_t                     view_offs;
+    struct ggml_tensor       * src[GGML_MAX_SRC];
+    int64_t                    ne[GGML_MAX_DIMS];
+    size_t                     nb[GGML_MAX_DIMS];
+    char                       op_params[GGML_MAX_OP_PARAMS];
+    enum ggml_type             type;
+    enum ggml_op               op;
+    int32_t                    flags;
+};
+
+// metadata of a previous submission's split, used to re-issue the same uid
+struct ggml_backend_sched_split_uid {
+    int      backend_id;
+    int      i_start;
+    int      i_end;
+    uint64_t uid;
+};
+
+static void ggml_backend_sched_snapshot_tensor(struct ggml_backend_sched_tensor_snapshot * dst, const struct ggml_tensor * t) {
+    memset(dst, 0, sizeof(*dst));
+    dst->tensor = t;
+    if (t == NULL) {
+        return;
+    }
+    dst->buffer    = t->buffer;
+    dst->data      = t->data;
+    dst->view_src  = t->view_src;
+    dst->view_offs = t->view_offs;
+    memcpy(dst->src, t->src, sizeof(dst->src));
+    memcpy(dst->ne, t->ne, sizeof(dst->ne));
+    memcpy(dst->nb, t->nb, sizeof(dst->nb));
+    memcpy(dst->op_params, t->op_params, sizeof(dst->op_params));
+    dst->type  = t->type;
+    dst->op    = t->op;
+    dst->flags = t->flags;
+}
+
 struct ggml_backend_sched {
     bool is_reset; // true if the scheduler has been reset since the last graph split
     bool is_alloc;
@@ -791,6 +837,20 @@ struct ggml_backend_sched {
 
     int * prev_node_backend_ids; // [graph_size]
     int * prev_leaf_backend_ids; // [graph_size]
+
+    // split-uid stability across submissions (see the uid assignment in
+    // ggml_backend_sched_split_graph): snapshots of the previous submission's
+    // graph nodes/leafs plus the previous splits' uids
+    struct ggml_backend_sched_tensor_snapshot * node_snapshots;      // [graph_size]
+    struct ggml_backend_sched_tensor_snapshot * prev_node_snapshots; // [graph_size]
+    struct ggml_backend_sched_tensor_snapshot * leaf_snapshots;      // [graph_size]
+    struct ggml_backend_sched_tensor_snapshot * prev_leaf_snapshots; // [graph_size]
+    int prev_snapshot_n_nodes;
+    int prev_snapshot_n_leafs;
+    size_t snapshots_size;
+    struct ggml_backend_sched_split_uid * prev_split_uids;
+    int prev_split_uids_capacity;
+    int prev_n_split_uids;
 
     // copy of the graph with modified inputs
     struct ggml_cgraph graph;
@@ -1480,9 +1540,77 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         graph_copy->leafs[graph_copy->n_leafs++] = leaf;
     }
 
-    // set ids for all splits
-    for (int i = 0; i < sched->n_splits; ++i) {
-        sched->splits[i].graph.uid = ggml_graph_next_uid();
+    // Set uids for all splits. A split keeps the uid it had on the previous
+    // submission when its subgraph is unchanged (same nodes and leafs with
+    // identical execution-relevant metadata, same backend and node range).
+    // Backends use the uid to reuse work across submissions: the RPC backend
+    // skips re-serializing and re-sending the graph (GRAPH_RECOMPUTE) and the
+    // CUDA backend keys its graph cache on it. Minting a fresh uid on every
+    // submission (the previous behavior) made those paths dead under the
+    // scheduler and leaked one CUDA graph cache entry per token (#20315).
+    // Tensor DATA is allowed to change (inputs are written via set_tensor);
+    // anything a backend serializes or compiles from is compared.
+    {
+        // Opt-in while the behavior earns field trust: set
+        // GGML_SCHED_SPLIT_UID_REUSE=1 to enable uid stability.
+        static int enable_uid_reuse = -1;
+        if (enable_uid_reuse == -1) {
+            const char * env = getenv("GGML_SCHED_SPLIT_UID_REUSE");
+            enable_uid_reuse = env != NULL && atoi(env) != 0;
+        }
+        const bool snapshots_fit =
+            sched->node_snapshots != NULL &&
+            sched->prev_node_snapshots != NULL &&
+            sched->leaf_snapshots != NULL &&
+            sched->prev_leaf_snapshots != NULL &&
+            (size_t) graph_copy->n_nodes <= sched->snapshots_size &&
+            (size_t) graph_copy->n_leafs <= sched->snapshots_size;
+        bool same_graph = snapshots_fit &&
+            enable_uid_reuse &&
+            sched->prev_snapshot_n_nodes == graph_copy->n_nodes &&
+            sched->prev_snapshot_n_leafs == graph_copy->n_leafs;
+        if (snapshots_fit) {
+            for (int i = 0; i < graph_copy->n_nodes; i++) {
+                ggml_backend_sched_snapshot_tensor(&sched->node_snapshots[i], graph_copy->nodes[i]);
+                same_graph = same_graph &&
+                    memcmp(&sched->node_snapshots[i], &sched->prev_node_snapshots[i], sizeof(sched->node_snapshots[0])) == 0;
+            }
+            for (int i = 0; i < graph_copy->n_leafs; i++) {
+                ggml_backend_sched_snapshot_tensor(&sched->leaf_snapshots[i], graph_copy->leafs[i]);
+                same_graph = same_graph &&
+                    memcmp(&sched->leaf_snapshots[i], &sched->prev_leaf_snapshots[i], sizeof(sched->leaf_snapshots[0])) == 0;
+            }
+            {
+                struct ggml_backend_sched_tensor_snapshot * tmp;
+                tmp = sched->prev_node_snapshots; sched->prev_node_snapshots = sched->node_snapshots; sched->node_snapshots = tmp;
+                tmp = sched->prev_leaf_snapshots; sched->prev_leaf_snapshots = sched->leaf_snapshots; sched->leaf_snapshots = tmp;
+            }
+            sched->prev_snapshot_n_nodes = graph_copy->n_nodes;
+            sched->prev_snapshot_n_leafs = graph_copy->n_leafs;
+        } else {
+            sched->prev_snapshot_n_nodes = -1;
+            sched->prev_snapshot_n_leafs = -1;
+        }
+        if (sched->prev_split_uids_capacity < sched->n_splits) {
+            sched->prev_split_uids = (ggml_backend_sched_split_uid *) realloc(
+                sched->prev_split_uids, sched->n_splits * sizeof(sched->prev_split_uids[0]));
+            GGML_ASSERT(sched->prev_split_uids != NULL);
+            sched->prev_split_uids_capacity = sched->n_splits;
+        }
+        for (int i = 0; i < sched->n_splits; ++i) {
+            struct ggml_backend_sched_split * split = &sched->splits[i];
+            const bool reuse = same_graph &&
+                i < sched->prev_n_split_uids &&
+                sched->prev_split_uids[i].backend_id == split->backend_id &&
+                sched->prev_split_uids[i].i_start    == split->i_start &&
+                sched->prev_split_uids[i].i_end      == split->i_end;
+            split->graph.uid = reuse ? sched->prev_split_uids[i].uid : ggml_graph_next_uid();
+            sched->prev_split_uids[i].backend_id = split->backend_id;
+            sched->prev_split_uids[i].i_start    = split->i_start;
+            sched->prev_split_uids[i].i_end      = split->i_end;
+            sched->prev_split_uids[i].uid        = split->graph.uid;
+        }
+        sched->prev_n_split_uids = sched->n_splits;
     }
 }
 
@@ -1763,6 +1891,17 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->prev_node_backend_ids = (int *) calloc(nodes_size, sizeof(sched->prev_node_backend_ids[0]));
     sched->prev_leaf_backend_ids = (int *) calloc(nodes_size, sizeof(sched->prev_leaf_backend_ids[0]));
 
+    sched->snapshots_size      = nodes_size;
+    sched->node_snapshots      = (ggml_backend_sched_tensor_snapshot *) calloc(nodes_size, sizeof(sched->node_snapshots[0]));
+    sched->prev_node_snapshots = (ggml_backend_sched_tensor_snapshot *) calloc(nodes_size, sizeof(sched->prev_node_snapshots[0]));
+    sched->leaf_snapshots      = (ggml_backend_sched_tensor_snapshot *) calloc(nodes_size, sizeof(sched->leaf_snapshots[0]));
+    sched->prev_leaf_snapshots = (ggml_backend_sched_tensor_snapshot *) calloc(nodes_size, sizeof(sched->prev_leaf_snapshots[0]));
+    sched->prev_snapshot_n_nodes = -1;
+    sched->prev_snapshot_n_leafs = -1;
+    sched->prev_split_uids = NULL;
+    sched->prev_split_uids_capacity = 0;
+    sched->prev_n_split_uids = 0;
+
     sched->debug_graph_size = 0;
     sched->debug_prev_graph_size = 0;
 
@@ -1812,6 +1951,11 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     free(sched->leaf_backend_ids);
     free(sched->prev_node_backend_ids);
     free(sched->prev_leaf_backend_ids);
+    free(sched->node_snapshots);
+    free(sched->prev_node_snapshots);
+    free(sched->leaf_snapshots);
+    free(sched->prev_leaf_snapshots);
+    free(sched->prev_split_uids);
     free(sched->context_buffer);
     free(sched->graph.nodes);
     free(sched->graph.leafs);
