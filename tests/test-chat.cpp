@@ -6133,6 +6133,57 @@ static void test_deepseek_v4_thinking_retention() {
     }
 }
 
+// Verify that consecutive tool results are rendered in the tool call order of the
+// preceding assistant message (matched by tool call id), as required by the reference
+// DeepSeek-V4 implementation.
+static void test_deepseek_v4_tool_result_ordering() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
+
+    common_chat_msg user_q; user_q.role = "user"; user_q.content = "Question";
+
+    common_chat_msg assist_calls;
+    assist_calls.role = "assistant";
+    assist_calls.tool_calls.push_back({ "get_time",    "{\"city\": \"Paris\"}", "call_1" });
+    assist_calls.tool_calls.push_back({ "get_weather", "{\"city\": \"Paris\"}", "call_2" });
+
+    common_chat_msg time_result; time_result.role = "tool";
+    time_result.tool_name = "get_time"; time_result.tool_call_id = "call_1"; time_result.content = "12:00";
+    common_chat_msg weather_result; weather_result.role = "tool";
+    weather_result.tool_name = "get_weather"; weather_result.tool_call_id = "call_2"; weather_result.content = "sunny";
+
+    auto render = [&](const std::vector<common_chat_msg> & messages) {
+        common_chat_templates_inputs inputs;
+        inputs.messages = messages;
+        inputs.add_generation_prompt = false;
+        return common_chat_templates_apply(tmpls.get(), inputs).prompt;
+    };
+
+    // Results sent out of order are reordered to match the tool call order.
+    {
+        auto prompt = render({ user_q, assist_calls, weather_result, time_result });
+        assert_contains(prompt, "<tool_result>12:00</tool_result>\n\n<tool_result>sunny</tool_result>");
+    }
+
+    // Results already in call order stay put.
+    {
+        auto prompt = render({ user_q, assist_calls, time_result, weather_result });
+        assert_contains(prompt, "<tool_result>12:00</tool_result>\n\n<tool_result>sunny</tool_result>");
+    }
+
+    // Without tool call ids there is nothing to match against; order is preserved.
+    {
+        auto no_id_calls = assist_calls;
+        no_id_calls.tool_calls[0].id = "";
+        no_id_calls.tool_calls[1].id = "";
+        auto no_id_weather = weather_result; no_id_weather.tool_call_id = "";
+        auto no_id_time    = time_result;    no_id_time.tool_call_id = "";
+        auto prompt = render({ user_q, no_id_calls, no_id_weather, no_id_time });
+        assert_contains(prompt, "<tool_result>sunny</tool_result>\n\n<tool_result>12:00</tool_result>");
+    }
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -6290,6 +6341,7 @@ int main(int argc, char ** argv) {
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();
         test_deepseek_v4_thinking_retention();
+        test_deepseek_v4_tool_result_ordering();
         test_template_generation_prompt();
         test_template_output_peg_parsers(detailed_debug);
         std::cout << "\n[chat] All tests passed!" << '\n';
