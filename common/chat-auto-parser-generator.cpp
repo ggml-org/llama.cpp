@@ -121,12 +121,23 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs, cons
         parser_build_context ctx(p, inputs);
         bool                 extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
-        ctx.extracting_reasoning = extract_reasoning && reasoning.mode != reasoning_mode::NONE;
+        const bool explicit_deepseek_reasoning = inputs.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK ||
+                                                 inputs.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY;
+
+        analyze_reasoning default_reasoning;
+        if (explicit_deepseek_reasoning && inputs.enable_thinking && reasoning.mode == reasoning_mode::NONE) {
+            default_reasoning.mode  = reasoning_mode::TAG_BASED;
+            default_reasoning.start = "<think>";
+            default_reasoning.end   = "</think>";
+        }
+        const auto & effective_reasoning = default_reasoning.mode == reasoning_mode::NONE ? reasoning : default_reasoning;
+
+        ctx.extracting_reasoning = extract_reasoning && effective_reasoning.mode != reasoning_mode::NONE;
         ctx.content              = &content;
-        ctx.reasoning            = &reasoning;
+        ctx.reasoning            = &effective_reasoning;
 
         // Build reasoning parser
-        ctx.reasoning_parser = reasoning.build_parser(ctx);
+        ctx.reasoning_parser = effective_reasoning.build_parser(ctx);
 
         auto parser = p.eps();
 

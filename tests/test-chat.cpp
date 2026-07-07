@@ -2600,6 +2600,60 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     {
+        // Qwen2.5-style templates do not expose reasoning markers, but some
+        // fine-tunes emit DeepSeek-style <think> tags. AUTO should not guess.
+        auto tst = peg_tester("models/templates/Qwen-Qwen2.5-7B-Instruct.jinja");
+
+        tst.test(R"(<think>
+I'm thinking
+</think>
+
+Hello, world!)")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_content(R"(<think>
+I'm thinking
+</think>
+
+Hello, world!)")
+            .run();
+
+        tst.test(R"(<think>
+I'm thinking
+</think>
+
+Hello, world!)")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(simple_assist_msg("Hello, world!", "I'm thinking"))
+            .run();
+
+        tst.test(R"(<think>
+I'm thinking
+</think>
+
+Hello, world!)")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY)
+            .expect(simple_assist_msg("Hello, world!", "I'm thinking"))
+            .run();
+
+        tst.test(R"(<think>
+I'm thinking
+</think>
+
+Hello, world!)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect_content(R"(<think>
+I'm thinking
+</think>
+
+Hello, world!)")
+            .run();
+    }
+
+    {
         // NVIDIA Nemotron-3 Nano
         auto tst = peg_tester("models/templates/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja", detailed_debug);
 
