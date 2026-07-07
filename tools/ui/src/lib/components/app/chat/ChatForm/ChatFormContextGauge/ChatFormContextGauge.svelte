@@ -395,7 +395,7 @@
 				<div
 					class="flex flex-col gap-2 border-t border-border/50 pt-2 text-xs text-muted-foreground"
 				>
-					<span> Context size is only available once the model is loaded. </span>
+					<span>Available context size is only visible once the model is loaded.</span>
 					<Button size="sm" variant="secondary" class="self-start" onclick={handleLoadModel}>
 						Load model
 					</Button>
