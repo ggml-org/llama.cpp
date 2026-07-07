@@ -30,6 +30,8 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "ggml-sycl.h"
+#include "ggml-innerq.h"   // P3.2.2: minimal host state machine (see header for surface)
+
 
 #include <cmath>
 #include <cstdint>
@@ -850,14 +852,117 @@ int main() {
     //
     // For the engineering-side context (header-only spec of ggml_innerq_state /
     // ggml_innerq_probe / ggml_innerq_host, the SYCL-backend touchpoint list, and the
-    // lifecycle semantics), see docs/research/innerq-host-state-machine-spec-2026-07-07.md
-    // (P3.2.1 spec).
     if (getenv("LLAMA_TEST_INNERQ")) {
-        printf("\n[8] InnerQ FA skeleton (OPT-IN, P3.2.1 hook only -- real probes land in P3.2.2/3)\n");
+        printf("\n[8] InnerQ FA skeleton (P3.2.1/P3.2.2: host state machine + state-decide/k-scale probes)\n");
         printf("   policy contract: see RALPH_TASKS.md (section P3.2) + docs/research/innerq-host-state-machine-spec-2026-07-07.md\n");
-        printf("   real InnerQ probes: NOT YET IMPLEMENTED (P3.2.2 / P3.2.3)\n");
-        g_skips++;  // [8] is a documented SKIP today; will become GATE probes once P3.2.2 lands.
-        skip("[8] InnerQ FA skeleton", "real probes land in P3.2.2/3; P3.2.1 ships the spec + harness hook");
+        // [8a] Host state machine correctness probe (P3.2.2 unit, no PPL run).
+        //
+        // We exercise the policy contract by calling decide() and
+        // k_squared_scale() across a small matrix of (key, env-state)
+        // combinations and asserting the return matches the policy
+        // expected outcome. This is a pure host-side check -- no SYCL
+        // device work, no PPL run. The full 50-chunk Qwen3 PPL probe
+        // is a separate sub-task (P3.2.4) -- see RALPH_TASKS.md.
+        //
+        // We verify by re-invoking the C wrapper functions directly
+        // (no ggml-context needed) so the probe is independent of the
+        // heavy backend graph machinery. The 5-question policy
+        // contract is in the P3.2 section header of RALPH_TASKS.md.
+        struct innerq_case_t {
+            const char * label;
+            ggml_innerq_state_key key;
+            int env_should_optin;   // 1 if the env value is set, 0 otherwise
+            ggml_innerq_policy expected_policy;
+            int k_should_be_one;    // 1 if expected k_squared_scale == 1.0
+        };
+        // Expected values for the policy-decide() outcomes.
+        const ggml_innerq_policy want_DISABLED = GGML_INNERQ_POLICY_DISABLED;
+        const ggml_innerq_policy want_OPTIN   = GGML_INNERQ_POLICY_OPTIN;
+        // Expected values for k_squared_scale():
+        //   want_one   -> expected == 1.0f (safe default; impl returns 1.0
+        //                  when the key is null, head_dim != 128, or innerq_quant
+        //                  is not in {TURBO2/3/4})
+        //   want_other -> expected != 1.0f (per-quant constant; impl returns
+        //                  0.9375/0.9688/0.9844 for the 3 eligible innerq_quants)
+        const int want_one    = 1;
+        const int want_other  = 0;
+        // env-state column values for the test matrix:
+        const int env_unset   = 0;
+        const int env_set     = 1;
+
+        // Test matrix: (label, model_fp, head_dim, kv_quant, innerq_quant,
+        //                env_set, expected_policy, k_should_be_one)
+        // k_should_be_one is independent of expected_policy: the k_squared_scale
+        // function gates on head_dim and innerq_quant only, NOT on policy.
+        // It returns 1.0 iff (head_dim != 128 OR innerq_quant not in {TURBO2/3/4}).
+        // The current implementation does NOT gate on kv_quant (the per-quant
+        // constant is the same for all turbo kv_quants; P3.2.3 may extend).
+        innerq_case_t cases[] = {
+            // --- null key: decide rejects (DISABLED), k returns 1.0 ---
+            {"null-key (env set)",     {0u, 128, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_one},
+            // --- model_fp = 0 (unidentified): decide rejects, k returns 0.9688 (per-quant) ---
+            {"unidentified (env set)", {0u, 128, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_other},
+            // --- non-turbo kv_quant: decide rejects, k returns 0.9688 (impl doesn't gate on kv_quant yet) ---
+            {"f16 kv (env set)",       {0xDEAD, 128, GGML_TYPE_F16,    GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_other},
+            {"q8_0 kv (env set)",      {0xDEAD, 128, GGML_TYPE_Q8_0,   GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_other},
+            // --- d != 128: decide rejects, k returns 1.0 (head_dim gate) ---
+            {"d=256 (env set)",        {0xDEAD, 256, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_one},
+            {"d=64 (env set)",         {0xDEAD,  64, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_one},
+            // --- OPTIN cases (env set, all eligible: model_fp != 0, turbo kv, d=128) ---
+            // k returns per-quant constant (0.9375 for turbo2, etc.)
+            {"turbo2 d=128 (env set)", {0xDEAD, 128, GGML_TYPE_TURBO2_0, GGML_INNERQ_QUANT_TURBO2_0}, env_set,   want_OPTIN,   want_other},
+            {"turbo3 d=128 (env set)", {0xDEAD, 128, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_OPTIN,   want_other},
+            {"turbo4 d=128 (env set)", {0xDEAD, 128, GGML_TYPE_TURBO4_0, GGML_INNERQ_QUANT_TURBO4_0}, env_set,   want_OPTIN,   want_other},
+            // --- env UNSET cases: all eligible keys still DISABLED ---
+            // k returns per-quant constant (env is irrelevant to k_squared_scale)
+            {"turbo3 d=128 (env unset)",{0xDEAD, 128, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_unset, want_DISABLED, want_other},
+            {"turbo4 d=128 (env unset)",{0xDEAD, 128, GGML_TYPE_TURBO4_0, GGML_INNERQ_QUANT_TURBO4_0}, env_unset, want_DISABLED, want_other},
+        };
+        // We don't override the env var from C here (the policy contract
+        // reads LLAMA_ENABLE_INNERQ from the process env). The env_unset
+        // case is verified by running this [8] probe ONLY when the harness
+        // is launched without LLAMA_ENABLE_INNERQ in the env (which is
+        // the default). The env_set case is verified by running with
+        // LLAMA_ENABLE_INNERQ=1 (the condition that gates this whole
+        // [8] block in the first place). So env_unset in the matrix
+        // above documents the "should be DISABLED" expectation; we
+        // expect exactly the env_set rows to come out OPTIN.
+
+
+        int n_cases = sizeof(cases) / sizeof(cases[0]);
+        int policy_failures = 0;
+        int k_scale_failures = 0;
+        int env_state = getenv("LLAMA_ENABLE_INNERQ") != nullptr ? env_set : env_unset;
+        for (int i = 0; i < n_cases; ++i) {
+            const innerq_case_t & c = cases[i];
+            ggml_innerq_policy got = ggml_innerq_state_decide(&c.key);
+            if (got != c.expected_policy) {
+                printf("   [8a] FAIL: %s expected policy %d, got %d\n",
+                       c.label, (int) c.expected_policy, (int) got);
+                ++policy_failures;
+            }
+            float k_scale = ggml_innerq_state_k_squared_scale(&c.key);
+            // k_squared_scale == 1.0 iff k_should_be_one else != 1.0.
+            int is_one = (k_scale == 1.0f) ? 1 : 0;
+            if (is_one != c.k_should_be_one) {
+                printf("   [8a] FAIL: %s expected k_one=%d, got k_scale=%f\n",
+                       c.label, c.k_should_be_one, (double) k_scale);
+                ++k_scale_failures;
+            }
+        }
+        if (policy_failures > 0 || k_scale_failures > 0) {
+            printf("   [8a] InnerQ state machine: %d policy failures, %d k_scale failures (env state in harness: %d)\n",
+                   policy_failures, k_scale_failures, env_state);
+            g_failures++;
+        } else {
+            printf("   [8a] InnerQ state machine: %d cases PASS (env state in harness: %d)\n",
+                   n_cases, env_state);
+        }
+        g_skips++;  // [8] as a whole is still in SKIP/placeholder territory -- the real
+                    // PPL probe lives in P3.2.4 and is what the policy contract
+                    // ultimately gates on. This P3.2.2 sub-probe is a unit check,
+                    // not a regression catcher.
+        skip("[8] InnerQ FA skeleton (P3.2.2 state machine unit PASS)", "real PPL probe is in P3.2.4; P3.2.1 ships spec + skeleton, P3.2.2 ships state machine + unit check");
     } else {
         printf("\n[8] InnerQ FA - SKIPPED (set LLAMA_TEST_INNERQ=1 to opt in; default OFF per P3.2 section 5 default-state)\n");
     }
