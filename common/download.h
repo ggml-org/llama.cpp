@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hf-cache.h"
+#include "ms-cache.h"
 
 #include <string>
 #include <vector>
@@ -69,6 +70,7 @@ struct common_download_task {
     std::string local_path;
     std::function<void()> on_done;
     bool is_hf = false;
+    bool is_ms = false;
     std::string lock_path;
     std::string alt_path; // HF snapshot path, also treated as cached (the blob may be moved there)
 
@@ -78,6 +80,11 @@ struct common_download_task {
             std::function<void()> on_done = nullptr)
         : opts(opts), url(f.url), local_path(f.local_path), on_done(on_done), is_hf(true),
           lock_path(hf_cache::get_lock_path(f.repo_id, f.oid)), alt_path(f.final_path) {}
+    common_download_task(ms_cache::ms_file f,
+            const common_download_opts & opts,
+            std::function<void()> on_done = nullptr)
+        : opts(opts), url(f.url), local_path(f.local_path), on_done(on_done), is_ms(true),
+          lock_path(ms_cache::get_lock_path(f.repo_id, f.oid)), alt_path(f.final_path) {}
 };
 
 void common_download_run_tasks(const std::vector<common_download_task> & tasks);
@@ -163,3 +170,14 @@ struct common_download_partial {
 
 // the partials the download of `plan` writes, for the files not in the cache yet
 std::vector<common_download_partial> common_download_plan_partials(const common_download_hf_plan & plan);
+
+struct common_download_ms_plan {
+    ms_cache::ms_file primary;
+    ms_cache::ms_files model_files;
+    ms_cache::ms_file mmproj;
+    ms_cache::ms_file mtp;
+    ms_cache::ms_file dflash;
+    ms_cache::ms_file eagle3;
+    ms_cache::ms_file dspark;
+};
+common_download_ms_plan common_download_get_ms_plan(const common_params_model & model, const common_download_opts & opts);

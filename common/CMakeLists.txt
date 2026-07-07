@@ -82,6 +82,8 @@ add_library(${TARGET}
     file-lock.h
     hf-cache.cpp
     hf-cache.h
+    ms-cache.cpp
+    ms-cache.h
     http.h
     imatrix-loader.cpp
     imatrix-loader.h
