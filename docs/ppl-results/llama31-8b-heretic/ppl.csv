@@ -1,0 +1,7 @@
+kv,batch,ngl,fa,ctx,chunks,status,final_ppl,wall_s,note
+f16,512,99,auto,512,642,OK,7.5433,273,
+q8_0,512,99,auto,512,642,OK,7.5456,275,
+q4_0,512,99,auto,512,642,OK,7.7722,275,
+turbo2,512,0,auto,512,642,OK,10.6345,836,
+turbo3,512,0,auto,512,642,OK,8.0200,935,sweep-driver
+turbo4,512,0,auto,512,642,OK,7.6625,967,sweep-driver
