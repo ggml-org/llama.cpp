@@ -417,6 +417,17 @@ class ToolsStore {
 		return !this._disabledTools.has(key);
 	}
 
+	/**
+	 * Drop the cached enabled-tools token count so the next read re-tokenizes.
+	 * The gauge effect in ChatFormContextGauge tracks `_enabledToolsTokenCount`
+	 * for reactivity, so resetting it triggers a refresh without needing a
+	 * version counter.
+	 */
+	private invalidateEnabledToolsTokenCount(): void {
+		this._enabledToolsTokenHash = '';
+		this._enabledToolsTokenCount = null;
+	}
+
 	toggleTool(key: string): void {
 		if (this._disabledTools.has(key)) {
 			this._disabledTools.delete(key);
@@ -424,6 +435,7 @@ class ToolsStore {
 			this._disabledTools.add(key);
 		}
 		this.persistDisabledTools();
+		this.invalidateEnabledToolsTokenCount();
 	}
 
 	setToolEnabled(key: string, enabled: boolean): void {
@@ -432,6 +444,7 @@ class ToolsStore {
 		} else {
 			this._disabledTools.add(key);
 		}
+		this.invalidateEnabledToolsTokenCount();
 	}
 
 	/** Enable all tools belonging to a specific MCP server */
@@ -442,14 +455,18 @@ class ToolsStore {
 			this._disabledTools.delete(this.toolKey(ToolSource.MCP, tool.name, serverId));
 		}
 		this.persistDisabledTools();
+		this.invalidateEnabledToolsTokenCount();
 	}
 
 	toggleGroup(group: ToolGroup): void {
 		const allEnabled = group.tools.every((t) => this.isToolEnabled(t.key));
+		const target = !allEnabled;
 		for (const tool of group.tools) {
-			this.setToolEnabled(tool.key, !allEnabled);
+			if (target) this._disabledTools.delete(tool.key);
+			else this._disabledTools.add(tool.key);
 		}
 		this.persistDisabledTools();
+		this.invalidateEnabledToolsTokenCount();
 	}
 
 	isGroupFullyEnabled(group: ToolGroup): boolean {
