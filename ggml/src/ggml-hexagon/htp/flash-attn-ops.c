@@ -510,8 +510,8 @@ typedef struct {
     struct hmx_fa_context * factx;
     uint32_t                kv_rows;
     size_t                  src_stride;
-    void *                  curr_v;
-    size_t                  buf_idx;
+    void *                  v_src;
+    void *                  v_tiles_dst;
     size_t                  n_col_tiles;
     uint32_t                kv_start;
     uint32_t                rows_per_t;
@@ -530,11 +530,11 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
         return;
     }
 
-    __fp16 * v_tiles_dest = factx->pipeline ? factx->vtcm_v_tiles[args->buf_idx] : factx->vtcm_v_tiles[0];
+    __fp16 * v_tiles_dst = (__fp16 *) args->v_tiles_dst;
 
     struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, (uint16_t) (args->kv_start + start));
-    hmx_interleave_cols_to_tiles(v_tiles_dest, (const __fp16 *) args->curr_v, total_rows, factx->DV,
+    hmx_interleave_cols_to_tiles(v_tiles_dst, (const __fp16 *) args->v_src, total_rows, factx->DV,
                              args->src_stride, (uint32_t) args->n_col_tiles, start, end);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, (uint16_t) (args->kv_start + start));
 }
@@ -542,8 +542,8 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
 static void fa_phase_v_interleave(struct hmx_fa_context * factx,
                                   uint32_t                kv_rows,
                                   size_t                  src_stride,
-                                  void *                  curr_v,
-                                  size_t                  buf_idx,
+                                  void *                  v_src,
+                                  void *                  v_tiles_dst,
                                   size_t                  n_col_tiles,
                                   uint32_t                kv_start) {
     worker_pool_context_t wp = factx->octx->ctx->worker_pool;
@@ -552,7 +552,7 @@ static void fa_phase_v_interleave(struct hmx_fa_context * factx,
         n = factx->n_threads;
     }
     uint32_t rows_per_t = hex_align_up(hmx_ceil_div(kv_rows, n), 2);
-    fa_v_int_args_t args = { factx, kv_rows, src_stride, curr_v, buf_idx, n_col_tiles, kv_start, rows_per_t };
+    fa_v_int_args_t args = { factx, kv_rows, src_stride, v_src, v_tiles_dst, n_col_tiles, kv_start, rows_per_t };
     if (n > 1) {
         worker_pool_run_func(wp, fa_v_interleave_thread, &args, n);
     } else {
@@ -671,31 +671,19 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
             uint8_t * q_flat  = (uint8_t *) factx->vtcm_o_tiles[0];
             if (factx->is_q_fp32) {
                 switch (d_limit) {
-                    case 2:
-                        hmx_fa_q_prep_fp32_d2(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
-                        break;
-                    case 4:
-                        hmx_fa_q_prep_fp32_d4(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
-                        break;
-                    default:
-                        hmx_fa_q_prep_fp32_generic(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, d_limit, args->q_transposed);
-                        break;
+                case 2:  hmx_fa_q_prep_fp32_d2(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed); break;
+                case 4:  hmx_fa_q_prep_fp32_d4(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed); break;
+                default: hmx_fa_q_prep_fp32(   q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, d_limit, args->q_transposed); break;
                 }
             } else {
                 switch (d_limit) {
-                    case 1:
-                        hmx_fa_q_prep_fp16_d1(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
-                        break;
-                    case 2:
-                        hmx_fa_q_prep_fp16_d2(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
-                        break;
-                    default:
-                        hmx_fa_q_prep_fp16_generic(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, d_limit, args->q_transposed);
-                        break;
+                case 1:  hmx_fa_q_prep_fp16_d1(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed); break;
+                case 2:  hmx_fa_q_prep_fp16_d2(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed); break;
+                default: hmx_fa_q_prep_fp16(   q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, d_limit, args->q_transposed); break;
                 }
             }
         } else {
-            // Fallback: Original direct-from-DDR/L2 path
+            // Fallback: direct-from-DDR/L2 path
             hmx_fa_q_prep_fallback(q_tiles, q->data, q->nb[1], q->nb[2], q->nb[3],
                                    q_start, kv_head, ib3, start, end, n_rows_g, G, DK, factx->is_q_fp32, &factx->div_G);
         }
@@ -1810,7 +1798,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                         // Wait for current V DMA and interleave
                         void * curr_v = dma_queue_pop(dma).dst;
-                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, curr_v, buf_idx, n_tiles_per_bc, kv_start);
+                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, curr_v, factx.vtcm_v_tiles[buf_idx], n_tiles_per_bc, kv_start);
 
                         if (kv_blk > 0) {
                             hmx_queue_pop(hmx_q);
@@ -1924,7 +1912,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                         // Wait for current V DMA and interleave
                         void * curr_v = dma_queue_pop(dma).dst;
-                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, curr_v, buf_idx, n_tiles_per_bc, kv_start);
+                        fa_phase_v_interleave(&factx, kv_rows, v_src_stride, curr_v, factx.vtcm_v_tiles[0], n_tiles_per_bc, kv_start);
 
                         // ---- Phase 3: softmax + build_D ----
                         __fp16 * current_mask_vtcm = NULL;

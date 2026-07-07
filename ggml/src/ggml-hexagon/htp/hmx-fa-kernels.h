@@ -294,7 +294,7 @@ static inline void hmx_fa_q_prep_fp32_d4(
     }
 }
 
-static inline void hmx_fa_q_prep_fp32_generic(
+static inline void hmx_fa_q_prep_fp32(
     __fp16 * vtcm_q_tiles, const uint8_t * temp_q_vtcm,
     size_t start, size_t end, size_t g_rows_end,
     size_t DK, size_t G, size_t n_rows_q,
@@ -444,7 +444,7 @@ static inline void hmx_fa_q_prep_fp16_d2(
     }
 }
 
-static inline void hmx_fa_q_prep_fp16_generic(
+static inline void hmx_fa_q_prep_fp16(
     __fp16 * vtcm_q_tiles, const uint8_t * temp_q_vtcm,
     size_t start, size_t end, size_t g_rows_end,
     size_t DK, size_t G, size_t n_rows_q,
