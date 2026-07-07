@@ -11,6 +11,7 @@ GGUF_MAGIC             = 0x46554747  # "GGUF"
 GGUF_VERSION           = 3
 GGUF_DEFAULT_ALIGNMENT = 32
 GGML_QUANT_VERSION     = 2  # GGML_QNT_VERSION from ggml.h
+GGML_MAX_DIMS          = 4  # GGML_MAX_DIMS from ggml.h
 
 #
 # metadata keys
