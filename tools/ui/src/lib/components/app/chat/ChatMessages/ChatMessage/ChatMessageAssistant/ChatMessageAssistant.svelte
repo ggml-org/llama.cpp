@@ -121,8 +121,6 @@
 		return parts.join('\n\n\n');
 	});
 
-	let highlightAgenticTurns = $derived(isAgentic && currentConfig.alwaysShowAgenticTurns);
-
 	let displayedModel = $derived(message.model ?? null);
 
 	// model being switched to while it loads, so the selector bar tracks it
@@ -236,7 +234,6 @@
 				{toolMessages}
 				isStreaming={isChatStreaming()}
 				{isLastAssistantMessage}
-				highlightTurns={highlightAgenticTurns}
 			/>
 		{/if}
 	{:else}

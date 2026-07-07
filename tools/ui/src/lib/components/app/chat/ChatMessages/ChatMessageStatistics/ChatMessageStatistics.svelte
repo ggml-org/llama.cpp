@@ -175,7 +175,7 @@
 					view: ChatMessageStatsView.READING,
 					icon: BookOpenText,
 					label: 'Reading',
-					tooltipText: 'Reading (prompt processing)'
+					tooltipText: 'Processing'
 				})}
 			{/if}
 
@@ -184,8 +184,8 @@
 				icon: Sparkles,
 				label: 'Generation',
 				tooltipText: isGenerationDisabled
-					? 'Generation (waiting for tokens...)'
-					: 'Generation (token output)',
+					? 'Waiting for tokens...'
+					: 'Generation',
 				disabled: isGenerationDisabled
 			})}
 

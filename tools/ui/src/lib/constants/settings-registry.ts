@@ -368,18 +368,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
-				label: 'Always show agentic turns in conversation',
-				help: 'Always expand and display agentic loop turns in conversation messages.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: {
-					serverKey: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
 				key: SETTINGS_KEYS.SHOW_BUILD_VERSION,
 				label: 'Show build version information',
 				help: 'Display the current build version in the bottom-right corner of the interface.',
