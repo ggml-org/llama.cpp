@@ -363,7 +363,6 @@
 				{/each}
 
 				{#if turnStats && showMessageStats}
-					<!-- <div class="turn-stats opacity-0 transition-opacity duration-150 group-hover/turn:opacity-100"> -->
 					<div class="turn-stats transition-opacity duration-150">
 						<ChatMessageStatistics
 							promptTokens={turnStats.llm.prompt_n}

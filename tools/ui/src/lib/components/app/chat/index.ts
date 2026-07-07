@@ -250,16 +250,7 @@ export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFo
 export { default as ChatFormActionAddReasoningSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddReasoningSubmenu.svelte';
 
 /**
- * Displays context token usage as a compact pill with tooltip.
- *
- * Features a donut chart showing context percentage, an active model
- * resolver (explicit selection > conversation model > single model), and
- * a collapsible detail panel with per-turn breakdowns: tool definition
- * tokens, current/cumulative reading and output counts, average tokens
- * per second, and transient diagnostic details. Auto-fetches /props when
- * the active model is loaded but props are missing from the cache.
- * Shows load/progress states when the model is not yet loaded or is
- * currently loading.
+ * Compact context-usage gauge with per-turn and cumulative breakdown in the tooltip.
  */
 export { default as ChatFormContextGauge } from './ChatForm/ChatFormContextGauge/ChatFormContextGauge.svelte';
 

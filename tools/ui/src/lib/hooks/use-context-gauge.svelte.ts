@@ -1,9 +1,7 @@
 /**
- * Reactive state for the context usage gauge.
- *
- * Resolves the active model, fetches its cached props, parses live server
- * stats, and exposes per-turn read / fresh / cache / output and cumulative
- * token counts along with the resulting context percentage.
+ * Reactive state for the context usage gauge: resolves the active model,
+ * fetches its cached props, parses live server stats, and exposes per-turn
+ * read / fresh / cache / output and cumulative token counts.
  */
 
 import {
@@ -92,10 +90,8 @@ function filterTransientDetails(raw: string[]): string[] {
 export function useContextGauge(): UseContextGaugeReturn {
 	const processingState = useProcessingState();
 
-	// Resolve the model the gauge reports context for. Mirrors the resolver
-	// shape in useChatScreenActiveModel: explicit selection wins, otherwise
-	// the conversation's last assistant model, otherwise the single loaded
-	// model in single-model mode (null otherwise).
+	// Resolve the model the gauge reports context for: explicit selection >
+	// last assistant model > single-model mode (mirrors useChatScreenActiveModel).
 	const activeModelId = $derived.by(() => {
 		if (!isRouterMode()) {
 			return singleModelName();
@@ -149,8 +145,6 @@ export function useContextGauge(): UseContextGaugeReturn {
 		return read;
 	});
 
-	// fresh = this turn's prompt_n; excludes cache_n so callers can stack
-	// fresh with cache without double-counting the cached prefix.
 	const currentFresh = $derived.by(() => {
 		const timings = lastAssistantTimings(activeMessages() as DatabaseMessage[]);
 		const fresh = timings?.prompt_n ?? 0;
@@ -178,9 +172,8 @@ export function useContextGauge(): UseContextGaugeReturn {
 	const cumulative = $derived.by(() => {
 		const messages = activeMessages() as DatabaseMessage[];
 
-		// Agentic flows expose one shared `agentic.llm.*` total copied onto
-		// every assistant message; read it once from the latest. They do
-		// not surface per-turn cache_n, so cache_total stays 0.
+		// Agentic sessions stamp the same agentic.llm totals onto every
+		// assistant message; cache_n is never per-turn so cache_total stays 0.
 		const agenticMessages = messages.filter(
 			(m) => m.role === MessageRole.ASSISTANT && m.timings?.agentic?.llm?.predicted_n != null
 		);
@@ -220,8 +213,7 @@ export function useContextGauge(): UseContextGaugeReturn {
 
 	const colorLevel = $derived(colorLevelFromPercent(contextPercent));
 
-	// Server-emitted technical details minus the lines duplicated by the
-	// "Context" / "Output" rows above and the speed row that lives below.
+	// Drop lines the surrounding Context / Output / speed rows already render.
 	const transientDetails = $derived(filterTransientDetails(processingState.getTechnicalDetails()));
 
 	const hasAnyUsage = $derived(

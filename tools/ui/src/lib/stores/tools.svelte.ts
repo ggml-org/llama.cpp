@@ -75,7 +75,7 @@ class ToolsStore {
 	/**
 	 * Recursively normalize a JSON Schema object: infers `type` from `default`
 	 * for properties / items that omit it, and descends into nested `properties`
-	 * and `items`. Returns a new object — does not mutate the input.
+	 * and `items`. Returns a new object -- does not mutate the input.
 	 */
 	private normalizeJsonSchema(schema: Record<string, unknown>): Record<string, unknown> {
 		if (!schema || typeof schema !== 'object') return schema;
@@ -333,9 +333,7 @@ class ToolsStore {
 
 		for (const def of this._builtinTools) take(def);
 		for (const def of this.frontendTools) take(def);
-		// Use mcpEntries() (not mcpStore directly) so we own the wire shape:
-		// - normalized JSON schema before sending
-		// - same health-check fallback as the rest of the tools UI sees
+		// mcpEntries() over mcpStore directly so wire shape stays normalized and aligned with the tools UI.
 		for (const entry of this.mcpEntries()) take(entry.definition);
 		for (const def of this.customTools) take(def);
 

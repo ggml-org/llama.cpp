@@ -244,8 +244,6 @@
 			});
 		}
 
-		// Mark the last assistant message and the user message that immediately
-		// precedes it (so live prompt progress can attach to the right user turn).
 		let lastAssistantIdx = -1;
 		for (let i = result.length - 1; i >= 0; i--) {
 			if (result[i].message.role === MessageRole.ASSISTANT) {
@@ -259,8 +257,6 @@
 			result[lastAssistantIdx - 1].isLastUserMessage = true;
 		}
 
-		// For each user entry, find the next assistant entry in display order so
-		// the prompt processing stats can be shown next to the user message.
 		for (let i = 0; i < result.length; i++) {
 			if (result[i].message.role !== MessageRole.USER) continue;
 

@@ -103,8 +103,6 @@
 			formattedPromptTime !== undefined
 	);
 
-	// In switchable live mode, generation tab is disabled until we have generation stats.
-	// In fixed-mode rendering we just show what we have; no need to gate anything.
 	let isGenerationDisabled = $derived(isLive && isSwitchable && !hasGenerationStats);
 
 	let hasAgenticStats = $derived(agenticTimings !== undefined && agenticTimings.toolCallsCount > 0);

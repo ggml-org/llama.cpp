@@ -57,8 +57,7 @@
 	const currentConfig = $derived(config());
 	const isActivelyProcessing = $derived(isLastUserMessage && isLoading());
 
-	// Prompt processing stats live on the next assistant message (the LLM call that
-	// followed this user turn). For agentic sessions they're cumulative across turns.
+	// For agentic turns, prefer the cumulative agentic.llm totals over per-call timings.
 	let storedReadingStats = $derived.by(() => {
 		const timings = nextAssistantMessage?.timings;
 		if (!timings?.prompt_n || !timings?.prompt_ms) return null;

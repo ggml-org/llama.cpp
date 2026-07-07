@@ -17,8 +17,6 @@
 		untrack(() => chatStore.setActiveProcessingConversation(conv?.id ?? null));
 	});
 
-	// Re-hydrate, or clear, the chat store's processing state when the
-	// active conversation switches or its messages change.
 	$effect(() => {
 		const conv = activeConversation();
 		const messages = activeMessages() as DatabaseMessage[];
@@ -59,7 +57,7 @@
 				<span class="text-muted-foreground">·</span>
 				<span class="font-mono text-muted-foreground">
 					{formatParameters(gauge.contextUsed)}
-					/ {gauge.contextTotal !== null ? formatParameters(gauge.contextTotal) : '—'}
+					/ {gauge.contextTotal !== null ? formatParameters(gauge.contextTotal) : '-'}
 				</span>
 			</div>
 
