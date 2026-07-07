@@ -6,6 +6,7 @@
 #include "cli-server.h"
 
 #include <atomic>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -14,17 +15,13 @@ struct cli_timings {
     double predicted_per_second = 0.0;
 };
 
-// set by the SIGINT handler; cleared once the interrupt has been handled
-extern std::atomic<bool> g_cli_interrupted;
+struct cli_context_impl;
 
 struct cli_context {
     common_params params;
 
     cli_client client;                // always initialized
     std::optional<cli_server> server; // only set when no --server-base is given
-
-    json messages      = json::array();
-    json pending_media = json::array(); // staged multimodal content parts
 
     // properties of the connected server
     // will be populated by fetch_server_props()
@@ -35,10 +32,8 @@ struct cli_context {
     bool has_audio  = false;
     bool has_video  = false;
 
-    cli_context(const common_params & params) : params(params) {}
-    ~cli_context() {
-        shutdown();
-    }
+    cli_context(const common_params & params);
+    ~cli_context();
 
     // connect to --server-base or spawn a local llama-server child;
     // argc/argv are needed to forward the server-relevant args to the child
@@ -49,6 +44,9 @@ struct cli_context {
 
     // stop the local server child (if any)
     void shutdown();
+
+    // set by the SIGINT handler; cleared once the interrupt has been handled
+    static std::atomic<bool> & interrupted();
 
 private:
     bool generate_completion(std::string & assistant_content, cli_timings & timings);
@@ -63,4 +61,6 @@ private:
     // read a file and stage it as a multimodal content part; type is one of
     // "image", "audio", "video"; returns false if the file cannot be read
     bool stage_media_file(const std::string & fname, const std::string & type);
+
+    std::unique_ptr<cli_context_impl> impl;
 };

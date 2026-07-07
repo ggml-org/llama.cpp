@@ -12,10 +12,24 @@
 #include <map>
 #include <set>
 
-std::atomic<bool> g_cli_interrupted = false;
+struct cli_context_impl {
+    json messages      = json::array();
+    json pending_media = json::array(); // staged multimodal content parts
+};
+
+cli_context::cli_context(const common_params & params) : params(params), impl(new cli_context_impl()) {}
+
+cli_context::~cli_context() {
+    shutdown();
+}
+
+std::atomic<bool> & cli_context::interrupted() {
+    static std::atomic<bool> flag = false;
+    return flag;
+}
 
 static bool should_stop() {
-    return g_cli_interrupted.load();
+    return cli_context::interrupted().load();
 }
 
 static constexpr size_t FILE_GLOB_MAX_RESULTS = 100;
@@ -208,7 +222,7 @@ bool cli_context::list_and_ask_models() {
 
 void cli_context::add_system_prompt() {
     if (!params.system_prompt.empty()) {
-        messages.push_back({
+        impl->messages.push_back({
             {"role",    "system"},
             {"content", params.system_prompt}
         });
@@ -217,18 +231,18 @@ void cli_context::add_system_prompt() {
 
 void cli_context::push_user_message(const std::string & text) {
     json content;
-    if (pending_media.empty()) {
+    if (impl->pending_media.empty()) {
         content = text;
     } else {
         // multimodal message: media parts first, then the text
-        content = pending_media;
+        content = impl->pending_media;
         content.push_back({
             {"type", "text"},
             {"text", text}
         });
-        pending_media = json::array();
+        impl->pending_media = json::array();
     }
-    messages.push_back({
+    impl->messages.push_back({
         {"role",    "user"},
         {"content", content}
     });
@@ -245,7 +259,7 @@ bool cli_context::stage_media_file(const std::string & fname, const std::string 
     if (type == "audio") {
         std::string ext = std::filesystem::path(fname).extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        pending_media.push_back({
+        impl->pending_media.push_back({
             {"type", "input_audio"},
             {"input_audio", {
                 {"data",   encoded},
@@ -253,7 +267,7 @@ bool cli_context::stage_media_file(const std::string & fname, const std::string 
             }}
         });
     } else if (type == "video") {
-        pending_media.push_back({
+        impl->pending_media.push_back({
             {"type", "input_video"},
             {"input_video", {
                 {"data", encoded}
@@ -261,7 +275,7 @@ bool cli_context::stage_media_file(const std::string & fname, const std::string 
         });
     } else {
         // the server detects the actual image type from the data
-        pending_media.push_back({
+        impl->pending_media.push_back({
             {"type", "image_url"},
             {"image_url", {
                 {"url", "data:image/unknown;base64," + encoded}
@@ -273,7 +287,7 @@ bool cli_context::stage_media_file(const std::string & fname, const std::string 
 
 bool cli_context::generate_completion(std::string & assistant_content, cli_timings & timings) {
     json body = {
-        {"messages",          messages},
+        {"messages",          impl->messages},
         {"stream",            true},
         // in order to get timings even when we cancel mid-way
         {"timings_per_token", true},
@@ -317,7 +331,7 @@ bool cli_context::generate_completion(std::string & assistant_content, cli_timin
         }
     });
 
-    g_cli_interrupted.store(false);
+    cli_context::interrupted().store(false);
 
     if (!err.is_null()) {
         ui::show_error(format_error_message(err));
@@ -414,7 +428,7 @@ int cli_context::run() {
         }
 
         if (should_stop()) {
-            g_cli_interrupted.store(false);
+            cli_context::interrupted().store(false);
             break;
         }
 
@@ -434,19 +448,19 @@ int cli_context::run() {
         if (string_starts_with(buffer, "/exit")) {
             break;
         } else if (string_starts_with(buffer, "/regen")) {
-            if (messages.size() >= 2) {
-                size_t last_idx = messages.size() - 1;
-                messages.erase(last_idx);
+            if (impl->messages.size() >= 2) {
+                size_t last_idx = impl->messages.size() - 1;
+                impl->messages.erase(last_idx);
                 add_user_msg = false;
             } else {
                 ui::show_error("No message to regenerate.");
                 continue;
             }
         } else if (string_starts_with(buffer, "/clear")) {
-            messages.clear();
+            impl->messages.clear();
             add_system_prompt();
 
-            pending_media = json::array();
+            impl->pending_media = json::array();
             ui::show_message("Chat history cleared.");
             continue;
         } else if (
@@ -532,7 +546,7 @@ int cli_context::run() {
         cli_timings timings;
         std::string assistant_content;
         generate_completion(assistant_content, timings);
-        messages.push_back({
+        impl->messages.push_back({
             {"role",    "assistant"},
             {"content", assistant_content}
         });

@@ -16,14 +16,14 @@
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__)) || defined (_WIN32)
 static void signal_handler(int) {
-    if (g_cli_interrupted.load()) {
+    if (cli_context::interrupted().load()) {
         // second Ctrl+C - exit immediately
         // make sure to clear colors before exiting (not using LOG or console.cpp here to avoid deadlock)
         fprintf(stdout, "\033[0m\n");
         fflush(stdout);
         std::exit(130);
     }
-    g_cli_interrupted.store(true);
+    cli_context::interrupted().store(true);
 }
 #endif
 
