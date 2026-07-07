@@ -3,7 +3,6 @@
 #include "log.h"
 
 #include "cli-context.h"
-#include "cli-view.h"
 
 #include <signal.h>
 

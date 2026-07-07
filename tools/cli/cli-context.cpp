@@ -1,5 +1,5 @@
 #include "cli-context.h"
-#include "cli-view.h"
+#include "cli-ui.h"
 
 #include "arg.h"
 #include "base64.hpp"
@@ -64,9 +64,9 @@ static std::string media_type_from_ext(const std::string & fname) {
 }
 
 bool cli_context::init() {
-    view::init(params);
+    ui::init(params);
 
-    std::optional<view::spinner> spinner;
+    std::optional<ui::spinner> spinner;
 
     bool use_external_server = !params.server_base.empty();
     if (use_external_server) {
@@ -80,7 +80,7 @@ bool cli_context::init() {
     } else {
         if (params.model.path.empty() && params.model.url.empty() &&
                 params.model.hf_repo.empty() && params.model.docker_repo.empty()) {
-            view::show_error(
+            ui::show_error(
                 "no model specified",
                 "use -m <file.gguf> or -hf <user/repo> to run a local model,\n"
                 "or --server-base <url> to connect to a running llama-server"
@@ -92,12 +92,12 @@ bool cli_context::init() {
 
         server.emplace();
         if (!server->start(params)) {
-            view::show_error("server start failed");
+            ui::show_error("server start failed");
             return false;
         }
         if (!server->wait_ready(should_stop)) {
             if (!should_stop()) {
-                view::show_error("the server exited before becoming ready");
+                ui::show_error("the server exited before becoming ready");
             }
             return false;
         }
@@ -117,7 +117,7 @@ bool cli_context::init() {
     }
     if (!healthy) {
         if (!should_stop()) {
-            view::show_error(client.last_error);
+            ui::show_error(client.last_error);
         }
         return false;
     }
@@ -177,13 +177,13 @@ bool cli_context::list_and_ask_models() {
         }
     }
     message += "\n";
-    view::show_message(message);
+    ui::show_message(message);
     std::string selection;
     while (selection.empty()) {
         if (should_stop()) {
             return false;
         }
-        view::user_turn user_turn;
+        ui::user_turn user_turn;
         selection = user_turn.read_input(false, "Select model by number: ");
         if (selection.empty()) {
             continue;
@@ -193,13 +193,13 @@ bool cli_context::list_and_ask_models() {
             if (idx > 0 && idx <= models.size()) {
                 model_name = models[idx - 1];
                 client.model = model_name;
-                view::show_message("Selected model: " + model_name);
+                ui::show_message("Selected model: " + model_name);
                 break;
             }
         } catch (...) {
             // ignore
         }
-        view::show_error("Invalid selection. Please enter a valid number.");
+        ui::show_error("Invalid selection. Please enter a valid number.");
         selection.clear();
         continue;
     }
@@ -281,12 +281,12 @@ bool cli_context::generate_completion(std::string & assistant_content, cli_timin
 
     bool stream_error = false;
 
-    view::assistant_turn a;
+    ui::assistant_turn a;
 
     json err = client.create_chat_completion(body, should_stop, [&](const json & chunk) {
         if (chunk.contains("error")) {
             stream_error = true;
-            view::show_error(format_error_message(chunk));
+            ui::show_error(format_error_message(chunk));
             return;
         }
         if (chunk.contains("timings")) {
@@ -305,14 +305,14 @@ bool cli_context::generate_completion(std::string & assistant_content, cli_timin
         if (delta.contains("reasoning_content") && delta.at("reasoning_content").is_string()) {
             const std::string text = delta.at("reasoning_content").get<std::string>();
             if (!text.empty()) {
-                a.push(view::ASSISTANT_DISPLAY_MODE_REASONING, text);
+                a.push(ui::ASSISTANT_DISPLAY_MODE_REASONING, text);
             }
         }
         if (delta.contains("content") && delta.at("content").is_string()) {
             const std::string text = delta.at("content").get<std::string>();
             if (!text.empty()) {
                 assistant_content += text;
-                a.push(view::ASSISTANT_DISPLAY_MODE_CONTENT, text);
+                a.push(ui::ASSISTANT_DISPLAY_MODE_CONTENT, text);
             }
         }
     });
@@ -320,7 +320,7 @@ bool cli_context::generate_completion(std::string & assistant_content, cli_timin
     g_cli_interrupted.store(false);
 
     if (!err.is_null()) {
-        view::show_error(format_error_message(err));
+        ui::show_error(format_error_message(err));
         return false;
     }
     return !stream_error;
@@ -371,7 +371,7 @@ int cli_context::run() {
     }
     banner += "\n";
 
-    view::show_message(banner);
+    ui::show_message(banner);
 
     // interactive loop
     std::string cur_msg;
@@ -379,7 +379,7 @@ int cli_context::run() {
     auto add_text_file = [&](const std::string & fname) -> bool {
         std::ifstream file(fname, std::ios::binary);
         if (!file) {
-            view::show_error(string_format("file does not exist or cannot be opened: '%s'", fname.c_str()));
+            ui::show_error(string_format("file does not exist or cannot be opened: '%s'", fname.c_str()));
             return false;
         }
         std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -387,14 +387,14 @@ int cli_context::run() {
         cur_msg += fname;
         cur_msg += " ---\n";
         cur_msg += content;
-        view::show_message(string_format("Loaded text from '%s'", fname.c_str()));
+        ui::show_message(string_format("Loaded text from '%s'", fname.c_str()));
         return true;
     };
 
     while (true) {
         std::string buffer;
         {
-            view::user_turn user_turn;
+            ui::user_turn user_turn;
 
             if (params.prompt.empty()) {
                 buffer = user_turn.read_input(params.multiline_input);
@@ -402,10 +402,10 @@ int cli_context::run() {
                 // process input prompt from args
                 for (auto & fname : params.image) {
                     if (!stage_media_file(fname, media_type_from_ext(fname))) {
-                        view::show_error(string_format("file does not exist or cannot be opened: '%s'", fname.c_str()));
+                        ui::show_error(string_format("file does not exist or cannot be opened: '%s'", fname.c_str()));
                         break;
                     }
-                    view::show_message(string_format("Loaded media from '%s'", fname.c_str()));
+                    ui::show_message(string_format("Loaded media from '%s'", fname.c_str()));
                 }
                 buffer = params.prompt;
                 user_turn.echo(buffer);
@@ -439,7 +439,7 @@ int cli_context::run() {
                 messages.erase(last_idx);
                 add_user_msg = false;
             } else {
-                view::show_error("No message to regenerate.");
+                ui::show_error("No message to regenerate.");
                 continue;
             }
         } else if (string_starts_with(buffer, "/clear")) {
@@ -447,7 +447,7 @@ int cli_context::run() {
             add_system_prompt();
 
             pending_media = json::array();
-            view::show_message("Chat history cleared.");
+            ui::show_message("Chat history cleared.");
             continue;
         } else if (
                 (string_starts_with(buffer, "/image ") && has_vision) ||
@@ -457,10 +457,10 @@ int cli_context::run() {
             // just in case (bad copy-paste for example), we strip all trailing/leading spaces
             std::string fname = string_strip(buffer.substr(7));
             if (!stage_media_file(fname, type)) {
-                view::show_error(string_format("file does not exist or cannot be opened: '%s'", fname.c_str()));
+                ui::show_error(string_format("file does not exist or cannot be opened: '%s'", fname.c_str()));
                 continue;
             }
-            view::show_message(string_format("Loaded media from '%s'", fname.c_str()));
+            ui::show_message(string_format("Loaded media from '%s'", fname.c_str()));
             continue;
         } else if (string_starts_with(buffer, "/read ")) {
             std::string fname = string_strip(buffer.substr(6));
@@ -514,7 +514,7 @@ int cli_context::run() {
                 }
 
                 if (++count >= FILE_GLOB_MAX_RESULTS) {
-                    view::show_error(string_format("Maximum number of globbed files allowed (%zu) reached.", FILE_GLOB_MAX_RESULTS));
+                    ui::show_error(string_format("Maximum number of globbed files allowed (%zu) reached.", FILE_GLOB_MAX_RESULTS));
                     break;
                 }
             }
@@ -538,7 +538,7 @@ int cli_context::run() {
         });
 
         if (params.show_timings) {
-            view::show_info(string_format(
+            ui::show_info(string_format(
                 "\n[ Prompt: %.1f t/s | Generation: %.1f t/s ]",
                 timings.prompt_per_second,
                 timings.predicted_per_second
@@ -550,7 +550,7 @@ int cli_context::run() {
         }
     }
 
-    view::show_message("\n\nExiting...");
+    ui::show_message("\n\nExiting...");
 
     return 0;
 }

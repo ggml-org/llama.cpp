@@ -127,7 +127,7 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
 }
 
 // note: make this view implementation generic, so that we can move to TUI in the future if we want to
-namespace view {
+namespace ui {
     static void init(const common_params & params) {
         // TODO: avoid using atexit() here by making `console` a singleton
         console::init(params.simple_io, params.use_color);
