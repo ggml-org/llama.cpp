@@ -146,6 +146,7 @@ void cli_context::fetch_server_props() {
                 model_name = std::filesystem::path(path).filename().string();
             }
         }
+        model_ftype = props.value("model_ftype", "");
         build_info = props.value("build_info", "");
         if (props.contains("modalities") && props.at("modalities").is_object()) {
             const auto & modalities = props.at("modalities");
@@ -345,6 +346,9 @@ int cli_context::run() {
     banner += "\n";
     banner += "build      : " + build_info + "\n";
     banner += "model      : " + model_name + "\n";
+    if (!model_ftype.empty()) {
+        banner += "ftype      : " + model_ftype + "\n";
+    }
     banner += "modalities : " + modalities + "\n";
     if (!params.system_prompt.empty()) {
         banner += "using custom system prompt\n";

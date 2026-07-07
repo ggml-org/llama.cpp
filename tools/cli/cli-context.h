@@ -29,6 +29,7 @@ struct cli_context {
     // properties of the connected server
     // will be populated by fetch_server_props()
     std::string model_name;
+    std::string model_ftype;
     std::string build_info;
     bool has_vision = false;
     bool has_audio  = false;
