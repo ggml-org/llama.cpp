@@ -23,13 +23,11 @@
  */
 
 import { browser } from '$app/environment';
-import { SvelteSet } from 'svelte/reactivity';
 import { SETTINGS_KEYS } from '$lib/constants';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mode } from 'mode-watcher';
 import {
 	parseMcpServerSettings,

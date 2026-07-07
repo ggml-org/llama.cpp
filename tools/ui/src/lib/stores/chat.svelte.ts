@@ -27,7 +27,6 @@ import {
 	modelsStore,
 	selectedModelContextSize
 } from '$lib/stores/models.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
 import { formatParameters } from '$lib/utils/formatters';
 import {
 	normalizeModelName,
@@ -2314,23 +2313,15 @@ class ChatStore {
 		);
 
 		// Derive context from message data (activeProcessingState may be stale by now).
-		// For agentic flows, the accumulated agentic.llm values represent the full KV cache.
-		// Non-agentic: use lastMsg.prompt_n + cache_n + predicted_n (current request KV footprint).
-		// Include tools in contextUsed so the group title matches the gauge display.
+		// KV in memory = sum across all committed assistant turns of
+		// (timings.prompt_n + timings.predicted_n). Cache hits are excluded
+		// because they reference tokens already counted by a prior turn's
+		// prompt_n - summing them would double-count.
 		let contextUsed = 0;
-		let tools = toolsStore.enabledToolsTokenCount ?? 0;
-		if (agenticMessages.length > 0) {
-			const lastAgentic = agenticMessages[agenticMessages.length - 1];
-			const agg = lastAgentic.timings?.agentic?.llm;
-			contextUsed = (agg?.prompt_n ?? 0) + (agg?.predicted_n ?? 0);
-		} else if (assistantMessages.length > 0) {
-			const lastMsg = assistantMessages[assistantMessages.length - 1];
-			contextUsed =
-				(lastMsg.timings?.prompt_n ?? 0) +
-				(lastMsg.timings?.cache_n ?? 0) +
-				(lastMsg.timings?.predicted_n ?? 0);
+		for (const msg of assistantMessages) {
+			if (!msg.timings) continue;
+			contextUsed += (msg.timings.prompt_n ?? 0) + (msg.timings.predicted_n ?? 0);
 		}
-		contextUsed += tools;
 		const contextTotal = modelsStore.getModelContextSize(singleModelName() ?? '');
 		const contextPercent =
 			contextTotal && contextTotal > 0 ? Math.round((contextUsed / contextTotal) * 100) : null;
@@ -2409,12 +2400,9 @@ class ChatStore {
 		// Current (in KV cache)
 		console.log('%cCurrent (KV cache):', 'font-weight: bold');
 		console.log(`  Total input: ${formatParameters(currentRead)} tok`);
-		if (tools > 0) {
-			console.log(`  Tools:       ${formatParameters(tools)} tok`);
-		}
 		console.log(`  Generated:   ${formatParameters(currentOutput)} tok`);
 		console.log(`  ─────────────────────`);
-		console.log(`  KV total:    ${formatParameters(currentRead + currentOutput + tools)} tok`);
+		console.log(`  KV total:    ${formatParameters(currentRead + currentOutput)} tok`);
 
 		console.groupEnd();
 	}
@@ -2441,21 +2429,15 @@ class ChatStore {
 			(m) => m.timings?.agentic?.llm?.predicted_n != null
 		);
 
-		// Derive context from message data. Include tools for consistency with gauge.
+		// Derive context from message data. KV in memory = sum across all
+		// committed assistant turns of (timings.prompt_n + timings.predicted_n);
+		// cache hits are excluded because they reference tokens already
+		// counted by a prior turn's prompt_n.
 		let contextUsed = 0;
-		let debugTools = toolsStore.enabledToolsTokenCount ?? 0;
-		if (agenticMessages.length > 0) {
-			const lastAgentic = agenticMessages[agenticMessages.length - 1];
-			const agg2 = lastAgentic.timings?.agentic?.llm;
-			contextUsed = (agg2?.prompt_n ?? 0) + (agg2?.predicted_n ?? 0);
-		} else if (assistantMessages.length > 0) {
-			const lastMsg = assistantMessages[assistantMessages.length - 1];
-			contextUsed =
-				(lastMsg.timings?.prompt_n ?? 0) +
-				(lastMsg.timings?.cache_n ?? 0) +
-				(lastMsg.timings?.predicted_n ?? 0);
+		for (const msg of assistantMessages) {
+			if (!msg.timings) continue;
+			contextUsed += (msg.timings.prompt_n ?? 0) + (msg.timings.predicted_n ?? 0);
 		}
-		contextUsed += debugTools;
 		const contextTotal = modelsStore.getModelContextSize(singleModelName() ?? '');
 		const contextPercent =
 			contextTotal && contextTotal > 0 ? Math.round((contextUsed / contextTotal) * 100) : null;
@@ -2468,7 +2450,6 @@ class ChatStore {
 		console.log('%cPer-message token usage:', 'font-weight: bold');
 		let totalRead = 0;
 		let totalOutput = 0;
-		let totalCache = 0;
 		let agg: { prompt_n?: number; predicted_n?: number } | undefined;
 
 		if (agenticMessages.length > 0) {
@@ -2498,10 +2479,8 @@ class ChatStore {
 				const t = msg.timings;
 				const read = (t?.prompt_n ?? 0) + (t?.cache_n ?? 0);
 				const output = t?.predicted_n ?? 0;
-				const cache = t?.cache_n ?? 0;
 				totalRead += read;
 				totalOutput += output;
-				totalCache += cache;
 
 				const modelLabel = msg.model ? ` [${msg.model}]` : '';
 				console.log(
@@ -2509,15 +2488,6 @@ class ChatStore {
 				);
 			});
 		}
-
-		// Tools
-		const tools = toolsStore.enabledToolsTokenCount ?? 0;
-		if (tools > 0) {
-			console.log(`%cTools: ${formatParameters(tools)} tok`, 'color: #f59e0b');
-		}
-
-		// Calculated totals
-		const calculatedContextUsed = totalRead + totalOutput;
 
 		// Current request values (what's in KV cache now)
 		const lastMsg = assistantMessages[assistantMessages.length - 1];
@@ -2535,12 +2505,7 @@ class ChatStore {
 		console.log(`  Output:    ${formatParameters(totalOutput)} tok`);
 
 		console.log('%cCurrent (KV cache):', 'font-weight: bold');
-		if (tools > 0) {
-			console.log(`  Reading:   ${formatParameters(currentRead)} tok`);
-			console.log(`  Tools:     ${formatParameters(tools)} tok`);
-		} else {
-			console.log(`  Reading:   ${formatParameters(currentRead)} tok`);
-		}
+		console.log(`  Reading:   ${formatParameters(currentRead)} tok`);
 		console.log(`  Output:    ${formatParameters(currentOutput)} tok`);
 
 		// Compare with live gauge values (if server state is still available)
@@ -2558,7 +2523,7 @@ class ChatStore {
 		);
 
 		if (serverContext > 0 && currentRead > 0) {
-			const diff = serverContext - (currentRead + currentOutput + tools);
+			const diff = serverContext - (currentRead + currentOutput);
 			if (diff !== 0) {
 				console.log(
 					`  Server vs calculated delta: ${formatParameters(diff)} tok`,
