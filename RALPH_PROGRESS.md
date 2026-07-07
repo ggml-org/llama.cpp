@@ -121,3 +121,70 @@ correctness items can use the extended harness as-is.
 documents that d=256 reproduces a device-lost hang on A770 SYCL FA. The new [7]
 section preserves this guarantee (opt-in only) while making the probe available
 for future re-validation after a driver/IGC bump that may upstream-fix the hang.
+
+
+## 2026-07-07 — P1 [model 1] (sub-task 1) — Mistral-7B Q4_K_M PPL matrix on wikitext-2
+
+First PPL pass of the validation track. Model 1 = mistral-7b-instruct-v0.1
+(Q4_K_M weights, ~4.37 GB, GQA=4:1, head_dim=128). Corpus = wikitext-2 raw
+test split (~322 K tokens, 4358 lines, found at
+`/mnt/mrgr/projects/llama-cpp-turboquant/wikitext-2-raw/wiki.test.raw`; script
+`scripts/get-wikitext-2.sh` would re-download from HF if needed). Binary =
+`build-port/bin/llama-perplexity` (commit `de701194b`).
+
+**Method:** 6 PPL runs, each at ctx=512, all layers on GPU (-ngl 99),
+CPU threads=12. KV types: f16, q8_0, q4_0, turbo2, turbo3, turbo4. f16/q8_0/q4_0
+use `--flash-attn auto` (SYCL FA supported on non-turbo types); turbo* uses
+`--flash-attn off` (SYCL FA on turbo is vetoed per TOPOLOGY.md → non-FA path
+is what the binary actually executes for turbo KV). Wall time ≈ 5 min/run
+× 6 = ~30 min plus the matched-condition f16-full re-run = ~30 min total.
+
+**Pitfalls hit and resolved:**
+
+1. **CLI value names use `_0`-less form.** The binary's `--cache-type-k TYPE`
+   help lists `turbo2, turbo3, turbo4` (the public CLI names), NOT the GGML
+   enum names (`GGML_TYPE_TURBO2_0` etc.). First turbo runs failed with
+   "unexpected argument" until I dropped the `_0`. Use `-ctk turboN -ctv turboN`.
+2. **Duplicate flag in smoke test.** `-ngl 99 --n-gpu-layers 99` is harmless
+   (binary uses last wins) but redundant; cleaned up for the matrix runs.
+3. **Smoke-test f16 (64 chunks) underestimates true PPL.** The 64-chunk f16
+   = 7.5818, full 642-chunk f16 = 7.6329. The smoke value was a stable
+   underestimate; canonical baseline is the 642-chunk number, not the smoke.
+
+**Results (642 chunks each, GPU -ngl 99):**
+
+| KV    | PPL     | Δ vs f16  | Δ %    |
+|-------|---------|-----------|--------|
+| f16   | 7.6329  | (ref)     | —      |
+| q8_0  | 7.6332  | +0.0003   | +0.00% |
+| q4_0  | 7.6901  | +0.0572   | +0.75% |
+| turbo4| **7.6563** | **+0.0234** | **+0.31%** |
+| turbo3| 7.7275  | +0.0946   | +1.24% |
+| turbo2| 8.1166  | +0.4837   | +6.34% |
+
+**Gate verdict (RALPH_TASKS P1 [model 1]): "turbo4 should now show the
+post-2a improvement (was tied with q4_0 pre-fix) — confirm numerically,
+don't assume." → PASS.** turbo4 PPL (7.6563) **beats** q4_0 PPL (7.6901) by
+0.0338 PPL (0.44% relative) at the model level. The post-2a fix improved
+end-to-end quality, not just kernel-level correctness.
+
+**Other observations:**
+
+- **q8_0 ≈ f16** (Δ = +0.004%, within ±0.05 noise). The 8-bit KV cache is
+  essentially free at this corpus; the 2x VRAM savings vs f16 are a clean win.
+- **Turbo2 = +6.34% PPL cost.** At 2-bit KV cache that's a real quality hit,
+  but the capacity gain (≈2x KV density vs q4_0) is the other half of the
+  reframe — and P1 [model 1] sub-task 2 (next iteration) will measure that
+  side.
+- **No GATE regression.** All 3 turbo types produced non-NaN, non-garbage
+  PPL, corroborating the [3b]/[3c] harness GATE which passed for the same
+  d=128/GQA-4:1 non-FA attention path.
+- **The reframe (capacity, not speed):** the PPL cost is the *quality* half
+  of the capacity-feature argument. The *capacity* half — KV-byte →
+  context-length gain at constant VRAM — is the next sub-task. PPL does not
+  measure capacity.
+
+**No new tasks uncovered.** This sub-task closed cleanly. Next unchecked
+[ ] in P1 [model 1] is sub-task 2: "Measure actual capacity gain: max
+context length (or max concurrent sequences) that fits in available VRAM
+at turbo3/4 vs q8_0/f16 KV cache."
