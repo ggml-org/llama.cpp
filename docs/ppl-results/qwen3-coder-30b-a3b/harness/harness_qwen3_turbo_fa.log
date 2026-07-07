@@ -1,0 +1,124 @@
+Build with Macros:
+  GGML_SYCL_FORCE_MMQ: no
+  GGML_SYCL_F16: yes
+  GGML_SYCL_GRAPH: yes
+  GGML_SYCL_DNNL: yes
+  GGML_SYCL_SUPPORT_LEVEL_ZERO: yes
+  GGML_SYCL_USE_VMM: yes
+Running with Environment Variables:
+  GGML_SYCL_DEBUG: 0
+  GGML_SYCL_DISABLE_OPT: 0
+  GGML_SYCL_DISABLE_GRAPH: 1
+  GGML_SYCL_ENABLE_LEVEL_ZERO: 1
+  GGML_SYCL_DISABLE_DNN: DNN disabled by compile flag
+  GGML_SYCL_ENABLE_VMM: 1
+  GGML_SYCL_PRIORITIZE_DMMV: 0
+  GGML_SYCL_USE_ASYNC_MEM_OP: 1
+  GGML_SYCL_ENABLE_FLASH_ATTN: 1
+Found 1 SYCL devices:
+|  |                   |                                       |       |Max    |        |Max  |Global |                     |
+|  |                   |                                       |       |compute|Max work|sub  |mem    |                     |
+|ID|        Device Type|                                   Name|Version|units  |group   |group|size   |       Driver version|
+|--|-------------------|---------------------------------------|-------|-------|--------|-----|-------|---------------------|
+| 0| [level_zero:gpu:0]|                Intel Arc A770 Graphics|  12.55|    512|    1024|   32| 16225M|           1.15.38646|
+SYCL Optimization Feature:
+|ID|        Device Type|Reorder|
+|--|-------------------|-------|
+| 0| [level_zero:gpu:0]|      Y|
+== TurboQuant CPU-vs-SYCL correctness ==
+reference: CPU   under test: SYCL0
+
+[1] Walsh-Hadamard rotation (TURBO_WHT)
+  [PASS] WHT g=128 dir=0              nmse=8.267e-15  max_abs=2.384e-07  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] WHT g=128 dir=1              nmse=8.385e-15  max_abs=2.384e-07  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] WHT g=64 dir=0               nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] WHT g=64 dir=1               nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] WHT g=32 dir=0               nmse=8.787e-15  max_abs=2.384e-07  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] WHT g=32 dir=1               nmse=7.907e-15  max_abs=2.384e-07  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] WHT g=128 dir=0 scaled       nmse=8.152e-15  max_abs=4.768e-07  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] WHT g=128 dir=1 scaled       nmse=9.501e-15  max_abs=7.153e-07  cosine=1.000000  |t|/|r|=1.0000
+
+[2] centroid decode (cpy turbo -> f32)
+  [PASS] cpy turbo2_0->f32            nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] cpy turbo3_0->f32            nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] cpy turbo4_0->f32            nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] cpy turbo2_0->f32            nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] cpy turbo3_0->f32            nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] cpy turbo4_0->f32            nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+
+[2b] SET_ROWS quantize-store (F32 -> turbo write, on-device)
+  [PASS] set_rows turbo2_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] set_rows turbo3_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] set_rows turbo4_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] set_rows turbo2_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] set_rows turbo3_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] set_rows turbo4_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000
+
+[3] mat-vec dot product (mul_mat, turbo weights)
+  [PASS] mul_mat turbo2_0             nmse=9.270e-08  max_abs=8.698e-03  cosine=1.000000  |t|/|r|=1.0001
+  [PASS] mul_mat turbo3_0             nmse=1.348e-07  max_abs=1.412e-02  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] mul_mat turbo4_0             nmse=1.075e-07  max_abs=8.617e-03  cosine=1.000000  |t|/|r|=1.0000
+  [PASS] mul_mat turbo2_0             nmse=8.122e-08  max_abs=1.348e-02  cosine=1.000000  |t|/|r|=1.0001
+  [PASS] mul_mat turbo3_0             nmse=1.853e-07  max_abs=2.182e-02  cosine=1.000000  |t|/|r|=0.9999
+  [PASS] mul_mat turbo4_0             nmse=8.342e-08  max_abs=1.741e-02  cosine=1.000000  |t|/|r|=1.0000
+
+[3b] non-FA attention (mul_mat/softmax/mul_mat, turbo KV, d=128) - GATE: mirrors build_attn_mha's fixed !v_trans branch (dequant V to F32 before transpose; see doc comment above probe_attn_noflash)
+  [WARN] attn_noflash turbo2_0 d=128  nmse=2.213e-01  max_abs=2.336e-01  cosine=0.888310  |t|/|r|=0.7862
+  [PASS] attn_noflash turbo3_0 d=128  nmse=6.051e-02  max_abs=6.541e-02  cosine=0.969369  |t|/|r|=0.9829
+  [PASS] attn_noflash turbo4_0 d=128  nmse=1.789e-02  max_abs=4.072e-02  cosine=0.991297  |t|/|r|=1.0150
+
+[3c] non-FA attention GQA sweep (d=128) - GATE, llama/mistral 4:1 + qwen3 8:1
+  [WARN] attn_noflash turbo2_0 d=128 GQA 4:1 nmse=2.150e-01  max_abs=2.336e-01  cosine=0.885992  |t|/|r|=0.8877
+  [PASS] attn_noflash turbo3_0 d=128 GQA 4:1 nmse=6.237e-02  max_abs=9.027e-02  cosine=0.969264  |t|/|r|=1.0122
+  [PASS] attn_noflash turbo4_0 d=128 GQA 4:1 nmse=1.736e-02  max_abs=4.561e-02  cosine=0.991383  |t|/|r|=1.0054
+  [WARN] attn_noflash turbo2_0 d=128 GQA 8:1 nmse=2.087e-01  max_abs=2.336e-01  cosine=0.891306  |t|/|r|=0.9469
+  [PASS] attn_noflash turbo3_0 d=128 GQA 8:1 nmse=6.418e-02  max_abs=9.027e-02  cosine=0.967989  |t|/|r|=1.0023
+  [PASS] attn_noflash turbo4_0 d=128 GQA 8:1 nmse=1.611e-02  max_abs=4.561e-02  cosine=0.992010  |t|/|r|=1.0061
+
+[4] flash attention TILE (n_q=8, prefill) - GATE, standard KV across head dims
+  [PASS] flash_attn f16 d=64 [tile nq=8] nmse=6.438e-06  max_abs=1.429e-03  cosine=0.999997  |t|/|r|=0.9999
+  [PASS] flash_attn f16 d=128 [tile nq=8] nmse=6.835e-06  max_abs=1.910e-03  cosine=0.999997  |t|/|r|=1.0001
+  [PASS] flash_attn q8_0 d=64 [tile nq=8] nmse=6.808e-05  max_abs=2.692e-03  cosine=0.999966  |t|/|r|=1.0001
+  [PASS] flash_attn q8_0 d=128 [tile nq=8] nmse=5.903e-05  max_abs=2.678e-03  cosine=0.999971  |t|/|r|=1.0006
+
+[4b] flash attention TILE GQA sweep (d=128, n_q=8) - GATE, f16 + q8_0 across llama/mistral 4:1 + qwen3 8:1
+  [PASS] flash_attn f16 d=128 [tile nq=8 GQA 4:1] nmse=6.603e-06  max_abs=1.910e-03  cosine=0.999997  |t|/|r|=1.0000
+  [PASS] flash_attn q8_0 d=128 [tile nq=8 GQA 4:1] nmse=6.633e-05  max_abs=3.205e-03  cosine=0.999967  |t|/|r|=1.0010
+  [PASS] flash_attn f16 d=128 [tile nq=8 GQA 8:1] nmse=6.330e-06  max_abs=1.910e-03  cosine=0.999997  |t|/|r|=1.0000
+  [PASS] flash_attn q8_0 d=128 [tile nq=8 GQA 8:1] nmse=6.606e-05  max_abs=3.598e-03  cosine=0.999967  |t|/|r|=1.0004
+
+[5] flash attention turbo KV - GATE (d=128 only)
+  [WARN] flash_attn turbo2_0 d=128 [tile nq=8] nmse=1.911e-01  max_abs=2.864e-01  cosine=0.899454  |t|/|r|=0.9123
+  [PASS] flash_attn turbo3_0 d=128 [tile nq=8] nmse=8.201e-02  max_abs=1.025e-01  cosine=0.958588  |t|/|r|=0.9886
+  [PASS] flash_attn turbo4_0 d=128 [tile nq=8] nmse=1.691e-02  max_abs=4.621e-02  cosine=0.991693  |t|/|r|=1.0109
+  [WARN] flash_attn turbo2_0 d=128 [tile nq=8 GQA 4:1] nmse=2.057e-01  max_abs=2.864e-01  cosine=0.894282  |t|/|r|=0.9683
+  [PASS] flash_attn turbo3_0 d=128 [tile nq=8 GQA 4:1] nmse=7.241e-02  max_abs=1.029e-01  cosine=0.964472  |t|/|r|=1.0157
+  [PASS] flash_attn turbo4_0 d=128 [tile nq=8 GQA 4:1] nmse=1.690e-02  max_abs=5.522e-02  cosine=0.991617  |t|/|r|=1.0058
+  [WARN] flash_attn turbo2_0 d=128 [tile nq=8 GQA 8:1] nmse=2.032e-01  max_abs=2.864e-01  cosine=0.897079  |t|/|r|=0.9861
+  [PASS] flash_attn turbo3_0 d=128 [tile nq=8 GQA 8:1] nmse=7.306e-02  max_abs=1.107e-01  cosine=0.963908  |t|/|r|=1.0106
+  [PASS] flash_attn turbo4_0 d=128 [tile nq=8 GQA 8:1] nmse=1.676e-02  max_abs=5.522e-02  cosine=0.991715  |t|/|r|=1.0077
+  [WARN] flash_attn turbo2_0 d=128 [vec nq=1] nmse=1.818e-01  max_abs=1.476e-01  cosine=0.906064  |t|/|r|=0.9590
+  [PASS] flash_attn turbo3_0 d=128 [vec nq=1] nmse=8.792e-02  max_abs=8.476e-02  cosine=0.955667  |t|/|r|=0.9906
+  [PASS] flash_attn turbo4_0 d=128 [vec nq=1] nmse=1.495e-02  max_abs=2.814e-02  cosine=0.992529  |t|/|r|=1.0004
+  [WARN] flash_attn turbo2_0 d=128 [vec nq=1 GQA 4:1] nmse=1.749e-01  max_abs=1.476e-01  cosine=0.910401  |t|/|r|=0.9717
+  [PASS] flash_attn turbo3_0 d=128 [vec nq=1 GQA 4:1] nmse=8.348e-02  max_abs=9.841e-02  cosine=0.958710  |t|/|r|=1.0097
+  [PASS] flash_attn turbo4_0 d=128 [vec nq=1 GQA 4:1] nmse=1.577e-02  max_abs=4.063e-02  cosine=0.992360  |t|/|r|=1.0157
+  [WARN] flash_attn turbo2_0 d=128 [vec nq=1 GQA 8:1] nmse=1.911e-01  max_abs=2.864e-01  cosine=0.899454  |t|/|r|=0.9123
+  [PASS] flash_attn turbo3_0 d=128 [vec nq=1 GQA 8:1] nmse=8.201e-02  max_abs=1.025e-01  cosine=0.958588  |t|/|r|=0.9886
+  [PASS] flash_attn turbo4_0 d=128 [vec nq=1 GQA 8:1] nmse=1.691e-02  max_abs=4.621e-02  cosine=0.991693  |t|/|r|=1.0109
+
+[6] flash attention VEC (n_q=1, decode) - GATE, standard KV across head dims [crash-prone: LAST]
+  [PASS] flash_attn f16 d=64 [vec nq=1] nmse=5.068e-06  max_abs=1.238e-03  cosine=0.999998  |t|/|r|=1.0005
+  [PASS] flash_attn f16 d=128 [vec nq=1] nmse=6.721e-06  max_abs=9.254e-04  cosine=0.999997  |t|/|r|=0.9996
+  [PASS] flash_attn q8_0 d=64 [vec nq=1] nmse=1.124e-04  max_abs=2.466e-03  cosine=0.999944  |t|/|r|=0.9992
+  [PASS] flash_attn q8_0 d=128 [vec nq=1] nmse=8.507e-05  max_abs=2.907e-03  cosine=0.999959  |t|/|r|=1.0014
+
+[6b] flash attention VEC GQA sweep (d=128, n_q=1) - GATE, f16 + q8_0 across llama/mistral 4:1 + qwen3 8:1
+  [PASS] flash_attn f16 d=128 [vec nq=1 GQA 4:1] nmse=6.953e-06  max_abs=1.910e-03  cosine=0.999997  |t|/|r|=1.0002
+  [PASS] flash_attn q8_0 d=128 [vec nq=1 GQA 4:1] nmse=8.521e-05  max_abs=2.907e-03  cosine=0.999958  |t|/|r|=1.0014
+  [PASS] flash_attn f16 d=128 [vec nq=1 GQA 8:1] nmse=6.835e-06  max_abs=1.910e-03  cosine=0.999997  |t|/|r|=1.0001
+  [PASS] flash_attn q8_0 d=128 [vec nq=1 GQA 8:1] nmse=8.619e-05  max_abs=3.351e-03  cosine=0.999957  |t|/|r|=1.0005
+
+[7] flash attention d=256 - SKIPPED (set LLAMA_TEST_FA256=1 to opt in; gated, A770 SYCL FA reproducibly hangs at d=256)
+
+== summary: 0 GATE-FAIL, 0 XPASS (promote to GATE!), 0 xfail (expected-broken), 0 SKIP ==
