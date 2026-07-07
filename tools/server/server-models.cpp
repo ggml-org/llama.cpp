@@ -2177,9 +2177,12 @@ server_http_proxy::server_http_proxy(
 
     // setup Client
     cli->set_follow_location(true);
-    cli->set_connection_timeout(timeout_read, 0); // use --timeout value instead of hardcoded 5 s
-    cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
-    cli->set_read_timeout(timeout_write, 0);
+    // httplib treats timeout of 0 as "immediate timeout", not "no timeout"
+    // when user passes --timeout 0, treat it as no timeout by using a large value
+    constexpr int32_t no_timeout_s = 3600;
+    cli->set_connection_timeout(timeout_read == 0 ? no_timeout_s : timeout_read, 0);
+    cli->set_write_timeout(timeout_read == 0 ? no_timeout_s : timeout_read, 0);
+    cli->set_read_timeout(timeout_write == 0 ? no_timeout_s : timeout_write, 0);
     this->status = 500; // to be overwritten upon response
     this->cleanup = [pipe]() {
         pipe->close_read();
