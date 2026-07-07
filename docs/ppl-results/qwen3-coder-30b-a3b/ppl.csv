@@ -1,0 +1,5 @@
+kv,batch,ngl,fa,ctx,chunks,status,final_ppl,wall_s,note
+f16,512,99,auto,512,564,OK,9.7022,1675,qwen3-f16
+turbo4,512,0,auto,512,50,OK,8.9105,365,asymmetric-K=q8_0-V=turbo4-qwen3
+q4_0,512,99,auto,512,564,OK,9.8740,1426,qwen3-q4_0
+q8_0,512,99,auto,512,564,OK,9.7030,1425,qwen3-q8_0
