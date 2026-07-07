@@ -19,7 +19,7 @@
 		renderMarkdown = false,
 		textColorClass = 'text-foreground',
 		cardBgClass = 'dark:bg-primary/15',
-		maxHeightStyle = 'max-height: var(--max-message-height);'
+		maxHeightStyle = ''
 	}: Props = $props();
 
 	let isMultiline = $state(false);
@@ -59,7 +59,7 @@
 
 {#if content.trim()}
 	<Card
-		class="max-w-[80%] overflow-y-auto rounded-[1.125rem] border-none bg-primary/5 px-3.75 py-1.5 {textColorClass} backdrop-blur-md data-[multiline]:py-2.5 {cardBgClass}"
+		class="chat-message-user-bubble max-w-[80%] overflow-y-auto rounded-[1.125rem] border-none bg-primary/5 px-3.75 py-1.5 {textColorClass} backdrop-blur-md data-multiline:py-2.5 {cardBgClass}"
 		data-multiline={isMultiline ? '' : undefined}
 		style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
 	>

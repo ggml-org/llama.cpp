@@ -525,7 +525,11 @@ const char * ggml_commit(void) {
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 static int64_t timer_freq, timer_start;
-void ggml_time_init(void) {
+static BOOL CALLBACK ggml_time_init_once(PINIT_ONCE once, PVOID param, PVOID *ctx) {
+    UNUSED(once);
+    UNUSED(param);
+    UNUSED(ctx);
+
     LARGE_INTEGER t;
     QueryPerformanceFrequency(&t);
     timer_freq = t.QuadPart;
@@ -535,6 +539,12 @@ void ggml_time_init(void) {
     // We subtract the program start time to reduce the likelihood of that happening.
     QueryPerformanceCounter(&t);
     timer_start = t.QuadPart;
+
+    return TRUE;
+}
+void ggml_time_init(void) {
+    static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
+    InitOnceExecuteOnce(&once, ggml_time_init_once, NULL, NULL);
 }
 int64_t ggml_time_ms(void) {
     LARGE_INTEGER t;
@@ -600,18 +610,15 @@ FILE * ggml_fopen(const char * fname, const char * mode) {
     // convert fname (UTF-8)
     wchar_t * wfname = ggml_mbstowcs(fname);
     if (wfname) {
-        // convert mode (ANSI)
-        wchar_t * wmode = GGML_MALLOC((strlen(mode) + 1) * sizeof(wchar_t));
-        wchar_t * wmode_p = wmode;
-        do {
-            *wmode_p++ = (wchar_t)*mode;
-        } while (*mode++);
-
-        // open file
-        file = _wfopen(wfname, wmode);
+        // convert mode (UTF-8)
+        wchar_t * wmode = ggml_mbstowcs(mode);
+        if (wmode) {
+            // open file
+            file = _wfopen(wfname, wmode);
+            GGML_FREE(wmode);
+        }
 
         GGML_FREE(wfname);
-        GGML_FREE(wmode);
     }
 
     return file;
@@ -7412,6 +7419,10 @@ static int ggml_node_list_find_tensor(const struct ggml_cgraph * cgraph,
     return -1;
 }
 
+static bool ggml_is_constant(const struct ggml_tensor * tensor) {
+    return tensor->buffer != NULL && ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS && (tensor->flags & GGML_TENSOR_FLAG_PARAM) == 0;
+}
+
 bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
                                 const int *                node_idxs,
                                 int                        count,
@@ -7457,10 +7468,11 @@ bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
             return false;
         }
 
-        // if node is a view, check if the view_src and all it's parent view_srcs are within the subgraph
+        // if node is a view, check if the view_src and all its parent view_srcs are within the subgraph.
+        // external view sources are allowed only for weight tensors, which are constant for this graph execution.
         struct ggml_tensor * view_src = node->view_src;
         while (view_src) {
-            if (ggml_node_list_find_tensor(cgraph, node_idxs, count, view_src) == -1) {
+            if (ggml_node_list_find_tensor(cgraph, node_idxs, count, view_src) == -1 && !ggml_is_constant(view_src)) {
                 return false;
             }
             view_src = view_src->view_src;

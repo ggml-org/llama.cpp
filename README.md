@@ -1,6 +1,6 @@
 # llama.cpp
 
-![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
+![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
@@ -37,7 +37,7 @@ LLM inference in C/C++
 
 Getting started with llama.cpp is straightforward. Here are several ways to install it on your machine:
 
-- Install `llama.cpp` using [brew, nix or winget](docs/install.md)
+- Install `llama.cpp` using [brew, nix, winget, or conda-forge](docs/install.md)
 - Run with Docker - see our [Docker documentation](docs/docker.md)
 - Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
 - Build from source by cloning this repository - check out [our build guide](docs/build.md)
@@ -142,7 +142,9 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [x] [GigaChat-20B-A3B](https://huggingface.co/ai-sage/GigaChat-20B-A3B-instruct)
 - [X] [Trillion-7B-preview](https://huggingface.co/trillionlabs/Trillion-7B-preview)
 - [x] [Ling models](https://huggingface.co/collections/inclusionAI/ling-67c51c85b34a7ea0aba94c32)
-- [x] [LFM2 models](https://huggingface.co/collections/LiquidAI/lfm2-686d721927015b2ad73eaa38)
+- [x] [Liquid LFM2 models](https://huggingface.co/collections/LiquidAI/lfm2)
+- [x] [Liquid LFM2.5 models](https://huggingface.co/collections/LiquidAI/lfm25)
+- [x] [Liquid Nanos](https://huggingface.co/collections/LiquidAI/liquid-nanos)
 - [x] [Hunyuan models](https://huggingface.co/collections/tencent/hunyuan-dense-model-6890632cda26b19119c9c5e7)
 - [x] [BailingMoeV2 (Ring/Ling 2.0) models](https://huggingface.co/collections/inclusionAI/ling-v2-68bf1dd2fc34c306c1fa6f86)
 - [x] [Mellum models](https://huggingface.co/JetBrains/models?search=mellum)

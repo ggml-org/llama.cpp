@@ -171,6 +171,8 @@ struct clip_ctx {
     std::map<ggml_backend_dev_t, size_t> mem_usage;
     std::map<ggml_backend_dev_t, size_t> mem_compute;
 
+    bool support_batch = false;
+
     clip_ctx(clip_context_params & ctx_params) {
         flash_attn_type = ctx_params.flash_attn_type;
         no_alloc = ctx_params.no_alloc;
@@ -314,7 +316,7 @@ ggml_tensor * clip_graph::build_vit(
             std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos,
             const build_vit_opts & opts
         ) {
-    // batch dim: inp is [n_embd, n_pos] (B==1) or [n_embd, n_pos, B] (multi-tile encode)
+    // batch dim: inp is [n_embd, n_pos, B]
     const int64_t B = inp->ne[2];
 
     if (learned_pos_embd) {
@@ -532,7 +534,7 @@ ggml_tensor * clip_graph::build_vit(
 ggml_tensor * clip_graph::build_inp() {
     ggml_tensor * inp_raw = build_inp_raw();
     ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-    inp = ggml_reshape_2d(ctx0, inp, n_patches, n_embd);
+    inp = ggml_reshape_3d(ctx0, inp, n_patches, n_embd, n_batch);
     inp = ggml_cont(ctx0, ggml_transpose(ctx0, inp));
     if (model.patch_bias) {
         inp = ggml_add(ctx0, inp, model.patch_bias);
@@ -862,8 +864,8 @@ ggml_tensor * clip_graph::build_patch_merge_permute(ggml_tensor * cur, int scale
     return cur;
 }
 
-static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32_batch & imgs) {
-    const clip_image_f32 & img = *imgs.entries[0];
+static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const clip_image_f32_batch & imgs) {
+    const clip_image_f32 & img = imgs.entries[0];
     std::unique_ptr<clip_graph> builder;
 
     switch (ctx->proj_type()) {
@@ -1025,7 +1027,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
     // TODO [QWEN_VIDEO]: improve this in the future
     builder->n_batch = imgs.entries.size();
 
-    return builder->build();
+    return builder;
 }
 
 //
@@ -1043,8 +1045,17 @@ struct clip_model_loader {
     bool has_vision = false;
     bool has_audio  = false;
 
+    mtmd_progress_callback progress_callback = nullptr;
+    void * progress_callback_user_data = nullptr;
+
     // TODO @ngxson : we should not pass clip_ctx here, it should be clip_model
-    clip_model_loader(const char * fname, bool skip_tensors = false) : fname(fname) {
+    clip_model_loader(const char * fname,
+            bool skip_tensors = false,
+            mtmd_progress_callback progress_cb = nullptr,
+            void * progress_user_data = nullptr)
+        : fname(fname),
+          progress_callback(progress_cb),
+          progress_callback_user_data(progress_user_data) {
         struct ggml_context * meta = nullptr;
 
         struct gguf_init_params params = {
@@ -1199,6 +1210,9 @@ struct clip_model_loader {
             {
                 std::vector<int> pinpoints;
                 get_arr_int(KEY_IMAGE_GRID_PINPOINTS, pinpoints, false);
+                if (pinpoints.size() % 2 != 0) {
+                    throw std::runtime_error(string_format("%s: image_grid_pinpoints must have an even number of elements, got %zu\n", __func__, pinpoints.size()));
+                }
                 if (!pinpoints.empty()) {
                     for (size_t i = 0; i < pinpoints.size(); i += 2) {
                         hparams.image_res_candidates.push_back({
@@ -1241,24 +1255,23 @@ struct clip_model_loader {
             }
 
             if (is_vision) {
-                int idx_mean = gguf_find_key(ctx_gguf.get(), KEY_IMAGE_MEAN);
-                int idx_std  = gguf_find_key(ctx_gguf.get(), KEY_IMAGE_STD);
-                GGML_ASSERT(idx_mean >= 0 && "image_mean not found");
-                GGML_ASSERT(idx_std >= 0  && "image_std not found");
-                const float * mean_data = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_mean);
-                const float * std_data  = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_std);
+                std::vector<float> image_mean;
+                std::vector<float> image_std;
+                get_arr_f32(KEY_IMAGE_MEAN, image_mean, false);
+                get_arr_f32(KEY_IMAGE_STD , image_std, false);
+                if (image_mean.size() < 3 || image_std.size() < 3) {
+                    throw std::runtime_error(string_format("%s: image_mean/image_std arrays must have at least 3 elements, got %zu and %zu\n", __func__, image_mean.size(), image_std.size()));
+                }
                 for (int i = 0; i < 3; ++i) {
-                    hparams.image_mean[i] = mean_data[i];
-                    hparams.image_std[i]  = std_data[i];
+                    hparams.image_mean[i] = image_mean[i];
+                    hparams.image_std[i]  = image_std[i];
                 }
             }
 
-            // Load the vision feature layer indices if they are explicitly provided;
-            // if multiple vision feature layers are present, the values will be concatenated
-            // to form the final visual features.
+            // Load the vision/audio feature layer indices if they are explicitly provided
             // NOTE: gguf conversions should standardize the values of the vision feature layer to
             // be non-negative, since we use -1 to mark values as unset here.
-            get_arr_int(KEY_FEATURE_LAYER, hparams.vision_feature_layer, false);
+            get_arr_int(string_format(KEY_FEATURE_LAYERS, prefix), hparams.feature_layers, false);
 
             // model-specific params
             switch (model.proj_type) {
@@ -1640,6 +1653,7 @@ struct clip_model_loader {
                         get_u32(KEY_A_PROJ_WINDOW_SIZE,     hparams.audio_proj_window_size);
                         get_u32(KEY_A_PROJ_DOWNSAMPLE_RATE, hparams.audio_proj_downsample_rate);
                         get_u32(KEY_A_PROJ_HEAD_COUNT,      hparams.audio_proj_head_count);
+                        // NOTE: feature layers loaded above in common path
                     } break;
                 case PROJECTOR_TYPE_JANUS_PRO:
                     {
@@ -1652,11 +1666,11 @@ struct clip_model_loader {
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
                         hparams.image_resize_pad = PAD_CEIL;
 
-                        get_arr_int(KEY_FEATURE_LAYER, hparams.vision_feature_layer);
+                        // NOTE: feature_layers loaded in common path as optional
                         get_arr_int(KEY_PROJ_SPATIAL_OFFSETS, hparams.proj_spatial_offsets);
-                        if (hparams.vision_feature_layer.size() != hparams.proj_spatial_offsets.size()) {
-                            throw std::runtime_error(string_format("%s: vision_feature_layer.size() %d != proj_spatial_offsets.size() %d",
-                                                                   hparams.vision_feature_layer.size(), hparams.proj_spatial_offsets.size()));
+                        if (hparams.feature_layers.size() != hparams.proj_spatial_offsets.size()) {
+                            throw std::runtime_error(string_format("%s: feature_layers.size() %d != proj_spatial_offsets.size() %d",
+                                                                   hparams.feature_layers.size(), hparams.proj_spatial_offsets.size()));
                         }
 
                         get_u32(KEY_PROJ_SAMPLE_QUERY_SIDE,  hparams.downsample_query_side);
@@ -1673,14 +1687,20 @@ struct clip_model_loader {
                     // note: some models having hparams.image_size == 0, which means the image size is dynamic
                     throw std::runtime_error(string_format("%s: image_size (%d) cannot be negative\n", __func__, hparams.image_size));
                 }
-                if (hparams.patch_size <= 0) {
-                    throw std::runtime_error(string_format("%s: patch_size (%d) must be greater than 0\n", __func__, hparams.patch_size));
+                if (hparams.image_size > 65536) {
+                    throw std::runtime_error(string_format("%s: image_size (%d) is too large (max 65536)\n", __func__, hparams.image_size));
+                }
+                if (hparams.patch_size <= 0 || hparams.patch_size >= 65536) {
+                    throw std::runtime_error(string_format("%s: patch_size (%d) must be positive and less than 65536\n", __func__, hparams.patch_size));
                 }
                 if (hparams.n_embd <= 0) {
                     throw std::runtime_error(string_format("%s: n_embd (%d) must be greater than 0\n", __func__, hparams.n_embd));
                 }
                 if (hparams.image_max_pixels < hparams.image_min_pixels) {
                     throw std::runtime_error(string_format("%s: image_max_pixels (%d) is less than image_min_pixels (%d)\n", __func__, hparams.image_max_pixels, hparams.image_min_pixels));
+                }
+                if (hparams.n_merge < 0 || hparams.n_merge >= 65536) {
+                    throw std::runtime_error(string_format("%s: n_merge (%d) must be greater than 0 and less than 65536\n", __func__, hparams.n_merge));
                 }
             }
 
@@ -1721,6 +1741,19 @@ struct clip_model_loader {
                 LOG_INF("%s: audio_n_fft:        %d\n", __func__, hparams.audio_n_fft);
                 LOG_INF("%s: audio_window_len:   %d\n", __func__, hparams.audio_window_len);
                 LOG_INF("%s: audio_hop_len:      %d\n", __func__, hparams.audio_hop_len);
+
+                // GEMMA4UA is encoder-free: it uses n_mel_bins as a raw-waveform frame size (640) and has no FFT/filterbank, so the mel-range and FFT
+                // checks below do not apply to it.
+                const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA;
+
+                // Validate audio hparams loaded from GGUF metadata
+                if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
+                    throw std::runtime_error(string_format("%s: n_mel_bins (%d) must be in range [1, 256]\n", __func__, hparams.n_mel_bins));
+                }
+                if (fft_based && (hparams.audio_sample_rate <= 0 || hparams.audio_n_fft <= 0 || hparams.audio_hop_len <= 0 || hparams.audio_window_len <= 0)) {
+                    throw std::runtime_error(string_format("%s: audio hparams invalid: sample_rate=%d n_fft=%d window_len=%d hop_len=%d\n",
+                        __func__, hparams.audio_sample_rate, hparams.audio_n_fft, hparams.audio_window_len, hparams.audio_hop_len));
+                }
             }
             LOG_INF("\n");
             LOG_INF("%s: model size:         %.2f MiB\n", __func__, model_size / 1024.0 / 1024.0);
@@ -1734,7 +1767,7 @@ struct clip_model_loader {
         std::map<std::string, size_t> tensor_offset;
         std::vector<ggml_tensor *> tensors_to_load;
 
-        auto fin = std::ifstream(fname, std::ios::binary);
+        auto fin = open_ifstream_binary(fname);
         if (!fin) {
             throw std::runtime_error(string_format("%s: failed to open %s\n", __func__, fname.c_str()));
         }
@@ -2713,7 +2746,7 @@ struct clip_model_loader {
                     model.image_newline = get_tensor(TN_IMAGE_NEWLINE);
 
                     // Load separate layerwise and spatial projector tensors
-                    const auto projector_count = hparams.vision_feature_layer.size();
+                    const auto projector_count = hparams.feature_layers.size();
                     model.qf_proj_blocks.resize(projector_count);
                     for (size_t bid = 0; bid < projector_count; ++bid) {
                         auto & b = model.qf_proj_blocks[bid];
@@ -2769,37 +2802,60 @@ struct clip_model_loader {
         }
 
         // load data
-        if (!ctx_clip.no_alloc) {
+        {
             std::vector<uint8_t> read_buf;
+
+            // start loading event
+            if (progress_callback){
+                progress_callback(0.0, progress_callback_user_data);
+            }
+
+            // compute total tensor data size for progress reporting
+            size_t total_data_size = 0;
+            for (auto & t : tensors_to_load) {
+                total_data_size += ggml_nbytes(t);
+            }
 
             // alloc memory and offload data
             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
             ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
             ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-            for (auto & t : tensors_to_load) {
-                ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
-                GGML_ASSERT(cur && "tensor not found in ctx_data");
-                auto it_off = tensor_offset.find(t->name);
-                GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
-                const size_t offset = it_off->second;
-                fin.seekg(offset, std::ios::beg);
-                if (!fin) {
-                    throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
+            // read the weight from file
+            if (!ctx_clip.no_alloc) {
+                size_t data_loaded = 0;
+                for (auto & t : tensors_to_load) {
+                    ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+                    GGML_ASSERT(cur && "tensor not found in ctx_data");
+                    auto it_off = tensor_offset.find(t->name);
+                    GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
+                    const size_t offset = it_off->second;
+                    fin.seekg(offset, std::ios::beg);
+                    if (!fin) {
+                        throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
+                    }
+                    size_t num_bytes = ggml_nbytes(cur);
+                    if (ggml_backend_buft_is_host(buft)) {
+                        // for the CPU and Metal backend, we can read directly into the tensor
+                        fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
+                    } else {
+                        // read into a temporary buffer first, then copy to device memory
+                        read_buf.resize(num_bytes);
+                        fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
+                        ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
+                    }
+                    data_loaded += num_bytes;
+                    if (progress_callback && total_data_size > 0) {
+                        const float progress = (float)data_loaded / (float)total_data_size;
+                        if (!progress_callback(progress, progress_callback_user_data)) {
+                            throw std::runtime_error(string_format("%s: model loading cancelled by progress_callback\n", __func__));
+                        }
+                    }
                 }
-                size_t num_bytes = ggml_nbytes(cur);
-                if (ggml_backend_buft_is_host(buft)) {
-                    // for the CPU and Metal backend, we can read directly into the tensor
-                    fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
-                } else {
-                    // read into a temporary buffer first, then copy to device memory
-                    read_buf.resize(num_bytes);
-                    fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
-                    ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
-                }
+                LOG_DBG("%s: loaded %zu tensors from %s\n", __func__, tensors_to_load.size(), fname.c_str());
+            } else {
+                LOG_DBG("%s: no_alloc is set, skipping tensor data loading (%zu tensors)\n", __func__, tensors_to_load.size());
             }
             fin.close();
-
-            LOG_DBG("%s: loaded %zu tensors from %s\n", __func__, tensors_to_load.size(), fname.c_str());
         }
 
     }
@@ -2819,20 +2875,40 @@ struct clip_model_loader {
         std::vector<support_info_op> ops;
     };
 
-    static void warmup(clip_ctx & ctx_clip) {
+    static clip_image_f32_batch get_dummy_batch(clip_ctx & ctx_clip) {
         // create a fake batch
         const auto & hparams = ctx_clip.model.hparams;
         clip_image_f32_batch batch;
-        clip_image_f32_ptr img(clip_image_f32_init());
+        clip_image_f32 img;
         if (ctx_clip.model.modality == CLIP_MODALITY_VISION) {
             const int sz = hparams.warmup_image_size;
-            img->set_size({sz, sz}, false, false);
+            img.set_size({sz, sz}, false, false);
             LOG_INF("%s: warmup with image size = %d x %d\n", __func__, sz, sz);
         } else {
-            img->set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
+            // GEMMA4UA uses n_mel_bins as a raw-waveform frame size (640), not a mel-bin count,
+            // so the [1, 256] bound only applies to FFT-based models.
+            const bool fft_based = ctx_clip.model.proj_type != PROJECTOR_TYPE_GEMMA4UA;
+            if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
+                throw std::runtime_error(string_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
+            }
+            img.set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
             LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
         }
-        batch.entries.push_back(std::move(img));
+        batch.entries.push_back(img);
+        return batch;
+    }
+
+    static void init_ctx(clip_ctx & ctx_clip) {
+        ctx_clip.buf_compute_meta.resize(ctx_clip.max_nodes * ggml_tensor_overhead() + ggml_graph_overhead());
+
+        // check batching support
+        auto batch = get_dummy_batch(ctx_clip);
+        auto builder = clip_get_graph_builder(&ctx_clip, batch);
+        ctx_clip.support_batch = builder->support_batch();
+    }
+
+    static void warmup(clip_ctx & ctx_clip) {
+        auto batch = get_dummy_batch(ctx_clip);
         warmup(ctx_clip, batch);
     }
 
@@ -2905,9 +2981,7 @@ struct clip_model_loader {
 
     // only initialize backend buffers, but do not allocate them yet
     static support_info_graph reserve_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
-        ctx_clip.buf_compute_meta.resize(ctx_clip.max_nodes * ggml_tensor_overhead() + ggml_graph_overhead());
-
-        ggml_cgraph * gf = clip_image_build_graph(&ctx_clip, batch);
+        ggml_cgraph * gf = clip_get_graph_builder(&ctx_clip, batch)->build();
         ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
 
         ctx_clip.mem_compute.clear();
@@ -2980,7 +3054,13 @@ struct clip_model_loader {
             }
             return;
         }
-        output = gguf_get_val_u32(ctx_gguf.get(), i);
+        const uint32_t val = gguf_get_val_u32(ctx_gguf.get(), i);
+        // sanity check
+        if (val > (uint32_t) INT32_MAX) {
+            throw std::runtime_error(string_format("%s: value %u for key '%s' exceeds INT32_MAX\n",
+                __func__, val, key.c_str()));
+        }
+        output = (int) val;
     }
 
     void get_f32(const std::string & key, float & output, bool required = true) const {
@@ -2992,6 +3072,29 @@ struct clip_model_loader {
             return;
         }
         output = gguf_get_val_f32(ctx_gguf.get(), i);
+    }
+
+    void get_arr_f32(const std::string & key, std::vector<float> & output, bool required = true) const {
+        const int i = gguf_find_key(ctx_gguf.get(), key.c_str());
+        if (i < 0) {
+            if (required) {
+                throw std::runtime_error("Key not found: " + key);
+            }
+            return;
+        }
+        const auto type = gguf_get_arr_type(ctx_gguf.get(), i);
+        if (type != GGUF_TYPE_FLOAT32) {
+            throw std::runtime_error(string_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_FLOAT32)\n", __func__, key.c_str(), type, GGUF_TYPE_FLOAT32));
+        }
+        const size_t n = gguf_get_arr_n(ctx_gguf.get(), i);
+        if (n > (size_t) std::numeric_limits<int>::max()) {
+            throw std::runtime_error(string_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
+        }
+        output.resize(n);
+        const float * values = (const float *)gguf_get_arr_data(ctx_gguf.get(), i);
+        for (size_t j = 0; j < n; ++j) {
+            output[j] = values[j];
+        }
     }
 
     void get_string(const std::string & key, std::string & output, bool required = true) const {
@@ -3013,11 +3116,18 @@ struct clip_model_loader {
             }
             return;
         }
-        int n = gguf_get_arr_n(ctx_gguf.get(), i);
+        const auto type = gguf_get_arr_type(ctx_gguf.get(), i);
+        if (type != GGUF_TYPE_INT32) {
+            throw std::runtime_error(string_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_INT32)\n", __func__, key.c_str(), type, GGUF_TYPE_INT32));
+        }
+        const size_t n = gguf_get_arr_n(ctx_gguf.get(), i);
+        if (n > (size_t) std::numeric_limits<int>::max()) {
+            throw std::runtime_error(string_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
+        }
         output.resize(n);
         const int32_t * values = (const int32_t *)gguf_get_arr_data(ctx_gguf.get(), i);
-        for (int i = 0; i < n; ++i) {
-            output[i] = values[i];
+        for (size_t j = 0; j < n; ++j) {
+            output[j] = values[j];
         }
     }
 
@@ -3063,13 +3173,17 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
     clip_ctx * ctx_audio = nullptr;
 
     try {
-        clip_model_loader loader(fname);
+        clip_model_loader loader(fname,
+            /* skip_tensors */ false,
+            ctx_params.progress_callback,
+            ctx_params.progress_callback_user_data);
         bool skip_audio = false;
 
         if (loader.has_vision) {
             ctx_vision = new clip_ctx(ctx_params);
             loader.load_hparams(ctx_vision->model, CLIP_MODALITY_VISION);
             loader.load_tensors(*ctx_vision);
+            loader.init_ctx(*ctx_vision);
             if (ctx_params.warmup) {
                 loader.warmup(*ctx_vision);
             }
@@ -3083,6 +3197,7 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             ctx_audio = new clip_ctx(ctx_params);
             loader.load_hparams(ctx_audio->model, CLIP_MODALITY_AUDIO);
             loader.load_tensors(*ctx_audio);
+            loader.init_ctx(*ctx_audio);
             if (ctx_params.warmup) {
                 loader.warmup(*ctx_audio);
             }
@@ -3108,64 +3223,6 @@ struct clip_cap clip_get_cap(const char * fname) {
     return res;
 }
 
-struct clip_image_size * clip_image_size_init() {
-    struct clip_image_size * load_image_size = new struct clip_image_size();
-    load_image_size->width = 448;
-    load_image_size->height = 448;
-    return load_image_size;
-}
-
-struct clip_image_u8 * clip_image_u8_init() {
-    return new clip_image_u8();
-}
-
-struct clip_image_f32 * clip_image_f32_init() {
-    return new clip_image_f32();
-}
-
-struct clip_image_f32_batch * clip_image_f32_batch_init() {
-    return new clip_image_f32_batch();
-}
-
-void clip_image_size_free(struct clip_image_size * load_image_size) {
-    if (load_image_size == nullptr) {
-        return;
-    }
-    delete load_image_size;
-}
-void clip_image_u8_free(struct clip_image_u8  * img) { delete img; }
-void clip_image_f32_free(struct clip_image_f32 * img) { delete img; }
-void clip_image_u8_batch_free(struct clip_image_u8_batch * batch) { delete batch; }
-void clip_image_f32_batch_free(struct clip_image_f32_batch * batch) { delete batch; }
-
-size_t clip_image_f32_batch_n_images(const struct clip_image_f32_batch * batch) {
-    return batch->entries.size();
-}
-
-size_t clip_image_f32_batch_nx(const struct clip_image_f32_batch * batch, int idx) {
-    if (idx < 0 || idx >= (int)batch->entries.size()) {
-        LOG_ERR("%s: invalid index %d\n", __func__, idx);
-        return 0;
-    }
-    return batch->entries[idx]->nx();
-}
-
-size_t clip_image_f32_batch_ny(const struct clip_image_f32_batch * batch, int idx) {
-    if (idx < 0 || idx >= (int)batch->entries.size()) {
-        LOG_ERR("%s: invalid index %d\n", __func__, idx);
-        return 0;
-    }
-    return batch->entries[idx]->ny();
-}
-
-clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batch, int idx) {
-    if (idx < 0 || idx >= (int)batch->entries.size()) {
-        LOG_ERR("%s: invalid index %d\n", __func__, idx);
-        return nullptr;
-    }
-    return batch->entries[idx].get();
-}
-
 void clip_free(clip_ctx * ctx) {
     if (ctx == nullptr) {
         return;
@@ -3173,23 +3230,11 @@ void clip_free(clip_ctx * ctx) {
     delete ctx;
 }
 
-int32_t clip_get_image_size(const struct clip_ctx * ctx) {
-    return ctx->model.hparams.image_size;
-}
-
-int32_t clip_get_patch_size(const struct clip_ctx * ctx) {
-    return ctx->model.hparams.patch_size;
-}
-
-int32_t clip_get_hidden_size(const struct clip_ctx * ctx) {
-    return ctx->model.hparams.n_embd;
-}
-
 const char * clip_patch_merge_type(const struct clip_ctx * ctx) {
     return ctx->model.hparams.mm_patch_merge_type == PATCH_MERGE_SPATIAL_UNPAD ? "spatial_unpad" : "flat";
 }
 
-int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
+int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img) {
     const auto & params = ctx->model.hparams;
     const int n_total = clip_n_output_tokens(ctx, img);
     const auto & proj = ctx->proj_type();
@@ -3212,7 +3257,7 @@ int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * 
     return n_total;
 }
 
-int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
+int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img) {
     const auto & params = ctx->model.hparams;
     const auto & proj = ctx->proj_type();
     switch (proj) {
@@ -3234,7 +3279,7 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
     return 1;
 }
 
-int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
+int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
     const auto & params = ctx->model.hparams;
 
     // for models with fixed size image, the input image is already pre-processed and resized to square
@@ -3356,8 +3401,8 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             {
                 // dynamic size
                 int n_merge = ctx->model.hparams.n_merge;
-                int n_patches_x = img->nx() / patch_size / (n_merge > 0 ? n_merge : 1);
-                int n_patches_y = img->ny() / patch_size / (n_merge > 0 ? n_merge : 1);
+                int n_patches_x = img->nx() / patch_size / n_merge;
+                int n_patches_y = img->ny() / patch_size / n_merge;
                 if (ctx->model.token_embd_img_break) {
                     n_patches = n_patches_y * n_patches_x + n_patches_y - 1; // + one [IMG_BREAK] per row, except the last row
                 } else {
@@ -3484,25 +3529,21 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
     return n_patches;
 }
 
-bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f32 * img, float * vec) {
+bool clip_image_encode(struct clip_ctx * ctx, int n_threads, const clip_image_f32 * img, std::vector<float> & out_vec) {
     clip_image_f32_batch imgs;
-    clip_image_f32_ptr img_copy(clip_image_f32_init());
-    *img_copy = *img;
+    clip_image_f32 img_copy = *img;
     imgs.entries.push_back(std::move(img_copy));
 
-    return clip_image_batch_encode(ctx, n_threads, &imgs, vec);
+    return clip_image_batch_encode(ctx, n_threads, &imgs, out_vec);
 }
 
-bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32_batch * imgs_c_ptr, std::vector<float> & out_batch_embd) {
     const clip_image_f32_batch & imgs = *imgs_c_ptr;
     int n_batch_cur = imgs.entries.size();
 
-    // maximum supported batch size, usually == 2 for qwen-vl-based models
-    int n_batch_max = clip_model_n_batch_max(ctx);
-
-    // TODO @ngxson : implement batch size > 1 as a loop
-    //                we don't need true batching support because the cgraph will gonna be big anyway
-    if (n_batch_cur > n_batch_max) {
+    // [QWEN_VIDEO] for video models, the batch dimension is used as temporal dimension for merged frames
+    if (!ctx->support_batch && n_batch_cur > clip_model_n_temporal_merge(ctx)) {
+        LOG_ERR("%s: batch size %d exceeds maximum supported batch/temporal-merge size %d\n", __func__, n_batch_cur, clip_model_n_temporal_merge(ctx));
         return false;
     }
 
@@ -3513,15 +3554,15 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
     // build the inference graph
     ggml_backend_sched_reset(ctx->sched.get());
-    ggml_cgraph * gf = clip_image_build_graph(ctx, imgs);
+    ggml_cgraph * gf = clip_get_graph_builder(ctx, imgs)->build();
     ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
 
     // set inputs
     const auto & model   = ctx->model;
     const auto & hparams = model.hparams;
 
-    const int image_size_width  = imgs.entries[0]->nx();
-    const int image_size_height = imgs.entries[0]->ny();
+    const int image_size_width  = imgs.entries[0].nx();
+    const int image_size_height = imgs.entries[0].ny();
 
     const int patch_size    = hparams.patch_size;
     const int num_patches   = ((image_size_width / patch_size) * (image_size_height / patch_size));
@@ -3559,7 +3600,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     if (!imgs.is_audio) {
         size_t nelem = 0;
         for (const auto & img : imgs.entries) {
-            nelem += img->nx() * img->ny() * 3;
+            nelem += img.nx() * img.ny() * 3;
         }
         std::vector<float> inp_raw(nelem);
 
@@ -3577,12 +3618,13 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         // IMPORTANT: [QWEN_VIDEO] the batch dim is currently used for temporal dim in Qwen-VL models
         // All entries must have the same spatial size (enforced by can_batch_with() during merging)
         {
-            const int nx = imgs.entries[0]->nx();
-            const int ny = imgs.entries[0]->ny();
+            const int nx = imgs.entries[0].nx();
+            const int ny = imgs.entries[0].ny();
             const int n  = nx * ny;
 
             for (int b = 0; b < n_batch_cur; b++) {
-                const auto & buf = imgs.entries[b]->get_ro_buf();
+                LOG_DBG("%s: copying image %d/%d to input buffer (nx=%d, ny=%d)\n", __func__, b+1, n_batch_cur, nx, ny);
+                const auto & buf = imgs.entries[b].get_ro_buf();
                 float * batch_entry = inp_raw.data() + b * (3*n);
                 for (int y = 0; y < ny; y++) {
                     for (int x = 0; x < nx; x++) {
@@ -3602,9 +3644,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         GGML_ASSERT(imgs.entries.size() == 1);
 
         const auto & mel_inp = imgs.entries[0];
-        const auto & buf = mel_inp->get_ro_buf();
-        const int n_step = mel_inp->nx();
-        const int n_mel  = mel_inp->ny();
+        const auto & buf = mel_inp.get_ro_buf();
+        const int n_step = mel_inp.nx();
+        const int n_mel  = mel_inp.ny();
         GGML_ASSERT((size_t)n_step * n_mel == buf.size());
 
         set_input_f32("inp_raw", buf);
@@ -4218,7 +4260,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 GGML_ASSERT(imgs.entries.size() == 1);
                 const auto & img0 = imgs.entries.front();
                 // Compute n_pos matching SSCP output: two stride-2 convs
-                int n_pos = img0->nx();
+                int n_pos = img0.nx();
                 for (int i = 0; i < 2; i++) { n_pos = (n_pos - 1) / 2 + 1; }
 
                 // Chunked local attention: blocked causal mask and RPE
@@ -4266,7 +4308,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_LFM2A:
             {
                 GGML_ASSERT(imgs.entries.size() == 1);
-                const auto n_frames = clip_n_output_tokens(ctx, imgs.entries.front().get());
+                const auto n_frames = clip_n_output_tokens(ctx, &imgs.entries.front());
 
                 auto d_model = 512;
                 auto seq_len = n_frames * 2 - 1;
@@ -4324,7 +4366,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 // reshapes as ggml_get_rows gathers. The names are set
                 // by g4v_gather() in models/granite4-vision.cpp.
                 const int patch_size  = model.hparams.patch_size;
-                const int image_side  = imgs.entries.front()->nx() / patch_size;
+                const int image_side  = imgs.entries.front().nx() / patch_size;
                 const int window_side = hparams.downsample_window_side;
                 const int query_side  = hparams.downsample_query_side;
                 const int n           = image_side / window_side;
@@ -4382,7 +4424,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
                 // Stage 1b only uses block 0's permutations; future stages
                 // will upload all blocks.
-                for (size_t bid = 0; bid < hparams.vision_feature_layer.size(); ++bid) {
+                for (size_t bid = 0; bid < hparams.feature_layers.size(); ++bid) {
                     const std::string prefix = "g4v_blk" + std::to_string(bid) + "_";
                     upload(prefix + "win_idx",     make_win_idx(image_side, window_side));
                     upload(prefix + "qwin_idx",    make_win_idx(new_side, query_side));
@@ -4416,24 +4458,34 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     // the last node is the embedding tensor
     ggml_tensor * embeddings = ggml_graph_node(gf, -1);
 
-    // sanity check (only support batch size of 1 for now)
+    // sanity check (assuming that all images in batch have the same number of tokens, so we only check the first one)
     const int n_tokens_out = embeddings->ne[1];
-    const int expected_n_tokens_out = clip_n_output_tokens(ctx, imgs.entries[0].get());
+    const int expected_n_tokens_out = clip_n_output_tokens(ctx, &imgs.entries[0]);
     if (n_tokens_out != expected_n_tokens_out) {
         LOG_ERR("%s: expected output %d tokens, got %d\n", __func__, expected_n_tokens_out, n_tokens_out);
         GGML_ABORT("Invalid number of output tokens");
     }
 
-    // copy the embeddings to the location passed by the user
-    if (vec != nullptr) {
-        ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
+    LOG_DBG("%s: output embedding shape [%d, %d, %d]\n", __func__,
+        (int)embeddings->ne[0], (int)embeddings->ne[1], (int)embeddings->ne[2]);
+
+    // copy output to user buffer if provided
+    // if output is empty, skip the copy
+    if (!out_batch_embd.empty()) {
+        if (out_batch_embd.size() != (size_t)ggml_nelements(embeddings)) {
+            LOG_ERR("%s: output buffer has %zu elements but expected %zu\n", __func__, out_batch_embd.size(), (size_t)ggml_nelements(embeddings));
+            GGML_ABORT("Output buffer size mismatch");
+        }
+        ggml_backend_tensor_get(embeddings, out_batch_embd.data(), 0, ggml_nbytes(embeddings));
+    } else {
+        LOG_WRN("%s: output buffer is empty, skipping copy\n", __func__);
     }
 
     // Debug: dump final embeddings if MTMD_DEBUG_EMBEDDINGS is set
     if (ctx->debug_output_embeddings) {
         const int64_t n_embd = embeddings->ne[0];
         const int64_t n_tokens = embeddings->ne[1];
-        std::vector<float> emb_data(n_embd * n_tokens);
+        std::vector<float> emb_data(ggml_nelements(embeddings));
         ggml_backend_tensor_get(embeddings, emb_data.data(), 0, ggml_nbytes(embeddings));
 
         LOG_INF("\n=== MTMD_DEBUG_EMBEDDINGS ===\n");
@@ -4570,7 +4622,14 @@ bool clip_has_audio_encoder(const struct clip_ctx * ctx) {
     return ctx->model.modality == CLIP_MODALITY_AUDIO;
 }
 
-int clip_model_n_batch_max(const struct clip_ctx * ctx) {
+bool clip_support_batch(const struct clip_ctx * ctx) {
+    return ctx->support_batch;
+}
+
+// TODO @ngxson : this is no longer correct with mtmd_batch API
+// this was only meant to be used by qwen-vl-based models, to fuse 2 input images into one (qwen-vl video support)
+// this logic should be refactored in near future to distinctly handle "merge frames" and "batching"
+int clip_model_n_temporal_merge(const struct clip_ctx * ctx) {
     switch (ctx->proj_type()) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:

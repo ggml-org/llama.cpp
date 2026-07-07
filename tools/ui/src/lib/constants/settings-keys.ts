@@ -32,7 +32,9 @@ export const SETTINGS_KEYS = {
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',
+	SHOW_BUILD_VERSION: 'showBuildVersion',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
+	RENDER_THINKING_AS_MARKDOWN: 'renderThinkingAsMarkdown',
 	// Sampling
 	TEMPERATURE: 'temperature',
 	DYNATEMP_RANGE: 'dynatemp_range',
@@ -58,6 +60,7 @@ export const SETTINGS_KEYS = {
 	// MCP
 	MCP_SERVERS: 'mcpServers',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
+	MCP_DEFAULT_SERVER_OVERRIDES: 'mcpDefaultServerOverrides',
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
 	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
 	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',
@@ -67,7 +70,6 @@ export const SETTINGS_KEYS = {
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
-	ENABLE_THINKING: 'enableThinking',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',

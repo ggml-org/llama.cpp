@@ -185,7 +185,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,              10000.0f);
         // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
-    } else if (arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
+    } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
@@ -322,6 +322,7 @@ static std::vector<float> get_logits(
 static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_LLAMA4:
+        case LLM_ARCH_COHERE2MOE:
         case LLM_ARCH_GROK:
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3MOE:
@@ -411,6 +412,9 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_DEEPSEEK2OCR) {
         return false;
     }
+    if (arch == LLM_ARCH_DEEPSEEK4) {
+        return false;
+    }
 
     // FIXME some models are segfaulting with WebGPU:
 #ifdef GGML_USE_WEBGPU
@@ -449,6 +453,9 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
         }
         if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
             continue; // FIXME: ISWA KV cache initialization needs more fixture params
+        }
+        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH) {
+            continue;
         }
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
@@ -552,6 +559,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
         }
         if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
             continue; // FIXME: ISWA KV cache initialization needs more fixture params
+        }
+        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH) {
+            continue;
         }
 
         const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;

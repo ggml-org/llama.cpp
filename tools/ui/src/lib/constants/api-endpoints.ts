@@ -1,7 +1,8 @@
 export const API_MODELS = {
 	LIST: '/v1/models',
 	LOAD: '/models/load',
-	UNLOAD: '/models/unload'
+	UNLOAD: '/models/unload',
+	SSE: '/models/sse'
 };
 
 // chat completion routes, the control route drives realtime inference (e.g. end reasoning)
@@ -22,6 +23,11 @@ export const API_TOOLS = {
 
 export const API_PROPS = {
 	LIST: '/props'
+};
+
+export const API_STREAM = {
+	BASE: '/v1/stream',
+	LOOKUP: '/v1/streams/lookup'
 };
 
 /** CORS proxy endpoint path */
