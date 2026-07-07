@@ -485,3 +485,59 @@ the 2026-07-02 source doc §4 L396-400.
 check for model #3) — separate turn.
 
 ---
+
+## 2026-07-07 — P1.6 — MoE dispatch check for model #3 (PASS, no port work needed)
+
+Verified whether Raudbjorn-fork has MUL_MAT_ID SYCL dispatch — yes, present
+and operational for Qwen3-Coder-30B-A3B. The earlier-session concern that the
+fork might be silently falling back to CPU for MoE experts is not borne
+out by source: the SYCL backend has a complete handler chain, the graph
+emitter routes MoE tensors through it, and the Q3_K_XL expert weights pass
+every supports_op precondition.
+
+What ran: four-grep evidence chain.
+
+1. ggml-sycl.cpp SYCL handlers — 4 sites: L4706 op-dispatch
+   (ggml_sycl_mul_mat_id), L5021 graph-allowed (comment: mul_mat_id does a
+   blocking host wait, incompatible with graph recording), L5295 supports-op,
+   L5605 buffer-size query. Cross-checked against TheTom fork and FellypeMelo
+   fork — identical structure, no divergence on this op.
+2. src/llama-arch.cpp:726-732 — LLM_TENSOR_FFN_{DOWN,GATE,UP}_EXPS and
+   CHEXPS variants map to GGML_OP_MUL_MAT_ID. Qwen3-Coder-30B-A3B is
+   qwen3moe arch and uses these tensor types.
+3. src/llama-graph.cpp:1118-1145 — build_lora_mm_id is the wrapper that
+   calls ggml_mul_mat_id (L1120/1131/1133); build_moe_ffn at L1421/1440
+   uses this path. The MoE FFN is built through build_moe_ffn, not a
+   manual ggml_mul_mat_id call from llama.cpp.
+4. ggml-sycl.cpp:5295-5328 supports_op — verified the two TODO exclusion
+   branches both require src0_type == GGML_TYPE_F16 (Qwen3 experts are
+   Q3_K_XL, not F16, so neither fires); the Q1_0/Q2_0 type rejection
+   (L5301) does not apply; the TQ3_1S/TQ4_1S short-circuit (L5305) is also
+   irrelevant. MUL_MAT_ID returns TRUE for Qwen3 at runtime.
+
+Empirical evidence: P0.2 sub-task 3 already ran Qwen3 on this exact
+binary with -ngl 99 and got PPL 8.7094 ± 0.858 over 4 chunks (4 chunks
+in 23.8 s, no crash, no device-lost). If MUL_MAT_ID were broken, the MoE
+experts would error or the run would have aborted. So the SYCL MoE path
+is empirically correct on this stack for this model.
+
+Result: P1.6 closed. No new port work needed for P1 [model 3].
+The P1 [model 3] sub-task 1 full-corpus PPL run will exercise MUL_MAT_ID
+at full scale and is the real verification of the SYCL MoE path; the
+only documented gotcha is the per-shape permutation edge case in
+supports_op (oneDNN F16-specific), which the Q3_K_XL experts will not
+hit. Flag in the P1 [model 3] sub-task 1 result if anything looks off,
+but no separate port task.
+
+Earlier-session follow-up bullet was unnecessary: the older advisory
+that suggested a new "decide whether to pull upstream 60b68a627 / 225088ea7
+or document hybrid path" task was drafted against a wrong premise
+("zero MUL_MAT_ID hits in ggml-sycl/"). The grep actually returns 1 file
+per fork (ggml-sycl.cpp itself) at 4 handler sites. Per the loop rule
+that inherited research/prior-session load-bearing claims get
+spot-checked against current source, the spot-check invalidated the
+advisory and it should not be enshrined as a follow-up. If a future
+P1 [model 3] run shows MUL_MAT_ID actually falling back to CPU at
+scale, add the port task then — speculation is not scope.
+
+---
