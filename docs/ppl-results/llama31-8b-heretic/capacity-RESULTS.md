@@ -26,6 +26,36 @@ max ctx 311552, ratio 3.79×). The capacity difference is purely
 The 16 GB Arc A770 has a single VRAM limit; how much context that
 holds is determined by KV bits per token.
 
+
+
+## turbo2 Boundary V caveat (load-bearing for the reframe)
+
+The binary **silently auto-enables "Boundary V mode 7" for turbo2**:
+first 2 and last 2 transformer layers use  V-cache, the rest
+(28 of 32 layers = 87.5%) use pure turbo2 V-cache. The K-cache is
+pure turbo2 across all 32 layers. Triggered at init time (see
+ L753:
+
+and
+).
+
+**Implications for the capacity-gain claim:**
+- The 6.38× turbo2/f16 capacity ratio is for the **auto-mode** (first/last
+  2 layers in q8_0, rest in turbo2), not pure turbo2. The boundary
+  q8_0 layers take ~2× the bytes of pure turbo2, so the **pure-turbo2
+  ratio would be higher** if Boundary V were disabled
+  ().
+- The +41% turbo2 PPL cost is also for the auto-mode. Pure turbo2
+  would have higher PPL cost (q8_0 boundary layers help quality on
+  the most-attended first/last layers).
+- **turbo3, turbo4, q8_0, q4_0, f16 are all pure (no Boundary V)** —
+  the auto-mode is turbo2-specific. turbo4/f16 = 3.79× ratio is for
+  pure turbo4 (no inflation/deflation).
+
+**Same caveat applies to mistral-7b** (same binary, same Boundary V
+auto-enable for turbo2). The 6.37× mistral-7b turbo2/f16 ratio is
+also for the auto-mode.
+
 ## Cross-model comparison (single-stream, n_par=1)
 
 | Model | f16 | q4_0 | turbo2 | turbo3 | turbo4 | turbo4/f16 | q4_0/f16 |

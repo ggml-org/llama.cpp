@@ -56,6 +56,35 @@ f16 and turbo* matches the theoretical KV bytes/token ratio within
 ~5% rounding error (e.g. theoretical 0.250/0.0625 = 4.00×, observed
 82304/311552 = 3.79× → 95% of theoretical).
 
+
+
+## turbo2 Boundary V caveat (load-bearing for the reframe)
+
+The binary **silently auto-enables "Boundary V mode 7" for turbo2**:
+first 2 and last 2 transformer layers use  V-cache, the rest
+(30 of 32 layers = 93.75%) use pure turbo2 V-cache. The K-cache is
+pure turbo2 across all 32 layers. Triggered at init time (see
+):
+
+and
+.
+
+**Implications for the capacity-gain claim:**
+- The 6.37× turbo2/f16 capacity ratio is for the **auto-mode** (first/last
+  2 layers in q8_0, rest in turbo2), not pure turbo2. Pure turbo2
+  would have a higher ratio (q8_0 boundary layers take ~2× the bytes
+  of pure turbo2).
+- The +6.40% turbo2 PPL cost is also for the auto-mode. Pure turbo2
+  would have higher PPL cost (q8_0 boundary layers help quality on
+  the most-attended first/last layers).
+- **turbo3, turbo4, q8_0, q4_0, f16 are all pure (no Boundary V)** —
+  the auto-mode is turbo2-specific. turbo4/f16 = 3.79× ratio is for
+  pure turbo4 (no inflation/deflation).
+
+**Same caveat applies to llama31-8b** (same binary, same Boundary V
+auto-enable for turbo2). The 6.38× llama31-8b turbo2/f16 ratio is
+also for the auto-mode.
+
 ## What the numbers DON'T measure (caveats)
 
 - **Concurrent sequences axis (deferred to P1.8).** v10 used

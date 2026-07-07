@@ -802,3 +802,39 @@ matmul (src/llama-arch.cpp:726-732), so the MoE FFN path uses the
 real MUL_MAT_ID SYCL handler — no separate port work needed.
 
 ---
+
+## 2026-07-07 — Boundary V auto-mode caveat (turbo2) — load-bearing for P2 reframe
+
+While archiving P1 [model 2] sub-task 3, a real new finding from the
+capacity sweep logs: the binary **silently auto-enables "Boundary V
+mode 7" for turbo2** — first 2 and last 2 transformer layers use
+`q8_0` V-cache, the rest (28/32 = 87.5% on llama31-8b, 30/32 = 93.75%
+on mistral-7b) use pure turbo2 V-cache. K-cache is pure turbo2 across
+all 32 layers. Triggered at init time:
+
+  llama_kv_cache: Boundary V auto-enabled for turbo2-V (opt-out: TURBO_LAYER_ADAPTIVE=0)
+  llama_kv_cache: Boundary V mode 7: first2+last2 V=q8_0, rest V=turbo2
+
+Found in BOTH models' turbo2 capacity sweep logs
+(`sweep-logs/llama31-8b-cap/turbo2_np1_c*.log` and
+`sweep-logs/mistral-7b-cap/turbo2_*.log`).
+NOT in turbo3, turbo4, q8_0, q4_0, or f16 logs.
+
+**Implications for the capacity-gain claim:**
+- The 6.37-6.38x turbo2/f16 capacity ratio (both models) is for the
+  AUTO-MODE (first/last 2 layers in q8_0, rest in turbo2), not pure
+  turbo2. Pure turbo2 would have a HIGHER ratio (q8_0 boundary layers
+  take ~2x the bytes of pure turbo2, so the boundary q8_0 layers
+  inflate the KV footprint and deflate the ratio).
+- The +6.4% (mistral-7b) and +41% (llama31-8b) turbo2 PPL costs are
+  also for the auto-mode. Pure turbo2 would have HIGHER PPL cost
+  (q8_0 boundary layers help quality on the most-attended first/last
+  layers, so removing them would increase the PPL cost).
+- **turbo3, turbo4, q8_0, q4_0, f16 are all pure (no Boundary V)** —
+  the auto-mode is turbo2-specific. The 3.79x turbo4/f16 ratio is
+  for pure turbo4 (no inflation/deflation).
+
+Added the caveat to BOTH `capacity-RESULTS.md` files (model 1 +
+model 2) so the P2 consolidation deliverable carries the nuance.
+
+---
