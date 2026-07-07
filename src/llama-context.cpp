@@ -52,6 +52,10 @@ llama_context::llama_context(
     }
 
     cparams.n_rs_seq = params.n_rs_seq;
+    // DSV4: default to its 1-token rollback bound so it is classified RS (keeps checkpoints).
+    if (cparams.n_rs_seq == 0 && model.arch == LLM_ARCH_DEEPSEEK4) {
+        cparams.n_rs_seq = 1;
+    }
     if (cparams.n_rs_seq > 0 && !llm_arch_supports_rs_rollback(model.arch)) {
         LLAMA_LOG_DEBUG("%s: n_rs_seq=%u requested but model arch does not support recurrent partial rollback; clamping to 0\n",
                         __func__, cparams.n_rs_seq);

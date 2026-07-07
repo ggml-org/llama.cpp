@@ -967,6 +967,8 @@ bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
+        // DSV4: keep checkpoints enabled.
+        case LLM_ARCH_DEEPSEEK4:
             return true;
         default:
             return false;
