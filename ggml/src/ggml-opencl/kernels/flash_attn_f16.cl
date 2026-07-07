@@ -10,7 +10,12 @@
 #define DK_VEC (DK/4)
 #define DV_VEC (DV/4)
 #define WG_SIZE (BLOCK_M)
-#define Q1_WG_SIZE 64
+// q1 reduces over a Q1_WG_SIZE-wide WG via work-group barriers; the launch WG
+// must match. Defaults to the Adreno sg (64); host passes -D FA_SG=32 on Intel.
+#ifndef FA_SG
+#define FA_SG 64
+#endif
+#define Q1_WG_SIZE FA_SG
 
 // The kernels are built with -cl-finite-math-only. On some older Adreno GPUs,
 // infinite operand can cause undefined behavior and miscompilation for exp.
