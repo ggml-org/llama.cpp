@@ -243,21 +243,7 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
     const size_t T       = HMX_FP16_TILE_N_ROWS;  // 32
     const size_t br_unit = hmx_ceil_div(T, gqa_factor);
     const size_t bc_unit = HMX_FP16_TILE_N_COLS * 2;  // 64
-    const size_t fp16    = sizeof(__fp16);
     const bool   can_pipeline = (kv_len >= FA_MIN_KV_BLOCKS * bc_unit && n_threads >= 2);
-
-    // Approximate per-unit VTCM costs (without per-buffer alignment padding).
-    const size_t per_gbr  = (DK + 2 * DV) * fp16 + 4 * sizeof(float);  // Q + O*2 + 4 col vectors
-    const size_t per_gbr2 = fp16;                             // D diagonal matrix
-    const size_t per_bc   = 3 * DK * fp16 + (can_pipeline ? 4 : 3) * DV * fp16 + 2 * n_threads * fp16;          // K/V DMA x2 + tiles + row bufs
-    const size_t per_gbr_bc = 2 * fp16;                       // S + P
-
-    const size_t overhead = 256 * 2 + 13 * 4096;
-
-    if (vtcm_budget <= overhead) {
-        return -1;
-    }
-    const size_t usable = vtcm_budget - overhead;
 
     // Br_max: largest Br aligned to br_unit that does not exceed qo_len.
     const size_t Br_max = qo_len >= br_unit ? hex_align_down(qo_len, br_unit) : br_unit;
@@ -274,51 +260,26 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
     size_t best_Br = 0, best_Bc = 0;
 
     for (size_t Br = Br_max; Br >= br_unit; Br -= br_unit) {
-        const size_t g_br = hex_align_up(gqa_factor * Br, T);
+        // Try all Bc candidates from Bc_limit down to bc_unit
+        for (size_t Bc = Bc_limit; Bc >= bc_unit; Bc -= bc_unit) {
+            size_t vtcm_needed = hmx_fa_compute_vtcm_usage(gqa_factor, DK, DV, Br, Bc, n_threads, can_pipeline);
+            if (vtcm_needed <= vtcm_budget) {
+                // This Bc fits for this Br!
+                const size_t q_blocks  = (qo_len + Br - 1) / Br;
+                const size_t kv_blocks = (kv_len + Bc - 1) / Bc;
+                const size_t cost      = q_blocks * (c_q_fixed + kv_blocks * c_iter_fixed);
+                const size_t mn        = Br * Bc;
 
-        // g_br-dependent VTCM cost: g_br * per_gbr + g_br*g_br * per_gbr2
-        const size_t gbr_cost = g_br * per_gbr + g_br * g_br * per_gbr2;
-        if (gbr_cost >= usable) {
-            if (Br == br_unit) {
+                if (cost < best_cost || (cost == best_cost && mn > best_mn)) {
+                    best_cost = cost;
+                    best_mn   = mn;
+                    best_Br   = Br;
+                    best_Bc   = Bc;
+                }
+                // Since we iterate Bc from largest to smallest, this is the largest Bc that fits
+                // for this Br. We can break to the next Br.
                 break;
             }
-            continue;
-        }
-
-        // Analytically solve for max Bc:
-        //   remain >= Bc * (per_bc + g_br * per_gbr_bc + Br * fp16 * HMX_FA_DMA_CACHE_SIZE)
-        // The Br * fp16 term accounts for the VTCM mask buffer [Br * Bc].
-        const size_t remain   = usable - gbr_cost;
-        const size_t bc_denom = per_bc + g_br * per_gbr_bc + Br * fp16 * HMX_FA_DMA_CACHE_SIZE;
-        size_t       Bc       = hex_smin(hex_align_down(remain / bc_denom, bc_unit), Bc_limit);
-        if (Bc < bc_unit) {
-            if (Br == br_unit) {
-                break;
-            }
-            continue;
-        }
-
-        // Exact VTCM verification (alignment padding may push over budget)
-        while (Bc >= bc_unit && hmx_fa_compute_vtcm_usage(gqa_factor, DK, DV, Br, Bc, n_threads, can_pipeline) > vtcm_budget) {
-            Bc -= bc_unit;
-        }
-        if (Bc < bc_unit) {
-            if (Br == br_unit) {
-                break;
-            }
-            continue;
-        }
-
-        const size_t q_blocks  = (qo_len + Br - 1) / Br;
-        const size_t kv_blocks = (kv_len + Bc - 1) / Bc;
-        const size_t cost      = q_blocks * (c_q_fixed + kv_blocks * c_iter_fixed);
-        const size_t mn        = Br * Bc;
-
-        if (cost < best_cost || (cost == best_cost && mn > best_mn)) {
-            best_cost = cost;
-            best_mn   = mn;
-            best_Br   = Br;
-            best_Bc   = Bc;
         }
 
         if (Br == br_unit) {
@@ -326,7 +287,7 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
         }
     }
 
-    if (best_Br == 0) {
+    if (best_Br == 0 || best_Bc == 0) {
         return -1;
     }
 
