@@ -1186,3 +1186,32 @@ in queue: P2 [consolidation deliverable] (the
 models together with the cross-model invariant-ratio finding).
 
 ---
+
+## 2026-07-07 — P2 [consolidation] sub-task 1 — turbo-capacity-validation.md
+
+P2 consolidation deliverable sub-task 1 RESOLVED. Doc written to
+`docs/research/turbo-capacity-validation.md` (workspace-level path,
+sibling to the repos per the file-location convention). Contains:
+- Explicit reframe statement (turbo is a capacity feature, not a
+  speed feature, on this stack as of this validation)
+- PPL matrix (3 models × 6 KV types) with the killed-hypothesis
+  caveats (turbo2/3 KILLED on Qwen3-MoE+CPU-FA)
+- Capacity matrix (3 models × 6 KV types) with the model-size ×
+  VRAM-budget finding (Qwen3's 12.7 GB = 80% of the 16 GB Arc)
+- Cross-model invariant-ratio finding (q8_0/f16=1.89-1.90x,
+  q4_0/f16=3.57-3.60x across all 3 models, determined purely by
+  KV bytes-per-token)
+- Correctness status (all 3 models GATE-clean on harness)
+- List of 6 open follow-up areas (P1.8 concurrent capacity, pure
+  turbo2/3 with policies disabled, GQA 16:1+, extended-ctx quality,
+  turbo1/5, non-Arc GPU architectures)
+- Cross-references to all 3 model PPL/capacity docs and 5 key
+  commits (89a9c41e8 Boundary V, eaaa1820 auto-asymmetric,
+  a570c4c37 chunk-count correction, 2a1d8690f MoE killed-hypothesis,
+  39df3c112 capacity matrix)
+
+P1 [capacity validation] + P2 [sub-task 1] COMPLETE. Remaining:
+P2 sub-task 2 (roadmap doc update) and P2 sub-task 3 (commit history
+squash). P3 parked.
+
+---
