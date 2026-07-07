@@ -2,6 +2,8 @@ import { base } from '$app/paths';
 import { getJsonHeaders, getAuthHeaders } from './api-headers';
 import { UrlProtocol } from '$lib/enums';
 import { ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants/error';
+import { config } from '$lib/stores/settings.svelte';
+
 
 /**
  * API Fetch Utilities
@@ -49,6 +51,8 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 
 	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
 	const headers = { ...baseHeaders, ...customHeaders };
+	const apiBase = config().apiBase ?? '';
+	path = apiBase + path;
 
 	const url =
 		path.startsWith(UrlProtocol.HTTP) || path.startsWith(UrlProtocol.HTTPS)
@@ -94,7 +98,8 @@ export async function apiFetchWithParams<T>(
 	params: Record<string, string>,
 	options: ApiFetchOptions = {}
 ): Promise<T> {
-	const url = new URL(basePath, window.location.href);
+	const apiBase = config().apiBase ?? base;
+	const url = new URL(apiBase + basePath, window.location.href);
 
 	for (const [key, value] of Object.entries(params)) {
 		if (value !== undefined && value !== null) {

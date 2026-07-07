@@ -1,3 +1,4 @@
+import { base } from '$app/paths';
 import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
@@ -42,6 +43,7 @@ import type {
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '../stores/settings.svelte';
 import { capImageDataURLSize } from '../utils/cap-img-size';
+
 
 function getAudioInputFormat(mimeType: string): AudioInputFormat {
 	const normalizedMimeType = mimeType.trim().toLowerCase();
@@ -340,7 +342,8 @@ export class ChatService {
 			if (stream && conversationId) {
 				headers['X-Conversation-Id'] = streamIdentity(conversationId, options.model);
 			}
-			const response = await fetch(API_CHAT.COMPLETIONS, {
+			const apiBase = settingsStore.getConfig(SETTINGS_KEYS.API_BASE) ?? base;
+			const response = await fetch(apiBase + API_CHAT.COMPLETIONS, {
 				method: 'POST',
 				headers,
 				body: JSON.stringify(requestBody),
@@ -434,7 +437,8 @@ export class ChatService {
 	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
 		try {
 			const url = model ? `${API_SLOTS.LIST}?model=${encodeURIComponent(model)}` : API_SLOTS.LIST;
-			const res = await fetch(url, { signal });
+			const apiBase = settingsStore.getConfig(SETTINGS_KEYS.API_BASE) ?? base;
+			const res = await fetch(apiBase + url, { signal });
 			if (!res.ok) return true;
 
 			const slots: { is_processing: boolean }[] = await res.json();
@@ -466,7 +470,8 @@ export class ChatService {
 		if (model) body.model = model;
 
 		try {
-			const res = await fetch(API_CHAT.CONTROL, {
+			const apiBase = settingsStore.getConfig(SETTINGS_KEYS.API_BASE) ?? base;
+			const res = await fetch(apiBase + API_CHAT.CONTROL, {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(body)
@@ -665,7 +670,8 @@ export class ChatService {
 		}
 
 		try {
-			await fetch(API_CHAT.COMPLETIONS, {
+			const apiBase = settingsStore.getConfig(SETTINGS_KEYS.API_BASE) ?? base;
+			await fetch(apiBase + API_CHAT.COMPLETIONS, {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),

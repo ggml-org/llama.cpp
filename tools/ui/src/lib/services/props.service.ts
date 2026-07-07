@@ -1,4 +1,5 @@
 import { apiFetchWithParams } from '$lib/utils';
+import { API_PROPS } from '$lib/constants';
 
 export class PropsService {
 	/**
@@ -24,7 +25,7 @@ export class PropsService {
 			params.autoload = 'false';
 		}
 
-		return apiFetchWithParams<ApiLlamaCppServerProps>('./props', params, { authOnly: true });
+		return apiFetchWithParams<ApiLlamaCppServerProps>(API_PROPS.LIST, params, { authOnly: true });
 	}
 
 	/**
@@ -42,6 +43,6 @@ export class PropsService {
 			params.autoload = 'false';
 		}
 
-		return apiFetchWithParams<ApiLlamaCppServerProps>('./props', params, { authOnly: true });
+		return apiFetchWithParams<ApiLlamaCppServerProps>(API_PROPS.LIST, params, { authOnly: true });
 	}
 }
