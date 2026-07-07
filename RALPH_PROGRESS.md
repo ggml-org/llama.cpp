@@ -610,3 +610,48 @@ Lessons learned (worth capturing for future sessions):
     parser fails. Retro-patching from logs is faster than re-running.
 
 ---
+
+## 2026-07-07 — P1 [model 1] sub-task 3 — Correctness smoke-test
+
+Re-ran `test-sycl-turbo-correctness` on the mistral-7b Q4_K_M fleet
+config (GQA 4:1, d=128) to confirm the P0 sub-task 2 GQA extension
+probes still PASS at the real model shape (the task said "if different
+from d=128 default" — fleet is head_dim=128 homogeneous, so this is
+a confirmation, not a new test).
+
+Default env (covers [1]-[4] + [4b] [6] [6b] GQA + [3c] non-FA GQA):
+  summary: 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP — 1.12 s wall time
+  - WHT g={32,64,128} dir={0,1,scaled}: 8 probes, all PASS
+  - cpy turbo{2,3,4}_0 -> f32: 6 probes, all PASS
+  - set_rows turbo{2,3,4}_0: 6 probes, all PASS
+  - mul_mat turbo{2,3,4}_0: 6 probes, all PASS (nmse < 2e-7, cosine 1.0)
+  - attn_noflash turbo{3,4} d=128 (vanilla + GQA 4:1 + 8:1): all PASS
+  - attn_noflash turbo2 d=128: WARN (cosine=0.89, |t|/|r|=0.79)
+    - documented XFAIL on turbo2 non-FA, same as [3b]/[3c]
+  - flash_attn f16/q8_0 d={64,128} [tile nq=8] [vec nq=1]: all PASS
+  - flash_attn f16/q8_0 d=128 [GQA 4:1] [GQA 8:1]: all PASS
+
+LLAMA_TEST_TURBO_FA=1 (exercises [5b] SYCL FA on turbo types):
+  summary: 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP — 1.09 s wall time
+  - flash_attn turbo{3,4}_0 d=128 (tile + vec, vanilla + GQA 4:1 + 8:1):
+    all PASS (cosine 0.96-0.99)
+  - flash_attn turbo2_0 d=128: WARN (cosine=0.89-0.91)
+    - same XFAIL pattern as the non-FA turbo2
+
+Harness output archived in
+`docs/ppl-results/mistral-7b-q4km/harness/`.
+
+P1 [model 1] is now COMPLETE on all 3 sub-tasks:
+  - sub-task 1: PPL matrix (CPU-FA, 5 KV types) — RESOLVED commit cd2ede92e
+  - sub-task 1.5: Full-corpus CPU-FA turbo re-run (corpus-cap workaround)
+                — CLOSED
+  - sub-task 2: Capacity matrix (f16=82304, turbo4=311552 3.79x, turbo2=524416
+                6.37x) — RESOLVED commit a534e47a7
+  - sub-task 3: Correctness smoke-test (harness GATE clean) — RESOLVED this turn
+  - P1.8 (follow-up): concurrent-sequence capacity via llama-server --parallel
+                — OPEN, deferred per the bullet's own text
+
+Next in queue: P1 [model 2 — llama31-8b] (3 sub-tasks) or P1 [model 3 —
+Qwen3-Coder-30B-A3B] (3 sub-tasks, MoE-specific watch-points).
+
+---
