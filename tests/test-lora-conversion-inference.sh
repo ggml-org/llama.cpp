@@ -12,6 +12,8 @@ MODELS_REPO=lora-tests
 MODELS_REPO_URL=https://huggingface.co/ggml-org/$MODELS_REPO
 COMMIT=c26d5fb85b4070a9e9c4e65d132c783b98086890
 
+LLAMA_BIN_DIR=${LLAMA_BIN_DIR:-build/bin}
+
 # Clone the Hugging Face repository if the directory does not exist
 if [ ! -d "$MODELS_REPO" ]; then
     echo "Cloning the Hugging Face repository..."
@@ -60,7 +62,7 @@ run_conversion_and_inference_lora() {
 
     # Convert safetensors to gguf
     echo "Running convert_hf_to_gguf.py for $model_name with hidden_size $hidden_size..."
-    python convert_hf_to_gguf.py $MODELS_REPO/$model_name/hidden_size=$hidden_size/base \
+    python3 convert_hf_to_gguf.py $MODELS_REPO/$model_name/hidden_size=$hidden_size/base \
         --outfile $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
         --outtype f32
 
@@ -72,7 +74,7 @@ run_conversion_and_inference_lora() {
 
     echo -e "\n\n---------------------------\n\n"
     echo "Running llama-export-lora with lora for $model_name with hidden_size $hidden_size..."
-    ./llama-export-lora \
+    $LLAMA_BIN_DIR/llama-export-lora \
         -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
         -o $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32-lora-merged.gguf \
         --lora $MODELS_REPO/$model_name/hidden_size=$hidden_size/lora/Lora-F32-LoRA.gguf
@@ -80,18 +82,18 @@ run_conversion_and_inference_lora() {
     # Run inference
     echo -e "\n\n---------------------------\n\n"
     echo "Running llama-completion without lora for $model_name with hidden_size $hidden_size..."
-    OUTPUT_BASE=$(./llama-completion -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
+    OUTPUT_BASE=$($LLAMA_BIN_DIR/llama-completion -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
         -p "$EXPECTED_BASE_FIRST_WORD" -n 50 --seed 42 --temp 0)
 
     echo -e "\n\n---------------------------\n\n"
     echo "Running llama-completion with hot lora for $model_name with hidden_size $hidden_size..."
-    OUTPUT_LORA_HOT=$(./llama-completion -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
+    OUTPUT_LORA_HOT=$($LLAMA_BIN_DIR/llama-completion -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
         --lora $MODELS_REPO/$model_name/hidden_size=$hidden_size/lora/Lora-F32-LoRA.gguf \
         -p "$EXPECTED_LORA_FIRST_WORD" -n 50 --seed 42 --temp 0)
 
     echo -e "\n\n---------------------------\n\n"
     echo "Running llama-completion with merged lora for $model_name with hidden_size $hidden_size..."
-    OUTPUT_LORA_MERGED=$(./llama-completion -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32-lora-merged.gguf \
+    OUTPUT_LORA_MERGED=$($LLAMA_BIN_DIR/llama-completion -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32-lora-merged.gguf \
         -p "$EXPECTED_LORA_FIRST_WORD" -n 50 --seed 42 --temp 0)
 
     # Remove any initial white space
