@@ -1,8 +1,6 @@
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { ToolsService } from '$lib/services/tools.service';
-import { TokenizeService } from '$lib/services/tokenize.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { hashString } from '$lib/utils/hash';
 import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
 import {
@@ -22,8 +20,6 @@ class ToolsStore {
 	private _error = $state<string | null>(null);
 	private _disabledTools = $state(new SvelteSet<string>());
 	private _toolsEndpointUnreachable = $state(false);
-	private _enabledToolsTokenCount = $state<number | null>(null);
-	private _enabledToolsTokenHash = '';
 
 	constructor() {
 		try {
@@ -366,66 +362,8 @@ class ToolsStore {
 		return this._disabledTools;
 	}
 
-	/**
-	 * Total tokens consumed by the currently enabled tool definitions on the
-	 * wire. Measured via llama-server's /tokenize endpoint and cached under
-	 * a "<model>:<frozenListHash>" key so we don't re-tokenize on every turn.
-	 *
-	 * Returns the value committed by {@link refreshEnabledToolsTokenCount}.
-	 * null = unknown / not yet measured; 0 = no tools are enabled.
-	 */
-	get enabledToolsTokenCount(): number | null {
-		return this._enabledToolsTokenCount;
-	}
-
-	/**
-	 * Refresh the cached enabled-tool token count for `model`. No-op when the
-	 * model + deduped enabled list hash is unchanged since the last call.
-	 *
-	 * Non-blocking on the caller: the TokenizeService returns null when the
-	 * server is unreachable, in which case a chars/4 heuristic is committed
-	 * instead so the UI never shows an unknown number.
-	 */
-	async refreshEnabledToolsTokenCount(model?: string | null): Promise<number | null> {
-		const enabled = this.getEnabledToolsForLLM();
-		if (enabled.length === 0) {
-			this._enabledToolsTokenHash = '';
-			this._enabledToolsTokenCount = 0;
-			return 0;
-		}
-
-		const serialized = JSON.stringify(enabled);
-		const hash = `${model ?? ''}:${hashString(serialized)}`;
-		if (hash === this._enabledToolsTokenHash && this._enabledToolsTokenCount !== null) {
-			return this._enabledToolsTokenCount;
-		}
-
-		this._enabledToolsTokenHash = hash;
-
-		const live = await TokenizeService.count(serialized, model);
-		if (live !== null) {
-			this._enabledToolsTokenCount = live;
-			return live;
-		}
-
-		const approx = Math.ceil(serialized.length / 4);
-		this._enabledToolsTokenCount = approx;
-		return approx;
-	}
-
 	isToolEnabled(key: string): boolean {
 		return !this._disabledTools.has(key);
-	}
-
-	/**
-	 * Drop the cached enabled-tools token count so the next read re-tokenizes.
-	 * The gauge effect in ChatFormContextGauge tracks `_enabledToolsTokenCount`
-	 * for reactivity, so resetting it triggers a refresh without needing a
-	 * version counter.
-	 */
-	private invalidateEnabledToolsTokenCount(): void {
-		this._enabledToolsTokenHash = '';
-		this._enabledToolsTokenCount = null;
 	}
 
 	toggleTool(key: string): void {
@@ -435,7 +373,6 @@ class ToolsStore {
 			this._disabledTools.add(key);
 		}
 		this.persistDisabledTools();
-		this.invalidateEnabledToolsTokenCount();
 	}
 
 	setToolEnabled(key: string, enabled: boolean): void {
@@ -444,7 +381,6 @@ class ToolsStore {
 		} else {
 			this._disabledTools.add(key);
 		}
-		this.invalidateEnabledToolsTokenCount();
 	}
 
 	/** Enable all tools belonging to a specific MCP server */
@@ -455,7 +391,6 @@ class ToolsStore {
 			this._disabledTools.delete(this.toolKey(ToolSource.MCP, tool.name, serverId));
 		}
 		this.persistDisabledTools();
-		this.invalidateEnabledToolsTokenCount();
 	}
 
 	toggleGroup(group: ToolGroup): void {
@@ -466,7 +401,6 @@ class ToolsStore {
 			else this._disabledTools.add(tool.key);
 		}
 		this.persistDisabledTools();
-		this.invalidateEnabledToolsTokenCount();
 	}
 
 	isGroupFullyEnabled(group: ToolGroup): boolean {
