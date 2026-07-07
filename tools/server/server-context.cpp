@@ -265,6 +265,7 @@ struct server_slot {
         }
 
         prompt.tokens.clear();
+        prompt.checkpoints.clear();
     }
 
     std::vector<common_adapter_lora_info> lora;
