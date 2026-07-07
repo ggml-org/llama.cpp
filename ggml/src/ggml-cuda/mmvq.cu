@@ -1013,6 +1013,112 @@ static __global__ void mul_mat_vec_q_nvfp4_repacked(
     }
 }
 
+template <int ncols_dst, int warps_per_block, int rows_per_warp>
+__launch_bounds__(warps_per_block*ggml_cuda_get_physical_warp_size(), 1)
+static __global__ void mul_mat_vec_q_nvfp4_repacked_y_reuse(
+        const void * vx_ptr, const void * vy_ptr, float * dst_ptr,
+        const uint32_t ncols_x, const uint32_t nrows_x, const uint32_t stride_row_x,
+        const uint32_t stride_col_y, const uint32_t stride_col_dst, const uint3 channel_ratio, const uint32_t stride_channel_x,
+        const uint32_t stride_channel_y, const uint32_t stride_channel_dst, const uint3 sample_ratio,
+        const uint32_t stride_sample_x, const uint32_t stride_sample_y, const uint32_t stride_sample_dst,
+        const uint3 blocks_per_matrix_x) {
+    const void * GGML_CUDA_RESTRICT vx  = vx_ptr;
+    const void * GGML_CUDA_RESTRICT vy  = vy_ptr;
+    float      * GGML_CUDA_RESTRICT dst = dst_ptr;
+
+    constexpr int qk = ggml_cuda_type_traits<GGML_TYPE_NVFP4>::qk;
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+
+    const uint32_t row0 = (warps_per_block*blockIdx.x + threadIdx.y) * rows_per_warp;
+    if (row0 >= nrows_x) {
+        return;
+    }
+
+    ggml_cuda_pdl_sync();
+
+    const uint32_t channel_dst = blockIdx.y;
+    const uint32_t channel_x   = fastdiv(channel_dst, channel_ratio);
+    const uint32_t channel_y   = channel_dst;
+    const uint32_t sample_dst  = blockIdx.z;
+    const uint32_t sample_x    = fastdiv(sample_dst, sample_ratio);
+    const uint32_t sample_y    = sample_dst;
+
+    const int blocks_per_row_x = ncols_x / qk;
+    const float * y_f32 = ((const float *) vy) + sample_y*stride_sample_y + channel_y*stride_channel_y;
+    const uint32_t kbx_x_base = sample_x*stride_sample_x + channel_x*stride_channel_x + row0*stride_row_x;
+
+    float tmp[rows_per_warp][ncols_dst] = {};
+
+    int kbx = 0;
+    for (; kbx + 8 <= blocks_per_row_x; kbx += 8) {
+        const int ky = kbx * qk;
+
+#pragma unroll
+        for (int j = 0; j < ncols_dst; ++j) {
+            const nvfp4_f32_y_subblock yv = load_nvfp4_f32_y_subblock(y_f32 + j*stride_col_y + ky, threadIdx.x);
+
+#pragma unroll
+            for (int r = 0; r < rows_per_warp; ++r) {
+                const uint32_t row = row0 + r;
+                const uint32_t row_r = row < nrows_x ? r : 0;
+                const float row_mask = row < nrows_x ? 1.0f : 0.0f;
+
+                tmp[r][j] += row_mask * vec_dot_nvfp4_f32_repacked_subblock_y(
+                    vx, yv, kbx_x_base + row_r*stride_row_x + kbx, blocks_per_matrix_x, threadIdx.x);
+            }
+        }
+    }
+
+    if (kbx < blocks_per_row_x) {
+        const int ky = kbx * qk;
+        const int blocks_remaining = blocks_per_row_x - kbx;
+
+#pragma unroll
+        for (int j = 0; j < ncols_dst; ++j) {
+            const nvfp4_f32_y_subblock yv = load_nvfp4_f32_y_subblock(y_f32 + j*stride_col_y + ky, threadIdx.x);
+
+#pragma unroll
+            for (int r = 0; r < rows_per_warp; ++r) {
+                const uint32_t row = row0 + r;
+                const uint32_t row_r = row < nrows_x ? r : 0;
+                const float row_mask = row < nrows_x ? 1.0f : 0.0f;
+
+                tmp[r][j] += row_mask * vec_dot_nvfp4_f32_repacked_subblock_y_tail(
+                    vx, yv, kbx_x_base + row_r*stride_row_x + kbx, blocks_per_matrix_x, threadIdx.x, blocks_remaining);
+            }
+        }
+    }
+
+    ggml_cuda_pdl_lc();
+
+#pragma unroll
+    for (int r = 0; r < rows_per_warp; ++r) {
+#pragma unroll
+        for (int j = 0; j < ncols_dst; ++j) {
+            tmp[r][j] = warp_reduce_sum<warp_size>(tmp[r][j]);
+        }
+    }
+
+    if (threadIdx.x != 0) {
+        return;
+    }
+
+    float * dst_base = dst + sample_dst*stride_sample_dst + channel_dst*stride_channel_dst + row0;
+
+#pragma unroll
+    for (int r = 0; r < rows_per_warp; ++r) {
+        const uint32_t row = row0 + r;
+        if (row >= nrows_x) {
+            continue;
+        }
+
+#pragma unroll
+        for (int j = 0; j < ncols_dst; ++j) {
+            dst_base[j*stride_col_dst + r] = tmp[r][j];
+        }
+    }
+}
+
 template<int c_ncols_dst>
 static void mul_mat_vec_q_nvfp4_repacked_switch_fusion(
         const void * vx, const void * vy, const int32_t * ids, const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -1040,6 +1146,23 @@ static void mul_mat_vec_q_nvfp4_repacked_switch_fusion(
     }
 
     GGML_ASSERT(!has_fusion && "fusion only supported for ncols_dst=1");
+
+    if (ids == nullptr) {
+        constexpr int warps_per_block = 4;
+        constexpr int rows_per_warp = 4;
+        const dim3 block_nums_y_reuse(
+            (nrows_x + warps_per_block*rows_per_warp - 1) / (warps_per_block*rows_per_warp),
+            nchannels_dst, nsamples_dst);
+        const dim3 block_dims_y_reuse(warp_size, warps_per_block);
+        const ggml_cuda_kernel_launch_params launch_params_y_reuse =
+            ggml_cuda_kernel_launch_params(block_nums_y_reuse, block_dims_y_reuse, 0, stream);
+
+        ggml_cuda_kernel_launch(mul_mat_vec_q_nvfp4_repacked_y_reuse<c_ncols_dst, warps_per_block, rows_per_warp>, launch_params_y_reuse,
+            vx, vy, dst, ncols_x, nrows_x, stride_row_x, stride_col_y, stride_col_dst,
+            channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst, sample_ratio,
+            stride_sample_x, stride_sample_y, stride_sample_dst, blocks_per_matrix_x);
+        return;
+    }
 
     ggml_cuda_kernel_launch(mul_mat_vec_q_nvfp4_repacked<c_ncols_dst, false, rows_per_block>, launch_params,
         vx, vy, ids, fusion, dst, ncols_x, nchannels_y, nrows_x, stride_row_x, stride_col_y, stride_col_dst,
