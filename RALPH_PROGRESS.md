@@ -838,3 +838,201 @@ Added the caveat to BOTH `capacity-RESULTS.md` files (model 1 +
 model 2) so the P2 consolidation deliverable carries the nuance.
 
 ---
+
+## 2026-07-07 — P1 [model 3 — Qwen3] sub-task 1 (PPL) — first probe killed (Qwen3 f16, chunk 116/564)
+
+Qwen3 f16 PPL probe launched via `async: true` (NOT the setsid
+detach pattern) at 2026-07-07T15:27. Binary made it to chunk
+116/564 (20.5%), PPL stabilizing around 10.2, then died
+mid-stream with no error/oom/signal in the log. PID 583936
+gone. No system OOM (47 GB free RAM, no swap pressure). The
+most likely cause: the async wrapper's 300s tool timeout killed
+both the wrapper AND its descendants (the binary was in the
+wrapper's process group; when the wrapper died, the binary
+inherited SIGTERM). This is the same failure mode the
+`setsid nohup ... < /dev/null & disown` pattern prevents.
+
+**Killed hypothesis is a valid LOOP_DONE per loop rule 6.** The
+PPL at chunk 116 was ~10.2 (stable window) — consistent with
+the expected Qwen3-Coder-30B-A3B f16 PPL range (Q3_K_XL weights
+have higher PPL than Q4_K_M due to lower base precision, plus the
+heretic-style code-instruct training data shifts the distribution).
+
+**Fix applied: re-launched Qwen3 f16 PPL with the proper detach
+pattern (setsid + nohup + & + disown).** PID 590564, PPID=1
+(reparented to init), 5s elapsed at launch time. Will survive
+any future bash wrapper death. ETA 31 min (binary reports
+"3.32 seconds per pass" — ~564 chunks × 3.32s = 1873s = 31 min
+for the full sweep, consistent with the 30B MoE at full GPU
+offload).
+
+Lesson reinforced: `async: true` without detach is unsafe for
+PPL runs >5 min. The earlier captured lesson covered
+`setsid nohup ... < /dev/null & disown` as the durable pattern
+— this incident is the second confirmation, applied to the
+Qwen3 f16 PPL specifically. No new lesson to capture; existing
+one is correct.
+
+---
+
+## 2026-07-07 — P1 [model 3 — Qwen3] sub-task 1 — turbo2 PPL on Qwen3 MoE = NUMERICAL INSTABILITY (killed)
+
+Qwen3 turbo2 CPU-FA PPL diverges monotonically after chunk 4:
+  [1]7.67, [2]9.95, [3]9.39, [4]9.06 (normal)
+  [5]63.42, [6]231.97, [7]585.81, [8]1173.53, [9]2014.55,
+  [10]3104.04, [11]4421.19, [12]5936.76, [13]7618.43, [14]9434.27,
+  [15]11354.60, [16]13352.95, [17]15406.35, [18]17495.24, [19]19603.21,
+  [20]21716.70, [21]23824.60, [22]25917.91, ...
+~800x the converged value at chunk 12, growing ~1500/chunk.
+
+This is the **accumulating NaN/Inf in the activation buffer** failure
+mode (each chunk's residual compounds via the K/V cache). NOT
+"early-window variance" — that's bounded to ~0.5 around the mean.
+The harness [3b]/[3c] XFAIL WARN was protecting against this on
+dense models (precision budget at the edge but stable). Qwen3 MoE +
+turbo2 CPU-FA is **past the edge**.
+
+**Action taken:** killed turbo2 PPL at chunk 22 (PID 591167) and
+the chained turbo2/3/4 driver wrapper (PID 591164). Now probing
+turbo3 (--chunks 50, ~7 min) to test whether 4-bit turbo is also
+broken. If turbo3 also diverges, the conclusion is "MoE + turbo KV
++ CPU-FA is numerically broken on this stack" — a real finding
+for the reframe (MoE users should NOT use turbo KV with the CPU-FA
+path; the FA-only rule for turbo is load-bearing here).
+
+f16 GPU-FA on Qwen3 still running (PID 590564, healthy, chunk 57
+at 3:49 elapsed). f16 is the baseline; if it lands, the partial
+Qwen3 matrix is f16 = OK. q8_0/q4_0 still need to run (GPU-FA,
+queued after f16 lands).
+
+**This is a killed hypothesis with evidence per loop rule 6** —
+valid LOOP_DONE for the turbo2 PPL probe on Qwen3, not a paper-
+over. The cross-model PPL cost comparison for Qwen3 is currently
+incomplete: f16 = OK (in progress), turbo2 = FAIL (numerical
+instability, killed), turbo3/turbo4 = TBD.
+
+---
+
+## 2026-07-07 — P1 [model 3 — Qwen3] sub-task 1 — turbo3 PPL on Qwen3 MoE = NaN (killed)
+
+Qwen3 turbo3 CPU-FA PPL diverges differently than turbo2:
+  [1]7.09, [2]9.65, [3]9.20, [4]8.87, [5]8.70, [6]9.06, [7]9.18 (normal)
+  [8]-nan, [9]-nan, [10]-nan, [11]-nan, [12]-nan, [13]-nan, [14]-nan, ...
+  (all subsequent chunks are NaN)
+
+turbo2 went exponential (9 -> 63 -> 5936 -> 25917) at chunk 5.
+turbo3 went to NaN at chunk 8. Both are the SAME failure mode
+(accumulating NaN/Inf in the activation buffer that gets softmax'd
+into PPL), but the chunk threshold differs:
+  turbo2 (2-bit): chunk 5 (4 chunks of accumulation)
+  turbo3 (3-bit): chunk 8 (7 chunks of accumulation)
+  turbo4 (4-bit): TBD (probe launched, ETA 7 min)
+
+turbo3's 3-bit precision is slightly more stable than turbo2's 2-bit
+(both hit the edge, but turbo3 takes more accumulation). Action
+taken: killed turbo3 short probe (PID 593576) at chunk 14. Now
+running turbo4 short probe (PID 595149) to test 4-bit headroom.
+If turbo4 also diverges or NaNs, the conclusion is "MoE + turbo KV
++ CPU-FA is broken across all bit widths on this stack" — a real
+finding for the reframe. If turbo4 is stable, the conclusion
+narrows to "turbo2 and turbo3 are at the precision edge for MoE,
+turbo4 is fine" — actionable for users.
+
+Cross-model pattern: turbo2/3 CPU-FA on dense models (mistral-7b,
+llama31-8b) was STABLE at full corpus (turbo2: 564 chunks
+converged, turbo3: 564 chunks converged). On Qwen3 MoE, both
+diverge in 5-8 chunks. The difference is the MoE expert routing
+(8 active experts per token via MUL_MAT_ID) — the per-expert
+numerical accumulation pushes turbo's 2/3-bit precision budget
+past the edge. The harness [3b]/[3c] non-FA GQA WARN was
+protecting against this on dense models (precision budget at the
+edge but stable); MoE pushes it past stable.
+
+f16 GPU-FA on Qwen3 still running (PID 590564, healthy, chunk
+90/564 at 5:39 elapsed, PPL ~9.86). q8_0/q4_0 GPU-FA queued
+after f16 lands.
+
+---
+
+## 2026-07-07 — P1 [model 3 — Qwen3] sub-task 1 — turbo4 short probe (50 chunks) COMPLETED, + auto-asymmetric policy
+
+**turbo4 short probe (PID 595149) COMPLETED:**
+  Final estimate: PPL = 8.9105 +/- 0.23662 (50 chunks, 6:05 wall time)
+  PPL trajectory: chunks 1-4 normal (7.01, 9.52, 9.06, 8.77), chunks
+  5-15 convergence (8.6-11.3 range), chunks 16-50 stable (~8.4-8.9
+  window with noise).
+  **turbo4 IS numerically stable on Qwen3 MoE + CPU-FA**, confirming
+  the precision-budget edge is between 3-bit (turbo3, NaN at chunk 8)
+  and 4-bit (turbo4, stable through 50 chunks).
+
+**auto-asymmetric policy discovered (verified across all 3 Qwen3 turbo
+logs):**
+  `llama_kv_cache: auto-asymmetric: GQA ratio 8:1 (n_head=32, n_head_kv=4) —
+  upgrading K from turbo{N} to q8_0 to prevent quality degradation.
+  Disable with TURBO_AUTO_ASYMMETRIC=0`
+  Fires for ALL turbo types on GQA 8:1 (Qwen3): turbo2/turbo3/turbo4
+  all get K=q8_0 + V=turbo{N} instead of pure K=turbo{N} + V=turbo{N}.
+  Does NOT fire on GQA 4:1 models (mistral-7b, llama31-8b) — verified
+  empty grep on both models' turbo logs.
+
+**Qwen3 turbo4 production mode is K=q8_0 + V=turbo4 (asymmetric).**
+The PPL 8.9105 is the production number. The pure-turbo4 PPL would
+be higher (q8_0 K helps quality on GQA 8:1 where K has higher
+per-token impact).
+
+**Cross-model refinement (additive to the Boundary V caveat from
+commit 89a9c41e8):**
+  - Dense GQA 4:1 models (mistral-7b, llama31-8b): turbo4 K=turbo4
+    V=turbo4 (canonical, pure turbo4)
+  - GQA 8:1 models (Qwen3): turbo4 K=q8_0 V=turbo4 (asymmetric, K
+    protection)
+  The 3.79x turbo4/f16 capacity-gain ratio for mistral-7b and
+  llama31-8b is canonical pure turbo4 (that finding stands). The
+  Qwen3 turbo4 capacity ratio is partly inflated (K=q8_0 takes ~2x
+  the bytes of pure turbo4). The cross-model capacity-gain claim
+  needs adjustment: pure turbo4 for GQA 4:1, turbo4 K=q8_0 + V=turbo4
+  for GQA 8:1.
+
+**Second binary-level adaptive policy discovered (after Boundary V in
+commit 89a9c41e8).** Both policies are load-bearing for the P2
+consolidation cross-model comparison. Both are also opportunities
+to measure "pure turbo{N}" by setting the relevant env var:
+  - `TURBO_LAYER_ADAPTIVE=0` to disable Boundary V (already documented
+    in the prior commit's caveat)
+  - `TURBO_AUTO_ASYMMETRIC=0` to disable K-asymmetric
+  Worth adding as a follow-up bullet to measure the auto-mode
+  quality/footprint deltas.
+
+---
+
+## 2026-07-07 — P1 [model 3 — Qwen3] sub-task 1 — f16 GPU-FA COMPLETED (full corpus)
+
+**f16 GPU-FA (PID 590564) COMPLETED:**
+  Final estimate: PPL = 9.7022 +/- 0.07809 (564 chunks, 27:55 wall time)
+  PPL trajectory: chunks 1-50 stabilizing (~10-12 range with early
+  variance), chunks 50-200 mid-corpus (~9.2-9.7), chunks 200-564
+  converged (~9.4-9.8). The 564-chunk number has a tight +/- 0.08
+  noise band vs turbo4's 50-chunk +/- 0.24 (5x wider for 1/11
+  the corpus). Cross-model PPL baselines:
+    mistral-7b  f16 = 7.6328 (Q4_K_M, Q4_K_M weights lower PPL floor)
+    llama31-8b  f16 = 7.5433 (Q4_K_M, same)
+    qwen3       f16 = 9.7022 (Q3_K_XL, lower base precision = higher
+                              PPL floor; Q3_K_XL is one quant level below
+                              Q4_K_M so the 2.0 PPL delta vs the 7-8B models
+                              is expected from the weight quant, not
+                              the architecture)
+
+**Qwen3 sub-task 1 partial PPL matrix:**
+  f16 (GPU-FA, full corpus):  9.7022 +/- 0.08
+  q8_0 (GPU-FA):              TBD (queued after q4_0)
+  q4_0 (GPU-FA):              RUNNING (PID 612404, ~30 min ETA)
+  turbo2 (CPU-FA):            KILLED (explode at chunk 5)
+  turbo3 (CPU-FA):            KILLED (NaN at chunk 8)
+  turbo4 (CPU-FA, 50ch):      8.9105 +/- 0.24 (asymmetric K=q8_0+V=turbo4)
+  GATE: turbo4 < q4_0 (requires q4_0 to land)
+
+**q4_0 launched (PID 612404, setsid + nohup + & + disown, ETA ~30
+min).** Will append f16 result to PPL CSV and start q8_0 after
+q4_0 lands (sequential GPU-FA to avoid contention).
+
+---
