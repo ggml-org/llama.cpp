@@ -900,7 +900,7 @@ private:
     llama_model   * model_dft = nullptr;
     llama_context * ctx_dft   = nullptr;
 
-    common_init_speculative_result_ptr spec_init;
+    common_speculative_init_result_ptr spec_init;
 
     common_context_seq_rm_type ctx_tgt_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
     common_context_seq_rm_type ctx_dft_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
@@ -1171,11 +1171,12 @@ private:
 
             {
                 common_params params_dft = common_base_params_to_speculative(params_base);
+
                 // progress callback
                 params_dft.load_progress_callback           = load_progress_callback;
                 params_dft.load_progress_callback_user_data = &load_progress_spec;
 
-                spec_init = common_init_speculative_from_params(params_dft, model_tgt, ctx_tgt);
+                spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
                 model_dft = spec_init->model();
                 ctx_dft   = spec_init->context();
 
@@ -2306,8 +2307,8 @@ private:
         //       this is not true for SWA models: https://github.com/ggml-org/llama.cpp/pull/24411#issuecomment-4677983225
         cur.update_pos(slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max);
 
-        cur.update_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-        cur.update_dft(ctx_dft,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        cur.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        cur.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
         // stash the draft's speculative state with the checkpoint
         common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
 
@@ -3264,8 +3265,8 @@ private:
 
                                     if (!do_reset) {
                                         // restore the context checkpoint
-                                        it->load_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                                        it->load_dft(ctx_dft,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         // restore the draft's speculative state
                                         common_speculative_set_state(spec.get(), slot.id, it->data_spec);
 

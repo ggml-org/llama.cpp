@@ -83,9 +83,9 @@ struct common_speculative_deleter {
 
 typedef std::unique_ptr<common_speculative, common_speculative_deleter> common_speculative_ptr;
 
-struct common_init_speculative_result {
-    common_init_speculative_result(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);
-    ~common_init_speculative_result();
+struct common_speculative_init_result {
+    common_speculative_init_result(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);
+    ~common_speculative_init_result();
 
     llama_model   * model();
     llama_context * context();
@@ -95,6 +95,6 @@ private:
     std::unique_ptr<impl> pimpl;
 };
 
-using common_init_speculative_result_ptr = std::unique_ptr<common_init_speculative_result>;
+using common_speculative_init_result_ptr = std::unique_ptr<common_speculative_init_result>;
 
-common_init_speculative_result_ptr common_init_speculative_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);
+common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);

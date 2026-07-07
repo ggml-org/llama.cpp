@@ -2246,7 +2246,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
     return result;
 }
 
-struct common_init_speculative_result::impl {
+struct common_speculative_init_result::impl {
     impl() = default;
     ~impl() = default;
 
@@ -2255,7 +2255,7 @@ struct common_init_speculative_result::impl {
     llama_context_ptr context;
 };
 
-common_init_speculative_result::common_init_speculative_result(
+common_speculative_init_result::common_speculative_init_result(
     common_params & params,
       llama_model * model_tgt,
     llama_context * ctx_tgt) :
@@ -2301,8 +2301,7 @@ common_init_speculative_result::common_init_speculative_result(
     } else if (spec_mtp) {
         model_path = params.model.path;
 
-        LOG_TRC("%s: creating MTP draft context against the target model '%s'\n", 
-            __func__, model_path.c_str());
+        LOG_TRC("%s: creating MTP draft context against the target model '%s'\n", __func__, model_path.c_str());
 
         llama_context * ctx_dft = llama_init_from_model(model_tgt, cparams);
         if (ctx_dft == nullptr) {
@@ -2314,18 +2313,18 @@ common_init_speculative_result::common_init_speculative_result(
     }
 }
 
-common_init_speculative_result::~common_init_speculative_result() = default;
+common_speculative_init_result::~common_speculative_init_result() = default;
 
-llama_model * common_init_speculative_result::model() {
+llama_model * common_speculative_init_result::model() {
     return pimpl->model.get();
 }
 
-llama_context * common_init_speculative_result::context() {
+llama_context * common_speculative_init_result::context() {
     return pimpl->context.get();
 }
 
-common_init_speculative_result_ptr common_init_speculative_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt) {
-    return std::make_unique<common_init_speculative_result>(params, model_tgt, ctx_tgt);
+common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt) {
+    return std::make_unique<common_speculative_init_result>(params, model_tgt, ctx_tgt);
 }
 
 // initialization of the speculative decoding system
