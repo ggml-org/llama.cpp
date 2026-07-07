@@ -760,3 +760,45 @@ P1 [model 2] sub-task 1 (PPL) + sub-task 2 (capacity) both RESOLVED.
 Remaining: sub-task 3 (correctness smoke-test).
 
 ---
+
+## 2026-07-07 — P1 [model 2 — llama31-8b] sub-task 3 — Correctness smoke-test
+
+Re-ran `test-sycl-turbo-correctness` on the llama31-8b-heretic fleet
+config (GQA 4:1, d=128) to confirm the P0 sub-task 2 GQA extension
+probes still PASS at the real model shape (same as model 1 sub-task 3
+— fleet is head_dim=128 homogeneous, this is a smoke-test confirmation).
+
+Default env (covers [1]-[4] + [3c]/[4b]/[6]/[6b] GQA):
+  summary: 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP — 1.04 s wall time
+  - WHT g={32,64,128} dir={0,1,scaled}: 8 probes, all PASS
+  - cpy turbo{2,3,4}_0 -> f32: 6 probes, all PASS
+  - set_rows turbo{2,3,4}_0: 6 probes, all PASS
+  - mul_mat turbo{2,3,4}_0: 6 probes, all PASS
+  - attn_noflash turbo{3,4} d=128 (vanilla + GQA 4:1 + 8:1): all PASS
+  - attn_noflash turbo2 d=128: WARN (cosine=0.89, same XFAIL pattern)
+  - flash_attn f16/q8_0 d={64,128} [tile nq=8] [vec nq=1]: all PASS
+  - flash_attn f16/q8_0 d=128 [GQA 4:1] [GQA 8:1]: all PASS
+
+LLAMA_TEST_TURBO_FA=1 (exercises [5b] SYCL FA on turbo types):
+  summary: 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP — 1.06 s wall time
+  - flash_attn turbo{3,4}_0 d=128 (tile + vec, vanilla + GQA 4:1 + 8:1):
+    all PASS (cosine 0.96-0.99)
+  - flash_attn turbo2_0 d=128: WARN (cosine=0.89-0.91, same XFAIL)
+
+Harness output archived in
+`docs/ppl-results/llama31-8b-heretic/harness/`.
+
+P1 [model 2 — llama31-8b] is now COMPLETE on all 3 sub-tasks:
+  - sub-task 1: PPL matrix (CPU-FA, 6 KV types, 564 chunks) — RESOLVED commit c0785f7e1
+  - sub-task 2: Capacity matrix (f16=79764, turbo4=302336 3.79x, turbo2=508928
+                6.38x; model-invariant ratio with model 1) — RESOLVED commit 689d2b29b
+  - sub-task 3: Correctness smoke-test (harness GATE clean) — RESOLVED this turn
+
+Next in queue: P1 [model 3 — Qwen3-Coder-30B-A3B] (3 sub-tasks, MoE-specific
+watch-points on per-expert KV reuse patterns). MoE adds the MUL_MAT_ID
+SYCL dispatch (P1.6 confirmed present + working for Q3_K_XL) but
+the GGUF graph builder still emits MUL_MAT_ID for the MoE expert
+matmul (src/llama-arch.cpp:726-732), so the MoE FFN path uses the
+real MUL_MAT_ID SYCL handler — no separate port work needed.
+
+---
