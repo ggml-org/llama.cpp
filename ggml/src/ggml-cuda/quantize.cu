@@ -458,13 +458,19 @@ void gather_mmq_fp4_blocks_cuda(
 // Fused variant: quantize each unique token once and scatter the block straight to its compact rows.
 static __global__ void build_tok2c_kernel(
         const int32_t * __restrict__ ids_src1, int32_t * __restrict__ cnt, int32_t * __restrict__ tok2c,
-        const int64_t nrows_dst, const int n_expert_used) {
+        const int64_t nrows_dst, const int64_t n_tokens, const int n_expert_used) {
     const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= nrows_dst) {
         return;
     }
     const int t = ids_src1[i];
+    if (t < 0 || t >= n_tokens) {
+        return;
+    }
     const int j = atomicAdd(&cnt[t], 1);
+    if (j >= n_expert_used) {
+        return; // more than n_expert_used entries for this token: drop instead of corrupting tok2c
+    }
     tok2c[(int64_t) t * n_expert_used + j] = (int) i;
 }
 
@@ -475,7 +481,7 @@ void build_tok2c_cuda(
     CUDA_CHECK(cudaMemsetAsync(tok2c, 0xFF, n_tokens * n_expert_used * sizeof(int32_t), stream)); // slots -> -1
     const int64_t block = 256;
     const int64_t grid  = (nrows_dst + block - 1) / block;
-    build_tok2c_kernel<<<grid, block, 0, stream>>>(ids_src1, cnt, tok2c, nrows_dst, n_expert_used);
+    build_tok2c_kernel<<<grid, block, 0, stream>>>(ids_src1, cnt, tok2c, nrows_dst, n_tokens, n_expert_used);
 }
 
 // Same block computation as quantize_mmq_nvfp4, but writes the block to every compact row of the
