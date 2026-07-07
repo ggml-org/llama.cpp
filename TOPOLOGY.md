@@ -78,6 +78,25 @@ $ systemctl status llama-sycl.cpp.service
 | `/opt/sycl/` | open-source DPCPP toolchain (alternative) | NOT the production toolchain |
 | `/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork/build-port/` | Active build dir for `Raudbjorn-fork` (`turbo-sycl-opt`) | `bin/test-sycl-turbo-correctness` (700680 B, 2026-07-03), `bin/llama-perplexity`, `bin/llama-server` (SYCL fork), full shared lib set. **Build flags (P1.7, pinned 2026-07-07):** `GGML_SYCL=ON`, `GGML_SYCL_TARGET=INTEL`, `GGML_SYCL_F16=ON`, `GGML_SYCL_DNN=ON`, `GGML_SYCL_GRAPH=ON`, `GGML_SYCL_HOST_MEM_FALLBACK=ON`, `GGML_SYCL_SUPPORT_LEVEL_ZERO=ON`. Toolchain: oneAPI 2026.0 icpx (per `AGENTS.md` build path); `CMAKE_AR=/usr/bin/llvm-ar` (system LLVM, irrelevant to libsycl ABI). Source from `build-port/CMakeCache.txt` — same flags the P0 GQA-ext harness and P1 [model 1] PPL runs executed under. **F16=ON is the pinned value for ALL P1 PPL/capacity runs** (all 3 models, all KV types) — flipping it mid-track would confound the PPL comparison table (changes prefill speed and accumulation precision, not decode bandwidth). If a future task needs to re-test with F16=OFF, document the change in `RALPH_PROGRESS.md` and re-run the f16 baseline, do not silently mix. |</input>
 
+
+## llama-perplexity / llama-server flag semantics (P1 [model 1] sub-task 2 gotcha)
+
+The two binaries have different "parallel" knobs that are easy to conflate:
+
+| Binary | Flag | What it does | Affects KV buffer? |
+|---|---|---|---|
+| `llama-perplexity` | `-b N` / `--batch-size N` | **Logical batch size** — N tokens processed in parallel within ONE sequence. PPL samples N tokens per step, not N concurrent sequences. | NO — KV is per-slot (1/1 seqs reported in the breakdown) regardless of `-b`. |
+| `llama-server` | `--parallel N` | **n_parallel** — N concurrent sequences served, each gets its own KV slot. | YES — KV buffer scales by N. |
+
+**Implication for capacity work:** to measure "max ctx at N concurrent
+sequences that fits in VRAM" (the L180 capacity claim's second half), you
+MUST use `llama-server --parallel N`, NOT `llama-perplexity -b N`. The
+`llama-perplexity -b 4` runs in P1 [model 1] sub-task 2 v10 produced
+identical results to `-b 1` — the binary was running single-sequence PPL
+both times, just sampling 4 tokens per step instead of 1. Real concurrent
+capacity is an OPEN measurement (see `RALPH_TASKS.md` follow-up bullet).
+Verified by reading `f16_np4_c66048.log` L1: `llama_kv_cache: size = 8256.00
+MiB (66048 cells, 32 layers, 1/1 seqs)` — 1/1 seqs confirms single-slot.
 ## Validation models (the 3-model fleet)
 
 | # | Path | Size | Notes |
