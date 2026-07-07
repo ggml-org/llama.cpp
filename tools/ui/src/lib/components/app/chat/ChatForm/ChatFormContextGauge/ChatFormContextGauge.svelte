@@ -411,18 +411,18 @@
 								<div
 									class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-1"
 								>
-									Cumulative (all responses)
+									Across all turns
 								</div>
 								<div class="flex flex-col gap-0.5">
 									{#if cumulativeStats.read > 0}
 										<ContextGaugeDetailRow
-											label="Reading"
+											label="Prompts sent"
 											value={`${cumulativeStats.read.toLocaleString()} tok`}
 										/>
 									{/if}
 									{#if cumulativeStats.output > 0}
 										<ContextGaugeDetailRow
-											label="Output"
+											label="Tokens generated"
 											value={`${cumulativeStats.output.toLocaleString()} tok`}
 										/>
 									{/if}
@@ -435,31 +435,31 @@
 								<div
 									class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-1"
 								>
-									Current request (KV cache)
+									This turn · KV cache
 								</div>
 								<div class="flex flex-col gap-0.5">
 									{#if currentRead > 0}
 										<ContextGaugeDetailRow
-											label="Reading"
+											label="Prompt"
 											value={`${currentRead.toLocaleString()} tok`}
 										/>
 									{/if}
 									{#if enabledToolsTokenCount ?? 0 > 0}
 										<ContextGaugeDetailRow
-											label="Tool definitions"
+											label="Tool schema"
 											value={`${(enabledToolsTokenCount ?? 0).toLocaleString()} tok`}
 											subtitle="Sent on every turn, cached after the first"
 										/>
 									{/if}
 									{#if currentOutput > 0}
 										<ContextGaugeDetailRow
-											label="Output"
+											label="Generated"
 											value={`${currentOutput.toLocaleString()} tok`}
 										/>
 									{/if}
 									<div class="pt-1 mt-0.5 border-t border-border/30">
 										<div class="flex justify-between">
-											<span class="text-muted-foreground">KV total</span>
+											<span class="text-muted-foreground">KV cache total</span>
 											<span class="font-mono font-medium">{kvTotal.toLocaleString()} tok</span>
 										</div>
 									</div>
