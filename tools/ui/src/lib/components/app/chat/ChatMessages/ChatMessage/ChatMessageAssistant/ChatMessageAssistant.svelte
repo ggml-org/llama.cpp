@@ -212,8 +212,8 @@
 >
 	{#if showProcessingInfoTop}
 		<div class="mt-6 w-full max-w-3xl" in:fade>
-			<div class="processing-container">
-				<span class="processing-text">
+			<div class="flex flex-col items-start gap-2">
+				<span class="shimmer-text text-sm">
 					{modelLoadingText ??
 						processingState.getPromptProgressText() ??
 						processingState.getProcessingMessage() ??
@@ -244,8 +244,8 @@
 
 	{#if showProcessingInfoBottom}
 		<div class="mt-4 w-full max-w-3xl" in:fade>
-			<div class="processing-container">
-				<span class="processing-text">
+			<div class="flex flex-col items-start gap-2">
+				<span class="shimmer-text text-sm">
 					{modelLoadingText ??
 						processingState.getPromptProgressText() ??
 						processingState.getProcessingMessage() ??
@@ -359,28 +359,6 @@
 		flex-direction: column;
 		align-items: flex-start;
 		gap: 0.5rem;
-	}
-
-	.processing-text {
-		background: linear-gradient(
-			90deg,
-			var(--muted-foreground),
-			var(--foreground),
-			var(--muted-foreground)
-		);
-		background-size: 200% 100%;
-		background-clip: text;
-		-webkit-background-clip: text;
-		-webkit-text-fill-color: transparent;
-		animation: shine 1s linear infinite;
-		font-weight: 500;
-		font-size: 0.875rem;
-	}
-
-	@keyframes shine {
-		to {
-			background-position: -200% 0;
-		}
 	}
 
 	.raw-output {
