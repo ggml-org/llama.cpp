@@ -183,9 +183,7 @@
 				view: ChatMessageStatsView.GENERATION,
 				icon: Sparkles,
 				label: 'Generation',
-				tooltipText: isGenerationDisabled
-					? 'Waiting for tokens...'
-					: 'Generation',
+				tooltipText: isGenerationDisabled ? 'Waiting for tokens...' : 'Generation',
 				disabled: isGenerationDisabled
 			})}
 

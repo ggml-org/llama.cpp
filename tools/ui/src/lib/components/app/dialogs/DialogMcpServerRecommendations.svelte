@@ -27,8 +27,8 @@
 	let addedServers = $state<MCPServerSettingsEntry[]>([]);
 	let didAddAny = $state(false);
 
-	let selectedRecommendedCount = $derived.by(() =>
-		RECOMMENDED_MCP_SERVERS.filter((server) => selected[server.id]).length
+	let selectedRecommendedCount = $derived.by(
+		() => RECOMMENDED_MCP_SERVERS.filter((server) => selected[server.id]).length
 	);
 
 	let footerLabel = $derived.by(() => {
@@ -199,7 +199,12 @@
 		<Dialog.Footer>
 			<Button variant="secondary" size="sm" onclick={() => handleOpenChange(false)}>Not now</Button>
 
-			<Button variant="default" size="sm" onclick={enableSelected} disabled={footerLabel === 'Continue'}>{footerLabel}</Button>
+			<Button
+				variant="default"
+				size="sm"
+				onclick={enableSelected}
+				disabled={footerLabel === 'Continue'}>{footerLabel}</Button
+			>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
