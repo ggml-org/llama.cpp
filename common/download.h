@@ -1,6 +1,7 @@
 #pragma once
 
 #include "hf-cache.h"
+#include "ms-cache.h"
 
 #include <string>
 #include <vector>
@@ -68,12 +69,17 @@ struct common_download_task {
     std::string local_path;
     std::function<void()> on_done;
     bool is_hf = false;
+    bool is_ms = false;
 
     common_download_task() = default;
     common_download_task(hf_cache::hf_file f,
             const common_download_opts & opts,
             std::function<void()> on_done = nullptr)
         : opts(opts), url(f.url), local_path(f.local_path), on_done(on_done), is_hf(true) {}
+    common_download_task(ms_cache::ms_file f,
+            const common_download_opts & opts,
+            std::function<void()> on_done = nullptr)
+        : opts(opts), url(f.url), local_path(f.local_path), on_done(on_done), is_ms(true) {}
 };
 
 void common_download_run_tasks(const std::vector<common_download_task> & tasks);
@@ -113,3 +119,13 @@ struct common_download_hf_plan {
     hf_cache::hf_file preset; // if set, only this file is downloaded
 };
 common_download_hf_plan common_download_get_hf_plan(const common_params_model & model, const common_download_opts & opts);
+
+struct common_download_ms_plan {
+    ms_cache::ms_file primary;
+    ms_cache::ms_files model_files;
+    ms_cache::ms_file mmproj;
+    ms_cache::ms_file mtp;
+    ms_cache::ms_file dflash;
+    ms_cache::ms_file eagle3;
+};
+common_download_ms_plan common_download_get_ms_plan(const common_params_model & model, const common_download_opts & opts);
