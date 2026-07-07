@@ -68,7 +68,6 @@ export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte
  * ```svelte
  * <CollapsibleContentBlock
  *   bind:open
- *   icon={BrainIcon}
  *   title="Thinking..."
  *   isStreaming
  * >

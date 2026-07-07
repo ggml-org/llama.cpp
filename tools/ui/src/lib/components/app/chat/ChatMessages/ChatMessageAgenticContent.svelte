@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Wrench, Loader2, Brain } from '@lucide/svelte';
+	import { Wrench, Loader2, Lightbulb } from '@lucide/svelte';
 	import {
 		ChatMessageStatistics,
 		CollapsibleContentBlock,
@@ -55,7 +55,10 @@
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
 	const renderThinkingAsMarkdown = $derived(config().renderThinkingAsMarkdown as boolean);
-	const showMessageStats = $derived(config().showMessageStats as boolean);
+	const showMessageStats = $derived(Boolean(config().showMessageStats));
+	const showAgenticTurnStats = $derived(
+		showMessageStats && Boolean(config().showAgenticTurnStats)
+	);
 
 	const hasReasoningError = $derived(
 		isLastAssistantMessage ? !!agenticLastError(message.convId) : false
@@ -208,33 +211,30 @@
 			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
 		>
-			<div class="pt-3">
-				<div class="my-3 flex items-center gap-2 text-xs text-muted-foreground">
-					<span>Arguments:</span>
+			<div class="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70">
+				<span>Input</span>
 
-					{#if isStreaming}
-						<Loader2 class="h-3 w-3 animate-spin" />
-					{/if}
-				</div>
-				{#if section.toolArgs}
-					<SyntaxHighlightedCode
-						code={formatJsonPretty(section.toolArgs)}
-						language={FileTypeText.JSON}
-						maxHeight="20rem"
-						class="text-xs"
-					/>
-				{:else if isStreaming}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
-						Receiving arguments...
-					</div>
-				{:else}
-					<div
-						class="rounded bg-yellow-500/10 p-2 text-xs text-yellow-600 italic dark:text-yellow-400"
-					>
-						Response was truncated
-					</div>
+				{#if isStreaming}
+					<Loader2 class="h-3 w-3 animate-spin" />
 				{/if}
 			</div>
+			{#if section.toolArgs}
+				<SyntaxHighlightedCode
+					code={formatJsonPretty(section.toolArgs)}
+					language={FileTypeText.JSON}
+					maxHeight="22rem"
+				/>
+			{:else if isStreaming}
+				<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+					Receiving arguments...
+				</div>
+			{:else}
+				<div
+					class="rounded bg-yellow-500/10 p-2 text-xs text-yellow-600 italic dark:text-yellow-400"
+				>
+					Response was truncated
+				</div>
+			{/if}
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.TOOL_CALL || section.type === AgenticSectionType.TOOL_CALL_PENDING}
 		{@const isPending = section.type === AgenticSectionType.TOOL_CALL_PENDING}
@@ -252,34 +252,31 @@
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			{#if section.toolArgs && section.toolArgs !== '{}'}
-				<div class="pt-3">
-					<div class="my-3 text-xs text-muted-foreground">Arguments:</div>
+				<div class="mb-1.5 text-xs text-muted-foreground/70">Input</div>
 
-					<SyntaxHighlightedCode
-						code={formatJsonPretty(section.toolArgs)}
-						language={FileTypeText.JSON}
-						maxHeight="20rem"
-						class="text-xs"
-					/>
-				</div>
+				<SyntaxHighlightedCode
+					code={formatJsonPretty(section.toolArgs)}
+					language={FileTypeText.JSON}
+					maxHeight="22rem"
+				/>
 			{/if}
 
-			<div class="pt-3">
-				<div class="my-3 flex items-center gap-2 text-xs text-muted-foreground">
-					<span>Result:</span>
+			<div class={section.toolArgs && section.toolArgs !== '{}' ? 'mt-4' : ''}>
+				<div class="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70">
+					<span>Output</span>
 
 					{#if isPending}
 						<Loader2 class="h-3 w-3 animate-spin" />
 					{/if}
 				</div>
 				{#if isPending}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
+					<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
 						Waiting for result...
 					</div>
 				{:else if section.toolResult}
-					<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
+					<div class="overflow-auto">
 						{#each section.parsedLines as line, i (i)}
-							<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">
+							<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
 								{line.text}
 							</div>
 							{#if line.image}
@@ -293,7 +290,7 @@
 						{/each}
 					</div>
 				{:else}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">No output</div>
+					<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No output</div>
 				{/if}
 			</div>
 		</CollapsibleContentBlock>
@@ -309,21 +306,20 @@
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
 			class="my-2"
-			icon={Brain}
+			icon={Lightbulb}
+			iconClass="h-3.5 w-3.5"
 			title="Reasoning"
 			subtitle={reasoningSubtitle}
 			rawContent={section.content}
 			onToggle={() => toggleExpanded(index, section)}
 		>
-			<div class="pt-3">
-				{#if renderThinkingAsMarkdown}
-					<MarkdownContent content={section.content} attachments={message?.extra} />
-				{:else}
-					<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
-						{section.content}
-					</div>
-				{/if}
-			</div>
+			{#if renderThinkingAsMarkdown}
+				<MarkdownContent content={section.content} attachments={message?.extra} />
+			{:else}
+				<div class="text-[13px] leading-relaxed break-words whitespace-pre-wrap text-foreground/90">
+					{section.content}
+				</div>
+			{/if}
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING_PENDING}
 		{@const reasoningTitle = isStreaming ? 'Reasoning...' : 'Reasoning'}
@@ -332,22 +328,22 @@
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
 			class="my-2"
-			icon={Brain}
+			icon={Lightbulb}
+			iconClass="h-3.5 w-3.5"
 			title={reasoningTitle}
 			subtitle={reasoningSubtitle}
 			rawContent={section.content}
 			{isStreaming}
+			shimmerTitle={isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
 		>
-			<div class="pt-3">
-				{#if renderThinkingAsMarkdown}
-					<MarkdownContent content={section.content} attachments={message?.extra} />
-				{:else}
-					<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
-						{section.content}
-					</div>
-				{/if}
-			</div>
+			{#if renderThinkingAsMarkdown}
+				<MarkdownContent content={section.content} attachments={message?.extra} />
+			{:else}
+				<div class="text-[13px] leading-relaxed break-words whitespace-pre-wrap text-foreground/90">
+					{section.content}
+				</div>
+			{/if}
 		</CollapsibleContentBlock>
 	{/if}
 {/snippet}
@@ -357,12 +353,12 @@
 		{#each turnGroups as turn, turnIndex (turnIndex)}
 			{@const turnStats = message?.timings?.agentic?.perTurn?.[turnIndex]}
 
-			<div class="agentic-turn group/turn grid gap-3 mb-4">
+			<div class="agentic-turn group/turn grid gap-3 mb-2">
 				{#each turn.sections as section, sIdx (turn.flatIndices[sIdx])}
 					{@render renderSection(section, turn.flatIndices[sIdx])}
 				{/each}
 
-				{#if turnStats && showMessageStats}
+				{#if turnStats && showAgenticTurnStats}
 					<div class="turn-stats transition-opacity duration-150">
 						<ChatMessageStatistics
 							promptTokens={turnStats.llm.prompt_n}
@@ -404,7 +400,7 @@
 		flex-direction: column;
 		width: 100%;
 		max-width: 48rem;
-		gap: 1rem;
+		/*gap: 1rem;*/
 	}
 
 	.agentic-content > :global(*),
