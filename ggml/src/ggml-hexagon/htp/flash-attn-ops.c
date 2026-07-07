@@ -143,6 +143,8 @@ struct hmx_fa_context {
     __fp16 *     vtcm_slopes;          // ALiBi slopes [g_br]
     size_t       row_buf_stride;       // HVX vectors per row buffer (Bc/64)
     size_t       mask_buf_row_stride;  // elements (__fp16) per row in mask buffer
+    size_t       q_tile_bytes;
+    size_t       o_tile_bytes;
     bool         mask_broadcast;       // true when mask->ne[2] == 1 (head-independent, single 2D DMA)
     dma_cache    m_cache;
 };
@@ -658,10 +660,10 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
 
         assert(factx->DK == factx->DV);
 
-        const size_t o_tile_bytes = hex_align_up(factx->g_br * factx->DV * sizeof(__fp16), 4096);
-        const bool use_vtcm_temp = (2 * o_tile_bytes >= factx->g_br * DK * (factx->is_q_fp32 ? 4 : 2));
+        const size_t o_tile_bytes = factx->o_tile_bytes;
+        const bool use_q_dma = (2 * o_tile_bytes >= factx->g_br * DK * (factx->is_q_fp32 ? 4 : 2));
 
-        if (use_vtcm_temp) {
+        if (use_q_dma) {
             if (factx->is_q_fp32) {
                 char * temp_q_vtcm = (char *) factx->vtcm_o_tiles[0];
                 const uint32_t d_limit = DK / 32;
@@ -706,7 +708,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
     {
         const uint32_t g_br = factx->g_br;
         const uint32_t DV   = factx->DV;
-        const size_t o_tile_bytes  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);
+        const size_t o_tile_bytes  = factx->o_tile_bytes;
         const size_t o_bytes_per_t = hex_align_up(o_tile_bytes / n, 128);
         const size_t o_start       = i * o_bytes_per_t;
         const size_t o_end         = hex_smin(o_start + o_bytes_per_t, o_tile_bytes);
@@ -1648,6 +1650,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.vtcm_hmx_scales_qk  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_hmx_scales_qk);
     factx.vtcm_mask_buf       = VTCM_LAYOUT_PTR(__fp16, base, L.off_mask_buf);
     factx.mask_buf_row_stride = L.mask_buf_row_stride;
+    factx.q_tile_bytes        = L.q_tile_bytes;
+    factx.o_tile_bytes        = L.o_tile_bytes;
     factx.vtcm_slopes         = VTCM_LAYOUT_PTR(__fp16, base, L.off_slopes);
 
     const size_t m_line_bytes = L.m_line_bytes;  // used by the mask DMAs in the KV loop
@@ -1692,10 +1696,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 const uint32_t iv2 = kv_head;
                 const uint32_t iv3 = ib3 / (neq3 / v->ne[3]);
 
-                // 1. Push Q DMA (if vtcm_temp is used)
-                const size_t o_tile_bytes = hex_align_up(factx.g_br * factx.DV * sizeof(__fp16), 4096);
-                const bool use_vtcm_temp = (2 * o_tile_bytes >= factx.g_br * factx.DK * (factx.is_q_fp32 ? 4 : 2));
-                if (use_vtcm_temp) {
+                // 1. Push Q DMA (if Q DMA is used)
+                const size_t o_tile_bytes = factx.o_tile_bytes;
+                const bool use_q_dma = (2 * o_tile_bytes >= factx.g_br * factx.DK * (factx.is_q_fp32 ? 4 : 2));
+                if (use_q_dma) {
                     const bool q_transposed = q->nb[1] < q->nb[2];
                     const uint8_t * q_ptr = (const uint8_t *) q->data + q_start * q->nb[1] + (kv_head * factx.G) * q->nb[2] + ib3 * q->nb[3];
                     const size_t el_size = factx.is_q_fp32 ? sizeof(float) : sizeof(__fp16);
@@ -1717,7 +1721,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 }
 
                 // 3. Pop Q DMA (blocks until Q is loaded)
-                if (use_vtcm_temp) {
+                if (use_q_dma) {
                     dma_queue_pop(dma);
                 }
 

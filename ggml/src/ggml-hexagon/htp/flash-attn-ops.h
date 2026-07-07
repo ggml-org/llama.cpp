@@ -116,6 +116,8 @@ struct hmx_fa_vtcm_layout {
     size_t off_slopes;
 
     // Region byte sizes reused by the device at runtime (not just for allocation).
+    size_t q_tile_bytes;
+    size_t o_tile_bytes;
     size_t s_tile_bytes;       // S and P tiles (same size)
     size_t d_tile_bytes;
     size_t m_line_bytes;       // one mask row
@@ -177,6 +179,8 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
     VTCM_LAYOUT_ALLOC(off, off_mask_buf,      m_buf_size);
     VTCM_LAYOUT_ALLOC(off, off_slopes,        slopes_size);
 
+    L->q_tile_bytes        = q_tile_size;
+    L->o_tile_bytes        = o_tile_size;
     L->s_tile_bytes        = s_tile_size;
     L->d_tile_bytes        = d_tile_size;
     L->m_line_bytes        = m_line_size;
