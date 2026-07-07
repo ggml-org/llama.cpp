@@ -1215,3 +1215,21 @@ P2 sub-task 2 (roadmap doc update) and P2 sub-task 3 (commit history
 squash). P3 parked.
 
 ---
+
+## 2026-07-07 — P2 [consolidation] sub-task 2 — roadmap doc updated
+
+Section 8 added to
+`docs/research/2026-07-05-turbo3-sycl-perf-findings-and-roadmap.md`
+marking Tier 1 (SLM Q-centroid LUT) and Tier 3 (XMX joint_matrix)
+as CLOSED with explicit re-opening conditions. Re-opening requires
+a full decode+prefill+GQA-4:1+GQA-8:1 benchmark for Tier 1, and
+either an upstream IGC version that compiles joint_matrix cleanly
+OR an Intel Arc-targeting SYCL FA reference for Tier 3. Section
+8.3 explicitly notes that both items are NOT load-bearing for the
+reframe (the reframe stands on the capacity result, not the speed
+result).
+
+P1 [capacity validation] + P2 [sub-tasks 1 + 2] COMPLETE. Remaining:
+P2 sub-task 3 (commit history squash). P3 parked.
+
+---
