@@ -408,6 +408,11 @@
 		gap: 1rem;
 	}
 
+	.agentic-content > :global(*),
+	.agentic-turn > :global(*) {
+		min-width: 0;
+	}
+
 	.agentic-text {
 		width: 100%;
 	}
