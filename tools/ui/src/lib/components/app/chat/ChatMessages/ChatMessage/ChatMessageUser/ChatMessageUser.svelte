@@ -8,7 +8,7 @@
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
-	import { MessageRole } from '$lib/enums';
+	import { MessageRole, ChatMessageStatisticsMode } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
@@ -107,7 +107,7 @@
 					class="inline-flex flex-wrap items-start justify-end gap-2 text-xs text-muted-foreground"
 				>
 					<ChatMessageStatistics
-						mode="reading"
+						mode={ChatMessageStatisticsMode.READING}
 						promptTokens={storedReadingStats!.promptTokens}
 						promptMs={storedReadingStats!.promptMs}
 					/>
@@ -121,7 +121,7 @@
 						class="inline-flex flex-wrap items-start justify-end gap-2 text-xs text-muted-foreground"
 					>
 						<ChatMessageStatistics
-							mode="reading"
+							mode={ChatMessageStatisticsMode.READING}
 							isLive
 							promptTokens={liveStats.tokensProcessed}
 							promptMs={liveStats.timeMs}

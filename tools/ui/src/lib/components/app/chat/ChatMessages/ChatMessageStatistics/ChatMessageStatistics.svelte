@@ -2,13 +2,11 @@
 	import { Clock, Gauge, WholeWord, BookOpenText, Sparkles, Wrench, Layers } from '@lucide/svelte';
 	import { ChatMessageStatisticsBadge } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ChatMessageStatsView } from '$lib/enums';
+	import { ChatMessageStatsView, ChatMessageStatisticsMode } from '$lib/enums';
 	import type { ChatMessageAgenticTimings } from '$lib/types/chat';
 	import { formatPerformanceTime } from '$lib/utils';
 	import { MS_PER_SECOND, DEFAULT_PERFORMANCE_TIME } from '$lib/constants';
 	import type { Component } from 'svelte';
-
-	export type ChatMessageStatisticsMode = 'switchable' | 'reading' | 'generation';
 
 	interface Props {
 		predictedTokens?: number;
@@ -35,15 +33,15 @@
 		agenticTimings,
 		onActiveViewChange,
 		hideSummary = false,
-		mode = 'switchable'
+		mode = ChatMessageStatisticsMode.SWITCHABLE
 	}: Props = $props();
 
-	let isSwitchable = $derived(mode === 'switchable');
+	let isSwitchable = $derived(mode === ChatMessageStatisticsMode.SWITCHABLE);
 
 	let activeView: ChatMessageStatsView = $derived(
-		mode === 'reading'
+		mode === ChatMessageStatisticsMode.READING
 			? ChatMessageStatsView.READING
-			: mode === 'generation'
+			: mode === ChatMessageStatisticsMode.GENERATION
 				? ChatMessageStatsView.GENERATION
 				: initialView
 	);
@@ -271,9 +269,7 @@
 				value={formattedAgenticTotalTime}
 				tooltipLabel="Total time (LLM + tools)"
 			/>
-		{:else if hasPromptStats && (mode === 'reading' || isSwitchable)}
-			<!-- Prompt stats: shown on the dedicated Reading panel (user message),
-			     or as a switchable-mode fallback while waiting for generation stats. -->
+		{:else if hasPromptStats && (mode === ChatMessageStatisticsMode.READING || isSwitchable)}
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={WholeWord}

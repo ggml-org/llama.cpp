@@ -60,6 +60,7 @@ import {
 	ErrorDialogType,
 	MessageRole,
 	MessageType,
+	ReasoningEffort,
 	StreamConnectionState
 } from '$lib/enums';
 
@@ -2335,7 +2336,7 @@ class ChatStore {
 
 		apiOptions.enableThinking = conversationsStore.getThinkingEnabled();
 		const effort = conversationsStore.getReasoningEffort();
-		if (effort !== 'off') apiOptions.reasoningEffort = effort;
+		if (effort !== ReasoningEffort.OFF) apiOptions.reasoningEffort = effort;
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);

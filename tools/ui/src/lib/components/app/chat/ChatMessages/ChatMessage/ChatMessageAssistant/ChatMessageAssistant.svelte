@@ -11,7 +11,7 @@
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { copyToClipboard, deriveAgenticSections, modelLoadProgressText } from '$lib/utils';
-	import { AgenticSectionType } from '$lib/enums';
+	import { AgenticSectionType, ChatMessageStatisticsMode } from '$lib/enums';
 	import { REASONING_TAGS } from '$lib/constants/agentic';
 	import { fade } from 'svelte/transition';
 	import { MessageRole } from '$lib/enums';
@@ -286,7 +286,7 @@
 				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
 					{@const agentic = message.timings.agentic}
 					<ChatMessageStatistics
-						mode="generation"
+						mode={ChatMessageStatisticsMode.GENERATION}
 						promptTokens={agentic ? agentic.llm.prompt_n : message.timings.prompt_n}
 						promptMs={agentic ? agentic.llm.prompt_ms : message.timings.prompt_ms}
 						predictedTokens={agentic ? agentic.llm.predicted_n : message.timings.predicted_n}
@@ -299,7 +299,7 @@
 
 					{#if genStats}
 						<ChatMessageStatistics
-							mode="generation"
+							mode={ChatMessageStatisticsMode.GENERATION}
 							isLive
 							promptTokens={liveStats?.tokensProcessed}
 							promptMs={liveStats?.timeMs}
