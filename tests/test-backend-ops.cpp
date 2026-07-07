@@ -1137,6 +1137,10 @@ struct test_case {
     }
 
     virtual ggml_tensor * build_graph(ggml_context * ctx) = 0;
+    virtual ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) {
+        GGML_UNUSED(ctx_weights);
+        return build_graph(ctx);
+    }
 
     virtual double max_nmse_err() {
         return 1e-7;
@@ -1213,6 +1217,7 @@ struct test_case {
 
     virtual bool run_whole_graph() { return false; }
     virtual std::vector<ggml_tensor *> fusion_test_nodes() { return {}; }
+    virtual bool use_weight_context() { return false; }
 
     ggml_cgraph * gf = nullptr;
     ggml_cgraph * gb = nullptr;
@@ -1319,20 +1324,28 @@ struct test_case {
             /* .mem_base = */ NULL,
             /* .no_alloc = */ true,
         };
+        const bool use_weights = use_weight_context();
+
         ggml_context * ctx = ggml_init(params);
         GGML_ASSERT(ctx);
+        ggml_context * ctx_weights = use_weights ? ggml_init(params) : nullptr;
+        GGML_ASSERT(!use_weights || ctx_weights);
 
         gf = ggml_new_graph(ctx);
 
         // pre-graph sentinel
         add_sentinel(ctx);
+        if (ctx_weights) {
+            add_sentinel(ctx_weights);
+        }
 
-        ggml_tensor * out = build_graph(ctx);
+        ggml_tensor * out = build_graph(ctx, ctx_weights);
         current_op_name   = op_desc(out);
         check_for_f16_tensor(ctx);
 
         if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
+            ggml_free(ctx_weights);
             ggml_free(ctx);
             return test_status_t::SKIPPED;
         }
@@ -1355,18 +1368,36 @@ struct test_case {
 
             print_test_result_locked(output_printer, result);
 
+            ggml_free(ctx_weights);
             ggml_free(ctx);
             return test_status_t::NOT_SUPPORTED;
         }
 
         // post-graph sentinel
         add_sentinel(ctx);
+        if (ctx_weights) {
+            add_sentinel(ctx_weights);
+        }
+
+        ggml_backend_buffer_t buf_weights = nullptr;
+        if (ctx_weights) {
+            buf_weights = ggml_backend_alloc_ctx_tensors(ctx_weights, backend1);
+            if (buf_weights == NULL) {
+                printf("failed to allocate weight tensors [%s] ", ggml_backend_name(backend1));
+                ggml_free(ctx_weights);
+                ggml_free(ctx);
+                return test_status_t::FAIL;
+            }
+            ggml_backend_buffer_set_usage(buf_weights, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
 
         // allocate
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend1);
 
         if (buf == NULL) {
             printf("failed to allocate tensors [%s] ", ggml_backend_name(backend1));
+            ggml_backend_buffer_free(buf_weights);
+            ggml_free(ctx_weights);
             ggml_free(ctx);
             return test_status_t::FAIL;
         }
@@ -1381,6 +1412,9 @@ struct test_case {
 
         // randomize tensors
         initialize_tensors(ctx);
+        if (ctx_weights) {
+            initialize_tensors(ctx_weights);
+        }
 
         // compare
         struct callback_userdata {
@@ -1466,7 +1500,8 @@ struct test_case {
                                                                fused_nodes_to_verify.size());
 
         ggml_backend_buffer_free(buf);
-
+        ggml_backend_buffer_free(buf_weights);
+        ggml_free(ctx_weights);
         ggml_free(ctx);
 
         // Create test result
@@ -1490,10 +1525,14 @@ struct test_case {
             /* .mem_base = */ NULL,
             /* .no_alloc = */ true,
         };
+        const bool use_weights = use_weight_context();
+
         ggml_context_ptr ctx(ggml_init(params)); // smart ptr
         GGML_ASSERT(ctx);
+        ggml_context_ptr ctx_weights(use_weights ? ggml_init(params) : nullptr);
+        GGML_ASSERT(!use_weights || ctx_weights);
 
-        ggml_tensor * out             = build_graph(ctx.get());
+        ggml_tensor * out             = build_graph(ctx.get(), ctx_weights.get());
         current_op_name               = op_desc(out);
         if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
@@ -1510,6 +1549,16 @@ struct test_case {
             return true;
         }
 
+        ggml_backend_buffer_ptr buf_weights(nullptr);
+        if (ctx_weights) {
+            buf_weights.reset(ggml_backend_alloc_ctx_tensors(ctx_weights.get(), backend));
+            if (buf_weights == NULL) {
+                printf("failed to allocate weight tensors\n");
+                return false;
+            }
+            ggml_backend_buffer_set_usage(buf_weights.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
+
         // allocate
         ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors(ctx.get(), backend)); // smart ptr
 
@@ -1520,6 +1569,9 @@ struct test_case {
 
         // randomize tensors
         initialize_tensors(ctx.get());
+        if (ctx_weights) {
+            initialize_tensors(ctx_weights.get());
+        }
 
         // build graph
         ggml_cgraph * gf = ggml_new_graph_custom(ctx.get(), graph_nodes, false);
@@ -5848,19 +5900,21 @@ struct test_mul_mat_vec_fusion : public test_case {
     const bool b;        // broadcast b matrix (only for use_id)
     const bool with_bias;
     const bool with_gate;
+    const bool with_lane_scale;
     std::array<int64_t, 2> batch_dims;
 
     test_mul_mat_vec_fusion(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k,
                         bool use_id = false, int n_mats = 1, int n_used = 1, bool b = false, bool with_bias = false, bool with_gate = true,
-                        std::array<int64_t, 2> batch_dims = {4, 2})
-    : type(type), glu_op(op), m(m), n(n), k(k), use_id(use_id), n_mats(n_mats), n_used(n_used), b(b), with_bias(with_bias), with_gate(with_gate), batch_dims(batch_dims) {
+                        bool with_lane_scale = false, std::array<int64_t, 2> batch_dims = {4, 2})
+    : type(type), glu_op(op), m(m), n(n), k(k), use_id(use_id), n_mats(n_mats), n_used(n_used), b(b), with_bias(with_bias),
+        with_gate(with_gate), with_lane_scale(with_lane_scale), batch_dims(batch_dims) {
         if (use_id) {
             GGML_ASSERT(n_used <= n_mats);
         }
     }
 
     std::string vars() override {
-        return VARS_TO_STR12(type, glu_op, m, n, k, use_id, n_mats, n_used, b, with_bias, with_gate, batch_dims);
+        return VARS_TO_STR13(type, glu_op, m, n, k, use_id, n_mats, n_used, b, with_bias, with_gate, with_lane_scale, batch_dims);
     }
 
     std::string op_desc(ggml_tensor * t) override {
@@ -5869,6 +5923,7 @@ struct test_mul_mat_vec_fusion : public test_case {
     }
 
     bool run_whole_graph() override { return true; }
+    bool use_weight_context() override { return use_id && with_lane_scale; }
 
     ggml_tensor * build_gate(ggml_context * ctx, ggml_tensor * ffn_gate, ggml_tensor * ffn_up) {
         ggml_tensor * out = nullptr;
@@ -5884,7 +5939,26 @@ struct test_mul_mat_vec_fusion : public test_case {
         return out;
     }
 
+    ggml_tensor * build_lane_scale_dense(ggml_context * ctx, ggml_tensor * out) {
+        ggml_tensor * scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+        return ggml_mul(ctx, out, scale);
+    }
+
+    ggml_tensor * build_lane_scale_id(ggml_context * ctx, ggml_context * ctx_weights, ggml_tensor * out, ggml_tensor * ids) {
+        GGML_ASSERT(ctx_weights);
+        ggml_tensor * scale = ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, n_mats);
+        ggml_tensor * s = ggml_reshape_3d(ctx, scale, 1, n_mats, 1);
+        s = ggml_repeat_4d(ctx, s, 1, n_mats, m, 1);
+        s = ggml_get_rows(ctx, s, ids);
+        return ggml_mul(ctx, out, s);
+    }
+
     ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_ASSERT(!use_weight_context());
+        return build_graph(ctx, nullptr);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
         if (!use_id) {
             const int              channels = batch_dims[0];
             const int              samples  = batch_dims[1];
@@ -5895,19 +5969,34 @@ struct test_mul_mat_vec_fusion : public test_case {
             ggml_tensor * gate = with_gate ? ggml_new_tensor(ctx, type, 4, ne0.data()) : nullptr;
             ggml_tensor * up   = ggml_new_tensor(ctx, type, 4, ne0.data());
 
-            ggml_tensor * ffn_up = ggml_mul_mat(ctx, up, cur);
-            if (with_bias) {
-                std::array<int64_t, 4> bias_ne = { ffn_up->ne[0], 1, channels, samples };
-                ggml_tensor * up_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
-                ffn_up = ggml_add(ctx, ffn_up, up_bias);
-            }
+            auto build_lane_up = [&]() {
+                ggml_tensor * ffn_up = ggml_mul_mat(ctx, up, cur);
+                if (with_lane_scale) {
+                    ffn_up = build_lane_scale_dense(ctx, ffn_up);
+                }
+                if (with_bias) {
+                    std::array<int64_t, 4> bias_ne = { ffn_up->ne[0], 1, channels, samples };
+                    ggml_tensor * up_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
+                    ffn_up = ggml_add(ctx, ffn_up, up_bias);
+                }
+                return ffn_up;
+            };
 
-            ggml_tensor * ffn_gate = with_gate ? ggml_mul_mat(ctx, gate, cur) : nullptr;
-            if (with_bias && with_gate) {
-                std::array<int64_t, 4> bias_ne   = { ffn_gate->ne[0], 1, channels, samples };
-                ggml_tensor * gate_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
-                ffn_gate = ggml_add(ctx, ffn_gate, gate_bias);
-            }
+            auto build_lane_gate = [&]() {
+                ggml_tensor * ffn_gate = ggml_mul_mat(ctx, gate, cur);
+                if (with_lane_scale) {
+                    ffn_gate = build_lane_scale_dense(ctx, ffn_gate);
+                }
+                if (with_bias) {
+                    std::array<int64_t, 4> bias_ne   = { ffn_gate->ne[0], 1, channels, samples };
+                    ggml_tensor * gate_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
+                    ffn_gate = ggml_add(ctx, ffn_gate, gate_bias);
+                }
+                return ffn_gate;
+            };
+
+            ggml_tensor * ffn_up = build_lane_up();
+            ggml_tensor * ffn_gate = with_gate ? build_lane_gate() : nullptr;
 
             ggml_tensor * out = with_gate ? build_gate(ctx, ffn_gate, ffn_up) : ffn_up;
 
@@ -5929,17 +6018,32 @@ struct test_mul_mat_vec_fusion : public test_case {
             ggml_tensor * cur = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, this->b ? 1 : n_used, m);
             ggml_set_name(cur, "cur");
 
-            ggml_tensor * ffn_up = ggml_mul_mat_id(ctx, ups, cur, ids);
-            if (with_bias) {
-                ggml_tensor * up_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_up->ne[0], n_mats);
-                ffn_up = ggml_add_id(ctx, ffn_up, up_bias_param, ids);
-            }
+            auto build_lane_up = [&]() {
+                ggml_tensor * ffn_up = ggml_mul_mat_id(ctx, ups, cur, ids);
+                if (with_lane_scale) {
+                    ffn_up = build_lane_scale_id(ctx, ctx_weights, ffn_up, ids);
+                }
+                if (with_bias) {
+                    ggml_tensor * up_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_up->ne[0], n_mats);
+                    ffn_up = ggml_add_id(ctx, ffn_up, up_bias_param, ids);
+                }
+                return ffn_up;
+            };
 
-            ggml_tensor * ffn_gate = with_gate? ggml_mul_mat_id(ctx, gates, cur, ids) : nullptr;
-            if (with_bias && with_gate) {
-                ggml_tensor * gate_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_gate->ne[0], n_mats);
-                ffn_gate = ggml_add_id(ctx, ffn_gate, gate_bias_param, ids);
-            }
+            auto build_lane_gate = [&]() {
+                ggml_tensor * ffn_gate = ggml_mul_mat_id(ctx, gates, cur, ids);
+                if (with_lane_scale) {
+                    ffn_gate = build_lane_scale_id(ctx, ctx_weights, ffn_gate, ids);
+                }
+                if (with_bias) {
+                    ggml_tensor * gate_bias_param = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ffn_gate->ne[0], n_mats);
+                    ffn_gate = ggml_add_id(ctx, ffn_gate, gate_bias_param, ids);
+                }
+                return ffn_gate;
+            };
+
+            ggml_tensor * ffn_up = build_lane_up();
+            ggml_tensor * ffn_gate = with_gate ? build_lane_gate() : nullptr;
 
             ggml_tensor * out = with_gate ? build_gate(ctx, ffn_gate, ffn_up) : ffn_up;
 
@@ -9202,10 +9306,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                             if (!with_gate && glu_op != GGML_GLU_OP_SWIGLU) {
                                 continue;
                             }
-                            test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
-                                use_id, 16, 8, b, with_bias, with_gate));
-                            test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
-                                use_id, 16, 8, b, with_bias, with_gate, {1, 1}));
+                            for (bool with_lane_scale : {false, true}) {
+                                if (with_lane_scale && type != GGML_TYPE_NVFP4) {
+                                    continue;
+                                }
+                                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
+                                    use_id, 16, 8, b, with_bias, with_gate, with_lane_scale));
+                                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
+                                    use_id, 16, 8, b, with_bias, with_gate, with_lane_scale, {1, 1}));
+                            }
                         }
                     }
                 }
@@ -9823,6 +9932,13 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
     }
 
     if (mode == MODE_GRAD) {
+        test_cases.erase(
+            std::remove_if(test_cases.begin(), test_cases.end(), [](const std::unique_ptr<test_case> & tc) {
+                return tc->run_whole_graph();
+            }),
+            test_cases.end()
+        );
+
         size_t n_ok = 0;
         for (auto & test : test_cases) {
             if (test->eval_grad(backend, op_names_filter, output_printer)) {
