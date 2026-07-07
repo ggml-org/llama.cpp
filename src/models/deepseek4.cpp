@@ -184,17 +184,6 @@ static ggml_tensor * dsv4_with_zero_dep(ggml_context * ctx, ggml_tensor * t, ggm
     return ggml_add(ctx, t, zero);
 }
 
-// Raw SWA K is stored once, but compressed K/masks can carry a stream axis.
-// Repeat raw K at graph build time before concatenating raw and compressed K.
-static ggml_tensor * dsv4_repeat_streams(ggml_context * ctx, ggml_tensor * t, int64_t n_stream) {
-    if (t->ne[3] == n_stream) {
-        return t;
-    }
-
-    GGML_ASSERT(t->ne[3] == 1);
-    return ggml_repeat_4d(ctx, t, t->ne[0], t->ne[1], t->ne[2], n_stream);
-}
-
 static constexpr int64_t DSV4_CSA_RATIO  = 4;
 static constexpr int64_t DSV4_HCA_RATIO  = 128;
 
@@ -661,8 +650,6 @@ ggml_tensor * llama_model_deepseek4::graph::build_csa_lid_attention(
             csa_k->nb[1], csa_k->nb[2], csa_k->nb[3], 0);
     cb(csa_k, "csa_comp_k", il);
 
-    raw_k = dsv4_repeat_streams(ctx0, raw_k, csa_k->ne[3]);
-
     ggml_tensor * k_all = ggml_concat(ctx0, raw_k, csa_k, 2);
     cb(k_all, "csa_k_all", il);
 
@@ -710,8 +697,6 @@ ggml_tensor * llama_model_deepseek4::graph::build_hca_attention(
             hca_k->nb[1], hca_k->nb[2], hca_k->nb[3], 0);
     cb(hca_k, "hca_comp_k", il);
 
-    raw_k = dsv4_repeat_streams(ctx0, raw_k, hca_k->ne[3]);
-
     ggml_tensor * k_all = ggml_concat(ctx0, raw_k, hca_k, 2);
     cb(k_all, "hca_k_all", il);
 
@@ -753,7 +738,6 @@ ggml_tensor * llama_model_deepseek4::graph::build_raw_attention(
     ggml_tensor * kq_mask = inp_attn->get_kq_mask();
 
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
-    k = dsv4_repeat_streams(ctx0, k, kq_mask->ne[3]);
 
     ggml_tensor * out = build_attn_mha(q, k, k, nullptr, kq_mask, sinks, nullptr, kq_scale, il);
     cb(out, "attn_raw", il);
