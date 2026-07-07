@@ -20,7 +20,6 @@ add_library(${HTP_LIB} SHARED
     worker-pool.c
     hex-dma.c
     hmx-queue.c
-    flash-attn-ops.c
     matmul-ops.c
     gated-delta-net-ops.c
     binary-ops.c
@@ -41,6 +40,7 @@ add_library(${HTP_LIB} SHARED
     diag-ops.c
     solve-tri-ops.c
     pad-ops.c
+    flash-attn-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE

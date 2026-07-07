@@ -145,6 +145,8 @@ struct hmx_fa_context {
     size_t       mask_buf_row_stride;  // elements (__fp16) per row in mask buffer
     size_t       q_tile_bytes;
     size_t       o_tile_bytes;
+    size_t       col_vec_bytes;
+    size_t       d_tile_bytes;
     bool         mask_broadcast;       // true when mask->ne[2] == 1 (head-independent, single 2D DMA)
     dma_cache    m_cache;
 };
@@ -595,8 +597,8 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
         const uint32_t g_br = factx->g_br;
         const uint32_t DV   = factx->DV;
 
-        const size_t col_vec_bytes = hex_align_up(g_br * sizeof(float), 256);
-        const size_t d_tile_bytes  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);
+        const size_t col_vec_bytes = factx->col_vec_bytes;
+        const size_t d_tile_bytes  = factx->d_tile_bytes;
 
         // Initialize vtcm_l_vec & vtcm_m_vec
         const size_t l_bytes_per_t = hex_align_up(col_vec_bytes / n, 128);
@@ -1608,9 +1610,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     const size_t size_v_row_padded = hex_round_up(size_v_row, 128);
 
     // Build the VTCM layout once (shared with the host estimator) and place every
-    // scratch buffer at its computed offset. This is the single source of truth for
-    // sizes/offsets/strides -- host and device can no longer disagree.
-    _Static_assert(sizeof(HVX_Vector) == HMX_FA_HVX_VECTOR_BYTES, "HVX vector size mismatch");
+    // scratch buffer at its computed offset.
     struct hmx_fa_vtcm_layout L;
     hmx_fa_vtcm_layout_build(&L, G, DK, DV, Br, Bc, n_threads, pipeline);
 
@@ -1645,6 +1645,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.mask_buf_row_stride = L.mask_buf_row_stride;
     factx.q_tile_bytes        = L.q_tile_bytes;
     factx.o_tile_bytes        = L.o_tile_bytes;
+    factx.col_vec_bytes       = L.col_vec_bytes;
+    factx.d_tile_bytes        = L.d_tile_bytes;
     factx.vtcm_slopes         = VTCM_LAYOUT_PTR(__fp16, base, L.off_slopes);
 
     const size_t m_line_bytes = L.m_line_bytes;  // used by the mask DMAs in the KV loop
