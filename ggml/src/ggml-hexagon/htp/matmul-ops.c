@@ -2395,7 +2395,6 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
 
     if (pipeline) {
         // --- Asynchronous Pipelined Loop ---
-        hmx_queue_wakeup(ctx->hmx_queue);
         hmx_matmul_job_t job_slots[2];  // persistent double-buffered job descriptors
 
         for (size_t mr = 0; mr < m; mr += m_chunk_n_rows) {
@@ -2527,8 +2526,6 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
             }
         }
     }
-
-    hmx_queue_suspend(ctx->hmx_queue);
 
     return 0;
 }
@@ -2969,11 +2966,8 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
         }
     }
 
-    hmx_queue_suspend(ctx->hmx_queue);
-
     return 0;
 }
-
 
 // --- Dispatchers and Public Entry Points ---
 

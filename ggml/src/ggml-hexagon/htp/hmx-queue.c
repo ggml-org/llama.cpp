@@ -66,7 +66,7 @@ static void hmx_queue_thread(void * arg) {
 
     bool killed = false;
 
-    unsigned int poll_cnt  = HMX_QUEUE_POLL_COUNT;
+    unsigned int poll_cnt  = 1; // HMX_QUEUE_POLL_COUNT;
     unsigned int prev_seqn = 0;
     while (!killed) {
         unsigned int seqn = atomic_load(&q->seqn);

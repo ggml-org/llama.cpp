@@ -1735,13 +1735,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 const size_t k_src_stride = size_k_row_padded / sizeof(__fp16);
                 const size_t v_src_stride = size_v_row_padded / sizeof(__fp16);
 
-                if (factx.pipeline) {
-                    // ==================================================================
-                    // Pipeline path
-                    // ==================================================================
-                    struct hmx_queue * hmx_q = ctx->hmx_queue;
-                    hmx_queue_wakeup(hmx_q);
+                struct hmx_queue * hmx_q = ctx->hmx_queue;
 
+                if (factx.pipeline) {
+                    // Pipeline path
                     for (uint32_t kv_blk = 0; kv_blk < factx.n_kv_blocks; ++kv_blk) {
                         const uint32_t kv_start    = kv_blk * Bc;
                         const uint32_t kv_rows     = hex_smin(Bc, nek1 - kv_start);
@@ -1868,9 +1865,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                     }
 
                 } else {
-                    // ==================================================================
                     // Fallback path
-                    // ==================================================================
                     for (uint32_t kv_blk = 0; kv_blk < factx.n_kv_blocks; ++kv_blk) {
                         const uint32_t kv_start    = kv_blk * Bc;
                         const uint32_t kv_rows     = hex_smin(Bc, nek1 - kv_start);
@@ -1995,8 +1990,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
             }
         }
     }
-
-    hmx_queue_suspend(ctx->hmx_queue);
 
     return HTP_STATUS_OK;
 }
