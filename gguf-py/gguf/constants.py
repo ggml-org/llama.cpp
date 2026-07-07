@@ -457,6 +457,7 @@ class MODEL_ARCH(IntEnum):
     GEMMA3N          = auto()
     GEMMA4           = auto()
     GEMMA4_ASSISTANT = auto()
+    QUATFIT1         = auto()
     GEMMA_EMBEDDING  = auto()
     STARCODER2       = auto()
     RWKV6            = auto()
@@ -1037,6 +1038,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GEMMA3N:          "gemma3n",
     MODEL_ARCH.GEMMA4:           "gemma4",
     MODEL_ARCH.GEMMA4_ASSISTANT: "gemma4-assistant",
+    MODEL_ARCH.QUATFIT1:         "quatfit1",
     MODEL_ARCH.GEMMA_EMBEDDING:  "gemma-embedding",
     MODEL_ARCH.STARCODER2:       "starcoder2",
     MODEL_ARCH.RWKV6:            "rwkv6",
@@ -2627,6 +2629,40 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.LAUREL_POST_NORM,
     ],
     MODEL_ARCH.GEMMA4: [
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_PRE_NORM_2,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.FFN_POST_NORM_1,
+        MODEL_TENSOR.FFN_POST_NORM_2,
+        MODEL_TENSOR.LAYER_OUT_SCALE,
+        MODEL_TENSOR.PER_LAYER_TOKEN_EMBD,
+        MODEL_TENSOR.PER_LAYER_MODEL_PROJ,
+        MODEL_TENSOR.PER_LAYER_INP_GATE,
+        MODEL_TENSOR.PER_LAYER_PROJ,
+        MODEL_TENSOR.PER_LAYER_PROJ_NORM,
+        MODEL_TENSOR.PER_LAYER_POST_NORM,
+    ],
+    MODEL_ARCH.QUATFIT1: [
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT,
@@ -4637,6 +4673,8 @@ class VisionProjectorType:
     GEMMA4A = "gemma4a"
     GEMMA4UV = "gemma4uv" # "unified" variant
     GEMMA4UA = "gemma4ua" # "unified" variant
+    QUATFIT1V = "quatfit1v"
+    QUATFIT1A = "quatfit1a"
     PHI4 = "phi4"
     IDEFICS3 = "idefics3"
     PIXTRAL = "pixtral"

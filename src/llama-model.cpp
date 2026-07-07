@@ -140,6 +140,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_gemma3n(params);
         case LLM_ARCH_GEMMA4:
             return new llama_model_gemma4(params);
+        case LLM_ARCH_QUATFIT1:
+            return new llama_model_quatfit1(params);
         case LLM_ARCH_GEMMA4_ASSISTANT:
             return new llama_model_gemma4_assistant(params);
         case LLM_ARCH_GEMMA_EMBEDDING:

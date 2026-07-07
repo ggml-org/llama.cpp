@@ -945,3 +945,17 @@ class Gemma4UnifiedVisionAudioModel(Gemma4VisionAudioModel):
             perm = row * p * 3 + col * 3 + ch
             data_torch = data_torch[perm]
         return super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Quatfit1ForConditionalGeneration", "Quatfit1ForCausalLM")
+class Quatfit1Model(Gemma4Model):
+    model_arch = gguf.MODEL_ARCH.QUATFIT1
+
+
+@ModelBase.register("Quatfit1ForConditionalGeneration")
+class Quatfit1VisionAudioModel(Gemma4VisionAudioModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.QUATFIT1V)
+        if self.has_audio_encoder:
+            self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.QUATFIT1A)
