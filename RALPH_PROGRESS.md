@@ -1314,3 +1314,28 @@ gain ratio (q8_0/f16=1.89-1.90x, q4_0/f16=3.57-3.60x,
 model-invariant for GPU-FA types).
 
 ---
+
+## 2026-07-07 — RALPH loop FINAL state
+
+P1 [capacity validation] + P2 [consolidation] + P1.8 [partial
+concurrent capacity, killed hypothesis] are all closed. P3 [2
+items] is explicitly parked per the task description. The loop is
+now in the "wait for human to add more" state per loop contract
+rule 7.
+
+A human skimming RALPH_TASKS.md can see the loop's final state:
+- All P1 model 1/2/3 sub-tasks (PPL + capacity + correctness) are
+  closed with result blocks
+- All P2 sub-tasks (consolidation doc + roadmap Section 8 +
+  squash branch) are closed with result blocks
+- P1.8 (concurrent capacity) is closed as a partial killed-
+  hypothesis LOOP_DONE; the full 3-model x 4-N sweep is a
+  follow-up bullet
+- P3 (2 items) is parked
+
+The reframe stands: turbo is a capacity feature, not a speed
+feature. The capacity-gain ratio is model-invariant for GPU-FA
+types. turbo4 wins on all 3 models. turbo2/3 NOT viable on MoE.
+Tier 1 (LUT) and Tier 3 (XMX) speed work closed with evidence.
+
+---
