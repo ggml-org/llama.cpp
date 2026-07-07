@@ -43,7 +43,8 @@
 </script>
 
 {#each fields as field (field.key)}
-	<div class="space-y-2">
+	{#if !field.dependsOn || Boolean(localConfig[field.dependsOn])}
+	<div class={field.dependsOn ? 'space-y-2 pl-6' : 'space-y-2'}>
 		{#if field.type === SettingsFieldType.INPUT}
 			{@const currentValue = String(localConfig[field.key] ?? '')}
 			{@const serverDefault = currentModelParams[field.key]}
@@ -263,5 +264,6 @@
 				</div>
 			</div>
 		{/if}
-	</div>
+		</div>
+	{/if}
 {/each}
