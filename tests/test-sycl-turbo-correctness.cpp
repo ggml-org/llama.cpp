@@ -958,6 +958,98 @@ int main() {
             printf("   [8a] InnerQ state machine: %d cases PASS (env state in harness: %d)\n",
                    n_cases, env_state);
         }
+
+        // [8b] K^2 profile computation probe (P3.2.3 device K^2 kernel, C reference).
+        //
+        // This is a unit-level check of the C reference for
+        // ggml_innerq_compute_k_squared_profile. We build a small probe
+        // (deterministic, not random -- so the test is reproducible)
+        // and verify the output is in the valid range and matches
+        // expectations for known input shapes.
+        //
+        // The P3.2.3 device SYCL kernel (parallel_for reduction)
+        // generalizes this C reference across all shapes; that's
+        // P3.2.3's "Option C" follow-up. This probe verifies the
+        // algorithm is correct; the SYCL implementation can be
+        // tested for compilation but not for runtime correctness
+        // without the full AOT link.
+        int n_probe = 8;  // small probe for fast unit test
+        int k2_failures = 0;
+        // --- Case 1: zero-input probe. Expect scale[d] == 1.0f for all d. ---
+        {
+            std::vector<float> probe_zero(1 * 128, 0.0f);
+            float scales[128] = {0};
+            ggml_innerq_compute_k_squared_profile(probe_zero.data(), 1, 128, scales);
+            for (int d = 0; d < 128; ++d) {
+                if (scales[d] != 1.0f) {
+                    printf("   [8b] FAIL: zero-input probe scale[%d] = %f, expected 1.0\n",
+                           d, (double) scales[d]);
+                    ++k2_failures;
+                }
+            }
+        }
+        // --- Case 2: constant-input probe. For probe[i,d] = c, mean_square = c^2,
+        //     expected scale = 1 / sqrt(1 + c^2) for all d. ---
+        {
+            const float c = 0.5f;
+            std::vector<float> probe_const(n_probe * 128, c);
+            float scales[128] = {0};
+            ggml_innerq_compute_k_squared_profile(probe_const.data(), n_probe, 128, scales);
+            const float expected = 1.0f / std::sqrt(1.0f + c * c);
+            for (int d = 0; d < 128; ++d) {
+                if (std::fabs(scales[d] - expected) > 1e-5f) {
+                    printf("   [8b] FAIL: const-input probe scale[%d] = %f, expected %f\n",
+                           d, (double) scales[d], (double) expected);
+                    ++k2_failures;
+                }
+            }
+        }
+        // --- Case 3: per-position probe (each position has a different value).
+        //     Verify the function produces per-position scales correctly. ---
+        {
+            std::vector<float> probe(2 * 128);
+            for (int d = 0; d < 128; ++d) {
+                probe[0 * 128 + d] = 0.1f * (float) d;
+                probe[1 * 128 + d] = 0.05f * (float) (127 - d);
+            }
+            float scales[128] = {0};
+            ggml_innerq_compute_k_squared_profile(probe.data(), 2, 128, scales);
+            // For each position d, expected mean_square = ((0.1*d)^2 + (0.05*(127-d))^2) / 2.
+            // Expected scale = 1 / sqrt(1 + mean_square).
+            for (int d = 0; d < 128; ++d) {
+                const double v0 = 0.1 * d;
+                const double v1 = 0.05 * (127 - d);
+                const double ms = (v0 * v0 + v1 * v1) / 2.0;
+                const float expected = (float)(1.0 / std::sqrt(1.0 + ms));
+                if (std::fabs(scales[d] - expected) > 1e-4f) {
+                    printf("   [8b] FAIL: per-position probe scale[%d] = %f, expected %f\n",
+                           d, (double) scales[d], (double) expected);
+                    ++k2_failures;
+                }
+            }
+        }
+        // --- Case 4: invalid head_dim. Expect the 1.0 default (the function
+        //     zero-fills the output for unsupported head_dims). ---
+        {
+            std::vector<float> probe_any(1 * 100, 1.0f);  // 100 is not a supported head_dim
+            float scales[100] = {0};
+            ggml_innerq_compute_k_squared_profile(probe_any.data(), 1, 100, scales);
+            for (int d = 0; d < 100; ++d) {
+                if (scales[d] != 1.0f) {
+                    printf("   [8b] FAIL: invalid head_dim scale[%d] = %f, expected 1.0\n",
+                           d, (double) scales[d]);
+                    ++k2_failures;
+                }
+            }
+        }
+        if (k2_failures > 0) {
+            printf("   [8b] InnerQ K^2 profile: %d failures\n", k2_failures);
+            g_failures++;
+        } else {
+            printf("   [8b] InnerQ K^2 profile: PASS (zero-input, const-input, per-position, invalid-head-dim)\n");
+        }
+
+
         g_skips++;  // [8] as a whole is still in SKIP/placeholder territory -- the real
                     // PPL probe lives in P3.2.4 and is what the policy contract
                     // ultimately gates on. This P3.2.2 sub-probe is a unit check,
