@@ -1095,3 +1095,45 @@ P1 [model 3] sub-task 1 RESOLVED. Remaining: sub-tasks 2 (capacity)
 and 3 (correctness).
 
 ---
+
+## 2026-07-07 — P1 [model 3 — Qwen3] sub-task 2 — Capacity gain (init-only, partial)
+
+Qwen3 sub-task 2 capacity sweep COMPLETE (init-only, no PPL).
+Final per-cell ceilings (single-stream, n_par=1):
+  f16    = 15248 ctx  (KV 1440 MiB, GPU-FA)
+  q8_0   = 28964 ctx  (KV 1454 MiB, GPU-FA) — 1.90× f16
+  q4_0   = 54872 ctx  (KV 1451 MiB, GPU-FA) — 3.60× f16
+  turbo2 = KV 17136 MiB at c=524288 (CPU-FA, -ngl 0, host RAM)
+  turbo3 = KV 17856 MiB at c=524288 (CPU-FA, -ngl 0, host RAM)
+  turbo4 = KV 19584 MiB at c=524288 (CPU-FA, -ngl 0, host RAM)
+
+**Qwen3-specific finding:** model is 12.7 GB (12994 MiB resident on
+GPU) — 80% of the 16 GB Arc A770 VRAM. Only ~3 GB left for KV +
+compute. KV ceilings are 5-6x smaller than the 7-8B models (which
+leave 10-11 GB for KV at ~25% model VRAM share). turbo types can't
+run GPU-FA at all (model + any meaningful KV doesn't fit in 3 GB);
+they use CPU-FA (-ngl 0) with KV on host RAM (17-20 GB at c=524288
+for K=q8_0+V=turbo{N}).
+
+**The capacity-gain ratio for GPU-FA types IS model-invariant:**
+  q8_0/f16 = 1.90× (models 1+2: 1.89×)
+  q4_0/f16 = 3.60× (models 1+2: 3.57-3.58×)
+The ratio is determined purely by KV bytes-per-token; the Qwen3 model
+just has smaller absolute ceilings because the model itself takes
+more VRAM.
+
+**turbo types on Qwen3 use CPU-FA + host RAM** (different kind of
+capacity story than the 7-8B models which use GPU-FA + VRAM).
+turbo2/3 KILLED on PPL (sub-task 1); only turbo4 viable for MoE.
+
+**v12 driver partial kill + recovery:** the v12 sweep was killed at
+the 300s bash tool timeout mid-turbo2 phase 1. The per-KV detached
+probes recovered the v10 ceilings (f16/q4_0/q8_0) and the turbo
+type probes at c=524288. The detach pattern (setsid nohup ... < /dev/null
+& disown) is the correct fix.
+
+Full result doc: `docs/ppl-results/qwen3-coder-30b-a3b/capacity-RESULTS.md`.
+Enriched CSV: `docs/ppl-results/qwen3-coder-30b-a3b/sweep_enriched.csv`.
+Remaining: sub-task 3 (correctness).
+
+---
