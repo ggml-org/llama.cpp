@@ -68,10 +68,32 @@
 		return null;
 	});
 
-	// Derive context from message data (same approach as logFlowSummary).
-	// Do NOT use processingState.processingState?.contextUsed — it is cleared during
-	// streaming and only restored after the response finishes, making it always one
-	// message behind.
+	// Live token stats from the server's processing state, parsed once per
+	// update so every consumer derived below reruns in lockstep with each
+	// server emission. Null outside of preparing/generating. Reading directly
+	// from processingState (instead of writing through a $state in an
+	// $effect) keeps the dependency graph a single hop and makes every gauge
+	// value reactive while streaming.
+	let liveStats = $derived.by(() => {
+		const live = processingState.processingState;
+		if (!live || (live.status !== 'preparing' && live.status !== 'generating')) {
+			return null;
+		}
+		const livePromptProgress = live.promptProgress?.processed ?? 0;
+		const livePromptTokens = Math.max(live.promptTokens ?? 0, livePromptProgress);
+		return {
+			promptTokens: livePromptTokens,
+			cacheTokens: live.cacheTokens ?? 0,
+			outputTokens: live.outputTokensUsed ?? 0,
+			tokensPerSecond: live.tokensPerSecond ?? 0
+		};
+	});
+
+	// Derive context from message data, plus live in-flight tokens when present.
+	// During preparing, live.promptTokens grows as the prompt is processed. During
+	// generating, the server zeroes prompt_n (pre_decode) so the value lags, but
+	// live.promptTokens still tracks via promptProgress. After the turn, the
+	// committed assistant message timings are stable and liveStats is null.
 	let contextUsed = $derived.by(() => {
 		const messages = activeMessages() as DatabaseMessage[];
 		const agenticMessages = messages.filter(
@@ -95,39 +117,14 @@
 				}
 			}
 		}
+
+		const live = liveStats;
+		if (live) {
+			const liveTotal = live.promptTokens + live.cacheTokens + live.outputTokens;
+			if (liveTotal > 0) used = Math.max(used, liveTotal);
+		}
+
 		return used + (enabledToolsTokenCount ?? 0);
-	});
-
-	// Track the last known prompt_n and cache_n from the preparing phase.
-	// The server resets prompt_n to 0 during generation (pre_decode), so we
-	// preserve the final counts from when promptProgress disappears.
-	// IMPORTANT: prompt_n and cache_n are separate fields — do NOT add them
-	// together here. The "reading" (prompt + cache) is computed in currentRead.
-	let lastKnownPromptTokens = $state(0);
-	let lastKnownCacheTokens = $state(0);
-
-	$effect(() => {
-		const live = processingState.processingState;
-
-		// Reset at the start of a fresh preparing phase (new request).
-		if (live?.status === 'preparing') {
-			const pp = live.promptProgress;
-			if (pp && pp.total > 0 && pp.processed === 0) {
-				lastKnownPromptTokens = 0;
-				lastKnownCacheTokens = 0;
-			}
-		}
-
-		if (live?.promptProgress) {
-			// Update while prompt processing is ongoing.
-			lastKnownPromptTokens = live.promptTokens ?? 0;
-			lastKnownCacheTokens = live.cacheTokens ?? 0;
-		} else if (live?.status === 'generating' && lastKnownPromptTokens === 0) {
-			// Prompt processing just finished — lock in whatever we have before
-			// the server zeroes prompt_n during generation.
-			lastKnownPromptTokens = live.promptTokens ?? 0;
-			lastKnownCacheTokens = live.cacheTokens ?? 0;
-		}
 	});
 
 	let cumulativeStats = $derived.by(() => {
@@ -138,33 +135,34 @@
 		let outputMs = 0;
 		let hasAgenticFlow = false;
 
-		// Find agentic messages. agentic.llm.predicted_n/prompt_n is accumulated across
-		// the entire flow and shared on ALL assistant messages, so we count it only once
-		// (from the last agentic message which has the complete accumulated totals).
+		// Sum the committed assistant message timings only. The "Cumulative
+		// (all responses)" rows deliberately reflect completed turns, so live
+		// in-flight tokens are not layered on top - that double-counts whenever
+		// a new turn starts after one has already committed. Live reactivity is
+		// handled by the "Current request (KV cache)" section below, which reads
+		// the same liveStats source directly.
 		const agenticMessages = messages.filter(
 			(m) => m.role === MessageRole.ASSISTANT && m.timings?.agentic?.llm?.predicted_n != null
 		);
-		if (agenticMessages.length > 0) {
-			hasAgenticFlow = true;
+		hasAgenticFlow = agenticMessages.length > 0;
+		if (hasAgenticFlow) {
+			// agentic.llm.predicted_n/prompt_n accumulates across the entire flow
+			// and is shared on all assistant messages, so count it from the latest
+			// agentic message once.
 			const lastAgentic = agenticMessages[agenticMessages.length - 1];
 			read += lastAgentic.timings.agentic.llm.prompt_n ?? 0;
-			read += lastAgentic.timings.agentic.llm.prompt_ms != null
-				? 0 // agentic llm doesn't track cache_n separately; prompt_n is the full prompt
-				: 0;
 			output += lastAgentic.timings.agentic.llm.predicted_n ?? 0;
 			outputMs += lastAgentic.timings.agentic.llm.predicted_ms ?? 0;
-		}
-
-		// Non-agentic assistant messages: use per-message timings directly.
-		for (const message of messages) {
-			if (message.role !== MessageRole.ASSISTANT) continue;
-			const timings = message.timings;
-			if (!timings) continue;
-			if (hasAgenticFlow && timings.agentic?.llm?.predicted_n != null) continue;
-			read += timings.prompt_n ?? 0;
-			read += timings.cache_n ?? 0;
-			output += timings.predicted_n ?? 0;
-			outputMs += timings.predicted_ms ?? 0;
+		} else {
+			for (const message of messages) {
+				if (message.role !== MessageRole.ASSISTANT) continue;
+				const timings = message.timings;
+				if (!timings) continue;
+				read += timings.prompt_n ?? 0;
+				read += timings.cache_n ?? 0;
+				output += timings.predicted_n ?? 0;
+				outputMs += timings.predicted_ms ?? 0;
+			}
 		}
 
 		const averageTokensPerSecond = outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
@@ -201,28 +199,38 @@
 		return Math.round((contextUsed / contextTotal) * 100);
 	});
 
-	// Current request's Reading: prompt_n + cache_n for the active request.
-	// Falls back to lastKnown values during generation (server zeroes prompt_n).
+	// Current request's Reading: prompt_n + cache_n for the in-flight request.
+	// During preparing, live.promptTokens tracks prompt processing; during
+	// generating, the server zeros prompt_n (pre_decode) but liveStats still
+	// carries the last known value. Falls back to the last assistant message's
+	// timings when the server has no live data.
 	let currentRead = $derived.by(() => {
-		if (lastKnownPromptTokens > 0) return (lastKnownPromptTokens ?? 0) + (lastKnownCacheTokens ?? 0);
 		const messages = activeMessages() as DatabaseMessage[];
+
+		let read = 0;
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const msg = messages[i];
 			if (msg.role === MessageRole.ASSISTANT && msg.timings) {
-				return (msg.timings.prompt_n ?? 0) + (msg.timings.cache_n ?? 0);
+				read = (msg.timings.prompt_n ?? 0) + (msg.timings.cache_n ?? 0);
+				break;
 			}
 		}
-		return 0;
+
+		const live = liveStats;
+		if (live && (live.promptTokens > 0 || live.cacheTokens > 0)) {
+			read = Math.max(read, live.promptTokens + live.cacheTokens);
+		}
+
+		return read;
 	});
 
-	// Current request's Output: what's being generated right now.
+	// Current request's Output: tokens generated so far in this response.
 	let currentOutput = $derived.by(() => {
-		const live = processingState.processingState;
-		if (live && (live.status === 'preparing' || live.status === 'generating')) {
-			const liveOutputTokens = live.outputTokensUsed ?? 0;
-			if (liveOutputTokens > 0) return liveOutputTokens;
-		}
 		const messages = activeMessages() as DatabaseMessage[];
+
+		const live = liveStats;
+		if (live && live.outputTokens > 0) return live.outputTokens;
+
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const msg = messages[i];
 			if (msg.role === MessageRole.ASSISTANT && msg.timings) {
@@ -400,7 +408,9 @@
 					<Collapsible.Content class="flex flex-col gap-3 text-xs pt-4">
 						{#if cumulativeStats.read > 0 || cumulativeStats.output > 0}
 							<div>
-								<div class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-1">
+								<div
+									class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-1"
+								>
 									Cumulative (all responses)
 								</div>
 								<div class="flex flex-col gap-0.5">
@@ -422,7 +432,9 @@
 
 						{#if currentRead > 0 || currentOutput > 0 || (enabledToolsTokenCount ?? 0) > 0}
 							<div>
-								<div class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-1">
+								<div
+									class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-1"
+								>
 									Current request (KV cache)
 								</div>
 								<div class="flex flex-col gap-0.5">
