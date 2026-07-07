@@ -1762,7 +1762,9 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         }
     }
 
-    if (it_best != states.end()) {
+    const bool found = it_best != states.end();
+
+    if (found) {
         SRV_TRC(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
 
         {
@@ -1804,7 +1806,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         states.erase(it_best);
     }
 
-    return true;
+    return found;
 }
 
 void server_prompt_cache::update() {
