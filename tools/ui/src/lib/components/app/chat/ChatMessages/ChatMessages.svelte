@@ -186,6 +186,8 @@
 			message: DatabaseMessage;
 			toolMessages: DatabaseMessage[];
 			isLastAssistantMessage: boolean;
+			isLastUserMessage: boolean;
+			nextAssistantMessage: DatabaseMessage | null;
 			siblingInfo: ChatMessageSiblingInfo;
 		}> = [];
 
@@ -236,15 +238,37 @@
 				message: msg,
 				toolMessages,
 				isLastAssistantMessage: false,
+				isLastUserMessage: false,
+				nextAssistantMessage: null,
 				siblingInfo
 			});
 		}
 
-		// Mark the last assistant message
+		// Mark the last assistant message and the user message that immediately
+		// precedes it (so live prompt progress can attach to the right user turn).
+		let lastAssistantIdx = -1;
 		for (let i = result.length - 1; i >= 0; i--) {
 			if (result[i].message.role === MessageRole.ASSISTANT) {
 				result[i].isLastAssistantMessage = true;
+				lastAssistantIdx = i;
 				break;
+			}
+		}
+
+		if (lastAssistantIdx > 0 && result[lastAssistantIdx - 1].message.role === MessageRole.USER) {
+			result[lastAssistantIdx - 1].isLastUserMessage = true;
+		}
+
+		// For each user entry, find the next assistant entry in display order so
+		// the prompt processing stats can be shown next to the user message.
+		for (let i = 0; i < result.length; i++) {
+			if (result[i].message.role !== MessageRole.USER) continue;
+
+			for (let j = i + 1; j < result.length; j++) {
+				if (result[j].message.role === MessageRole.ASSISTANT) {
+					result[i].nextAssistantMessage = result[j].message;
+					break;
+				}
 			}
 		}
 
@@ -257,12 +281,14 @@
 		{isVisible ? 'opacity-100' : 'opacity-0'}
 		{previousRouteId === '/(chat)/chat/[id]' ? '' : 'delay-300'}"
 >
-	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
+	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, isLastUserMessage, nextAssistantMessage, siblingInfo } (message.id)}
 		<ChatMessage
 			class="mx-auto mt-12 w-full max-w-3xl"
 			{message}
 			{toolMessages}
 			{isLastAssistantMessage}
+			{isLastUserMessage}
+			{nextAssistantMessage}
 			{siblingInfo}
 		/>
 	{/each}
