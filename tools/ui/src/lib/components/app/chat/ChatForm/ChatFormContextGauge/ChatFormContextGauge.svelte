@@ -138,6 +138,7 @@
 		let read = 0;
 		let output = 0;
 		let outputMs = 0;
+		let cacheTotal = 0;
 		let hasAgenticFlow = false;
 
 		// Sum the committed assistant message timings only. The "Cumulative
@@ -153,7 +154,8 @@
 		if (hasAgenticFlow) {
 			// agentic.llm.predicted_n/prompt_n accumulates across the entire flow
 			// and is shared on all assistant messages, so count it from the latest
-			// agentic message once.
+			// agentic message once. agentic flows don't surface per-turn cache_n,
+			// so cacheTotal stays 0.
 			const lastAgentic = agenticMessages[agenticMessages.length - 1];
 			read += lastAgentic.timings.agentic.llm.prompt_n ?? 0;
 			output += lastAgentic.timings.agentic.llm.predicted_n ?? 0;
@@ -165,6 +167,7 @@
 				if (!timings) continue;
 				read += timings.prompt_n ?? 0;
 				read += timings.cache_n ?? 0;
+				cacheTotal += timings.cache_n ?? 0;
 				output += timings.predicted_n ?? 0;
 				outputMs += timings.predicted_ms ?? 0;
 			}
@@ -172,7 +175,7 @@
 
 		const averageTokensPerSecond = outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
 
-		return { read, output, averageTokensPerSecond };
+		return { read, output, cacheTotal, averageTokensPerSecond };
 	});
 
 	const TRANSIENT_DETAILS_EXCLUDED_PREFIXES = ['Context:', 'Output:'];
@@ -230,6 +233,52 @@
 		}
 
 		return read;
+	});
+
+	// Current request's fresh (newly processed) tokens: prompt_n for the last
+	// assistant message. During preparing/generating, the live state splits
+	// combined promptTokens into fresh = total - cache.
+	let currentFresh = $derived.by(() => {
+		const messages = activeMessages() as DatabaseMessage[];
+
+		let fresh = 0;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const msg = messages[i];
+			if (msg.role === MessageRole.ASSISTANT && msg.timings) {
+				fresh = msg.timings.prompt_n ?? 0;
+				break;
+			}
+		}
+
+		const live = liveStats;
+		if (live && live.promptTokens > 0) {
+			// live.promptTokens is total (fresh + cache); subtract cache to get fresh.
+			fresh = Math.max(fresh, live.promptTokens - live.cacheTokens);
+		}
+
+		return fresh;
+	});
+
+	// Current request's cached tokens: cache_n for the last assistant message —
+	// those that matched the in-memory KV cache and were not re-processed.
+	let currentCache = $derived.by(() => {
+		const messages = activeMessages() as DatabaseMessage[];
+
+		let cached = 0;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const msg = messages[i];
+			if (msg.role === MessageRole.ASSISTANT && msg.timings) {
+				cached = msg.timings.cache_n ?? 0;
+				break;
+			}
+		}
+
+		const live = liveStats;
+		if (live && live.promptTokens > 0) {
+			cached = Math.max(cached, live.cacheTokens);
+		}
+
+		return cached;
 	});
 
 	// Current request's Output: tokens generated so far in this response.
@@ -410,17 +459,20 @@
 					<Collapsible.Content class="flex flex-col gap-4 text-xs pt-4">
 						{#if cumulativeStats.read > 0 || cumulativeStats.output > 0}
 							<div>
-    							<h3
-    								class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-2"
-    							>
+								<h3
+									class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-2"
+								>
 									Across all turns
-                                </h3>
+								</h3>
 
 								<div class="flex flex-col gap-2">
 									{#if cumulativeStats.read > 0}
 										<ContextGaugeDetailRow
 											label="Prompts sent"
 											value={`${cumulativeStats.read.toLocaleString()} tok`}
+											subtitle={cumulativeStats.cacheTotal > 0
+												? `${cumulativeStats.cacheTotal.toLocaleString()} of these were cached (KV hit)`
+												: undefined}
 										/>
 									{/if}
 									{#if cumulativeStats.output > 0}
@@ -442,18 +494,21 @@
 								</h3>
 
 								<div class="flex flex-col gap-2">
-    								{#if enabledToolsTokenCount ?? 0 > 0}
-       									<ContextGaugeDetailRow
-      										label="Tool schema"
-      										value={`${(enabledToolsTokenCount ?? 0).toLocaleString()} tok`}
-      										subtitle="Sent on every turn, cached after the first"
-       									/>
-    								{/if}
+									{#if enabledToolsTokenCount ?? 0 > 0}
+										<ContextGaugeDetailRow
+											label="Tool schema"
+											value={`${(enabledToolsTokenCount ?? 0).toLocaleString()} tok`}
+											subtitle="Sent on every turn, cached after the first"
+										/>
+									{/if}
 
 									{#if currentRead > 0}
 										<ContextGaugeDetailRow
 											label="Prompt"
 											value={`${currentRead.toLocaleString()} tok`}
+											subtitle={currentCache > 0
+												? `${currentFresh.toLocaleString()} fresh + ${currentCache.toLocaleString()} cached`
+												: undefined}
 										/>
 									{/if}
 
