@@ -142,6 +142,13 @@ float ggml_innerq_state_k_squared_scale(const ggml_innerq_state_key * key);
 void ggml_innerq_compute_k_squared_profile(
     const float * probe, int n_probe, int head_dim, float * out_scales);
 
+// P3.2.3.2: SYCL device kernel (parallel_for reduction). Same
+// signature as the C reference; the kernel falls back to the C
+// reference if no SYCL device is available. The C reference is
+// the binding correctness oracle.
+void ggml_innerq_compute_k_squared_profile_sycl(
+    const float * probe, int n_probe, int head_dim, float * out_scales);
+
 #ifdef __cplusplus
 }
 #endif
