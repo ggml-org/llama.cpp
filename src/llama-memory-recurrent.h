@@ -73,10 +73,18 @@ public:
     // number of recurrent-state snapshots per seq for rollback; tensors are widened to (1 + n_rs_seq) groups
     uint32_t n_rs_seq = 0;
 
-    // per-seq rollback index
+    // per-seq rollback index: the snapshot plane the seq will enter the next decode on
     std::vector<uint32_t> rs_idx;
 
+    // per-seq deepest snapshot plane that still holds valid history. equal splits can shorten this
+    // below n_rs_seq (a deep rollback followed by a short decode), so a rollback deeper than this
+    // must restore from a checkpoint instead of the in-place snapshots.
+    std::vector<uint32_t> rs_valid_depth;
+
     void set_rs_idx(llama_seq_id seq_id, uint32_t idx);
+
+    uint32_t get_rs_idx        (llama_seq_id seq_id) const;
+    uint32_t get_rs_valid_depth(llama_seq_id seq_id) const;
 
     // computed before each graph build
     uint32_t n = 0;
@@ -164,6 +172,7 @@ public:
     //
 
     uint32_t get_n_rs() const;
+    uint32_t get_n_rs_seq() const;
     uint32_t get_head() const;
     int32_t  get_rs_z() const;
     uint32_t get_size() const;
@@ -172,6 +181,11 @@ public:
     ggml_tensor * get_s_l(int32_t il) const;
 
     int32_t s_copy(int i) const;
+
+    // like s_copy(), for "extra" cells (bracketed live cells of seqs not active in this ubatch).
+    // does not consume the rollback index; materializes a relocated cell's current state to plane 0
+    // and resets its rollback metadata (see the implementation).
+    int32_t s_copy_extra(int i) const;
 
 private:
     const llama_memory_status status;

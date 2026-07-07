@@ -34,6 +34,7 @@ llama_memory_recurrent::llama_memory_recurrent(
 
     this->n_rs_seq = n_rs_seq;
     rs_idx.assign(n_seq_max, 0);
+    rs_valid_depth.assign(n_seq_max, 0);
 
     cells.clear();
     cells.resize(mem_size);
@@ -96,7 +97,15 @@ llama_memory_recurrent::llama_memory_recurrent(
             throw std::runtime_error("failed to create ggml context for rs cache");
         }
 
-        const uint32_t n_rows = mem_size * (1 + n_rs_seq);
+        // the snapshot-major row index (plane*size + cell) is carried as int32 in s_copy; guard at
+        // construction so a pathological (size, n_rs_seq) cannot overflow the row-index math. compute
+        // in 64-bit (1 + n_rs_seq and the product can both overflow 32-bit before the cast).
+        const uint64_t n_rows_u64 = (uint64_t) mem_size * ((uint64_t) n_rs_seq + 1ull);
+        // n_rs_seq is user-controllable; fail like the sibling allocations below rather than abort.
+        if (n_rows_u64 > (uint64_t) std::numeric_limits<int32_t>::max()) {
+            throw std::runtime_error("recurrent snapshot row count exceeds int32 range");
+        }
+        const int64_t n_rows = (int64_t) n_rows_u64;
         ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows);
         ggml_tensor * s = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), n_rows);
         ggml_format_name(r, "cache_r_l%d", i);
@@ -145,6 +154,7 @@ void llama_memory_recurrent::clear(bool data) {
     }
 
     std::fill(rs_idx.begin(), rs_idx.end(), 0);
+    std::fill(rs_valid_depth.begin(), rs_valid_depth.end(), 0);
 }
 
 bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -162,8 +172,12 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
     if (rm_all) {
         if (seq_id >= 0) {
             set_rs_idx(seq_id, 0);
+            if ((size_t) seq_id < rs_valid_depth.size()) {
+                rs_valid_depth[seq_id] = 0;
+            }
         } else {
             std::fill(rs_idx.begin(), rs_idx.end(), 0);
+            std::fill(rs_valid_depth.begin(), rs_valid_depth.end(), 0);
         }
     }
 
@@ -178,11 +192,21 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
         if (tail_id >= 0) {
             auto & cell = cells[tail_id];
 
-            // partial rollback via per-token snapshot index (bounded by n_rs_seq)
+            // partial rollback via per-token snapshot index (bounded by the kept history)
             if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
+                // don't roll back a shared tail; the other owner would observe the pos change
+                if (n_rs_seq > 0 && cell.seq_id.size() > 1) {
+                    return false;
+                }
                 const llama_pos rollback = cell.pos - (p0 - 1);
-                if (rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
-                    set_rs_idx(seq_id, (uint32_t) rollback);
+                // accumulate onto any pending rollback index: a second rollback before the seq is
+                // decoded must reach (existing rs_idx + this rollback) tokens back, not just `rollback`.
+                const uint64_t new_idx = (uint64_t) get_rs_idx(seq_id) + (uint64_t) rollback;
+                // a rollback is only valid as deep as the rolling-history planes actually kept (equal
+                // splits can shorten this below n_rs_seq); past that the carry would read a never-kept
+                // plane, so signal "RS insufficient" (false) and let the caller restore a checkpoint.
+                if (new_idx >= 1 && new_idx <= (uint64_t) get_rs_valid_depth(seq_id)) {
+                    set_rs_idx(seq_id, (uint32_t) new_idx);
                     cell.pos = p0 - 1;
                     return true;
                 }
@@ -259,12 +283,25 @@ void llama_memory_recurrent::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
                 cell_dst.src = -1;
                 used -= 1;
             }
+            // dst's old tail (and its rollback state) is gone; clear so it can't carry a stale index
+            if (n_rs_seq > 0 && (size_t) seq_id_dst < rs_idx.size()) {
+                rs_idx[seq_id_dst]         = 0;
+                rs_valid_depth[seq_id_dst] = 0;
+            }
         }
         if (tail_src.tail >= 0) {
             auto & cell_src = cells[tail_src.tail];
 
             cell_src.seq_id.insert(seq_id_dst);
             tail_dst.tail = tail_src.tail;
+
+            // dst now shares src's tail; mirror the rollback metadata so all owners agree on the plane
+            // (s_copy requires it; find_slot de-shares before decode). exact for a full copy.
+            if (n_rs_seq > 0 &&
+                    (size_t) seq_id_src < rs_idx.size() && (size_t) seq_id_dst < rs_idx.size()) {
+                rs_idx[seq_id_dst]         = rs_idx[seq_id_src];
+                rs_valid_depth[seq_id_dst] = rs_valid_depth[seq_id_src];
+            }
         }
     }
 }
@@ -292,6 +329,14 @@ void llama_memory_recurrent::seq_keep(llama_seq_id seq_id) {
         } else {
             cells[i].seq_id.clear();
             cells[i].seq_id.insert(seq_id);
+        }
+    }
+
+    // dropped seqs keep no history; clear their rollback metadata (rs vectors are sized n_seq_max)
+    for (uint32_t i = 0; i < (uint32_t) rs_idx.size(); ++i) {
+        if ((llama_seq_id) i != seq_id) {
+            rs_idx[i]         = 0;
+            rs_valid_depth[i] = 0;
         }
     }
 
@@ -396,6 +441,20 @@ void llama_memory_recurrent::set_rs_idx(llama_seq_id seq_id, uint32_t idx) {
     rs_idx[seq_id] = (idx > n_rs_seq) ? n_rs_seq : idx;
 }
 
+uint32_t llama_memory_recurrent::get_rs_idx(llama_seq_id seq_id) const {
+    if (seq_id < 0 || (size_t) seq_id >= rs_idx.size()) {
+        return 0;
+    }
+    return rs_idx[seq_id];
+}
+
+uint32_t llama_memory_recurrent::get_rs_valid_depth(llama_seq_id seq_id) const {
+    if (seq_id < 0 || (size_t) seq_id >= rs_valid_depth.size()) {
+        return n_rs_seq;
+    }
+    return rs_valid_depth[seq_id];
+}
+
 std::map<ggml_backend_buffer_type_t, size_t> llama_memory_recurrent::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, size_t> ret;
     for (const auto & [_, buf] : ctxs_bufs) {
@@ -416,15 +475,12 @@ llama_memory_context_ptr llama_memory_recurrent::init_batch(llama_batch_allocr &
                 // if all tokens are output, split by sequence
                 ubatch = balloc.split_seq(n_ubatch);
             } else {
-                if (n_rs_seq > 0) {
-                    // [TAG_RECURRENT_ROLLBACK_SPLITS]
-                    // TODO: recurrent state rollback does not support equal splits
-                    ubatch = balloc.split_seq(n_ubatch);
-                } else {
-                    // TODO: non-sequential equal split can be done if using unified KV cache
-                    //       for simplicity, we always use sequential equal split for now
-                    ubatch = balloc.split_equal(n_ubatch, true);
-                }
+                // [TAG_RECURRENT_ROLLBACK_SPLITS]
+                // recurrent-state rollback supports equal splits: the snapshot writers carry the
+                // deeper rollback planes forward across ubatches (build_rs_rollback_carry), so a draft
+                // split across ubatches still restores the correct state. equal splits let concurrent
+                // sequences share one graph pass instead of running one-per-ubatch.
+                ubatch = balloc.split_equal(n_ubatch, true);
             }
 
             if (ubatch.n_tokens == 0) {
@@ -464,8 +520,12 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
     // simply remember the full state because it is very small for this type of cache
     // TODO: optimize
     auto org_cells = cells;
-    auto org_used = used;
-    auto org_head = head;
+    auto org_used  = used;
+    auto org_head  = head;
+    // find_slot advances rs_valid_depth (and consumes rs_idx via s_copy on apply); the dry-run must
+    // not leave them mutated or apply()'s re-run would double-advance the depth on the rollback path.
+    auto org_rs_idx         = rs_idx;
+    auto org_rs_valid_depth = rs_valid_depth;
 
     bool success = true;
 
@@ -478,8 +538,10 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
 
     // restore the original state
     cells = std::move(org_cells);
-    used = org_used;
-    head = org_head;
+    used  = org_used;
+    head  = org_head;
+    rs_idx         = std::move(org_rs_idx);
+    rs_valid_depth = std::move(org_rs_valid_depth);
 
     return success;
 }
@@ -691,6 +753,31 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
     used = std::count_if(cells.begin(), cells.end(),
         [](const mem_cell & cell){ return !cell.is_empty(); });
 
+    if (n_rs_seq > 0) {
+        const uint32_t K = n_rs_seq + 1;
+        // under rollback each ubatch seq owns the contiguous cell at head+s (head == min here); the
+        // snapshot planes address that cell, so a broken tail would corrupt another seq's state.
+        for (uint32_t s = 0; s < n_seqs; ++s) {
+            const uint32_t i = s*n_seq_tokens;
+            const llama_seq_id seq_id = ubatch.seq_id[i][0];
+            GGML_ASSERT(cells[seq_id].tail == (int32_t)(head + s));
+
+            // update the deepest plane still holding valid history after this ubatch. fresh writes fill
+            // planes [0, n_written); the rolling-history carry fills deeper planes [n_written, K) from
+            // source planes [idx, idx + (K-1-n_written)], but those are only valid as deep as the seq's
+            // previous depth, so the new depth is bounded by (n_written + (prev_depth - idx)). idx is the
+            // rollback plane the seq enters on (set by seq_rm, consumed later in s_copy()).
+            const uint32_t idx       = (size_t) seq_id < rs_idx.size() ? rs_idx[seq_id] : 0;
+            const uint32_t n_written = std::min(n_seq_tokens, K);
+            const uint32_t prev      = get_rs_valid_depth(seq_id);
+            const uint32_t carry     = (idx <= prev) ? (prev - idx) : 0;
+            const uint32_t new_depth = std::min(n_rs_seq, n_written + carry);
+            if ((size_t) seq_id < rs_valid_depth.size()) {
+                rs_valid_depth[seq_id] = new_depth;
+            }
+        }
+    }
+
     // sanity check
     return n >= n_seqs;
 }
@@ -836,8 +923,12 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
     if (n_rs_seq != 0) {
         if (seq_id == -1) {
             std::fill(rs_idx.begin(), rs_idx.end(), 0);
+            std::fill(rs_valid_depth.begin(), rs_valid_depth.end(), 0);
         } else {
             set_rs_idx(seq_id, 0);
+            if ((size_t) seq_id < rs_valid_depth.size()) {
+                rs_valid_depth[seq_id] = 0;
+            }
         }
     }
 }
@@ -1221,6 +1312,10 @@ uint32_t llama_memory_recurrent_context::get_n_rs() const {
     return is_full ? mem->size : mem->n;
 }
 
+uint32_t llama_memory_recurrent_context::get_n_rs_seq() const {
+    return mem->n_rs_seq;
+}
+
 uint32_t llama_memory_recurrent_context::get_head() const {
     return is_full ? 0 : mem->head;
 }
@@ -1249,14 +1344,70 @@ int32_t llama_memory_recurrent_context::s_copy(int i) const {
         return src0;
     }
 
-    uint32_t idx = 0;
-    if (!mem->cells[cell_idx].seq_id.empty()) {
-        const llama_seq_id seq = *mem->cells[cell_idx].seq_id.begin();
-        if (seq >= 0 && (size_t) seq < mem->rs_idx.size()) {
-            idx = mem->rs_idx[seq];
-            // reset rollback idx
-            mem->rs_idx[seq] = 0;
+    // a cell may own multiple seqs; resolve the plane from all owners (they must agree) and consume it
+    // for every owner, else a stale rs_idx is left that state_write rejects / a later decode misreads.
+    uint32_t idx     = 0;
+    bool     has_idx = false;
+    for (const llama_seq_id seq : mem->cells[cell_idx].seq_id) {
+        if (seq < 0 || (size_t) seq >= mem->rs_idx.size()) {
+            continue;
+        }
+        const uint32_t cur = mem->rs_idx[seq];
+        if (!has_idx) {
+            idx     = cur;
+            has_idx = true;
+        } else if (idx != cur) {
+            // owners of a shared cell must agree on the rollback plane (see s_copy_extra)
+            GGML_ABORT("shared recurrent cell has divergent rollback indices");
         }
     }
+    for (const llama_seq_id seq : mem->cells[cell_idx].seq_id) {
+        if (seq >= 0 && (size_t) seq < mem->rs_idx.size()) {
+            mem->rs_idx[seq] = 0; // consume the rollback idx for every owner
+        }
+    }
+    return (int32_t)(idx * mem->size) + src0;
+}
+
+int32_t llama_memory_recurrent_context::s_copy_extra(int i) const {
+    const uint32_t cell_idx = i + mem->head;
+    auto &        cell      = mem->cells[cell_idx];
+    const int32_t src0      = cell.src0;
+
+    if (mem->n_rs_seq == 0) {
+        return src0;
+    }
+
+    // extra cells (idle seqs) get only plane 0 copied by build_rs, never the deeper planes. so a
+    // relocated cell must reset its owners' metadata to 0 - a leftover valid_depth would falsely claim
+    // deeper planes are valid. non-relocated cells keep their planes; the index is not consumed here.
+    uint32_t idx     = 0;
+    bool     has_idx = false;
+    for (const llama_seq_id seq : cell.seq_id) {
+        if (seq < 0 || (size_t) seq >= mem->rs_idx.size()) {
+            continue;
+        }
+        const uint32_t cur = mem->rs_idx[seq];
+        if (!has_idx) {
+            idx     = cur;
+            has_idx = true;
+        } else if (idx != cur) {
+            // a shared extra cell can't be materialized from one row with divergent planes (seq_cp
+            // mirrors the index and find_slot de-shares before decode, so this must not happen)
+            GGML_ABORT("shared extra recurrent cell has divergent rollback planes");
+        }
+    }
+
+    const bool materializes = has_idx && (idx != 0 || src0 != (int32_t) cell_idx);
+    if (materializes) {
+        for (const llama_seq_id seq : cell.seq_id) {
+            if (seq >= 0 && (size_t) seq < mem->rs_idx.size()) {
+                mem->rs_idx[seq]         = 0;
+                mem->rs_valid_depth[seq] = 0;
+            }
+        }
+    }
+
+    GGML_ASSERT(idx <= mem->n_rs_seq && "rollback plane out of range");
     return (int32_t)(idx * mem->size) + src0;
 }
