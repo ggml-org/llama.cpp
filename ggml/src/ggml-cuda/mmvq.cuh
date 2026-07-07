@@ -73,6 +73,16 @@ static __device__ __forceinline__ float vec_dot_nvfp4x2_f32(
     return vf.x*f.x + vf.y*f.y;
 }
 
+static __device__ __forceinline__ float vec_dot_nvfp4x2_f32_fma(
+                                        const __nv_fp4x2_storage_t v,
+                                        const float2 & f,
+                                        const float acc) {
+    const __half2_raw hraw2 = __nv_cvt_fp4x2_to_halfraw2(v, __NV_E2M1);
+    const __half2 h2 = static_cast<__half2>(hraw2);
+    const float2 vf = __half22float2(h2);
+    return fmaf(vf.y, f.y, fmaf(vf.x, f.x, acc));
+}
+
 struct nvfp4_f32_y_subblock {
     float8 y0;
     float8 y2;
@@ -121,14 +131,14 @@ static __device__ __forceinline__ float vec_dot_nvfp4_f32_repacked_subblock_y(
 
     const uint8_t * qs_bytes = (const uint8_t *) &qs_u64;
     float sumf = 0.0f;
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[0]), make_float2(yv.y0.x, yv.y0.y));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[1]), make_float2(yv.y0.z, yv.y0.w));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[2]), make_float2(yv.y0.p, yv.y0.q));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[3]), make_float2(yv.y0.r, yv.y0.s));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[4]), make_float2(yv.y2.x, yv.y2.y));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[5]), make_float2(yv.y2.z, yv.y2.w));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[6]), make_float2(yv.y2.p, yv.y2.q));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[7]), make_float2(yv.y2.r, yv.y2.s));
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[0]), make_float2(yv.y0.x, yv.y0.y), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[1]), make_float2(yv.y0.z, yv.y0.w), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[2]), make_float2(yv.y0.p, yv.y0.q), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[3]), make_float2(yv.y0.r, yv.y0.s), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[4]), make_float2(yv.y2.x, yv.y2.y), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[5]), make_float2(yv.y2.z, yv.y2.w), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[6]), make_float2(yv.y2.p, yv.y2.q), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[7]), make_float2(yv.y2.r, yv.y2.s), sumf);
 
     return ggml_cuda_ue4m3_to_fp32(d[sub]) * sumf;
 }
@@ -164,14 +174,14 @@ static __device__ __forceinline__ float vec_dot_nvfp4_f32_repacked_subblock(
 
     const uint8_t * qs_bytes = (const uint8_t *) &qs_u64;
     float sumf = 0.0f;
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[0]), make_float2(yv.y0.x, yv.y0.y));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[1]), make_float2(yv.y0.z, yv.y0.w));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[2]), make_float2(yv.y0.p, yv.y0.q));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[3]), make_float2(yv.y0.r, yv.y0.s));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[4]), make_float2(yv.y2.x, yv.y2.y));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[5]), make_float2(yv.y2.z, yv.y2.w));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[6]), make_float2(yv.y2.p, yv.y2.q));
-    sumf += vec_dot_nvfp4x2_f32(static_cast<__nv_fp4x2_storage_t>(qs_bytes[7]), make_float2(yv.y2.r, yv.y2.s));
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[0]), make_float2(yv.y0.x, yv.y0.y), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[1]), make_float2(yv.y0.z, yv.y0.w), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[2]), make_float2(yv.y0.p, yv.y0.q), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[3]), make_float2(yv.y0.r, yv.y0.s), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[4]), make_float2(yv.y2.x, yv.y2.y), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[5]), make_float2(yv.y2.z, yv.y2.w), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[6]), make_float2(yv.y2.p, yv.y2.q), sumf);
+    sumf = vec_dot_nvfp4x2_f32_fma(static_cast<__nv_fp4x2_storage_t>(qs_bytes[7]), make_float2(yv.y2.r, yv.y2.s), sumf);
 
     return ggml_cuda_ue4m3_to_fp32(d[sub]) * sumf;
 }
