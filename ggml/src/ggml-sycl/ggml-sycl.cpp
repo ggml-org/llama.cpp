@@ -41,7 +41,7 @@
 #if SYCL_EXT_ONEAPI_VIRTUAL_MEM
 #    include <sycl/ext/oneapi/virtual_mem/physical_mem.hpp>
 #    include <sycl/ext/oneapi/virtual_mem/virtual_mem.hpp>
-#    define GGML_SYCL_USE_VMM
+#    define GGML_SYCL_SUPPORT_VMM
 #endif
 #include <sycl/half_type.hpp>
 
@@ -80,9 +80,9 @@
 
 static bool g_sycl_loaded = false;
 int g_ggml_sycl_debug = 0;
-int g_ggml_sycl_disable_optimize = 0;
-int g_ggml_sycl_disable_graph = 0;
-int g_ggml_sycl_disable_dnn = 0;
+int g_ggml_sycl_enable_optimize = 1;
+int g_ggml_sycl_enable_graph = 0;
+int g_ggml_sycl_enable_dnn = 1;
 int g_ggml_sycl_enable_vmm = 1;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
@@ -117,7 +117,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
         SYCL_CHECK(CHECK_TRY_ERROR(dpct::get_device_info(
             prop, device)));
 
-#if !defined(GGML_SYCL_USE_VMM)
+#if !defined(GGML_SYCL_SUPPORT_VMM)
         info.devices[i].vmm = 0;
 #else
         info.devices[i].vmm = device.has(sycl::aspect::ext_oneapi_virtual_mem);
@@ -265,14 +265,24 @@ void ggml_backend_sycl_print_sycl_devices() {
     print_device_opt_feature(device_count);
 }
 
+static const char* dev2dev_int2str(int dev2dev) {
+    if (dev2dev == DEV2DEV_MEMCPY_SYCL) {
+        return "SYCL API";
+    } else if (dev2dev == DEV2DEV_MEMCPY_L0) {
+        return "Level Zero API";
+    } else {
+        return "Unknown";
+    }
+}
+
 static void ggml_check_sycl() try {
     static bool initialized = false;
 
     if (!initialized) {
         g_ggml_sycl_debug = ggml_sycl_get_env("GGML_SYCL_DEBUG", 0);
-        g_ggml_sycl_disable_optimize = ggml_sycl_get_env("GGML_SYCL_DISABLE_OPT", 0);
-        g_ggml_sycl_disable_graph = ggml_sycl_get_env("GGML_SYCL_DISABLE_GRAPH", 1);
-        g_ggml_sycl_disable_dnn = ggml_sycl_get_env("GGML_SYCL_DISABLE_DNN", 0);
+        g_ggml_sycl_enable_optimize = ggml_sycl_get_env("GGML_SYCL_ENABLE_OPT", 1);
+        g_ggml_sycl_enable_graph = ggml_sycl_get_env("GGML_SYCL_ENABLE_GRAPH", 0);
+        g_ggml_sycl_enable_dnn = ggml_sycl_get_env("GGML_SYCL_ENABLE_DNN", 1);
         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
 
@@ -292,72 +302,87 @@ static void ggml_check_sycl() try {
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
 
         GGML_LOG_INFO("Build with Macros:\n");
-#if defined(GGML_SYCL_FORCE_MMQ)
-        GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ: yes\n");
-#else
-        GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ: no\n");
-#endif
-#if defined(GGML_SYCL_F16)
-        GGML_LOG_INFO("  GGML_SYCL_F16: yes\n");
-#else
-        GGML_LOG_INFO("  GGML_SYCL_F16: no\n");
-#endif
-#if defined(GGML_SYCL_GRAPH)
-        GGML_LOG_INFO("  GGML_SYCL_GRAPH: yes\n");
-#else
-        GGML_LOG_INFO("  GGML_SYCL_GRAPH: no\n");
-#endif
 #if defined(GGML_SYCL_DNNL)
         GGML_LOG_INFO("  GGML_SYCL_DNNL: yes\n");
 #else
         GGML_LOG_INFO("  GGML_SYCL_DNNL: no\n");
 #endif
+
+#if defined(GGML_SYCL_F16)
+        GGML_LOG_INFO("  GGML_SYCL_F16: yes\n");
+#else
+        GGML_LOG_INFO("  GGML_SYCL_F16: no\n");
+#endif
+
+#if defined(GGML_SYCL_FORCE_MMQ)
+        GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ: yes\n");
+#else
+        GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ: no\n");
+#endif
+
+#if defined(GGML_SYCL_GRAPH)
+        GGML_LOG_INFO("  GGML_SYCL_GRAPH: yes\n");
+#else
+        GGML_LOG_INFO("  GGML_SYCL_GRAPH: no\n");
+#endif
+
 #if defined(GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
         GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes\n");
 #else
         GGML_LOG_INFO("  GGML_SYCL_SUPPORT_LEVEL_ZERO_API: no\n");
 #endif
-#if defined(GGML_SYCL_USE_VMM)
-        GGML_LOG_INFO("  GGML_SYCL_USE_VMM: yes\n");
+#if defined(GGML_SYCL_SUPPORT_VMM)
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_VMM: yes\n");
 #else
-        GGML_LOG_INFO("  GGML_SYCL_USE_VMM: no\n");
+        GGML_LOG_INFO("  GGML_SYCL_SUPPORT_VMM: no\n");
 #endif
 
         GGML_LOG_INFO("Running with Environment Variables:\n");
         GGML_LOG_INFO("  GGML_SYCL_DEBUG: %d\n", g_ggml_sycl_debug);
-        GGML_LOG_INFO("  GGML_SYCL_DISABLE_OPT: %d\n", g_ggml_sycl_disable_optimize);
-#ifdef GGML_SYCL_GRAPH
-        GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: %d\n", g_ggml_sycl_disable_graph);
-#else
-        GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: graph disabled by compile flag\n");
-#endif
+
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
-        GGML_LOG_INFO("  GGML_SYCL_USE_LEVEL_ZERO_API: %d\n", g_ggml_sycl_use_level_zero_api);
-        GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d\n", g_ggml_sycl_dev2dev_memcpy);
+        GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d (%s)\n", g_ggml_sycl_dev2dev_memcpy, dev2dev_int2str(g_ggml_sycl_dev2dev_memcpy));
 #else
-        GGML_LOG_INFO("  GGML_SYCL_USE_LEVEL_ZERO_API: Disable Level Zero API usage by compile flag\n");
-        GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d, enable to SYCL API since missing GGML_SYCL_SUPPORT_LEVEL_ZERO_API\n",
-                      g_ggml_sycl_dev2dev_memcpy);
+        GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d (%s), enable to SYCL API since missing GGML_SYCL_SUPPORT_LEVEL_ZERO_API\n",
+                      g_ggml_sycl_dev2dev_memcpy, dev2dev_int2str(g_ggml_sycl_dev2dev_memcpy));
 #endif
-#if GGML_SYCL_DNNL
-        GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: %d\n", g_ggml_sycl_disable_dnn);
+
+#if defined(GGML_SYCL_DNNL)
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_DNN: %d\n", g_ggml_sycl_enable_dnn);
 #else
-        GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: DNN disabled by compile flag\n");
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_DNN: DNN disabled by compile flag\n");
 #endif
-#if defined(GGML_SYCL_USE_VMM)
-        GGML_LOG_INFO("  GGML_SYCL_ENABLE_VMM: %d\n", g_ggml_sycl_enable_vmm);
-#else
-        GGML_LOG_INFO("  GGML_SYCL_ENABLE_VMM: virtual memory extension is not available\n");
-#endif
-        GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
-        g_ggml_sycl_use_async_mem_op_requested = ggml_sycl_get_env("GGML_SYCL_USE_ASYNC_MEM_OP", 1);
-        GGML_LOG_INFO("  GGML_SYCL_USE_ASYNC_MEM_OP: %d\n", g_ggml_sycl_use_async_mem_op_requested);
 
 #ifdef SYCL_FLASH_ATTN
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FLASH_ATTN: %d\n", g_ggml_sycl_enable_flash_attention);
 #else
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FLASH_ATTN: %d disabled by compile flag\n",
             g_ggml_sycl_enable_flash_attention);
+#endif
+
+#ifdef GGML_SYCL_GRAPH
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_GRAPH: %d\n", g_ggml_sycl_enable_graph);
+#else
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_GRAPH: graph disabled by compile flag\n");
+#endif
+
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_OPT: %d\n", g_ggml_sycl_enable_optimize);
+
+#if defined(GGML_SYCL_SUPPORT_VMM)
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_VMM: %d\n", g_ggml_sycl_enable_vmm);
+#else
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_VMM: virtual memory extension is not available\n");
+#endif
+
+        GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
+
+        g_ggml_sycl_use_async_mem_op_requested = ggml_sycl_get_env("GGML_SYCL_USE_ASYNC_MEM_OP", 1);
+        GGML_LOG_INFO("  GGML_SYCL_USE_ASYNC_MEM_OP: %d\n", g_ggml_sycl_use_async_mem_op_requested);
+
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+        GGML_LOG_INFO("  GGML_SYCL_USE_LEVEL_ZERO_API: %d\n", g_ggml_sycl_use_level_zero_api);
+#else
+        GGML_LOG_INFO("  GGML_SYCL_USE_LEVEL_ZERO_API: Disable Level Zero API usage by compile flag\n");
 #endif
 
         GGML_LOG_INFO("  GGML_SYCL_USM_SYSTEM: %d\n", g_ggml_sycl_usm_system);
@@ -373,7 +398,7 @@ static void ggml_check_sycl() try {
         // staging path while preserving queue ordering semantics. Graph support still depends on the extension being
         // available, but it no longer needs to control the non-graph fast path.
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
-        g_ggml_sycl_use_async_mem_op = g_ggml_sycl_use_async_mem_op_requested || !g_ggml_sycl_disable_graph;
+        g_ggml_sycl_use_async_mem_op = g_ggml_sycl_use_async_mem_op_requested || g_ggml_sycl_enable_graph;
         if (g_ggml_sycl_use_async_mem_op) {
             for (unsigned int i = 0; i < dpct::dev_mgr::instance().device_count(); ++i) {
                 if (!dpct::dev_mgr::instance().get_device(i).has(sycl::aspect::ext_oneapi_async_memory_alloc)) {
@@ -516,7 +541,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         return GGML_STATUS_SUCCESS;
     }
 
-    if (!g_ggml_sycl_disable_optimize) {
+    if (g_ggml_sycl_enable_optimize) {
         // set reorder extra buffer based on supported type
         switch (tensor->type) {
             case GGML_TYPE_Q4_0:
@@ -1562,7 +1587,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
 };
 
 // pool with virtual memory management
-#if defined(GGML_SYCL_USE_VMM)
+#if defined(GGML_SYCL_SUPPORT_VMM)
 struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     static const size_t SYCL_POOL_VMM_MAX_SIZE = 1ull << 35; // 32 GB
 
@@ -1674,7 +1699,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
         GGML_ASSERT(ptr == reinterpret_cast<void *>(pool_addr + pool_used));
     }
 };
-#endif // defined(GGML_SYCL_USE_VMM)
+#endif // defined(GGML_SYCL_SUPPORT_VMM)
 
 struct ggml_sycl_pool_host : public ggml_sycl_pool {
     queue_ptr qptr;
@@ -1756,11 +1781,11 @@ std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_host(que
 }
 
 std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(queue_ptr qptr, int device) {
-#if defined(GGML_SYCL_USE_VMM)
+#if defined(GGML_SYCL_SUPPORT_VMM)
     if (g_ggml_sycl_enable_vmm && ggml_sycl_info().devices[device].vmm) {
         return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_vmm(qptr, device));
     }
-#endif // defined(GGML_SYCL_USE_VMM)
+#endif // defined(GGML_SYCL_SUPPORT_VMM)
     return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_leg(qptr, device));
 }
 
@@ -2429,7 +2454,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
 
 #if GGML_SYCL_DNNL && defined(GGML_SYCL_HAS_BF16)
     // Fast path for bf16 src0
-    if (src0->type == GGML_TYPE_BF16 && !g_ggml_sycl_disable_dnn && ggml_is_contiguous(src0) &&
+    if (src0->type == GGML_TYPE_BF16 && g_ggml_sycl_enable_dnn && ggml_is_contiguous(src0) &&
         row_diff == src0->ne[1]) {
         using bf16_t = sycl::ext::oneapi::bfloat16;
         ggml_sycl_pool_alloc<bf16_t> src1_as_bf16(ctx.pool(), src1_ncols*ne10);
@@ -2482,7 +2507,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
                                          : src1_as_f16.get();
 
 #if GGML_SYCL_DNNL
-        if (!g_ggml_sycl_disable_dnn) {
+        if (g_ggml_sycl_enable_dnn) {
                 DnnlGemmWrapper::row_gemm(ctx,row_diff, src1_ncols , ne10, src0_ptr,
                                      DnnlGemmWrapper::to_dt<sycl::half>(), src1_ptr, DnnlGemmWrapper::to_dt<sycl::half>(),
                                       dst_dd_i, DnnlGemmWrapper::to_dt<float>(), stream);
@@ -2532,7 +2557,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
             const int64_t gemm_flops = (int64_t)row_diff * src1_ncols * ne10;
             const bool use_mkl_direct = gemm_flops < 256 * 256 * 256;
 #if GGML_SYCL_DNNL
-            if (!g_ggml_sycl_disable_dnn && !use_mkl_direct) {
+            if (g_ggml_sycl_enable_dnn && !use_mkl_direct) {
                 DnnlGemmWrapper::row_gemm(ctx, row_diff, src1_ncols, ne10, src0_ddf_i,
                                           DnnlGemmWrapper::to_dt<float>(), src1_ddf1_i, DnnlGemmWrapper::to_dt<float>(),
                                           dst_dd_i, DnnlGemmWrapper::to_dt<float>(), stream);
@@ -3352,7 +3377,7 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
     const int64_t r3 = ne13 / ne03;
 
 #if GGML_SYCL_DNNL
-    if (!g_ggml_sycl_disable_dnn) {
+    if (g_ggml_sycl_enable_dnn) {
             int64_t str_a0 = nb00 / type_size_src0;
             int64_t str_a1 = nb01 / type_size_src0;
             int64_t str_a2 = nb02 / type_size_src0;
@@ -4092,12 +4117,12 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
 }
 
 static bool should_reorder_tensor(ggml_backend_sycl_context& ctx, const ggml_tensor * dst) {
-    return !g_ggml_sycl_disable_optimize && //allow optimize, controlled by $GGML_SYCL_DISABLE_OPT
-            ctx.opt_feature.reorder &&      //allow this device due to good perf, skip the devices with bad perf.
-            dst->op == GGML_OP_MUL_MAT &&   //limit to some supported cases of Q4_0, to do for more cases.
-            // ne[1] <= 8 so multi-column decode (spec / MTP verify) also bootstraps the reorder;
-            // all reorderable types have a _switch_ncols kernel.
-            dst->src[1]->ne[1] <= 8 && dst->src[1]->ne[2]==1 && dst->src[1]->ne[3]==1;
+    return g_ggml_sycl_enable_optimize && //allow optimize, controlled by $GGML_SYCL_ENABLE_OPT
+           ctx.opt_feature.reorder &&      //allow this device due to good perf, skip the devices with bad perf.
+           dst->op == GGML_OP_MUL_MAT &&   //limit to some supported cases of Q4_0, to do for more cases.
+           // ne[1] <= 8 so multi-column decode (spec / MTP verify) also bootstraps the reorder;
+           // all reorderable types have a _switch_ncols kernel.
+           dst->src[1]->ne[1] <= 8 && dst->src[1]->ne[2]==1 && dst->src[1]->ne[3]==1;
 }
 
 static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor * src0, const ggml_tensor * /* src1 */,
@@ -4136,7 +4161,7 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
 
 // Lazily reorder supported MoE expert weights once their fused path is used.
 static void opt_for_reorder_id(ggml_backend_sycl_context * ctx, const ggml_tensor * src0) {
-    if (g_ggml_sycl_disable_optimize || !ctx->opt_feature.reorder) {
+    if (!g_ggml_sycl_enable_optimize || !ctx->opt_feature.reorder) {
         return;
     }
     if (src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K && src0->type != GGML_TYPE_Q6_K) {
@@ -5204,7 +5229,10 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
 
 #ifdef GGML_SYCL_GRAPH
-    bool use_sycl_graph = !g_ggml_sycl_disable_graph && check_graph_compatibility(cgraph);
+    bool use_sycl_graph = false;
+    if (g_ggml_sycl_enable_graph) {
+        use_sycl_graph = check_graph_compatibility(cgraph);
+    }
     if (use_sycl_graph) {
         const bool graph_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_limited_graph);
         if (!graph_support) {
