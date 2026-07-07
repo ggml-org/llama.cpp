@@ -1,9 +1,7 @@
 <script lang="ts">
-	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
-	import { buttonVariants } from '$lib/components/ui/button/index.js';
-	import { Card } from '$lib/components/ui/card';
-	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
+	import { cn } from '$lib/components/ui/utils';
 	import { useThrottle } from '$lib/hooks/use-throttle.svelte';
 	import { formatReasoningPreview } from '$lib/utils';
 	import { config } from '$lib/stores/settings.svelte';
@@ -20,6 +18,7 @@
 		preview?: string;
 		rawContent?: string;
 		isStreaming?: boolean;
+		shimmerTitle?: boolean;
 		onToggle?: () => void;
 		children: Snippet;
 	}
@@ -34,11 +33,10 @@
 		preview,
 		rawContent,
 		isStreaming = false,
+		shimmerTitle = false,
 		onToggle,
 		children
 	}: Props = $props();
-
-	let contentContainer: HTMLDivElement | undefined = $state();
 
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
 
@@ -53,21 +51,6 @@
 		displayedPreview = result.preview;
 		displayedOverflow = result.overflow;
 	});
-
-	const autoScroll = createAutoScrollController();
-
-	$effect(() => {
-		autoScroll.setContainer(contentContainer);
-	});
-
-	$effect(() => {
-		// Only auto-scroll when open and streaming
-		autoScroll.updateInterval(open && isStreaming);
-	});
-
-	function handleScroll() {
-		autoScroll.handleScroll();
-	}
 </script>
 
 <Collapsible.Root
@@ -76,59 +59,52 @@
 		open = value;
 		onToggle?.();
 	}}
-	class="{className} my-0!"
+	class="my-0! {className} group/collapsible"
 >
-	<Card class="gap-0 border-muted bg-muted/30 py-0">
-		<Collapsible.Trigger class="flex w-full cursor-pointer items-start justify-between gap-2 p-3">
-			<div class="flex min-w-0 items-center gap-2">
-				<div class="flex items-center gap-2 text-muted-foreground">
-					{#if IconComponent}
-						<IconComponent class={iconClass} />
-					{/if}
+	<Collapsible.Trigger
+		class="flex w-full cursor-pointer items-center justify-between gap-2 py-1.5 pr-1 text-left"
+	>
+		<div class="flex min-w-0 items-center gap-2 text-muted-foreground">
+			{#if IconComponent}
+				<IconComponent class={cn('shrink-0 text-muted-foreground/60', iconClass)} />
+			{/if}
 
-					<span class="font-mono text-sm font-medium">{title}</span>
+			<span class={cn('text-sm font-medium', shimmerTitle ? 'shimmer-text' : 'text-foreground/80')}>{title}</span>
 
-					{#if subtitle}
-						<span class="text-xs italic">{subtitle}</span>
+			{#if subtitle}
+				<span class="text-xs italic text-muted-foreground/70">{subtitle}</span>
+			{/if}
+
+			{#if displayedPreview && !showThoughtInProgress && isStreaming}
+				<div class="ml-1 flex min-w-0 items-baseline gap-2">
+					<div class="w-3/4 truncate text-xs text-muted-foreground/60">
+						{displayedPreview}
+					</div>
+
+					{#if displayedOverflow > 0}
+						<span class="shrink-0 text-xs text-muted-foreground/40"
+							>+{displayedOverflow}</span
+						>
 					{/if}
 				</div>
+			{/if}
+		</div>
 
-				{#if displayedPreview && !showThoughtInProgress}
-					<div class="flex min-w-0 items-baseline justify-between gap-2">
-						<div class="w-3/4 truncate text-xs text-muted-foreground/80">
-							{displayedPreview}
-						</div>
-						{#if displayedOverflow > 0}
-							<span class="shrink-0 text-xs text-muted-foreground/60"
-								>{displayedOverflow}+ chars</span
-							>
-						{/if}
-					</div>
-				{/if}
-			</div>
+		<ChevronDown
+			class={cn(
+				'size-4 shrink-0 text-muted-foreground/60 transition-all duration-150 ease-out opacity-0 group-hover/collapsible:opacity-100',
+				open && 'rotate-180'
+			)}
+		/>
 
-			<div
-				class={buttonVariants({
-					variant: 'ghost',
-					size: 'sm',
-					class: 'h-6 w-6 p-0 text-muted-foreground hover:text-foreground'
-				})}
-			>
-				<ChevronsUpDownIcon class="h-4 w-4" />
+		<span class="sr-only">Toggle content</span>
+	</Collapsible.Trigger>
 
-				<span class="sr-only">Toggle content</span>
-			</div>
-		</Collapsible.Trigger>
-
-		<Collapsible.Content>
-			<div
-				bind:this={contentContainer}
-				class="overflow-y-auto border-t border-muted px-3 pb-3"
-				onscroll={handleScroll}
-				style="min-height: var(--min-message-height); max-height: var(--max-message-height);"
-			>
-				{@render children()}
-			</div>
-		</Collapsible.Content>
-	</Card>
+	<Collapsible.Content>
+		<div class="pl-1.5 inline-grid min-w-0" style="min-height: var(--min-message-height);">
+            <div class="min-w-0 border-l border-muted-foreground/20 pl-4">
+		    	{@render children()}
+            </div>
+		</div>
+	</Collapsible.Content>
 </Collapsible.Root>
