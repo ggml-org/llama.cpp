@@ -4279,7 +4279,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
-        GGML_ASSERT(ggml_n_dims(op->src[0]) == 2);
+        GGML_ASSERT(ggml_n_dims(op->src[0]) >= 2);
         // GGML_ASSERT(ggml_n_dims(op->src[1]) == 2);
 
         char *       wdata = static_cast<char *>(params->wdata);

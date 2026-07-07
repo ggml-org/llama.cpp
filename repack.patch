@@ -1,0 +1,11 @@
+--- a/ggml/src/ggml-cpu/repack.cpp
++++ b/ggml/src/ggml-cpu/repack.cpp
+@@ -4279,7 +4279,7 @@
+         GGML_ASSERT(ne03 == 1);
+         GGML_ASSERT(ne13 == 1);
+         GGML_ASSERT(ne3 == 1);
+-        GGML_ASSERT(ggml_n_dims(op->src[0]) == 2);
++        GGML_ASSERT(ggml_n_dims(op->src[0]) >= 2);
+         // GGML_ASSERT(ggml_n_dims(op->src[1]) == 2);
+ 
+         char *       wdata = static_cast<char *>(params->wdata);
