@@ -24,7 +24,7 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint itid, 
         [[unroll]] for (uint l = 0; l < 2; ++l) {
             const uint8_t sign = sign16[l];
             const uint qs = qs16[l] | ((qh << (8 - nibble_shift - 2 * l)) & 0x300);
-            const uvec2 grid = iq2s_grid[qs];
+            const uvec2 grid = iq2_grid[qs];
             const vec4 grid0 = vec4(unpack8(grid.x));
             const vec4 grid1 = vec4(unpack8(grid.y));
 
