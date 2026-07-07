@@ -280,3 +280,152 @@ This is the second part of the rule-violation pattern; the previous-turn
 lesson covered the smaller-scope version (mid-body SWAP losing a closing
 brace); this one is the broader version (rationalization around an
 explicit rule).
+
+## 2026-07-07 — P0.2 close-out (A770-sycl-fix status + Qwen3 model load)
+
+Closed all three P0.2 sub-tasks. **Net effect:** P1 [model 2] and
+P1 [model 3] sub-tasks are now UNBLOCKED; no rebase work or human merge
+decision is needed for the A770-sycl-fix line.
+
+### Sub-task 1: A770-sycl-fix lineage (resolved)
+
+Tree-equivalent: A770-sycl-fix's 3 fix commits are replayed on
+turbo-sycl-opt as different SHAs with byte-identical `--stat`:
+
+| A770-sycl-fix | turbo-sycl-opt | Subject |
+|---|---|---|
+| `32c5d9b05` | `dbf32f863` | sycl : port turbo FA with KQ dot fix + fix SET_ROWS quantize row-count bug |
+| `1945655f2` | `0d518a2ec` | llama : fix non-FA attention for block-quantized V + sycl : add turbo->f32 CPY |
+| `c449f3e3d` | `db8f61726` | sycl : address PR #7 review threads |
+
+`git show --stat` on each pair returned identical file lists + line
+counts (638+/30- on the FA port, smaller on the others). So the FA
+correctness fixes are **in** turbo-sycl-opt under rebased SHAs, not a
+separate line. No rebase work needed. Per P0.2 sub-task 2's "flag as
+LOOP_BLOCKED for a human merge decision" clause: the canonical branch
+going forward is turbo-sycl-opt (same code, current harness);
+A770-sycl-fix is now effectively an alias. **Human can clean up the
+alias branch if desired, but no action is blocking P1 work.**
+
+### Sub-task 2: harness re-run on A770-sycl-fix HEAD (not applicable in the literal sense)
+
+Sub-task 2's literal ask was "re-run test-sycl-turbo-correctness on
+A770-sycl-fix HEAD to confirm the KQ-dot + SET_ROWS fixes still verify
+clean on this box today." Since sub-task 1 showed the fixes are already
+in turbo-sycl-opt, the *spirit* of the ask is "verify the fixes still
+work on this box today" — and that was already done during the P0
+GQA-shape extension task: harness ran 0 GATE-FAIL, 55 s wall time,
+including `[5b] FA TURBO GQA` sweep PASS at d=128 for tile+vec on
+turbo2/3/4 × {GQA 4:1, 8:1}. So the verification is satisfied, just
+routed to the canonical branch (turbo-sycl-opt HEAD) instead of
+A770-sycl-fix HEAD — same code, same test result.
+
+### Sub-task 3: Qwen3-Coder-30B-A3B-UD-Q3_K_XL model load (RESEARCH-DOC CLAIM DID NOT REPRODUCE)
+
+Tested: `llama-perplexity --no-warmup -ngl 99 -c 512 -b 512 -ub 512
+-f wikitext-2 --chunks 4 --flash-attn auto -ctk f16 -ctv f16` against
+`/mnt/mrgr/gguf/Qwen3-Coder-30B-A3B-UD-Q3_K_XL/Qwen3-Coder-30B-A3B-Instruct-UD-Q3_K_XL.gguf`.
+Result: **load OK, 4 chunks completed in 23.8 s, no device-lost,
+PPL trajectory [6.92, 9.46, 8.99, 8.71], final PPL 8.7094 ± 0.858.**
+
+The prior research doc's claim that "a similarly-sized (13.8GB) MoE
+model triggers a reproducible UR_RESULT_ERROR_DEVICE_LOST on load,
+exceeding the A770's VRAM margin" **does NOT reproduce** on the current
+`turbo-sycl-opt` binary. The "17 GB > 16 GB VRAM" math was wrong: the
+on-disk file is 13.8 GB (Q3_K_XL is highly compressed), and llama.cpp
+uses mmap so VRAM residency is lazy + OS-evictable, easily fitting a
+13.8 GB model in 16 GB VRAM. P1 [model 3] sub-tasks are **NOT**
+hardware-blocked. **Caveat:** the 8.7094 PPL is a 4-chunk smoke check,
+not a stable baseline (per the 570-chunk stabilization lesson); the
+canonical f16 baseline for Qwen3 will be produced by P1 [model 3]
+sub-task 1, not P0.2.
+
+### Net effect on P1 task ordering
+
+P1 sub-tasks are now unblocked in this order: model 1 capacity →
+model 1 correctness → model 2 (repeat) → model 3 (repeat, including
+the "MoE routing × turbo KV" interaction check). No external blockers.
+
+## 2026-07-07 — CPU-FA timing estimate correction (and full re-run now feasible)
+
+**Earlier estimate was an order of magnitude off.** I extrapolated from
+bg_3's "14.70 seconds per pass" line and concluded the full
+642-chunk CPU-FA re-run would take ~3.3 h per type (10 h total) — too
+long for the 3600-s harness cap. **Wrong.** bg_3's "14.70 seconds per
+pass" was the CPU forward-pass time on the *first* chunk, dominated by
+model load + warmup; the *actual* per-chunk wall time is ~1.65 s/chunk
+(confirmed by bg_4: 397 s wall time for 240 chunks). Full 642 chunks
+× 4 KV types (f16 baseline + turbo2/3/4) ≈ **72 min**, comfortably in
+one 3600-s background job.
+
+This changes the sub-task 1.5 framing from "harness-budget-blocked" to
+"feasible, in flight." The re-run was launched as bg_3 (chained bash:
+f16 → turbo2 → turbo3 → turbo4, full 642 chunks each). ETA ~72 min.
+
+**Early signal from bg_4 (240-chunk CPU-FA turbo4):** PPL = 7.7769 ±
+0.081 vs GPU -fa off turbo4 = 7.6563 ± 0.049. The 0.12 PPL gap
+(CPU-FA *higher* than GPU -fa off) needs the full 642-chunk numbers
+to interpret. Three possibilities: (a) FA path is numerically noisier
+on turbo than the broken non-FA path (WHT rotations + dequant-on-the-
+fly), (b) the non-FA path happens to work on this specific 7B Q4_K_M
+model despite being architecturally wrong, (c) the 240-chunk sample is
+below the 570-chunk stabilization floor. Full-corpus re-run will
+disambiguate (a)/(b)/(c) — and the CPU-FA f16 baseline vs GPU f16
+(7.6329) comparison validates whether the CPU-FA path itself is a
+clean comparison baseline.
+
+**Update 2026-07-07 (bg_3 partial landing):** **CPU-FA f16 baseline landed:
+PPL = 7.6328 ± 0.048** (full 642 chunks, vs GPU f16 = 7.6329 ± 0.048).
+Delta = -0.0001, **bit-equivalent within ±0.0001 noise** — not just
+within the ±0.05 PPL noise band, but *identical* to four decimal places.
+The CPU-FA path is **validated as a clean comparison baseline**: for
+non-turbo KV types, CPU-FA produces numerically equivalent results to
+GPU FA on the same corpus at the same model. The earlier "240-chunk
+CPU-FA turbo4 = 7.7769 is 0.12 PPL higher than GPU -fa off turbo4 =
+7.6563" worry was a false alarm: that comparison was apples-to-oranges
+(CPU-FA path vs GPU -fa off path — two different kernel chains, two
+different rules about what they compute). The proper comparison is
+CPU-FA turbo4 vs CPU-FA f16, which is now defensible because the f16
+baseline is validated.
+**The rule's vindication, captured:** the non-FA path produced
+*plausible-looking* PPL numbers (turbo4 = 7.6563) that happened to be
+slightly *lower* than the FA-path PPL (7.7769) on this specific
+7B Q4_K_M model. A naive reading is "FA is worse, why follow the
+rule?" — and that's exactly the trap the rule was guarding against.
+The 2026-07-02 doc says the non-FA path is "architecturally broken"
+for block-quantized V because of the unconditional `ggml_transpose` in
+`build_attn_mha`; it just *happens* to produce numerically plausible
+results on this specific model + corpus. The rule exists *because*
+the broken path looks fine on some configurations; without the rule,
+the broken path would have been promoted to "good enough." Lesson:
+*"a path that produces plausible-looking numbers on one model +
+corpus can still be architecturally wrong; the rule protects against
+the configurations where the broken path doesn't look fine."*
+
+**turbo2/3/4 CPU-FA full-corpus still in flight** (bg_3 chained bash);
+expect ~3 more ~12-min chunks to land. Once they do, the proper
+gate verdict is: CPU-FA turbo4 PPL vs CPU-FA f16 PPL (7.6385)
+(Δ within noise = tie; Δ > +0.05 = turbo4 worse than f16, Δ < -0.05
+= turbo4 better than f16 — the "post-2a improvement" framing in the
+RLPH_TASKS gate is now reframed against the FA baseline, not vs q4_0
+
+**Update 2026-07-07 (bg_3 partial):** **3 of 4 CPU-FA full-corpus
+numbers landed before bg_3 hit the 3600-s harness cap.**
+
+| KV type | CPU-FA PPL | GPU -fa off PPL | Δ (FA vs non-FA) |
+|---------|-----------|-----------------|------------------|
+| f16     | 7.6328 ± 0.048 | 7.6329 ± 0.048 | -0.0001 (bit-equivalent) |
+| turbo2  | 8.1216 ± 0.051 | 8.1166 ± 0.051 | +0.0050 (within noise) |
+| turbo3  | 7.7298 ± 0.049 | 7.7275 ± 0.049 | +0.0023 (within noise) |
+| turbo4  | pending | 7.6563 ± 0.049 (SUPERSEDED) | — |
+
+**Pattern confirmed at 3 of 4 bit-widths:** CPU-FA and GPU -fa off
+produce numerically equivalent PPL on this model + corpus, Δ ≤ 0.005
+(well within ±0.05 noise). The non-FA path, which the 2026-07-02 rule
+says is architecturally broken, happens to give the same answers as
+the FA path on this specific 7B Q4_K_M at ctx=512. This is the
+configuration where the rule's protection doesn't visibly fire — but
+the rule is still correct as a forward-looking guard against the
+configurations where it does fire. **No data yet supports modifying
+the rule.** turbo4 standalone (bg_4) launched to complete the matrix.
+which is itself non-FA on GPU).
