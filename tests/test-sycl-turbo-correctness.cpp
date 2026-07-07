@@ -422,17 +422,22 @@ static void probe_mul_mat(ggml_backend_t cpu, ggml_backend_t sycl,
 //               kernel is correct, PASSes -> XPASS -> "promote to GATE" signal.
 // The reference is always F16 K/V on CPU; turbo/q8_0 are judged LOSSY (cosine).
 static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
-                             ggml_type kv_type, const char * name,
-                             int64_t d, int64_t n_q, const char * path,
-                             Exp exp, bool force) {
+                            ggml_type kv_type, const char * name,
+                            int64_t d, int64_t n_q, const char * path,
+                            Exp exp, bool force,
+                            int64_t nh_q = 1, int64_t nh_kv = 1) {
     const int64_t n_kv = 256;   // cached tokens (multiple of FATTN_KQ_STRIDE)
-    const int64_t nh   = 1;     // heads
+    // nh_q = number of Q heads; nh_kv = number of K/V heads (GQA: nh_kv <= nh_q, nh_q % nh_kv == 0).
+    // The harness historically used nh_q == nh_kv == 1 (single-head, no GQA). Real models use
+    // GQA ratios (4:1 llama/mistral, 8:1 Qwen3-Coder-30B-A3B); see probe driver for the
+    // realistic-shape sweeps. nh_kv == nh_q stays the default for the kernel-correctness
+    // checks at each head dim; GQA variants probe the broadcast path.
     const int64_t pad  = 64;    // GGML_KQ_MASK_PAD
     const int64_t n_q_pad = ((n_q + pad - 1) / pad) * pad;
 
-    auto q_f32 = gen_normal(d * n_q * nh, 0xFA01u ^ (uint32_t) kv_type);
-    auto k_f32 = gen_normal(d * n_kv * nh, 0xFA02u ^ (uint32_t) kv_type);
-    auto v_f32 = gen_normal(d * n_kv * nh, 0xFA03u ^ (uint32_t) kv_type);
+    auto q_f32 = gen_normal(d * n_q * nh_q, 0xFA01u ^ (uint32_t) kv_type);
+    auto k_f32 = gen_normal(d * n_kv * nh_kv, 0xFA02u ^ (uint32_t) kv_type);
+    auto v_f32 = gen_normal(d * n_kv * nh_kv, 0xFA03u ^ (uint32_t) kv_type);
 
     // F16 copies for the reference.
     std::vector<ggml_fp16_t> k_f16(k_f32.size()), v_f16(v_f32.size());
@@ -440,18 +445,18 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
     ggml_fp32_to_fp16_row(v_f32.data(), v_f16.data(), v_f32.size());
 
     // Turbo copies for the kernel under test.
-    auto k_q = quantize_host(kv_type, k_f32, d, n_kv * nh);
-    auto v_q = quantize_host(kv_type, v_f32, d, n_kv * nh);
+    auto k_q = quantize_host(kv_type, k_f32, d, n_kv * nh_kv);
+    auto v_q = quantize_host(kv_type, v_f32, d, n_kv * nh_kv);
 
     std::vector<ggml_fp16_t> mask(n_kv * n_q_pad, ggml_fp32_to_fp16(0.0f));
     const float scale = 1.0f / std::sqrt((float) d);
 
     auto build = [=](ggml_context * ctx, ggml_type kvt) -> ggml_tensor * {
-        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d, n_q, nh, 1);
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d, n_q, nh_q, 1);
         ggml_set_name(q, "q");
-        ggml_tensor * k = ggml_new_tensor_4d(ctx, kvt, d, n_kv, nh, 1);
+        ggml_tensor * k = ggml_new_tensor_4d(ctx, kvt, d, n_kv, nh_kv, 1);
         ggml_set_name(k, "k");
-        ggml_tensor * v = ggml_new_tensor_4d(ctx, kvt, d, n_kv, nh, 1);
+        ggml_tensor * v = ggml_new_tensor_4d(ctx, kvt, d, n_kv, nh_kv, 1);
         ggml_set_name(v, "v");
         ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv, n_q_pad, 1, 1);
         ggml_set_name(m, "m");
@@ -470,8 +475,13 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         return o;
     };
 
-    char label[64];
-    snprintf(label, sizeof(label), "flash_attn %s d=%d [%s nq=%d]", name, (int) d, path, (int) n_q);
+    char label[80];
+    if (nh_q == nh_kv) {
+        snprintf(label, sizeof(label), "flash_attn %s d=%d [%s nq=%d]", name, (int) d, path, (int) n_q);
+    } else {
+        snprintf(label, sizeof(label), "flash_attn %s d=%d [%s nq=%d GQA %d:%d]",
+                 name, (int) d, path, (int) n_q, (int) nh_q, (int) nh_kv);
+    }
 
     // Reference: F16 K/V on CPU.
     bool cpu_ok = true;
@@ -524,30 +534,39 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
 // mul_mat -> inverse WHT. Exercises the SYCL turbo->f32 CPY kernel (cpy.cpp)
 // plus the mmvq turbo-K path on device.
 static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
-                               ggml_type kv_type, const char * name, int64_t d) {
-    const int64_t n_kv = 256, nh = 1;
-    auto q_f32 = gen_normal(d * 1 * nh, 0xAF01u ^ (uint32_t) kv_type);
-    auto k_f32 = gen_normal(d * n_kv * nh, 0xAF02u ^ (uint32_t) kv_type);
-    auto v_f32 = gen_normal(d * n_kv * nh, 0xAF03u ^ (uint32_t) kv_type);
+                               ggml_type kv_type, const char * name, int64_t d,
+                               int64_t nh_q = 1, int64_t nh_kv = 1) {
+    // Single-token decode probe (n_q=1). GQA: see probe_flash_attn for rationale.
+    // Default (1, 1) preserves the historical single-head probe; main() sweeps
+    // realistic GQA ratios (4:1 llama/mistral, 8:1 Qwen3-Coder-30B-A3B).
+    const int64_t n_kv = 256;
+    auto q_f32 = gen_normal(d * 1 * nh_q, 0xAF01u ^ (uint32_t) kv_type);
+    auto k_f32 = gen_normal(d * n_kv * nh_kv, 0xAF02u ^ (uint32_t) kv_type);
+    auto v_f32 = gen_normal(d * n_kv * nh_kv, 0xAF03u ^ (uint32_t) kv_type);
 
     std::vector<ggml_fp16_t> k_f16(k_f32.size()), v_f16(v_f32.size());
     ggml_fp32_to_fp16_row(k_f32.data(), k_f16.data(), k_f32.size());
     ggml_fp32_to_fp16_row(v_f32.data(), v_f16.data(), v_f32.size());
 
-    auto k_q = quantize_host(kv_type, k_f32, d, n_kv * nh);
-    auto v_q = quantize_host(kv_type, v_f32, d, n_kv * nh);
+    auto k_q = quantize_host(kv_type, k_f32, d, n_kv * nh_kv);
+    auto v_q = quantize_host(kv_type, v_f32, d, n_kv * nh_kv);
 
     const float scale = 1.0f / std::sqrt((float) d);
 
-    char label[64];
-    snprintf(label, sizeof(label), "attn_noflash %s d=%d", name, (int) d);
+    char label[80];
+    if (nh_q == nh_kv) {
+        snprintf(label, sizeof(label), "attn_noflash %s d=%d", name, (int) d);
+    } else {
+        snprintf(label, sizeof(label), "attn_noflash %s d=%d GQA %d:%d",
+                 name, (int) d, (int) nh_q, (int) nh_kv);
+    }
 
     auto build = [=](ggml_context * ctx, ggml_type kvt) -> ggml_tensor * {
-        ggml_tensor * q = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d, 1, nh);
+        ggml_tensor * q = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d, 1, nh_q);
         ggml_set_name(q, "q");
-        ggml_tensor * k = ggml_new_tensor_3d(ctx, kvt, d, n_kv, nh);
+        ggml_tensor * k = ggml_new_tensor_3d(ctx, kvt, d, n_kv, nh_kv);
         ggml_set_name(k, "k");
-        ggml_tensor * v = ggml_new_tensor_3d(ctx, kvt, d, n_kv, nh);
+        ggml_tensor * v = ggml_new_tensor_3d(ctx, kvt, d, n_kv, nh_kv);
         ggml_set_name(v, "v");
         const bool turbo = (kvt == GGML_TYPE_TURBO2_0 || kvt == GGML_TYPE_TURBO3_0 || kvt == GGML_TYPE_TURBO4_0);
         ggml_tensor * qq = turbo ? ggml_turbo_wht(ctx, q, 0, 0, nullptr) : q;
@@ -597,19 +616,20 @@ static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
     }
     verdict(label, compare(test, ref), Tol::LOSSY, Exp::GATE);
 }
-
 // (5) Baseline: standard f16 KV flash attention, SYCL vs CPU. This is NOT a
 // turbo path -- it tests whether the merged SYCL FA kernels are correct at all.
 // If this fails, the FellypeMelo FA header changes regressed the whole FA path
 // (not just turbo); if it passes, only the turbo FA fusion is broken.
 static void probe_fa_f16(ggml_backend_t cpu, ggml_backend_t sycl,
-                         int64_t d, int64_t n_q, const char * path) {
-    const int64_t n_kv = 256, nh = 1, pad = 64;
+                         int64_t d, int64_t n_q, const char * path,
+                         int64_t nh_q = 1, int64_t nh_kv = 1) {
+    // GQA: see probe_flash_attn for rationale. Default (1, 1) keeps single-head baseline.
+    const int64_t n_kv = 256, pad = 64;
     const int64_t n_q_pad = ((n_q + pad - 1) / pad) * pad;
 
-    auto q_f32 = gen_normal(d * n_q * nh, 0xF16Au);
-    auto k_f32 = gen_normal(d * n_kv * nh, 0xF16Bu);
-    auto v_f32 = gen_normal(d * n_kv * nh, 0xF16Cu);
+    auto q_f32 = gen_normal(d * n_q * nh_q, 0xF16Au);
+    auto k_f32 = gen_normal(d * n_kv * nh_kv, 0xF16Bu);
+    auto v_f32 = gen_normal(d * n_kv * nh_kv, 0xF16Cu);
     std::vector<ggml_fp16_t> k_f16(k_f32.size()), v_f16(v_f32.size());
     ggml_fp32_to_fp16_row(k_f32.data(), k_f16.data(), k_f32.size());
     ggml_fp32_to_fp16_row(v_f32.data(), v_f16.data(), v_f32.size());
@@ -617,9 +637,9 @@ static void probe_fa_f16(ggml_backend_t cpu, ggml_backend_t sycl,
     const float scale = 1.0f / std::sqrt((float) d);
 
     auto build = [=](ggml_context * ctx) -> ggml_tensor * {
-        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d, n_q, nh, 1); ggml_set_name(q, "q");
-        ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, n_kv, nh, 1); ggml_set_name(k, "k");
-        ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, n_kv, nh, 1); ggml_set_name(v, "v");
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d, n_q, nh_q, 1); ggml_set_name(q, "q");
+        ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, n_kv, nh_kv, 1); ggml_set_name(k, "k");
+        ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d, n_kv, nh_kv, 1); ggml_set_name(v, "v");
         ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv, n_q_pad, 1, 1); ggml_set_name(m, "m");
         return ggml_flash_attn_ext(ctx, q, k, v, m, scale, 0.0f, 0.0f);
     };
@@ -630,8 +650,13 @@ static void probe_fa_f16(ggml_backend_t cpu, ggml_backend_t sycl,
         ggml_backend_tensor_set(ggml_get_tensor(ctx, "m"), mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
     };
 
-    char label[64];
-    snprintf(label, sizeof(label), "flash_attn f16 d=%d [%s nq=%d]", (int) d, path, (int) n_q);
+    char label[80];
+    if (nh_q == nh_kv) {
+        snprintf(label, sizeof(label), "flash_attn f16 d=%d [%s nq=%d]", (int) d, path, (int) n_q);
+    } else {
+        snprintf(label, sizeof(label), "flash_attn f16 d=%d [%s nq=%d GQA %d:%d]",
+                 (int) d, path, (int) n_q, (int) nh_q, (int) nh_kv);
+    }
 
     bool cok = true, sok = true;
     auto ref = run_on_backend(cpu, build, set, &cok);
@@ -701,6 +726,24 @@ int main() {
     probe_attn_noflash(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128);
     probe_attn_noflash(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128);
 
+    // [3c] Non-FA attention GQA sweep — exercises the broadcast path with realistic
+    // GQA ratios from the validation fleet (head_dim=128 across all 3 models):
+    //   4:1  llama-3.1-8B / mistral-7b  (head_count=32, head_count_kv=8)
+    //   8:1  Qwen3-Coder-30B-A3B        (head_count=32, head_count_kv=4)
+    // Per-head FA math is nh/nh_kv-independent, so a GATE pass here is mostly a
+    // coverage-shape signal (no new kernel math), but a GATE fail would localize
+    // to the GQA-broadcast code path on device. Stays non-FA path because FA is
+    // separately exercised by [4]/[5]/[6]. d=128 only (turbo invariant).
+    printf("\n[3c] non-FA attention GQA sweep (d=128) - GATE, llama/mistral 4:1 + qwen3 8:1\n");
+    for (int64_t gqa_q : {4, 8}) {
+        const int64_t gqa_kv = 1;  // 4:1 and 8:1 ratios
+        for (ggml_type kvt : { GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO4_0 }) {
+            const char * nm = (kvt == GGML_TYPE_TURBO2_0) ? "turbo2_0"
+                            : (kvt == GGML_TYPE_TURBO3_0) ? "turbo3_0"
+                            : "turbo4_0";
+            probe_attn_noflash(cpu, sycl, kvt, nm, 128, gqa_q, gqa_kv);
+        }
+    }
     // Head-dim sweep is {64,128}: d=256 reproducibly HANGS the A770 SYCL FA
     // path (device-lost manifesting as a non-terminating compute, not garbage)
     // on both the tile (n_q=8) and vec (n_q=1) kernels. A CI gate must always
@@ -710,6 +753,16 @@ int main() {
     printf("\n[4] flash attention TILE (n_q=8, prefill) - GATE, standard KV across head dims\n");
     for (int64_t d : {64, 128}) probe_fa_f16(cpu, sycl, d, 8, "tile");
     for (int64_t d : {64, 128}) probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", d, 8, "tile", Exp::GATE, /*force=*/true);
+
+    // [4b] FA TILE GQA sweep at d=128 — f16 + q8_0 only (safe; turbo FA stays under [5]).
+    // Same 4:1 + 8:1 ratios as [3c]. Per-head math is nh-independent, so this is a
+    // coverage-shape check on the FA GQA-broadcast path.
+    printf("\n[4b] flash attention TILE GQA sweep (d=128, n_q=8) - GATE, f16 + q8_0 across llama/mistral 4:1 + qwen3 8:1\n");
+    for (int64_t gqa_q : {4, 8}) {
+        const int64_t gqa_kv = 1;
+        probe_fa_f16(cpu, sycl, 128, 8, "tile", gqa_q, gqa_kv);
+        probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", 128, 8, "tile", Exp::GATE, /*force=*/true, gqa_q, gqa_kv);
+    }
 
     // Turbo FA fix landed (see fattn-common.hpp vec_dot_fattn_vec_KQ_turbo_generic):
     // the KQ dot now reads Q from the caller's per-thread register slice instead of
@@ -725,6 +778,13 @@ int main() {
             probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, path, Exp::GATE, /*force=*/true);
             probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::GATE, /*force=*/true);
             probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::GATE, /*force=*/true);
+            // [5b] GQA variants for the turbo FA path (still under LLAMA_TEST_TURBO_FA gate).
+            // Same 4:1 + 8:1 ratios as [3c]/[4b] for cross-probe comparability.
+            for (int64_t gqa_q : {4, 8}) {
+                probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, path, Exp::GATE, /*force=*/true, gqa_q, 1);
+                probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::GATE, /*force=*/true, gqa_q, 1);
+                probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::GATE, /*force=*/true, gqa_q, 1);
+            }
         }
     } else {
         printf("\n[5] flash attention turbo KV - SKIPPED (set LLAMA_TEST_TURBO_FA=1 to run; gated so a regressed kernel cannot wedge the A770)\n");
@@ -734,6 +794,28 @@ int main() {
     for (int64_t d : {64, 128}) probe_fa_f16(cpu, sycl, d, 1, "vec");
     for (int64_t d : {64, 128}) probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", d, 1, "vec", Exp::GATE, /*force=*/true);
 
+    // [6b] FA VEC GQA sweep at d=128 — f16 + q8_0 only (turbo VEC FA stays under [5b]).
+    // Same coverage-shape rationale as [4b]. The VEC kernel is the crash-prone one
+    // (runs LAST), but f16/q8_0 don't wedge on A770 — only turbo has the hang risk.
+    printf("\n[6b] flash attention VEC GQA sweep (d=128, n_q=1) - GATE, f16 + q8_0 across llama/mistral 4:1 + qwen3 8:1\n");
+    for (int64_t gqa_q : {4, 8}) {
+        const int64_t gqa_kv = 1;
+        probe_fa_f16(cpu, sycl, 128, 1, "vec", gqa_q, gqa_kv);
+        probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", 128, 1, "vec", Exp::GATE, /*force=*/true, gqa_q, gqa_kv);
+    }
+
+    // [7] d=256 FA stress probe — EXPLICITLY GATED. d=256 reproducibly HANGS the A770 SYCL FA
+    // path on both tile (n_q=8) and vec (n_q=1) kernels (device-lost, not garbage). CI gates
+    // must terminate, and a hang cannot be caught at runtime — so d=256 is NOT in the
+    // default sweep. This opt-in env-var-gated section exists so a developer can re-test it
+    // after a driver/IGC bump to see if the hang was upstream-fixed. Set LLAMA_TEST_FA256=1.
+    if (getenv("LLAMA_TEST_FA256")) {
+        printf("\n[7] flash attention d=256 (OPT-IN, known-hang-risk on A770) - f16 only at this stage\n");
+        probe_fa_f16(cpu, sycl, 256, 8, "tile");
+        probe_fa_f16(cpu, sycl, 256, 1, "vec");
+    } else {
+        printf("\n[7] flash attention d=256 - SKIPPED (set LLAMA_TEST_FA256=1 to opt in; gated, A770 SYCL FA reproducibly hangs at d=256)\n");
+    }
     printf("\n== summary: %d GATE-FAIL, %d XPASS (promote to GATE!), %d xfail (expected-broken), %d SKIP ==\n",
            g_failures, g_xpass, g_xfail, g_skips);
 
