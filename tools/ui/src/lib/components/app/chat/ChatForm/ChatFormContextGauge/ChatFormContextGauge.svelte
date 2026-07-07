@@ -6,7 +6,6 @@
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { activeConversation, activeMessages } from '$lib/stores/conversations.svelte';
 	import ContextGaugeDetailRow from './ContextGaugeDetailRow.svelte';
 	import {
@@ -72,64 +71,65 @@
 	// update so every consumer derived below reruns in lockstep with each
 	// server emission. Null outside of preparing/generating.
 	//
-	// promptTokens is the combined reading (prompt_n + cache_n) — during preparing
-	// it's promptProgress.processed (= total prompt tokens from the server), during
-	// generating it falls back to prompt_n since promptProgress disappears after
-	// pre_decode. cacheTokens is kept for reference but should not be added to
-	// promptTokens — that would double-count since promptTokens already includes
-	// the cached portion.
+	// Three live fields matter:
+	//   freshTokens — NEW tokens added this turn (= timing.prompt_n =
+	//     n_prompt_tokens_processed from server-context.cpp). Excludes cache
+	//     hits so the gauge can sum it across turns without double-counting.
+	//   promptTokens — full prompt input this turn = fresh + cache hit prefix.
+	//     Used by "this turn" breakdown rows.
+	//   cacheTokens — matched prefix tokens from the in-memory KV cache.
 	let liveStats = $derived.by(() => {
 		const live = processingState.processingState;
 		if (!live || (live.status !== 'preparing' && live.status !== 'generating')) {
 			return null;
 		}
-		const livePromptProgress = live.promptProgress?.processed ?? 0;
-		const livePromptTokens = Math.max(live.promptTokens ?? 0, livePromptProgress);
+		const livePromptTokens = live.promptTokens ?? 0;
+		const liveCacheTokens = live.cacheTokens ?? 0;
 		return {
-			promptTokens: livePromptTokens,
-			cacheTokens: live.cacheTokens ?? 0,
+			freshTokens: livePromptTokens,
+			promptTokens: livePromptTokens + liveCacheTokens,
+			cacheTokens: liveCacheTokens,
 			outputTokens: live.outputTokensUsed ?? 0,
 			tokensPerSecond: live.tokensPerSecond ?? 0
 		};
 	});
 
 	// Derive context from message data, plus live in-flight tokens when present.
-	// During preparing, live.promptTokens grows as the prompt is processed. During
-	// generating, the server zeroes prompt_n (pre_decode) so the value lags, but
-	// live.promptTokens still tracks via promptProgress. After the turn, the
-	// committed assistant message timings are stable and liveStats is null.
+	//
+	// KV cache in memory = sum across all committed assistant turns of
+	// (timings.prompt_n + timings.predicted_n). Cache hits are excluded because
+	// they reference tokens already counted by a prior turn's prompt_n.
+	//
+	// During streaming of a new turn, the previous cumulative total still
+	// represents the slot's KV. The live "fresh" addition (= this turn's new
+	// prompt_n) and the live output are added on top — that's the running
+	// delta between committed state and the in-flight request.
+	//
+	// Edge case: there's a brief window between commitMessageAtIndex(...) (the
+	// assistant timings land in activeMessages) and cleanupStreamingState()
+	// (processingState clears). During that window the same turn's data lives
+	// in BOTH the committed array and the live state, so adding live on top of
+	// sum would double-count. Guard against that by skipping live additions
+	// whenever the last entry in activeMessages is already a committed
+	// assistant — the live state at that moment is just the same delta.
 	let contextUsed = $derived.by(() => {
 		const messages = activeMessages() as DatabaseMessage[];
-		const agenticMessages = messages.filter(
-			(m) => m.role === MessageRole.ASSISTANT && m.timings?.agentic?.llm?.predicted_n != null
-		);
 
 		let used = 0;
-		if (agenticMessages.length > 0) {
-			const lastAgentic = agenticMessages[agenticMessages.length - 1];
-			const agg = lastAgentic.timings?.agentic?.llm;
-			used = (agg?.prompt_n ?? 0) + (agg?.predicted_n ?? 0);
-		} else if (messages.length > 0) {
-			for (let i = messages.length - 1; i >= 0; i--) {
-				const msg = messages[i];
-				if (msg.role === MessageRole.ASSISTANT && msg.timings) {
-					used =
-						(msg.timings.prompt_n ?? 0) +
-						(msg.timings.cache_n ?? 0) +
-						(msg.timings.predicted_n ?? 0);
-					break;
-				}
-			}
+		for (const msg of messages) {
+			if (msg.role !== MessageRole.ASSISTANT || !msg.timings) continue;
+			used += (msg.timings.prompt_n ?? 0) + (msg.timings.predicted_n ?? 0);
 		}
 
 		const live = liveStats;
-		if (live) {
-			// promptTokens already includes cache (combined reading from promptProgress)
-			const liveTotal = live.promptTokens + live.outputTokens;
-			if (liveTotal > 0) used = Math.max(used, liveTotal);
+		const lastMsg = messages[messages.length - 1];
+		const liveTurnAlreadyCommitted =
+			!!lastMsg && lastMsg.role === MessageRole.ASSISTANT && !!lastMsg.timings;
+		if (live && !liveTurnAlreadyCommitted) {
+			used += live.freshTokens + live.outputTokens;
 		}
 
-		return used + (enabledToolsTokenCount ?? 0);
+		return used;
 	});
 
 	let cumulativeStats = $derived.by(() => {
@@ -191,17 +191,6 @@
 		})
 	);
 
-	let enabledToolsTokenCount = $derived(toolsStore.enabledToolsTokenCount);
-
-	$effect(() => {
-		const modelId = activeModelId;
-		const enabledToolsTokenCount = (toolsStore as any)._enabledToolsTokenCount;
-		void enabledToolsTokenCount;
-		toolsStore.refreshEnabledToolsTokenCount(modelId).catch((err) => {
-			console.warn('[ChatFormContextGauge] Failed to refresh tools token count:', err);
-		});
-	});
-
 	let contextPercent = $derived.by(() => {
 		if (contextTotal === null || contextTotal <= 0) return null;
 		return Math.round((contextUsed / contextTotal) * 100);
@@ -235,9 +224,9 @@
 		return read;
 	});
 
-	// Current request's fresh (newly processed) tokens: prompt_n for the last
-	// assistant message. During preparing/generating, the live state splits
-	// combined promptTokens into fresh = total - cache.
+	// Current request's fresh (newly processed) tokens: this turn's prompt_n.
+	// live.freshTokens is the server's n_prompt_tokens_processed - cache hits
+	// already excluded, so it matches the committed semantics exactly.
 	let currentFresh = $derived.by(() => {
 		const messages = activeMessages() as DatabaseMessage[];
 
@@ -251,9 +240,8 @@
 		}
 
 		const live = liveStats;
-		if (live && live.promptTokens > 0) {
-			// live.promptTokens is total (fresh + cache); subtract cache to get fresh.
-			fresh = Math.max(fresh, live.promptTokens - live.cacheTokens);
+		if (live) {
+			fresh = Math.max(fresh, live.freshTokens);
 		}
 
 		return fresh;
@@ -297,8 +285,9 @@
 		return 0;
 	});
 
-	// KV total = current request's Reading + Output + Tool definitions.
-	let kvTotal = $derived(currentRead + currentOutput + (enabledToolsTokenCount ?? 0));
+	// KV total = current request's Reading + Output. The model's prompt_n + cache_n
+	// already includes tool definitions rendered into the prompt by the chat template.
+	let kvTotal = $derived(currentRead + currentOutput);
 
 	let detailsOpen = $state(false);
 
@@ -307,7 +296,6 @@
 			cumulativeStats.output > 0 ||
 			currentRead > 0 ||
 			currentOutput > 0 ||
-			(enabledToolsTokenCount ?? 0) > 0 ||
 			cumulativeStats.averageTokensPerSecond !== null ||
 			transientDetails.length > 0
 	);
@@ -485,7 +473,7 @@
 							</div>
 						{/if}
 
-						{#if currentRead > 0 || currentOutput > 0 || (enabledToolsTokenCount ?? 0) > 0}
+						{#if currentRead > 0 || currentOutput > 0}
 							<div>
 								<h3
 									class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-2"
@@ -494,14 +482,6 @@
 								</h3>
 
 								<div class="flex flex-col gap-2">
-									{#if enabledToolsTokenCount ?? 0 > 0}
-										<ContextGaugeDetailRow
-											label="Tool schema"
-											value={`${(enabledToolsTokenCount ?? 0).toLocaleString()} tok`}
-											subtitle="Sent on every turn, cached after the first"
-										/>
-									{/if}
-
 									{#if currentRead > 0}
 										<ContextGaugeDetailRow
 											label="Prompt"
