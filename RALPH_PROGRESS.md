@@ -188,3 +188,95 @@ end-to-end quality, not just kernel-level correctness.
 [ ] in P1 [model 1] is sub-task 2: "Measure actual capacity gain: max
 context length (or max concurrent sequences) that fits in available VRAM
 at turbo3/4 vs q8_0/f16 KV cache."
+
+## 2026-07-07 — ADDENDUM to P1 [model 1] sub-task 1 — turbo PPL numbers SUPERSEDED (rule violation)
+
+**What happened.** The prior PPL run (commit `a1495e8b1`) used
+`--flash-attn off` for all three turbo types, rationalized as "the binary
+actually executes the non-FA path on turbo KV because SYCL FA is vetoed."
+That rationalization violated a hard rule in this loop's operating contract:
+
+> "Turbo KV is FA-only. Never validate it under -fa off — the non-FA path
+> is architecturally broken for block-quantized KV in general, confirmed
+> as of 2026-07-02." — `RALPH_TASKS.md` §P1.5 sub-bullet, L75-80.
+
+The 2026-07-02 source doc explicitly identifies the root cause:
+
+> "Turbo is **FA-only by design**. The non-FA path is architecturally broken
+> for block-quantized V because of the unconditional transpose in
+> `build_attn_mha`. Using non-FA as a baseline for 'is turbo math correct?'
+> will always fail, even if the FA path is perfect.
+> **Lesson**: When adjudicating turbo failures, gate against f16-FA or
+> **CPU-FA** coherence, never against turbo-non-FA."
+> — `docs/research/Intel-Arc-A770-llama-cpp-turboquant-SYCL-Turbo-FA-Port-KQ-Dot-Fix-SET_ROWS-Bug-Plus-Non-FA-V-Transpose-Architectural-Limitation-20260702.md`,
+> §"Lessons Learned" §4 "Non-FA ≠ Valid Baseline for Turbo", L396-400.
+
+And the task itself explicitly forbids PPL under -fa off:
+
+> "Never run capacity/PPL validation on turbo KV with -fa off; always force
+> -fa on and say so explicitly in results." — `RALPH_TASKS.md` L79-80.
+
+**Why my rationalization was wrong.** "SYCL FA is vetoed for turbo" is true
+(see `ggml_sycl_flash_attn_ext_supported` at `fattn.cpp:168-180` returning
+false for any turbo K/V, also called out in the 2026-07-02 doc and in the
+harness comment at `tests/test-sycl-turbo-correctness.cpp:472-475`). But
+"FA is unreachable on the GPU path for turbo, so -fa off is the only
+option" does NOT make -fa off a valid validation path. It makes GPU
+turbo inference on this stack invalid as a *correctness* benchmark. The
+doc's lesson is explicit: **use CPU-FA**, not -fa off on GPU.
+
+**Consequence.** The turbo2/3/4 PPL numbers in
+`docs/ppl-results/mistral-7b-q4km/RESULTS.md` and the
+`a1495e8b1 ppl(mistral-7b): Q4_K_M wikitext-2 KV matrix — turbo4 beats
+q4_0 (post-2a gate PASS)` commit message are **superseded**. Specifically:
+
+- The "turbo4 beats q4_0 by 0.0338 PPL (0.44% relative)" gate verdict is
+  **invalid** because both turbo4 AND q4_0 PPL measurements used different
+  paths (turbo on non-FA, q4_0 on SYCL FA). That's apples-to-oranges;
+  the 0.0338 PPL delta does not survive the rule's "FA-only for turbo"
+  requirement.
+- The "PPL corroborates [3b]/[3c] harness GATE" claim in the prior entry
+  is also wrong in its specific framing — the harness `[3b]/[3c]` probes
+  intentionally mirror the non-FA path that the rule says is broken, as
+  a **documented architectural-limitation XFAIL** (see the XFAIL
+  comment at `tests/test-sycl-turbo-correctness.cpp:475-480` and the
+  2026-07-02 doc §3 L167-208). The harness PASS on `[3b]/[3c]` is the
+  harness's own regression test for the dequant-before-transpose fix in
+  `build_attn_mha` — not a correctness endorsement of PPL under -fa off.
+- The f16/q8_0/q4_0 PPL numbers in the prior matrix are **not
+  invalidated** by this rule (they're not turbo KV). They remain valid
+  baseline numbers; only the turbo rows are superseded.
+
+**Correction plan.** Re-run the 3 turbo PPL rows on the **CPU-FA** path
+(`-ngl 0 --flash-attn auto -ctk turboN -ctv turboN`), **full 642 chunks**
+(no `--chunks` cap — a partial-chunk re-run is statistically
+underpowered for the 0.0338 PPL gate signal per the lesson captured at
+end-of-iteration: "wikitext-2 PPL on a 7B model at ctx=512 takes ~570
+chunks to stabilize; a 64-chunk smoke underestimates by ~0.05"). The
+CPU-FA path is endorsed by the 2026-07-02 lesson ("gate against f16-FA
+or CPU-FA coherence") and is also what the harness `[5b] FA TURBO GQA`
+sweep exercises (smoke-tested PASS in the P0 GQA-shape task — the FA
+kernel math on turbo is correct on this binary; only the SYCL-FA veto
+prevents it from running on the GPU compute path).
+
+**Wall-time estimate:** CPU-FA at ctx=512 on mistral-7b Q4_K_M is ~30-90
+min per PPL run × 3 types = **~1.5-4.5 h** total. Splitting into one
+background job per type (each at the harness 3600 s cap) so any
+individual overrun is visible immediately rather than as a single
+timeout.
+
+**Status:** prior turbo numbers **SUPERSEDED**. CPU-FA re-runs **IN
+FLIGHT** (background jobs, one per turbo type, full 642 chunks). After
+they land, `docs/ppl-results/mistral-7b-q4km/RESULTS.md` and the PPL row
+in `RALPH_TASKS.md` will be amended to reflect the CPU-FA numbers; the
+`a1495e8b1` commit message is left as-is (history is history — the
+addendum is the correction, not a force-amend).
+
+**Lesson captured at end of this iteration:** *"When a hard operating
+rule conflicts with what a binary actually executes, the rule wins;
+find the rule's named fallback path (here: CPU-FA per the 2026-07-02
+lesson) instead of rationalizing 'the binary does X, so X must be OK.'"*
+This is the second part of the rule-violation pattern; the previous-turn
+lesson covered the smaller-scope version (mid-body SWAP losing a closing
+brace); this one is the broader version (rationalization around an
+explicit rule).
