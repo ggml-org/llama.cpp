@@ -210,8 +210,8 @@ static inline void hmx_fa_o_norm_tile(
 }
 
 static inline void hmx_fa_q_prep_fp32_d2(
-    __fp16 * vtcm_q_tiles, const char * temp_q_vtcm,
-    size_t start, size_t end, size_t valid_end,
+    __fp16 * vtcm_q_tiles, const uint8_t * temp_q_vtcm,
+    size_t start, size_t end, size_t g_rows_end,
     size_t DK, size_t G, size_t n_rows_q,
     const struct fastdiv_values * div_G, bool q_transposed
 ) {
@@ -220,7 +220,7 @@ static inline void hmx_fa_q_prep_fp32_d2(
         size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
         __fp16 * out_base = vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * DK;
 
-        if (r >= valid_end) {
+        if (r >= g_rows_end) {
             ((HVX_Vector *) (out_base + 0 * HMX_FP16_TILE_N_ELMS))[r1 / 2] = Q6_V_vzero();
             ((HVX_Vector *) (out_base + 1 * HMX_FP16_TILE_N_ELMS))[r1 / 2] = Q6_V_vzero();
             continue;
@@ -235,7 +235,7 @@ static inline void hmx_fa_q_prep_fp32_d2(
         const size_t offset1 = q_transposed ? (h_idx1 * n_rows_q + q_idx1) : (q_idx1 * G + h_idx1);
 
         const HVX_Vector * pv_in0 = (const HVX_Vector *) (temp_q_vtcm + offset0 * DK * sizeof(float));
-        const HVX_Vector * pv_in1 = (r + 1 < valid_end)
+        const HVX_Vector * pv_in1 = (r + 1 < g_rows_end)
             ? (const HVX_Vector *) (temp_q_vtcm + offset1 * DK * sizeof(float))
             : NULL;
 
@@ -255,8 +255,8 @@ static inline void hmx_fa_q_prep_fp32_d2(
 }
 
 static inline void hmx_fa_q_prep_fp32_d4(
-    __fp16 * vtcm_q_tiles, const char * temp_q_vtcm,
-    size_t start, size_t end, size_t valid_end,
+    __fp16 * vtcm_q_tiles, const uint8_t * temp_q_vtcm,
+    size_t start, size_t end, size_t g_rows_end,
     size_t DK, size_t G, size_t n_rows_q,
     const struct fastdiv_values * div_G, bool q_transposed
 ) {
@@ -265,7 +265,7 @@ static inline void hmx_fa_q_prep_fp32_d4(
         size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
         __fp16 * out_base = vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * DK;
 
-        if (r >= valid_end) {
+        if (r >= g_rows_end) {
             for (uint32_t d = 0; d < 4; ++d) {
                 ((HVX_Vector *) (out_base + d * HMX_FP16_TILE_N_ELMS))[r1 / 2] = Q6_V_vzero();
             }
@@ -281,7 +281,7 @@ static inline void hmx_fa_q_prep_fp32_d4(
         const size_t offset1 = q_transposed ? (h_idx1 * n_rows_q + q_idx1) : (q_idx1 * G + h_idx1);
 
         const HVX_Vector * pv_in0 = (const HVX_Vector *) (temp_q_vtcm + offset0 * DK * sizeof(float));
-        const HVX_Vector * pv_in1 = (r + 1 < valid_end)
+        const HVX_Vector * pv_in1 = (r + 1 < g_rows_end)
             ? (const HVX_Vector *) (temp_q_vtcm + offset1 * DK * sizeof(float))
             : NULL;
 
@@ -295,8 +295,8 @@ static inline void hmx_fa_q_prep_fp32_d4(
 }
 
 static inline void hmx_fa_q_prep_fp32_generic(
-    __fp16 * vtcm_q_tiles, const char * temp_q_vtcm,
-    size_t start, size_t end, size_t valid_end,
+    __fp16 * vtcm_q_tiles, const uint8_t * temp_q_vtcm,
+    size_t start, size_t end, size_t g_rows_end,
     size_t DK, size_t G, size_t n_rows_q,
     const struct fastdiv_values * div_G, uint32_t d_limit, bool q_transposed
 ) {
@@ -305,7 +305,7 @@ static inline void hmx_fa_q_prep_fp32_generic(
         size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
         __fp16 * out_base = vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * DK;
 
-        if (r >= valid_end) {
+        if (r >= g_rows_end) {
             for (uint32_t d = 0; d < d_limit; ++d) {
                 ((HVX_Vector *) (out_base + d * HMX_FP16_TILE_N_ELMS))[r1 / 2] = Q6_V_vzero();
             }
@@ -321,7 +321,7 @@ static inline void hmx_fa_q_prep_fp32_generic(
         const size_t offset1 = q_transposed ? (h_idx1 * n_rows_q + q_idx1) : (q_idx1 * G + h_idx1);
 
         const HVX_Vector * pv_in0 = (const HVX_Vector *) (temp_q_vtcm + offset0 * DK * sizeof(float));
-        const HVX_Vector * pv_in1 = (r + 1 < valid_end)
+        const HVX_Vector * pv_in1 = (r + 1 < g_rows_end)
             ? (const HVX_Vector *) (temp_q_vtcm + offset1 * DK * sizeof(float))
             : NULL;
 
@@ -337,8 +337,8 @@ static inline void hmx_fa_q_prep_fp32_generic(
 }
 
 static inline void hmx_fa_q_prep_fp16_d1(
-    __fp16 * vtcm_q_tiles, const char * temp_q_vtcm,
-    size_t start, size_t end, size_t valid_end,
+    __fp16 * vtcm_q_tiles, const uint8_t * temp_q_vtcm,
+    size_t start, size_t end, size_t g_rows_end,
     size_t DK, size_t G, size_t n_rows_q,
     const struct fastdiv_values * div_G, bool q_transposed
 ) {
@@ -347,7 +347,7 @@ static inline void hmx_fa_q_prep_fp16_d1(
         size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
         __fp16 * out_base = vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * DK;
 
-        if (r >= valid_end) {
+        if (r >= g_rows_end) {
             __fp16 *     out_dtile = out_base + 0 * HMX_FP16_TILE_N_ELMS * 2;
             HVX_Vector * pv_out0   = ((HVX_Vector *) out_dtile) + r1 / 2;
             HVX_Vector * pv_out1   = pv_out0 + 16;
@@ -365,7 +365,7 @@ static inline void hmx_fa_q_prep_fp16_d1(
         const size_t offset1 = q_transposed ? (h_idx1 * n_rows_q + q_idx1) : (q_idx1 * G + h_idx1);
 
         const HVX_Vector * pv_in0 = (const HVX_Vector *) (temp_q_vtcm + offset0 * DK * sizeof(__fp16));
-        const HVX_Vector * pv_in1 = (r + 1 < valid_end)
+        const HVX_Vector * pv_in1 = (r + 1 < g_rows_end)
             ? (const HVX_Vector *) (temp_q_vtcm + offset1 * DK * sizeof(__fp16))
             : NULL;
 
@@ -383,8 +383,8 @@ static inline void hmx_fa_q_prep_fp16_d1(
 }
 
 static inline void hmx_fa_q_prep_fp16_d2(
-    __fp16 * vtcm_q_tiles, const char * temp_q_vtcm,
-    size_t start, size_t end, size_t valid_end,
+    __fp16 * vtcm_q_tiles, const uint8_t * temp_q_vtcm,
+    size_t start, size_t end, size_t g_rows_end,
     size_t DK, size_t G, size_t n_rows_q,
     const struct fastdiv_values * div_G, bool q_transposed
 ) {
@@ -393,7 +393,7 @@ static inline void hmx_fa_q_prep_fp16_d2(
         size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
         __fp16 * out_base = vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * DK;
 
-        if (r >= valid_end) {
+        if (r >= g_rows_end) {
             for (uint32_t d = 0; d < 2; ++d) {
                 __fp16 *     out_dtile = out_base + d * HMX_FP16_TILE_N_ELMS * 2;
                 HVX_Vector * pv_out0   = ((HVX_Vector *) out_dtile) + r1 / 2;
@@ -413,7 +413,7 @@ static inline void hmx_fa_q_prep_fp16_d2(
         const size_t offset1 = q_transposed ? (h_idx1 * n_rows_q + q_idx1) : (q_idx1 * G + h_idx1);
 
         const HVX_Vector * pv_in0 = (const HVX_Vector *) (temp_q_vtcm + offset0 * DK * sizeof(__fp16));
-        const HVX_Vector * pv_in1 = (r + 1 < valid_end)
+        const HVX_Vector * pv_in1 = (r + 1 < g_rows_end)
             ? (const HVX_Vector *) (temp_q_vtcm + offset1 * DK * sizeof(__fp16))
             : NULL;
 
@@ -445,8 +445,8 @@ static inline void hmx_fa_q_prep_fp16_d2(
 }
 
 static inline void hmx_fa_q_prep_fp16_generic(
-    __fp16 * vtcm_q_tiles, const char * temp_q_vtcm,
-    size_t start, size_t end, size_t valid_end,
+    __fp16 * vtcm_q_tiles, const uint8_t * temp_q_vtcm,
+    size_t start, size_t end, size_t g_rows_end,
     size_t DK, size_t G, size_t n_rows_q,
     const struct fastdiv_values * div_G, uint32_t d_limit, bool q_transposed
 ) {
@@ -455,7 +455,7 @@ static inline void hmx_fa_q_prep_fp16_generic(
         size_t   r1       = r % HMX_FP16_TILE_N_ROWS;
         __fp16 * out_base = vtcm_q_tiles + r0 * HMX_FP16_TILE_N_ROWS * DK;
 
-        if (r >= valid_end) {
+        if (r >= g_rows_end) {
             for (uint32_t d = 0; d < d_limit; ++d) {
                 __fp16 *     out_dtile = out_base + d * HMX_FP16_TILE_N_ELMS * 2;
                 HVX_Vector * pv_out0   = ((HVX_Vector *) out_dtile) + r1 / 2;
@@ -475,7 +475,7 @@ static inline void hmx_fa_q_prep_fp16_generic(
         const size_t offset1 = q_transposed ? (h_idx1 * n_rows_q + q_idx1) : (q_idx1 * G + h_idx1);
 
         const HVX_Vector * pv_in0 = (const HVX_Vector *) (temp_q_vtcm + offset0 * DK * sizeof(__fp16));
-        const HVX_Vector * pv_in1 = (r + 1 < valid_end)
+        const HVX_Vector * pv_in1 = (r + 1 < g_rows_end)
             ? (const HVX_Vector *) (temp_q_vtcm + offset1 * DK * sizeof(__fp16))
             : NULL;
 

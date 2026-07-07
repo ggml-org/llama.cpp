@@ -663,35 +663,40 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
         const size_t o_tile_bytes = factx->o_tile_bytes;
         const bool use_q_dma = (2 * o_tile_bytes >= factx->g_br * DK * (factx->is_q_fp32 ? 4 : 2));
 
+        __fp16 * q_tiles = factx->vtcm_q_tiles;
         if (use_q_dma) {
-            if (factx->is_q_fp32) {
-                char * temp_q_vtcm = (char *) factx->vtcm_o_tiles[0];
-                const uint32_t d_limit = DK / 32;
-                const size_t valid_end = hex_smin(end, n_rows_g);
+            const size_t g_rows_end = hex_smin(end, n_rows_g);
+            const uint32_t d_limit = factx->is_q_fp32 ? DK / 32 : DK / 64;
 
-                if (d_limit == 2) {
-                    hmx_fa_q_prep_fp32_d2(factx->vtcm_q_tiles, temp_q_vtcm, start, end, valid_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
-                } else if (d_limit == 4) {
-                    hmx_fa_q_prep_fp32_d4(factx->vtcm_q_tiles, temp_q_vtcm, start, end, valid_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
-                } else {
-                    hmx_fa_q_prep_fp32_generic(factx->vtcm_q_tiles, temp_q_vtcm, start, end, valid_end, DK, G, args->n_rows_q, &factx->div_G, d_limit, args->q_transposed);
+            uint8_t * q_flat  = (uint8_t *) factx->vtcm_o_tiles[0];
+            if (factx->is_q_fp32) {
+                switch (d_limit) {
+                    case 2:
+                        hmx_fa_q_prep_fp32_d2(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
+                        break;
+                    case 4:
+                        hmx_fa_q_prep_fp32_d4(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
+                        break;
+                    default:
+                        hmx_fa_q_prep_fp32_generic(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, d_limit, args->q_transposed);
+                        break;
                 }
             } else {
-                char * temp_q_vtcm = (char *) factx->vtcm_o_tiles[0];
-                const uint32_t d_limit = DK / 64;
-                const size_t valid_end = hex_smin(end, n_rows_g);
-
-                if (d_limit == 1) {
-                    hmx_fa_q_prep_fp16_d1(factx->vtcm_q_tiles, temp_q_vtcm, start, end, valid_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
-                } else if (d_limit == 2) {
-                    hmx_fa_q_prep_fp16_d2(factx->vtcm_q_tiles, temp_q_vtcm, start, end, valid_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
-                } else {
-                    hmx_fa_q_prep_fp16_generic(factx->vtcm_q_tiles, temp_q_vtcm, start, end, valid_end, DK, G, args->n_rows_q, &factx->div_G, d_limit, args->q_transposed);
+                switch (d_limit) {
+                    case 1:
+                        hmx_fa_q_prep_fp16_d1(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
+                        break;
+                    case 2:
+                        hmx_fa_q_prep_fp16_d2(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, args->q_transposed);
+                        break;
+                    default:
+                        hmx_fa_q_prep_fp16_generic(q_tiles, q_flat, start, end, g_rows_end, DK, G, args->n_rows_q, &factx->div_G, d_limit, args->q_transposed);
+                        break;
                 }
             }
         } else {
             // Fallback: Original direct-from-DDR/L2 path
-            hmx_fa_q_prep_fallback(factx->vtcm_q_tiles, q->data, q->nb[1], q->nb[2], q->nb[3],
+            hmx_fa_q_prep_fallback(q_tiles, q->data, q->nb[1], q->nb[2], q->nb[3],
                                    q_start, kv_head, ib3, start, end, n_rows_g, G, DK, factx->is_q_fp32, &factx->div_G);
         }
     }
