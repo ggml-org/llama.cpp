@@ -6,11 +6,16 @@
 #include "log.h"
 #include "console.h"
 
+#define JSON_ASSERT GGML_ASSERT
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <set>
+
+using json = nlohmann::ordered_json;
 
 struct cli_context_impl {
     json messages      = json::array();
@@ -63,6 +68,15 @@ static std::string format_error_message(const json & err) {
         }
     }
     return err.dump();
+}
+
+// err is the raw response body of a failed request; it may or may not be JSON
+static std::string format_error_message(const std::string & err) {
+    json parsed = json::parse(err, nullptr, false);
+    if (!parsed.is_discarded()) {
+        return format_error_message(parsed);
+    }
+    return err;
 }
 
 static std::string media_type_from_ext(const std::string & fname) {
@@ -152,7 +166,7 @@ bool cli_context::init() {
 
 void cli_context::fetch_server_props() {
     try {
-        json props = client.get_props();
+        json props = json::parse(client.get("/props"));
         model_name = props.value("model_alias", "");
         if (model_name.empty()) {
             const std::string path = props.value("model_path", "");
@@ -175,7 +189,16 @@ void cli_context::fetch_server_props() {
 }
 
 bool cli_context::list_and_ask_models() {
-    auto models = client.list_models();
+    json resp = json::parse(client.get("/v1/models"));
+    if (!resp.contains("data") || !resp.at("data").is_array()) {
+        throw std::runtime_error("invalid response from /v1/models");
+    }
+    std::vector<std::string> models;
+    for (const auto & m : resp.at("data")) {
+        if (m.contains("id") && m.at("id").is_string()) {
+            models.push_back(m.at("id").get<std::string>());
+        }
+    }
 
     // only one model: use it without asking
     if (models.size() == 1) {
@@ -292,12 +315,19 @@ bool cli_context::generate_completion(std::string & assistant_content, cli_timin
         // in order to get timings even when we cancel mid-way
         {"timings_per_token", true},
     };
+    if (!client.model.empty()) {
+        body["model"] = client.model;
+    }
 
     bool stream_error = false;
 
     ui::assistant_turn a;
 
-    json err = client.create_chat_completion(body, should_stop, [&](const json & chunk) {
+    std::string err = client.post_sse("/v1/chat/completions", body.dump(), should_stop, [&](const std::string & payload) {
+        json chunk = json::parse(payload, nullptr, false);
+        if (chunk.is_discarded()) {
+            return;
+        }
         if (chunk.contains("error")) {
             stream_error = true;
             ui::show_error(format_error_message(chunk));
@@ -333,7 +363,7 @@ bool cli_context::generate_completion(std::string & assistant_content, cli_timin
 
     cli_context::interrupted().store(false);
 
-    if (!err.is_null()) {
+    if (!err.empty()) {
         ui::show_error(format_error_message(err));
         return false;
     }
