@@ -6,7 +6,6 @@
 #include "dequantize.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/presets.hpp"
-#include "ggml-quants.h"
 #include "ggml.h"
 
 
