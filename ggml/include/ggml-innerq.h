@@ -116,6 +116,32 @@ ggml_innerq_policy ggml_innerq_state_decide(const ggml_innerq_state_key * key);
 // kernel in P3.2.3.
 float ggml_innerq_state_k_squared_scale(const ggml_innerq_state_key * key);
 
+// P3.2.3: real per-position K^2 profile computation. Replaces the
+// P3.2.2 constant with a sum-of-squares per head_dim position across
+// a small probe of token activations.
+//
+// Inputs:
+//   probe      -- (n_probe * head_dim) floats in row-major layout:
+//                probe[i*head_dim + d] is the activation at token i,
+//                head_dim position d. Caller owns the buffer.
+//   n_probe    -- number of probe tokens; must be >= 1
+//   head_dim   -- D; must be 16, 32, 64, or 128 (the only head_dims
+//                InnerQ supports). Other values are not policy-eligible.
+//   out_scales -- caller-provided array of `head_dim` floats; the
+//                function writes the per-position K^2 scale into it.
+//                Caller owns the buffer; it is NOT zeroed first.
+//
+// Output convention (P3.2.3 minimal): for each position d, the scale
+// is 1 / sqrt(1 + sum_i probe[i*head_dim + d]^2 / n_probe). This
+// matches the spec's "inverse WHT of squared magnitudes" intent
+// without the WHT step (the WHT is a refinement on top, P3.2.3's
+// "Option C" follow-up).
+//
+// The function is pure: no side effects, no allocation. Safe to call
+// from any context including the harness probe.
+void ggml_innerq_compute_k_squared_profile(
+    const float * probe, int n_probe, int head_dim, float * out_scales);
+
 #ifdef __cplusplus
 }
 #endif

@@ -12,7 +12,8 @@
 #include "ggml-innerq.h"
 #include "ggml.h"
 
-#include <cstdlib>
+#include <cmath>
+
 #include <cstring>
 
 // Internal helper: model fingerprint. P3.2.2 doesn't have a real
@@ -112,4 +113,59 @@ extern "C" float ggml_innerq_state_k_squared_scale(
     }
     (void) key->kv_quant;  // currently a no-op; P3.2.3 may extend.
     return base;
+}
+
+// P3.2.3: real per-position K^2 profile computation.
+//
+// For each head_dim position d, the scale is
+//     scale[d] = 1 / sqrt(1 + mean_i probe[i*head_dim + d]^2)
+// This matches the spec's "inverse WHT of squared magnitudes" intent
+// without the WHT step (the WHT is a refinement on top; P3.2.3's
+// "Option C" follow-up adds it). The +1 inside the sqrt is a
+// smoothing constant that prevents division-by-zero on a zero-input
+// probe (a degenerate case: all-zero probe gives scale=1.0 for all d).
+//
+// P3.2.3 minimal: this is the C reference. The SYCL device kernel
+// (parallel_for reduction) is the "Option C" follow-up that
+// generalizes across all shapes. The harness probe verifies this
+// CPU reference is correct against an independent CPU
+// implementation in the test; once verified, the SYCL kernel
+// can be implemented to match.
+//
+// No allocation, no side effects. Safe to call from any context.
+extern "C" void ggml_innerq_compute_k_squared_profile(
+    const float * probe, int n_probe, int head_dim, float * out_scales) {
+    // Defensive: zero the output first so a half-written run leaves
+    // a clean (1.0) baseline rather than garbage. We overwrite
+    // every position below, but the zero is the safe fallback if
+    // n_probe < 1 (which would skip the loop) or head_dim invalid
+    // (also skipped). Caller sees 1.0f for skipped positions,
+    // matching the "no K^2 adjustment" safe default in
+    // k_squared_scale().
+    for (int d = 0; d < head_dim; ++d) {
+        out_scales[d] = 1.0f;
+    }
+    if (probe == nullptr || out_scales == nullptr || n_probe < 1) {
+        return;
+    }
+    // Only the head_dims InnerQ supports. Others leave the 1.0 default.
+    if (head_dim != 16 && head_dim != 32 && head_dim != 64 && head_dim != 128) {
+        return;
+    }
+    // Pass 1: per-position sum of squares.
+    // Reuses the output array as a scratch buffer for the sum;
+    // we'll overwrite with the final 1/sqrt(1+mean) in pass 2.
+    for (int d = 0; d < head_dim; ++d) {
+        double sumsq = 0.0;
+        for (int i = 0; i < n_probe; ++i) {
+            const double v = (double) probe[i * head_dim + d];
+            sumsq += v * v;
+        }
+        out_scales[d] = (float)(sumsq / (double) n_probe);  // mean square
+    }
+    // Pass 2: convert mean-square to 1/sqrt(1+mean-square).
+    for (int d = 0; d < head_dim; ++d) {
+        const double ms = (double) out_scales[d];
+        out_scales[d] = (float)(1.0 / std::sqrt(1.0 + ms));
+    }
 }
