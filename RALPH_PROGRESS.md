@@ -429,3 +429,32 @@ the rule is still correct as a forward-looking guard against the
 configurations where it does fire. **No data yet supports modifying
 the rule.** turbo4 standalone (bg_4) launched to complete the matrix.
 which is itself non-FA on GPU).
+
+## 2026-07-07 — P1.7 — Pin GGML_SYCL_F16 setting for capacity validation
+
+Pinned the build flag that every P1 PPL/capacity run will use, so the comparison
+table stays internally consistent (F16 changes prefill speed and accumulation
+precision, not decode bandwidth — an inconsistent setting between rows would
+confound the deltas).
+
+**What ran:** live `grep` on `Raudbjorn-fork/build-port/CMakeCache.txt`:
+`GGML_SYCL=ON`, `GGML_SYCL_TARGET=INTEL`, `GGML_SYCL_F16=ON`, `GGML_SYCL_DNN=ON`,
+`GGML_SYCL_GRAPH=ON`, `GGML_SYCL_HOST_MEM_FALLBACK=ON`, `GGML_SYCL_SUPPORT_LEVEL_ZERO=ON`.
+Toolchain: oneAPI 2026.0 icpx. Same flags the P0 GQA-ext harness and P1 [model 1]
+PPL matrix runs were built with — so the existing PPL/capacity numbers (mistral
+CPU-FA f16=7.6328, q4_0=7.6913, turbo2/3/4=8.1216/7.7298/7.6534) are consistent
+with this pin.
+
+**Result:** Pinned `GGML_SYCL_F16=ON` for ALL P1 PPL/capacity runs. Recorded in
+`Raudbjorn-fork/TOPOLOGY.md` "Toolchain & build artifacts" table with the full
+flag set + a note that mid-track flips require a fresh f16 baseline run + a
+`RALPH_PROGRESS.md` change-record entry.
+
+**No new tasks.** Next unchecked `[ ]` in priority order is P1.5 (turbo FA
+correctness — already addressed by P0.2: fixes are in turbo-sycl-opt under
+rebased SHAs and validated by the harness smoke-test on [5b] FA TURBO GQA).
+P1.5 is essentially a no-op confirmation; doing it as a "I read P0.2 and
+confirm it satisfies P1.5" entry is fine. After P1.5, the open P1 model-2
+and model-3 sub-tasks become the next real work.
+
+---

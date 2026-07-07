@@ -72,11 +72,11 @@ $ systemctl status llama-sycl.cpp.service
 |---|---|---|
 | `/home/svnbjrn/build-turbofix/bin/llama-server` (736352 bytes, 2026-07-02) | SYCL fork binary referenced by `llama-sycl.cpp.service` ExecStart | build-id `904738505`, `turbo-fix` branch, IntelLLVM 2026.0 |
 | `/usr/bin/llama-server` (14320 bytes, 2026-06-27) | Stock CPU llama-server package | currently squatting :8088 |
-| `/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork/build-port/` | Active build dir for `Raudbjorn-fork` (`turbo-sycl-opt`) | `bin/test-sycl-turbo-correctness` (700680 B, 2026-07-03), `bin/llama-perplexity`, `bin/llama-server` (SYCL fork), full shared lib set |
 | `/home/svnbjrn/build-pr5/` | Older PR #5 build | auxiliary |
 | `/home/svnbjrn/build-llama-sycl/` | Reference builds (`do-build.sh`, `do-build-f16-jit.sh`) | auxiliary |
 | `/opt/intel/oneapi/setvars.sh` | oneAPI 2026.0 env | needed for SYCL build/run |
 | `/opt/sycl/` | open-source DPCPP toolchain (alternative) | NOT the production toolchain |
+| `/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork/build-port/` | Active build dir for `Raudbjorn-fork` (`turbo-sycl-opt`) | `bin/test-sycl-turbo-correctness` (700680 B, 2026-07-03), `bin/llama-perplexity`, `bin/llama-server` (SYCL fork), full shared lib set. **Build flags (P1.7, pinned 2026-07-07):** `GGML_SYCL=ON`, `GGML_SYCL_TARGET=INTEL`, `GGML_SYCL_F16=ON`, `GGML_SYCL_DNN=ON`, `GGML_SYCL_GRAPH=ON`, `GGML_SYCL_HOST_MEM_FALLBACK=ON`, `GGML_SYCL_SUPPORT_LEVEL_ZERO=ON`. Toolchain: oneAPI 2026.0 icpx (per `AGENTS.md` build path); `CMAKE_AR=/usr/bin/llvm-ar` (system LLVM, irrelevant to libsycl ABI). Source from `build-port/CMakeCache.txt` — same flags the P0 GQA-ext harness and P1 [model 1] PPL runs executed under. **F16=ON is the pinned value for ALL P1 PPL/capacity runs** (all 3 models, all KV types) — flipping it mid-track would confound the PPL comparison table (changes prefill speed and accumulation precision, not decode bandwidth). If a future task needs to re-test with F16=OFF, document the change in `RALPH_PROGRESS.md` and re-run the f16 baseline, do not silently mix. |</input>
 
 ## Validation models (the 3-model fleet)
 
