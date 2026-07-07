@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -81,7 +82,7 @@ static std::string format_error_message(const std::string & err) {
 
 static std::string media_type_from_ext(const std::string & fname) {
     std::string ext = std::filesystem::path(fname).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
     if (ext == ".wav" || ext == ".mp3") {
         return "audio";
     }
@@ -281,7 +282,7 @@ bool cli_context::stage_media_file(const std::string & fname, const std::string 
 
     if (type == "audio") {
         std::string ext = std::filesystem::path(fname).extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
         impl->pending_media.push_back({
             {"type", "input_audio"},
             {"input_audio", {

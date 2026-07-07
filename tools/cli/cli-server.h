@@ -19,8 +19,13 @@ struct cli_server {
     }
 
     void stop() {
-        if (alive() && !is_stopping.exchange(true)) {
+        if (is_stopping.exchange(true)) {
+            return;
+        }
+        if (alive()) {
             llama_server_terminate();
+        }
+        if (th.joinable()) {
             th.join();
         }
     }
@@ -35,9 +40,10 @@ struct cli_server {
 
         is_alive.store(true, std::memory_order_release);
 
-        th = std::thread([&]() {
-            common_params server_params = params; // copy
-            server_params.port = port;
+        common_params server_params = params; // copy
+        server_params.port = port;
+
+        th = std::thread([this, server_params]() mutable {
             // argc / argv are only used in router mode, we can skip them for now
             int res = llama_server(server_params, 0, nullptr);
             if (res != 0) {

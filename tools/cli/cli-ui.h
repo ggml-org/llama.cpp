@@ -5,6 +5,7 @@
 
 #include <array>
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <string_view>
 
@@ -61,7 +62,7 @@ static std::vector<std::pair<std::string, size_t>> auto_completion_callback(std:
         }
         if (string_starts_with(expanded_prefix, '/')) {
 #else
-        if (std::isalpha(expanded_prefix[0]) && expanded_prefix.find(':') == 1) {
+        if (std::isalpha(static_cast<unsigned char>(expanded_prefix[0])) && expanded_prefix.find(':') == 1) {
 #endif
             cur_dir = std::filesystem::path(expanded_prefix).parent_path();
             cur_dir_str.clear();
