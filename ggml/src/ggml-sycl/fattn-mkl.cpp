@@ -408,7 +408,15 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
             to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type);
 
             int64_t s01, s02, s03;
-            if (k_interleaved) {
+            // True Gemma interleave packs heads *within* a row, so the head
+            // stride is smaller than one dense head (nb[2] < ne[1]*nb[1]) and
+            // the physical strides must be reconstructed. A padded seq-view
+            // (real KV cache viewing a larger buffer) has heads spaced *wider*
+            // (nb[2] > ne[1]*nb[1]); there the physical strides are already
+            // correct and the reconstruction would alias heads together.
+            const bool k_gemma_interleaved =
+                k_interleaved && (int64_t)K->nb[2] < (int64_t)K->ne[1] * K->nb[1];
+            if (k_gemma_interleaved) {
                 const int64_t blk_per_row = (int64_t)K->ne[0] / bs;
                 s01 = (int64_t)n_kv_heads * blk_per_row;
                 s02 = blk_per_row;
@@ -486,7 +494,12 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type);
 
                 int64_t s01, s02, s03;
-                if (v_interleaved) {
+                // See K dequant: only true Gemma interleave (heads packed
+                // within a row, nb[2] < ne[1]*nb[1]) needs reconstructed
+                // strides. Padded seq-views use their physical strides.
+                const bool v_gemma_interleaved =
+                    v_interleaved && (int64_t)V->nb[2] < (int64_t)V->ne[1] * V->nb[1];
+                if (v_gemma_interleaved) {
                     const int64_t blk_per_row = (int64_t)V->ne[0] / bs;
                     s01 = (int64_t)V->ne[2] * blk_per_row;
                     s02 = blk_per_row;

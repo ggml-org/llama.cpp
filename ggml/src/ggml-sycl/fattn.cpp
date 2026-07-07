@@ -115,6 +115,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
+    const ggml_tensor * sinks = dst->src[4];
 
     const int gqa_ratio = Q->ne[2] / K->ne[2];
     GGML_ASSERT(Q->ne[2] % K->ne[2] == 0);
@@ -140,7 +141,16 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     if (mkl_enable < 0) {
         mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
     }
-    if (mkl_enable == 1 && Q->ne[1] >= 32 && K->ne[1] >= 1024 &&
+    // MKL is validated for the mainstream GQA envelope: grouped-query
+    // (gqa_ratio >= 2), head_dim a multiple of 64 in [64,512] with matching
+    // K/V head size, mask, no sinks/ALiBi/softcap. Gemma's global layers use
+    // head_dim 512, so the cap must include it. Head sizes not a multiple of
+    // 64 (72/80/96), MHA (gqa_ratio == 1), and MLA (DKQ != DV, e.g. 576/512)
+    // fall through to TILE/VEC; see follow-up work.
+    if (mkl_enable == 1 && mask && !sinks && gqa_ratio >= 2 &&
+        Q->ne[0] >= 64 && Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 &&
+        Q->ne[0] == V->ne[0] &&
+        Q->ne[1] >= 32 && K->ne[1] >= 1024 &&
         max_bias == 0.0f && logit_softcap == 0.0f &&
         (Q->ne[3] == K->ne[3] || K->ne[3] == 1)) {
         // F16 K/V strides must be a multiple of ne[0]*2 (the natural row size
@@ -206,7 +216,10 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     switch (K->type) {
         case GGML_TYPE_F32:
         case GGML_TYPE_F16:
-        case GGML_TYPE_BF16:
+            // Note: BF16 is handled by the MKL path (checked above) for
+            // prefill-shaped calls. It is intentionally NOT listed here:
+            // the VEC/TILE decode fallback has no BF16 kernel, so BF16
+            // decode falls through to NONE (same as upstream master).
             break;
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
