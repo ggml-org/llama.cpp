@@ -37,8 +37,7 @@ import type {
 import type {
 	AudioInputFormat,
 	DatabaseMessageExtraMcpPrompt,
-	DatabaseMessageExtraMcpResource,
-	OpenAIToolDefinition
+	DatabaseMessageExtraMcpResource
 } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '../stores/settings.svelte';
@@ -341,8 +340,6 @@ export class ChatService {
 			if (stream && conversationId) {
 				headers['X-Conversation-Id'] = streamIdentity(conversationId, options.model);
 			}
-
-			ChatService.logRequestPayload(normalizedMessages, tools, requestBody);
 
 			const response = await fetch(API_CHAT.COMPLETIONS, {
 				method: 'POST',
@@ -669,8 +666,6 @@ export class ChatService {
 		}
 
 		try {
-			ChatService.logRequestPayload(normalizedMessages, undefined, requestBody);
-
 			await fetch(API_CHAT.COMPLETIONS, {
 				method: 'POST',
 				headers: getJsonHeaders(),
@@ -1021,61 +1016,6 @@ export class ChatService {
 	 * @returns {Promise<string>} Promise that resolves to the generated content string
 	 * @throws {Error} if the response cannot be parsed or is malformed
 	 */
-	/**
-	 * Diagnostic breakdown of what's being sent on the prompt side of a
-	 * completion request. Compares against server-reported prompt_n / cache_n
-	 * to surface where extra tokens are coming from (system message vs tool
-	 * schema vs chat-template prefix rendered server-side).
-	 */
-	private static logRequestPayload(
-		normalizedMessages: ApiChatMessageData[],
-		tools: OpenAIToolDefinition[] | undefined,
-		requestBody: Record<string, unknown>
-	): void {
-		console.group('[ChatService] Sending chat completion');
-		console.log(
-			'  What we are sending to llama-server. Chat-template delimiters (<|im_start|> etc.) are added server-side and not counted here.'
-		);
-
-		const userMessages = normalizedMessages.filter((m) => m.role === MessageRole.USER);
-		const assistantMessages = normalizedMessages.filter((m) => m.role === MessageRole.ASSISTANT);
-		const toolMessages = normalizedMessages.filter((m) => m.role === MessageRole.TOOL);
-
-		const roleCounts: string[] = [];
-		if (userMessages.length > 0) roleCounts.push(`${userMessages.length} user`);
-		if (assistantMessages.length > 0) roleCounts.push(`${assistantMessages.length} assistant`);
-		if (toolMessages.length > 0) roleCounts.push(`${toolMessages.length} tool`);
-		console.log(`  Messages: ${roleCounts.length > 0 ? roleCounts.join(', ') : '<none>'}`);
-
-		const lastUser = userMessages[userMessages.length - 1];
-		if (lastUser && typeof lastUser.content === 'string' && lastUser.content.length > 0) {
-			const preview =
-				lastUser.content.length > 60 ? `${lastUser.content.slice(0, 60)}...` : lastUser.content;
-			console.log(`    Last user: ${JSON.stringify(preview)}`);
-		}
-
-		const systemMsgs = normalizedMessages.filter((m) => m.role === MessageRole.SYSTEM);
-		if (systemMsgs.length > 0 && typeof systemMsgs[0].content === 'string') {
-			const systemText = systemMsgs[0].content;
-			const preview = systemText.length > 80 ? `${systemText.slice(0, 80)}...` : systemText;
-			console.log(`  System: ${systemText.length} chars ${JSON.stringify(preview)}`);
-		} else {
-			console.log('  System: <none>');
-		}
-
-		if (tools && tools.length > 0) {
-			const names = tools.map((t) => t.function?.name ?? '?');
-			console.log(`  Tools: ${tools.length} [${names.join(', ')}]`);
-		} else {
-			console.log('  Tools: <none>');
-		}
-
-		console.log(
-			`  Wire-format JSON: ${JSON.stringify(requestBody).length} chars (HTTP body sent to server; chat template is rendered server-side)`
-		);
-		console.groupEnd();
-	}
-
 	private static async handleNonStreamResponse(
 		response: Response,
 		onComplete?: (
