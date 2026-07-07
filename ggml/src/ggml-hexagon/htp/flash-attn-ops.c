@@ -1680,7 +1680,6 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
     const size_t qo_element_size = factx.is_q_fp32 ? sizeof(float) : sizeof(__fp16);
 
-
     // ======== Reusable job descriptors for pipeline ========
     hmx_fa_qk_job_t       qk_job;
     hmx_fa_o_update_job_t ou_job;
@@ -1697,9 +1696,9 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
             for (uint32_t kv_head = 0; kv_head < n_kv_heads; ++kv_head) {
                 const uint32_t ik2 = kv_head;
-                const uint32_t ik3 = ib3 / (neq3 / k->ne[3]);
+                const uint32_t ik3 = fastdiv(ib3, &kparams->broadcast_rk3);
                 const uint32_t iv2 = kv_head;
-                const uint32_t iv3 = ib3 / (neq3 / v->ne[3]);
+                const uint32_t iv3 = fastdiv(ib3, &kparams->broadcast_rv3);
 
                 // 1. Push Q DMA (if Q DMA is used)
                 const size_t o_tile_bytes = factx.o_tile_bytes;
@@ -2041,10 +2040,10 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
     factx.src0_div21 = kparams->u.hvx.src0_div21;
     factx.src0_div1  = kparams->u.hvx.src0_div1;
 
-    factx.broadcast_rk2 = kparams->u.hvx.broadcast_rk2;
-    factx.broadcast_rk3 = kparams->u.hvx.broadcast_rk3;
-    factx.broadcast_rv2 = kparams->u.hvx.broadcast_rv2;
-    factx.broadcast_rv3 = kparams->u.hvx.broadcast_rv3;
+    factx.broadcast_rk2 = kparams->broadcast_rk2;
+    factx.broadcast_rk3 = kparams->broadcast_rk3;
+    factx.broadcast_rv2 = kparams->broadcast_rv2;
+    factx.broadcast_rv3 = kparams->broadcast_rv3;
 
     if (mask) {
         factx.src3_div2 = kparams->src3_div2;

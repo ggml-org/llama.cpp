@@ -2028,10 +2028,10 @@ static bool ggml_hexagon_precompute_flash_attn_params(
     kparams->u.hvx.size_v_row_padded = size_v_row_padded;
     kparams->u.hvx.src0_div21 = init_fastdiv_values(q->ne[2] * q->ne[1]);
     kparams->u.hvx.src0_div1 = init_fastdiv_values(q->ne[1]);
-    kparams->u.hvx.broadcast_rk2 = init_fastdiv_values(q->ne[2]/k->ne[2]);
-    kparams->u.hvx.broadcast_rk3 = init_fastdiv_values(q->ne[3]/k->ne[3]);
-    kparams->u.hvx.broadcast_rv2 = init_fastdiv_values(q->ne[2]/v->ne[2]);
-    kparams->u.hvx.broadcast_rv3 = init_fastdiv_values(q->ne[3]/v->ne[3]);
+    kparams->broadcast_rk2 = init_fastdiv_values(q->ne[2]/k->ne[2]);
+    kparams->broadcast_rk3 = init_fastdiv_values(q->ne[3]/k->ne[3]);
+    kparams->broadcast_rv2 = init_fastdiv_values(q->ne[2]/v->ne[2]);
+    kparams->broadcast_rv3 = init_fastdiv_values(q->ne[3]/v->ne[3]);
     if (mask) {
         kparams->src3_div2 = init_fastdiv_values(mask->ne[2]);
         kparams->src3_div3 = init_fastdiv_values(mask->ne[3]);

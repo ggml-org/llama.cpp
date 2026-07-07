@@ -55,6 +55,11 @@ struct htp_fa_kernel_params {
     struct fastdiv_values src3_div2;
     struct fastdiv_values src3_div3;
 
+    struct fastdiv_values broadcast_rk2;
+    struct fastdiv_values broadcast_rk3;
+    struct fastdiv_values broadcast_rv2;
+    struct fastdiv_values broadcast_rv3;
+
     union {
         struct {
             uint32_t g_br;
@@ -70,10 +75,6 @@ struct htp_fa_kernel_params {
             uint32_t size_v_row_padded;
             struct fastdiv_values src0_div21;
             struct fastdiv_values src0_div1;
-            struct fastdiv_values broadcast_rk2;
-            struct fastdiv_values broadcast_rk3;
-            struct fastdiv_values broadcast_rv2;
-            struct fastdiv_values broadcast_rv3;
         } hvx;
     } u;
 };
