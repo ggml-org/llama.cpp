@@ -70,10 +70,14 @@
 
 	// Live token stats from the server's processing state, parsed once per
 	// update so every consumer derived below reruns in lockstep with each
-	// server emission. Null outside of preparing/generating. Reading directly
-	// from processingState (instead of writing through a $state in an
-	// $effect) keeps the dependency graph a single hop and makes every gauge
-	// value reactive while streaming.
+	// server emission. Null outside of preparing/generating.
+	//
+	// promptTokens is the combined reading (prompt_n + cache_n) — during preparing
+	// it's promptProgress.processed (= total prompt tokens from the server), during
+	// generating it falls back to prompt_n since promptProgress disappears after
+	// pre_decode. cacheTokens is kept for reference but should not be added to
+	// promptTokens — that would double-count since promptTokens already includes
+	// the cached portion.
 	let liveStats = $derived.by(() => {
 		const live = processingState.processingState;
 		if (!live || (live.status !== 'preparing' && live.status !== 'generating')) {
@@ -120,7 +124,8 @@
 
 		const live = liveStats;
 		if (live) {
-			const liveTotal = live.promptTokens + live.cacheTokens + live.outputTokens;
+			// promptTokens already includes cache (combined reading from promptProgress)
+			const liveTotal = live.promptTokens + live.outputTokens;
 			if (liveTotal > 0) used = Math.max(used, liveTotal);
 		}
 
@@ -216,9 +221,12 @@
 			}
 		}
 
+		// live.promptTokens is already the combined reading (prompt + cache).
+		// Do NOT add live.cacheTokens here — promptTokens includes cache_n via
+		// promptProgress.processed from the server.
 		const live = liveStats;
-		if (live && (live.promptTokens > 0 || live.cacheTokens > 0)) {
-			read = Math.max(read, live.promptTokens + live.cacheTokens);
+		if (live && live.promptTokens > 0) {
+			read = Math.max(read, live.promptTokens);
 		}
 
 		return read;
@@ -254,12 +262,6 @@
 			cumulativeStats.averageTokensPerSecond !== null ||
 			transientDetails.length > 0
 	);
-
-	// Auto-expand details during streaming so live token counts are visible.
-	$effect(() => {
-		const live = processingState.processingState;
-		detailsOpen = !!(live && (live.status === 'preparing' || live.status === 'generating'));
-	});
 
 	let contextLabelColor = $derived.by(() => {
 		if (contextPercent === null) return 'text-muted-foreground';
@@ -405,15 +407,16 @@
 						/>
 					</Collapsible.Trigger>
 
-					<Collapsible.Content class="flex flex-col gap-3 text-xs pt-4">
+					<Collapsible.Content class="flex flex-col gap-4 text-xs pt-4">
 						{#if cumulativeStats.read > 0 || cumulativeStats.output > 0}
 							<div>
-								<div
-									class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-1"
-								>
+    							<h3
+    								class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-2"
+    							>
 									Across all turns
-								</div>
-								<div class="flex flex-col gap-0.5">
+                                </h3>
+
+								<div class="flex flex-col gap-2">
 									{#if cumulativeStats.read > 0}
 										<ContextGaugeDetailRow
 											label="Prompts sent"
@@ -432,31 +435,35 @@
 
 						{#if currentRead > 0 || currentOutput > 0 || (enabledToolsTokenCount ?? 0) > 0}
 							<div>
-								<div
-									class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-1"
+								<h3
+									class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-2"
 								>
 									This turn · KV cache
-								</div>
-								<div class="flex flex-col gap-0.5">
+								</h3>
+
+								<div class="flex flex-col gap-2">
+    								{#if enabledToolsTokenCount ?? 0 > 0}
+       									<ContextGaugeDetailRow
+      										label="Tool schema"
+      										value={`${(enabledToolsTokenCount ?? 0).toLocaleString()} tok`}
+      										subtitle="Sent on every turn, cached after the first"
+       									/>
+    								{/if}
+
 									{#if currentRead > 0}
 										<ContextGaugeDetailRow
 											label="Prompt"
 											value={`${currentRead.toLocaleString()} tok`}
 										/>
 									{/if}
-									{#if enabledToolsTokenCount ?? 0 > 0}
-										<ContextGaugeDetailRow
-											label="Tool schema"
-											value={`${(enabledToolsTokenCount ?? 0).toLocaleString()} tok`}
-											subtitle="Sent on every turn, cached after the first"
-										/>
-									{/if}
+
 									{#if currentOutput > 0}
 										<ContextGaugeDetailRow
 											label="Generated"
 											value={`${currentOutput.toLocaleString()} tok`}
 										/>
 									{/if}
+
 									<div class="pt-1 mt-0.5 border-t border-border/30">
 										<div class="flex justify-between">
 											<span class="text-muted-foreground">KV cache total</span>
