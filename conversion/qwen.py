@@ -266,8 +266,105 @@ class Qwen3MoeModel(Qwen2MoeModel):
         super().set_vocab()
 
 
+class _QwenMtpMixin:
+    """Shared MTP wiring for Qwen3-Next and Qwen3.5/3.6 text variants. The HF
+    config carries the MTP block under `mtp_num_hidden_layers` (calculated from
+    the checkpoint when absent, e.g. Qwen3-Next) and the tensors under
+    `mtp.*`; we extend block_count, emit the nextn metadata key, and remap
+    `mtp.*` to the standard layer-indexed nextn naming so the existing
+    tensor_map handles them."""
+
+    hparams: dict[str, Any]
+    model_arch: gguf.MODEL_ARCH
+    gguf_writer: gguf.GGUFWriter
+    block_count: int
+    tensor_map: gguf.TensorNameMap
+    no_mtp: bool
+    mtp_only: bool
+    _original_block_count: int | None = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.block_count = self.hparams["num_hidden_layers"]
+        if not self.no_mtp:
+            self.block_count += self.hparams.get("mtp_num_hidden_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
+        key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
+        type(self)._original_block_count = hparams.get(key)
+        tensors = super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
+
+        # Qwen-3-Next doesn't include `mtp_num_hidden_layers` in config.
+        if not self.no_mtp and "mtp_num_hidden_layers" not in self.hparams:
+            n_mtp = 0
+            for name in tensors:
+                if name.startswith("model.layers."):
+                    idx = name.split(".", 3)[2]
+                    if idx.isdecimal():
+                        n_mtp = max(n_mtp, int(idx) - self._original_block_count + 1)
+            if n_mtp > 0:
+                self.hparams["mtp_num_hidden_layers"] = n_mtp
+
+        return tensors
+
+    @classmethod
+    def filter_tensors(cls, item):
+        assert cls._original_block_count is not None
+        # TODO: change TextModel to super()
+        if (titem := TextModel.filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+        if name.startswith("model.mtp."):
+            name = name.replace("model.", "", 1)
+        if name.startswith("mtp."):
+            if cls.no_mtp:
+                return None
+            remapper = {
+                "fc":                    "eh_proj",
+                "pre_fc_norm_embedding": "enorm",
+                "pre_fc_norm_hidden":    "hnorm",
+                "norm":                  "shared_head.norm",
+            }
+            parts = name.split(".", 3)
+            if len(parts) == 4 and parts[1] == "layers" and parts[2].isdecimal():
+                mtp_idx = int(parts[2])
+                name = f"model.layers.{cls._original_block_count + mtp_idx}.{parts[3]}"
+            elif len(parts) == 3 and parts[1] in remapper:
+                name = f"model.layers.{cls._original_block_count}.{remapper[parts[1]]}.{parts[2]}"
+        elif cls.mtp_only:
+            keep = name in (
+                "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+                "embed_tokens.weight", "norm.weight",
+            )
+            if not keep:
+                return None
+        return name, gen
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        if self.no_mtp:
+            return
+        if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
+            self.gguf_writer.add_nextn_predict_layers(n)
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[unresolved-attribute]
+
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
+
+
 @ModelBase.register("Qwen3NextForCausalLM")
-class Qwen3NextModel(Qwen2MoeModel):
+class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
 
     def set_gguf_parameters(self):
@@ -281,16 +378,6 @@ class Qwen3NextModel(Qwen2MoeModel):
         if (rope_dim := self.hparams.get("head_dim")) is None:
             rope_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.rope_parameters.get("partial_rotary_factor", 0.25)))
-
-    @classmethod
-    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
-
-        if name.startswith("mtp"):
-            # ignore MTP layers for now
-            return None
-
-        return super().filter_tensors(item)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.endswith(".A_log"):
@@ -534,96 +621,13 @@ class _Qwen35MRopeMixin:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
 
-class _Qwen35MtpMixin:
-    """Shared MTP wiring for Qwen3.5/3.6 text variants. The HF config carries
-    the MTP block under `mtp_num_hidden_layers` and the tensors under
-    `mtp.*`; we extend block_count, emit the nextn metadata key, and remap
-    `mtp.*` to the standard layer-indexed nextn naming so the existing
-    tensor_map handles them."""
-
-    hparams: dict[str, Any]
-    model_arch: gguf.MODEL_ARCH
-    gguf_writer: gguf.GGUFWriter
-    block_count: int
-    tensor_map: gguf.TensorNameMap
-    no_mtp: bool
-    mtp_only: bool
-    _original_block_count: int | None = None
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.block_count = self.hparams["num_hidden_layers"]
-        if not self.no_mtp:
-            self.block_count += self.hparams.get("mtp_num_hidden_layers", 0)
-        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
-
-    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
-        key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
-        type(self)._original_block_count = hparams.get(key)
-        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
-
-    @classmethod
-    def filter_tensors(cls, item):
-        assert cls._original_block_count is not None
-        # TODO: change TextModel to super()
-        if (titem := TextModel.filter_tensors(item)) is None:
-            return None
-        name, gen = titem
-        if name.startswith("model.mtp."):
-            name = name.replace("model.", "", 1)
-        if name.startswith("mtp."):
-            if cls.no_mtp:
-                return None
-            remapper = {
-                "fc":                    "eh_proj",
-                "pre_fc_norm_embedding": "enorm",
-                "pre_fc_norm_hidden":    "hnorm",
-                "norm":                  "shared_head.norm",
-            }
-            parts = name.split(".", 3)
-            if len(parts) == 4 and parts[1] == "layers" and parts[2].isdecimal():
-                mtp_idx = int(parts[2])
-                name = f"model.layers.{cls._original_block_count + mtp_idx}.{parts[3]}"
-            elif len(parts) == 3 and parts[1] in remapper:
-                name = f"model.layers.{cls._original_block_count}.{remapper[parts[1]]}.{parts[2]}"
-        elif cls.mtp_only:
-            keep = name in (
-                "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
-                "embed_tokens.weight", "norm.weight",
-            )
-            if not keep:
-                return None
-        return name, gen
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
-        if self.no_mtp:
-            return
-        if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
-            self.gguf_writer.add_nextn_predict_layers(n)
-
-    def prepare_metadata(self, vocab_only: bool):
-        from_dir = self.fname_out.is_dir()
-        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[unresolved-attribute]
-
-        if not self.mtp_only or not from_dir:
-            return
-
-        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-        fname_default: str = gguf.naming_convention(
-            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
-
-
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
-class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
+class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
-class Qwen3_5MoeTextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
+class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
 

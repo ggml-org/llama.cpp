@@ -109,7 +109,7 @@ class ModelBase:
     sentence_transformers_dense_modules: bool = False
 
     # MTP (multi-token prediction) export modes; set by main() before instantiation.
-    # Architectures opt in by overriding the handling (see _Qwen35MtpMixin).
+    # Architectures opt in by overriding the handling (see _QwenMtpMixin).
     mtp_only: bool = False
     no_mtp: bool = False
 
