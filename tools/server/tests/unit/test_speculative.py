@@ -27,8 +27,8 @@ def test_with_and_without_draft():
     global server
     request = {
         "prompt": "I believe the meaning of life is",
-        "temperature": 0.0,
-        "top_k": 1,
+        "temperature": 0.8,
+        "top_k": 40,
         "seed": 4242,
         "n_predict": 16,
         "return_tokens": True,

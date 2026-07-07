@@ -1739,6 +1739,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
         return -2;
     };
 
+    // start a new sampling transaction for this logical batch
+    for (const auto & entry : sampling.samplers) {
+        llama_sampler_backend_begin(entry.second);
+    }
+
     int64_t n_outputs_prev = 0;
     int64_t n_tokens_prev  = 0;
 

@@ -1045,6 +1045,8 @@ extern "C" {
     //
 
     // Get the backend sampled token for the ith token.
+    // With multiple outputs, sampler state advances when the token is accepted,
+    // not when it is read through this function.
     // Returns LLAMA_TOKEN_NULL if no token was sampled.
     LLAMA_API llama_token llama_get_sampled_token_ith(struct llama_context * ctx, int32_t i);
 

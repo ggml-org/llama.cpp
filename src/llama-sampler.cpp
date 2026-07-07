@@ -865,6 +865,7 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
     // If a backend sampler has already sampled a token, return it.
     if (sampled_token != LLAMA_TOKEN_NULL) {
         LLAMA_LOG_DEBUG("%s: Backend sampler selected token for idx %d. Skipping CPU samplers\n", __func__, idx);
+        llama_sampler_accept(smpl, sampled_token);
         return sampled_token;
     }
 
@@ -1081,6 +1082,12 @@ struct llama_sampler_dist : public llama_sampler_backend {
 
     std::mt19937 rng;
 
+    // multi-output backend draws are committed when their tokens are accepted
+    bool backend_transactional;
+    std::mt19937 rng_backend;
+    size_t n_backend_generated;
+    size_t n_backend_accepted;
+
     // inputs for the current sampling graph
     std::vector<ggml_tensor *> inp_uniforms;
 };
@@ -1166,6 +1173,9 @@ static void llama_sampler_dist_reset(struct llama_sampler * smpl) {
     auto * ctx = (llama_sampler_dist *) smpl->ctx;
     ctx->seed_cur = get_rng_seed(ctx->seed);
     ctx->rng.seed(ctx->seed_cur);
+    ctx->rng_backend = ctx->rng;
+    ctx->n_backend_generated = 0;
+    ctx->n_backend_accepted  = 0;
 }
 
 static struct llama_sampler * llama_sampler_dist_clone(const struct llama_sampler * smpl) {
@@ -1176,7 +1186,11 @@ static struct llama_sampler * llama_sampler_dist_clone(const struct llama_sample
     {
         auto * result_ctx = (llama_sampler_dist *) result->ctx;
 
-        result_ctx->rng = ctx->rng;
+        result_ctx->rng                   = ctx->rng;
+        result_ctx->backend_transactional = ctx->backend_transactional;
+        result_ctx->rng_backend           = ctx->rng_backend;
+        result_ctx->n_backend_generated   = ctx->n_backend_generated;
+        result_ctx->n_backend_accepted    = ctx->n_backend_accepted;
     }
 
     return result;
@@ -1191,11 +1205,14 @@ static bool llama_sampler_dist_backend_init(
         ggml_backend_buffer_type_t   buft,
         uint32_t                     n_outputs_per_seq_max) {
     auto * sctx = (llama_sampler_dist *) smpl->ctx;
-    GGML_UNUSED(n_outputs_per_seq_max);
 
     const bool res = llama_sampler_backend_support(smpl, buft);
 
     sctx->init(res);
+    sctx->backend_transactional = n_outputs_per_seq_max > 1;
+    sctx->rng_backend = sctx->rng;
+    sctx->n_backend_generated = 0;
+    sctx->n_backend_accepted  = 0;
 
     return res;
 }
@@ -1273,10 +1290,17 @@ static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {
     // different sequences).
     std::uniform_real_distribution<double> dist(0.0f, 1.0f);
 
+    auto & rng = sctx->backend_transactional ? sctx->rng_backend : sctx->rng;
+
     for (auto * inp_uniform : sctx->inp_uniforms) {
         GGML_ASSERT(inp_uniform != nullptr);
-        const float rnd = dist(sctx->rng);
+
+        const float rnd = dist(rng);
         ggml_backend_tensor_set(inp_uniform, &rnd, 0, sizeof(float));
+
+        if (sctx->backend_transactional) {
+            ++sctx->n_backend_generated;
+        }
     }
 }
 
@@ -1285,9 +1309,23 @@ static void llama_sampler_dist_backend_reset(struct llama_sampler * smpl) {
     sctx->inp_uniforms.clear();
 }
 
+static void llama_sampler_dist_accept(struct llama_sampler * smpl, llama_token token) {
+    GGML_UNUSED(token);
+
+    auto * sctx = (llama_sampler_dist *) smpl->ctx;
+
+    if (!sctx->backend_transactional || sctx->n_backend_accepted >= sctx->n_backend_generated) {
+        return;
+    }
+
+    std::uniform_real_distribution<double> dist(0.0f, 1.0f);
+    dist(sctx->rng);
+    ++sctx->n_backend_accepted;
+}
+
 static struct llama_sampler_i llama_sampler_dist_i = {
     /* .name              = */ llama_sampler_dist_name,
-    /* .accept            = */ nullptr,
+    /* .accept            = */ llama_sampler_dist_accept,
     /* .apply             = */ llama_sampler_dist_apply,
     /* .reset             = */ llama_sampler_dist_reset,
     /* .clone             = */ llama_sampler_dist_clone,
@@ -1305,12 +1343,37 @@ struct llama_sampler * llama_sampler_init_dist(uint32_t seed) {
         /* .iface = */ &llama_sampler_dist_i,
         /* .ctx   = */ new llama_sampler_dist {
             ("dist"),
-            /* .seed         = */ seed,
-            /* .seed_cur     = */ seed_cur,
-            /* .rng          = */ std::mt19937(seed_cur),
-            /* .inp_uniforms = */ {},
+            /* .seed                  = */ seed,
+            /* .seed_cur              = */ seed_cur,
+            /* .rng                   = */ std::mt19937(seed_cur),
+            /* .backend_transactional = */ false,
+            /* .rng_backend           = */ std::mt19937(seed_cur),
+            /* .n_backend_generated   = */ 0,
+            /* .n_backend_accepted    = */ 0,
+            /* .inp_uniforms          = */ {},
         }
     );
+}
+
+void llama_sampler_backend_begin(llama_sampler * sampler) {
+    GGML_ASSERT(sampler != nullptr);
+
+    if (sampler->iface == &llama_sampler_chain_i) {
+        auto * chain = (llama_sampler_chain *) sampler->ctx;
+        for (auto & entry : chain->samplers) {
+            if (!entry.is_backend) {
+                break;
+            }
+            llama_sampler_backend_begin(entry.ptr);
+        }
+    } else if (sampler->iface == &llama_sampler_dist_i) {
+        auto * ctx = (llama_sampler_dist *) sampler->ctx;
+        if (ctx->backend_transactional) {
+            ctx->rng_backend = ctx->rng;
+            ctx->n_backend_generated = 0;
+            ctx->n_backend_accepted  = 0;
+        }
+    }
 }
 
 // top-k

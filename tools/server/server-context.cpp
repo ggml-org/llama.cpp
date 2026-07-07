@@ -184,7 +184,6 @@ struct server_slot {
     llama_tokens spec_prompt;
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
-    common_sampler_ptr spec_smpl_save;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -319,7 +318,6 @@ struct server_slot {
             spec_draft.clear();
             spec_i_batch.clear();
             spec_ckpt.clear();
-            spec_smpl_save.reset();
         }
         generated_tokens.clear();
         generated_token_probs.clear();
@@ -3036,11 +3034,6 @@ private:
 
         // update the batch with the sampled/drafted tokens
         iterate(generating, [&](server_slot & slot) {
-            GGML_ASSERT(!slot.spec_smpl_save);
-            if (!slot.spec_draft.empty()) {
-                // backend sampling advances the sampler during llama_decode()
-                slot.spec_smpl_save.reset(common_sampler_clone(slot.smpl.get()));
-            }
             slot.handle_last_sampled_token(batch);
         });
 
@@ -3819,8 +3812,7 @@ private:
 
             // verify and try to accept the draft
             {
-                GGML_ASSERT(slot.spec_smpl_save);
-                common_sampler_ptr smpl_save = std::move(slot.spec_smpl_save);
+                common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
                 auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
@@ -3861,16 +3853,12 @@ private:
                         }
 
                         slot.prompt.tokens.keep_first(ckpt.n_tokens);
-                        const bool restore_backend_sampler = slot.backend_sampling;
-                        if (restore_backend_sampler) {
-                            llama_set_sampler(slot.ctx_tgt, slot.id, nullptr);
+                        if (slot.backend_sampling) {
+                            slot.backend_sampling = llama_set_sampler(
+                                slot.ctx_tgt, slot.id, common_sampler_get(smpl_save.get()));
                         }
 
                         slot.smpl = std::move(smpl_save);
-                        if (restore_backend_sampler) {
-                            slot.backend_sampling = llama_set_sampler(
-                                slot.ctx_tgt, slot.id, common_sampler_get(slot.smpl.get()));
-                        }
 
                         return;
                     }
