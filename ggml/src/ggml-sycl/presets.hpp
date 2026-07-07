@@ -62,7 +62,7 @@
 #endif
 
 #ifndef K_QUANTS_PER_ITERATION
-#define K_QUANTS_PER_ITERATION 2
+#define K_QUANTS_PER_ITERATION 1
 #else
 static_assert(K_QUANTS_PER_ITERATION == 1 || K_QUANTS_PER_ITERATION == 2, "K_QUANTS_PER_ITERATION must be 1 or 2");
 #endif
