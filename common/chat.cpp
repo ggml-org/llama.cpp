@@ -138,6 +138,11 @@ common_chat_msg_delimiters common_chat_msg_delimiters_parse(const json & delimit
         });
     }
 
+    // Process delimiters from longest to shortest, so token groups matching multiple delimiters can be supported (specialization)
+    sort(result.delimiters.begin(), result.delimiters.end(), [](common_chat_msg_delimiter a, common_chat_msg_delimiter b) {
+        return ( a.delimiter.length() > b.delimiter.length());
+    });
+
     return result;
 }
 
@@ -2765,6 +2770,9 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         }
         if (!autoparser.user_start.empty()) {
             delimiters.add(COMMON_CHAT_ROLE_USER, autoparser.user_start);
+        }
+        if (!autoparser.tool_response_start.empty()) {
+            delimiters.add(COMMON_CHAT_ROLE_TOOL, autoparser.tool_response_start);
         }
 
         auto_params.message_delimiters = std::move(delimiters);

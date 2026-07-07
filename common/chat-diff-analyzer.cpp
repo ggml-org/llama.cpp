@@ -27,6 +27,7 @@ static const std::string ARG_FIRST = "AA_ARG_FST_AA";
 static const std::string ARG_SECOND = "BB_ARG_SND_BB";
 static const std::string USER_MSG = "U_USER_MSG Hello END_U";
 static const std::string USER_MSG_TWO = "V_USER_MSG Hello END_V";
+static const std::string TOOL_MSG = "T_TOOL_MSG Tool response END_T";
 static const std::string ASSISTANT_MSG = "A_ASST_MSG I can help END_A";
 static const std::string THINKING_CONTENT = "REASON_PART I am thinking END_R";
 static const std::string CALL_ID_001 = "call00001";
@@ -233,6 +234,7 @@ void autoparser::analyze_template(const common_chat_template & tmpl) {
     tools = analyze_tools(jinja_caps.supports_tool_calls ? analyze_tools(tmpl, jinja_caps, reasoning) : analyze_tools());
     assistant_start = detect_assistant_start_marker(tmpl);
     user_start = detect_user_start_marker(tmpl);
+    tool_response_start = detect_tool_response_start_marker(tmpl);
     collect_preserved_tokens();
 
     for (auto & workaround : workarounds) {
@@ -242,6 +244,7 @@ void autoparser::analyze_template(const common_chat_template & tmpl) {
     LOG_DBG("\n--- Reasoning & Content Structure ---\n");
     LOG_DBG("user_msg_start: %s\n", user_start.c_str());
     LOG_DBG("assistant_msg_start: %s\n", assistant_start.c_str());
+    LOG_DBG("tool_response_start: %s\n", tool_response_start.c_str());
     LOG_DBG("reasoning_mode: %s\n", mode_to_str(reasoning.mode).c_str());
     LOG_DBG("reasoning_start: '%s'\n", reasoning.start.c_str());
     LOG_DBG("reasoning_end: '%s'\n", reasoning.end.c_str());
@@ -426,6 +429,48 @@ std::string autoparser::detect_user_start_marker(const common_chat_template & tm
         result << mrk.value;
     }
     return trim_whitespace(result.str());
+}
+
+std::string autoparser::detect_tool_response_start_marker(const common_chat_template & tmpl) {
+    json tool_msg = json{
+        { "role",    "tool"   },
+        { "content", TOOL_MSG }
+    };
+
+    json assistant_no_reasoning = json{
+        { "role",    "assistant"   },
+        { "content", ASSISTANT_MSG }
+    };
+
+    template_params params;
+    params.messages              = json::array({ assistant_no_reasoning });
+    params.add_generation_prompt = false;
+    params.enable_thinking       = true;
+
+    auto comparison = compare_variants(
+        tmpl, params, [&](template_params & p) {
+            p.messages = json::array({ assistant_no_reasoning, tool_msg });
+        }
+    );
+
+    if (!comparison) {
+        LOG_WRN(ANSI_ORANGE "%s: Template application failed, skipping tool start detection\n" ANSI_RESET, __func__);
+        return "";
+    }
+
+    auto usermsg = comparison->diff.right;
+    if (usermsg.find(TOOL_MSG) == std::string::npos) {
+        LOG_WRN(ANSI_ORANGE "%s: Did not find tool message in tool message block, skipping detection\n" ANSI_RESET, __func__);
+    }
+
+    auto ast_prefix = usermsg.substr(0, usermsg.find(TOOL_MSG));
+    if (!reasoning.start.empty() && ast_prefix.find(trim_whitespace(reasoning.start)) != std::string::npos) {
+        ast_prefix = ast_prefix.substr(0, ast_prefix.find(trim_whitespace(reasoning.start)));
+    }
+    if (!reasoning.end.empty() && ast_prefix.find(trim_whitespace(reasoning.end)) != std::string::npos) {
+        ast_prefix = ast_prefix.substr(0, ast_prefix.find(trim_whitespace(reasoning.end)));
+    }
+    return trim_whitespace(ast_prefix);
 }
 
 analyze_reasoning::analyze_reasoning(const common_chat_template & tmpl, bool supports_tools)
