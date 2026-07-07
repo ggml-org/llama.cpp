@@ -13,7 +13,7 @@ static void col2im_1d_sycl(
         const int total,
         dpct::queue_ptr stream) {
 
-    const uint32_t block_size = 256;
+    const uint32_t block_size = SYCL_COL2IM_1D_BLOCK_SIZE;
     const uint32_t num_blocks = (uint32_t) ((total + block_size - 1) / block_size);
 
     stream->parallel_for(
@@ -43,10 +43,10 @@ static void col2im_1d_sycl(
             float sum = 0.0f;
             for (int t_in = t_in_min; t_in <= t_in_max; ++t_in) {
                 const int k = t_abs - t_in * s0;
-                sum += (float) col[(oc * K + k) + t_in * K_OC];
+                sum += static_cast<float>(col[(oc * K + k) + t_in * K_OC]);
             }
 
-            dst[idx] = (T) sum;
+            dst[idx] = static_cast<T>(sum);
         });
 }
 
