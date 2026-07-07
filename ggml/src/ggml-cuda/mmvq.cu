@@ -1149,7 +1149,7 @@ static void mul_mat_vec_q_nvfp4_repacked_switch_fusion(
 
     if (ids == nullptr) {
         constexpr int warps_per_block = 4;
-        constexpr int rows_per_warp = 4;
+        constexpr int rows_per_warp = 8;
         const dim3 block_nums_y_reuse(
             (nrows_x + warps_per_block*rows_per_warp - 1) / (warps_per_block*rows_per_warp),
             nchannels_dst, nsamples_dst);
