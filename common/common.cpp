@@ -55,6 +55,10 @@
 #include <pwd.h>
 #endif
 
+#if defined(_AIX)
+#include <sys/systemcfg.h>
+#endif
+
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
@@ -72,7 +76,16 @@ common_time_meas::~common_time_meas() {
 //
 
 int32_t common_cpu_get_num_physical_cores() {
-#ifdef __linux__
+#if defined(_AIX)
+    int32_t logical_cpus = _system_configuration.ncpus;
+    int32_t smt_threads = _system_configuration.smt_threads;
+    if (smt_threads > 0) {
+        return static_cast<int32_t>(logical_cpus / smt_threads);
+    }
+    if (logical_cpus > 0) {
+        return static_cast<int32_t>(logical_cpus);
+    }
+#elif defined(__linux__)
     // enumerate the set of thread siblings, num entries is num cores
     std::unordered_set<std::string> siblings;
     for (uint32_t cpu=0; cpu < UINT32_MAX; ++cpu) {
@@ -202,6 +215,14 @@ int32_t common_cpu_get_num_math() {
             }
         }
     }
+#elif defined(__powerpc64__) || defined(__powerpc__)
+    int32_t smt_factor = 1;
+    int phy_cpus = common_cpu_get_num_physical_cores();
+    int logical_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    if (phy_cpus > 0 && logical_cpus > phy_cpus) {
+        smt_factor = logical_cpus / phy_cpus;
+    }
+    return phy_cpus * std::min(smt_factor, 2);
 #endif
     return common_cpu_get_num_physical_cores();
 }
