@@ -221,8 +221,6 @@ struct llama_layer_nextn {
     struct ggml_tensor * shared_head_norm      = nullptr;
 };
 
-// granite-switch: per-token embedded LoRA adapters, stacked over slots in dim 2
-// (slot 0 is zero-filled so base tokens add an exact-zero delta)
 struct llama_layer_switch_lora {
     struct ggml_tensor * a_q    = nullptr;
     struct ggml_tensor * b_q    = nullptr;
