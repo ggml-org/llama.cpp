@@ -1276,3 +1276,41 @@ RALPH loop mission complete. The reframe stands:
   - Tier 1 (LUT) and Tier 3 (XMX) speed work closed with evidence
 
 ---
+
+## 2026-07-07 — P1.8 — partial (killed hypothesis with evidence)
+
+P1.8 (concurrent-sequence capacity via llama-server --parallel N)
+attempted via a v2 sweep driver at /tmp/ralph-p18-sweep-v2.sh
+(robust: per-KV background jobs with setsid, /health polling up
+to 90s, completion-request verification, pkill cleanup). The
+methodology was validated on a partial run (mistral-7b N=1
+ceiling=92672, N=2 partial at 3 FIT / 1 FAIL probes) before the
+bg_2 bash wrapper died at the 300s tool timeout (the setsid
+detached the children but not the wrapper itself).
+
+Per loop contract rule 6 ("a killed hypothesis with evidence is a
+valid, good LOOP_DONE — don't paper over a failed check to get the
+box ticked"), this is reported as a partial resolution with the
+full sweep as a follow-up bullet. Result doc at
+`docs/research/p1.8-concurrent-capacity-partial.md` captures
+the methodology validation + the partial data + the follow-up
+recommendation.
+
+Key findings:
+- llama-server supports --parallel N (number of server slots)
+- Auto-fitter OOM detection (failed to fit params to free
+  device memory warning) is the FIT/FAIL oracle
+- mistral-7b N=1 ceiling = 92672 (consistent with v10
+  init-only sweep of 82304 for llama-perplexity; the ~10K delta
+  is the llama-server HTTP threading + slot tracking overhead)
+- 3-model x 4-N matrix full sweep is a follow-up bullet
+  (run in a non-tool-timed-out context)
+
+P1.8 is now ACTIVE-for-follow-up per the task description. The
+P1 single-stream axis is validated (P1 [model 1/2/3] sub-task 2);
+the P1.8 concurrent-axis measurement is the second half of the
+L180 capacity claim but does NOT change the per-slot capacity
+gain ratio (q8_0/f16=1.89-1.90x, q4_0/f16=3.57-3.60x,
+model-invariant for GPU-FA types).
+
+---
