@@ -93,6 +93,7 @@ class ServerProcess:
     models_max: int | None = None
     models_preset: str | None = None
     no_models_autoload: bool | None = None
+    log_verbosity: int | None = None
     lora_files: List[str] | None = None
     enable_ctx_shift: int | None = False
     spec_draft_n_min: int | None = None
@@ -105,10 +106,13 @@ class ServerProcess:
     chat_template_file: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
+    no_mmproj: bool = False
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
     no_cache_idle_slots: bool = False
+    n_ctx_checkpoints: int | None = None
+    checkpoint_min_step: int | None = None
     log_path: str | None = None
     ui_mcp_proxy: bool = False
     backend_sampling: bool = False
@@ -217,6 +221,8 @@ class ServerProcess:
             server_args.extend(["--grp-attn-w", self.n_ga_w])
         if self.debug:
             server_args.append("--verbose")
+        if self.log_verbosity is not None:
+            server_args.extend(["--log-verbosity", self.log_verbosity])
         if self.lora_files:
             for lora_file in self.lora_files:
                 server_args.extend(["--lora", lora_file])
@@ -246,6 +252,8 @@ class ServerProcess:
             server_args.extend(["--chat-template-file", self.chat_template_file])
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
+        if self.no_mmproj:
+            server_args.append("--no-mmproj")
         if self.media_path:
             server_args.extend(["--media-path", self.media_path])
         if self.sleep_idle_seconds is not None:
@@ -254,6 +262,10 @@ class ServerProcess:
             server_args.extend(["--cache-ram", self.cache_ram])
         if self.no_cache_idle_slots:
             server_args.append("--no-cache-idle-slots")
+        if self.n_ctx_checkpoints is not None:
+            server_args.extend(["--ctx-checkpoints", self.n_ctx_checkpoints])
+        if self.checkpoint_min_step is not None:
+            server_args.extend(["--checkpoint-min-step", self.checkpoint_min_step])
         if self.ui_mcp_proxy:
             server_args.append("--ui-mcp-proxy")
         if self.backend_sampling:
