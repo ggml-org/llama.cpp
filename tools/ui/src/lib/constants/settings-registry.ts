@@ -223,13 +223,22 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				key: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
 				label: 'Show message generation statistics',
 				help: 'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
-				defaultValue: true,
+				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				sync: {
 					serverKey: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.SHOW_AGENTIC_TURN_STATS,
+				label: 'Show statistics for individual agentic turns',
+				help: 'Display per-turn statistics (tokens, duration) under each turn in agentic responses. Shown only when "Show message generation statistics" is enabled.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				dependsOn: SETTINGS_KEYS.SHOW_MESSAGE_STATS
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
@@ -804,6 +813,7 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 			type: s.type,
 			isExperimental: s.isExperimental,
 			isPositiveInteger: s.isPositiveInteger,
+			dependsOn: s.dependsOn,
 			help: s.help,
 			options: s.options
 		}))
