@@ -124,6 +124,7 @@ public:
     ggml_tensor * get_turbo_rot_forward() const override;
     ggml_tensor * get_turbo_rot_inverse() const override;
     ggml_tensor * get_turbo_innerq_scale_inv() const override;
+    void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) override;
 
     //
     // llama_memory_hybrid_context
