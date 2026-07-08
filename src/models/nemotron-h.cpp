@@ -42,7 +42,17 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
     switch (hparams.n_layer()) {
         case 52: type = LLM_TYPE_31B_A3_5B; break; // Nemotron-H_MOE 31B
         case 56: type = LLM_TYPE_9B; break;
-        case 88: type = LLM_TYPE_120B_A12B; break;
+        case 88:
+            {
+                // Nemotron 3 Super (uniform MoE) and Nemotron 3 Puzzle (per-layer
+                // heterogeneous MoE) both have 88 layers; the per-layer top-k array
+                // is the discriminator.
+                bool heterogeneous = false;
+                for (uint32_t i = 1; i < hparams.n_layer(); ++i) {
+                    heterogeneous |= hparams.n_expert_used_arr[i] != hparams.n_expert_used_arr[0];
+                }
+                type = heterogeneous ? LLM_TYPE_75B_A9B : LLM_TYPE_120B_A12B;
+            } break;
         default: type = LLM_TYPE_UNKNOWN;
     }
 }
