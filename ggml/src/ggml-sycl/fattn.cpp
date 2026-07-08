@@ -137,10 +137,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // Set GGML_SYCL_ENABLE_MKL_FA=0 to force TILE/VEC path for A/B testing.
     // Example: GGML_SYCL_ENABLE_MKL_FA=0 llama-cli -m model.gguf -fa -ngl 99 ...
     // Note: MKL GEMM calls are incompatible with SYCL graph capture replay.
-    static int mkl_enable = -1;
-    if (mkl_enable < 0) {
-        mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
-    }
+    static int mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
     // MKL is validated for the mainstream GQA envelope: grouped-query
     // (gqa_ratio >= 2), head_dim a multiple of 64 in [64,512] with matching
     // K/V head size, mask, no sinks/ALiBi/softcap. Gemma's global layers use
