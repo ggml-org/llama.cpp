@@ -1681,7 +1681,7 @@ void server_models_routes::init_routes() {
         }
         // remember which child serves this conversation so the stream routes can route straight
         // to it without polling, keyed on the exact conv id from the header
-        std::string conv_id = stream_conv_id_from_headers(req.headers);
+        std::string conv_id = server_stream_conv_id_from_headers(req.headers);
         if (!conv_id.empty()) {
             models.conv_models.remember(conv_id, name);
         }
@@ -1896,7 +1896,7 @@ void server_models_routes::init_routes() {
         if (!from.empty()) {
             child_path += "?from=" + from;
         }
-        SRV_INF("proxying stream resume to model %s on port %d, path=%s\n",
+        SRV_TRC("proxying stream resume to model %s on port %d, path=%s\n",
                 owner->name.c_str(), owner->port, child_path.c_str());
         auto proxy = std::make_unique<server_http_proxy>(
                 "GET",

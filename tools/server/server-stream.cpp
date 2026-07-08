@@ -6,6 +6,12 @@
 #include <chrono>
 #include <memory>
 #include <utility>
+#include <shared_mutex>
+
+enum class stream_read_status {
+    OK,
+    OFFSET_LOST,
+};
 
 namespace {
 constexpr int64_t STREAM_SESSION_TTL_SECONDS         = 300;
@@ -13,7 +19,6 @@ constexpr size_t  STREAM_SESSION_MAX_BYTES           = 4 * 1024 * 1024;
 constexpr int64_t STREAM_SESSION_GC_INTERVAL_SECONDS = 60;
 constexpr int64_t STREAM_READ_WAKE_INTERVAL_MS       = 200;
 
-// returns unix time in seconds
 int64_t now_seconds() {
     return std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()
@@ -21,6 +26,91 @@ int64_t now_seconds() {
 }
 }
 
+// owns all live sessions keyed by conversation_id, one conv = at most one live session.
+// a periodic GC evicts expired ones
+class stream_session_manager {
+public:
+    stream_session_manager();
+    ~stream_session_manager();
+
+    stream_session_manager(const stream_session_manager &)             = delete;
+    stream_session_manager & operator=(const stream_session_manager &) = delete;
+
+    // install a new session, evicting and cancelling any previous one. conversation_id must be non empty
+    stream_session_ptr create_or_replace(const std::string & conversation_id);
+
+    stream_session_ptr get(const std::string & conversation_id);
+
+    std::vector<stream_session_ptr> list_all() const;
+
+    void evict(const std::string & conversation_id);
+
+    void evict_and_cancel(const std::string & conversation_id);
+
+    void start_gc();
+    void stop_gc();
+
+private:
+    void gc_loop();
+
+    mutable std::shared_mutex                           map_mu;
+    std::unordered_map<std::string, stream_session_ptr> sessions; // key: conversation_id
+    std::thread                                         gc_thread;
+    bool                                                running;
+    std::mutex                                          gc_wake_mu;
+    std::condition_variable                             gc_wake_cv;
+};
+
+// process wide manager, lifecycle controlled by llama-server main() via start_gc/stop_gc
+static stream_session_manager g_stream_sessions;
+
+void server_stream_session_manager_start() {
+    g_stream_sessions.start_gc();
+}
+
+void server_stream_session_manager_stop() {
+    g_stream_sessions.stop_gc();
+}
+
+struct stream_session {
+    std::string conversation_id;
+    int64_t     started_ts; // unix seconds at construction
+
+    stream_session(std::string conversation_id_, size_t max_bytes_);
+    stream_session(const stream_session &)             = delete;
+    stream_session & operator=(const stream_session &) = delete;
+
+    bool append(const char * data, size_t len);
+
+    void finalize();
+
+    // drain from offset into sink, blocking for more bytes or finalize. OFFSET_LOST if offset
+    // fell below the dropped prefix
+    stream_read_status read_from(size_t offset,
+        const std::function<bool(const char *, size_t)> & sink,
+        const std::function<bool()> & should_stop);
+
+    bool    is_done() const;
+    bool    is_cancelled() const;
+    size_t  total_size() const;     // bytes that ever entered the session
+    size_t  dropped_prefix() const; // bytes evicted from the front due to cap
+    int64_t completed_at() const;   // 0 while alive, unix seconds after finalize
+
+    void set_stop_producer(std::function<void()> fn);
+
+    void cancel();
+
+private:
+    mutable std::mutex      mu;
+    std::condition_variable cv;
+    std::vector<char>       buffer;
+    size_t                  prefix_dropped;
+    size_t                  cap_bytes;
+    bool                    done;
+    std::atomic<bool>       cancelled; // polled lock-free by the should_stop closure, no mu
+    int64_t                 completed_ts;
+    std::function<void()>   stop_producer;
+};
 stream_session::stream_session(std::string conversation_id_, size_t max_bytes_)
     : conversation_id(std::move(conversation_id_))
     , started_ts(now_seconds())
@@ -38,7 +128,7 @@ bool stream_session::append(const char * data, size_t len) {
     }
     {
         std::lock_guard<std::mutex> lock(mu);
-        if (done.load(std::memory_order_relaxed)) {
+        if (done) {
             return false;
         }
         if (len >= cap_bytes) {
@@ -62,11 +152,14 @@ bool stream_session::append(const char * data, size_t len) {
 }
 
 void stream_session::finalize() {
-    bool was_done = done.exchange(true, std::memory_order_acq_rel);
-    if (was_done) {
-        return;
+    {
+        std::lock_guard<std::mutex> lock(mu);
+        if (done) {
+            return;
+        }
+        done         = true;
+        completed_ts = now_seconds();
     }
-    completed_ts.store(now_seconds(), std::memory_order_release);
     cv.notify_all();
 }
 
@@ -96,7 +189,7 @@ stream_read_status stream_session::read_from(size_t offset,
             lock.lock();
             continue;
         }
-        if (done.load(std::memory_order_acquire)) {
+        if (done) {
             return stream_read_status::OK;
         }
         // wait for new bytes, finalize, or a periodic wake to re check should_stop
@@ -105,7 +198,8 @@ stream_read_status stream_session::read_from(size_t offset,
 }
 
 bool stream_session::is_done() const {
-    return done.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(mu);
+    return done;
 }
 
 size_t stream_session::total_size() const {
@@ -119,7 +213,8 @@ size_t stream_session::dropped_prefix() const {
 }
 
 int64_t stream_session::completed_at() const {
-    return completed_ts.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(mu);
+    return completed_ts;
 }
 
 void stream_session::set_stop_producer(std::function<void()> fn) {
@@ -128,7 +223,7 @@ void stream_session::set_stop_producer(std::function<void()> fn) {
 }
 
 void stream_session::cancel() {
-    // flip cancelled first so the producer-side stream_aware_should_stop can break out of the
+    // flip cancelled first so the producer-side server_stream_aware_should_stop can break out of the
     // recv() wait even if remove_waiting_task_ids does not notify the condvar (the cancel task
     // posted by rd.stop() will eventually notify, but we do not want to depend on that timing)
     cancelled.store(true, std::memory_order_release);
@@ -237,18 +332,24 @@ void stream_session_manager::evict_and_cancel(const std::string & conversation_i
 }
 
 void stream_session_manager::start_gc() {
-    if (running.exchange(true)) {
-        return;
+    {
+        std::lock_guard<std::mutex> lock(gc_wake_mu);
+        if (running) {
+            return;
+        }
+        running = true;
     }
     gc_thread = std::thread([this] { gc_loop(); });
 }
 
 void stream_session_manager::stop_gc() {
-    bool was_running = running.exchange(false);
+    bool was_running;
+    {
+        std::lock_guard<std::mutex> lock(gc_wake_mu);
+        was_running = running;
+        running = false;
+    }
     if (was_running) {
-        {
-            std::lock_guard<std::mutex> lock(gc_wake_mu);
-        }
         gc_wake_cv.notify_all();
         if (gc_thread.joinable()) {
             gc_thread.join();
@@ -270,15 +371,15 @@ void stream_session_manager::stop_gc() {
 }
 
 void stream_session_manager::gc_loop() {
-    while (running.load(std::memory_order_acquire)) {
+    while (true) {
         {
             std::unique_lock<std::mutex> lock(gc_wake_mu);
             gc_wake_cv.wait_for(lock,
                 std::chrono::seconds(STREAM_SESSION_GC_INTERVAL_SECONDS),
-                [this] { return !running.load(std::memory_order_acquire); });
-        }
-        if (!running.load(std::memory_order_acquire)) {
-            return;
+                [this] { return !running; });
+            if (!running) {
+                return;
+            }
         }
         int64_t cutoff = now_seconds() - STREAM_SESSION_TTL_SECONDS;
         std::vector<stream_session_ptr> to_drop;
@@ -301,10 +402,19 @@ void stream_session_manager::gc_loop() {
     }
 }
 
-// process wide manager, lifecycle controlled by llama-server main() via start_gc/stop_gc
-stream_session_manager g_stream_sessions;
+// stream_pipe
 
-// stream_pipe ---------------------------------------------------------------------------------
+// consumer end: read-only replay of the ring buffer, the destructor does not finalize the session
+struct stream_pipe_consumer : stream_pipe {
+    stream_read_status read(size_t & offset,
+        const std::function<bool(const char *, size_t)> & sink,
+        const std::function<bool()> & should_stop);
+
+    static std::shared_ptr<stream_pipe_consumer> create(stream_session_ptr session);
+
+private:
+    explicit stream_pipe_consumer(stream_session_ptr session);
+};
 
 stream_pipe::stream_pipe(stream_session_ptr session)
     : session_(std::move(session)) {
@@ -408,12 +518,10 @@ static server_http_res_ptr make_error_response(int status, const std::string & m
     return res;
 }
 
-server_http_context::handler_t make_stream_get_handler() {
+server_http_context::handler_t server_stream_make_get_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
-        // GET /v1/stream/<conv_id>?from=N replays the SSE bytes already buffered for the
-        // session, blocks for more bytes when the session is still running, returns when
-        // the session is finalized. the body is streamed back as text/event-stream so the
-        // browser EventSource can attach to it like a fresh request
+        // GET /v1/stream/<conv_id>?from=N replays buffered SSE bytes then blocks for live
+        // bytes until the session finalizes, streamed as text/event-stream for EventSource
         std::string conv_id = req.get_param("conv_id");
         if (conv_id.empty()) {
             return make_error_response(400, "Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST);
@@ -459,11 +567,10 @@ server_http_context::handler_t make_stream_get_handler() {
     };
 }
 
-server_http_context::handler_t make_streams_lookup_handler() {
+server_http_context::handler_t server_stream_make_lookup_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
-        // POST /v1/streams/lookup with body {"conversation_ids": ["X", "Y", ...]} returns the
-        // matching sessions, only for ids the caller already knows. each id matches the exact key
-        // and any "<id>::<model>" variant, so one lookup covers every per model session for a conv
+        // POST /v1/streams/lookup returns the matching sessions, only for ids the caller already
+        // knows. each id matches the exact key and any "<id>::<model>" per model variant
         std::vector<std::string> requested;
         try {
             json body = json::parse(req.body);
@@ -518,11 +625,10 @@ server_http_context::handler_t make_streams_lookup_handler() {
     };
 }
 
-server_http_context::handler_t make_stream_delete_handler() {
+server_http_context::handler_t server_stream_make_delete_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
-        // DELETE /v1/stream/<conv_id> is the explicit user Stop, cancels the producer hook
-        // wired by handle_completions_impl and evicts the buffer. idempotent, a session that
-        // already finalized or was never created returns 204 either way
+        // DELETE /v1/stream/<conv_id> is the explicit user Stop, cancels the producer and evicts
+        // the buffer. idempotent, returns 204 even if the session was already gone
         std::string conv_id = req.get_param("conv_id");
         if (conv_id.empty()) {
             return make_error_response(400, "Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST);
@@ -536,7 +642,7 @@ server_http_context::handler_t make_stream_delete_handler() {
     };
 }
 
-std::string stream_conv_id_from_headers(const std::map<std::string, std::string> & headers) {
+std::string server_stream_conv_id_from_headers(const std::map<std::string, std::string> & headers) {
     // case-insensitive scan for x-conversation-id
     static constexpr char   target[]   = "x-conversation-id";
     static constexpr size_t target_len = sizeof(target) - 1;
@@ -555,8 +661,8 @@ std::string stream_conv_id_from_headers(const std::map<std::string, std::string>
     return std::string();
 }
 
-void stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers) {
-    std::string conversation_id = stream_conv_id_from_headers(headers);
+void server_stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers) {
+    std::string conversation_id = server_stream_conv_id_from_headers(headers);
     SRV_TRC("conv_id=%s (empty=%d)\n", conversation_id.c_str(), conversation_id.empty() ? 1 : 0);
     if (conversation_id.empty()) {
         return;
@@ -565,7 +671,7 @@ void stream_session_attach_pipe(server_http_res & res, const std::map<std::strin
     res.spipe = stream_pipe_producer::create(session, res);
 }
 
-std::function<bool()> stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback) {
+std::function<bool()> server_stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback) {
     return [res, fallback = std::move(fallback)]() -> bool {
         if (res->spipe) {
             return res->spipe->is_cancelled();
