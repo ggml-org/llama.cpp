@@ -20,6 +20,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-vtcm.h"
+#include "hex-profile.h"
 
 struct htp_unary_context {
     struct htp_ops_context * octx;
@@ -655,6 +656,7 @@ static void unary_task_f32_##NAME(unsigned int nth, unsigned int ith, void * dat
     struct htp_ops_context * octx = uctx->octx;                                                                     \
     const struct htp_tensor * src = octx->src[0];                                                                   \
     const struct htp_tensor * dst = octx->dst;                                                                      \
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                       \
                                                                                                                     \
     htp_unary_preamble;                                                                                             \
                                                                                                                     \
@@ -746,7 +748,9 @@ static void unary_task_f32_##NAME(unsigned int nth, unsigned int ith, void * dat
             src1_vtcm = (float *) dma_queue_pop(dma_queue).dst;                                                     \
         }                                                                                                           \
                                                                                                                     \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir);                                                      \
         CORE_EXPR;                                                                                                  \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir);                                                       \
                                                                                                                     \
         const size_t dst_off = dst_contig ? (ir * nb1) : unary_row_offset(ir, ne1, ne2, nb1, nb2, nb3);             \
         dma_queue_push(dma_queue,                                                                                   \
@@ -903,6 +907,7 @@ static void unary_task_f32_wide_row_per_thread(unsigned int nth, unsigned int it
     struct htp_ops_context * octx = uctx->octx;
     const struct htp_tensor * src = octx->src[0];
     const struct htp_tensor * dst = octx->dst;
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
 
     htp_unary_preamble;
 
@@ -973,11 +978,13 @@ static void unary_task_f32_wide_row_per_thread(unsigned int nth, unsigned int it
 
         const uint32_t tw  = MIN(col_tile, ne0 - col);
 
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, t);
         if (htp_op == HTP_OP_TRI) {
             tri_apply_tile_f32(src_vtcm, dst_vtcm, tw, col, i01, ne0, tri_ttype);
         } else {
             unary_apply_tile_f32(htp_op, src_vtcm, dst_vtcm, tw, op_params);
         }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, t);
 
         const size_t doff = (dst_contig ? (row * nb1) : unary_row_offset(row, ne1, ne2, nb1, nb2, nb3)) + (size_t) col * sizeof(float);
         const size_t tb   = (size_t) tw * sizeof(float);
