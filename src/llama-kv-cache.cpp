@@ -2882,7 +2882,7 @@ bool llama_kv_cache_context::apply() {
     // graph and whether the early-return at :2831 fires
     // (the consume/update block at :2841-2850 is inside
     // the non-empty-ubatch path only).
-    LLAMA_LOG_INFO("%s: InnerQ apply() entry ubatches.size()=%zu scale_inv=%p\n",
+    LLAMA_LOG_DEBUG("%s: InnerQ apply() entry ubatches.size()=%zu scale_inv=%p\n",
                    __func__, ubatches.size(),
                    (void *) kv->get_turbo_innerq_scale_inv_raw());
     assert(!llama_memory_status_is_fail(status));
@@ -2909,7 +2909,7 @@ bool llama_kv_cache_context::apply() {
     // the state we're trying to observe. The real consume call
     // stays on the original control path inside the gate below.
     llama_turbo_innerq_runtime_snapshot peek_rt = kv->turbo_innerq_peek_runtime();
-    LLAMA_LOG_INFO("%s: InnerQ consume gate scale_inv_raw=%p peek_dirty=%d peek.finalized=%d abort=%d retry=%d freeze=%d scale_inv_n=%zu\n",
+    LLAMA_LOG_DEBUG("%s: InnerQ consume gate scale_inv_raw=%p peek_dirty=%d peek.finalized=%d abort=%d retry=%d freeze=%d scale_inv_n=%zu\n",
                    __func__, (void *) scale_inv_raw, peek_rt.dirty,
                    peek_rt.finalized, peek_rt.abort_reason,
                    peek_rt.retry_count, peek_rt.freeze_last_good,
@@ -2918,7 +2918,7 @@ bool llama_kv_cache_context::apply() {
         ggml_tensor * t = scale_inv_raw;
         if (t->buffer != nullptr) {
             ggml_backend_tensor_set(t, innerq_rt.scale_inv.data(), 0, innerq_rt.scale_inv.size() * sizeof(float));
-            LLAMA_LOG_INFO("%s: InnerQ scale_inv tensor updated (finalized=%d abort=%d retry=%d freeze=%d)\n",
+            LLAMA_LOG_DEBUG("%s: InnerQ scale_inv tensor updated (finalized=%d abort=%d retry=%d freeze=%d)\n",
                            __func__, innerq_rt.finalized, innerq_rt.abort_reason,
                            innerq_rt.retry_count, innerq_rt.freeze_last_good);
         }
@@ -3006,7 +3006,7 @@ bool llama_kv_cache::turbo_innerq_consume_runtime(llama_turbo_innerq_runtime_sna
     // so `out` is informative in BOTH the ok=1 and ok=0 paths --
     // log the snapshot fields unconditionally.
     bool ok = turbo_innerq_runtime.consume_if_dirty(out);
-    LLAMA_LOG_INFO("turbo_innerq_consume_runtime: ok=%d out.dirty=%d out.finalized=%d out.abort=%d out.retry=%d out.freeze=%d out.scale_inv_n=%zu\n",
+    LLAMA_LOG_DEBUG("turbo_innerq_consume_runtime: ok=%d out.dirty=%d out.finalized=%d out.abort=%d out.retry=%d out.freeze=%d out.scale_inv_n=%zu\n",
                    ok, out.dirty, out.finalized, out.abort_reason, out.retry_count, out.freeze_last_good, out.scale_inv.size());
     return ok;
 }
