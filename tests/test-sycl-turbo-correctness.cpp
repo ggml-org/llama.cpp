@@ -1141,6 +1141,45 @@ int main() {
             }
         }
 
+        // [8d] Static-turbo fallback + init-only retry policy (P3.2.3.3).
+        {
+            struct recovery_case_t {
+                const char * label;
+                ggml_innerq_state_key key;
+                ggml_innerq_abort reason;
+                int retry_count;
+                int has_last_good;
+                ggml_innerq_recovery expected;
+            };
+
+            const ggml_innerq_state_key eligible = {0xDEAD, 128, GGML_TYPE_TURBO4_0, GGML_INNERQ_QUANT_TURBO4_0};
+            recovery_case_t cases[] = {
+                {"init first hit retries once", eligible, GGML_INNERQ_ABORT_INIT_STATS, 0, 0, GGML_INNERQ_RECOVERY_RETRY_INIT},
+                {"init second hit falls back", eligible, GGML_INNERQ_ABORT_INIT_STATS, 1, 0, GGML_INNERQ_RECOVERY_STATIC_FALLBACK},
+                {"init second hit freezes last-good", eligible, GGML_INNERQ_ABORT_INIT_STATS, 1, 1, GGML_INNERQ_RECOVERY_STATIC_FALLBACK_FREEZE},
+                {"midstream nan never retries", eligible, GGML_INNERQ_ABORT_NAN, 0, 0, GGML_INNERQ_RECOVERY_STATIC_FALLBACK},
+                {"device lost freezes last-good", eligible, GGML_INNERQ_ABORT_DEVICE_LOST, 0, 1, GGML_INNERQ_RECOVERY_STATIC_FALLBACK_FREEZE},
+                {"ppl drift freezes last-good", eligible, GGML_INNERQ_ABORT_PPL_DRIFT, 0, 1, GGML_INNERQ_RECOVERY_STATIC_FALLBACK_FREEZE},
+                {"ineligible key falls back", {0u, 128, GGML_TYPE_TURBO4_0, GGML_INNERQ_QUANT_TURBO4_0}, GGML_INNERQ_ABORT_INIT_STATS, 0, 1, GGML_INNERQ_RECOVERY_STATIC_FALLBACK},
+            };
+
+            int recovery_failures = 0;
+            for (const recovery_case_t & c : cases) {
+                ggml_innerq_recovery got = ggml_innerq_state_recover(&c.key, c.reason, c.retry_count, c.has_last_good);
+                if (got != c.expected) {
+                    printf("   [8d] FAIL: %s expected recovery %d, got %d\n",
+                           c.label, (int) c.expected, (int) got);
+                    ++recovery_failures;
+                }
+            }
+            if (recovery_failures > 0) {
+                printf("   [8d] InnerQ recovery policy: %d failures\n", recovery_failures);
+                g_failures++;
+            } else {
+                printf("   [8d] InnerQ recovery policy: PASS (retry-init once, hard-fail -> static turbo, freeze last-good)\n");
+            }
+        }
+
                     // not a regression catcher.
         skip("[8] InnerQ FA skeleton (P3.2.2 state machine unit PASS)", "real PPL probe is in P3.2.4; P3.2.1 ships spec + skeleton, P3.2.2 ships state machine + unit check");
     } else {
