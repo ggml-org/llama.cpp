@@ -6,20 +6,13 @@
 		ChatMessageActionCardContinueRequest
 	} from '$lib/components/app';
 
-	import {
-		AgenticSectionType,
-		ChatMessageStatsView,
-		ToolPermissionDecision
-	} from '$lib/enums';
+	import { AgenticSectionType, ChatMessageStatsView, ToolPermissionDecision } from '$lib/enums';
 	import type {
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
 		DatabaseMessage
 	} from '$lib/types';
-	import {
-		deriveAgenticSections,
-		type AgenticSection
-	} from '$lib/utils';
+	import { deriveAgenticSections, type AgenticSection } from '$lib/utils';
 	import {
 		agenticPendingPermissionRequest,
 		agenticResolvePermission,
@@ -47,7 +40,6 @@
 
 	let expandedStates: Record<number, boolean> = $state({});
 
-	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
 	const renderThinkingAsMarkdown = $derived(config().renderThinkingAsMarkdown as boolean);
 	const showMessageStats = $derived(Boolean(config().showMessageStats));
 	const showAgenticTurnStats = $derived(showMessageStats && Boolean(config().showAgenticTurnStats));
@@ -145,7 +137,7 @@
 		}
 
 		if (section.type === AgenticSectionType.REASONING_PENDING) {
-			return showThoughtInProgress;
+			return true;
 		}
 
 		return false;
