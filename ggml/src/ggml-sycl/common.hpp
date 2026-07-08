@@ -45,13 +45,12 @@ namespace syclexp = sycl::ext::oneapi::experimental;
 #define GGML_COMMON_IMPL_SYCL
 #define SYCL_FLASH_ATTN //remove it to disable FLASH_ATTENTION in building.
 #define SYCL_FAST_FP16  //don't change. remove it will break fattn-tile.hpp building
-// GGML_SYCL_FA_ALL_QUANTS: default OFF. Defining this re-enables
-// mixed-K flash_attn_ext_vec<...,42/43,44,...> dispatch (see
-// ASSUMPTIONS.md:553-583 and RALPH_TASKS.md:1237-1251). Keep
-// commented: the PR deliberately narrows SYCL FA quant support
-// to f16/q8_0 only, so commenting this is an intentional default,
-// not a regression. To re-enable mixed-K FA dispatch, uncomment
-// the line below.
+// GGML_SYCL_FA_ALL_QUANTS: default OFF. Defining this enables the
+// full mixed-K flash_attn_ext_vec<...,42/43,44,...> dispatch matrix
+// (see ASSUMPTIONS.md:553-583 and RALPH_TASKS.md:1237-1251).
+// Leave commented to keep the restricted default dispatch set in
+// fattn.cpp. To re-enable the full mixed-K FA matrix, uncomment the
+// line below.
 //#define GGML_SYCL_FA_ALL_QUANTS
 
 /* suppress warning spam */

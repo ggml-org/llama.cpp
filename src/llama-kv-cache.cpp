@@ -125,8 +125,8 @@ llama_kv_cache::llama_kv_cache(
     // Auto-asymmetric: when symmetric turbo K+V is requested and the model has
     // high GQA ratio (few KV heads serving many Q heads), upgrade K to q8_0.
     // Turbo K quantization error gets amplified by the GQA broadcast factor.
-    // Qwen2.5: 4 KV heads / 28 Q heads = 7:1 → turbo3 K PPL catastrophic (2887 vs 7.4 baseline)
-    // Mistral:  8 KV heads / 32 Q heads = 4:1 → turbo3 K works fine (+4.4% PPL)
+    // Qwen2.5: 4 KV heads / 28 Q heads = 7:1 -> turbo3 K PPL catastrophic (2887 vs 7.4 baseline)
+    // Mistral:  8 KV heads / 32 Q heads = 4:1 -> turbo3 K works fine (+4.4% PPL)
     // Threshold: GQA ratio >= 6 triggers auto-asymmetric.
     {
         const bool k_is_turbo = (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0 || type_k == GGML_TYPE_TURBO2_0);
@@ -136,8 +136,8 @@ llama_kv_cache::llama_kv_cache(
         // the downgrade fired (resolves the
         // auto-asymmetric hypothesis for Qwen3 vs
         // mistral).
-        LLAMA_LOG_INFO("%s: a2a3c-pre-auto: k_is_turbo=%d type_k=%s type_v=%s\n",
-                       __func__, (int)k_is_turbo, ggml_type_name(type_k), ggml_type_name(type_v));
+        LLAMA_LOG_DEBUG("%s: a2a3c-pre-auto: k_is_turbo=%d type_k=%s type_v=%s\n",
+                        __func__, (int)k_is_turbo, ggml_type_name(type_k), ggml_type_name(type_v));
         if (k_is_turbo) {
             const uint32_t n_head    = hparams.n_head(0);
             const uint32_t n_head_kv = hparams.n_head_kv(0);
@@ -146,21 +146,21 @@ llama_kv_cache::llama_kv_cache(
             const char * env = getenv("TURBO_AUTO_ASYMMETRIC");
             const bool disabled = (env && env[0] == '0');
 
-            LLAMA_LOG_INFO("%s: a2a3c-pre-auto: n_head=%u n_head_kv=%u gqa_ratio=%u disabled=%d\n",
-                           __func__, n_head, n_head_kv, gqa_ratio, (int)disabled);
+            LLAMA_LOG_DEBUG("%s: a2a3c-pre-auto: n_head=%u n_head_kv=%u gqa_ratio=%u disabled=%d\n",
+                            __func__, n_head, n_head_kv, gqa_ratio, (int)disabled);
 
             if (!disabled && gqa_ratio >= 6 && type_k == type_v) {
-                LLAMA_LOG_WARN("%s: auto-asymmetric: GQA ratio %u:1 (n_head=%u, n_head_kv=%u) — "
+                LLAMA_LOG_WARN("%s: auto-asymmetric: GQA ratio %u:1 (n_head=%u, n_head_kv=%u) - "
                                "upgrading K from %s to q8_0 to prevent quality degradation. "
                                "Disable with TURBO_AUTO_ASYMMETRIC=0\n",
                                __func__, gqa_ratio, n_head, n_head_kv, ggml_type_name(type_k));
                 type_k = GGML_TYPE_Q8_0;
-                LLAMA_LOG_INFO("%s: a2a3c-post-auto: downgrade FIRED, type_k now=%s\n",
-                               __func__, ggml_type_name(type_k));
+                LLAMA_LOG_DEBUG("%s: a2a3c-post-auto: downgrade FIRED, type_k now=%s\n",
+                                __func__, ggml_type_name(type_k));
             } else {
-                LLAMA_LOG_INFO("%s: a2a3c-post-auto: downgrade SKIPPED (disabled=%d gqa_ratio=%u type_k==type_v=%d), type_k still=%s\n",
-                               __func__, (int)disabled, gqa_ratio,
-                               (int)(type_k == type_v), ggml_type_name(type_k));
+                LLAMA_LOG_DEBUG("%s: a2a3c-post-auto: downgrade SKIPPED (disabled=%d gqa_ratio=%u type_k==type_v=%d), type_k still=%s\n",
+                                __func__, (int)disabled, gqa_ratio,
+                                (int)(type_k == type_v), ggml_type_name(type_k));
             }
         }
     }
@@ -421,12 +421,12 @@ llama_kv_cache::llama_kv_cache(
         // smoke log whether the guard was entered (whether
         // type_k is still turbo at this point) and whether
         // the alloc actually ran.
-        LLAMA_LOG_INFO("%s: a2a3c-pre-alloc: il=%u turbo_rotation=%p type_k=%s\n",
-                       __func__, il, (void *)turbo_rotation, ggml_type_name(type_k));
+        LLAMA_LOG_DEBUG("%s: a2a3c-pre-alloc: il=%u turbo_rotation=%p type_k=%s\n",
+                        __func__, il, (void *)turbo_rotation, ggml_type_name(type_k));
         if (turbo_rotation == nullptr &&
             (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0 || type_k == GGML_TYPE_TURBO2_0)) {
-            LLAMA_LOG_INFO("%s: a2a3c-alloc: il=%u alloc ENTERED, creating turbo_rotation + turbo_rotation_inv + turbo_innerq_scale_inv\n",
-                           __func__, il);
+            LLAMA_LOG_DEBUG("%s: a2a3c-alloc: il=%u alloc ENTERED, creating turbo_rotation + turbo_rotation_inv + turbo_innerq_scale_inv\n",
+                            __func__, il);
             turbo_rotation = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 128);
             ggml_format_name(turbo_rotation, "turbo_rotation");  // R^T
             turbo_rotation_inv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 128);
@@ -435,11 +435,11 @@ llama_kv_cache::llama_kv_cache(
             // InnerQ: per-channel scale_inv tensor (128 floats, initialized to all 1.0)
             turbo_innerq_scale_inv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, LLAMA_TURBO_INNERQ_CHANNELS);
             ggml_format_name(turbo_innerq_scale_inv, "turbo_innerq_scale_inv");
-            LLAMA_LOG_INFO("%s: a2a3c-alloc: il=%u alloc DONE, turbo_innerq_scale_inv=%p\n",
-                           __func__, il, (void *)turbo_innerq_scale_inv);
+            LLAMA_LOG_DEBUG("%s: a2a3c-alloc: il=%u alloc DONE, turbo_innerq_scale_inv=%p\n",
+                            __func__, il, (void *)turbo_innerq_scale_inv);
         } else {
-            LLAMA_LOG_INFO("%s: a2a3c-alloc: il=%u alloc SKIPPED (turbo_rotation=%p type_k=%s)\n",
-                           __func__, il, (void *)turbo_rotation, ggml_type_name(type_k));
+            LLAMA_LOG_DEBUG("%s: a2a3c-alloc: il=%u alloc SKIPPED (turbo_rotation=%p type_k=%s)\n",
+                            __func__, il, (void *)turbo_rotation, ggml_type_name(type_k));
         }
     }
 
@@ -491,8 +491,8 @@ llama_kv_cache::llama_kv_cache(
             #include "turbo-rotation-data.h"
             // ggml is column-major; C arrays are row-major. Storing a row-major matrix
             // into ggml implicitly transposes it. ggml_mul_mat(A, x) computes A^T @ x.
-            // To get R @ q: store R^T → ggml sees (R^T)^T_col = R → mul_mat gives R @ q. Wait no —
-            // store R so ggml col-major reads it as R^T, then mul_mat gives (R^T)^T = R. ✓
+            // To get R @ q: store R^T -> ggml sees (R^T)^T_col = R -> mul_mat gives R @ q. Wait no -
+            // store R so ggml col-major reads it as R^T, then mul_mat gives (R^T)^T = R.
             // Store R for Q forward rotation, R^T for V inverse rotation
             // ggml_mul_mat(A,x) computes A@x for row-major stored A (verified by test)
             ggml_backend_tensor_set(turbo_rotation, TURBO_ROTATION_R, 0, 128 * 128 * sizeof(float));
@@ -505,16 +505,16 @@ llama_kv_cache::llama_kv_cache(
             // runs for this layer (the alloc + this init both
             // need to succeed for the consumer to see the
             // tensor).
-            LLAMA_LOG_INFO("%s: a2a3c-init1-pre: turbo_innerq_scale_inv=%p buffer=%p\n",
-                           __func__, (void *)turbo_innerq_scale_inv,
-                           turbo_innerq_scale_inv ? (void *)turbo_innerq_scale_inv->buffer : nullptr);
+            LLAMA_LOG_DEBUG("%s: a2a3c-init1-pre: turbo_innerq_scale_inv=%p buffer=%p\n",
+                            __func__, (void *)turbo_innerq_scale_inv,
+                            turbo_innerq_scale_inv ? (void *)turbo_innerq_scale_inv->buffer : nullptr);
             if (turbo_innerq_scale_inv != nullptr && turbo_innerq_scale_inv->buffer != nullptr) {
                 float ones[LLAMA_TURBO_INNERQ_CHANNELS];
                 for (int i = 0; i < LLAMA_TURBO_INNERQ_CHANNELS; i++) ones[i] = 1.0f;
                 ggml_backend_tensor_set(turbo_innerq_scale_inv, ones, 0, LLAMA_TURBO_INNERQ_CHANNELS * sizeof(float));
-                LLAMA_LOG_INFO("%s: a2a3c-init1-done: wrote ones[128]=1.0 to turbo_innerq_scale_inv\n", __func__);
+                LLAMA_LOG_DEBUG("%s: a2a3c-init1-done: wrote 128 identity scale values to turbo_innerq_scale_inv\n", __func__);
             } else {
-                LLAMA_LOG_INFO("%s: a2a3c-init1-skip: tensor null or no buffer\n", __func__);
+                LLAMA_LOG_DEBUG("%s: a2a3c-init1-skip: tensor null or no buffer\n", __func__);
             }
 
             LLAMA_LOG_INFO("%s: TurboQuant rotation matrices initialized (128x128)\n", __func__);
@@ -652,15 +652,15 @@ void llama_kv_cache::clear(bool data) {
 
             // Re-initialize InnerQ scale_inv to all 1.0
             // P3.2.2a2a3c trace: log second-init run state.
-            LLAMA_LOG_INFO("%s: a2a3c-init2-pre: turbo_innerq_scale_inv=%p\n",
-                           __func__, (void *)turbo_innerq_scale_inv);
+            LLAMA_LOG_DEBUG("%s: a2a3c-init2-pre: turbo_innerq_scale_inv=%p\n",
+                            __func__, (void *)turbo_innerq_scale_inv);
             if (turbo_innerq_scale_inv != nullptr && turbo_innerq_scale_inv->buffer != nullptr) {
                 float ones[LLAMA_TURBO_INNERQ_CHANNELS];
                 for (int i = 0; i < LLAMA_TURBO_INNERQ_CHANNELS; i++) ones[i] = 1.0f;
                 ggml_backend_tensor_set(turbo_innerq_scale_inv, ones, 0, LLAMA_TURBO_INNERQ_CHANNELS * sizeof(float));
-                LLAMA_LOG_INFO("%s: a2a3c-init2-done\n", __func__);
+                LLAMA_LOG_DEBUG("%s: a2a3c-init2-done\n", __func__);
             } else {
-                LLAMA_LOG_INFO("%s: a2a3c-init2-skip\n", __func__);
+                LLAMA_LOG_DEBUG("%s: a2a3c-init2-skip\n", __func__);
             }
         }
     }
@@ -1556,7 +1556,7 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
     const uint64_t kv_size      = get_size();
     const uint64_t n_embd_v_gqa = v->ne[0];
 
-    // [TAG_V_CACHE_VARIABLE] — for turbo-padded V, cache may be larger
+    // [TAG_V_CACHE_VARIABLE] - for turbo-padded V, cache may be larger
     assert(n_embd_v_gqa >= hparams.n_embd_v_gqa(il));
 
     // Use padded head_dim for turbo types
@@ -1599,7 +1599,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
 
     // Turbo zero-padding: pad each head to next multiple of 128 before merging dims.
     // k_cur shape here is (n_embd_head, n_head, n_tokens).
-    // ggml_pad pads ne[0] with zeros — exactly what we need per-head.
+    // ggml_pad pads ne[0] with zeros - exactly what we need per-head.
     const bool k_is_turbo = (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0);
     const bool k_needs_pad = k_is_turbo && (n_embd_head % 128 != 0);
     if (k_needs_pad) {
@@ -1745,7 +1745,7 @@ ggml_tensor * llama_kv_cache::build_input_k_rot(ggml_context * ctx) const {
         // EXPERIMENT (master TODO): force smallest rotation matrix (nrot=64)
         // for K, mirroring V's choice. Master defaults to the largest power-of-2
         // that divides head_dim, but the upstream comment hypothesizes smaller
-        // tiles preserve more local structure → less PPL hit on sensitive models
+        // tiles preserve more local structure -> less PPL hit on sensitive models
         // (gemma-4 26B-A4B reportedly regresses with the largest tile).
         // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
         const char * LLAMA_ATTN_ROT_K_NROT = getenv("LLAMA_ATTN_ROT_K_NROT");
@@ -2452,7 +2452,7 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
     for (const auto & layer : layers) {
         auto * k = layer.k_stream[cr.strm];
 
-        // Use actual tensor width (may be padded for turbo types: e.g. 576→640)
+        // Use actual tensor width (may be padded for turbo types: e.g. 576->640)
         const uint32_t n_embd_k_gqa = (uint32_t) k->ne[0];
 
         // Write key type
