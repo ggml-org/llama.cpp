@@ -213,10 +213,6 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     switch (K->type) {
         case GGML_TYPE_F32:
         case GGML_TYPE_F16:
-            // Note: BF16 is handled by the MKL path (checked above) for
-            // prefill-shaped calls. It is intentionally NOT listed here:
-            // the VEC/TILE decode fallback has no BF16 kernel, so BF16
-            // decode falls through to NONE (same as upstream master).
             break;
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
