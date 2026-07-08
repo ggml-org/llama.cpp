@@ -90,9 +90,7 @@
 					</div>
 
 					{#if displayedOverflow > 0}
-						<span class="shrink-0 text-xs text-muted-foreground/40"
-							>+{displayedOverflow}</span
-						>
+						<span class="shrink-0 text-xs text-muted-foreground/40">+{displayedOverflow}</span>
 					{/if}
 				</div>
 			{/if}
@@ -109,10 +107,10 @@
 	</Collapsible.Trigger>
 
 	<Collapsible.Content>
-		<div class="pl-1.5 inline-grid min-w-0" style="min-height: var(--min-message-height);">
-            <div class="min-w-0 border-l border-muted-foreground/20 pl-4">
-		    	{@render children()}
-            </div>
+		<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
+			<div class="min-w-0 border-l border-muted-foreground/20 pl-4 pb-2 my-2">
+				{@render children()}
+			</div>
 		</div>
 	</Collapsible.Content>
 </Collapsible.Root>

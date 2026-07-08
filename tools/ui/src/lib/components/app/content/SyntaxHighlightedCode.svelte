@@ -72,8 +72,10 @@
 </script>
 
 <div
-	class="code-preview-wrapper min-w-0 max-w-full overflow-x-auto rounded-lg border border-border bg-muted {className}"
-	style="max-height: {maxHeight}; {maxWidth ? `max-width: ${maxWidth};` : ''}"
+	class="code-preview-wrapper min-w-0 max-w-full overflow-x-auto rounded-xl border shadow-[0_1px_2px_0_rgb(0_0_0_/_0.05)] {className}"
+	style="border-color: color-mix(in oklch, var(--border) 30%, transparent); background: var(--code-background); max-height: {maxHeight}; {maxWidth
+		? `max-width: ${maxWidth};`
+		: ''}"
 >
 	<!-- Needs to be formatted as single line for proper rendering -->
 	<pre class="m-0"><code class="hljs text-sm leading-relaxed">{@html highlightedHtml}</code></pre>
@@ -86,5 +88,9 @@
 
 	.code-preview-wrapper code {
 		background: transparent;
+	}
+
+	:global(.dark) .code-preview-wrapper {
+		border-color: color-mix(in oklch, var(--border) 20%, transparent);
 	}
 </style>
