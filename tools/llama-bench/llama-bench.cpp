@@ -2295,7 +2295,8 @@ int llama_bench(int argc, char ** argv) {
             mparams.tensor_buft_overrides = fit_overrides.data();
             cparams.n_ctx                 = 0;
 
-            std::vector<size_t> margins(llama_max_devices(), inst.fit_target * 1024 * 1024);
+            std::vector<size_t> margins_base(llama_max_devices(), inst.fit_target * 1024 * 1024);
+            std::vector<size_t> margins_per_ctx(llama_max_devices(), 0);
 
             uint32_t n_ctx_needed = inst.n_prompt + inst.n_gen + inst.n_depth;
             cparams.n_ctx = std::max(cparams.n_ctx, n_ctx_needed);
@@ -2303,7 +2304,8 @@ int llama_bench(int argc, char ** argv) {
             common_fit_params(inst.model.c_str(), &mparams, &cparams,
                 fit_tensor_split.data(),
                 fit_overrides.data(),
-                margins.data(),
+                margins_base.data(),
+                margins_per_ctx.data(),
                 inst.fit_min_ctx,
                 params.verbose ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
        }

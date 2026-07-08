@@ -1104,7 +1104,8 @@ private:
                         devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
 
                     GGML_ASSERT(!params_base.fit_params_target.empty());
-                    size_t total = 0;
+                    GGML_ASSERT(!params_base.fit_params_overhead_per_ctx.empty());
+                    size_t total_fixed = 0;
 
                     std::vector<ggml_backend_dev_t> tgt_devices = params.devices;
 
@@ -1114,21 +1115,29 @@ private:
                         }
                     }
 
+                    const uint32_t n_ctx_spec = cparams_dft.n_ctx == 0 ? hp_nct : cparams_dft.n_ctx;
+                    GGML_ASSERT(n_ctx_spec != 0);
+
+                    // calculate spec footprint as a fixed portion and a ctx-dependent portion
                     for (size_t j = 0; j < devs.size(); ++j) {
-                        const size_t bytes = (measure_model_bytes ? dmd[j].model : 0) + dmd[j].context + dmd[j].compute;
-                        total += bytes;
+                        const size_t fixed   = (measure_model_bytes ? dmd[j].model : 0) + dmd[j].compute;
+                        const size_t per_ctx = dmd[j].context / n_ctx_spec;
+                        total_fixed += fixed;
                         for (size_t i = 0; i < tgt_devices.size(); i++) {
                             if (tgt_devices[i] == devs[j]) {
-                                SRV_DBG("[spec] adding %.2f MiB to fit_params_target for device %s\n",
-                                        bytes / (1024.0 * 1024.0), ggml_backend_dev_name(devs[j]));
-                                params_base.fit_params_target[i] += bytes;
+                                SRV_DBG("[spec] adding %.2f MiB (fixed) + %.2f MiB/ctx to fit_params for device %s\n",
+                                        fixed   / (1024.0 * 1024.0),
+                                        per_ctx / (1024.0 * 1024.0),
+                                        ggml_backend_dev_name(devs[j]));
+                                params_base.fit_params_target[i]           += fixed;
+                                params_base.fit_params_overhead_per_ctx[i] += per_ctx;
                                 break;
                             }
                         }
                     }
-                    SRV_TRC("[spec] estimated memory usage of %s is %.2f MiB\n",
+                    SRV_TRC("[spec] estimated fixed memory usage of %s is %.2f MiB\n",
                             has_draft ? "draft model" : "MTP context",
-                            total / (1024.0 * 1024.0));
+                            total_fixed / (1024.0 * 1024.0));
                 } catch (const std::exception & e) {
                     SRV_WRN("[spec] failed to measure %s memory: %s\n",
                             has_draft ? "draft model" : "MTP context", e.what());
