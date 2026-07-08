@@ -40,6 +40,8 @@
 		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
 		onMcpResourcesClick?: () => void;
+		onCompactContext?: () => void;
+		onModelCheck?: () => boolean;
 	}
 
 	let {
@@ -58,7 +60,9 @@
 		onStop,
 		onSystemPromptClick,
 		onMcpPromptClick,
-		onMcpResourcesClick
+		onMcpResourcesClick,
+		onCompactContext,
+		onModelCheck
 	}: Props = $props();
 
 	let currentConfig = $derived(config());
@@ -80,6 +84,7 @@
 	let hasVisionModality = $state(false);
 	let hasModelSelected = $state(false);
 	let isSelectedModelInCache = $state(true);
+	let isCompactingContext = $state(false);
 	let submitTooltip = $state('');
 
 	let hasAudioAttachments = $derived(
@@ -129,6 +134,35 @@
 		const liveOutputTokens = processingState.outputTokensUsed ?? 0;
 		return livePromptTokens > 0 || liveOutputTokens > 0;
 	});
+
+	let canCompactContext = $derived(
+		!!onCompactContext &&
+			!disabled &&
+			!isLoading &&
+			!isCompactingContext &&
+			conversationsStore.activeMessages.length > 0 &&
+			(!showModelSelector || hasModelSelected)
+	);
+
+	let compactTooltip = $derived.by(() => {
+		if (isCompactingContext) return 'Compacting context...';
+		if (showModelSelector && !hasModelSelected) return 'Select a model to compact context';
+		if (conversationsStore.activeMessages.length === 0) return 'No context to compact';
+		if (isLoading) return 'Wait for the current response to finish';
+		if (disabled) return 'Compact context unavailable';
+		return 'Compact context';
+	});
+
+	async function handleCompactContextClick() {
+		if (isCompactingContext || !canCompactContext) return;
+		if (onModelCheck?.() === false) return;
+		isCompactingContext = true;
+		try {
+			await Promise.resolve(onCompactContext?.());
+		} finally {
+			isCompactingContext = false;
+		}
+	}
 </script>
 
 <div
@@ -155,7 +189,12 @@
 
 	<div class="flex items-center gap-1.5">
 		{#if hasProcessedTokens}
-			<ChatFormContextGauge />
+			<ChatFormContextGauge
+				onCompactContext={onCompactContext ? handleCompactContextClick : undefined}
+				compactDisabled={!canCompactContext}
+				compactLoading={isCompactingContext}
+				{compactTooltip}
+			/>
 		{/if}
 
 		{#if showModelSelector}

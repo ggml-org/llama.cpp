@@ -183,6 +183,15 @@
 		await chatStore.addSystemPrompt();
 	}
 
+	async function handleCompactContext() {
+		const success = await chatStore.compactContext();
+		if (success) {
+			import('svelte-sonner').then(({ toast }) => {
+				toast.success('Context compacted');
+			});
+		}
+	}
+
 	$effect(() => {
 		const shouldDisableAutoScroll =
 			config().disableAutoScroll || (isMobile.current && isCurrentConversationLoading);
@@ -296,6 +305,7 @@
 				onSend={handleSendMessage}
 				onStop={() => chatStore.stopGeneration()}
 				onSystemPromptAdd={handleSystemPromptAdd}
+				onCompactContext={handleCompactContext}
 				bind:uploadedFiles={fileUpload.uploadedFiles}
 			/>
 		</div>

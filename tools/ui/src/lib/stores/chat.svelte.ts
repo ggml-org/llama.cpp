@@ -2431,6 +2431,116 @@ class ChatStore {
 			}
 		}
 	}
+
+	async compactContext(): Promise<boolean> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv || conversationsStore.activeMessages.length === 0) return false;
+		if (this.isChatLoadingInternal(activeConv.id)) return false;
+
+		this.setChatLoading(activeConv.id, true);
+		this.clearChatStreaming(activeConv.id);
+
+		try {
+			const promptMessages = conversationsStore.activeMessages;
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+
+			const compactPrompt = `You are compacting a conversation into durable context for future turns.
+
+Write a concise Markdown context note that preserves only information needed to continue the conversation accurately.
+
+Preserve:
+- the user's goals and current intent
+- current state, progress, and decisions made
+- facts, constraints, preferences, assumptions, and open questions
+- important entities: files, paths, commands, errors, URLs, APIs, model names, tools, repositories, settings, versions, dates
+- TODOs and next steps
+- any prior summary or durable memory that is still relevant
+
+Omit:
+- greetings, small talk, repeated discussion, dead ends
+- transient debugging steps unless they explain the current state
+- reasoning that did not affect decisions
+- obsolete information superseded later in the conversation
+
+Requirements:
+- Use Markdown.
+- Be specific and factual.
+- Keep exact names, paths, commands, errors, and numeric values when they matter.
+- Do not invent or infer missing facts.
+- Prefer compact bullets over prose.
+- Organize by topic when helpful.
+- If the conversation is short, keep this very short.
+- If the conversation is long, include enough detail for another assistant to continue without reading the original history.
+
+Output only the compacted context note.`;
+
+			const compactMessage: ApiChatMessageData = {
+				role: MessageRole.USER,
+				content: compactPrompt
+			};
+
+			const conversationModel = this.getConversationModel(promptMessages);
+			const effectiveModel = isRouterMode() ? selectedModelName() || conversationModel : undefined;
+
+			let compactedContent = '';
+
+			await ChatService.sendMessage(
+				[...promptMessages, compactMessage],
+				{
+					...this.getApiOptions(),
+					model: effectiveModel,
+					stream: true,
+					custom: { chat_template_kwargs: { enable_thinking: false } },
+					onChunk: (chunk: string) => {
+						compactedContent += chunk;
+					}
+				},
+				activeConv.id
+			);
+
+			if (!compactedContent.trim()) {
+				this.setChatLoading(activeConv.id, false);
+				return false;
+			}
+
+			const compactedTrimmed = compactedContent.trim();
+			const messageIdsToDelete = conversationsStore.activeMessages
+				.filter((m) => m.id !== rootMessage?.id)
+				.map((m) => m.id);
+
+			for (const messageId of messageIdsToDelete) {
+				await DatabaseService.deleteMessage(messageId);
+			}
+
+			const rootId = rootMessage?.id ?? (await DatabaseService.createRootMessage(activeConv.id));
+
+			const newSystemMessage = await DatabaseService.createSystemMessage(
+				activeConv.id,
+				compactedTrimmed,
+				rootId
+			);
+
+			await DatabaseService.updateConversation(activeConv.id, {
+				currNode: newSystemMessage.id
+			});
+
+			conversationsStore.activeMessages = [newSystemMessage];
+			conversationsStore.activeConversation = {
+				...conversationsStore.activeConversation,
+				currNode: newSystemMessage.id,
+				lastModified: Date.now()
+			};
+
+			conversationsStore.updateConversationTimestamp();
+			this.setChatLoading(activeConv.id, false);
+			return true;
+		} catch (error) {
+			console.error('Failed to compact context:', error);
+			if (activeConv) this.setChatLoading(activeConv.id, false);
+			return false;
+		}
+	}
 }
 
 export const chatStore = new ChatStore();

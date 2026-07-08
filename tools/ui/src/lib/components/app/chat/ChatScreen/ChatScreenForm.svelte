@@ -16,6 +16,8 @@
 		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
 		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
+		onCompactContext?: () => void;
+		onModelCheck?: () => boolean;
 		uploadedFiles?: ChatUploadedFile[];
 	}
 
@@ -29,6 +31,8 @@
 		onSend,
 		onStop,
 		onSystemPromptAdd,
+		onCompactContext,
+		onModelCheck,
 		uploadedFiles = $bindable([])
 	}: Props = $props();
 
@@ -147,6 +151,8 @@
 		{onStop}
 		onSubmit={handleSubmit}
 		onSystemPromptClick={handleSystemPromptClick}
+		{onCompactContext}
+		onModelCheck={() => chatFormRef?.checkModelSelected() ?? true}
 		onUploadedFileRemove={handleUploadedFileRemove}
 	/>
 </div>

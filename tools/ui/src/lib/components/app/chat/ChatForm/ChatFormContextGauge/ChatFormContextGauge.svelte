@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import { Loader2 } from '@lucide/svelte';
 	import * as HoverCard from '$lib/components/ui/hover-card';
+	import { Button } from '$lib/components/ui/button';
 	import { activeConversation, activeMessages } from '$lib/stores/conversations.svelte';
 	import { chatStore, isChatStreaming, isLoading } from '$lib/stores/chat.svelte';
 	import { formatParameters } from '$lib/utils/formatters';
@@ -9,6 +11,20 @@
 	import ContextGaugeDetails from './ContextGaugeDetails.svelte';
 	import ContextGaugeLoadModel from './ContextGaugeLoadModel.svelte';
 	import { colorLevelBgClass, colorLevelTextClass } from './context-gauge';
+
+	interface Props {
+		onCompactContext?: () => void;
+		compactDisabled?: boolean;
+		compactLoading?: boolean;
+		compactTooltip?: string;
+	}
+
+	let {
+		onCompactContext,
+		compactDisabled = false,
+		compactLoading = false,
+		compactTooltip = 'Compact context'
+	}: Props = $props();
 
 	const gauge = useContextGauge();
 
@@ -40,6 +56,7 @@
 			gauge.contextTotal > 0 &&
 			(gauge.activeModelId !== null || gauge.isActiveModelLoaded)
 	);
+	const showLoadModelAction = $derived(gauge.activeModelId !== null && !gauge.isActiveModelLoaded);
 </script>
 
 <HoverCard.Root>
@@ -61,7 +78,7 @@
 				</span>
 			</div>
 
-			{#if gauge.activeModelId !== null && !gauge.isActiveModelLoaded}
+			{#if showLoadModelAction}
 				<ContextGaugeLoadModel
 					modelId={gauge.activeModelId}
 					isLoading={gauge.isActiveModelLoading}
@@ -87,6 +104,26 @@
 				</div>
 			{:else}
 				<div class="text-xs text-muted-foreground">No context info available</div>
+			{/if}
+
+			{#if onCompactContext && !showLoadModelAction}
+				<div class="border-t border-border/50 pt-2">
+					<Button
+						size="sm"
+						variant="secondary"
+						class="self-start"
+						disabled={compactDisabled || compactLoading}
+						title={compactTooltip}
+						onclick={onCompactContext}
+					>
+						{#if compactLoading}
+							<Loader2 class="h-3.5 w-3.5 animate-spin" />
+							Compacting...
+						{:else}
+							Compact context
+						{/if}
+					</Button>
+				</div>
 			{/if}
 
 			{#if gauge.hasAnyUsage}

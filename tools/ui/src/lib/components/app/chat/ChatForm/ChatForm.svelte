@@ -62,6 +62,8 @@
 		onStop?: () => void;
 		onSubmit?: () => void;
 		onSystemPromptClick?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
+		onCompactContext?: () => void;
+		onModelCheck?: () => boolean;
 		onUploadedFileRemove?: (fileId: string) => void;
 		onUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
 		onValueChange?: (value: string) => void;
@@ -82,6 +84,8 @@
 		onFilesAdd,
 		onStop,
 		onSubmit,
+		onCompactContext,
+		onModelCheck,
 		onSystemPromptClick,
 		onUploadedFileRemove,
 		onUploadedFilesChange,
@@ -550,6 +554,8 @@
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}
 				{onStop}
+				{onCompactContext}
+				{onModelCheck}
 				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
 				onMcpPromptClick={showMcpPromptButton ? () => (isPromptPickerOpen = true) : undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
