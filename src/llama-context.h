@@ -56,6 +56,8 @@ struct llama_context {
     void sched_reserve();
 
     void synchronize();
+    ggml_status last_sync_status = GGML_STATUS_SUCCESS;
+
 
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;

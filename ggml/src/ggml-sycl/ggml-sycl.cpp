@@ -465,6 +465,12 @@ struct ggml_backend_sycl_buffer_context {
 };
 
 static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_type_t buft);
+struct ggml_backend_sycl_device_context;
+static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_device(ggml_backend_dev_t dev);
+static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_backend(ggml_backend_t backend);
+static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_context * dev_ctx);
+static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_context * dev_ctx);
+
 
 static bool ggml_backend_buffer_is_sycl(ggml_backend_buffer_t buffer) {
     return buffer->buft->iface.get_name == ggml_backend_sycl_buffer_type_get_name;
@@ -4894,49 +4900,52 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
 static void ggml_backend_sycl_set_tensor_async(ggml_backend_t backend,
                                                ggml_tensor *tensor,
                                                const void *data, size_t offset,
-                                               size_t size) try {
+                                               size_t size) {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
-    GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
-    const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    SYCL_CHECK(CHECK_TRY_ERROR(
-        (stream)->memcpy((char *)tensor->data + offset, data, size)));
-}
-catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
+    try {
+        GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
+        const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            (stream)->memcpy((char *)tensor->data + offset, data, size)));
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_status(dev_ctx);
+        GGML_LOG_ERROR("%s: SYCL set_tensor_async failed: %s\n", __func__, exc.what());
+    }
 }
 
 static void ggml_backend_sycl_get_tensor_async(ggml_backend_t backend,
                                                const ggml_tensor *tensor,
                                                void *data, size_t offset,
-                                               size_t size) try {
+                                               size_t size) {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
-    GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
-    const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
-        data, (const char *)tensor->data + offset, size)));
-}
-catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
+    try {
+        GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
+        const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+        SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
+            data, (const char *)tensor->data + offset, size)));
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_status(dev_ctx);
+        GGML_LOG_ERROR("%s: SYCL get_tensor_async failed: %s\n", __func__, exc.what());
+    }
 }
 
 static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend,
                                                const ggml_tensor *src,
-                                               ggml_tensor *dst) try {
+                                               ggml_tensor *dst) {
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
     bool is_cpy_supported                = dst->buffer->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) &&
                             ggml_backend_buffer_is_sycl(src->buffer);
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
@@ -4949,32 +4958,33 @@ static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend,
         error codes. The original code was commented out and a warning string
         was inserted. You need to rewrite this code.
         */
-        const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-        SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
-            dst->data, src->data, ggml_nbytes(dst))));
-        return true;
+        try {
+            const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+            SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
+                dst->data, src->data, ggml_nbytes(dst))));
+            return true;
+        } catch (sycl::exception const & exc) {
+            ggml_backend_sycl_record_failed_status(dev_ctx);
+            GGML_LOG_ERROR("%s: SYCL cpy_tensor_async failed: %s\n", __func__, exc.what());
+            return false;
+        }
     }
 
     return false;
 }
-catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
-}
 
-static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
+static void ggml_backend_sycl_synchronize(ggml_backend_t backend) {
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
-    const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    SYCL_CHECK(CHECK_TRY_ERROR((stream)->wait()));
-
-    GGML_UNUSED(backend);
-}
-catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
+ 
+    try {
+        const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+        SYCL_CHECK(CHECK_TRY_ERROR((stream)->wait()));
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_status(dev_ctx);
+        GGML_LOG_ERROR("%s: SYCL synchronize failed: %s\n", __func__, exc.what());
+    }
 }
 
 static ggml_status ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
@@ -5105,37 +5115,37 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     return GGML_STATUS_SUCCESS;
 }
 
-static void ggml_backend_sycl_event_record(ggml_backend_t backend, ggml_backend_event_t event)
-try
-{
-    ggml_backend_sycl_context *sycl_ctx =
-        (ggml_backend_sycl_context *)backend->context;
-
-    sycl::event *sycl_event = static_cast<sycl::event *>(event->context);
-
-    const queue_ptr &stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    // Record the current state of the queue
-    SYCL_CHECK(CHECK_TRY_ERROR(*sycl_event = stream->ext_oneapi_submit_barrier()));
+static void ggml_backend_sycl_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
+    ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
+ 
+    try {
+        sycl::event * sycl_event = static_cast<sycl::event *>(event->context);
+        const queue_ptr & stream = sycl_ctx->stream(sycl_ctx->device, 0);
+        // Record the current state of the queue
+        SYCL_CHECK(CHECK_TRY_ERROR(*sycl_event = stream->ext_oneapi_submit_barrier()));
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_status(dev_ctx);
+        GGML_LOG_ERROR("%s: SYCL event record failed: %s\n", __func__, exc.what());
+    }
 }
-catch (sycl::exception const &exc)
-{
-    std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-              << ", line:" << __LINE__ << std::endl;
-    std::exit(1);
-}
-
-static void ggml_backend_sycl_event_wait(ggml_backend_t backend, ggml_backend_event_t event) try {
+ 
+static void ggml_backend_sycl_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
-    sycl::event* sycl_event = static_cast<sycl::event*>(event->context);
-
-    if (ggml_backend_is_sycl(backend)) {
-        SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));
-    } else
-        GGML_ABORT("fatal error");
-} catch (sycl::exception const& exc) {
-    std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-              << ", line:" << __LINE__ << std::endl;
-    std::exit(1);
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
+ 
+    try {
+        sycl::event * sycl_event = static_cast<sycl::event *>(event->context);
+ 
+        if (ggml_backend_is_sycl(backend)) {
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));
+        } else {
+            GGML_ABORT("fatal error");
+        }
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_status(dev_ctx);
+        GGML_LOG_ERROR("%s: SYCL event wait failed: %s\n", __func__, exc.what());
+    }
 }
 
 static ggml_backend_i ggml_backend_sycl_interface = {
@@ -5180,7 +5190,41 @@ struct ggml_backend_sycl_device_context {
     std::string name;
     std::string description;
     int op_offload_min_batch_size;
+    std::atomic<int> pending_status = GGML_STATUS_SUCCESS;
 };
+ 
+static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_device(ggml_backend_dev_t dev) {
+    return dev ? static_cast<ggml_backend_sycl_device_context *>(dev->context) : nullptr;
+}
+ 
+static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_backend(ggml_backend_t backend) {
+    if (backend == nullptr || !ggml_backend_is_sycl(backend)) {
+        return nullptr;
+    }
+ 
+    return ggml_backend_sycl_device_context_from_device(backend->device);
+}
+ 
+static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_context * dev_ctx) {
+    if (dev_ctx != nullptr) {
+        dev_ctx->pending_status.store(GGML_STATUS_SUCCESS);
+    }
+}
+ 
+static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_context * dev_ctx) {
+    if (dev_ctx != nullptr) {
+        dev_ctx->pending_status.store(GGML_STATUS_FAILED);
+    }
+}
+ 
+ggml_status ggml_backend_sycl_consume_last_status(ggml_backend_t backend) {
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
+    if (dev_ctx == nullptr) {
+        return GGML_STATUS_SUCCESS;
+    }
+ 
+    return static_cast<ggml_status>(dev_ctx->pending_status.exchange(GGML_STATUS_SUCCESS));
+}
 
 static const char * ggml_backend_sycl_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *)dev->context;
@@ -5670,16 +5714,18 @@ static void ggml_backend_sycl_device_event_free(ggml_backend_dev_t dev, ggml_bac
 }
 
 
-static void ggml_backend_sycl_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) try {
-  GGML_UNUSED(dev);
-  GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
-
-  sycl::event *sycl_event = static_cast<sycl::event *>(event->context);
-  SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));
-} catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
+static void ggml_backend_sycl_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) {
+    GGML_UNUSED(dev);
+    GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_device(dev);
+ 
+    try {
+        sycl::event * sycl_event = static_cast<sycl::event *>(event->context);
+        SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_status(dev_ctx);
+        GGML_LOG_ERROR("%s: SYCL device event synchronize failed: %s\n", __func__, exc.what());
+    }
 }
 
 static const ggml_backend_device_i ggml_backend_sycl_device_interface = {

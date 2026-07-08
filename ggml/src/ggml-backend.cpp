@@ -12,6 +12,39 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
+#ifdef GGML_USE_SYCL
+#include "ggml-sycl.h"
+#endif
+
+#ifdef GGML_USE_SYCL
+static enum ggml_status ggml_backend_maybe_consume_sycl_status(ggml_backend_t backend) {
+    if (backend == NULL || !ggml_backend_is_sycl(backend)) {
+        return GGML_STATUS_SUCCESS;
+    }
+
+    return ggml_backend_sycl_consume_last_status(backend);
+}
+#else
+static enum ggml_status ggml_backend_maybe_consume_sycl_status(ggml_backend_t backend) {
+    GGML_UNUSED(backend);
+    return GGML_STATUS_SUCCESS;
+}
+#endif
+static enum ggml_status ggml_backend_sched_maybe_consume_sycl_status(ggml_backend_sched_t sched) {
+    if (sched == NULL) {
+        return GGML_STATUS_SUCCESS;
+    }
+
+    const int n_backends = ggml_backend_sched_get_n_backends(sched);
+    for (int i = 0; i < n_backends; ++i) {
+        enum ggml_status status = ggml_backend_maybe_consume_sycl_status(ggml_backend_sched_get_backend(sched, i));
+        if (status != GGML_STATUS_SUCCESS) {
+            return status;
+        }
+    }
+
+    return GGML_STATUS_SUCCESS;
+}
 
 #include <assert.h>
 #include <limits.h>
@@ -444,7 +477,10 @@ enum ggml_status ggml_backend_graph_plan_compute(ggml_backend_t backend, ggml_ba
 enum ggml_status ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph);
     ggml_backend_synchronize(backend);
-    return err;
+    if (err != GGML_STATUS_SUCCESS) {
+        return err;
+    }
+    return ggml_backend_maybe_consume_sycl_status(backend);
 }
 
 enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
@@ -1561,8 +1597,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                    enum ggml_status sync_status = ggml_backend_maybe_consume_sycl_status(split_backend);
+                    if (sync_status != GGML_STATUS_SUCCESS) {
+                        return sync_status;
+                    }
                 } else {
                     ggml_backend_synchronize(split_backend);
+                    enum ggml_status sync_status = ggml_backend_maybe_consume_sycl_status(split_backend);
+                    if (sync_status != GGML_STATUS_SUCCESS) {
+                        return sync_status;
+                    }
                 }
                 ggml_backend_tensor_copy(input, input_cpy);
             } else {
@@ -1571,6 +1615,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
                 } else {
                     ggml_backend_synchronize(split_backend);
+                }
+                enum ggml_status sync_status = ggml_backend_maybe_consume_sycl_status(split_backend);
+                if (sync_status != GGML_STATUS_SUCCESS) {
+                    return sync_status;
                 }
 
                 // when offloading MoE weights, we can reduce the amount of data copied by copying only the experts that are used
@@ -1586,7 +1634,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     const size_t expert_size = node->op == GGML_OP_MUL_MAT_ID ? input->nb[2] : input->nb[1];
 
                     ggml_backend_synchronize(input_backend);
-
+                    enum ggml_status input_status = ggml_backend_maybe_consume_sycl_status(input_backend);
+                    if (input_status != GGML_STATUS_SUCCESS) {
+                        return input_status;
+                    }
                     // get the ids
                     ggml_tensor * ids_tensor = node->src[2];
                     ggml_backend_t ids_backend = split_backend;
@@ -1605,7 +1656,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
                         ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
                         ggml_backend_synchronize(ids_backend);
-
+                        enum ggml_status ids_status = ggml_backend_maybe_consume_sycl_status(ids_backend);
+                        if (ids_status != GGML_STATUS_SUCCESS) {
+                            return ids_status;
+                        }
                         // find the used experts
                         used_ids.clear();
                         used_ids.resize(ggml_bitset_size(n_expert));
@@ -1663,10 +1717,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                     if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
                         ggml_backend_synchronize(input_backend);
+                        enum ggml_status input_status = ggml_backend_maybe_consume_sycl_status(input_backend);
+                        if (input_status != GGML_STATUS_SUCCESS) {
+                            return input_status;
+                        }
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                             ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                         } else {
                             ggml_backend_synchronize(split_backend);
+                        }
+                        enum ggml_status split_status = ggml_backend_maybe_consume_sycl_status(split_backend);
+                        if (split_status != GGML_STATUS_SUCCESS) {
+                            return split_status;
                         }
                         ggml_backend_tensor_copy(input, input_cpy);
                     }
@@ -1704,6 +1766,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                 // TODO: pass backend to the callback, then the user can decide if they want to synchronize
                 ggml_backend_synchronize(split_backend);
+                enum ggml_status sync_status = ggml_backend_maybe_consume_sycl_status(split_backend);
+                if (sync_status != GGML_STATUS_SUCCESS) {
+                    return sync_status;
+                }
 
                 if (need && !sched->callback_eval(t, false, sched->callback_eval_user_data)) {
                     break;
@@ -1717,6 +1783,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         if (split->n_inputs > 0) {
             if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                 ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
+                enum ggml_status event_status = ggml_backend_maybe_consume_sycl_status(split_backend);
+                if (event_status != GGML_STATUS_SUCCESS) {
+                    return event_status;
+                }
             }
         }
     }
@@ -1883,7 +1953,10 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
 enum ggml_status ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     enum ggml_status err = ggml_backend_sched_graph_compute_async(sched, graph);
     ggml_backend_sched_synchronize(sched);
-    return err;
+    if (err != GGML_STATUS_SUCCESS) {
+        return err;
+    }
+    return ggml_backend_sched_maybe_consume_sycl_status(sched);
 }
 
 enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
