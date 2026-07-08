@@ -1,6 +1,9 @@
 #include "models.h"
 
 // DSpark = DFlash backbone + a semi-autoregressive Markov head applied in-graph by the decoder
+//
+// TODO: only Qwen3-style backbones are supported for now; other backbones (e.g. Gemma4)
+//       need their own conversion path and graph tweaks in the shared DFlash code
 
 void llama_model_dspark::load_arch_hparams(llama_model_loader & ml) {
     llama_model_dflash::load_arch_hparams(ml);
@@ -20,6 +23,9 @@ void llama_model_dspark::load_arch_tensors(llama_model_loader & ml) {
     dspark_markov_w1 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight"), { R, n_vocab }, 0);
     dspark_markov_w2 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight"), { R, n_vocab }, 0);
 
+    // TODO: the confidence head is loaded but not yet used by the graph -- it should gate
+    //       the draft length per block (early-exit on low confidence) instead of always
+    //       drafting the full block
     dspark_conf_proj   = create_tensor(tn(LLM_TENSOR_DSPARK_CONF_PROJ, "weight"), { n_embd + R, 1 }, TENSOR_NOT_REQUIRED);
     dspark_conf_proj_b = create_tensor(tn(LLM_TENSOR_DSPARK_CONF_PROJ, "bias"),   { 1 },             TENSOR_NOT_REQUIRED);
 }
@@ -102,6 +108,8 @@ llama_model_dspark::graph<false>::graph(const llama_model & model, const llm_gra
     res->add_input(std::move(inp));
 
     ggml_tensor * cat = nullptr;
+    // TODO: the in-graph chain is greedy (argmax); sampling params affect only the final
+    //       token pick, not the Markov conditioning path
     for (int64_t i = 0; i < bs; ++i) {
         ggml_tensor * bias = ggml_mul_mat(ctx0, w2, ggml_get_rows(ctx0, w1, prev)); // [n_vocab, n_blocks]
 
