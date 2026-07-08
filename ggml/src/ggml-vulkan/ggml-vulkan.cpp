@@ -3759,13 +3759,6 @@ static std::vector<GpuPipelineConfig> gpu_pipeline_configs = {
         update_subgroup_params_amd
     },
     {
-        vk_device_architecture::INTEL_XE1,
-        {
-        },
-        INTEL_DEFAULT_SUBGROUP_SIZE,
-        update_subgroup_params_intel
-    },
-    {
         vk_device_architecture::INTEL_XE2,
         {
             xe2_pipelines,
