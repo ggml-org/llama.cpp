@@ -2,7 +2,7 @@
 #include "llama-memory-recurrent.h"
 
 void llama_model_qwen35moe::load_arch_hparams(llama_model_loader & ml) {
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
+    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp_impl, false);
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
 
@@ -57,7 +57,7 @@ void llama_model_qwen35moe::load_arch_tensors(llama_model_loader & ml) {
     auto load_block_trunk = [&](int il, int flags) {
         auto & layer = layers[il];
 
-        const int64_t n_ff_exp   = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+        const int64_t n_ff_exp   = hparams.n_ff_exp_impl ? hparams.n_ff_exp_impl : n_ff / n_expert_used;
         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
 
         // Calculate dimensions from hyperparameters
@@ -109,7 +109,7 @@ void llama_model_qwen35moe::load_arch_tensors(llama_model_loader & ml) {
     auto load_block_mtp = [&](int il) {
         auto & layer = layers[il];
 
-        const int64_t n_ff_exp   = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+        const int64_t n_ff_exp   = hparams.n_ff_exp_impl ? hparams.n_ff_exp_impl : n_ff / n_expert_used;
         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
 
         // MTP block looks like a full-attention Qwen3.5 decoder block with MoE FFN.
