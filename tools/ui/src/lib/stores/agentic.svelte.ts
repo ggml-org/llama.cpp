@@ -187,23 +187,23 @@ class AgenticStore {
 	}
 
 	isRunning(conversationId: string): boolean {
-		return this.getSession(conversationId).isRunning;
+		return this._sessions.get(conversationId)?.isRunning ?? false;
 	}
 
 	currentTurn(conversationId: string): number {
-		return this.getSession(conversationId).currentTurn;
+		return this._sessions.get(conversationId)?.currentTurn ?? 0;
 	}
 
 	totalToolCalls(conversationId: string): number {
-		return this.getSession(conversationId).totalToolCalls;
+		return this._sessions.get(conversationId)?.totalToolCalls ?? 0;
 	}
 
 	lastError(conversationId: string): Error | null {
-		return this.getSession(conversationId).lastError;
+		return this._sessions.get(conversationId)?.lastError ?? null;
 	}
 
 	streamingToolCall(conversationId: string): { name: string; arguments: string } | null {
-		return this.getSession(conversationId).streamingToolCall;
+		return this._sessions.get(conversationId)?.streamingToolCall ?? null;
 	}
 
 	pendingPermissionRequest(
