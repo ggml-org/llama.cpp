@@ -2202,6 +2202,41 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
+        tst.test(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .json_schema(invoice_schema)
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .json_schema(invoice_schema)
+            .expect(message_assist_call)
+            .run();
+
         // tool call segment in reasoning
         tst.test(
                "Let's call a tool: <tool_call>\n"
@@ -2791,6 +2826,17 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "]<|END_ACTION|>")
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .tools({ special_function_tool })
+            .expect(message_assist_thoughts_call_idx)
+            .run();
+
+        tst.test(
+               "<|START_THINKING|>I'm\nthinking<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .json_schema(invoice_schema)
             .expect(message_assist_thoughts_call_idx)
             .run();
 
@@ -4792,6 +4838,11 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .expect(message_assist_call)
             .expect_reconstruction()
+            .run();
+        tst.test("<function=special_function>{\"arg1\": 1}</function>")
+            .tools({ special_function_tool })
+            .json_schema(invoice_schema)
+            .expect(message_assist_call)
             .run();
 
         // Continuation tests

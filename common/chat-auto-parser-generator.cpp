@@ -135,12 +135,30 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs, cons
         bool pure_content        = reasoning.mode == reasoning_mode::NONE;
 
         if (has_response_format) {
-            auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
-            parser = ctx.reasoning_parser + p.space() + p.choice({
-                p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
-                p.space() + response_format  + p.space()
-            }) + p.end();
-            pure_content = false;
+            auto response_format_parser = [&]() {
+                auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
+                return ctx.reasoning_parser + p.space() + p.choice({
+                    p.literal("```json") + p.space() + response_format + p.space() + p.literal("```"),
+                    p.space() + response_format + p.space()
+                }) + p.end();
+            };
+            if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+                if (!jinja_caps.supports_tool_calls || tools.format.mode == tool_format::NONE) {
+                    throw std::invalid_argument("tools + response_format requires a template with detectable tool-call format");
+                }
+                if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
+                    parser = tools.build_parser(ctx, false, true);
+                } else {
+                    parser = p.choice({
+                        tools.build_parser(ctx, false, true),
+                        response_format_parser(),
+                    });
+                }
+                pure_content = false;
+            } else {
+                parser = response_format_parser();
+                pure_content = false;
+            }
         } else if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && jinja_caps.supports_tool_calls) {
             parser = tools.build_parser(ctx);
             pure_content = false;
@@ -195,13 +213,17 @@ common_peg_parser analyze_content::build_optional_wrapped(parser_build_context &
 }
 
 common_peg_parser analyze_tools::build_parser(parser_build_context & ctx) const {
+    return build_parser(ctx, true, false);
+}
+
+common_peg_parser analyze_tools::build_parser(parser_build_context & ctx, bool allow_content_before_tools, bool force_tool_calls) const {
     switch (format.mode) {
         case tool_format::JSON_NATIVE:
-            return build_tool_parser_json_native(ctx);
+            return build_tool_parser_json_native(ctx, allow_content_before_tools, force_tool_calls);
         case tool_format::TAG_WITH_JSON:
-            return build_tool_parser_tag_json(ctx);
+            return build_tool_parser_tag_json(ctx, allow_content_before_tools, force_tool_calls);
         case tool_format::TAG_WITH_TAGGED:
-            return build_tool_parser_tag_tagged(ctx);
+            return build_tool_parser_tag_tagged(ctx, allow_content_before_tools, force_tool_calls);
         default:
             LOG_ERR("[ERROR] Template seems to support tool calls, but failed to determine tool format. Tool calling will not work properly. "
                 "Check for a fixed template for your model in the models/templates directory of your llama.cpp installation or "
@@ -210,7 +232,7 @@ common_peg_parser analyze_tools::build_parser(parser_build_context & ctx) const 
     }
 }
 
-common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_context & ctx) const {
+common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_context & ctx, bool allow_content_before_tools, bool force_tool_calls) const {
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
 
@@ -228,18 +250,20 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
     if (format.section_start.empty() && !format.per_call_start.empty()) {
         auto single_tool_parser = p.standard_json_tools(
             format.per_call_start, format.per_call_end, inputs.tools, inputs.parallel_tool_calls,
-            inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
+            force_tool_calls || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED,
+            name_field, args_field, format.tools_array_wrapped,
             format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger);
         tools_parser = p.trigger_rule("tool-calls", p.one_or_more(single_tool_parser + p.space()));
     } else {
         tools_parser = p.standard_json_tools(
             format.section_start, format.section_end, inputs.tools, inputs.parallel_tool_calls,
-            inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
+            force_tool_calls || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED,
+            name_field, args_field, format.tools_array_wrapped,
             format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger);
     }
 
     // Handle content wrappers if present
-    if (ctx.content && ctx.content->is_always_wrapped()) {
+    if (allow_content_before_tools && ctx.content && ctx.content->is_always_wrapped()) {
         auto wrapped_content = ctx.content->build_optional_wrapped(ctx);
         return ctx.reasoning_parser + wrapped_content + tools_parser + p.end();
     }
@@ -251,7 +275,8 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         tool_start = format.per_call_start;
     }
 
-    return ctx.reasoning_parser + p.optional(p.content(p.until(tool_start))) + tools_parser + p.end();
+    auto content_before_tools = allow_content_before_tools ? p.optional(p.content(p.until(tool_start))) : p.eps();
+    return ctx.reasoning_parser + content_before_tools + tools_parser + p.end();
 }
 
 common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, const std::string & name,
@@ -296,7 +321,7 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, 
     return func_parser;
 }
 
-common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context & ctx) const {
+common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context & ctx, bool allow_content_before_tools, bool force_tool_calls) const {
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
 
@@ -332,7 +357,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
         tool_choice |= p.rule("tool-" + name, func_parser);
     });
 
-    auto require_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    auto require_calls = force_tool_calls || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     common_peg_parser tool_calls = p.eps();
 
@@ -364,10 +389,11 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
     std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
-    return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
+    auto        content              = allow_content_before_tools ? p.optional(p.content(content_before_tools)) : p.eps();
+    return ctx.reasoning_parser + content + tool_calls + p.end();
 }
 
-common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_context & ctx) const {
+common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_context & ctx, bool allow_content_before_tools, bool force_tool_calls) const {
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
 
@@ -460,7 +486,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         tool_choice |= p.rule("tool-" + name, func_parser);
     });
 
-    auto require_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    auto require_tools = force_tool_calls || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     common_peg_parser tool_calls = p.eps();
 
@@ -495,7 +521,8 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
     std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
-    return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
+    auto        content              = allow_content_before_tools ? p.optional(p.content(content_before_tools)) : p.eps();
+    return ctx.reasoning_parser + content + tool_calls + p.end();
 }
 
 }  // namespace autoparser
