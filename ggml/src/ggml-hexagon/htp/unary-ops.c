@@ -314,41 +314,43 @@ static void hvx_fast_norm_f32(const uint8_t * restrict src,
     }
 }
 
+#define htp_unary_op_preamble                                         \
+    int32_t * op_params = uctx->octx->op_params;                      \
+    const uint32_t ne0 = uctx->nc;                                    \
+    const size_t src0_row_size_aligned = uctx->src0_row_size_aligned; \
+    const size_t dst_row_size_aligned = uctx->dst_row_size_aligned;
+
 static void scale_f32(const float * restrict src,
                       float * restrict dst,
-                      uint8_t * restrict spad,
                       const uint32_t num_rows,
-                      const uint32_t row_elems,
-                      const size_t   row_size,
-                      int32_t *      op_params) {
+                      const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
     float scale = 0.f;
     float bias  = 0.f;
     memcpy(&scale, &op_params[0], sizeof(float));
     memcpy(&bias,  &op_params[1], sizeof(float));
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
-        hvx_scale_offset_f32_aa((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems, scale, bias);
+        hvx_scale_offset_f32_aa((uint8_t *) dst_local, (const uint8_t *) src_local, ne0, scale, bias);
     }
 }
 
 static void rms_norm_f32(const float * restrict src,
                          float * restrict dst,
-                         uint8_t * restrict spad,
                          const uint32_t num_rows,
-                         const uint32_t row_elems,
-                         const size_t   row_size,
-                         int32_t *      op_params) {
+                         const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
     float epsilon = 0.f;
     memcpy(&epsilon, op_params, sizeof(float));
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
-        hvx_fast_rms_norm_f32((const uint8_t *) src_local, (uint8_t *) dst_local, spad, row_elems, epsilon);
+        hvx_fast_rms_norm_f32((const uint8_t *) src_local, (uint8_t *) dst_local, NULL, ne0, epsilon);
     }
 }
 
@@ -356,135 +358,116 @@ static void rms_norm_mul_f32(const float * restrict src,
                              const float * restrict weight,
                              float * restrict dst,
                              const uint32_t num_rows,
-                             const uint32_t row_elems,
-                             const size_t   row_size,
-                             const size_t   weight_row_size,
-                             int32_t *      op_params,
-                             bool           broadcast_weight) {
+                             const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
     float epsilon = 0.f;
     memcpy(&epsilon, op_params, sizeof(float));
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
-        const uint8_t * restrict w_local   = (const uint8_t *)weight + (broadcast_weight ? 0 : ir * weight_row_size);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        const uint8_t * restrict w_local   = (const uint8_t *)weight + (uctx->broadcast_weight ? 0 : ir * uctx->src1_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
-        hvx_fast_rms_norm_mul_f32(src_local, w_local, dst_local, row_elems, epsilon);
+        hvx_fast_rms_norm_mul_f32(src_local, w_local, dst_local, ne0, epsilon);
     }
 }
 
 static void norm_f32(const float * restrict src,
-                         float * restrict dst,
-                         uint8_t * restrict spad,
-                         const uint32_t num_rows,
-                         const uint32_t row_elems,
-                         const size_t   row_size,
-                         int32_t *      op_params) {
+                     float * restrict dst,
+                     const uint32_t num_rows,
+                     const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
     float epsilon = 0.f;
     memcpy(&epsilon, op_params, sizeof(float));
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
-        hvx_fast_norm_f32((const uint8_t *) src_local, (uint8_t *) dst_local, spad, row_elems, epsilon);
+        hvx_fast_norm_f32((const uint8_t *) src_local, (uint8_t *) dst_local, NULL, ne0, epsilon);
     }
 }
 
 static void sqr_f32(const float * restrict src,
                     float * restrict dst,
-                    uint8_t * restrict spad,
                     const uint32_t num_rows,
-                    const uint32_t row_elems,
-                    const size_t   row_size,
-                    int32_t *      op_params) {
+                    const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
-        hvx_sqr_f32_aa((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems);
+        hvx_sqr_f32_aa((uint8_t *) dst_local, (const uint8_t *) src_local, ne0);
     }
 }
 
 static void sqrt_f32(const float * restrict src,
                      float * restrict dst,
-                     uint8_t * restrict spad,
                      const uint32_t num_rows,
-                     const uint32_t row_elems,
-                     const size_t   row_size,
-                     int32_t *      op_params) {
+                     const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
-        hvx_sqrt_f32_aa((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems);
+        hvx_sqrt_f32_aa((uint8_t *) dst_local, (const uint8_t *) src_local, ne0);
     }
 }
 
 static void neg_f32(const float * restrict src,
                     float * restrict dst,
-                    uint8_t * restrict spad,
                     const uint32_t num_rows,
-                    const uint32_t row_elems,
-                    const size_t   row_size,
-                    int32_t *      op_params) {
+                    const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
-        hvx_scale_f32_aa(dst_local, src_local, row_elems, -1.0f);
+        hvx_scale_f32_aa(dst_local, src_local, ne0, -1.0f);
     }
 }
 
 static void exp_f32(const float * restrict src,
                     float * restrict dst,
-                    uint8_t * restrict spad,
                     const uint32_t num_rows,
-                    const uint32_t row_elems,
-                    const size_t   row_size,
-                    int32_t *      op_params) {
+                    const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
-        hvx_exp_f32(dst_local, src_local, row_elems, false);
+        hvx_exp_f32(dst_local, src_local, ne0, false);
     }
 }
 
 static void sigmoid_f32(const float * restrict src,
                         float * restrict dst,
-                        uint8_t * restrict spad,
                         const uint32_t num_rows,
-                        const uint32_t row_elems,
-                        const size_t   row_size,
-                        int32_t *      op_params) {
+                        const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
-        hvx_sigmoid_f32_aa(dst_local, src_local, row_elems);
+        hvx_sigmoid_f32_aa(dst_local, src_local, ne0);
     }
 }
 
 static void tri_f32(const float * restrict src,
                     float * restrict dst,
-                    uint8_t * restrict spad,
                     const uint32_t num_rows,
-                    const uint32_t row_elems,
-                    const size_t   row_size,
-                    int32_t *      op_params,
                     const uint32_t ir,
                     const struct htp_unary_context * uctx) {
-
+    htp_unary_op_preamble;
     const int32_t ttype = op_params[0];
     const HVX_Vector zero = hvx_vec_splat_f32(0.0f);
-    const uint32_t nvec  = row_elems / VLEN_FP32;
-    const uint32_t nloe  = row_elems % VLEN_FP32;
+    const uint32_t nvec  = ne0 / VLEN_FP32;
+    const uint32_t nloe  = ne0 % VLEN_FP32;
 
     const uint32_t ne01 = uctx->octx->src[0]->ne[1];
 
@@ -492,8 +475,8 @@ static void tri_f32(const float * restrict src,
         const uint32_t abs_row = ir + b;
         const uint32_t i01     = abs_row % ne01;
 
-        const HVX_Vector * restrict v_src = (const HVX_Vector *) ((const uint8_t *) src + b * row_size);
-        HVX_Vector * restrict v_dst       = (HVX_Vector *) ((uint8_t *) dst + b * row_size);
+        const HVX_Vector * restrict v_src = (const HVX_Vector *) ((const uint8_t *) src + b * src0_row_size_aligned);
+        HVX_Vector * restrict v_dst       = (HVX_Vector *) ((uint8_t *) dst + b * dst_row_size_aligned);
 
         uint32_t boundary;
         int      keep_left;
@@ -504,7 +487,7 @@ static void tri_f32(const float * restrict src,
             case 3: boundary = i01;     keep_left = 1; break;  // keep col < row
             default: boundary = 0; keep_left = 0; break;
         }
-        if (boundary > row_elems) boundary = row_elems;
+        if (boundary > ne0) boundary = ne0;
 
         // Full HVX vectors — each starts at a 128-byte aligned offset
         for (uint32_t i = 0; i < nvec; i++) {
@@ -533,25 +516,25 @@ static void tri_f32(const float * restrict src,
 
         // Tail elements (row_elems not a multiple of VLEN_FP32)
         if (nloe > 0) {
-            const uint32_t vec_start = nvec * VLEN_FP32;
-            const uint32_t vec_end   = vec_start + nloe;
+            const uint32_t abs_start = nvec * VLEN_FP32;
+            const uint32_t abs_end   = abs_start + nloe;
             HVX_Vector     tail_val;
             if (keep_left) {
-                if (vec_end <= boundary) {
+                if (abs_end <= boundary) {
                     tail_val = v_src[nvec];
-                } else if (vec_start >= boundary) {
+                } else if (abs_start >= boundary) {
                     tail_val = zero;
                 } else {
-                    HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - vec_start) * sizeof(float));
+                    HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - abs_start) * sizeof(float));
                     tail_val            = Q6_V_vmux_QVV(mask, v_src[nvec], zero);
                 }
             } else {
-                if (vec_end <= boundary) {
+                if (abs_end <= boundary) {
                     tail_val = zero;
-                } else if (vec_start >= boundary) {
+                } else if (abs_start >= boundary) {
                     tail_val = v_src[nvec];
                 } else {
-                    HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - vec_start) * sizeof(float));
+                    HVX_VectorPred mask = Q6_Q_vsetq_R((boundary - abs_start) * sizeof(float));
                     tail_val            = Q6_V_vmux_QVV(mask, zero, v_src[nvec]);
                 }
             }
@@ -562,18 +545,16 @@ static void tri_f32(const float * restrict src,
 
 static void softplus_f32(const float * restrict src,
                          float * restrict dst,
-                         uint8_t * restrict spad,
                          const uint32_t num_rows,
-                         const uint32_t row_elems,
-                         const size_t   row_size,
-                         int32_t *      op_params) {
+                         const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
     // softplus(x) = log(1 + exp(x))
     // Match CPU reference: ggml_compute_softplus_f32() in ggml-impl.h
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const float * restrict src_f = (const float *)((const uint8_t *)src + (ir * row_size));
-        float * restrict dst_f       = (float *)((uint8_t *)dst + (ir * row_size));
+        const float * restrict src_f = (const float *)((const uint8_t *)src + (ir * src0_row_size_aligned));
+        float * restrict dst_f       = (float *)((uint8_t *)dst + (ir * dst_row_size_aligned));
 
-        for (uint32_t i = 0; i < row_elems; i++) {
+        for (uint32_t i = 0; i < ne0; i++) {
             float x = src_f[i];
             // For x > 20: softplus(x) ≈ x (avoids exp overflow)
             dst_f[i] = (x > 20.0f) ? x : logf(1.0f + expf(x));
@@ -640,226 +621,176 @@ static void hvx_fast_l2_norm_f32(const uint8_t * restrict src,
 
 static void l2_norm_f32(const float * restrict src,
                         float * restrict dst,
-                        uint8_t * restrict spad,
                         const uint32_t num_rows,
-                        const uint32_t row_elems,
-                        const size_t   row_size,
-                        int32_t *      op_params) {
+                        const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
     float epsilon = 0.f;
     memcpy(&epsilon, op_params, sizeof(float));
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const float * restrict src_f = (const float *)((const uint8_t *)src + (ir * row_size));
-        float * restrict dst_f       = (float *)((uint8_t *)dst + (ir * row_size));
+        const float * restrict src_f = (const float *)((const uint8_t *)src + (ir * src0_row_size_aligned));
+        float * restrict dst_f       = (float *)((uint8_t *)dst + (ir * dst_row_size_aligned));
 
-        hvx_fast_l2_norm_f32((const uint8_t *)src_f, (uint8_t *)dst_f, spad, row_elems, epsilon);
+        hvx_fast_l2_norm_f32((const uint8_t *)src_f, (uint8_t *)dst_f, NULL, ne0, epsilon);
     }
 }
 
 static void tanh_f32(const float * restrict src,
                      float * restrict dst,
-                     uint8_t * restrict spad,
                      const uint32_t num_rows,
-                     const uint32_t row_elems,
-                     const size_t   row_size,
-                     int32_t *      op_params) {
+                     const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
-        hvx_tanh_f32_aa(dst_local, src_local, row_elems);
+        hvx_tanh_f32_aa(dst_local, src_local, ne0);
     }
 }
 
-static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * data) {
-    const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
-    struct htp_ops_context * octx = uctx->octx;
-    const struct htp_tensor * src = octx->src[0];
-    const struct htp_tensor * dst = octx->dst;
-
-    htp_unary_preamble;
-
-    int                       htp_op = octx->op;
-    int32_t *                 op_params = octx->op_params;
-    uint32_t                  src0_nrows_per_thread = uctx->src0_nrows_per_thread;
-
-    const size_t src0_data_row_size = uctx->src0_data_row_size;
-    const size_t dst_data_row_size  = uctx->dst_data_row_size;
-
-    const size_t src0_row_size_aligned = uctx->src0_row_size_aligned;
-    const size_t dst_row_size_aligned  = uctx->dst_row_size_aligned;
-
-    const uint32_t src0_nrows = uctx->src0_nrows;
-    const uint32_t src0_start_row = src0_nrows_per_thread * ith;
-    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
-
-    // no work for this thread
-    if (src0_start_row >= src0_end_row) {
-        return;
-    }
-
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
-
-    const uint8_t * restrict data_src = uctx->data_src0;
-    const uint8_t * restrict data_src1 = uctx->data_src1;
-    uint8_t * restrict       data_dst = uctx->data_dst;
-
-    const struct htp_tensor * src1 = (htp_op == HTP_OP_RMS_NORM_MUL) ? octx->src[1] : NULL;
-    const uint32_t nb11 = src1 ? src1->nb[1] : 0;
-    const uint32_t nb12 = src1 ? src1->nb[2] : 0;
-    const uint32_t nb13 = src1 ? src1->nb[3] : 0;
-    const bool src1_contig = src1 ? ((nb12 == (size_t)ne01 * nb11) && (nb13 == (size_t)ne02 * nb12)) : false;
-
-    uint8_t * src0_vtcm_data = uctx->vtcm_src0 + (ith * uctx->vtcm_src0_size_per_thread);
-    uint8_t * src1_vtcm_data = uctx->vtcm_src1 ? (uctx->vtcm_src1 + (ith * uctx->vtcm_src1_size_per_thread)) : NULL;
-    uint8_t * dst_vtcm_data  = uctx->vtcm_dst + (ith * uctx->vtcm_dst_size_per_thread);
-
-    size_t src0_vtcm_half_size = uctx->src0_vtcm_half_size;
-    size_t src1_vtcm_half_size = uctx->src1_vtcm_half_size;
-    size_t dst_vtcm_half_size  = uctx->dst_vtcm_half_size;
-
-    // Non-contiguous tensors have gaps at dim-2/3 boundaries that a single-stride
-    // 2D DMA descriptor cannot span. Clamp BLOCK to ne1 (one dim-1 slice) so every
-    // transfer stays within a nb1-uniform region. Skipped for contiguous tensors.
-    const bool src0_contig = (nb02 == (size_t)ne01 * nb01) &&
-                             (nb03 == (size_t)ne02 * nb02);
-    const bool dst_contig  = (nb2  == (size_t)ne1  * nb1)  &&
-                             (nb3  == (size_t)ne2  * nb2);
-    const uint32_t src0_max_block = src0_contig ? uctx->block : MIN((uint32_t)uctx->block, ne01);
-    const uint32_t dst_max_block  = dst_contig  ? uctx->block : MIN((uint32_t)uctx->block, ne1);
-    const uint32_t BLOCK = MIN(src0_max_block, dst_max_block);
-    if (BLOCK == 0) {
-        FARF(ERROR, "unary-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n",
-             uctx->vtcm_src0_size_per_thread, src0_row_size_aligned);
-        return;
-    }
-
-    dma_queue * dma_queue = octx->ctx->dma[ith];
-
-    // If weight is broadcasted, load it once per thread at the beginning of execution
-    if (htp_op == HTP_OP_RMS_NORM_MUL && uctx->broadcast_weight) {
-        dma_queue_push(dma_queue, dma_make_ptr(src1_vtcm_data, data_src1), uctx->src1_row_size_aligned, 0, uctx->src1_data_row_size, 1);
-        dma_queue_flush(dma_queue);
-    }
-
-    for (uint32_t ir = src0_start_row, vtcm_idx = 0; ir < src0_end_row && vtcm_idx < 2; vtcm_idx++) {
-        const uint32_t block_size = unary_block_size(ir, src0_end_row, BLOCK, src0_contig, dst_contig, ne01, ne1);
-
-        // Dummy DMA transation for sequencing (interleaving dst,src,dst,...)
-        dma_queue_push(dma_queue,
-            dma_make_ptr(data_dst, dst_vtcm_data + (vtcm_idx * dst_vtcm_half_size)),
-            nb1, dst_row_size_aligned, dst_data_row_size, 0);
-
-        const size_t src0_off = src0_contig ? (ir * nb01) : unary_row_offset(ir, ne01, ne02, nb01, nb02, nb03);
-        dma_queue_push(dma_queue,
-            dma_make_ptr(src0_vtcm_data + (vtcm_idx * src0_vtcm_half_size), data_src + src0_off),
-            src0_row_size_aligned, nb01, src0_data_row_size, block_size);
-
-        if (htp_op == HTP_OP_RMS_NORM_MUL && !uctx->broadcast_weight) {
-            const size_t src1_off = src1_contig ? (ir * nb11) : unary_row_offset(ir, ne01, ne02, nb11, nb12, nb13);
-            dma_queue_push(dma_queue,
-                dma_make_ptr(src1_vtcm_data + (vtcm_idx * src1_vtcm_half_size), data_src1 + src1_off),
-                uctx->src1_row_size_aligned, nb11, uctx->src1_data_row_size, block_size);
-        }
-
-        ir += block_size;
-    }
-
-    for (uint32_t ir = src0_start_row; ir < src0_end_row; ) {
-        const uint32_t block_size = unary_block_size(ir, src0_end_row, BLOCK, src0_contig, dst_contig, ne01, ne1);
-
-        float * dst_vtcm  = (float *) dma_queue_pop(dma_queue).src;
-        float * src0_vtcm = (float *) dma_queue_pop(dma_queue).dst;
-        float * src1_vtcm = NULL;
-        if (htp_op == HTP_OP_RMS_NORM_MUL && !uctx->broadcast_weight) {
-            src1_vtcm = (float *) dma_queue_pop(dma_queue).dst;
-        }
-
-        // Process block in VTCM
-        switch (htp_op) {
-            case HTP_OP_NORM:
-                norm_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne0, src0_row_size_aligned, op_params);
-                break;
-            case HTP_OP_RMS_NORM:
-                rms_norm_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne0, src0_row_size_aligned, op_params);
-                break;
-            case HTP_OP_RMS_NORM_MUL:
-                {
-                    const float * w_ptr = uctx->broadcast_weight ? (const float *) src1_vtcm_data : src1_vtcm;
-                    rms_norm_mul_f32(src0_vtcm, w_ptr, dst_vtcm, block_size, ne0, src0_row_size_aligned, uctx->src1_row_size_aligned, op_params, uctx->broadcast_weight);
-                }
-                break;
-            case HTP_OP_SCALE:
-                scale_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne0, src0_row_size_aligned, op_params);
-                break;
-            case HTP_OP_SQR:
-                sqr_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne0, src0_row_size_aligned, op_params);
-                break;
-            case HTP_OP_SQRT:
-                sqrt_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne0, src0_row_size_aligned, op_params);
-                break;
-            case HTP_OP_UNARY_NEG:
-                neg_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne0, src0_row_size_aligned, op_params);
-                break;
-            case HTP_OP_UNARY_EXP:
-                exp_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne0, src0_row_size_aligned, op_params);
-                break;
-            case HTP_OP_UNARY_SIGMOID:
-                sigmoid_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne0, src0_row_size_aligned, op_params);
-                break;
-            case HTP_OP_UNARY_SOFTPLUS:
-                softplus_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne0, src0_row_size_aligned, op_params);
-                break;
-            case HTP_OP_UNARY_TANH:
-                tanh_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne0, src0_row_size_aligned, op_params);
-                break;
-            case HTP_OP_L2_NORM:
-                l2_norm_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne0, src0_row_size_aligned, op_params);
-                break;
-            case HTP_OP_TRI:
-                tri_f32(src0_vtcm, dst_vtcm, NULL, block_size, ne00, src0_row_size_aligned, op_params, ir, uctx);
-                break;
-            default:
-                break;
-        }
-
-        const size_t dst_off = dst_contig ? (ir * nb1) : unary_row_offset(ir, ne1, ne2, nb1, nb2, nb3);
-        dma_queue_push(dma_queue,
-            dma_make_ptr(data_dst + dst_off, dst_vtcm),
-            nb1, dst_row_size_aligned, dst_data_row_size, block_size);
-
-        // prefetch N+2 loop iteration if any
-        const uint32_t next_ir = ir + block_size;
-        if (next_ir < src0_end_row) {
-            const uint32_t next_block_size = unary_block_size(next_ir, src0_end_row, BLOCK, src0_contig, dst_contig, ne01, ne1);
-            const uint32_t pref_ir = next_ir + next_block_size;
-            if (pref_ir < src0_end_row) {
-                const uint32_t pref_block_size = unary_block_size(pref_ir, src0_end_row, BLOCK, src0_contig, dst_contig, ne01, ne1);
-                const size_t src0_pref_off = src0_contig ? (pref_ir * nb01) : unary_row_offset(pref_ir, ne01, ne02, nb01, nb02, nb03);
-                dma_queue_push(dma_queue,
-                    dma_make_ptr(src0_vtcm, data_src + src0_pref_off),
-                    src0_row_size_aligned, nb01, src0_data_row_size, pref_block_size);
-
-                if (htp_op == HTP_OP_RMS_NORM_MUL && !uctx->broadcast_weight) {
-                    const size_t src1_pref_off = src1_contig ? (pref_ir * nb11) : unary_row_offset(pref_ir, ne01, ne02, nb11, nb12, nb13);
-                    dma_queue_push(dma_queue,
-                        dma_make_ptr(src1_vtcm, data_src1 + src1_pref_off),
-                        uctx->src1_row_size_aligned, nb11, uctx->src1_data_row_size, pref_block_size);
-                }
-            }
-        }
-        ir += block_size;
-    }
-
-    dma_queue_flush(dma_queue);
-
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "unary-f32 %d/%d: %ux%ux%ux%u (%u:%u) -> %ux%ux%ux%u usec %u\n", ith, nth, src->ne[0],
-         src->ne[1], src->ne[2], src->ne[3], src0_start_row, src0_end_row, dst->ne[0], dst->ne[1], dst->ne[2],
-         dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+#define DEFINE_UNARY_TASK(NAME, IS_RMS_NORM_MUL, IS_TRI, CORE_EXPR)                                                 \
+static void unary_task_f32_##NAME(unsigned int nth, unsigned int ith, void * data) {                                \
+    const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;                                \
+    struct htp_ops_context * octx = uctx->octx;                                                                     \
+    const struct htp_tensor * src = octx->src[0];                                                                   \
+    const struct htp_tensor * dst = octx->dst;                                                                      \
+                                                                                                                    \
+    htp_unary_preamble;                                                                                             \
+                                                                                                                    \
+    int32_t *    op_params = octx->op_params;                                                                       \
+    uint32_t     src0_nrows_per_thread = uctx->src0_nrows_per_thread;                                               \
+                                                                                                                    \
+    const size_t src0_data_row_size = uctx->src0_data_row_size;                                                     \
+    const size_t dst_data_row_size  = uctx->dst_data_row_size;                                                      \
+                                                                                                                    \
+    const size_t src0_row_size_aligned = uctx->src0_row_size_aligned;                                               \
+    const size_t dst_row_size_aligned  = uctx->dst_row_size_aligned;                                                \
+                                                                                                                    \
+    const uint32_t src0_nrows = uctx->src0_nrows;                                                                   \
+    const uint32_t src0_start_row = src0_nrows_per_thread * ith;                                                    \
+    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);                        \
+                                                                                                                    \
+    if (src0_start_row >= src0_end_row) {                                                                           \
+        return;                                                                                                     \
+    }                                                                                                               \
+                                                                                                                    \
+    const uint8_t * restrict data_src = uctx->data_src0;                                                            \
+    const uint8_t * restrict data_src1 = uctx->data_src1;                                                           \
+    uint8_t * restrict       data_dst = uctx->data_dst;                                                             \
+                                                                                                                    \
+    const struct htp_tensor * src1 = (IS_RMS_NORM_MUL) ? octx->src[1] : NULL;                                       \
+    const uint32_t nb11 = src1 ? src1->nb[1] : 0;                                                                   \
+    const uint32_t nb12 = src1 ? src1->nb[2] : 0;                                                                   \
+    const uint32_t nb13 = src1 ? src1->nb[3] : 0;                                                                   \
+    const bool src1_contig = src1 ? ((nb12 == (size_t)ne01 * nb11) && (nb13 == (size_t)ne02 * nb12)) : false;       \
+                                                                                                                    \
+    uint8_t * src0_vtcm_data = uctx->vtcm_src0 + (ith * uctx->vtcm_src0_size_per_thread);                           \
+    uint8_t * src1_vtcm_data = uctx->vtcm_src1 ? (uctx->vtcm_src1 + (ith * uctx->vtcm_src1_size_per_thread)) : NULL;\
+    uint8_t * dst_vtcm_data  = uctx->vtcm_dst + (ith * uctx->vtcm_dst_size_per_thread);                             \
+                                                                                                                    \
+    size_t src0_vtcm_half_size = uctx->src0_vtcm_half_size;                                                         \
+    size_t src1_vtcm_half_size = uctx->src1_vtcm_half_size;                                                         \
+    size_t dst_vtcm_half_size  = uctx->dst_vtcm_half_size;                                                          \
+                                                                                                                    \
+    const bool src0_contig = (nb02 == (size_t)ne01 * nb01) &&                                                       \
+                             (nb03 == (size_t)ne02 * nb02);                                                         \
+    const bool dst_contig  = (nb2  == (size_t)ne1  * nb1)  &&                                                       \
+                             (nb3  == (size_t)ne2  * nb2);                                                          \
+    const uint32_t src0_max_block = src0_contig ? uctx->block : MIN((uint32_t)uctx->block, ne01);                   \
+    const uint32_t dst_max_block  = dst_contig  ? uctx->block : MIN((uint32_t)uctx->block, ne1);                    \
+    const uint32_t BLOCK = MIN(src0_max_block, dst_max_block);                                                      \
+    if (BLOCK == 0) {                                                                                               \
+        FARF(ERROR, "unary-f32 : current VTCM reservation %zu is too small, needed at least %zu\n",                 \
+             uctx->vtcm_src0_size_per_thread, src0_row_size_aligned);                                               \
+        return;                                                                                                     \
+    }                                                                                                               \
+                                                                                                                    \
+    dma_queue * dma_queue = octx->ctx->dma[ith];                                                                    \
+                                                                                                                    \
+    if ((IS_RMS_NORM_MUL) && uctx->broadcast_weight) {                                                              \
+        dma_queue_push(dma_queue, dma_make_ptr(src1_vtcm_data, data_src1),                                          \
+                       uctx->src1_row_size_aligned, 0, uctx->src1_data_row_size, 1);                                \
+        dma_queue_flush(dma_queue);                                                                                 \
+    }                                                                                                               \
+                                                                                                                    \
+    for (uint32_t ir = src0_start_row, vtcm_idx = 0; ir < src0_end_row && vtcm_idx < 2; vtcm_idx++) {               \
+        const uint32_t block_size = unary_block_size(ir, src0_end_row, BLOCK, src0_contig, dst_contig, ne01, ne1);  \
+                                                                                                                    \
+        dma_queue_push(dma_queue,                                                                                   \
+            dma_make_ptr(data_dst, dst_vtcm_data + (vtcm_idx * dst_vtcm_half_size)),                                \
+            nb1, dst_row_size_aligned, dst_data_row_size, 0);                                                       \
+                                                                                                                    \
+        const size_t src0_off = src0_contig ? (ir * nb01) : unary_row_offset(ir, ne01, ne02, nb01, nb02, nb03);     \
+        dma_queue_push(dma_queue,                                                                                   \
+            dma_make_ptr(src0_vtcm_data + (vtcm_idx * src0_vtcm_half_size), data_src + src0_off),                   \
+            src0_row_size_aligned, nb01, src0_data_row_size, block_size);                                           \
+                                                                                                                    \
+        if ((IS_RMS_NORM_MUL) && !uctx->broadcast_weight) {                                                         \
+            const size_t src1_off = src1_contig ? (ir * nb11) : unary_row_offset(ir, ne01, ne02, nb11, nb12, nb13); \
+            dma_queue_push(dma_queue,                                                                               \
+                dma_make_ptr(src1_vtcm_data + (vtcm_idx * src1_vtcm_half_size), data_src1 + src1_off),              \
+                uctx->src1_row_size_aligned, nb11, uctx->src1_data_row_size, block_size);                           \
+        }                                                                                                           \
+                                                                                                                    \
+        ir += block_size;                                                                                           \
+    }                                                                                                               \
+                                                                                                                    \
+    for (uint32_t ir = src0_start_row; ir < src0_end_row; ) {                                                       \
+        const uint32_t block_size = unary_block_size(ir, src0_end_row, BLOCK, src0_contig, dst_contig, ne01, ne1);  \
+                                                                                                                    \
+        float * dst_vtcm  = (float *) dma_queue_pop(dma_queue).src;                                                 \
+        float * src0_vtcm = (float *) dma_queue_pop(dma_queue).dst;                                                 \
+        float * src1_vtcm = NULL;                                                                                   \
+        if ((IS_RMS_NORM_MUL) && !uctx->broadcast_weight) {                                                         \
+            src1_vtcm = (float *) dma_queue_pop(dma_queue).dst;                                                     \
+        }                                                                                                           \
+                                                                                                                    \
+        CORE_EXPR;                                                                                                  \
+                                                                                                                    \
+        const size_t dst_off = dst_contig ? (ir * nb1) : unary_row_offset(ir, ne1, ne2, nb1, nb2, nb3);             \
+        dma_queue_push(dma_queue,                                                                                   \
+            dma_make_ptr(data_dst + dst_off, dst_vtcm),                                                             \
+            nb1, dst_row_size_aligned, dst_data_row_size, block_size);                                              \
+                                                                                                                    \
+        const uint32_t next_ir = ir + block_size;                                                                   \
+        if (next_ir < src0_end_row) {                                                                               \
+            const uint32_t next_block_size = unary_block_size(next_ir, src0_end_row, BLOCK, src0_contig, dst_contig, ne01, ne1); \
+            const uint32_t pref_ir = next_ir + next_block_size;                                                     \
+            if (pref_ir < src0_end_row) {                                                                           \
+                const uint32_t pref_block_size = unary_block_size(pref_ir, src0_end_row, BLOCK, src0_contig, dst_contig, ne01, ne1);   \
+                const size_t src0_pref_off = src0_contig ? (pref_ir * nb01) : unary_row_offset(pref_ir, ne01, ne02, nb01, nb02, nb03); \
+                dma_queue_push(dma_queue,                                                                           \
+                    dma_make_ptr(src0_vtcm, data_src + src0_pref_off),                                              \
+                    src0_row_size_aligned, nb01, src0_data_row_size, pref_block_size);                              \
+                                                                                                                    \
+                if ((IS_RMS_NORM_MUL) && !uctx->broadcast_weight) {                                                 \
+                    const size_t src1_pref_off = src1_contig ? (pref_ir * nb11) : unary_row_offset(pref_ir, ne01, ne02, nb11, nb12, nb13); \
+                    dma_queue_push(dma_queue,                                                                       \
+                        dma_make_ptr(src1_vtcm, data_src1 + src1_pref_off),                                         \
+                        uctx->src1_row_size_aligned, nb11, uctx->src1_data_row_size, pref_block_size);              \
+                }                                                                                                   \
+            }                                                                                                       \
+        }                                                                                                           \
+        ir += block_size;                                                                                           \
+    }                                                                                                               \
+                                                                                                                    \
+    dma_queue_flush(dma_queue);                                                                                     \
 }
+
+DEFINE_UNARY_TASK(norm,           false, false, norm_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(rms_norm,       false, false, rms_norm_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(rms_norm_mul,   true,  false, rms_norm_mul_f32(src0_vtcm, uctx->broadcast_weight ? (const float *) src1_vtcm_data : src1_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(scale,          false, false, scale_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(sqr,            false, false, sqr_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(sqrt,           false, false, sqrt_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(unary_neg,      false, false, neg_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(unary_exp,      false, false, exp_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(unary_sigmoid,  false, false, sigmoid_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(unary_softplus, false, false, softplus_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(unary_tanh,     false, false, tanh_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(l2_norm,        false, false, l2_norm_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(tri,            false, true,  tri_f32(src0_vtcm, dst_vtcm, block_size, ir, uctx))
 
 // Apply a pointwise unary op to one column tile that is already in VTCM.
 static inline void unary_apply_tile_f32(int htp_op, const uint8_t * restrict src, uint8_t * restrict dst,
@@ -967,7 +898,7 @@ static inline void tri_apply_tile_f32(const uint8_t * restrict src, uint8_t * re
 
 // Wide-row mode: a single pointwise row is too large to fit double-buffered in VTCM, so
 // each row is processed as a sequence of column tiles, in one double-buffered pass.
-static void unary_job_f32_wide_row_per_thread(unsigned int nth, unsigned int ith, void * data) {
+static void unary_task_f32_wide_row_per_thread(unsigned int nth, unsigned int ith, void * data) {
     const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
     struct htp_ops_context * octx = uctx->octx;
     const struct htp_tensor * src = octx->src[0];
@@ -1218,9 +1149,34 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
 
         FARF(HIGH, "%s: %s mode (col_tile %u)\n", op_type, col_tile ? "wide-row" : "row-block", col_tile);
 
-        worker_pool_run_func(octx->ctx->worker_pool,
-                             col_tile ? unary_job_f32_wide_row_per_thread : unary_job_f32_per_thread,
-                             &uctx, n_threads);
+        worker_callback_t task_func = NULL;
+        if (col_tile) {
+            task_func = unary_task_f32_wide_row_per_thread;
+        } else {
+            switch (octx->op) {
+                case HTP_OP_NORM:            task_func = unary_task_f32_norm; break;
+                case HTP_OP_RMS_NORM:        task_func = unary_task_f32_rms_norm; break;
+                case HTP_OP_RMS_NORM_MUL:    task_func = unary_task_f32_rms_norm_mul; break;
+                case HTP_OP_SCALE:           task_func = unary_task_f32_scale; break;
+                case HTP_OP_SQR:             task_func = unary_task_f32_sqr; break;
+                case HTP_OP_SQRT:            task_func = unary_task_f32_sqrt; break;
+                case HTP_OP_UNARY_NEG:       task_func = unary_task_f32_unary_neg; break;
+                case HTP_OP_UNARY_EXP:       task_func = unary_task_f32_unary_exp; break;
+                case HTP_OP_UNARY_SIGMOID:   task_func = unary_task_f32_unary_sigmoid; break;
+                case HTP_OP_UNARY_SOFTPLUS:  task_func = unary_task_f32_unary_softplus; break;
+                case HTP_OP_UNARY_TANH:      task_func = unary_task_f32_unary_tanh; break;
+                case HTP_OP_L2_NORM:         task_func = unary_task_f32_l2_norm; break;
+                case HTP_OP_TRI:             task_func = unary_task_f32_tri; break;
+                default:                     break;
+            }
+        }
+
+        if (task_func) {
+            worker_pool_run_func(octx->ctx->worker_pool, task_func, &uctx, n_threads);
+        } else {
+            FARF(ERROR, "execute_op_unary_f32: task function is NULL for op %d\n", octx->op);
+            err = HTP_STATUS_NO_SUPPORT;
+        }
     }
 
     return err;
