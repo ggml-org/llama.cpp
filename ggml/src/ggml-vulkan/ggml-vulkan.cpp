@@ -3700,6 +3700,7 @@ static void update_subgroup_params_intel(
     uint32_t & final_required_subgroup_size,
     std::vector<uint32_t> & final_specialization_constant) {
     GGML_UNUSED(require_full_subgroups);
+    GGML_UNUSED(required_subgroup_size);
     GGML_UNUSED(default_subgroup_size);
     if (pipeline_param_found) {
         // We have a GPU configuration and a specific parameter for this pipeline.
