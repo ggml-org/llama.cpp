@@ -12,7 +12,7 @@ void llama_model_grok::load_arch_hparams(llama_model_loader & ml) {
     hparams.f_final_logit_softcapping = 0.0f;
 
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,  hparams.f_norm_rms_eps);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,   hparams.n_ff_exp, false);
+    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,   hparams.n_ff_exp_impl, false);
     ml.get_key(LLM_KV_LOGIT_SCALE,                  hparams.f_logit_scale, false);
     ml.get_key(LLM_KV_EMBEDDING_SCALE,              hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_OUTPUT_SCALE,       hparams.f_attn_out_scale, false);
@@ -50,7 +50,7 @@ void llama_model_grok::load_arch_tensors(llama_model_loader &) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
     }
 
-    const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff/* / n_expert_used*/; // grok-1 n_ff_exp == n_ff
+    const int64_t n_ff_exp = hparams.n_ff_exp_impl ? hparams.n_ff_exp_impl : n_ff/* / n_expert_used*/; // grok-1 n_ff_exp == n_ff
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
 
