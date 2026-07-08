@@ -1243,6 +1243,7 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             params.tensor_split,
             params.tensor_buft_overrides.data(),
             params.fit_params_target.data(),
+            params.fit_params_overhead_per_ctx.data(),
             params.fit_params_min_ctx,
             params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     }
@@ -1332,6 +1333,9 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
         return;
     }
+
+    // persist resolved context size back to params
+    params.n_ctx = llama_n_ctx(lctx);
 
     pimpl->context.reset(lctx);
 }
