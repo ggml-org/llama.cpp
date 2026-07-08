@@ -5095,7 +5095,9 @@ json server_routes::get_model_info() const {
 std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const server_http_req & req, int id_slot) {
     auto res = create_response();
     const json request_data = json::parse(req.body);
-    std::string filename = request_data.at("filename");
+    std::string filename = request_data.contains("filename") && request_data.at("filename").is_string()
+        ? request_data.at("filename").get<std::string>()
+        : "";
     if (!fs_validate_filename(filename)) {
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
@@ -5131,7 +5133,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const ser
 std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const server_http_req & req, int id_slot) {
     auto res = create_response();
     const json request_data = json::parse(req.body);
-    std::string filename = request_data.at("filename");
+    std::string filename = request_data.contains("filename") && request_data.at("filename").is_string()
+        ? request_data.at("filename").get<std::string>()
+        : "";
     if (!fs_validate_filename(filename)) {
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
