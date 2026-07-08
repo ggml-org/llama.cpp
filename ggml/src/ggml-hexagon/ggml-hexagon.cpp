@@ -2663,8 +2663,10 @@ static void ggml_hexagon_precompute_unary_params(
     kparams->block = col_tile ? 0 : ((L.src0_bytes / 2) / src0_row_size_aligned);
 
     const uint32_t tiles_per_row = col_tile > 0 ? (src0->ne[0] + col_tile - 1) / col_tile : 1;
-    kparams->div_ne01 = init_fastdiv_values(src0->ne[1]);
-    kparams->div_tpr  = init_fastdiv_values(tiles_per_row);
+    kparams->div_ne01  = init_fastdiv_values(src0->ne[1]);
+    kparams->div_ne02  = init_fastdiv_values(src0->ne[2]);
+    kparams->div_ne012 = init_fastdiv_values(src0->ne[1] * src0->ne[2]);
+    kparams->div_tpr   = init_fastdiv_values(tiles_per_row);
 }
 
 static void ggml_hexagon_precompute_fused_qkv_params(

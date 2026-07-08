@@ -28,6 +28,8 @@ struct htp_unary_kernel_params {
 
     // Fastdiv helpers
     struct fastdiv_values div_ne01;
+    struct fastdiv_values div_ne02;
+    struct fastdiv_values div_ne012;
     struct fastdiv_values div_tpr;
 };
 
