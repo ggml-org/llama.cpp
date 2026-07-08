@@ -1171,14 +1171,6 @@ int main() {
             printf("   [8b] InnerQ K^2 profile: PASS (zero-input, const-input, per-position, invalid-head-dim)\n");
         }
 
-
-        g_skips++;  // [8] as a whole is still in SKIP/placeholder territory -- the real
-        if (k2_failures > 0) {
-            printf("   [8b] InnerQ K^2 profile: %d failures\n", k2_failures);
-            g_failures++;
-        } else {
-            printf("   [8b] InnerQ K^2 profile: PASS (zero-input, const-input, per-position, invalid-head-dim)\n");
-        }
         // [8c] SYCL implementation cross-check (P3.2.3.2).
         //
         // Compares ggml_innerq_compute_k_squared_profile_sycl against
