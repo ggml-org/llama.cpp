@@ -2627,7 +2627,7 @@ static void ggml_hexagon_precompute_fused_qkv_params(
 
     struct htp_mm_hvx_vtcm_layout L;
     bool try_tiled = (opt_mm_select >= 2);
-    
+
     // Test tiled first
     htp_mm_hvx_vtcm_layout_build(
         &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, src1_nrows, sess->n_threads,
@@ -2646,7 +2646,7 @@ static void ggml_hexagon_precompute_fused_qkv_params(
     } else {
         kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
         size_t flat_src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
-        
+
         htp_mm_hvx_vtcm_layout_build(
             &L, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT, wtype, ne10, src1_nrows, sess->n_threads,
             0, src0_row_size, flat_src1_row_size, best_n_prefetch, false, true, false
@@ -2697,7 +2697,7 @@ static void ggml_hexagon_precompute_fused_ffn_params(
 
     struct htp_mm_hvx_vtcm_layout L;
     bool try_tiled = (opt_mm_select >= 2);
-    
+
     // Test tiled first
     htp_mm_hvx_vtcm_layout_build(
         &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, src1_nrows, sess->n_threads,
@@ -2715,7 +2715,7 @@ static void ggml_hexagon_precompute_fused_ffn_params(
     } else {
         kparams->kernel_type = HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT;
         size_t flat_src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
-        
+
         htp_mm_hvx_vtcm_layout_build(
             &L, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT, wtype, ne10, src1_nrows, sess->n_threads,
             0, src0_row_size, flat_src1_row_size, best_n_prefetch, false, false, true

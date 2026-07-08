@@ -628,7 +628,7 @@ static void core_dot_chunk_fp16_short(__fp16 *restrict output, const __fp16 *res
     }
 }
 
-static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation, 
+static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation,
                           const __fp16 *restrict weight, const __fp16 *restrict scales,
                           uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
     if (n_dot_tiles <= 32) {
