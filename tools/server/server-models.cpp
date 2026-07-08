@@ -7,6 +7,7 @@
 #include "build-info.h"
 #include "preset.h"
 #include "download.h"
+#include "http.h"
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
 #include <optional>
@@ -28,14 +29,7 @@
 #include <sstream>
 #include <cstring>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <windows.h>
-#else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
+#ifndef _WIN32
 extern char **environ;
 #endif
 
@@ -523,6 +517,7 @@ void server_models::load_models() {
 
         // collect all threads to join in one pass while the lock is held:
         // - monitoring threads from just-unloaded models (to_unload)
+        // - threads of finished downloads (DOWNLOADED), they acquire the mutex on exit
         // - threads of already-UNLOADED models that are being removed from source
         std::vector<std::thread> threads_to_join;
         for (const auto & name : to_unload) {
@@ -534,6 +529,13 @@ void server_models::load_models() {
         for (auto & [name, inst] : mapping) {
             if (inst.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
                 continue; // downloading models are not from config sources, leave them alone
+            }
+            if (inst.meta.status == SERVER_MODEL_STATUS_DOWNLOADED) {
+                // joining this thread under the lock deadlocks: it locks the mutex on its way out
+                if (inst.th.joinable()) {
+                    threads_to_join.push_back(std::move(inst.th));
+                }
+                continue;
             }
             if (final_presets.find(name) == final_presets.end() && !inst.meta.is_running() && inst.th.joinable()) {
                 threads_to_join.push_back(std::move(inst.th));
@@ -550,10 +552,8 @@ void server_models::load_models() {
             if (it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
                 ++it; // download thread is still busy, skip
             } else if (it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADED) {
-                // download finished, safe to erase
-                if (it->second.th.joinable()) {
-                    it->second.th.join();
-                }
+                // download finished, thread is joined above, safe to erase
+                GGML_ASSERT(!it->second.th.joinable());
                 it = mapping.erase(it);
             } else if (final_presets.find(it->first) == final_presets.end()) {
                 SRV_INF("(reload) removing model name=%s (no longer in source)\n", it->first.c_str());
@@ -710,66 +710,6 @@ std::optional<server_model_meta> server_models::get_meta(const std::string & nam
     return std::nullopt;
 }
 
-static int get_free_port() {
-#ifdef _WIN32
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        return -1;
-    }
-    typedef SOCKET native_socket_t;
-#define INVALID_SOCKET_VAL INVALID_SOCKET
-#define CLOSE_SOCKET(s) closesocket(s)
-#else
-    typedef int native_socket_t;
-#define INVALID_SOCKET_VAL -1
-#define CLOSE_SOCKET(s) close(s)
-#endif
-
-    native_socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET_VAL) {
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return -1;
-    }
-
-    struct sockaddr_in serv_addr;
-    std::memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    serv_addr.sin_port = htons(0);
-
-    if (bind(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) != 0) {
-        CLOSE_SOCKET(sock);
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return -1;
-    }
-
-#ifdef _WIN32
-    int namelen = sizeof(serv_addr);
-#else
-    socklen_t namelen = sizeof(serv_addr);
-#endif
-    if (getsockname(sock, (struct sockaddr*)&serv_addr, &namelen) != 0) {
-        CLOSE_SOCKET(sock);
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return -1;
-    }
-
-    int port = ntohs(serv_addr.sin_port);
-
-    CLOSE_SOCKET(sock);
-#ifdef _WIN32
-    WSACleanup();
-#endif
-
-    return port;
-}
-
 // helper to convert vector<string> to char **
 // pointers are only valid as long as the original vector is valid
 static std::vector<char *> to_char_ptr_array(const std::vector<std::string> & vec) {
@@ -873,7 +813,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
     // prepare new instance info
     instance_t inst;
     inst.meta             = meta;
-    inst.meta.port        = get_free_port();
+    inst.meta.port        = common_http_get_free_port();
     inst.meta.status      = SERVER_MODEL_STATUS_LOADING;
     inst.meta.loaded_info = json{};
     inst.meta.last_used   = ggml_time_ms();
@@ -1675,7 +1615,7 @@ void server_models_routes::init_routes() {
         }
         // remember which child serves this conversation so the stream routes can route straight
         // to it without polling, keyed on the exact conv id from the header
-        std::string conv_id = stream_conv_id_from_headers(req.headers);
+        std::string conv_id = server_stream_conv_id_from_headers(req.headers);
         if (!conv_id.empty()) {
             models.conv_models.remember(conv_id, name);
         }
@@ -1890,7 +1830,7 @@ void server_models_routes::init_routes() {
         if (!from.empty()) {
             child_path += "?from=" + from;
         }
-        SRV_INF("proxying stream resume to model %s on port %d, path=%s\n",
+        SRV_TRC("proxying stream resume to model %s on port %d, path=%s\n",
                 owner->name.c_str(), owner->port, child_path.c_str());
         auto proxy = std::make_unique<server_http_proxy>(
                 "GET",

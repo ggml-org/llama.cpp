@@ -20,6 +20,7 @@ static const ggml_opencl_fa_dim g_fa_dims_adreno_default[] = {
     {192, 128, 16, 16, 1, 0},
     {192, 192, 16, 16, 1, 0},
     {256, 256, 16, 16, 16, 0},
+    {512, 512,  8, 16, 64, 0},
 };
 
 struct ggml_opencl_fa_dim_table {

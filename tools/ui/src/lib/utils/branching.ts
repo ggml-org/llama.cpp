@@ -111,15 +111,7 @@ function findLeafNodeInMap(
 }
 
 /**
- * Convenience wrapper around {@link findLeafNodeInMap} for callers that only have
- * a flat message array.
- *
- * Finds the leaf node (message with no children) for a given message branch.
- * Traverses down the tree following the last child until reaching a leaf.
- *
- * @param messages - All messages in the conversation
- * @param messageId - Starting message ID to find leaf for
- * @returns The leaf node ID, or the original messageId if no children
+ * Convenience wrapper around {@link findLeafNodeInMap} for callers that have a flat message array.
  */
 export function findLeafNode(messages: readonly DatabaseMessage[], messageId: string): string {
 	const nodeMap = new Map(messages.map((msg) => [msg.id, msg] as const));
@@ -225,7 +217,6 @@ export function getMessageSiblings(
 
 /**
  * Builds sibling information for every message in a conversation.
- * A single node map is shared across all lookups for O(1) access.
  *
  * @param messages - All messages in the conversation
  * @returns Map of message ID to its sibling information

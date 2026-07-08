@@ -39,13 +39,17 @@
 					{@const faviconUrl = group.serverId ? mcpStore.getServerFavicon(group.serverId) : null}
 
 					<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
-						<McpServerIdentity
-							iconClass="h-4 w-4"
-							iconRounded="rounded-sm"
-							showVersion={false}
-							displayName={group.label}
-							{faviconUrl}
-						/>
+						{#if group.source === 'mcp'}
+							<McpServerIdentity
+								iconClass="h-4 w-4"
+								iconRounded="rounded-sm"
+								showVersion={false}
+								displayName={group.label}
+								{faviconUrl}
+							/>
+						{:else}
+							<TruncatedText text={group.label} class="font-medium" />
+						{/if}
 					</span>
 
 					<span class="ml-auto shrink-0 text-xs text-muted-foreground">

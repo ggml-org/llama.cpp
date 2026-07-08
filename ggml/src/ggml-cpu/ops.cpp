@@ -665,6 +665,7 @@ void ggml_compute_forward_add(
                 ggml_compute_forward_add_non_quantized(params, dst);
             } break;
         case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -1115,6 +1116,7 @@ void ggml_compute_forward_add1(
                 }
             } break;
         case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -1245,6 +1247,7 @@ void ggml_compute_forward_acc(
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
         case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -4454,6 +4457,7 @@ void ggml_compute_forward_out_prod(
 
     switch (src0->type) {
         case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -4730,6 +4734,7 @@ void ggml_compute_forward_set(
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
         case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -4954,6 +4959,7 @@ void ggml_compute_forward_get_rows(
 
     switch (src0->type) {
         case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -5019,8 +5025,8 @@ void ggml_compute_forward_get_rows(
     //}
 }
 
-template<typename idx_t>
-static void ggml_compute_forward_set_rows_f32(
+template<typename src_t, typename idx_t>
+static void ggml_compute_forward_set_rows_impl(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
 
@@ -5035,7 +5041,7 @@ static void ggml_compute_forward_set_rows_f32(
     assert(ne0  == nc);
     assert(ne2  == ne02);
     assert(ne3  == ne03);
-    assert(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16));
     assert(ne02 % ne11 == 0);
     assert(ne03 % ne12 == 0);
 
@@ -5048,6 +5054,8 @@ static void ggml_compute_forward_set_rows_f32(
     // row range for this thread
     const int64_t ir0 = dr*ith;
     const int64_t ir1 = std::min(ir0 + dr, nr);
+
+    const size_t rs = ggml_row_size(src0->type, nc);
 
     ggml_from_float_t const from_float = ggml_get_type_traits_cpu(dst->type)->from_float;
 
@@ -5062,9 +5070,18 @@ static void ggml_compute_forward_set_rows_f32(
 
                 GGML_ASSERT(i1 >= 0 && i1 < ne1);
 
-                from_float(
-                        (const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
-                                        ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                if constexpr (std::is_same_v<src_t, float>) {
+                    from_float(
+                            (const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
+                                            ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                } else if constexpr (std::is_same_v<src_t, ggml_fp16_t>) {
+                    memcpy(
+                                            ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3),
+                                            ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
+                                            rs);
+                } else {
+                    GGML_ABORT("src0->type = %d (%s) not supported", src0->type, ggml_type_name(src0->type));
+                }
             }
         }
     }
@@ -5081,11 +5098,25 @@ void ggml_compute_forward_set_rows(
         case GGML_TYPE_F32:
             {
                 if (src1->type == GGML_TYPE_I64) {
-                    ggml_compute_forward_set_rows_f32<int64_t>(params, dst);
+                    ggml_compute_forward_set_rows_impl<float, int64_t>(params, dst);
                 } else if (src1->type == GGML_TYPE_I32) {
-                    ggml_compute_forward_set_rows_f32<int32_t>(params, dst);
+                    ggml_compute_forward_set_rows_impl<float, int32_t>(params, dst);
                 } else {
                     GGML_ABORT("src1->type = %d (%s) not supported", src1->type, ggml_type_name(src1->type));
+                }
+            } break;
+        case GGML_TYPE_F16:
+            {
+                if (dst->type == GGML_TYPE_F16) {
+                    if (src1->type == GGML_TYPE_I64) {
+                        ggml_compute_forward_set_rows_impl<ggml_fp16_t, int64_t>(params, dst);
+                    } else if (src1->type == GGML_TYPE_I32) {
+                        ggml_compute_forward_set_rows_impl<ggml_fp16_t, int32_t>(params, dst);
+                    } else {
+                        GGML_ABORT("src1->type = %d (%s) not supported", src1->type, ggml_type_name(src1->type));
+                    }
+                } else {
+                    GGML_ABORT("dst->type = %d (%s) not supported with src0->type = %d (%s)", dst->type, ggml_type_name(dst->type), src0->type, ggml_type_name(src0->type));
                 }
             } break;
         default:
@@ -5680,6 +5711,7 @@ void ggml_compute_forward_clamp(
             } break;
         case GGML_TYPE_BF16:
         case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:

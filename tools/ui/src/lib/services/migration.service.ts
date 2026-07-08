@@ -564,9 +564,9 @@ const configTypesMigration: Migration = {
 		const config = JSON.parse(configRaw);
 		let changed = false;
 
-		// Pre-schema configs persisted booleans as the strings "true"/"false", which the
-		// strict server schema now rejects. Coerce those back to real booleans. No config
-		// string field holds exactly "true"/"false", so the match is unambiguous.
+		// Pre-schema configs persisted booleans as "true"/"false" strings; the strict server
+		// schema rejects them. No config string field holds exactly "true"/"false", so the
+		// match is unambiguous.
 		for (const key of Object.keys(config)) {
 			if (config[key] === 'true') {
 				config[key] = true;

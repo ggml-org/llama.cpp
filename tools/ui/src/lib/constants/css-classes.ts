@@ -17,3 +17,4 @@ export const PANEL_CLASSES = `
 `;
 
 export const CHAT_FORM_POPOVER_MAX_HEIGHT = 'max-h-80';
+export const DIALOG_SUBMENU_CONTENT = 'w-60';

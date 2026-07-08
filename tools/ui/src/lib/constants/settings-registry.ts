@@ -259,18 +259,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.KEEP_STATS_VISIBLE,
-				label: 'Keep stats visible after generation',
-				help: 'Keep processing statistics visible after generation finishes.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: {
-					serverKey: SETTINGS_KEYS.KEEP_STATS_VISIBLE,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
 				key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
 				label: 'Show microphone on empty input',
 				help: 'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
@@ -376,18 +364,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				sync: {
 					serverKey: SETTINGS_KEYS.SHOW_MODEL_TAGS,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
-				key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
-				label: 'Always show agentic turns in conversation',
-				help: 'Always expand and display agentic loop turns in conversation messages.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: {
-					serverKey: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
 					paramType: SyncableParameterType.BOOLEAN
 				}
 			},

@@ -30,7 +30,7 @@
 		"@chromatic-com/storybook": "5.0.0",
 		"@eslint/compat": "1.4.1",
 		"@eslint/js": "9.39.2",
-		"@internationalized/date": "3.10.1",
+		"@internationalized/date": "3.12.2",
 		"@lucide/svelte": "0.515.0",
 		"@modelcontextprotocol/sdk": "1.26.0",
 		"@playwright/test": "1.56.1",

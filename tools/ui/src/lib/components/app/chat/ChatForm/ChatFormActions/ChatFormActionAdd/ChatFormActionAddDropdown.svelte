@@ -11,7 +11,8 @@
 	} from '$lib/constants';
 	import {
 		ChatFormActionAddToolsSubmenu,
-		ChatFormActionAddMcpServersSubmenu
+		ChatFormActionAddMcpServersSubmenu,
+		ChatFormActionAddReasoningSubmenu
 	} from '$lib/components/app';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
@@ -92,7 +93,11 @@
 			</Tooltip.Content>
 		</Tooltip.Root>
 
-		<DropdownMenu.Content align="start" class="w-48">
+		<DropdownMenu.Content align="start" class="w-52">
+			<ChatFormActionAddReasoningSubmenu />
+
+			<DropdownMenu.Separator />
+
 			<DropdownMenu.Sub>
 				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 					<File class="h-4 w-4" />

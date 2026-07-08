@@ -4,9 +4,10 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { fly } from 'svelte/transition';
 	import { McpServerCardCompact, McpServerForm } from '$lib/components/app/mcp';
-	import { RECOMMENDED_MCP_SERVERS } from '$lib/constants';
+	import { RECOMMENDED_MCP_SERVERS, SETTINGS_KEYS } from '$lib/constants';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { uuid } from '$lib/utils';
 	import { MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, MCP_SERVER_ID_PREFIX } from '$lib/constants';
 	import type { MCPServerSettingsEntry } from '$lib/types';
@@ -24,6 +25,22 @@
 	);
 
 	let addedServers = $state<MCPServerSettingsEntry[]>([]);
+	let didAddAny = $state(false);
+
+	let selectedRecommendedCount = $derived.by(
+		() => RECOMMENDED_MCP_SERVERS.filter((server) => selected[server.id]).length
+	);
+
+	let footerLabel = $derived.by(() => {
+		const recommended = selectedRecommendedCount;
+		const custom = addedServers.length;
+		const total = recommended + custom;
+
+		if (total === 0) return 'Continue';
+		if (recommended === 0) return custom === 1 ? 'Add server' : `Add ${custom} servers`;
+		if (custom === 0) return recommended === 1 ? 'Add server' : `Add ${recommended} servers`;
+		return `Add ${recommended} servers and ${custom} custom`;
+	});
 
 	let showAddForm = $state(false);
 	let newServerUrl = $state('');
@@ -44,9 +61,14 @@
 			showAddForm = false;
 			newServerUrl = '';
 			newServerHeaders = '';
-			addedServers = [];
+
+			if (!didAddAny) {
+				settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, []);
+			}
 
 			localStorage.setItem(MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, 'true');
+			addedServers = [];
+			didAddAny = false;
 		}
 		open = value;
 		onOpenChange?.(value);
@@ -59,6 +81,7 @@
 	}
 
 	function enableSelected() {
+		didAddAny = true;
 		localStorage.setItem(MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY, 'true');
 
 		for (const server of RECOMMENDED_MCP_SERVERS) {
@@ -82,6 +105,8 @@
 
 	function saveNewServer() {
 		if (newServerUrlError) return;
+
+		didAddAny = true;
 
 		const newServerId = uuid() ?? `${MCP_SERVER_ID_PREFIX}-${Date.now()}`;
 
@@ -174,7 +199,12 @@
 		<Dialog.Footer>
 			<Button variant="secondary" size="sm" onclick={() => handleOpenChange(false)}>Not now</Button>
 
-			<Button variant="default" size="sm" onclick={enableSelected}>Add selected</Button>
+			<Button
+				variant="default"
+				size="sm"
+				onclick={enableSelected}
+				disabled={footerLabel === 'Continue'}>{footerLabel}</Button
+			>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

@@ -7,14 +7,20 @@
 		ChatFormActionModels,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		ChatFormReasoningToggle
+		ChatFormContextGauge
 	} from '$lib/components/app';
-	import { FileTypeCategory } from '$lib/enums';
+	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
+	import {
+		activeProcessingState,
+		isChatStreaming,
+		isLoading as chatIsLoading
+	} from '$lib/stores/chat.svelte';
 	import { getFileTypeCategory } from '$lib/utils';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
@@ -93,6 +99,36 @@
 	let activeMessage = $derived(
 		conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1]
 	);
+
+	let hasProcessedTokens = $derived.by(() => {
+		if (!page.params.id) return false;
+
+		const messages = activeMessages() as DatabaseMessage[];
+		let totalHistoricalTokens = 0;
+		for (const m of messages) {
+			if (m.role !== MessageRole.ASSISTANT) continue;
+			const timings = m.timings;
+			if (!timings) continue;
+			const agenticLlm = timings.agentic?.llm;
+			if (agenticLlm?.prompt_n != null || agenticLlm?.predicted_n != null) {
+				totalHistoricalTokens += (agenticLlm?.prompt_n ?? 0) + (agenticLlm?.predicted_n ?? 0);
+			} else {
+				totalHistoricalTokens += (timings.prompt_n ?? 0) + (timings.predicted_n ?? 0);
+			}
+		}
+		if (totalHistoricalTokens > 0) return true;
+
+		if (!chatIsLoading() && !isChatStreaming()) return false;
+
+		const processingState = activeProcessingState();
+		if (!processingState) return false;
+		const livePromptTokens = Math.max(
+			processingState.promptTokens ?? 0,
+			processingState.promptProgress?.processed ?? 0
+		);
+		const liveOutputTokens = processingState.outputTokensUsed ?? 0;
+		return livePromptTokens > 0 || liveOutputTokens > 0;
+	});
 </script>
 
 <div
@@ -100,7 +136,7 @@
 	style="container-type: inline-size"
 >
 	{#if showAddButton}
-		<div class="mr-auto flex items-center gap-3">
+		<div class="mr-auto flex items-center gap-2">
 			<ChatFormActionsAdd
 				{disabled}
 				{hasAudioModality}
@@ -117,8 +153,10 @@
 		</div>
 	{/if}
 
-	<div class="flex items-center gap-2">
-		<ChatFormReasoningToggle />
+	<div class="flex items-center gap-1.5">
+		{#if hasProcessedTokens}
+			<ChatFormContextGauge />
+		{/if}
 
 		{#if showModelSelector}
 			<ChatFormActionModels

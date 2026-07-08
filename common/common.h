@@ -14,6 +14,7 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <fstream>
 
 #if defined(_WIN32) && !defined(_WIN32_WINNT)
 #define _WIN32_WINNT 0x0A00
@@ -642,6 +643,9 @@ struct common_params {
     std::string ssl_file_cert = "";                                                                         // NOLINT
 
     std::map<std::string, std::string> default_template_kwargs;
+
+    // CLI params
+    std::string server_base; // if set, connect to this server instead of starting a new one
 
     // UI configs
     bool ui = true;

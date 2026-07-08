@@ -262,6 +262,10 @@ private:
 
     llm_graph_cb graph_get_cb() const;
 
+    // disable auto fused ops (Flash Attention, Gated Delta Net) whose op lands on a device
+    // that differs from the layer it belongs to (usually due to missing backend support)
+    void resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs);
+
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
     size_t state_read_data (llama_io_read_i  & io);

@@ -1157,6 +1157,11 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
                 op->src[1]->type == GGML_TYPE_F32 &&
                 op->type == GGML_TYPE_F32;
+        case GGML_OP_COL2IM_1D:
+            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_BF16) &&
+                op->type == op->src[0]->type &&
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op);
         case GGML_OP_CONV_3D:
             return ggml_is_contiguous(op->src[0]) &&
                    ggml_is_contiguous(op->src[1]) &&
@@ -1329,7 +1334,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return op->src[0]->type != GGML_TYPE_NVFP4;
         case GGML_OP_SET_ROWS:
             {
-                if (op->src[0]->type != GGML_TYPE_F32) {
+                if (op->src[0]->type != GGML_TYPE_F32 && op->src[0]->type != GGML_TYPE_F16) {
                     return false;
                 }
 

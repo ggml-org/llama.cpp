@@ -47,7 +47,6 @@ import {
 	NON_ALPHANUMERIC_REGEX,
 	MULTIPLE_UNDERSCORE_REGEX,
 	SETTINGS_KEYS,
-	THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY,
 	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY
 } from '$lib/constants';
 
@@ -84,11 +83,16 @@ class ConversationsStore {
 	/** Pending MCP server overrides for new conversations (before first message) */
 	pendingMcpServerOverrides = $state<McpServerOverride[]>(ConversationsStore.loadMcpDefaults());
 
-	/** Global (non-conversation-specific) thinking toggle default */
-	pendingThinkingEnabled = $state(ConversationsStore.loadThinkingDefaults());
+	/** Global (non-conversation-specific) thinking toggle default, derived from reasoning effort */
+	pendingThinkingEnabled = $state(false);
 
 	/** Global (non-conversation-specific) reasoning effort default */
-	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
+	pendingReasoningEffort = $state<ReasoningEffort | ReasoningEffort.OFF>(
+		ConversationsStore.loadReasoningEffortDefault()
+	);
+
+	/** Last non-off reasoning effort, restored when re-enabling thinking globally */
+	private lastNonOffEffort: ReasoningEffort | null = null;
 
 	private static loadMcpDefaults(): McpServerOverride[] {
 		const raw = config()[SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES];
@@ -112,35 +116,14 @@ class ConversationsStore {
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES, JSON.stringify(plain));
 	}
 
-	/** Load thinking-enabled default from localStorage */
-	private static loadThinkingDefaults(): boolean {
-		if (typeof globalThis.localStorage === 'undefined') return true;
-		try {
-			const raw = localStorage.getItem(THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY);
-			if (!raw) return true;
-			return raw === 'true';
-		} catch {
-			return true;
-		}
-	}
-
-	/** Persist thinking-enabled default to localStorage */
-	private saveThinkingDefaults(): void {
-		if (typeof globalThis.localStorage === 'undefined') return;
-		localStorage.setItem(
-			THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY,
-			this.pendingThinkingEnabled ? 'true' : 'false'
-		);
-	}
-
 	/** Load reasoning effort default from localStorage */
-	private static loadReasoningEffortDefault(): ReasoningEffort {
-		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.MEDIUM;
+	private static loadReasoningEffortDefault(): ReasoningEffort | ReasoningEffort.OFF {
+		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.OFF;
 		try {
 			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
-			return (raw as ReasoningEffort) || ReasoningEffort.MEDIUM;
+			return (raw as ReasoningEffort | ReasoningEffort.OFF) || ReasoningEffort.OFF;
 		} catch {
-			return ReasoningEffort.MEDIUM;
+			return ReasoningEffort.OFF;
 		}
 	}
 
@@ -303,10 +286,17 @@ class ConversationsStore {
 			this.pendingMcpServerOverrides = [];
 		}
 
-		// Inherit global thinking default into the new conversation
-		conversation.thinkingEnabled = this.pendingThinkingEnabled;
+		// Inherit global thinking/reasoning defaults into the new conversation
+		const thinkingEnabled = this.getThinkingEnabled();
+		conversation.thinkingEnabled = thinkingEnabled;
+		conversation.reasoningEffort =
+			this.pendingReasoningEffort === ReasoningEffort.OFF ? undefined : this.pendingReasoningEffort;
 		await DatabaseService.updateConversation(conversation.id, {
-			thinkingEnabled: this.pendingThinkingEnabled
+			thinkingEnabled,
+			reasoningEffort:
+				this.pendingReasoningEffort === ReasoningEffort.OFF
+					? undefined
+					: this.pendingReasoningEffort
 		});
 
 		this.conversations = [conversation, ...this.conversations];
@@ -332,7 +322,6 @@ class ConversationsStore {
 			}
 
 			this.pendingMcpServerOverrides = [];
-			this.pendingThinkingEnabled = ConversationsStore.loadThinkingDefaults();
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
@@ -363,7 +352,7 @@ class ConversationsStore {
 		this.activeMessages = [];
 		// reload defaults so new chats inherit persisted state
 		this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
-		this.pendingThinkingEnabled = ConversationsStore.loadThinkingDefaults();
+		this.pendingReasoningEffort = ConversationsStore.loadReasoningEffortDefault();
 	}
 
 	/**
@@ -794,9 +783,11 @@ class ConversationsStore {
 	 */
 	getThinkingEnabled(): boolean {
 		if (this.activeConversation) {
-			return this.activeConversation.thinkingEnabled ?? this.pendingThinkingEnabled;
+			if (this.activeConversation.thinkingEnabled !== undefined) {
+				return this.activeConversation.thinkingEnabled;
+			}
 		}
-		return this.pendingThinkingEnabled;
+		return this.getReasoningEffort() !== ReasoningEffort.OFF;
 	}
 
 	/**
@@ -806,8 +797,17 @@ class ConversationsStore {
 	 */
 	async setThinkingEnabled(enabled: boolean): Promise<void> {
 		if (!this.activeConversation) {
-			this.pendingThinkingEnabled = enabled;
-			this.saveThinkingDefaults();
+			if (enabled) {
+				const effort = this.lastNonOffEffort ?? ReasoningEffort.LOW;
+				this.pendingReasoningEffort = effort;
+				this.saveReasoningEffortDefaults();
+			} else {
+				if (this.pendingReasoningEffort !== ReasoningEffort.OFF) {
+					this.lastNonOffEffort = this.pendingReasoningEffort;
+				}
+				this.pendingReasoningEffort = ReasoningEffort.OFF;
+				this.saveReasoningEffortDefaults();
+			}
 			return;
 		}
 
@@ -831,7 +831,7 @@ class ConversationsStore {
 	 * Gets the effective reasoning effort for the active conversation.
 	 * Returns the conversation override if set, otherwise the global default.
 	 */
-	getReasoningEffort(): ReasoningEffort {
+	getReasoningEffort(): ReasoningEffort | ReasoningEffort.OFF {
 		if (this.activeConversation) {
 			return this.activeConversation.reasoningEffort ?? this.pendingReasoningEffort;
 		}

@@ -131,8 +131,8 @@ extern float ggml_table_f32_ue4m3[1 << 8];
 #define GGML_CPU_E8M0_TO_FP32_HALF(x) GGML_E8M0_TO_FP32_HALF(x)
 #endif
 
-// Use lookup table for UE4M3 on x86 (faster than bit manipulation)
-#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+// Use lookup table for UE4M3 on x86 and ARM (faster than bit manipulation)
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__ARM_NEON)
 #define GGML_CPU_UE4M3_TO_FP32(x) ggml_table_f32_ue4m3[(uint8_t)(x)]
 #else
 #define GGML_CPU_UE4M3_TO_FP32(x) ggml_ue4m3_to_fp32(x)
