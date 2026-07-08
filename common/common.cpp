@@ -1914,7 +1914,15 @@ common_control_vector_data common_control_vector_load(const std::vector<common_c
 
 ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std::vector<llama_token> & tokens, int64_t stride) {
     const int64_t ne_datapoint = llama_n_ctx(ctx);
-    const int64_t ndata        = (tokens.size() - ne_datapoint - 1) / stride;
+
+    if ((int64_t) tokens.size() < ne_datapoint + 1) {
+        LOG_ERR("%s: dataset contains %zu tokens but requires at least %lld tokens for a context size of %lld. "
+                "Provide more training data or reduce the context size (-c).\n",
+                __func__, tokens.size(), (long long)(ne_datapoint + 1), (long long)ne_datapoint);
+        exit(1);
+    }
+
+    const int64_t ndata = ((int64_t) tokens.size() - ne_datapoint - 1) / stride;
     ggml_opt_dataset_t result = ggml_opt_dataset_init(
         GGML_TYPE_I32, GGML_TYPE_I32, ne_datapoint, ne_datapoint, ndata, /*ndata_shard =*/ 1);
 
