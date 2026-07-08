@@ -1,11 +1,13 @@
 #include "llama-context.h"
 
 #include "ggml.h"
+#include "ggml-innerq.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
+#include "llama-kv-cache.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
@@ -14,9 +16,11 @@
 
 #include <cinttypes>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 //
 // llama_context
@@ -28,6 +32,89 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
         case LLAMA_CONTEXT_TYPE_MTP    : return LLM_GRAPH_TYPE_DECODER_MTP;
     }
     throw std::runtime_error("Unsupported ctx type");
+}
+
+struct turbo_innerq_eval_capture {
+    llama_memory_context_i * mctx = nullptr;
+    ggml_backend_sched_eval_callback user_cb = nullptr;
+    void * user_ud = nullptr;
+    bool user_requested_current = false;
+    bool enabled = false;
+    bool captured = false;
+};
+
+static bool turbo_innerq_is_vcur_probe_tensor(const ggml_tensor * t) {
+    return t != nullptr && (strncmp(t->name, "Vcur_clamped", 12) == 0 || strncmp(t->name, "Vcur", 4) == 0);
+}
+
+static void turbo_innerq_capture_and_publish(const ggml_tensor * t, turbo_innerq_eval_capture * cap) {
+    if (cap == nullptr || !cap->enabled || cap->captured || !turbo_innerq_is_vcur_probe_tensor(t)) {
+        return;
+    }
+
+    auto * kv_ctx = dynamic_cast<llama_kv_cache_context *>(cap->mctx);
+    if (kv_ctx == nullptr) {
+        return;
+    }
+
+    if (t->ne[0] != 128 || t->ne[1] < 1 || t->ne[2] < 1) {
+        return;
+    }
+
+    const int64_t n_heads = t->ne[1];
+    const int64_t n_tokens = std::min<int64_t>(t->ne[2], 256);
+    const size_t row_size = ggml_row_size(t->type, t->ne[0]);
+    const size_t nbytes = size_t((n_tokens - 1) * t->nb[2] + (n_heads - 1) * t->nb[1] + row_size);
+    std::vector<uint8_t> raw(nbytes);
+    ggml_backend_tensor_get(t, raw.data(), 0, nbytes);
+
+    const auto * traits = ggml_get_type_traits(t->type);
+    if (t->type != GGML_TYPE_F32 && traits->to_float == nullptr) {
+        return;
+    }
+
+    const int64_t head_dim = t->ne[0];
+    const int64_t n_probe = n_heads * n_tokens;
+    std::vector<float> probe(n_probe * head_dim);
+
+    for (int64_t tok = 0; tok < n_tokens; ++tok) {
+        for (int64_t head = 0; head < n_heads; ++head) {
+            const char * src = reinterpret_cast<const char *>(raw.data()) + tok * t->nb[2] + head * t->nb[1];
+            float * dst = probe.data() + (tok * n_heads + head) * head_dim;
+            if (t->type == GGML_TYPE_F32) {
+                memcpy(dst, src, head_dim * sizeof(float));
+            } else {
+                traits->to_float(src, dst, head_dim);
+            }
+        }
+    }
+
+    float scale_inv[llama_turbo_innerq_runtime_snapshot::N_CHANNELS];
+    ggml_innerq_compute_k_squared_profile(probe.data(), (int) n_probe, (int) head_dim, scale_inv);
+    kv_ctx->turbo_innerq_publish_scale_inv(scale_inv, llama_turbo_innerq_runtime_snapshot::N_CHANNELS, true);
+    cap->captured = true;
+}
+
+static bool turbo_innerq_eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
+    auto * cap = static_cast<turbo_innerq_eval_capture *>(user_data);
+    const bool internal_need = cap && cap->enabled && !cap->captured && turbo_innerq_is_vcur_probe_tensor(t);
+
+    if (ask) {
+        const bool user_need = cap && cap->user_cb ? cap->user_cb(t, true, cap->user_ud) : false;
+        if (internal_need) {
+            cap->user_requested_current = user_need;
+        }
+        return internal_need || user_need;
+    }
+
+    if (internal_need) {
+        turbo_innerq_capture_and_publish(t, cap);
+        const bool call_user = cap->user_requested_current;
+        cap->user_requested_current = false;
+        return call_user && cap->user_cb ? cap->user_cb(t, false, cap->user_ud) : true;
+    }
+
+    return cap && cap->user_cb ? cap->user_cb(t, false, cap->user_ud) : true;
 }
 
 llama_context::llama_context(
@@ -1348,6 +1435,34 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             return nullptr;
         }
     }
+
+    turbo_innerq_eval_capture innerq_cap = {
+        /* .mctx                   = */ mctx,
+        /* .user_cb                = */ cparams.cb_eval,
+        /* .user_ud                = */ cparams.cb_eval_user_data,
+        /* .user_requested_current = */ false,
+        /* .enabled                = */ getenv("LLAMA_ENABLE_INNERQ") != nullptr,
+        /* .captured               = */ false,
+    };
+    const bool use_eval_wrapper = innerq_cap.enabled || innerq_cap.user_cb != nullptr;
+    ggml_backend_sched_set_eval_callback(sched.get(),
+        use_eval_wrapper ? turbo_innerq_eval_callback : nullptr,
+        use_eval_wrapper ? &innerq_cap : nullptr);
+
+    struct sched_eval_callback_restore {
+        ggml_backend_sched_t sched = nullptr;
+        ggml_backend_sched_eval_callback cb = nullptr;
+        void * user_data = nullptr;
+        ~sched_eval_callback_restore() {
+            if (sched) {
+                ggml_backend_sched_set_eval_callback(sched, cb, user_data);
+            }
+        }
+    } restore_eval_cb = {
+        /* .sched     = */ sched.get(),
+        /* .cb        = */ cparams.cb_eval,
+        /* .user_data = */ cparams.cb_eval_user_data,
+    };
 
     // set the input data for the input tensors
     {

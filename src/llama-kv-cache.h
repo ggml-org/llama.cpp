@@ -407,6 +407,8 @@ public:
     // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization
     ggml_tensor * get_turbo_innerq_scale_inv() const override;
 
+    void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized);
+
     void on_graph_compute_failure(ggml_status status) override;
 
     // store k_cur and v_cur in the cache based on the provided head location

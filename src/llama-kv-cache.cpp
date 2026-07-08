@@ -2932,6 +2932,10 @@ void llama_kv_cache_context::on_graph_compute_failure(ggml_status status) {
     kv->turbo_innerq_publish_abort((int) status, 0, false);
 }
 
+void llama_kv_cache_context::turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
+    kv->turbo_innerq_publish_scale_inv(scale_inv, n, finalized);
+}
+
 ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
     return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
 }
