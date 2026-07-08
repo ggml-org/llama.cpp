@@ -898,7 +898,22 @@
 			{/if}
 		{/if}
 	{:else}
-		<div class="mb-2 flex items-center gap-2 text-xs text-muted-foreground/70">
+		{@const showInput = Boolean(section.toolArgs)}
+		{#if showInput}
+			<div class="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70">
+				<span>Input</span>
+			</div>
+			<SyntaxHighlightedCode
+				code={formatJsonPretty(section.toolArgs ?? '')}
+				language={FileTypeText.JSON}
+				maxHeight="22rem"
+			/>
+		{/if}
+		<div
+			class={showInput
+				? 'mt-4 mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70'
+				: 'mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70'}
+		>
 			<span>Output</span>
 			{#if isPending}
 				<Loader2 class="h-3 w-3 animate-spin" />
