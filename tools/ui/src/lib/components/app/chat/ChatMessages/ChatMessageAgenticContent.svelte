@@ -43,6 +43,7 @@
 	let expandedStates: Record<number, boolean> = $state({});
 
 	const renderThinkingAsMarkdown = $derived(config().renderThinkingAsMarkdown as boolean);
+	const showThoughtInProgress = $derived(Boolean(config().showThoughtInProgress));
 	const showMessageStats = $derived(Boolean(config().showMessageStats));
 	const showAgenticTurnStats = $derived(showMessageStats && Boolean(config().showAgenticTurnStats));
 
@@ -139,7 +140,7 @@
 		}
 
 		if (section.type === AgenticSectionType.REASONING_PENDING) {
-			return true;
+			return showThoughtInProgress;
 		}
 
 		return false;
@@ -208,18 +209,18 @@
 	{/if}
 {/snippet}
 
-<div class="agentic-content gap-3">
+<div class="agentic-content gap-1.5">
 	{#if turnGroups.length > 1}
 		{#each turnGroups as turn, turnIndex (turnIndex)}
 			{@const turnStats = message?.timings?.agentic?.perTurn?.[turnIndex]}
 
-			<div class="agentic-turn group/turn grid gap-3">
+			<div class="agentic-turn group/turn grid gap-2">
 				{#each turn.sections as section, sIdx (turn.flatIndices[sIdx])}
 					{@render renderSection(section, turn.flatIndices[sIdx])}
 				{/each}
 
 				{#if turnStats && showAgenticTurnStats}
-					<div class="turn-stats transition-opacity duration-150">
+					<div class="turn-stats transition-opacity duration-150 mt-1 mb-4">
 						<ChatMessageStatistics
 							promptTokens={turnStats.llm.prompt_n}
 							promptMs={turnStats.llm.prompt_ms}
