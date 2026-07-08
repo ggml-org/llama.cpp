@@ -1,6 +1,7 @@
 #include "llama-context.h"
 
 #include "ggml.h"
+#include "ggml-backend.h"
 #include "ggml-innerq.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
@@ -38,6 +39,7 @@ static ggml_backend_sycl_failure llama_backend_sched_consume_sycl_failure(ggml_b
     return { GGML_STATUS_SUCCESS, GGML_SYCL_FAILURE_CAUSE_NONE, 0 };
 }
 #endif
+
 
 #include <cinttypes>
 #include <cmath>
