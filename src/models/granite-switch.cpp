@@ -44,6 +44,7 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
     // K/V. reusing n_layer_nextn keeps n_layer() == n_real, so the regular layers
     // keep their indices and the KV cache shift/defrag skips the router layer
     const uint32_t n_real = hparams.n_layer();
+    GGML_ASSERT(n_real < LLAMA_MAX_LAYERS);
     hparams.router_layer  = (int32_t) n_real;
     hparams.n_layer_all   = n_real + 1;
     hparams.n_layer_nextn = 1;
@@ -56,7 +57,7 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
-    const int64_t n_slots_i64 = (int64_t) n_slots();
+    const int64_t n_slots_i64 = (int64_t) (n_adapters + 1); // slot 0 = base/zero delta
     const int64_t n_rank      = (int64_t) max_lora_rank;
     const int64_t n_embd_q    = n_embd_head_k * n_head;
     const int64_t n_embd_kv   = n_embd_k_gqa;

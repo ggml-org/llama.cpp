@@ -1545,9 +1545,6 @@ struct llama_model_granite_switch : public llama_model_base {
     uint32_t max_lora_rank = 0;
     float    router_gain   = 15.0f;
 
-    // stacked-adapter slots: n_adapters + 1 (slot 0 = base/zero delta)
-    uint32_t n_slots() const { return n_adapters + 1; }
-
     std::unordered_map<llama_token, int32_t>     adapter_token_to_slot;
     std::unordered_map<llama_token, llama_token> adapter_token_to_substitute;
 
