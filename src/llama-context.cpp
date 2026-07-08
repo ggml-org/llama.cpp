@@ -468,9 +468,6 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
             return;
         }
 
-        // n_outputs must match n_tokens: for embedding models with mean/rank pooling, build_pooling
-        // creates inp_mean with shape [n_tokens, n_seqs] and multiplies it with t_embd, which is
-        // reduced to [n_outputs, ...] via out_ids - the ggml_mul_mat asserts if n_outputs != n_tokens.
         const uint32_t n_tokens_probe = probe.n_tokens_per_seq*n_seqs;
 
         auto * gf = graph_reserve(n_tokens_probe, n_seqs, n_tokens_probe, mctx, true);
