@@ -5062,6 +5062,7 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
 
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
 
 #ifdef GGML_SYCL_GRAPH
     bool use_sycl_graph = !g_ggml_sycl_disable_graph && check_graph_compatibility(cgraph);
@@ -5070,6 +5071,9 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         if (!graph_support) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] can not use graphs on device:%d\n", sycl_ctx->device);
             const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+            if (status != GGML_STATUS_SUCCESS) {
+                ggml_backend_sycl_record_failed_status(dev_ctx);
+            }
             return status;
         }
 
@@ -5079,6 +5083,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         const ggml_status graph_status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
         model_sycl_graph.end_recording();
         if (graph_status != GGML_STATUS_SUCCESS) {
+            ggml_backend_sycl_record_failed_status(dev_ctx);
             return graph_status;
         }
 
@@ -5104,6 +5109,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             sycl_ctx->stream()->wait();
         } catch (sycl::exception const & e) {
             GGML_LOG_ERROR("%s: SYCL graph launch/wait failed: %s\n", __func__, e.what());
+            ggml_backend_sycl_record_failed_exception(dev_ctx, e);
             return GGML_STATUS_FAILED;
         }
     } else
@@ -5111,6 +5117,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     {
         const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
         if (status != GGML_STATUS_SUCCESS) {
+            ggml_backend_sycl_record_failed_status(dev_ctx);
             return status;
         }
     }

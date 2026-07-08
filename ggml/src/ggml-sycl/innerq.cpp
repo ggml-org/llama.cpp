@@ -13,6 +13,7 @@
 #include "ggml.h"
 
 #include <cmath>
+#include <cstdlib>
 
 #include <cstring>
 
@@ -145,23 +146,16 @@ extern "C" void ggml_innerq_compute_k_squared_profile(
     if (out_scales == nullptr) {
         return;
     }
-    // Zero the output first so a half-written run leaves a clean
-    // (1.0) baseline rather than garbage. We overwrite every
-    // position below, but the zero is the safe fallback if n_probe < 1
-    // (which would skip the loop) or head_dim invalid (also skipped).
-    // Caller sees 1.0f for skipped positions, matching the "no K^2
-    // adjustment" safe default in k_squared_scale().
+    // Validate head_dim before any writes so unsupported values don't
+    // overrun the caller's expected output buffer.
+    if (head_dim != 16 && head_dim != 32 && head_dim != 64 && head_dim != 128) {
+        return;
+    }
+    // Initialize valid outputs to the identity scale before early returns.
     for (int d = 0; d < head_dim; ++d) {
         out_scales[d] = 1.0f;
     }
     if (probe == nullptr || n_probe < 1) {
-        return;
-    }
-    if (head_dim != 16 && head_dim != 32 && head_dim != 64 && head_dim != 128) {
-        return;
-    }
-    // Only the head_dims InnerQ supports. Others leave the 1.0 default.
-    if (head_dim != 16 && head_dim != 32 && head_dim != 64 && head_dim != 128) {
         return;
     }
     // Pass 1: per-position sum of squares.
