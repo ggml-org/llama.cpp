@@ -11610,7 +11610,7 @@ void ggml_compute_forward_lightning_indexer(
         for (int i_batch = 0; i_batch < n_batch; ++i_batch) {
             const float       * src2_row =       (float *) ((char *) src2->data + i_batch*nb21 +        i_stream*nb23);
             const ggml_fp16_t * src3_row = (ggml_fp16_t *) ((char *) src3->data + i_batch*nb31 + (i_stream%ne33)*nb33);
-            float             * dst_row =        (float *) ((char *) dst->data +  i_batch*nb1 +         i_stream*nb3);
+            float             * dst_row  =       (float *) ((char *)  dst->data + i_batch*nb1  +        i_stream*nb3 );
             for (int i_kv = ir0; i_kv < ir1; ++i_kv) {
                 char * src1_row = (char *) src1->data + i_kv*nb12 + i_stream*nb13;
                 if (k_to_float) {
