@@ -154,6 +154,15 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
     FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,GGML_TYPE_TURBO2_0)
     FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,GGML_TYPE_TURBO3_0)
     FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,GGML_TYPE_TURBO4_0)
+    // P3.2.2b0a1b4aab: post-auto-asymmetric K=q8_0 + V=turbo mix rows;
+    // already in the GGML_SYCL_FA_ALL_QUANTS matrix at :126/:136/:146
+    // for the macro-DEF branch, but the cheap-cut #else branch compiles
+    // only same-type K=V pairs, so the post-auto-asymmetric path needs
+    // its own row here. Dispatches require explicit -ctk q8_0 -ctv turbo
+    // (or auto-asymmetric K downgrade produces this pair at runtime).
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0,GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0,GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0,GGML_TYPE_TURBO4_0)
 #endif // GGML_SYCL_FA_ALL_QUANTS
 
     GGML_ABORT("Not match KV type in vec");
@@ -227,7 +236,15 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     }
 
 #ifndef GGML_SYCL_FA_ALL_QUANTS
-    if (K->type != V->type) {
+    // P3.2.2b0a1b4aab: admit the post-auto-asymmetric K=q8_0 + V=turbo
+    // pair so Qwen3 GQA 8:1 (after the auto-asymmetric K downgrade at
+    // src/llama-kv-cache.cpp:152 fires) can reach the VEC kernel.
+    const bool k_q8_0_v_turbo =
+        (K->type == GGML_TYPE_Q8_0) &&
+        (V->type == GGML_TYPE_TURBO2_0 ||
+         V->type == GGML_TYPE_TURBO3_0 ||
+         V->type == GGML_TYPE_TURBO4_0);
+    if (K->type != V->type && !k_q8_0_v_turbo) {
         return BEST_FATTN_KERNEL_NONE;
     }
 #endif // GGML_SYCL_FA_ALL_QUANTS
