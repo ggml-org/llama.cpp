@@ -39,17 +39,79 @@
 	const shimmerTitle = $derived(isPending && isStreaming);
 
 	let scrollEl: HTMLDivElement | undefined = $state();
-	const SCROLL_BOTTOM_THRESHOLD_PX = 32;
+
+	// Generous stickiness: anything within this many pixels of the bottom is
+	// considered "at the bottom" and continues to follow new content. Larger
+	// than the chat main view's 10px threshold because reasoning fires lots of
+	// small incremental DOM writes that easily drift a few pixels off bottom.
+	const SCROLL_BOTTOM_THRESHOLD_PX = 64;
+
+	let userScrolledUp = $state(false);
+	let lastScrollTop = 0;
+	let pendingFrame: number | null = null;
+
+	function isAtBottom(): boolean {
+		if (!scrollEl) return false;
+		return (
+			scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop <=
+			SCROLL_BOTTOM_THRESHOLD_PX
+		);
+	}
+
+	function scrollToBottomOnFrame() {
+		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
+		pendingFrame = requestAnimationFrame(() => {
+			pendingFrame = null;
+			// Re-check at paint time: the user may have scrolled between
+			// scheduling the frame and the frame firing.
+			if (scrollEl && !userScrolledUp && isAtBottom()) {
+				scrollEl.scrollTop = scrollEl.scrollHeight;
+			}
+		});
+	}
+
+	function handleScrollEvent() {
+		if (!scrollEl) return;
+		const isScrollingUp = scrollEl.scrollTop < lastScrollTop;
+		if (isScrollingUp && !isAtBottom()) {
+			userScrolledUp = true;
+		} else if (isAtBottom()) {
+			userScrolledUp = false;
+		}
+		lastScrollTop = scrollEl.scrollTop;
+	}
 
 	$effect(() => {
-		// Re-run when content grows while reasoning is in progress; pin to the
-		// bottom unless the user has scrolled up to read earlier content.
+		// Primary trigger: content updates directly. Coalesced via RAF so a
+		// burst of chunks within the same paint frame results in one scroll.
 		void section.content;
 		if (!scrollEl || !isPending || !isStreaming) return;
+		scrollToBottomOnFrame();
+	});
 
-		const distanceFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
-		if (distanceFromBottom <= SCROLL_BOTTOM_THRESHOLD_PX) {
-			scrollEl.scrollTop = scrollEl.scrollHeight;
+	$effect(() => {
+		// Secondary trigger: any DOM mutation inside the scroll region. This
+		// catches layout changes that don't touch section.content directly,
+		// e.g. markdown re-parsing turning plain text into a list, code blocks
+		// expanding as syntax highlighting settles, image loads, etc.
+		if (!scrollEl || !isPending || !isStreaming) return;
+
+		const observer = new MutationObserver(() => scrollToBottomOnFrame());
+		observer.observe(scrollEl, {
+			childList: true,
+			subtree: true,
+			characterData: true
+		});
+
+		return () => observer.disconnect();
+	});
+
+	$effect(() => {
+		// Reasoning just ended - reset sticky state so the next round starts
+		// pinned to the bottom again, even if the user scrolled away.
+		if (!isPending) {
+			userScrolledUp = false;
+			lastScrollTop = 0;
 		}
 	});
 </script>
@@ -64,7 +126,12 @@
 	{shimmerTitle}
 	{onToggle}
 >
-	<div bind:this={scrollEl} class="reasoning-content" class:is-streaming={isPending}>
+	<div
+		bind:this={scrollEl}
+		class="reasoning-content"
+		class:is-streaming={isPending}
+		onscroll={handleScrollEvent}
+	>
 		{#if renderThinkingAsMarkdown}
 			<MarkdownContent content={section.content} {attachments} />
 		{:else}
