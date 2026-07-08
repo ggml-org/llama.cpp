@@ -162,12 +162,12 @@ class GraniteSwitchModel(GraniteMoeModel):
         if not self.hparams.get("num_local_experts"):
             self.gguf_writer.add_expert_used_count(0)
 
-        self.gguf_writer.add_num_adapters(self._n_adapters)
-        self.gguf_writer.add_max_lora_rank(self._max_lora_rank)
-        self.gguf_writer.add_adapter_token_ids(self.hparams["adapter_token_ids"])
-        self.gguf_writer.add_adapter_substitute_token_ids(self.hparams["adapter_substitute_token_ids"])
+        self.gguf_writer.add_adapter_count(self._n_adapters)
+        self.gguf_writer.add_adapter_lora_rank(self._max_lora_rank)
+        self.gguf_writer.add_adapter_token_ids_activate(self.hparams["adapter_token_ids"])
+        self.gguf_writer.add_adapter_token_ids_substitute(self.hparams["adapter_substitute_token_ids"])
         router_gain = float(self.hparams.get("control_token_gain", 15.0))
-        self.gguf_writer.add_router_gain(router_gain)
+        self.gguf_writer.add_adapter_router_gain(router_gain)
         logger.info("gguf: (graniteswitch) num_adapters=%s max_lora_rank=%s n_slots=%s router_gain=%s", self._n_adapters, self._max_lora_rank, self._n_slots, router_gain)
 
     def _lora_a(self, data: Tensor) -> Tensor:

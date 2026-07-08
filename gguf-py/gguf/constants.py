@@ -159,11 +159,11 @@ class Keys:
         TARGET_HIDDEN_SIZE                = "{arch}.target_hidden_size"
         BLOCK_SIZE                        = "{arch}.block_size"
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
-        NUM_ADAPTERS                      = "{arch}.num_adapters"
-        ADAPTER_TOKEN_IDS                 = "{arch}.adapter_token_ids"
-        ADAPTER_SUBSTITUTE_TOKEN_IDS      = "{arch}.adapter_substitute_token_ids"
-        MAX_LORA_RANK                     = "{arch}.max_lora_rank"
-        ROUTER_GAIN                       = "{arch}.router_gain"
+        ADAPTER_COUNT                     = "{arch}.adapters.count"
+        ADAPTER_TOKEN_IDS_ACTIVATE        = "{arch}.adapters.token_ids_activate"
+        ADAPTER_TOKEN_IDS_SUBSTITUTE      = "{arch}.adapters.token_ids_substitute"
+        ADAPTER_LORA_RANK                 = "{arch}.adapters.lora_rank"
+        ADAPTER_ROUTER_GAIN               = "{arch}.adapters.router_gain"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
