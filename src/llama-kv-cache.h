@@ -189,7 +189,12 @@ public:
     void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized);
     void turbo_innerq_publish_abort(int abort_reason, int retry_count, bool freeze_last_good);
     bool turbo_innerq_consume_runtime(llama_turbo_innerq_runtime_snapshot & out);
-
+    // P3.2.2a2a3b discriminator: non-mutating snapshot read for
+    // the consumer-side gate at apply(). Mirrors
+    // llama_turbo_innerq_runtime_state::peek() without clearing
+    // state.dirty; use this for diagnostics, not for the real
+    // consume path.
+    llama_turbo_innerq_runtime_snapshot turbo_innerq_peek_runtime() const;
     // store k_cur and v_cur in the cache based on the provided head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;

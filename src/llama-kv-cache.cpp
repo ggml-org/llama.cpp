@@ -2850,8 +2850,22 @@ bool llama_kv_cache_context::apply() {
     // InnerQ: consume any pending per-cache runtime update and mirror the
     // current scale_inv snapshot into the device tensor.
     llama_turbo_innerq_runtime_snapshot innerq_rt;
-    if (kv->get_turbo_innerq_scale_inv_raw() != nullptr && kv->turbo_innerq_consume_runtime(innerq_rt)) {
-        ggml_tensor * t = kv->get_turbo_innerq_scale_inv_raw();
+    ggml_tensor * scale_inv_raw = kv->get_turbo_innerq_scale_inv_raw();
+    // P3.2.2a2a3b discriminator: log the gate inputs via a
+    // non-mutating peek() so we can tell whether the short-circuit
+    // is on the scale_inv null check, the consume_runtime false
+    // return, or both. DO NOT call turbo_innerq_consume_runtime
+    // here -- it clears state.dirty on success and would mutate
+    // the state we're trying to observe. The real consume call
+    // stays on the original control path inside the gate below.
+    llama_turbo_innerq_runtime_snapshot peek_rt = kv->turbo_innerq_peek_runtime();
+    LLAMA_LOG_INFO("%s: InnerQ consume gate scale_inv_raw=%p peek_dirty=%d peek.finalized=%d abort=%d retry=%d freeze=%d scale_inv_n=%zu\n",
+                   __func__, (void *) scale_inv_raw, peek_rt.dirty,
+                   peek_rt.finalized, peek_rt.abort_reason,
+                   peek_rt.retry_count, peek_rt.freeze_last_good,
+                   peek_rt.scale_inv.size());
+    if (scale_inv_raw != nullptr && kv->turbo_innerq_consume_runtime(innerq_rt)) {
+        ggml_tensor * t = scale_inv_raw;
         if (t->buffer != nullptr) {
             ggml_backend_tensor_set(t, innerq_rt.scale_inv.data(), 0, innerq_rt.scale_inv.size() * sizeof(float));
             LLAMA_LOG_INFO("%s: InnerQ scale_inv tensor updated (finalized=%d abort=%d retry=%d freeze=%d)\n",
@@ -2859,7 +2873,6 @@ bool llama_kv_cache_context::apply() {
                            innerq_rt.retry_count, innerq_rt.freeze_last_good);
         }
     }
-
     return true;
 }
 
@@ -2919,6 +2932,13 @@ ggml_tensor * llama_kv_cache::get_turbo_innerq_scale_inv() const {
         : nullptr;
 }
 
+// P3.2.2a2a3b discriminator: non-mutating snapshot read so the
+// apply() gate at :2867 can log the gate inputs without clearing
+// state.dirty. Mirrors llama_turbo_innerq_runtime_state::peek().
+llama_turbo_innerq_runtime_snapshot llama_kv_cache::turbo_innerq_peek_runtime() const {
+    return turbo_innerq_runtime.peek();
+}
+
 void llama_kv_cache::turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
     turbo_innerq_runtime.publish_scale_inv(scale_inv, n, finalized);
 }
@@ -2928,7 +2948,17 @@ void llama_kv_cache::turbo_innerq_publish_abort(int abort_reason, int retry_coun
 }
 
 bool llama_kv_cache::turbo_innerq_consume_runtime(llama_turbo_innerq_runtime_snapshot & out) {
-    return turbo_innerq_runtime.consume_if_dirty(out);
+    // P3.2.2a2a3b discriminator: log the wrapper's return + the
+    // out snapshot before the return so we can confirm whether the
+    // consume path is wired even if the upstream :2867 scale_inv
+    // gate fails. Note: consume_if_dirty copies state into `out`
+    // BEFORE the dirty check (llama-turbo-innerq-runtime.cpp:47),
+    // so `out` is informative in BOTH the ok=1 and ok=0 paths --
+    // log the snapshot fields unconditionally.
+    bool ok = turbo_innerq_runtime.consume_if_dirty(out);
+    LLAMA_LOG_INFO("turbo_innerq_consume_runtime: ok=%d out.dirty=%d out.finalized=%d out.abort=%d out.retry=%d out.freeze=%d out.scale_inv_n=%zu\n",
+                   ok, out.dirty, out.finalized, out.abort_reason, out.retry_count, out.freeze_last_good, out.scale_inv.size());
+    return ok;
 }
 
 void llama_kv_cache_context::on_graph_compute_failure(ggml_status status, int abort_reason) {
