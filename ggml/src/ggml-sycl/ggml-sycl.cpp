@@ -4838,10 +4838,11 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
 } catch (sycl::exception & e) {
     std::cerr << e.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::cerr << "Error OP "<<ggml_op_name(dst->op)<< std::endl;
-    // P3.2.3.3b2b blocker: direct process exit here bypasses the llama_context
-    // abort-callback / GGML_STATUS_* path, so SYCL FA failures cannot currently
-    // publish InnerQ recovery state before termination.
-    std::exit(1);
+    // Return failure to the graph-compute caller instead of terminating the
+    // process. A higher layer (llama_context + memory context) can then seed
+    // later-attempt fallback state. Typed InnerQ cause mapping remains a
+    // follow-up task.
+    return false;
 }
 
 GGML_API void ggml_backend_sycl_get_device_description(int device, char *description,
@@ -4976,7 +4977,7 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
+static ggml_status ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
     ggml_sycl_set_main_device(sycl_ctx->device);
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -4997,10 +4998,11 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 #endif
         bool ok = ggml_sycl_compute_forward(*sycl_ctx, node);
         if (!ok) {
-            GGML_LOG_ERROR("%s: error: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
+            GGML_LOG_ERROR("%s: error: op failed or unsupported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
+            return GGML_STATUS_FAILED;
         }
-        GGML_ASSERT(ok);
     }
+    return GGML_STATUS_SUCCESS;
 }
 
 #ifdef GGML_SYCL_GRAPH
@@ -5055,15 +5057,18 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         const bool graph_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_limited_graph);
         if (!graph_support) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] can not use graphs on device:%d\n", sycl_ctx->device);
-            ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
-            return GGML_STATUS_SUCCESS;
+            const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+            return status;
         }
 
         sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
 
         model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
-        ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+        const ggml_status graph_status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
         model_sycl_graph.end_recording();
+        if (graph_status != GGML_STATUS_SUCCESS) {
+            return graph_status;
+        }
 
         const bool graph_update_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_graph);
         if (!sycl_ctx->exec_graph || !graph_update_support) {
@@ -5087,7 +5092,10 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     } else
 #endif
     {
-        ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+        const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+        if (status != GGML_STATUS_SUCCESS) {
+            return status;
+        }
     }
     return GGML_STATUS_SUCCESS;
 }
