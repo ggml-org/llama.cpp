@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "hex-dma.h"
+#include "hex-fastdiv.h"
 #include "hvx-exp.h"
 #include "hvx-sigmoid.h"
 #include "hvx-utils.h"
@@ -697,6 +698,7 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
     const uint32_t nb11 = src1 ? src1->nb[1] : 0;
     const uint32_t nb12 = src1 ? src1->nb[2] : 0;
     const uint32_t nb13 = src1 ? src1->nb[3] : 0;
+    const bool src1_contig = src1 ? ((nb12 == (size_t)ne01 * nb11) && (nb13 == (size_t)ne02 * nb12)) : false;
 
     uint8_t * src0_spad_data = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
     uint8_t * src1_spad_data = octx->src1_spad.data + (ith * octx->src1_spad.size_per_thread);
@@ -738,13 +740,13 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
             dma_make_ptr(data_dst, dst_spad_data + (spad_idx * dst_spad_half_size)),
             nb1, dst_row_size_aligned, dst_data_row_size, 0);
 
-        const size_t src0_off = unary_row_offset(ir, ne01, ne02, nb01, nb02, nb03);
+        const size_t src0_off = src0_contig ? (ir * nb01) : unary_row_offset(ir, ne01, ne02, nb01, nb02, nb03);
         dma_queue_push(dma_queue,
             dma_make_ptr(src0_spad_data + (spad_idx * src0_spad_half_size), data_src + src0_off),
             src0_row_size_aligned, nb01, src0_data_row_size, block_size);
 
         if (htp_op == HTP_OP_RMS_NORM_MUL && !uctx->broadcast_weight) {
-            const size_t src1_off = unary_row_offset(ir, ne01, ne02, nb11, nb12, nb13);
+            const size_t src1_off = src1_contig ? (ir * nb11) : unary_row_offset(ir, ne01, ne02, nb11, nb12, nb13);
             dma_queue_push(dma_queue,
                 dma_make_ptr(src1_spad_data + (spad_idx * src1_spad_half_size), data_src1 + src1_off),
                 uctx->src1_row_size_aligned, nb11, uctx->src1_data_row_size, block_size);
@@ -811,7 +813,7 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
                 break;
         }
 
-        const size_t dst_off = unary_row_offset(ir, ne1, ne2, nb1, nb2, nb3);
+        const size_t dst_off = dst_contig ? (ir * nb1) : unary_row_offset(ir, ne1, ne2, nb1, nb2, nb3);
         dma_queue_push(dma_queue,
             dma_make_ptr(data_dst + dst_off, dst_spad),
             nb1, dst_row_size_aligned, dst_data_row_size, block_size);
@@ -823,13 +825,13 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
             const uint32_t pref_ir = next_ir + next_block_size;
             if (pref_ir < src0_end_row) {
                 const uint32_t pref_block_size = unary_block_size(pref_ir, src0_end_row, BLOCK, src0_contig, dst_contig, ne01, ne1);
-                const size_t src0_pref_off = unary_row_offset(pref_ir, ne01, ne02, nb01, nb02, nb03);
+                const size_t src0_pref_off = src0_contig ? (pref_ir * nb01) : unary_row_offset(pref_ir, ne01, ne02, nb01, nb02, nb03);
                 dma_queue_push(dma_queue,
                     dma_make_ptr(src0_spad, data_src + src0_pref_off),
                     src0_row_size_aligned, nb01, src0_data_row_size, pref_block_size);
 
                 if (htp_op == HTP_OP_RMS_NORM_MUL && !uctx->broadcast_weight) {
-                    const size_t src1_pref_off = unary_row_offset(pref_ir, ne01, ne02, nb11, nb12, nb13);
+                    const size_t src1_pref_off = src1_contig ? (pref_ir * nb11) : unary_row_offset(pref_ir, ne01, ne02, nb11, nb12, nb13);
                     dma_queue_push(dma_queue,
                         dma_make_ptr(src1_spad, data_src1 + src1_pref_off),
                         uctx->src1_row_size_aligned, nb11, uctx->src1_data_row_size, pref_block_size);
@@ -990,6 +992,11 @@ static void unary_job_f32_wide_row_per_thread(unsigned int nth, unsigned int ith
     const uint32_t tiles_per_row = (ne0 + col_tile - 1) / col_tile;
     const int32_t  tri_ttype     = (htp_op == HTP_OP_TRI) ? op_params[0] : 0;
 
+    const bool src0_contig = (nb02 == (size_t)ne01 * nb01) &&
+                             (nb03 == (size_t)ne02 * nb02);
+    const bool dst_contig  = (nb2  == (size_t)ne1  * nb1)  &&
+                             (nb3  == (size_t)ne2  * nb2);
+
     // Single-pass pointwise pipeline, flattened over all (row, tile) pairs so tiles
     // stream continuously across row boundaries. 
     const uint32_t total_tiles = (src0_end_row - src0_start_row) * tiles_per_row;
@@ -999,39 +1006,66 @@ static void unary_job_f32_wide_row_per_thread(unsigned int nth, unsigned int ith
         const uint32_t col  = (t % tiles_per_row) * col_tile;
         const uint32_t tw   = MIN(col_tile, ne0 - col);
         const size_t   tb   = (size_t) tw * sizeof(float);
-        const size_t   soff = unary_row_offset(row, ne01, ne02, nb01, nb02, nb03) + (size_t) col * sizeof(float);
+        const size_t   soff = (src0_contig ? (row * nb01) : unary_row_offset(row, ne01, ne02, nb01, nb02, nb03)) + (size_t) col * sizeof(float);
 
         dma_queue_push(dmaq, dma_make_ptr(data_dst, dst_spad_data + (spad_idx * dst_half)), 0, 0, 0, 0);
         dma_queue_push(dmaq, dma_make_ptr(src0_spad_data + (spad_idx * src0_half), data_src + soff), tb, tb, tb, 1);
     }
 
+    struct fastdiv_values div_ne01 = init_fastdiv_values(ne01);
+    struct fastdiv_values div_tpr  = init_fastdiv_values(tiles_per_row);
+
+    uint32_t row = src0_start_row;
+    uint32_t col = 0;
+    uint32_t tile_in_row = 0;
+    uint32_t i01 = fastmodulo(row, ne01, &div_ne01);
+
+    uint32_t prow = src0_start_row + fastdiv(2, &div_tpr);
+    uint32_t pcol = fastmodulo(2, tiles_per_row, &div_tpr) * col_tile;
+    uint32_t ptile_in_row = fastmodulo(2, tiles_per_row, &div_tpr);
+
     for (uint32_t t = 0; t < total_tiles; t++) {
         uint8_t * dst_spad = (uint8_t *) dma_queue_pop(dmaq).src;
         uint8_t * src_spad = (uint8_t *) dma_queue_pop(dmaq).dst;
 
-        const uint32_t row = src0_start_row + t / tiles_per_row;
-        const uint32_t col = (t % tiles_per_row) * col_tile;
         const uint32_t tw  = MIN(col_tile, ne0 - col);
 
         if (htp_op == HTP_OP_TRI) {
-            const uint32_t i01 = row % ne01;
             tri_apply_tile_f32(src_spad, dst_spad, tw, col, i01, ne0, tri_ttype);
         } else {
             unary_apply_tile_f32(htp_op, src_spad, dst_spad, tw, op_params);
         }
 
-        const size_t doff = unary_row_offset(row, ne1, ne2, nb1, nb2, nb3) + (size_t) col * sizeof(float);
+        const size_t doff = (dst_contig ? (row * nb1) : unary_row_offset(row, ne1, ne2, nb1, nb2, nb3)) + (size_t) col * sizeof(float);
         const size_t tb   = (size_t) tw * sizeof(float);
         dma_queue_push(dmaq, dma_make_ptr(data_dst + doff, dst_spad), tb, tb, tb, 1);
 
         const uint32_t pt = t + 2;
         if (pt < total_tiles) {
-            const uint32_t prow = src0_start_row + pt / tiles_per_row;
-            const uint32_t pcol = (pt % tiles_per_row) * col_tile;
             const uint32_t ptw  = MIN(col_tile, ne0 - pcol);
             const size_t   ptb  = (size_t) ptw * sizeof(float);
-            const size_t   psoff = unary_row_offset(prow, ne01, ne02, nb01, nb02, nb03) + (size_t) pcol * sizeof(float);
+            const size_t   psoff = (src0_contig ? (prow * nb01) : unary_row_offset(prow, ne01, ne02, nb01, nb02, nb03)) + (size_t) pcol * sizeof(float);
             dma_queue_push(dmaq, dma_make_ptr(src_spad, data_src + psoff), ptb, ptb, ptb, 1);
+        }
+
+        tile_in_row++;
+        col += col_tile;
+        if (tile_in_row == tiles_per_row) {
+            tile_in_row = 0;
+            col = 0;
+            row++;
+            i01++;
+            if (i01 == ne01) {
+                i01 = 0;
+            }
+        }
+
+        ptile_in_row++;
+        pcol += col_tile;
+        if (ptile_in_row == tiles_per_row) {
+            ptile_in_row = 0;
+            pcol = 0;
+            prow++;
         }
     }
 
