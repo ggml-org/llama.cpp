@@ -2840,8 +2840,8 @@ bool llama_kv_cache_context::apply() {
     // InnerQ: consume any pending per-cache runtime update and mirror the
     // current scale_inv snapshot into the device tensor.
     llama_turbo_innerq_runtime_snapshot innerq_rt;
-    if (kv->get_turbo_innerq_scale_inv() != nullptr && kv->turbo_innerq_consume_runtime(innerq_rt)) {
-        ggml_tensor * t = kv->get_turbo_innerq_scale_inv();
+    if (kv->get_turbo_innerq_scale_inv_raw() != nullptr && kv->turbo_innerq_consume_runtime(innerq_rt)) {
+        ggml_tensor * t = kv->get_turbo_innerq_scale_inv_raw();
         if (t->buffer != nullptr) {
             ggml_backend_tensor_set(t, innerq_rt.scale_inv.data(), 0, innerq_rt.scale_inv.size() * sizeof(float));
             LLAMA_LOG_INFO("%s: InnerQ scale_inv tensor updated (finalized=%d abort=%d retry=%d freeze=%d)\n",
@@ -2901,6 +2901,12 @@ ggml_tensor * llama_kv_cache_context::get_turbo_rot_inverse() const {
 
 ggml_tensor * llama_kv_cache_context::get_turbo_innerq_scale_inv() const {
     return kv->get_turbo_innerq_scale_inv();
+}
+
+ggml_tensor * llama_kv_cache::get_turbo_innerq_scale_inv() const {
+    return turbo_innerq_runtime.should_attach_scale_tensor()
+        ? turbo_innerq_scale_inv
+        : nullptr;
 }
 
 void llama_kv_cache::turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {

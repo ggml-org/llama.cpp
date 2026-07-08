@@ -178,8 +178,12 @@ public:
     ggml_tensor * get_turbo_rotation() const { return turbo_rotation; }
     ggml_tensor * get_turbo_rotation_inv() const { return turbo_rotation_inv; }
 
-    // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization
-    ggml_tensor * get_turbo_innerq_scale_inv() const { return turbo_innerq_scale_inv; }
+    // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization.
+    // Raw accessor = always returns the owned tensor; active accessor returns
+    // nullptr unless runtime state says the scale should participate in the
+    // graph (finalized or frozen-last-good).
+    ggml_tensor * get_turbo_innerq_scale_inv_raw() const { return turbo_innerq_scale_inv; }
+    ggml_tensor * get_turbo_innerq_scale_inv() const;
 
     // Publish/consume mutable InnerQ runtime state for this cache.
     void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized);
