@@ -100,6 +100,9 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DSpark.gguf \
 
 `--spec-draft-n-max` is clamped to the draft model's trained block size.
 
+Currently only drafts with a Qwen3 backbone are supported; support for other backbones
+(e.g. Gemma4) is planned.
+
 See:
 
 - #25173

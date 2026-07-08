@@ -1280,6 +1280,9 @@ struct common_speculative_impl_draft_dspark : public common_speculative_impl_dra
 
             auto * smpl = smpls[seq_id].get();
             // greedily read the predicted block at this sequence's noise positions 1..nb-1
+            // TODO: implement confidence-scheduled prefix pruning (the "scheduled" part of DSpark):
+            //       use the confidence head to truncate the drafted block at the first low-confidence
+            //       position instead of always keeping all n_draft tokens
             for (int32_t i = 0; i < nb; ++i) {
                 common_sampler_sample(smpl, ctx_dft, beg + i, true);
 
