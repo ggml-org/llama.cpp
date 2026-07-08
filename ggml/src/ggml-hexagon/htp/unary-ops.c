@@ -1023,17 +1023,18 @@ static void unary_job_f32_wide_row_per_thread(unsigned int nth, unsigned int ith
         dma_queue_push(dmaq, dma_make_ptr(src0_vtcm_data + (vtcm_idx * src0_half), data_src + soff), tb, tb, tb, 1);
     }
 
-    struct fastdiv_values div_ne01 = init_fastdiv_values(ne01);
-    struct fastdiv_values div_tpr  = init_fastdiv_values(tiles_per_row);
+    const struct htp_unary_kernel_params * kparams = (const struct htp_unary_kernel_params *) octx->kernel_params;
+    const struct fastdiv_values * div_ne01 = &kparams->div_ne01;
+    const struct fastdiv_values * div_tpr  = &kparams->div_tpr;
 
     uint32_t row = src0_start_row;
     uint32_t col = 0;
     uint32_t tile_in_row = 0;
-    uint32_t i01 = fastmodulo(row, ne01, &div_ne01);
+    uint32_t i01 = fastmodulo(row, ne01, div_ne01);
 
-    uint32_t prow = src0_start_row + fastdiv(2, &div_tpr);
-    uint32_t pcol = fastmodulo(2, tiles_per_row, &div_tpr) * col_tile;
-    uint32_t ptile_in_row = fastmodulo(2, tiles_per_row, &div_tpr);
+    uint32_t prow = src0_start_row + fastdiv(2, div_tpr);
+    uint32_t pcol = fastmodulo(2, tiles_per_row, div_tpr) * col_tile;
+    uint32_t ptile_in_row = fastmodulo(2, tiles_per_row, div_tpr);
 
     for (uint32_t t = 0; t < total_tiles; t++) {
         uint8_t * dst_vtcm = (uint8_t *) dma_queue_pop(dmaq).src;

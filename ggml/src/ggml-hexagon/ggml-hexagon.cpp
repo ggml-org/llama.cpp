@@ -2644,7 +2644,7 @@ static void ggml_hexagon_precompute_unary_params(
     uint32_t vtcm_row_per_thread = 0;
 
     htp_unary_vtcm_layout_build(&L, op, src0->ne[0], dst->ne[0],
-                                op == HTP_OP_RMS_NORM_MUL ? dst->src[1]->ne[0] : 0,
+                                op == HTP_OP_RMS_NORM_MUL ? src1->ne[0] : 0,
                                 broadcast_weight, n_threads, sess->vtcm_size,
                                 &col_tile, &vtcm_row_per_thread);
 
@@ -2661,6 +2661,10 @@ static void ggml_hexagon_precompute_unary_params(
     kparams->vtcm_dst_size  = L.dst_bytes * n_threads;
 
     kparams->block = col_tile ? 0 : ((L.src0_bytes / 2) / src0_row_size_aligned);
+
+    const uint32_t tiles_per_row = col_tile > 0 ? (src0->ne[0] + col_tile - 1) / col_tile : 1;
+    kparams->div_ne01 = init_fastdiv_values(src0->ne[1]);
+    kparams->div_tpr  = init_fastdiv_values(tiles_per_row);
 }
 
 static void ggml_hexagon_precompute_fused_qkv_params(

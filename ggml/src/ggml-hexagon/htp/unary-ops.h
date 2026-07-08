@@ -25,6 +25,10 @@ struct htp_unary_kernel_params {
     uint32_t  dst_row_size_aligned;
 
     uint32_t  vtcm_size;
+
+    // Fastdiv helpers
+    struct fastdiv_values div_ne01;
+    struct fastdiv_values div_tpr;
 };
 
 #if defined(__cplusplus)
