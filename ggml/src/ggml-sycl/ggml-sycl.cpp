@@ -5087,8 +5087,13 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                     sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
             }
         }
-
-        sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
+        try {
+            sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
+            sycl_ctx->stream()->wait();
+        } catch (sycl::exception const & e) {
+            GGML_LOG_ERROR("%s: SYCL graph launch/wait failed: %s\n", __func__, e.what());
+            return GGML_STATUS_FAILED;
+        }
     } else
 #endif
     {
