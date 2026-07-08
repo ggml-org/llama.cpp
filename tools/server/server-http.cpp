@@ -237,12 +237,32 @@ bool server_http_context::init(const common_params & params) {
         return false;
     };
 
+#if defined(LLAMA_UI_HAS_ASSETS)
+    static auto handle_gzip_header = [](const httplib::Request & req, httplib::Response & res) {
+        if (!llama_ui_use_gzip()) {
+            // no gzip build, skip
+            return true;
+        }
+        if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+            res.status = 415; // unsupported media type
+            res.set_content("Error: gzip is not supported by this browser", "text/plain");
+            return false;
+        } else {
+            res.set_header("Content-Encoding", "gzip");
+        }
+        return true;
+    };
+#endif
+
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
         if (!is_ready.load()) {
 #if defined(LLAMA_UI_HAS_ASSETS)
             if (const auto tmp = string_split<std::string>(req.path, '.');
                 req.path == "/" || (!tmp.empty() && tmp.back() == "html")) {
                 if (const llama_ui_asset * a = llama_ui_find_asset("loading.html")) {
+                    if (!handle_gzip_header(req, res)) {
+                        return false;  // returns error message
+                    }
                     res.status = 503;
                     res.set_content(reinterpret_cast<const char*>(a->data), a->size, "text/html; charset=utf-8");
                     return false;
@@ -321,21 +341,6 @@ bool server_http_context::init(const common_params & params) {
             }
         } else {
 #if defined(LLAMA_UI_HAS_ASSETS)
-            static auto handle_gzip_header = [](const httplib::Request & req, httplib::Response & res) {
-                if (!llama_ui_use_gzip()) {
-                    // no gzip build, skip
-                    return true;
-                }
-                if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
-                    res.status = 415; // unsupported media type
-                    res.set_content("Error: gzip is not supported by this browser", "text/plain");
-                    return false;
-                } else {
-                    res.set_header("Content-Encoding", "gzip");
-                }
-                return true;
-            };
-
             auto serve_asset_cached = [](const std::string & name, bool isolation) {
                 return [name, isolation](const httplib::Request & req, httplib::Response & res) {
                     if (!handle_gzip_header(req, res)) {
