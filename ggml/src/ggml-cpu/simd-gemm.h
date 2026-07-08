@@ -78,7 +78,7 @@ static void simd_gemm(
             for (int64_t i = 0; i < GEMM_RM; i++) {
                 float a = C[i * N + jj];
                 for (int64_t kk = 0; kk < K; kk++) {
-                    a += A[i + kk] * B[kk * N + jj];
+                    a += A[i * K + kk] * B[kk * N + jj];
                 }
                 C[i * N + jj] = a;
             }
