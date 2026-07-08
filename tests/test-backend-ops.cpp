@@ -7126,6 +7126,11 @@ struct test_lightning_indexer : public test_case {
         return 1e-6;
     }
 
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return ((2 * hsk + 2) * nh + 1) * kv * nb * ns;
+    }
+
     test_lightning_indexer(int64_t hsk = 128, int64_t nh = 64, int64_t kv = 256, int64_t nb = 128, int64_t ns = 1, ggml_type type_K = GGML_TYPE_F16)
         : hsk(hsk), nh(nh), kv(kv), nb(nb), ns(ns), type_K(type_K) {}
 
