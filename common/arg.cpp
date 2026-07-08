@@ -32,7 +32,6 @@
 #include <regex>
 #include <set>
 #include <string>
-#include <thread> // for hardware_concurrency
 #include <vector>
 
 #ifndef __EMSCRIPTEN__
@@ -1278,7 +1277,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.cpuparams.n_threads = value;
             if (params.cpuparams.n_threads <= 0) {
-                params.cpuparams.n_threads = std::thread::hardware_concurrency();
+                // leave unresolved so postprocess_cpu_params() picks the physical core
+                // count, matching the default when the flag is not set (avoids
+                // over-counting logical cores via std::thread::hardware_concurrency())
+                params.cpuparams.n_threads = -1;
             }
         }
     ).set_env("LLAMA_ARG_THREADS"));
@@ -1288,7 +1290,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.cpuparams_batch.n_threads = value;
             if (params.cpuparams_batch.n_threads <= 0) {
-                params.cpuparams_batch.n_threads = std::thread::hardware_concurrency();
+                // leave unresolved so postprocess_cpu_params() inherits from --threads
+                params.cpuparams_batch.n_threads = -1;
             }
         }
     ));
@@ -3537,7 +3540,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams.n_threads = value;
             if (params.speculative.draft.cpuparams.n_threads <= 0) {
-                params.speculative.draft.cpuparams.n_threads = std::thread::hardware_concurrency();
+                // leave unresolved so postprocess_cpu_params() inherits from --threads
+                params.speculative.draft.cpuparams.n_threads = -1;
             }
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
@@ -3547,7 +3551,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams_batch.n_threads = value;
             if (params.speculative.draft.cpuparams_batch.n_threads <= 0) {
-                params.speculative.draft.cpuparams_batch.n_threads = std::thread::hardware_concurrency();
+                // leave unresolved so postprocess_cpu_params() inherits from --threads-draft
+                params.speculative.draft.cpuparams_batch.n_threads = -1;
             }
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
