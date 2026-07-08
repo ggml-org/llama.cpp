@@ -18,24 +18,24 @@
 #endif
 
 #ifdef GGML_USE_SYCL
-static ggml_status llama_backend_sched_consume_sycl_status(ggml_backend_sched_t sched) {
+static ggml_backend_sycl_failure llama_backend_sched_consume_sycl_failure(ggml_backend_sched_t sched) {
     const int n_backends = ggml_backend_sched_get_n_backends(sched);
     for (int i = 0; i < n_backends; ++i) {
         ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
         if (!ggml_backend_is_sycl(backend)) {
             continue;
         }
-        const ggml_status status = ggml_backend_sycl_consume_last_status(backend);
-        if (status != GGML_STATUS_SUCCESS) {
-            return status;
+        const ggml_backend_sycl_failure failure = ggml_backend_sycl_consume_last_failure(backend);
+        if (failure.status != GGML_STATUS_SUCCESS) {
+            return failure;
         }
     }
-    return GGML_STATUS_SUCCESS;
+    return { GGML_STATUS_SUCCESS, GGML_SYCL_FAILURE_CAUSE_NONE, 0 };
 }
 #else
-static ggml_status llama_backend_sched_consume_sycl_status(ggml_backend_sched_t sched) {
+static ggml_backend_sycl_failure llama_backend_sched_consume_sycl_failure(ggml_backend_sched_t sched) {
     GGML_UNUSED(sched);
-    return GGML_STATUS_SUCCESS;
+    return { GGML_STATUS_SUCCESS, GGML_SYCL_FAILURE_CAUSE_NONE, 0 };
 }
 #endif
 
@@ -802,9 +802,11 @@ void llama_context::synchronize() {
     }
 
     ggml_backend_sched_synchronize(sched.get());
-    last_sync_status = llama_backend_sched_consume_sycl_status(sched.get());
+    const ggml_backend_sycl_failure sync_failure = llama_backend_sched_consume_sycl_failure(sched.get());
+    last_sync_status = sync_failure.status;
     if (last_sync_status != GGML_STATUS_SUCCESS) {
-        LLAMA_LOG_ERROR("%s: backend synchronize failed, status: %d\n", __func__, last_sync_status);
+        LLAMA_LOG_ERROR("%s: backend synchronize failed, status: %d cause: %d raw_code: %d\n",
+                __func__, last_sync_status, (int) sync_failure.cause, sync_failure.raw_code);
         return;
     }
 
@@ -1441,13 +1443,18 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         // that the previous compute is still reading.
         if (cparams.pipeline_parallel) {
             ggml_backend_sched_synchronize(sched.get());
-            const ggml_status sync_status = llama_backend_sched_consume_sycl_status(sched.get());
+            const ggml_backend_sycl_failure sync_failure = llama_backend_sched_consume_sycl_failure(sched.get());
+            const ggml_status sync_status = sync_failure.status;
             last_sync_status = sync_status;
             if (sync_status != GGML_STATUS_SUCCESS) {
+                const int abort_reason = sync_failure.cause == GGML_SYCL_FAILURE_CAUSE_DEVICE_LOST
+                    ? GGML_INNERQ_ABORT_DEVICE_LOST
+                    : GGML_INNERQ_ABORT_NONE;
                 if (mctx) {
-                    mctx->on_graph_compute_failure(sync_status);
+                    mctx->on_graph_compute_failure(sync_status, abort_reason);
                 }
-                LLAMA_LOG_ERROR("%s: failed to synchronize reused graph, compute status: %d\n", __func__, sync_status);
+                LLAMA_LOG_ERROR("%s: failed to synchronize reused graph, compute status: %d cause: %d raw_code: %d\n",
+                        __func__, sync_status, (int) sync_failure.cause, sync_failure.raw_code);
                 ret = sync_status;
                 return nullptr;
             }
@@ -1520,10 +1527,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     }
 
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
-        last_sync_status = status;
+    last_sync_status = status;
     if (status != GGML_STATUS_SUCCESS) {
         if (mctx) {
-            mctx->on_graph_compute_failure(status);
+            mctx->on_graph_compute_failure(status, GGML_INNERQ_ABORT_NONE);
         }
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;

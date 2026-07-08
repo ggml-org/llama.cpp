@@ -409,7 +409,7 @@ public:
 
     void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized);
 
-    void on_graph_compute_failure(ggml_status status) override;
+    void on_graph_compute_failure(ggml_status status, int abort_reason = 0) override;
 
     // store k_cur and v_cur in the cache based on the provided head location
     // note: the heads in k_cur and v_cur should be laid out contiguously in memory
