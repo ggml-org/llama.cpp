@@ -48,7 +48,16 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
     ggml_tensor * K = dst->src[1];
     ggml_tensor * V = dst->src[2];
 
-#ifdef GGML_SYCL_FA_ALL_QUANTS
+#ifdef GGML_SYCL_FA_ALL_QUANTS  // P3.2.2a2a first cut: leave the
+       // mixed-K flash_attn_ext_vec<...,42/43/44,...> dispatch block
+       // available, but with the macro UNDEFINED in
+       // ggml/src/ggml-sycl/common.hpp:48 by default. The runtime
+       // rejection path in ggml_sycl_get_best_fattn_kernel()
+       // (fattn.cpp:224,237) is behind #ifndef, so the macro
+       // state is the single source of truth - flipping it in
+       // common.hpp is the only edit needed to switch dispatch
+       // modes end-to-end. See ASSUMPTIONS.md:553-583 +
+       // RALPH_TASKS.md:1237-1251.
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_F16)
