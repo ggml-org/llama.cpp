@@ -13,6 +13,10 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
     // main stack (blk.n_layer = attention sub-block, blk.n_layer+1 = moe sub-block).
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
     GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_all");
+    if (hparams.n_layer_nextn > 0) {
+        // both nextn blocks form a single draft head (see graph_mtp)
+        hparams.n_layer_nextn_per_head = hparams.n_layer_nextn;
+    }
 
     // A layer is recurrent IFF the n_head_kv value is set to 0 and
     // the n_ff value is set to 0. Covers the MTP blocks too (neither is recurrent).

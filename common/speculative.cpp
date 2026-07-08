@@ -1245,7 +1245,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         n_embd = llama_model_n_embd_out(llama_get_model(ctx_dft));
         GGML_ASSERT(n_embd == llama_model_n_embd(llama_get_model(ctx_tgt)) &&
                 "MTP input row width must match the target h_nextn width");
-        n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
+        // count invokable draft heads, not raw nextn blocks: a single draft step
+        // may span several nextn blocks (e.g. NemotronH Puzzle's [attention, moe])
+        n_mtp_layers = std::max(1, (int) llama_model_n_nextn_heads(llama_get_model(ctx_dft)));
 
         SPC_TRC("%s", "adding speculative implementation 'draft-mtp'\n");
         SPC_TRC("- n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);

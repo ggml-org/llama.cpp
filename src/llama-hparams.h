@@ -52,6 +52,7 @@ struct llama_hparams {
     uint32_t n_embd;
     uint32_t n_layer_all;
     uint32_t n_layer_nextn = 0;
+    uint32_t n_layer_nextn_per_head = 1; // nextn blocks consumed by one draft head (>1 = multi-block MTP step)
     uint32_t n_expert = 0;
     uint32_t n_expert_used_impl = 0;
     uint32_t n_rel_attn_bkts = 0;
