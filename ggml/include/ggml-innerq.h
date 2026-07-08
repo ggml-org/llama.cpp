@@ -88,6 +88,29 @@ typedef enum {
     GGML_INNERQ_POLICY_FROZEN  = 2,  // P3.2.3 only
 } ggml_innerq_policy;
 
+// P3.2.3.3: failure classification for the host-side recovery policy.
+// "Init-only anomalies" are narrowly the degenerate-statistics failures
+// that happen before the request has entered steady-state decode.
+typedef enum {
+    GGML_INNERQ_ABORT_NONE        = 0,
+    GGML_INNERQ_ABORT_INIT_STATS  = 1,
+    GGML_INNERQ_ABORT_NAN         = 2,
+    GGML_INNERQ_ABORT_DEVICE_LOST = 3,
+    GGML_INNERQ_ABORT_PPL_DRIFT   = 4,
+} ggml_innerq_abort;
+
+// Recovery outcome for the CURRENT request.
+// STATIC_FALLBACK = serve via the static turbo baseline now.
+// STATIC_FALLBACK_FREEZE = same current-request behavior, but freeze the
+// last-known-good scales for recovered runs instead of re-probing blindly.
+// RETRY_INIT = exactly one init-only retry is allowed.
+typedef enum {
+    GGML_INNERQ_RECOVERY_STATIC_FALLBACK        = 0,
+    GGML_INNERQ_RECOVERY_RETRY_INIT             = 1,
+    GGML_INNERQ_RECOVERY_STATIC_FALLBACK_FREEZE = 2,
+} ggml_innerq_recovery;
+
+
 // Calibration slot key. Equal keys MUST serialize (concurrent calibration
 // of the same slot would race). P3.2.3 adds the host-side lock.
 typedef struct {
@@ -115,6 +138,26 @@ ggml_innerq_policy ggml_innerq_state_decide(const ggml_innerq_state_key * key);
 // correct for K^2 distortion. Real K^2 computation is the device
 // kernel in P3.2.3.
 float ggml_innerq_state_k_squared_scale(const ggml_innerq_state_key * key);
+
+// P3.2.3.3: host-side recovery policy.
+//
+// Inputs:
+//   key           -- request slot key; non-eligible/null keys always fall back
+//   reason        -- failure classification
+//   retry_count   -- number of init-only retries already consumed
+//   has_last_good -- whether a last-known-good frozen state exists
+//
+// Policy:
+//   - INIT_STATS gets exactly one retry (retry_count == 0).
+//   - NAN / DEVICE_LOST / PPL_DRIFT NEVER retry.
+//   - Hard failures and exhausted init retries fall back to static turbo
+//     for the current request.
+//   - If has_last_good, hard failures freeze that state for recovered runs.
+ggml_innerq_recovery ggml_innerq_state_recover(
+    const ggml_innerq_state_key * key,
+    ggml_innerq_abort reason,
+    int retry_count,
+    int has_last_good);
 
 // P3.2.3: real per-position K^2 profile computation. Replaces the
 // P3.2.2 constant with a sum-of-squares per head_dim position across

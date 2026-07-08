@@ -26,6 +26,25 @@ static int is_unidentified_model(uint32_t model_fp) {
     return model_fp == 0u;
 }
 
+static int is_turbo_kv_quant(int kv_quant) {
+    switch (kv_quant) {
+        case GGML_TYPE_TURBO2_0:
+        case GGML_TYPE_TURBO3_0:
+        case GGML_TYPE_TURBO4_0:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int is_policy_eligible(const ggml_innerq_state_key * key) {
+    return key != nullptr &&
+           !is_unidentified_model(key->model_fp) &&
+           key->head_dim == 128 &&
+           is_turbo_kv_quant(key->kv_quant);
+}
+
+
 extern "C" ggml_innerq_policy ggml_innerq_state_decide(
     const ggml_innerq_state_key * key) {
     // Per the P3.2 policy contract, off by default. LLAMA_ENABLE_INNERQ
@@ -42,23 +61,9 @@ extern "C" ggml_innerq_policy ggml_innerq_state_decide(
         // and the state machine correctly refuses.
         return GGML_INNERQ_POLICY_DISABLED;
     }
-    // Policy contract: only turbo-path quants are eligible. The harness
-    // probe (test-sycl-turbo-correctness.cpp [8] InnerQ) only ever passes
-    // TURBO{2,3,4}_0 kv_quants. f16/q8_0/q4_0 are evaluation baselines
-    // and fall back targets -- not InnerQ-eligible per the policy.
-    switch (key->kv_quant) {
-        case GGML_TYPE_TURBO2_0:
-        case GGML_TYPE_TURBO3_0:
-        case GGML_TYPE_TURBO4_0:
-            break;
-        default:
-            return GGML_INNERQ_POLICY_DISABLED;
-    }
-    // Per the policy contract, head_dim=128 is the validation fleet
-    // invariant (turbo hard invariant). d=256 stays behind the existing
-    // opt-in gate (LLAMA_TEST_FA256), and d != {128, 256} is not
-    // policy-eligible. P3.2.2 only handles d=128.
-    if (key->head_dim != 128) {
+    // Policy contract: only turbo-path quants at d=128 are eligible.
+    // f16/q8_0/q4_0 are evaluation baselines and fallback targets.
+    if (!is_policy_eligible(key)) {
         return GGML_INNERQ_POLICY_DISABLED;
     }
     // Opt-in gate: LLAMA_ENABLE_INNERQ=1 enables. Absent (or empty
@@ -230,14 +235,38 @@ extern "C" void ggml_innerq_compute_k_squared_profile_sycl(
     ggml_innerq_compute_k_squared_profile(probe, n_probe, head_dim, out_scales);
 }
 
-// P3.2.3.3: Static-turbo fallback + init-only retry policy placeholder.
-//
-// The P3.2 policy contract specifies:
-//   - On InnerQ failure, fall back to STATIC turbo4 (NEVER f16).
-//   - Recalibration: 1 retry on init-only anomalies, no retry on
-//     mid-stream NaN.
-// The full implementation lives in the SYCL backend's FA dispatch
-// path; it is gated on the policy's `decide()` return value and
-// inspects the per-request abort signal (P3.2.3.3 will wire it
-// into ggml-sycl.cpp:4828). For now, P3.2.3.1 (C reference) and
-// P3.2.3.2 (SYCL kernel) are the artifacts shipped to date.
+extern "C" ggml_innerq_recovery ggml_innerq_state_recover(
+    const ggml_innerq_state_key * key,
+    ggml_innerq_abort reason,
+    int retry_count,
+    int has_last_good) {
+    if (!is_policy_eligible(key)) {
+        return GGML_INNERQ_RECOVERY_STATIC_FALLBACK;
+    }
+    switch (reason) {
+        case GGML_INNERQ_ABORT_INIT_STATS:
+            if (retry_count <= 0) {
+                return GGML_INNERQ_RECOVERY_RETRY_INIT;
+            }
+            return has_last_good
+                ? GGML_INNERQ_RECOVERY_STATIC_FALLBACK_FREEZE
+                : GGML_INNERQ_RECOVERY_STATIC_FALLBACK;
+        case GGML_INNERQ_ABORT_NAN:
+        case GGML_INNERQ_ABORT_DEVICE_LOST:
+        case GGML_INNERQ_ABORT_PPL_DRIFT:
+            return has_last_good
+                ? GGML_INNERQ_RECOVERY_STATIC_FALLBACK_FREEZE
+                : GGML_INNERQ_RECOVERY_STATIC_FALLBACK;
+        case GGML_INNERQ_ABORT_NONE:
+        default:
+            return GGML_INNERQ_RECOVERY_STATIC_FALLBACK;
+    }
+}
+
+// P3.2.3.3: host-side recovery primitives are implemented above, but the
+// full fallback/retry behavior is still only PARTIAL until the SYCL FA
+// dispatch path consumes them at the spec touchpoints:
+//   - fattn.cpp: ggml_sycl_flash_attn_ext_supported()
+//   - ggml-sycl.cpp: GGML_OP_FLASH_ATTN_EXT compute path
+// Today the helpers make the policy testable and keep the contract in one
+// place; a follow-up turn must wire them into the real dispatch path.
