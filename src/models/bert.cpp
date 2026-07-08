@@ -182,7 +182,7 @@ llama_model_bert::graph::graph(const llama_model & model, const llm_graph_params
                     nullptr,
                     model.layers[il].ffn_down_exps,
                     nullptr,
-                    hparams.n_expert, hparams.n_expert_used,
+                    hparams.n_expert, hparams.n_expert_used_impl,
                     LLM_FFN_GELU, false,
                     hparams.expert_weights_scale,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
