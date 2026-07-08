@@ -73,29 +73,13 @@ static ggml_tensor * ggml_mul_mat_aux(
     return res;
 }
 
-// InnerQ: cross-TU shared state for CUDA per-channel equalization. CUDA was
-// pruned from this fork, so only the no-op stub below is built. The pre-prune
-// implementation lived in ggml-cuda/turbo-innerq.cu.
-#ifndef INNERQ_MAX_CHANNELS
-#define INNERQ_MAX_CHANNELS 128
-#endif
+// InnerQ runtime state now lives per KV cache instance (see
+// llama-turbo-innerq-runtime.{h,cpp}), not as a process-global 128-float
+// buffer. This prevents one model/context from bleeding scale updates or
+// abort/retry state into another turbo KV cache.
 
-#ifdef GGML_USE_CUDA
-#if defined(_WIN32) && !defined(__MINGW32__)
-#  define TURBO_IQ_IMPORT __declspec(dllimport)
-#else
-#  define TURBO_IQ_IMPORT
-#endif
-extern TURBO_IQ_IMPORT bool  g_innerq_finalized;
-extern TURBO_IQ_IMPORT float g_innerq_scale_inv_host[INNERQ_MAX_CHANNELS];
-TURBO_IQ_IMPORT bool turbo_innerq_needs_tensor_update(void);
-TURBO_IQ_IMPORT void turbo_innerq_mark_tensor_updated(void);
-#else
-[[maybe_unused]] static bool  g_innerq_finalized = false;
-[[maybe_unused]] static float g_innerq_scale_inv_host[INNERQ_MAX_CHANNELS] = {};
-[[maybe_unused]] static bool turbo_innerq_needs_tensor_update(void) { return false; }
-[[maybe_unused]] static void turbo_innerq_mark_tensor_updated(void) {}
-#endif
+static constexpr int LLAMA_TURBO_INNERQ_CHANNELS =
+        (int) llama_turbo_innerq_runtime_snapshot::N_CHANNELS;
 
 //
 // llama_kv_cache
@@ -422,7 +406,7 @@ llama_kv_cache::llama_kv_cache(
             ggml_format_name(turbo_rotation_inv, "turbo_rotation_inv");  // R
 
             // InnerQ: per-channel scale_inv tensor (128 floats, initialized to all 1.0)
-            turbo_innerq_scale_inv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, INNERQ_MAX_CHANNELS);
+            turbo_innerq_scale_inv = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, LLAMA_TURBO_INNERQ_CHANNELS);
             ggml_format_name(turbo_innerq_scale_inv, "turbo_innerq_scale_inv");
         }
     }
@@ -483,13 +467,13 @@ llama_kv_cache::llama_kv_cache(
             ggml_backend_tensor_set(turbo_rotation_inv, TURBO_ROTATION_RT, 0, 128 * 128 * sizeof(float));
 
             // Initialize InnerQ scale_inv to all 1.0 (identity scaling).
-            // This is plumbing only, not active InnerQ/recovery: the SYCL path
-            // still exposes no runtime abort/retry signal, and
-            // turbo_innerq_needs_tensor_update() remains a no-op stub there.
+            // The per-cache runtime state starts at the same identity values
+            // and clean/not-finalized flags; later publish_* calls can make
+            // the tensor path observable without cross-context bleed.
             if (turbo_innerq_scale_inv != nullptr && turbo_innerq_scale_inv->buffer != nullptr) {
-                float ones[INNERQ_MAX_CHANNELS];
-                for (int i = 0; i < INNERQ_MAX_CHANNELS; i++) ones[i] = 1.0f;
-                ggml_backend_tensor_set(turbo_innerq_scale_inv, ones, 0, INNERQ_MAX_CHANNELS * sizeof(float));
+                float ones[LLAMA_TURBO_INNERQ_CHANNELS];
+                for (int i = 0; i < LLAMA_TURBO_INNERQ_CHANNELS; i++) ones[i] = 1.0f;
+                ggml_backend_tensor_set(turbo_innerq_scale_inv, ones, 0, LLAMA_TURBO_INNERQ_CHANNELS * sizeof(float));
             }
 
             LLAMA_LOG_INFO("%s: TurboQuant rotation matrices initialized (128x128)\n", __func__);
@@ -627,9 +611,9 @@ void llama_kv_cache::clear(bool data) {
 
             // Re-initialize InnerQ scale_inv to all 1.0
             if (turbo_innerq_scale_inv != nullptr && turbo_innerq_scale_inv->buffer != nullptr) {
-                float ones[INNERQ_MAX_CHANNELS];
-                for (int i = 0; i < INNERQ_MAX_CHANNELS; i++) ones[i] = 1.0f;
-                ggml_backend_tensor_set(turbo_innerq_scale_inv, ones, 0, INNERQ_MAX_CHANNELS * sizeof(float));
+                float ones[LLAMA_TURBO_INNERQ_CHANNELS];
+                for (int i = 0; i < LLAMA_TURBO_INNERQ_CHANNELS; i++) ones[i] = 1.0f;
+                ggml_backend_tensor_set(turbo_innerq_scale_inv, ones, 0, LLAMA_TURBO_INNERQ_CHANNELS * sizeof(float));
             }
         }
     }
@@ -2853,13 +2837,16 @@ bool llama_kv_cache_context::apply() {
     kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
     n_kv = kv->get_n_kv(sinfos[i_cur]);
 
-    // InnerQ: check if CUDA calibration finalized and tensor needs update
-    if (kv->get_turbo_innerq_scale_inv() != nullptr && turbo_innerq_needs_tensor_update()) {
+    // InnerQ: consume any pending per-cache runtime update and mirror the
+    // current scale_inv snapshot into the device tensor.
+    llama_turbo_innerq_runtime_snapshot innerq_rt;
+    if (kv->get_turbo_innerq_scale_inv() != nullptr && kv->turbo_innerq_consume_runtime(innerq_rt)) {
         ggml_tensor * t = kv->get_turbo_innerq_scale_inv();
         if (t->buffer != nullptr) {
-            ggml_backend_tensor_set(t, g_innerq_scale_inv_host, 0, INNERQ_MAX_CHANNELS * sizeof(float));
-            turbo_innerq_mark_tensor_updated();
-            LLAMA_LOG_INFO("%s: InnerQ scale_inv tensor updated\n", __func__);
+            ggml_backend_tensor_set(t, innerq_rt.scale_inv.data(), 0, innerq_rt.scale_inv.size() * sizeof(float));
+            LLAMA_LOG_INFO("%s: InnerQ scale_inv tensor updated (finalized=%d abort=%d retry=%d freeze=%d)\n",
+                           __func__, innerq_rt.finalized, innerq_rt.abort_reason,
+                           innerq_rt.retry_count, innerq_rt.freeze_last_good);
         }
     }
 
@@ -2914,6 +2901,18 @@ ggml_tensor * llama_kv_cache_context::get_turbo_rot_inverse() const {
 
 ggml_tensor * llama_kv_cache_context::get_turbo_innerq_scale_inv() const {
     return kv->get_turbo_innerq_scale_inv();
+}
+
+void llama_kv_cache::turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
+    turbo_innerq_runtime.publish_scale_inv(scale_inv, n, finalized);
+}
+
+void llama_kv_cache::turbo_innerq_publish_abort(int abort_reason, int retry_count, bool freeze_last_good) {
+    turbo_innerq_runtime.publish_abort(abort_reason, retry_count, freeze_last_good);
+}
+
+bool llama_kv_cache::turbo_innerq_consume_runtime(llama_turbo_innerq_runtime_snapshot & out) {
+    return turbo_innerq_runtime.consume_if_dirty(out);
 }
 
 ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {

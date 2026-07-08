@@ -4,6 +4,7 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "llama-turbo-innerq-runtime.h"
 
 #include <unordered_map>
 #include <vector>
@@ -180,6 +181,11 @@ public:
     // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization
     ggml_tensor * get_turbo_innerq_scale_inv() const { return turbo_innerq_scale_inv; }
 
+    // Publish/consume mutable InnerQ runtime state for this cache.
+    void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized);
+    void turbo_innerq_publish_abort(int abort_reason, int retry_count, bool freeze_last_good);
+    bool turbo_innerq_consume_runtime(llama_turbo_innerq_runtime_snapshot & out);
+
     // store k_cur and v_cur in the cache based on the provided head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
@@ -296,6 +302,8 @@ private:
 
     // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization (128 floats)
     ggml_tensor * turbo_innerq_scale_inv = nullptr;
+
+    llama_turbo_innerq_runtime_state turbo_innerq_runtime;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
