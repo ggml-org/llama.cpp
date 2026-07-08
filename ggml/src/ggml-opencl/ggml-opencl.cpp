@@ -6242,8 +6242,14 @@ inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, c
         threshold_ne0 = 128;
         threshold_ne1 = 128;
     }
-    return tensor->ne[0] >= threshold_ne0 && tensor->ne[1] >= threshold_ne1 &&
+    bool threashold_ok = tensor->ne[0] >= threshold_ne0 && tensor->ne[1] >= threshold_ne1 &&
             tensor->ne[2] == 1 && tensor->ne[3] == 1;
+
+    // q6_K adreno kernels requires ne1 is multiple of 128
+    if (tensor->type == GGML_TYPE_Q6_K) {
+        return threashold_ok && tensor->ne[1] % 128 == 0;
+    }
+    return threashold_ok;
 }
 
 inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
@@ -6492,15 +6498,6 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                        op->src[0]->type == GGML_TYPE_Q4_K  ||
                        op->src[0]->type == GGML_TYPE_Q5_K  ||
                        op->src[0]->type == GGML_TYPE_Q6_K) {
-#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-                // q6_K GEMM (ne1>1) for weights routed off the noshuffle path because
-                // ne01 % 128 != 0 (see use_flat_gemv_for_large_m_q6_K): the flat convert
-                // has no verified small-batch GEMM kernel for these shapes (l4_lm drifts
-                // at small K). Fall back to CPU; decode (ne1==1) stays on the flat GEMV.
-                if (op->src[0]->type == GGML_TYPE_Q6_K && op->ne[1] > 1 && op->src[0]->ne[1] % 128 != 0) {
-                    return false;
-                }
-#endif // GGML_OPENCL_USE_ADRENO_KERNELS
                 return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
             } else if (op->src[0]->type == GGML_TYPE_Q8_0) {
                 return op->src[1]->type == GGML_TYPE_F32;
