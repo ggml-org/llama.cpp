@@ -2866,6 +2866,9 @@ static bool ggml_hexagon_supported_binary(const struct ggml_hexagon_session * se
         return false;
     }
 
+    if (ggml_is_permuted(src0) || ggml_is_permuted(dst)) {
+        return false;
+    }
     if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
@@ -2910,6 +2913,9 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
         return false;
     }
     if (dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (ggml_is_permuted(src0)) {
         return false;
     }
     if (!ggml_are_same_shape(src0, dst)) {
