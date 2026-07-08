@@ -70,8 +70,9 @@ struct llama_memory_context_i {
     virtual ggml_tensor * get_turbo_rot_forward() const { return nullptr; }
     virtual ggml_tensor * get_turbo_rot_inverse() const { return nullptr; }
 
-    // TurboQuant InnerQ: get per-channel scale_inv tensor for Q/V equalization
-    // Returns nullptr when InnerQ is not active. Override in KV cache contexts.
+    // TurboQuant InnerQ: get per-channel scale_inv tensor for Q/V equalization.
+    // Returns nullptr when InnerQ is not active. Today the SYCL path still
+    // uses identity/no-op plumbing until runtime abort/retry state is wired.
     virtual ggml_tensor * get_turbo_innerq_scale_inv() const { return nullptr; }
 };
 
