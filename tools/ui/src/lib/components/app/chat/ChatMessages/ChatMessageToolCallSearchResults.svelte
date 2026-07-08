@@ -113,7 +113,13 @@
 					class="bg-popover text-popover-foreground z-50 w-80 max-w-[90vw] rounded-lg border p-0 shadow-lg"
 				>
 					<div class="flex flex-col gap-2 p-3">
-						<a href={safeUrl} target="_blank" rel="noopener noreferrer" class="line-clamp-3 text-sm font-medium leading-snug hover:underline">{result.title}</a>
+						<a
+							href={safeUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							class="line-clamp-3 text-sm font-medium leading-snug hover:underline"
+							>{result.title}</a
+						>
 						{#if publishDate || result.author}
 							<div class="text-muted-foreground flex items-center gap-1.5 text-[11px]">
 								{#if publishDate}

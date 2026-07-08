@@ -135,7 +135,9 @@
 		{#if renderThinkingAsMarkdown}
 			<MarkdownContent content={section.content} class="text-muted-foreground" {attachments} />
 		{:else}
-			<div class="text-[13px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
+			<div
+				class="text-[13px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
+			>
 				{section.content}
 			</div>
 		{/if}
