@@ -11577,8 +11577,11 @@ void ggml_compute_forward_lightning_indexer(
     GGML_TENSOR_LOCALS(int64_t, ne3, src3, ne)
     GGML_TENSOR_LOCALS(size_t,  nb3, src3, nb)
 
-    GGML_ASSERT( nb0 == sizeof(float));
-    GGML_ASSERT(nb00 == sizeof(float));
+    GGML_ASSERT( nb0 == ggml_type_size( dst->type));
+    GGML_ASSERT(nb00 == ggml_type_size(src0->type));
+    GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+    GGML_ASSERT(nb20 == ggml_type_size(src2->type));
+    GGML_ASSERT(nb30 == ggml_type_size(src3->type));
 
     int n_embd   = src0->ne[0];
     int n_head   = src0->ne[1];
