@@ -133,9 +133,9 @@
 		onscroll={handleScrollEvent}
 	>
 		{#if renderThinkingAsMarkdown}
-			<MarkdownContent content={section.content} {attachments} />
+			<MarkdownContent content={section.content} class="text-muted-foreground" {attachments} />
 		{:else}
-			<div class="text-[13px] leading-relaxed break-words whitespace-pre-wrap text-foreground/90">
+			<div class="text-[13px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground">
 				{section.content}
 			</div>
 		{/if}
