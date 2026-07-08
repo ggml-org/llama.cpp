@@ -2076,7 +2076,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q8_0 ||
            op->src[0]->type == GGML_TYPE_MXFP4 ||
            op->src[0]->type == GGML_TYPE_IQ4_NL ||
-           false) && (ne11 >= 2 && ne11 <= 8)
+           false) && (ne11 >= 2 && ne11 <= 16)
          ) ||
          (
           (
@@ -2085,7 +2085,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q6_K ||
            op->src[0]->type == GGML_TYPE_Q2_K ||
            op->src[0]->type == GGML_TYPE_Q3_K ||
-           false) && (ne11 >= 4 && ne11 <= 8)
+           false) && (ne11 >= 4 && ne11 <= 16)
          )
         )
        ) {
@@ -2126,6 +2126,19 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                 r1ptg = 4; break;
             case 5:
                 r1ptg = 5; break;
+            case 9:
+                r1ptg = 3; break;
+            case 10:
+                r1ptg = 5; break;
+            case 11:
+            case 12:
+                r1ptg = 4; break;
+            case 13:
+            case 14:
+            case 15:
+                r1ptg = 5; break;
+            case 16:
+                r1ptg = 4; break;
             default:
                 GGML_ABORT("unsupported ne11");
         };
