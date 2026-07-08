@@ -482,7 +482,10 @@ llama_kv_cache::llama_kv_cache(
             ggml_backend_tensor_set(turbo_rotation, TURBO_ROTATION_R, 0, 128 * 128 * sizeof(float));
             ggml_backend_tensor_set(turbo_rotation_inv, TURBO_ROTATION_RT, 0, 128 * 128 * sizeof(float));
 
-            // Initialize InnerQ scale_inv to all 1.0 (identity scaling)
+            // Initialize InnerQ scale_inv to all 1.0 (identity scaling).
+            // This is plumbing only, not active InnerQ/recovery: the SYCL path
+            // still exposes no runtime abort/retry signal, and
+            // turbo_innerq_needs_tensor_update() remains a no-op stub there.
             if (turbo_innerq_scale_inv != nullptr && turbo_innerq_scale_inv->buffer != nullptr) {
                 float ones[INNERQ_MAX_CHANNELS];
                 for (int i = 0; i < INNERQ_MAX_CHANNELS; i++) ones[i] = 1.0f;
