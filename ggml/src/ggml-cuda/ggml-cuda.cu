@@ -3175,7 +3175,11 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                               (sqr->type  == x->type) && (mul1->type  == x->type) &&
                               (add->type  == x->type);
 
-        if (types_ok && shape_ok && dim_ok && x_in_add == x) {
+        // kernel reads x[idx] and a[c] / inv_b[c] linearly, so every operand is contiguous
+        const bool contig_ok = ggml_is_contiguous(x) && ggml_is_contiguous(add) &&
+                               ggml_is_contiguous(a) && ggml_is_contiguous(inv_b);
+
+        if (types_ok && shape_ok && dim_ok && contig_ok && x_in_add == x) {
             ggml_cuda_op_snake_fused(*cuda_ctx, x, a, inv_b, add);
             return 4;
         }
