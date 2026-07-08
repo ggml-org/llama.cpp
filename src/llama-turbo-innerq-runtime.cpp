@@ -44,11 +44,11 @@ llama_turbo_innerq_runtime_snapshot llama_turbo_innerq_runtime_state::peek() con
 bool llama_turbo_innerq_runtime_state::consume_if_dirty(llama_turbo_innerq_runtime_snapshot & out) {
     std::lock_guard<std::mutex> lock(mutex);
 
-    out = state;
     if (!state.dirty) {
         return false;
     }
 
+    out = state;
     state.dirty = false;
     return true;
 }

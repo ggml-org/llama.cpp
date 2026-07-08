@@ -18,11 +18,9 @@
 #include <cstring>
 
 // Internal helper: model fingerprint. P3.2.2 doesn't have a real
-// fingerprint extractor; for now the caller passes a key with
-// model_fp = 0 (a sentinel meaning "trust the env gate, ignore the
-// model identity"). P3.2.3 wires the real fingerprint extractor
-// (hash of GGUF header chunks) and rejects model_fp = 0 as
-// "unidentified" -- which is the conservative safe default.
+// fingerprint extractor yet, so model_fp = 0 is treated as
+// unidentified and InnerQ stays disabled. P3.2.3 wires the real
+// fingerprint extractor (hash of GGUF header chunks).
 static int is_unidentified_model(uint32_t model_fp) {
     return model_fp == 0u;
 }
