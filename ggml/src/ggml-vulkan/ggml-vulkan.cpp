@@ -3692,7 +3692,8 @@ static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vec
     }
 
     // Needs to be kept up to date on shader changes
-    const uint32_t bank_conflict_offset = device->coopmat_support ? 8 : 1;
+    const bool intel_shmem_stride_pad_zero = device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support;
+    const uint32_t bank_conflict_offset = intel_shmem_stride_pad_zero ? 0 : (device->coopmat_support ? 8 : 1);
     const uint32_t type_size = device->fp16 ? sizeof(ggml_fp16_t) : sizeof(float);
     const uint32_t warps = warptile[0] / warptile[10];
 
