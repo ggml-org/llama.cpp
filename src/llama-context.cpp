@@ -78,10 +78,14 @@ static void turbo_innerq_capture_and_publish(const ggml_tensor * t, turbo_innerq
     }
 
     if (cap->mctx == nullptr) {
+        LLAMA_LOG_INFO("%s: InnerQ capture skipped: memory context missing for %s\n",
+                       __func__, t->name);
         return;
     }
 
     if (t->ne[0] != 128 || t->ne[1] < 1 || t->ne[2] < 1) {
+        LLAMA_LOG_INFO("%s: InnerQ capture skipped: unexpected probe shape for %s (%" PRId64 ", %" PRId64 ", %" PRId64 ")\n",
+                       __func__, t->name, t->ne[0], t->ne[1], t->ne[2]);
         return;
     }
 
@@ -94,6 +98,8 @@ static void turbo_innerq_capture_and_publish(const ggml_tensor * t, turbo_innerq
 
     const auto * traits = ggml_get_type_traits(t->type);
     if (t->type != GGML_TYPE_F32 && traits->to_float == nullptr) {
+        LLAMA_LOG_INFO("%s: InnerQ capture skipped: no to_float for type %d on %s\n",
+                       __func__, (int) t->type, t->name);
         return;
     }
 
@@ -116,6 +122,8 @@ static void turbo_innerq_capture_and_publish(const ggml_tensor * t, turbo_innerq
     float scale_inv[llama_turbo_innerq_runtime_snapshot::N_CHANNELS];
     ggml_innerq_compute_k_squared_profile(probe.data(), (int) n_probe, (int) head_dim, scale_inv);
     cap->mctx->turbo_innerq_publish_scale_inv(scale_inv, llama_turbo_innerq_runtime_snapshot::N_CHANNELS, true);
+    LLAMA_LOG_INFO("%s: InnerQ publish_scale_inv issued from %s (n_probe=%" PRId64 ")\n",
+                   __func__, t->name, n_probe);
     cap->captured = true;
 }
 
@@ -126,6 +134,8 @@ static bool turbo_innerq_eval_callback(struct ggml_tensor * t, bool ask, void * 
     if (ask) {
         const bool user_need = cap && cap->user_cb ? cap->user_cb(t, true, cap->user_ud) : false;
         if (internal_need) {
+            LLAMA_LOG_INFO("%s: InnerQ callback requested %s (%" PRId64 ", %" PRId64 ", %" PRId64 ")\n",
+                           __func__, t->name, t->ne[0], t->ne[1], t->ne[2]);
             cap->user_requested_current = user_need;
         }
         return internal_need || user_need;
