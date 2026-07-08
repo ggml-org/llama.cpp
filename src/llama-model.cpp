@@ -2086,6 +2086,16 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
                     (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE);
 
+                // Same reasoning for NEMOTRON_H_MOE (Puzzle): the MTP sub-blocks are
+                // non-recurrent (attention + moe, no mamba), so the MTP context must not
+                // carry the trunk's recurrent state - recurrent memory can't roll back
+                // (can_seq_rm() is false for it), which otherwise disables the draft
+                // rollback the speculative-decoding framework relies on.
+                const bool mtp_on_hybrid_nemotron_h =
+                    params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
+                    (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) &&
+                    hparams.n_layer_nextn > 0;
+
                 if (llm_arch_is_recurrent(arch)) {
                     res = new llama_memory_recurrent(
                             *this,
@@ -2096,7 +2106,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_seq_max,
                             cparams.n_rs_seq,
                             nullptr);
-                } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen35) {
+                } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen35 && !mtp_on_hybrid_nemotron_h) {
                     // The main difference between hybrid architectures is the
                     // layer filters, so pick the right one here
                     llama_memory_hybrid::layer_filter_cb filter_attn = nullptr;
@@ -2179,6 +2189,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
                     if (mtp_on_hybrid_qwen35) {
                         filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                    }
+
+                    if (mtp_on_hybrid_nemotron_h) {
+                        // Only the attention sub-block (blk.n_layer) needs a KV slot; the
+                        // moe sub-block (blk.n_layer+1) never attends.
+                        filter = [&](uint32_t il) { return il >= hparams.n_layer() && hparams.n_ff(il) == 0; };
                     }
 
                     if ((arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_HY_V3) && hparams.n_layer_nextn > 0) {

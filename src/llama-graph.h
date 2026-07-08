@@ -1221,13 +1221,6 @@ struct llm_graph_context {
 
     llm_graph_input_mem_hybrid_iswa * build_inp_mem_hybrid_iswa() const;
 
-    // Attention-only view of a hybrid model's memory (mctx is a llama_memory_hybrid_context),
-    // for graphs that only ever touch the attention sub-cache (e.g. an MTP head made of
-    // non-recurrent sub-blocks appended to a hybrid trunk). Unlike build_inp_mem_hybrid(),
-    // this does not register a recurrent-state input, so it must not be used by a graph
-    // that also builds recurrent (mamba/rs) layers against the same mctx.
-    llm_graph_input_attn_kv * build_attn_inp_kv_hybrid_attn_only() const;
-
     //
     // pooling
     //

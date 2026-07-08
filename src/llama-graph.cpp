@@ -3232,14 +3232,6 @@ llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
     return (llm_graph_input_mem_hybrid *) res->add_input(std::move(inp));
 }
 
-llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv_hybrid_attn_only() const {
-    const auto * mctx_cur = static_cast<const llama_memory_hybrid_context *>(mctx);
-
-    auto inp = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur->get_attn());
-
-    return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
-}
-
 llm_graph_input_mem_hybrid_k * llm_graph_context::build_inp_mem_hybrid_k() const {
     const auto * mctx_cur = static_cast<const llama_memory_hybrid_context *>(mctx);
 
