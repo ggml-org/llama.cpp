@@ -29,6 +29,10 @@ void llama_turbo_innerq_runtime_state::publish_abort(int abort_reason, int retry
     state.abort_reason = abort_reason;
     state.retry_count = retry_count;
     state.freeze_last_good = freeze_last_good;
+    if (!freeze_last_good) {
+        state.scale_inv.fill(1.0f);
+        state.finalized = false;
+    }
     state.dirty = true;
 }
 
@@ -47,4 +51,14 @@ bool llama_turbo_innerq_runtime_state::consume_if_dirty(llama_turbo_innerq_runti
 
     state.dirty = false;
     return true;
+}
+
+bool llama_turbo_innerq_runtime_state::should_attach_scale_tensor() const {
+    std::lock_guard<std::mutex> lock(mutex);
+
+    if (state.abort_reason != 0) {
+        return state.freeze_last_good;
+    }
+
+    return state.finalized;
 }

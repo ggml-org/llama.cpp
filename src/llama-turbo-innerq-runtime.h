@@ -24,6 +24,7 @@ public:
 
     llama_turbo_innerq_runtime_snapshot peek() const;
     bool consume_if_dirty(llama_turbo_innerq_runtime_snapshot & out);
+    bool should_attach_scale_tensor() const;
 
 private:
     mutable std::mutex mutex;
