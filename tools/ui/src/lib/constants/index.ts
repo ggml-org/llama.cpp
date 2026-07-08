@@ -12,6 +12,7 @@ export * from './storage';
 export * from './attachment-menu';
 export * from './auto-scroll';
 export * from './binary-detection';
+export * from './built-in-tools';
 export * from './cache';
 export * from './chat-form';
 export * from './cli-flags';
