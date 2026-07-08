@@ -201,6 +201,8 @@ llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURC
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
+llama_build(test-turbo-innerq-runtime.cpp)
+llama_test(test-turbo-innerq-runtime)
 
 if (GGML_SYCL)
     add_executable(test-sycl-turbo test-sycl-turbo.cpp)
