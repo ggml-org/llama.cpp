@@ -4500,6 +4500,11 @@ void server_routes::init_routes() {
             return res;
         }
 
+        if (id_slot < 0) {
+            res->error(format_error_response("Invalid slot ID", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
         std::string action = req.get_param("action");
 
         if (action == "save") {
