@@ -2,9 +2,6 @@
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { cn } from '$lib/components/ui/utils';
-	import { useThrottle } from '$lib/hooks/use-throttle.svelte';
-	import { formatReasoningPreview } from '$lib/utils';
-	import { config } from '$lib/stores/settings.svelte';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 
@@ -17,9 +14,6 @@
 		title?: string;
 		titleSnippet?: Snippet;
 		subtitle?: string;
-		preview?: string;
-		rawContent?: string;
-		isStreaming?: boolean;
 		shimmerTitle?: boolean;
 		onToggle?: () => void;
 		children: Snippet;
@@ -34,27 +28,10 @@
 		title = '',
 		titleSnippet,
 		subtitle,
-		preview,
-		rawContent,
-		isStreaming = false,
 		shimmerTitle = false,
 		onToggle,
 		children
 	}: Props = $props();
-
-	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
-
-	let previewKey = useThrottle(() => rawContent ?? preview ?? '', 500);
-	let displayedPreview = $state('');
-	let displayedOverflow = $state(0);
-
-	$effect(() => {
-		void previewKey.key;
-		const content = rawContent ?? preview ?? '';
-		const result = formatReasoningPreview(content);
-		displayedPreview = result.preview;
-		displayedOverflow = result.overflow;
-	});
 </script>
 
 <Collapsible.Root
@@ -93,18 +70,6 @@
 
 			{#if subtitle}
 				<span class="text-xs italic text-muted-foreground/70">{subtitle}</span>
-			{/if}
-
-			{#if displayedPreview && !showThoughtInProgress && isStreaming}
-				<div class="ml-1 flex min-w-0 items-baseline gap-2">
-					<div class="w-3/4 truncate text-xs text-muted-foreground/60">
-						{displayedPreview}
-					</div>
-
-					{#if displayedOverflow > 0}
-						<span class="shrink-0 text-xs text-muted-foreground/40">+{displayedOverflow}</span>
-					{/if}
-				</div>
 			{/if}
 		</div>
 
