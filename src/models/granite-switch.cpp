@@ -20,14 +20,14 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, /* required */ false);
 
-    ml.get_key(LLM_KV_NUM_ADAPTERS,  n_adapters);
-    ml.get_key(LLM_KV_MAX_LORA_RANK, max_lora_rank);
-    ml.get_key(LLM_KV_ROUTER_GAIN, router_gain, /* required */ false);
+    ml.get_key(LLM_KV_ADAPTER_COUNT,     n_adapters);
+    ml.get_key(LLM_KV_ADAPTER_LORA_RANK, max_lora_rank);
+    ml.get_key(LLM_KV_ADAPTER_ROUTER_GAIN, router_gain, /* required */ false);
 
     std::vector<llama_token> token_ids;
     std::vector<llama_token> substitute_ids;
-    ml.get_arr(LLM_KV_ADAPTER_TOKEN_IDS,            token_ids);
-    ml.get_arr(LLM_KV_ADAPTER_SUBSTITUTE_TOKEN_IDS, substitute_ids);
+    ml.get_arr(LLM_KV_ADAPTER_TOKEN_IDS_ACTIVATE,   token_ids);
+    ml.get_arr(LLM_KV_ADAPTER_TOKEN_IDS_SUBSTITUTE, substitute_ids);
 
     GGML_ASSERT(token_ids.size() == n_adapters);
     GGML_ASSERT(substitute_ids.size() == n_adapters);
