@@ -8,6 +8,11 @@
 #include <utility>
 #include <shared_mutex>
 
+enum class stream_read_status {
+    OK,
+    OFFSET_LOST,
+};
+
 namespace {
 constexpr int64_t STREAM_SESSION_TTL_SECONDS         = 300;
 constexpr size_t  STREAM_SESSION_MAX_BYTES           = 4 * 1024 * 1024;

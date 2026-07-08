@@ -8,11 +8,6 @@
 #include <memory>
 #include <string>
 
-enum class stream_read_status {
-    OK,
-    OFFSET_LOST,
-};
-
 // streaming buffer for one generation, survives HTTP disconnect. the producer appends SSE bytes,
 // readers drain from any offset via read_from. keyed by conversation_id, one conv = one live session
 
