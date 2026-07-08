@@ -11566,15 +11566,16 @@ void ggml_compute_forward_lightning_indexer(
     const ggml_tensor * src0 = dst->src[0]; // q
     const ggml_tensor * src1 = dst->src[1]; // k
     const ggml_tensor * src2 = dst->src[2]; // weights
-
-    const float scale_embd = ggml_get_op_params_f32(dst, 0);
-    const float scale_heads = ggml_get_op_params_f32(dst, 1);
+    const ggml_tensor * src3 = dst->src[3]; // mask
 
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(src2->type == GGML_TYPE_F32);
+    GGML_ASSERT(src3->type == GGML_TYPE_F16);
 
     GGML_TENSOR_TERNARY_OP_LOCALS
+    GGML_TENSOR_LOCALS(int64_t, ne3, src3, ne)
+    GGML_TENSOR_LOCALS(size_t,  nb3, src3, nb)
 
     GGML_ASSERT( nb0 == sizeof(float));
     GGML_ASSERT(nb00 == sizeof(float));
@@ -11604,6 +11605,9 @@ void ggml_compute_forward_lightning_indexer(
 
     for (int i_stream = 0; i_stream < n_stream; ++i_stream) {
         for (int i_batch = 0; i_batch < n_batch; ++i_batch) {
+            const float       * src2_row =       (float *) ((char *) src2->data + i_batch*nb21 +        i_stream*nb23);
+            const ggml_fp16_t * src3_row = (ggml_fp16_t *) ((char *) src3->data + i_batch*nb31 + (i_stream%ne33)*nb33);
+            float             * dst_row =        (float *) ((char *) dst->data +  i_batch*nb1 +         i_stream*nb3);
             for (int i_kv = ir0; i_kv < ir1; ++i_kv) {
                 char * src1_row = (char *) src1->data + i_kv*nb12 + i_stream*nb13;
                 if (k_to_float) {
@@ -11611,20 +11615,17 @@ void ggml_compute_forward_lightning_indexer(
                 } else {
                     src1_row_f32 = (float *) src1_row;
                 }
-                float * src2_row = (float *) ((char *) src2->data + i_batch*nb21 + i_stream*nb23);
-                float * dst_row = (float *) ((char *) dst->data + i_batch*nb1 + i_stream*nb3);
                 float score = 0.0f;
                 for (int i_head = 0; i_head < n_head; ++i_head) {
                     // dot product of q and k for head i_head
                     float qk = 0.0f;
                     float * src0_row = (float *) ((char *) src0->data + i_head*nb01 + i_batch*nb02 + i_stream*nb03);
                     ggml_vec_dot_f32(n_embd, &qk, 0, src0_row, 0, src1_row_f32, 0, 1);
-                    qk *= scale_embd;
-                    // ReLU and weights
+                    // ReLU and weights (prescaled)
                     score += MAX(qk, 0.0f) * src2_row[i_head];
                 }
-                score *= scale_heads;
-                dst_row[i_kv] = score;
+                // apply mask
+                dst_row[i_kv] = score + GGML_CPU_FP16_TO_FP32(src3_row[i_kv]);
             }
         }
     }
