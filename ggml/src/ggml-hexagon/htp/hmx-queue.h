@@ -18,13 +18,19 @@ extern "C" {
 #endif
 
 #define HMX_QUEUE_THREAD_STACK_SIZE (16 * 1024)
-#define HMX_QUEUE_POLL_COUNT        2000
+
+#if __HVX_ARCH__ > 79
+#define HMX_QUEUE_POLL_COUNT 2000
+#else
+#define HMX_QUEUE_POLL_COUNT 1
+#endif
 
 typedef void (*hmx_queue_func)(void *);
 
 // Dummy funcs used as signals
 enum hmx_queue_signal {
     HMX_QUEUE_NOOP = 0, // aka NULL
+    HMX_QUEUE_WAKEUP,
     HMX_QUEUE_SUSPEND,
     HMX_QUEUE_KILL
 };
@@ -97,7 +103,7 @@ static inline uint32_t hmx_queue_capacity(struct hmx_queue * q) {
     return q->capacity;
 }
 
-static inline struct hmx_queue_desc hmx_queue_pop(struct hmx_queue * q) {
+static inline struct hmx_queue_desc hmx_queue_pop_one(struct hmx_queue * q) {
     unsigned int ip = q->idx_pop;
     unsigned int iw = q->idx_write;
 
@@ -120,13 +126,28 @@ static inline struct hmx_queue_desc hmx_queue_pop(struct hmx_queue * q) {
     return rd;
 }
 
+static inline struct hmx_queue_desc hmx_queue_pop(struct hmx_queue * q) {
+    while (1) {
+        struct hmx_queue_desc d = hmx_queue_pop_one(q);
+
+        uint32_t sig = (uint32_t) d.func;
+        if (sig && sig <= HMX_QUEUE_KILL)
+            continue;
+
+        return d;
+    }
+}
+
 static inline void hmx_queue_flush(struct hmx_queue * q) {
-    while (hmx_queue_pop(q).func != NULL) ;
+    while (hmx_queue_pop_one(q).func != NULL) ;
+}
+
+static inline void hmx_queue_wakeup(struct hmx_queue * q) {
+    hmx_queue_signal(q, HMX_QUEUE_WAKEUP);
 }
 
 static inline void hmx_queue_suspend(struct hmx_queue *q) {
     hmx_queue_signal(q, HMX_QUEUE_SUSPEND);
-    hmx_queue_flush(q);
 }
 
 #ifdef __cplusplus
