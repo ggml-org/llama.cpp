@@ -36,6 +36,19 @@ static inline void signal_handler(int signal) {
     shutdown_handler(signal);
 }
 
+// satisfies -Wmissing-declarations (used by llama command)
+int llama_server(int argc, char ** argv);
+
+// to be used via CLI (argc / argv are used by router mode only)
+int llama_server(common_params & params, int argc, char ** argv);
+void llama_server_terminate();
+void llama_server_terminate() {
+    if (shutdown_handler) {
+        shutdown_handler(0);
+    }
+}
+
+
 // wrapper function that handles exceptions and logs errors
 // this is to make sure handler_t never throws exceptions; instead, it returns an error response
 static server_http_context::handler_t ex_wrapper(server_http_context::handler_t func) {
@@ -72,9 +85,6 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
     };
 }
 
-// satisfies -Wmissing-declarations
-int llama_server(int argc, char ** argv);
-
 int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
@@ -94,16 +104,26 @@ int llama_server(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
+    return llama_server(params, argc, argv);
+}
+
+int llama_server(common_params & params, int argc, char ** argv) {
+    bool is_run_by_cli = (argv == nullptr);
+
     common_models_handler models_handler;
-    try {
-        models_handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
-        if (common_models_handler_is_preset_repo(models_handler)) {
-            // apply the preset and start the server in router mode
-            common_models_handler_apply(models_handler, params);
+
+    // note: router mode also accepts -hf remote-preset, so we need to check that first
+    if (!is_run_by_cli && !params.model.hf_repo.empty()) {
+        try {
+            models_handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
+            if (common_models_handler_is_preset_repo(models_handler)) {
+                // apply the preset and start the server in router mode
+                common_models_handler_apply(models_handler, params);
+            }
+        } catch (const std::exception & e) {
+            SRV_ERR("failed to fetch model metadata: %s\n", e.what());
+            return 1;
         }
-    } catch (const std::exception & e) {
-        SRV_ERR("failed to fetch model metadata: %s\n", e.what());
-        return 1;
     }
 
     // router server never loads a model and must not touch the GPU
@@ -321,8 +341,9 @@ int llama_server(int argc, char ** argv) {
 
     if (child.is_child() && child.get_mode() == SERVER_CHILD_MODE_DOWNLOAD) {
         return child.run_download(params);
-    } else if (!is_router_server) {
+    } else if (!is_router_server && !is_run_by_cli) {
         // single-model mode (NOT spawned by router)
+        // if this is invoked by CLI, model downloading should be already handled
         try {
             common_models_handler_apply(models_handler, params);
         } catch (const std::exception & e) {
@@ -411,20 +432,22 @@ int llama_server(int argc, char ** argv) {
         };
     }
 
-    // TODO: refactor in common/console
+    // register signal handler if not running by CLI
+    if (!is_run_by_cli) {
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
-    struct sigaction sigint_action;
-    sigint_action.sa_handler = signal_handler;
-    sigemptyset (&sigint_action.sa_mask);
-    sigint_action.sa_flags = 0;
-    sigaction(SIGINT, &sigint_action, NULL);
-    sigaction(SIGTERM, &sigint_action, NULL);
+        struct sigaction sigint_action;
+        sigint_action.sa_handler = signal_handler;
+        sigemptyset (&sigint_action.sa_mask);
+        sigint_action.sa_flags = 0;
+        sigaction(SIGINT, &sigint_action, NULL);
+        sigaction(SIGTERM, &sigint_action, NULL);
 #elif defined (_WIN32)
-    auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
-        return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
-    };
-    SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
+        auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
+            return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
+        };
+        SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
+    }
 
     SRV_INF("listening on %s\n", ctx_http.listening_address.c_str());
 

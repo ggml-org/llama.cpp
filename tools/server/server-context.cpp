@@ -4521,6 +4521,7 @@ void server_routes::init_routes() {
             { "default_generation_settings", default_generation_settings_for_props },
             { "total_slots",                 params.n_parallel },
             { "model_alias",                 meta->model_name },
+            { "model_ftype",                 meta->model_ftype },
             { "model_path",                  meta->model_path },
             { "modalities",                  json {
                 {"vision", meta->has_inp_image},
