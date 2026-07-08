@@ -10025,10 +10025,10 @@ static void show_test_coverage() {
     };
 
     for (auto & test_case : test_cases) {
-        ggml_context * ctx = ggml_init(params);
+        ggml_context_ptr ctx(ggml_init(params));
         if (ctx) {
             test_case->mode = MODE_TEST;
-            ggml_tensor * out = test_case->build_graph(ctx);
+            ggml_tensor * out = test_case->build_graph(ctx.get());
             if (out && out->op != GGML_OP_NONE) {
                 if (out->op == GGML_OP_UNARY) {
                     tested_ops.insert(ggml_unary_op_name(ggml_get_unary_op(out)));
@@ -10038,7 +10038,6 @@ static void show_test_coverage() {
                     tested_ops.insert(ggml_op_name(out->op));
                 }
             }
-            ggml_free(ctx);
         }
     }
     std::set<std::string> covered_ops;
