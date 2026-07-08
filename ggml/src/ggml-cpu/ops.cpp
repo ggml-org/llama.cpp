@@ -11583,11 +11583,11 @@ void ggml_compute_forward_lightning_indexer(
     GGML_ASSERT(nb20 == ggml_type_size(src2->type));
     GGML_ASSERT(nb30 == ggml_type_size(src3->type));
 
-    int n_embd   = src0->ne[0];
-    int n_head   = src0->ne[1];
-    int n_batch  = src0->ne[2];
-    int n_stream = src0->ne[3];
-    int n_kv     = src1->ne[2];
+    const int n_embd   = src0->ne[0];
+    const int n_head   = src0->ne[1];
+    const int n_batch  = src0->ne[2];
+    const int n_stream = src0->ne[3];
+    const int n_kv     = src1->ne[2];
 
     ggml_to_float_t const k_to_float = ggml_get_type_traits(src1->type)->to_float;
     GGML_ASSERT((src1->type == GGML_TYPE_F32 || k_to_float) && "lightning indexer: unsupported K-type");
@@ -11622,7 +11622,7 @@ void ggml_compute_forward_lightning_indexer(
                 for (int i_head = 0; i_head < n_head; ++i_head) {
                     // dot product of q and k for head i_head
                     float qk = 0.0f;
-                    float * src0_row = (float *) ((char *) src0->data + i_head*nb01 + i_batch*nb02 + i_stream*nb03);
+                    const float * src0_row = (float *) ((char *) src0->data + i_head*nb01 + i_batch*nb02 + i_stream*nb03);
                     ggml_vec_dot_f32(n_embd, &qk, 0, src0_row, 0, src1_row_f32, 0, 1);
                     // ReLU and weights (prescaled)
                     score += MAX(qk, 0.0f) * src2_row[i_head];
