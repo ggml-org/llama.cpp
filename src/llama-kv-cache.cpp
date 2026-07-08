@@ -1,4 +1,5 @@
 #include "llama-kv-cache.h"
+#include "ggml-innerq.h"
 
 #include "llama-impl.h"
 #include "llama-io.h"
@@ -2921,15 +2922,17 @@ bool llama_kv_cache::turbo_innerq_consume_runtime(llama_turbo_innerq_runtime_sna
     return turbo_innerq_runtime.consume_if_dirty(out);
 }
 
-void llama_kv_cache_context::on_graph_compute_failure(ggml_status status) {
+void llama_kv_cache_context::on_graph_compute_failure(ggml_status status, int abort_reason) {
     if (status != GGML_STATUS_FAILED) {
         return;
     }
 
-    // Narrow seed only: this marks the runtime for a later attempt after a
-    // backend compute failure. It intentionally ignores generic aborts and
-    // alloc failures; current-request recovery still does not happen here.
-    kv->turbo_innerq_publish_abort((int) status, 0, false);
+    // Keep backend/device-lost causes separate from NaN/PPL/policy gates.
+    // Only the explicit device-lost semantic is forwarded into the InnerQ
+    // runtime here; all other causes stay with their own origin paths.
+    if (abort_reason == GGML_INNERQ_ABORT_DEVICE_LOST) {
+        kv->turbo_innerq_publish_abort(GGML_INNERQ_ABORT_DEVICE_LOST, 0, false);
+    }
 }
 
 void llama_kv_cache_context::turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
