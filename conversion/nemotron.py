@@ -5,6 +5,7 @@ from typing import Any, Callable, Iterable, TYPE_CHECKING
 import torch
 
 if TYPE_CHECKING:
+    from pathlib import Path
     from torch import Tensor
 
 from .base import MmprojModel, ModelBase, TextModel, gguf, logger
@@ -154,6 +155,7 @@ class NemotronHModel(GraniteHybridModel):
     """Hybrid mamba2/attention model from NVIDIA"""
     model_arch = gguf.MODEL_ARCH.NEMOTRON_H
     is_moe: bool = False
+    _experts: list[dict[str, Tensor]] | None = None
 
     def __init__(self, *args, **kwargs):
         # We have to determine the correct model architecture (MoE vs non-MoE) before
@@ -383,3 +385,93 @@ class NemotronHModel(GraniteHybridModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("NemotronHPuzzleForCausalLM")
+class NemotronHPuzzleModel(NemotronHModel):
+    """NVIDIA Puzzle: NemotronH with a per-block MoE config (block_configs) and an
+    MTP draft head (mtp.safetensors) appended as two extra blocks."""
+
+    model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
+    is_moe: bool = True
+
+    def __init__(self, dir_model: "Path", *args, **kwargs):
+        hparams = dict(kwargs.pop("hparams", None) or ModelBase.load_hparams(dir_model, self.is_mistral_format))
+
+        self.block_configs: list[dict] = hparams["block_configs"]
+        self.mtp_block_configs: list[dict] = hparams.get("mtp_block_configs", [])
+        self.n_layer_trunk = len(self.block_configs)
+
+        # block_configs/mtp_block_configs carry the per-block MoE shape; the trunk's
+        # layers_block_type (already computed by the HF config wrapper) doesn't cover
+        # the MTP sub-layers, so build a combined length-90 pattern covering both.
+        hparams["num_hidden_layers"] = self.n_layer_trunk + len(self.mtp_block_configs)
+        hparams["layers_block_type"] = (
+            [bc["block_type"] for bc in self.block_configs]
+            + [bc["block_type"] for bc in self.mtp_block_configs]
+        )
+
+        self.model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
+
+        # Bypass NemotronHModel.__init__: it assumes a flat num_experts_per_tok /
+        # moe_intermediate_size and a layers_block_type sized to block_count, neither
+        # of which hold for Puzzle's per-block config.
+        GraniteHybridModel.__init__(self, dir_model, *args, hparams=hparams, **kwargs)
+
+        self.head_dim = self.find_hparam(["head_dim", "attention_head_dim"])
+        self.d_inner = self.find_hparam(["num_heads"]) * self.d_model
+
+    def set_gguf_parameters(self):
+        GraniteHybridModel.set_gguf_parameters(self)
+
+        head_dim = self.head_dim
+        if head_dim is None:
+            raise ValueError("Could not find the attention head dim in config")
+        self.gguf_writer.add_key_length(head_dim)
+        self.gguf_writer.add_value_length(head_dim)
+
+        all_block_configs = self.block_configs + self.mtp_block_configs
+        ffn_lengths = [bc.get("moe_intermediate_size") or 0 for bc in all_block_configs]
+        experts_used = [bc.get("num_experts_per_tok") or 0 for bc in all_block_configs]
+
+        self.gguf_writer.add_feed_forward_length(ffn_lengths)
+        self.gguf_writer.add_expert_feed_forward_length(ffn_lengths)
+        self.gguf_writer.add_expert_used_count(experts_used)
+
+        self.gguf_writer.add_expert_shared_feed_forward_length(self.hparams["moe_shared_expert_intermediate_size"])
+        self.gguf_writer.add_expert_count(self.hparams["n_routed_experts"])
+        self.gguf_writer.add_expert_shared_count(self.hparams["n_shared_experts"])
+        self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
+        self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
+        self.gguf_writer.add_expert_group_count(self.hparams["n_group"])
+        self.gguf_writer.add_moe_latent_size(self.hparams["moe_latent_size"])
+
+        self.gguf_writer.add_nextn_predict_layers(len(self.mtp_block_configs))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("mtp."):
+            # the MTP head has exactly two sub-blocks: bid 0 = attention, bid 1 = moe
+            assert bid is not None and bid in (0, 1), f"Unexpected MTP tensor: {name}"
+            mtp_bid = self.n_layer_trunk + bid
+
+            if name == "mtp.layers.0.eh_proj.weight":
+                yield self.format_tensor_name(gguf.MODEL_TENSOR.NEXTN_EH_PROJ, mtp_bid), data_torch
+                return
+            if name == "mtp.layers.0.enorm.weight":
+                yield self.format_tensor_name(gguf.MODEL_TENSOR.NEXTN_ENORM, mtp_bid), data_torch
+                return
+            if name == "mtp.layers.0.hnorm.weight":
+                yield self.format_tensor_name(gguf.MODEL_TENSOR.NEXTN_HNORM, mtp_bid), data_torch
+                return
+            if name == "mtp.layers.1.final_layernorm.weight":
+                yield self.format_tensor_name(gguf.MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM, mtp_bid), data_torch
+                return
+
+            # Everything else (norm, mixer.*, experts.*) follows the exact same layout
+            # as a regular trunk block: rewrite onto a synthetic "backbone.layers.{mtp_bid}."
+            # name so it goes through the same handling (incl. expert stacking) as the trunk.
+            rewritten_name = name.replace(f"mtp.layers.{bid}.", f"backbone.layers.{mtp_bid}.", 1)
+            yield from super().modify_tensors(data_torch, rewritten_name, mtp_bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
