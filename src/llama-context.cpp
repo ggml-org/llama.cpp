@@ -3250,6 +3250,19 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
     GGML_ASSERT(model->hparams.n_ctx_train % n_batch  == 0);
     GGML_ASSERT(n_batch                    % n_ubatch == 0);
 
+    // The graph buffer normally reserved by sched_reserve() is sized by graph_max_nodes(),
+    // which assumes the compact, fused inference graph shape (one Flash Attention node and
+    // one KV-cache-write node per layer). Training builds a larger, unfused, no-cache forward
+    // graph (see LLM_GRAPH_TYPE_TRAIN), and ggml_opt_alloc() then appends a full set of
+    // backward-pass nodes into that same buffer. Re-reserve it here, now that we know for
+    // certain training is starting, with enough headroom for both. The factor below is a
+    // heuristic (not a measured worst case) covering the unfused attention op count plus
+    // backward-pass node growth; if training graphs grow further this may need revisiting.
+    {
+        const size_t max_nodes_train = 8 * this->graph_max_nodes(n_batch);
+        gf_res_prev.reset(new llm_graph_result(max_nodes_train));
+    }
+
     ggml_opt_params opt_params = ggml_opt_default_params(sched.get(), GGML_OPT_LOSS_TYPE_CROSS_ENTROPY);
     opt_params.opt_period      = n_batch / n_ubatch;
     opt_params.get_opt_pars    = lopt_params.get_opt_pars;
@@ -3349,7 +3362,10 @@ void llama_context::opt_epoch_iter(
 
             auto * res = gf_res_prev.get();
 
-            const auto gparams = graph_params(res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type));
+            // Use LLM_GRAPH_TYPE_TRAIN so architectures build a graph without KV-cache writes,
+            // which ggml's backward-pass builder cannot differentiate through. This is currently
+            // the only call site that produces LLM_GRAPH_TYPE_TRAIN.
+            const auto gparams = graph_params(res, ubatch, mctx.get(), LLM_GRAPH_TYPE_TRAIN);
 
             res->reset();
 

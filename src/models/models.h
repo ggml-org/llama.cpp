@@ -442,6 +442,10 @@ struct llama_model_qwen2 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
+    // Inference builds a graph<false> against the persistent KV cache. Training builds
+    // graph<true>, which avoids KV-cache writes since they are not supported by ggml's
+    // backward-pass builder. See qwen2.cpp for the shared implementation.
+    template <bool is_training>
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
     };

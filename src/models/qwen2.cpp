@@ -47,10 +47,21 @@ void llama_model_qwen2::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_qwen2::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    // Training graphs use a different topology than inference graphs: they must avoid
+    // KV-cache writes, which are not supported by ggml's backward-pass (autodiff) builder.
+    if (params.gtype == LLM_GRAPH_TYPE_TRAIN) {
+        return std::make_unique<graph<true>>(*this, params);
+    }
+    return std::make_unique<graph<false>>(*this, params);
 }
 
-llama_model_qwen2::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+// graph<false> (inference): builds attention against the persistent KV cache.
+// graph<true>  (training):  builds attention with no cache, since a KV-cache write node
+//                            cannot be differentiated by ggml's backward-pass builder.
+// The two topologies share this single definition; `if constexpr` selects the differing
+// parts at compile time with no runtime branch and no duplicated model-graph code.
+template <bool is_training>
+llama_model_qwen2::graph<is_training>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -64,7 +75,14 @@ llama_model_qwen2::graph::graph(const llama_model & model, const llm_graph_param
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn = build_attn_inp_kv();
+    llm_graph_input_attn_kv       * inp_attn_kv = nullptr;
+    llm_graph_input_attn_no_cache * inp_attn_nc = nullptr;
+
+    if constexpr (is_training) {
+        inp_attn_nc = build_attn_inp_no_cache();
+    } else {
+        inp_attn_kv = build_attn_inp_kv();
+    }
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -99,9 +117,15 @@ llama_model_qwen2::graph::graph(const llama_model & model, const llm_graph_param
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+            if constexpr (is_training) {
+                cur = build_attn(inp_attn_nc,
+                        model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+            } else {
+                cur = build_attn(inp_attn_kv,
+                        model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+            }
         }
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
@@ -152,3 +176,8 @@ llama_model_qwen2::graph::graph(const llama_model & model, const llm_graph_param
 
     ggml_build_forward_expand(gf, cur);
 }
+
+// Explicit instantiation: both graph topologies are needed at link time since
+// build_arch_graph() selects between them at runtime via params.gtype.
+template struct llama_model_qwen2::graph<false>;
+template struct llama_model_qwen2::graph<true>;
