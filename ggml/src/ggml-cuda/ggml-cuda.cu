@@ -1164,6 +1164,15 @@ static void ggml_backend_cuda_comm_init_internal(ggml_backend_cuda_comm_context 
 
 static void ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * ret) {
 #ifdef GGML_USE_NCCL
+    // Disabling NCCL path when CUDA virtual devices are in use since NCCL requires one distinct physical GPU per rank.
+    const ggml_cuda_device_info & info = ggml_cuda_info();
+    if (info.device_count > info.physical_device_count) {
+        GGML_LOG_WARN("NCCL disabled: virtual devices in use; "
+                      "falling back to internal AllReduce\n");
+        ggml_backend_cuda_comm_init_internal(ret);
+        return;
+    }
+
     const size_t n = ret->dev_ids.size();
     ret->comms.resize(n);
     ncclResult_t rc = ncclCommInitAll(ret->comms.data(), (int) n, ret->dev_ids.data());
