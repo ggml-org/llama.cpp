@@ -379,6 +379,8 @@ bool llama_batch_allocr::init(
                     LLAMA_LOG_ERROR("%s: sequence %d positions are decreasing (not allowed)\n", __func__, seq_id);
                     return false;
                 }
+
+                cur_seq_pos[seq_id] = pos;
             }
         }
     }
