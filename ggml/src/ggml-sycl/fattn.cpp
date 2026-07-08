@@ -308,11 +308,8 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     // Copy first 64 float output values to host for fingerprinting.
     // Compare MKL vs TILE (GGML_SYCL_ENABLE_MKL_FA=0) to detect divergence.
     // Only fingerprints the first 6 FA calls with n_kv >= 1024.
-    static int fa_diag = -1;
+    static int fa_diag = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DIAG", 0);
     static int fa_diag_count = 0;
-    if (fa_diag < 0) {
-        fa_diag = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DIAG", 0);
-    }
     if (fa_diag == 1 && fa_diag_count < 6) {
         const ggml_tensor * K_diag = dst->src[1];
         const ggml_tensor * V_diag = dst->src[2];
