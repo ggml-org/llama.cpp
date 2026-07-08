@@ -23,6 +23,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import ChatMessageReasoningBlock from './ChatMessageReasoningBlock.svelte';
 	import ChatMessageToolCallBlock from './ChatMessageToolCallBlock.svelte';
+	import ChatMessageToolCallDateTime from './ChatMessageToolCallDateTime.svelte';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -183,25 +184,27 @@
 			attachments={message?.extra}
 			onToggle={() => toggleExpanded(index, section)}
 		/>
-	{:else if section.type === AgenticSectionType.TOOL_CALL ||
-		section.type === AgenticSectionType.TOOL_CALL_PENDING ||
-		section.type === AgenticSectionType.TOOL_CALL_STREAMING}
-		<ChatMessageToolCallBlock
-			{section}
-			open={isExpanded(index, section)}
-			{isStreaming}
-			attachments={message?.extra}
-			onToggle={() => toggleExpanded(index, section)}
-		/>
+	{:else if section.type === AgenticSectionType.TOOL_CALL || section.type === AgenticSectionType.TOOL_CALL_PENDING || section.type === AgenticSectionType.TOOL_CALL_STREAMING}
+		{#if section.toolName === 'get_datetime'}
+			<ChatMessageToolCallDateTime {section} {isStreaming} />
+		{:else}
+			<ChatMessageToolCallBlock
+				{section}
+				open={isExpanded(index, section)}
+				{isStreaming}
+				attachments={message?.extra}
+				onToggle={() => toggleExpanded(index, section)}
+			/>
+		{/if}
 	{/if}
 {/snippet}
 
-<div class="agentic-content">
+<div class="agentic-content gap-3">
 	{#if turnGroups.length > 1}
 		{#each turnGroups as turn, turnIndex (turnIndex)}
 			{@const turnStats = message?.timings?.agentic?.perTurn?.[turnIndex]}
 
-			<div class="agentic-turn group/turn grid gap-3 mb-2">
+			<div class="agentic-turn group/turn grid gap-3">
 				{#each turn.sections as section, sIdx (turn.flatIndices[sIdx])}
 					{@render renderSection(section, turn.flatIndices[sIdx])}
 				{/each}

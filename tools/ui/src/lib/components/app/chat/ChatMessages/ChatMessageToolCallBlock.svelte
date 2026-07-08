@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Wrench, Loader2, XCircle } from '@lucide/svelte';
+	import { Wrench, Loader2, XCircle, Terminal } from '@lucide/svelte';
 	import { CollapsibleContentBlock, SyntaxHighlightedCode } from '$lib/components/app';
 	import { AgenticSectionType, FileTypeText } from '$lib/enums';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
@@ -138,7 +138,15 @@
 			}
 		}
 
-		return { fileName, filePath: rawPath, language, changes, resultMessage, totalLines, errorMessage };
+		return {
+			fileName,
+			filePath: rawPath,
+			language,
+			changes,
+			resultMessage,
+			totalLines,
+			errorMessage
+		};
 	}
 
 	function describeEditChange(change: EditFileChange): string {
@@ -266,6 +274,237 @@
 		return undefined;
 	}
 
+	type FileGlobSearchMeta = {
+		path: string;
+		include: string;
+		exclude?: string;
+		matches: string[];
+		totalMatches?: number;
+		errorMessage?: string;
+	};
+
+	function parseFileGlobSearchMeta(
+		toolName: string | undefined,
+		toolArgsString: string | undefined,
+		toolResultString: string | undefined
+	): FileGlobSearchMeta | null {
+		if (toolName !== 'file_glob_search' || !toolArgsString) return null;
+
+		let args: Record<string, unknown>;
+		try {
+			const parsed: unknown = JSON.parse(toolArgsString);
+			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+			args = parsed as Record<string, unknown>;
+		} catch {
+			return null;
+		}
+
+		const path = typeof args.path === 'string' ? args.path : '';
+		const include = typeof args.include === 'string' && args.include ? args.include : '**';
+		const exclude = typeof args.exclude === 'string' && args.exclude ? args.exclude : undefined;
+		if (!path) return null;
+
+		let matches: string[] = [];
+		let totalMatches: number | undefined;
+		let errorMessage: string | undefined;
+
+		if (toolResultString) {
+			try {
+				const parsed: unknown = JSON.parse(toolResultString);
+				if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+					const obj = parsed as Record<string, unknown>;
+					if (typeof obj.error === 'string') {
+						errorMessage = obj.error;
+					} else if (typeof obj.plain_text_response === 'string') {
+						matches = splitGlobMatches(obj.plain_text_response, (total) => (totalMatches = total));
+					}
+				}
+			} catch {
+				matches = splitGlobMatches(toolResultString, (total) => (totalMatches = total));
+			}
+		}
+
+		return { path, include, exclude, matches, totalMatches, errorMessage };
+	}
+
+	function splitGlobMatches(text: string, captureTotal: (n: number) => void): string[] {
+		return splitSearchSummaryList(text, captureTotal).lines;
+	}
+
+	type GrepSearchMatch = {
+		file: string;
+		line?: number;
+		content: string;
+	};
+
+	type GrepSearchMeta = {
+		path: string;
+		pattern: string;
+		include: string;
+		exclude?: string;
+		showLineNumbers: boolean;
+		matches: GrepSearchMatch[];
+		totalMatches?: number;
+		errorMessage?: string;
+	};
+
+	function parseGrepSearchMeta(
+		toolName: string | undefined,
+		toolArgsString: string | undefined,
+		toolResultString: string | undefined
+	): GrepSearchMeta | null {
+		if (toolName !== 'grep_search' || !toolArgsString) return null;
+
+		let args: Record<string, unknown>;
+		try {
+			const parsed: unknown = JSON.parse(toolArgsString);
+			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+			args = parsed as Record<string, unknown>;
+		} catch {
+			return null;
+		}
+
+		const path = typeof args.path === 'string' ? args.path : '';
+		const pattern = typeof args.pattern === 'string' ? args.pattern : '';
+		if (!path || !pattern) return null;
+
+		const include = typeof args.include === 'string' && args.include ? args.include : '**';
+		const exclude = typeof args.exclude === 'string' && args.exclude ? args.exclude : undefined;
+		const showLineNumbers = args.return_line_numbers === true;
+
+		let matches: GrepSearchMatch[] = [];
+		let totalMatches: number | undefined;
+		let errorMessage: string | undefined;
+
+		if (toolResultString) {
+			try {
+				const parsed: unknown = JSON.parse(toolResultString);
+				if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+					const obj = parsed as Record<string, unknown>;
+					if (typeof obj.error === 'string') {
+						errorMessage = obj.error;
+					} else if (typeof obj.plain_text_response === 'string') {
+						const split = splitSearchSummaryList(
+							obj.plain_text_response,
+							(total) => (totalMatches = total)
+						);
+						matches = split.lines.map((line) => parseGrepLine(line, showLineNumbers));
+					}
+				}
+			} catch {
+				const split = splitSearchSummaryList(toolResultString, (total) => (totalMatches = total));
+				matches = split.lines.map((line) => parseGrepLine(line, showLineNumbers));
+			}
+		}
+
+		return {
+			path,
+			pattern,
+			include,
+			exclude,
+			showLineNumbers,
+			matches,
+			totalMatches,
+			errorMessage
+		};
+	}
+
+	function splitSearchSummaryList(
+		text: string,
+		captureTotal: (n: number) => void
+	): { lines: string[] } {
+		const separatorIndex = text.indexOf('---\n');
+		const matchesText = separatorIndex === -1 ? text : text.slice(0, separatorIndex);
+		const summaryText = separatorIndex === -1 ? '' : text.slice(separatorIndex + '---\n'.length);
+
+		const totalMatch = summaryText.match(/Total matches:\s*(\d+)/);
+		if (totalMatch) {
+			captureTotal(parseInt(totalMatch[1], 10));
+		}
+
+		const lines = matchesText
+			.split('\n')
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0);
+
+		return { lines };
+	}
+
+	function parseGrepLine(line: string, showLineNumbers: boolean): GrepSearchMatch {
+		// Server output: <file>:<content>            when return_line_numbers=false
+		//               <file>:<lineno>:<content>   when return_line_numbers=true
+		const firstColon = line.indexOf(':');
+		if (firstColon === -1) {
+			return { file: line, content: '' };
+		}
+		const file = line.slice(0, firstColon);
+		const tail = line.slice(firstColon + 1);
+
+		if (!showLineNumbers) {
+			return { file, content: tail };
+		}
+
+		const secondColon = tail.indexOf(':');
+		if (secondColon === -1) {
+			return { file, content: tail };
+		}
+		const lineNum = parseInt(tail.slice(0, secondColon), 10);
+		return {
+			file,
+			line: Number.isFinite(lineNum) ? lineNum : undefined,
+			content: tail.slice(secondColon + 1)
+		};
+	}
+
+	type RunJavascriptMeta = {
+		code: string;
+		timeoutMs?: number;
+		errorMessage?: string;
+	};
+
+	function parseRunJavascriptMeta(
+		toolName: string | undefined,
+		toolArgsString: string | undefined,
+		toolResultString: string | undefined
+	): RunJavascriptMeta | null {
+		if (toolName !== 'run_javascript' || !toolArgsString) return null;
+
+		let args: Record<string, unknown>;
+		try {
+			const parsed: unknown = JSON.parse(toolArgsString);
+			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+			args = parsed as Record<string, unknown>;
+		} catch {
+			return null;
+		}
+
+		const code = typeof args.code === 'string' ? args.code : '';
+		if (!code) return null;
+
+		const timeoutRaw = Number(args.timeout_ms);
+		const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : undefined;
+
+		let errorMessage: string | undefined;
+		if (toolResultString) {
+			try {
+				const parsed: unknown = JSON.parse(toolResultString);
+				if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+					const obj = parsed as Record<string, unknown>;
+					if (typeof obj.error === 'string') errorMessage = obj.error;
+				}
+			} catch {
+				// SandboxService.formatReply emits 'Error: <msg>' on failure.
+				const errorLine = toolResultString
+					.split('\n')
+					.map((line) => line.trim())
+					.find((line) => line.startsWith('Error:'));
+				if (errorLine) errorMessage = errorLine.slice('Error:'.length).trim();
+			}
+		}
+
+		return { code, timeoutMs, errorMessage };
+	}
+
 	interface Props {
 		section: AgenticSection;
 		attachments?: DatabaseMessageExtra[];
@@ -296,14 +535,25 @@
 	);
 	const execShellMeta = $derived(parseExecShellCommandMeta(section.toolName, section.toolArgs));
 	const execShellError = $derived(parseExecShellCommandError(section.toolResult));
+	const fileGlobMeta = $derived(
+		parseFileGlobSearchMeta(section.toolName, section.toolArgs, section.toolResult)
+	);
+	const grepMeta = $derived(
+		parseGrepSearchMeta(section.toolName, section.toolArgs, section.toolResult)
+	);
+	const runJsMeta = $derived(
+		parseRunJavascriptMeta(section.toolName, section.toolArgs, section.toolResult)
+	);
 
-	const hasCustomTitle = $derived(
+	const hasCustomTitleSnippet = $derived(
 		readFileMeta !== null ||
 			writeFileMeta !== null ||
 			editFileMeta !== null ||
-			execShellMeta !== null
+			execShellMeta !== null ||
+			fileGlobMeta !== null ||
+			grepMeta !== null
 	);
-	const title = $derived(hasCustomTitle ? '' : toolUi?.label ?? section.toolName ?? '');
+	const title = $derived(hasCustomTitleSnippet ? '' : (toolUi?.label ?? section.toolName ?? ''));
 
 	const subtitle = $derived(
 		showSpinner
@@ -321,7 +571,7 @@
 	<span class="font-mono">{readFileMeta?.fileName}</span>
 	{#if readFileMeta?.lineRange}
 		<span class="text-muted-foreground"
-			>{' '}(lines {readFileMeta.lineRange.start}-{readFileMeta.lineRange.end})</span
+			>&nbsp;(lines {readFileMeta.lineRange.start}-{readFileMeta.lineRange.end})</span
 		>
 	{/if}
 {/snippet}
@@ -346,6 +596,28 @@
 	<span class="font-mono">{execShellMeta?.command}</span>
 {/snippet}
 
+{#snippet fileGlobTitle()}
+	{#if fileGlobMeta}
+		<span class="text-muted-foreground"
+			>{fileGlobMeta.include === '**' ? 'List files' : 'Search files'}&nbsp;</span
+		>
+		{#if fileGlobMeta.include !== '**'}
+			<span class="font-mono">{fileGlobMeta.include}</span>
+		{/if}
+		<span class="text-muted-foreground">&nbsp;in&nbsp;</span>
+		<span class="font-mono">{fileGlobMeta.path}</span>
+	{/if}
+{/snippet}
+
+{#snippet grepSearchTitle()}
+	{#if grepMeta}
+		<span class="text-muted-foreground">Search for&nbsp;</span>
+		<span class="font-mono">{grepMeta.pattern}</span>
+		<span class="text-muted-foreground">&nbsp;in&nbsp;</span>
+		<span class="font-mono">{grepMeta.path}</span>
+	{/if}
+{/snippet}
+
 <CollapsibleContentBlock
 	{open}
 	class="my-2"
@@ -361,9 +633,12 @@
 				? editFileTitle
 				: execShellMeta
 					? execShellTitle
-					: undefined}
+					: fileGlobMeta
+						? fileGlobTitle
+						: grepMeta
+							? grepSearchTitle
+							: undefined}
 	{subtitle}
-	{isStreaming}
 	{onToggle}
 >
 	{#if execShellMeta}
@@ -493,9 +768,117 @@
 				{/if}
 			</div>
 		{:else}
+			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No changes</div>
+		{/if}
+	{:else if fileGlobMeta}
+		{#if isPending}
 			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
-				No changes
+				Searching...
 			</div>
+		{:else if fileGlobMeta.errorMessage}
+			<div
+				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
+			>
+				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+				<span>{fileGlobMeta.errorMessage}</span>
+			</div>
+		{:else if fileGlobMeta.matches.length > 0}
+			<div class="max-h-96 overflow-auto">
+				{#each fileGlobMeta.matches as match, i (i)}
+					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{match}</div>
+				{/each}
+			</div>
+			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
+				Total matches: <span class="font-mono"
+					>{fileGlobMeta.totalMatches ?? fileGlobMeta.matches.length}</span
+				>
+			</div>
+		{:else}
+			<div class="text-xs text-muted-foreground/70 italic">No matches</div>
+			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
+				Total matches: <span class="font-mono">{fileGlobMeta.totalMatches ?? 0}</span>
+			</div>
+		{/if}
+	{:else if grepMeta}
+		{#if isPending}
+			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+				Searching...
+			</div>
+		{:else if grepMeta.errorMessage}
+			<div
+				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
+			>
+				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+				<span>{grepMeta.errorMessage}</span>
+			</div>
+		{:else if grepMeta.matches.length > 0}
+			<div class="max-h-96 overflow-auto">
+				{#each grepMeta.matches as match, mi (mi)}
+					<div class="font-mono text-[11px] leading-relaxed">
+						<span class="text-muted-foreground/70">{match.file}</span>
+						{#if grepMeta.showLineNumbers && match.line != null}
+							<span class="text-muted-foreground/70">:{match.line}</span>
+						{/if}
+						<span class="text-muted-foreground/70">:</span>
+						<span>{match.content}</span>
+					</div>
+				{/each}
+			</div>
+			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
+				Total matches: <span class="font-mono"
+					>{grepMeta.totalMatches ?? grepMeta.matches.length}</span
+				>
+				{#if grepMeta.showLineNumbers}
+					&nbsp;<span class="italic">(with line numbers)</span>
+				{/if}
+			</div>
+		{:else}
+			<div class="text-xs text-muted-foreground/70 italic">No matches</div>
+			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
+				Total matches: <span class="font-mono">{grepMeta.totalMatches ?? 0}</span>
+			</div>
+		{/if}
+	{:else if runJsMeta}
+		{#if isPending}
+			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">Running...</div>
+		{:else if runJsMeta.errorMessage}
+			<div
+				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
+			>
+				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+				<span>{runJsMeta.errorMessage}</span>
+			</div>
+			<div class="mt-3">
+				<SyntaxHighlightedCode
+					code={runJsMeta.code}
+					language={FileTypeText.JAVASCRIPT}
+					maxHeight="22rem"
+				/>
+			</div>
+		{:else}
+			<SyntaxHighlightedCode
+				code={runJsMeta.code}
+				language={FileTypeText.JAVASCRIPT}
+				maxHeight="22rem"
+			/>
+			<div class="mb-2 mt-3 flex items-center gap-2 text-xs text-muted-foreground/70">
+				<Terminal class="h-3 w-3" />
+				<span>Console</span>
+				{#if runJsMeta.timeoutMs != null}
+					<span class="font-mono">&middot;&nbsp;timeout&nbsp;{runJsMeta.timeoutMs}&nbsp;ms</span>
+				{/if}
+			</div>
+			{#if section.toolResult}
+				<div class="mt-1">
+					<SyntaxHighlightedCode
+						code={section.toolResult}
+						language={FileTypeText.JAVASCRIPT}
+						maxHeight="22rem"
+					/>
+				</div>
+			{:else}
+				<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No output</div>
+			{/if}
 		{/if}
 	{:else}
 		<div class="mb-2 flex items-center gap-2 text-xs text-muted-foreground/70">
@@ -523,9 +906,7 @@
 				{/each}
 			</div>
 		{:else}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
-				No output
-			</div>
+			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No output</div>
 		{/if}
 	{/if}
 </CollapsibleContentBlock>
