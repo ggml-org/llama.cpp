@@ -74,6 +74,11 @@ struct llama_memory_context_i {
     // Returns nullptr when InnerQ is not active. Today the SYCL path still
     // uses identity/no-op plumbing until runtime abort/retry state is wired.
     virtual ggml_tensor * get_turbo_innerq_scale_inv() const { return nullptr; }
+
+    // P3.2.3.3b2b1a: narrow failure hook. Called when graph_compute() returns
+    // a non-success status to seed state for a later attempt. This does NOT
+    // retroactively recover the current request; callers still see failure.
+    virtual void on_graph_compute_failure(ggml_status status) { (void) status; }
 };
 
 using llama_memory_context_ptr = std::unique_ptr<llama_memory_context_i>;

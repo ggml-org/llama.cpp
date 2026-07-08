@@ -4838,6 +4838,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
 } catch (sycl::exception & e) {
     std::cerr << e.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::cerr << "Error OP "<<ggml_op_name(dst->op)<< std::endl;
+    // P3.2.3.3b2b blocker: direct process exit here bypasses the llama_context
+    // abort-callback / GGML_STATUS_* path, so SYCL FA failures cannot currently
+    // publish InnerQ recovery state before termination.
     std::exit(1);
 }
 
