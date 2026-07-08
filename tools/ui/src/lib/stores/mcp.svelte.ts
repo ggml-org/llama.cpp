@@ -939,6 +939,28 @@ class MCPStore {
 		return this.toolsIndex.get(toolName);
 	}
 
+	/**
+	 * Resolve which configured MCP server owns a given tool name. Looks at
+	 * active connections first (fast path), then falls back to per-server
+	 * health-check data so server-side MCP proxies (where llama-server
+	 * executes MCP tools but the browser does not hold a direct connection)
+	 * still resolve tool names to their owning server.
+	 */
+	findServerForTool(toolName: string): string | undefined {
+		const fromIndex = this.toolsIndex.get(toolName);
+		if (fromIndex) return fromIndex;
+
+		for (const server of this.getServers()) {
+			const health = this._healthChecks[server.id];
+			if (!health || health.status !== HealthCheckStatus.SUCCESS) continue;
+			if (health.tools.some((tool) => tool.name === toolName)) {
+				return server.id;
+			}
+		}
+
+		return undefined;
+	}
+
 	hasPromptsSupport(): boolean {
 		for (const connection of this.connections.values()) {
 			if (connection.serverCapabilities?.prompts) {

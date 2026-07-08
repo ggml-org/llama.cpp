@@ -11,6 +11,7 @@
 		variant?: 'default' | 'terminal';
 		icon?: Component;
 		iconClass?: string;
+		iconUrl?: string | null;
 		title?: string;
 		titleSnippet?: Snippet;
 		subtitle?: string;
@@ -25,6 +26,7 @@
 		variant = 'default',
 		icon: IconComponent,
 		iconClass = 'h-4 w-4',
+		iconUrl = null,
 		title = '',
 		titleSnippet,
 		subtitle,
@@ -32,6 +34,10 @@
 		onToggle,
 		children
 	}: Props = $props();
+
+	function hideBrokenIcon(event: Event) {
+		(event.currentTarget as HTMLImageElement).style.display = 'none';
+	}
 </script>
 
 <Collapsible.Root
@@ -56,7 +62,14 @@
 		)}
 	>
 		<div class="flex min-w-0 items-center gap-2 text-muted-foreground">
-			{#if IconComponent}
+			{#if iconUrl}
+				<img
+					src={iconUrl}
+					alt=""
+					class={cn('shrink-0 rounded-sm', iconClass)}
+					onerror={hideBrokenIcon}
+				/>
+			{:else if IconComponent}
 				<IconComponent class={cn('shrink-0 text-muted-foreground/60', iconClass)} />
 			{/if}
 

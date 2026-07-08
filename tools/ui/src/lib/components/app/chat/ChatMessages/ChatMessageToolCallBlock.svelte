@@ -3,6 +3,7 @@
 	import { CollapsibleContentBlock, SyntaxHighlightedCode } from '$lib/components/app';
 	import { AgenticSectionType, FileTypeText } from '$lib/enums';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
 		formatJsonPretty,
 		getFileTypeByExtension,
@@ -522,6 +523,21 @@
 	const toolIcon = $derived(showSpinner ? Loader2 : (toolUi?.icon ?? Wrench));
 	const toolIconClass = $derived(showSpinner ? 'h-4 w-4 animate-spin' : 'h-4 w-4');
 
+	// For MCP-sourced tools without a built-in icon, swap the wrench fallback
+	// for the server's own icon (MCP spec `icons[]`, theme-aware, with
+	// /favicon.ico fallback). Spinner keeps precedence while the call is in
+	// flight so the user sees execution status.
+	const mcpServerFavicon = $derived.by<string | null>(() => {
+		const toolName = section.toolName;
+		if (!toolName) return null;
+		const serverName = mcpStore.findServerForTool(toolName);
+		if (!serverName) return null;
+		return mcpStore.getServerFavicon(serverName);
+	});
+	const iconUrl = $derived(
+		!showSpinner && !toolUi?.icon && mcpServerFavicon ? mcpServerFavicon : null
+	);
+
 	const parsedLines: ToolResultLine[] = $derived(
 		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
 	);
@@ -624,6 +640,7 @@
 	variant={execShellMeta ? 'terminal' : 'default'}
 	icon={toolIcon}
 	iconClass={toolIconClass}
+	{iconUrl}
 	{title}
 	titleSnippet={readFileMeta
 		? readFileTitle
