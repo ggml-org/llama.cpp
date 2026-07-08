@@ -1326,34 +1326,32 @@ struct test_case {
         };
         const bool use_weights = use_weight_context();
 
-        ggml_context * ctx = ggml_init(params);
+        ggml_context_ptr ctx(ggml_init(params));
         GGML_ASSERT(ctx);
-        ggml_context * ctx_weights = use_weights ? ggml_init(params) : nullptr;
+        ggml_context_ptr ctx_weights(use_weights ? ggml_init(params) : nullptr);
         GGML_ASSERT(!use_weights || ctx_weights);
 
-        gf = ggml_new_graph(ctx);
+        gf = ggml_new_graph(ctx.get());
 
         // pre-graph sentinel
-        add_sentinel(ctx);
+        add_sentinel(ctx.get());
         if (ctx_weights) {
-            add_sentinel(ctx_weights);
+            add_sentinel(ctx_weights.get());
         }
 
-        ggml_tensor * out = build_graph(ctx, ctx_weights);
+        ggml_tensor * out = build_graph(ctx.get(), ctx_weights.get());
         current_op_name   = op_desc(out);
-        check_for_f16_tensor(ctx);
+        check_for_f16_tensor(ctx.get());
 
         if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
-            ggml_free(ctx_weights);
-            ggml_free(ctx);
             return test_status_t::SKIPPED;
         }
 
         // check if the backends support the ops
         bool supported = true;
         for (ggml_backend_t backend : {backend1, backend2}) {
-            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != NULL; t = ggml_get_next_tensor(ctx.get(), t)) {
                 if (!ggml_backend_supports_op(backend, t)) {
                     supported = false;
                     break;
@@ -1368,37 +1366,30 @@ struct test_case {
 
             print_test_result_locked(output_printer, result);
 
-            ggml_free(ctx_weights);
-            ggml_free(ctx);
             return test_status_t::NOT_SUPPORTED;
         }
 
         // post-graph sentinel
-        add_sentinel(ctx);
+        add_sentinel(ctx.get());
         if (ctx_weights) {
-            add_sentinel(ctx_weights);
+            add_sentinel(ctx_weights.get());
         }
 
-        ggml_backend_buffer_t buf_weights = nullptr;
+        ggml_backend_buffer_ptr buf_weights(nullptr);
         if (ctx_weights) {
-            buf_weights = ggml_backend_alloc_ctx_tensors(ctx_weights, backend1);
+            buf_weights.reset(ggml_backend_alloc_ctx_tensors(ctx_weights.get(), backend1));
             if (buf_weights == NULL) {
                 printf("failed to allocate weight tensors [%s] ", ggml_backend_name(backend1));
-                ggml_free(ctx_weights);
-                ggml_free(ctx);
                 return test_status_t::FAIL;
             }
-            ggml_backend_buffer_set_usage(buf_weights, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            ggml_backend_buffer_set_usage(buf_weights.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         }
 
         // allocate
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend1);
+        ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors(ctx.get(), backend1));
 
         if (buf == NULL) {
             printf("failed to allocate tensors [%s] ", ggml_backend_name(backend1));
-            ggml_backend_buffer_free(buf_weights);
-            ggml_free(ctx_weights);
-            ggml_free(ctx);
             return test_status_t::FAIL;
         }
 
@@ -1411,9 +1402,9 @@ struct test_case {
         }
 
         // randomize tensors
-        initialize_tensors(ctx);
+        initialize_tensors(ctx.get());
         if (ctx_weights) {
-            initialize_tensors(ctx_weights);
+            initialize_tensors(ctx_weights.get());
         }
 
         // compare
@@ -1498,11 +1489,6 @@ struct test_case {
         const bool cmp_ok = ggml_backend_compare_graph_backend(backend1, backend2, gf, callback, &ud,
                                                                run_whole_graph() ? fused_nodes_to_verify.data() : nullptr,
                                                                fused_nodes_to_verify.size());
-
-        ggml_backend_buffer_free(buf);
-        ggml_backend_buffer_free(buf_weights);
-        ggml_free(ctx_weights);
-        ggml_free(ctx);
 
         // Create test result
         bool        test_passed = ud.ok && cmp_ok;
