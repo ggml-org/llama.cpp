@@ -290,43 +290,43 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_json("chat_format"))
         ->set_desc("Chat format used internally by the server")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
-            ctx.params.chat_parser_params.format = static_cast<common_chat_format>(data.at("chat_format").get<int>());
-            SRV_TRC("chat format: %s\n", common_chat_format_name(ctx.params.chat_parser_params.format));
+            ctx.params.chat_parser_params->format = static_cast<common_chat_format>(data.at("chat_format").get<int>());
+            SRV_TRC("chat format: %s\n", common_chat_format_name(ctx.params.chat_parser_params->format));
         }));
 
     add((new field_str("reasoning_format"))
         ->set_desc("Reasoning format for chain-of-thought models")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             auto reasoning_format = common_reasoning_format_from_name(data.at("reasoning_format").get<std::string>());
-            ctx.params.chat_parser_params.reasoning_format = reasoning_format;
-            ctx.params.chat_parser_params.reasoning_in_content = ctx.params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
+            ctx.params.chat_parser_params->reasoning_format = reasoning_format;
+            ctx.params.chat_parser_params->reasoning_in_content = ctx.params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
         }));
 
     add((new field_str("generation_prompt"))
         ->set_desc("Generation prompt appended to the chat template output")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             std::string s = data.at("generation_prompt").get<std::string>();
-            ctx.params.chat_parser_params.generation_prompt = s;
+            ctx.params.chat_parser_params->generation_prompt = s;
             ctx.params.sampling.generation_prompt = s;
         }));
 
-    add((new field_bool("parse_tool_calls", params.chat_parser_params.parse_tool_calls))
+    add((new field_bool("parse_tool_calls", params.chat_parser_params->parse_tool_calls))
         ->set_desc("Whether to parse tool calls from the generated output"));
 
     add((new field_str("chat_parser"))
         ->set_desc("Chat parser configuration string")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
-            ctx.params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
+            ctx.params.chat_parser_params->parser.load(data.at("chat_parser").get<std::string>());
         }));
 
     add((new field_json("continue_final_message"))
         ->set_desc("Whether to continue the final message of the chat template")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             auto continuation = common_chat_continuation_parse(data.at("continue_final_message"));
-            ctx.params.chat_parser_params.is_continuation = continuation != COMMON_CHAT_CONTINUATION_NONE;
+            ctx.params.chat_parser_params->is_continuation = continuation != COMMON_CHAT_CONTINUATION_NONE;
         }));
 
-    add((new field_bool("echo", params.chat_parser_params.echo))
+    add((new field_bool("echo", params.chat_parser_params->echo))
         ->set_desc("Whether to echo the input tokens in the output"));
 
     //
@@ -513,7 +513,7 @@ task_params eval_llama_cmpl_schema(
     // enabling this will output extra debug information in the HTTP responses from the server
     params.verbose       = params_base.verbosity > 9;
 
-    params.chat_parser_params.reasoning_format = params_base.reasoning_format;
+    params.chat_parser_params->reasoning_format = params_base.reasoning_format;
 
     // create context and schema
     field_eval_context ctx(params);
@@ -539,8 +539,8 @@ task_params eval_llama_cmpl_schema(
         }
 
         // if "reasoning_format" is not provided, its handler will not be called, we will need to handle it here
-        auto reasoning_format = params.chat_parser_params.reasoning_format;
-        params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
+        auto reasoning_format = params.chat_parser_params->reasoning_format;
+        params.chat_parser_params->reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
     }
 
     // debugging
