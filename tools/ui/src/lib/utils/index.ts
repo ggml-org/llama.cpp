@@ -158,6 +158,14 @@ export {
 	type ToolResultLine
 } from './agentic';
 
+// Search-result parsing (web-search / fetch MCP tools)
+export {
+	extractSearchResults,
+	extractSearchQuery,
+	faviconForUrl,
+	type SearchResult
+} from './search-results';
+
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
 
