@@ -496,13 +496,15 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     }
 
     // handle hf_plan tasks
-    auto add_tasks = [&opts, &tasks](const hf_cache::hf_files & model_files, common_params_model & model) {
+    auto add_tasks = [&opts, &tasks](const hf_cache::hf_files  & model_files,
+                                    const hf_cache::hf_file    & primary,
+                                    common_params_model        & model) {
         for (size_t i = 0; i < model_files.size(); ++i) {
             auto & model_file = model_files[i];
-            bool is_first = (i == 0);
-            tasks.emplace_back(model_file, opts, [&, is_first]() {
-                if (is_first) {
-                    // only use first part as model path
+            bool is_primary = (model_file.path == primary.path);
+            tasks.emplace_back(model_file, opts, [&, is_primary]() {
+                if (is_primary) {
+                    // the primary file is the first split (00001-of), use it as model path
                     model.path = hf_cache::finalize_file(model_file);
                 } else {
                     hf_cache::finalize_file(model_file);
@@ -511,7 +513,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         }
     };
     if (!plan.model_files.empty()) {
-        add_tasks(plan.model_files, params.model);
+        add_tasks(plan.model_files, plan.primary, params.model);
     }
     if (!plan.mmproj.local_path.empty()) {
         tasks.emplace_back(plan.mmproj, opts, [&]() {
@@ -539,12 +541,12 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 
     // handle plan_spec (e.g. --spec-draft-hf)
     if (!plan_spec.model_files.empty()) {
-        add_tasks(plan_spec.model_files, params.speculative.draft.mparams);
+        add_tasks(plan_spec.model_files, plan_spec.primary, params.speculative.draft.mparams);
     }
 
     // handle vocoder plan (e.g. --hf-repo-v)
     if (!plan_voc.model_files.empty()) {
-        add_tasks(plan_voc.model_files, params.vocoder.model);
+        add_tasks(plan_voc.model_files, plan_voc.primary, params.vocoder.model);
     }
 
     // run all tasks in parallel

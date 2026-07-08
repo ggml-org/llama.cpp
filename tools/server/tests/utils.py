@@ -31,6 +31,9 @@ import wget
 
 DEFAULT_HTTP_TIMEOUT = 60
 
+# per-request timeout, a hung server fails the test instead of stalling the CI for hours
+DEFAULT_REQUEST_TIMEOUT = 600
+
 
 class ServerResponse:
     headers: dict
@@ -330,7 +333,7 @@ class ServerProcess:
         path: str,
         data: dict | Any | None = None,
         headers: dict | None = None,
-        timeout: float | None = None,
+        timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     ) -> ServerResponse:
         url = f"http://{self.server_host}:{self.server_port}{path}"
         parse_body = False
@@ -389,7 +392,7 @@ class ServerProcess:
         path: str,
         data: dict | None = None,
         headers: dict | None = None,
-        timeout: float | None = None,
+        timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     ) -> dict:
         stream = data.get('stream', False)
         if stream:

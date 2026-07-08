@@ -637,6 +637,8 @@ struct llama_model {
 
     std::string desc() const;
 
+    llama_ftype ftype() const;
+
     size_t size() const; // file size
     size_t n_tensors() const;
     size_t n_devices() const;

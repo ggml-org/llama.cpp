@@ -1,4 +1,5 @@
 #include "server-common.h"
+#include "http.h"
 #include "server-models.h"
 #include "server-context.h"
 #include "server-stream.h"
@@ -522,6 +523,7 @@ void server_models::load_models() {
 
         // collect all threads to join in one pass while the lock is held:
         // - monitoring threads from just-unloaded models (to_unload)
+        // - threads of finished downloads (DOWNLOADED), they acquire the mutex on exit
         // - threads of already-UNLOADED models that are being removed from source
         std::vector<std::thread> threads_to_join;
         for (const auto & name : to_unload) {
@@ -533,6 +535,13 @@ void server_models::load_models() {
         for (auto & [name, inst] : mapping) {
             if (inst.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
                 continue; // downloading models are not from config sources, leave them alone
+            }
+            if (inst.meta.status == SERVER_MODEL_STATUS_DOWNLOADED) {
+                // joining this thread under the lock deadlocks: it locks the mutex on its way out
+                if (inst.th.joinable()) {
+                    threads_to_join.push_back(std::move(inst.th));
+                }
+                continue;
             }
             if (final_presets.find(name) == final_presets.end() && !inst.meta.is_running() && inst.th.joinable()) {
                 threads_to_join.push_back(std::move(inst.th));
@@ -549,10 +558,8 @@ void server_models::load_models() {
             if (it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
                 ++it; // download thread is still busy, skip
             } else if (it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADED) {
-                // download finished, safe to erase
-                if (it->second.th.joinable()) {
-                    it->second.th.join();
-                }
+                // download finished, thread is joined above, safe to erase
+                GGML_ASSERT(!it->second.th.joinable());
                 it = mapping.erase(it);
             } else if (final_presets.find(it->first) == final_presets.end()) {
                 SRV_INF("(reload) removing model name=%s (no longer in source)\n", it->first.c_str());
@@ -2263,7 +2270,8 @@ server_http_proxy::server_http_proxy(
             }
             if (lowered == "host") {
                 bool is_default_port = (scheme == "https" && port == 443) || (scheme == "http" && port == 80);
-                req.set_header(key, is_default_port ? host : host + ":" + std::to_string(port));
+                const std::string url_host = common_http_format_host(host);
+                req.set_header(key, is_default_port ? url_host : url_host + ":" + std::to_string(port));
             } else {
                 req.set_header(key, value);
             }
