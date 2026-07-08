@@ -16653,6 +16653,7 @@ static cl_mem ggml_cl_mul_mat_dequant_quant_to_f16(
         ? ggml_cl_is_q4_0_soa(tensor)
         : ggml_cl_is_q8_0_soa(tensor);
 
+    cl_mem aos = nullptr;
     if (is_soa) {
         // Reconstruct full parent AoS; view's own nb[] then index it correctly.
         const ggml_tensor * parent = tensor->view_src ? tensor->view_src : tensor;
@@ -16664,7 +16665,7 @@ static cl_mem ggml_cl_mul_mat_dequant_quant_to_f16(
         const size_t parent_nbytes = (size_t) ggml_nelements(parent) / blck_size * block_bytes;
 
         cl_int err;
-        cl_mem aos = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, parent_nbytes, NULL, &err);
+        aos = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, parent_nbytes, NULL, &err);
         CL_CHECK(err);
 
         // large q4_0/q8_0 WEIGHTS are stored transposed and small weights
@@ -16751,9 +16752,6 @@ static cl_mem ggml_cl_mul_mat_dequant_quant_to_f16(
 
         if (extra_reconstruct) {
             *extra_reconstruct = aos;
-        } else {
-            // OpenCL retains the memobj while queued kernels reference it.
-            CL_CHECK(clReleaseMemObject(aos));
         }
     } else {
         auto * extra = (ggml_tensor_extra_cl *) tensor->extra;
@@ -16817,6 +16815,13 @@ static cl_mem ggml_cl_mul_mat_dequant_quant_to_f16(
     size_t lws[3] = { 1, 1, 1 };
     CL_CHECK(clEnqueueNDRangeKernel(backend_ctx->queue, dq_kernel, 3, NULL, gws, lws, 0, NULL, NULL));
 
+    // release the reconstructed aos if
+    //  1. it was actually reconstructed
+    //  2. the caller didn't request it to be returned
+    // src_buf may refer to aos, so we should release after this enqueue
+    if (aos && !extra_reconstruct) {
+        CL_CHECK(clReleaseMemObject(aos));
+    }
     return out;
 }
 
