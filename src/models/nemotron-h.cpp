@@ -353,7 +353,20 @@ llama_model_nemotron_h::graph_mtp::graph_mtp(const llama_model & model, const ll
     res->add_input(std::move(inp));
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
-    auto * inp_attn = build_attn_inp_kv();
+
+    // NEMOTRON_H_MOE is a hybrid arch (llm_arch_is_hybrid), so llama_model::create_memory()
+    // gives the MTP context a llama_memory_hybrid too (there is no MTP-only plain-kv
+    // special case for this arch, unlike qwen35moe/step35). mctx is therefore a
+    // llama_memory_hybrid_context; build_attn_inp_kv() assumes a plain llama_kv_cache_context
+    // and mis-casts it, which segfaults inside build_input_v_idxs.
+    //
+    // build_inp_mem_hybrid() itself is not right either: both MTP sub-blocks (attention +
+    // moe) are non-recurrent, so this graph never builds a recurrent/mamba layer against
+    // the hybrid mctx's recr sub-cache. That leaves the recurrent input's s_copy tensor
+    // out of the actual compute graph, unallocated, and llm_graph_input_mem_hybrid::set_input()
+    // writes to it unconditionally -> GGML_ASSERT(buffer) abort at decode time. Use the
+    // attention-only accessor instead, which only registers the attn sub-cache input.
+    auto * inp_attn = build_attn_inp_kv_hybrid_attn_only();
 
     // seed: enorm(tok_embd) + hnorm(h_prev) -> concat -> eh_proj
     ggml_tensor * e_norm = build_norm(tok_embd, layer_attn.nextn.enorm, nullptr, LLM_NORM_RMS, il_attn);
