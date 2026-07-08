@@ -22,6 +22,20 @@ GGML_BACKEND_API ggml_backend_t ggml_backend_sycl_init(int device);
 GGML_BACKEND_API bool ggml_backend_is_sycl(ggml_backend_t backend);
 GGML_BACKEND_API enum ggml_status ggml_backend_sycl_consume_last_status(ggml_backend_t backend);
 
+typedef enum {
+    GGML_SYCL_FAILURE_CAUSE_NONE        = 0,
+    GGML_SYCL_FAILURE_CAUSE_DEVICE_LOST = 1,
+    GGML_SYCL_FAILURE_CAUSE_OTHER       = 2,
+} ggml_backend_sycl_failure_cause;
+
+typedef struct {
+    enum ggml_status               status;
+    ggml_backend_sycl_failure_cause cause;
+    int                             raw_code;
+} ggml_backend_sycl_failure;
+
+GGML_BACKEND_API ggml_backend_sycl_failure ggml_backend_sycl_consume_last_failure(ggml_backend_t backend);
+
 // devide buffer
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(int device);
 
