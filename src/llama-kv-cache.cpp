@@ -2826,6 +2826,15 @@ bool llama_kv_cache_context::next() {
 }
 
 bool llama_kv_cache_context::apply() {
+    // P3.2.2a2a3 discriminator: log every apply() entry with
+    // ubatches.size() + scale_inv tensor pointer so we can
+    // tell whether apply() is reached on the perplexity
+    // graph and whether the early-return at :2831 fires
+    // (the consume/update block at :2841-2850 is inside
+    // the non-empty-ubatch path only).
+    LLAMA_LOG_INFO("%s: InnerQ apply() entry ubatches.size()=%zu scale_inv=%p\n",
+                   __func__, ubatches.size(),
+                   (void *) kv->get_turbo_innerq_scale_inv_raw());
     assert(!llama_memory_status_is_fail(status));
 
     // no ubatches -> this is a KV cache update
