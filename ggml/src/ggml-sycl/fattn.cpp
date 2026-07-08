@@ -265,10 +265,7 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
     // n_kv watchdog: log when n_kv differs from the last FA call with
     // the same D — helps detect cache-truncation issues.
-    static int nkv_debug = -1;
-    if (nkv_debug < 0) {
-        nkv_debug = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DEBUG", 0);
-    }
+    static int nkv_debug = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DEBUG", 0);
     if (nkv_debug == 1) {
         const ggml_tensor * K_dbg = dst->src[1];
         const ggml_tensor * V_dbg = dst->src[2];
