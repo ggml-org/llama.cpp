@@ -24,6 +24,8 @@
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
 		isLastAssistantMessage?: boolean;
+		isLastUserMessage?: boolean;
+		nextAssistantMessage?: DatabaseMessage | null;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 	}
 
@@ -32,6 +34,8 @@
 		message,
 		toolMessages = [],
 		isLastAssistantMessage = false,
+		isLastUserMessage = false,
+		nextAssistantMessage = null,
 		siblingInfo = null
 	}: Props = $props();
 
@@ -359,7 +363,9 @@
 		<ChatMessageUser
 			class={className}
 			{deletionInfo}
+			{isLastUserMessage}
 			{message}
+			{nextAssistantMessage}
 			onConfirmDelete={handleConfirmDelete}
 			onCopy={handleCopy}
 			onDelete={handleDelete}
