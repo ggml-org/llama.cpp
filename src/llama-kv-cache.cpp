@@ -2921,6 +2921,17 @@ bool llama_kv_cache::turbo_innerq_consume_runtime(llama_turbo_innerq_runtime_sna
     return turbo_innerq_runtime.consume_if_dirty(out);
 }
 
+void llama_kv_cache_context::on_graph_compute_failure(ggml_status status) {
+    if (status != GGML_STATUS_FAILED) {
+        return;
+    }
+
+    // Narrow seed only: this marks the runtime for a later attempt after a
+    // backend compute failure. It intentionally ignores generic aborts and
+    // alloc failures; current-request recovery still does not happen here.
+    kv->turbo_innerq_publish_abort((int) status, 0, false);
+}
+
 ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
     return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
 }
