@@ -286,6 +286,12 @@ ggml_tensor * llama_memory_hybrid_context::get_turbo_innerq_scale_inv() const {
     return ctx_attn ? ctx_attn->get_turbo_innerq_scale_inv() : nullptr;
 }
 
+void llama_memory_hybrid_context::turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
+    if (ctx_attn) {
+        ctx_attn->turbo_innerq_publish_scale_inv(scale_inv, n, finalized);
+    }
+}
+
 const llama_memory_recurrent_context * llama_memory_hybrid_context::get_recr() const {
     return static_cast<const llama_memory_recurrent_context *>(ctx_recr.get());
 }

@@ -75,6 +75,15 @@ struct llama_memory_context_i {
     // uses identity/no-op plumbing until runtime abort/retry state is wired.
     virtual ggml_tensor * get_turbo_innerq_scale_inv() const { return nullptr; }
 
+    // TurboQuant InnerQ: publish a newly-measured scale_inv snapshot back to
+    // the concrete memory context. Hybrid contexts should forward to their
+    // attention-side child.
+    virtual void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
+        (void) scale_inv;
+        (void) n;
+        (void) finalized;
+    }
+
     // P3.2.3.3b2b1a/b3: narrow failure hook. Called when graph_compute() or
     // an adjacent backend sync path returns non-success to seed state for a
     // later attempt. `abort_reason` is backend-neutral: device-lost style

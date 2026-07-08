@@ -77,8 +77,7 @@ static void turbo_innerq_capture_and_publish(const ggml_tensor * t, turbo_innerq
         return;
     }
 
-    auto * kv_ctx = dynamic_cast<llama_kv_cache_context *>(cap->mctx);
-    if (kv_ctx == nullptr) {
+    if (cap->mctx == nullptr) {
         return;
     }
 
@@ -116,7 +115,7 @@ static void turbo_innerq_capture_and_publish(const ggml_tensor * t, turbo_innerq
 
     float scale_inv[llama_turbo_innerq_runtime_snapshot::N_CHANNELS];
     ggml_innerq_compute_k_squared_profile(probe.data(), (int) n_probe, (int) head_dim, scale_inv);
-    kv_ctx->turbo_innerq_publish_scale_inv(scale_inv, llama_turbo_innerq_runtime_snapshot::N_CHANNELS, true);
+    cap->mctx->turbo_innerq_publish_scale_inv(scale_inv, llama_turbo_innerq_runtime_snapshot::N_CHANNELS, true);
     cap->captured = true;
 }
 
