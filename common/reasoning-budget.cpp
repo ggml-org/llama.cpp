@@ -1,5 +1,6 @@
 #include "reasoning-budget.h"
 #include "common.h"
+#include "trie.h"
 #include "unicode.h"
 
 #include "log.h"
@@ -10,30 +11,31 @@
 #include <vector>
 
 struct token_matcher {
-    std::vector<llama_token> tokens;
-    size_t pos = 0;
+    common_aho_corasick ac;
+    size_t state = 0;
+
+    token_matcher(const std::vector<llama_tokens> & seqs) : ac(build_trie(seqs)) {}
+
+    static common_trie build_trie(const std::vector<llama_tokens> & seqs) {
+        common_trie t;
+        for (const auto & seq : seqs) {
+            if (!seq.empty()) {
+                t.insert(std::vector<uint32_t>(seq.begin(), seq.end()));
+            }
+        }
+        return t;
+    }
 
     bool advance(llama_token token) {
-        if (tokens.empty()) {
-            return false;
-        }
-
-        if (token == tokens[pos]) {
-            pos++;
-            if (pos >= tokens.size()) {
-                pos = 0;
-                return true;
-            }
-        } else {
-            pos = 0;
-            if (token == tokens[0]) {
-                pos = 1;
-            }
+        state = ac.next(state, (uint32_t) token);
+        if (ac.is_terminal(state)) {
+            state = 0;
+            return true;
         }
         return false;
     }
 
-    void reset() { pos = 0; }
+    void reset() { state = 0; }
 };
 
 struct common_reasoning_budget_ctx {
@@ -41,7 +43,7 @@ struct common_reasoning_budget_ctx {
 
     token_matcher start_matcher;
     token_matcher end_matcher;
-    std::vector<llama_token> forced_tokens;
+    llama_tokens forced_tokens;
 
     int32_t budget;           // maximum tokens in reasoning block
     int32_t remaining;        // tokens remaining in budget
@@ -172,8 +174,8 @@ static void common_reasoning_budget_reset(struct llama_sampler * smpl) {
 }
 
 static struct llama_sampler * common_reasoning_budget_init_state(
-        const struct llama_vocab * vocab, const std::vector<llama_token> & start_tokens,
-        const std::vector<llama_token> & end_tokens, const std::vector<llama_token> & forced_tokens,
+        const struct llama_vocab * vocab, const std::vector<llama_tokens> & start_seqs,
+        const std::vector<llama_tokens> & end_seqs, const llama_tokens & forced_tokens,
         int32_t budget, common_reasoning_budget_state initial_state);
 
 static struct llama_sampler * common_reasoning_budget_clone(const struct llama_sampler * smpl);
@@ -205,12 +207,12 @@ static struct llama_sampler * common_reasoning_budget_clone(const struct llama_s
 }
 
 static struct llama_sampler * common_reasoning_budget_init_state(
-        const struct llama_vocab             * vocab,
-        const std::vector<llama_token>       & start_tokens,
-        const std::vector<llama_token>       & end_tokens,
-        const std::vector<llama_token>       & forced_tokens,
-        int32_t                                budget,
-        common_reasoning_budget_state          initial_state) {
+        const struct llama_vocab        * vocab,
+        const std::vector<llama_tokens> & start_seqs,
+        const std::vector<llama_tokens> & end_seqs,
+        const llama_tokens              & forced_tokens,
+        int32_t                           budget,
+        common_reasoning_budget_state     initial_state) {
     // promote COUNTING with budget <= 0 to FORCING
     if (initial_state == REASONING_BUDGET_COUNTING && budget <= 0) {
         initial_state = REASONING_BUDGET_FORCING;
@@ -220,8 +222,8 @@ static struct llama_sampler * common_reasoning_budget_init_state(
         /* .iface = */ &common_reasoning_budget_i,
         /* .ctx   = */ new common_reasoning_budget_ctx {
             /* .vocab         = */ vocab,
-            /* .start_matcher = */ { start_tokens, 0 },
-            /* .end_matcher   = */ { end_tokens, 0 },
+            /* .start_matcher = */ token_matcher(start_seqs),
+            /* .end_matcher   = */ token_matcher(end_seqs),
             /* .forced_tokens = */ forced_tokens,
             /* .budget        = */ budget,
             /* .remaining     = */ budget,
@@ -232,13 +234,13 @@ static struct llama_sampler * common_reasoning_budget_init_state(
 }
 
 struct llama_sampler * common_reasoning_budget_init(
-        const struct llama_vocab       * vocab,
-        const std::vector<llama_token> & start_tokens,
-        const std::vector<llama_token> & end_tokens,
-        const std::vector<llama_token> & forced_tokens,
-        int32_t                          budget,
-        common_reasoning_budget_state    initial_state) {
-    return common_reasoning_budget_init_state(vocab, start_tokens, end_tokens, forced_tokens, budget, initial_state);
+        const struct llama_vocab        * vocab,
+        const std::vector<llama_tokens> & start_seqs,
+        const std::vector<llama_tokens> & end_seqs,
+        const llama_tokens              & forced_tokens,
+        int32_t                           budget,
+        common_reasoning_budget_state     initial_state) {
+    return common_reasoning_budget_init_state(vocab, start_seqs, end_seqs, forced_tokens, budget, initial_state);
 }
 
 common_reasoning_budget_state common_reasoning_budget_get_state(const struct llama_sampler * smpl) {
