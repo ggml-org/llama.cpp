@@ -2380,6 +2380,10 @@ uint32_t llama_model_n_cls_out(const struct llama_model * model) {
     return model->hparams.n_cls_out;
 }
 
+bool llama_model_has_cls_head(const struct llama_model * model) {
+    return model->cls != nullptr || model->cls_out != nullptr;
+}
+
 const char * llama_model_cls_label(const struct llama_model * model, uint32_t i) {
     if (i < model->classifier_labels.size()) {
         return model->classifier_labels[i].c_str();

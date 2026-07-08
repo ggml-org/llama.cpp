@@ -37,6 +37,53 @@
 
 using json = nlohmann::ordered_json;
 
+// causal-LM reranking helpers
+
+// Official Qwen3-Reranker judge prompt: fallback when GGUF has no "rerank" template.
+static const char * DEFAULT_CAUSAL_RERANK_TEMPLATE =
+    "<|im_start|>system\n"
+    "Judge whether the Document meets the requirements based on the Query and the Instruct provided. "
+    "Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n"
+    "<|im_start|>user\n"
+    "<Instruct>: Given a web search query, retrieve relevant passages that answer the query\n"
+    "<Query>: {query}\n"
+    "<Document>: {document}<|im_end|>\n"
+    "<|im_start|>assistant\n"
+    "<think>\n\n</think>\n\n";
+
+// Use the model's GGUF "rerank" template if present, otherwise the built-in default.
+static std::string format_causal_rerank_prompt(
+        const struct llama_model * model,
+        const std::string & query,
+        const std::string & document) {
+    const char * tmpl = llama_model_chat_template(model, "rerank");
+    if (tmpl == nullptr) {
+        tmpl = DEFAULT_CAUSAL_RERANK_TEMPLATE;
+    }
+    std::string prompt = tmpl;
+    string_replace_all(prompt, "{query}",    query);
+    string_replace_all(prompt, "{document}", document);
+    return prompt;
+}
+
+// sigmoid(margin / 5) where margin = ln(P(yes)) - ln(P(no)).
+// Calibration factor from ZeroEntropy's Qwen3-Reranker.
+static float score_yes_no_logit_margin(const std::vector<completion_token_output::prob_info> & token_probs) {
+    double p_yes = 0.0, p_no = 0.0;
+    for (const auto & entry : token_probs) {
+        std::string token_text = entry.txt;
+        while (!token_text.empty() && (token_text.front() == ' ' || token_text.front() == '\t')) token_text.erase(token_text.begin());
+        while (!token_text.empty() && (token_text.back()  == ' ' || token_text.back()  == '\t')) token_text.pop_back();
+        for (auto & c : token_text) c = (char)std::tolower((unsigned char)c);
+        if (token_text == "yes") p_yes += entry.prob;
+        else if (token_text == "no") p_no += entry.prob;
+    }
+    constexpr double prob_floor = 1e-9;
+    constexpr double calibration = 5.0;
+    double margin = std::log(std::max(p_yes, prob_floor)) - std::log(std::max(p_no, prob_floor));
+    return (float)(1.0 / (1.0 + std::exp(-margin / calibration)));
+}
+
 constexpr int HTTP_POLLING_SECONDS = 1;
 
 static uint32_t server_n_outputs_max(const common_params & params) {
@@ -4945,39 +4992,83 @@ void server_routes::init_routes() {
 
         int top_n = json_value(body, "top_n", (int)documents.size());
 
-        // create and queue the task
-        json responses = json::array();
+        const bool is_causal_reranker = !llama_model_has_cls_head(ctx_server.model_tgt);
+
+        // Create and queue tasks: causal-LM and pooling paths differ only here
         auto & rd = res->rd;
         {
             std::vector<server_task> tasks;
             tasks.reserve(documents.size());
-            for (size_t i = 0; i < documents.size(); i++) {
-                auto tmp = format_prompt_rerank(ctx_server.model_tgt, ctx_server.vocab, ctx_server.mctx, query, documents[i]);
-                server_task task = server_task(SERVER_TASK_TYPE_RERANK);
-                task.id     = rd.get_new_id();
-                task.tokens = std::move(tmp);
-                tasks.push_back(std::move(task));
+
+            if (is_causal_reranker) {
+                const bool has_rerank_template = llama_model_chat_template(ctx_server.model_tgt, "rerank") != nullptr;
+                SRV_INF("causal-LM reranker detected (no classification head), using logit-margin scoring for %zu documents\n", documents.size());
+                if (!has_rerank_template) {
+                    SRV_WRN("%s", "model has no 'rerank' chat template in GGUF metadata, using built-in default (Qwen3-Reranker format)\n");
+                }
+
+                for (size_t i = 0; i < documents.size(); i++) {
+                    std::string prompt_str = format_causal_rerank_prompt(
+                        ctx_server.model_tgt, query.get<std::string>(), documents[i]);
+                    auto prompt_tokens = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, json(prompt_str), false, true);
+
+                    server_task task = server_task(SERVER_TASK_TYPE_COMPLETION);
+                    task.id     = rd.get_new_id();
+                    task.index  = i;
+                    task.tokens = std::move(prompt_tokens[0]);
+                    task.params.n_predict            = 1;
+                    task.params.sampling.temp         = 0;
+                    task.params.sampling.n_probs      = 10;
+                    task.params.post_sampling_probs   = false;
+                    task.params.stream                = false;
+                    tasks.push_back(std::move(task));
+                }
+            } else {
+                for (size_t i = 0; i < documents.size(); i++) {
+                    auto rerank_tokens = format_prompt_rerank(ctx_server.model_tgt, ctx_server.vocab, ctx_server.mctx, query, documents[i]);
+                    server_task task = server_task(SERVER_TASK_TYPE_RERANK);
+                    task.id     = rd.get_new_id();
+                    task.tokens = std::move(rerank_tokens);
+                    tasks.push_back(std::move(task));
+                }
             }
+
             rd.post_tasks(std::move(tasks));
         }
 
-        // wait for the results
+        // Wait and collect results
         auto all_results = rd.wait_for_all(req.should_stop);
 
-        // collect results
         if (all_results.is_terminated) {
-            return res; // connection is closed
+            return res;
         } else if (all_results.error) {
             res->error(all_results.error->to_json());
             return res;
-        } else {
-            for (auto & res : all_results.results) {
-                GGML_ASSERT(dynamic_cast<server_task_result_rerank*>(res.get()) != nullptr);
-                responses.push_back(res->to_json());
+        }
+
+        json responses = json::array();
+        for (auto & result : all_results.results) {
+            if (is_causal_reranker) {
+                auto * completion = dynamic_cast<server_task_result_cmpl_final*>(result.get());
+                if (!completion) {
+                    continue;
+                }
+                float score = 0.0f;
+                if (!completion->probs_output.empty()) {
+                    score = score_yes_no_logit_margin(completion->probs_output[0].probs);
+                }
+                auto rerank_result = std::make_unique<server_task_result_rerank>();
+                rerank_result->id       = completion->id;
+                rerank_result->index    = completion->index;
+                rerank_result->n_tokens = completion->n_prompt_tokens;
+                rerank_result->score    = score;
+                responses.push_back(rerank_result->to_json());
+            } else {
+                GGML_ASSERT(dynamic_cast<server_task_result_rerank*>(result.get()) != nullptr);
+                responses.push_back(result->to_json());
             }
         }
 
-        // write JSON response
         json root = format_response_rerank(
             body,
             meta->model_name,

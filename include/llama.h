@@ -579,6 +579,11 @@ extern "C" {
     // Undefined behavior for non-classifier models
     LLAMA_API uint32_t llama_model_n_cls_out(const struct llama_model * model);
 
+    // Returns true if the model has a classification head (cls or cls_out tensor).
+    // Models without a classification head cannot produce meaningful scores through
+    // pooling-based reranking and need an alternative scoring method.
+    LLAMA_API bool llama_model_has_cls_head(const struct llama_model * model);
+
     // Returns label of classifier output by index (<n_cls_out). Returns nullptr if no label provided
     LLAMA_API const char * llama_model_cls_label(const struct llama_model * model, uint32_t i);
 
