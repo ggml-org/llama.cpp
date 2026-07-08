@@ -856,8 +856,6 @@ struct llm_graph_context {
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
 
-    void mark_fused(llm_fused_op op, ggml_tensor * cur, int il) const;
-
     //
     // common
     //

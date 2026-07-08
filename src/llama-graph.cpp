@@ -1081,9 +1081,7 @@ void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     }
 }
 
-void llm_graph_context::mark_fused(llm_fused_op op, ggml_tensor * cur, int il) const {
-    res->add_fused_node({op, cur, il});
-}
+
 
 ggml_tensor * llm_graph_context::build_cvec(
          ggml_tensor * cur,
@@ -2101,7 +2099,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
-        mark_fused(LLM_FUSED_OP_FLASH_ATTN, cur, il);
+        res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN, cur, il});
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
