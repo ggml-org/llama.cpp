@@ -738,7 +738,7 @@ public:
 
     llm_graph_input_i * add_input(llm_graph_input_ptr input);
 
-    void add_fused_node(llm_fused_op op, ggml_tensor * tensor, int il);
+    void add_fused_node(llm_graph_fused_node result);
 
     const std::vector<llm_graph_fused_node> & get_fused_nodes() const { return fused_nodes; }
 
@@ -856,7 +856,7 @@ struct llm_graph_context {
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
 
-    void mark_fused(llm_fused_op op, ggml_tensor * cur, const char * name, int il) const;
+    void mark_fused(llm_fused_op op, ggml_tensor * cur, int il) const;
 
     //
     // common
