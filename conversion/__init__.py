@@ -188,6 +188,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "NanbeigeForCausalLM": "nanbeige",
     "NemotronForCausalLM": "nemotron",
     "NemotronHForCausalLM": "nemotron",
+    "NemotronHPuzzleForCausalLM": "nemotron",
     "NeoBERT": "bert",
     "NeoBERTForSequenceClassification": "bert",
     "NeoBERTLMHead": "bert",
