@@ -37,6 +37,10 @@ void llama_model_granite_swa::load_arch_hparams(llama_model_loader & ml) {
 
     // Granite uses rope_finetuned as a switch for rope, so default to true
     bool rope_finetuned = true;
+
+    // Per-layer RoPE pattern (optional)
+    ml.get_arr(LLM_KV_ATTENTION_ROPE_PATTERN, hparams.rope_pattern, false);
+
     ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
     hparams.rope_finetuned = rope_finetuned;
 
@@ -134,10 +138,7 @@ llama_model_granite_swa::graph::graph(
     inpL = build_inp_embd(model.tok_embd);
 
     // inp_pos - built only if rope enabled
-    ggml_tensor * inp_pos = nullptr;
-    if (hparams.rope_finetuned) {
-        inp_pos = build_inp_pos();
-    }
+    ggml_tensor * inp_pos = build_inp_pos();
     auto * inp_attn = build_attn_inp_kv_iswa();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
@@ -211,7 +212,7 @@ ggml_tensor * llama_model_granite_swa::graph::build_attention_layer(
     auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
             n_embd_head, hparams.n_head(il), hparams.n_head_kv(il), il);
 
-    const bool use_rope = hparams.rope_finetuned;
+    const bool use_rope = hparams.has_rope(il);
     if (use_rope) {
         ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
         Qcur = ggml_rope_ext(
