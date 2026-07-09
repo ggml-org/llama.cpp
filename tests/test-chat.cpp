@@ -4569,6 +4569,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
     {
         test_laguna_parser("models/templates/laguna.jinja", detailed_debug);
+        test_laguna_parser("models/templates/laguna-v8.jinja", detailed_debug);
     }
 
     // Thinking cases only apply to LFM2.5-8B-A1B, the one LFM2 template that emits <think>

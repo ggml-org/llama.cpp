@@ -2600,23 +2600,24 @@ static common_chat_params common_chat_params_init_laguna(const common_chat_templ
         auto end = p.end();
 
         // The framework prepends data.generation_prompt to the parsed output:
-        // "<assistant>\n" followed by the opening <think> (thinking enabled) or
-        // </think> (disabled). Consume it, then capture reasoning. The model's
-        // output therefore starts with the reasoning text (no leading <think>).
-        const std::string GEN_PROMPT = "<assistant>\n";
+        // "<assistant>" then the opening <think> (thinking enabled) or </think>
+        // (disabled). The separator after <assistant> is optional whitespace:
+        // template v4/v5 (M.1, XS.2) emit a newline, template v8 (XS-2.1, S-2.1)
+        // emit none. Match it with p.space() so both parse.
+        const std::string GEN_PROMPT = "<assistant>";
         auto head = p.eps();
         if (extract_reasoning && inputs.enable_thinking) {
             // The model normally closes reasoning with </think> before a tool
             // call, but sometimes emits <tool_call> directly without it.
             // Terminate reasoning on whichever marker comes first so the call is
             // not swallowed into reasoning_content; consume </think> if present.
-            head = p.literal(GEN_PROMPT + THINK_START) +
+            head = p.literal(GEN_PROMPT) + p.space() + p.literal(THINK_START) +
                    p.reasoning(p.until_one_of({ THINK_END, CALL_START })) +
                    p.optional(p.literal(THINK_END));
         } else if (extract_reasoning) {
-            head = p.literal(GEN_PROMPT + THINK_END);
+            head = p.literal(GEN_PROMPT) + p.space() + p.literal(THINK_END);
         } else {
-            head = p.literal(GEN_PROMPT) +
+            head = p.literal(GEN_PROMPT) + p.space() +
                    p.optional(p.literal(THINK_START)) + p.optional(p.literal(THINK_END));
         }
 
