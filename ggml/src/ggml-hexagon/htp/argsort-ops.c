@@ -170,6 +170,154 @@ int32_t argosrt_ramp_lut[32] __attribute__((aligned(VLEN))) = {
     16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
 };
 
+static inline void vec_cas(HVX_Vector * X_val, HVX_Vector * X_idx, HVX_Vector * Y_val, HVX_Vector * Y_idx, bool asc) {
+    HVX_VectorPred pred = asc ? Q6_Q_vcmp_gt_VsfVsf(*X_val, *Y_val)
+                              : Q6_Q_vcmp_gt_VsfVsf(*Y_val, *X_val);
+    HVX_Vector next_X_val = Q6_V_vmux_QVV(pred, *Y_val, *X_val);
+    HVX_Vector next_Y_val = Q6_V_vmux_QVV(pred, *X_val, *Y_val);
+    HVX_Vector next_X_idx = Q6_V_vmux_QVV(pred, *Y_idx, *X_idx);
+    HVX_Vector Y_tmp_idx  = Q6_V_vmux_QVV(pred, *X_idx, *Y_idx);
+    *X_val = next_X_val;
+    *Y_val = next_Y_val;
+    *X_idx = next_X_idx;
+    *Y_idx = Y_tmp_idx;
+}
+
+static inline void bitonic_cas_32(HVX_Vector * V, HVX_Vector * I, int d, HVX_VectorPred dir_mask, HVX_Vector idx_vec, HVX_Vector zero_vec) {
+    HVX_VectorPred mask_left;
+    HVX_Vector V_rot_left, V_rot_right;
+    HVX_Vector I_rot_left, I_rot_right;
+
+    if (d == 1) {
+        mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(1)), zero_vec);
+        V_rot_left = Q6_V_vror_VR(*V, 124);
+        V_rot_right = Q6_V_vror_VR(*V, 4);
+        I_rot_left = Q6_V_vror_VR(*I, 124);
+        I_rot_right = Q6_V_vror_VR(*I, 4);
+    } else if (d == 2) {
+        mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(2)), zero_vec);
+        V_rot_left = Q6_V_vror_VR(*V, 120);
+        V_rot_right = Q6_V_vror_VR(*V, 8);
+        I_rot_left = Q6_V_vror_VR(*I, 120);
+        I_rot_right = Q6_V_vror_VR(*I, 8);
+    } else if (d == 4) {
+        mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(4)), zero_vec);
+        V_rot_left = Q6_V_vror_VR(*V, 112);
+        V_rot_right = Q6_V_vror_VR(*V, 16);
+        I_rot_left = Q6_V_vror_VR(*I, 112);
+        I_rot_right = Q6_V_vror_VR(*I, 16);
+    } else if (d == 8) {
+        mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(8)), zero_vec);
+        V_rot_left = Q6_V_vror_VR(*V, 96);
+        V_rot_right = Q6_V_vror_VR(*V, 32);
+        I_rot_left = Q6_V_vror_VR(*I, 96);
+        I_rot_right = Q6_V_vror_VR(*I, 32);
+    } else { // d == 16
+        mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(16)), zero_vec);
+        V_rot_left = Q6_V_vror_VR(*V, 64);
+        V_rot_right = Q6_V_vror_VR(*V, 64);
+        I_rot_left = Q6_V_vror_VR(*I, 64);
+        I_rot_right = Q6_V_vror_VR(*I, 64);
+    }
+
+    HVX_Vector V_paired = Q6_V_vmux_QVV(mask_left, V_rot_left, V_rot_right);
+    HVX_Vector I_paired = Q6_V_vmux_QVV(mask_left, I_rot_left, I_rot_right);
+
+    HVX_VectorPred V_gt_Vpaired = Q6_Q_vcmp_gt_VsfVsf(*V, V_paired);
+    HVX_VectorPred Vpaired_gt_V = Q6_Q_vcmp_gt_VsfVsf(V_paired, *V);
+    HVX_VectorPred mask_right = Q6_Q_not_Q(mask_left);
+    HVX_VectorPred Q_asc = Q6_Q_or_QQ(
+        Q6_Q_and_QQ(mask_left, V_gt_Vpaired),
+        Q6_Q_and_QQ(Vpaired_gt_V, mask_right)
+    );
+    HVX_VectorPred Q_swap = Q6_Q_or_QQ(
+        Q6_Q_and_QQ(dir_mask, Q_asc),
+        Q6_Q_and_QQ(Q6_Q_not_Q(dir_mask), Q6_Q_not_Q(Q_asc))
+    );
+
+    *V = Q6_V_vmux_QVV(Q_swap, V_paired, *V);
+    *I = Q6_V_vmux_QVV(Q_swap, I_paired, *I);
+}
+
+static inline void bitonic_sort_generic_hvx(uint8_t * values, uint8_t * indices, int K, bool asc_order) {
+    HVX_Vector V[32];
+    HVX_Vector I[32];
+
+    HVX_Vector zero_vec = Q6_V_vzero();
+    HVX_Vector idx_vec = *(HVX_Vector *)argosrt_ramp_lut;
+
+    // Load values and initialize indices
+    for (int v = 0; v < K; v++) {
+        V[v] = *(HVX_Vector *)(values + v * 128);
+        I[v] = Q6_Vw_vadd_VwVw(idx_vec, Q6_V_vsplat_R(v * 32));
+    }
+
+    HVX_VectorPred pred_all_1s = Q6_Q_vcmp_eq_VwVw(zero_vec, zero_vec);
+    HVX_VectorPred pred_all_0s = Q6_Q_not_Q(pred_all_1s);
+
+    int M = 5;
+    while ((1 << (M - 5)) < K) M++;
+
+    for (int s = 1; s <= M; s++) {
+        for (int stage_d = s - 1; stage_d >= 0; stage_d--) {
+            int d = 1 << stage_d;
+            if (d >= 32) {
+                int v_dist = d / 32;
+                for (int v1 = 0; v1 < K; v1++) {
+                    if ((v1 & v_dist) == 0) {
+                        int v2 = v1 + v_dist;
+                        bool asc = (s < M) ? ((((v1 * 32) >> s) % 2) == 0) : asc_order;
+                        vec_cas(&V[v1], &I[v1], &V[v2], &I[v2], asc);
+                    }
+                }
+            } else {
+                if (s < 5) {
+                    HVX_VectorPred dir_mask = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(1 << s)), zero_vec);
+                    for (int v = 0; v < K; v++) {
+                        bitonic_cas_32(&V[v], &I[v], d, dir_mask, idx_vec, zero_vec);
+                    }
+                } else {
+                    for (int v = 0; v < K; v++) {
+                        bool asc = (s < M) ? ((((v * 32) >> s) % 2) == 0) : asc_order;
+                        HVX_VectorPred dir_mask = asc ? pred_all_1s : pred_all_0s;
+                        bitonic_cas_32(&V[v], &I[v], d, dir_mask, idx_vec, zero_vec);
+                    }
+                }
+            }
+        }
+    }
+
+    // Write back sorted values and indices
+    for (int v = 0; v < K; v++) {
+        *(HVX_Vector *)(values + v * 128)  = V[v];
+        *(HVX_Vector *)(indices + v * 128) = I[v];
+    }
+}
+
+static void sort32_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 1, order == GGML_SORT_ORDER_ASC);
+}
+
+static void sort64_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 2, order == GGML_SORT_ORDER_ASC);
+}
+
+static void sort128_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 4, order == GGML_SORT_ORDER_ASC);
+}
+
+static void sort256_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 8, order == GGML_SORT_ORDER_ASC);
+}
+
+static void sort512_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 16, order == GGML_SORT_ORDER_ASC);
+}
+
+static void sort1024_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 32, order == GGML_SORT_ORDER_ASC);
+}
+
 static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_argsort_context * actx = (struct htp_argsort_context *)data;
     struct htp_ops_context * octx = actx->octx;
@@ -228,18 +376,32 @@ static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
         hex_l2fetch(src_ptr, ne00 * sizeof(float), ne00 * sizeof(float), 1);
         hvx_copy_f32_au((uint8_t*)values_buf, src_ptr, ne00);
 
-        // Initialize indices - Start with values 0..31, add 32 for additional vec iterations
-        HVX_Vector curr_ind_vec = ind_init_vec;
-        for (uint32_t j_vec = 0; j_vec < num_vec_ind_values; j_vec++) {
-            indices_buf_vec[j_vec] = curr_ind_vec;
-            curr_ind_vec = Q6_Vw_vadd_VwVw(curr_ind_vec, ind_diff_vec);
-        }
-
-        // Sort values and mirror swaps to indices
-        if (order == GGML_SORT_ORDER_ASC) {
-            quicksort_values_indices_asc(values_buf, indices_buf, 0, ne00 - 1);
+        if (ne00 == 1024) {
+            sort1024_f32_hvx((uint8_t*)values_buf, (uint8_t*)indices_buf, order);
+        } else if (ne00 == 512) {
+            sort512_f32_hvx((uint8_t*)values_buf, (uint8_t*)indices_buf, order);
+        } else if (ne00 == 256) {
+            sort256_f32_hvx((uint8_t*)values_buf, (uint8_t*)indices_buf, order);
+        } else if (ne00 == 128) {
+            sort128_f32_hvx((uint8_t*)values_buf, (uint8_t*)indices_buf, order);
+        } else if (ne00 == 64) {
+            sort64_f32_hvx((uint8_t*)values_buf, (uint8_t*)indices_buf, order);
+        } else if (ne00 == 32) {
+            sort32_f32_hvx((uint8_t*)values_buf, (uint8_t*)indices_buf, order);
         } else {
-            quicksort_values_indices_desc(values_buf, indices_buf, 0, ne00 - 1);
+            // Initialize indices - Start with values 0..31, add 32 for additional vec iterations
+            HVX_Vector curr_ind_vec = ind_init_vec;
+            for (uint32_t j_vec = 0; j_vec < num_vec_ind_values; j_vec++) {
+                indices_buf_vec[j_vec] = curr_ind_vec;
+                curr_ind_vec = Q6_Vw_vadd_VwVw(curr_ind_vec, ind_diff_vec);
+            }
+
+            // Sort values and mirror swaps to indices
+            if (order == GGML_SORT_ORDER_ASC) {
+                quicksort_values_indices_asc(values_buf, indices_buf, 0, ne00 - 1);
+            } else {
+                quicksort_values_indices_desc(values_buf, indices_buf, 0, ne00 - 1);
+            }
         }
 
         // Copy indices back to DDR
