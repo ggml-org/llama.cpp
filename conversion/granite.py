@@ -120,6 +120,43 @@ class GraniteSWAModel(GraniteModel):
             logger.info("gguf: (granite_swa) rope_pattern = %d RoPE layers / %d total",
                         sum(rope_pattern), len(rope_pattern))
 
+
+@ModelBase.register("GraniteMoeSWAForCausalLM")
+class GraniteMoeSWAModel(GraniteSWAModel):
+    """Conversion for IBM's GraniteMoeSWAForCausalLM (unified dense + MoE with iSWA)"""
+    model_arch = gguf.MODEL_ARCH.GRANITE_SWA
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        """Split merged MoE tensors (gate+up) following standard MoE pattern."""
+
+        # Handle expert FFN tensors (merged gate+up)
+        if name.endswith("block_sparse_moe.input_linear.weight"):
+            ffn_dim = self.hparams["intermediate_size"]
+            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
+            gate, up = data_torch.split(ffn_dim, dim=-2)
+            yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), bid)
+            yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), bid)
+            return
+
+        # Handle shared expert FFN tensors (if present)
+        if name.endswith("shared_mlp.input_linear.weight"):
+            ffn_dim = self.hparams.get("shared_intermediate_size", self.hparams["intermediate_size"])
+            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * shared_intermediate_size"
+            gate, up = data_torch.split(ffn_dim, dim=-2)
+            yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), bid)
+            yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), bid)
+            return
+
+        # Handle shared expert output (if present)
+        if name.endswith("shared_mlp.output_linear.weight"):
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, bid), bid)
+            return
+
+        # Pass through to parent for all other tensors (including sinks)
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+
 @ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
 class GraniteMoeModel(GraniteModel):
     """Conversion for IBM's GraniteMoeForCausalLM"""
