@@ -8096,13 +8096,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                         for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
                                             test_cases.emplace_back(new test_conv_2d(
                                                 { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, kernel_type, s0, s1, p0, p1, d0, d1, false));
-
-                                            //if (Cin == Cout) {
-                                            //    test_cases.emplace_back(new test_conv_2d_dw(
-                                            //        { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, s0, p0, d0, false));
-                                            //    test_cases.emplace_back(new test_conv_2d_dw(
-                                            //        { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, s0, p0, d0, true));
-                                            //}
                                         }
                                     }
                                 }
