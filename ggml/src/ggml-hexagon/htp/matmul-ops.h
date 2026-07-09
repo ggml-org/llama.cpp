@@ -710,7 +710,6 @@ static inline bool htp_mm_hmx_solve_2d_params(
     int wtype,
     uint32_t k,
     uint32_t m_id_rows,
-    uint32_t ne11,
     uint32_t ne01_padded,
     uint32_t ne11_padded,
     uint32_t m_for_cost,

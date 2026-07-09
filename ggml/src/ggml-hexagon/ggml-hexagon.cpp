@@ -2242,7 +2242,7 @@ static bool ggml_hexagon_precompute_hmx_mm_params(
     if (!use_grouped) {
         // Fallback to simple 2D path (group_size = 1)
         const int m_id_rows = (int) ((size_t) dst->ne[1] * dst->ne[2]);
-        if (!htp_mm_hmx_solve_2d_params(wtype, ne00_padded, m_id_rows, ne11, ne01_padded, ne11_padded, ne11, n_threads, pipeline, is_matmul_id, aligned_tile_size, vtcm_budget, &m_chunk, &n_chunk, &act_threads_selected, &vtcm_size)) {
+        if (!htp_mm_hmx_solve_2d_params(wtype, ne00_padded, m_id_rows, ne01_padded, ne11_padded, ne11, n_threads, pipeline, is_matmul_id, aligned_tile_size, vtcm_budget, &m_chunk, &n_chunk, &act_threads_selected, &vtcm_size)) {
             return false;
         }
     }
