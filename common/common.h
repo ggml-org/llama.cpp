@@ -1081,6 +1081,9 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
 struct common_prompt_checkpoint {
     int64_t n_tokens;
 
+    // (optional) id of the task that created the checkpoint
+    int id_task = -1;
+
     llama_pos pos_min;
     llama_pos pos_max;
 
