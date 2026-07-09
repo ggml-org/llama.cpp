@@ -581,6 +581,8 @@ struct ggml_backend_opencl_context {
     bool adreno_use_bin_kernels;
     get_adreno_bin_kernel_func_t get_adreno_bin_kernel_func = nullptr;
     ggml_cl_compiler_version adreno_cl_compiler_version;
+    // The q6_K flat mul_mat codegen workarounds are needed by old E031 compilers only.
+    bool q6_k_flat_old_compiler;
 
     std::string kernel_compile_opts;  // cached for lazy-compiled kernels.
 
@@ -1926,8 +1928,14 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("mul_mv_q6_k_f32_flat.cl");
 #endif
+        // The codegen workarounds in this kernel are a measured 13-20% loss on
+        // compilers that do not need them, so only the affected ones build them;
+        // everyone else gets the original source.
+        const std::string q6k_opts = backend_ctx->q6_k_flat_old_compiler
+            ? compile_opts + " -DADRENO_OLD_COMPILER=1"
+            : compile_opts;
         cl_program prog =
-            build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+            build_program_from_source(backend_ctx, kernel_src.c_str(), q6k_opts);
 
         CL_CHECK((backend_ctx->kernel_mul_mv_q6_K_f32_flat = clCreateKernel(prog, "kernel_mul_mv_q6_K_f32_flat", &err), err));
         CL_CHECK(clReleaseProgram(prog));
@@ -5870,6 +5878,16 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     backend_ctx->has_vector_subgroup_broadcast =
         (backend_ctx->adreno_cl_compiler_version.type == E031 && backend_ctx->adreno_cl_compiler_version.major >= 47) ||
         (backend_ctx->adreno_cl_compiler_version.type == DX   && backend_ctx->adreno_cl_compiler_version.major >= 17);
+
+    // The q6_K flat mul_mat miscompile is a defect of the older E031 compilers, not a
+    // property of any GPU generation: it reproduces on E031.38 (Adreno 642L) and E031.41
+    // (Adreno 740) and is fixed by E031.45 (Adreno 619). Gate on the compiler so parts
+    // that do not need the workarounds do not pay for them. The explicit type check is
+    // required: newer_than_or_same() is false for every non-E031 compiler, so negating it
+    // alone would enable the workarounds on E17/DX.
+    backend_ctx->q6_k_flat_old_compiler =
+        backend_ctx->adreno_cl_compiler_version.type == E031 &&
+        !backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 45, 0, 0);
 
     size_t ext_str_size;
     clGetDeviceInfo(device, CL_DEVICE_EXTENSIONS, 0, NULL, &ext_str_size);
@@ -20409,6 +20427,12 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne1));
             CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &r2));
             CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &r3));
+            // The optimizer-barrier arg exists only in the ADRENO_OLD_COMPILER build of
+            // this kernel; conformant compilers get the original 17-arg signature.
+            if (backend_ctx->q6_k_flat_old_compiler) {
+                cl_uchar q6k_mask = 0xFF;   // never 0xFE in prod; see the kernel note
+                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_uchar), &q6k_mask));
+            }
 #else
             kernel = backend_ctx->kernel_mul_mv_q6_K_f32;
 
