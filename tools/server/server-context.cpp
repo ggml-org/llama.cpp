@@ -1444,6 +1444,7 @@ private:
         // populate chat template params
         {
             common_chat_templates_ptr chat_templates;
+            bool enable_thinking = false;
 
             try {
                 chat_templates = common_chat_templates_init(model_tgt, params_base.chat_template);
@@ -1451,19 +1452,18 @@ private:
                 SRV_TRC("%s: chat template, example_format: '%s'\n", __func__,
                     common_chat_format_example(chat_templates.get(), params_base.use_jinja, params_base.default_template_kwargs).c_str());
 
+                // thinking is enabled if:
+                // 1. It's not explicitly disabled via --reasoning off
+                // 2. The chat template supports it
+                const bool template_supports_thinking = params_base.use_jinja && common_chat_templates_support_enable_thinking(chat_templates.get());
+                enable_thinking = params_base.enable_reasoning != 0 && template_supports_thinking;
+                SRV_TRC("%s: chat template, thinking = %d\n", __func__, enable_thinking);
             } catch (const std::exception & e) {
                 SRV_ERR("%s: chat template parsing error: %s\n", __func__, e.what());
                 SRV_ERR("%s: please consider disabling jinja via --no-jinja, or use a custom chat template via --chat-template\n", __func__);
                 SRV_ERR("%s: for example: --no-jinja --chat-template chatml\n", __func__);
                 return false;
             }
-
-            // thinking is enabled if:
-            // 1. It's not explicitly disabled via --reasoning off
-            // 2. The chat template supports it
-            const bool template_supports_thinking = params_base.use_jinja && common_chat_templates_support_enable_thinking(chat_templates.get());
-            const bool enable_thinking = params_base.enable_reasoning != 0 && template_supports_thinking;
-            SRV_TRC("%s: chat template, thinking = %d\n", __func__, enable_thinking);
 
             // IMPORTANT: chat_params is reused across sleeping / resuming states,
             //            never store llama_context/llama_model pointers in chat_params,
