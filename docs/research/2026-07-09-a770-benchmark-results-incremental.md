@@ -2,8 +2,8 @@
 
 Date: 2026-07-09
 Branch: `benchmark/fork-vs-upstream-a770`
-Status: partial 16/60 at 2026-07-09T10:48:59Z
-Matrix job: `bg_3` still running when this revision written
+Status: complete - matrix 60/60 ok, coherence 15/15 (see Final verdict below; sections between are incremental snapshots captured while the job ran)
+Matrix job: `bg_3` completed
 Matrix artifact: `docs/research/a770-fork-unique-2026-07-09/results.jsonl`
 Important: current `--quick` matrix uses `p64/n16/r1`. Smoke only. Directional only. Not final throughput claim.
 

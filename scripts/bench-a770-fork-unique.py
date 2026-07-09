@@ -32,6 +32,10 @@ DEFAULT_MODELS = [
 def run(argv: list[str], env_extra: dict[str, str], timeout_s: int, cwd: Path | None = None) -> dict[str, Any]:
     env = os.environ.copy()
     env.setdefault("ONEAPI_DEVICE_SELECTOR", "level_zero:0")
+    # Clear fork-controlled knobs so an ambient shell export can't leak into a
+    # case that declares defaults; env_extra is the only per-case source.
+    for _knob in ("GGML_SYCL_FA_XMX", "TURBO_LAYER_ADAPTIVE", "TURBO_AUTO_ASYMMETRIC"):
+        env.pop(_knob, None)
     env.update(env_extra)
     t0 = time.time()
     try:

@@ -793,9 +793,9 @@ int main() {
 
     // Ordering rule: probes that cannot device-lost run first, so a later FA
     // crash can't mask earlier results. The crash-prone non-turbo VEC path
-    // (n_q=1) runs LAST. Turbo FA is GATE (kernel fixed) at d=128 plus a GATE
-    // d=256 turbo3/turbo4 path (QK_TURBO{2,3,4}==128 is a hard invariant, so
-    // d=256 is two 128-element turbo blocks; see ggml-common.h).
+    // (n_q=1) runs LAST. turbo3/turbo4 FA is GATE (kernel fixed) at d=128 and
+    // d=256 (QK_TURBO{2,3,4}==128 is a hard invariant, so d=256 is two
+    // 128-element turbo blocks; see ggml-common.h); turbo2 FA stays XFAIL.
     printf("[1] Walsh-Hadamard rotation (TURBO_WHT)\n");                 // GATE
     probe_wht(cpu, sycl, 128);
     probe_wht(cpu, sycl, 64);
