@@ -190,28 +190,28 @@ static inline void bitonic_cas_32(HVX_Vector * V, HVX_Vector * I, int d, HVX_Vec
 
     if (d == 1) {
         mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(1)), zero_vec);
-        V_rot_left = Q6_V_vror_VR(*V, 124);
-        V_rot_right = Q6_V_vror_VR(*V, 4);
-        I_rot_left = Q6_V_vror_VR(*I, 124);
-        I_rot_right = Q6_V_vror_VR(*I, 4);
+        V_rot_left = Q6_V_vror_VR(*V, 4);
+        V_rot_right = Q6_V_vror_VR(*V, 124);
+        I_rot_left = Q6_V_vror_VR(*I, 4);
+        I_rot_right = Q6_V_vror_VR(*I, 124);
     } else if (d == 2) {
         mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(2)), zero_vec);
-        V_rot_left = Q6_V_vror_VR(*V, 120);
-        V_rot_right = Q6_V_vror_VR(*V, 8);
-        I_rot_left = Q6_V_vror_VR(*I, 120);
-        I_rot_right = Q6_V_vror_VR(*I, 8);
+        V_rot_left = Q6_V_vror_VR(*V, 8);
+        V_rot_right = Q6_V_vror_VR(*V, 120);
+        I_rot_left = Q6_V_vror_VR(*I, 8);
+        I_rot_right = Q6_V_vror_VR(*I, 120);
     } else if (d == 4) {
         mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(4)), zero_vec);
-        V_rot_left = Q6_V_vror_VR(*V, 112);
-        V_rot_right = Q6_V_vror_VR(*V, 16);
-        I_rot_left = Q6_V_vror_VR(*I, 112);
-        I_rot_right = Q6_V_vror_VR(*I, 16);
+        V_rot_left = Q6_V_vror_VR(*V, 16);
+        V_rot_right = Q6_V_vror_VR(*V, 112);
+        I_rot_left = Q6_V_vror_VR(*I, 16);
+        I_rot_right = Q6_V_vror_VR(*I, 112);
     } else if (d == 8) {
         mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(8)), zero_vec);
-        V_rot_left = Q6_V_vror_VR(*V, 96);
-        V_rot_right = Q6_V_vror_VR(*V, 32);
-        I_rot_left = Q6_V_vror_VR(*I, 96);
-        I_rot_right = Q6_V_vror_VR(*I, 32);
+        V_rot_left = Q6_V_vror_VR(*V, 32);
+        V_rot_right = Q6_V_vror_VR(*V, 96);
+        I_rot_left = Q6_V_vror_VR(*I, 32);
+        I_rot_right = Q6_V_vror_VR(*I, 96);
     } else { // d == 16
         mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(16)), zero_vec);
         V_rot_left = Q6_V_vror_VR(*V, 64);
