@@ -2680,9 +2680,11 @@ static common_chat_params common_chat_params_init_laguna(const common_chat_templ
                 args_seq = args_seq + p.repeat(p.space() + any_opt, 0, -1);
             }
 
-            // <tool_call>name\n {args} </tool_call>
+            // <tool_call>name{sep}{args}</tool_call>. The separator after the
+            // name is optional whitespace: the model may emit a newline, a
+            // space, or nothing before the first <arg_key>.
             auto func_parser = p.tool(
-                p.tool_open(p.literal(CALL_START) + p.tool_name(p.literal(name)) + p.literal("\n")) +
+                p.tool_open(p.literal(CALL_START) + p.tool_name(p.literal(name)) + p.space()) +
                 args_seq + p.space() +
                 p.tool_close(p.literal(CALL_END)));
 

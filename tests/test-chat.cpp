@@ -1928,6 +1928,35 @@ static void test_laguna_parser(const std::string & template_path, bool detailed_
         .expect(message_with_tool_calls_and_reasoning("get_weather", R"({"city": "Paris"})", "Let me check the weather"))
         .run();
 
+    // Same call, but the model omits the newline after the function name
+    // (the name directly abuts <arg_key>). The optional-whitespace separator
+    // must still parse it. Mirrors the vLLM poolside_v1 fix (vllm#47311).
+    tst.test(
+           "Let me check the weather</think>\n"
+           "<tool_call>get_weather"
+           "<arg_key>city</arg_key>\n"
+           "<arg_value>Paris</arg_value>\n"
+           "</tool_call>")
+        .enable_thinking(true)
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .tools({ get_weather_tool })
+        .expect(message_with_tool_calls_and_reasoning("get_weather", R"({"city": "Paris"})", "Let me check the weather"))
+        .run();
+
+    // Same call with a space after the function name (<tool_call>name <arg_key>),
+    // the separator shown in this parser's header comment.
+    tst.test(
+           "Let me check the weather</think>\n"
+           "<tool_call>get_weather "
+           "<arg_key>city</arg_key>\n"
+           "<arg_value>Paris</arg_value>\n"
+           "</tool_call>")
+        .enable_thinking(true)
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .tools({ get_weather_tool })
+        .expect(message_with_tool_calls_and_reasoning("get_weather", R"({"city": "Paris"})", "Let me check the weather"))
+        .run();
+
     // Non-thinking mode + non-string (integer) arg. Generation prompt is
     // "<assistant>\n</think>"; the integer is a raw JSON value, not quoted.
     tst.test(
