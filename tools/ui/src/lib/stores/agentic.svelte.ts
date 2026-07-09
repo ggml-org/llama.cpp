@@ -27,10 +27,10 @@ import { modelsStore } from '$lib/stores/models.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import { permissionsStore } from '$lib/stores/permissions.svelte';
 import { ToolSource, ToolPermissionDecision } from '$lib/enums';
-import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
 import { SandboxService } from '$lib/services/sandbox.service';
-import { isAbortError, createLinkedController } from '$lib/utils';
+import { isAbortError } from '$lib/utils';
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
@@ -141,32 +141,6 @@ class AgenticStore {
 	>();
 	/** Non-reactive: stores resolve functions for pending permission Promises */
 	private _permissionResolvers = new Map<string, (decision: ToolPermissionDecision) => void>();
-
-	/**
-	 * Per-conversation state of the streaming-time permission gate. Tool call args
-	 * are buffered (not propagated to the UI) from the moment the first tool call
-	 * name is revealed until the user approves or denies the request. Driving this
-	 * out of closure-local state lets the fire-and-forget permission awaiter flip
-	 * it back without holding a reference into the agentic loop.
-	 */
-	private _streamPermissionState = new SvelteMap<
-		string,
-		'idle' | 'awaiting' | 'granted' | 'denied'
-	>();
-	/**
-	 * Per-conversation set of tool call IDs whose permission was resolved during
-	 * streaming, so the execution loop skips a duplicate prompt for the same call.
-	 */
-	private _streamApprovedToolCallIds = new SvelteMap<string, SvelteSet<string>>();
-
-	/**
-	 * Per-conversation wrapper controllers that the agentic loop drives. We link
-	 * them to the user-supplied signal so cancelling from outside propagates in.
-	 * Conversely, when the streaming-time permission gate denies a tool, the
-	 * loop aborts its wrapper so the SSE reader stops; the user signal is left
-	 * untouched so subsequent flows in the same conversation still work.
-	 */
-	private _loopControllers = new SvelteMap<string, AbortController>();
 
 	/** Dedicated reactive state for pending continue requests (turn limit reached) */
 	private _pendingContinueRequests = new SvelteMap<string, boolean>();
@@ -376,53 +350,6 @@ class AgenticStore {
 		});
 	}
 
-	/**
-	 * Fire-and-forget wrapper around the existing permission flow. Called from
-	 * inside the LLM stream callback as soon as the first tool call name is
-	 * revealed. We want the args XML buffer (so the user sees a tool call block
-	 * with no args yet), and the prompt shown immediately, while the user
-	 * decides. Returns control to the caller's callback chain without awaiting.
-	 *
-	 * Why not request the prompt the same way the execution loop does: we are
-	 * already mid-stream from the server. Awaiting here would block the SSE
-	 * reader, so the loop is replaced by fire-and-forget and the state machine
-	 * flips from `awaiting` to `granted` or `denied` to release/flush.
-	 */
-	private _requestStreamingPermission(
-		conversationId: string,
-		toolName: string,
-		toolCallId: string,
-		serverLabel: string,
-		signal?: AbortSignal
-	): void {
-		void (async () => {
-			try {
-				const decision = await this.requestPermission(
-					conversationId,
-					toolName,
-					serverLabel,
-					signal
-				);
-				const approvedIds =
-					this._streamApprovedToolCallIds.get(conversationId) ?? new SvelteSet<string>();
-				if (decision === ToolPermissionDecision.DENY || signal?.aborted) {
-					this._streamPermissionState.set(conversationId, 'denied');
-					// Abort via the wrapped controller (see `_loopControllers`); the user
-					// supplied signal only carries incoming cancellation, it is not
-					// writable. Stopping the SSE reader lets the agentic loop exit
-					// without persisting the half-received tool call.
-					this._loopControllers.get(conversationId)?.abort(new Error('Tool call denied by user'));
-					return;
-				}
-				approvedIds.add(toolCallId);
-				this._streamApprovedToolCallIds.set(conversationId, approvedIds);
-				this._streamPermissionState.set(conversationId, 'granted');
-			} catch {
-				/* requestPermission logs and resolves internally; ignore */
-			}
-		})();
-	}
-
 	private async requestContinue(conversationId: string, signal?: AbortSignal): Promise<boolean> {
 		this._pendingContinueRequests.set(conversationId, true);
 
@@ -462,8 +389,6 @@ class AgenticStore {
 		this._pendingContinueRequests.set(conversationId, false);
 		this._continueResolvers.delete(conversationId);
 		this._steeringMessages.delete(conversationId);
-		this._streamPermissionState.set(conversationId, 'idle');
-		this._streamApprovedToolCallIds.delete(conversationId);
 
 		// Ensure built-in tools are fetched before checking if agentic is enabled
 		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
@@ -517,12 +442,6 @@ class AgenticStore {
 		if (hasMcpServers) mcpStore.acquireConnection();
 
 		try {
-			// Wrap the user signal so the loop can abort itself when the streaming
-			// permission prompt is denied (signals are read-only; we need a
-			// writable controller to stop the SSE reader).
-			const loopController = createLinkedController(signal);
-			this._loopControllers.set(conversationId, loopController);
-
 			await this.executeAgenticLoop({
 				conversationId,
 				messages: normalizedMessages,
@@ -530,7 +449,7 @@ class AgenticStore {
 				tools,
 				agenticConfig,
 				callbacks,
-				signal: loopController.signal
+				signal
 			});
 			return { handled: true };
 		} catch (error) {
@@ -539,7 +458,6 @@ class AgenticStore {
 			callbacks.onError?.(normalizedError);
 			return { handled: true, error: normalizedError };
 		} finally {
-			this._loopControllers.delete(conversationId);
 			this.updateSession(conversationId, { isRunning: false });
 
 			if (hasMcpServers) {
@@ -656,58 +574,6 @@ class AgenticStore {
 						onToolCallChunk: (serialized: string) => {
 							try {
 								turnToolCalls = JSON.parse(serialized) as ApiChatCompletionToolCall[];
-
-								// Permission gate: when the LLM first reveals a tool call
-								// name, ask the user before any of the (often sensitive)
-								// arguments show up in the chat. We keep accumulating the
-								// args internally so the first propagation after approval
-								// is a seamless flush; the chat store just doesn't see it
-								// yet, so the UI keeps showing the empty-args placeholder.
-								const firstTool = turnToolCalls[0];
-								const firstName = firstTool?.function?.name || '';
-								const firstToolId = firstTool?.id ?? 'tool_0';
-								const streamState = this._streamPermissionState.get(conversationId) ?? 'idle';
-
-								if (firstName && streamState === 'idle') {
-									const approvedIds =
-										this._streamApprovedToolCallIds.get(conversationId) ?? new SvelteSet<string>();
-									// NEVER re-prompt if the tool was already approved earlier
-									// in this turn (e.g., multiple deltas arrive in quick
-									// succession before the awaiter flips state).
-									if (!approvedIds.has(firstToolId)) {
-										const serverLabel = toolsStore.getToolServerLabel(firstName);
-										this._streamPermissionState.set(conversationId, 'awaiting');
-										this.updateSession(conversationId, {
-											streamingToolCall: { name: firstName, arguments: '' }
-										});
-										this._requestStreamingPermission(
-											conversationId,
-											firstName,
-											firstToolId,
-											serverLabel,
-											signal
-										);
-									}
-									return;
-								}
-
-								if (streamState === 'awaiting') {
-									// Hold internal state; do not propagate UI yet.
-									return;
-								}
-
-								if (streamState === 'denied') {
-									// Loop is about to abort via signal; skip propagation
-									// so the chat store is not updated with half-streamed
-									// args that we will never execute.
-									return;
-								}
-
-								// streamState === 'granted' on the first post-approval chunk
-								// flips back to 'idle' so subsequent chunks propagate normally.
-								if (streamState === 'granted') {
-									this._streamPermissionState.set(conversationId, 'idle');
-								}
 
 								onToolCallsStreaming?.(turnToolCalls);
 
@@ -899,19 +765,13 @@ class AgenticStore {
 				const toolName = toolCall.function.name;
 				const serverLabel = toolsStore.getToolServerLabel(toolName);
 
-				// Skip the prompt if the user already approved this tool call during
-				// the streaming phase. Anything else (always-allowed fallback, latency,
-				// subsequent calls) still goes through the existing flow.
-				const approvedDuringStream =
-					this._streamApprovedToolCallIds.get(conversationId)?.has(toolCall.id) ?? false;
-				let permission: ToolPermissionDecision;
-				if (approvedDuringStream) {
-					this._streamApprovedToolCallIds.get(conversationId)!.delete(toolCall.id);
-					permission = ToolPermissionDecision.ONCE;
-				} else {
-					// Ask for permission before executing the tool
-					permission = await this.requestPermission(conversationId, toolName, serverLabel, signal);
-				}
+				// Ask for permission before executing the tool
+				const permission = await this.requestPermission(
+					conversationId,
+					toolName,
+					serverLabel,
+					signal
+				);
 
 				// Yield to allow Svelte to flush the UI update (hide permission dialog)
 				await new Promise((r) => setTimeout(r, 0));
