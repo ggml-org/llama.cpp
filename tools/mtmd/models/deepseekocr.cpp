@@ -320,9 +320,7 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
         // add CLS token per batch item
         // inp: [n_embd, clip_n_patches, n_batch]
         // class_embedding: [n_embd] -> [n_embd, 1, n_batch]
-        ggml_tensor * cls_embd = ggml_reshape_3d(ctx0, model.class_embedding, n_embd, 1, 1);
-        ggml_tensor * cls_target = ggml_new_tensor_3d(ctx0, model.class_embedding->type, n_embd, 1, n_batch);
-        cls_embd = ggml_repeat(ctx0, cls_embd, cls_target);
+        ggml_tensor * cls_embd = ggml_repeat_4d(ctx0, model.class_embedding, n_embd, 1, n_batch, 1);
         inp = ggml_concat(ctx0, cls_embd, inp, 1);
 
         // for selecting learned pos embd, used by ViT

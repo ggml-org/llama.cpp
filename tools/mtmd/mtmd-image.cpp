@@ -1204,7 +1204,6 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const cli
                     }
                 }
                 output.append(hparams, row_img, true);
-                grid_w = 1; // reset grid_w to 1 since we fused the row
             } else {
                 for (int col = 0; col < grid_w; col++) {
                     clip_image_u8 tile;
@@ -1212,6 +1211,9 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const cli
                     output.append(hparams, tile, true);
                 }
             }
+        }
+        if (fuse_row) {
+            grid_w = 1; // each fused row is one image; a single output column
         }
     }
 
