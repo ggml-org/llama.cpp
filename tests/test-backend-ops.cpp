@@ -8523,6 +8523,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 1));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 4));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 128, 4));
+    test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 128, 1, 1));
+    test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 128, 32, 1));
+    test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 128, 32, 4));
 
     // FWHT tests
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 128, 1, 128));
