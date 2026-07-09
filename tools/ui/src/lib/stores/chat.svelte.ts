@@ -562,8 +562,14 @@ class ChatStore {
 	 * Abort the current agentic flow signal without clearing loading state.
 	 * Used by "Send immediately" to force the agentic loop to exit so that
 	 * the pending steering message can be re-sent.
+	 *
+	 * Any tool calls captured mid-stream are dropped before the abort so the
+	 * pending message (or a manual follow-up) does not re-send a half-received
+	 * tool call with invalid JSON arguments to the server. Mirrors what the
+	 * Stop button already does through stopGenerationForChat.
 	 */
-	abortCurrentFlow(convId: string): void {
+	async abortCurrentFlow(convId: string): Promise<void> {
+		await this.savePartialResponseIfNeeded(convId);
 		const c = this.abortControllers.get(convId);
 		if (c) {
 			c.abort();
@@ -1505,21 +1511,27 @@ class ChatStore {
 
 		const partialContent = streamingState.response;
 		const partialReasoning = lastMessage.reasoningContent || '';
+		// snapshot the streamed tool calls before clearing so we still know whether
+		// anything was captured when deciding to skip the DB write below
+		const hadPartialToolCalls = !!lastMessage.toolCalls?.trim();
 
-		// nothing to persist when both content and reasoning are empty (e.g. stop before any token)
-		if (!partialContent.trim() && !partialReasoning.trim()) return;
+		// nothing to persist when content, reasoning, and streamed tool calls are all empty
+		// (e.g. stop before any token). otherwise drop the partial tool call and write whatever
+		// was streamed: incomplete arguments (truncated JSON, missing closing quote) would
+		// otherwise be re-sent to the server on the next turn and rejected.
+		if (!partialContent.trim() && !partialReasoning.trim() && !hadPartialToolCalls) return;
 
 		try {
 			const updateData: {
-				content: string;
+				content?: string;
 				reasoningContent?: string;
+				toolCalls?: string;
 				timings?: ChatMessageTimings;
 			} = {
-				content: partialContent
+				toolCalls: ''
 			};
-			if (partialReasoning) {
-				updateData.reasoningContent = partialReasoning;
-			}
+			if (partialContent.trim()) updateData.content = partialContent;
+			if (partialReasoning.trim()) updateData.reasoningContent = partialReasoning;
 			const lastKnownState = this.getProcessingState(conversationId);
 			if (lastKnownState) {
 				updateData.timings = {
@@ -1535,9 +1547,14 @@ class ChatStore {
 			}
 			await DatabaseService.updateMessage(lastMessage.id, updateData);
 			lastMessage.content = partialContent;
+			// mirror the drop into the in-memory message so the next request sent via
+			// sendMessage (queued pending, Send immediately, or manual follow-up) reads
+			// the cleared value, not whatever the streaming widget had been showing
+			lastMessage.toolCalls = '';
 			if (updateData.timings) lastMessage.timings = updateData.timings;
 		} catch (error) {
 			lastMessage.content = partialContent;
+			lastMessage.toolCalls = '';
 			console.error('Failed to save partial response:', error);
 		}
 	}
