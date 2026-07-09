@@ -26,6 +26,8 @@
 // bounded. Override with GGML_SYCL_MKL_FA_Q_TILE.
 #define MKL_FA_Q_TILE 8192
 
+#define MKL_FA_WG_SIZE 256
+
 using oneapi::mkl::transpose;
 using oneapi::mkl::blas::column_major::gemm;
 
@@ -247,16 +249,23 @@ static void mkl_fa_normalize_head(
 // interleave vs padded-seq-view distinction is resolved once when the
 // descriptor is built; slicing does not reintroduce it.
 // ---------------------------------------------------------------------------
+enum mkl_fa_kv_desc_mode {
+    MKL_FA_KV_MODE_F16_DENSE       = 0,
+    MKL_FA_KV_MODE_F16_INTERLEAVED = 1,
+    MKL_FA_KV_MODE_QUANT_CONTIG    = 2,
+    MKL_FA_KV_MODE_QUANT_NC        = 3,
+};
+
 struct mkl_fa_kv_desc {
-    const char * data = nullptr;
-    ggml_type    type = GGML_TYPE_F16;
-    int64_t      D    = 0;      // ne[0]
-    int64_t      nb1  = 0;      // byte stride, seq dim
-    int64_t      nb2  = 0;      // byte stride, head dim
-    int          mode = 0;      // 0=f16 dense, 1=f16 interleaved, 2=quant contig, 3=quant nc
-    int64_t      ts   = 0;      // type size (mode 3 base offset)
-    int64_t      s01  = 0;      // nc row stride in blocks (mode 3)
-    int64_t      s02  = 0;      // nc head stride in blocks (mode 3)
+    const char *         data = nullptr;
+    ggml_type            type = GGML_TYPE_F16;
+    int64_t              D    = 0;      // ne[0]
+    int64_t              nb1  = 0;      // byte stride, seq dim
+    int64_t              nb2  = 0;      // byte stride, head dim
+    mkl_fa_kv_desc_mode  mode = MKL_FA_KV_MODE_F16_DENSE;
+    int64_t              ts   = 0;      // type size (mode 3 base offset)
+    int64_t              s01  = 0;      // nc row stride in blocks (mode 3)
+    int64_t              s02  = 0;      // nc head stride in blocks (mode 3)
 };
 
 static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved, int n_kv_heads) {
@@ -269,11 +278,12 @@ static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved, 
     d.ts   = (int64_t)ggml_type_size(T->type);
 
     if (T->type == GGML_TYPE_F16) {
-        d.mode = interleaved ? 1 : 0;
+        d.mode = interleaved ? MKL_FA_KV_MODE_F16_INTERLEAVED
+                             : MKL_FA_KV_MODE_F16_DENSE;
     } else if (ggml_is_contiguously_allocated(T) && !interleaved) {
-        d.mode = 2;
+        d.mode = MKL_FA_KV_MODE_QUANT_CONTIG;
     } else {
-        d.mode = 3;
+        d.mode = MKL_FA_KV_MODE_QUANT_NC;
         const int64_t bs          = (int64_t)ggml_blck_size(T->type);
         const int64_t blk_per_row = T->ne[0] / bs;
         // True Gemma interleave packs heads within a row (nb[2] < ne[1]*nb[1])
@@ -299,13 +309,13 @@ static void mkl_fa_dequant_chunk(
 
     const int64_t D = d.D;
     switch (d.mode) {
-        case 0: {  // F16 dense
+        case MKL_FA_KV_MODE_F16_DENSE: {
             const char * base = d.data + (int64_t)ikvh * d.nb2
                 + (int64_t)chunk_start * d.nb1;
             stream->memcpy(out, base, (size_t)this_chunk * D * sizeof(sycl::half));
             break;
         }
-        case 1: {  // F16 interleaved (Gemma or padded seq-view)
+        case MKL_FA_KV_MODE_F16_INTERLEAVED: {
             const char * base = d.data + (int64_t)ikvh * d.nb2
                 + (int64_t)chunk_start * d.nb1;
             const int64_t row_halfs = d.nb1 / (int64_t)sizeof(sycl::half);
@@ -319,14 +329,14 @@ static void mkl_fa_dequant_chunk(
                 });
             break;
         }
-        case 2: {  // quantized contiguous
+        case MKL_FA_KV_MODE_QUANT_CONTIG: {
             const char * base = d.data + (int64_t)ikvh * d.nb2
                 + (int64_t)chunk_start * d.nb1;
             to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(d.type, dst_ctx);
             to_fp16(base, out, (int64_t)this_chunk * D, stream);
             break;
         }
-        default: {  // 3: quantized non-contiguous
+        default: {  // MKL_FA_KV_MODE_QUANT_NC
             to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(d.type);
             const int64_t base_blocks = (int64_t)ikvh * d.s02
                 + (int64_t)chunk_start * d.s01;
@@ -384,21 +394,15 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     // Query rows are processed in tiles of q_tile_rows so the score buffers
     // (KQ_f32/S_f16 = q_tile_rows * chunk_size) stay bounded regardless of
     // batch size. n_query_rows <= Q_TILE is a single tile (no extra work).
-    static int q_tile_env = -1;
-    if (q_tile_env < 0) {
-        q_tile_env = ggml_sycl_get_env("GGML_SYCL_MKL_FA_Q_TILE", MKL_FA_Q_TILE);
-    }
+    static int q_tile_env = ggml_sycl_get_env("GGML_SYCL_MKL_FA_Q_TILE", MKL_FA_Q_TILE);
     const int q_tile_rows = std::max(1, std::min(q_tile_env, n_query_rows));
 
-    const int64_t wg_size = 256;
+    const int64_t wg_size = MKL_FA_WG_SIZE;
 
     // --- Debug output (gated by GGML_SYCL_MKL_FA_DEBUG=1) ---
     static int mkl_call_count = 0;
     mkl_call_count++;
-    static int mkl_debug = -1;
-    if (mkl_debug < 0) {
-        mkl_debug = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DEBUG", 0);
-    }
+    static int mkl_debug = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DEBUG", 0);
     const bool do_print = (mkl_debug == 1);
 
     const int64_t q_row_stride  = Q->nb[1] / sizeof(float);
