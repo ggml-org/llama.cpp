@@ -1,0 +1,65 @@
+#version 450
+
+#include "types.glsl"
+
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(push_constant) uniform parameter {
+    uint IL;
+    uint OL;
+    uint OC;
+    uint pelements;
+    uint op;
+    int k0;
+    int s0;
+    int p0;
+} p;
+
+#define BLOCK_SIZE 512
+#define FLT_MAX 3.402823466e+38F
+#define OP_POOL_MAX 0u
+#define OP_POOL_AVG 1u
+
+layout (local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer X {A_TYPE data_a[];};
+layout(binding = 1) writeonly buffer D {D_TYPE data_d[];};
+
+void main() {
+    const uint idx = gl_GlobalInvocationID.x;
+    if (idx >= p.pelements) {
+        return;
+    }
+
+    const uint nc = idx / p.OL;
+    const uint cur_ol = idx % p.OL;
+
+    const int start = int(cur_ol) * p.s0 - p.p0;
+    const int bl = max(start, 0);
+    const int el = min(start + p.k0, int(p.IL));
+
+    const int window_size = el - bl;
+    const float scale = window_size > 0 ? 1.0 / float(window_size) : 0.0;
+    float res;
+
+    if (p.op == OP_POOL_AVG) {
+        res = 0.0;
+    } else if (p.op == OP_POOL_MAX) {
+        res = -FLT_MAX;
+    } else {
+        return;
+    }
+
+    #pragma unroll
+    for (uint i = bl; i < el; i++) {
+        const float cur = D_TYPE(data_a[nc * p.IL + i]);
+
+        if (p.op == OP_POOL_AVG) {
+            res += cur * scale;
+        } else if (p.op == OP_POOL_MAX) {
+            res = max(res, cur);
+        }
+    }
+
+    data_d[nc * p.OL + cur_ol] = res;
+}
