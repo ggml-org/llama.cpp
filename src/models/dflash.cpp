@@ -156,17 +156,36 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_tensor * prev = ggml_view_2d(ctx0, tokens, 1, n_blocks, bs*tokens->nb[0], 0);
     prev = ggml_cont_1d(ctx0, prev, n_blocks); // I32 [n_blocks]
 
-    ggml_tensor * cat = nullptr;
+    // confidence head (optional): predicted acceptance per position, from the same
+    // hidden state that feeds the lm_head plus the markov embedding of prev
+    ggml_tensor * h = model.dspark_conf_proj ? res->t_embd : nullptr; // [n_embd, n_tok]
+
+    ggml_tensor * cat      = nullptr;
+    ggml_tensor * cat_conf = nullptr;
     // TODO: the in-graph chain is greedy (argmax); sampling params affect only the final
     //       token pick, not the Markov conditioning path
     for (int64_t i = 0; i < bs; ++i) {
-        ggml_tensor * bias = ggml_mul_mat(ctx0, w2, ggml_get_rows(ctx0, w1, prev)); // [n_vocab, n_blocks]
+        ggml_tensor * w1_prev = ggml_get_rows(ctx0, w1, prev);   // [R, n_blocks]
+        ggml_tensor * bias    = ggml_mul_mat(ctx0, w2, w1_prev); // [n_vocab, n_blocks]
 
         // position i of every block: strided view [n_vocab, n_blocks]
         ggml_tensor * base_i = ggml_view_2d(ctx0, base, n_vocab, n_blocks, bs*base->nb[1], i*base->nb[1]);
         ggml_tensor * col    = ggml_add(ctx0, base_i, bias);
 
         cat = cat ? ggml_concat(ctx0, cat, col, 1) : col;
+
+        if (h) {
+            // conf(i) = sigmoid(conf_proj . [h(i); markov_w1[prev(i)]] + b)  -- [1, n_blocks]
+            ggml_tensor * h_i  = ggml_view_2d(ctx0, h, h->ne[0], n_blocks, bs*h->nb[1], i*h->nb[1]);
+            ggml_tensor * feat = ggml_concat(ctx0, ggml_cont(ctx0, h_i), w1_prev, 0);
+            ggml_tensor * conf = ggml_mul_mat(ctx0, model.dspark_conf_proj, feat);
+            if (model.dspark_conf_proj_b) {
+                conf = ggml_add(ctx0, conf, model.dspark_conf_proj_b);
+            }
+            conf = ggml_sigmoid(ctx0, conf);
+
+            cat_conf = cat_conf ? ggml_concat(ctx0, cat_conf, conf, 1) : conf;
+        }
 
         if (i + 1 < bs) {
             prev = ggml_argmax(ctx0, col); // I32 [n_blocks]
@@ -177,6 +196,17 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_tensor * out = ggml_reshape_3d(ctx0, cat, n_vocab, n_blocks, bs);
     out = ggml_cont(ctx0, ggml_permute(ctx0, out, 0, 2, 1, 3)); // [n_vocab, bs, n_blocks]
     out = ggml_reshape_2d(ctx0, out, n_vocab, n_tok);
+
+    if (cat_conf) {
+        // same position-major -> block-major reorder as the logits
+        ggml_tensor * conf = ggml_reshape_3d(ctx0, cat_conf, 1, n_blocks, bs);
+        conf = ggml_cont(ctx0, ggml_permute(ctx0, conf, 0, 2, 1, 3));
+        conf = ggml_reshape_2d(ctx0, conf, 1, n_tok);
+
+        conf = ggml_repeat(ctx0, conf, res->t_embd);
+        res->t_h_nextn = conf;
+        ggml_build_forward_expand(g.gf, conf);
+    }
 
     res->t_logits = out;
     ggml_build_forward_expand(g.gf, out);
