@@ -52,6 +52,7 @@ class ServerProcess:
     debug: bool = False
     server_port: int = 8080
     server_host: str = "127.0.0.1"
+    server_ssl: bool = False
     model_hf_repo: str | None = "ggml-org/models"
     model_hf_file: str | None = "tinyllamas/stories260K.gguf"
     model_alias: str = "tinyllama-2"
@@ -113,6 +114,7 @@ class ServerProcess:
     ui_mcp_proxy: bool = False
     backend_sampling: bool = False
     gcp_compat: bool = False
+    verify_ssl: bool = True
 
     # session variables
     process: subprocess.Popen | None = None
@@ -335,19 +337,20 @@ class ServerProcess:
         headers: dict | None = None,
         timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     ) -> ServerResponse:
-        url = f"http://{self.server_host}:{self.server_port}{path}"
+        scheme = "https" if self.server_ssl else "http"
+        url = f"{scheme}://{self.server_host}:{self.server_port}{path}"
         parse_body = False
         if method == "GET":
-            response = requests.get(url, headers=headers, timeout=timeout)
+            response = requests.get(url, headers=headers, timeout=timeout, verify=self.verify_ssl)
             parse_body = True
         elif method == "POST":
-            response = requests.post(url, headers=headers, json=data, timeout=timeout)
+            response = requests.post(url, headers=headers, json=data, timeout=timeout, verify=self.verify_ssl)
             parse_body = True
         elif method == "DELETE":
             response = requests.delete(url, headers=headers, timeout=timeout)
             parse_body = True
         elif method == "OPTIONS":
-            response = requests.options(url, headers=headers, timeout=timeout)
+            response = requests.options(url, headers=headers, timeout=timeout, verify=self.verify_ssl)
         else:
             raise ValueError(f"Unimplemented method: {method}")
         result = ServerResponse()
@@ -370,9 +373,10 @@ class ServerProcess:
         data: dict | None = None,
         headers: dict | None = None,
     ) -> Iterator[dict]:
-        url = f"http://{self.server_host}:{self.server_port}{path}"
+        scheme = "https" if self.server_ssl else "http"
+        url = f"{scheme}://{self.server_host}:{self.server_port}{path}"
         if method == "POST":
-            response = requests.post(url, headers=headers, json=data, stream=True)
+            response = requests.post(url, headers=headers, json=data, stream=True, verify=self.verify_ssl)
         else:
             raise ValueError(f"Unimplemented method: {method}")
         if response.status_code != 200:
