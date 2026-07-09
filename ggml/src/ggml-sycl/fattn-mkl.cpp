@@ -392,10 +392,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     // --- Debug output (gated by GGML_SYCL_MKL_FA_DEBUG=1) ---
     static int mkl_call_count = 0;
     mkl_call_count++;
-    static int mkl_debug = -1;
-    if (mkl_debug < 0) {
-        mkl_debug = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DEBUG", 0);
-    }
+    static int mkl_debug = ggml_sycl_get_env("GGML_SYCL_MKL_FA_DEBUG", 0);
     const bool do_print = (mkl_debug == 1);
 
     const int64_t q_row_stride  = Q->nb[1] / sizeof(float);
