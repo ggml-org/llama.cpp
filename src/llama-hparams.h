@@ -145,6 +145,11 @@ struct llama_hparams {
 
     // if is_swa_impl[il] == 1, then layer il is SWA
     // if is_swa_impl[il] == 0, then layer il is dense (i.e. non-SWA)
+
+    // Per-layer RoPE enable flags (1 = use RoPE, 0 = NoPE)
+    // by default, all layers use RoPE (controlled by rope_finetuned)
+    std::array<uint32_t, LLAMA_MAX_LAYERS> rope_pattern;
+
     // by default, all layers are dense
     // note: using uint32_t type for compatibility reason
     std::array<uint32_t, LLAMA_MAX_LAYERS> is_swa_impl;
@@ -303,6 +308,10 @@ struct llama_hparams {
     bool is_swa(uint32_t il) const;
 
     void set_recr_pattern(uint32_t n_pattern, bool dense_first = false);
+
+    // Per-layer RoPE enable check (duplicated from PR #25107 for temporary compatibility)
+    bool has_rope(uint32_t il) const;
+
 
     // whether or not the given layer is recurrent (for hybrid models)
     bool is_recr(uint32_t il) const;
