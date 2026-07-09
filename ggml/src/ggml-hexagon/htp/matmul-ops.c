@@ -1955,6 +1955,169 @@ typedef struct {
     uint32_t             dma_step_rows_shift;
 } activation_transfer_task_state_t;
 
+typedef struct {
+    __fp16                         *dst;
+    const float                    *src;
+    uint32_t                        n_rows;
+    uint32_t                        k_block;
+    uint32_t                        k_stride;
+    uint32_t                        k_valid;
+    uint32_t                        n_col_chunks;
+    float                          *vtcm_f32_act;
+    size_t                          vtcm_f32_act_bytes;
+    struct htp_thread_trace        *traces;
+    struct htp_context             *ctx;
+    uint32_t                        dma_step_rows;
+    uint32_t                        dma_step_rows_shift;
+} activation_transfer_col_chunk_state_t;
+
+static void transfer_activation_chunk_fp32_to_fp16_dma_pipelined_col_chunk(
+        dma_queue *dma_q,
+        __fp16 *restrict vtcm_dst,
+        const float *restrict src,
+        uint32_t n_rows,
+        uint32_t k_block,
+        uint32_t k_stride,
+        uint32_t k_chunk_valid,
+        uint32_t c_first,
+        uint32_t c_len,
+        float *thread_f32_act,
+        struct htp_thread_trace *tr,
+        uint32_t dma_step_rows,
+        uint32_t dma_step_rows_shift) {
+
+    const uint32_t R = dma_step_rows;
+    const uint32_t n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
+
+    const uint32_t n_steps = n_rows_padded >> dma_step_rows_shift;
+
+    // Push step 0
+    if (n_steps > 0 && n_rows > 0) {
+        uint32_t nrows_to_fetch = hex_smin(n_rows, R);
+        dma_queue_push(dma_q, dma_make_ptr(thread_f32_act, src + c_first),
+                       c_len * sizeof(float), k_stride * sizeof(float), k_chunk_valid * sizeof(float), nrows_to_fetch);
+    }
+    // Push step 1
+    if (n_steps > 1) {
+        uint32_t next_r = R * 1;
+        if (next_r < n_rows) {
+            uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, R);
+            const float *next_src = src + next_r * k_stride + c_first;
+            float *next_buf = thread_f32_act + 1 * R * c_len;
+            dma_queue_push(dma_q, dma_make_ptr(next_buf, next_src),
+                           c_len * sizeof(float), k_stride * sizeof(float), k_chunk_valid * sizeof(float), nrows_to_fetch);
+        }
+    }
+    for (uint32_t s = 0; s < n_steps; ++s) {
+        uint32_t r = s << dma_step_rows_shift;
+        float *curr_buf = thread_f32_act;
+
+        if (r < n_rows) {
+            curr_buf = (float *) dma_queue_pop(dma_q).dst;
+        }
+
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, r);
+        for (uint32_t p = 0; p < (R >> 1); ++p) {
+            uint32_t row_idx = r + (p << 1);
+            float *pair_buf = curr_buf + (p << 1) * c_len;
+            bool r0_valid = ((row_idx + 0) < n_rows);
+            bool r1_valid = ((row_idx + 1) < n_rows);
+
+            transfer_activation_row_pair_fp32_to_fp16_col_chunk(
+                vtcm_dst, pair_buf, pair_buf + c_len, row_idx, k_block, c_first, c_len, k_chunk_valid, r0_valid, r1_valid
+            );
+        }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, r);
+
+        // Push step s + 2
+        uint32_t next_s = s + 2;
+        uint32_t next_r = next_s << dma_step_rows_shift;
+        if (next_r < n_rows) {
+            uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, R);
+            const float *next_src = src + next_r * k_stride + c_first;
+            dma_queue_push(dma_q, dma_make_ptr(curr_buf, next_src),
+                           c_len * sizeof(float), k_stride * sizeof(float), k_chunk_valid * sizeof(float), nrows_to_fetch);
+        }
+    }
+}
+
+static void transfer_activation_chunk_fp32_to_fp16_col_chunk(
+        __fp16 *restrict vtcm_dst,
+        const float *restrict src,
+        uint32_t n_rows,
+        uint32_t k_block,
+        uint32_t k_stride,
+        uint32_t c_first,
+        uint32_t c_len,
+        uint32_t k_chunk_valid) {
+    const uint32_t n_rows_padded = hex_align_up(n_rows, HTP_MM_HMX_TILE_N_ROWS);
+    const uint32_t n_rows_tiled  = (n_rows / HTP_MM_HMX_TILE_N_ROWS) * HTP_MM_HMX_TILE_N_ROWS;
+
+    uint32_t r = 0;
+
+    #pragma unroll(2)
+    for (r = 0; r < n_rows_tiled; r += 2) {
+        const float *ptr_in0 = src + (r + 0) * k_stride + c_first;
+        const float *ptr_in1 = src + (r + 1) * k_stride + c_first;
+
+        transfer_activation_row_pair_fp32_to_fp16_col_chunk(
+            vtcm_dst, ptr_in0, ptr_in1, r, k_block, c_first, c_len, k_chunk_valid, true, true
+        );
+    }
+
+    for (; r < n_rows_padded; r += 2) {
+        const bool row0_valid = r       < n_rows;
+        const bool row1_valid = (r + 1) < n_rows;
+
+        const float *ptr_in0 = row0_valid ? (src + (r + 0) * k_stride + c_first) : NULL;
+        const float *ptr_in1 = row1_valid ? (src + (r + 1) * k_stride + c_first) : NULL;
+
+        transfer_activation_row_pair_fp32_to_fp16_col_chunk(
+            vtcm_dst, ptr_in0, ptr_in1, r, k_block, c_first, c_len, k_chunk_valid, row0_valid, row1_valid
+        );
+    }
+}
+
+static void transfer_activation_chunk_col_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
+    activation_transfer_col_chunk_state_t *st = (activation_transfer_col_chunk_state_t *) data;
+    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+
+    uint32_t n_blocks = st->k_block / 32;
+    uint32_t b_first = (n_blocks * i) / n;
+    uint32_t b_last = (n_blocks * (i + 1)) / n;
+    uint32_t c_first = b_first * 32;
+    uint32_t c_last = b_last * 32;
+    uint32_t c_len = c_last - c_first;
+
+    if (c_len == 0) {
+        return;
+    }
+
+    uint32_t k_chunk_valid = 0;
+    if (st->k_valid > c_first) {
+        k_chunk_valid = hex_smin(st->k_valid, c_last) - c_first;
+    }
+
+    __fp16 *dst = st->dst;
+    const float *src = st->src;
+
+    if (st->vtcm_f32_act) {
+        size_t thread_scratch_bytes = st->vtcm_f32_act_bytes / n;
+        float *thread_f32_act = (float *)((char *)st->vtcm_f32_act + i * thread_scratch_bytes);
+
+        transfer_activation_chunk_fp32_to_fp16_dma_pipelined_col_chunk(
+            st->ctx->dma[i], dst, src, st->n_rows, st->k_block, st->k_stride, k_chunk_valid,
+            c_first, c_len, thread_f32_act, tr, st->dma_step_rows, st->dma_step_rows_shift
+        );
+    } else {
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, c_first);
+        transfer_activation_chunk_fp32_to_fp16_col_chunk(
+            dst, src, st->n_rows, st->k_block, st->k_stride, c_first, c_len, k_chunk_valid
+        );
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, c_first);
+    }
+}
+
 static void transfer_activation_chunk_fp32_to_fp16_dma_pipelined(
         dma_queue *dma_q,
         __fp16 *restrict vtcm_dst,
@@ -2222,6 +2385,42 @@ static void transfer_activation_chunk_threaded(
         float *vtcm_f32_act,
         size_t vtcm_f32_act_bytes) {
     if (n_rows <= 0) {
+        return;
+    }
+
+    const size_t n_tasks = (n_rows + 31) / 32;
+    if (n_threads > 1 && k_block > 32 && n_tasks < (size_t) n_threads) {
+        // Calculate step rows parameters for column-chunked dma pipelining
+        uint32_t dma_step_rows = 2;
+        uint32_t dma_step_rows_shift = 1;
+        if (vtcm_f32_act && vtcm_f32_act_bytes > 0 && k_block > 0) {
+            size_t thread_scratch_elements = vtcm_f32_act_bytes / (n_threads * sizeof(float));
+            size_t dma_step_rows_max = (thread_scratch_elements / 2) / k_block;
+            if (dma_step_rows_max >= 4) {
+                dma_step_rows = 4;
+                dma_step_rows_shift = 2;
+            } else {
+                dma_step_rows = 2;
+                dma_step_rows_shift = 1;
+            }
+        }
+
+        activation_transfer_col_chunk_state_t col_state;
+        col_state.dst = dst;
+        col_state.src = src;
+        col_state.n_rows = n_rows;
+        col_state.k_block = k_block;
+        col_state.k_stride = k_stride;
+        col_state.k_valid = k_valid;
+        col_state.n_col_chunks = n_threads;
+        col_state.vtcm_f32_act = vtcm_f32_act;
+        col_state.vtcm_f32_act_bytes = vtcm_f32_act_bytes;
+        col_state.traces = ctx->trace;
+        col_state.ctx = ctx;
+        col_state.dma_step_rows = dma_step_rows;
+        col_state.dma_step_rows_shift = dma_step_rows_shift;
+
+        worker_pool_run_func(ctx->worker_pool, transfer_activation_chunk_col_chunk_worker_fn, &col_state, n_threads);
         return;
     }
 
