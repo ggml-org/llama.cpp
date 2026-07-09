@@ -3382,6 +3382,13 @@ struct vk_fa_tuning_params {
 static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc, ggml_type k_type, ggml_type v_type);
 static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc, ggml_type k_type = GGML_TYPE_F16);
 
+static bool ggml_vk_subgroup_size_supported(const vk_device& device, uint32_t subgroup_size) {
+    return device->subgroup_size == subgroup_size ||
+           (device->subgroup_size_control &&
+            device->subgroup_min_size <= subgroup_size &&
+            subgroup_size <= device->subgroup_max_size);
+}
+
 static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc) {
 
     vk_fa_tuning_params result{};
@@ -3457,7 +3464,9 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
     return result;
 }
 
-static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc) {
+static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv,
+                                                         ggml_type k_type, ggml_type v_type, bool f32acc, uint32_t subgroup_size = 0,
+                                                         uint32_t num_subgroups = 4) {
     GGML_UNUSED(n_rows);
     GGML_UNUSED(n_kv);
     GGML_UNUSED(k_type);
@@ -3472,12 +3481,14 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
     const uint32_t coopmat_block_rows = 16;
     const uint32_t coopmat_block_cols = 16;
 
-    const uint32_t num_subgroups = 4;
+    if (subgroup_size == 0) {
+        subgroup_size = device->subgroup_size;
+    }
 
     result.block_rows = coopmat_block_rows;
     result.block_cols = coopmat_block_cols * num_subgroups;
     result.row_split = num_subgroups;
-    result.subgroup_size = device->subgroup_size;
+    result.subgroup_size = subgroup_size;
     result.workgroup_size = num_subgroups * result.subgroup_size;
 
     const uint32_t D_lsb = D ^ (D & (D-1));  // extract lowest set bit
@@ -3519,6 +3530,8 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat2(const vk_device& device
 static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc) {
     FaCodePath path = device->coopmat2 ? FA_COOPMAT2 :
                       device->coopmat1_fa_support ? FA_COOPMAT1 : FA_SCALAR;
+    vk_fa_tuning_params coopmat1_params{};
+    bool use_coopmat1_params = false;
 
     if (path == FA_COOPMAT2 && k_type == GGML_TYPE_BF16 && !device->coopmat2_bf16_support) {
         path = FA_COOPMAT1;
@@ -3535,11 +3548,22 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
     if (path == FA_COOPMAT1) {
         bool shape_ok = (f32acc && device->coopmat_support_16x16x16_f32acc) ||
                         (!f32acc && device->coopmat_support_16x16x16_f16acc);
-        const vk_fa_tuning_params params = get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
+        vk_fa_tuning_params params = get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
         bool shmem_ok = ggml_vk_flash_attn_coopmat_shmem_support(device, params, hsk, hsv, f32acc, k_type);
+
+        if (shape_ok && !shmem_ok && ggml_vk_subgroup_size_supported(device, 32)) {
+            const vk_fa_tuning_params params_sg32 = get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc, 32, 2);
+            if (ggml_vk_flash_attn_coopmat_shmem_support(device, params_sg32, hsk, hsv, f32acc, k_type)) {
+                params = params_sg32;
+                shmem_ok = true;
+            }
+        }
 
         if (!shape_ok || !shmem_ok) {
             path = FA_SCALAR;
+        } else {
+            coopmat1_params = params;
+            use_coopmat1_params = true;
         }
     }
 
@@ -3557,7 +3581,8 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
     case FA_SCALAR:
         return get_fa_tuning_params_scalar(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
     case FA_COOPMAT1:
-        return get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
+        return use_coopmat1_params ? coopmat1_params :
+               get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
     case FA_COOPMAT2:
         return get_fa_tuning_params_coopmat2(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
     default:
