@@ -104,14 +104,21 @@ class GraniteSWAModel(GraniteModel):
             logger.info("gguf: (granite_swa) sliding_window_pattern = %d SWA layers / %d total",
                         sum(is_swa), len(is_swa))
         else:
-            # Fall back to period-based pattern: (i + 1) % 4 != 0
-            # This matches the pattern for models without explicit layer_types
+            # Fall back to period-based pattern: i % 4 != 0
+            # This matches the transformers default pattern
             n_layers = self.block_count
-            is_swa = [(i + 1) % 4 != 0 for i in range(n_layers)]
+            is_swa = [i % 4 != 0 for i in range(n_layers)]
             self.gguf_writer.add_sliding_window_pattern(is_swa)
             logger.info("gguf: (granite_swa) sliding_window_pattern (inferred) = %d SWA layers / %d total",
                         sum(is_swa), n_layers)
 
+        # Add rope_pattern from no_rope_layers
+        if no_rope_layers := self.hparams.get("no_rope_layers"):
+            # Convert 1/0 to bool (1 = use RoPE, 0 = NoPE)
+            rope_pattern = [bool(x) for x in no_rope_layers]
+            self.gguf_writer.add_rope_pattern(rope_pattern)
+            logger.info("gguf: (granite_swa) rope_pattern = %d RoPE layers / %d total",
+                        sum(rope_pattern), len(rope_pattern))
 
 @ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
 class GraniteMoeModel(GraniteModel):
