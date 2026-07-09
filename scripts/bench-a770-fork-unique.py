@@ -19,10 +19,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+MODELS_ROOT = os.environ.get("MODELS_ROOT", "/mnt/mrgr")
+
+# Model paths are relative to MODELS_ROOT (default /mnt/mrgr); override the env var to relocate.
 DEFAULT_MODELS = [
-    ("llama31-8b-heretic", "/mnt/mrgr/models/llama31-8b-heretic/Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf"),
-    ("mistral-7b", "/mnt/mrgr/models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"),
-    ("qwen3-coder-30b-a3b", "/mnt/mrgr/gguf/Qwen3-Coder-30B-A3B-UD-Q3_K_XL/Qwen3-Coder-30B-A3B-Instruct-UD-Q3_K_XL.gguf"),
+    ("llama31-8b-heretic", "models/llama31-8b-heretic/Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf"),
+    ("mistral-7b", "models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"),
+    ("qwen3-coder-30b-a3b", "gguf/Qwen3-Coder-30B-A3B-UD-Q3_K_XL/Qwen3-Coder-30B-A3B-Instruct-UD-Q3_K_XL.gguf"),
 ]
 
 
@@ -58,11 +61,24 @@ def run(argv: list[str], env_extra: dict[str, str], timeout_s: int, cwd: Path | 
             "stderr": exc.stderr or "",
             "timeout_s": timeout_s,
         }
+    except OSError as exc:
+        return {
+            "ok": False,
+            "returncode": -1,
+            "elapsed_s": round(time.time() - t0, 3),
+            "stdout": "",
+            "stderr": str(exc),
+        }
 
 
 def parse_bench(stdout: str) -> list[dict[str, Any]]:
     try:
-        data = json.loads(stdout)
+        start = stdout.find("[")
+        end = stdout.rfind("]")
+        if start != -1 and end != -1:
+            data = json.loads(stdout[start:end + 1])
+        else:
+            data = json.loads(stdout)
     except json.JSONDecodeError:
         return []
     if not isinstance(data, list):
@@ -104,7 +120,7 @@ def bench_case(bin_dir: Path, model: str, kv: tuple[str, str], fa: str, p: int, 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fork-bin", default="build-port/bin")
-    ap.add_argument("--upstream-bin", default="/mnt/mrgr/llama-cpp-sycl-turbo/compare/llama.cpp/build-sycl-a770/bin")
+    ap.add_argument("--upstream-bin", default=os.environ.get("UPSTREAM_BIN", "/mnt/mrgr/llama-cpp-sycl-turbo/compare/llama.cpp/build-sycl-a770/bin"))
     ap.add_argument("--out-dir", default="bench-a770-fork-unique")
     ap.add_argument("--quick", action="store_true", help="Use p64/n16/r1 for all models")
     ap.add_argument("--models", nargs="*", choices=[m[0] for m in DEFAULT_MODELS], help="Subset of models")
@@ -119,7 +135,7 @@ def main() -> int:
     md_path = out_dir / "summary.md"
 
     selected = set(ns.models or [m[0] for m in DEFAULT_MODELS])
-    models = [(name, path) for name, path in DEFAULT_MODELS if name in selected]
+    models = [(name, str((Path(MODELS_ROOT) / rel).resolve())) for name, rel in DEFAULT_MODELS if name in selected]
 
     cases: list[dict[str, Any]] = []
     for name, model in models:
@@ -153,7 +169,7 @@ def main() -> int:
             jf.flush()
 
     records = [json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    lines = ["# Arc A770 fork-unique benchmark summary", "", f"JSONL: `{jsonl_path}`", "", "| model | case | status | pp tok/s | tg tok/s |", "|---|---|---:|---:|---:|"]
+    lines = ["# Arc A770 fork-unique benchmark summary", "", f"JSONL: `{os.path.relpath(jsonl_path)}`", "", "| model | case | status | pp tok/s | tg tok/s |", "|---|---|---:|---:|---:|"]
     for rec in records:
         pp = tg = ""
         for row in rec.get("bench", []):

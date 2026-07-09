@@ -2,8 +2,8 @@
 
 Date: 2026-07-09
 Branch: `benchmark/fork-vs-upstream-a770`
-Fork tree: `/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork` at `24ce99ec1`
-Upstream comparison tree: `/mnt/mrgr/llama-cpp-sycl-turbo/compare/llama.cpp` at `259f2e2`
+Fork: `Raudbjorn/ggml-llama.cpp` at `24ce99ec1` (local working copy)
+Upstream: `ggml-org/llama.cpp` at `259f2e2` (local working copy)
 Target hardware: Intel Arc A770 via SYCL / oneAPI Level Zero
 
 ## Scope

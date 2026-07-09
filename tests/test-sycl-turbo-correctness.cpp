@@ -794,8 +794,8 @@ int main() {
     // Ordering rule: probes that cannot device-lost run first, so a later FA
     // crash can't mask earlier results. The crash-prone non-turbo VEC path
     // (n_q=1) runs LAST. Turbo FA is GATE (kernel fixed) at d=128 plus a GATE
-    // d=256 turbo3 path (QK_TURBO{2,3,4}==128 is a hard invariant, so d=256 is
-    // two 128-element turbo blocks; see ggml-common.h).
+    // d=256 turbo3/turbo4 path (QK_TURBO{2,3,4}==128 is a hard invariant, so
+    // d=256 is two 128-element turbo blocks; see ggml-common.h).
     printf("[1] Walsh-Hadamard rotation (TURBO_WHT)\n");                 // GATE
     probe_wht(cpu, sycl, 128);
     probe_wht(cpu, sycl, 64);
@@ -869,11 +869,11 @@ int main() {
     // Turbo FA on SYCL is opt-in on this fork: the supports_op chain in fattn.cpp
     // accepts turbo KV (D=128 routes to VEC, D=256 to VEC/XMX), but this remains
     // the riskiest A770 path, so the env gate is the explicit benchmark switch.
-    // turbo3/turbo4 are GATE only at d=128; the later d=256 loop probes
-    // turbo3_0 only (also GATE). turbo2 remains XFAIL because its 2-bit
-    // precision is below the lossy cosine floor.
+    // turbo3/turbo4 are GATE at both d=128 and d=256 (same-type K/V routes to
+    // the VEC kernel; D=256 is two 128-element turbo blocks). turbo2 remains
+    // XFAIL because its 2-bit precision is below the lossy cosine floor.
     if (turbo_fa_enabled()) {
-        printf("\n[5] flash attention turbo KV - GATE/XFAIL (LLAMA_TEST_TURBO_FA=1, d=128 + d=256 turbo3)\n");
+        printf("\n[5] flash attention turbo KV - GATE/XFAIL (LLAMA_TEST_TURBO_FA=1, d=128 + d=256 turbo3/turbo4)\n");
         for (int64_t n_q : {8, 1}) {
             const char * path = (n_q == 8) ? "tile" : "vec";
             probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, path, Exp::XFAIL, /*force=*/false);
@@ -889,6 +889,7 @@ int main() {
         for (int64_t n_q : {8, 1}) {
             const char * path = (n_q == 8) ? "tile" : "vec";
             probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 256, n_q, path, Exp::GATE, /*force=*/false);
+            probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 256, n_q, path, Exp::GATE, /*force=*/false);
         }
     } else {
         printf("\n[5] flash attention turbo KV - SKIPPED (set LLAMA_TEST_TURBO_FA=1 to run; gated so a regressed kernel cannot wedge the A770)\n");

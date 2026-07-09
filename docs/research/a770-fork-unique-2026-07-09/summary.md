@@ -1,6 +1,6 @@
 # Arc A770 fork-unique benchmark summary
 
-JSONL: `/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork/docs/research/a770-fork-unique-2026-07-09/results.jsonl`
+JSONL: `docs/research/a770-fork-unique-2026-07-09/results.jsonl`
 
 | model | case | status | pp tok/s | tg tok/s |
 |---|---|---:|---:|---:|
