@@ -996,11 +996,13 @@ int main() {
         // Expected values for the policy-decide() outcomes.
         const ggml_innerq_policy want_DISABLED = GGML_INNERQ_POLICY_DISABLED;
         const ggml_innerq_policy want_OPTIN   = GGML_INNERQ_POLICY_OPTIN;
-        // Expected values for k_squared_scale() per ggml-innerq.h contract:
-        //   want_one   -> expected == 1.0f (safe default; impl returns 1.0
-        //                  when the key is null, head_dim != 128, kv_quant is
-        //                  not in the turbo set, or innerq_quant is not in
-        //                  {TURBO2/3/4})
+        // Expected values for k_squared_scale():
+        //   want_one   -> expected == 1.0f (header contract per ggml-innerq.h:
+        //                  returns 1.0 when the key is null, head_dim != 128,
+        //                  or kv_quant is not in the turbo set. Current
+        //                  implementation also returns 1.0 when innerq_quant
+        //                  is not in {TURBO2/3/4}, which is implementation
+        //                  behavior, not part of the header contract.)
         //   want_other -> expected != 1.0f (per-quant constant; impl returns
         //                  0.9375/0.9688/0.9844 for the 3 eligible innerq_quants
         //                  at d=128 + turbo kv_quant)
