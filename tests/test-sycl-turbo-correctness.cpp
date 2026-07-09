@@ -18,13 +18,11 @@
 //
 // This is a GATE, not just a diagnostic. Each probe carries an expectation:
 //   GATE  probes (standard f16/q8_0 + turbo WHT/dequant/mul_mat) MUST pass.
-//   XFAIL probes (turbo flash-attention) are known-broken: they RUN when
-//         LLAMA_TEST_TURBO_FA=1 is set and the supports_op chain allows the
-//         kernel, but MUST NOT pass yet (the VEC turbo FA kernel is still
-//         fragile on the A770 and can hang the JIT). Promote to GATE once
-//         the kernel runs cleanly across all probed configs.
-// Exit code is non-zero iff a GATE probe FAILs OR an XFAIL probe PASSes
-// (XPASS = the kernel fixed itself, time to flip Exp::XFAIL -> Exp::GATE).
+//   Turbo flash-attention probes RUN when LLAMA_TEST_TURBO_FA=1 is set.
+//   turbo3/turbo4 are promoted to GATE because the SYCL VEC/TILE paths now
+//   pass the probed A770 configs; turbo2 remains XFAIL because 2-bit precision
+//   still misses the lossy cosine floor. Exit code is non-zero iff a GATE probe
+//   FAILs OR an XFAIL probe PASSes (XPASS = promote that probe to GATE).
 // SKIPs never fail the gate.
 // Turbo FA probes additionally sit behind LLAMA_TEST_TURBO_FA=1: a broken turbo
 // kernel can hang the device/JIT outright, and a hang cannot be SKIPped at
@@ -867,30 +865,28 @@ int main() {
         probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", 128, 8, "tile", Exp::GATE, /*force=*/true, gqa_q, gqa_kv);
     }
 
-    // Turbo FA on SYCL is XFAIL on this fork: the supports_op chain in fattn.cpp
-    // accepts turbo KV (D=128 routes to VEC, D=256 to VEC/XMX), but the VEC
-    // turbo kernel is fragile on the A770 and a hang cannot be turned into a
-    // SKIP at runtime. The probes are gated off unless LLAMA_TEST_TURBO_FA=1:
-    // default runs stay off the turbo FA path so a regressed kernel cannot
-    // wedge CI. With LLAMA_TEST_TURBO_FA=1 the probes RUN; an XPASS (probe
-    // passes) is the signal to flip Exp::XFAIL -> Exp::GATE and drop the gate.
+    // Turbo FA on SYCL is opt-in on this fork: the supports_op chain in fattn.cpp
+    // accepts turbo KV (D=128 routes to VEC, D=256 to VEC/XMX), but this remains
+    // the riskiest A770 path, so the env gate is the explicit benchmark switch.
+    // turbo3/turbo4 are GATE for the probed d=128 and d=256 configs; turbo2
+    // remains XFAIL because its 2-bit precision is below the lossy cosine floor.
     if (turbo_fa_enabled()) {
-        printf("\n[5] flash attention turbo KV - XFAIL (LLAMA_TEST_TURBO_FA=1, d=128 + d=256 turbo3)\n");
+        printf("\n[5] flash attention turbo KV - GATE/XFAIL (LLAMA_TEST_TURBO_FA=1, d=128 + d=256 turbo3)\n");
         for (int64_t n_q : {8, 1}) {
             const char * path = (n_q == 8) ? "tile" : "vec";
             probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, path, Exp::XFAIL, /*force=*/false);
-            probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::XFAIL, /*force=*/false);
-            probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::XFAIL, /*force=*/false);
+            probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::GATE, /*force=*/false);
+            probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::GATE, /*force=*/false);
             // [5b] GQA variants for the turbo FA path (still under the LLAMA_TEST_TURBO_FA gate).
             for (int64_t gqa_q : {4, 8}) {
                 probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 128, n_q, path, Exp::XFAIL, /*force=*/false, gqa_q, 1);
-                probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::XFAIL, /*force=*/false, gqa_q, 1);
-                probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::XFAIL, /*force=*/false, gqa_q, 1);
+                probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 128, n_q, path, Exp::GATE, /*force=*/false, gqa_q, 1);
+                probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 128, n_q, path, Exp::GATE, /*force=*/false, gqa_q, 1);
             }
         }
         for (int64_t n_q : {8, 1}) {
             const char * path = (n_q == 8) ? "tile" : "vec";
-            probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 256, n_q, path, Exp::XFAIL, /*force=*/false);
+            probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 256, n_q, path, Exp::GATE, /*force=*/false);
         }
     } else {
         printf("\n[5] flash attention turbo KV - SKIPPED (set LLAMA_TEST_TURBO_FA=1 to run; gated so a regressed kernel cannot wedge the A770)\n");
