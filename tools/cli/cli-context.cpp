@@ -157,18 +157,12 @@ bool cli_context::init() {
             if (!list_and_ask_models()) {
                 return false;
             }
-        } catch (const std::runtime_error & e) {
-            ui::show_error(e.what());
-            return false;
         } catch (const json::parse_error & e) {
             ui::show_error(e.what());
             ui::show_message("This might be caused by an incorrect server-base endpoint URL");
             return false;
         } catch (const std::exception & e) {
             ui::show_error(e.what());
-            return false;
-        } catch (...) {
-            ui::show_error("unrecognized issue has occurred");
             return false;
         }
 
