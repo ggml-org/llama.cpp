@@ -2612,7 +2612,7 @@ static void ggml_hexagon_precompute_unary_params(
     memset(kparams, 0, sizeof(*kparams));
 
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
-    const uint32_t n_threads  = std::min((uint32_t)sess->n_threads, src0_nrows);
+    const uint32_t n_threads  = (std::min)((uint32_t)sess->n_threads, src0_nrows);
 
     kparams->n_threads = n_threads;
 
