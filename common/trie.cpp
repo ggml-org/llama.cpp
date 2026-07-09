@@ -26,7 +26,7 @@ common_trie::match_result common_trie::check_at(std::string_view sv, size_t star
         pos += result.bytes_consumed;
 
         // Check if we've matched a complete word
-        if (nodes[current].word >= 0) {
+        if (nodes[current].pattern >= 0) {
             return match_result{match_result::COMPLETE_MATCH};
         }
     }
@@ -68,10 +68,10 @@ int32_t common_trie::insert(const std::vector<uint32_t> & symbols) {
             current = it->second;
         }
     }
-    if (nodes[current].word < 0) {
-        nodes[current].word = n_words++;
+    if (nodes[current].pattern < 0) {
+        nodes[current].pattern = n_patterns++;
     }
-    return nodes[current].word;
+    return nodes[current].pattern;
 }
 
 common_aho_corasick::common_aho_corasick(common_trie trie) : t(std::move(trie)) {
@@ -99,11 +99,11 @@ common_aho_corasick::common_aho_corasick(common_trie trie) : t(std::move(trie)) 
         }
     }
 
-    // fail[u] points to a strictly shorter suffix, so the first word found on
-    // the fail chain (including u itself) is the longest word ending at u
+    // fail[u] points to a strictly shorter suffix, so the first pattern found on
+    // the fail chain (including u itself) is the longest pattern ending at u
     match.assign(n, -1);
     for (size_t u : order) {
-        match[u] = nodes[u].word >= 0 ? nodes[u].word : (u != 0 ? match[fail[u]] : -1);
+        match[u] = nodes[u].pattern >= 0 ? nodes[u].pattern : (u != 0 ? match[fail[u]] : -1);
     }
 
     for (const auto & node : nodes) {

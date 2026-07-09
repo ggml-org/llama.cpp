@@ -256,9 +256,9 @@ static void test_reasoning_budget_force_manual() {
 }
 
 // Aho-Corasick match reporting unit test
-// match_word() must report the longest word ending at the current position
-static void test_aho_corasick_match_word() {
-    // duplicate inserts keep the first word index
+// match_pattern() must report the longest pattern ending at the current position
+static void test_aho_corasick_match_pattern() {
+    // duplicate inserts keep the first pattern index
     {
         common_trie t;
         GGML_ASSERT(t.insert(std::string("ab")) == 0);
@@ -274,22 +274,22 @@ static void test_aho_corasick_match_word() {
         return state;
     };
 
-    // match via a suffix link: after "abc" the state is not a word, but "bc" ends there
+    // match via a suffix link: after "abc" the state is not a pattern, but "bc" ends there
     {
         common_aho_corasick ac({"bc", "abcd"});
-        GGML_ASSERT(ac.match_word(feed(ac, "ab"))  == -1);
-        GGML_ASSERT(ac.match_word(feed(ac, "abc")) == 0);
-        GGML_ASSERT(ac.match_word(feed(ac, "xbc")) == 0);
+        GGML_ASSERT(ac.match_pattern(feed(ac, "ab"))  == -1);
+        GGML_ASSERT(ac.match_pattern(feed(ac, "abc")) == 0);
+        GGML_ASSERT(ac.match_pattern(feed(ac, "xbc")) == 0);
     }
 
-    // multiple words end at the same position: the longest wins
+    // multiple patterns end at the same position: the longest wins
     {
         common_aho_corasick ac({"c", "abc"});
-        GGML_ASSERT(ac.match_word(feed(ac, "abc")) == 1);
-        GGML_ASSERT(ac.match_word(feed(ac, "xc"))  == 0);
+        GGML_ASSERT(ac.match_pattern(feed(ac, "abc")) == 1);
+        GGML_ASSERT(ac.match_pattern(feed(ac, "xc"))  == 0);
     }
 
-    // an empty word makes the start state terminal (used by gbnf_ac_grammar)
+    // an empty pattern makes the start state terminal (used by gbnf_ac_grammar)
     {
         common_aho_corasick ac(std::vector<std::string>{""});
         GGML_ASSERT(ac.is_terminal(0));
@@ -460,7 +460,7 @@ int main(void) {
     printf("OK (11 tests passed)\n");
 
     printf("Testing Aho-Corasick match reporting... ");
-    test_aho_corasick_match_word();
+    test_aho_corasick_match_pattern();
     printf("OK\n");
 
     printf("Testing UTF-8 boundary detection... ");

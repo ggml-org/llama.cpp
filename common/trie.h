@@ -12,7 +12,7 @@
 struct common_trie {
     struct node {
         std::map<uint32_t, size_t> children;  // Use uint32_t to store Unicode codepoints
-        int32_t word = -1;                    // index of the word ending at this node, -1 if none
+        int32_t pattern = -1;                 // index of the pattern ending at this node, -1 if none
     };
 
     std::vector<node> nodes;
@@ -32,15 +32,15 @@ struct common_trie {
     // Check if a delimiter starts at the given position
     match_result check_at(std::string_view sv, size_t start_pos) const;
 
-    // Insert a word as a sequence of Unicode codepoints, returns its word index
+    // Insert a word as a sequence of Unicode codepoints, returns its pattern index
     int32_t insert(const std::string & word);
 
-    // Insert a raw symbol sequence, returns its word index (insertion order,
+    // Insert a raw symbol sequence, returns its pattern index (insertion order,
     // duplicates keep the first index)
     int32_t insert(const std::vector<uint32_t> & symbols);
 
   private:
-    int32_t n_words = 0;
+    int32_t n_patterns = 0;
 
     size_t create_node() {
         size_t index = nodes.size();
@@ -54,7 +54,7 @@ struct common_aho_corasick {
     common_trie          t;
     std::vector<size_t>  fail;     // failure links
     std::vector<size_t>  order;    // states in BFS order
-    std::vector<int32_t> match;    // longest word ending at each state (directly or via a suffix link), -1 if none
+    std::vector<int32_t> match;    // longest pattern ending at each state (directly or via a suffix link), -1 if none
     std::set<uint32_t>   alphabet; // every character with a transition
 
     common_aho_corasick(common_trie trie);
@@ -65,8 +65,8 @@ struct common_aho_corasick {
     size_t num_states()          const { return t.nodes.size(); }
     bool   is_terminal(size_t s) const { return match[s] >= 0; }
 
-    // word index of the longest word ending at this state, -1 if none
-    int32_t match_word(size_t s) const { return match[s]; }
+    // index of the longest pattern ending at this state, -1 if none
+    int32_t match_pattern(size_t s) const { return match[s]; }
 
     // follow failure links until a transition on `ch` exists.
     size_t next(size_t state, uint32_t ch) const;

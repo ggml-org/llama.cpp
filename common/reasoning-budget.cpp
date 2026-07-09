@@ -12,38 +12,38 @@
 #include <vector>
 
 struct token_matcher {
-    std::vector<llama_tokens> words;  // unique non-empty seqs, indices match the trie word indices
+    std::vector<llama_tokens> seqs;
     common_aho_corasick ac;
     size_t state = 0;
 
-    token_matcher(const std::vector<llama_tokens> & seqs) : words(collect(seqs)), ac(build_trie(words)) {}
+    token_matcher(const std::vector<llama_tokens> & seqs) : seqs(collect(seqs)), ac(build_trie(this->seqs)) {}
 
     static std::vector<llama_tokens> collect(const std::vector<llama_tokens> & seqs) {
-        std::vector<llama_tokens> words;
+        std::vector<llama_tokens> res;
         for (const auto & seq : seqs) {
-            if (!seq.empty() && std::find(words.begin(), words.end(), seq) == words.end()) {
-                words.push_back(seq);
+            if (!seq.empty() && std::find(res.begin(), res.end(), seq) == res.end()) {
+                res.push_back(seq);
             }
         }
-        return words;
+        return res;
     }
 
-    static common_trie build_trie(const std::vector<llama_tokens> & words) {
+    static common_trie build_trie(const std::vector<llama_tokens> & seqs) {
         common_trie t;
-        for (const auto & w : words) {
-            t.insert(std::vector<uint32_t>(w.begin(), w.end()));
+        for (const auto & seq : seqs) {
+            t.insert(std::vector<uint32_t>(seq.begin(), seq.end()));
         }
         return t;
     }
 
-    // returns the index into words of the longest sequence ending at this token, or -1
+    // returns the index into seqs of the longest sequence ending at this token, or -1
     int32_t advance(llama_token token) {
         state = ac.next(state, (uint32_t) token);
-        const int32_t w = ac.match_word(state);
-        if (w >= 0) {
+        const int32_t p = ac.match_pattern(state);
+        if (p >= 0) {
             state = 0;
         }
-        return w;
+        return p;
     }
 
     void reset() { state = 0; }
