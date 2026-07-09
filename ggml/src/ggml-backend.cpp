@@ -478,6 +478,9 @@ enum ggml_status ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_
     enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph);
     ggml_backend_synchronize(backend);
     if (err != GGML_STATUS_SUCCESS) {
+        // Drain any pending SYCL failure state recorded during the
+        // async call so it does not leak into a later request.
+        (void) ggml_backend_maybe_consume_sycl_status(backend);
         return err;
     }
     return ggml_backend_maybe_consume_sycl_status(backend);
@@ -1954,6 +1957,9 @@ enum ggml_status ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, st
     enum ggml_status err = ggml_backend_sched_graph_compute_async(sched, graph);
     ggml_backend_sched_synchronize(sched);
     if (err != GGML_STATUS_SUCCESS) {
+        // Drain any pending SYCL failure state recorded during the
+        // async call so it does not leak into a later request.
+        (void) ggml_backend_sched_maybe_consume_sycl_status(sched);
         return err;
     }
     return ggml_backend_sched_maybe_consume_sycl_status(sched);

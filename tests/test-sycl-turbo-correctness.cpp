@@ -1032,13 +1032,17 @@ int main() {
         int env_state = getenv("LLAMA_ENABLE_INNERQ") != nullptr ? env_set : env_unset;
         for (int i = 0; i < n_cases; ++i) {
             const innerq_case_t & c = cases[i];
-            ggml_innerq_policy got = ggml_innerq_state_decide(&c.key);
+            // The "null-key" row exercises decide() with a null pointer;
+            // pass nullptr there instead of &c.key so the contract is real.
+            const ggml_innerq_state_key * pass_key =
+                std::strcmp(c.label, "null-key (env set)") == 0 ? nullptr : &c.key;
+            ggml_innerq_policy got = ggml_innerq_state_decide(pass_key);
             if (got != c.expected_policy) {
                 printf("   [8a] FAIL: %s expected policy %d, got %d\n",
                        c.label, (int) c.expected_policy, (int) got);
                 ++policy_failures;
             }
-            float k_scale = ggml_innerq_state_k_squared_scale(&c.key);
+            float k_scale = ggml_innerq_state_k_squared_scale(pass_key);
             // k_squared_scale == 1.0 iff k_should_be_one else != 1.0.
             int is_one = (k_scale == 1.0f) ? 1 : 0;
             if (is_one != c.k_should_be_one) {

@@ -68,7 +68,10 @@ bool llama_turbo_innerq_runtime_state::should_attach_scale_tensor() const {
     std::lock_guard<std::mutex> lock(mutex);
 
     if (state.abort_reason != 0) {
-        return state.freeze_last_good;
+        // Freeze only when we have a finalized last-good scale to keep.
+        // Otherwise the freeze flag references an unflushed initial state
+        // (1.0 fill) which is identity but not "finalized" data.
+        return state.freeze_last_good && state.finalized;
     }
 
     return state.finalized;

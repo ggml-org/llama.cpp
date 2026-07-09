@@ -5264,7 +5264,7 @@ static void ggml_backend_sycl_record_failed_exception(ggml_backend_sycl_device_c
     }
 }
  
-ggml_backend_sycl_failure ggml_backend_sycl_consume_last_failure(ggml_backend_t backend) {
+extern "C" ggml_backend_sycl_failure ggml_backend_sycl_consume_last_failure(ggml_backend_t backend) {
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
     if (dev_ctx == nullptr) {
         return {
@@ -5282,7 +5282,7 @@ ggml_backend_sycl_failure ggml_backend_sycl_consume_last_failure(ggml_backend_t 
     return out;
 }
  
-ggml_status ggml_backend_sycl_consume_last_status(ggml_backend_t backend) {
+extern "C" ggml_status ggml_backend_sycl_consume_last_status(ggml_backend_t backend) {
     return ggml_backend_sycl_consume_last_failure(backend).status;
 }
 

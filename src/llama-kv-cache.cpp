@@ -499,12 +499,13 @@ llama_kv_cache::llama_kv_cache(
             ggml_backend_tensor_set(turbo_rotation_inv, TURBO_ROTATION_RT, 0, 128 * 128 * sizeof(float));
 
             // Initialize InnerQ scale_inv to all 1.0 (identity scaling).
-            // The per-cache runtime state starts at the same identity values
-            // and clean/not-finalized flags; later publish_* calls can make
-            // P3.2.2a2a3c trace: log whether the first init
-            // runs for this layer (the alloc + this init both
-            // need to succeed for the consumer to see the
-            // tensor).
+            // The per-cache runtime state starts at the same identity
+            // values with clean/not-finalized flags. publish_*_scale
+            // later overwrites these once the device kernel reports a
+            // meaningful per-tensor K^2 value.
+            // P3.2.2a2a3c trace: log whether the first init runs for
+            // this layer (the alloc + this init both need to succeed
+            // for the consumer to see the tensor).
             LLAMA_LOG_DEBUG("%s: a2a3c-init1-pre: turbo_innerq_scale_inv=%p buffer=%p\n",
                             __func__, (void *)turbo_innerq_scale_inv,
                             turbo_innerq_scale_inv ? (void *)turbo_innerq_scale_inv->buffer : nullptr);
@@ -2902,18 +2903,22 @@ bool llama_kv_cache_context::apply() {
     llama_turbo_innerq_runtime_snapshot innerq_rt;
     ggml_tensor * scale_inv_raw = kv->get_turbo_innerq_scale_inv_raw();
     // P3.2.2a2a3b discriminator: log the gate inputs via a
-    // non-mutating peek() so we can tell whether the short-circuit
-    // is on the scale_inv null check, the consume_runtime false
-    // return, or both. DO NOT call turbo_innerq_consume_runtime
+    // non-mutating peek() ONLY when the build is a debug build;
+    // release builds skip the mutex-guarded copy that the debug
+    // stringification needs. DO NOT call turbo_innerq_consume_runtime
     // here -- it clears state.dirty on success and would mutate
     // the state we're trying to observe. The real consume call
     // stays on the original control path inside the gate below.
-    llama_turbo_innerq_runtime_snapshot peek_rt = kv->turbo_innerq_peek_runtime();
-    LLAMA_LOG_DEBUG("%s: InnerQ consume gate scale_inv_raw=%p peek_dirty=%d peek.finalized=%d abort=%d retry=%d freeze=%d scale_inv_n=%zu\n",
-                   __func__, (void *) scale_inv_raw, peek_rt.dirty,
-                   peek_rt.finalized, peek_rt.abort_reason,
-                   peek_rt.retry_count, peek_rt.freeze_last_good,
-                   peek_rt.scale_inv.size());
+#ifndef NDEBUG
+    if (scale_inv_raw != nullptr) {
+        llama_turbo_innerq_runtime_snapshot peek_rt = kv->turbo_innerq_peek_runtime();
+        LLAMA_LOG_DEBUG("%s: InnerQ consume gate scale_inv_raw=%p peek_dirty=%d peek.finalized=%d abort=%d retry=%d freeze=%d scale_inv_n=%zu\n",
+                       __func__, (void *) scale_inv_raw, peek_rt.dirty,
+                       peek_rt.finalized, peek_rt.abort_reason,
+                       peek_rt.retry_count, peek_rt.freeze_last_good,
+                       peek_rt.scale_inv.size());
+    }
+#endif
     if (scale_inv_raw != nullptr && kv->turbo_innerq_consume_runtime(innerq_rt)) {
         ggml_tensor * t = scale_inv_raw;
         if (t->buffer != nullptr) {

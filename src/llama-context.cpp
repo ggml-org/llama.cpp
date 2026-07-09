@@ -14,12 +14,14 @@
 #include "llama-model.h"
 #include "llama-ext.h"
 #include "llama.h"
-#ifdef GGML_USE_SYCL
+// ggml-sycl.h includes the failure-status type that is referenced from
+// both SYCL and non-SYCL paths here; pulling it in unconditionally keeps
+// the helpers below compiling identically. The actual graph_compute
+// call sites are guarded by GGML_USE_SYCL.
 #include "ggml-sycl.h"
-#endif
 
-#ifdef GGML_USE_SYCL
 static ggml_backend_sycl_failure llama_backend_sched_consume_sycl_failure(ggml_backend_sched_t sched) {
+#ifdef GGML_USE_SYCL
     const int n_backends = ggml_backend_sched_get_n_backends(sched);
     for (int i = 0; i < n_backends; ++i) {
         ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
@@ -31,14 +33,11 @@ static ggml_backend_sycl_failure llama_backend_sched_consume_sycl_failure(ggml_b
             return failure;
         }
     }
-    return { GGML_STATUS_SUCCESS, GGML_SYCL_FAILURE_CAUSE_NONE, 0 };
-}
 #else
-static ggml_backend_sycl_failure llama_backend_sched_consume_sycl_failure(ggml_backend_sched_t sched) {
     GGML_UNUSED(sched);
+#endif
     return { GGML_STATUS_SUCCESS, GGML_SYCL_FAILURE_CAUSE_NONE, 0 };
 }
-#endif
 
 
 #include <cinttypes>
