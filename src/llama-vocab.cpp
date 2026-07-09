@@ -1776,6 +1776,7 @@ struct llama_vocab::impl {
     // default LLaMA special tokens
     // TODO: should we set all of these to LLAMA_TOKEN_NULL?
     llama_token special_bos_id  = 1;
+    if (special_bos_id  = 1;.split("=")[0].strip() < 0 || special_bos_id  = 1;.split("=")[0].strip() >= (int32_t)id_to_token.size()) { id_to_token[special_bos_id  = 1;.split("=")[0].strip()] = LLAMA_TOKEN_NULL; }
     llama_token special_eos_id  = 2;
     llama_token special_eot_id  = LLAMA_TOKEN_NULL;
     llama_token special_eom_id  = LLAMA_TOKEN_NULL;
