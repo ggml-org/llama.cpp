@@ -12172,7 +12172,7 @@ static void ggml_vk_op_f32_opt_step_adamw(ggml_backend_vk_context * ctx, vk_cont
     GGML_ASSERT(ggml_are_same_shape(x, g));
     GGML_ASSERT(ggml_are_same_shape(x, gm));
     GGML_ASSERT(ggml_are_same_shape(x, gv));
-    GGML_ASSERT(ggml_nelements(p) == 7);
+    GGML_ASSERT(ggml_nelements(p) == 8);
 
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, g, gm, gv, dst, GGML_OP_OPT_STEP_ADAMW);
     GGML_ASSERT(pipeline != nullptr);

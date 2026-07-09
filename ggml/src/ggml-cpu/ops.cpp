@@ -4500,6 +4500,93 @@ void ggml_compute_forward_out_prod(
     }
 }
 
+// ggml_compute_forward_out_prod_id
+
+static void ggml_compute_forward_out_prod_id_f32(
+        const ggml_compute_params * params,
+              ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0]; // a [cols, n_exp_used, n_tokens]
+    const ggml_tensor * src1 = dst->src[1]; // b [rows, n_exp_used, n_tokens]
+    const ggml_tensor * ids  = dst->src[2]; // ids [n_exp_used, n_tokens] I32
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(ids->type  == GGML_TYPE_I32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t cols       = src0->ne[0];
+    const int64_t n_exp_used = src0->ne[1];
+    const int64_t n_tokens   = src0->ne[2];
+    const int64_t rows       = src1->ne[0];
+    const int64_t n_expert   = dst->ne[2];
+
+    // zero dst
+    if (ith == 0) {
+        ggml_vec_set_f32(ggml_nelements(dst), (float *)dst->data, 0);
+    }
+    ggml_barrier(params->threadpool);
+
+    // total dispatch slots: n_exp_used * n_tokens
+    const int64_t n_slots = n_exp_used * n_tokens;
+
+    // slots per thread
+    const int64_t ds  = (n_slots + nth - 1) / nth;
+    const int64_t is0 = ds * ith;
+    const int64_t is1 = MIN(is0 + ds, n_slots);
+
+    // strides for src0 (a): [cols, n_exp_used, n_tokens]
+    const size_t a_nb_exp = src0->nb[1]; // stride per expert slot (cols * sizeof(float))
+    const size_t a_nb_tok = src0->nb[2]; // stride per token
+
+    // strides for src1 (b): [rows, n_exp_used, n_tokens]
+    const size_t b_nb_exp = src1->nb[1]; // stride per expert slot
+    const size_t b_nb_tok = src1->nb[2]; // stride per token
+
+    // stride for dst per expert: [cols, rows, n_expert]
+    const size_t d_nb_exp = dst->nb[2];  // stride per expert
+
+    for (int64_t is = is0; is < is1; ++is) {
+        const int64_t iexp = is / n_tokens;
+        const int64_t itok = is % n_tokens;
+
+        const int32_t eid = *(const int32_t *)((const char *)ids->data
+            + iexp * ids->nb[0] + itok * ids->nb[1]);
+
+        GGML_ASSERT(eid >= 0 && eid < (int32_t)n_expert);
+
+        const float * a_col = (const float *)((const char *)src0->data + iexp * a_nb_exp + itok * a_nb_tok);
+        const float * b_col = (const float *)((const char *)src1->data + iexp * b_nb_exp + itok * b_nb_tok);
+        float       * d_mat = (float       *)((char       *) dst->data + eid  * d_nb_exp);
+
+        // rank-1 update: d_mat[:, :] += a_col[:] ⊗ b_col[:]
+        for (int64_t r = 0; r < rows; ++r) {
+            const float b_val = b_col[r];
+            for (int64_t c = 0; c < cols; ++c) {
+                d_mat[c + r * (dst->nb[1] / sizeof(float))] += a_col[c] * b_val;
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_out_prod_id(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            ggml_compute_forward_out_prod_id_f32(params, dst);
+            break;
+        default:
+            GGML_ABORT("fatal error");
+    }
+}
+
 // ggml_compute_forward_scale
 
 static void ggml_compute_forward_scale_f32(
@@ -11333,7 +11420,7 @@ static void ggml_compute_forward_opt_step_adamw_f32(
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad));
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad_m));
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad_v));
-    GGML_ASSERT(ggml_nelements(adamw_params) == 7);
+    GGML_ASSERT(ggml_nelements(adamw_params) == 8);
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -11359,6 +11446,7 @@ static void ggml_compute_forward_opt_step_adamw_f32(
     const float wd     = adamw_params_ptr[4];
     const float beta1h = adamw_params_ptr[5];
     const float beta2h = adamw_params_ptr[6];
+    const float gclip  = adamw_params_ptr[7]; // element-wise gradient clip (0 = disabled)
     const float keep   = 1.f - alpha * wd;
     for (int ir = ir0; ir < ir1; ++ir) {
         const int64_t i03 = ir/(ne02*ne01);
@@ -11373,8 +11461,10 @@ static void ggml_compute_forward_opt_step_adamw_f32(
         float       * v = (float       *) ((char       *) src0_grad_v->data + offset);
 
         for (int i00 = 0; i00 < ne00; ++i00) {
-            m[i00] = m[i00]*beta1 +        g[i00]*(1.0f - beta1);
-            v[i00] = v[i00]*beta2 + g[i00]*g[i00]*(1.0f - beta2);
+            const float gi = (gclip > 0.0f) ? fmaxf(-gclip, fminf(gclip, g[i00])) : g[i00];
+
+            m[i00] = m[i00]*beta1 +       gi*(1.0f - beta1);
+            v[i00] = v[i00]*beta2 + gi*gi*(1.0f - beta2);
 
             const float mh =       m[i00]*beta1h;
             const float vh = sqrtf(v[i00]*beta2h) + eps;
