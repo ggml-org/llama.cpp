@@ -17,19 +17,19 @@
 struct mock_memory : public llama_memory_i {
     std::map<llama_seq_id, std::pair<llama_pos, llama_pos>> ranges; // seq_id -> [pos_min, pos_max]
 
-    llama_memory_context_ptr init_batch(llama_batch_allocr &, uint32_t, bool) override { return nullptr; }
-    llama_memory_context_ptr init_full() override { return nullptr; }
-    llama_memory_context_ptr init_update(llama_context *, bool) override { return nullptr; }
+    llama_memory_context_ptr init_batch(llama_batch_allocr &, uint32_t, bool) override {  GGML_ASSERT(false && "not implemented"); return nullptr; }
+    llama_memory_context_ptr init_full() override {  GGML_ASSERT(false && "not implemented"); return nullptr; }
+    llama_memory_context_ptr init_update(llama_context *, bool) override { GGML_ASSERT(false && "not implemented");  return nullptr; }
 
-    bool get_can_shift() const override { return false; }
+    bool get_can_shift() const override { GGML_ASSERT(false && "not implemented");  return false; }
 
-    void clear(bool) override {}
+    void clear(bool) override { GGML_ASSERT(false && "not implemented"); }
 
-    bool seq_rm  (llama_seq_id, llama_pos, llama_pos) override { return true; }
-    void seq_cp  (llama_seq_id, llama_seq_id, llama_pos, llama_pos) override {}
-    void seq_keep(llama_seq_id) override {}
-    void seq_add (llama_seq_id, llama_pos, llama_pos, llama_pos) override {}
-    void seq_div (llama_seq_id, llama_pos, llama_pos, int) override {}
+    bool seq_rm  (llama_seq_id, llama_pos, llama_pos) override { GGML_ASSERT(false && "not implemented");  return true; }
+    void seq_cp  (llama_seq_id, llama_seq_id, llama_pos, llama_pos) override { GGML_ASSERT(false && "not implemented"); }
+    void seq_keep(llama_seq_id) override { GGML_ASSERT(false && "not implemented"); }
+    void seq_add (llama_seq_id, llama_pos, llama_pos, llama_pos) override { GGML_ASSERT(false && "not implemented"); }
+    void seq_div (llama_seq_id, llama_pos, llama_pos, int) override { GGML_ASSERT(false && "not implemented");  }
 
     llama_pos seq_pos_min(llama_seq_id seq_id) const override {
         auto it = ranges.find(seq_id);
@@ -43,8 +43,8 @@ struct mock_memory : public llama_memory_i {
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override { return {}; }
 
-    void state_write(llama_io_write_i &, llama_seq_id, llama_state_seq_flags) const override {}
-    void state_read (llama_io_read_i &,  llama_seq_id, llama_state_seq_flags) override {}
+    void state_write(llama_io_write_i &, llama_seq_id, llama_state_seq_flags) const override { GGML_ASSERT(false && "not implemented"); }
+    void state_read (llama_io_read_i &,  llama_seq_id, llama_state_seq_flags) override { GGML_ASSERT(false && "not implemented"); }
 };
 
 // builds embedding batches - an empty llama_vocab rejects all token ids, so
