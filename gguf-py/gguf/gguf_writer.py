@@ -810,6 +810,9 @@ class GGUFWriter:
         else:
             self.add_array(key, value)
 
+    def add_rope_pattern(self, value: Sequence[bool]) -> None:
+        self.add_array(Keys.Attention.ROPE_PATTERN.format(arch=self.arch), value)
+
     def add_dense_features_dims(self, dense:str, in_f:int, out_f:int) -> None:
         self.add_uint32(Keys.LLM.DENSE_FEAT_IN_SIZE.format(arch=self.arch, dense=dense), in_f)
         self.add_uint32(Keys.LLM.DENSE_FEAT_OUT_SIZE.format(arch=self.arch, dense=dense), out_f)
