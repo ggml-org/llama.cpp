@@ -384,10 +384,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     // Query rows are processed in tiles of q_tile_rows so the score buffers
     // (KQ_f32/S_f16 = q_tile_rows * chunk_size) stay bounded regardless of
     // batch size. n_query_rows <= Q_TILE is a single tile (no extra work).
-    static int q_tile_env = -1;
-    if (q_tile_env < 0) {
-        q_tile_env = ggml_sycl_get_env("GGML_SYCL_MKL_FA_Q_TILE", MKL_FA_Q_TILE);
-    }
+    static int q_tile_env = ggml_sycl_get_env("GGML_SYCL_MKL_FA_Q_TILE", MKL_FA_Q_TILE);
     const int q_tile_rows = std::max(1, std::min(q_tile_env, n_query_rows));
 
     const int64_t wg_size = 256;
