@@ -71,27 +71,26 @@ float ggml_innerq_state_k_squared_scale(const ggml_innerq_state_key * key) {
     if (key == NULL) {
         return 1.0f;
     }
-    if (key->head_dim != 128) {
-        return 1.0f;  // not eligible; safe default
+    // Caller contract (ggml-innerq.h): 1.0f when key is null,
+    // head_dim != 128, OR kv_quant is not in the turbo set. The
+    // turbo-set check matches is_policy_eligible() so a non-turbo
+    // kv_quant never gets a K^2 correction even with a turbo
+    // innerq_quant requested.
+    if (key->head_dim != 128 || !is_turbo_kv_quant(key->kv_quant)) {
+        return 1.0f;
     }
-    // Per-(kv_quant, innerq_quant) constant lookup. P3.2.2's
+    // Per-innerq_quant constant at d=128 + turbo kv_quant. P3.2.2's
     // placeholder table; the real per-tensor computation is P3.2.3.
     // Values from the P1 [model 3] sub-task 1 data:
     //   innerq2 -> 0.9375f
     //   innerq3 -> 0.9688f
     //   innerq4 -> 0.9844f
-    // In all 3 cases, the table is dominated by the innerq_quant
-    // value (kv_quant is the cache substrate, doesn't shift the
-    // precision budget on its own).
-    float base = 1.0f;
     switch (key->innerq_quant) {
-        case GGML_INNERQ_QUANT_TURBO2_0: base = 0.9375f; break;
-        case GGML_INNERQ_QUANT_TURBO3_0: base = 0.9688f; break;
-        case GGML_INNERQ_QUANT_TURBO4_0: base = 0.9844f; break;
+        case GGML_INNERQ_QUANT_TURBO2_0: return 0.9375f;
+        case GGML_INNERQ_QUANT_TURBO3_0: return 0.9688f;
+        case GGML_INNERQ_QUANT_TURBO4_0: return 0.9844f;
         default: return 1.0f;  // not eligible; safe default
     }
-    (void) key->kv_quant;  // currently a no-op; P3.2.3 may extend.
-    return base;
 }
 
 void ggml_innerq_compute_k_squared_profile(

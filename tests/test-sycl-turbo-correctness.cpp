@@ -996,12 +996,14 @@ int main() {
         // Expected values for the policy-decide() outcomes.
         const ggml_innerq_policy want_DISABLED = GGML_INNERQ_POLICY_DISABLED;
         const ggml_innerq_policy want_OPTIN   = GGML_INNERQ_POLICY_OPTIN;
-        // Expected values for k_squared_scale():
+        // Expected values for k_squared_scale() per ggml-innerq.h contract:
         //   want_one   -> expected == 1.0f (safe default; impl returns 1.0
-        //                  when the key is null, head_dim != 128, or innerq_quant
-        //                  is not in {TURBO2/3/4})
+        //                  when the key is null, head_dim != 128, kv_quant is
+        //                  not in the turbo set, or innerq_quant is not in
+        //                  {TURBO2/3/4})
         //   want_other -> expected != 1.0f (per-quant constant; impl returns
-        //                  0.9375/0.9688/0.9844 for the 3 eligible innerq_quants)
+        //                  0.9375/0.9688/0.9844 for the 3 eligible innerq_quants
+        //                  at d=128 + turbo kv_quant)
         const int want_one    = 1;
         const int want_other  = 0;
         // env-state column values for the test matrix:
@@ -1010,19 +1012,18 @@ int main() {
 
         // Test matrix: (label, model_fp, head_dim, kv_quant, innerq_quant,
         //                env_set, expected_policy, k_should_be_one)
-        // k_should_be_one is independent of expected_policy: the k_squared_scale
-        // function gates on head_dim and innerq_quant only, NOT on policy.
-        // It returns 1.0 iff (head_dim != 128 OR innerq_quant not in {TURBO2/3/4}).
-        // The current implementation does NOT gate on kv_quant (the per-quant
-        // constant is the same for all turbo kv_quants; P3.2.3 may extend).
+        // k_should_be_one is independent of expected_policy: k_squared_scale
+        // gates on (head_dim, kv_quant, innerq_quant) and never reads policy.
+        // It returns 1.0 iff (head_dim != 128 OR kv_quant not in turbo set
+        // OR innerq_quant not in {TURBO2/3/4}).
         innerq_case_t cases[] = {
             // --- null key: decide rejects (DISABLED), k returns 1.0 ---
             {"null-key (env set)",     {0u, 128, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_one},
             // --- model_fp = 0 (unidentified): decide rejects, k returns 0.9688 (per-quant) ---
             {"unidentified (env set)", {0u, 128, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_other},
-            // --- non-turbo kv_quant: decide rejects, k returns 0.9688 (impl doesn't gate on kv_quant yet) ---
-            {"f16 kv (env set)",       {0xDEAD, 128, GGML_TYPE_F16,    GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_other},
-            {"q8_0 kv (env set)",      {0xDEAD, 128, GGML_TYPE_Q8_0,   GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_other},
+            // --- non-turbo kv_quant: decide rejects, k returns 1.0 (kv_quant gate) ---
+            {"f16 kv (env set)",       {0xDEAD, 128, GGML_TYPE_F16,    GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_one},
+            {"q8_0 kv (env set)",      {0xDEAD, 128, GGML_TYPE_Q8_0,   GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_one},
             // --- d != 128: decide rejects, k returns 1.0 (head_dim gate) ---
             {"d=256 (env set)",        {0xDEAD, 256, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_one},
             {"d=64 (env set)",         {0xDEAD,  64, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_one},
