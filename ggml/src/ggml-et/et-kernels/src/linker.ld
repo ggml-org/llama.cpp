@@ -10,23 +10,23 @@ SECTIONS
 {
   /* Start at the base address passed by -Wl,--defsym=BASE_ADDRESS=... */
   . = BASE_ADDRESS;
-  
+
   /* Export entry point symbol for runtime compatibility */
   KERNEL_UMODE_ENTRY = BASE_ADDRESS;
-  
+
   /* Initialization section - must come first */
-  .text.init : 
+  .text.init :
   {
      *(.text.init)
   }
-  
+
   /* Align to cache line boundary */
   . = ALIGN(64);
-  
+
   /* Main text section for code */
-  .text : { 
-    *(.text) 
-    *(.text.*) 
+  .text : {
+    *(.text)
+    *(.text.*)
   }
   . = ALIGN(64);
 
@@ -35,11 +35,11 @@ SECTIONS
   {
     _data_start = .;
     . = ALIGN(64);
-    
+
     /* Small data section and global pointer */
     *(.sdata .sdata.*)
     PROVIDE( __global_pointer$ = . + 0x800 );
-    
+
     /* Regular data */
     *(.data .data.*)
     . = ALIGN(64);
@@ -64,9 +64,9 @@ SECTIONS
      *(.tdata*)
      . = ALIGN(64);
   }
-  __tdata_start = ADDR(.tdata);  
-  
-  .tbss : { 
+  __tdata_start = ADDR(.tdata);
+
+  .tbss : {
       __tbss_start = .;
       *(.tbss*)
   }
@@ -78,7 +78,7 @@ SECTIONS
   .tls-alloc ALIGN(64) (NOLOAD) : {
      __tls_alloc_start = .;
      . = . + (ABSOLUTE(__tbss_end) - ABSOLUTE(__tdata_start)) * MAX_HARTS;
-  } 
+  }
 
   /* End of kernel image */
   _end = .;

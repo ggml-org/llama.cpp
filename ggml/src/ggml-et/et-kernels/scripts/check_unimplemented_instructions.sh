@@ -22,7 +22,7 @@ then
     # unimplemented instructions are found
     echo -e "BUILD ERROR: Executable file ${TARGET_DEBUG} contains unimplemented instructions. Please review the lines of code listed in ${BAD_INST_FILE}"
     echo -e "\t     For further details, please read paragraph 3.4 of the ETSoC-1 Programmer's Reference Manual (PRM)"
-    
+
     # addr2line
     grep ${UNIMPLEMENTED_EXPR} ${TARGET_ASM} | cut -d: -f 1 | ${ADDR2LINE} -i -e ${TARGET_DEBUG} > ${BAD_INST_FILE}
     grep ${UNIMPLEMENTED_EXPR} ${TARGET_ASM} >> ${BAD_INST_FILE}
@@ -31,6 +31,6 @@ then
     echo "------------------------------------------------------------"
     exit 1
 
-else 
+else
    rm -f ${BAD_INST_FILE}
 fi
