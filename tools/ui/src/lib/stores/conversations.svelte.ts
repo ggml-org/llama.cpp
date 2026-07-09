@@ -1115,21 +1115,18 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Downloads a conversation as JSON file.
+	 * Downloads a single conversation as a JSONL file, serializing the full message tree.
 	 * @param convId - The conversation ID to download
 	 */
 	async downloadConversation(convId: string): Promise<void> {
-		let conversation: DatabaseConversation | null;
-		let messages: DatabaseMessage[];
+		const conversation =
+			this.activeConversation?.id === convId
+				? this.activeConversation
+				: await DatabaseService.getConversation(convId);
 
-		if (this.activeConversation?.id === convId) {
-			conversation = this.activeConversation;
-			messages = this.activeMessages;
-		} else {
-			conversation = await DatabaseService.getConversation(convId);
-			if (!conversation) return;
-			messages = await DatabaseService.getConversationMessages(convId);
-		}
+		if (!conversation) return;
+
+		const messages = await DatabaseService.getConversationMessages(convId);
 
 		this.downloadConversationFile({ conv: conversation, messages });
 	}
