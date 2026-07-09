@@ -808,19 +808,22 @@ void llama_context::sched_reserve() {
 
 void llama_context::synchronize() {
     if (!sched) {
-        last_sync_status = GGML_STATUS_SUCCESS;
+        // Nothing to sync; the last compute-path status stands.
+        // Don't overwrite a previous non-success result.
         return;
     }
 
     ggml_backend_sched_synchronize(sched.get());
     const ggml_backend_sycl_failure sync_failure = llama_backend_sched_consume_sycl_failure(sched.get());
-    last_sync_status = sync_failure.status;
-    if (last_sync_status != GGML_STATUS_SUCCESS) {
+    if (sync_failure.status != GGML_STATUS_SUCCESS) {
+        last_sync_status = sync_failure.status;
         LLAMA_LOG_ERROR("%s: backend synchronize failed, status: %d cause: %d raw_code: %d\n",
                 __func__, last_sync_status, (int) sync_failure.cause, sync_failure.raw_code);
         return;
     }
-
+    // Sync succeeded; keep the last compute-path status. Overwriting
+    // with SUCCESS here would clear a previous non-success result from
+    // graph_compute_async and let getters like llama_get_logits() proceed.
 
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats
@@ -1499,12 +1502,22 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
     }
 
+    // InnerQ capture enablement: route through the same env-var
+    // semantics as ggml_innerq_state_decide so the contract stays in
+    // one place. decide() itself is the policy gate (it adds the
+    // model_fp/kv_quant/head_dim checks); this is just the env-var
+    // half. Empty/0 values are treated as disabled, matching
+    // ggml_innerq_state_decide.
+    const bool innerq_env_enabled = []() {
+        const char * env = getenv("LLAMA_ENABLE_INNERQ");
+        return env != nullptr && env[0] != '\0' && env[0] != '0';
+    }();
     turbo_innerq_eval_capture innerq_cap = {
         /* .mctx                   = */ mctx,
         /* .user_cb                = */ cparams.cb_eval,
         /* .user_ud                = */ cparams.cb_eval_user_data,
         /* .user_requested_current = */ false,
-        /* .enabled                = */ getenv("LLAMA_ENABLE_INNERQ") != nullptr,
+        /* .enabled                = */ innerq_env_enabled,
         /* .captured               = */ false,
     };
     const bool use_eval_wrapper = innerq_cap.enabled || innerq_cap.user_cb != nullptr;
