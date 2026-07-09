@@ -618,6 +618,10 @@ void llama_kv_cache::clear(bool data) {
             }
         }
     }
+    // Reset the per-cache InnerQ runtime state alongside the tensor
+    // reset so should_attach_scale_tensor() does not get stuck on
+    // stale finalized/abort/freeze flags from a previous use.
+    turbo_innerq_runtime.reset();
 }
 
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {

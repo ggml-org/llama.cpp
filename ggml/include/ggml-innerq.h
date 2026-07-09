@@ -2,12 +2,15 @@
 //
 // Minimal InnerQ host state machine -- P3.2.2 (Qwen3-MoE turbo3 rescue probe).
 //
-// This header establishes the absolute minimum C++ surface needed to
-// drive the Early Kill Gate probe in tests/test-sycl-turbo-correctness.cpp.
-// The full state machine, file layout, and SYCL-backend touchpoint list
-// are specified in docs/research/innerq-host-state-machine-spec-2026-07-07.md
-// (workspace-sibling). The implementations land in P3.2.3.
-//
+// This header establishes the minimal C API surface used by tests and
+// backends. The host reference implementation lives in-tree in
+// ggml/src/ggml-innerq.c (always built into ggml-base, linkable from
+// src/llama-context.cpp without GGML_USE_SYCL). The optional SYCL
+// acceleration for K^2 profiling lives in ggml/src/ggml-sycl/innerq.cpp.
+// Design notes that survive into the repo should live in-tree under
+// docs/ when they are added; this header no longer references
+// out-of-repo "workspace-sibling" spec files.
+
 // What this header defines (P3.2.2, "minimal" = enough for the Qwen3-MoE
 // rescue probe, nothing more):
 //

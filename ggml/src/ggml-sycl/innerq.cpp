@@ -35,13 +35,12 @@ extern "C" void ggml_innerq_compute_k_squared_profile(
 // at the start of this turn).
 extern "C" void ggml_innerq_compute_k_squared_profile_sycl(
     const float * probe, int n_probe, int head_dim, float * out_scales) {
-    (void) probe;  // unused in this stub; kept for signature compatibility
-    (void) n_probe; // unused in this stub; kept for signature compatibility
-    (void) head_dim; // unused in this stub; kept for signature compatibility
-    // P3.2.3.2a: delegate to C reference until the runtime fallback
-    // works on host CPU emulators. The C reference is the binding
-    // correctness oracle; the SYCL kernel's only job is to match it
-    // within float tolerance, and the [8c] harness sub-probe verifies
-    // that by construction (it's the same function call).
+    // P3.2.3.2a: delegate to the C reference until the runtime
+    // fallback works on host CPU emulators. The C reference is the
+    // binding correctness oracle; the SYCL kernel's only job is to
+    // match it within float tolerance, and the [8c] harness sub-probe
+    // verifies that by construction (it's the same function call).
+    // The real SYCL kernel re-enablement lands in a future turn when
+    // a real GPU is available for the runtime test.
     ggml_innerq_compute_k_squared_profile(probe, n_probe, head_dim, out_scales);
 }

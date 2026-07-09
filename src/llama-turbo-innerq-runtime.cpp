@@ -36,6 +36,17 @@ void llama_turbo_innerq_runtime_state::publish_abort(int abort_reason, int retry
     state.dirty = true;
 }
 
+void llama_turbo_innerq_runtime_state::reset() {
+    std::lock_guard<std::mutex> lock(mutex);
+
+    state.scale_inv.fill(1.0f);
+    state.finalized = false;
+    state.dirty = false;
+    state.abort_reason = 0;
+    state.retry_count = 0;
+    state.freeze_last_good = false;
+}
+
 llama_turbo_innerq_runtime_snapshot llama_turbo_innerq_runtime_state::peek() const {
     std::lock_guard<std::mutex> lock(mutex);
     return state;

@@ -21,6 +21,11 @@ public:
 
     void publish_scale_inv(const float * scale_inv, size_t n, bool finalized);
     void publish_abort(int abort_reason, int retry_count, bool freeze_last_good);
+    // Reset to the initial state (scale_inv = all 1.0f, not finalized,
+    // no abort, no freeze). Called when the per-cache tensor is reset
+    // so should_attach_scale_tensor() does not get stuck on stale
+    // flags from a previous use of this cache.
+    void reset();
 
     llama_turbo_innerq_runtime_snapshot peek() const;
     bool consume_if_dirty(llama_turbo_innerq_runtime_snapshot & out);
