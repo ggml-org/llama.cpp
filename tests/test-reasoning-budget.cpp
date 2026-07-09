@@ -1,4 +1,5 @@
 #include "reasoning-budget.h"
+#include "trie.h"
 #include "unicode.h"
 
 #include "llama.h"
@@ -254,6 +255,47 @@ static void test_reasoning_budget_force_manual() {
     fprintf(stderr, "  Test 'manual force transition' passed\n");
 }
 
+// Aho-Corasick match reporting unit test
+// match_word() must report the longest word ending at the current position
+static void test_aho_corasick_match_word() {
+    // duplicate inserts keep the first word index
+    {
+        common_trie t;
+        GGML_ASSERT(t.insert(std::string("ab")) == 0);
+        GGML_ASSERT(t.insert(std::string("cd")) == 1);
+        GGML_ASSERT(t.insert(std::string("ab")) == 0);
+    }
+
+    auto feed = [](const common_aho_corasick & ac, const std::string & input) {
+        size_t state = 0;
+        for (char c : input) {
+            state = ac.next(state, (uint32_t) c);
+        }
+        return state;
+    };
+
+    // match via a suffix link: after "abc" the state is not a word, but "bc" ends there
+    {
+        common_aho_corasick ac({"bc", "abcd"});
+        GGML_ASSERT(ac.match_word(feed(ac, "ab"))  == -1);
+        GGML_ASSERT(ac.match_word(feed(ac, "abc")) == 0);
+        GGML_ASSERT(ac.match_word(feed(ac, "xbc")) == 0);
+    }
+
+    // multiple words end at the same position: the longest wins
+    {
+        common_aho_corasick ac({"c", "abc"});
+        GGML_ASSERT(ac.match_word(feed(ac, "abc")) == 1);
+        GGML_ASSERT(ac.match_word(feed(ac, "xc"))  == 0);
+    }
+
+    // an empty word makes the start state terminal (used by gbnf_ac_grammar)
+    {
+        common_aho_corasick ac(std::vector<std::string>{""});
+        GGML_ASSERT(ac.is_terminal(0));
+    }
+}
+
 // UTF-8 boundary detection unit test
 // Tests common_utf8_is_complete() from reasoning-budget.h
 static void test_utf8_boundary_detection() {
@@ -416,6 +458,10 @@ int main(void) {
     test_reasoning_budget_force_manual();
 
     printf("OK (11 tests passed)\n");
+
+    printf("Testing Aho-Corasick match reporting... ");
+    test_aho_corasick_match_word();
+    printf("OK\n");
 
     printf("Testing UTF-8 boundary detection... ");
     test_utf8_boundary_detection();

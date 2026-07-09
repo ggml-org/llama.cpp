@@ -5,34 +5,45 @@
 
 #include "log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 struct token_matcher {
+    std::vector<llama_tokens> words;  // unique non-empty seqs, indices match the trie word indices
     common_aho_corasick ac;
     size_t state = 0;
 
-    token_matcher(const std::vector<llama_tokens> & seqs) : ac(build_trie(seqs)) {}
+    token_matcher(const std::vector<llama_tokens> & seqs) : words(collect(seqs)), ac(build_trie(words)) {}
 
-    static common_trie build_trie(const std::vector<llama_tokens> & seqs) {
-        common_trie t;
+    static std::vector<llama_tokens> collect(const std::vector<llama_tokens> & seqs) {
+        std::vector<llama_tokens> words;
         for (const auto & seq : seqs) {
-            if (!seq.empty()) {
-                t.insert(std::vector<uint32_t>(seq.begin(), seq.end()));
+            if (!seq.empty() && std::find(words.begin(), words.end(), seq) == words.end()) {
+                words.push_back(seq);
             }
+        }
+        return words;
+    }
+
+    static common_trie build_trie(const std::vector<llama_tokens> & words) {
+        common_trie t;
+        for (const auto & w : words) {
+            t.insert(std::vector<uint32_t>(w.begin(), w.end()));
         }
         return t;
     }
 
-    bool advance(llama_token token) {
+    // returns the index into words of the longest sequence ending at this token, or -1
+    int32_t advance(llama_token token) {
         state = ac.next(state, (uint32_t) token);
-        if (ac.is_terminal(state)) {
+        const int32_t w = ac.match_word(state);
+        if (w >= 0) {
             state = 0;
-            return true;
         }
-        return false;
+        return w;
     }
 
     void reset() { state = 0; }
@@ -64,7 +75,7 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
     switch (ctx->state) {
         case REASONING_BUDGET_IDLE:
         {
-            if (ctx->start_matcher.advance(token)) {
+            if (ctx->start_matcher.advance(token) >= 0) {
                 ctx->state = REASONING_BUDGET_COUNTING;
                 ctx->remaining = ctx->budget;
                 COM_TRC("activated, budget=%d tokens\n", ctx->budget);
@@ -80,7 +91,7 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
         case REASONING_BUDGET_COUNTING:
         case REASONING_BUDGET_WAITING_UTF8:
         {
-            if (ctx->end_matcher.advance(token)) {
+            if (ctx->end_matcher.advance(token) >= 0) {
                 ctx->state = REASONING_BUDGET_DONE;
                 COM_TRC("%s", "deactivated (natural end)\n");
                 break;
@@ -126,7 +137,7 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
         case REASONING_BUDGET_DONE:
             // Re-arm on a new start tag: some models emit multiple <think> blocks
             // per response, and each should get a fresh budget window.
-            if (ctx->start_matcher.advance(token)) {
+            if (ctx->start_matcher.advance(token) >= 0) {
                 ctx->state = REASONING_BUDGET_COUNTING;
                 ctx->remaining = ctx->budget;
                 ctx->end_matcher.reset();
