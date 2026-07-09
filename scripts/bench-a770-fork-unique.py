@@ -123,7 +123,7 @@ def main() -> int:
 
     cases: list[dict[str, Any]] = []
     for name, model in models:
-        p, n, reps = (64, 16, 1) if ns.quick or "qwen3" in name else (512, 64, 2)
+        p, n, reps = (64, 16, 1) if ns.quick else (512, 64, 2)
         base = {"model_name": name, "model_path": model, "p": p, "n": n, "reps": reps}
         for kv in [("f16", "f16"), ("q8_0", "q8_0")]:
             cases.append({**base, "repo": "upstream", "label": f"upstream-{kv[0]}-{kv[1]}", "bin": upstream_bin, "kv": kv, "fa": "on", "env": {}})
