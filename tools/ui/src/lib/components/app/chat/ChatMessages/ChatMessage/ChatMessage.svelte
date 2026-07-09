@@ -24,6 +24,8 @@
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
 		isLastAssistantMessage?: boolean;
+		isLastUserMessage?: boolean;
+		nextAssistantMessage?: DatabaseMessage | null;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 	}
 
@@ -32,6 +34,8 @@
 		message,
 		toolMessages = [],
 		isLastAssistantMessage = false,
+		isLastUserMessage = false,
+		nextAssistantMessage = null,
 		siblingInfo = null
 	}: Props = $props();
 
@@ -231,7 +235,7 @@
 			editedContent = message.content;
 		}
 
-		textareaElement?.focus();
+		textareaElement?.focus({ preventScroll: true });
 		editedExtras = message.extra ? [...message.extra] : [];
 		editedUploadedFiles = [];
 
@@ -324,7 +328,7 @@
 	}
 </script>
 
-<div use:fadeInView>
+<div use:fadeInView class="chat-message">
 	{#if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem
 			bind:textareaElement
@@ -359,7 +363,9 @@
 		<ChatMessageUser
 			class={className}
 			{deletionInfo}
+			{isLastUserMessage}
 			{message}
+			{nextAssistantMessage}
 			onConfirmDelete={handleConfirmDelete}
 			onCopy={handleCopy}
 			onDelete={handleDelete}

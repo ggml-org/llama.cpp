@@ -680,14 +680,14 @@ static void dequantize_mul_mat_vec_q4_k(const void *__restrict__ vx,
             q16[2] = q2[0] & 0x0f0f;
             q16[3] = q2[0] & 0xf0f0;
 
-            float4 s = {0.f, 0.f, 0.f, 0.f};
+            sycl::float4 s = {0.f, 0.f, 0.f, 0.f};
             float smin = 0;
             for (int l = 0; l < 2; ++l) {
-                s.x += y1[l] * q4[l+0]; s.y += y1[l+32] * q4[l+2];
-                s.z += y2[l] * q4[l+4]; s.w += y2[l+32] * q4[l+6];
+                s.x() += y1[l] * q4[l+0]; s.y() += y1[l+32] * q4[l+2];
+                s.z() += y2[l] * q4[l+4]; s.w() += y2[l+32] * q4[l+6];
                 smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
             }
-            tmp += dall * (s.x * sc[0] + s.y * sc[1] * 1.f/16.f + s.z * sc[4] + s.w * sc[5] * 1.f/16.f) - dmin * smin;
+            tmp += dall * (s.x() * sc[0] + s.y() * sc[1] * 1.f/16.f + s.z() * sc[4] + s.w() * sc[5] * 1.f/16.f) - dmin * smin;
 #endif
         }
 
@@ -835,14 +835,14 @@ static void dequantize_mul_mat_vec_q4_k_reorder(const void *__restrict__ vx,
             q16[2] = q2[0] & 0x0f0f;
             q16[3] = q2[0] & 0xf0f0;
 
-            float4 s = {0.f, 0.f, 0.f, 0.f};
+            sycl::float4 s = {0.f, 0.f, 0.f, 0.f};
             float smin = 0;
             for (int l = 0; l < 2; ++l) {
-                s.x += y1[l] * q4[l+0]; s.y += y1[l+32] * q4[l+2];
-                s.z += y2[l] * q4[l+4]; s.w += y2[l+32] * q4[l+6];
+                s.x() += y1[l] * q4[l+0]; s.y() += y1[l+32] * q4[l+2];
+                s.z() += y2[l] * q4[l+4]; s.w() += y2[l+32] * q4[l+6];
                 smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
             }
-            tmp += dall * (s.x * sc[0] + s.y * sc[1] * 1.f/16.f + s.z * sc[4] + s.w * sc[5] * 1.f/16.f) - dmin * smin;
+            tmp += dall * (s.x() * sc[0] + s.y() * sc[1] * 1.f/16.f + s.z() * sc[4] + s.w() * sc[5] * 1.f/16.f) - dmin * smin;
 #endif
         }
 
@@ -1126,7 +1126,7 @@ static void dequantize_mul_mat_vec_q5_k_reorder(const void *__restrict__ vx,
 
     // sum up partial sums and write back result
 #pragma unroll
-    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
             dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
     }
@@ -1418,6 +1418,50 @@ static void dequantize_mul_mat_vec_q4_0_sycl(const void *vx, const dfloat *y,
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 dequantize_mul_mat_vec<QK4_0, QR4_0, dequantize_q4_0>(
+                    vx, y, dst, ncols, nrows, item_ct1);
+            });
+    }
+}
+
+static void dequantize_mul_mat_vec_q1_0_sycl_reorder(const void *vx, const dfloat *y,
+                                             float *dst, const int ncols,
+                                             const int nrows,
+                                             dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    // the number of rows may exceed maximum grid size in the y or z dimensions, use the x dimension instead
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+    {
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
+
+        stream->parallel_for(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_reorder<QK1_0, QR1_0, dequantize_q1_0_reorder>(
+                    vx, y, dst, ncols, nrows, item_ct1);
+            });
+    }
+}
+
+static void dequantize_mul_mat_vec_q1_0_sycl(const void *vx, const dfloat *y,
+                                             float *dst, const int ncols,
+                                             const int nrows,
+                                             dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    // the number of rows may exceed maximum grid size in the y or z dimensions, use the x dimension instead
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+    {
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
+
+        stream->parallel_for(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec<QK1_0, QR1_0, dequantize_q1_0>(
                     vx, y, dst, ncols, nrows, item_ct1);
             });
     }
@@ -1718,10 +1762,13 @@ static void dequantize_mul_mat_vec_q5_K_sycl_reorder(const void *vx, const float
                                                      const int nrows,
                                                      dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
-    const sycl::range<3> block_dims(1, 1, QK_WARP_SIZE);
+    const int ny = 2 / K_QUANTS_PER_ITERATION;
+    const int block_num_y = (nrows + ny - 1) / ny;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
     stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, nrows) * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+        sycl::nd_range<3>(block_nums * block_dims, block_dims),
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q5_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
         });
 }
@@ -1759,6 +1806,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     sycl::half *src1_dfloat = nullptr; // dfloat == half
 
     bool src1_convert_f16 =
+        src0->type == GGML_TYPE_Q1_0 ||
         src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_1 ||
         src0->type == GGML_TYPE_Q5_0 || src0->type == GGML_TYPE_Q5_1 ||
         src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_F16 ||
@@ -1777,6 +1825,14 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
 #endif // GGML_SYCL_F16
 
     switch (src0->type) {
+        case GGML_TYPE_Q1_0:
+            if ((ggml_tensor_extra_gpu*)dst->src[0]->extra &&
+                ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
+                dequantize_mul_mat_vec_q1_0_sycl_reorder(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            } else {
+                dequantize_mul_mat_vec_q1_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            }
+            break;
         case GGML_TYPE_Q4_0:
             if ((ggml_tensor_extra_gpu*)dst->src[0]->extra &&
                 ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {

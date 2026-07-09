@@ -31,6 +31,9 @@ import wget
 
 DEFAULT_HTTP_TIMEOUT = 60
 
+# per-request timeout, a hung server fails the test instead of stalling the CI for hours
+DEFAULT_REQUEST_TIMEOUT = 600
+
 
 class ServerResponse:
     headers: dict
@@ -94,7 +97,7 @@ class ServerProcess:
     enable_ctx_shift: int | None = False
     spec_draft_n_min: int | None = None
     spec_draft_n_max: int | None = None
-    no_webui: bool | None = None
+    no_ui: bool | None = None
     jinja: bool | None = None
     reasoning_format: Literal['deepseek', 'none', 'nothink'] | None = None
     reasoning: Literal['on', 'off', 'auto'] | None = None
@@ -107,7 +110,7 @@ class ServerProcess:
     cache_ram: int | None = None
     no_cache_idle_slots: bool = False
     log_path: str | None = None
-    webui_mcp_proxy: bool = False
+    ui_mcp_proxy: bool = False
     backend_sampling: bool = False
     gcp_compat: bool = False
 
@@ -225,8 +228,8 @@ class ServerProcess:
             server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
         if self.spec_draft_n_min:
             server_args.extend(["--spec-draft-n-min", self.spec_draft_n_min])
-        if self.no_webui:
-            server_args.append("--no-webui")
+        if self.no_ui:
+            server_args.append("--no-ui")
         if self.no_models_autoload:
             server_args.append("--no-models-autoload")
         if self.jinja:
@@ -251,8 +254,8 @@ class ServerProcess:
             server_args.extend(["--cache-ram", self.cache_ram])
         if self.no_cache_idle_slots:
             server_args.append("--no-cache-idle-slots")
-        if self.webui_mcp_proxy:
-            server_args.append("--webui-mcp-proxy")
+        if self.ui_mcp_proxy:
+            server_args.append("--ui-mcp-proxy")
         if self.backend_sampling:
             server_args.append("--backend_sampling")
         if self.gcp_compat:
@@ -330,7 +333,7 @@ class ServerProcess:
         path: str,
         data: dict | Any | None = None,
         headers: dict | None = None,
-        timeout: float | None = None,
+        timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     ) -> ServerResponse:
         url = f"http://{self.server_host}:{self.server_port}{path}"
         parse_body = False
@@ -339,6 +342,9 @@ class ServerProcess:
             parse_body = True
         elif method == "POST":
             response = requests.post(url, headers=headers, json=data, timeout=timeout)
+            parse_body = True
+        elif method == "DELETE":
+            response = requests.delete(url, headers=headers, timeout=timeout)
             parse_body = True
         elif method == "OPTIONS":
             response = requests.options(url, headers=headers, timeout=timeout)
@@ -386,7 +392,7 @@ class ServerProcess:
         path: str,
         data: dict | None = None,
         headers: dict | None = None,
-        timeout: float | None = None,
+        timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     ) -> dict:
         stream = data.get('stream', False)
         if stream:
