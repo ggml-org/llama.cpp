@@ -156,7 +156,6 @@ class GraniteMoeSWAModel(GraniteSWAModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-
 @ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
 class GraniteMoeModel(GraniteModel):
     """Conversion for IBM's GraniteMoeForCausalLM"""
