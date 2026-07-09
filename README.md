@@ -1,36 +1,30 @@
-# llama.cpp + TurboQuant+
+# ggml-llama.cpp (Raudbjorn fork)
 
-> Production-grade KV-cache and weight quantization for llama.cpp, with cross-backend kernel support for Apple Silicon, NVIDIA CUDA, AMD ROCm, and Vulkan.
+> Single-maintainer fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) focused on the TurboQuant+ codec stack and SYCL/Vulkan deployment on Intel Arc A770. Backends shipped: CPU, BLAS, SYCL, Vulkan, OpenVINO. CUDA, ROCm/HIP, Metal, OpenCL, WebGPU, CANN, MUSA, hexagon, RPC are not built or supported here.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Status: WIP](https://img.shields.io/badge/status-work--in--progress-yellow.svg)](https://github.com/TheTom/llama-cpp-turboquant)
-[![Codec papers](https://img.shields.io/badge/codec-turboquant__plus-orange.svg)](https://github.com/TheTom/turboquant_plus)
+[![Maintained by Raudbjorn](https://img.shields.io/badge/maintainer-Raudbjorn-blueviolet.svg)](https://github.com/Raudbjorn)
 
-A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) integrating the **TurboQuant+** codec stack — Walsh-Hadamard rotated polar quantization, attention-gated sparse dequantization, and layer-aware V compression policies. The codec design, calibration, and validation papers live at [TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus); this repository is the llama.cpp runtime integration.
+A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) integrating the **TurboQuant+** codec stack -- Walsh-Hadamard rotated polar quantization, attention-gated sparse dequantization, and layer-aware V compression policies. The codec design, calibration, and validation papers live at [TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus); this repository is the llama.cpp runtime integration.
 
-### Lineage — why the `+`
+### Lineage -- why the `+`
 
-TurboQuant+ is inspired by Google's original **TurboQuant** paper (ICLR 2026), which introduced Walsh-Hadamard-rotated polar codebook quantization for KV cache and demonstrated 4.6× compression at ~1% PPL loss. This project extends that foundation substantially — adding the asymmetric K/V policy (V is free, K is everything), layer-aware Boundary V protection, attention-gated sparse V dequantization, the `TQ3_1S` / `TQ4_1S` weight quantization formats, the `turbo2` / `turbo4` tier variants, the cross-backend kernel coverage (CUDA `dp4a`, HIP/ROCm RDNA/CDNA, Vulkan coopmat, Metal TurboFlash + V2.1 fused kernels), and a body of model-family-specific quality and operational fixes. The trailing `+` denotes that ongoing extension work; the original TurboQuant codec remains the foundation.
+This project extends that foundation -- adding the asymmetric K/V policy (V is free, K is everything), layer-aware Boundary V protection, attention-gated sparse V dequantization, the `TQ3_1S` / `TQ4_1S` weight quantization formats, the `turbo2` / `turbo3` / `turbo4` tier variants, the SYCL/Vulkan kernel coverage, and a body of model-family-specific quality and operational fixes. The trailing `+` denotes ongoing extension work; the original TurboQuant codec itself was the Google ICLR 2026 contribution.
 
-This fork is additive: every existing llama.cpp quantization, model, and backend continues to work unchanged. New types are opt-in via the standard `--cache-type-k` / `--cache-type-v` and `llama-quantize` interfaces.
+This fork is additive within its scope: every shipped backend (CPU, BLAS, SYCL, Vulkan, OpenVINO) continues to work as in upstream, and all TurboQuant+ types (weights, KV cache) are opt-in via the standard `--cache-type-k` / `--cache-type-v` and `llama-quantize` interfaces. Backends not in the shipped set (CUDA, HIP/ROCm, Metal, OpenCL, CANN, MUSA, WebGPU, RPC, Hexagon) are not built here; pull upstream for those.
 
-## Production deployments
+## Maintenance
 
-This fork's TurboQuant integration is used in:
-
-- [**LocalAI**](https://localai.io) — drop-in OpenAI-compatible local inference server
-- [**Chronara**](https://chronara.io) — quantum-safe fintech infrastructure with AI-driven networks
-- [**AtomicChat**](https://atomic.chat/) — on-device chat application
-- and other downstream projects
-
-## Status
+This is a single-maintainer fork. No production deployments are tracked here -- if you deploy this fork somewhere public, please open an issue so the README can be updated.
 
 | | |
 |---|---|
-| Default branch | `feature/turboquant-kv-cache` |
-| Commits ahead of upstream | ~300 |
+| Maintainer | Sveinbjorn Geirsson (Raudbjorn) |
+| Default branch | `master` |
+| Backends shipped | CPU, BLAS, SYCL, Vulkan, OpenVINO |
 | Upstream tracking | continuous sync from `ggml-org/llama.cpp` master |
-| Upstream PR status | not yet upstreamed; running as a long-lived feature branch |
+| Upstream PR status | not yet upstreamed; running as a long-lived fork |
+
 
 ---
 
@@ -41,32 +35,33 @@ This fork's TurboQuant integration is used in:
 | Type | Domain | Approx. bits | Notes | Paper |
 |---|---|---|---|---|
 | `TQ3_1S` | weights | ~3.5 | smaller VRAM than `q8_0` | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
-| `TQ4_1S` | weights | ~4.5 | V2.1 fused Metal kernels; CUDA `dp4a` 3.5× faster (240 t/s vs 68 baseline) | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
+| `TQ4_1S` | weights | ~4.5 | smaller VRAM than `q8_0`; requires GPU backend (Vulkan or SYCL) to be built in | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
 | `turbo2` | KV cache | ~2.0 | aggressive; pair with Boundary V | [block-size-experiment](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/block-size-experiment.md) |
-| `turbo3` | KV cache | ~3.5 | ~4.6× compression at <1.5% PPL loss | [attn-rotation-and-ppl-artifact](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/attn-rotation-and-ppl-artifact.md) |
+| `turbo3` | KV cache | ~3.5 | ~4.6x compression at <1.5% PPL loss | [attn-rotation-and-ppl-artifact](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/attn-rotation-and-ppl-artifact.md) |
 | `turbo4` | KV cache | ~4.5 | rehabilitated to beat `q4_0` on fidelity | [turbo4-resurrection](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/turbo4-resurrection.md) |
 
 All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantization on 128-element blocks. Why this works where MSE-driven codecs fail: [why-mse-fails-for-kv-quantization](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/why-mse-fails-for-kv-quantization.md).
 
 ### Compression policies
 
-- **Auto-asymmetric K/V compression** — recognizes that V tolerates aggressive compression while K does not; default policy picks complementary codecs rather than symmetric. [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md)
-- **Boundary V (experimental, layer-aware)** — auto-enabled for `turbo2-V`. Protects layers where aggressive V quantization degrades quality, leaves the rest at full aggression. [layer-aware-v-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/layer-aware-v-compression.md), [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md)
-- **Sparse V dequantization** — skip V dequantization for positions whose softmax attention weight falls below threshold. Enabled across all Metal targets. [sparse-v-dequant](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/sparse-v-dequant.md)
+- **Auto-asymmetric K/V compression** -- recognizes that V tolerates aggressive compression while K does not; default policy picks complementary codecs rather than symmetric. [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md)
+- **Boundary V (experimental, layer-aware)** -- auto-enabled for `turbo2-V`. Protects layers where aggressive V quantization degrades quality, leaves the rest at full aggression. [layer-aware-v-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/layer-aware-v-compression.md), [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md)
+- **Sparse V dequantization** -- skip V dequantization for positions whose softmax attention weight falls below threshold. Enabled across SYCL/Vulkan targets. [sparse-v-dequant](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/sparse-v-dequant.md)
 
 ### Backend coverage
 
 | Backend | Quant kernels | Flash Attention | Notes |
 |---|---|---|---|
+| **SYCL** (Intel Arc / oneAPI) | turbo `mmvq` + WHT custom op | `q8_0` / `f16` KV at mainline parity; turbo KV FA is XFAIL (kernel is fragile on the A770, gated behind `LLAMA_TEST_TURBO_FA=1` for opt-in validation) | A770 (DG2) is the canonical target; builds with `GGML_SYCL_F16=ON` or `OFF` |
 | **Vulkan** | `TQ4_1S` weights, `SET_ROWS` for `turbo2`/`turbo4` | coopmat flash attention with `turbo3` KV | Compute-shader path; nix-buildable |
-| **SYCL** (Intel Arc / oneAPI) | turbo `mmvq` + WHT custom op | `q8_0` / `f16` KV at mainline parity; turbo KV is rejected on the FA path (numerically broken) and falls back to the non-FA attention path | A770 (DG2) verified; builds with `GGML_SYCL_F16=ON` or `OFF`; use `q8_0` KV with `-fa on`, not turbo |
 
+OpenVINO is shipped in-tree but is not exercised by the TurboQuant+ probes in this fork -- build with `-DGGML_OPENVINO=ON` only if you need the upstream OpenVINO backend.
 
 ### Model-family support
 
-- **Gemma 4** — `dk=512` Metal FA kernels, MoE token routing, op-concurrency handling
-- **Large MoE** — kernel instantiations for up to 256-expert routing
-- **Hybrid architectures (GDN, Mamba)** — speculative decoding cherry-picked from upstream feature branches
+- **Gemma 4** -- large head-dim (`dk=512`) FA kernels, MoE token routing, op-concurrency handling
+- **Large MoE** -- kernel instantiations for up to 256-expert routing
+- **Hybrid architectures (GDN, Mamba)** -- speculative decoding cherry-picked from upstream feature branches
 - All existing llama.cpp model families remain fully supported
 
 ### Operational fixes carried by this fork
@@ -79,35 +74,37 @@ All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantiz
 
 ## Quick start
 
-Standard llama.cpp build flags. TurboQuant types become available automatically once the matching backend is compiled in.
+Build with the backends you need. TurboQuant+ types become available once a supported GPU backend is compiled in.
 
 ```bash
+# CPU only
+cmake -B build && cmake --build build -j
+
+# SYCL (Intel Arc / oneAPI) -- canonical target
+cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx && cmake --build build -j
+
 # Vulkan
 cmake -B build -DGGML_VULKAN=ON && cmake --build build -j
 
-# SYCL (Intel Arc / oneAPI)
+# SYCL + Vulkan (A770 with Vulkan fallback)
 cmake -B build -DGGML_SYCL=ON -DGGML_VULKAN=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx && cmake --build build -j
 ```
 
-## Usage
-
-### KV-cache quantization (runtime)
-
 KV-cache types are selected per-side via the standard `--cache-type-k` / `--cache-type-v` flags.
 
-> **Start light, then compress.** Some model families — small models, certain MoE configurations, quant-sensitive instruction-tuned variants — are more delicate than others. Pick a light asymmetric configuration first, verify output quality (eyeball + PPL on a hold-out set) on your specific model, then ratchet up V aggression if you have memory headroom to gain. **Do not start at maximum compression** and work backwards.
+> **Start light, then compress.** Some model families -- small models, certain MoE configurations, quant-sensitive instruction-tuned variants -- are more delicate than others. Pick a light asymmetric configuration first, verify output quality (eyeball + PPL on a hold-out set) on your specific model, then ratchet up V aggression if you have memory headroom to gain. **Do not start at maximum compression** and work backwards.
 
-The core finding from the asymmetric-kv-compression paper — [**Asymmetric K/V Cache Compression: Why V is Free and K is Everything**](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) — drives all the configs below: **V tolerates aggressive compression, K does not**. Always keep K at higher precision than V; never start symmetric. That paper documents the specific failure modes you'll hit if you ignore this and compress K aggressively (PPL blow-up on certain model families, attention-rotation interaction with low-bit K, etc.) — read it before considering step 6.
+The core finding from the asymmetric-kv-compression paper -- [**Asymmetric K/V Cache Compression: Why V is Free and K is Everything**](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) -- drives all the configs below: **V tolerates aggressive compression, K does not**. Always keep K at higher precision than V; never start symmetric. That paper documents the specific failure modes you'll hit if you ignore this and compress K aggressively (PPL blow-up on certain model families, attention-rotation interaction with low-bit K, etc.) -- read it before considering step 6.
 
-Higher turbo number = more bits per element = less aggressive compression. The V-side compression ladder is `turbo4` (lightest) → `turbo3` → `turbo2` (heaviest). On the K side, prefer `f16` or `q8_0`; never lead with a turbo K.
+Higher turbo number = more bits per element = less aggressive compression. The V-side compression ladder is `turbo4` (lightest) -> `turbo3` -> `turbo2` (heaviest). On the K side, prefer `f16` or `q8_0`; never lead with a turbo K.
 
 Recommendations, ordered from most conservative to most aggressive:
 
 | Step | `--cache-type-k` | `--cache-type-v` | When | Notes |
 |---|---|---|---|---|
-| **1. Safest start** | `f16` | `turbo4` | First contact with any new model | K untouched, V at the lightest turbo tier. If output isn't faithful at this step, the model is unusually quant-sensitive — stop and investigate before escalating. |
+| **1. Safest start** | `f16` | `turbo4` | First contact with any new model | K untouched, V at the lightest turbo tier. If output isn't faithful at this step, the model is unusually quant-sensitive -- stop and investigate before escalating. |
 | **2. Conservative** | `q8_0` | `turbo4` | Verified safe at step 1, want a memory win without much risk | Light on both sides. Typically near-indistinguishable from `f16`/`f16` outputs. |
-| **3. Recommended default** | `q8_0` | `turbo3` | Most dense models, most production workloads | The "asymmetric turbo" sweet spot from the [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) paper. Near-lossless K, ~4.6× compressed V. Total KV ~3-4× smaller than `f16`/`f16`. |
+| **3. Recommended default** | `q8_0` | `turbo3` | Most dense models, most production workloads | The "asymmetric turbo" sweet spot from the [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) paper. Near-lossless K, ~4.6x compressed V. Total KV ~3-4x smaller than `f16`/`f16`. |
 | **4. Aggressive V** | `q8_0` | `turbo2` | Memory-bound long context, after validating quality at step 3 | Boundary V auto-engages and protects sensitive layers. Expect <2% PPL loss on dense models outside the protected layers. |
 | **5. MoE-aware aggressive** | `q8_0` | `turbo2` | Large MoE models (DeepSeek, Qwen3.6, Mixtral-style) | Same flags; Boundary V's per-expert-boundary protection is what makes this work on MoE. See [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md). |
 | **6. Discouraged: symmetric K compression** | any `turbo*` | any `turbo*` | Only with model-specific quality validation in hand | Compressing K is where models break. The asymmetric paper documents the failure modes. Not a starting point. |
@@ -115,42 +112,38 @@ Recommendations, ordered from most conservative to most aggressive:
 Example invocations:
 
 ```bash
-# Step 1 — safest start (first contact with a new model)
+# Step 1 -- safest start (first contact with a new model)
 llama-cli -m model.gguf --cache-type-k f16 --cache-type-v turbo4 -p "..."
 
-# Step 3 — recommended default (asymmetric turbo)
+# Step 3 -- recommended default (asymmetric turbo)
 llama-cli -m model.gguf --cache-type-k q8_0 --cache-type-v turbo3 -p "..."
 
-# Step 4 — aggressive V at long context
+# Step 4 -- aggressive V at long context
 llama-cli -m model.gguf --cache-type-k q8_0 --cache-type-v turbo2 -c 131072 -p "..."
 ```
 
-If output quality drops between steps, walk back to the previous step. The compression frontier is per-model — there is no global "best" setting.
+If output quality drops between steps, walk back to the previous step. The compression frontier is per-model -- there is no global "best" setting.
 
 ### Weight quantization (offline)
 
 Weight quantization is selected at conversion time via `llama-quantize`:
 
 ```bash
-# TQ4_1S — recommended for most CUDA / HIP deployments (dp4a 3.5× faster than baseline)
+# TQ4_1S -- recommended for most GPU deployments (Vulkan or SYCL)
 llama-quantize model.f16.gguf model.tq4_1s.gguf TQ4_1S
 
-# TQ3_1S — smaller, accept ~1-2 PPL bump
+# TQ3_1S -- smaller, accept ~1-2 PPL bump
 llama-quantize model.f16.gguf model.tq3_1s.gguf TQ3_1S
 ```
 
 ### Automatic behavior
 
-The following activate based on the selected types — no flags required:
+The following activate based on the selected types -- no flags required:
 
-- **Auto-asymmetric K/V** — when both sides are turbo / TQ types, the policy picks complementary configurations rather than symmetric.
-- **Boundary V (layer-aware)** — auto-enables for any `turbo2-V` selection.
-- **Sparse V dequantization** — on Metal targets, sparse V activates for all turbo V types.
-- **Flash Attention** — auto-enabled for turbo KV with the relevant backend kernel.
-
-See the linked papers above for parameter selection guidance on a per-model basis.
-
-## Citation
+- **Auto-asymmetric K/V** -- when both sides are turbo / TQ types, the policy picks complementary configurations rather than symmetric.
+- **Boundary V (layer-aware)** -- auto-enables for any `turbo2-V` selection.
+- **Sparse V dequantization** -- on SYCL/Vulkan targets, sparse V activates for all turbo V types.
+- **Flash Attention** -- auto-enabled for turbo KV with the relevant backend kernel (XFAIL on SYCL by default; opt in with `LLAMA_TEST_TURBO_FA=1`).
 
 If this fork or any of its quantization types is used in your work, please cite the corresponding paper from the [TurboQuant+ paper corpus](https://github.com/TheTom/turboquant_plus/tree/main/docs/papers).
 
@@ -211,13 +204,11 @@ The main goal of `llama.cpp` is to enable LLM inference with minimal setup and s
 range of hardware - locally and in the cloud.
 
 - Plain C/C++ implementation without any dependencies
-- Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
-- AVX, AVX2, AVX512 and AMX support for x86 architectures
-- RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
-- 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
-- Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
-- Vulkan and SYCL backend support
-- CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
+- x86_64 (AVX / AVX2 / AVX512 / AMX), ARM NEON, and RISC-V (RVV) SIMD paths on CPU
+- 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization, plus the TurboQuant+ family (`turbo2`/`turbo3`/`turbo4`/`TQ3_1S`/`TQ4_1S`)
+- Vulkan and SYCL backend support (this fork's GPU targets)
+- BLAS support (OpenBLAS, oneMKL, AOCL) for CPU matrix multiplication
+- CPU+GPU hybrid inference to partially accelerate models larger than total VRAM
 
 The `llama.cpp` project is the main playground for developing new features for the [ggml](https://github.com/ggml-org/ggml) library.
 
@@ -395,12 +386,12 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 <details>
 <summary>Tools</summary>
 
-- [akx/ggify](https://github.com/akx/ggify) – download PyTorch models from Hugging Face Hub and convert them to GGML
-- [akx/ollama-dl](https://github.com/akx/ollama-dl) – download models from the Ollama library to be used directly with llama.cpp
-- [crashr/gppm](https://github.com/crashr/gppm) – launch llama.cpp instances utilizing NVIDIA Tesla P40 or P100 GPUs with reduced idle power consumption
+- [akx/ggify](https://github.com/akx/ggify) - download PyTorch models from Hugging Face Hub and convert them to GGML
+- [akx/ollama-dl](https://github.com/akx/ollama-dl) - download models from the Ollama library to be used directly with llama.cpp
+- [crashr/gppm](https://github.com/crashr/gppm) - launch llama.cpp instances utilizing NVIDIA Tesla P40 or P100 GPUs with reduced idle power consumption
 - [gpustack/gguf-parser](https://github.com/gpustack/gguf-parser-go/tree/main/cmd/gguf-parser) - review/check the GGUF file and estimate the memory usage
 - [Styled Lines](https://marketplace.unity.com/packages/tools/generative-ai/styled-lines-llama-cpp-model-292902) (proprietary licensed, async wrapper of inference part for game development in Unity3d with pre-built Mobile and Web platform wrappers and a model example)
-- [unslothai/unsloth](https://github.com/unslothai/unsloth) – 🦥 exports/saves fine-tuned and trained models to GGUF (Apache-2.0)
+- [unslothai/unsloth](https://github.com/unslothai/unsloth) - 🦥 exports/saves fine-tuned and trained models to GGUF (Apache-2.0)
 
 </details>
 
@@ -425,27 +416,17 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 </details>
 
 
-## Supported backends
+## Supported backends in this fork
 
-| Backend | Target devices |
-| --- | --- |
-| [Metal](docs/build.md#metal-build) | Apple Silicon |
-| [BLAS](docs/build.md#blas-build) | All |
-| [BLIS](docs/backend/BLIS.md) | All |
-| [SYCL](docs/backend/SYCL.md) | Intel GPU |
-| [OpenVINO [In Progress]](docs/backend/OPENVINO.md) | Intel CPUs, GPUs, and NPUs |
-| [MUSA](docs/build.md#musa) | Moore Threads GPU |
-| [CUDA](docs/build.md#cuda) | Nvidia GPU |
-| [HIP](docs/build.md#hip) | AMD GPU |
-| [ZenDNN](docs/build.md#zendnn) | AMD CPU |
-| [Vulkan](docs/build.md#vulkan) | GPU |
-| [CANN](docs/build.md#cann) | Ascend NPU |
-| [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
-| [IBM zDNN](docs/backend/zDNN.md) | IBM Z & LinuxONE |
-| [WebGPU](docs/build.md#webgpu) | All |
-| [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
-| [Hexagon [In Progress]](docs/backend/snapdragon/README.md) | Snapdragon |
-| [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
+Only the backends below are built and tested. CUDA, HIP/ROCm, Metal, OpenCL, CANN, MUSA, WebGPU, RPC, Hexagon, BLIS, ZenDNN, IBM zDNN, and VirtGPU are present in upstream `ggml-org/llama.cpp` but **not shipped here** -- see the upstream README for those.
+
+| Backend | Target devices | Notes |
+| --- | --- | --- |
+| [CPU](docs/build.md#cpu-build) | x86_64 / ARM / RISC-V | Default backend; SIMD-accelerated |
+| [BLAS](docs/build.md#blas-build) | All | OpenBLAS, oneMKL, AOCL, Accelerate |
+| [SYCL](docs/backend/SYCL.md) | Intel GPU (Arc / iGPU / Data Center GPU Max) | Canonical target is the Arc A770; oneAPI/DPC++ toolchain required |
+| [Vulkan](docs/build.md#vulkan) | GPU (cross-vendor) | Compute-shader path; works on Intel/AMD/NVIDIA |
+| [OpenVINO [In Progress]](docs/backend/OPENVINO.md) | Intel CPUs, GPUs, and NPUs | Shipped in-tree; not exercised by TurboQuant+ probes |
 
 ## Obtaining and quantizing models
 

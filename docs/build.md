@@ -1,4 +1,6 @@
-# Build llama.cpp locally
+# Build llama.cpp locally (Raudbjorn fork)
+
+This fork ships five backends: **CPU, BLAS, SYCL, Vulkan, and OpenVINO**. CUDA, HIP/ROCm, Metal, OpenCL, CANN, MUSA, WebGPU, RPC, Hexagon, BLIS, ZenDNN, IBM zDNN, and VirtGPU are upstream-only -- see [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) if you need them. The TurboQuant+ codec stack (`turbo2`/`turbo3`/`turbo4`/`TQ3_1S`/`TQ4_1S`) requires either SYCL or Vulkan to be built in for GPU acceleration.
 
 The main product of this project is the `llama` library. Its C-style interface can be found in [include/llama.h](../include/llama.h).
 
@@ -7,8 +9,8 @@ The project also includes many example programs and tools using the `llama` libr
 **To get the Code:**
 
 ```bash
-git clone https://github.com/ggml-org/llama.cpp
-cd llama.cpp
+git clone https://github.com/Raudbjorn/ggml-llama.cpp
+cd ggml-llama.cpp
 ```
 
 The following sections describe how to build with different backends and options.
