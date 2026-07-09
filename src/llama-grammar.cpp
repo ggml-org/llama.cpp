@@ -952,6 +952,188 @@ static llama_grammar_candidates llama_grammar_reject_candidates(
     return rejects;
 }
 
+// Left-factor grammar rules to reduce redundant parallel stacks.
+//
+// When a rule has many alternates (e.g. tool-choice ::= tc0 | tc1 | ... | tc119)
+// and the referenced rules share a common element-content prefix, extract that
+// prefix so the parser processes it once instead of N times.
+//
+// Handles two cases:
+// 1. Inline common prefix: rule = "ab1" | "ab2" → rule = "ab" rule', rule' = "1" | "2"
+// 2. Cross-rule prefix: rule = A | B | C where A,B,C start with same elements
+//    → rule = common_prefix rule', rule' = A_suffix | B_suffix | C_suffix
+static void llama_grammar_left_factor(llama_grammar_rules & rules) {
+    auto elem_eq = [](const llama_grammar_element & a, const llama_grammar_element & b) {
+        return a.type == b.type && a.value == b.value;
+    };
+
+    struct alt_info {
+        size_t rule_idx;
+        size_t start;
+        size_t end;
+    };
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        const size_t n_rules = rules.size();
+
+        for (size_t ri = 0; ri < n_rules; ri++) {
+            const auto & rule = rules[ri];
+
+            // Split rule into alternates
+            std::vector<std::pair<size_t, size_t>> alt_ranges;
+            size_t alt_start = 0;
+            for (size_t j = 0; j < rule.size(); j++) {
+                if (rule[j].type == LLAMA_GRETYPE_ALT || rule[j].type == LLAMA_GRETYPE_END) {
+                    alt_ranges.push_back({alt_start, j});
+                    alt_start = j + 1;
+                }
+            }
+
+            if (alt_ranges.size() < 4) {
+                continue;
+            }
+
+            // Resolve each alternate: if it's a single RULE_REF, follow it to get the
+            // actual element sequence from the referenced rule.
+            std::vector<alt_info> resolved;
+            resolved.reserve(alt_ranges.size());
+            bool all_single_refs = true;
+
+            for (const auto & [astart, aend] : alt_ranges) {
+                size_t len = aend - astart;
+                if (len == 1 && rule[astart].type == LLAMA_GRETYPE_RULE_REF) {
+                    size_t ref_id = static_cast<size_t>(rule[astart].value);
+                    if (ref_id < rules.size()) {
+                        size_t ref_end = 0;
+                        for (size_t k = 0; k < rules[ref_id].size(); k++) {
+                            if (rules[ref_id][k].type == LLAMA_GRETYPE_ALT ||
+                                rules[ref_id][k].type == LLAMA_GRETYPE_END) {
+                                ref_end = k;
+                                break;
+                            }
+                        }
+                        bool single_alt = (rules[ref_id][ref_end].type == LLAMA_GRETYPE_END);
+                        if (single_alt) {
+                            resolved.push_back({ref_id, 0, ref_end});
+                            continue;
+                        }
+                    }
+                }
+                all_single_refs = false;
+                resolved.push_back({ri, astart, aend});
+            }
+
+            if (!all_single_refs) {
+                // Inline-only factoring
+                size_t prefix_len = 0;
+                bool prefix_match = true;
+                while (prefix_match) {
+                    const auto & first = alt_ranges[0];
+                    if (first.first + prefix_len >= first.second) {
+                        break;
+                    }
+                    const auto & ref_elem = rule[first.first + prefix_len];
+                    for (size_t ai = 1; ai < alt_ranges.size(); ai++) {
+                        const auto & alt = alt_ranges[ai];
+                        if (alt.first + prefix_len >= alt.second ||
+                            !elem_eq(rule[alt.first + prefix_len], ref_elem)) {
+                            prefix_match = false;
+                            break;
+                        }
+                    }
+                    if (prefix_match) {
+                        prefix_len++;
+                    }
+                }
+
+                if (prefix_len == 0) {
+                    continue;
+                }
+
+                uint32_t suffix_rule_id = static_cast<uint32_t>(rules.size());
+                llama_grammar_rule suffix_rule;
+                for (size_t ai = 0; ai < alt_ranges.size(); ai++) {
+                    if (ai > 0) {
+                        suffix_rule.push_back({LLAMA_GRETYPE_ALT, 0});
+                    }
+                    const auto & alt = alt_ranges[ai];
+                    for (size_t j = alt.first + prefix_len; j < alt.second; j++) {
+                        suffix_rule.push_back(rule[j]);
+                    }
+                }
+                suffix_rule.push_back({LLAMA_GRETYPE_END, 0});
+
+                llama_grammar_rule new_rule;
+                for (size_t j = 0; j < prefix_len; j++) {
+                    new_rule.push_back(rule[alt_ranges[0].first + j]);
+                }
+                new_rule.push_back({LLAMA_GRETYPE_RULE_REF, suffix_rule_id});
+                new_rule.push_back({LLAMA_GRETYPE_END, 0});
+
+                rules.push_back(std::move(suffix_rule));
+                rules[ri] = std::move(new_rule);
+                changed = true;
+                continue;
+            }
+
+            // Cross-rule factoring: all alternates are single RULE_REFs to single-alternate rules.
+            size_t prefix_len = 0;
+            bool prefix_match = true;
+            while (prefix_match) {
+                const auto & first = resolved[0];
+                if (first.start + prefix_len >= first.end) {
+                    break;
+                }
+                const auto & ref_elem = rules[first.rule_idx][first.start + prefix_len];
+
+                for (size_t ai = 1; ai < resolved.size(); ai++) {
+                    const auto & alt = resolved[ai];
+                    if (alt.start + prefix_len >= alt.end ||
+                        !elem_eq(rules[alt.rule_idx][alt.start + prefix_len], ref_elem)) {
+                        prefix_match = false;
+                        break;
+                    }
+                }
+                if (prefix_match) {
+                    prefix_len++;
+                }
+            }
+
+            if (prefix_len == 0) {
+                continue;
+            }
+
+            uint32_t suffix_choice_id = static_cast<uint32_t>(rules.size());
+            llama_grammar_rule suffix_choice;
+
+            for (size_t ai = 0; ai < resolved.size(); ai++) {
+                if (ai > 0) {
+                    suffix_choice.push_back({LLAMA_GRETYPE_ALT, 0});
+                }
+                const auto & alt = resolved[ai];
+                for (size_t j = alt.start + prefix_len; j < alt.end; j++) {
+                    suffix_choice.push_back(rules[alt.rule_idx][j]);
+                }
+            }
+            suffix_choice.push_back({LLAMA_GRETYPE_END, 0});
+
+            llama_grammar_rule new_rule;
+            const auto & first = resolved[0];
+            for (size_t j = 0; j < prefix_len; j++) {
+                new_rule.push_back(rules[first.rule_idx][first.start + j]);
+            }
+            new_rule.push_back({LLAMA_GRETYPE_RULE_REF, suffix_choice_id});
+            new_rule.push_back({LLAMA_GRETYPE_END, 0});
+
+            rules.push_back(std::move(suffix_choice));
+            rules[ri] = std::move(new_rule);
+            changed = true;
+        }
+    }
+}
+
 static bool llama_grammar_detect_left_recursion(
         const llama_grammar_rules & rules,
         size_t rule_index,
@@ -1139,11 +1321,15 @@ struct llama_grammar * llama_grammar_init_impl(
         vec_rules[i].push_back({LLAMA_GRETYPE_END, 0});
     }
 
-    // Check for left recursion
-    std::vector<bool> rules_visited(n_rules);
-    std::vector<bool> rules_in_progress(n_rules);
-    std::vector<bool> rules_may_be_empty(n_rules);
-    for (size_t i = 0; i < n_rules; i++) {
+    // Left-factor rules to reduce redundant parallel stacks
+    llama_grammar_left_factor(vec_rules);
+
+    // Check for left recursion (use post-factoring rule count)
+    const size_t n_rules_total = vec_rules.size();
+    std::vector<bool> rules_visited(n_rules_total);
+    std::vector<bool> rules_in_progress(n_rules_total);
+    std::vector<bool> rules_may_be_empty(n_rules_total);
+    for (size_t i = 0; i < n_rules_total; i++) {
         if (rules_visited[i]) {
             continue;
         }
@@ -1232,11 +1418,15 @@ struct llama_grammar * llama_grammar_init_impl(
         vec_rules[i].push_back({LLAMA_GRETYPE_END, 0});
     }
 
-    // Check for left recursion
-    std::vector<bool> rules_visited(n_rules);
-    std::vector<bool> rules_in_progress(n_rules);
-    std::vector<bool> rules_may_be_empty(n_rules);
-    for (size_t i = 0; i < n_rules; i++) {
+    // Left-factor rules to reduce redundant parallel stacks
+    llama_grammar_left_factor(vec_rules);
+
+    // Check for left recursion (use post-factoring rule count)
+    const size_t n_rules_total = vec_rules.size();
+    std::vector<bool> rules_visited(n_rules_total);
+    std::vector<bool> rules_in_progress(n_rules_total);
+    std::vector<bool> rules_may_be_empty(n_rules_total);
+    for (size_t i = 0; i < n_rules_total; i++) {
         if (rules_visited[i]) {
             continue;
         }
@@ -1320,14 +1510,15 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
         grammar.trigger_patterns,
     };
 
-    // redirect elements in stacks to point to new rules
-    for (size_t is = 0; is < result->stacks.size(); is++) {
-        for (size_t ie = 0; ie < result->stacks[is].size(); ie++) {
-            for (size_t ir0 = 0; ir0 < grammar.rules.size(); ir0++) {
-                for (size_t ir1 = 0; ir1 < grammar.rules[ir0].size(); ir1++) {
-                    if (grammar.stacks[is][ie] == &grammar.rules[ir0][ir1]) {
-                        result->stacks[is][ie] =  &result->rules[ir0][ir1];
-                    }
+    // redirect elements in stacks to point to new rules using per-rule pointer offsets
+    for (auto & stack : result->stacks) {
+        for (auto & elem : stack) {
+            for (size_t ir = 0; ir < grammar.rules.size(); ir++) {
+                const auto & old_rule = grammar.rules[ir];
+                if (!old_rule.empty() && elem >= old_rule.data() && elem < old_rule.data() + old_rule.size()) {
+                    size_t offset = static_cast<size_t>(elem - old_rule.data());
+                    elem = result->rules[ir].data() + offset;
+                    break;
                 }
             }
         }
