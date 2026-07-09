@@ -30,7 +30,12 @@ export {
 } from './branching';
 
 // Code
-export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from './code';
+export {
+	highlightCode,
+	detectIncompleteCodeBlock,
+	trimCodePadding,
+	type IncompleteCodeBlock
+} from './code';
 
 // Config helpers
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';

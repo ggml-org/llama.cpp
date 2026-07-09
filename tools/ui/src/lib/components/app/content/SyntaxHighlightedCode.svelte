@@ -1,11 +1,11 @@
 <script lang="ts">
-	import hljs from 'highlight.js';
 	import { browser } from '$app/environment';
 	import { mode } from 'mode-watcher';
 
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { ColorMode } from '$lib/enums';
+	import { highlightCode } from '$lib/utils';
 
 	interface Props {
 		code: string;
@@ -13,6 +13,10 @@
 		class?: string;
 		maxHeight?: string;
 		maxWidth?: string;
+		// When true the container auto-scrolls to the bottom as new chunks
+		// arrive; scrolling up pauses the follow until the user returns to
+		// the bottom. Same pattern as ChatMessageReasoningBlock.
+		streaming?: boolean;
 	}
 
 	let {
@@ -20,10 +24,21 @@
 		language = 'text',
 		class: className = '',
 		maxHeight = '60vh',
-		maxWidth = ''
+		maxWidth = '',
+		streaming = false
 	}: Props = $props();
 
-	let highlightedHtml = $state('');
+	const highlightedHtml = $derived(highlightCode(code, language));
+
+	let scrollEl = $state<HTMLDivElement>();
+	let userScrolledUp = $state(false);
+	let lastScrollTop = 0;
+	// Any scroll position within this many pixels of the bottom counts as
+	// "at the bottom" and continues to follow new content. Bigger than the
+	// chat main view's 10px threshold because line wrap reflows while the
+	// highlight.js pass settles can drift a few pixels off bottom.
+	const SCROLL_BOTTOM_THRESHOLD_PX = 32;
+	let pendingFrame: number | null = null;
 
 	function loadHighlightTheme(isDark: boolean) {
 		if (!browser) return;
@@ -38,6 +53,37 @@
 		document.head.appendChild(style);
 	}
 
+	function isAtBottom(): boolean {
+		if (!scrollEl) return false;
+		return (
+			scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop <=
+			SCROLL_BOTTOM_THRESHOLD_PX
+		);
+	}
+
+	function scrollToBottomOnFrame() {
+		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
+		pendingFrame = requestAnimationFrame(() => {
+			pendingFrame = null;
+			// Re-check at paint time: the user may have scrolled between
+			// scheduling the frame and the frame firing.
+			if (scrollEl && !userScrolledUp && isAtBottom()) {
+				scrollEl.scrollTop = scrollEl.scrollHeight;
+			}
+		});
+	}
+
+	function handleScrollEvent() {
+		if (!scrollEl) return;
+		const isScrollingUp = scrollEl.scrollTop < lastScrollTop;
+		if (isScrollingUp && !isAtBottom()) {
+			userScrolledUp = true;
+		} else if (isAtBottom()) {
+			userScrolledUp = false;
+		}
+		lastScrollTop = scrollEl.scrollTop;
+	}
+
 	$effect(() => {
 		const currentMode = mode.current;
 		const isDark = currentMode === ColorMode.DARK;
@@ -45,34 +91,45 @@
 		loadHighlightTheme(isDark);
 	});
 
+	// Reset sticky state at the start of a streaming episode so the first
+	// chunk pins to the bottom again. Only depends on `streaming`, so
+	// post-stream code updates don't trigger this and preserve the user's
+	// scroll position.
 	$effect(() => {
-		if (!code) {
-			highlightedHtml = '';
-			return;
+		if (streaming) {
+			userScrolledUp = false;
+			lastScrollTop = 0;
 		}
+	});
 
-		try {
-			// Check if the language is supported
-			const lang = language.toLowerCase();
-			const isSupported = hljs.getLanguage(lang);
+	// Follow growing content while streaming. Tracks `code` so each chunk
+	// schedules a scroll, but skips if the user has scrolled up.
+	$effect(() => {
+		void code;
+		if (!streaming || userScrolledUp) return;
+		scrollToBottomOnFrame();
+	});
 
-			if (isSupported) {
-				const result = hljs.highlight(code, { language: lang });
-				highlightedHtml = result.value;
-			} else {
-				// Try auto-detection or fallback to plain text
-				const result = hljs.highlightAuto(code);
-				highlightedHtml = result.value;
-			}
-		} catch {
-			// Fallback to escaped plain text
-			highlightedHtml = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-		}
+	// Catch DOM mutations that don't change `code` directly (e.g. layout
+	// shifts after highlight.js re-tokenizes, line-wrap reflows).
+	$effect(() => {
+		if (!streaming || !scrollEl) return;
+
+		const observer = new MutationObserver(() => scrollToBottomOnFrame());
+		observer.observe(scrollEl, {
+			childList: true,
+			subtree: true,
+			characterData: true
+		});
+
+		return () => observer.disconnect();
 	});
 </script>
 
 <div
-	class="code-preview-wrapper min-w-0 max-w-full overflow-x-auto rounded-xl border shadow-[0_1px_2px_0_rgb(0_0_0_/_0.05)] {className}"
+	bind:this={scrollEl}
+	onscroll={handleScrollEvent}
+	class="code-preview-wrapper min-w-0 max-w-full overflow-auto rounded-xl border shadow-[0_1px_2px_0_rgb(0_0_0_/_0.05)] {className}"
 	style="border-color: color-mix(in oklch, var(--border) 30%, transparent); background: var(--code-background); max-height: {maxHeight}; {maxWidth
 		? `max-width: ${maxWidth};`
 		: ''}"
@@ -82,12 +139,19 @@
 </div>
 
 <style>
+	.code-preview-wrapper {
+		overscroll-behavior: contain;
+	}
+
 	.code-preview-wrapper pre {
 		background: transparent;
+		padding: 0;
 	}
 
 	.code-preview-wrapper code {
 		background: transparent;
+		display: block;
+		padding: 0.5rem;
 	}
 
 	:global(.dark) .code-preview-wrapper {

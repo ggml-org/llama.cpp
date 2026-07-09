@@ -25,14 +25,8 @@
 	): ReadFileMeta | null {
 		if (toolName !== 'read_file' || !toolArgsString) return null;
 
-		let args: Record<string, unknown>;
-		try {
-			const parsed: unknown = JSON.parse(toolArgsString);
-			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-			args = parsed as Record<string, unknown>;
-		} catch {
-			return null;
-		}
+		const args = parsePartialJsonArgs(toolArgsString);
+		if (!args) return null;
 
 		const rawPath = args.path ?? args.file_path ?? args.filePath;
 		if (typeof rawPath !== 'string' || !rawPath) return null;
@@ -61,6 +55,74 @@
 		return { fileName, lineRange, language };
 	}
 
+	// Parse partial tool-arg JSON streamed token-by-token. Closes any
+	// unterminated string and dangling open containers (in reverse order),
+	// so parsers can still surface keys already received while the call
+	// is still in flight.
+	function parsePartialJsonArgs(toolArgsString: string): Record<string, unknown> | null {
+		try {
+			const parsed: unknown = JSON.parse(toolArgsString);
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+				return parsed as Record<string, unknown>;
+			}
+			return null;
+		} catch {
+			let inString = false;
+			let escape = false;
+			const stack: ('{' | '[')[] = [];
+
+			for (let i = 0; i < toolArgsString.length; i++) {
+				const ch = toolArgsString[i];
+				if (escape) {
+					escape = false;
+					continue;
+				}
+				if (ch === '\\' && inString) {
+					escape = true;
+					continue;
+				}
+				if (ch === '"') {
+					inString = !inString;
+					continue;
+				}
+				if (inString) continue;
+				if (ch === '{') stack.push('{');
+				else if (ch === '}') {
+					if (stack.length === 0 || stack[stack.length - 1] !== '{') return null;
+					stack.pop();
+				} else if (ch === '[') stack.push('[');
+				else if (ch === ']') {
+					if (stack.length === 0 || stack[stack.length - 1] !== '[') return null;
+					stack.pop();
+				}
+			}
+
+			let completed = toolArgsString;
+			if (escape) {
+				// Dangling escape at end of partial JSON: escape the trailing
+				// backslash as a literal so we can close the string cleanly.
+				completed += '\\';
+			}
+			if (inString) completed += '"';
+			if (!inString) completed = completed.replace(/,?\s*$/, '');
+
+			// Close in reverse nesting order: innermost container first.
+			for (let i = stack.length - 1; i >= 0; i--) {
+				completed += stack[i] === '{' ? '}' : ']';
+			}
+
+			try {
+				const parsed: unknown = JSON.parse(completed);
+				if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+					return parsed as Record<string, unknown>;
+				}
+				return null;
+			} catch {
+				return null;
+			}
+		}
+	}
+
 	type EditFileChange = {
 		mode: 'replace' | 'delete' | 'append';
 		lineStart: number;
@@ -85,14 +147,8 @@
 	): EditFileMeta | null {
 		if (toolName !== 'edit_file' || !toolArgsString) return null;
 
-		let args: Record<string, unknown>;
-		try {
-			const parsed: unknown = JSON.parse(toolArgsString);
-			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-			args = parsed as Record<string, unknown>;
-		} catch {
-			return null;
-		}
+		const args = parsePartialJsonArgs(toolArgsString);
+		if (!args) return null;
 
 		const rawPath = args.input_path ?? args.path ?? args.file_path ?? args.filePath;
 		if (typeof rawPath !== 'string' || !rawPath) return null;
@@ -182,14 +238,8 @@
 	): WriteFileMeta | null {
 		if (toolName !== 'write_file' || !toolArgsString) return null;
 
-		let args: Record<string, unknown>;
-		try {
-			const parsed: unknown = JSON.parse(toolArgsString);
-			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-			args = parsed as Record<string, unknown>;
-		} catch {
-			return null;
-		}
+		const args = parsePartialJsonArgs(toolArgsString);
+		if (!args) return null;
 
 		const rawPath = args.path ?? args.file_path ?? args.filePath;
 		if (typeof rawPath !== 'string' || !rawPath) return null;
@@ -519,6 +569,11 @@
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
 	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming));
+	// True only while the LLM is still emitting chunks into this tool call's
+	// args. Use this to drive streaming-only UI like auto-scroll in code
+	// blocks; once the call is persisted (TOOL_CALL_PENDING) the content is
+	// stable and the code block is just a deferred scroll container.
+	const isCodeStreaming = $derived(isStreamingCall && isStreaming);
 	const toolUi = $derived(getBuiltinToolUi(section.toolName));
 	const toolIcon = $derived(showSpinner ? Loader2 : (toolUi?.icon ?? Wrench));
 	const toolIconClass = $derived(showSpinner ? 'h-4 w-4 animate-spin' : 'h-4 w-4');
@@ -696,6 +751,7 @@
 				code={formatJsonPretty(section.toolArgs)}
 				language={FileTypeText.JSON}
 				maxHeight="22rem"
+				streaming={isCodeStreaming}
 			/>
 		{:else if isStreaming}
 			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
@@ -707,11 +763,7 @@
 			</div>
 		{/if}
 	{:else if writeFileMeta}
-		{#if isPending}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
-				Waiting for writer...
-			</div>
-		{:else if writeFileMeta.errorMessage}
+		{#if writeFileMeta.errorMessage}
 			<div
 				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
 			>
@@ -723,6 +775,7 @@
 				code={writeFileMeta.content}
 				language={writeFileMeta.language}
 				maxHeight="22rem"
+				streaming={isCodeStreaming}
 			/>
 			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
 				{#if writeFileMeta.resultMessage}
@@ -748,11 +801,7 @@
 			</div>
 		{/if}
 	{:else if editFileMeta}
-		{#if isPending}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
-				Waiting for editor...
-			</div>
-		{:else if editFileMeta.errorMessage}
+		{#if editFileMeta.errorMessage}
 			<div
 				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
 			>
@@ -770,6 +819,7 @@
 							code={change.content}
 							language={editFileMeta.language}
 							maxHeight="22rem"
+							streaming={isCodeStreaming}
 						/>
 					{/if}
 				</div>
@@ -870,6 +920,7 @@
 					code={runJsMeta.code}
 					language={FileTypeText.JAVASCRIPT}
 					maxHeight="22rem"
+					streaming={isCodeStreaming}
 				/>
 			</div>
 		{:else}
@@ -877,6 +928,7 @@
 				code={runJsMeta.code}
 				language={FileTypeText.JAVASCRIPT}
 				maxHeight="22rem"
+				streaming={isCodeStreaming}
 			/>
 			<div class="mb-2 mt-3 flex items-center gap-2 text-xs text-muted-foreground/70">
 				<Terminal class="h-3 w-3" />
@@ -907,6 +959,7 @@
 				code={formatJsonPretty(section.toolArgs ?? '')}
 				language={FileTypeText.JSON}
 				maxHeight="22rem"
+				streaming={isCodeStreaming}
 			/>
 		{/if}
 		<div
