@@ -1212,7 +1212,7 @@ struct common_speculative_impl_draft_dspark : public common_speculative_impl_dra
         params.n_max = std::min(params_in.draft.n_max, block_size);
 
         LOG_INF("%s: adding speculative implementation 'draft-dspark'\n", __func__);
-        LOG_INF("%s: - block_size=%d, n_max=%d\n", __func__, block_size, params.n_max);
+        LOG_INF("%s: - block_size=%d, n_max=%d, conf_min=%.2f\n", __func__, block_size, params.n_max, params.conf_min);
     }
 
     void draft(common_speculative_draft_params_vec & dparams) override {
@@ -1271,11 +1271,13 @@ struct common_speculative_impl_draft_dspark : public common_speculative_impl_dra
             const int32_t nb  = n_block[seq_id]; // drafts to keep (<= block_size)
 
             auto * smpl = smpls[seq_id].get();
-            // greedily read the predicted block at this sequence's noise positions 1..nb-1
-            // TODO: implement confidence-scheduled prefix pruning (the "scheduled" part of DSpark):
-            //       use the confidence head to truncate the drafted block at the first low-confidence
-            //       position instead of always keeping all n_draft tokens
+            // greedily read the predicted block at this sequence's noise positions 1..nb-1.
+            const float * conf = params.conf_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
             for (int32_t i = 0; i < nb; ++i) {
+                if (conf && conf[(beg + i) * n_embd_dec] < params.conf_min) {
+                    break;
+                }
+
                 common_sampler_sample(smpl, ctx_dft, beg + i, true);
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);

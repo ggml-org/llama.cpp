@@ -209,6 +209,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_hard_limits(0.0f, 1.0f)
         ->set_desc("Minimum speculative decoding probability for draft tokens (0 = greedy)"));
 
+    add((new field_num("speculative.conf_min", params.speculative.draft.conf_min))
+        ->set_hard_limits(0.0f, 1.0f)
+        ->set_desc("DSpark: minimum confidence-head acceptance to keep a drafted token (0 = disabled)"));
+
     add((new field_str("speculative.type"))
         ->set_desc("Speculative decoding method (for debugging and research purposes)")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
