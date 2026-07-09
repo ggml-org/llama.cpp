@@ -1803,6 +1803,345 @@ __kernel void flash_attn_f32_f16_q1_vec_mq_split(
     }
 }
 
+// Cluster-parallel variant of _q1_vec_mq_split
+//
+// Tthe baseline keeps one 256B K row in flight per subgroup (32 lanes cooperate
+// on one position, serialized by the reduce+exp chain). This kernel
+// takes q1_split's memory-level parallelism at MQ's read-once traffic:
+//   - the 64-lane subgroup is split into FA_CL_NCL clusters of FA_CL_C lanes;
+//   - each cluster owns its own KV position stream (positions strided by
+//     FA_CL_NCL) with private per-cluster online-softmax state, hence FA_CL_NCL
+//     independent K rows in flight per subgroup, no cross-cluster serial chain;
+//   - within a cluster, lanes split DK for the dot (cluster-reduce via
+//     sub_group_shuffle_xor, steps < FA_CL_C stay inside the cluster) and
+//     split DV for o_acc (each lane owns dv indices {lic + FA_CL_C*i} — the
+//     same slice for every position, so accumulation is lane-local);
+//   - merge stage 1 folds the FA_CL_NCL cluster partials with cross-cluster
+//     shuffles (distances >= FA_CL_C); stage 2 is the baseline cross-subgroup
+//     LDS merge (o published by cluster 0's lanes, layout-identical to the
+//     baseline's sg_o).
+// The KV sweep runs a UNIFORM trip count (max over clusters) with a clamped
+// row address + FA_M_INIT score on the tail — keeps every shuffle convergent
+// (p = exp(FA_M_INIT - m) underflows to 0, so clamped-row reads are inert).
+// Register cost vs baseline: o_acc grows from DV_VEC/64 to DV_VEC/FA_CL_C
+// float4 per lane per head — FA_CL_C=8 / MQ_GQA=4 => 16 float4 (256B).
+
+#ifdef HAS_SUBGROUP_SHUFFLE  // cluster reduce/merge needs shuffles; absent -> kernel dropped, dispatch falls back
+
+#ifndef FA_CL_C
+#define FA_CL_C 8
+#endif
+
+// The lane striping requires DK/DV to divide evenly across the cluster;
+// otherwise (e.g. DK=40 with FA_CL_C=16 -> zero-size arrays) compile the
+// kernel out — host soft-create falls back silently.
+#if (DK_VEC % FA_CL_C) == 0 && (DV_VEC % FA_CL_C) == 0
+#define FA_CL_NCL (Q1_WG_SIZE / FA_CL_C)   // clusters (position streams) per subgroup
+#define FA_CL_DK  (DK_VEC / FA_CL_C)       // half4s of K per lane per row
+#define FA_CL_DV  (DV_VEC / FA_CL_C)       // float4s of o_acc per lane per head
+
+// explicit "half" sub-group attribute routes this fp16-heavy kernel to a slow
+// codegen path on the X1 compiler. X2 keeps the pin: its driver miscompile
+// without it.
+#ifdef FA_C8_NO_SG_PIN
+#define FA_C8_SG_ATTR
+#else
+// REQD_FA_SG pins the HW subgroup on Intel (intel_reqd_sub_group_size(FA_SG),
+// host passes -D FA_SG=32); empty on Adreno. REQD_SUBGROUP_SIZE_64 pins 64 on
+// Adreno; empty on Intel.
+#define FA_C8_SG_ATTR REQD_FA_SG REQD_SUBGROUP_SIZE_64
+#endif
+
+FA_C8_SG_ATTR
+__kernel void flash_attn_f32_f16_q1_vec_mq_split_c8(
+    const global void * q_void, ulong q_offset,
+    const global void * k_void, ulong k_offset,
+    const global void * v_void, ulong v_offset,
+    const float scale,
+    const int n_q,
+    const int n_kv,
+    const int n_head,
+    const ulong q_nb1, const ulong q_nb2, const ulong q_nb3,
+    const ulong k_nb1, const ulong k_nb2, const ulong k_nb3,
+    const ulong v_nb1, const ulong v_nb2, const ulong v_nb3,
+    const float max_bias,
+    const float m0,
+    const float m1,
+    const int n_head_log2,
+    const float logit_softcap,
+    const int n_head_kv,
+    const global void * mask_void,
+    const ulong mask_offset,
+    const ulong mask_nb1,
+    const ulong mask_nb2,
+    const ulong mask_nb3,
+    const int mask_ne2,
+    const int mask_ne3,
+    global float * partial_void,
+    const int n_splits,
+    const int kv_per_split
+) {
+    const int tid              = get_local_id(0);
+    const int sgid             = tid / Q1_WG_SIZE;
+    const int tid_sg           = tid % Q1_WG_SIZE;
+    const int cl               = tid_sg / FA_CL_C;   // cluster id
+    const int lic              = tid_sg % FA_CL_C;   // lane in cluster
+    const int kvhead_batch_idx = get_global_id(1);
+    const int split_q_idx      = get_global_id(2);
+    const int split_idx        = split_q_idx % n_splits;
+    const int q_idx            = split_q_idx / n_splits;
+
+    const int batch_idx   = kvhead_batch_idx / n_head_kv;
+    const int head_kv_idx = kvhead_batch_idx % n_head_kv;
+
+    const int kv_start = split_idx * kv_per_split;
+    const int kv_end   = min(kv_start + kv_per_split, n_kv);
+
+    const ulong record_stride = (ulong) FA_PARTIAL_FLOATS;
+
+    if (kv_start >= kv_end) {
+        if (tid == 0) {
+            #pragma unroll
+            for (int h = 0; h < MQ_GQA; ++h) {
+                const int head_idx = head_kv_idx * MQ_GQA + h;
+                const ulong rec_idx = ((((ulong) batch_idx * n_head + head_idx) * n_q + q_idx)
+                                       * n_splits + split_idx);
+                global float * rec = partial_void + rec_idx * record_stride;
+                rec[0] = FA_M_INIT;
+                rec[1] = 0.0f;
+            }
+        }
+        return;
+    }
+
+    const global char * q_base = (const global char *) q_void + q_offset;
+    const global char * k_base = (const global char *) k_void + k_offset;
+    const global char * v_base = (const global char *) v_void + v_offset;
+
+    // Stage MQ_GQA Q rows in __local once (uniform across WG).
+    __local ACC_TYPE4 q_shared[MQ_GQA * DK_VEC];
+    for (int i = tid; i < MQ_GQA * DK_VEC; i += MQ_SPLIT_WG_SIZE) {
+        const int h        = i / DK_VEC;
+        const int k        = i % DK_VEC;
+        const int head_idx = head_kv_idx * MQ_GQA + h;
+        const ulong q_row_offset = batch_idx * q_nb3 + head_idx * q_nb2 + (ulong) q_idx * q_nb1;
+        const global Q_DATA_TYPE4 * q_ptr = (const global Q_DATA_TYPE4 *) (q_base + q_row_offset);
+        q_shared[h * DK_VEC + k] = CONVERT_Q_ACC4(q_ptr[k]);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    float slope[MQ_GQA];
+    #pragma unroll
+    for (int h = 0; h < MQ_GQA; ++h) {
+        slope[h] = get_alibi_slope(max_bias, head_kv_idx * MQ_GQA + h, n_head_log2, m0, m1);
+    }
+
+    const global char * mask_base[MQ_GQA];
+    if (mask_void != NULL) {
+        const int mask_batch_idx = batch_idx % mask_ne3;
+        const global char * mask_base_b = (const global char *) mask_void + mask_offset +
+                                          mask_batch_idx * mask_nb3 +
+                                          (ulong) q_idx * mask_nb1;
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+            const int head_idx      = head_kv_idx * MQ_GQA + h;
+            const int mask_head_idx = head_idx % mask_ne2;
+            mask_base[h] = mask_base_b + mask_head_idx * mask_nb2;
+        }
+    } else {
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) mask_base[h] = NULL;
+    }
+
+    // Per-CLUSTER online-softmax state (uniform across the cluster's lanes);
+    // o_acc holds this lane's DV slice {lic + FA_CL_C*i}.
+    ACC_TYPE4 o_acc[MQ_GQA][FA_CL_DV];
+    ACC_TYPE  m_i[MQ_GQA];
+    ACC_TYPE  l_i[MQ_GQA];
+    #pragma unroll
+    for (int h = 0; h < MQ_GQA; ++h) {
+        m_i[h] = FA_M_INIT;
+        l_i[h] = 0.0f;
+        #pragma unroll
+        for (int i = 0; i < FA_CL_DV; ++i) o_acc[h][i] = (ACC_TYPE4)(0.0f);
+    }
+
+    const int kv_len    = kv_end - kv_start;
+    const int kv_per_sg = (kv_len + MQ_NSG_SPLIT - 1) / MQ_NSG_SPLIT;
+    const int kv_lo     = kv_start + sgid * kv_per_sg;
+    const int kv_hi     = min(kv_end, kv_lo + kv_per_sg);
+
+    // Uniform trip count across the subgroup: every cluster runs n_iter
+    // iterations; tail positions clamp the row address and drop the score to
+    // FA_M_INIT so shuffles stay convergent and the contribution is exactly 0.
+    const int n_iter = (kv_hi - kv_lo + FA_CL_NCL - 1) / FA_CL_NCL;
+    const ulong kv_row_base = batch_idx * k_nb3 + head_kv_idx * k_nb2;
+    const ulong v_row_base  = batch_idx * v_nb3 + head_kv_idx * v_nb2;
+
+    for (int it = 0; it < n_iter; ++it) {
+        const int k_idx = kv_lo + cl + it * FA_CL_NCL;
+        const int valid = k_idx < kv_hi;
+        const int k_safe = valid ? k_idx : (kv_hi - 1);
+
+        const global KV_DATA_TYPE4 * k_ptr = (const global KV_DATA_TYPE4 *) (k_base + kv_row_base + (ulong) k_safe * k_nb1);
+        const global KV_DATA_TYPE4 * v_ptr = (const global KV_DATA_TYPE4 *) (v_base + v_row_base  + (ulong) k_safe * v_nb1);
+
+        // Dot: this lane covers DK elements {lic + FA_CL_C*i} of the cluster's row.
+        ACC_TYPE4 dot4[MQ_GQA];
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) dot4[h] = (ACC_TYPE4)(0.0f);
+        #pragma unroll
+        for (int i = 0; i < FA_CL_DK; ++i) {
+            const int kk = lic + FA_CL_C * i;
+            const ACC_TYPE4 k_vec = CONVERT_KV_ACC4(k_ptr[kk]);
+            #pragma unroll
+            for (int h = 0; h < MQ_GQA; ++h) {
+                dot4[h] = mad(q_shared[h * DK_VEC + kk], k_vec, dot4[h]);
+            }
+        }
+
+        // Cluster-reduce (xor steps < FA_CL_C stay inside the cluster) + score.
+        ACC_TYPE score[MQ_GQA];
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+            ACC_TYPE s = dot4[h].s0 + dot4[h].s1 + dot4[h].s2 + dot4[h].s3;
+            #pragma unroll
+            for (int step = 1; step < FA_CL_C; step <<= 1) {
+                s += sub_group_shuffle_xor(s, step);
+            }
+            s *= scale;
+            if (mask_base[h] != NULL) {
+                const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
+                s += slope[h] * (ACC_TYPE) mask_ptr[k_safe];
+            }
+            if (logit_softcap > 0.0f) {
+                s = logit_softcap * tanh(s / logit_softcap);
+            }
+            score[h] = valid ? s : FA_M_INIT;
+        }
+
+        // Per-cluster online update — identical math to the baseline, but the
+        // serial chain is per cluster (depth n_iter, not kv_per_sg).
+        ACC_TYPE p_h[MQ_GQA];
+        ACC_TYPE sp_h[MQ_GQA];
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+            const ACC_TYPE m_new = max(m_i[h], score[h]);
+            sp_h[h] = native_exp(m_i[h] - m_new);
+            p_h[h]  = native_exp(score[h] - m_new);
+            l_i[h]  = l_i[h] * sp_h[h] + p_h[h];
+            m_i[h]  = m_new;
+        }
+
+        // V accumulate on this lane's DV slice (p = 0 on tail -> inert).
+        #pragma unroll
+        for (int i = 0; i < FA_CL_DV; ++i) {
+            const ACC_TYPE4 v_vec = CONVERT_KV_ACC4(v_ptr[lic + FA_CL_C * i]);
+            #pragma unroll
+            for (int h = 0; h < MQ_GQA; ++h) {
+                o_acc[h][i] = mad(p_h[h], v_vec, o_acc[h][i] * sp_h[h]);
+            }
+        }
+    }
+
+    // Merge stage 1: fold the FA_CL_NCL cluster partials inside the subgroup.
+    // Lanes with equal lic across clusters hold the SAME dv slice, so a
+    // cross-cluster xor-reduce (distances FA_CL_C..Q1_WG_SIZE/2) sums o
+    // slice-wise; m/l fold the same way. All shuffles are subgroup-convergent.
+    #pragma unroll
+    for (int h = 0; h < MQ_GQA; ++h) {
+        ACC_TYPE m_c = m_i[h];
+        #pragma unroll
+        for (int step = FA_CL_C; step < Q1_WG_SIZE; step <<= 1) {
+            m_c = max(m_c, sub_group_shuffle_xor(m_c, step));
+        }
+        const ACC_TYPE alpha = native_exp(m_i[h] - m_c);
+        ACC_TYPE l_c = l_i[h] * alpha;
+        #pragma unroll
+        for (int step = FA_CL_C; step < Q1_WG_SIZE; step <<= 1) {
+            l_c += sub_group_shuffle_xor(l_c, step);
+        }
+        #pragma unroll
+        for (int i = 0; i < FA_CL_DV; ++i) {
+            ACC_TYPE4 o = o_acc[h][i] * alpha;
+            #pragma unroll
+            for (int step = FA_CL_C; step < Q1_WG_SIZE; step <<= 1) {
+                o.s0 += sub_group_shuffle_xor(o.s0, step);
+                o.s1 += sub_group_shuffle_xor(o.s1, step);
+                o.s2 += sub_group_shuffle_xor(o.s2, step);
+                o.s3 += sub_group_shuffle_xor(o.s3, step);
+            }
+            o_acc[h][i] = o;
+        }
+        m_i[h] = m_c;
+        l_i[h] = l_c;
+    }
+
+    // Merge stage 2: baseline cross-subgroup LDS merge. Cluster 0's lanes hold
+    // the subgroup's merged o (dv indices {lic + FA_CL_C*i}) — same sg_o layout
+    // and fold loop as q1_vec_mq_split.
+    __local ACC_TYPE  sg_m[MQ_GQA][MQ_NSG_SPLIT];
+    __local ACC_TYPE  sg_l[MQ_GQA][MQ_NSG_SPLIT];
+    __local ACC_TYPE4 sg_o[MQ_NSG_SPLIT][DV_VEC];
+
+    if (tid_sg == 0) {
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+            sg_m[h][sgid] = m_i[h];
+            sg_l[h][sgid] = l_i[h];
+        }
+    }
+
+    #pragma unroll
+    for (int h = 0; h < MQ_GQA; ++h) {
+        if (cl == 0) {
+            #pragma unroll
+            for (int i = 0; i < FA_CL_DV; ++i) {
+                sg_o[sgid][lic + FA_CL_C * i] = o_acc[h][i];
+            }
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        if (sgid == 0) {
+            const int head_idx = head_kv_idx * MQ_GQA + h;
+
+            ACC_TYPE m_c = sg_m[h][0];
+            #pragma unroll
+            for (int s = 1; s < MQ_NSG_SPLIT; ++s) {
+                m_c = max(m_c, sg_m[h][s]);
+            }
+            ACC_TYPE l_c = 0.0f;
+            #pragma unroll
+            for (int s = 0; s < MQ_NSG_SPLIT; ++s) {
+                l_c += sg_l[h][s] * native_exp(sg_m[h][s] - m_c);
+            }
+
+            const ulong rec_idx = ((((ulong) batch_idx * n_head + head_idx) * n_q + q_idx)
+                                   * n_splits + split_idx);
+            global float  * rec   = partial_void + rec_idx * record_stride;
+            global float4 * rec_o = (global float4 *) (rec + 2);
+
+            if (tid_sg == 0) {
+                rec[0] = (float) m_c;
+                rec[1] = (float) l_c;
+            }
+            for (int dv_idx = tid_sg; dv_idx < DV_VEC; dv_idx += Q1_WG_SIZE) {
+                ACC_TYPE4 o_merged = (ACC_TYPE4)(0.0f);
+                #pragma unroll
+                for (int s = 0; s < MQ_NSG_SPLIT; ++s) {
+                    const ACC_TYPE alpha = native_exp(sg_m[h][s] - m_c);
+                    o_merged = mad((ACC_TYPE4)(alpha), sg_o[s][dv_idx], o_merged);
+                }
+                rec_o[dv_idx] = o_merged;
+            }
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+}
+
+#endif  // DK_VEC/DV_VEC divisible by FA_CL_C
+#endif  // HAS_SUBGROUP_SHUFFLE (q1_vec_mq_split_c8)
+
 REQD_SUBGROUP_SIZE_64
 __kernel void flash_attn_f32_f16_q1_vec_mq_split_k_img(
     const global void * q_void, ulong q_offset,
