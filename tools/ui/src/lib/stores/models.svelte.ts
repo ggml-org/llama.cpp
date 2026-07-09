@@ -629,7 +629,12 @@ class ModelsStore {
 	}
 
 	findModelByName(modelName: string): ModelOption | null {
-		return this.models.find((model) => model.model === modelName) ?? null;
+		return (
+			this.models.find(
+				(model) =>
+					model.model === modelName || model.id === modelName || model.aliases?.includes(modelName)
+			) ?? null
+		);
 	}
 
 	findModelById(modelId: string): ModelOption | null {
