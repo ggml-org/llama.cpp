@@ -65,9 +65,11 @@
 		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
 		pendingFrame = requestAnimationFrame(() => {
 			pendingFrame = null;
-			// Re-check at paint time: the user may have scrolled between
-			// scheduling the frame and the frame firing.
-			if (scrollEl && !userScrolledUp && isAtBottom()) {
+			// Re-check `userScrolledUp` at paint time. Skip an `isAtBottom`
+			// gate: it would falsely return false on the first chunk that
+			// overflows the container (scrollTop is still at the top),
+			// freezing autoscroll for the rest of the stream.
+			if (scrollEl && !userScrolledUp) {
 				scrollEl.scrollTop = scrollEl.scrollHeight;
 			}
 		});

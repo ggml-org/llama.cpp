@@ -571,9 +571,15 @@
 	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming));
 	// True only while the LLM is still emitting chunks into this tool call's
 	// args. Use this to drive streaming-only UI like auto-scroll in code
-	// blocks; once the call is persisted (TOOL_CALL_PENDING) the content is
-	// stable and the code block is just a deferred scroll container.
-	const isCodeStreaming = $derived(isStreamingCall && isStreaming);
+	// blocks. Once `onComplete()` fires (`isStreaming` flips false) the
+	// content is stable and the code block is just a deferred scroll
+	// container, even if the section is still TOOL_CALL_PENDING.
+	// Note: chat-streaming tool calls are surfaced as TOOL_CALL_PENDING
+	// (not TOOL_CALL_STREAMING) because `message.toolCalls` is JSON-encoded
+	// on every chunk, so the outer array always parses cleanly while the
+	// inner arguments string is partial. Both pending and streaming-call
+	// states match "still receiving args".
+	const isCodeStreaming = $derived(isStreaming && (isPending || isStreamingCall));
 	const toolUi = $derived(getBuiltinToolUi(section.toolName));
 	const toolIcon = $derived(showSpinner ? Loader2 : (toolUi?.icon ?? Wrench));
 	const toolIconClass = $derived(showSpinner ? 'h-4 w-4 animate-spin' : 'h-4 w-4');
