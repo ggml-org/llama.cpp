@@ -255,6 +255,81 @@ static void test_reasoning_budget_force_manual() {
     fprintf(stderr, "  Test 'manual force transition' passed\n");
 }
 
+static void test_reasoning_budget_matched_end() {
+    const std::vector<llama_tokens> start = {{100}};
+    const std::vector<llama_tokens> end   = {{101}, {103, 104}};
+
+    // natural end records the sequence that matched; re-arming clears it
+    {
+        auto * sampler = common_reasoning_budget_init(nullptr, start, end, {102, 101}, 5, REASONING_BUDGET_IDLE);
+
+        GGML_ASSERT(common_reasoning_budget_get_matched_end(sampler) == nullptr);
+
+        llama_sampler_accept(sampler, 100); // COUNTING
+        llama_sampler_accept(sampler, 50);
+        llama_sampler_accept(sampler, 103);
+        llama_sampler_accept(sampler, 104); // end matched via {103, 104}, DONE
+
+        const llama_tokens * matched = common_reasoning_budget_get_matched_end(sampler);
+        GGML_ASSERT(matched != nullptr);
+        GGML_ASSERT(*matched == llama_tokens({103, 104}));
+
+        llama_sampler_accept(sampler, 100); // re-arm, COUNTING
+        GGML_ASSERT(common_reasoning_budget_get_matched_end(sampler) == nullptr);
+
+        llama_sampler_free(sampler);
+    }
+
+    // overlapping end sequences: the longest one ending at the position wins
+    {
+        const std::vector<llama_tokens> end_overlap = {{104}, {103, 104}};
+
+        auto * sampler = common_reasoning_budget_init(nullptr, start, end_overlap, {102, 104}, 5, REASONING_BUDGET_IDLE);
+
+        llama_sampler_accept(sampler, 100); // COUNTING
+        llama_sampler_accept(sampler, 103);
+        llama_sampler_accept(sampler, 104); // both {104} and {103, 104} end here
+
+        const llama_tokens * matched = common_reasoning_budget_get_matched_end(sampler);
+        GGML_ASSERT(matched != nullptr);
+        GGML_ASSERT(*matched == llama_tokens({103, 104}));
+
+        llama_sampler_free(sampler);
+    }
+
+    // forcing records the end sequence terminating forced_tokens
+    {
+        auto * sampler = common_reasoning_budget_init(nullptr, start, end, {102, 103, 104}, 0, REASONING_BUDGET_FORCING);
+
+        llama_sampler_accept(sampler, 102);
+        llama_sampler_accept(sampler, 103);
+        GGML_ASSERT(common_reasoning_budget_get_matched_end(sampler) == nullptr);
+        llama_sampler_accept(sampler, 104); // forced sequence complete, DONE
+
+        const llama_tokens * matched = common_reasoning_budget_get_matched_end(sampler);
+        GGML_ASSERT(matched != nullptr);
+        GGML_ASSERT(*matched == llama_tokens({103, 104}));
+
+        llama_sampler_free(sampler);
+    }
+
+    // forced_tokens not ending with a known end sequence records nothing
+    {
+        auto * sampler = common_reasoning_budget_init(nullptr, start, end, {102}, 0, REASONING_BUDGET_FORCING);
+
+        llama_sampler_accept(sampler, 102); // forced sequence complete, DONE
+        GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
+        GGML_ASSERT(common_reasoning_budget_get_matched_end(sampler) == nullptr);
+
+        llama_sampler_free(sampler);
+    }
+
+    // a null sampler is safely ignored
+    GGML_ASSERT(common_reasoning_budget_get_matched_end(nullptr) == nullptr);
+
+    fprintf(stderr, "  Test 'matched end sequence' passed\n");
+}
+
 // Aho-Corasick match reporting unit test
 // match_pattern() must report the longest pattern ending at the current position
 static void test_aho_corasick_match_pattern() {
@@ -456,8 +531,9 @@ int main(void) {
     test_reasoning_budget_clone_mid_counting();
     test_reasoning_budget_clone_mid_forcing();
     test_reasoning_budget_force_manual();
+    test_reasoning_budget_matched_end();
 
-    printf("OK (11 tests passed)\n");
+    printf("OK (12 tests passed)\n");
 
     printf("Testing Aho-Corasick match reporting... ");
     test_aho_corasick_match_pattern();
