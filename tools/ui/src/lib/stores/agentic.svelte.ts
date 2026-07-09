@@ -462,6 +462,8 @@ class AgenticStore {
 		this._pendingContinueRequests.set(conversationId, false);
 		this._continueResolvers.delete(conversationId);
 		this._steeringMessages.delete(conversationId);
+		this._streamPermissionState.set(conversationId, 'idle');
+		this._streamApprovedToolCallIds.delete(conversationId);
 
 		// Ensure built-in tools are fetched before checking if agentic is enabled
 		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
@@ -515,6 +517,12 @@ class AgenticStore {
 		if (hasMcpServers) mcpStore.acquireConnection();
 
 		try {
+			// Wrap the user signal so the loop can abort itself when the streaming
+			// permission prompt is denied (signals are read-only; we need a
+			// writable controller to stop the SSE reader).
+			const loopController = createLinkedController(signal);
+			this._loopControllers.set(conversationId, loopController);
+
 			await this.executeAgenticLoop({
 				conversationId,
 				messages: normalizedMessages,
@@ -522,7 +530,7 @@ class AgenticStore {
 				tools,
 				agenticConfig,
 				callbacks,
-				signal
+				signal: loopController.signal
 			});
 			return { handled: true };
 		} catch (error) {
@@ -531,6 +539,7 @@ class AgenticStore {
 			callbacks.onError?.(normalizedError);
 			return { handled: true, error: normalizedError };
 		} finally {
+			this._loopControllers.delete(conversationId);
 			this.updateSession(conversationId, { isRunning: false });
 
 			if (hasMcpServers) {
@@ -647,6 +656,59 @@ class AgenticStore {
 						onToolCallChunk: (serialized: string) => {
 							try {
 								turnToolCalls = JSON.parse(serialized) as ApiChatCompletionToolCall[];
+
+								// Permission gate: when the LLM first reveals a tool call
+								// name, ask the user before any of the (often sensitive)
+								// arguments show up in the chat. We keep accumulating the
+								// args internally so the first propagation after approval
+								// is a seamless flush; the chat store just doesn't see it
+								// yet, so the UI keeps showing the empty-args placeholder.
+								const firstTool = turnToolCalls[0];
+								const firstName = firstTool?.function?.name || '';
+								const firstToolId = firstTool?.id ?? 'tool_0';
+								const streamState = this._streamPermissionState.get(conversationId) ?? 'idle';
+
+								if (firstName && streamState === 'idle') {
+									const approvedIds =
+										this._streamApprovedToolCallIds.get(conversationId) ?? new SvelteSet<string>();
+									// NEVER re-prompt if the tool was already approved earlier
+									// in this turn (e.g., multiple deltas arrive in quick
+									// succession before the awaiter flips state).
+									if (!approvedIds.has(firstToolId)) {
+										const serverLabel = toolsStore.getToolServerLabel(firstName);
+										this._streamPermissionState.set(conversationId, 'awaiting');
+										this.updateSession(conversationId, {
+											streamingToolCall: { name: firstName, arguments: '' }
+										});
+										this._requestStreamingPermission(
+											conversationId,
+											firstName,
+											firstToolId,
+											serverLabel,
+											signal
+										);
+									}
+									return;
+								}
+
+								if (streamState === 'awaiting') {
+									// Hold internal state; do not propagate UI yet.
+									return;
+								}
+
+								if (streamState === 'denied') {
+									// Loop is about to abort via signal; skip propagation
+									// so the chat store is not updated with half-streamed
+									// args that we will never execute.
+									return;
+								}
+
+								// streamState === 'granted' on the first post-approval chunk
+								// flips back to 'idle' so subsequent chunks propagate normally.
+								if (streamState === 'granted') {
+									this._streamPermissionState.set(conversationId, 'idle');
+								}
+
 								onToolCallsStreaming?.(turnToolCalls);
 
 								if (turnToolCalls.length > 0 && turnToolCalls[0]?.function) {
