@@ -3435,9 +3435,14 @@ private:
 
                         slot.n_prompt_tokens_processed++;
 
-                        // stop the prompt batch exactly before a user message
-                        if (spans.is_user_start(slot.prompt.n_tokens())) {
-                            break;
+                        // break at the last user message, or at user messages at least min step past the last checkpoint
+                        if (do_checkpoint && spans.is_user_start(slot.prompt.n_tokens())) {
+                            const auto pos = slot.prompt.n_tokens();
+                            const auto & checkpoints = slot.prompt.checkpoints;
+
+                            if (pos == last_user_pos || checkpoints.empty() || pos > checkpoints.back().n_tokens + params_base.checkpoint_min_step) {
+                                break;
+                            }
                         }
 
                         // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
