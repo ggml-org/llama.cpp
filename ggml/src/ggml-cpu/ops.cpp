@@ -11563,41 +11563,48 @@ void ggml_compute_forward_lightning_indexer(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
 
-    const ggml_tensor * src0 = dst->src[0]; // q
-    const ggml_tensor * src1 = dst->src[1]; // k
-    const ggml_tensor * src2 = dst->src[2]; // weights
-    const ggml_tensor * src3 = dst->src[3]; // mask
+    const ggml_tensor * q = dst->src[0];
+    const ggml_tensor * k = dst->src[1];
+    const ggml_tensor * w = dst->src[2]; // weights
+    const ggml_tensor * m = dst->src[3]; // mask
 
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT(src2->type == GGML_TYPE_F32);
-    GGML_ASSERT(src3->type == GGML_TYPE_F16);
+    GGML_ASSERT(   q->type == GGML_TYPE_F32);
+    GGML_ASSERT(   w->type == GGML_TYPE_F32);
+    GGML_ASSERT(   m->type == GGML_TYPE_F16);
 
-    GGML_TENSOR_TERNARY_OP_LOCALS
-    GGML_TENSOR_LOCALS(int64_t, ne3, src3, ne)
-    GGML_TENSOR_LOCALS(size_t,  nb3, src3, nb)
+    GGML_TENSOR_LOCALS(int64_t, neq,  q, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbq,  q, nb)
+    GGML_TENSOR_LOCALS(int64_t, nek,  k, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbk,  k, nb)
+    GGML_TENSOR_LOCALS(int64_t, new,  w, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbw,  w, nb)
+    GGML_TENSOR_LOCALS(int64_t, nem,  m, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbm,  m, nb)
+    GGML_TENSOR_LOCALS(int64_t, ne, dst, ne)
+    GGML_TENSOR_LOCALS(size_t,  nb, dst, nb)
 
-    GGML_ASSERT( nb0 == ggml_type_size( dst->type));
-    GGML_ASSERT(nb00 == ggml_type_size(src0->type));
-    GGML_ASSERT(nb10 == ggml_type_size(src1->type));
-    GGML_ASSERT(nb20 == ggml_type_size(src2->type));
-    GGML_ASSERT(nb30 == ggml_type_size(src3->type));
+    GGML_ASSERT( nb0 == ggml_type_size(dst->type));
+    GGML_ASSERT(nbq0 == ggml_type_size(  q->type));
+    GGML_ASSERT(nbk0 == ggml_type_size(  k->type));
+    GGML_ASSERT(nbw0 == ggml_type_size(  w->type));
+    GGML_ASSERT(nbm0 == ggml_type_size(  m->type));
 
-    const int n_embd   = src0->ne[0];
-    const int n_head   = src0->ne[1];
-    const int n_batch  = src0->ne[2];
-    const int n_stream = src0->ne[3];
-    const int n_kv     = src1->ne[2];
+    const int n_embd    = q->ne[0];
+    const int n_head    = q->ne[1];
+    const int n_tokens  = q->ne[2];
+    const int n_stream  = q->ne[3];
+    const int n_kv      = k->ne[2];
 
-    ggml_to_float_t const k_to_float = ggml_get_type_traits(src1->type)->to_float;
-    GGML_ASSERT((src1->type == GGML_TYPE_F32 || k_to_float) && "lightning indexer: unsupported K-type");
+    ggml_to_float_t const k_to_float = ggml_get_type_traits(k->type)->to_float;
+    GGML_ASSERT((k->type == GGML_TYPE_F32 || k_to_float) && "lightning indexer: unsupported K-type");
 
     const int nr  = n_kv;
     const int ith = params->ith;
     const int nth = params->nth;
 
     // (temporary) buffer for K converted to float
-    float * src1_row_f32 = (float *) params->wdata + ith*(1*n_embd + CACHE_LINE_SIZE_F32);
+    float * k_row_f32 = (float *) params->wdata + ith*(1*n_embd + CACHE_LINE_SIZE_F32);
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -11606,29 +11613,29 @@ void ggml_compute_forward_lightning_indexer(
     const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
 
-    for (int i_stream = 0; i_stream < n_stream; ++i_stream) {
-        for (int i_batch = 0; i_batch < n_batch; ++i_batch) {
-            const float       * src2_row =       (float *) ((char *) src2->data + i_batch*nb21 +        i_stream*nb23);
-            const ggml_fp16_t * src3_row = (ggml_fp16_t *) ((char *) src3->data + i_batch*nb31 + (i_stream%ne33)*nb33);
-            float             * dst_row  =       (float *) ((char *)  dst->data + i_batch*nb1  +        i_stream*nb3 );
-            for (int i_kv = ir0; i_kv < ir1; ++i_kv) {
-                char * src1_row = (char *) src1->data + i_kv*nb12 + i_stream*nb13;
+    for (int s = 0; s < n_stream; ++s) {
+        for (int t = 0; t < n_tokens; ++t) {
+            const float       *   w_row =       (float *) ((char *)   w->data + t*nbw1 +        s*nbw3);
+            const ggml_fp16_t *   m_row = (ggml_fp16_t *) ((char *)   m->data + t*nbm1 + (s%nem3)*nbm3);
+            float             * dst_row =       (float *) ((char *) dst->data + t*nb1  +        s*nb3 );
+            for (int ik = ir0; ik < ir1; ++ik) {
+                char * k_row = (char *) k->data + ik*nbk2 + s*nbk3;
                 if (k_to_float) {
-                    k_to_float(src1_row, src1_row_f32, n_embd);
+                    k_to_float(k_row, k_row_f32, n_embd);
                 } else {
-                    src1_row_f32 = (float *) src1_row;
+                    k_row_f32 = (float *) k_row;
                 }
                 float score = 0.0f;
-                for (int i_head = 0; i_head < n_head; ++i_head) {
-                    // dot product of q and k for head i_head
+                for (int h = 0; h < n_head; ++h) {
+                    // dot product of q and k for head h
                     float qk = 0.0f;
-                    const float * src0_row = (float *) ((char *) src0->data + i_head*nb01 + i_batch*nb02 + i_stream*nb03);
-                    ggml_vec_dot_f32(n_embd, &qk, 0, src0_row, 0, src1_row_f32, 0, 1);
+                    const float * q_row = (float *) ((char *) q->data + h*nbq1 + t*nbq2 + s*nbq3);
+                    ggml_vec_dot_f32(n_embd, &qk, 0, q_row, 0, k_row_f32, 0, 1);
                     // ReLU and weights (prescaled)
-                    score += MAX(qk, 0.0f) * src2_row[i_head];
+                    score += MAX(qk, 0.0f) * w_row[h];
                 }
                 // apply mask
-                dst_row[i_kv] = score + GGML_CPU_FP16_TO_FP32(src3_row[i_kv]);
+                dst_row[ik] = score + GGML_CPU_FP16_TO_FP32(m_row[ik]);
             }
         }
     }
