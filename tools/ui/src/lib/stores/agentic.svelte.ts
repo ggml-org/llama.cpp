@@ -786,6 +786,21 @@ class AgenticStore {
 				throw normalizedError;
 			}
 
+			// If the abort landed while ChatService.sendMessage was still resolving, the
+			// outer catch above never fires because ChatService swallows the AbortError
+			// and returns normally. Bail out here so a half-received tool_call (truncated
+			// arguments JSON) is not persisted as if it were complete.
+			if (signal?.aborted) {
+				await onAssistantTurnComplete?.(
+					turnContent,
+					turnReasoningContent || undefined,
+					this.buildFinalTimings(capturedTimings, agenticTimings),
+					undefined
+				);
+				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+				return;
+			}
+
 			// === Steering check: if a user message was queued during this turn, exit the flow.
 			// The caller (chatStore) will consume the pending message and re-send it normally.
 			if (this._steeringMessages.has(conversationId)) {
@@ -884,13 +899,19 @@ class AgenticStore {
 				const toolName = toolCall.function.name;
 				const serverLabel = toolsStore.getToolServerLabel(toolName);
 
-				// Ask for permission before executing the tool
-				const permission = await this.requestPermission(
-					conversationId,
-					toolName,
-					serverLabel,
-					signal
-				);
+				// Skip the prompt if the user already approved this tool call during
+				// the streaming phase. Anything else (always-allowed fallback, latency,
+				// subsequent calls) still goes through the existing flow.
+				const approvedDuringStream =
+					this._streamApprovedToolCallIds.get(conversationId)?.has(toolCall.id) ?? false;
+				let permission: ToolPermissionDecision;
+				if (approvedDuringStream) {
+					this._streamApprovedToolCallIds.get(conversationId)!.delete(toolCall.id);
+					permission = ToolPermissionDecision.ONCE;
+				} else {
+					// Ask for permission before executing the tool
+					permission = await this.requestPermission(conversationId, toolName, serverLabel, signal);
+				}
 
 				// Yield to allow Svelte to flush the UI update (hide permission dialog)
 				await new Promise((r) => setTimeout(r, 0));
