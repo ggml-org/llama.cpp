@@ -3243,17 +3243,8 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
     return true;
 }
 
-// Trivial no-op kernel to touch the GPU via a heartbeat (--no-sleep in server).
-// Keeps headless/secondary GPUs from being evicted by driver power management.
-static __global__ void ggml_cuda_noop_kernel(void) {}
-
 static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
-
-    // Submit a trivial no-op kernel to keep the GPU alive.
-    // Without this, headless/secondary GPUs may be evicted by the driver
-    // after extended idle periods (e.g. --no-sleep heartbeat in server).
-    ggml_cuda_noop_kernel<<<1, 1, 0, cuda_ctx->stream()>>>();
 
     CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
 

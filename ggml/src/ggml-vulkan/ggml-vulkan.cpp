@@ -15560,36 +15560,6 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
             cmd_buf->in_use = false;
             cmd_buf->buf.reset();
         }
-    } else if (ctx->sync_staging) {
-        // Heartbeat: submit a tiny GPU operation (vkCmdFillBuffer on 4 bytes)
-        // to keep the GPU alive and prevent driver VRAM eviction on
-        // headless/secondary GPUs. An empty vkQueueSubmit is a spec-allowed
-        // no-op, so we must record and submit real work.
-        vk::CommandBufferAllocateInfo alloc_info(
-            ctx->compute_cmd_pool.pool,
-            vk::CommandBufferLevel::ePrimary,
-            1);
-        const std::vector<vk::CommandBuffer> cmd_bufs =
-            ctx->device->device.allocateCommandBuffers(alloc_info);
-        if (!cmd_bufs.empty()) {
-            vk::CommandBufferBeginInfo begin_info(
-                vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-            cmd_bufs[0].begin(begin_info);
-            cmd_bufs[0].fillBuffer(ctx->sync_staging->buffer, 0, 4, 0);
-            cmd_bufs[0].end();
-
-            vk::SubmitInfo submit_info;
-            submit_info.commandBufferCount = 1;
-            submit_info.pCommandBuffers = &cmd_bufs[0];
-
-            std::lock_guard<std::mutex> guard(queue_mutex);
-            ctx->device->compute_queue.queue.submit({ submit_info }, ctx->fence);
-
-            ggml_vk_wait_for_fence(ctx);
-
-            ctx->device->device.freeCommandBuffers(
-                ctx->compute_cmd_pool.pool, cmd_bufs);
-        }
     }
 
     if (do_transfer) {
