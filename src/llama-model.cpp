@@ -296,8 +296,6 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_eagle3(params);
         case LLM_ARCH_DFLASH:
             return new llama_model_dflash(params);
-        case LLM_ARCH_DSPARK:
-            return new llama_model_dspark(params);
         case LLM_ARCH_MIMO2:
             return new llama_model_mimo2(params);
         case LLM_ARCH_KIMI_LINEAR:
@@ -2544,7 +2542,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_TALKIE:
         case LLM_ARCH_MELLUM:
         case LLM_ARCH_DFLASH:
-        case LLM_ARCH_DSPARK:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
@@ -2673,8 +2670,7 @@ bool llama_model_has_encoder(const llama_model * model) {
         case LLM_ARCH_T5:
         case LLM_ARCH_T5ENCODER:
         case LLM_ARCH_EAGLE3:
-        case LLM_ARCH_DFLASH:
-        case LLM_ARCH_DSPARK:    return true;
+        case LLM_ARCH_DFLASH:    return true;
         default:                 return false;
     }
 }

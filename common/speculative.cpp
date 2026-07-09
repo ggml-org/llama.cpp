@@ -1200,24 +1200,16 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     }
 };
 
-// DSpark: DFlash backbone + a semi-autoregressive Markov head; reuses process(), only draft() differs
+// DSpark: DFlash backbone + a semi-autoregressive Markov head; reuses process(), only draft() differs.
+// The draft model is a DFlash GGUF carrying the Markov head tensors -- the decoder graph picks them
+// up by presence, this impl only changes how the noise blocks are submitted and read back.
 struct common_speculative_impl_draft_dspark : public common_speculative_impl_draft_dflash {
     common_speculative_impl_draft_dspark(const common_params_speculative & params_in, uint32_t n_seq)
         : common_speculative_impl_draft_dflash(params_in, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
     {
-        auto * ctx_dft = params.ctx_dft;
-        const llama_model * model_dft = llama_get_model(ctx_dft);
-
-        {
-            char buf[32] = {};
-            if (llama_model_meta_val_str(model_dft, "dspark.block_size", buf, sizeof(buf)) < 0) {
-                GGML_ABORT("DSpark: missing required metadata key 'dspark.block_size'");
-            }
-            block_size = std::atoi(buf);
-        }
-        if (params.n_max > block_size) {
-            params.n_max = block_size;
-        }
+        // DSpark drafts from position 0 of the block (the anchor position), so unlike DFlash
+        // it can draft a full block_size tokens per step; undo the base class's n_max clamp
+        params.n_max = std::min(params_in.draft.n_max, block_size);
 
         LOG_INF("%s: adding speculative implementation 'draft-dspark'\n", __func__);
         LOG_INF("%s: - block_size=%d, n_max=%d\n", __func__, block_size, params.n_max);

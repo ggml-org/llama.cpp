@@ -131,7 +131,6 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MISTRAL3,         "mistral3"         },
     { LLM_ARCH_EAGLE3,           "eagle3"           },
     { LLM_ARCH_DFLASH,           "dflash"           },
-    { LLM_ARCH_DSPARK,           "dspark"           },
     { LLM_ARCH_MISTRAL4,         "mistral4"         },
     { LLM_ARCH_PADDLEOCR,        "paddleocr"        },
     { LLM_ARCH_MIMO2,            "mimo2"            },
@@ -308,8 +307,6 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_TARGET_LAYERS,         "%s.target_layers"        },
     { LLM_KV_TARGET_HIDDEN_SIZE,    "%s.target_hidden_size"   },
-    { LLM_KV_MARKOV_RANK,           "%s.markov_rank"          },
-    { LLM_KV_BLOCK_SIZE,            "%s.block_size"           },
     { LLM_KV_NORM_BEFORE_RESIDUAL,  "%s.norm_before_residual" },
 
     { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
