@@ -17,15 +17,15 @@
 struct mock_memory : public llama_memory_i {
     std::map<llama_seq_id, std::pair<llama_pos, llama_pos>> ranges; // seq_id -> [pos_min, pos_max]
 
-    llama_memory_context_ptr init_batch(llama_batch_allocr &, uint32_t, bool) override {  GGML_ASSERT(false && "not implemented"); return nullptr; }
-    llama_memory_context_ptr init_full() override {  GGML_ASSERT(false && "not implemented"); return nullptr; }
-    llama_memory_context_ptr init_update(llama_context *, bool) override { GGML_ASSERT(false && "not implemented");  return nullptr; }
+    llama_memory_context_ptr init_batch(llama_batch_allocr &, uint32_t, bool) override {  GGML_ASSERT(false && "not implemented"); }
+    llama_memory_context_ptr init_full() override {  GGML_ASSERT(false && "not implemented"); }
+    llama_memory_context_ptr init_update(llama_context *, bool) override { GGML_ASSERT(false && "not implemented"); }
 
-    bool get_can_shift() const override { GGML_ASSERT(false && "not implemented");  return false; }
+    bool get_can_shift() const override { GGML_ASSERT(false && "not implemented"); }
 
     void clear(bool) override { GGML_ASSERT(false && "not implemented"); }
 
-    bool seq_rm  (llama_seq_id, llama_pos, llama_pos) override { GGML_ASSERT(false && "not implemented");  return true; }
+    bool seq_rm  (llama_seq_id, llama_pos, llama_pos) override { GGML_ASSERT(false && "not implemented"); }
     void seq_cp  (llama_seq_id, llama_seq_id, llama_pos, llama_pos) override { GGML_ASSERT(false && "not implemented"); }
     void seq_keep(llama_seq_id) override { GGML_ASSERT(false && "not implemented"); }
     void seq_add (llama_seq_id, llama_pos, llama_pos, llama_pos) override { GGML_ASSERT(false && "not implemented"); }
