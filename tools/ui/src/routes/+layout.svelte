@@ -235,7 +235,10 @@
 	});
 
 	// Background MCP server health checks on app load
-	// Fetch enabled servers from settings and run health checks in background
+	// Fetch enabled servers from settings and run health checks in background.
+	// Only IDLE servers are checked; already-resolved (SUCCESS / ERROR) servers
+	// keep their existing state, so adding or removing a server does not flash
+	// every other card back through skeleton state.
 	$effect(() => {
 		if (!browser) return;
 
@@ -247,7 +250,7 @@
 		if (enabledServers.length > 0) {
 			untrack(() => {
 				// Run health checks in background (don't await)
-				mcpStore.runHealthChecksForServers(enabledServers, false).catch((error) => {
+				mcpStore.runHealthChecksForServers(enabledServers, true).catch((error) => {
 					console.warn('[layout] MCP health checks failed:', error);
 				});
 			});
