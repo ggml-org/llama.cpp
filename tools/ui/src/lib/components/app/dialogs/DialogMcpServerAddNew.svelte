@@ -109,6 +109,8 @@
 
 	let consent = $state<ConsentState>(readConsent());
 	let dismissedRecommendationIds = $state<string[]>(readDismissedRecommendationIds());
+	let selectedRecommendationId = $state<string | null>(null);
+	let hasSelection = $derived(selectedRecommendationId !== null);
 
 	// Cross-check against the configured MCP servers by URL — a recommended
 	// entry whose URL is already in the config is filtered out of the slot.
@@ -137,8 +139,10 @@
 
 		if (!recommendation) return;
 
-		// Fill the form so the user can review / tweak before saving through
-		// the dialog's primary "Add" button.
+		// Mark the recommendation as the active selection so it stands out
+		// from the others, then fill the form so the user can review / tweak
+		// before saving through the dialog's primary "Add" button.
+		selectedRecommendationId = recommendedId;
 		newServerUrl = recommendation.url;
 		newServerHeaders = '';
 	}
@@ -156,6 +160,7 @@
 			}
 			newServerUrl = '';
 			newServerHeaders = '';
+			selectedRecommendationId = null;
 		}
 		open = value;
 		onOpenChange?.(value);
@@ -185,7 +190,7 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
-	<Dialog.Content class="sm:max-w-3xl">
+	<Dialog.Content class="sm:max-w-3xl" onOpenAutoFocus={(event) => event.preventDefault()}>
 		<Dialog.Header>
 			<Dialog.Title>Add New Server</Dialog.Title>
 		</Dialog.Header>
@@ -226,6 +231,8 @@
 							}}
 							onClick={() => handleRecommendationClick(recommendation.id)}
 							onDismiss={() => handleDismissRecommendation(recommendation.id)}
+							selected={selectedRecommendationId === recommendation.id}
+							dimmed={hasSelection && selectedRecommendationId !== recommendation.id}
 						/>
 					{/each}
 				</div>

@@ -15,9 +15,11 @@
 		server: MCPServerSettingsEntry & { description?: string };
 		onClick?: () => void;
 		onDismiss?: () => void;
+		selected?: boolean;
+		dimmed?: boolean;
 	}
 
-	let { server, onClick, onDismiss }: Props = $props();
+	let { server, onClick, onDismiss, selected = false, dimmed = false }: Props = $props();
 
 	onMount(() => {
 		const state = mcpStore.getHealthCheckState(server.id);
@@ -76,9 +78,8 @@
 </script>
 
 <Card.Root
-	class={`relative !gap-3 bg-muted/30 p-4 transition-colors ${onClick ? 'cursor-pointer hover:bg-muted/50' : ''}`}
+	class={`relative !gap-3 bg-muted/30 p-4 transition-colors ${onClick ? 'cursor-pointer hover:bg-muted/50' : ''} ${selected ? 'bg-background ring-2 ring-primary/40' : ''} ${dimmed ? 'opacity-50' : ''}`}
 	role={onClick ? 'button' : undefined}
-	tabindex={onClick ? 0 : undefined}
 	onclick={onClick}
 	onkeydown={handleKey}
 >
