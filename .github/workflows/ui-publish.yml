@@ -73,4 +73,3 @@ jobs:
           hf buckets rm ggml-org/${{ env.HF_BUCKET_NAME }}/index.html --yes 2>/dev/null || true
           hf buckets rm ggml-org/${{ env.HF_BUCKET_NAME }}/bundle.js --yes 2>/dev/null || true
           hf buckets rm ggml-org/${{ env.HF_BUCKET_NAME }}/bundle.css --yes 2>/dev/null || true
-          hf buckets rm ggml-org/${{ env.HF_BUCKET_NAME }}/loading.html --yes 2>/dev/null || true
