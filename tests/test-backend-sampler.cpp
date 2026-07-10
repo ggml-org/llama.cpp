@@ -1017,7 +1017,19 @@ static void compare_top_k_penalties_logits(
     llama_sampler_ptr top_k(llama_sampler_init_top_k(k));
     const std::vector<llama_token_data> top_k_data = apply_cpu_sampler(raw_logits, top_k.get());
     GGML_ASSERT(top_k_data.size() == (size_t) k);
-    const llama_token penalized_token = top_k_data[0].id;
+    const llama_token retained_history_token = top_k_data[0].id;
+
+    llama_token excluded_history_token = LLAMA_TOKEN_NULL;
+    for (llama_token token = 0; token < n_vocab; ++token) {
+        const auto it = std::find_if(top_k_data.begin(), top_k_data.end(), [token](const llama_token_data & data) {
+            return data.id == token;
+        });
+        if (it == top_k_data.end()) {
+            excluded_history_token = token;
+            break;
+        }
+    }
+    GGML_ASSERT(excluded_history_token != LLAMA_TOKEN_NULL);
 
     const auto add_samplers = [&](llama_sampler * chain) {
         llama_sampler_chain_add(chain, llama_sampler_init_top_k(k));
@@ -1027,15 +1039,10 @@ static void compare_top_k_penalties_logits(
 
     auto accept_history = [&](llama_sampler * smpl) {
         accept_prompt(smpl, vocab, prompt);
-
-        const int32_t n_extra = std::min<int32_t>(16, n_vocab);
-        GGML_ASSERT(n_extra > k);
-        for (llama_token token = 0; token < n_extra; ++token) {
-            llama_sampler_accept(smpl, token);
-        }
-
-        llama_sampler_accept(smpl, penalized_token);
-        llama_sampler_accept(smpl, penalized_token);
+        llama_sampler_accept(smpl, excluded_history_token);
+        llama_sampler_accept(smpl, excluded_history_token);
+        llama_sampler_accept(smpl, retained_history_token);
+        llama_sampler_accept(smpl, retained_history_token);
     };
 
     const sampler_comparison_output output = run_sampler_comparison(
@@ -1046,8 +1053,11 @@ static void compare_top_k_penalties_logits(
 
     const std::unordered_map<llama_token, float> expected_logits = map_logits(output.expected);
 
-    GGML_ASSERT(expected_logits.find(penalized_token) != expected_logits.end());
-    GGML_ASSERT(fabsf(expected_logits.at(penalized_token) - raw_logits[penalized_token]) > 1e-6f);
+    GGML_ASSERT(expected_logits.find(retained_history_token) != expected_logits.end());
+    GGML_ASSERT(fabsf(expected_logits.at(retained_history_token) - raw_logits[retained_history_token]) > 1e-6f);
+    GGML_ASSERT(expected_logits.find(excluded_history_token) == expected_logits.end());
+    GGML_ASSERT(std::find(output.actual.candidates.begin(), output.actual.candidates.end(),
+                excluded_history_token) == output.actual.candidates.end());
 
     const sampler_comparison_stats stats = compare_sampler_outputs(
             "top-k penalties", expected_logits, output.actual);
