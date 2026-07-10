@@ -53,6 +53,7 @@
 #endif
 
 static bool g_enable_renderdoc = false;
+static bool g_print_result     = false;
 
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     if (ggml_is_empty(tensor)) {
@@ -1514,6 +1515,7 @@ struct test_case {
             test_case * tc;
             ggml_backend_t backend1;
             ggml_backend_t backend2;
+            ggml_tensor * out;
         };
 
         callback_userdata ud {
@@ -1521,6 +1523,7 @@ struct test_case {
             this,
             backend1,
             backend2,
+            out,
         };
 
         auto callback = [](int index, ggml_tensor * t1, ggml_tensor * t2, void * user_data) -> bool {
@@ -1544,6 +1547,24 @@ struct test_case {
 
             std::vector<float> f1 = tensor_to_float(t1);
             std::vector<float> f2 = tensor_to_float(t2);
+
+            if (g_print_result && t1 == ud->out) {
+                for (size_t i = 0; i < f2.size(); ++i) {
+                    const size_t d = i % 40;
+                    const size_t x = i / 40;
+                    const size_t h = x % 4;
+                    const size_t n = x / 4;
+
+                    printf(
+                        "golden[n=%zu,h=%zu,d=%zu] = %.9g"
+                        "  vulkan = %.9g"
+                        "  diff = %.9g\n",
+                        n, h, d,
+                        f2[i],
+                        f1[i],
+                        f1[i] - f2[i]);
+                }
+            }
 
             for (size_t i = 0; i < f1.size(); i++) {
                 // check for nans
@@ -13650,6 +13671,7 @@ static void usage(char ** argv) {
     printf("  -coopmat <N>               sets Vulkan cooperative matrix mode: 0=disable, 1=VK_KHR_cooperative_matrix, 2=VK_NV_cooperative_matrix2, 3=VK_NV_cooperative_matrix2 decode vector\n");
     printf("  -vulkandebug <on|off>       enables or disables Vulkan debug logging\n");
     printf("  -enablerenderdoc           captures the selected Vulkan test case (use -j 1 and select one case)\n");
+    printf("  -printResult               prints golden, backend, and difference values (use -j 1 and select one case)\n");
     printf("Examples:\n");
     printf("  %s -j 8\n", argv[0]);
     printf("  %s -o ADD,MUL_MAT\n", argv[0]);
@@ -13762,6 +13784,8 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[i], "-enablerenderdoc") == 0 || strcmp(argv[i], "--enable-renderdoc") == 0) {
             g_enable_renderdoc = true;
+        } else if (strcmp(argv[i], "-printResult") == 0) {
+            g_print_result = true;
         } else {
             usage(argv);
             return 1;
@@ -13770,6 +13794,10 @@ int main(int argc, char ** argv) {
 
     if (g_enable_renderdoc && (mode != MODE_TEST || parallel_workers != 1)) {
         fprintf(stderr, "-enablerenderdoc requires test mode and -j 1\n");
+        return 1;
+    }
+    if (g_print_result && (mode != MODE_TEST || parallel_workers != 1)) {
+        fprintf(stderr, "-printResult requires test mode and -j 1\n");
         return 1;
     }
 
