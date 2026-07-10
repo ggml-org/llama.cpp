@@ -1,29 +1,30 @@
 <script lang="ts">
+	import { Plus, X } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Switch } from '$lib/components/ui/switch';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { McpServerIdentity } from '$lib/components/app/mcp';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { HealthCheckStatus } from '$lib/enums';
-	import type { MCPServerDisplayInfo, HealthCheckState, MCPServerSettingsEntry } from '$lib/types';
+	import type { HealthCheckState, MCPServerSettingsEntry } from '$lib/types';
 	import { onMount } from 'svelte';
 	import { MCP_CARD_VISIBLE_TOOL_LIMIT, NEWLINE } from '$lib/constants';
 
 	interface Props {
-		server: MCPServerDisplayInfo & { description?: string };
-		enabled?: boolean;
-		onToggle?: (enabled: boolean) => void;
+		server: MCPServerSettingsEntry & { description?: string };
+		onAdd?: () => void;
+		onDismiss?: () => void;
 	}
 
-	let { server, enabled = false, onToggle }: Props = $props();
+	let { server, onAdd, onDismiss }: Props = $props();
 
 	onMount(() => {
 		const state = mcpStore.getHealthCheckState(server.id);
 
 		if (state.status === HealthCheckStatus.IDLE) {
-			mcpStore.runHealthCheck(server as MCPServerSettingsEntry).catch(() => {});
+			mcpStore.runHealthCheck(server).catch(() => {});
 		}
 	});
 
@@ -60,33 +61,38 @@
 	let visibleTools = $derived(tools.slice(0, MCP_CARD_VISIBLE_TOOL_LIMIT));
 	let hiddenTools = $derived(tools.slice(MCP_CARD_VISIBLE_TOOL_LIMIT));
 	let hiddenToolCount = $derived(hiddenTools.length);
-
-	function handleToggle(checked: boolean) {
-		onToggle?.(checked);
-	}
 </script>
 
-<Card.Root class="!gap-3 bg-muted/30 p-4">
-	<div class="flex items-start justify-between gap-3">
-		<div class="min-w-0 flex-1">
-			{#if showSkeleton}
-				<span class="flex min-w-0 items-center gap-1.5">
-					<Skeleton class="h-5 w-5 rounded" />
-					<Skeleton class="h-4 w-32" />
-				</span>
-			{:else}
-				<McpServerIdentity
-					{displayName}
-					{faviconUrl}
-					{serverInfo}
-					iconClass="h-5 w-5"
-					iconRounded="rounded"
-					nameClass="font-medium"
-				/>
-			{/if}
-		</div>
+<Card.Root class="relative !gap-3 bg-muted/30 p-4">
+	{#if onDismiss}
+		<button
+			type="button"
+			onclick={onDismiss}
+			aria-label={`Dismiss ${displayName}`}
+			class="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+		>
+			<X />
 
-		<Switch checked={enabled} disabled={isError || showSkeleton} onCheckedChange={handleToggle} />
+			<span class="sr-only">Dismiss</span>
+		</button>
+	{/if}
+
+	<div class={['min-w-0', onDismiss ? 'pr-7' : '']}>
+		{#if showSkeleton}
+			<span class="flex min-w-0 items-center gap-1.5">
+				<Skeleton class="h-5 w-5 rounded" />
+				<Skeleton class="h-4 w-32" />
+			</span>
+		{:else}
+			<McpServerIdentity
+				{displayName}
+				{faviconUrl}
+				{serverInfo}
+				iconClass="h-5 w-5"
+				iconRounded="rounded"
+				nameClass="font-medium"
+			/>
+		{/if}
 	</div>
 
 	{#if isError && errorMessage}
@@ -152,5 +158,21 @@
 				{/if}
 			</div>
 		{/if}
+	{/if}
+
+	{#if onAdd}
+		<div class="flex justify-end">
+			<Button
+				size="sm"
+				variant="secondary"
+				disabled={isError}
+				onclick={onAdd}
+				aria-label={`Add ${displayName}`}
+			>
+				<Plus />
+
+				Add
+			</Button>
+		</div>
 	{/if}
 </Card.Root>

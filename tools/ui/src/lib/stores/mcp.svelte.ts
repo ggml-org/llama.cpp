@@ -52,7 +52,8 @@ import {
 	MCP_RECONNECT_BACKOFF_MULTIPLIER,
 	MCP_RECONNECT_INITIAL_DELAY,
 	MCP_RECONNECT_MAX_DELAY,
-	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS
+	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS,
+	RECOMMENDED_MCP_SERVERS
 } from '$lib/constants';
 import type {
 	MCPToolCall,
@@ -456,10 +457,27 @@ class MCPStore {
 	 */
 	getServerFavicon(serverId: string): string | null {
 		const server = this.getServerById(serverId);
-		if (!server) {
-			return null;
+		if (server) {
+			return this.#resolveFavicon(serverId, server.url);
 		}
 
+		// Fallback for ids that aren't in the configured list yet, such as
+		// recommended servers shown in the Add New Server dialog after the
+		// user consents: derive a favicon straight from their declared URL.
+		const recommended = RECOMMENDED_MCP_SERVERS.find((rec) => rec.id === serverId);
+		if (recommended) {
+			return this.#resolveFavicon(serverId, recommended.url);
+		}
+
+		return null;
+	}
+
+	/**
+	 * Resolve an icon URL for the given server id + url. Honors the
+	 * health-check-provided icons when available, otherwise falls back to
+	 * `https://<rootDomain>/favicon.ico|png`.
+	 */
+	#resolveFavicon(serverId: string, serverUrl: string): string | null {
 		const isDark = mode.current === ColorMode.DARK;
 		const healthState = this.getHealthCheckState(serverId);
 		if (healthState.status === HealthCheckStatus.SUCCESS && healthState.serverInfo?.icons) {
@@ -470,8 +488,7 @@ class MCPStore {
 			}
 		}
 
-		// Fallback: try favicon from root domain
-		const fallbackUrl = this.#getServerFaviconFallback(server.url);
+		const fallbackUrl = this.#getServerFaviconFallback(serverUrl);
 		if (fallbackUrl) {
 			return fallbackUrl;
 		}

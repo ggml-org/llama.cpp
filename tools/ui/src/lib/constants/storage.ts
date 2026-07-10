@@ -22,9 +22,16 @@ export const DISABLED_TOOLS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledTool
 export const DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledToolKeys`;
 export const FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteModels`;
 export const REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.reasoningEffortDefault`;
-/** Set when user has interacted with the MCP server recommendations dialog (checked servers, added custom server, or dismissed) */
-export const MCP_SERVERS_ADDED_TO_CHAT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.mcpServersSetupDone`;
 export const USER_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.userOverrides`;
+/**
+ * Tracks whether the user has answered the recommended MCP servers consent
+ * prompt in the Add New Server dialog. `'true'` enables the hard-coded
+ * suggestions and runs health checks against them. `'false'` suppresses the
+ * prompt for good. Missing or unrecognized values are treated as undecided.
+ */
+export const MCP_RECOMMENDATIONS_CONSENT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.mcpRecommendationsConsent`;
+/** JSON-encoded array of suggested MCP server ids the user has dismissed per-card from the Add New Server dialog */
+export const DISMISSED_RECOMMENDED_MCP_SERVER_IDS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.dismissedRecommendedMcpServers`;
 
 /** Key prefix for per-conversation resumable stream state, conversationId is appended */
 export const STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX = `${STORAGE_APP_NAME}.streamResume.`;
