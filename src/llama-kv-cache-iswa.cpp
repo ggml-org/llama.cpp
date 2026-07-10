@@ -89,6 +89,11 @@ void llama_kv_cache_iswa::clear(bool data) {
     kv_swa ->clear(data);
 }
 
+void llama_kv_cache_iswa::clear_data_only() {
+    kv_base->clear_data_only();
+    kv_swa ->clear_data_only();
+}
+
 bool llama_kv_cache_iswa::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     bool res = true;
 

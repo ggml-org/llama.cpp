@@ -2987,8 +2987,8 @@ ggml_tensor * llama_kv_cache_context::get_turbo_rotation() const {
     return kv->get_turbo_rotation();
 }
 
-ggml_tensor * llama_kv_cache_context::get_turbo_rot_forward() const {
-    return kv->get_turbo_rotation();
+ggml_tensor * llama_kv_cache_context::get_turbo_rotation_inv() const {
+    return kv->get_turbo_rotation_inv();
 }
 
 // Returns the raw tensor only when the per-context InnerQ opt-in flag is set.
@@ -2998,6 +2998,10 @@ ggml_tensor * llama_kv_cache_context::get_turbo_rot_forward() const {
 // init1 (always) so the tensor is safe to read regardless of attach state.
 ggml_tensor * llama_kv_cache::get_turbo_innerq_scale_inv() const {
     return (innerq_active && turbo_innerq_scale_inv != nullptr) ? turbo_innerq_scale_inv : nullptr;
+}
+
+ggml_tensor * llama_kv_cache_context::get_turbo_rot_forward() const {
+    return kv->get_turbo_rotation();
 }
 
 ggml_tensor * llama_kv_cache_context::get_turbo_rot_inverse() const {

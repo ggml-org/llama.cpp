@@ -140,6 +140,11 @@ void llama_memory_hybrid::clear(bool data) {
     mem_recr->clear(data);
 }
 
+void llama_memory_hybrid::clear_data_only() {
+    mem_attn->clear_data_only();
+    mem_recr->clear_data_only();
+}
+
 bool llama_memory_hybrid::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     // Try removing from the recurrent cache first since it may fail. If it does
     // fail, the cache will not have been mutated.

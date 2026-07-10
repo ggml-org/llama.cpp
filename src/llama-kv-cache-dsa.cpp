@@ -57,6 +57,11 @@ void llama_kv_cache_dsa::clear(bool data) {
     kv_lid->clear(data);
 }
 
+void llama_kv_cache_dsa::clear_data_only() {
+    kv_mla->clear_data_only();
+    kv_lid->clear_data_only();
+}
+
 bool llama_kv_cache_dsa::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     bool res = true;
 

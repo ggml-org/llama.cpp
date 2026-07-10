@@ -59,6 +59,8 @@ public:
     bool get_can_shift() const override;
 
     void clear(bool data) override;
+    // P3.2.4a: cascade clear_data_only to attn + recr sub-memories.
+    void clear_data_only() override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;

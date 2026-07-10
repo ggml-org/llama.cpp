@@ -140,6 +140,11 @@ bool llama_memory_hybrid_iswa::get_can_shift() const {
     return mem_attn->get_can_shift();
 }
 
+void llama_memory_hybrid_iswa::clear_data_only() {
+    mem_attn->clear_data_only();
+    mem_recr->clear_data_only();
+}
+
 void llama_memory_hybrid_iswa::clear(bool data) {
     mem_attn->clear(data);
     mem_recr->clear(data);

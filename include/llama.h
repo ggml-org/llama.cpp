@@ -712,7 +712,8 @@ extern "C" {
                       bool data);
 
 
-    // Preserves InnerQ calibration across chunk clears; non-KV memory falls back to a metadata-only clear.
+    // Preserves InnerQ calibration across chunk clears; non-KV memory types
+    // fall back to a normal full data clear.
     LLAMA_API void llama_memory_clear_data_only(
             llama_memory_t mem);
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
