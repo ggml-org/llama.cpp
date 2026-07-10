@@ -751,6 +751,9 @@ void server_models::unload_lru() {
         for (const auto & m : mapping) {
             if (m.second.meta.is_running()) {
                 count_active++;
+                if (m.second.meta.status == SERVER_MODEL_STATUS_LOADING) {
+                    continue;
+                }
                 if (m.second.meta.last_used < lru_last_used) {
                     lru_model_name = m.first;
                     lru_last_used = m.second.meta.last_used;
