@@ -4799,10 +4799,14 @@ static void ggml_compute_forward_get_rows_q(
     const ggml_type type = src0->type;
     ggml_to_float_t const dequantize_row_q = ggml_get_type_traits(type)->to_float;
 
-    assert(ne0  == nc);
-    assert(ne02 == ne11);
-    assert(nb00 == ggml_type_size(type));
-    assert(ggml_nrows(dst) == nr);
+    // NOTE: these guards bound the destination write extent to the destination's
+    // declared shape. They must survive NDEBUG (the default Release build strips
+    // plain assert()), otherwise an untrusted graph (e.g. via the RPC backend) can
+    // drive the get_rows write past the buffer that deserialize_tensor validated.
+    GGML_ASSERT(ne0  == nc);
+    GGML_ASSERT(ne02 == ne11);
+    GGML_ASSERT(nb00 == ggml_type_size(type));
+    GGML_ASSERT(ggml_nrows(dst) == nr);
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -4840,10 +4844,12 @@ static void ggml_compute_forward_get_rows_f16(
     const int64_t nc = ne00;
     const int64_t nr = ggml_nelements(src1);
 
-    assert(ne0  == nc);
-    assert(ne02 == ne11);
-    assert(nb00 == sizeof(ggml_fp16_t));
-    assert(ggml_nrows(dst) == nr);
+    // see note in ggml_compute_forward_get_rows_q: bound the dst write extent and
+    // survive NDEBUG so untrusted graphs cannot write past the validated buffer.
+    GGML_ASSERT(ne0  == nc);
+    GGML_ASSERT(ne02 == ne11);
+    GGML_ASSERT(nb00 == sizeof(ggml_fp16_t));
+    GGML_ASSERT(ggml_nrows(dst) == nr);
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -4881,10 +4887,12 @@ static void ggml_compute_forward_get_rows_bf16(
     const int64_t nc = ne00;
     const int64_t nr = ggml_nelements(src1);
 
-    assert(ne0  == nc);
-    assert(ne02 == ne11);
-    assert(nb00 == sizeof(ggml_bf16_t));
-    assert(ggml_nrows(dst) == nr);
+    // see note in ggml_compute_forward_get_rows_q: bound the dst write extent and
+    // survive NDEBUG so untrusted graphs cannot write past the validated buffer.
+    GGML_ASSERT(ne0  == nc);
+    GGML_ASSERT(ne02 == ne11);
+    GGML_ASSERT(nb00 == sizeof(ggml_bf16_t));
+    GGML_ASSERT(ggml_nrows(dst) == nr);
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -4922,10 +4930,12 @@ static void ggml_compute_forward_get_rows_f32(
     const int64_t nc = ne00;
     const int64_t nr = ggml_nelements(src1);
 
-    assert(ne0  == nc);
-    assert(ne02 == ne11);
-    assert(nb00 == sizeof(float));
-    assert(ggml_nrows(dst) == nr);
+    // see note in ggml_compute_forward_get_rows_q: bound the dst write extent and
+    // survive NDEBUG so untrusted graphs cannot write past the validated buffer.
+    GGML_ASSERT(ne0  == nc);
+    GGML_ASSERT(ne02 == ne11);
+    GGML_ASSERT(nb00 == sizeof(float));
+    GGML_ASSERT(ggml_nrows(dst) == nr);
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -5154,6 +5164,12 @@ static void ggml_compute_forward_get_rows_back_f32_f16(
     for (int i = 0; i < nr; ++i) {
         const int r = ((int32_t *) src1->data)[i];
 
+        // bound the scatter (write) index: dst->data + r*dst->nb[1] must stay
+        // inside dst. r comes from src1 (attacker-controlled via the RPC backend)
+        // and is an unvalidated signed int32; without this guard a negative or
+        // oversized r writes outside the destination buffer.
+        GGML_ASSERT(r >= 0 && r < dst->ne[1]);
+
         for (int j = 0; j < nc; ++j) {
             ggml_fp16_t v = ((ggml_fp16_t *) ((char *) src0->data + i*src0->nb[1]))[j];
             ((float *) ((char *) dst->data + r*dst->nb[1]))[j] += GGML_CPU_FP16_TO_FP32(v);
@@ -5186,6 +5202,12 @@ static void ggml_compute_forward_get_rows_back_f32(
 
     for (int i = 0; i < nr; ++i) {
         const int r = ((int32_t *) src1->data)[i];
+
+        // bound the scatter (write) index: dst->data + r*dst->nb[1] must stay
+        // inside dst. r comes from src1 (attacker-controlled via the RPC backend)
+        // and is an unvalidated signed int32; without this guard a negative or
+        // oversized r writes outside the destination buffer.
+        GGML_ASSERT(r >= 0 && r < dst->ne[1]);
 
         ggml_vec_add_f32(nc,
                 (float *) ((char *)  dst->data + r*dst->nb[1]),
@@ -6318,6 +6340,12 @@ static void ggml_compute_forward_im2col_f32(
 
     GGML_ASSERT(nb10 == sizeof(float));
 
+    // bound the dst write extent: the kernel writes a flat [N, OH, OW, IC*KH*KW]
+    // tensor computed from the src shapes, independent of ggml_nbytes(dst). Verify
+    // dst is large enough so an untrusted graph (RPC backend) cannot drive the
+    // linear write past the destination buffer. Must survive NDEBUG.
+    GGML_ASSERT(N*OH*OW*(IC*KH*KW) <= ggml_nelements(dst));
+
     // im2col: [N, IC, IH, IW] => [N, OH, OW, IC*KH*KW]
     {
         float * const wdata = (float *) dst->data;
@@ -6395,6 +6423,12 @@ static void ggml_compute_forward_im2col_f16(
 
     GGML_ASSERT(nb00 == sizeof(ggml_fp16_t));
     GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+
+    // bound the dst write extent: the kernel writes a flat [N, OH, OW, IC*KH*KW]
+    // tensor computed from the src shapes, independent of ggml_nbytes(dst). Verify
+    // dst is large enough so an untrusted graph (RPC backend) cannot drive the
+    // linear write past the destination buffer. Must survive NDEBUG.
+    GGML_ASSERT(N*OH*OW*(IC*KH*KW) <= ggml_nelements(dst));
 
     // im2col: [N, IC, IH, IW] => [N, OH, OW, IC*KH*KW]
     {
@@ -7490,6 +7524,12 @@ static void ggml_compute_forward_pool_1d_ksp(
 
     const int64_t nr = ggml_nrows(src);
 
+    // bound the dst write extent: the kernel writes OW floats into dst row ir for
+    // ir in [0, nrows(src)), where the row count is driven by src. Verify dst has
+    // at least that many rows so an untrusted graph (RPC backend) cannot drive the
+    // per-plane write past the destination buffer. Must survive NDEBUG.
+    GGML_ASSERT(nr <= ggml_nrows(dst));
+
     for (int64_t ir = 0; ir < nr; ++ir) {
         const char * srow_bytes =            (const char *) src->data + ir * src->nb[1];
         float      * drow       = (float *) ((      char *) dst->data + ir * dst->nb[1]);
@@ -7584,6 +7624,16 @@ void ggml_compute_forward_pool_2d(
     const int64_t pa = px * py;
 
     float * dplane = (float *)dst->data;
+
+    // bound the dst write extent: the kernel iterates one dst plane (px*py floats)
+    // per src plane, where the src-plane count is driven by src (ggml_nbytes(src) /
+    // src->nb[2]). Verify dst is large enough so an untrusted graph (RPC backend)
+    // cannot drive the per-plane write past the destination buffer. Must survive
+    // NDEBUG.
+    {
+        const int64_t n_planes = src->nb[2] ? (int64_t) (ggml_nbytes(src) / src->nb[2]) : 0;
+        GGML_ASSERT(n_planes*pa <= ggml_nelements(dst));
+    }
 
     const int ka = k0 * k1;
     const int offset0 = -p0;
@@ -7988,7 +8038,13 @@ static void ggml_compute_forward_pad_f32(
 
     const ggml_tensor * src0 = dst->src[0];
 
-    assert(dst->nb[0] == sizeof(float));
+    // bound the dst write extent: the kernel writes a flat linear index in
+    // [0, ggml_nelements(dst)) using dst's logical shape, ignoring dst->nb.
+    // Requiring dst to be contiguous makes ggml_nbytes(dst) == nelements*type_size,
+    // so the deserialize byte-extent bound (RPC backend) actually covers the write.
+    // Must survive NDEBUG.
+    GGML_ASSERT(dst->nb[0] == sizeof(float));
+    GGML_ASSERT(ggml_is_contiguous(dst));
 
     const int ith = params->ith;
     const int nth = params->nth;
