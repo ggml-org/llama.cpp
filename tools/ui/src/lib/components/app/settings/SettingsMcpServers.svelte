@@ -24,7 +24,6 @@
 
 	let servers = $derived(mcpStore.visibleMcpServers);
 
-	let initialLoadComplete = $state(false);
 	let isAddingServer = $state(false);
 
 	let previousRouteId = $state<string | null>(null);
@@ -56,27 +55,13 @@
 		}
 	});
 
-	$effect(() => {
-		if (initialLoadComplete) return;
-
-		// An empty config has nothing to health-check; mark the initial load
-		// complete so a freshly-added server can swap straight from skeleton
-		// to card without re-running the gate.
-		if (servers.length === 0) {
-			initialLoadComplete = true;
-			return;
-		}
-
-		const allChecked = servers.every((server) => {
-			const state = mcpStore.getHealthCheckState(server.id);
-
-			return state.status === HealthCheckStatus.SUCCESS || state.status === HealthCheckStatus.ERROR;
-		});
-
-		if (allChecked) {
-			initialLoadComplete = true;
-		}
-	});
+	// Each card decides for itself whether to render based on its own
+	// health-check state, so adding a server only flashes the new card
+	// (not every other already-loaded card) until its health check resolves.
+	function isServerPending(serverId: string): boolean {
+		const status = mcpStore.getHealthCheckState(serverId).status;
+		return status === HealthCheckStatus.IDLE || status === HealthCheckStatus.CONNECTING;
+	}
 </script>
 
 <div in:fade={{ duration: 150 }} class="flex min-h-[calc(100dvh-4rem)] flex-col">
@@ -124,7 +109,7 @@
 			style="grid-template-columns: repeat(auto-fill, minmax(min(32rem, calc(100dvw - 2rem)), 1fr));"
 		>
 			{#each servers as server (server.id)}
-				{#if !initialLoadComplete}
+				{#if isServerPending(server.id)}
 					<McpServerCardSkeleton />
 				{:else}
 					<McpServerCard
