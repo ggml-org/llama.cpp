@@ -1,10 +1,9 @@
-# infcore gateway — пример конфигурации (валидируется config/schema/gateway.schema.json).
-# Формат JSON (валиден и как YAML). Всё offline: веса локальные, egress запрещён.
+// infcore gateway - пример конфигурации (валидируется config/schema/gateway.schema.json).
+// Формат JSONC (JSON + // комментарии). Всё offline: веса локальные, egress запрещён.
 {
   "server": {
     "host": "127.0.0.1",
     "port": 8080,
-    "metrics_port": 9090,
     "max_concurrent_requests": 8,
     "request_timeout_ms": 120000
   },
@@ -12,10 +11,11 @@
     "authn": "api_key",
     "rbac_enabled": true,
     // api_key поддерживает инъекцию секретов: "env:VAR" или "file:/path"
-    // (см. DEPLOY.md), чтобы не хранить ключи открытым текстом в конфиге.
+    // (см. DEPLOY.md). Ключи открытым текстом в конфиге держать нельзя -
+    // здесь ссылки на переменные окружения (из EnvironmentFile / gateway.env).
     "principals": [
-      { "api_key": "change-me-admin", "subject": "alice", "role": "admin" },
-      { "api_key": "change-me-rag",   "subject": "svc-rag", "role": "embeddings-only" }
+      { "api_key": "env:INFCORE_KEY_ADMIN", "subject": "alice",   "role": "admin" },
+      { "api_key": "env:INFCORE_KEY_EMBED", "subject": "svc-embed", "role": "embeddings-only" }
     ],
     "roles": [
       { "name": "admin",           "allow_models": ["*"], "allow_endpoints": ["*"] },

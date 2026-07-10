@@ -44,6 +44,30 @@ static std::string resolve_secret(const std::string& v) {
     return v;
 }
 
+// Хост URL локальный (loopback/RFC1918/localhost)? Для offline-инварианта:
+// внешние backend_url обязаны указывать внутрь контура, не в интернет.
+static bool is_local_host(const std::string& url) {
+    std::string h = url;
+    auto p = h.find("://");
+    if (p != std::string::npos) h = h.substr(p + 3);
+    h = h.substr(0, h.find_first_of("/?"));            // отбрасываем путь
+    if (!h.empty() && h.front() == '[') {              // IPv6 в скобках
+        auto e = h.find(']');
+        std::string v6 = h.substr(1, e == std::string::npos ? std::string::npos : e - 1);
+        return v6 == "::1" || v6.rfind("fd", 0) == 0 || v6.rfind("fc", 0) == 0 || v6.rfind("fe80", 0) == 0;
+    }
+    h = h.substr(0, h.rfind(':'));                     // отбрасываем порт
+    if (h == "localhost") return true;
+    if (h.rfind("127.", 0) == 0) return true;
+    if (h.rfind("10.", 0) == 0) return true;
+    if (h.rfind("192.168.", 0) == 0) return true;
+    if (h.rfind("172.", 0) == 0) {                     // 172.16.0.0 - 172.31.255.255
+        int oct = std::atoi(h.c_str() + 4);
+        if (oct >= 16 && oct <= 31) return true;
+    }
+    return false;
+}
+
 GatewayConfig load_config(const std::string& path) {
     std::ifstream f(path);
     if (!f) throw std::runtime_error("infcore: не удалось открыть конфиг: " + path);
@@ -76,14 +100,18 @@ GatewayConfig load_config(const std::string& path) {
         const auto& s = j.at("server");
         cfg.host = s.value("host", cfg.host);
         cfg.port = s.value("port", cfg.port);
-        cfg.metrics_port = s.value("metrics_port", cfg.metrics_port);
         cfg.request_timeout_ms = s.value("request_timeout_ms", cfg.request_timeout_ms);
     }
     if (j.contains("security")) {
         const auto& s = j.at("security");
         cfg.rbac_enabled = s.value("rbac_enabled", cfg.rbac_enabled);
         if (s.contains("api_keys"))
-            for (const auto& k : s.at("api_keys")) cfg.api_keys.push_back(resolve_secret(k.get<std::string>()));
+            for (const auto& k : s.at("api_keys")) {
+                std::string key = resolve_secret(k.get<std::string>());
+                if (key.rfind("change-me", 0) == 0)
+                    throw std::runtime_error("infcore: заглушечный ключ 'change-me...' в security.api_keys - задайте реальный ключ (env:/file:)");
+                cfg.api_keys.push_back(std::move(key));
+            }
         if (s.contains("principals")) {
             for (const auto& p : s.at("principals")) {
                 ApiKeyPrincipal ap;
@@ -92,6 +120,9 @@ GatewayConfig load_config(const std::string& path) {
                 ap.principal.role    = p.value("role", std::string());
                 if (ap.api_key.empty())
                     throw std::runtime_error("infcore: principal без api_key");
+                if (ap.api_key.rfind("change-me", 0) == 0)
+                    throw std::runtime_error("infcore: заглушечный ключ 'change-me...' у principal '" +
+                        ap.principal.subject + "' - задайте реальный ключ (env:/file:)");
                 cfg.principals.push_back(std::move(ap));
             }
         }
@@ -133,6 +164,7 @@ GatewayConfig load_config(const std::string& path) {
             e.arch           = m.value("arch", std::string());
             e.backend_url    = m.value("backend_url", std::string());
             e.upstream_model = m.value("upstream_model", e.logical_name);
+            e.mmproj_path    = m.value("mmproj_path", std::string());
             e.modality       = parse_modality(m.value("modality", std::string("text")));
             e.enabled        = m.value("enabled", true);
             e.n_ctx          = m.value("n_ctx", 8192);
@@ -159,15 +191,26 @@ GatewayConfig load_config(const std::string& path) {
         }
     }
 
-    // Управляемая модель (без backend_url) требует runtime.llama_server_bin и gguf_path.
     for (const auto& m : cfg.models) {
-        if (!m.backend_url.empty()) continue;
+        const bool vlm = (m.modality == Modality::Vision || m.modality == Modality::Audio);
+        if (!m.backend_url.empty()) {
+            // Внешний бэкенд: при жёстком offline обязан быть локальным (не в интернет).
+            if (cfg.enforce_no_egress && !is_local_host(m.backend_url))
+                throw std::runtime_error("infcore: enforce_no_egress: backend_url модели '" +
+                    m.logical_name + "' не локальный: " + m.backend_url);
+            continue;
+        }
+        // Управляемая модель (без backend_url) требует llama_server_bin и gguf_path.
         if (cfg.llama_server_bin.empty())
             throw std::runtime_error("infcore: модель '" + m.logical_name +
                 "' без backend_url требует runtime.llama_server_bin");
         if (m.gguf_path.empty())
             throw std::runtime_error("infcore: управляемая модель '" + m.logical_name +
                 "' требует gguf_path");
+        // Vision/audio без проектора запустились бы битыми - ловим на старте.
+        if (vlm && m.mmproj_path.empty())
+            throw std::runtime_error("infcore: модель '" + m.logical_name +
+                "' модальности vision/audio требует mmproj_path");
     }
 
     return cfg;

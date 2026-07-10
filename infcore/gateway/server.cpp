@@ -34,6 +34,9 @@ GatewayServer::GatewayServer(GatewayConfig cfg) : cfg_(std::move(cfg)) {
 
     // Обратная совместимость: плоские api_keys = principal'ы с ролью admin.
     if (!cfg_.api_keys.empty()) {
+        std::fprintf(stderr,
+            "infcore: ВНИМАНИЕ: security.api_keys (legacy) дают роль admin с subject "
+            "'legacy' и слабо аудируются; переходите на security.principals + roles.\n");
         if (!has_admin_role) {
             Role admin; admin.name = "admin";
             admin.allow_models = {"*"}; admin.allow_endpoints = {"*"};

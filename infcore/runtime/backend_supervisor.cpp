@@ -92,6 +92,7 @@ bool BackendSupervisor::spawn(const ModelEntry& e, int port, pid_t& out_pid, std
     };
     if (!api_key_.empty()) { args.push_back("--api-key"); args.push_back(api_key_); }
     if (e.modality == Modality::Embedding) args.push_back("--embedding");
+    if (!e.mmproj_path.empty()) { args.push_back("--mmproj"); args.push_back(e.mmproj_path); }
 
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);

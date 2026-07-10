@@ -13,7 +13,6 @@
       "properties": {
         "host": { "type": "string", "default": "127.0.0.1" },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "metrics_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "max_concurrent_requests": { "type": "integer", "minimum": 1, "default": 8 },
         "request_timeout_ms": { "type": "integer", "minimum": 0, "default": 120000 }
       }
