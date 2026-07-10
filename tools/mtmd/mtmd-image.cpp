@@ -942,8 +942,11 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_lf
     inst.overview_size = img_tool::calc_size_preserved_ratio(
                             original_size, align_size,
                             hparams.image_min_pixels, hparams.image_max_pixels);
-    // tile if either dimension exceeds tile_size with tolerance
-    const bool needs_tiling = original_size.width > tile_size * max_pixels_tolerance || original_size.height > tile_size * max_pixels_tolerance;
+    const int   tile_size            = hparams.preproc_tile_size;
+    const float max_pixels_tolerance = hparams.preproc_max_pixels_tolerance;
+    // tile if tiling is enabled and either dimension exceeds tile_size with tolerance
+    const bool needs_tiling = hparams.preproc_max_tiles > 1
+        && (original_size.width > tile_size * max_pixels_tolerance || original_size.height > tile_size * max_pixels_tolerance);
 
     if (!needs_tiling) {
         inst.refined_size = clip_image_size{0, 0};
@@ -994,6 +997,7 @@ clip_image_size mtmd_image_preprocessor_lfm2::find_closest_aspect_ratio(
             best_ratio_diff = ratio_diff;
             best_ratio = ratio;
         } else if (ratio_diff == best_ratio_diff) {
+            const int   tile_size   = hparams.preproc_tile_size;
             const float target_area = static_cast<float>(tile_size * tile_size * ratio.width * ratio.height);
             if (area > 0.5f * target_area) {
                 best_ratio = ratio;
@@ -1004,6 +1008,8 @@ clip_image_size mtmd_image_preprocessor_lfm2::find_closest_aspect_ratio(
 }
 
 std::vector<clip_image_size> mtmd_image_preprocessor_lfm2::get_target_ratios() {
+    const int min_tiles = hparams.preproc_min_tiles;
+    const int max_tiles = hparams.preproc_max_tiles;
     std::vector<clip_image_size> ratios;
     for (int n = min_tiles; n <= max_tiles; n++) {
         for (int w = 1; w <= n; w++) {
