@@ -127,6 +127,13 @@ void on_term(int) { if (g_active_srv) g_active_srv->stop(); }
 int GatewayServer::run() {
     httplib::Server svr;
 
+    // Ограничение параллелизма: SSE-стрим держит воркер на всё время потока,
+    // поэтому размер пула = потолок одновременных запросов.
+    if (cfg_.max_concurrent_requests > 0) {
+        const int n = cfg_.max_concurrent_requests;
+        svr.new_task_queue = [n] { return new httplib::ThreadPool(n); };
+    }
+
     g_active_srv = &svr;
     std::signal(SIGINT, on_term);
     std::signal(SIGTERM, on_term);
@@ -158,7 +165,7 @@ int GatewayServer::run() {
             if (!m.enabled) continue;
             if (!rbac_.model_allowed(pr.role, m.logical_name)) continue;
             data.push_back({{"id", m.logical_name}, {"object", "model"},
-                            {"owned_by", "infcore"},
+                            {"created", 0}, {"owned_by", "infcore"},
                             {"modality", modality_to_string(m.modality)}});
         }
         audit_event(pr, req.remote_addr, "/v1/models", "", "allow", "", 200);

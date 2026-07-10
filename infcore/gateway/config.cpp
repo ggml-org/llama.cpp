@@ -100,6 +100,7 @@ GatewayConfig load_config(const std::string& path) {
         const auto& s = j.at("server");
         cfg.host = s.value("host", cfg.host);
         cfg.port = s.value("port", cfg.port);
+        cfg.max_concurrent_requests = s.value("max_concurrent_requests", cfg.max_concurrent_requests);
         cfg.request_timeout_ms = s.value("request_timeout_ms", cfg.request_timeout_ms);
     }
     if (j.contains("security")) {

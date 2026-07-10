@@ -20,6 +20,7 @@ struct ApiKeyPrincipal {
 struct GatewayConfig {
     std::string host = "127.0.0.1";
     int         port = 8080;
+    int         max_concurrent_requests = 8;
     int         request_timeout_ms = 120000;
     bool        rbac_enabled = true;
     bool        enforce_no_egress = true;

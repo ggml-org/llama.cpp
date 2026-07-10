@@ -1,6 +1,8 @@
 // infcore — корп. лицензия.
 #include "authn/authn.h"
 
+#include <cctype>
+
 namespace infcore {
 
 namespace {
@@ -30,9 +32,10 @@ bool Authenticator::verify(const std::string& token, Principal& out) const {
 }
 
 std::string parse_bearer(const std::string& header) {
-    const std::string pfx = "Bearer ";
-    if (header.size() <= pfx.size() || header.compare(0, pfx.size(), pfx) != 0)
-        return std::string();
+    const std::string pfx = "bearer ";           // схема auth регистронезависима (RFC 7235)
+    if (header.size() <= pfx.size()) return std::string();
+    for (size_t i = 0; i < pfx.size(); ++i)
+        if (std::tolower((unsigned char)header[i]) != pfx[i]) return std::string();
     return header.substr(pfx.size());
 }
 

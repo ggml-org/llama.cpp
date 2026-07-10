@@ -47,7 +47,12 @@ json request(const Opts& o, const char* method, const std::string& path, const s
         std::fprintf(stderr, "infcore-cli: ошибка %d: %s\n", r->status, r->body.c_str());
         std::exit(1);
     }
-    return json::parse(r->body, nullptr, false);
+    json j = json::parse(r->body, nullptr, false);
+    if (j.is_discarded()) {
+        std::fprintf(stderr, "infcore-cli: неожиданный ответ (не JSON): %s\n", r->body.c_str());
+        std::exit(1);
+    }
+    return j;
 }
 
 int cmd_models(const Opts& o, bool admin) {

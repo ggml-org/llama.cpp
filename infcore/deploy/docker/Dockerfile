@@ -20,8 +20,9 @@ RUN cmake -S infcore -B build -C infcore/cmake/profile-rf.cmake \
 ARG BASE_RUNTIME=registry.internal/astra/base:1.7
 FROM ${BASE_RUNTIME}
 WORKDIR /opt/infcore
-# build/bin содержит infcore_gateway, infcore-cli И llama-server (единый output-каталог).
-COPY --from=build /src/build/bin/ /opt/infcore/bin/
+# В рантайм только нужные бинари (gateway, cli, llama-server); прочие tools апстрима
+# (bench/quantize/rpc-client и т.п.) в образ не тащим - меньше attack surface.
+COPY --from=build /src/build/bin/infcore_gateway /src/build/bin/infcore-cli /src/build/bin/llama-server /opt/infcore/bin/
 # Конфиг-ШАБЛОН (env: ключи, без секретов). В бою монтируйте свой (host=0.0.0.0).
 COPY infcore/config/gateway.yaml /opt/infcore/config/gateway.yaml
 COPY infcore/docs/DEPLOY.md /opt/infcore/docs/DEPLOY.md
