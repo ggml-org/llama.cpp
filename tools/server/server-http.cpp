@@ -175,6 +175,15 @@ bool server_http_context::init(const common_params & params) {
     // Middlewares
     //
 
+    // Frontend paths - all embedded UI assets
+    static const std::unordered_set<std::string> frontend_paths = []() {
+        std::unordered_set<std::string> paths { "/" };
+        for (const llama_ui_asset & a : llama_ui_get_assets()) {
+            paths.insert("/" + a.name);
+        }
+        return paths;
+    }();
+
     // Public endpoints - API routes plus all embedded UI assets
     static const std::unordered_set<std::string> get_public_endpoints = []() {
         std::unordered_set<std::string> endpoints {
@@ -182,11 +191,8 @@ bool server_http_context::init(const common_params & params) {
             "/v1/health",
             "/models",
             "/v1/models",
-            "/",
         };
-        for (const llama_ui_asset & a : llama_ui_get_assets()) {
-            endpoints.insert("/" + a.name);
-        }
+        endpoints.insert(frontend_paths.begin(), frontend_paths.end());
         return endpoints;
     }();
 
@@ -239,18 +245,9 @@ bool server_http_context::init(const common_params & params) {
 
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
         if (!is_ready.load()) {
-#if defined(LLAMA_UI_HAS_ASSETS)
-            if (const auto tmp = string_split<std::string>(req.path, '.');
-                req.path == "/" || (!tmp.empty() && tmp.back() == "html")) {
-                if (const llama_ui_asset * a = llama_ui_find_asset("loading.html")) {
-                    res.status = 503;
-                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, "text/html; charset=utf-8");
-                    return false;
-                }
+            if (frontend_paths.count(req.path)) {
+                return true; // frontend asset, allow it to load and show "loading"
             }
-#else
-            (void)req;
-#endif
             // no endpoints are allowed to be accessed when the server is not ready
             // this is to prevent any data races or inconsistent states
             res.status = 503;

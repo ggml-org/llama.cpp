@@ -12,6 +12,21 @@ import { ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants/error';
  * - Base path resolution
  */
 
+/**
+ * Error thrown when an API request fails, carrying the HTTP status code
+ * so callers can distinguish e.g. a 503 "still loading" response from a
+ * genuine failure.
+ */
+export class ApiError extends Error {
+	status: number;
+
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = 'ApiError';
+		this.status = status;
+	}
+}
+
 export interface ApiFetchOptions extends Omit<RequestInit, 'headers'> {
 	/**
 	 * Use auth-only headers (no Content-Type).
@@ -67,7 +82,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 
 	if (!response.ok) {
 		const errorMessage = await parseErrorMessage(response);
-		throw new Error(errorMessage);
+		throw new ApiError(errorMessage, response.status);
 	}
 
 	return response.json() as Promise<T>;
@@ -119,7 +134,7 @@ export async function apiFetchWithParams<T>(
 
 	if (!response.ok) {
 		const errorMessage = await parseErrorMessage(response);
-		throw new Error(errorMessage);
+		throw new ApiError(errorMessage, response.status);
 	}
 
 	return response.json() as Promise<T>;
