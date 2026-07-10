@@ -257,6 +257,8 @@ set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
                                             "ggml: sycl device architecture")
 
 option(GGML_OPENVINO                        "ggml: use OPENVINO"                              OFF)
+option(GGML_ET                              "ggml: use ET backend"                            OFF)
+option(GGML_ET_SYSEMU                       "ggml: use ET backend via sysemu"                 OFF)
 
 option(GGML_OPENCL                          "ggml: use OpenCL"                                OFF)
 option(GGML_OPENCL_PROFILING                "ggml: use OpenCL profiling (increases overhead)" OFF)

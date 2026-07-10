@@ -1,0 +1,6 @@
+// Auto-generated kernel embeddings. Do not edit.
+#include "ggml-et-kernels-embed.hpp"
+
+const std::unordered_map<std::string, std::pair<const unsigned char*, uint64_t>> ggml_et_embedded_kernels = {
+@EMBED_MAP_ENTRIES@
+};
