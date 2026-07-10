@@ -1553,7 +1553,15 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, d_inner, n_head, n_seqs, d_state, 1, 1);
+    const bool use_group_kernel = src3->ne[0] == 1 && n_seq_tokens == 1 &&
+        (d_state == 128 || d_state == 256);
+    if (use_group_kernel) {
+        const int64_t nsg = d_state / 32;
+        ggml_metal_encoder_dispatch_threadgroups(
+                enc, (d_inner * n_head + nsg - 1) / nsg, n_seqs, 1, d_state, 1, 1);
+    } else {
+        ggml_metal_encoder_dispatch_threadgroups(enc, d_inner, n_head, n_seqs, d_state, 1, 1);
+    }
 
     return 1;
 }

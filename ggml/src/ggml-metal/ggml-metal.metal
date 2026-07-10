@@ -2392,6 +2392,89 @@ kernel void kernel_ssm_scan_f32(
     s_buff[i] = s;
 }
 
+kernel void kernel_ssm_scan_group_f32(
+        constant ggml_metal_kargs_ssm_scan & args,
+        device const void * src0,
+        device const void * src1,
+        device const void * src2,
+        device const void * src3,
+        device const void * src4,
+        device const void * src5,
+        device const void * src6,
+        device      float * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort  sgptg[[simdgroups_per_threadgroup]]) {
+    constexpr short NW = N_SIMDWIDTH;
+
+    const int32_t nc = args.d_state;
+    const int32_t nr = args.d_inner;
+    const int32_t nh = args.n_head;
+    const int32_t ng = args.n_group;
+    const int32_t nt = args.n_seq_tokens;
+
+    const int32_t row = tgpig.x * sgptg + sgitg;
+    if (row >= nr * nh) {
+        return;
+    }
+
+    const int32_t i1 = row % nr;
+    const int32_t ir = row / nr;
+    const int32_t i3 = tgpig.y;
+    const int32_t g  = ir / (nh / ng);
+
+    device const int32_t * ids = (device const int32_t *) src6;
+
+    device const float * s0 = (device const float *) ((device const char *) src0
+            + ir * args.nb02 + ids[i3] * args.nb03 + i1 * args.nb01);
+    device       float * s  = (device       float *) ((device       char *) dst + args.s_off
+            + ir * args.nb02 + i3 * args.nb03 + i1 * args.nb01);
+
+    device const float * x  = (device const float *) ((device const char *) src1
+            + i1 * args.nb10 + ir * args.nb11 + i3 * args.nb13);
+    device const float * dt = (device const float *) ((device const char *) src2
+            + ir * args.nb20 + i3 * args.nb22);
+    device const float * A  = (device const float *) ((device const char *) src3
+            + ir * args.nb31);
+    device const float * B  = (device const float *) ((device const char *) src4
+            + g * args.nb41 + i3 * args.nb43);
+    device const float * C  = (device const float *) ((device const char *) src5
+            + g * args.nb51 + i3 * args.nb53);
+
+    device float * y = dst + i1 + ir * nr + i3 * nt * nh * nr;
+
+    float state[8];
+    const int32_t c_factor = nc / NW;
+
+    for (int32_t j = 0; j < c_factor; ++j) {
+        state[j] = s0[j * NW + tiisg];
+    }
+
+    for (int32_t i = 0; i < nt; ++i) {
+        const float dt0  = dt[i * args.ns21];
+        const float dtsp = dt0 <= 20.0f ? log(1.0f + exp(dt0)) : dt0;
+        const float dA   = exp(dtsp * A[0]);
+        const float x_dt = x[i * args.ns12] * dtsp;
+
+        float sumf = 0.0f;
+        for (int32_t j = 0; j < c_factor; ++j) {
+            const int32_t state_idx = j * NW + tiisg;
+            state[j] = state[j] * dA + B[i * args.ns42 + state_idx] * x_dt;
+            sumf += state[j] * C[i * args.ns52 + state_idx];
+        }
+
+        sumf = simd_sum(sumf);
+        if (tiisg == 0) {
+            y[i * nh * nr] = sumf;
+        }
+    }
+
+    for (int32_t j = 0; j < c_factor; ++j) {
+        s[j * NW + tiisg] = state[j];
+    }
+}
+
 kernel void kernel_rwkv_wkv6_f32(
     device const float * k,
     device const float * v,
