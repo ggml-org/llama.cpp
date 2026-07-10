@@ -785,35 +785,186 @@ static void accept_prompt(llama_sampler * smpl, const llama_vocab * vocab, const
     }
 }
 
-static std::vector<llama_token> unique_prompt_tokens(const llama_vocab * vocab, const std::string & prompt) {
-    std::unordered_set<llama_token> seen;
-    std::vector<llama_token> unique;
+static std::vector<float> decode_raw_logits(const test_params & params, const std::string & prompt) {
+    const int seq_id = 0;
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(params.model.get()));
+    std::vector<llama_sampler_seq_config> empty_configs;
+    test_context ctx(params, empty_configs);
 
-    const auto add = [&](llama_token token) {
-        if (seen.insert(token).second) {
-            unique.push_back(token);
+    GGML_ASSERT(ctx.decode({{ seq_id, prompt }}));
+
+    float * logits = llama_get_logits_ith(ctx.ctx.get(), ctx.idx_for_seq(seq_id));
+    GGML_ASSERT(logits != nullptr);
+    return std::vector<float>(logits, logits + n_vocab);
+}
+
+static std::vector<llama_token_data> apply_cpu_sampler(
+        const std::vector<float> & raw_logits,
+        llama_sampler * sampler) {
+    std::vector<llama_token_data> data;
+    data.reserve(raw_logits.size());
+    for (llama_token token = 0; token < (llama_token) raw_logits.size(); ++token) {
+        data.push_back({ token, raw_logits[token], 0.0f });
+    }
+
+    llama_token_data_array cur_p = { data.data(), data.size(), -1, false };
+    llama_sampler_apply(sampler, &cur_p);
+    data.resize(cur_p.size);
+    return data;
+}
+
+using sampler_setup_fn = std::function<void(llama_sampler *)>;
+
+static llama_sampler_ptr make_sampler_chain(
+        const sampler_setup_fn & add_samplers,
+        const sampler_setup_fn & accept_history) {
+    llama_sampler_ptr chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+    add_samplers(chain.get());
+    accept_history(chain.get());
+    return chain;
+}
+
+struct backend_sampler_output {
+    std::vector<float> logits;
+    std::vector<llama_token> candidates;
+};
+
+static backend_sampler_output run_backend_sampler(
+        const test_params & params,
+        const std::string & prompt,
+        llama_sampler * sampler) {
+    const int seq_id = 0;
+    std::vector<llama_sampler_seq_config> configs = {{ seq_id, sampler }};
+    test_context ctx(params, configs);
+
+    GGML_ASSERT(ctx.decode({{ seq_id, prompt }}));
+    llama_synchronize(ctx.ctx.get());
+
+    const int32_t idx = ctx.idx_for_seq(seq_id);
+    const uint32_t n_logits = llama_get_sampled_logits_count_ith(ctx.ctx.get(), idx);
+    const uint32_t n_candidates = llama_get_sampled_candidates_count_ith(ctx.ctx.get(), idx);
+    float * logits = llama_get_sampled_logits_ith(ctx.ctx.get(), idx);
+    llama_token * candidates = llama_get_sampled_candidates_ith(ctx.ctx.get(), idx);
+    GGML_ASSERT(logits != nullptr);
+
+    backend_sampler_output result;
+    result.logits.assign(logits, logits + n_logits);
+    result.candidates.resize(n_logits);
+
+    if (n_candidates == 0) {
+        for (uint32_t i = 0; i < n_logits; ++i) {
+            result.candidates[i] = (llama_token) i;
         }
+    } else {
+        GGML_ASSERT(candidates != nullptr);
+        GGML_ASSERT(n_candidates == n_logits);
+        std::memcpy(result.candidates.data(), candidates, n_candidates * sizeof(llama_token));
+    }
+
+    return result;
+}
+
+struct sampler_comparison_output {
+    std::vector<llama_token_data> expected;
+    backend_sampler_output actual;
+};
+
+static sampler_comparison_output run_sampler_comparison(
+        const test_params & params,
+        const std::string & prompt,
+        const std::vector<float> & raw_logits,
+        const sampler_setup_fn & add_samplers,
+        const sampler_setup_fn & accept_history) {
+    llama_sampler_ptr cpu_chain = make_sampler_chain(add_samplers, accept_history);
+    llama_sampler_ptr backend_chain = make_sampler_chain(add_samplers, accept_history);
+    return {
+        apply_cpu_sampler(raw_logits, cpu_chain.get()),
+        run_backend_sampler(params, prompt, backend_chain.get()),
     };
+}
 
-    const llama_token bos = llama_vocab_bos(vocab);
-    if (bos != LLAMA_TOKEN_NULL) {
-        add(bos);
+static std::unordered_map<llama_token, float> map_logits(const std::vector<llama_token_data> & data) {
+    std::unordered_map<llama_token, float> result;
+    result.reserve(data.size());
+    for (const auto & item : data) {
+        result[item.id] = item.logit;
+    }
+    return result;
+}
+
+struct sampler_comparison_stats {
+    int n_mismatch = 0;
+    int n_masked = 0;
+    float max_diff = 0.0f;
+};
+
+static sampler_comparison_stats compare_sampler_outputs(
+        const char * name,
+        const std::unordered_map<llama_token, float> & expected,
+        const backend_sampler_output & actual,
+        bool allow_extra_candidates = false) {
+    GGML_ASSERT(actual.logits.size() == actual.candidates.size());
+
+    sampler_comparison_stats result;
+    std::unordered_set<llama_token> seen;
+    seen.reserve(actual.candidates.size());
+
+    for (size_t i = 0; i < actual.logits.size(); ++i) {
+        const llama_token token = actual.candidates[i];
+        const float logit = actual.logits[i];
+        if (!seen.insert(token).second || std::isnan(logit)) {
+            if (result.n_mismatch < 5) {
+                printf("%s token %d has invalid backend output\n", name, token);
+            }
+            ++result.n_mismatch;
+            continue;
+        }
+
+        const auto it = expected.find(token);
+        if (it == expected.end()) {
+            if (std::isinf(logit) && logit < 0.0f) {
+                ++result.n_masked;
+            } else if (!allow_extra_candidates) {
+                if (result.n_mismatch < 5) {
+                    printf("%s token %d was not masked\n", name, token);
+                }
+                ++result.n_mismatch;
+            }
+            continue;
+        }
+
+        const float diff = fabsf(it->second - logit);
+        result.max_diff = std::max(result.max_diff, diff);
+        if (!std::isfinite(logit) || diff > 1e-3f) {
+            if (result.n_mismatch < 5) {
+                printf("%s mismatch token %d: cpu=%.6f backend=%.6f diff=%.6f\n",
+                        name, token, it->second, logit, diff);
+            }
+            ++result.n_mismatch;
+        }
     }
 
-    std::vector<llama_token> tokens(64);
-    int32_t n_tokens = llama_tokenize(vocab, prompt.c_str(), (int32_t) prompt.size(),
-            tokens.data(), (int32_t) tokens.size(), false, false);
-    if (n_tokens < 0) {
-        tokens.resize(-n_tokens);
-        n_tokens = llama_tokenize(vocab, prompt.c_str(), (int32_t) prompt.size(),
-                tokens.data(), (int32_t) tokens.size(), false, false);
+    for (const auto & item : expected) {
+        if (seen.find(item.first) == seen.end()) {
+            if (result.n_mismatch < 5) {
+                printf("%s missing backend token %d\n", name, item.first);
+            }
+            ++result.n_mismatch;
+        }
     }
 
-    for (int32_t i = 0; i < n_tokens; ++i) {
-        add(tokens[i]);
-    }
+    printf("%s logits: max_diff=%.6f n_masked=%d n_mismatch=%d\n",
+            name, result.max_diff, result.n_masked, result.n_mismatch);
+    return result;
+}
 
-    return unique;
+static float find_backend_logit(const backend_sampler_output & output, llama_token token) {
+    for (size_t i = 0; i < output.candidates.size(); ++i) {
+        if (output.candidates[i] == token) {
+            return output.logits[i];
+        }
+    }
+    GGML_ABORT("backend token not found");
 }
 
 static void compare_penalties_logits(
@@ -824,111 +975,29 @@ static void compare_penalties_logits(
         float penalty_present,
         const std::string & prompt,
         const std::function<void(llama_sampler *)> & extra_accept = {}) {
-    const auto * model = params.model.get();
-    const auto * vocab = llama_model_get_vocab(model);
-    const int n_vocab = llama_vocab_n_tokens(vocab);
-    const int seq_id = 0;
-
-    // Decode once without a backend sampler and release the context before
-    // creating one with backend penalties (two contexts would double VRAM).
-    std::vector<float> raw_logits(n_vocab);
-    {
-        std::vector<llama_sampler_seq_config> empty_configs;
-        test_context raw_ctx(params, empty_configs);
-
-        if (!raw_ctx.decode({{ seq_id, prompt }})) {
-            GGML_ASSERT(false && "Failed to decode for raw logits");
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const std::vector<float> raw_logits = decode_raw_logits(params, prompt);
+    const auto add_samplers = [&](llama_sampler * chain) {
+        llama_sampler_chain_add(chain, llama_sampler_init_penalties(
+                    penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+    };
+    const auto accept_history = [&](llama_sampler * chain) {
+        accept_prompt(chain, vocab, prompt);
+        if (extra_accept) {
+            extra_accept(chain);
         }
+    };
 
-        const int32_t batch_idx = raw_ctx.idx_for_seq(seq_id);
-        float * logits = llama_get_logits_ith(raw_ctx.ctx.get(), batch_idx);
-        GGML_ASSERT(logits != nullptr);
-        std::memcpy(raw_logits.data(), logits, (size_t) n_vocab * sizeof(float));
-    }
+    const sampler_comparison_output output = run_sampler_comparison(
+            params, prompt, raw_logits, add_samplers, accept_history);
 
-    struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
-    llama_sampler_ptr backend_chain(llama_sampler_chain_init(chain_params));
-    llama_sampler_chain_add(backend_chain.get(), llama_sampler_init_penalties(
-                penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+    GGML_ASSERT(output.expected.size() == raw_logits.size());
+    GGML_ASSERT(output.actual.logits.size() == raw_logits.size());
 
-    accept_prompt(backend_chain.get(), vocab, prompt);
-    if (extra_accept) {
-        extra_accept(backend_chain.get());
-    }
-
-    llama_sampler_ptr cpu_penalties(llama_sampler_init_penalties(
-                penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
-    accept_prompt(cpu_penalties.get(), vocab, prompt);
-    if (extra_accept) {
-        extra_accept(cpu_penalties.get());
-    }
-
-    std::vector<float> backend_logits(n_vocab);
-    {
-        std::vector<llama_sampler_seq_config> backend_configs = {{ seq_id, backend_chain.get() }};
-        test_context backend_ctx(params, backend_configs);
-
-        if (!backend_ctx.decode({{ seq_id, prompt }})) {
-            GGML_ASSERT(false && "Failed to decode for backend penalties");
-        }
-
-        llama_synchronize(backend_ctx.ctx.get());
-
-        const int32_t backend_idx = backend_ctx.idx_for_seq(seq_id);
-        float * logits = llama_get_sampled_logits_ith(backend_ctx.ctx.get(), backend_idx);
-        GGML_ASSERT(logits != nullptr);
-
-        const uint32_t n_backend_logits = llama_get_sampled_logits_count_ith(backend_ctx.ctx.get(), backend_idx);
-        GGML_ASSERT(n_backend_logits == (uint32_t) n_vocab);
-        std::memcpy(backend_logits.data(), logits, (size_t) n_vocab * sizeof(float));
-    }
-
-    // Compare via the CPU sampler on the penalized token ids only.
-    const std::vector<llama_token> check_tokens = unique_prompt_tokens(vocab, prompt);
-    std::vector<llama_token_data> cur;
-    cur.reserve(check_tokens.size());
-    for (const llama_token token : check_tokens) {
-        cur.push_back({ token, raw_logits[token], 0.0f });
-    }
-
-    llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
-    llama_sampler_apply(cpu_penalties.get(), &cur_p);
-
-    int n_mismatch = 0;
-    float max_diff = 0.0f;
-    for (size_t i = 0; i < cur.size(); ++i) {
-        const llama_token token = cur[i].id;
-        const float diff = fabsf(cur[i].logit - backend_logits[token]);
-        max_diff = std::max(max_diff, diff);
-        if (!std::isfinite(backend_logits[token]) || diff > 1e-3f) {
-            if (n_mismatch < 5) {
-                printf("penalties mismatch token %d: cpu=%.6f backend=%.6f diff=%.6f\n",
-                        token, cur[i].logit, backend_logits[token], diff);
-            }
-            ++n_mismatch;
-        }
-    }
-
-    // Spot-check that non-penalized logits are unchanged.
-    for (llama_token token = 0; token < n_vocab && token < 4096; token += 257) {
-        if (std::find(check_tokens.begin(), check_tokens.end(), token) != check_tokens.end()) {
-            continue;
-        }
-
-        const float diff = fabsf(raw_logits[token] - backend_logits[token]);
-        max_diff = std::max(max_diff, diff);
-        if (!std::isfinite(backend_logits[token]) || diff > 1e-3f) {
-            if (n_mismatch < 5) {
-                printf("penalties unchanged mismatch token %d: raw=%.6f backend=%.6f diff=%.6f\n",
-                        token, raw_logits[token], backend_logits[token], diff);
-            }
-            ++n_mismatch;
-        }
-    }
-
-    printf("penalties logits: max_diff=%.6f n_mismatch=%d (last_n=%d repeat=%.2f freq=%.2f present=%.2f)\n",
-            max_diff, n_mismatch, penalty_last_n, penalty_repeat, penalty_freq, penalty_present);
-    GGML_ASSERT(n_mismatch == 0);
+    const sampler_comparison_stats stats = compare_sampler_outputs(
+            "penalties", map_logits(output.expected), output.actual);
+    GGML_ASSERT(stats.n_masked == 0);
+    GGML_ASSERT(stats.n_mismatch == 0);
 }
 
 static void compare_top_k_penalties_logits(
@@ -939,40 +1008,22 @@ static void compare_top_k_penalties_logits(
         float penalty_freq,
         float penalty_present,
         const std::string & prompt) {
-    const auto * model = params.model.get();
-    const auto * vocab = llama_model_get_vocab(model);
-    const int n_vocab = llama_vocab_n_tokens(vocab);
-    const int seq_id = 0;
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const std::vector<float> raw_logits = decode_raw_logits(params, prompt);
+    const int n_vocab = (int) raw_logits.size();
 
     GGML_ASSERT(n_vocab > k);
 
-    std::vector<float> raw_logits(n_vocab);
-    {
-        std::vector<llama_sampler_seq_config> empty_configs;
-        test_context raw_ctx(params, empty_configs);
-
-        if (!raw_ctx.decode({{ seq_id, prompt }})) {
-            GGML_ASSERT(false && "Failed to decode for raw logits");
-        }
-
-        const int32_t batch_idx = raw_ctx.idx_for_seq(seq_id);
-        float * logits = llama_get_logits_ith(raw_ctx.ctx.get(), batch_idx);
-        GGML_ASSERT(logits != nullptr);
-        std::memcpy(raw_logits.data(), logits, (size_t) n_vocab * sizeof(float));
-    }
-
-    std::vector<llama_token_data> top_k_data;
-    top_k_data.reserve(n_vocab);
-    for (llama_token token = 0; token < n_vocab; ++token) {
-        top_k_data.push_back({ token, raw_logits[token], 0.0f });
-    }
-
     llama_sampler_ptr top_k(llama_sampler_init_top_k(k));
-    llama_token_data_array top_k_p = { top_k_data.data(), top_k_data.size(), -1, false };
-    llama_sampler_apply(top_k.get(), &top_k_p);
-    GGML_ASSERT(top_k_p.size == (size_t) k);
+    const std::vector<llama_token_data> top_k_data = apply_cpu_sampler(raw_logits, top_k.get());
+    GGML_ASSERT(top_k_data.size() == (size_t) k);
+    const llama_token penalized_token = top_k_data[0].id;
 
-    const llama_token penalized_token = top_k_p.data[0].id;
+    const auto add_samplers = [&](llama_sampler * chain) {
+        llama_sampler_chain_add(chain, llama_sampler_init_top_k(k));
+        llama_sampler_chain_add(chain, llama_sampler_init_penalties(
+                    penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+    };
 
     auto accept_history = [&](llama_sampler * smpl) {
         accept_prompt(smpl, vocab, prompt);
@@ -987,90 +1038,21 @@ static void compare_top_k_penalties_logits(
         llama_sampler_accept(smpl, penalized_token);
     };
 
-    struct llama_sampler_chain_params cpu_chain_params = llama_sampler_chain_default_params();
-    llama_sampler_ptr cpu_chain(llama_sampler_chain_init(cpu_chain_params));
-    llama_sampler_chain_add(cpu_chain.get(), llama_sampler_init_top_k(k));
-    llama_sampler_chain_add(cpu_chain.get(), llama_sampler_init_penalties(
-                penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
-    accept_history(cpu_chain.get());
+    const sampler_comparison_output output = run_sampler_comparison(
+            params, prompt, raw_logits, add_samplers, accept_history);
 
-    std::vector<llama_token_data> expected_data;
-    expected_data.reserve(n_vocab);
-    for (llama_token token = 0; token < n_vocab; ++token) {
-        expected_data.push_back({ token, raw_logits[token], 0.0f });
-    }
+    GGML_ASSERT(output.expected.size() == (size_t) k);
+    GGML_ASSERT(output.actual.logits.size() == (size_t) k);
 
-    llama_token_data_array expected_p = { expected_data.data(), expected_data.size(), -1, false };
-    llama_sampler_apply(cpu_chain.get(), &expected_p);
-    GGML_ASSERT(expected_p.size == (size_t) k);
-
-    std::unordered_map<llama_token, float> expected_logits;
-    expected_logits.reserve(expected_p.size);
-    for (size_t i = 0; i < expected_p.size; ++i) {
-        expected_logits[expected_p.data[i].id] = expected_p.data[i].logit;
-    }
+    const std::unordered_map<llama_token, float> expected_logits = map_logits(output.expected);
 
     GGML_ASSERT(expected_logits.find(penalized_token) != expected_logits.end());
-    GGML_ASSERT(fabsf(expected_logits[penalized_token] - raw_logits[penalized_token]) > 1e-6f);
+    GGML_ASSERT(fabsf(expected_logits.at(penalized_token) - raw_logits[penalized_token]) > 1e-6f);
 
-    struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
-    llama_sampler_ptr backend_chain(llama_sampler_chain_init(backend_chain_params));
-    llama_sampler_chain_add(backend_chain.get(), llama_sampler_init_top_k(k));
-    llama_sampler_chain_add(backend_chain.get(), llama_sampler_init_penalties(
-                penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
-    accept_history(backend_chain.get());
-
-    std::vector<float> backend_logits(k);
-    std::vector<llama_token> backend_candidates(k);
-    {
-        std::vector<llama_sampler_seq_config> backend_configs = {{ seq_id, backend_chain.get() }};
-        test_context backend_ctx(params, backend_configs);
-
-        if (!backend_ctx.decode({{ seq_id, prompt }})) {
-            GGML_ASSERT(false && "Failed to decode for backend top-k penalties");
-        }
-
-        llama_synchronize(backend_ctx.ctx.get());
-
-        const int32_t backend_idx = backend_ctx.idx_for_seq(seq_id);
-        float * logits = llama_get_sampled_logits_ith(backend_ctx.ctx.get(), backend_idx);
-        llama_token * candidates = llama_get_sampled_candidates_ith(backend_ctx.ctx.get(), backend_idx);
-        GGML_ASSERT(logits != nullptr);
-        GGML_ASSERT(candidates != nullptr);
-
-        const uint32_t n_backend_logits = llama_get_sampled_logits_count_ith(backend_ctx.ctx.get(), backend_idx);
-        const uint32_t n_backend_candidates = llama_get_sampled_candidates_count_ith(backend_ctx.ctx.get(), backend_idx);
-        GGML_ASSERT(n_backend_logits == (uint32_t) k);
-        GGML_ASSERT(n_backend_candidates == (uint32_t) k);
-
-        std::memcpy(backend_logits.data(), logits, (size_t) k * sizeof(float));
-        std::memcpy(backend_candidates.data(), candidates, (size_t) k * sizeof(llama_token));
-    }
-
-    int n_mismatch = 0;
-    float max_diff = 0.0f;
-    for (int32_t i = 0; i < k; ++i) {
-        const llama_token token = backend_candidates[i];
-        const auto it = expected_logits.find(token);
-        if (it == expected_logits.end()) {
-            printf("top-k penalties missing backend token %d from CPU result\n", token);
-            ++n_mismatch;
-            continue;
-        }
-
-        const float diff = fabsf(it->second - backend_logits[i]);
-        max_diff = std::max(max_diff, diff);
-        if (!std::isfinite(backend_logits[i]) || diff > 1e-3f) {
-            if (n_mismatch < 5) {
-                printf("top-k penalties mismatch token %d: cpu=%.6f backend=%.6f diff=%.6f\n",
-                        token, it->second, backend_logits[i], diff);
-            }
-            ++n_mismatch;
-        }
-    }
-
-    printf("top-k penalties logits: max_diff=%.6f n_mismatch=%d\n", max_diff, n_mismatch);
-    GGML_ASSERT(n_mismatch == 0);
+    const sampler_comparison_stats stats = compare_sampler_outputs(
+            "top-k penalties", expected_logits, output.actual);
+    GGML_ASSERT(stats.n_masked == 0);
+    GGML_ASSERT(stats.n_mismatch == 0);
 }
 
 static void compare_masking_penalties_logits(
@@ -1083,43 +1065,19 @@ static void compare_masking_penalties_logits(
         float penalty_present,
         const std::string & prompt,
         bool add_history = true) {
-    const auto * model = params.model.get();
-    const auto * vocab = llama_model_get_vocab(model);
-    const int n_vocab = llama_vocab_n_tokens(vocab);
-    const int seq_id = 0;
-
-    std::vector<float> raw_logits(n_vocab);
-    {
-        std::vector<llama_sampler_seq_config> empty_configs;
-        test_context raw_ctx(params, empty_configs);
-
-        if (!raw_ctx.decode({{ seq_id, prompt }})) {
-            GGML_ASSERT(false && "Failed to decode for raw logits");
-        }
-
-        const int32_t batch_idx = raw_ctx.idx_for_seq(seq_id);
-        float * logits = llama_get_logits_ith(raw_ctx.ctx.get(), batch_idx);
-        GGML_ASSERT(logits != nullptr);
-        std::memcpy(raw_logits.data(), logits, (size_t) n_vocab * sizeof(float));
-    }
-
-    std::vector<llama_token_data> filtered_data;
-    filtered_data.reserve(n_vocab);
-    for (llama_token token = 0; token < n_vocab; ++token) {
-        filtered_data.push_back({ token, raw_logits[token], 0.0f });
-    }
-
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+    const std::vector<float> raw_logits = decode_raw_logits(params, prompt);
+    const int n_vocab = (int) raw_logits.size();
     llama_sampler_ptr filter(init_filter());
-    llama_token_data_array filtered_p = { filtered_data.data(), filtered_data.size(), -1, false };
-    llama_sampler_apply(filter.get(), &filtered_p);
-    GGML_ASSERT(filtered_p.size > 0);
-    GGML_ASSERT(filtered_p.size < (size_t) n_vocab);
+    const std::vector<llama_token_data> filtered_data = apply_cpu_sampler(raw_logits, filter.get());
+    GGML_ASSERT(!filtered_data.empty());
+    GGML_ASSERT(filtered_data.size() < (size_t) n_vocab);
 
-    const llama_token penalized_token = filtered_p.data[0].id;
+    const llama_token penalized_token = filtered_data[0].id;
     std::unordered_set<llama_token> retained_tokens;
-    retained_tokens.reserve(filtered_p.size);
-    for (size_t i = 0; i < filtered_p.size; ++i) {
-        retained_tokens.insert(filtered_p.data[i].id);
+    retained_tokens.reserve(filtered_data.size());
+    for (const auto & data : filtered_data) {
+        retained_tokens.insert(data.id);
     }
 
     llama_token masked_token = LLAMA_TOKEN_NULL;
@@ -1131,6 +1089,11 @@ static void compare_masking_penalties_logits(
     }
     GGML_ASSERT(masked_token != LLAMA_TOKEN_NULL);
 
+    const auto add_samplers = [&](llama_sampler * chain) {
+        llama_sampler_chain_add(chain, init_filter());
+        llama_sampler_chain_add(chain, llama_sampler_init_penalties(
+                    penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+    };
     auto accept_history = [&](llama_sampler * smpl) {
         if (!add_history) {
             return;
@@ -1142,115 +1105,26 @@ static void compare_masking_penalties_logits(
         llama_sampler_accept(smpl, masked_token);
     };
 
-    struct llama_sampler_chain_params cpu_chain_params = llama_sampler_chain_default_params();
-    llama_sampler_ptr cpu_chain(llama_sampler_chain_init(cpu_chain_params));
-    llama_sampler_chain_add(cpu_chain.get(), init_filter());
-    llama_sampler_chain_add(cpu_chain.get(), llama_sampler_init_penalties(
-                penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
-    accept_history(cpu_chain.get());
+    const sampler_comparison_output output = run_sampler_comparison(
+            params, prompt, raw_logits, add_samplers, accept_history);
 
-    std::vector<llama_token_data> expected_data;
-    expected_data.reserve(n_vocab);
-    for (llama_token token = 0; token < n_vocab; ++token) {
-        expected_data.push_back({ token, raw_logits[token], 0.0f });
-    }
+    GGML_ASSERT(output.actual.logits.size() == (size_t) n_vocab);
 
-    llama_token_data_array expected_p = { expected_data.data(), expected_data.size(), -1, false };
-    llama_sampler_apply(cpu_chain.get(), &expected_p);
-
-    std::unordered_map<llama_token, float> expected_logits;
-    expected_logits.reserve(expected_p.size);
-    for (size_t i = 0; i < expected_p.size; ++i) {
-        expected_logits[expected_p.data[i].id] = expected_p.data[i].logit;
-    }
+    const std::unordered_map<llama_token, float> expected_logits = map_logits(output.expected);
 
     GGML_ASSERT(expected_logits.find(penalized_token) != expected_logits.end());
     GGML_ASSERT(expected_logits.find(masked_token) == expected_logits.end());
     if (add_history) {
-        GGML_ASSERT(fabsf(expected_logits[penalized_token] - raw_logits[penalized_token]) > 1e-6f);
+        GGML_ASSERT(fabsf(expected_logits.at(penalized_token) - raw_logits[penalized_token]) > 1e-6f);
     }
 
-    struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
-    llama_sampler_ptr backend_chain(llama_sampler_chain_init(backend_chain_params));
-    llama_sampler_chain_add(backend_chain.get(), init_filter());
-    llama_sampler_chain_add(backend_chain.get(), llama_sampler_init_penalties(
-                penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
-    accept_history(backend_chain.get());
-
-    std::vector<float> backend_logits(n_vocab);
-    std::vector<llama_token> backend_candidates(n_vocab);
-    {
-        std::vector<llama_sampler_seq_config> backend_configs = {{ seq_id, backend_chain.get() }};
-        test_context backend_ctx(params, backend_configs);
-
-        if (!backend_ctx.decode({{ seq_id, prompt }})) {
-            GGML_ASSERT(false && "Failed to decode for backend filtered penalties");
-        }
-
-        llama_synchronize(backend_ctx.ctx.get());
-
-        const int32_t backend_idx = backend_ctx.idx_for_seq(seq_id);
-        float * logits = llama_get_sampled_logits_ith(backend_ctx.ctx.get(), backend_idx);
-        llama_token * candidates = llama_get_sampled_candidates_ith(backend_ctx.ctx.get(), backend_idx);
-        GGML_ASSERT(logits != nullptr);
-
-        const uint32_t n_backend_logits = llama_get_sampled_logits_count_ith(backend_ctx.ctx.get(), backend_idx);
-        const uint32_t n_backend_candidates = llama_get_sampled_candidates_count_ith(backend_ctx.ctx.get(), backend_idx);
-        GGML_ASSERT(n_backend_logits == (uint32_t) n_vocab);
-
-        std::memcpy(backend_logits.data(), logits, (size_t) n_vocab * sizeof(float));
-        if (n_backend_candidates == 0) {
-            for (llama_token token = 0; token < n_vocab; ++token) {
-                backend_candidates[token] = token;
-            }
-        } else {
-            GGML_ASSERT(candidates != nullptr);
-            GGML_ASSERT(n_backend_candidates == (uint32_t) n_vocab);
-            std::memcpy(backend_candidates.data(), candidates, (size_t) n_vocab * sizeof(llama_token));
-        }
-    }
-
-    int n_mismatch = 0;
-    int n_masked = 0;
-    bool masked_token_preserved = false;
-    float max_diff = 0.0f;
-    for (int32_t i = 0; i < n_vocab; ++i) {
-        const llama_token token = backend_candidates[i];
-        if (std::isnan(backend_logits[i])) {
-            if (n_mismatch < 5) {
-                printf("%s penalties token %d has NaN logit\n", filter_name, token);
-            }
-            ++n_mismatch;
-            continue;
-        }
-
-        const auto it = expected_logits.find(token);
-        if (it == expected_logits.end()) {
-            if (std::isinf(backend_logits[i]) && backend_logits[i] < 0.0f) {
-                ++n_masked;
-                if (token == masked_token) {
-                    masked_token_preserved = true;
-                }
-            }
-            continue;
-        }
-
-        const float diff = fabsf(it->second - backend_logits[i]);
-        max_diff = std::max(max_diff, diff);
-        if (!std::isfinite(backend_logits[i]) || diff > 1e-3f) {
-            if (n_mismatch < 5) {
-                printf("%s penalties mismatch token %d: cpu=%.6f backend=%.6f diff=%.6f\n",
-                        filter_name, token, it->second, backend_logits[i], diff);
-            }
-            ++n_mismatch;
-        }
-    }
-
-    printf("%s penalties logits: max_diff=%.6f n_masked=%d n_mismatch=%d\n",
-            filter_name, max_diff, n_masked, n_mismatch);
-    GGML_ASSERT(n_masked > 0);
-    GGML_ASSERT(masked_token_preserved);
-    GGML_ASSERT(n_mismatch == 0);
+    const std::string name = std::string(filter_name) + " penalties";
+    const sampler_comparison_stats stats = compare_sampler_outputs(
+            name.c_str(), expected_logits, output.actual, true);
+    const float masked_logit = find_backend_logit(output.actual, masked_token);
+    GGML_ASSERT(stats.n_masked > 0);
+    GGML_ASSERT(std::isinf(masked_logit) && masked_logit < 0.0f);
+    GGML_ASSERT(stats.n_mismatch == 0);
 }
 
 static void test_backend_penalties_sampling(const test_params & params) {
