@@ -137,20 +137,25 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     const int64_t n_vocab = base->ne[0];
     const int64_t n_tok   = base->ne[1];
 
-    // the trained draft block size, in tokens (anchor + n-1 masks)
+    // the trained draft block size bounds the runtime block length (anchor + up to bs-1 masks)
     const auto it = model.gguf_kv.find("dflash.block_size");
     GGML_ASSERT(it != model.gguf_kv.end() && "DSpark draft requires 'dflash.block_size' in GGUF metadata");
     const int64_t bs = std::stoi(it->second);
     GGML_ASSERT(bs > 0);
 
-    // the drafting loop always submits whole anchor-first blocks
-    if (n_tok % bs != 0) {
+    // the drafting loop submits one uniform anchor-first block per sequence; recover the runtime
+    // block length from the ubatch instead of assuming the full trained block_size
+    const int64_t n_blocks = g.ubatch.n_seqs_unq;
+    if (n_blocks == 0 || n_tok % n_blocks != 0) {
         return;
     }
-    const int64_t n_blocks = n_tok / bs;
+    const int64_t bs_rt = n_tok / n_blocks; // runtime block length, <= bs
+    if (bs_rt > bs) {
+        return;
+    }
 
     // anchor (committed last) token of every block: token 0 of each block, i.e. a strided view
-    ggml_tensor * prev = ggml_view_2d(ctx0, tokens, 1, n_blocks, bs*tokens->nb[0], 0);
+    ggml_tensor * prev = ggml_view_2d(ctx0, tokens, 1, n_blocks, bs_rt*tokens->nb[0], 0);
     prev = ggml_cont_1d(ctx0, prev, n_blocks); // I32 [n_blocks]
 
     // confidence head (optional): predicted acceptance per position, from the same
@@ -161,19 +166,19 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_tensor * cat_conf = nullptr;
     // TODO: the in-graph chain is greedy (argmax); sampling params affect only the final
     //       token pick, not the Markov conditioning path
-    for (int64_t i = 0; i < bs; ++i) {
+    for (int64_t i = 0; i < bs_rt; ++i) {
         ggml_tensor * w1_prev = ggml_get_rows(ctx0, w1, prev);   // [R, n_blocks]
         ggml_tensor * bias    = ggml_mul_mat(ctx0, w2, w1_prev); // [n_vocab, n_blocks]
 
         // position i of every block: strided view [n_vocab, n_blocks]
-        ggml_tensor * base_i = ggml_view_2d(ctx0, base, n_vocab, n_blocks, bs*base->nb[1], i*base->nb[1]);
+        ggml_tensor * base_i = ggml_view_2d(ctx0, base, n_vocab, n_blocks, bs_rt*base->nb[1], i*base->nb[1]);
         ggml_tensor * col    = ggml_add(ctx0, base_i, bias);
 
         cat = cat ? ggml_concat(ctx0, cat, col, 1) : col;
 
         if (h) {
             // conf(i) = sigmoid(conf_proj . [h(i); markov_w1[prev(i)]] + b)  -- [1, n_blocks]
-            ggml_tensor * h_i  = ggml_view_2d(ctx0, h, h->ne[0], n_blocks, bs*h->nb[1], i*h->nb[1]);
+            ggml_tensor * h_i  = ggml_view_2d(ctx0, h, h->ne[0], n_blocks, bs_rt*h->nb[1], i*h->nb[1]);
             ggml_tensor * feat = ggml_concat(ctx0, ggml_cont(ctx0, h_i), w1_prev, 0);
             ggml_tensor * conf = ggml_mul_mat(ctx0, model.dspark_conf_proj, feat);
             if (model.dspark_conf_proj_b) {
@@ -184,19 +189,19 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
             cat_conf = cat_conf ? ggml_concat(ctx0, cat_conf, conf, 1) : conf;
         }
 
-        if (i + 1 < bs) {
+        if (i + 1 < bs_rt) {
             prev = ggml_argmax(ctx0, col); // I32 [n_blocks]
         }
     }
 
     // cat is position-major; restore the ubatch's block-major order
-    ggml_tensor * out = ggml_reshape_3d(ctx0, cat, n_vocab, n_blocks, bs);
-    out = ggml_cont(ctx0, ggml_permute(ctx0, out, 0, 2, 1, 3)); // [n_vocab, bs, n_blocks]
+    ggml_tensor * out = ggml_reshape_3d(ctx0, cat, n_vocab, n_blocks, bs_rt);
+    out = ggml_cont(ctx0, ggml_permute(ctx0, out, 0, 2, 1, 3)); // [n_vocab, bs_rt, n_blocks]
     out = ggml_reshape_2d(ctx0, out, n_vocab, n_tok);
 
     if (cat_conf) {
         // same position-major -> block-major reorder as the logits
-        ggml_tensor * conf = ggml_reshape_3d(ctx0, cat_conf, 1, n_blocks, bs);
+        ggml_tensor * conf = ggml_reshape_3d(ctx0, cat_conf, 1, n_blocks, bs_rt);
         conf = ggml_cont(ctx0, ggml_permute(ctx0, conf, 0, 2, 1, 3));
         conf = ggml_reshape_2d(ctx0, conf, 1, n_tok);
 

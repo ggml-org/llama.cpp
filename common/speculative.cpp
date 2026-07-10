@@ -917,7 +917,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     llama_token mask_token_id = 0;
 
     // draft-dspark: the draft carries a Markov head and uses an anchor-first block layout
-    const bool shifted;
+    const bool is_dspark;
 
     const int32_t * target_layer_ids   = nullptr; // model_dft's extract layer indices
     uint32_t        target_layer_ids_n = 0;
@@ -929,7 +929,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
         : common_speculative_impl(type, n_seq)
         , params(params.draft)
-        , shifted(type == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
+        , is_dspark(type == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
     {
         auto * ctx_tgt = this->params.ctx_tgt;
         auto * ctx_dft = this->params.ctx_dft;
@@ -962,7 +962,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         // DFlash input is [id_last, <mask> * (block_size-1)]: in-place denoising yields at most
         // block_size-1 drafts, anchor-first (DSpark) blocks yield a full block_size
-        const int32_t n_draft_max = shifted ? block_size : block_size - 1;
+        const int32_t n_draft_max = is_dspark ? block_size : block_size - 1;
         if (this->params.n_max > n_draft_max || this->params.n_min > n_draft_max) {
             LOG_WRN("%s: requested draft size (n_max=%d, n_min=%d) exceeds the trained block size %d -- clamping to %d\n",
                     __func__, this->params.n_max, this->params.n_min, block_size, n_draft_max);
@@ -1136,11 +1136,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 n_draft = std::min(n_draft, dp.n_max);
             }
 
-            // DSpark blocks are always submitted whole (the Markov head keys anchors off block boundaries)
-            const int32_t n_submit = shifted ? block_size : n_draft + 1;
+            const int32_t n_block_tokens = n_draft + (is_dspark ? 0 : 1);
             i_block_beg[seq_id] = batch.n_tokens;
-            n_block    [seq_id] = n_draft;
-            for (int32_t i = 0; i < n_submit; ++i) {
+            n_block    [seq_id] = n_block_tokens;
+            for (int32_t i = 0; i < n_block_tokens; ++i) {
                 common_batch_add(batch, i == 0 ? dp.id_last : mask_token_id, n + i, { seq_id }, true);
             }
         }
@@ -1162,44 +1161,68 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             }
             auto & dp = dparams[seq_id];
 
-            const int32_t beg     = i_block_beg[seq_id];
-            const int32_t n_draft = n_block[seq_id];
+            const int32_t beg            = i_block_beg[seq_id];
+            const int32_t n_block_tokens = n_block[seq_id];
 
             auto * smpl = smpls[seq_id].get();
 
             auto & result = *dp.result;
 
-            // DSpark drafts expose a per-position predicted acceptance through the nextn
-            // channel; --spec-draft-conf-min prunes the block at the first position below it
-            const float * conf = shifted && params.conf_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
+            if (is_dspark) {
+                // DSpark predicts the next token from position 0 and optionally truncates
+                // at the first position below the confidence threshold.
+                const float * conf = params.conf_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
 
-            // greedily read the predicted block: DSpark blocks predict the NEXT token from position 0 on
-            for (int32_t k = 0; k < n_draft; ++k) {
-                const int32_t i = beg + k + (shifted ? 0 : 1);
+                for (int32_t i = 0; i < n_block_tokens; ++i) {
+                    const int32_t idx = beg + i;
 
-                if (conf && conf[(size_t) i * n_embd_dec] < params.conf_min) {
-                    break;
+                    if (conf && conf[(size_t) idx * n_embd_dec] < params.conf_min) {
+                        break;
+                    }
+
+                    common_sampler_sample(smpl, ctx_dft, idx, true);
+
+                    const auto * cur_p = common_sampler_get_candidates(smpl, true);
+
+                    for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
+                        LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                                seq_id, k, i, cur_p->data[k].id, cur_p->data[k].p,
+                                common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+                    }
+
+                    const llama_token id = cur_p->data[0].id;
+
+                    if (cur_p->data[0].p < params.p_min) {
+                        break;
+                    }
+
+                    common_sampler_accept(smpl, id, true);
+
+                    result.push_back(id);
                 }
+            } else {
+                // greedily read the predicted block at this sequence's noise positions 1..n_block_tokens-1
+                for (int32_t i = 1; i < n_block_tokens; ++i) {
+                    common_sampler_sample(smpl, ctx_dft, beg + i, true);
 
-                common_sampler_sample(smpl, ctx_dft, i, true);
+                    const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
-                const auto * cur_p = common_sampler_get_candidates(smpl, true);
+                    for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
+                        LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                                seq_id, k, i - 1, cur_p->data[k].id, cur_p->data[k].p,
+                                common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+                    }
 
-                for (int j = 0; j < std::min(3, (int) cur_p->size); ++j) {
-                    LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
-                            seq_id, j, k, cur_p->data[j].id, cur_p->data[j].p,
-                            common_token_to_piece(ctx_dft, cur_p->data[j].id).c_str());
+                    const llama_token id = cur_p->data[0].id;
+
+                    if (cur_p->data[0].p < params.p_min) {
+                        break;
+                    }
+
+                    common_sampler_accept(smpl, id, true);
+
+                    result.push_back(id);
                 }
-
-                const llama_token id = cur_p->data[0].id;
-
-                if (cur_p->data[0].p < params.p_min) {
-                    break;
-                }
-
-                common_sampler_accept(smpl, id, true);
-
-                result.push_back(id);
             }
 
             if (result.size() < (size_t) params.n_min) {
