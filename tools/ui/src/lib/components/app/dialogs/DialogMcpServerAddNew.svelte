@@ -197,7 +197,7 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
-	<Dialog.Content class="sm:max-w-md">
+	<Dialog.Content class="sm:max-w-2xl">
 		<Dialog.Header>
 			<Dialog.Title>Add New Server</Dialog.Title>
 		</Dialog.Header>
@@ -225,7 +225,7 @@
 			<div class="space-y-3">
 				<h3 class="text-sm font-medium text-muted-foreground">Recommended</h3>
 
-				<div class="grid grid-cols-1 gap-3">
+				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 					{#each recommendationsToShow as recommendation (recommendation.id)}
 						<McpServerCardCompact
 							server={{
