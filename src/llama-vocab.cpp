@@ -2520,14 +2520,23 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             int32_t & id = std::get<1>(it);
 
             uint32_t new_id;
-            if (!ml.get_key(std::get<0>(it), new_id, false)) {
-                continue;
+            if (ml.get_key(std::get<0>(it), new_id, false)) {
+                if (new_id >= id_to_token.size()) {
+                    LLAMA_LOG_WARN("%s: bad special token: '%s' = %u, using default id %d\n",
+                        __func__, key.c_str(), new_id, id);
+                } else {
+                    id = new_id;
+                }
             }
-            if (new_id >= id_to_token.size()) {
-                LLAMA_LOG_WARN("%s: bad special token: '%s' = %u, using default id %d\n",
-                    __func__, key.c_str(), new_id, id);
-            } else {
-                id = new_id;
+
+            // The default id (used when the key is absent, or when an explicit id is out of range)
+            // is otherwise never validated against the vocab size. An out-of-range default reaches
+            // id_to_token[id] below (e.g. the special_eog_ids loop) as an out-of-bounds access.
+            // Disable the special token if its resolved id is out of range.
+            if (id != LLAMA_TOKEN_NULL && (size_t) id >= id_to_token.size()) {
+                LLAMA_LOG_WARN("%s: special token '%s' id %d is out of vocab range (size %zu), disabling\n",
+                    __func__, key.c_str(), id, id_to_token.size());
+                id = LLAMA_TOKEN_NULL;
             }
         }
 
