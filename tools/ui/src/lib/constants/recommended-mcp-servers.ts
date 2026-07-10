@@ -23,8 +23,7 @@ export const RECOMMENDED_MCP_SERVERS: RecommendedMCPServer[] = [
 	{
 		id: 'huggingface-mcp',
 		name: 'Hugging Face',
-		description:
-			'Browse AI models, datasets, spaces and more.',
+		description: 'Browse AI models, datasets, spaces and more.',
 		url: 'https://huggingface.co/mcp',
 		enabled: true,
 		requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds
