@@ -69,6 +69,8 @@ struct clip_hparams {
     std::vector<clip_image_size> image_res_candidates;
     int32_t preproc_min_tiles = 0;
     int32_t preproc_max_tiles = 0;
+    int32_t preproc_tile_size = 0;
+    float preproc_max_pixels_tolerance = 1.0f;
     resize_algo image_resize_algo_rf = RESIZE_ALGO_BICUBIC;
     resize_algo image_resize_algo_ov = RESIZE_ALGO_BILINEAR;
     pad_style image_pad_rf = PAD_CEIL;  // padding style for the refined image (e.g. llava-1.6)

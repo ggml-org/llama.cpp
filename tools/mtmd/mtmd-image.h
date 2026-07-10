@@ -130,14 +130,9 @@ struct mtmd_image_preprocessor_longest_edge : mtmd_image_preprocessor {
 };
 
 // custom llava-uhd slicing logic for LFM2
+// tiling params (min/max tiles, tile size, pixels tolerance) come from hparams
 // ref: https://github.com/huggingface/transformers/blob/v5.1.0/src/transformers/models/lfm2_vl/image_processing_lfm2_vl_fast.py
 struct mtmd_image_preprocessor_lfm2 : mtmd_image_preprocessor_llava_uhd {
-    // ref: https://huggingface.co/LiquidAI/LFM2.5-VL-1.6B/blob/main/processor_config.json
-    static constexpr int   min_tiles            = 2;
-    static constexpr int   max_tiles            = 10;
-    static constexpr float max_pixels_tolerance = 2.0f;
-    static constexpr int   tile_size            = 512;
-
     using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
     slice_instructions get_slice_instructions(const clip_image_size & original_size) override;
 

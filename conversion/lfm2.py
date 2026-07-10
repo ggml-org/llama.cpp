@@ -182,6 +182,16 @@ class LFM2VLModel(MmprojModel):
         # python notation, e.g. for vision_feature_layer == -1, we pick last layer -> vision_feature_layers_to_drop = 0
         vision_feature_layers_to_drop = -(self.global_config.get("vision_feature_layer", -1) + 1)
         self.gguf_writer.add_vision_block_count(self.find_vparam(self.n_block_keys) - vision_feature_layers_to_drop)
+        # tiling params from processor_config.json (do_image_splitting=False -> single tile, i.e. no tiling)
+        preproc = self.preprocessor_config
+        if preproc.get("do_image_splitting", True):
+            self.gguf_writer.add_vision_preproc_min_tiles(preproc.get("min_tiles", 2))
+            self.gguf_writer.add_vision_preproc_max_tiles(preproc.get("max_tiles", 10))
+        else:
+            self.gguf_writer.add_vision_preproc_min_tiles(1)
+            self.gguf_writer.add_vision_preproc_max_tiles(1)
+        self.gguf_writer.add_vision_preproc_tile_size(preproc.get("tile_size", 512))
+        self.gguf_writer.add_vision_preproc_max_pixels_tolerance(preproc.get("max_pixels_tolerance", 2.0))
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
