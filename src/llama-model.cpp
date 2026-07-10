@@ -1068,6 +1068,15 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn,     false);
     ml.get_key(LLM_KV_POOLING_TYPE,            hparams.pooling_type,    false);
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer_all);
+
+    // n_layer_all drives writes into fixed-size per-layer arrays (std::array<..., LLAMA_MAX_LAYERS>,
+    // e.g. is_swa_impl in set_swa_pattern). Reject a model that declares more layers than those
+    // arrays hold, otherwise an out-of-range block_count causes an out-of-bounds write during load.
+    if (hparams.n_layer_all > LLAMA_MAX_LAYERS) {
+        throw std::runtime_error(format("invalid n_layer = %u (exceeds LLAMA_MAX_LAYERS = %d)",
+            hparams.n_layer_all, LLAMA_MAX_LAYERS));
+    }
+
     ml.get_key(LLM_KV_EXPERT_COUNT,            hparams.n_expert,        false);
     ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
     ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);
