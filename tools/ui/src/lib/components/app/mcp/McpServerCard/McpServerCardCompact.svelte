@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { Plus, X } from '@lucide/svelte';
+	import { X } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { McpServerIdentity } from '$lib/components/app/mcp';
@@ -14,11 +13,11 @@
 
 	interface Props {
 		server: MCPServerSettingsEntry & { description?: string };
-		onAdd?: () => void;
+		onClick?: () => void;
 		onDismiss?: () => void;
 	}
 
-	let { server, onAdd, onDismiss }: Props = $props();
+	let { server, onClick, onDismiss }: Props = $props();
 
 	onMount(() => {
 		const state = mcpStore.getHealthCheckState(server.id);
@@ -61,13 +60,32 @@
 	let visibleTools = $derived(tools.slice(0, MCP_CARD_VISIBLE_TOOL_LIMIT));
 	let hiddenTools = $derived(tools.slice(MCP_CARD_VISIBLE_TOOL_LIMIT));
 	let hiddenToolCount = $derived(hiddenTools.length);
+
+	function handleKey(event: KeyboardEvent) {
+		if (!onClick) return;
+		if (event.key === 'Enter' || event.key === ' ') {
+			event.preventDefault();
+			onClick();
+		}
+	}
+
+	function handleDismissClick(event: MouseEvent) {
+		event.stopPropagation();
+		onDismiss?.();
+	}
 </script>
 
-<Card.Root class="relative !gap-3 bg-muted/30 p-4">
+<Card.Root
+	class={`relative !gap-3 bg-muted/30 p-4 transition-colors ${onClick ? 'cursor-pointer hover:bg-muted/50' : ''}`}
+	role={onClick ? 'button' : undefined}
+	tabindex={onClick ? 0 : undefined}
+	onclick={onClick}
+	onkeydown={handleKey}
+>
 	{#if onDismiss}
 		<button
 			type="button"
-			onclick={onDismiss}
+			onclick={handleDismissClick}
 			aria-label={`Dismiss ${displayName}`}
 			class="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
 		>
@@ -158,21 +176,5 @@
 				{/if}
 			</div>
 		{/if}
-	{/if}
-
-	{#if onAdd}
-		<div class="flex justify-end">
-			<Button
-				size="sm"
-				variant="secondary"
-				disabled={isError}
-				onclick={onAdd}
-				aria-label={`Add ${displayName}`}
-			>
-				<Plus />
-
-				Add
-			</Button>
-		</div>
 	{/if}
 </Card.Root>

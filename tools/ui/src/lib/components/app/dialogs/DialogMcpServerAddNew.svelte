@@ -132,27 +132,15 @@
 		writeConsent('dismissed');
 	}
 
-	function handleAddRecommendation(recommendedId: string) {
+	function handleRecommendationClick(recommendedId: string) {
 		const recommendation = RECOMMENDED_MCP_SERVERS.find((rec) => rec.id === recommendedId);
 
 		if (!recommendation) return;
 
-		const existing = mcpStore
-			.getServers()
-			.find((configured) => configured.url === recommendation.url);
-
-		if (existing) {
-			mcpStore.updateServer(existing.id, { enabled: true });
-			conversationsStore.setMcpServerOverride(existing.id, true);
-		} else {
-			mcpStore.addServer({
-				id: recommendation.id,
-				enabled: true,
-				url: recommendation.url,
-				name: recommendation.name
-			});
-			conversationsStore.setMcpServerOverride(recommendation.id, true);
-		}
+		// Fill the form so the user can review / tweak before saving through
+		// the dialog's primary "Add" button.
+		newServerUrl = recommendation.url;
+		newServerHeaders = '';
 	}
 
 	function handleDismissRecommendation(recommendedId: string) {
@@ -197,7 +185,7 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
-	<Dialog.Content class="sm:max-w-2xl">
+	<Dialog.Content class="sm:max-w-3xl">
 		<Dialog.Header>
 			<Dialog.Title>Add New Server</Dialog.Title>
 		</Dialog.Header>
@@ -222,7 +210,7 @@
 				</Empty.Content>
 			</Empty.Root>
 		{:else if recommendationsToShow.length > 0}
-			<div class="space-y-3">
+			<div class="space-y-3 pt-2">
 				<h3 class="text-sm font-medium text-muted-foreground">Recommended</h3>
 
 				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -236,7 +224,7 @@
 								enabled: true,
 								requestTimeoutSeconds: recommendation.requestTimeoutSeconds
 							}}
-							onAdd={() => handleAddRecommendation(recommendation.id)}
+							onClick={() => handleRecommendationClick(recommendation.id)}
 							onDismiss={() => handleDismissRecommendation(recommendation.id)}
 						/>
 					{/each}
