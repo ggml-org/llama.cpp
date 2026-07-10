@@ -1900,8 +1900,6 @@ static void test_convert_responses_to_chatcmpl() {
     }
 }
 
-// Laguna (poolside) — GLM-4-MoE tool calls + <think> reasoning, turn ends with </assistant>.
-
 // Shared LFM2 parser cases - all variants use one output format and parser
 static void test_lfm2_parser(const std::string & template_path, bool detailed_debug) {
     auto tst = peg_tester(template_path, detailed_debug);
@@ -4461,7 +4459,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
          }) {
         test_lfm2_parser(tmpl, detailed_debug);
     }
-
 
     // Thinking cases only apply to LFM2.5-8B-A1B, the one LFM2 template that emits <think>
     {

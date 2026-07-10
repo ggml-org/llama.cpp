@@ -2550,17 +2550,6 @@ static json common_chat_extra_context() {
     return ctx;
 }
 
-// Laguna (poolside) — GLM-4-MoE-style tool calls + <think> reasoning.
-// Tool call wire format:
-//   <tool_call>{name}
-//   <arg_key>{k}</arg_key>
-//   <arg_value>{v}</arg_value>
-//   ...
-//   </tool_call>
-// String-typed args are emitted raw between <arg_value>...</arg_value>; all other
-// args are JSON literals. Reasoning is <think>...</think>; the turn ends with
-// </assistant>. Both Laguna-XS.2 and Laguna-M.1 share this format.
-
 std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
@@ -2572,7 +2561,6 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         LOG_DBG("Using specialized template: Ministral/Magistral Large 3\n");
         return common_chat_params_init_ministral_3(tmpl, params);
     }
-
 
     // GPT-OSS - has unique channel-based structure that needs dedicated handler
     if (src.find("<|channel|>") != std::string::npos) {
