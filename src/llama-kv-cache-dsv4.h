@@ -21,7 +21,7 @@ public:
             const char    * name,
         const llama_memory_i::layer_filter_cb & filter);
 
-    void clear(bool data);
+    void clear(llama_seq_id seq_id, bool data);
 
     uint32_t get_ratio()    const;
     uint32_t get_state_size() const;
@@ -146,7 +146,7 @@ private:
     std::unique_ptr<llama_dsv4_comp_state> hca_state;
     std::unique_ptr<llama_dsv4_comp_state> lid_state;
 
-    void clear_compressed(bool data);
+    void clear_compressed(llama_seq_id seq_id, bool data);
 };
 
 // DSV4 raw attention only uses the SWA half of kv_raw. The base half is kept
