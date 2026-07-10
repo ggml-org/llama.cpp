@@ -1108,7 +1108,11 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
 
     cur_p->selected = 0;
 
+    std::uniform_real_distribution<double> dist(0.0f, 1.0f);
+
     if (cur_p->size == 1) {
+        // keep the RNG state aligned with backend sampling, which draws once per output
+        dist(ctx->rng);
         cur_p->data[0].p = 1.0f;
         return;
     }
@@ -1133,7 +1137,6 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
     // sample from the obtained probabilities and normalize the probs in a single pass
     // this is ~3x faster on Mac with full gpt-oss vocab than the version below
     //
-    std::uniform_real_distribution<double> dist(0.0f, 1.0f);
     const double rnd = dist(ctx->rng);
 
           double sum_run = 0.0f;

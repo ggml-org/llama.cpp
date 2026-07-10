@@ -61,6 +61,31 @@ private:
     std::vector<llama_token_data> cur;
 };
 
+static llama_token sample_dist(llama_sampler * sampler, const std::vector<float> & logits) {
+    std::vector<llama_token_data> cur;
+    for (llama_token token_id = 0; token_id < (llama_token) logits.size(); ++token_id) {
+        cur.push_back({ token_id, logits[token_id], 0.0f });
+    }
+
+    llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+    llama_sampler_apply(sampler, &cur_p);
+    GGML_ASSERT(cur_p.selected >= 0);
+    return cur_p.data[cur_p.selected].id;
+}
+
+static void test_dist_singleton_rng() {
+    llama_sampler * singleton = llama_sampler_init_dist(4242);
+    llama_sampler * control   = llama_sampler_init_dist(4242);
+
+    sample_dist(singleton, { 0.0f });
+    sample_dist(control,   { 0.0f, 0.0f });
+
+    GGML_ASSERT(sample_dist(singleton, { 0.0f, 0.0f }) == sample_dist(control, { 0.0f, 0.0f }));
+
+    llama_sampler_free(singleton);
+    llama_sampler_free(control);
+}
+
 static void test_temp(const std::vector<float> & probs, const std::vector<float> & probs_expected, float temp) {
     sampler_tester tester(probs, probs_expected);
 
@@ -307,6 +332,8 @@ static void test_perf() {
 
 int main(void) {
     ggml_time_init();
+
+    test_dist_singleton_rng();
 
     test_temp({0.1f, 0.2f, 0.3f, 0.4f}, {0.1f, 0.2f, 0.3f, 0.4f}, 1.0f);
     test_temp({0.1f, 0.2f, 0.3f, 0.4f}, {0.0f, 0.0f, 0.0f, 1.0f}, 0.0f);
