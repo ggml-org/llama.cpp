@@ -8,12 +8,14 @@
 namespace ggml_metal_tuning {
 
 // FA vec selection key buckets: ne11 = KV length, ne01 = query rows.
-// ne01 only needs the 1 vs >=2 split: Q>1 reuses one K/V tile load across query
-// rows, so the optimum flips to Q>1 exactly when there are >=2 rows to share it.
+// ne01 splits decode (==1) from batch (>=2): Q>1 reuses one K/V tile load across query
+// rows, so the optimum flips to Q>1 only with >=2 rows. Quant KV refines the batch side
+// into {2,3,4,5}: Q>1 wastes work unless ne01 is a multiple of Q (penalty recurs with
+// ne01 % Q), and q5 flips Q2->Q4 by ne01.
 // ne11 keeps a finer split: the baseline->Q>1 crossover by KV length is head-size
 // dependent (small dk crosses late, large dk wins even at short KV).
 constexpr int FA_VEC_NE11_BUCKETS[] = { 1024, 4096, 16384 };
-constexpr int FA_VEC_NE01_BUCKETS[] = { 2 };
+constexpr int FA_VEC_NE01_BUCKETS[] = { 2, 3, 4, 5 };
 
 int fa_vec_ne11_bucket(int64_t ne11);
 int fa_vec_ne01_bucket(int64_t ne01);
@@ -22,6 +24,14 @@ int fa_vec_ne01_bucket(int64_t ne01);
 // Hand-maintained mirror; keep in sync with those instantiations (run_fa_vec_tune_check
 // exercises every (Q,NE), so a missing instantiation surfaces there).
 int fa_vec_baseline_ne(int dk, int dv);
+
+// Tuned table has two row kinds. Exact rows key a (ne11_b, ne01_b) bucket. Default rows
+// collapse ne11 over one ne01 domain: ne11_b == FA_VEC_NE11_DEFAULT and ne01_b holds the
+// domain. fa_vec_pick tries exact bucket -> domain default -> baseline; short KV
+// (ne11 < FA_VEC_NE11_BUCKETS[0]) always uses baseline.
+constexpr int8_t FA_VEC_NE11_DEFAULT  = -1;
+constexpr int8_t FA_VEC_DOMAIN_DECODE = 0;  // ne01 == 1
+constexpr int8_t FA_VEC_DOMAIN_BATCH  = 1;  // ne01 >= 2
 
 struct fa_vec_key_t {
     int8_t  device_id;
