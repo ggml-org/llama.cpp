@@ -88,13 +88,31 @@ extern "C" void ggml_innerq_compute_k_squared_profile_sycl(
         sycl::accessor acc_probe{buf_probe, h, sycl::read_only};
         sycl::accessor acc_out{buf_out, h, sycl::write_only, sycl::no_init};
         h.parallel_for(sycl::range<1>(D), [=](sycl::id<1> d) {
-            double sumsq = 0.0;
+            // P3.2.2b1-current-head-followup: float-only accumulation
+            // to keep the SPIR-V payload free of `double` types,
+            // which the A770 acm-g10 offline AOT path via ocloc
+            // rejects with "Double type is not supported on this
+            // platform." The C reference in ggml/src/ggml-innerq.c
+            // is also `double`-accumulating (lines 120/122/125/
+            // 129/130), so the float-only SYCL kernel is NOT
+            // bit-equivalent to the C reference. The binding
+            // correctness gate is the harness [8c] sub-probe
+            // (tests/test-sycl-turbo-correctness.cpp:1161-1243)
+            // which uses `fabs(...) > 1e-5f` to compare
+            // ggml_innerq_compute_k_squared_profile_sycl against
+            // both the analytical expected value AND the C
+            // reference output (per-position tolerance = 1e-5f).
+            // The float-only accumulation is well within this
+            // tolerance for the small n_probe (<=8) and head_dim=128
+            // probe sizes the harness uses. See ASSUMPTIONS.md
+            // 2026-07-10 entry.
+            float sumsq = 0.0f;
             const int d_idx = (int) d[0];
             for (int i = 0; i < N; ++i) {
-                const double v = (double) acc_probe[(size_t) i * (size_t) D + (size_t) d_idx];
+                const float v = acc_probe[(size_t) i * (size_t) D + (size_t) d_idx];
                 sumsq += v * v;
             }
-            acc_out[d_idx] = (float) (sumsq / (double) N);  // mean square
+            acc_out[d_idx] = sumsq / (float) N;  // mean square
         });
     });
     // Pass 2: convert mean-square to 1 / sqrt(1 + mean-square).
@@ -102,8 +120,8 @@ extern "C" void ggml_innerq_compute_k_squared_profile_sycl(
         sycl::accessor acc_out{buf_out, h, sycl::read_write};
         h.parallel_for(sycl::range<1>(D), [=](sycl::id<1> d) {
             const int d_idx = (int) d[0];
-            const double ms = (double) acc_out[d_idx];
-            acc_out[d_idx] = (float) (1.0 / sycl::sqrt(1.0 + ms));
+            const float ms = acc_out[d_idx];
+            acc_out[d_idx] = 1.0f / sycl::sqrt(1.0f + ms);
         });
     });
     q.wait_and_throw();

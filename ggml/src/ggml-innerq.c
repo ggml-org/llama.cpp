@@ -100,14 +100,21 @@ void ggml_innerq_compute_k_squared_profile(
     if (out_scales == NULL) {
         return;
     }
-    // Validate head_dim before any writes so unsupported values don't
-    // overrun the caller's expected output buffer.
-    if (head_dim != 16 && head_dim != 32 && head_dim != 64 && head_dim != 128) {
-        return;
-    }
-    // Initialize valid outputs to the identity scale before early returns.
+    // P3.2.2b1-current-head-followup (C-reference contract fix):
+    // initialize valid outputs to the identity scale BEFORE the
+    // head_dim check so that the early-return path (unsupported
+    // head_dim, null probe, n_probe < 1) also produces identity
+    // 1.0. The harness [8b] test 4 (`invalid head_dim`) expects
+    // identity; the SYCL kernel at ggml/src/ggml-sycl/innerq.cpp
+    // :51-53 already does this. This commit makes the C reference
+    // match the SYCL contract. (Also: head_dim validation now
+    // happens AFTER the identity init, so the head_dim check is
+    // only a no-op for an already-initialized buffer.)
     for (int d = 0; d < head_dim; ++d) {
         out_scales[d] = 1.0f;
+    }
+    if (head_dim != 16 && head_dim != 32 && head_dim != 64 && head_dim != 128) {
+        return;
     }
     if (probe == NULL || n_probe < 1) {
         return;

@@ -171,17 +171,35 @@ ggml_innerq_recovery ggml_innerq_state_recover(
 //                probe[i*head_dim + d] is the activation at token i,
 //                head_dim position d. Caller owns the buffer.
 //   n_probe    -- number of probe tokens; must be >= 1
-//   head_dim   -- D; must be 16, 32, 64, or 128 (the only head_dims
-//                InnerQ supports). Other values are not policy-eligible.
+//   head_dim   -- D; the supported head_dims are 16, 32, 64, and 128
+//                (the P3.2 fleet is 128). Other values are not
+//                policy-eligible and the function returns identity
+//                (out_scales[d] = 1.0f for all d) without doing any
+//                compute; the C reference at ggml/src/ggml-innerq.c
+//                and the SYCL device kernel at ggml/src/ggml-sycl/
+//                innerq.cpp both match this contract.
 //   out_scales -- caller-provided array of `head_dim` floats; the
 //                function writes the per-position K^2 scale into it.
-//                Caller owns the buffer; it is NOT zeroed first.
+//                Caller owns the buffer; the function INITIALIZES
+//                every entry to the identity 1.0f BEFORE any early-
+//                return path (unsupported head_dim, null probe,
+//                n_probe < 1, no SYCL device) so the buffer is
+//                always in a valid state on return.
 //
 // Output convention (P3.2.3 minimal): for each position d, the scale
 // is 1 / sqrt(1 + sum_i probe[i*head_dim + d]^2 / n_probe). This
 // matches the spec's "inverse WHT of squared magnitudes" intent
 // without the WHT step (the WHT is a refinement on top, P3.2.3's
 // "Option C" follow-up).
+//
+// P3.2.2b1-current-head-followup contract change: the function now
+// initializes out_scales[d] = 1.0f for all d in [0, head_dim) BEFORE
+// the head_dim check, so the invalid-head_dim early-return path
+// produces identity (matches the harness [8b] test 4 expectation and
+// the SYCL device kernel's pre-existing behavior). The C reference
+// at ggml/src/ggml-innerq.c and the SYCL kernel at ggml/src/ggml-sycl/
+// innerq.cpp both implement this; the public API contract here
+// documents it.
 //
 // The function is pure: no side effects, no allocation. Safe to call
 // from any context including the harness probe.
