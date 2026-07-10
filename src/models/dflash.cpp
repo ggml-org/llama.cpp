@@ -161,7 +161,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
 
     ggml_tensor * cat      = nullptr;
     ggml_tensor * cat_conf = nullptr;
-    
+
     // TODO: the in-graph chain is greedy (argmax); sampling params affect only the final
     //       token pick, not the Markov conditioning path
     for (int64_t i = 0; i < block_drafts; ++i) {
