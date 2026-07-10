@@ -263,13 +263,13 @@ void ggml_vec_dot_q2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
             const uint8x16_t raw16 = vcombine_u8(raw, raw);
 
             // First 16 elements: replicate bytes 0-3, shift, mask, subtract 1
-            uint8x16_t bytes0 = vqtbl1q_u8(raw16, idx_lo);
+            uint8x16_t bytes0 = ggml_vqtbl1q_u8(raw16, idx_lo);
             int8x16_t qv0 = vsubq_s8(
                 vreinterpretq_s8_u8(vandq_u8(vshlq_u8(bytes0, shifts), mask2)),
                 one);
 
             // Second 16 elements: replicate bytes 4-7, shift, mask, subtract 1
-            uint8x16_t bytes1 = vqtbl1q_u8(raw16, idx_hi);
+            uint8x16_t bytes1 = ggml_vqtbl1q_u8(raw16, idx_hi);
             int8x16_t qv1 = vsubq_s8(
                 vreinterpretq_s8_u8(vandq_u8(vshlq_u8(bytes1, shifts), mask2)),
                 one);
