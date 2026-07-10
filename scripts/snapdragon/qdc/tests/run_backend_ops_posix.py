@@ -35,7 +35,7 @@ def test_backend_ops_htp0(type_a):
     result = run_script(
         "run-tool.sh",
         extra_env={"HB": "0"},
-        extra_args=["test-backend-ops", "-b", "HTP0", "-o", "MUL_MAT", "-p", quoted_pattern],
+        extra_args=["test-backend-ops", "-j", "8", "-b", "HTP0", "-o", "MUL_MAT", "-p", quoted_pattern],
     )
     write_qdc_log(f"backend_ops_{type_a}.log", result.stdout or "")
     assert result.returncode == 0, (

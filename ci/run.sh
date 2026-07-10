@@ -683,7 +683,7 @@ function gg_run_test_backend_ops_cpu {
 
     set -e
 
-    (time ./bin/test-backend-ops -b CPU ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops-cpu.log
+    (time ./bin/test-backend-ops -j 8 -b CPU ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops-cpu.log
 
     set +e
 }
