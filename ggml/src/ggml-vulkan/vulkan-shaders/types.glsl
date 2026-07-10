@@ -1806,6 +1806,8 @@ const int8_t kvalues_mxfp4_const[16] = {
     int8_t(0), int8_t(-1), int8_t(-2), int8_t(-3), int8_t(-4), int8_t(-6), int8_t(-8), int8_t(-12),
 };
 
+// Padded to a full cacheline (64B) for aligned shared-memory access;
+// only the first 16 entries hold real MXFP4 dequant values.
 shared int8_t kvalues_mxfp4[64];
 #endif
 
@@ -1832,7 +1834,7 @@ float ue4m3_to_fp32_build(uint u) {
 void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
-    for (uint i = gl_LocalInvocationIndex.x; i < kvalues_mxfp4.length(); i += wgsize.x) {
+    for (uint i = gl_LocalInvocationIndex.x; i < kvalues_mxfp4_const.length(); i += wgsize.x) {
         kvalues_mxfp4[i] = kvalues_mxfp4_const[i];
     }
 #if defined(DATA_A_NVFP4)
