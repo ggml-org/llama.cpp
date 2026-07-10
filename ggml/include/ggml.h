@@ -570,6 +570,7 @@ extern "C" {
         GGML_OP_RWKV_WKV7,
         GGML_OP_SOLVE_TRI,
         GGML_OP_GATED_DELTA_NET,
+        GGML_OP_GATHER,
 
         GGML_OP_UNARY,
 
@@ -1670,6 +1671,15 @@ extern "C" {
             struct ggml_tensor  * a,  // gradients of ggml_get_rows result
             struct ggml_tensor  * b,  // row indices
             struct ggml_tensor  * c); // data for ggml_get_rows, only used for its shape
+
+    // a     [ne00, ne01, ne02, ne03]
+    // b I32 [n_idx, ne01, ne02, ne03]
+    //
+    // return [n_idx, ne01, ne02, ne03]
+    GGML_API struct ggml_tensor * ggml_gather(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b);
 
     // a TD  [n_embd, ne1,    ne2,    ne3]
     // b TS  [n_embd, n_rows, ne02,   ne03] | ne02 == ne2, ne03 == ne3
