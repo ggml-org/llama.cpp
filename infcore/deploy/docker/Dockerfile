@@ -12,11 +12,17 @@ RUN cmake -S infcore -B build -C infcore/cmake/profile-rf.cmake \
  && cmake --build build -j"$(nproc)"
 
 # --- runtime stage (offline) ---
+# ВНИМАНИЕ: base-образ рантайма должен содержать РАНТАЙМ-библиотеки GPU под профиль
+# сборки (при GGML_CUDA=ON - libcuda/CUDA runtime, при GGML_VULKAN=ON - Vulkan ICD),
+# иначе llama-server не стартует. Драйвер NVIDIA пробрасывается nvidia-container-toolkit;
+# CUDA/Vulkan runtime ставится из внутреннего зеркала в base-образ. Для CPU-only контура
+# соберите с -DGGML_CUDA=OFF -DGGML_VULKAN=OFF (см. DEPLOY.md, раздел GPU).
 ARG BASE_RUNTIME=registry.internal/astra/base:1.7
 FROM ${BASE_RUNTIME}
 WORKDIR /opt/infcore
 # build/bin содержит infcore_gateway, infcore-cli И llama-server (единый output-каталог).
 COPY --from=build /src/build/bin/ /opt/infcore/bin/
+# Конфиг-ШАБЛОН (env: ключи, без секретов). В бою монтируйте свой (host=0.0.0.0).
 COPY infcore/config/gateway.yaml /opt/infcore/config/gateway.yaml
 COPY infcore/docs/DEPLOY.md /opt/infcore/docs/DEPLOY.md
 COPY infcore/NOTICE infcore/sbom.cdx.json /opt/infcore/
@@ -27,5 +33,5 @@ RUN useradd -r -s /usr/sbin/nologin infcore \
 USER infcore
 # Модели монтируются томом, в образ не зашиваются. Управляемые llama-server gateway
 # поднимает сам (config.runtime.llama_server_bin=/opt/infcore/bin/llama-server).
-EXPOSE 8080 9090
+EXPOSE 8080
 ENTRYPOINT ["/opt/infcore/bin/infcore_gateway", "/opt/infcore/config/gateway.yaml"]

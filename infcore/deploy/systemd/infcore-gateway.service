@@ -31,5 +31,10 @@ ProtectHome=yes
 ReadWritePaths=/var/log/infcore
 LimitNOFILE=65536
 
+# Offline-инвариант на уровне ядра: запрещаем весь egress, кроме loopback.
+# Клиенты ходят на gateway - добавьте их подсеть в IPAddressAllow (напр. 10.0.0.0/8).
+IPAddressDeny=any
+IPAddressAllow=localhost
+
 [Install]
 WantedBy=multi-user.target
