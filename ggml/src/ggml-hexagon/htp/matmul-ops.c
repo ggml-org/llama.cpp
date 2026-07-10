@@ -92,10 +92,10 @@ struct htp_mm_context {
     // Per thread quant tasks
     // Precomputed block-parallel quantization values
     worker_callback_t quant_task_func;
-    uint32_t          quant_ib_first[MAX_NUM_WORKERS];
-    uint32_t          quant_ib_last[MAX_NUM_WORKERS];
-    uint32_t          quant_r[MAX_NUM_WORKERS];
-    uint32_t          quant_c[MAX_NUM_WORKERS];
+    uint32_t          quant_ib_first[WORK_QUEUE_MAX_N_THREADS];
+    uint32_t          quant_ib_last[WORK_QUEUE_MAX_N_THREADS];
+    uint32_t          quant_r[WORK_QUEUE_MAX_N_THREADS];
+    uint32_t          quant_c[WORK_QUEUE_MAX_N_THREADS];
     uint32_t          n_quant_tasks;
     uint32_t          n_quant_rows_per_thread;
     atomic_uint       quant_barrier;

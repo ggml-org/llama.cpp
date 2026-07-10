@@ -5,7 +5,7 @@
 #include "hmx-queue.h"
 #include "htp-ops.h"
 #include "hex-profile.h"
-#include "worker-pool.h"
+#include "work-queue.h"
 
 #include <assert.h>
 #include <dspqueue.h>
@@ -68,7 +68,7 @@ struct htp_context {
     dspqueue_t             queue;
     dma_queue *            dma[HTP_MAX_NTHREADS];
     struct htp_mmap        mmap[HTP_MAX_MMAPS];
-    worker_pool_context_t  worker_pool;
+    work_queue_t           work_queue;
     uint32_t               n_threads;
 
     int                    thread_id;

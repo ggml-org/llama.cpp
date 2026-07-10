@@ -29,7 +29,7 @@
 #include "htp-ops.h"
 #include "htp-ops.h"
 #include "htp_iface.h"
-#include "worker-pool.h"
+#include "work-queue.h"
 #include "hex-profile.h"
 
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
@@ -434,16 +434,15 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     ctx->ddr_spad_size = 512 * 1024; // 512 KB
     ctx->ddr_spad_base = memalign(128, ctx->ddr_spad_size);
 
-    // init worker pool
-    err = worker_pool_init(&ctx->worker_pool, n_hvx);
-    if (err != AEE_SUCCESS) {
-        FARF(ERROR, "Unable to create worker pool");
+    // init work queue
+    if (!work_queue_init(&ctx->work_queue, n_hvx)) {
+        FARF(ERROR, "Unable to create work queue");
         if (ctx->ddr_spad_base) {
             free(ctx->ddr_spad_base);
             ctx->ddr_spad_base = NULL;
             ctx->ddr_spad_size = 0;
         }
-        return err;
+        return AEE_EFAILED;
     }
 
     FARF(HIGH, "session %u started: n-hvx %u vtcm-size %zu vtcm-rctx %u n-threads %u thread-id %d thread-prio %d \n",
@@ -471,9 +470,9 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
         return err;
     }
 
-    if (ctx->worker_pool) {
-        // Release worker pool
-        worker_pool_release(&ctx->worker_pool);
+    if (ctx->work_queue) {
+        // Release work queue
+        work_queue_release(&ctx->work_queue);
     }
 
     for (int i = 0; i < ctx->n_threads; i++) {
