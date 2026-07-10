@@ -35,6 +35,20 @@ class LagunaModel(TextModel):
                 self.gguf_writer.add_eot_token_id(extra[0])
                 logger.info(f"gguf: registered eot_token_id={extra[0]} from eos list {eos_ids}")
 
+    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+        # </assistant> is the assistant turn-end (registered as eot below). The
+        # HF tokenizer flags it special=false, so the base classifies it as
+        # USER_DEFINED and llama.cpp renders its text into generated content,
+        # leaking "</assistant>" and breaking response parsing. It is a control
+        # marker, so promote it to CONTROL: llama.cpp then treats it as
+        # end-of-generation and suppresses its text.
+        tokens, toktypes, tokpre = super().get_vocab_base()
+        for i, tok in enumerate(tokens):
+            if tok == "</assistant>":
+                toktypes[i] = gguf.TokenType.CONTROL
+                logger.info(f"gguf: marked </assistant> (id {i}) as CONTROL token")
+        return tokens, toktypes, tokpre
+
     # --- hparams -------------------------------------------------------------
 
     def set_gguf_parameters(self) -> None:
