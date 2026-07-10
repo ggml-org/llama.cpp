@@ -1235,9 +1235,16 @@ static void compare_masking_penalties_logits(
             continue;
         }
 
-        const float diff = fabsf(it->second - backend_logits[i]);
-        max_diff = std::max(max_diff, diff);
-        if (!std::isfinite(backend_logits[i]) || diff > 1e-3f) {
+        const bool same_infinity =
+            std::isinf(it->second) &&
+            std::isinf(backend_logits[i]) &&
+            std::signbit(it->second) == std::signbit(backend_logits[i]);
+        const float diff = same_infinity ? 0.0f : fabsf(it->second - backend_logits[i]);
+        if (std::isfinite(diff)) {
+            max_diff = std::max(max_diff, diff);
+        }
+        if (!same_infinity &&
+            (!std::isfinite(it->second) || !std::isfinite(backend_logits[i]) || diff > 1e-3f)) {
             if (n_mismatch < 5) {
                 printf("%s penalties mismatch token %d: cpu=%.6f backend=%.6f diff=%.6f\n",
                         filter_name, token, it->second, backend_logits[i], diff);
@@ -1297,6 +1304,9 @@ static void test_backend_penalties_sampling(const test_params & params) {
     compare_masking_penalties_logits(params, "top-p repeat", []() {
         return llama_sampler_init_top_p(0.9f, 0);
     }, 64, 1.1f, 0.0f, 0.0f, "Hello");
+    compare_masking_penalties_logits(params, "top-p repeat zero", []() {
+        return llama_sampler_init_top_p(0.9f, 0);
+    }, 64, 0.0f, 0.0f, 0.0f, "Hello");
     compare_masking_penalties_logits(params, "top-p frequency", []() {
         return llama_sampler_init_top_p(0.9f, 0);
     }, 64, 1.0f, 0.5f, 0.0f, "Hello");
