@@ -1,5 +1,8 @@
 #include "models.h"
 #include "llama-kv-cache.h"
+#ifndef LLAMA_TENSOR_NAME_FATTN
+#define LLAMA_TENSOR_NAME_FATTN "__fattn__"
+#endif
 #include <cmath>
 #include <vector>
 #include <algorithm>
