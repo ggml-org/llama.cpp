@@ -24,6 +24,42 @@
 
 #define UNUSED GGML_UNUSED
 
+static bool ggml_repack_rvv_vlen1024_type(const struct ggml_tensor * cur, ggml_type type) {
+#if defined __riscv_zvfh
+    if (!cur || cur->type != type || !ggml_cpu_has_riscv_v()) {
+        return false;
+    }
+
+    return __riscv_vlenb() * 8 == 1024;
+#else
+    GGML_UNUSED(cur);
+    GGML_UNUSED(type);
+    return false;
+#endif
+}
+
+static int ggml_repack_q4_K_vlen1024_cols(const struct ggml_tensor * cur) {
+    if (!ggml_repack_rvv_vlen1024_type(cur, GGML_TYPE_Q4_K)) {
+        return 0;
+    }
+    if (cur->ne[1] % 64 == 0) {
+        return 64;
+    }
+
+    return 0;
+}
+
+static int ggml_repack_q5_K_vlen1024_cols(const struct ggml_tensor * cur) {
+    if (!ggml_repack_rvv_vlen1024_type(cur, GGML_TYPE_Q5_K)) {
+        return 0;
+    }
+    if (cur->ne[1] % 64 == 0) {
+        return 64;
+    }
+
+    return 0;
+}
+
 static inline int nearest_int(float fval) {
     assert(fabsf(fval) <= 4194303.f);
     float val = fval + 12582912.f;
@@ -2962,6 +2998,49 @@ static block_q4_Kx16 make_block_q4_Kx16(block_q4_K * in, unsigned int blck_size_
     return out;
 }
 
+static block_q4_Kx64 make_block_q4_Kx64(block_q4_K * in, unsigned int blck_size_interleave) {
+    block_q4_Kx64 out;
+    constexpr int N_COLS = 64;
+
+    GGML_ASSERT(blck_size_interleave == 1);
+
+    for (int i = 0; i < N_COLS; i++) {
+        out.d[i] = in[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
+        out.dmin[i] = in[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+    }
+
+    for (int i = 0; i < QK_K / 2 * N_COLS; ++i) {
+        int src_id = i % N_COLS;
+        int src_offset = i / N_COLS;
+
+        out.qs[i] = in[src_id].qs[src_offset];
+    }
+
+    uint8_t s[8 * N_COLS], m[8 * N_COLS];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < N_COLS; j++) {
+            s[i * N_COLS + j] = in[j].scales[i] & 63;
+            m[i * N_COLS + j] = in[j].scales[i + 4] & 63;
+        }
+    }
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < N_COLS; j++) {
+            s[4 * N_COLS + i * N_COLS + j] = ((in[j].scales[i] & 192) >> 2) | (in[j].scales[i + 8] & 15);
+            m[4 * N_COLS + i * N_COLS + j] = ((in[j].scales[i + 4] & 192) >> 2) | ((in[j].scales[i + 8] & 240) >> 4);
+        }
+    }
+
+    for (int i = 0; i < 8 * N_COLS; i++) {
+        out.scales[i] = (s[i] & 15) | ((m[i] & 15) << 4);
+    }
+    for (int i = 0; i < 4 * N_COLS; i++) {
+        out.scales[8 * N_COLS + i] =
+            ((s[i] & 48) >> 4) | ((m[i] & 48) >> 2) | (s[4 * N_COLS + i] & 48) | ((m[4 * N_COLS + i] & 48) << 2);
+    }
+
+    return out;
+}
+
 static block_q2_Kx8 make_block_q2_Kx8(block_q2_K * in, unsigned int blck_size_interleave) {
     block_q2_Kx8 out;
 
@@ -3084,6 +3163,54 @@ static block_q5_Kx8 make_block_q5_Kx8(block_q5_K * in, unsigned int blck_size_in
         out.scales[i * 12 + 57] = (s[5] & 15) + ((m[5] & 15) << 4);
         out.scales[i * 12 + 58] = (s[6] & 15) + ((m[6] & 15) << 4);
         out.scales[i * 12 + 59] = (s[7] & 15) + ((m[7] & 15) << 4);
+    }
+
+    return out;
+}
+
+static block_q5_Kx64 make_block_q5_Kx64(const block_q5_K * in, unsigned int blck_size_interleave) {
+    block_q5_Kx64 out;
+    constexpr int N_COLS = 64;
+
+    GGML_ASSERT(blck_size_interleave == 1);
+
+    for (int i = 0; i < N_COLS; i++) {
+        out.d[i] = in[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d;
+        out.dmin[i] = in[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin;
+    }
+
+    for (int i = 0; i < QK_K / 2 * N_COLS; ++i) {
+        const int src_id = i % N_COLS;
+        const int src_offset = i / N_COLS;
+        out.qs[i] = in[src_id].qs[src_offset];
+    }
+
+    for (int i = 0; i < QK_K / 8 * N_COLS; ++i) {
+        const int src_id = i % N_COLS;
+        const int src_offset = i / N_COLS;
+        out.qh[i] = in[src_id].qh[src_offset];
+    }
+
+    uint8_t s[8 * N_COLS], m[8 * N_COLS];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < N_COLS; j++) {
+            s[i * N_COLS + j] = in[j].scales[i] & 63;
+            m[i * N_COLS + j] = in[j].scales[i + 4] & 63;
+        }
+    }
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < N_COLS; j++) {
+            s[4 * N_COLS + i * N_COLS + j] = ((in[j].scales[i] & 192) >> 2) | (in[j].scales[i + 8] & 15);
+            m[4 * N_COLS + i * N_COLS + j] = ((in[j].scales[i + 4] & 192) >> 2) | ((in[j].scales[i + 8] & 240) >> 4);
+        }
+    }
+
+    for (int i = 0; i < 8 * N_COLS; i++) {
+        out.scales[i] = (s[i] & 15) | ((m[i] & 15) << 4);
+    }
+    for (int i = 0; i < 4 * N_COLS; i++) {
+        out.scales[8 * N_COLS + i] =
+            ((s[i] & 48) >> 4) | ((m[i] & 48) >> 2) | (s[4 * N_COLS + i] & 48) | ((m[4 * N_COLS + i] & 48) << 2);
     }
 
     return out;
@@ -3289,6 +3416,34 @@ static int repack_q4_K_to_q4_K_16_bl(struct ggml_tensor * t, int interleave_bloc
     GGML_UNUSED(data_size);
 }
 
+static int repack_q4_K_to_q4_K_64_bl(struct ggml_tensor * t, int interleave_block, const void * GGML_RESTRICT data, size_t data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_Q4_K);
+    constexpr int nrows_interleaved = 64;
+
+    block_q4_Kx64 * dst = (block_q4_Kx64*)t->data;
+    const block_q4_K * src = (const block_q4_K*) data;
+    block_q4_K dst_tmp[nrows_interleaved];
+    int nrow = ggml_nrows(t);
+    int nblocks = t->ne[0] / QK_K;
+
+    GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_q4_K));
+
+    if (t->ne[1] % nrows_interleaved != 0 || t->ne[0] % QK_K != 0) {
+        return -1;
+    }
+
+    for (int b = 0; b < nrow; b += nrows_interleaved) {
+        for (int64_t x = 0; x < nblocks; x++) {
+            for (int i  = 0; i < nrows_interleaved; i++ ) {
+                dst_tmp[i] = src[x + i * nblocks];
+            }
+            *dst++ = make_block_q4_Kx64(dst_tmp, interleave_block);
+        }
+        src += nrows_interleaved * nblocks;
+    }
+    return 0;
+}
+
 static int repack_q2_K_to_q2_K_8_bl(struct ggml_tensor * t, int interleave_block, const void * GGML_RESTRICT data, size_t data_size) {
     GGML_ASSERT(t->type == GGML_TYPE_Q2_K);
     GGML_ASSERT(interleave_block == 8);
@@ -3411,6 +3566,34 @@ static int repack_q5_K_to_q5_K_8_bl(struct ggml_tensor *       t,
                 dst_tmp[i] = src[x + i * nblocks];
             }
             *dst++ = make_block_q5_Kx8(dst_tmp, interleave_block);
+        }
+        src += nrows_interleaved * nblocks;
+    }
+    return 0;
+}
+
+static int repack_q5_K_to_q5_K_64_bl(struct ggml_tensor * t, int interleave_block, const void * GGML_RESTRICT data, size_t data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_Q5_K);
+    constexpr int nrows_interleaved = 64;
+
+    block_q5_Kx64 * dst = (block_q5_Kx64 *) t->data;
+    const block_q5_K * src = (const block_q5_K *) data;
+    block_q5_K dst_tmp[nrows_interleaved];
+    int nrow = ggml_nrows(t);
+    int nblocks = t->ne[0] / QK_K;
+
+    GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_q5_K));
+
+    if (t->ne[1] % nrows_interleaved != 0 || t->ne[0] % QK_K != 0) {
+        return -1;
+    }
+
+    for (int b = 0; b < nrow; b += nrows_interleaved) {
+        for (int64_t x = 0; x < nblocks; x++) {
+            for (int i = 0; i < nrows_interleaved; i++) {
+                dst_tmp[i] = src[x + i * nblocks];
+            }
+            *dst++ = make_block_q5_Kx64(dst_tmp, interleave_block);
         }
         src += nrows_interleaved * nblocks;
     }
@@ -3943,6 +4126,14 @@ template <> int repack<block_q4_K, 1, 16>(struct ggml_tensor * t, const void * d
     return repack_q4_K_to_q4_K_16_bl(t, 1, data, data_size);
 }
 
+template <> int repack<block_q4_K, 1, 64>(struct ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_q4_K_to_q4_K_64_bl(t, 1, data, data_size);
+}
+
+template <> int repack<block_q5_K, 1, 64>(struct ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_q5_K_to_q5_K_64_bl(t, 1, data, data_size);
+}
+
 template <> int repack<block_iq4_nl, 1, 16>(struct ggml_tensor * t, const void * data, size_t data_size) {
     return repack_iq4_nl_to_iq4_nl_16_bl(t, 1, data, data_size);
 }
@@ -4038,6 +4229,14 @@ template <> void gemv<block_q4_0, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_
 
 template <> void gemv<block_q4_K, 1, 16, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemv_q4_K_16x1_q8_K(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemv<block_q4_K, 1, 64, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemv_q4_K_64x1_q8_K(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemv<block_q5_K, 1, 64, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemv_q5_K_64x1_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
 template <> void gemv<block_iq4_nl, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
@@ -4137,6 +4336,14 @@ template <> void gemm<block_q4_K, 1, 16, GGML_TYPE_Q8_K>(int n, float * s, size_
     ggml_gemm_q4_K_16x1_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
+template <> void gemm<block_q4_K, 1, 64, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_q4_K_64x1_q8_K(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemm<block_q5_K, 1, 64, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_q5_K_64x1_q8_K(n, s, bs, vx, vy, nr, nc);
+}
+
 template <> void gemm<block_iq4_nl, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_iq4_nl_16x1_q8_0(n, s, bs, vx, vy, nr, nc);
 }
@@ -4156,7 +4363,6 @@ class tensor_traits_base : public ggml::cpu::tensor_traits {
 };
 
 template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE> class tensor_traits : public tensor_traits_base {
-
     bool work_size(int /* n_threads */, const struct ggml_tensor * op, size_t & size) override {
         // not realy a GGML_TYPE_Q8_0 but same size.
         switch (op->op) {
@@ -4565,6 +4771,8 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
 #if defined __riscv_zvfh
     static const ggml::cpu::repack::tensor_traits<block_q4_0, 1, 16, GGML_TYPE_Q8_0> q4_0_16x1_q8_0;
     static const ggml::cpu::repack::tensor_traits<block_q4_K, 1, 16, GGML_TYPE_Q8_K> q4_K_16x1_q8_K;
+    static const ggml::cpu::repack::tensor_traits<block_q4_K, 1, 64, GGML_TYPE_Q8_K> q4_K_64x1_q8_K;
+    static const ggml::cpu::repack::tensor_traits<block_q5_K, 1, 64, GGML_TYPE_Q8_K> q5_K_64x1_q8_K;
     static const ggml::cpu::repack::tensor_traits<block_iq4_nl, 1, 16, GGML_TYPE_Q8_0> iq4_nl_16x1_q8_0;
     static const ggml::cpu::repack::tensor_traits<block_q8_0, 1, 16, GGML_TYPE_Q8_0> q8_0_16x1_q8_0;
     static const ggml::cpu::repack::tensor_traits<block_q2_K, 1, 16, GGML_TYPE_Q8_K> q2_K_16x1_q8_K;
@@ -4615,11 +4823,14 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
         }
         if (ggml_cpu_has_riscv_v()) {
             #if defined __riscv_zvfh
+            switch (ggml_repack_q4_K_vlen1024_cols(cur)) {
+                case 64: { return &q4_K_64x1_q8_K; }
+                default: { break; }
+            }
             switch (__riscv_vlenb() * 8) {
                 case 128:  { break; } // TODO
                 case 256:  { if (cur->ne[1] % 16 == 0) { return &q4_K_16x1_q8_K; } break; }
                 case 512:  { break; } // TODO
-                case 1024: { break; } // TODO
                 default:   { return nullptr; }
             }
             #endif
@@ -4642,6 +4853,14 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             #endif
         }
     } else if (cur->type == GGML_TYPE_Q5_K) {
+        if (ggml_cpu_has_riscv_v()) {
+            #if defined __riscv_zvfh
+            switch (ggml_repack_q5_K_vlen1024_cols(cur)) {
+                case 64: { return &q5_K_64x1_q8_K; }
+                default: { break; }
+            }
+            #endif
+        }
         if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) {
             if (cur->ne[1] % 8 == 0) {
                 return &q5_K_8x8_q8_K;
