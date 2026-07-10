@@ -37,3 +37,8 @@ export const MODEL_ACTIVATED_PARAMS_RE = /^[Aa]\d+(\.\d+)?[BbMmKkTt]$/;
  * Container format segments to exclude from tags (every model uses these).
  */
 export const MODEL_IGNORED_SEGMENTS = new Set(['GGUF', 'GGML']);
+
+/**
+ * Matches a trailing weight file extension, e.g. `model.gguf` -> `model`.
+ */
+export const MODEL_WEIGHT_EXTENSION_RE = /\.(gguf|ggml)$/i;

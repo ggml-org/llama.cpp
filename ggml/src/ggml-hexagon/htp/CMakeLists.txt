@@ -20,6 +20,7 @@ add_library(${HTP_LIB} SHARED
     worker-pool.c
     hex-dma.c
     hmx-queue.c
+    gated-delta-net-ops.c
     binary-ops.c
     unary-ops.c
     sum-rows-ops.c
@@ -30,17 +31,16 @@ add_library(${HTP_LIB} SHARED
     get-rows-ops.c
     cpy-ops.c
     repeat-ops.c
-    argsort-ops.c
     ssm-conv.c
     cumsum-ops.c
     fill-ops.c
     concat-ops.c
     diag-ops.c
     solve-tri-ops.c
-    gated-delta-net-ops.c
     pad-ops.c
-    matmul-ops.c
     flash-attn-ops.c
+    matmul-ops.c
+    argsort-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
