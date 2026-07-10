@@ -145,6 +145,10 @@ class ModelsStore {
 	 */
 
 	getModelModalities(modelId: string): ModelModalities | null {
+		if (!isRouterMode() && serverStore.props?.modalities) {
+			return this.buildModalities(serverStore.props.modalities);
+		}
+
 		const model = this.models.find((m) => m.model === modelId || m.id === modelId);
 		if (model?.modalities) {
 			return model.modalities;
