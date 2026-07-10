@@ -1,6 +1,7 @@
 // infcore — корп. лицензия.
 #include "audit/audit.h"
 
+#include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -28,7 +29,8 @@ AuditLog::~AuditLog() {
 }
 
 bool AuditLog::open(const std::string& path) {
-    fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0640);
+    // O_CLOEXEC: дочерние llama-server не должны наследовать fd журнала.
+    fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
     return fd_ >= 0;
 }
 
@@ -52,7 +54,10 @@ void AuditLog::log(const AuditEvent& e) {
     ssize_t off = 0, n = (ssize_t)line.size();
     while (off < n) {
         ssize_t w = ::write(fd_, line.data() + off, n - off);
-        if (w <= 0) break;   // запись прервана; журнал не должен ронять gateway
+        if (w < 0) {
+            if (errno == EINTR || errno == EAGAIN) continue;  // повтор, а не потеря записи
+            break;   // фатальная ошибка записи; журнал не должен ронять gateway
+        }
         off += w;
     }
     ::fsync(fd_);
