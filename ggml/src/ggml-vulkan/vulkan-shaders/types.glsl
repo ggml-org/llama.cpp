@@ -1806,7 +1806,7 @@ const int8_t kvalues_mxfp4_const[16] = {
     int8_t(0), int8_t(-1), int8_t(-2), int8_t(-3), int8_t(-4), int8_t(-6), int8_t(-8), int8_t(-12),
 };
 
-shared int8_t kvalues_mxfp4[16];
+shared int8_t kvalues_mxfp4[64];
 #endif
 
 #if defined(DATA_A_NVFP4) && !defined(USE_OCP_FP4)
