@@ -5963,6 +5963,43 @@ kernel void kernel_argsort_merge_f32_i32(
 template [[host_name("kernel_argsort_merge_f32_i32_asc")]]  kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_ASC>;
 template [[host_name("kernel_argsort_merge_f32_i32_desc")]] kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_DESC>;
 
+kernel void kernel_flash_attn_ext_q8_0_to_f16(
+        constant ggml_metal_kargs_flash_attn_ext_q8_0_to_f16 & args,
+        device const char * k,
+        device const char * v,
+        device       half * k_dst,
+        device       half * v_dst,
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= 2u*(uint) args.nblocks) {
+        return;
+    }
+
+    const bool is_v = gid >= (uint) args.nblocks;
+    uint ib = gid - (is_v ? args.nblocks : 0);
+    const uint idst = ib;
+
+    const uint nb = args.ne10/QK8_0;
+    const uint i0 = ib%nb;
+    ib /= nb;
+    const uint i1 = ib%args.ne11;
+    ib /= args.ne11;
+    const uint i2 = ib%args.ne12;
+    const uint i3 = ib/args.ne12;
+
+    const uint64_t offs = is_v ?
+        i0*args.nb20 + i1*args.nb21 + i2*args.nb22 + i3*args.nb23 :
+        i0*args.nb10 + i1*args.nb11 + i2*args.nb12 + i3*args.nb13;
+
+    device const block_q8_0 * src = (device const block_q8_0 *) ((is_v ? v : k) + offs);
+    device const packed_char4 * qs = (device const packed_char4 *) src->qs;
+    device half4 * dst = (device half4 *) (is_v ? v_dst : k_dst) + 8*idst;
+    const float d = src->d;
+
+    for (short i = 0; i < 8; ++i) {
+        dst[i] = half4(float4(qs[i])*d);
+    }
+}
+
 constant bool FC_flash_attn_ext_pad_has_mask [[function_constant(FC_FLASH_ATTN_EXT_PAD + 0)]];
 
 constant int32_t FC_flash_attn_ext_pad_ncpsg [[function_constant(FC_FLASH_ATTN_EXT_PAD + 25)]];
@@ -7004,6 +7041,7 @@ template<
     short DK,       // K head size
     short DV,       // V head size
     short NE = 4,   // head elements per thread
+    short H  = 1,   // query heads per threadgroup
     short Q  = OP_FLASH_ATTN_EXT_VEC_NQPSG,  // queries per threadgroup
     short C  = OP_FLASH_ATTN_EXT_VEC_NCPSG>  // cache items per threadgroup
 kernel void kernel_flash_attn_ext_vec(
@@ -7021,6 +7059,7 @@ kernel void kernel_flash_attn_ext_vec(
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
     static_assert(DK % 32 == 0, "DK must be divisible by 32");
     static_assert(DV % 32 == 0, "DV must be divisible by 32");
+    static_assert(H == 1 || H == 2, "unsupported query heads per threadgroup");
 
 #define NWG  (FC_flash_attn_ext_vec_nwg)
 #define NSG  (FC_flash_attn_ext_vec_nsg)
@@ -7031,7 +7070,7 @@ kernel void kernel_flash_attn_ext_vec(
     const short iwg = tgpig[2]%NWG;
 
     const ushort iq3 = tgpig[2]/NWG;
-    const ushort iq2 = tgpig[1];
+    const ushort iq2 = H*tgpig[1];
     const ushort iq1 = tgpig[0];
 
     constexpr short DK4 = DK/4;
@@ -7050,17 +7089,11 @@ kernel void kernel_flash_attn_ext_vec(
     static_assert(DK4 % NL == 0, "DK4 must be divisible by NL");
     static_assert(DV4 % NL == 0, "DV4 must be divisible by NL");
 
-  //const short T = PK + NSG*SH; // shared memory size per query in (half)
-
-  //threadgroup q_t   * sq  = (threadgroup q_t   *) (shmem_f16 +                      0*PK); // holds the query data
-    threadgroup q4_t  * sq4 = (threadgroup q4_t  *) (shmem_f16 +                      0*PK); // same as above but in q4_t
-    threadgroup s_t   * ss  = (threadgroup s_t   *) (shmem_f16 +   sgitg*SH       + NSG*PK); // scratch buffer for attention
-    threadgroup s4_t  * ss4 = (threadgroup s4_t  *) (shmem_f16 +   sgitg*SH       + NSG*PK); // same as above but in s4_t
-    threadgroup half  * sm  = (threadgroup half  *) (shmem_f16 +   sgitg*SH + 2*C + NSG*PK); // scratch buffer for mask
-    threadgroup o4_t  * so4 = (threadgroup o4_t  *) (shmem_f16 + 2*sgitg*PV       + NSG*PK + NSG*SH); // scratch buffer for the results
-
-    // store the result for all queries in shared memory (the O matrix from the paper)
-    so4 += tiisg;
+    threadgroup q4_t * sq4 = (threadgroup q4_t *) shmem_f16;
+    threadgroup s_t  * ss  = (threadgroup s_t  *) (shmem_f16 + NSG*H*PK);
+    threadgroup s4_t * ss4 = (threadgroup s4_t *) (shmem_f16 + NSG*H*PK);
+    threadgroup half * sm  = (threadgroup half *) (shmem_f16 + NSG*H*PK);
+    threadgroup o4_t * so4 = (threadgroup o4_t *) (shmem_f16 + NSG*H*(PK + SH));
 
     {
         q += iq1*args.nb01 + iq2*args.nb02 + iq3*args.nb03;
@@ -7072,53 +7105,51 @@ kernel void kernel_flash_attn_ext_vec(
         v += ikv2*args.nb22 + ikv3*args.nb23;
     }
 
-    // load heads from Q to shared memory
-    device const float4 * q4 = (device const float4 *) ((device const char *) q);
-
     if (iq1 < args.ne01) {
-        for (short i = tiisg; i < PK4; i += NW) {
-            if (i < DK4) {
-                sq4[i] = (q4_t) q4[i];
-            } else {
-                sq4[i] = (q4_t) 0.0f;
+        FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+            device const float4 * q4 = (device const float4 *) (q + ih*args.nb02);
+
+            for (short i = tiisg; i < PK4; i += NW) {
+                if (i < DK4) {
+                    sq4[ih*PK4 + i] = (q4_t) q4[i];
+                } else {
+                    sq4[ih*PK4 + i] = (q4_t) 0.0f;
+                }
             }
         }
     }
 
     // zero out so
-    for (short i = 0; i < DV4/NL; ++i) {
-        so4[i*NL] = (o4_t) 0.0f;
+    FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+        threadgroup o4_t * so4h = so4 + (sgitg*H + ih)*PV4 + tiisg;
+
+        for (short i = 0; i < DV4/NL; ++i) {
+            so4h[i*NL] = (o4_t) 0.0f;
+        }
     }
 
     // zero out shared memory SH
-    for (short i = tiisg; i < SH/4; i += NW) {
-        ss4[i] = (s4_t) 0.0f;
+    for (short i = tiisg; i < H*SH/4; i += NW) {
+        ss4[sgitg*H*SH/4 + i] = (s4_t) 0.0f;
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     {
-        float S = 0.0f;
-        float M = -FLT_MAX/2;
+        float S[H];
+        float M[H];
+
+        FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+            S[ih] = 0.0f;
+            M[ih] = -FLT_MAX/2;
+        }
 
         // thread indices inside the simdgroup
         const short tx = tiisg%NL;
         const short ty = tiisg/NL;
 
-        // pointer to the mask
         device const half * pm = (device const half *) (mask + iq1*args.nb31 + (iq2%args.ne32)*args.nb32 + (iq3%args.ne33)*args.nb33);
-
-        float slope = 1.0f;
-
-        // ALiBi
-        if (FC_flash_attn_ext_vec_has_bias) {
-            const short h = iq2;
-
-            const float base = h < args.n_head_log2 ? args.m0 : args.m1;
-            const short exph = h < args.n_head_log2 ? h + 1 : 2*(h - args.n_head_log2) + 1;
-
-            slope = pow(base, exph);
-        }
+        threadgroup half * sm0 = sm + sgitg*H*SH + 2*C;
 
         // loop over the KV cache
         // each simdgroup handles blocks of Q rows and C columns
@@ -7142,7 +7173,7 @@ kernel void kernel_flash_attn_ext_vec(
 
                 if (!FC_flash_attn_ext_vec_has_mask) {
                     if (ic + tiisg >= args.ne11) {
-                        sm[tiisg] = -MAXHALF;
+                        sm0[tiisg] = -MAXHALF;
                     }
                 } else {
                     pm = (device const half *) (mask) +
@@ -7155,29 +7186,38 @@ kernel void kernel_flash_attn_ext_vec(
             }
 
             if (FC_flash_attn_ext_vec_has_mask) {
-                sm[tiisg] = pm[ic + tiisg];
+                sm0[tiisg] = pm[ic + tiisg];
             }
 
             // skip -INF blocks
-            if (simd_max(sm[tiisg]) <= -MAXHALF) {
+            if (simd_max(sm0[tiisg]) <= -MAXHALF) {
                 continue;
             }
 
             // Q*K^T
             {
-                device      const k4_t * pk4 = (device const k4_t *) (k + ic*args.nb11);
-                threadgroup const q4_t * pq4 = sq4;
+                device const k4_t * pk4 = (device const k4_t *) (k + ic*args.nb11);
 
                 pk4 += ty*NS10/4 + tx;
-                pq4 += tx;
 
-                qk_t mqk[C/NE] = { [ 0 ... C/NE - 1] = 0.0f };
+                qk_t mqk[H][C/NE];
 
-                // each simdgroup processes 1 query and NE (NW/NL) cache elements
+                FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                    FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
+                        mqk[ih][cc] = 0.0f;
+                    }
+                }
+
+                // each simdgroup processes H query heads and NE (NW/NL) cache elements
                 FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
                     if (is_same<kd4_t, k4_t>::value) {
                         FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
-                            mqk[cc] += dot((float4) pk4[cc*NE*NS10/4 +  ii*NL], (float4) pq4[ii*NL]);
+                            const k4_t mk = pk4[cc*NE*NS10/4 + ii*NL];
+                            const short i = ii*NL + tx;
+
+                            FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                                mqk[ih][cc] += dot((float4) mk, (float4) sq4[ih*PK4 + i]);
+                            }
                         }
                     } else {
                         device const kd4_t * pk = (device const kd4_t *) (k + ((ic + NE*cc + ty)*args.nb11));
@@ -7189,57 +7229,64 @@ kernel void kernel_flash_attn_ext_vec(
 
                             deq_k_t4(pk + i/nl_k, i%nl_k, mk);
 
-                            mqk[cc] += dot((float4) mk, (float4) sq4[i]);
+                            FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                                mqk[ih][cc] += dot((float4) mk, (float4) sq4[ih*PK4 + i]);
+                            }
                         }
                     }
 
-                    if (NE == 1) {
-                        mqk[cc] = simd_sum(mqk[cc]);
-                    } else {
-                        // simdgroup reduce (NE = 4)
-                        // [ 0 ..  7] -> [ 0]
-                        // [ 8 .. 15] -> [ 8]
-                        // [16 .. 23] -> [16]
-                        // [24 .. 31] -> [24]
-                        if (NE <= 1) {
-                            mqk[cc] += simd_shuffle_down(mqk[cc], 16);
-                        }
-                        if (NE <= 2) {
-                            mqk[cc] += simd_shuffle_down(mqk[cc],  8);
-                        }
-                        if (NE <= 4) {
-                            mqk[cc] += simd_shuffle_down(mqk[cc],  4);
-                        }
-                        if (NE <= 8) {
-                            mqk[cc] += simd_shuffle_down(mqk[cc],  2);
-                        }
-                        if (NE <= 16) {
-                            mqk[cc] += simd_shuffle_down(mqk[cc],  1);
-                        }
+                    FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                        if (NE == 1) {
+                            mqk[ih][cc] = simd_sum(mqk[ih][cc]);
+                        } else {
+                            if (NE <= 1) {
+                                mqk[ih][cc] += simd_shuffle_down(mqk[ih][cc], 16);
+                            }
+                            if (NE <= 2) {
+                                mqk[ih][cc] += simd_shuffle_down(mqk[ih][cc],  8);
+                            }
+                            if (NE <= 4) {
+                                mqk[ih][cc] += simd_shuffle_down(mqk[ih][cc],  4);
+                            }
+                            if (NE <= 8) {
+                                mqk[ih][cc] += simd_shuffle_down(mqk[ih][cc],  2);
+                            }
+                            if (NE <= 16) {
+                                mqk[ih][cc] += simd_shuffle_down(mqk[ih][cc],  1);
+                            }
 
-                        // broadcast
-                        mqk[cc] = simd_shuffle(mqk[cc], NL*ty);
+                            mqk[ih][cc] = simd_shuffle(mqk[ih][cc], NL*ty);
+                        }
                     }
                 }
 
-                if (FC_flash_attn_ext_vec_has_mask &&
-                   !FC_flash_attn_ext_vec_has_scap &&
-                   !FC_flash_attn_ext_vec_has_bias) {
-                    ss[NE*tx + ty] = fma(mqk[tx], args.scale, (qk_t) sm[NE*tx + ty]);
-                } else {
-                    mqk[tx] *= args.scale;
+                FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                    threadgroup s_t * ssh = ss + (sgitg*H + ih)*(SH/2);
 
-                    if (FC_flash_attn_ext_vec_has_scap) {
-                        mqk[tx] = args.logit_softcap*precise::tanh(mqk[tx]);
-                    }
-
-                    if (FC_flash_attn_ext_vec_has_bias) {
-                        mqk[tx] += (qk_t) sm[NE*tx + ty]*slope;
+                    if (FC_flash_attn_ext_vec_has_mask &&
+                       !FC_flash_attn_ext_vec_has_scap &&
+                       !FC_flash_attn_ext_vec_has_bias) {
+                        ssh[NE*tx + ty] = fma(mqk[ih][tx], args.scale, (qk_t) sm0[NE*tx + ty]);
                     } else {
-                        mqk[tx] += (qk_t) sm[NE*tx + ty];
-                    }
+                        mqk[ih][tx] *= args.scale;
 
-                    ss[NE*tx + ty] = mqk[tx];
+                        if (FC_flash_attn_ext_vec_has_scap) {
+                            mqk[ih][tx] = args.logit_softcap*precise::tanh(mqk[ih][tx]);
+                        }
+
+                        if (FC_flash_attn_ext_vec_has_bias) {
+                            const short h = iq2 + ih;
+                            const float base = h < args.n_head_log2 ? args.m0 : args.m1;
+                            const short exph = h < args.n_head_log2 ? h + 1 : 2*(h - args.n_head_log2) + 1;
+                            const float slope = pow(base, exph);
+
+                            mqk[ih][tx] += (qk_t) sm0[NE*tx + ty]*slope;
+                        } else {
+                            mqk[ih][tx] += (qk_t) sm0[NE*tx + ty];
+                        }
+
+                        ssh[NE*tx + ty] = mqk[ih][tx];
+                    }
                 }
             }
 
@@ -7247,23 +7294,26 @@ kernel void kernel_flash_attn_ext_vec(
 
             // online softmax
             {
-                const float m = M;
-                const float s = ss[tiisg];
+                FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                    threadgroup s_t  * ssh  = ss  + (sgitg*H + ih)*(SH/2);
+                    threadgroup o4_t * so4h = so4 + (sgitg*H + ih)*PV4 + tiisg;
 
-                M = simd_max(max(M, s));
+                    const float m = M[ih];
+                    const float s = ssh[tiisg];
 
-                const float ms = exp(m - M);
-                const float vs = exp(s - M);
+                    M[ih] = simd_max(max(M[ih], s));
 
-                S = S*ms + simd_sum(vs);
+                    const float ms = exp(m - M[ih]);
+                    const float vs = exp(s - M[ih]);
 
-                // the P matrix from the paper (Q rows, C columns)
-                ss[tiisg] = vs;
+                    S[ih] = S[ih]*ms + simd_sum(vs);
 
-                // O = diag(ms)*O
-                if ((DV4/NL % NW == 0) || ty == 0) {
-                    FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
-                        so4[ii*NL] *= ms;
+                    ssh[tiisg] = vs;
+
+                    if ((DV4/NL % NW == 0) || ty == 0) {
+                        FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
+                            so4h[ii*NL] *= ms;
+                        }
                     }
                 }
             }
@@ -7272,9 +7322,11 @@ kernel void kernel_flash_attn_ext_vec(
 
             // O = O + (Q*K^T)*V
             {
-                o4_t lo[DV4/NL];
-                FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
-                    lo[ii] = 0.0f;
+                o4_t lo[H][DV4/NL];
+                FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                    FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
+                        lo[ih][ii] = 0.0f;
+                    }
                 }
 
                 if (is_same<vd4_t, v4_t>::value) {
@@ -7282,11 +7334,14 @@ kernel void kernel_flash_attn_ext_vec(
 
                     pv4 += ty*NS20/4 + tx;
 
-                    const auto sst = ss + ty;
-
                     FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
                         FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
-                            lo[ii] += o4_t(float4(pv4[cc*NE*NS20/4 + ii*NL])*float4(sst[cc*NE]));
+                            const v4_t mv = pv4[cc*NE*NS20/4 + ii*NL];
+
+                            FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                                threadgroup s_t * ssh = ss + (sgitg*H + ih)*(SH/2);
+                                lo[ih][ii] += o4_t(float4(mv)*float4(ssh[NE*cc + ty]));
+                            }
                         }
                     }
                 } else {
@@ -7299,109 +7354,128 @@ kernel void kernel_flash_attn_ext_vec(
                             v4_t mv;
                             deq_v_t4(pv4 + i/nl_v, i%nl_v, mv);
 
-                            lo[ii] += o4_t(float4(mv)*float4(ss[NE*cc + ty]));
+                            FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                                threadgroup s_t * ssh = ss + (sgitg*H + ih)*(SH/2);
+                                lo[ih][ii] += o4_t(float4(mv)*float4(ssh[NE*cc + ty]));
+                            }
                         }
                     }
                 }
 
-                FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
-                    if (NE > 1) {
-                        lo[ii][0] += simd_shuffle_down(lo[ii][0], 16);
-                        lo[ii][1] += simd_shuffle_down(lo[ii][1], 16);
-                        lo[ii][2] += simd_shuffle_down(lo[ii][2], 16);
-                        lo[ii][3] += simd_shuffle_down(lo[ii][3], 16);
-                    }
-
-                    if (NE > 2) {
-                        lo[ii][0] += simd_shuffle_down(lo[ii][0],  8);
-                        lo[ii][1] += simd_shuffle_down(lo[ii][1],  8);
-                        lo[ii][2] += simd_shuffle_down(lo[ii][2],  8);
-                        lo[ii][3] += simd_shuffle_down(lo[ii][3],  8);
-                    }
-
-                    if (NE > 4) {
-                        lo[ii][0] += simd_shuffle_down(lo[ii][0],  4);
-                        lo[ii][1] += simd_shuffle_down(lo[ii][1],  4);
-                        lo[ii][2] += simd_shuffle_down(lo[ii][2],  4);
-                        lo[ii][3] += simd_shuffle_down(lo[ii][3],  4);
-                    }
-
-                    if (NE > 8) {
-                        lo[ii][0] += simd_shuffle_down(lo[ii][0],  2);
-                        lo[ii][1] += simd_shuffle_down(lo[ii][1],  2);
-                        lo[ii][2] += simd_shuffle_down(lo[ii][2],  2);
-                        lo[ii][3] += simd_shuffle_down(lo[ii][3],  2);
-                    }
-
-                    if (NE > 16) {
-                        lo[ii][0] += simd_shuffle_down(lo[ii][0],  1);
-                        lo[ii][1] += simd_shuffle_down(lo[ii][1],  1);
-                        lo[ii][2] += simd_shuffle_down(lo[ii][2],  1);
-                        lo[ii][3] += simd_shuffle_down(lo[ii][3],  1);
-                    }
-                }
-
-                if ((DV4/NL % NW == 0) || ty == 0) {
+                FOR_UNROLL (short ih = 0; ih < H; ++ih) {
                     FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
-                        so4[ii*NL] += lo[ii];
+                        if (NE > 1) {
+                            lo[ih][ii][0] += simd_shuffle_down(lo[ih][ii][0], 16);
+                            lo[ih][ii][1] += simd_shuffle_down(lo[ih][ii][1], 16);
+                            lo[ih][ii][2] += simd_shuffle_down(lo[ih][ii][2], 16);
+                            lo[ih][ii][3] += simd_shuffle_down(lo[ih][ii][3], 16);
+                        }
+
+                        if (NE > 2) {
+                            lo[ih][ii][0] += simd_shuffle_down(lo[ih][ii][0],  8);
+                            lo[ih][ii][1] += simd_shuffle_down(lo[ih][ii][1],  8);
+                            lo[ih][ii][2] += simd_shuffle_down(lo[ih][ii][2],  8);
+                            lo[ih][ii][3] += simd_shuffle_down(lo[ih][ii][3],  8);
+                        }
+
+                        if (NE > 4) {
+                            lo[ih][ii][0] += simd_shuffle_down(lo[ih][ii][0],  4);
+                            lo[ih][ii][1] += simd_shuffle_down(lo[ih][ii][1],  4);
+                            lo[ih][ii][2] += simd_shuffle_down(lo[ih][ii][2],  4);
+                            lo[ih][ii][3] += simd_shuffle_down(lo[ih][ii][3],  4);
+                        }
+
+                        if (NE > 8) {
+                            lo[ih][ii][0] += simd_shuffle_down(lo[ih][ii][0],  2);
+                            lo[ih][ii][1] += simd_shuffle_down(lo[ih][ii][1],  2);
+                            lo[ih][ii][2] += simd_shuffle_down(lo[ih][ii][2],  2);
+                            lo[ih][ii][3] += simd_shuffle_down(lo[ih][ii][3],  2);
+                        }
+
+                        if (NE > 16) {
+                            lo[ih][ii][0] += simd_shuffle_down(lo[ih][ii][0],  1);
+                            lo[ih][ii][1] += simd_shuffle_down(lo[ih][ii][1],  1);
+                            lo[ih][ii][2] += simd_shuffle_down(lo[ih][ii][2],  1);
+                            lo[ih][ii][3] += simd_shuffle_down(lo[ih][ii][3],  1);
+                        }
+                    }
+
+                    if ((DV4/NL % NW == 0) || ty == 0) {
+                        threadgroup o4_t * so4h = so4 + (sgitg*H + ih)*PV4 + tiisg;
+
+                        FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
+                            so4h[ii*NL] += lo[ih][ii];
+                        }
                     }
                 }
             }
         }
 
         if (FC_flash_attn_ext_vec_has_sinks && sgitg == 0 && iwg == 0) {
-            const float m = M;
-            const float s = tiisg == 0 ? ((device const float *) sinks)[iq2] : -FLT_MAX/2;
+            FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                threadgroup o4_t * so4h = so4 + ih*PV4 + tiisg;
 
-            M = simd_max(max(M, s));
+                const float m = M[ih];
+                const float s = tiisg == 0 ? ((device const float *) sinks)[iq2 + ih] : -FLT_MAX/2;
 
-            const float ms = exp(m - M);
-            const float vs = exp(s - M);
+                M[ih] = simd_max(max(M[ih], s));
 
-            S = S*ms + simd_sum(vs);
+                const float ms = exp(m - M[ih]);
+                const float vs = exp(s - M[ih]);
 
-            if ((DV4/NL % NW == 0) || ty == 0) {
-                FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
-                    so4[ii*NL] *= ms;
+                S[ih] = S[ih]*ms + simd_sum(vs);
+
+                if ((DV4/NL % NW == 0) || ty == 0) {
+                    FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
+                        so4h[ii*NL] *= ms;
+                    }
                 }
             }
         }
 
         // these are needed for reducing the results from the simdgroups (reuse the ss buffer)
         if (tiisg == 0) {
-            ss[0] = (s_t) S;
-            ss[1] = (s_t) M;
+            FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                threadgroup s_t * ssh = ss + (sgitg*H + ih)*(SH/2);
+                ssh[0] = (s_t) S[ih];
+                ssh[1] = (s_t) M[ih];
+            }
         }
     }
-
-    so4 -= tiisg;
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     // parallel reduce
     for (short r = NSG/2; r > 0; r >>= 1) {
         if (sgitg < r) {
-            const float S0 = ss[           0];
-            const float S1 = ss[r*(SH/2) + 0];
+            FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+                threadgroup s_t * ss0 = ss + (sgitg*H + ih)*(SH/2);
+                threadgroup s_t * ss1 = ss + ((sgitg + r)*H + ih)*(SH/2);
 
-            const float M0 = ss[           1];
-            const float M1 = ss[r*(SH/2) + 1];
+                const float S0 = ss0[0];
+                const float S1 = ss1[0];
 
-            const float M = max(M0, M1);
+                const float M0 = ss0[1];
+                const float M1 = ss1[1];
 
-            const float ms0 = exp(M0 - M);
-            const float ms1 = exp(M1 - M);
+                const float M = max(M0, M1);
 
-            const float S = S0*ms0 + S1*ms1;
+                const float ms0 = exp(M0 - M);
+                const float ms1 = exp(M1 - M);
 
-            if (tiisg == 0) {
-                ss[0] = S;
-                ss[1] = M;
-            }
+                const float S = S0*ms0 + S1*ms1;
 
-            // O_0 = diag(ms0)*O_0 + diag(ms1)*O_1
-            for (short i = tiisg; i < DV4; i += NW) {
-                so4[i] = so4[i]*ms0 + so4[i + r*PV4]*ms1;
+                if (tiisg == 0) {
+                    ss0[0] = S;
+                    ss0[1] = M;
+                }
+
+                threadgroup o4_t * so0 = so4 + (sgitg*H + ih)*PV4;
+                threadgroup o4_t * so1 = so4 + ((sgitg + r)*H + ih)*PV4;
+
+                for (short i = tiisg; i < DV4; i += NW) {
+                    so0[i] = so0[i]*ms0 + so1[i]*ms1;
+                }
             }
         }
 
@@ -7411,23 +7485,26 @@ kernel void kernel_flash_attn_ext_vec(
     // final rescale with 1/S and store to global memory
     if (sgitg == 0) {
         const int64_t nrows = args.ne3*args.ne2*args.ne1;
-        const int64_t rid   = iq3*args.ne2*args.ne1 + iq2 + iq1*args.ne1;
 
         device float4 * dst4 = (device float4 *) dst;
         device float  * dst1 = (device float  *) dst + nrows*DV*NWG; // the S and M are stored after the results
 
-        const float S = NWG == 1 ? (ss[0] == 0.0f ? 0.0f : 1.0f/ss[0]) : 1.0f;
+        FOR_UNROLL (short ih = 0; ih < H; ++ih) {
+            const int64_t rid = iq3*args.ne2*args.ne1 + iq2 + ih + iq1*args.ne1;
+            threadgroup s_t  * ssh  = ss  + ih*(SH/2);
+            threadgroup o4_t * so4h = so4 + ih*PV4;
 
-        // interleave the workgroup data
-        for (short i = tiisg; i < DV4; i += NW) {
-            dst4[rid*DV4*NWG + NWG*i + iwg] = (float4) so4[i]*S;
-        }
+            const float scale = NWG == 1 ? (ssh[0] == 0.0f ? 0.0f : 1.0f/ssh[0]) : 1.0f;
 
-        // store S and M
-        if (NWG > 1) {
-            if (tiisg == 0) {
-                dst1[rid*(2*NWG) + 2*iwg + 0] = ss[0];
-                dst1[rid*(2*NWG) + 2*iwg + 1] = ss[1];
+            for (short i = tiisg; i < DV4; i += NW) {
+                dst4[rid*DV4*NWG + NWG*i + iwg] = (float4) so4h[i]*scale;
+            }
+
+            if (NWG > 1) {
+                if (tiisg == 0) {
+                    dst1[rid*(2*NWG) + 2*iwg + 0] = ssh[0];
+                    dst1[rid*(2*NWG) + 2*iwg + 1] = ssh[1];
+                }
             }
         }
     }
@@ -7535,6 +7612,7 @@ template [[host_name("kernel_flash_attn_ext_vec_q4_1_dk256_dv256")]] kernel flas
 template [[host_name("kernel_flash_attn_ext_vec_q5_0_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_q5_0, 8, dequantize_q5_0_t4, block_q5_0,  8, dequantize_q5_0_t4, 256, 256, 1>;
 template [[host_name("kernel_flash_attn_ext_vec_q5_1_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_q5_1, 8, dequantize_q5_1_t4, block_q5_1,  8, dequantize_q5_1_t4, 256, 256, 1>;
 template [[host_name("kernel_flash_attn_ext_vec_q8_0_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_q8_0, 8, dequantize_q8_0_t4_packed, block_q8_0,  8, dequantize_q8_0_t4_packed, 256, 256, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_gqa2_q8_0_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_q8_0, 8, dequantize_q8_0_t4_packed, block_q8_0, 8, dequantize_q8_0_t4_packed, 256, 256, 1, 2>;
 
 template [[host_name("kernel_flash_attn_ext_vec_f32_dk320_dv256")]]  kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES_F32, float4,     1, dequantize_f32_t4,  float4,      1, dequantize_f32_t4,  320, 256, 2>;
 template [[host_name("kernel_flash_attn_ext_vec_f16_dk320_dv256")]]  kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     half4,      1, dequantize_f16_t4,  half4,       1, dequantize_f16_t4,  320, 256, 2>;
