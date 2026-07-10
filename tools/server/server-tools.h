@@ -9,10 +9,10 @@ struct server_tool {
     bool permission_write = false;
 
     virtual ~server_tool() = default;
-    virtual json get_definition() = 0;
-    virtual json invoke(json params) = 0;
+    virtual json get_definition() const = 0;
+    virtual json invoke(json params) const = 0;
 
-    json to_json();
+    json to_json() const;
 };
 
 struct server_tools {
