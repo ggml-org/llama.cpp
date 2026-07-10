@@ -434,8 +434,8 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     ctx->ddr_spad_size = 512 * 1024; // 512 KB
     ctx->ddr_spad_base = memalign(128, ctx->ddr_spad_size);
 
-    // init work queue
-    if (!work_queue_init(&ctx->work_queue, n_hvx)) {
+    ctx->work_queue = work_queue_create(n_hvx);
+    if (!ctx->work_queue) {
         FARF(ERROR, "Unable to create work queue");
         if (ctx->ddr_spad_base) {
             free(ctx->ddr_spad_base);
@@ -471,8 +471,7 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     }
 
     if (ctx->work_queue) {
-        // Release work queue
-        work_queue_release(&ctx->work_queue);
+        work_queue_delete(ctx->work_queue);
     }
 
     for (int i = 0; i < ctx->n_threads; i++) {

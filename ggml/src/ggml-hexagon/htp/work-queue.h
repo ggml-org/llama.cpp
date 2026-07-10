@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef void (*work_queue_callback_t)(unsigned int n, unsigned int i, void *);
+typedef void (*work_queue_func_t)(unsigned int n, unsigned int i, void *);
 
 struct work_queue_s;
 typedef struct work_queue_s * work_queue_t;
@@ -17,11 +17,12 @@ typedef struct work_queue_s * work_queue_t;
 
 #define WORK_QUEUE_POLL_COUNT         2000
 
-bool work_queue_init(work_queue_t * q, uint32_t n_threads);
-void work_queue_release(work_queue_t * q);
-bool work_queue_run_async(work_queue_t q, work_queue_callback_t func, void * data, unsigned int n);
+work_queue_t work_queue_create(uint32_t n_threads);
+void work_queue_delete(work_queue_t q);
 
-static inline bool work_queue_run(work_queue_t q, work_queue_callback_t func, void * data, unsigned int n) {
+bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, unsigned int n);
+
+static inline bool work_queue_run(work_queue_t q, work_queue_func_t func, void * data, unsigned int n) {
     if (n <= 1) {
         func(n, 0, data);
         return true;
@@ -30,7 +31,7 @@ static inline bool work_queue_run(work_queue_t q, work_queue_callback_t func, vo
 }
 
 // Legacy compatibility
-typedef work_queue_callback_t worker_callback_t;
+typedef work_queue_func_t     worker_callback_t;
 #define worker_pool_run_func  work_queue_run
 #define worker_pool           work_queue
 

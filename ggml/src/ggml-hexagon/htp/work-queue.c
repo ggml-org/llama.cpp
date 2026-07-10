@@ -21,10 +21,10 @@ typedef struct {
 } worker_context_t;
 
 struct work_queue_task_s {
-    work_queue_callback_t func;
-    void *                data;
-    unsigned int          n_threads;
-    atomic_uint           barrier;
+    work_queue_func_t func;
+    void *            data;
+    unsigned int      n_threads;
+    atomic_uint       barrier;
 };
 
 // internal structure kept in thread-local storage per instance of work queue
@@ -40,20 +40,22 @@ struct work_queue_s {
     worker_context_t   context[WORK_QUEUE_MAX_N_THREADS];  // worker contexts
     void *             stack[WORK_QUEUE_MAX_N_THREADS];    // thread stack pointers
     unsigned int       n_threads;                          // total threads (workers + main)
+    unsigned int       n_workers;                          // number of active threads (just workers)
 
     atomic_bool        killed;                             // threads need to exit
 };
 
 static void work_queue_thread(void * context) {
-    worker_context_t * me    = (worker_context_t *) context;
-    work_queue_t       queue = me->queue;
+    worker_context_t * me = (worker_context_t *) context;
+    work_queue_t       q  = me->queue;
 
     FARF(HIGH, "work-queue: thread %u started", me->id);
 
     unsigned int prev_seqn = 0;
     unsigned int poll_cnt  = WORK_QUEUE_POLL_COUNT;
-    while (!atomic_load_explicit(&queue->killed, memory_order_relaxed)) {
-        unsigned int seqn = atomic_load_explicit(&queue->seqn, memory_order_acquire);
+
+    while (!atomic_load_explicit(&q->killed, memory_order_relaxed)) {
+        unsigned int seqn = atomic_load_explicit(&q->seqn, memory_order_acquire);
         if (seqn == prev_seqn) {
             // drop HVX context while spinning
             if (poll_cnt > 1 && poll_cnt == WORK_QUEUE_POLL_COUNT) {
@@ -63,7 +65,7 @@ static void work_queue_thread(void * context) {
                 hex_pause();
                 continue;
             }
-            qurt_futex_wait(&queue->seqn, prev_seqn);
+            qurt_futex_wait(&q->seqn, prev_seqn);
             poll_cnt = WORK_QUEUE_POLL_COUNT;
             continue;
         }
@@ -72,11 +74,11 @@ static void work_queue_thread(void * context) {
         poll_cnt  = WORK_QUEUE_POLL_COUNT;
 
         // Process all active tasks in the queue
-        unsigned int ir = atomic_load_explicit(&queue->idx_read, memory_order_relaxed);
-        unsigned int iw = queue->idx_write;
+        unsigned int ir = atomic_load_explicit(&q->idx_read, memory_order_relaxed);
+        unsigned int iw = q->idx_write;
 
         while (ir != iw) {
-            struct work_queue_task_s * task = &queue->queue[ir];
+            struct work_queue_task_s * task = &q->queue[ir];
 
             unsigned int n = task->n_threads;
             unsigned int i = me->id;
@@ -90,21 +92,56 @@ static void work_queue_thread(void * context) {
                 }
             }
 
-            ir = (ir + 1) & queue->idx_mask;
+            ir = (ir + 1) & q->idx_mask;
         }
     }
 
     FARF(HIGH, "work-queue: thread %u stopped", me->id);
 }
 
-bool work_queue_init(work_queue_t * context, uint32_t n_threads) {
-    int err = 0;
-
-    if (NULL == context) {
-        FARF(ERROR, "NULL context passed to work_queue_init().");
+bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, unsigned int n) {
+    if (n > q->n_threads) {
+        FARF(ERROR, "work-queue: invalid number of jobs %u for n-threads %u", n, q->n_threads);
         return false;
     }
 
+    unsigned int ir = atomic_load_explicit(&q->idx_read, memory_order_relaxed);
+    unsigned int iw = q->idx_write;
+
+    if (((iw + 1) & q->idx_mask) == ir) {
+        FARF(ERROR, "work-queue-push: queue is full\n");
+        return false;
+    }
+
+    struct work_queue_task_s * task = &q->queue[iw];
+    task->func      = func;
+    task->data      = data;
+    task->n_threads = n;
+    atomic_store_explicit(&task->barrier, n, memory_order_relaxed);
+
+    q->idx_write = (iw + 1) & q->idx_mask;
+
+    // wake up workers
+    atomic_fetch_add_explicit(&q->seqn, 1, memory_order_release);
+    qurt_futex_wake(&q->seqn, q->n_workers);
+
+    // main thread runs job #0
+    func(n, 0, data);
+
+    atomic_fetch_sub_explicit(&task->barrier, 1, memory_order_release);
+
+    while (atomic_load_explicit(&task->barrier, memory_order_relaxed) > 0) {
+        hex_pause();
+    }
+
+    atomic_thread_fence(memory_order_acquire);
+
+    atomic_store_explicit(&q->idx_read, (ir + 1) & q->idx_mask, memory_order_relaxed);
+
+    return true;
+}
+
+work_queue_t work_queue_create(uint32_t n_threads) {
     uint32_t stack_size = WORK_QUEUE_THREAD_STACK_SIZE;
     uint32_t n_workers  = n_threads > 1 ? n_threads - 1 : 0;
 
@@ -114,33 +151,31 @@ bool work_queue_init(work_queue_t * context, uint32_t n_threads) {
     unsigned char * mem_blob = (unsigned char *) memalign(4096, size);
     if (!mem_blob) {
         FARF(ERROR, "Could not allocate memory for work queue!!");
-        return false;
+        return NULL;
     }
 
-    work_queue_t queue = (work_queue_t) (mem_blob + stack_size * n_workers);
+    work_queue_t q = (work_queue_t) (mem_blob + stack_size * n_workers);
 
-    queue->n_threads = n_threads;
+    q->n_threads = n_threads;
+    q->n_workers = n_workers;
 
-    // initializations
     for (unsigned int i = 0; i < n_workers; i++) {
-        queue->stack[i]  = NULL;
-        queue->thread[i] = 0;
-
-        queue->context[i].id    = i + 1; // Thread IDs start at 1
-        queue->context[i].queue = queue;
+        q->stack[i]  = mem_blob; mem_blob += stack_size;
+        q->thread[i] = 0;
+        q->context[i].id    = i + 1;
+        q->context[i].queue = q;
     }
 
-    // initialize task queue indices and descriptors
-    queue->idx_write = 0;
-    atomic_init(&queue->idx_read, 0);
-    queue->idx_mask  = WORK_QUEUE_SIZE - 1;
-    queue->seqn      = 0;
-    queue->killed    = 0;
+    atomic_init(&q->idx_read, 0);
+    atomic_init(&q->seqn,     0);
+    q->idx_write = 0;
+    q->idx_mask  = WORK_QUEUE_SIZE - 1;
+    q->killed    = 0;
     for (int i = 0; i < WORK_QUEUE_SIZE; i++) {
-        queue->queue[i].func = NULL;
-        queue->queue[i].data = NULL;
-        queue->queue[i].n_threads = 0;
-        atomic_init(&queue->queue[i].barrier, 0);
+        atomic_init(&q->queue[i].barrier, 0);
+        q->queue[i].func      = NULL;
+        q->queue[i].data      = NULL;
+        q->queue[i].n_threads = 0;
     }
 
     // launch the workers
@@ -148,18 +183,15 @@ bool work_queue_init(work_queue_t * context, uint32_t n_threads) {
     qurt_thread_attr_init(&attr);
 
     for (unsigned int i = 0; i < n_workers; i++) {
-        // set up stack
-        queue->stack[i] = mem_blob; mem_blob += stack_size;
-        qurt_thread_attr_set_stack_addr(&attr, queue->stack[i]);
+        qurt_thread_attr_set_stack_addr(&attr, q->stack[i]);
         qurt_thread_attr_set_stack_size(&attr, stack_size);
 
         char thread_name[32];
-        snprintf(thread_name, sizeof(thread_name), "0x%8x:worker%u", (unsigned int)(uintptr_t)queue, i);
+        snprintf(thread_name, sizeof(thread_name), "work-queue:%u", i);
         qurt_thread_attr_set_name(&attr, thread_name);
 
         // set up priority - by default, match the creating thread's prio
         int prio = qurt_thread_get_priority(qurt_thread_get_id());
-
         if (prio < 1) {
             prio = 1;
         }
@@ -169,98 +201,33 @@ bool work_queue_init(work_queue_t * context, uint32_t n_threads) {
 
         qurt_thread_attr_set_priority(&attr, prio);
 
-        // launch
-        err = qurt_thread_create(&queue->thread[i], &attr, work_queue_thread, (void *) &queue->context[i]);
+        int err = qurt_thread_create(&q->thread[i], &attr, work_queue_thread, (void *) &q->context[i]);
         if (err) {
             FARF(ERROR, "Could not launch worker threads!");
-            work_queue_release(&queue);
-            return false;
+            work_queue_delete(q);
+            return NULL;
         }
     }
-    *context = queue;
-    return true;
+
+    return q;
 }
 
-// clean up work queue
-void work_queue_release(work_queue_t * context) {
-    work_queue_t queue = *context;
+void work_queue_delete(work_queue_t q) {
+    if (!q) { return; }
 
-    // if no work queue exists, return.
-    if (NULL == queue) {
-        return;
-    }
+    atomic_store_explicit(&q->killed,   1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&q->seqn, 1, memory_order_release);
+    qurt_futex_wake(&q->seqn, q->n_workers);
 
-    uint32_t n_workers = queue->n_threads > 1 ? queue->n_threads - 1 : 0;
-
-    atomic_store_explicit(&queue->killed, 1, memory_order_relaxed);
-    atomic_fetch_add_explicit(&queue->seqn, 1, memory_order_release);
-    qurt_futex_wake(&queue->seqn, n_workers);
-
-    // de-initializations
-    for (unsigned int i = 0; i < n_workers; i++) {
-        if (queue->thread[i]) {
+    for (unsigned int i = 0; i < q->n_workers; i++) {
+        if (q->thread[i]) {
             int status;
-            (void) qurt_thread_join(queue->thread[i], &status);
+            (void) qurt_thread_join(q->thread[i], &status);
         }
     }
 
     // free allocated memory (were allocated as a single buffer starting at stack[0])
-    if (queue->stack[0]) {
-        free(queue->stack[0]);
+    if (q->stack[0]) {
+        free(q->stack[0]);
     }
-
-    *context = NULL;
-}
-
-// async run helper
-bool work_queue_run_async(work_queue_t context, work_queue_callback_t func, void * data, unsigned int n) {
-    work_queue_t queue = context;
-    if (NULL == queue) {
-        FARF(ERROR, "work-queue: invalid context");
-        return false;
-    }
-
-    if (n > queue->n_threads) {
-        FARF(ERROR, "work-queue: invalid number of jobs %u for n-threads %u", n, queue->n_threads);
-        return false;
-    }
-
-    unsigned int ir = atomic_load_explicit(&queue->idx_read, memory_order_relaxed);
-    unsigned int iw = queue->idx_write;
-
-    if (((iw + 1) & queue->idx_mask) == ir) {
-        FARF(ERROR, "work-queue-push: queue is full\n");
-        return false;
-    }
-
-    struct work_queue_task_s * task = &queue->queue[iw];
-    task->func      = func;
-    task->data      = data;
-    task->n_threads = n;
-    atomic_store_explicit(&task->barrier, n, memory_order_relaxed);
-
-    queue->idx_write = (iw + 1) & queue->idx_mask;
-
-    uint32_t n_workers = queue->n_threads > 1 ? queue->n_threads - 1 : 0;
-
-    // wake up workers (using memory_order_release to publish idx_write and queue state changes)
-    atomic_fetch_add_explicit(&queue->seqn, 1, memory_order_release);
-    qurt_futex_wake(&queue->seqn, n_workers);
-
-    // main thread runs job #0
-    func(n, 0, data);
-
-    // main thread decrements barrier (using memory_order_release to publish slice 0 writes to spinning idle threads)
-    atomic_fetch_sub_explicit(&task->barrier, 1, memory_order_release);
-
-    while (atomic_load_explicit(&task->barrier, memory_order_relaxed) > 0) {
-        hex_pause();
-    }
-
-    atomic_thread_fence(memory_order_acquire);
-
-    // pop task
-    atomic_store_explicit(&queue->idx_read, (ir + 1) & queue->idx_mask, memory_order_relaxed);
-
-    return true;
 }
