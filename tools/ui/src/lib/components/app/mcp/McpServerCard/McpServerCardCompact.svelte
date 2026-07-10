@@ -63,14 +63,6 @@
 	let hiddenTools = $derived(tools.slice(MCP_CARD_VISIBLE_TOOL_LIMIT));
 	let hiddenToolCount = $derived(hiddenTools.length);
 
-	function handleKey(event: KeyboardEvent) {
-		if (!onClick) return;
-		if (event.key === 'Enter' || event.key === ' ') {
-			event.preventDefault();
-			onClick();
-		}
-	}
-
 	function handleDismissClick(event: MouseEvent) {
 		event.stopPropagation();
 		onDismiss?.();
@@ -79,9 +71,7 @@
 
 <Card.Root
 	class={`relative !gap-3 bg-muted/30 p-4 transition-colors ${onClick ? 'cursor-pointer hover:bg-muted/50' : ''} ${selected ? 'bg-background ring-2 ring-primary/40' : ''} ${dimmed ? 'opacity-50' : ''}`}
-	role={onClick ? 'button' : undefined}
 	onclick={onClick}
-	onkeydown={handleKey}
 >
 	{#if onDismiss}
 		<button
