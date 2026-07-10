@@ -2,11 +2,14 @@ import { DEFAULT_MCP_CONFIG } from './mcp';
 import type { RecommendedMCPServer } from '$lib/types';
 
 /**
- * Pre-defined recommended MCP servers.
+ * Hard-coded suggested MCP servers.
  *
- * Servers are enabled by default, but they are not turned on for individual
- * conversations until the user explicitly enables them (so their tools are
- * disabled by default).
+ * Shown only inside the "Add New Server" dialog as opt-in cards. These
+ * entries are rendered without triggering any connection or health check,
+ * so showing them never causes a request to leave the user's machine.
+ * Only when the user explicitly picks one and clicks the dialog's own
+ * Add button does the URL end up in the configured server list and start
+ * contacting the upstream server.
  */
 export const RECOMMENDED_MCP_SERVERS: RecommendedMCPServer[] = [
 	{
@@ -27,9 +30,3 @@ export const RECOMMENDED_MCP_SERVERS: RecommendedMCPServer[] = [
 		requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds
 	}
 ];
-
-export const RECOMMENDED_MCP_SERVER_IDS = new Set(
-	RECOMMENDED_MCP_SERVERS.map((server) => server.id)
-);
-
-export const RECOMMENDED_MCP_SERVERS_OPTIN_DIALOG_DELAY = 1000;
