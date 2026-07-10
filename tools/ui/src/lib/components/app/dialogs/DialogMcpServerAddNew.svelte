@@ -109,7 +109,16 @@
 
 	let consent = $state<ConsentState>(readConsent());
 	let dismissedRecommendationIds = $state<string[]>(readDismissedRecommendationIds());
-	let selectedRecommendationId = $state<string | null>(null);
+
+	// A recommendation is "selected" iff the form URL exactly matches its
+	// URL. Clicking a card writes its URL into the form, which lights it
+	// up; editing the URL away from any recommendation's URL clears the
+	// selection automatically - no separate state to keep in sync.
+	let selectedRecommendationId = $derived.by(() => {
+		const url = newServerUrl.trim();
+		if (!url) return null;
+		return RECOMMENDED_MCP_SERVERS.find((rec) => rec.url === url)?.id ?? null;
+	});
 	let hasSelection = $derived(selectedRecommendationId !== null);
 
 	// Cross-check against the configured MCP servers by URL — a recommended
@@ -139,10 +148,9 @@
 
 		if (!recommendation) return;
 
-		// Mark the recommendation as the active selection so it stands out
-		// from the others, then fill the form so the user can review / tweak
-		// before saving through the dialog's primary "Add" button.
-		selectedRecommendationId = recommendedId;
+		// Fill the form so the user can review / tweak before saving through
+		// the dialog's primary "Add" button. The selection highlight follows
+		// from the URL match (see selectedRecommendationId).
 		newServerUrl = recommendation.url;
 		newServerHeaders = '';
 	}
@@ -160,7 +168,6 @@
 			}
 			newServerUrl = '';
 			newServerHeaders = '';
-			selectedRecommendationId = null;
 		}
 		open = value;
 		onOpenChange?.(value);
