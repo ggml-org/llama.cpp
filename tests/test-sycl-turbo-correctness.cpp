@@ -1167,6 +1167,42 @@ int main() {
                 }
             }
         }
+        // --- Case 5: null out_scales. Must return without writes / segfault. ---
+        {
+            std::vector<float> probe_one(1 * 128, 0.25f);
+            float sentinel = -42.0f;
+            ggml_innerq_compute_k_squared_profile(probe_one.data(), 1, 128, nullptr);
+            if (sentinel != -42.0f) {
+                printf("   [8b] FAIL: null out_scales corrupted stack (sentinel = %f)\n",
+                       (double) sentinel);
+                ++k2_failures;
+            }
+        }
+        // --- Case 6: null probe, valid out_scales, n_probe=1. Expect all 1.0f. ---
+        {
+            float scales[128] = {0};
+            ggml_innerq_compute_k_squared_profile(nullptr, 1, 128, scales);
+            for (int d = 0; d < 128; ++d) {
+                if (scales[d] != 1.0f) {
+                    printf("   [8b] FAIL: null probe scale[%d] = %f, expected 1.0\n",
+                           d, (double) scales[d]);
+                    ++k2_failures;
+                }
+            }
+        }
+        // --- Case 7: n_probe=0, valid pointers. Expect all 1.0f. ---
+        {
+            std::vector<float> probe_zero(1 * 128, 0.0f);
+            float scales[128] = {0};
+            ggml_innerq_compute_k_squared_profile(probe_zero.data(), 0, 128, scales);
+            for (int d = 0; d < 128; ++d) {
+                if (scales[d] != 1.0f) {
+                    printf("   [8b] FAIL: zero n_probe scale[%d] = %f, expected 1.0\n",
+                           d, (double) scales[d]);
+                    ++k2_failures;
+                }
+            }
+        }
         if (k2_failures > 0) {
             printf("   [8b] InnerQ K^2 profile: %d failures\n", k2_failures);
             g_failures++;
@@ -1250,6 +1286,42 @@ int main() {
                     }
                 }
             }
+            // Test 4: null out_scales on SYCL wrapper. Must not crash.
+            {
+                std::vector<float> probe_one(1 * 128, 0.25f);
+                float sentinel_sycl = -42.0f;
+                ggml_innerq_compute_k_squared_profile_sycl(probe_one.data(), 1, 128, nullptr);
+                if (sentinel_sycl != -42.0f) {
+                    printf("   [8c] FAIL: sycl null out_scales corrupted stack (sentinel = %f)\n",
+                           (double) sentinel_sycl);
+                    ++k3_failures;
+                }
+            }
+            // Test 5: null probe on SYCL wrapper, valid out_scales, n_probe=1.
+            {
+                float scales_sycl[128] = {0};
+                ggml_innerq_compute_k_squared_profile_sycl(nullptr, 1, 128, scales_sycl);
+                for (int d = 0; d < 128; ++d) {
+                    if (scales_sycl[d] != 1.0f) {
+                        printf("   [8c] FAIL: sycl null probe d=%d = %f, expected 1.0\n",
+                               d, (double) scales_sycl[d]);
+                        ++k3_failures;
+                    }
+                }
+            }
+            // Test 6: n_probe=0 on SYCL wrapper, valid pointers.
+            {
+                std::vector<float> probe_zero(1 * 128, 0.0f);
+                float scales_sycl[128] = {0};
+                ggml_innerq_compute_k_squared_profile_sycl(probe_zero.data(), 0, 128, scales_sycl);
+                for (int d = 0; d < 128; ++d) {
+                    if (scales_sycl[d] != 1.0f) {
+                        printf("   [8c] FAIL: sycl zero n_probe d=%d = %f, expected 1.0\n",
+                               d, (double) scales_sycl[d]);
+                        ++k3_failures;
+                    }
+                }
+            }
             if (k3_failures > 0) {
                 printf("   [8c] InnerQ K^2 profile (CPU vs SYCL): %d failures\n", k3_failures);
                 g_failures++;
@@ -1298,7 +1370,6 @@ int main() {
         }
 
                     // not a regression catcher.
-        skip("[8] InnerQ FA skeleton (P3.2.2 state machine unit PASS)", "real PPL probe is in P3.2.4; P3.2.1 ships spec + skeleton, P3.2.2 ships state machine + unit check");
     } else {
         printf("\n[8] InnerQ FA - SKIPPED (set LLAMA_TEST_INNERQ=1 to opt in; default OFF per P3.2 section 5 default-state)\n");
     }

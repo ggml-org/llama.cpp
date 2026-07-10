@@ -47,11 +47,18 @@ extern "C" void ggml_innerq_compute_k_squared_profile(
 
 extern "C" void ggml_innerq_compute_k_squared_profile_sycl(
     const float * probe, int n_probe, int head_dim, float * out_scales) {
-    // Defensive: same as the C reference.
+    // Guard ordering (P3.2.4b plan 2.1): null-output early-return
+    // BEFORE any write, then identity-init the output buffer, then
+    // null-probe / n_probe<1 early-return, then head_dim check.
+    // This two-stage contract matches the C reference and the
+    // header-documented invariant in ggml/include/ggml-innerq.h.
+    if (out_scales == nullptr) {
+        return;
+    }
     for (int d = 0; d < head_dim; ++d) {
         out_scales[d] = 1.0f;
     }
-    if (probe == nullptr || out_scales == nullptr || n_probe < 1) {
+    if (probe == nullptr || n_probe < 1) {
         return;
     }
     if (head_dim != 16 && head_dim != 32 && head_dim != 64 && head_dim != 128) {

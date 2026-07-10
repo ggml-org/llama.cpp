@@ -45,9 +45,13 @@
 //      probe round-trip works, then P3.2.3 builds the device kernel
 //      on top of a known-good harness.
 //
-//   6. NO device kernel. NO ggml-sycl.cpp wire-up. NO test edits.
-//      Those are the harness probe (this file + test-sycl-turbo-correctness.cpp
-//      edit) and the SYCL wire-up (P3.2.3) respectively.
+//   6. (Superseded.) The P3.2.2-era 'no device kernel / no ggml-sycl.cpp
+//      wire-up / no test edits' scoping note is RETIRED: the device
+//      SYCL kernel now lives at ggml/src/ggml-sycl/innerq.cpp, the
+//      test harness at tests/test-sycl-turbo-correctness.cpp exercises
+//      it under LLAMA_TEST_INNERQ=1, and the wire-up is integrated.
+//      This header remains the contract surface; the deferred-scope
+//      note above is kept as historical context only.
 //
 // Why header-only in P3.2.2:
 //   - Compiles in 0.4s via icpx -fsyntax-only (no AOT link needed).
@@ -180,11 +184,13 @@ ggml_innerq_recovery ggml_innerq_state_recover(
 //                innerq.cpp both match this contract.
 //   out_scales -- caller-provided array of `head_dim` floats; the
 //                function writes the per-position K^2 scale into it.
-//                Caller owns the buffer; the function INITIALIZES
-//                every entry to the identity 1.0f BEFORE any early-
-//                return path (unsupported head_dim, null probe,
-//                n_probe < 1, no SYCL device) so the buffer is
-//                always in a valid state on return.
+//                If `out_scales` is null the function returns immediately
+//                without writes. Otherwise, for non-null output, every
+//                entry is initialized to `1.0f` BEFORE any early-return
+//                path (unsupported `head_dim`, null `probe`, `n_probe <
+//                1`, no SYCL device), so the buffer is always in a
+//                valid identity state on return. The C reference and
+//                the SYCL wrapper both implement this two-stage contract.
 //
 // Output convention (P3.2.3 minimal): for each position d, the scale
 // is 1 / sqrt(1 + sum_i probe[i*head_dim + d]^2 / n_probe). This
@@ -199,7 +205,10 @@ ggml_innerq_recovery ggml_innerq_state_recover(
 // the SYCL device kernel's pre-existing behavior). The C reference
 // at ggml/src/ggml-innerq.c and the SYCL kernel at ggml/src/ggml-sycl/
 // innerq.cpp both implement this; the public API contract here
-// documents it.
+// documents it. SYCL-wrapper parity (P3.2.4b plan 2.2): the SYCL
+// wrapper at ggml/src/ggml-sycl/innerq.cpp also guards null
+// `out_scales` BEFORE the identity-init loop so the null-output
+// early-return writes nothing and no segfault occurs.
 //
 // The function is pure: no side effects, no allocation. Safe to call
 // from any context including the harness probe.
