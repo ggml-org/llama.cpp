@@ -2,85 +2,31 @@
 	import { Lightbulb, LightbulbOff, Check, Info } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ReasoningEffort } from '$lib/enums';
-	import { REASONING_EFFORT_TOKENS } from '$lib/constants/reasoning-effort-tokens';
-	import { REASONING_EFFORT_LEVELS } from '$lib/constants/reasoning-effort';
-	import type { ReasoningEffortLevel } from '$lib/types';
-	import {
-		modelsStore,
-		checkModelSupportsThinking,
-		supportsThinking,
-		propsCacheVersion,
-		loadedModelIds
-	} from '$lib/stores/models.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import type { DatabaseMessage } from '$lib/types/database';
+	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 
 	let subOpen = $state(false);
 
-	let conversationModel = $derived(
-		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
-	);
-
-	let modelSupportsThinkingFromMessages = $derived.by(() => {
-		const modelId = isRouterMode() ? modelsStore.selectedModelName || conversationModel : null;
-		if (!modelId) return false;
-
-		const messages = conversationsStore.activeMessages;
-
-		return messages.some(
-			(m) => m.role === 'assistant' && m.model === modelId && !!m.reasoningContent
-		);
-	});
-
-	let modelSupportsThinking = $derived.by(() => {
-		loadedModelIds();
-		propsCacheVersion();
-
-		if (isRouterMode()) {
-			const modelId = modelsStore.selectedModelName || conversationModel;
-			return checkModelSupportsThinking(modelId ?? '') || modelSupportsThinkingFromMessages;
-		}
-
-		return supportsThinking() || modelSupportsThinkingFromMessages;
-	});
-
-	let thinkingEnabled = $derived(conversationsStore.getThinkingEnabled());
-	let currentEffort = $derived(conversationsStore.getReasoningEffort());
-	let isOff = $derived(!thinkingEnabled);
-
-	function isSelected(item: ReasoningEffortLevel): boolean {
-		if (item.isOff) return isOff;
-		return thinkingEnabled && currentEffort === item.value;
-	}
-
-	function handleSelection(item: ReasoningEffortLevel) {
-		if (item.isOff) {
-			conversationsStore.setThinkingEnabled(false);
-		} else {
-			conversationsStore.setThinkingEnabled(true);
-			conversationsStore.setReasoningEffort(item.value as ReasoningEffort);
-		}
-		subOpen = false;
-	}
+	const reasoning = useReasoningMenu();
 </script>
 
-{#if modelSupportsThinking}
+{#if reasoning.modelSupportsThinking}
 	<DropdownMenu.Sub bind:open={subOpen}>
 		<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-			{#if thinkingEnabled}
+			{#if reasoning.thinkingEnabled}
 				<Lightbulb class="h-4 w-4 shrink-0 text-amber-400" />
 			{:else}
 				<LightbulbOff class="h-4 w-4 shrink-0 text-muted-foreground" />
 			{/if}
 
-			<span class="text-sm inline-flex gap-2 {!thinkingEnabled ? 'text-muted-foreground' : ''}">
+			<span
+				class="text-sm inline-flex gap-2 {!reasoning.thinkingEnabled
+					? 'text-muted-foreground'
+					: ''}"
+			>
 				Reasoning
 
 				<span class="capitalize text-muted-foreground">
-					{thinkingEnabled ? currentEffort : 'off'}
+					{reasoning.thinkingEnabled ? reasoning.currentEffort : 'off'}
 				</span>
 			</span>
 		</DropdownMenu.SubTrigger>
@@ -88,14 +34,18 @@
 		<DropdownMenu.SubContent
 			class="w-60 bg-popover p-1.5 text-popover-foreground shadow-md outline-none"
 		>
-			{#each REASONING_EFFORT_LEVELS as level (level.value)}
+			{#each reasoning.levels as level (level.value)}
+				{@const tokenLabel = reasoning.tokenLabel(level)}
 				<button
 					type="button"
 					class="flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.75 text-left text-sm transition-colors hover:bg-accent"
-					class:bg-accent={isSelected(level)}
-					onclick={() => handleSelection(level)}
+					class:bg-accent={reasoning.isSelected(level)}
+					onclick={() => {
+						reasoning.select(level);
+						subOpen = false;
+					}}
 				>
-					{#if isSelected(level)}
+					{#if reasoning.isSelected(level)}
 						<Check class="h-4 w-4 shrink-0 text-foreground" />
 					{:else}
 						<div class="h-4 w-4 shrink-0"></div>
@@ -103,11 +53,9 @@
 
 					<span class="flex-1">{level.label}</span>
 
-					{#if !level.isOff}
+					{#if tokenLabel}
 						<span class="text-[11px] text-muted-foreground opacity-60">
-							{REASONING_EFFORT_TOKENS[level.value] === -1
-								? 'Unlimited'
-								: `Max ${REASONING_EFFORT_TOKENS[level.value].toLocaleString()} tokens`}
+							{tokenLabel}
 						</span>
 					{/if}
 
