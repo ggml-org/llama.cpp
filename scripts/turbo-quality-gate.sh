@@ -42,7 +42,7 @@ esac
 
 # Per-stage tempdir for captured stdout/stderr.
 STAGE_LOG_DIR="$(mktemp -d -t turbo-gate.XXXXXX)"
-trap 'rm -rf "$STAGE_LOG_DIR"' EXIT
+trap 'if [ "${PRESERVE_LOGS:-0}" = "1" ]; then printf "  [preserved logs at %s]\n" "$STAGE_LOG_DIR" >&2; else rm -rf "$STAGE_LOG_DIR"; fi' EXIT
 
 FAIL_COUNT=0
 SKIP_COUNT=0
@@ -284,7 +284,7 @@ stage_scaling
 
 echo "========================================"
 echo "  Summary"
-echo "    stages run:    3"
+echo "    stages seen:    3 (correctness, ppl, scaling)"
 echo "    failures:      $FAIL_COUNT"
 echo "    skips:         $SKIP_COUNT"
 echo "    timeouts:      $TIMEOUT_COUNT"
@@ -292,12 +292,14 @@ echo "    timeouts:      $TIMEOUT_COUNT"
 echo "========================================"
 
 # Exit code: strict mode exits nonzero on any FAIL, any forbidden SKIP,
-# any timeout, or any XPASS. Non-strict mode follows the existing
-# harness contract (SKIP green, GATE-FAIL/XPASS red).
-if [ "$FAIL_COUNT" -gt 0 ] || [ "$TIMEOUT_COUNT" -gt 0 ]; then
+PRESERVE_LOGS=0
+if [ "$FAIL_COUNT" -gt 0 ]; then
+  [ "$TIMEOUT_COUNT" -gt 0 ] && exit 124
   exit 1
 fi
+if [ "$TIMEOUT_COUNT" -gt 0 ]; then exit 124; fi
 if [ "$STRICT" = "1" ] && [ "$SKIP_COUNT" -gt 0 ]; then
+  PRESERVE_LOGS=1  # strict SKIP usually means a config bug worth diffing
   exit 2
 fi
 exit 0
