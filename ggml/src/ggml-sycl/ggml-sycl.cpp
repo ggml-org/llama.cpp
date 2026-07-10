@@ -5129,6 +5129,12 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_TIMESTEP_EMBEDDING:
             ggml_sycl_op_timestep_embedding(ctx, dst);
             break;
+        case GGML_OP_RWKV_LERP:
+            ggml_sycl_op_rwkv_lerp(ctx, dst);
+            break;
+        case GGML_OP_RWKV_RK:
+            ggml_sycl_op_rwkv_rk(ctx, dst);
+            break;
         case GGML_OP_RWKV_WKV6:
             ggml_sycl_op_rwkv_wkv6(ctx, dst);
             break;
@@ -5918,6 +5924,54 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
             return true;
         case GGML_OP_LEAKY_RELU:
         case GGML_OP_TIMESTEP_EMBEDDING:
+        case GGML_OP_RWKV_LERP:
+            return op->type == GGML_TYPE_F32 &&
+                   op->src[0]->type == GGML_TYPE_F32 &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   op->src[2]->type == GGML_TYPE_F32 &&
+                   ggml_are_same_shape(op->src[0], op->src[1]) &&
+                   ggml_is_contiguous(op->src[0]) &&
+                   ggml_is_contiguous(op->src[1]) &&
+                   ggml_is_contiguous(op->src[2]) &&
+                   ggml_is_contiguous(op) &&
+                   op->ne[0] == op->src[0]->ne[0] &&
+                   op->ne[1] == op->src[0]->ne[1] &&
+                   op->ne[2] == op->src[0]->ne[2] &&
+                   ggml_nelements(op) == ggml_nelements(op->src[0]) * op->ne[3] &&
+                   op->src[2]->ne[0] == op->ne[0] &&
+                   op->src[2]->ne[1] == 1 &&
+                   op->src[2]->ne[2] == 1 &&
+                   op->src[2]->ne[3] == op->ne[3] &&
+                   ggml_nelements(op->src[2]) == op->ne[0] * op->ne[3];
+        case GGML_OP_RWKV_RK: {
+            const int64_t head_size = op->src[1]->ne[0];
+            const int64_t H         = op->src[1]->ne[1];
+            const int64_t T         = op->src[1]->ne[2];
+            const int64_t C         = head_size * H;
+
+            return op->type == GGML_TYPE_F32 &&
+                   op->src[0]->type == GGML_TYPE_F32 &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   op->src[2]->type == GGML_TYPE_F32 &&
+                   op->src[3]->type == GGML_TYPE_F32 &&
+                   op->src[4]->type == GGML_TYPE_F32 &&
+                   (head_size == 64 || head_size == 128) &&
+                   ggml_are_same_shape(op->src[1], op->src[2]) &&
+                   ggml_are_same_shape(op->src[1], op->src[3]) &&
+                   ggml_are_same_shape(op->src[0], op) &&
+                   ggml_is_contiguous(op->src[0]) &&
+                   ggml_is_contiguous(op->src[1]) &&
+                   ggml_is_contiguous(op->src[2]) &&
+                   ggml_is_contiguous(op->src[3]) &&
+                   ggml_is_contiguous(op->src[4]) &&
+                   ggml_is_contiguous(op) &&
+                   op->src[4]->ne[0] == head_size &&
+                   op->src[4]->ne[1] == H &&
+                   ggml_nelements(op->src[4]) == head_size * H &&
+                   op->ne[0] == C &&
+                   op->ne[1] == T &&
+                   ggml_nelements(op) == C * T;
+        }
         case GGML_OP_RWKV_WKV6:
         case GGML_OP_RWKV_WKV7:
         case GGML_OP_GATED_LINEAR_ATTN:

@@ -39,6 +39,7 @@
 #include "quants.hpp"
 #include "roll.hpp"
 #include "rope.hpp"
+#include "rwkv.hpp"
 #include "set_rows.hpp"
 #include "ssm_conv.hpp"
 #include "softmax.hpp"

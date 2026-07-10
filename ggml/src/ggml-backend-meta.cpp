@@ -975,6 +975,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_OP_WIN_UNPART:
             case GGML_OP_GET_REL_POS:
             case GGML_OP_ADD_REL_POS:
+            case GGML_OP_RWKV_LERP:
+            case GGML_OP_RWKV_RK:
             case GGML_OP_RWKV_WKV6:
             case GGML_OP_GATED_LINEAR_ATTN:
             case GGML_OP_RWKV_WKV7:
