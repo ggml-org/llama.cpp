@@ -711,6 +711,10 @@ extern "C" {
             llama_memory_t mem,
                       bool data);
 
+
+    // Preserves InnerQ calibration across chunk clears; non-KV memory falls back to a metadata-only clear.
+    LLAMA_API void llama_memory_clear_data_only(
+            llama_memory_t mem);
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // Returns false if a partial sequence cannot be removed. Removing a whole sequence never fails
     // seq_id < 0 : match any sequence

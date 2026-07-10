@@ -4054,6 +4054,15 @@ void llama_memory_clear(llama_memory_t mem, bool data) {
     mem->clear(data);
 }
 
+// Single-dispatch through the llama_memory_i virtual; non-KV types fall back to a metadata clear.
+void llama_memory_clear_data_only(llama_memory_t mem) {
+    if (!mem) {
+        return;
+    }
+
+    mem->clear_data_only();
+}
+
 bool llama_memory_seq_rm(
         llama_memory_t mem,
           llama_seq_id seq_id,

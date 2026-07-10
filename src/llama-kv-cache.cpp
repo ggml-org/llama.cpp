@@ -120,6 +120,17 @@ llama_kv_cache::llama_kv_cache(
         }
     }
 
+
+    // P3.2.4a: cache the per-context InnerQ opt-in flag once. Mirrors
+    // llama-context.cpp's innerq_env_enabled so the policy gate is a
+    // single env-var check. Without this flag, get_turbo_innerq_scale_inv
+    // would return the raw tensor even when LLAMA_ENABLE_INNERQ is unset,
+    // silently making the InnerQ datapath active in every kv cache
+    // (violates off-by-default and contaminates the ≤2% latency baseline).
+    {
+        const char * env = getenv("LLAMA_ENABLE_INNERQ");
+        innerq_active = (env != nullptr && env[0] != '\0' && env[0] != '0');
+    }
     GGML_ASSERT(kv_size % n_pad == 0);
 
     // Auto-asymmetric: when symmetric turbo K+V is requested and the model has
@@ -635,40 +646,51 @@ llama_kv_cache::llama_kv_cache(
 }
 
 void llama_kv_cache::clear(bool data) {
+    do_clear(data, /*reset_innerq=*/true);
+}
+
+void llama_kv_cache::clear_data_only() {
+    // Preserve published InnerQ calibration across chunk boundaries.
+    do_clear(/*data=*/true, /*reset_innerq=*/false);
+}
+void llama_kv_cache::do_clear(bool data, bool reset_innerq) {
     for (uint32_t s = 0; s < n_stream; ++s) {
         v_cells[s].reset();
         v_heads[s] = 0;
     }
 
+    // Order matters: ggml_backend_buffer_clear zeroes both rotation and
+    // scale_inv tensors (they share ctxs_bufs), so the buffer-clear in
+    // `if (data)` runs BEFORE re-seeding rotation/scale. The tensor restore
+    // also runs in `data=false && reset_innerq=true` (e.g. llama-bench
+    // between reps) so the tensor stays consistent with the runtime reset.
     if (data) {
         for (auto & [_, buf] : ctxs_bufs) {
             ggml_backend_buffer_clear(buf.get(), 0);
         }
-
-        // Re-initialize turbo rotation matrices after buffer clear (clear zeroes everything)
-        if (turbo_rotation != nullptr && turbo_rotation->buffer != nullptr) {
-            #include "turbo-rotation-data.h"
-            ggml_backend_tensor_set(turbo_rotation, TURBO_ROTATION_R, 0, 128 * 128 * sizeof(float));
-            ggml_backend_tensor_set(turbo_rotation_inv, TURBO_ROTATION_RT, 0, 128 * 128 * sizeof(float));
-
-            // Re-initialize InnerQ scale_inv to all 1.0
-            // P3.2.2a2a3c trace: log second-init run state.
-            LLAMA_LOG_DEBUG("%s: a2a3c-init2-pre: turbo_innerq_scale_inv=%p\n",
-                            __func__, (void *)turbo_innerq_scale_inv);
-            if (turbo_innerq_scale_inv != nullptr && turbo_innerq_scale_inv->buffer != nullptr) {
-                float ones[LLAMA_TURBO_INNERQ_CHANNELS];
-                for (int i = 0; i < LLAMA_TURBO_INNERQ_CHANNELS; i++) ones[i] = 1.0f;
-                ggml_backend_tensor_set(turbo_innerq_scale_inv, ones, 0, LLAMA_TURBO_INNERQ_CHANNELS * sizeof(float));
-                LLAMA_LOG_DEBUG("%s: a2a3c-init2-done\n", __func__);
-            } else {
-                LLAMA_LOG_DEBUG("%s: a2a3c-init2-skip\n", __func__);
-            }
-        }
     }
-    // Reset the per-cache InnerQ runtime state alongside the tensor
-    // reset so should_attach_scale_tensor() does not get stuck on
-    // stale finalized/abort/freeze flags from a previous use.
-    turbo_innerq_runtime.reset();
+
+    if (turbo_rotation != nullptr && turbo_rotation->buffer != nullptr && (data || reset_innerq)) {
+        #include "turbo-rotation-data.h"
+        ggml_backend_tensor_set(turbo_rotation, TURBO_ROTATION_R, 0, 128 * 128 * sizeof(float));
+        ggml_backend_tensor_set(turbo_rotation_inv, TURBO_ROTATION_RT, 0, 128 * 128 * sizeof(float));
+    }
+    if (turbo_innerq_scale_inv != nullptr && turbo_innerq_scale_inv->buffer != nullptr && (data || reset_innerq)) {
+        LLAMA_LOG_DEBUG("%s: a2a3c-init2-pre: turbo_innerq_scale_inv=%p reset_innerq=%d\n",
+                        __func__, (void *)turbo_innerq_scale_inv, (int)reset_innerq);
+        const llama_turbo_innerq_runtime_snapshot snap = turbo_innerq_runtime.peek();
+        const float * src = snap.scale_inv.data();
+        float restore[LLAMA_TURBO_INNERQ_CHANNELS];
+        for (int i = 0; i < LLAMA_TURBO_INNERQ_CHANNELS; i++) {
+            restore[i] = reset_innerq ? 1.0f : src[i];
+        }
+        ggml_backend_tensor_set(turbo_innerq_scale_inv, restore, 0, LLAMA_TURBO_INNERQ_CHANNELS * sizeof(float));
+        LLAMA_LOG_DEBUG("%s: a2a3c-init2-done\n", __func__);
+    }
+
+    if (reset_innerq) {
+        turbo_innerq_runtime.reset();
+    }
 }
 
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -2965,12 +2987,17 @@ ggml_tensor * llama_kv_cache_context::get_turbo_rotation() const {
     return kv->get_turbo_rotation();
 }
 
-ggml_tensor * llama_kv_cache_context::get_turbo_rotation_inv() const {
-    return kv->get_turbo_rotation_inv();
-}
-
 ggml_tensor * llama_kv_cache_context::get_turbo_rot_forward() const {
     return kv->get_turbo_rotation();
+}
+
+// Returns the raw tensor only when the per-context InnerQ opt-in flag is set.
+// When the flag is false (LLAMA_ENABLE_INNERQ unset), returns nullptr so the
+// graph's `src[1]` matches the off-by-default pre-P3.2.4a baseline and the
+// turbo-wht kernel's scale multiply is skipped. Identity fill is done by
+// init1 (always) so the tensor is safe to read regardless of attach state.
+ggml_tensor * llama_kv_cache::get_turbo_innerq_scale_inv() const {
+    return (innerq_active && turbo_innerq_scale_inv != nullptr) ? turbo_innerq_scale_inv : nullptr;
 }
 
 ggml_tensor * llama_kv_cache_context::get_turbo_rot_inverse() const {
@@ -2981,11 +3008,7 @@ ggml_tensor * llama_kv_cache_context::get_turbo_innerq_scale_inv() const {
     return kv->get_turbo_innerq_scale_inv();
 }
 
-ggml_tensor * llama_kv_cache::get_turbo_innerq_scale_inv() const {
-    return turbo_innerq_runtime.should_attach_scale_tensor()
-        ? turbo_innerq_scale_inv
-        : nullptr;
-}
+
 
 // P3.2.2a2a3b discriminator: non-mutating snapshot read so the
 // apply() gate at :2867 can log the gate inputs without clearing

@@ -133,6 +133,8 @@ public:
     bool get_can_shift() const override;
 
     void clear(bool data) override;
+    // Preserves InnerQ calibration across chunk boundaries; see do_clear.
+    void clear_data_only() override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
@@ -239,6 +241,13 @@ public:
     void set_input_v_rot(ggml_tensor * dst) const;
 
 private:
+    // data: zero ctxs_bufs; reset_innerq: drop in-flight InnerQ calibration.
+    // reset_innerq=false keeps the published scale alive across chunk clears.
+    void do_clear(bool data, bool reset_innerq);
+
+public:
+
+private:
     const llama_model & model;
     const llama_hparams & hparams;
 
@@ -313,6 +322,13 @@ private:
     ggml_tensor * turbo_innerq_scale_inv = nullptr;
 
     llama_turbo_innerq_runtime_state turbo_innerq_runtime;
+
+    // Per-context InnerQ opt-in flag. Set once at construction from the
+    // canonical LLAMA_ENABLE_INNERQ env gate (mirrors llama-context.cpp
+  // innerq_env_enabled and ggml_innerq_state_decide's env-var half).
+    // When false, get_turbo_innerq_scale_inv() returns nullptr so the
+    // graph-build src[1] matches the off-by-default pre-P3.2.4a baseline.
+    bool innerq_active = false;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
