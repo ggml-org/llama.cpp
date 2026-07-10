@@ -8,9 +8,11 @@
 	import { onMount } from 'svelte';
 
 	import { SidebarNavigation, DialogConversationTitleUpdate } from '$lib/components/app';
+	import { DialogMcpServerRecommendations } from '$lib/components/app/dialogs';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
@@ -25,6 +27,7 @@
 	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
+	import { useMcpRecommendations } from '$lib/hooks/use-mcp-recommendations.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { theme } from '$lib/stores/theme.svelte';
@@ -35,6 +38,8 @@
 	let { children } = $props();
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
+
+	const mcpRecommendations = useMcpRecommendations();
 
 	let chatSidebar:
 		| {
@@ -154,7 +159,17 @@
 
 	onMount(() => {
 		updateFavicon();
+		// snapshot of every backend running stream on first load, populates the sidebar spinners
+		// so the user sees each conv that has a live inference, even ones not opened yet
+		void chatStore.syncRemoteRunningStreams();
 	});
+
+	// refresh that snapshot when the tab returns to the foreground, a stream may have advanced
+	// or ended while it was hidden. snapshot only, no polling
+	function handleVisibilityChange() {
+		if (document.visibilityState !== 'visible') return;
+		void chatStore.syncRemoteRunningStreams();
+	}
 
 	$effect(() => {
 		void theme.isSystemDark;
@@ -280,6 +295,7 @@
 </svelte:head>
 
 <svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<svelte:document onvisibilitychange={handleVisibilityChange} />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<div class="flex flex-col md:flex-row">
@@ -308,6 +324,11 @@
 		newTitle={titleUpdateNewTitle}
 		onConfirm={handleTitleUpdateConfirm}
 		onCancel={handleTitleUpdateCancel}
+	/>
+
+	<DialogMcpServerRecommendations
+		open={mcpRecommendations.open}
+		onOpenChange={mcpRecommendations.handleOpenChange}
 	/>
 </Tooltip.Provider>
 

@@ -129,7 +129,7 @@ typedef struct VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE {
 #endif
 
 #define ROUNDUP_POW2(M, N) (((M) + (N) - 1) & ~((N) - 1))
-#define CEIL_DIV(M, N) (((M) + (N)-1) / (N))
+#define CEIL_DIV(M, N) (((M) / (N)) + (((M) % (N)) != 0))
 static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define VK_VENDOR_ID_AMD 0x1002
@@ -308,6 +308,7 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    INTEL_XE1,
     INTEL_XE2,
     NVIDIA_PRE_TURING,
     NVIDIA_TURING,
@@ -365,21 +366,26 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
 
         bool subgroup_size_control = false;
+        bool integer_dot_product = false;
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
                 subgroup_size_control = true;
+            } else if (strcmp("VK_KHR_shader_integer_dot_product", properties.extensionName) == 0) {
+                integer_dot_product = true;
             }
         }
 
-        if (!subgroup_size_control) {
+        if (!subgroup_size_control || !integer_dot_product) {
             return vk_device_architecture::OTHER;
         }
 
         vk::PhysicalDeviceProperties2 props2;
         vk::PhysicalDeviceSubgroupSizeControlPropertiesEXT subgroup_size_control_props;
+        vk::PhysicalDeviceShaderIntegerDotProductPropertiesKHR integer_dot_props;
 
         props2.pNext = &subgroup_size_control_props;
+        subgroup_size_control_props.pNext = &integer_dot_props;
         device.getProperties2(&props2);
 
         if (subgroup_size_control_props.minSubgroupSize == 16) {
@@ -388,6 +394,9 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             // https://www.intel.com/content/www/us/en/content-details/824434/2024-intel-tech-tour-xe2-and-lunar-lake-s-gpu.html
             // https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
             return vk_device_architecture::INTEL_XE2;
+        } else if (subgroup_size_control_props.minSubgroupSize == 8 &&
+                 integer_dot_product && integer_dot_props.integerDotProduct4x8BitPackedSignedAccelerated) {
+            return vk_device_architecture::INTEL_XE1;
         }
     } else if (props.vendorID == VK_VENDOR_ID_NVIDIA) {
         const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
@@ -1898,6 +1907,38 @@ static bool vk_enable_sync_logger = false;
 static uint32_t vk_perf_logger_frequency = 1;
 static std::string vk_pipeline_stats_filter;
 
+static uint64_t ggml_vk_get_node_flops(const ggml_tensor * node) {
+    if (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) {
+        const uint64_t m     = node->ne[0];
+        const uint64_t n     = node->ne[1];
+        const uint64_t k     = node->src[1]->ne[0];
+        const uint64_t batch = node->ne[2] * node->ne[3];
+        return m * n * (k + (k - 1)) * batch;
+    }
+    if (node->op == GGML_OP_CONV_2D || node->op == GGML_OP_CONV_TRANSPOSE_2D) {
+        const ggml_tensor * knl = node->src[0];
+        const uint64_t Cout  = node->ne[2];
+        const uint64_t size_K = node->src[1]->ne[2] * knl->ne[0] * knl->ne[1];
+        const uint64_t size_N = node->ne[3] * node->ne[0] * node->ne[1];
+        return Cout * size_N * (size_K + (size_K - 1));
+    }
+    if (node->op == GGML_OP_CONV_3D) {
+        const ggml_tensor * knl = node->src[0];
+        const uint64_t OC     = ggml_get_op_params_i32(node, 11);
+        const uint64_t IC     = ggml_get_op_params_i32(node, 9);
+        const uint64_t size_K = IC * knl->ne[0] * knl->ne[1] * knl->ne[2];
+        const uint64_t size_N = node->ne[3] / OC * node->ne[0] * node->ne[1] * node->ne[2];
+        return OC * size_N * (size_K + (size_K - 1));
+    }
+    if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+        const ggml_tensor * q = node->src[0];
+        const ggml_tensor * k = node->src[1];
+        const ggml_tensor * v = node->src[2];
+        return 2ull * q->ne[1] * q->ne[2] * (k->ne[0] + v->ne[0]) * k->ne[1] * q->ne[3];
+    }
+    return 0;
+}
+
 class vk_perf_logger {
   public:
     void print_timings(bool force = false) {
@@ -1946,7 +1987,7 @@ class vk_perf_logger {
     }
 
     std::string get_node_fusion_name(const ggml_tensor * node, const char *fusion_name, uint64_t *n_flops) {
-        *n_flops = 0;
+        *n_flops = ggml_vk_get_node_flops(node);
         std::string fusion_str;
         if (fusion_name) {
             fusion_str = fusion_name + std::string(" ");
@@ -1973,35 +2014,22 @@ class vk_perf_logger {
             if (batch > 1) {
                 name += " batch=" + std::to_string(batch);
             }
-            name = fusion_str + name;
-            *n_flops = m * n * (k + (k - 1)) * batch;
-            return name;
+            return fusion_str + name;
         }
         if (node->op == GGML_OP_CONV_2D || node->op == GGML_OP_CONV_TRANSPOSE_2D) {
             std::string   name    = ggml_op_name(node->op);
-            ggml_tensor * knl     = node->src[0];
-            uint64_t      OW      = node->ne[0];
-            uint64_t      OH      = node->ne[1];
-            uint64_t      N       = node->ne[3];
+            const ggml_tensor * knl = node->src[0];
             uint64_t      Cout    = node->ne[2];
-            uint64_t      KW      = knl->ne[0];
-            uint64_t      KH      = knl->ne[1];
-            uint64_t      Cin     = node->src[1]->ne[2];
-            // KxCRS @ CRSxNPQ = KxNPQ -> M=K, K=CRS, N=NPQ
-            uint64_t      size_M  = Cout;
-            uint64_t      size_K  = Cin * KW * KH;
-            uint64_t      size_N  = N * OW * OH;
-            *n_flops = size_M * size_N * (size_K + (size_K - 1));
-            name += " M=Cout=" + std::to_string(size_M) + ", K=Cin*KW*KH=" + std::to_string(size_K) +
+            uint64_t      size_K  = node->src[1]->ne[2] * knl->ne[0] * knl->ne[1];
+            uint64_t      size_N  = node->ne[3] * node->ne[0] * node->ne[1];
+            name += " M=Cout=" + std::to_string(Cout) + ", K=Cin*KW*KH=" + std::to_string(size_K) +
                     ", N=N*OW*OH=" + std::to_string(size_N);
-            name = fusion_str + name;
-            return name;
+            return fusion_str + name;
         }
         if (node->op == GGML_OP_RMS_NORM) {
             std::string   name    = ggml_op_name(node->op);
             name += "(" + std::to_string(node->ne[0]) + "," + std::to_string(node->ne[1]) + "," + std::to_string(node->ne[2]) + "," + std::to_string(node->ne[3]) + ")";
-            name = fusion_str + name;
-            return name;
+            return fusion_str + name;
         }
         if (node->op == GGML_OP_FLASH_ATTN_EXT) {
             const ggml_tensor * dst = node;
@@ -2017,7 +2045,6 @@ class vk_perf_logger {
                 " k(" << k->ne[0] << "," << k->ne[1] << "," << k->ne[2] << "," << k->ne[3] << "), " <<
                 " v(" << v->ne[0] << "," << v->ne[1] << "," << v->ne[2] << "," << v->ne[3] << "), " <<
                 " m(" << (m?m->ne[0]:0) << "," << (m?m->ne[1]:0) << "," << (m?m->ne[2]:0) << "," << (m?m->ne[3]:0) << ")";
-            *n_flops = 2ull * q->ne[1] * q->ne[2] * (k->ne[0] + v->ne[0]) * k->ne[1] * q->ne[3];
             return name.str();
         }
         if (node->op == GGML_OP_TOP_K) {
@@ -2081,7 +2108,7 @@ struct ggml_backend_vk_context {
     bool do_add_rms_partials_offset_calculation;
     bool do_add_rms_partials;
 
-    uint64_t last_total_mul_mat_bytes {};
+    uint64_t last_total_flops {UINT64_MAX};
 
     // Cache most recent tensor that was converted into prealloc_y, and what pipeline it used to convert.
     vk_pipeline_struct * prealloc_y_last_pipeline_used {};
@@ -2448,6 +2475,85 @@ static bool ggml_vk_strip_decode_vector(const uint32_t * code, size_t word_count
     return true;
 }
 
+// Remove the loop unrolling hint of the matmul shader's BK loop
+// and replace it with the dont_unroll hint for better performance on
+// hardware like Apple M1/M2.
+// Assumes 1. code comes from mul_mm.comp 2. the K-tile loop has no loop
+// control hint and 3. the BK loop is the last loop nested directly inside
+// the K-tile loop.
+// Returns true when the input was modified; returns false otherwise
+// without touching `out`.
+static bool ggml_vk_roll_bk_loop(const uint32_t * code, size_t word_count, std::vector<uint32_t> & out) {
+    if (word_count < 5) {
+        return false;
+    }
+
+    struct vk_spv_loop {
+        size_t   header;
+        size_t   end;
+        uint32_t control;
+    };
+
+    std::vector<vk_spv_loop> loops;
+
+    // Collect a list of all loops in the module.
+    for (size_t pos = 5; pos < word_count; ) {
+        const uint32_t wc = code[pos] >> spv::WordCountShift;
+        const uint32_t op = code[pos] & spv::OpCodeMask;
+        if (wc == 0 || pos + wc > word_count) {
+            return false;
+        }
+
+        if (op == spv::OpLoopMerge && wc >= 4) { loops.push_back({ pos, 0, code[pos + 3] }); }
+
+        if (op == spv::OpLabel && wc >= 2) {
+            for (auto & l : loops) {
+                if (l.end == 0 && code[l.header + 1] == code[pos + 1]) { l.end = pos; }
+            }
+        }
+
+        pos += wc;
+    }
+
+    auto encloses = [](const vk_spv_loop & a, const vk_spv_loop & b) {
+        return a.header < b.header && b.header < a.end;
+    };
+
+    // Find the BK loop.
+    const vk_spv_loop * bk = nullptr;
+    for (const auto & h : loops) {
+        if (h.control != spv::LoopControlUnrollMask) {
+            continue;
+        }
+        const vk_spv_loop * parent = nullptr;
+        bool has_child = false;
+        for (const auto & g : loops) {
+            if (encloses(g, h) && (!parent || g.header > parent->header)) {
+                parent = &g;
+            }
+            if (encloses(h, g)) {
+                has_child = true;
+            }
+        }
+        // BK loop should be the last loop nested inside the loop with no hint
+        // and have at least one child loop.
+        if (parent &&
+            parent->control == spv::LoopControlMaskNone &&
+            has_child &&
+            (!bk || h.header > bk->header)) {
+            bk = &h;
+        }
+    }
+    if (!bk) {
+        return false;
+    }
+
+    // set DontUnroll instead of Unroll
+    out.assign(code, code + word_count);
+    out[bk->header + 3] = spv::LoopControlDontUnrollMask;
+    return true;
+}
+
 static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipeline, size_t spv_size, const void* spv_data, const std::string entrypoint,
                                          uint32_t parameter_count, std::array<uint32_t, 3> wg_denoms, std::vector<uint32_t> specialization_constants,
                                          bool disable_robustness, bool require_full_subgroups, uint32_t required_subgroup_size) {
@@ -2526,6 +2632,22 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         std::vector<uint32_t> stripped;
         if (ggml_vk_strip_decode_vector(src, src_n, stripped)) {
             spirv = std::move(stripped);
+            shader_module_create_info = vk::ShaderModuleCreateInfo({}, spirv.size() * sizeof(uint32_t), spirv.data());
+        }
+    }
+#endif
+
+#if VK_HEADER_VERSION >= 287
+    // Roll the mul_mm BK loop on Asahi Linux. Skip bf16 and the mul_mmq pipelines.
+    if (device->driver_id == vk::DriverId::eMesaHoneykrisp &&
+        pipeline->name.rfind("matmul", 0) == 0 &&
+        pipeline->name.find("bf16") == std::string::npos &&
+        pipeline->name.find("q8_1") == std::string::npos) {
+        const uint32_t * src   = spirv.empty() ? reinterpret_cast<const uint32_t *>(spv_data) : spirv.data();
+        size_t           src_n = spirv.empty() ? spv_size / sizeof(uint32_t) : spirv.size();
+        std::vector<uint32_t> rolled;
+        if (ggml_vk_roll_bk_loop(src, src_n, rolled)) {
+            spirv = std::move(rolled);
             shader_module_create_info = vk::ShaderModuleCreateInfo({}, spirv.size() * sizeof(uint32_t), spirv.data());
         }
     }
@@ -3837,7 +3959,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             l_warptile = { 256, 128, 128, 16, subgroup_size_8, 64, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = l_warptile_mmq_int = { 256, 128, 128, 32, subgroup_size_8, 64, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq_int_k = { 256, 128, 128, 32, subgroup_size_16, 64, 1, 4, 2, 1, subgroup_size_16 };
-        } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support && device->architecture == INTEL_XE2) {
+        } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support) {
             // Xe2/Xe3 with coopmat enabled - warptile performance tuning
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
@@ -4710,7 +4832,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     }
     uint32_t rm_iq = 2 * rm_kq;
 
-    const bool use_subgroups = device->subgroup_arithmetic && device->architecture != vk_device_architecture::AMD_GCN;
+    const bool use_subgroups = device->subgroup_arithmetic;
     // Ensure a subgroup size >= 16 is available
     const bool use_subgroups16 = use_subgroups && subgroup_min_size_16;
 
@@ -6361,9 +6483,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 break;
             case VK_VENDOR_ID_INTEL: {
                 // Current Windows driver does not expose BF16 support.
-                // We only want to use l_warptile if coopmat is available and is Xe2+
-                const bool xe2_with_coopmat = device->coopmat_support && device->architecture == INTEL_XE2;
-                const bool use_l_warptile = (i == GGML_TYPE_BF16) ? (device->coopmat_bf16_support && xe2_with_coopmat) : xe2_with_coopmat;
+                // We only want to use l_warptile if coopmat is available
+                const bool use_l_warptile = (i == GGML_TYPE_BF16) ? (device->coopmat_bf16_support && device->coopmat_support) : device->coopmat_support;
                 device->mul_mat_l[i] = use_l_warptile;
                 device->mul_mat_id_l[i] = use_l_warptile;
                 device->mul_mat_m[i] = true;
@@ -10189,7 +10310,8 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     }
 
     // Only use mask opt when the mask is fairly large. This hasn't been tuned extensively.
-    bool use_mask_opt = mask && nem1 >= 32 && nem0 * nem1 > 32768 && nem0 >= tuning_params.block_cols * 16;
+    bool use_mask_opt = mask && nem1 >= 32 && nem0 * nem1 > 32768 && nem0 >= tuning_params.block_cols * 16
+                        && (ctx->device->architecture != vk_device_architecture::AMD_GCN || HSK > 256 || HSV > 256);
     vk_fa_pipeline_state fa_pipeline_state = get_fa_pipeline_state(ctx->device, tuning_params, HSK, HSV, aligned, f32acc,
                                                                    mask != nullptr, use_mask_opt, logit_softcap != 0, k->type, v->type);
 
@@ -16180,22 +16302,34 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     }
 
     // Submit after enough work has accumulated, to overlap CPU cmdbuffer generation with GPU execution.
-    // Estimate the amount of matmul work by looking at the weight matrix size, and submit every 100MB
-    // (and scaled down based on model size, so smaller models submit earlier).
-    int submitted_nodes = 0;
-    int submit_count = 0;
-    uint64_t mul_mat_bytes = 0;
-    uint64_t total_mul_mat_bytes = 0;
-    uint64_t mul_mat_bytes_per_submit = std::min(uint64_t(100*1000*1000), ctx->last_total_mul_mat_bytes / 40u);
+    // Estimate the amount of compute work using flops, and submit every 200 GFLOP
+    // (and scaled down based on total graph flops, so smaller models submit earlier).
+    // Also submit at least every 100 nodes, in case there are workloads without heavy compute.
+    uint32_t submitted_nodes = 0;
+    uint32_t submit_count = 0;
+    uint64_t batch_flops = 0;
+    uint64_t total_flops = 0;
+    uint64_t flops_cap = 200'000'000'000ULL;
+
+    // On weaker AMD GPUs larger submissions can hit a driver timeout, submit more often to avoid this
+    if (ctx->device->vendor_id == VK_VENDOR_ID_AMD && ctx->device->shader_core_count > 0) {
+        if (ctx->device->architecture == AMD_GCN && ctx->device->shader_core_count < 32) {
+            flops_cap = 500'000'000ULL * ctx->device->shader_core_count;
+        } else if (ctx->device->architecture != AMD_GCN && ctx->device->shader_core_count < 24) {
+            flops_cap = 2'000'000'000ULL * ctx->device->shader_core_count;
+        }
+    }
+    uint64_t flops_per_submit = std::min(flops_cap, ctx->last_total_flops / 40u);
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (first_node_in_batch) {
             submit_node_idx = i;
         }
 
-        if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT || cgraph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
-            auto bytes = ggml_nbytes(cgraph->nodes[i]->src[0]);
-            mul_mat_bytes += bytes;
-            total_mul_mat_bytes += bytes;
+        {
+            auto node_flops = ggml_vk_get_node_flops(cgraph->nodes[i]);
+            batch_flops += node_flops;
+            total_flops += node_flops;
         }
 
         // op_srcs_fused_elementwise indicates whether an op's srcs all contribute to
@@ -16407,8 +16541,8 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
         // Signal the almost_ready fence when the graph is mostly complete (< 20% remaining)
         bool almost_ready = (cgraph->n_nodes - i) < cgraph->n_nodes / 5;
-        bool submit = ((uint32_t)submitted_nodes >= ctx->device->max_nodes_per_submit) ||
-                      (mul_mat_bytes_per_submit != 0 && mul_mat_bytes >= mul_mat_bytes_per_submit) ||
+        bool submit = (submitted_nodes >= ctx->device->max_nodes_per_submit) ||
+                      (flops_per_submit != 0 && batch_flops >= flops_per_submit) ||
                       (i + ctx->num_additional_fused_ops >= last_node) ||
                       (almost_ready && !ctx->almost_ready_fence_pending);
 
@@ -16442,9 +16576,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         if (submit && enqueued) {
             first_node_in_batch = true;
             submitted_nodes = 0;
-            mul_mat_bytes = 0;
+            batch_flops = 0;
             if (submit_count < 3) {
-                mul_mat_bytes_per_submit *= 2;
+                flops_per_submit *= 2;
             }
             submit_count++;
         }
@@ -16453,7 +16587,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ctx->fused_ops_write_mask = 0;
     }
 
-    ctx->last_total_mul_mat_bytes = total_mul_mat_bytes;
+    ctx->last_total_flops = total_flops;
 
     if (vk_perf_logger_enabled) {
         // End the command buffer and submit/wait
@@ -17248,21 +17382,24 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_SET_ROWS:
             {
-                switch (op->type) {
-                    case GGML_TYPE_F32:
-                    case GGML_TYPE_F16:
-                    case GGML_TYPE_BF16:
-                    case GGML_TYPE_Q1_0:
-                    case GGML_TYPE_Q4_0:
-                    case GGML_TYPE_Q4_1:
-                    case GGML_TYPE_Q5_0:
-                    case GGML_TYPE_Q5_1:
-                    case GGML_TYPE_Q8_0:
-                    case GGML_TYPE_IQ4_NL:
-                        return true;
-                    default:
-                        return false;
+                if (op->src[0]->type == GGML_TYPE_F32) {
+                    switch (op->type) {
+                        case GGML_TYPE_F32:
+                        case GGML_TYPE_F16:
+                        case GGML_TYPE_BF16:
+                        case GGML_TYPE_Q1_0:
+                        case GGML_TYPE_Q4_0:
+                        case GGML_TYPE_Q4_1:
+                        case GGML_TYPE_Q5_0:
+                        case GGML_TYPE_Q5_1:
+                        case GGML_TYPE_Q8_0:
+                        case GGML_TYPE_IQ4_NL:
+                            return true;
+                        default:
+                            return false;
+                    }
                 }
+                return false;
             }
         case GGML_OP_CONT:
         case GGML_OP_CPY:
@@ -17890,9 +18027,9 @@ static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
-        // Only allowing Xe2 GPU at the moment since Xe2 GPU can gain significant performance boost,
-        // while some older hardware (ex. Arc A770) has performance regressions
-        return arch == vk_device_architecture::INTEL_XE2;
+        // Only allowing Xe2/Xe3 GPU and integrated Xe GPUs at the moment since older hardware (ex. Arc A770) has performance regressions.
+        return (arch == vk_device_architecture::INTEL_XE2) ||
+            (arch == vk_device_architecture::INTEL_XE1 && props.deviceType == vk::PhysicalDeviceType::eIntegratedGpu && driver_props.driverID == vk::DriverId::eIntelProprietaryWindows);
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
@@ -17940,6 +18077,8 @@ static uint32_t ggml_vk_intel_shader_core_count(const vk::PhysicalDevice& vkdev)
     case 0xE20B:  // B580
     case 0xE211:  // Pro B60
         return 20;
+    case 0xB080:  // PTL Xe3 LPG 2x6 (12 subslices)
+        return 12;
     default:
         return 0;
     }

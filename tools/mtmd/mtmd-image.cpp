@@ -628,7 +628,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_llava_uhd::preprocess(const clip_
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_llava_uhd::get_slice_instructions(const clip_image_size & original_size) {
     mtmd_image_preprocessor_llava_uhd::slice_instructions res;
     // align slices by patch_size * n_merge so an integer number of merger output tokens fits per slice
-    const int n_merge         = hparams.n_merge > 0 ? hparams.n_merge : 1;
+    const int n_merge         = hparams.n_merge;
     const int patch_size      = hparams.patch_size * n_merge;
     const int slice_size      = hparams.image_size;
     const int original_width  = original_size.width;
@@ -894,7 +894,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
     clip_image_u8 resized_image;
     const clip_image_size original_size = img.get_size();
     // the original pixtral model doesn't have n_merge
-    const int cur_merge = hparams.n_merge == 0 ? 1 : hparams.n_merge;
+    const int cur_merge = hparams.n_merge;
     const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
         original_size,
         hparams.patch_size * cur_merge,

@@ -27,6 +27,7 @@
 #include <cinttypes>
 #include <climits>
 #include <cstdarg>
+#include <filesystem>
 #include <fstream>
 #include <list>
 #include <regex>
@@ -352,6 +353,8 @@ static std::string get_default_local_path(const std::string & url) {
 
 common_models_handler common_models_handler_init(const common_params & params, llama_example curr_ex) {
     common_download_hf_plan plan;
+    common_download_hf_plan plan_spec;
+    common_download_hf_plan plan_voc;
     common_download_opts opts;
 
     const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
@@ -377,7 +380,15 @@ common_models_handler common_models_handler_init(const common_params & params, l
         plan = common_download_get_hf_plan(params.model, opts);
     }
 
-    return common_models_handler{plan, opts};
+    if (!params.speculative.draft.mparams.hf_repo.empty()) {
+        plan_spec = common_download_get_hf_plan(params.speculative.draft.mparams, opts);
+    }
+
+    if (!params.vocoder.model.hf_repo.empty()) {
+        plan_voc = common_download_get_hf_plan(params.vocoder.model, opts);
+    }
+
+    return common_models_handler{plan, plan_spec, plan_voc, opts};
 }
 
 bool common_models_handler_is_preset_repo(const common_models_handler & handler) {
@@ -425,7 +436,9 @@ static std::vector<common_download_task> build_url_tasks(const common_params_mod
 void common_models_handler_apply(common_models_handler & handler, common_params & params, common_download_callback * callback) {
     std::vector<common_download_task> tasks;
 
-    auto & plan = handler.plan;
+    auto & plan      = handler.plan;
+    auto & plan_spec = handler.plan_spec;
+    auto & plan_voc  = handler.plan_voc;
 
     auto opts = handler.opts; // copy
     opts.callback = callback;
@@ -455,7 +468,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         // the first part is what gets loaded, so point params.model.path at it
         if (!url_tasks.empty()) {
             std::string first_path = url_tasks.front().local_path;
-            url_tasks.front().on_done = [&]() { params.model.path = first_path; };
+            url_tasks.front().on_done = [&, first_path]() { params.model.path = first_path; };
         }
         for (auto & task : url_tasks) {
             tasks.push_back(std::move(task));
@@ -484,19 +497,24 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     }
 
     // handle hf_plan tasks
-    if (!plan.model_files.empty()) {
-        for (size_t i = 0; i < plan.model_files.size(); ++i) {
-            auto & model_file = plan.model_files[i];
-            bool is_first = (i == 0);
-            tasks.emplace_back(model_file, opts, [&, is_first]() {
-                if (is_first) {
-                    // only use first part as model path
-                    params.model.path = hf_cache::finalize_file(model_file);
+    auto add_tasks = [&opts, &tasks](const hf_cache::hf_files  & model_files,
+                                    const hf_cache::hf_file    & primary,
+                                    common_params_model        & model) {
+        for (size_t i = 0; i < model_files.size(); ++i) {
+            auto & model_file = model_files[i];
+            bool is_primary = (model_file.path == primary.path);
+            tasks.emplace_back(model_file, opts, [&, is_primary]() {
+                if (is_primary) {
+                    // the primary file is the first split (00001-of), use it as model path
+                    model.path = hf_cache::finalize_file(model_file);
                 } else {
                     hf_cache::finalize_file(model_file);
                 }
             });
         }
+    };
+    if (!plan.model_files.empty()) {
+        add_tasks(plan.model_files, plan.primary, params.model);
     }
     if (!plan.mmproj.local_path.empty()) {
         tasks.emplace_back(plan.mmproj, opts, [&]() {
@@ -522,9 +540,31 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         });
     }
 
+    // handle plan_spec (e.g. --spec-draft-hf)
+    if (!plan_spec.model_files.empty()) {
+        add_tasks(plan_spec.model_files, plan_spec.primary, params.speculative.draft.mparams);
+    }
+
+    // handle vocoder plan (e.g. --hf-repo-v)
+    if (!plan_voc.model_files.empty()) {
+        add_tasks(plan_voc.model_files, plan_voc.primary, params.vocoder.model);
+    }
+
     // run all tasks in parallel
     if (!params.offline) {
-        common_download_run_tasks(tasks);
+        // if duplicated files are found, only download once (but still call on_done for each task)
+        std::unordered_map<std::string, common_download_task *> unique_tasks;
+        for (auto & task : tasks) {
+            auto it = unique_tasks.find(task.local_path);
+            if (it == unique_tasks.end()) {
+                unique_tasks[task.local_path] = &task;
+            }
+        }
+        std::vector<common_download_task> unique_tasks_vec;
+        for (auto & pair : unique_tasks) {
+            unique_tasks_vec.push_back(*pair.second);
+        }
+        common_download_run_tasks(unique_tasks_vec);
     }
 
     // download successful, update params with the downloaded paths
@@ -679,9 +719,8 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
         // model is required (except for server)
         // TODO @ngxson : maybe show a list of available models in CLI in this case
-        if (params.model.path.empty()
-                && !params.usage
-                && !params.completion) {
+        bool can_skip_model = params.usage || params.completion || !params.server_base.empty();
+        if (!can_skip_model && params.model.path.empty()) {
             throw std::invalid_argument("error: --model is required\n");
         }
     }
@@ -1201,6 +1240,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.completion = true;
         }
     ));
+    add_opt(common_arg(
+        {"--server-base"}, "URL",
+        string_format("connect to this server instead of starting a new one, example: 'http://localhost:8080' (default: none)"),
+        [](common_params & params, const std::string & value) {
+            params.server_base = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--verbose-prompt"},
         string_format("print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false"),
@@ -2803,7 +2849,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.out_file = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE,
-                    LLAMA_EXAMPLE_RESULTS, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS}));
+                    LLAMA_EXAMPLE_RESULTS, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -2990,7 +3036,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
         "specify \"all\" to enable all tools\n"
-        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff, get_datetime",
+        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_datetime",
         [](common_params & params, const std::string & value) {
             params.server_tools = parse_csv_row(value);
         }
@@ -3260,6 +3306,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_MESSAGE"));
     add_opt(common_arg(
+        {"--reasoning-preserve"},
+        {"--no-reasoning-preserve"},
+        "preserve reasoning trace in the full history, not just the last assistant message (default: template default)\n"
+        "compatible with certain templates having 'supports_preserve_reasoning' capability\n"
+        "example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking",
+        [](common_params & params, bool value) {
+            if (value) {
+                params.default_template_kwargs["preserve_reasoning"] = "true";
+            } else {
+                params.default_template_kwargs["preserve_reasoning"] = "false";
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING_PRESERVE"));
+    add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
             "set custom jinja chat template (default: template taken from model's metadata)\n"
@@ -3398,9 +3458,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_LOG_FILE"));
     add_opt(common_arg(
         {"--log-prompts-dir"}, "PATH",
-        "Log prompts to directory (only used for debugging, default: disabled)",
+        "Log prompts to directory (auto-created if not present; only used for debugging, default: disabled)",
         [](common_params & params, const std::string & value) {
             params.path_prompts_log_dir = value;
+            std::error_code ec;
+            std::filesystem::create_directories(value, ec);
+            if (ec) {
+                fprintf(stderr, "warning: failed to create prompts-log-dir '%s': %s\n", value.c_str(), ec.message().c_str());
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
@@ -3434,7 +3499,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.offline = true;
         }
-    ).set_env("LLAMA_ARG_OFFLINE"));
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_OFFLINE"));
     add_opt(common_arg(
         {"-lv", "--verbosity", "--log-verbosity"}, "N",
         string_format("Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:\n"
@@ -3711,6 +3776,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "draft model for speculative decoding (default: unused)",
         [](common_params & params, const std::string & value) {
             params.speculative.draft.mparams.path = value;
+            params.speculative.draft.mparams.hf_file = value; // will be used if --spec-draft-hf is set
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
     add_opt(common_arg(

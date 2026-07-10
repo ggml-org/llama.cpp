@@ -1505,3 +1505,49 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
     return acc;
 }
 #endif
+
+#ifdef MUL_ACC_NVFP4
+#define BLOCK_SIZE 64
+#define BLOCK_SIZE_BYTES 36
+#define THREADS_PER_BLOCK 4
+#define ELEMS_PER_THREAD (BLOCK_SIZE/THREADS_PER_BLOCK)
+fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src1_idx_base: u32) -> array<array<f32, OUTPUTS_PER_WG>, NUM_COLS> {
+    var acc: array<array<f32, OUTPUTS_PER_WG>, NUM_COLS>;
+
+    let num_blocks = params.k / BLOCK_SIZE;
+    let sub = thread_id % THREADS_PER_BLOCK;
+    for (var block = thread_id/THREADS_PER_BLOCK; block < num_blocks; block += WG_SIZE/THREADS_PER_BLOCK) {
+        let x_base = src1_idx_base + block * BLOCK_SIZE + sub * ELEMS_PER_THREAD;
+        var x_block: array<array<f32, ELEMS_PER_THREAD>, NUM_COLS>;
+        for (var col = 0u; col < NUM_COLS;col += 1) {
+            for (var i = 0u; i < ELEMS_PER_THREAD / 2; i++) {
+                x_block[col][i]     = f32(src1[x_base + col * params.stride_11 + i]);
+                x_block[col][i + 8] = f32(src1[x_base + col * params.stride_11 + i + 8]);
+            }
+        }
+        for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
+            let output_row = row_base + row;
+            if (output_row < params.m) {
+                let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
+                let d = ue4m3_to_fp32(get_byte(load_u32_at_src0_aligned(block_byte_base), sub)) * 0.5;
+                let q_w0 = load_u32_at_src0_aligned(block_byte_base + 4u + 8u * sub);
+                let q_w1 = load_u32_at_src0_aligned(block_byte_base + 8u + 8u * sub);
+                for (var col = 0u;col < NUM_COLS;col += 1) {
+                    var row_sum = 0.0;
+                    for (var l = 0u; l < 8u; l++) {
+                        let q_word = select(q_w0, q_w1, l >= 4u);
+                        let q_byte = get_byte(q_word, l % 4u);
+                        let q_lo = f32(kvalues_mxfp4[q_byte & 0xFu]) * d;
+                        let q_hi = f32(kvalues_mxfp4[(q_byte >> 4u) & 0xFu]) * d;
+                        row_sum += q_lo * x_block[col][l];
+                        row_sum += q_hi * x_block[col][l + 8u];
+                    }
+                    acc[col][row] += row_sum;
+                }
+            }
+        }
+    }
+
+    return acc;
+}
+#endif

@@ -520,6 +520,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.delay                = cmd_params_defaults.delay;
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
+    params.offline              = cmd_params_defaults.offline;
 
     if (const char * env = getenv("HF_TOKEN")) {
         params.hf_token = env;
