@@ -2877,8 +2877,6 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
         (sctx->penalty_repeat == 1.0f && sctx->penalty_freq == 0.0f && sctx->penalty_present == 0.0f)) {
         return;
     }
-    //builds two parallel host-side arrays — host_token_ids and host_counts of fixed size n_max 
-    //upload to GPU input tensors (inp_token_ids, inp_counts)
     //fill active entries from the map
     int32_t n_active = 0;
 
