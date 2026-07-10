@@ -11,11 +11,16 @@
   хелперы `llama-common`. Файлы `tools/server` не правим — gateway строится рядом.
 - Подробности и карта «ядро/периферия/своё» — в `../AUDIT.md` (в корне форка).
 
-## Возможности (целевые)
+## Возможности
 - OpenAI-совместимый API (chat/completions, completions, embeddings, models) + SSE.
-- Любые локальные GGUF-модели (text / embeddings / vision / audio) — как у llama.cpp.
-- Multi-model registry, authn/RBAC, audit, observability (pull-метрики), RAG/agents, SDK.
-- Полностью offline: нулевой исходящий трафик в рантайме (`tests/egress/`).
+- Любые локальные GGUF-модели: text / embeddings / vision (VLM). Audio (ASR/TTS) —
+  движок сохранён, эндпоинты `/v1/audio/*` пока не реализованы (roadmap).
+- Multi-model registry, ленивый супервайзер (авто-подъём/гашение llama-server),
+  authn/RBAC, audit, observability (pull-метрики на `/metrics`), клиентский SDK/CLI.
+- Изоляция бэкендов: управляемые `llama-server` слушают только 127.0.0.1 и защищены
+  per-boot `--api-key`; прямой доступ к их портам без ключа -> 401.
+- Полностью offline: нулевой исходящий трафик в рантайме (`enforce_no_egress` +
+  инфра-контроль systemd/docker; проверяется `tests/egress/`).
 
 ## Сборка
 ```
@@ -35,16 +40,15 @@ cmake --build build -j
 ```
 cmake/profile-rf.cmake   профиль бэкендов/состава (cpu+cuda+vulkan, server+mtmd)
 CMakeLists.txt           супер-проект: add_subdirectory(.. ) движка + слой infcore
-gateway/                 надстройка над tools/server: OpenAI-surface, routing, policy
+gateway/                 надстройка над tools/server: OpenAI-surface, routing, policy, supervisor
 security/                authn / rbac / audit / secrets
 observability/           pull-метрики (VictoriaMetrics/Prometheus)
 registry/                реестр моделей (multi-model, идея из llm_gateway)
-extensions/              agents, rag
 sdk/python/              клиентский SDK
 config/                  конфиги + JSON-Schema
 deploy/                  docker / compose / systemd (РФ-образы)
-model-toolkit/           convert/quantize/bench — offline, не рантайм
-tests/egress/            проверка нулевого egress
-docs/                    ARCHITECTURE, COMPLIANCE
+tests/unit/              ctest: RBAC / authn / json-schema / config
+tests/egress/            проверка нулевого egress (netns-based)
+docs/                    STATUS, ARCHITECTURE, COMPLIANCE, DEPLOY
 NOTICE / sbom.cdx.json / THIRD_PARTY_LICENSES   compliance
 ```

@@ -14,10 +14,15 @@ infcore **построен на базе open-source llama.cpp (ggml authors, MI
 | cpp-httplib / stb / miniaudio / sheredom | MIT / Public Domain / Unlicense | `vendor/*` |
 | infcore (свой слой) | Проприетарная | `infcore/LICENSE`, `infcore/NOTICE` |
 
-Артефакты: `NOTICE`, `THIRD_PARTY_LICENSES/`, `sbom.cdx.json`, `UPSTREAM_COMMIT` (корень форка).
+Артефакты (в `infcore/`): `NOTICE`, `THIRD_PARTY_LICENSES/` (полные тексты лицензий
+на каждый компонент), `sbom.cdx.json` (CycloneDX 1.5, 7 компонентов с версиями,
+UPSTREAM_COMMIT в purl), `LICENSE`. Пин версии апстрима - `UPSTREAM_COMMIT` (корень форка).
+
+> БЛОКЕР подачи: в `infcore/LICENSE` и `infcore/NOTICE` правообладатель указан как
+> `<Организация>` (placeholder, помечен TODO). Заменить на юрлицо ДО подачи в реестр.
 
 ## Реестр российского ПО — чек-лист
-- [ ] Правообладатель — РФ-юрлицо; права на слой infcore/ оформлены.
+- [ ] Правообладатель — РФ-юрлицо; права на слой infcore/ оформлены (заменить `<Организация>`).
 - [ ] СПО (MIT/PD) совместимо с включением в реестровый продукт; происхождение раскрыто.
 - [ ] Работа без обязательного обращения к зарубежной инфраструктуре (offline; egress-тест пройден).
 - [ ] Отечественные ОС: Astra/РЕД ОС/ALT (`deploy/`).
