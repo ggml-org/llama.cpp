@@ -4,23 +4,7 @@
 #pragma OPENCL EXTENSION cl_khr_integer_dot_product : enable
 #endif
 
-// Dense q5_0 prefill GEMM, dp4a (int8) inner loop.
-//
-// dp4a alternative to kernel_gemm_noshuffle_q5_0_f32 (the f16 half-dot GEMM used
-// for the dense q5_0 matmuls). Activations pre-quantized to q8_1
-// (kernel_quant_a_q8_1) from the original [N, K] token-major buffer (no
-// transpose); per-32-block dot uses the qcom int8 dp4a.
-//
-// q5_0 weight = (x - 16) * d, x in [0,31] = low nibble (qs) | high bit (qh)<<4,
-// one fp16 scale d per 32-block. Pack x DIRECTLY as an unsigned byte 0..31 (fits
-// signed int8) so the dot is plain; the -16 centering becomes a single min term
-// via the q8_1 block sum (a_s = sum*d_a):
-//   Sum w*a = d*a_d*dp4a(x,a) - (d*16)*a_s
-// Mirrors kernel_gemm_noshuffle_q4_k_q8_1_dp4a (one WI per output row, a
-// TILESIZE_N-token tile); the q4_K scale/min decode is replaced by the single d
-// and the qh high-bit plane (EXP1). Large-batch (prefill) only.
-//
-// Weight layout (feature-major SoA, byte-identical to the f16 kernel's reads):
+// Weight layout
 //   src0_qs[row + (k/4)*m]  ushort = 4 low nibbles (K = 4*grp .. +3)
 //   src0_qh[row + (k/8)*m]  uchar  = 8 high bits  (one per element)
 //   src0_d [row + (k/32)*m] half   = per-32-block scale
@@ -106,7 +90,7 @@ kernel void kernel_gemm_noshuffle_q5_0_q8_1_dp4a(
         qw.s4 = QW(4); qw.s5 = QW(5); qw.s6 = QW(6); qw.s7 = QW(7);
         #undef QW
 
-        // cooperatively stage the 32-token x 32-K int8 activations to LDS
+        // cooperatively stage the 32-token x 32-K int8 activations to lm
         for (uint idx = lid; idx < TILESIZE_N * 8; idx += 64) {
             const uint t = idx >> 3;
             const uint u = idx & 7;
@@ -150,16 +134,6 @@ kernel void kernel_gemm_noshuffle_q5_0_q8_1_dp4a(
 #undef NGROUPS
 }
 
-// Weight-as-texture variant of kernel_gemm_noshuffle_q5_0_q8_1_dp4a.
-//
-// Byte-identical math; routes the dominant q5_0 low-nibble plane (qs, 4 bits/elem
-// = the bulk of the weight bytes) through an image1d_buffer (read_imageui ->
-// texture/L1 cache) instead of a plain buffer. The small high-bit plane (qh, 1
-// bit/elem, ~1/4 the bytes) stays on the plain buffer. Same X1 lever as the q4_K
-// / q8_0 _wimg variants. qs is bound CL_R/UINT32 (1 texel = 2 ushorts, width
-// M*K/8 -- the same view the GEMV path builds); M%64==0 => each row's qs reads
-// have constant ushort parity (rrow&1), so a single hoisted half-select picks the
-// ushort and adjacent lanes share each texel. Opt-in: GGML_OPENCL_Q5_DENSE_DP4A_WIMG.
 __attribute__((qcom_wave_pair_mode(1)))
 kernel void kernel_gemm_noshuffle_q5_0_q8_1_dp4a_wimg(
         __read_only image1d_buffer_t src0_qs_img, // q5_0 low nibbles as uint32 texels (2 ushorts/texel)

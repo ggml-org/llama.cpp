@@ -4,18 +4,6 @@
 #pragma OPENCL EXTENSION cl_khr_integer_dot_product : enable
 #endif
 
-// q4_0 MoE prefill GEMM, dp4a (int8) inner loop.
-//
-// Drop-in alternative to kernel_gemm_moe_q4_0_f32_ns: same tiling / grid /
-// output scatter, but the activation tile is pre-quantized to q8_1 (see
-// kernel_moe_reorder_quant_a_q8_1) and the per-32-block dot uses the qcom int8
-// dp4a. Mirrors kernel_gemm_moe_q4_k_q8_1_dp4a; q4_0 differs only in having a
-// single fp16 scale per 32-block (no per-subblock 6-bit scales) and a constant
-// zero-point of 8 instead of a per-block min:
-//   q4_0 weight w_i = d * (q_i - 8), q_i in [0,15]
-//   Sum_i w_i a_i = d * a_d * dp4a(q_i, qa_i) - 8 * d * a_s
-// where a_s = a_d * Sum(qa) (the q8_1 "s" field). Mirrors vec_dot_q4_0_q8_1.
-
 #define TILESIZE_M 64
 #define TILESIZE_N 32
 
@@ -78,7 +66,7 @@ kernel void kernel_gemm_moe_q4_0_q8_1_dp4a(
     __local half sh_d[TILESIZE_N];
     __local half sh_s[TILESIZE_N];
 
-    // Real-token count for this tile (see kernel_gemm_moe_q4_k_q8_1_dp4a).
+    // Real-token count for this tile
     __local uint sh_src2[TILESIZE_N];
     __local int  sh_nreal;
     if (lid < TILESIZE_N) {
@@ -106,12 +94,11 @@ kernel void kernel_gemm_moe_q4_0_q8_1_dp4a(
     for (uint step = 0; step < ne00; step += 32) {
         const uint sub = step >> 5;        // 32-block index along K
 
-        // --- per-32-block scale for this WI's row ---
+        // per-32-block scale for this WI's row
         const uint d_offset = row_idx + sub * ne01 + expert_id * num_blocks * ne01;
         const float d_val = (float)src0_d[d_offset];
 
-        // --- repack this WI's 32 weight nibbles into 8 dp4a uints (same image
-        //     layout as kernel_gemm_moe_q4_k_q8_1_dp4a) ---
+        // repack this WI's 32 weight nibbles into 8 dp4a uints
         const uint qoff0 = row + ((ne01 * step) >> 3)        + ((expert_id * ne00 * ne01) >> 3);
         const uint qoff1 = row + ((ne01 * (step + 16)) >> 3) + ((expert_id * ne00 * ne01) >> 3);
         const uint r0 = read_imageui(src0_q, qoff0 + lid).x;
@@ -124,7 +111,7 @@ kernel void kernel_gemm_moe_q4_0_q8_1_dp4a(
         qw[4] = EXP4(r2);        qw[5] = EXP4(r2 >> 16);
         qw[6] = EXP4(r3);        qw[7] = EXP4(r3 >> 16);
 
-        // --- cooperatively stage the n_real-token x 32-K int8 activations to LDS ---
+        // cooperatively stage the n_real-token x 32-K int8 activations
         const uint stage_lim = (uint)n_real * 8;
         for (uint idx = lid; idx < stage_lim; idx += 64) {
             const uint t = idx >> 3;
@@ -151,7 +138,7 @@ kernel void kernel_gemm_moe_q4_0_q8_1_dp4a(
         return;
     }
 
-    // --- scatter results to original output rows (reuse sh_src2 from the top) ---
+    // scatter results to original output rows (reuse sh_src2 from the top)
     __local uint out_idx[TILESIZE_N];
     if (lid < TILESIZE_N) {
         uint idx = sh_src2[lid];

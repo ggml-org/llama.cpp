@@ -4,17 +4,10 @@
 #pragma OPENCL EXTENSION cl_khr_integer_dot_product : enable
 #endif
 
-// q4_K MoE prefill GEMM, dp4a (int8) inner loop.
-//
-// Drop-in alternative to kernel_gemm_moe_q4_k_f32_ns: same tiling/grid/output
-// scatter, but the activation tile is pre-quantized to q8_1 (see
-// kernel_moe_quant_a_q8_1) and the per-subblock dot uses the qcom int8 dp4a
-// (dot_acc_sat_4x8packed_ss_int), which the X2 runs ~4x faster than half4 MAD.
-//
 // q4_K subblock (32 elems): w_i = scale*q_i - minv, q_i in [0,15], scale =
 // d_super*sv6, minv = dmin_super*mn6. With activation block (a_d, a_s, qa[32]):
 //   Sum_i w_i * a_i = scale * a_d * dp4a(q, qa) - minv * a_s
-// where a_s = a_d * Sum(qa) (the q8_1 "s" field). Mirrors vec_dot_q4_K_q8_1.
+// where a_s = a_d * Sum(qa) (the q8_1 "s" field)
 
 #define TILESIZE_M 64
 #define TILESIZE_N 32
@@ -98,12 +91,7 @@ kernel void kernel_gemm_moe_q4_k_q8_1_dp4a(
     __local half sh_d[TILESIZE_N];
     __local half sh_s[TILESIZE_N];
 
-    // Real-token count for this tile. Real tokens (original out positions) are
-    // packed contiguously at the tile start by kernel_moe_scatter; padded slots
-    // hold 0xFFFFFFFF (only the last tile of each expert is partial). When
-    // is_ragged, skip the dp4a/staging/scatter for the padded slots -> at the
-    // ub=512 prefill floor ~50% of token-slots are padding (high-variance MoE
-    // routing). is_ragged==0 forces n_real=32 == the original full-tile path.
+    // Real token count for this tile
     __local uint sh_src2[TILESIZE_N];
     __local int  sh_nreal;
     if (lid < TILESIZE_N) {
@@ -170,8 +158,8 @@ kernel void kernel_gemm_moe_q4_k_q8_1_dp4a(
         }
         barrier(CLK_LOCAL_MEM_FENCE);
 
-        // --- dp4a: each real token Sum over 8 uints (32 K), then scale/min ---
-        // Full tiles keep the fully-unrolled 32-wide loop (== original, best ILP);
+        // dp4a - each real token sum over 8 uints (32 K), then scale/min
+        // Full tiles keep the fully-unrolled 32-wide loop;
         // partial tiles run only n_real (saves the padded-slot dp4a + staging).
         if (n_real == TILESIZE_N) {
             #pragma unroll
@@ -187,11 +175,7 @@ kernel void kernel_gemm_moe_q4_k_q8_1_dp4a(
         return;
     }
 
-    // --- scatter results to original output rows ---
-    // Reuse sh_src2 (raw post-router positions read at the top). Full / non-ragged
-    // path keeps the original 0xFFFFFFFF->slot0 fallback + t=0-written-last ordering
-    // (padded slots alias slot 0; the last write wins). Ragged path writes only the
-    // n_real real tokens (distinct positions, no aliasing -> no ordering needed).
+    // scatter results to original output rows
     __local uint out_idx[TILESIZE_N];
     if (lid < TILESIZE_N) {
         uint idx = sh_src2[lid];

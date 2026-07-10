@@ -516,12 +516,14 @@ struct ggml_backend_opencl_context {
     bool has_subgroup_shuffle = false;       // cl_khr_subgroup_shuffle or cl_qcom_subgroup_shuffle
     bool has_qcom_subgroup_shuffle = false;  // specifically cl_qcom_subgroup_shuffle
     bool disable_fusion;
-    bool fuse_moe_combine = true;    // opt-out GGML_OPENCL_FUSE_MOE_COMBINE=0 (router-weight mul + cross-expert add chain -> one weighted-sum kernel; weights copied to scratch + bails on experts/dst alias)
-    bool moe_gemm_ragged = true;     // opt-out GGML_OPENCL_MOE_RAGGED=0 (skip the fully-padded per-expert token tiles in the q4_K/q6_K MoE prefill GEMM; byte-identical)
 
     // ragged moe, use int to directly pass to kernel
     cl_uint  adreno_use_moe_ragged;
     cl_uint  adreno_moe_ragged_skip_gran;
+    cl_uint  adreno_use_moe_ragged_dp4;
+
+    // whether fuse moe combine
+    cl_uint fuse_moe_combine;
 
     bool adreno_has_large_buffer;
     bool adreno_use_large_buffer;
@@ -551,6 +553,8 @@ struct ggml_backend_opencl_context {
     ggml_cl_buffer prealloc_moe_qa;   // int8 quants  [tok_slots * ne00]
     ggml_cl_buffer prealloc_moe_da;   // per-block d  [tok_slots * ne00/32] (half)
     ggml_cl_buffer prealloc_moe_sa;   // per-block s  [tok_slots * ne00/32] (half)
+    // scratch copy of the router weights to avoid dst aliasing
+    ggml_cl_buffer prealloc_moe_combine_w;
 
     // pool of persistent image1d_buffer views over kv-cache layers, keyed by
     // (parent buffer, offset within parent)
@@ -804,9 +808,6 @@ struct ggml_backend_opencl_context {
     // [size_idx][kda][tgpp] where size_idx: 0=S_V=16, 1=32, 2=64, 3=128; kda: 0 or 1.
     // tgpp 0 = TG variant (COLS_PER_LANE_GROUP=1), tgpp 1 = prefill variant (COLS_PER_LANE_GROUP=4).
     cl_kernel kernel_gated_delta_net_f32[4][2][2] = {};
-    cl_kernel kernel_moe_combine_f32 = nullptr;   // fused router-weight mul + cross-expert sum
-    ggml_cl_buffer prealloc_moe_combine_w;        // small scratch copy of the router weights (avoids dst-aliasing)
-
     cl_kernel kernel_timestep_embedding;
     cl_kernel kernel_gemv_moe_q4_0_f32_ns, kernel_gemm_moe_q4_0_f32_ns, kernel_gemm_moe_q4_0_f32_ns_bin;
     cl_kernel kernel_gemm_moe_q8_0_f32_ns;
@@ -833,6 +834,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemm_moe_q4_0_q8_1_dp4a;    // dp4a (int8) q4_0 MoE prefill GEMM
     cl_kernel kernel_moe_reorder_b;
     cl_kernel kernel_moe_histogram, kernel_moe_scan, kernel_moe_fill, kernel_moe_scatter;
+    cl_kernel kernel_moe_combine_f32 = nullptr;   // fused router-weight mul + cross-expert sum
     cl_kernel kernel_mul_mv_id_q4_0_f32_8x_flat;
     cl_kernel kernel_mul_mv_id_q8_0_f32, kernel_mul_mv_id_q8_0_f32_flat;
     cl_kernel kernel_mul_mv_id_mxfp4_f32;
@@ -1376,11 +1378,6 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         CL_CHECK((backend_ctx->kernel_restore_block_q5_1_trans4_ns = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_q5_1_trans4_ns", &err), err));
         CL_CHECK((backend_ctx->kernel_convert_block_q4_k_trans4_ns = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_q4_k_trans4_ns", &err), err));
         CL_CHECK((backend_ctx->kernel_restore_block_q4_k_trans4_ns = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_q4_k_trans4_ns", &err), err));
-#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        CL_CHECK((backend_ctx->kernel_moe_expand_scale_q8_0 = clCreateKernel(backend_ctx->program_cvt, "kernel_moe_expand_scale_q8_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_moe_expand_scale_q5_0 = clCreateKernel(backend_ctx->program_cvt, "kernel_moe_expand_scale_q5_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_moe_expand_scale_q5_K = clCreateKernel(backend_ctx->program_cvt, "kernel_moe_expand_scale_q5_K", &err), err));
-#endif
         CL_CHECK((backend_ctx->kernel_convert_block_q5_k_trans4_ns = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_q5_k_trans4_ns", &err), err));
         CL_CHECK((backend_ctx->kernel_restore_block_q5_k_trans4_ns = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_q5_k_trans4_ns", &err), err));
         CL_CHECK((backend_ctx->kernel_convert_block_q6_k_trans4_ns = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_block_q6_k_trans4_ns", &err), err));
@@ -1416,6 +1413,11 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         CL_CHECK((backend_ctx->kernel_restore_block_iq4_nl_noshuffle = clCreateKernel(backend_ctx->program_cvt, "kernel_restore_block_iq4_nl_noshuffle", &err), err));
         CL_CHECK((backend_ctx->kernel_convert_bf16_to_f16 = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_bf16_to_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_convert_f16_to_bf16 = clCreateKernel(backend_ctx->program_cvt, "kernel_convert_f16_to_bf16", &err), err));
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        CL_CHECK((backend_ctx->kernel_moe_expand_scale_q8_0 = clCreateKernel(backend_ctx->program_cvt, "kernel_moe_expand_scale_q8_0", &err), err));
+        CL_CHECK((backend_ctx->kernel_moe_expand_scale_q5_0 = clCreateKernel(backend_ctx->program_cvt, "kernel_moe_expand_scale_q5_0", &err), err));
+        CL_CHECK((backend_ctx->kernel_moe_expand_scale_q5_K = clCreateKernel(backend_ctx->program_cvt, "kernel_moe_expand_scale_q5_K", &err), err));
+#endif
         GGML_LOG_CONT(".");
     }
 
@@ -4121,7 +4123,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         GGML_LOG_CONT(".");
     }
 
-    // gemm_moe_q8_1_dp4a (generic dp4a MoE GEMM; MOE_QT=80 -> q8_0 expert variant, opt-in)
+    // gemm_moe_q8_1_dp4a (generic dp4a MoE GEMM; MOE_QT=80 -> q8_0 expert variant)
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
@@ -5620,13 +5622,6 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     // check Adreno large buffer support
     backend_ctx->adreno_has_large_buffer = strstr(ext_buffer, "cl_qcom_large_buffer") != NULL;
 
-    if (const char * env = getenv("GGML_OPENCL_FUSE_MOE_COMBINE")) {
-        backend_ctx->fuse_moe_combine = atoi(env) != 0;
-    }
-    if (const char * env = getenv("GGML_OPENCL_MOE_RAGGED")) {
-        backend_ctx->moe_gemm_ragged = atoi(env) != 0;
-    }
-
     // subgroup shuffle support (N_SPLIT>1 FA kernel)
     backend_ctx->has_qcom_subgroup_shuffle = strstr(ext_buffer, "cl_qcom_subgroup_shuffle") != NULL;
     backend_ctx->has_subgroup_shuffle =
@@ -5679,6 +5674,14 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     // 16 = half (legacy), 32 = disabled. Override with GGML_OPENCL_MOE_RAGGED_GRAN={8,16,32}
     static const char * ragged_gran_env = getenv("GGML_OPENCL_MOE_RAGGED_GRAN");
     backend_ctx->adreno_moe_ragged_skip_gran = (ragged_gran_env != NULL) ? atoi(ragged_gran_env) : 8;
+
+    // whether fuse moe combine
+    static const char * fuse_moe_combine_env = getenv("GGML_OPENCL_FUSE_MOE_COMBINE");
+    backend_ctx->fuse_moe_combine = fuse_moe_combine_env == NULL ? 1 : (atoi(fuse_moe_combine_env) != 0);
+
+    // ragged moe dp4 variant
+    static const char * ragged_dp4_env = getenv("GGML_OPENCL_MOE_RAGGED");
+    backend_ctx->adreno_use_moe_ragged_dp4 = ragged_dp4_env == NULL ? 1 : (atoi(ragged_dp4_env) != 0);
 
 #ifdef GGML_OPENCL_USE_ADRENO_BIN_KERNELS
     // try loading adreno binary kernels if enabled
@@ -6007,7 +6010,7 @@ struct ggml_tensor_extra_cl_q5_0 {
     // Scales in image1d_buffer_t.
     cl_mem d_img = nullptr;
     // Uniform per-32-block scale (2/block) + min (1/block, = d*16 for the -16 centering)
-    // for the generic dp4a MoE GEMM (kernel_gemm_moe_q8_1_dp4a, MOE_QT=50). Built from d.
+    // for the generic dp4a MoE GEMM. Built from d.
     cl_mem scale = nullptr;
     cl_mem min = nullptr;
     // Size of quantized values.
@@ -6170,9 +6173,9 @@ struct ggml_tensor_extra_cl_q8_0 {
     cl_mem d = nullptr;
     cl_mem d_img = nullptr;
 
-    // Uniform per-16-segment scale (16/superblock) for the generic dp4a MoE GEMM
-    // (kernel_gemm_moe_q8_1_dp4a, MOE_QT=80). Expanded from d at set_tensor; the int8
-    // codes are reused from q. q8_0 is symmetric so no min buffer (has_min=0).
+    // Uniform per-16-segment scale (16/superblock) for the generic dp4a MoE GEMM.
+    // Expanded from d at set_tensor; the int8 codes are reused from q.
+    // q8_0 is symmetric so no min buffer (has_min=0).
     cl_mem scale = nullptr;
 
     size_t size_q = 0;
@@ -6285,8 +6288,8 @@ struct ggml_tensor_extra_cl_q5_K {
     // Min for each super block.
     cl_mem dm = nullptr;
     // Uniform per-32-block scale (2/block) + min (1/block, = dm*mn) decoded from the
-    // 6-bit packed s[] for the generic dp4a MoE GEMM (kernel_gemm_moe_q8_1_dp4a,
-    // MOE_QT=5). Built from s/d/dm at set_tensor; q/qh are reused as-is.
+    // 6-bit packed s[] for the generic dp4a MoE GEMM kernel_gemm_moe_q8_1_dp4a.
+    // Built from s/d/dm at set_tensor; q/qh are reused as-is.
     cl_mem scale = nullptr;
     cl_mem min   = nullptr;
 
@@ -6481,7 +6484,7 @@ static void sync_with_other_backends(ggml_backend_t backend) {
 static bool ggml_cl_tensors_overlap(const ggml_tensor * x, const ggml_tensor * y) {
     ggml_tensor_extra_cl * ex = (ggml_tensor_extra_cl *)x->extra;
     ggml_tensor_extra_cl * ey = (ggml_tensor_extra_cl *)y->extra;
-    if (!ex || !ey || ex->data_device != ey->data_device) return false;
+    if (!ex || !ey || ex->data_device != ey->data_device) { return false; }
     const cl_ulong xo = ex->offset + x->view_offs, xe = xo + ggml_nbytes(x);
     const cl_ulong yo = ey->offset + y->view_offs, ye = yo + ggml_nbytes(y);
     return xo < ye && yo < xe;
@@ -6494,45 +6497,46 @@ static bool ggml_cl_tensors_overlap(const ggml_tensor * x, const ggml_tensor * y
 static bool ggml_opencl_can_fuse_moe_combine(const struct ggml_cgraph * cgraph, int node_idx,
                                              const ggml_tensor ** out_final_add) {
     const ggml_tensor * mul = cgraph->nodes[node_idx];
-    if (mul->op != GGML_OP_MUL) return false;
+    if (mul->op != GGML_OP_MUL) { return false; }
     const ggml_tensor * experts = mul->src[0];
     const ggml_tensor * weights = mul->src[1];
-    if (!experts || !weights) return false;
-    if (experts->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32) return false;
+    if (!experts || !weights) { return false; }
+    if (experts->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32) { return false; }
 
     const int64_t n_embd = experts->ne[0];
     const int64_t k      = experts->ne[1];
     const int64_t nt     = experts->ne[2];
-    if (k < 2 || k > 64 || experts->ne[3] != 1 || n_embd % 4 != 0) return false;
-    if (weights->ne[0] != 1 || weights->ne[1] != k || weights->ne[2] != nt || weights->ne[3] != 1) return false;
-    if (mul->ne[0] != n_embd || mul->ne[1] != k || mul->ne[2] != nt) return false;
+    if (k < 2 || k > 64 || experts->ne[3] != 1 || n_embd % 4 != 0) { return false; }
+    if (weights->ne[0] != 1 || weights->ne[1] != k || weights->ne[2] != nt || weights->ne[3] != 1) { return false; }
+    if (mul->ne[0] != n_embd || mul->ne[1] != k || mul->ne[2] != nt) { return false; }
     // the fused kernel needs contiguous experts/weights and a contiguous 2D dst
-    if (!ggml_is_contiguous(experts) || !ggml_is_contiguous(weights)) return false;
+    if (!ggml_is_contiguous(experts) || !ggml_is_contiguous(weights)) { return false; }
 
     const int n_nodes = 1 + (int)k + (int)(k - 1);  // MUL + k*VIEW + (k-1)*ADD
-    if (node_idx + n_nodes > cgraph->n_nodes) return false;
+    if (n_nodes >= 32) { return false; }
+    if (node_idx + n_nodes > cgraph->n_nodes) { return false; }
 
     enum ggml_op ops[1 + 64 + 63];
     int n = 0;
     ops[n++] = GGML_OP_MUL;
-    for (int j = 0; j < (int)k;     ++j) ops[n++] = GGML_OP_VIEW;
-    for (int j = 0; j < (int)k - 1; ++j) ops[n++] = GGML_OP_ADD;
+    for (int j = 0; j < (int)k;     ++j) { ops[n++] = GGML_OP_VIEW; }
+    for (int j = 0; j < (int)k - 1; ++j) { ops[n++] = GGML_OP_ADD;  }
     const int outs[] = { node_idx + n_nodes - 1 };
-    if (!ggml_can_fuse_subgraph(cgraph, node_idx, n_nodes, ops, outs, 1)) return false;
+    if (!ggml_can_fuse_subgraph(cgraph, node_idx, n_nodes, ops, outs, 1)) { return false; }
 
     for (int j = 0; j < (int)k; ++j) {
         const ggml_tensor * vw = cgraph->nodes[node_idx + 1 + j];
-        if (vw->op != GGML_OP_VIEW || vw->src[0] != mul || vw->ne[0] != n_embd || vw->ne[1] != nt) return false;
+        if (vw->op != GGML_OP_VIEW || vw->src[0] != mul || vw->ne[0] != n_embd || vw->ne[1] != nt) { return false; }
     }
     const ggml_tensor * final_add = cgraph->nodes[node_idx + n_nodes - 1];
     if (final_add->op != GGML_OP_ADD || final_add->type != GGML_TYPE_F32 ||
-        final_add->ne[0] != n_embd || final_add->ne[1] != nt || final_add->ne[2] != 1) return false;
-    if (!ggml_is_contiguous(final_add)) return false;
-    // CRITICAL: the fused kernel reads experts + writes final_add in one pass; bail if the
-    // pool allocator overlapped the output with the (large) experts input -> would race.
+        final_add->ne[0] != n_embd || final_add->ne[1] != nt || final_add->ne[2] != 1) { return false; }
+    if (!ggml_is_contiguous(final_add)) { return false; }
+    // the fused kernel reads experts + writes final_add in one pass; bail if the
+    // pool allocator overlapped the output with the (large) experts input -- would race.
     // The small weights input is copied to a private scratch in the dispatch, so its own
     // aliasing with the output is handled there and does not block the fusion.
-    if (ggml_cl_tensors_overlap(experts, final_add)) return false;
+    if (ggml_cl_tensors_overlap(experts, final_add)) { return false; }
 
     *out_final_add = final_add;
     return true;
@@ -6587,7 +6591,7 @@ static void ggml_cl_moe_combine_fused(ggml_backend_t backend, const ggml_tensor 
 
     size_t lws[2] = { 64, 1 };
     size_t gws[2] = { (size_t)(((n_embd4 + 63) / 64) * 64), (size_t)nt };
-    backend_ctx->enqueue_ndrange_kernel(kernel, 2, gws, lws, (ggml_tensor *)dst);
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, gws, lws, dst);
 }
 
 static bool ggml_opencl_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
@@ -6691,7 +6695,7 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
             continue;
         }
         // Fuse the MoE combine: router-weight mul + cross-expert add chain ->
-        // one weighted-sum-across-experts kernel (opt-in GGML_OPENCL_FUSE_MOE_COMBINE).
+        // one weighted-sum-across-experts kernel.
         if (backend_ctx->fuse_moe_combine && !backend_ctx->disable_fusion) {
             const ggml_tensor * combine_out = nullptr;
             if (ggml_opencl_can_fuse_moe_combine(cgraph, i, &combine_out)) {
@@ -6750,14 +6754,7 @@ inline bool enable_adreno_trans_weight(const ggml_backend_opencl_context *backen
     size_t elem_num = tensor->ne[0] * tensor->ne[1] * tensor->ne[2] * tensor->ne[3];
 
     // The 2D weight transpose (transpose_2d_as_*) tiles rows by 4 over a 2D matrix,
-    // so it requires K(ne0)%32==0, M(ne1)%4==0 and ne2==ne3==1. Every real
-    // transformer weight (hidden/FFN/vocab dims, 2D) already satisfies this, so this
-    // is a no-op for conforming weights — it only guards the rare non-conforming
-    // shape (e.g. a full-Q8_0 model with a 2D weight whose ne1%4!=0) so it falls back
-    // to the flat (un-transposed) path instead of hitting the set_tensor asserts. This
-    // predicate is the single source of truth (set_tensor transpose, get_tensor /
-    // restore_block_q8_0_trans, and the ggml_cl_mul_mat_q8_0_f32_adreno dispatch all
-    // read it), so flat storage and flat dispatch stay in sync — no layout mismatch.
+    // so it requires K(ne0)%32==0, M(ne1)%4==0 and ne2==ne3==1.
     const bool shape_ok = (tensor->ne[0] % 32 == 0) && (tensor->ne[1] % 4 == 0) &&
                           (tensor->ne[2] == 1) && (tensor->ne[3] == 1);
 
@@ -8100,10 +8097,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             extra->qs_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_format_qs, &img_desc_qs, NULL, &err);
             tensor->extra = extra;
 
-            // Generic dp4a MoE path (opt-in GGML_OPENCL_Q5_MOE_DP4A): expand d into the
-            // uniform per-32-block scale[2] + min[1] (=d*16, the -16 centering) that
-            // kernel_gemm_moe_q8_1_dp4a (MOE_QT=50) reads. ne2>1 (MoE) only; the qs image
-            // + qh are reused as-is.
+            // Generic dp4a MoE path
             {
                 static const char * q5dp4a_env = getenv("GGML_OPENCL_Q5_MOE_DP4A");
                 const bool q5dp4a = q5dp4a_env ? (atoi(q5dp4a_env) != 0)
@@ -8122,9 +8116,9 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
                     CL_CHECK(clSetKernelArg(ek, 4, sizeof(int), &ne01));
                     size_t eg[3] = { (size_t)(((ne01 + 63) / 64) * 64), nb32, (size_t)ne02 };
                     size_t el[3] = { 64, 1, 1 };
-                    cl_event eev;
-                    CL_CHECK(clEnqueueNDRangeKernel(queue, ek, 3, NULL, eg, el, 0, NULL, &eev));
-                    CL_CHECK(clWaitForEvents(1, &eev));
+                    cl_event evt;
+                    CL_CHECK(clEnqueueNDRangeKernel(queue, ek, 3, NULL, eg, el, 0, NULL, &evt));
+                    CL_CHECK(clWaitForEvents(1, &evt));
                 }
             }
 
@@ -8507,10 +8501,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         tensor->extra = extra;
         ctx->q8_0_soa_tensors.insert(tensor);
 
-        // Generic dp4a MoE path (opt-in GGML_OPENCL_Q8_MOE_DP4A): expand the per-32-
-        // block scale d into the uniform scale[16] format kernel_gemm_moe_q8_1_dp4a
-        // (MOE_QT=80) reads. Only for 3D MoE expert weights (ne2>1); the flat int8
-        // codes in extra->q are reused verbatim (no extra weight copy).
+        // Generic dp4a MoE path (opt-in GGML_OPENCL_Q8_MOE_DP4A)
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         {
             static const char * q8dp4a_env = getenv("GGML_OPENCL_Q8_MOE_DP4A");
@@ -8531,9 +8522,9 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
                 CL_CHECK(clSetKernelArg(ek, 3, sizeof(int), &ne01));
                 size_t eg[3] = { (size_t)(((ne01 + 63) / 64) * 64), nb32, (size_t)ne02 };
                 size_t el[3] = { 64, 1, 1 };
-                cl_event eev;
-                CL_CHECK(clEnqueueNDRangeKernel(queue, ek, 3, NULL, eg, el, 0, NULL, &eev));
-                CL_CHECK(clWaitForEvents(1, &eev));
+                cl_event evt;
+                CL_CHECK(clEnqueueNDRangeKernel(queue, ek, 3, NULL, eg, el, 0, NULL, &evt));
+                CL_CHECK(clWaitForEvents(1, &evt));
             }
         }
 #endif
@@ -8890,10 +8881,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
             CL_CHECK(err);
             tensor->extra = extra;
 
-            // Generic dp4a MoE path (opt-in GGML_OPENCL_Q5K_MOE_DP4A): decode the 6-bit
-            // packed s[] into the uniform per-32-block scale[2] (= d*sv) + min[1] (= dm*mn)
-            // that kernel_gemm_moe_q8_1_dp4a (MOE_QT=5) reads. ne2>1 (MoE) only; the q
-            // image + qh hi-plane are reused as-is.
+            // Generic dp4a MoE path
             {
                 static const char * q5kdp4a_env = getenv("GGML_OPENCL_Q5K_MOE_DP4A");
                 const bool q5kdp4a = q5kdp4a_env ? (atoi(q5kdp4a_env) != 0)
@@ -8914,9 +8902,9 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
                     CL_CHECK(clSetKernelArg(ek, 6, sizeof(int), &ne01));
                     size_t eg[3] = { (size_t)(((ne01 + 63) / 64) * 64), (size_t)(ne00 / 256), (size_t)ne02 };
                     size_t el[3] = { 64, 1, 1 };
-                    cl_event eev;
-                    CL_CHECK(clEnqueueNDRangeKernel(queue, ek, 3, NULL, eg, el, 0, NULL, &eev));
-                    CL_CHECK(clWaitForEvents(1, &eev));
+                    cl_event evt;
+                    CL_CHECK(clEnqueueNDRangeKernel(queue, ek, 3, NULL, eg, el, 0, NULL, &evt));
+                    CL_CHECK(clWaitForEvents(1, &evt));
                 }
             }
 
@@ -16707,29 +16695,22 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clReleaseMemObject(b_img));
         CL_CHECK(clReleaseMemObject(b_sub_buf));
     } else {
-        // dp4a (int8) dense q8_0 prefill GEMM. Quantizes the [N,K] activations to
+        // dp4a dense q8_0 prefill GEMM. Quantizes the [N,K] activations to
         // q8_1 and runs the int8 dot instead of the f16 half-dot. Large-batch
         // (ne1>8) only; q8_0 weights are already int8 (no requant) and symmetric
-        // (no min term) -> read byte-identically to the f16 kernel's feature-major
-        // SoA. Placed before the bin/f16 paths so the env can A/B against either.
-        //
-        // Beats f16 on X2E (greedy byte-identical, MUL_MAT q8_0 NMSE-OK), but the ILA
-        // bin kernel beats dp4a, so when the bin kernel is loaded we defer to it (same
-        // call as q4_k MoE -> bin). DEFAULT ON only on X2E without a bin kernel; X1
-        // stays on the f16 path (the dp4a buffer path regresses there, like the other
-        // dense dp4a GEMMs). Env override GGML_OPENCL_Q8_DENSE_DP4A forces either way.
-        // Weight-as-texture variant (X1 lever): reads the q8_0 int8 weight plane
-        // through an image1d_buffer. Opt-in GGML_OPENCL_Q8_DENSE_DP4A_WIMG; when
-        // set it also forces the dense dp4a path on so it can be A/B'd anywhere.
+        // (no min term)
         static const char * q8_dense_dp4a_env = getenv("GGML_OPENCL_Q8_DENSE_DP4A");
         static const char * q8_dense_wimg_env = getenv("GGML_OPENCL_Q8_DENSE_DP4A_WIMG");
         const bool q8_dense_wimg_on = q8_dense_wimg_env && (atoi(q8_dense_wimg_env) != 0);
+
         const bool q8_bin_loaded   = (backend_ctx->kernel_gemm_noshuffle_q8_0_f32_bin != nullptr);
+        // bin kernel takes precedence
         const bool q8_dense_dp4a_on = q8_dense_wimg_on
             ? true
             : q8_dense_dp4a_env
             ? (atoi(q8_dense_dp4a_env) != 0)
             : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E && !q8_bin_loaded);
+
         if (q8_dense_dp4a_on && backend_ctx->kernel_gemm_noshuffle_q8_0_q8_1_dp4a
                 && N > 8 && (K % 32 == 0) && (M % 64 == 0)) {
             cl_mem a_sub = nullptr;
@@ -16753,8 +16734,7 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
             size_t q_global[1] = { (size_t)(((n_blocks + 63) / 64) * 64) };
             backend_ctx->enqueue_ndrange_kernel(qk, 1, q_global, q_local, dst);
 
-            // optional weight texture (image1d_buffer over the int8 weight; the
-            // same CL_R/UINT32 view, width M*K/4, the GEMV path builds).
+            // optional weight texture, the same CL_R/UINT32 view, width M*K/4
             cl_mem q8_q_img = nullptr;
             bool use_wimg = q8_dense_wimg_on;
             if (use_wimg) {
@@ -17132,32 +17112,21 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno(ggml_backend_t backend, const ggml_t
         size_t global_work_size_t[2] = { (size_t)width_B, (size_t)padded_height_B };
         backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size_t, local_work_size_t, dst);
 
-        // dp4a (int8) dense prefill GEMM. Quantizes the original [N,K] activations
-        // to q8_1 and runs the int8 dp4a GEMM instead of the f16 half-dot kernel
-        // (the transpose output is unused here). Large-batch (prefill) only; ne1<=8
-        // keeps the cok/f16 small-batch path. DEFAULT ON, except disabled on Adreno
-        // X1 (dp4a ~2x slower than the f16 half-dot there, occupancy/mem-wall bound).
-        // Opt out / in with GGML_OPENCL_Q4K_DENSE_DP4A=0 / 1. Greedy byte-identical.
+        // dp4a (int8) dense prefill GEMM and weight via texture
         static const char * q4k_dense_dp4a_env = getenv("GGML_OPENCL_Q4K_DENSE_DP4A");
-        // Weight-as-texture dp4a variant (X1 experiment): reads the q4_K weight
-        // plane through an image1d_buffer instead of a plain global buffer, to
-        // recover the texture-cache bandwidth the f16 path uses while keeping the
-        // int8 dp4a ALU win. Opt-in; when set it also forces the dense dp4a path
-        // on (so it can be A/B'd on X1, where dp4a defaults off). See the kernel
-        // header in gemm_noshuffle_q4_k_q8_1_dp4a.cl.
         static const char * q4k_dense_wimg_env = getenv("GGML_OPENCL_Q4K_DENSE_DP4A_WIMG");
+
         const bool          q4k_dense_wimg_on  = q4k_dense_wimg_env && (atoi(q4k_dense_wimg_env) != 0);
         const bool          q4k_dense_dp4a_on  = q4k_dense_wimg_on
             ? true
             : q4k_dense_dp4a_env
             ? (atoi(q4k_dense_dp4a_env) != 0)
             : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
-        // Min N for the dp4a prefill GEMM. Default 9 (ne1>8 = large-batch prefill;
-        // ne1<=8 keeps the cok/mc3 small-batch kernels). Lowered via env to A/B the
-        // MTP/spec-decode verify regime (ne1=2..8) -- see the q4k_smalln_dp4a path.
-        // For ne1=2..4 also set GGML_OPENCL_Q4K_MC3=0 (mc3 GEMV otherwise intercepts).
+
+        // Min N for the dp4a prefill GEMM, default 9, i.e., ne1 > 8
         static const char * q4k_dp4a_minn_env = getenv("GGML_OPENCL_Q4K_DP4A_MINN");
         const int           q4k_dp4a_minn     = q4k_dp4a_minn_env ? atoi(q4k_dp4a_minn_env) : 9;
+
         if (q4k_dense_dp4a_on && N >= q4k_dp4a_minn && (K % 32 == 0) && (M % 64 == 0)) {
             const size_t n_blocks = (size_t)N * (K / 32);
             backend_ctx->prealloc_moe_qa.allocate(context, (size_t)N * K * sizeof(cl_char));
@@ -17175,10 +17144,7 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno(ggml_backend_t backend, const ggml_t
             size_t q_global[1] = { (size_t)(((n_blocks + 63) / 64) * 64) };
             backend_ctx->enqueue_ndrange_kernel(qk, 1, q_global, q_local, dst);
 
-            // Optionally bind the weight plane as a texture (image1d_buffer over
-            // the same q4_K weight buffer; CL_R/UINT32, one texel = 2 ushorts).
-            // Falls back to the plain-buffer kernel if the env is off, the texel
-            // count overflows the device image-buffer cap, or clCreateImage fails.
+            // check if weights go through texture
             cl_mem q4k_q_img = nullptr;
             bool use_wimg = q4k_dense_wimg_on;
             if (use_wimg) {
@@ -17377,19 +17343,15 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         region.size = ne00 * ne1 * sizeof(float);
         CL_CHECK((b_sub_buf = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
 
-        // dp4a (int8) dense q6_K prefill GEMM (ffn_down/attn_v). Quantizes the
-        // [N,K] activations to q8_1 and runs the int8 dp4a GEMM instead of the
-        // f16 half-dot kernel — no activation transpose needed. Large-batch
-        // (prefill, ne1>8) only; the output/lm_head weight stays on the f16 path
-        // for logit stability (matches the q6_K cok exclusion). DEFAULT ON, except
-        // disabled on Adreno X1 (dp4a ~2x slower than f16 there). Opt out / in with
-        // GGML_OPENCL_Q6K_DENSE_DP4A=0 / 1.
+        // dp4a (int8) dense q6_K prefill GEMM
         static const char * q6k_dense_dp4a_env = getenv("GGML_OPENCL_Q6K_DENSE_DP4A");
         static const bool   q6k_dense_dp4a_on  = (q6k_dense_dp4a_env != nullptr)
                                                    ? (atoi(q6k_dense_dp4a_env) != 0)
                                                    : (backend_ctx->adreno_gen != ADRENO_GPU_GEN::X1E);
+
         const bool is_output_w_dp4a = strncmp(src0->name, "output", 6) == 0 ||
                                       strncmp(src0->name, "token_embd", 10) == 0;
+
         if (q6k_dense_dp4a_on && !is_output_w_dp4a && ne1 > 8 && (ne00 % 32 == 0) && (ne01 % 64 == 0)) {
             const int M = ne01, N = ne1, K = ne00;
             const size_t n_blocks = (size_t)N * (K / 32);
@@ -17674,16 +17636,12 @@ static void ggml_cl_mul_mat_q5_K_f32_adreno(ggml_backend_t backend, const ggml_t
         size_t global_work_size_t[2] = {(size_t)width_B, (size_t)padded_height_B};
         backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size_t, local_work_size_t, dst);
 
-        // dp4a (int8) dense q5_K prefill GEMM. q5_K previously had NO dp4a path
-        // (unlike q4_K/q6_K) so dense prefill fell back to the f16 GEMM (~2x slower).
-        // Quantize the [N,K] activations to q8_1 and int8-dp4a over the transposed
-        // q5_K weight (q nibbles + qh hi-plane). Large-batch (prefill, ne1>8) only;
-        // the transpose output above is unused here. DEFAULT ON Adreno X2E (same gate
-        // as q4_K/q6_K dense dp4a); opt out GGML_OPENCL_Q5K_DENSE_DP4A=0.
+        // dp4a (int8) dense q5_K prefill GEMM
         static const char * q5k_dense_dp4a_env = getenv("GGML_OPENCL_Q5K_DENSE_DP4A");
         const bool          q5k_dense_dp4a_on  = q5k_dense_dp4a_env
             ? (atoi(q5k_dense_dp4a_env) != 0)
             : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
+
         if (q5k_dense_dp4a_on && ne1 > 8 && (ne00 % 32 == 0) && (ne01 % 64 == 0)) {
             const int Mm = ne01, Nn = ne1, Kk = ne00;
             const size_t n_blocks = (size_t)Nn * (Kk / 32);
@@ -20414,14 +20372,13 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     cl_mem buf_src1_reordered = nullptr, image_src1_reordered = nullptr;
                     cl_mem buf_src2, buf_src2_emap;
 
-                    // dp4a (int8) prefill GEMM variant (see the mxfp4/q4_K paths):
-                    // fused reorder + q8_1 quant of activations, then the int8 dp4a
-                    // inner-loop GEMM. PPL byte-identical. DEFAULT ON only on Adreno
-                    // X2E (mirror q4_K dp4a; X1 stays opt-in). Env forces either way.
+                    // dp4a (int8) prefill GEMM variant
                     static const char * q4_0_moe_dp4a_env = getenv("GGML_OPENCL_Q4_0_MOE_DP4A");
-                    const bool use_moe_dp4a = q4_0_moe_dp4a_env
+                    bool use_moe_dp4a = q4_0_moe_dp4a_env
                         ? (atoi(q4_0_moe_dp4a_env) != 0)
                         : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
+                    // bin kernel takes precedence
+                    use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin == nullptr;
 
                     cl_buffer_region region;
                     region.origin = 0;
@@ -20539,8 +20496,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &(backend_ctx->prealloc_total_tiles.buffer)));
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne00));
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne01));
-                        const int moe_ragged = backend_ctx->moe_gemm_ragged ? 1 : 0;
-                        CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &moe_ragged));
+                        CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &backend_ctx->adreno_use_moe_ragged_dp4));
 
                         size_t dp_global[3] = { 64, (size_t)((ne01 + 63) / 64), (size_t)max_post_router_tile };
                         size_t dp_local[3]  = { 64, 1, 1 };
@@ -20907,9 +20863,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     sub_buf_src1_pre = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
                     CL_CHECK(status);
 
-                    // Generic dp4a MoE GEMM (opt-in GGML_OPENCL_Q5_MOE_DP4A): q8_1 reorder
-                    // + int8 dp4a over the q5_0 expert (qs image + qh hi-plane), centering
-                    // via min=d*16 (has_min=1). Reuses buf_src2/emap above.
+                    // Generic dp4a MoE GEMM
                     {
                         static const char * q5mdp4a_env = getenv("GGML_OPENCL_Q5_MOE_DP4A");
                         const bool q5mdp4a_on = q5mdp4a_env ? (atoi(q5mdp4a_env) != 0)
@@ -20917,6 +20871,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         const bool use_q5_moe_dp4a = q5mdp4a_on
                             && backend_ctx->kernel_gemm_moe_q8_1_dp4a_q50 != nullptr
                             && extra0_q5_0->scale != nullptr;
+
                         if (use_q5_moe_dp4a) {
                             const size_t tok_slots = (size_t)max_post_router_tile * n_tile_size;
                             const size_t n_blocks  = tok_slots * (ne00 / 32);
@@ -20952,6 +20907,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
                             int ne00i = (int)ne00, ne01i = (int)ne01;
                             cl_kernel dk = backend_ctx->kernel_gemm_moe_q8_1_dp4a_q50;
+                            int has_min_q5 = 1;
                             int aidx = 0;
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &extra0_q5_0->qs_img));
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &extra0_q5_0->qh));
@@ -20966,9 +20922,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &(backend_ctx->prealloc_total_tiles.buffer)));
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne00i));
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne01i));
-                            const int moe_ragged_q5 = backend_ctx->moe_gemm_ragged ? 1 : 0;
-                            CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &moe_ragged_q5));
-                            const int has_min_q5 = 1;
+                            CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &backend_ctx->adreno_use_moe_ragged_dp4));
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &has_min_q5));
 
                             size_t dp_global[3] = { 64, (size_t)((ne01 + 63) / 64), (size_t)max_post_router_tile };
@@ -21253,21 +21207,8 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
         }
         case GGML_TYPE_Q8_0: {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-            // Batched MoE GEMM for q8_0 at prefill (ne12>1). q8_0 is the only quant
-            // without a gemm_moe path, so prefill MoE otherwise falls to the per-token
-            // GEMV (mul_mv_id_q8_0_f32_flat: re-streams each expert weight per token,
-            // ~32x over-fetch). This groups tokens by expert (shared reorder pipeline)
-            // and reuses each expert weight across its tile of 32 tokens. Reads the
-            // EXISTING flat q8_0 weights (no transposed image / decode-path change),
-            // a large prefill win; decode (ne12==1) unaffected.
-            // DEFAULT ON for X2E. Correctness verified via test-backend-ops MUL_MAT_ID
-            // q8_0: all 75 cases pass NMSE-vs-CPU (5e-4) with the batched kernel routed
-            // (trace-confirmed firing on ne12={4,5,16,17,32,129}, ne01={64,512}); the
-            // flat path passes the same bar. A reordered-reduction GEMM is NOT bit-id
-            // to the flat GEMV (both within 5e-4 of CPU, ~1e-3 of each other), so greedy
-            // generation diverges late but stays coherent -- that is benign fp-reorder
-            // cascade, not a kernel bug. Held X1 off -- like the dp4a prefill GEMMs, X1
-            // keeps the flat path. Opt in/out anywhere with the env override.
+            // MoE GEMM for q8_0 at prefill (ne12>1)
+            // There is no corresponding gemv_moe, so the code path is different here
             static const char * moe_gemm_q8_env = getenv("GGML_OPENCL_MOE_GEMM_Q8");
             const bool          moe_gemm_q8     = moe_gemm_q8_env
                 ? (atoi(moe_gemm_q8_env) != 0)
@@ -21305,10 +21246,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 sub_buf_src1_pre = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
                 CL_CHECK(status);
 
-                // Generic dp4a MoE GEMM (opt-in GGML_OPENCL_Q8_MOE_DP4A): fused reorder
-                // + q8_1 quant of the activation, then int8 dp4a over the flat q8_0 expert
-                // weight (kernel_gemm_moe_q8_1_dp4a, MOE_QT=80). Reuses buf_src2/emap from
-                // above; the weight codes are extra0_q8_0->q, scale is the expanded buffer.
+                // Generic dp4a MoE GEMM
                 {
                     static const char * q8mdp4a_env = getenv("GGML_OPENCL_Q8_MOE_DP4A");
                     const bool q8mdp4a_on = q8mdp4a_env ? (atoi(q8mdp4a_env) != 0)
@@ -21352,6 +21290,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
                         int ne00i = (int)ne00, ne01i = (int)ne01;
                         cl_kernel dk = backend_ctx->kernel_gemm_moe_q8_1_dp4a_q80;
+                        int has_min_q8 = 0;
                         int aidx = 0;
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &extra0_q8_0->q));      // flat int8 codes [expert][row][K]
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &extra0_q8_0->scale));  // uniform scale[16]
@@ -21365,9 +21304,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &(backend_ctx->prealloc_total_tiles.buffer)));
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne00i));
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne01i));
-                        const int moe_ragged_q8 = backend_ctx->moe_gemm_ragged ? 1 : 0;
-                        CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &moe_ragged_q8));
-                        const int has_min_q8 = 0;
+                        CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &backend_ctx->adreno_use_moe_ragged_dp4));
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &has_min_q8));
 
                         size_t dp_global[3] = { 64, (size_t)((ne01 + 63) / 64), (size_t)max_post_router_tile };
@@ -21532,11 +21469,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 if (ne12 == 1) { // for gemv
                     kernel = backend_ctx->kernel_gemv_moe_q4_k_f32_ns;
 
-                    // Weight-as-texture MoE decode GEMV: read expert weights through the
-                    // q_img texture cache, like the dense decode GEMVs and the MoE prefill
-                    // GEMMs already do (the MoE decode GEMV was the one weight-read still on a
-                    // host buffer). Byte-identical; just passes q_img instead of the q buffer.
-                    // DEFAULT ON X2E (mirror the dense-decode image-weight default); env forces.
+                    // Weight-as-texture MoE decode GEMV
                     static const char * moe_decode_wimg_env = getenv("GGML_OPENCL_MOE_DECODE_WIMG");
                     const bool moe_decode_wimg_on = moe_decode_wimg_env
                         ? (atoi(moe_decode_wimg_env) != 0)
@@ -21614,16 +21547,13 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     cl_mem buf_src1_reordered = nullptr, image_src1_reordered = nullptr;
                     cl_mem buf_src2, buf_src2_emap;
 
-                    // dp4a (int8) prefill GEMM variant: fused reorder+q8_1 quant of
-                    // activations, then the int8 dp4a inner-loop GEMM, in place of the
-                    // f32 reorder + half-dot kernel. DEFAULT ON for X1E + X2E (unlike the
-                    // dense dp4a GEMM, MoE dp4a also wins on X1 after the vec-acc rewrite).
-                    // Opt out / in with GGML_OPENCL_Q4K_MOE_DP4A=0 / 1. PPL-neutral.
+                    // dp4a (int8) prefill GEMM variant
                     static const char * q4k_moe_dp4a_env = getenv("GGML_OPENCL_Q4K_MOE_DP4A");
-                    static const bool   use_moe_dp4a = (q4k_moe_dp4a_env != nullptr)
-                                                         ? (atoi(q4k_moe_dp4a_env) != 0)
-                                                         : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E
-                                                            || backend_ctx->adreno_gen == ADRENO_GPU_GEN::X1E);
+                    bool  use_moe_dp4a = (q4k_moe_dp4a_env != nullptr)
+                                         ? (atoi(q4k_moe_dp4a_env) != 0)
+                                         : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E || backend_ctx->adreno_gen == ADRENO_GPU_GEN::X1E);
+                    // bin kernel takes precedence
+                    use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_q4_k_f32_ns_bin == nullptr;
 
                     cl_buffer_region region;
                     region.origin = 0;
@@ -21739,11 +21669,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &(backend_ctx->prealloc_total_tiles.buffer)));
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne00));
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne01));
-                        // ragged tiles: compute only real tokens per tile (skip the
-                        // ~50% per-expert padding at the ub=512 prefill floor).
-                        // Byte-identical; default on, opt-out GGML_OPENCL_MOE_RAGGED=0.
-                        const int moe_ragged = backend_ctx->moe_gemm_ragged ? 1 : 0;
-                        CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &moe_ragged));
+                        CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &backend_ctx->adreno_use_moe_ragged_dp4));
 
                         size_t dp_global[3] = { 64, (size_t)((ne01 + 63) / 64), (size_t)max_post_router_tile };
                         size_t dp_local[3]  = { 64, 1, 1 };
@@ -21886,17 +21812,18 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     sub_buf_src1_pre = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
                     CL_CHECK(status);
 
-                    // Generic dp4a MoE GEMM (opt-in GGML_OPENCL_Q5K_MOE_DP4A): q8_1 reorder
-                    // + int8 dp4a over the q5_K expert (q image low nibbles + qh hi-plane),
-                    // scale/min via the decoded uniform buffers (has_min=1). Reuses buf_src2/emap.
+                    // Generic dp4a MoE GEMM
                     {
                         static const char * q5kmdp4a_env = getenv("GGML_OPENCL_Q5K_MOE_DP4A");
                         const bool q5kmdp4a_on = q5kmdp4a_env ? (atoi(q5kmdp4a_env) != 0)
                                                               : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
-                        const bool use_q5k_moe_dp4a = q5kmdp4a_on
+                        bool use_moe_dp4a = q5kmdp4a_on
                             && backend_ctx->kernel_gemm_moe_q8_1_dp4a_q5k != nullptr
                             && extra0_q5_K->scale != nullptr;
-                        if (use_q5k_moe_dp4a) {
+                        // bin kernel takes precedence
+                        use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_q4_k_f32_ns_bin == nullptr;
+
+                        if (use_moe_dp4a) {
                             const size_t tok_slots = (size_t)max_post_router_tile * n_tile_size;
                             const size_t n_blocks  = tok_slots * (ne00 / 32);
                             backend_ctx->prealloc_moe_qa.allocate(backend_ctx->context, tok_slots * ne00 * sizeof(cl_char));
@@ -21931,6 +21858,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
                             int ne00i = (int)ne00, ne01i = (int)ne01;
                             cl_kernel dk = backend_ctx->kernel_gemm_moe_q8_1_dp4a_q5k;
+                            int has_min_q5k = 1;
                             int aidx = 0;
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &extra0_q5_K->q_img));
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &extra0_q5_K->qh));
@@ -21945,9 +21873,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &(backend_ctx->prealloc_total_tiles.buffer)));
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne00i));
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne01i));
-                            const int moe_ragged_q5k = backend_ctx->moe_gemm_ragged ? 1 : 0;
-                            CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &moe_ragged_q5k));
-                            const int has_min_q5k = 1;
+                            CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &backend_ctx->adreno_use_moe_ragged_dp4));
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &has_min_q5k));
 
                             size_t dp_global[3] = { 64, (size_t)((ne01 + 63) / 64), (size_t)max_post_router_tile };
@@ -22125,14 +22051,9 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     cl_mem buf_src1_reordered = nullptr, image_src1_reordered = nullptr;
                     cl_mem buf_src2, buf_src2_emap;
 
-                    // dp4a (int8) q6_K MoE prefill GEMM variant: fused reorder+q8_1
-                    // quant + the int8 dp4a GEMM, in place of the f32 reorder +
-                    // half-dot kernel. Greedy byte-identical. DEFAULT ON for X1E + X2E
-                    // (like q4_K MoE, MoE dp4a wins on X1 after the vec-acc rewrite;
-                    // dense dp4a stays X2-only). Opt out / in with
-                    // GGML_OPENCL_Q6K_MOE_DP4A=0 / 1. Env forces either way.
+                    // dp4a (int8) q6_K MoE prefill GEMM
                     static const char * q6k_moe_dp4a_env = getenv("GGML_OPENCL_Q6K_MOE_DP4A");
-                    static const bool   use_q6k_dp4a = (q6k_moe_dp4a_env != nullptr)
+                    static const bool   use_moe_dp4a = (q6k_moe_dp4a_env != nullptr)
                                                          ? (atoi(q6k_moe_dp4a_env) != 0)
                                                          : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E
                                                             || backend_ctx->adreno_gen == ADRENO_GPU_GEN::X1E);
@@ -22158,7 +22079,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
 
-                    if (!use_q6k_dp4a) {
+                    if (!use_moe_dp4a) {
                         // Create image for reordered src1
                         region.origin = 0;
                         region.size = ne00 * max_post_router_tile * n_tile_size * sizeof(float);
@@ -22207,7 +22128,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     buf_dst_image = clCreateImage(backend_ctx->context, CL_MEM_WRITE_ONLY, &image_format_buf_dst, &image_desc_buf_dst, NULL, &status);
                     CL_CHECK(status);
 
-                    if (use_q6k_dp4a) {
+                    if (use_moe_dp4a) {
                         const size_t tok_slots = (size_t)max_post_router_tile * n_tile_size;
                         const size_t n_blocks  = tok_slots * (ne00 / 32);
                         backend_ctx->prealloc_moe_qa.allocate(backend_ctx->context, tok_slots * ne00 * sizeof(cl_char));
@@ -22245,9 +22166,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         CL_CHECK(clSetKernelArg(dk, qi++, sizeof(cl_mem), &(backend_ctx->prealloc_total_tiles.buffer)));
                         CL_CHECK(clSetKernelArg(dk, qi++, sizeof(int),    &ne00));
                         CL_CHECK(clSetKernelArg(dk, qi++, sizeof(int),    &ne01));
-                        // ragged tiles (skip padded tokens); byte-identical, default on.
-                        const int moe_ragged_q6 = backend_ctx->moe_gemm_ragged ? 1 : 0;
-                        CL_CHECK(clSetKernelArg(dk, qi++, sizeof(int),    &moe_ragged_q6));
+                        CL_CHECK(clSetKernelArg(dk, qi++, sizeof(int),    &backend_ctx->adreno_use_moe_ragged_dp4));
 
                         size_t dp_global[3] = { 64, (size_t)((ne01 + 63) / 64), (size_t)max_post_router_tile };
                         size_t dp_local[3]  = { 64, 1, 1 };
@@ -22309,11 +22228,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 if (ne12 == 1) { // for gemv
                     kernel = backend_ctx->kernel_gemv_moe_mxfp4_f32_ns;
 
-                    // Weight-as-texture MoE decode GEMV (see q4_K _wimg). Byte-identical.
-                    // DEFAULT OFF (opt-in via GGML_OPENCL_MOE_DECODE_WIMG=1): unlike q4_K
-                    // plain, mxfp4 plain is neutral (the heavy mxfp4->fp16 dequant makes
-                    // the GEMV ALU-bound, so the texture weight-BW lane has nothing to
-                    // give). Kept for A/B.
+                    // Weight-as-texture MoE decode GEMV (see q4_K _wimg)
                     static const char * moe_decode_wimg_env = getenv("GGML_OPENCL_MOE_DECODE_WIMG");
                     const bool use_moe_decode_wimg = (moe_decode_wimg_env && (atoi(moe_decode_wimg_env) != 0))
                         && backend_ctx->kernel_gemv_moe_mxfp4_f32_ns_wimg != nullptr
@@ -22386,15 +22301,13 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     cl_mem buf_src1_reordered = nullptr, image_src1_reordered = nullptr;
                     cl_mem buf_src2, buf_src2_emap;
 
-                    // dp4a (int8) prefill GEMM variant: fused reorder + q8_1 quant of
-                    // activations, then the int8 dp4a inner-loop GEMM, in place of the
-                    // f32 reorder + half-dot kernel. mxfp4 values *2 are exact int8
-                    // (no min term). PPL-neutral. DEFAULT ON only on Adreno X2E (mirror
-                    // q4_K dp4a; X1 stays opt-in). Env forces either way.
+                    // dp4a (int8) prefill GEMM variant
                     static const char * mxfp4_moe_dp4a_env = getenv("GGML_OPENCL_MXFP4_MOE_DP4A");
-                    const bool use_moe_dp4a = mxfp4_moe_dp4a_env
+                    bool use_moe_dp4a = mxfp4_moe_dp4a_env
                         ? (atoi(mxfp4_moe_dp4a_env) != 0)
                         : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
+                    // bin kernel takes precedence
+                    use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_bin == nullptr;
 
                     cl_buffer_region region;
                     region.origin = 0;
@@ -22514,11 +22427,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &(backend_ctx->prealloc_total_tiles.buffer)));
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne00));
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &ne01));
-                        // ragged tiles: compute only real tokens per tile (skip the
-                        // ~50% per-expert padding at the ub=512 prefill floor).
-                        // Default on, opt-out GGML_OPENCL_MOE_RAGGED=0.
-                        const int moe_ragged = backend_ctx->moe_gemm_ragged ? 1 : 0;
-                        CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &moe_ragged));
+                        CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(int),    &backend_ctx->adreno_use_moe_ragged_dp4));
 
                         size_t dp_global[3] = { 64, (size_t)((ne01 + 63) / 64), (size_t)max_post_router_tile };
                         size_t dp_local[3]  = { 64, 1, 1 };

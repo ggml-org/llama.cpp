@@ -2384,16 +2384,16 @@ kernel void kernel_restore_block_iq4_nl_noshuffle(
 // from the existing flat q8_0 weight buffer (extra0_q8_0->q), so only the scale is
 // rebuilt here. One work-item per (row, superblock, expert).
 // ---------------------------------------------------------------------------
-__kernel void kernel_moe_expand_scale_q8_0(
-    __global const half * src_d,      // [expert][row][block], one scale per 32-block
-    __global       half * dst_scale,  // [expert][row][block][2] (FLAT per-32-block)
+kernel void kernel_moe_expand_scale_q8_0(
+    global const half * src_d,      // [expert][row][block], one scale per 32-block
+    global       half * dst_scale,  // [expert][row][block][2] (FLAT per-32-block)
     int ne00,
     int ne01
 ) {
     int row = get_global_id(0);
     int blk = get_global_id(1);   // 32-block index along K
     int e   = get_global_id(2);
-    if (row >= ne01) return;
+    if (row >= ne01) { return; }
 
     long nb = ne00 / 32;          // 32-blocks per row (K only needs % 32 == 0)
     half d  = src_d[((long)e*ne01 + row)*nb + blk];
@@ -2412,17 +2412,17 @@ __kernel void kernel_moe_expand_scale_q8_0(
 // trans4 convert) and writes the FLAT per-32-block uniform scale[2]/min[1] in
 // [expert][row][block] order (a transpose). One work-item per (row, block, expert).
 // ---------------------------------------------------------------------------
-__kernel void kernel_moe_expand_scale_q5_0(
-    __global const half * src_d,      // [expert][block][row]
-    __global       half * dst_scale,  // [expert][row][block][2]
-    __global       half * dst_min,    // [expert][row][block]
+kernel void kernel_moe_expand_scale_q5_0(
+    global const half * src_d,      // [expert][block][row]
+    global       half * dst_scale,  // [expert][row][block][2]
+    global       half * dst_min,    // [expert][row][block]
     int ne00,
     int ne01
 ) {
     int row = get_global_id(0);
     int blk = get_global_id(1);
     int e   = get_global_id(2);
-    if (row >= ne01) return;
+    if (row >= ne01) { return; }
 
     long nb = ne00 / 32;
     half d  = src_d[(long)e*nb*ne01 + (long)blk*ne01 + row];   // [expert][block][row]
@@ -2448,27 +2448,21 @@ __kernel void kernel_moe_expand_scale_q5_0(
 // reads (same trans4_ns convert that feeds gemm_moe_q5_k_f32_ns), so only the scale
 // is rebuilt here.
 //
-// Inputs are the trans4_ns convert outputs:
-//   src_s  : uchar [expert][row][superblock][12]   (6-bit packed scales/mins)
-//   src_d  : half  [expert][superblock][row]        (superblock scale d)
-//   src_dm : half  [expert][superblock][row]        (superblock min dm)
-// Outputs (FLAT per-32-block, [expert][row][32block]):
-//   dst_scale : half 2/32-block      dst_min : half 1/32-block
 // One work-item per (row, superblock, expert); each emits 8 sub-blocks.
 // ---------------------------------------------------------------------------
-__kernel void kernel_moe_expand_scale_q5_K(
-    __global const uchar * src_s,     // [expert][row][superblock][12]
-    __global const half  * src_d,     // [expert][superblock][row]
-    __global const half  * src_dm,    // [expert][superblock][row]
-    __global       half  * dst_scale, // [expert][row][32block][2]
-    __global       half  * dst_min,   // [expert][row][32block]
+kernel void kernel_moe_expand_scale_q5_K(
+    global const uchar * src_s,     // [expert][row][superblock][12]
+    global const half  * src_d,     // [expert][superblock][row]
+    global const half  * src_dm,    // [expert][superblock][row]
+    global       half  * dst_scale, // [expert][row][32block][2]
+    global       half  * dst_min,   // [expert][row][32block]
     int ne00,
     int ne01
 ) {
     int row = get_global_id(0);
     int sb  = get_global_id(1);   // superblock index along K
     int e   = get_global_id(2);
-    if (row >= ne01) return;
+    if (row >= ne01) { return; }
 
     long nsb    = ne00 / 256;     // superblocks per row
     long nblk32 = ne00 / 32;      // 32-blocks per row

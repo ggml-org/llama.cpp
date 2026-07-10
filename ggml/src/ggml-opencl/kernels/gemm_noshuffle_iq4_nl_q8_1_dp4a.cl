@@ -4,31 +4,15 @@
 #pragma OPENCL EXTENSION cl_khr_integer_dot_product : enable
 #endif
 
-// Dense IQ4_NL prefill GEMM, dp4a (int8) inner loop.
-//
-// dp4a alternative to kernel_gemm_noshuffle_iq4_nl_f32 (the f16 half-dot GEMM
-// for dense IQ4_NL matmuls). Activations pre-quantized to q8_1
-// (kernel_quant_a_q8_1) from the original [N, K] token-major buffer; the
-// per-32-block dot uses the qcom int8 dp4a.
-//
-// IQ4_NL weight = kvalues[nibble] * d, where kvalues is the fixed non-linear
-// 4-bit codebook (all entries fit signed int8: -127..113) and d is one fp16
-// scale per 32-block. The codebook value IS the int8 used by the dot, so this
-// is the q8_0 case (no min/offset term) plus a nibble->int8 LUT unpack:
-//   Sum w*a = d * a_d * dp4a(kvalues[nibble], a_i8)
-// Mirrors kernel_gemm_noshuffle_q8_0_q8_1_dp4a; the only difference is mapping
-// each 4-bit code through the codebook before packing. Large-batch (prefill) only.
-//
-// Weight layout (feature-major SoA, byte-identical to the f16 kernel's reads):
+// Weight layout, feature-major:
 //   src0_q[row + (k/4)*m]  ushort = 4 nibbles (K = 4*grp .. +3)
 //   src0_d[row + (k/32)*m] half   = per-32-block scale
 
 #define TILESIZE_N 32
 
-// IQ4_NL non-linear codebook as signed int8 (== the f16 kvalues_iq4nl, integral),
-// packed 4 codes per uint. Mirrors the f16 kernel's iq4nl_packed trick: divergent
-// nibble lookups read a small __constant *uint* array + shift, never a byte array
-// (byte-indexed __constant loads serialize on Adreno and tank throughput).
+// IQ4_NL non-linear codebook as signed int8, packed 4 codes per uint.
+// divergent nibble lookups read a small __constant uint array + shift,
+// never a byte array because byte-indexed __constant loads serialize on Adreno and tank perf
 //   idx 0-3:  -127,-104,-83,-65 = 0x81,0x98,0xAD,0xBF
 //   idx 4-7:  -49,-35,-22,-10   = 0xCF,0xDD,0xEA,0xF6
 //   idx 8-11:  1, 13, 25, 38    = 0x01,0x0D,0x19,0x26
@@ -36,10 +20,12 @@
 __constant uint kvalues_iq4nl_i8x4[4] = {
     0xBFAD9881u, 0xF6EADDCFu, 0x26190D01u, 0x71594535u
 };
+
 // nibble (0..15) -> its codebook byte in the low 8 bits.
 inline uint iq4nl_code(uint n) {
     return (kvalues_iq4nl_i8x4[n >> 2] >> ((n & 3u) * 8u)) & 0xFFu;
 }
+
 // 4 nibbles in low 16 bits of u -> 4 codebook int8, packed for dp4a.
 inline uint iq4nl_pack(ushort u) {
     return  iq4nl_code((uint)( u        & 0xF))
@@ -112,7 +98,7 @@ kernel void kernel_gemm_noshuffle_iq4_nl_q8_1_dp4a(
         qw.s6 = iq4nl_pack(src0_q[qsbase + 6 * m]);
         qw.s7 = iq4nl_pack(src0_q[qsbase + 7 * m]);
 
-        // cooperatively stage the 32-token x 32-K int8 activations to LDS
+        // cooperatively stage the 32-token x 32-K int8 activations to lm
         for (uint idx = lid; idx < TILESIZE_N * 8; idx += 64) {
             const uint t = idx >> 3;
             const uint u = idx & 7;

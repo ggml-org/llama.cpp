@@ -4,18 +4,6 @@
 #pragma OPENCL EXTENSION cl_khr_integer_dot_product : enable
 #endif
 
-// Dense q4_K prefill GEMM, dp4a (int8) inner loop.
-//
-// dp4a alternative to kernel_gemm_noshuffle_q4_k_f32 (the f16 half-dot GEMM used
-// for the dense q4_K matmuls — attention Q/K/V/O projections). The activations
-// are pre-quantized to q8_1 (kernel_quant_a_q8_1) straight from the original
-// [N, K] token-major buffer (no transpose), and the per-subblock dot uses the
-// qcom int8 dp4a, ~4x faster than half4 MAD on the X2.
-//
-// Each WI owns one output row (feature) and a TILESIZE_N-token tile, doing a
-// dot over K via dp4a. Mirrors the MoE dp4a kernel without routing/scatter.
-// q4_K reassociation per 32-subblock: Sum w*a = scale*a_d*dp4a(q,a) - minv*a_s.
-
 #ifndef TILESIZE_N
 #define TILESIZE_N 32
 #endif
@@ -47,7 +35,7 @@ inline void get_scale_min_k4(
                   (((uint)((u) & 0x0F00u)) << 8)  | \
                   (((uint)((u) & 0xF000u)) << 12) )
 
-// 32-K dp4a dot of one token's int8 activations (8 packed uints in LDS) against the
+// 32-K dp4a dot of one token's int8 activations (8 packed uints in lm) against the
 // row's 8 packed weight uints. qw passed by value as a uint8 (register), not an array.
 inline int dot8_q8a(uint8 qw, __local const uint * a) {
     int r = 0;
@@ -99,17 +87,11 @@ kernel void kernel_gemm_noshuffle_q4_k_q8_1_dp4a(
     __local half sh_d[TILESIZE_N];
     __local half sh_s[TILESIZE_N];
 
-    // One float4 vector-register accumulator per group of 4 tokens (NGROUPS =
-    // TILESIZE_N/4). NO per-WI private acc[] array: on Adreno X1 a private array
-    // spills to private memory whose loads are issued per-wave with no cross-WI
-    // coalescing (each WI pulls its own 512-bit line, no reuse) — that spill, not
-    // the dp4a or LDS path, is the main cost. float4 (not float8) is Adreno's
-    // native 128-bit register/transaction width: it packs into the register file
-    // without 256-bit alignment padding. Byte-identical to the scalar acc[].
+    // One float4 vector-register accumulator per group of 4 tokens (NGROUPS = TILESIZE_N/4).
 #define NGROUPS (TILESIZE_N / 4)
     float4 acc[NGROUPS];
     #pragma unroll
-    for (int g = 0; g < NGROUPS; ++g) acc[g] = (float4)(0.0f);
+    for (int g = 0; g < NGROUPS; ++g) { acc[g] = (float4)(0.0f); }
 
     for (uint step = 0; step < (uint)k; step += 32) {
         const uint sub     = step >> 5;
@@ -139,7 +121,7 @@ kernel void kernel_gemm_noshuffle_q4_k_q8_1_dp4a(
         qw.s6 = EXP4(src0_q[wbase + 6 * m]);
         qw.s7 = EXP4(src0_q[wbase + 7 * m]);
 
-        // cooperatively stage the 32-token x 32-K int8 activations to LDS
+        // cooperatively stage the 32-token x 32-K int8 activations to lm
         for (uint idx = lid; idx < TILESIZE_N * 8; idx += 64) {
             const uint t = idx >> 3;
             const uint u = idx & 7;
@@ -185,25 +167,6 @@ kernel void kernel_gemm_noshuffle_q4_k_q8_1_dp4a(
 #undef NGROUPS
 }
 
-// Weight-as-texture variant of kernel_gemm_noshuffle_q4_k_q8_1_dp4a.
-//
-// Byte-identical math; the ONLY change is that the q4_K weight plane is read
-// through an image1d_buffer (read_imageui -> texture/L1 cache) instead of a
-// plain __global buffer. Motivation (Adreno X1): the f16 half-dot GEMM beats
-// the dp4a buffer GEMM on X1 not because the int8 dot is slow (it is ~2x the
-// f16-mad rate) but because the f16 path streams weights through the texture
-// cache and is near-BW-optimal, while the dp4a buffer path gives that up. The
-// cross-N-tile weight reuse (same weight texels re-read for every 32-token
-// tile) is exactly what the texture cache captures. This variant keeps the
-// int8 ALU win AND the texture path; gated to X1, opt-in via
-// GGML_OPENCL_Q4K_DENSE_DP4A_WIMG.
-//
-// The weight buffer is bound as CL_R/CL_UNSIGNED_INT32 (one texel = 2 packed
-// ushorts), the same proven format the f16 _kimg / MoE _ns kernels use. The
-// dispatch guarantees M%64==0 so m is even, hence every weight read for a
-// given output row has constant ushort parity (= rrow&1): the wanted ushort is
-// selected with a single hoisted shift, and adjacent lanes (rows) share each
-// uint32 texel -> good cache-line / coalescing behaviour.
 __attribute__((qcom_wave_pair_mode(1)))
 kernel void kernel_gemm_noshuffle_q4_k_q8_1_dp4a_wimg(
         __read_only image1d_buffer_t src0_q_img, // q4_K weights as uint32 texels (2 ushorts/texel)
@@ -263,8 +226,6 @@ kernel void kernel_gemm_noshuffle_q4_k_q8_1_dp4a_wimg(
         const float scale = dd  * (float)sv;
         const float minv  = dmm * (float)mn;
 
-        // Same logical ushort index (wbase + j*m) as the buffer kernel, read
-        // through the texture: uint32 texel = ushort_index>>1, half = sel.
         const uint wbase = rrow + (step >> 2) * (uint)m;
         uint8 qw;
         qw.s0 = EXP4(read_imageui(src0_q_img, (int)((wbase + 0 * m) >> 1)).x >> sel);

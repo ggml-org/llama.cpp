@@ -4,21 +4,6 @@
 #pragma OPENCL EXTENSION cl_khr_integer_dot_product : enable
 #endif
 
-// Dense q4_0 prefill GEMM, dp4a (int8) inner loop.
-//
-// dp4a alternative to kernel_gemm_noshuffle_q4_0_f32 (the f16 half-dot GEMM for
-// dense q4_0 matmuls -- attention / ffn projections in a full-Q4_0 model).
-// Activations pre-quantized to q8_1 (kernel_quant_a_q8_1) from the original
-// [N, K] token-major buffer; the per-32-block dot uses the qcom int8 dp4a.
-//
-// q4_0 weight = d * (q - 8), q in [0,15], one fp16 scale per 32-block per row.
-// Mirrors kernel_gemm_noshuffle_iq4_nl_q8_1_dp4a (same feature-major nibble
-// layout: src0_q[row + (k/4)*m], ushort = 4 nibbles, low nibble = lowest K) but
-// uses the plain nibble (EXP4) instead of the IQ4_NL codebook, and adds the
-// constant -8 zero-point via the q8_1 sum term:
-//   Sum w*a = d_w * (a_d * dp4a(q, qa) - 8 * a_s),  a_s = a_d * Sum(qa)
-// Mirrors vec_dot_q4_0_q8_1. Large-batch (prefill) only; ne1<=8 keeps the f16 path.
-
 #define TILESIZE_N 32
 
 // Expand the 4 nibbles in the low 16 bits of u into 4 bytes (value 0..15),

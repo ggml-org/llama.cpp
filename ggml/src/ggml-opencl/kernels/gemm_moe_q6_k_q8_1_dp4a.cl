@@ -4,16 +4,6 @@
 #pragma OPENCL EXTENSION cl_khr_integer_dot_product : enable
 #endif
 
-// q6_K MoE prefill GEMM, dp4a (int8) inner loop.
-//
-// dp4a alternative to kernel_gemm_moe_q6_k_f32_ns. q6_K weight = scale*(q6-32),
-// q6 in [0,63] = ql nibble (4b) | qh high (2b)<<4, with an int8 scale per 16
-// elements (vs q4_K's per-32) and a superblock half d. Reuses the same q8_1
-// activation tiles as the q4_K MoE dp4a (per-32 int8 + scale d).
-//
-// (q6-32) is packed DIRECTLY as a signed int8 per byte (see SIGN6) so the dot
-// needs no separate -32*Sum(a) correction: Sum w*a = scale*a_d*dp4a(q6-32, a).
-
 #define TILESIZE_N 32
 #define QK_K 256
 
@@ -96,8 +86,7 @@ kernel void kernel_gemm_moe_q6_k_q8_1_dp4a(
     __local uint sh_qa[TILESIZE_N][8];
     __local half sh_d[TILESIZE_N];
 
-    // Real-token count for this tile (see kernel_gemm_moe_q4_k_q8_1_dp4a); padded
-    // slots hold 0xFFFFFFFF at the tile tail. is_ragged==0 forces n_real=32.
+    // Real token count for this tile
     __local uint sh_src2[TILESIZE_N];
     __local int  sh_nreal;
     if (lid < TILESIZE_N) {

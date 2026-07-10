@@ -4,30 +4,8 @@
 #pragma OPENCL EXTENSION cl_khr_integer_dot_product : enable
 #endif
 
-// Generic quant -> q8_1 dp4a MoE prefill GEMM (CUDA MMQ analog for the routed
-// expert matmul). ONE templated source replacing the per-quant hand-written MoE
-// dp4a GEMMs (gemm_moe_q4_k/q6_k_q8_1_dp4a) and the float gemm_moe_*_f32_ns. The
-// expert weight stays NATIVE bit-width (experts dominate VRAM -- an int8 requant
-// would inflate them substantially); only the activation is q8_1 (kernel_moe_reorder_quant_a_q8_1,
-// already type-agnostic) and the weight is unpacked to int8 in registers per tile.
-//
-// Compiled once per quant type via -DMOE_QT (see families below). The skeleton
-// (grid, expert routing via src2/src2_emap, ragged padding-skip, LDS activation
-// staging, scatter to original output rows) is byte-identical across types and
-// verbatim from kernel_gemm_moe_q4_k_q8_1_dp4a (shipped, validated). Only the
-// weight buffer signature + the per-32-step unpack to qw[8] (8 packed int8 uints)
-// differ.
-//
-// UNIFORM SCALE FORMAT (the matching per-type MoE convert pre-decodes each type's
-// packed scales -> these two buffers, so the hot loop is type-agnostic):
-//   src0_scale : f16, 16 per superblock (per-16-element segment), per [expert,row]
-//   src0_min   : f16,  8 per superblock (per-32-element sub-block), per [expert,row]
-// Per 32-step (sub-block j): two 16-wide dp4a (raw1,raw2), then
-//   acc += sc[2j]*a_d*raw1 + sc[2j+1]*a_d*raw2 - mn[j]*a_s     (a_s = q8_1 block sum)
-// min[]=0 -> symmetric no-op; additive-min (q4_1/q5_1) stores -m; centered
-// (q4_0/q5_0) stores d*offset; mxfp4 stores the e8m0_half scale, codes via LUT.
-//
-// MOE_QT families:
+// Generic int8 dp4a MoE GEMM, specialized versions also exist
+// MOE_QT:
 //   4 (q4_K)/41(q4_1)/40(q4_0)   NIBBLE   image low nibbles -> EXP4
 //   5 (q5_K)/51(q5_1)/50(q5_0)   NIBBLE+HI image nibbles + qh high-bit plane
 //   6 (q6_K)                     Q6       image nibbles + qh 2-bit -> SIGN6((nibble|hi2))
@@ -51,15 +29,17 @@
                   (((uint)((b) & 0x0Cu)) << 10)  | \
                   (((uint)((b) & 0x30u)) << 16)  | \
                   (((uint)((b) & 0xC0u)) << 22) )
+
 // q6 (0..63) -> (q6-32) signed int8/byte (no inter-byte carry)
 inline uint SIGN6(uint q6p){ uint x=q6p^0x20202020u; uint s=x&0x20202020u; return x|(s<<1)|(s<<2); }
-// 4 high bits (one per element, in bits 0..3 of h) -> bit4 of each of 4 bytes (5-bit hi plane)
+
+// 4 high bits (one per element, in bits 0..3 of h) -> bit4 of each of 4 bytes (5-bit hi)
 #define EXP1(h)  ( (((uint)((h) & 0x1u)) << 4)   | \
                   (((uint)((h) & 0x2u)) << 11)  | \
                   (((uint)((h) & 0x4u)) << 18)  | \
                   (((uint)((h) & 0x8u)) << 25) )
 
-// -------- per-type weight params + per-32-step unpack into qw[8] (8 int8 uints) --------
+// per-type weight params + per-32-step unpack into qw[8] (8 int8 uints)
 #if MOE_QT == 4 || MOE_QT == 41 || MOE_QT == 40
   #define WEIGHT_PARAMS __read_only image1d_buffer_t src0_q,
   #define LOAD_QW(step, sub) \
@@ -74,7 +54,7 @@ inline uint SIGN6(uint q6p){ uint x=q6p^0x20202020u; uint s=x&0x20202020u; retur
 #elif MOE_QT == 5 || MOE_QT == 51 || MOE_QT == 50
   // low nibbles via image (q4_K layout) + high-bit plane src0_qh: 1 uint per 32-block
   // (bit i = high bit of element i). qh laid out [expert][block][row] to match the
-  // existing q5_0 trans4 convert (kernel_gemm_moe_q5_0_f32_ns reads the same blk_offset).
+  // existing q5_0 trans4 convert
   #define WEIGHT_PARAMS __read_only image1d_buffer_t src0_q, __global uint * src0_qh,
   #define LOAD_QW(step, sub) \
       uint qw[8]; { \
@@ -157,8 +137,7 @@ kernel void kernel_gemm_moe_q8_1_dp4a(
 
     // Scale/min are laid out FLAT per-32-block (2 per-16-segment scales + 1 min per
     // 32-block), so K only needs to be a multiple of 32 — works for the 32-block
-    // types (q8_0/q5_0/q4_0/...) whose expert K is not a multiple of 256 (e.g. gemma
-    // ffn_down_exps K=704), as well as the K-quants (K%256==0, same bytes).
+    // types (q8_0/q5_0/q4_0/...) as well as the K-quants (K%256==0, same bytes).
     const uint nblk32     = ne00 / 32;
     const uint sc_per_row = nblk32 * 2;
     const uint mn_per_row = nblk32;

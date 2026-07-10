@@ -4,21 +4,6 @@
 #pragma OPENCL EXTENSION cl_khr_integer_dot_product : enable
 #endif
 
-// Dense q6_K prefill GEMM, dp4a (int8) inner loop.
-//
-// dp4a alternative to kernel_gemm_noshuffle_q6_K_f32 (the f16 half-dot GEMM used
-// for the dense q6_K matmuls — ffn_down + output projections in a Q4_K_M model).
-// Combines the dense q4_K dp4a structure (kernel_gemm_noshuffle_q4_k_q8_1_dp4a:
-// one WI per output row, a TILESIZE_N token tile, q8_1 activations staged to LDS)
-// with the q6_K weight unpack from the MoE dp4a (EXP4 nibble | EXP2 high, then
-// SIGN6 packs (q6-32) as a signed int8 so NO min/sum correction is needed).
-//
-// q6_K has an int8 scale per 16 elements (vs q4_K's per-32), so each 32-K step is
-// split into two 16-K dp4a dots with their own scale: the first 16 K -> qw[0..3]
-// (scale0), the second 16 K -> qw[4..7] (scale1). Reuses the SAME q8_1 activation
-// tiles as the q4_K dense dp4a (per-32 int8 + scale d); the activation sum tile is
-// unused (q6_K is symmetric).
-
 #define TILESIZE_N 32
 #define QK_K 256
 
@@ -109,7 +94,7 @@ kernel void kernel_gemm_noshuffle_q6_k_q8_1_dp4a(
             qw[u] = SIGN6(EXP4((uint)src0_ql[o]) | EXP2((uint)src0_qh[o]));
         }
 
-        // cooperatively stage the 32-token x 32-K int8 activations + scale to LDS
+        // cooperatively stage the 32-token x 32-K int8 activations + scale
         for (uint idx = lid; idx < TILESIZE_N * 8; idx += 64) {
             const uint t = idx >> 3;
             const uint u = idx & 7;

@@ -1,19 +1,3 @@
-// Batched MoE GEMM for q8_0 experts (Adreno). Prototype that closes the q8_0 MoE
-// gap: q8_0 was the only quant routing prefill MoE through a per-token GEMV
-// (kernel_mul_mv_id_q8_0_f32_flat), re-streaming each expert weight once PER token
-// (~32x over-fetch at prefill). This tiles 32 tokens of the SAME expert (grouped by
-// the quant-independent moe reorder pipeline) so the expert weight is read once and
-// reused across all 32 tokens in registers.
-//
-// Structurally identical to kernel_gemm_moe_q4_0_f32_ns (same reordered-activation
-// addressing, LM staging, dot-reduce, output scatter). ONLY the weight + scale reads
-// differ: this reads the EXISTING flat SoA q8_0 weights (extra0_q8_0->q chars,
-// ->d halves) directly — no transposed image / q_img / convert kernel, so the q8_0
-// decode GEMV path and weight memory are untouched.
-//
-// Flat q8_0 layout (per kernel_convert_block_q8_0): q[(e*ne01 + row)*ne00 + k] char,
-// d[(e*ne01 + row)*nb + kb] half, nb = ne00/32, one scale per 32-element block.
-
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
 #pragma OPENCL EXTENSION cl_khr_subgroups : enable
 #pragma OPENCL EXTENSION cl_qcom_subgroup_uniform_load: enable
@@ -140,7 +124,7 @@ kernel void kernel_gemm_moe_q8_0_f32_ns(
     b_local_offset.x = (sub_block_id_m & 3) * 32 + (sub_block_id_m >> 2);
     b_local_offset.y = b_local_offset.x + 16;
 
-    // Loop along K axis, 32 elements (one block) per iteration, split into 2 sub-blocks.
+    // Loop along K axis, 32 elements per iteration, split into 2 sub-blocks.
     for (uint step = 0; step < ne00; step += TILESIZE_K * 2) {
         half s = w_d[step >> 5];               // one q8_0 scale per 32-element block
 

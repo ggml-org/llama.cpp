@@ -164,10 +164,6 @@ __kernel void kernel_gemv_moe_mxfp4_f32_ns(
 
 }
 
-// --- Weight-as-texture variant of kernel_gemv_moe_mxfp4_f32_ns -----------------
-// Byte-identical; the mxfp4 plane is read via image1d_buffer (texture cache)
-// instead of a __global uint buffer. Mirrors the q4_K _wimg MoE decode GEMV.
-// Opt path: GGML_OPENCL_MOE_DECODE_WIMG (default on X2E).
 __attribute__((qcom_reqd_sub_group_size("half")))
 __kernel void kernel_gemv_moe_mxfp4_f32_ns_wimg(
     __read_only image1d_buffer_t src0_q,

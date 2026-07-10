@@ -4,27 +4,11 @@
 #pragma OPENCL EXTENSION cl_khr_integer_dot_product : enable
 #endif
 
-// Dense q8_0 prefill GEMM, dp4a (int8) inner loop.
-//
-// dp4a alternative to kernel_gemm_noshuffle_q8_0_f32 (the f16 half-dot GEMM used
-// for the dense q8_0 matmuls — attention / ffn projections in a full-Q8_0 model).
-// The activations are pre-quantized to q8_1 (kernel_quant_a_q8_1) straight from
-// the original [N, K] token-major buffer (no transpose); the per-32-block dot
-// uses the qcom int8 dp4a.
-//
-// q8_0 is the simplest case: the stored weights are already signed int8 (4 per
-// uint, feature-major: src0_q[row + (k/4)*m]) — no nibble unpack — with one fp16
-// scale per 32-block per row (src0_d[row + (k/32)*m]) and NO min/offset term
-// (symmetric quant). So per 32-K step: qw = 8 raw weight uints, and
-//   Sum w*a = d_w * a_d * dp4a(qw, qa)
-// with no q8_1 sum-correction term. Mirrors kernel_gemm_noshuffle_q4_k_q8_1_dp4a
-// (one WI per output row, a TILESIZE_N-token tile) without the q4_K scale decode.
-//
-// Large-batch (prefill) only; ne1<=8 keeps the f16 / bin small-batch path.
+// ne1<=8 keeps the f16 / bin small-batch path.
 
 #define TILESIZE_N 32
 
-// 32-K dp4a dot of one token's int8 activations (8 packed uints in LDS) against
+// 32-K dp4a dot of one token's int8 activations (8 packed uints in lm) against
 // 8 packed weight uints. q8_0 weights are already dp4a-format signed int8.
 inline int dot8_q8a(uint8 qw, __local const uint * a) {
     int r = 0;
@@ -135,16 +119,6 @@ kernel void kernel_gemm_noshuffle_q8_0_q8_1_dp4a(
 #undef NGROUPS
 }
 
-// Weight-as-texture variant of kernel_gemm_noshuffle_q8_0_q8_1_dp4a.
-//
-// Byte-identical math; the only change is that the q8_0 int8 weight plane is read
-// through an image1d_buffer (read_imageui -> texture/L1 cache) instead of a plain
-// __global buffer. Same motivation as the q4_K _wimg variant: keep the int8 dp4a
-// ALU win AND the texture-cache bandwidth the f16 path relies on (the lever for
-// Adreno X1, where the buffer dp4a path regresses). Cleanest case of all: the q8_0
-// weight is already 4 int8/uint, so the CL_R/UINT32 image (1 texel = 4 int8, width
-// M*K/4 -- the same view the GEMV path builds) maps 1:1 to the buffer index, no
-// parity / half-select. Opt-in: GGML_OPENCL_Q8_DENSE_DP4A_WIMG.
 __attribute__((qcom_wave_pair_mode(1)))
 kernel void kernel_gemm_noshuffle_q8_0_q8_1_dp4a_wimg(
         __read_only image1d_buffer_t src0_q_img,  // q8_0 weights as uint32 texels (4 int8/texel)

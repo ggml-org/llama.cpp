@@ -4,19 +4,6 @@
 #pragma OPENCL EXTENSION cl_khr_integer_dot_product : enable
 #endif
 
-// Dense q5_K prefill GEMM, dp4a (int8) inner loop.
-//
-// dp4a alternative to kernel_gemm_noshuffle_q5_k_f32 (the f16 half-dot GEMM used
-// for the dense q5_K matmuls). q5_K dense had NO dp4a path (unlike q4_K/q6_K), so
-// it fell back to the float GEMM -> ~2x slower prefill. This closes that gap.
-//
-// Identical to kernel_gemm_noshuffle_q4_k_q8_1_dp4a (same q8_1 activation staging,
-// per-32-subblock scale/min via get_scale_min_k4, scale*a_d*dp4a - minv*a_s
-// reassociation) with the q5_K high-bit (qh) plane folded into each weight code:
-// code = nibble | (hi << 4) in 0..31. Weight buffers are the transposed (feature-
-// major) q5_K SoA: q ushort [row + Kgroup*m], qh uchar [row + bytegroup*m] (one
-// byte = 8 elements' high bits), matching the float kernel's exact layout usage.
-
 #define TILESIZE_N 32
 #define QK_K 256
 #define K_SCALE_SIZE 12

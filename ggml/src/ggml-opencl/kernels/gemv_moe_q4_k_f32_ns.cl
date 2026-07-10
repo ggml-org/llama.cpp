@@ -154,13 +154,6 @@ __kernel void kernel_gemv_moe_q4_k_f32_ns(
     }
 }
 
-// --- Weight-as-texture variant of kernel_gemv_moe_q4_k_f32_ns ------------------
-// Byte-identical math; the only change is that the q4_K nibble plane is read
-// through an image1d_buffer (read_imageui -> texture/L1 cache) instead of a plain
-// __global uint buffer. Dense decode GEMVs (gemv_noshuffle_*) and the MoE prefill
-// dp4a GEMMs already read weights this way; the MoE decode GEMV was the one path
-// still on a host buffer. src0_q is the same CL_R/UINT32 q_img used by prefill
-// (1 uint/texel, index == the buffer uint index). Opt-in: GGML_OPENCL_MOE_DECODE_WIMG.
 __attribute__((qcom_reqd_sub_group_size("half")))
 __kernel void kernel_gemv_moe_q4_k_f32_ns_wimg(
     __read_only image1d_buffer_t src0_q,
