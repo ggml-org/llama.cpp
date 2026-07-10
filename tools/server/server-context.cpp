@@ -39,28 +39,18 @@ using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
 
-static uint32_t server_n_outputs_max(const common_params & params) {
+static common_speculative_output_limits server_output_limits(const common_params & params) {
     if (params.embedding ||
             (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
-        return params.n_batch;
+        return { params.n_batch, 1 };
     }
 
-    const int32_t n_outputs = common_speculative_n_outputs_max(
+    auto result = common_speculative_get_output_limits(
             params.n_batch, params.n_parallel, common_speculative_n_max(&params.speculative));
 
-    return std::max<int32_t>(1, n_outputs);
-}
-
-static uint32_t server_n_sampling_outputs_per_seq_max(const common_params & params) {
-    if (params.embedding ||
-            (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
-        return 1;
-    }
-
-    const int32_t n_outputs = common_speculative_n_outputs_per_seq_max(
-            params.n_batch, common_speculative_n_max(&params.speculative));
-
-    return std::max<int32_t>(1, n_outputs);
+    result.total   = std::max<int32_t>(1, result.total);
+    result.per_seq = std::max<int32_t>(1, result.per_seq);
+    return result;
 }
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
@@ -1016,8 +1006,9 @@ private:
         const bool is_resume = sleeping;
 
         params_base = params;
-        params_base.n_outputs_max = server_n_outputs_max(params_base);
-        params_base.n_sampling_outputs_per_seq_max = server_n_sampling_outputs_per_seq_max(params_base);
+        const auto output_limits = server_output_limits(params_base);
+        params_base.n_outputs_max = output_limits.total;
+        params_base.n_sampling_outputs_per_seq_max = output_limits.per_seq;
 
         const bool has_mmproj = !params.mmproj.path.empty();
         const bool has_draft = params.speculative.has_dft();
@@ -1098,7 +1089,6 @@ private:
                 bool measure_model_bytes = has_draft;
 
                 common_params params_dft = common_base_params_to_speculative(params_base);
-                params_dft.n_sampling_outputs_per_seq_max = 1;
 
                 auto mparams_dft = common_model_params_to_llama(params_dft);
                 auto cparams_dft = common_context_params_to_llama(params_dft);
@@ -1182,7 +1172,6 @@ private:
                 // progress callback
                 params_dft.load_progress_callback           = load_progress_callback;
                 params_dft.load_progress_callback_user_data = &load_progress_spec;
-                params_dft.n_sampling_outputs_per_seq_max = 1;
 
                 spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
                 model_dft = spec_init->model();

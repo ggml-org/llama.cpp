@@ -1047,6 +1047,7 @@ extern "C" {
     // Get the backend sampled token for the ith token.
     // With multiple outputs, sampler state advances when the token is accepted,
     // not when it is read through this function.
+    // When accepting multiple outputs, accept a contiguous prefix in output order.
     // Returns LLAMA_TOKEN_NULL if no token was sampled.
     LLAMA_API llama_token llama_get_sampled_token_ith(struct llama_context * ctx, int32_t i);
 
@@ -1281,11 +1282,11 @@ extern "C" {
                 struct ggml_cgraph        * gf,
                 struct llama_sampler_data * data);
 
-        // called before rebuilding a sampling graph to clear graph-owned tensor references
-        void (*backend_reset)(struct llama_sampler * smpl);
-
         // called before graph execution to set inputs for the current ubatch
         void (*backend_set_input)(struct llama_sampler * smpl);
+
+        // called before rebuilding a sampling graph to clear graph-owned tensor references
+        void (*backend_reset)(struct llama_sampler * smpl);
     };
 
     struct llama_sampler {
@@ -1495,6 +1496,7 @@ extern "C" {
     LLAMA_API uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl);
 
     /// @details Sample and accept a token from the idx-th output of the last evaluation
+    // For multiple outputs from one sampler, call this function in output order without gaps.
     //
     // Shorthand for:
     //    const auto * logits = llama_get_logits_ith(ctx, idx);

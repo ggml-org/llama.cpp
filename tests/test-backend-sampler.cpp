@@ -321,8 +321,8 @@ static llama_sampler_i test_single_output_backend_sampler_i = {
     /* .backend_init      = */ test_single_output_backend_sampler_backend_init,
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ test_single_output_backend_sampler_backend_apply,
-    /* .backend_reset     = */ nullptr,
     /* .backend_set_input = */ nullptr,
+    /* .backend_reset     = */ nullptr,
 };
 
 static llama_sampler * test_single_output_backend_sampler_init(

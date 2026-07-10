@@ -2337,27 +2337,16 @@ ggml_cgraph * llama_context::graph_reserve(
     const uint32_t n_sampling_outputs_per_seq = std::min(
             ubatch.n_seq_tokens, cparams.n_sampling_outputs_per_seq_max);
 
-    // activate each configured sampler once
-    if (n_sampling_outputs_per_seq > 0) {
-        for (uint32_t s : sampler_seqs) {
-            if (n_outputs_set >= n_outputs) {
-                break;
-            }
+    // select sampling rows in round-robin order across sampler sequences
+    if (!sampler_seqs.empty()) {
+        const uint32_t n_sampler_seqs = sampler_seqs.size();
+        n_outputs_set = std::min<uint64_t>(
+                n_outputs, (uint64_t) n_sampler_seqs * n_sampling_outputs_per_seq);
 
-            ubatch.output[s * ubatch.n_seq_tokens] = true;
-            ++n_outputs_set;
-        }
-    }
-
-    // add the remaining valid sampling rows
-    for (uint32_t t = 1; t < n_sampling_outputs_per_seq && n_outputs_set < n_outputs; ++t) {
-        for (uint32_t s : sampler_seqs) {
-            if (n_outputs_set >= n_outputs) {
-                break;
-            }
-
+        for (uint32_t i = 0; i < n_outputs_set; ++i) {
+            const uint32_t s = sampler_seqs[i % n_sampler_seqs];
+            const uint32_t t = i / n_sampler_seqs;
             ubatch.output[s * ubatch.n_seq_tokens + t] = true;
-            ++n_outputs_set;
         }
     }
 
