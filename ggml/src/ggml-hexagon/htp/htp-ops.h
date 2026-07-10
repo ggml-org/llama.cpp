@@ -183,6 +183,7 @@ enum htp_trace_event_id {
     HTP_TRACE_EVT_HVX_FA_V_PREP       = 30,
 
     HTP_TRACE_EVT_HMX_COMP            = 40,
+    HTP_TRACE_EVT_L2FLUSH             = 50,
 };
 
 struct htp_trace_desc {

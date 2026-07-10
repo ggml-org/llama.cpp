@@ -30,6 +30,7 @@
 #include "htp-ops.h"
 #include "htp_iface.h"
 #include "worker-pool.h"
+#include "hex-profile.h"
 
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
     struct htp_context * ctx;
@@ -803,6 +804,8 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
 
     FARF(HIGH, "proc-op #%u: opcode %u flags 0x%x", idx, octx->op, octx->flags);
 
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[0] : NULL;
+
     // Prep input tensors
     for (uint32_t i=0; i<HTP_OP_MAX_INPUTS; i++) {
         struct htp_tensor *src = op->src[i] == 0xffff ? NULL : tens + op->src[i];
@@ -812,7 +815,9 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
 
         if (!(src->flags & HTP_TENSOR_FLUSHED) && (src->flags & HTP_TENSOR_COMPUTE)) {
             // flush compute buffers on input
+            htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, i);
             hex_l2flush((void *) src->data, src->size);
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, i);
         }
 
         FARF(HIGH, "prep-src #%u: data %p size %u : %u:%u:%u:%u", op->src[i], (void*) src->data, src->size,
@@ -845,8 +850,11 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
     for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
         if (octx->dsts[i]) {
             struct htp_tensor *dst = (struct htp_tensor *)octx->dsts[i];
-            hex_l2flush((void *) dst->data, dst->size);
             dst->flags |= HTP_TENSOR_FLUSHED;
+
+            htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, i);
+            hex_l2flush((void *) dst->data, dst->size);
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, i);
 
             FARF(HIGH, "post-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, op->dst[i], (void*) dst->data, dst->size,
                 dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
