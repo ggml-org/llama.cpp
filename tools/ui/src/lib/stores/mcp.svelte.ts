@@ -522,27 +522,6 @@ class MCPStore {
 		return null;
 	}
 
-	isAnyServerLoading(): boolean {
-		return this.getServers().some((s) => {
-			const state = this.getHealthCheckState(s.id);
-
-			return (
-				state.status === HealthCheckStatus.IDLE || state.status === HealthCheckStatus.CONNECTING
-			);
-		});
-	}
-
-	getServersSorted(): MCPServerSettingsEntry[] {
-		const servers = this.getServers();
-		if (this.isAnyServerLoading()) {
-			return servers;
-		}
-
-		return [...servers].sort((a, b) =>
-			this.getServerLabel(a).localeCompare(this.getServerLabel(b))
-		);
-	}
-
 	addServer(
 		serverData: Omit<MCPServerSettingsEntry, 'id' | 'requestTimeoutSeconds'> & { id?: string }
 	): MCPServerSettingsEntry {
@@ -596,10 +575,11 @@ class MCPStore {
 	}
 
 	/**
-	 * MCP servers selectable in chat-add UIs and the settings page.
+	 * MCP servers selectable in chat-add UIs and the settings page,
+	 * in the order they were added to the config.
 	 */
 	get visibleMcpServers(): MCPServerSettingsEntry[] {
-		return this.getServersSorted().filter((server) => server.enabled);
+		return this.getServers().filter((server) => server.enabled);
 	}
 
 	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {
