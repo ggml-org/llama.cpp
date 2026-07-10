@@ -261,7 +261,6 @@
 		flex-direction: column;
 		width: 100%;
 		max-width: 48rem;
-		/*gap: 1rem;*/
 	}
 
 	.agentic-content > :global(*),
