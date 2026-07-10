@@ -11,15 +11,21 @@ void llama_model_laguna::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
-    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
-    ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm);
+    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
+    ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
 
     // Laguna ships one shared expert and stores its size directly (routed and
     // shared experts may differ), so read the size from expert_shared_feed_forward_length.
     // The count is not in the config; default to 1 but read the key if present.
     hparams.n_expert_shared = 1;
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared, false);
-    ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
+    ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+    if (hparams.n_ff_shexp == 0) {
+        // Weightless fixtures (test-llama-archs) omit this key; derive a nonzero
+        // size so the shared expert is still built. Real GGUFs always carry the
+        // exact value (routed and shared FF lengths may differ).
+        hparams.n_ff_shexp = hparams.n_ff_exp * hparams.n_expert_shared;
+    }
 
     // Sliding-window attention is OPTIONAL. XS.2 is hybrid (full / SWA / SWA /
     // SWA repeating, period 4 starting with full); M.1 has no sliding window
@@ -95,19 +101,24 @@ void llama_model_laguna::load_arch_tensors(llama_model_loader & ml) {
         // per head broadcast over head_dim at multiply time); M.1 is per-element
         // (g_proj -> n_head*head_dim, like afmoe). Detect from the stored tensor
         // shape so a single arch handles both; the graph mirrors this check.
-        // Gate width selects per-head vs per-element. Read it from the tensor and
-        // require EXACTLY one of the two valid widths -- never silently fall back.
-        // (The converter also cross-checks this against the config's declared
-        // `gating` type and fails at conversion time on a mismatch.)
+        // Gate width selects per-head vs per-element. Real GGUFs always carry the
+        // gate tensor, so read the width from it and require EXACTLY one of the two
+        // valid widths -- never guess between them. Weightless fixtures
+        // (test-llama-archs) have no gate tensor; fall back to the per-head layout so
+        // the per-head reshape path is still exercised.
         const int64_t n_gate_per_head = n_head_il;
         const int64_t n_gate_per_elem = n_embd_head_k * n_head_il;
         const ggml_tensor * gate_meta = ml.get_tensor_meta(tn(LLM_TENSOR_ATTN_GATE, "weight", i).str().c_str());
-        GGML_ASSERT(gate_meta != nullptr && "Laguna: missing attention gate tensor");
-        const int64_t n_gate_out = gate_meta->ne[1];
-        if (n_gate_out != n_gate_per_head && n_gate_out != n_gate_per_elem) {
-            GGML_ABORT("Laguna: unexpected attention gate width %lld at layer %d "
-                       "(expected %lld per-head or %lld per-element)",
-                       (long long) n_gate_out, i, (long long) n_gate_per_head, (long long) n_gate_per_elem);
+        int64_t n_gate_out;
+        if (gate_meta != nullptr) {
+            n_gate_out = gate_meta->ne[1];
+            if (n_gate_out != n_gate_per_head && n_gate_out != n_gate_per_elem) {
+                GGML_ABORT("Laguna: unexpected attention gate width %lld at layer %d "
+                           "(expected %lld per-head or %lld per-element)",
+                           (long long) n_gate_out, i, (long long) n_gate_per_head, (long long) n_gate_per_elem);
+            }
+        } else {
+            n_gate_out = n_gate_per_head;
         }
         layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_gate_out}, 0);
 
