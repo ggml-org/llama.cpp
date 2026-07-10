@@ -185,6 +185,12 @@ std::string common_params_sampling::print() const {
 }
 
 struct common_sampler * common_sampler_init(const struct llama_model * model, struct common_params_sampling & params) {
+    if (!std::isfinite(params.penalty_repeat) ||
+        params.penalty_repeat <= 0.0f ||
+        !std::isfinite(1.0f/params.penalty_repeat)) {
+        throw std::invalid_argument("penalty_repeat must be finite and greater than 0");
+    }
+
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     // if the user did not specify a value for penalty_last_n, set it to the model's context size

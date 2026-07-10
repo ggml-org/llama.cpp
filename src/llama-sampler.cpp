@@ -2947,6 +2947,10 @@ struct llama_sampler * llama_sampler_init_penalties(
         float penalty_repeat,
         float penalty_freq,
         float penalty_present) {
+    GGML_ASSERT(std::isfinite(penalty_repeat));
+    GGML_ASSERT(penalty_repeat > 0.0f);
+    GGML_ASSERT(std::isfinite(1.0f/penalty_repeat));
+
     penalty_last_n = std::max(penalty_last_n, 0);
 
     const bool is_empty = (penalty_last_n == 0 || (penalty_repeat == 1.0f && penalty_freq == 0.0f && penalty_present == 0.0f));

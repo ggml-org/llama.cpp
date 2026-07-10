@@ -10,6 +10,8 @@
 #include "speculative.h"
 #include "server-common.h"
 
+#include <cmath>
+
 using json = nlohmann::ordered_json;
 
 //
@@ -349,6 +351,12 @@ task_params server_task::params_from_json_cmpl(
 
     if (params.sampling.penalty_last_n < -1) {
         throw std::runtime_error("Error: repeat_last_n must be >= -1");
+    }
+
+    if (!std::isfinite(params.sampling.penalty_repeat) ||
+        params.sampling.penalty_repeat <= 0.0f ||
+        !std::isfinite(1.0f/params.sampling.penalty_repeat)) {
+        throw std::runtime_error("Error: repeat_penalty must be finite and greater than 0");
     }
 
     if (params.sampling.dry_penalty_last_n < -1) {
