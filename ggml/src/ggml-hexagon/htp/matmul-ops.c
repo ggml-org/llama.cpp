@@ -2102,7 +2102,7 @@ static void transfer_activation_chunk_col_chunk_worker_fn(unsigned int n, unsign
     const float *src = st->src;
 
     if (st->vtcm_f32_act) {
-        size_t thread_scratch_bytes = st->vtcm_f32_act_bytes / n;
+        size_t thread_scratch_bytes = hex_align_down(st->vtcm_f32_act_bytes / n, 128);
         float *thread_f32_act = (float *)((char *)st->vtcm_f32_act + i * thread_scratch_bytes);
 
         transfer_activation_chunk_fp32_to_fp16_dma_pipelined_col_chunk(
@@ -2457,7 +2457,7 @@ static void transfer_activation_chunk_threaded(
     state.vtcm_f32_act       = vtcm_f32_act;
 
     int active_threads = hex_smin(n_threads, (int)state.n_tasks);
-    state.vtcm_f32_act_bytes_per_thread = (vtcm_f32_act_bytes / active_threads) & ~127u;
+    state.vtcm_f32_act_bytes_per_thread = hex_align_down(vtcm_f32_act_bytes / active_threads, 128);
     state.dma_step_rows      = dma_step_rows;
     state.dma_step_rows_shift = dma_step_rows_shift;
 
