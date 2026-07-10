@@ -2896,6 +2896,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MAIN_GPU"));
     add_opt(common_arg(
+        {"-enablerenderdoc", "--enable-renderdoc"}, "N",
+        "capture the decode of the Nth generated token with RenderDoc (N is 1-based)",
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("token index must be at least 1");
+            }
+            params.renderdoc_token = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"-coopmat", "--coopmat"}, "N",
         "Vulkan cooperative matrix mode: 0=disable, 1=VK_KHR_cooperative_matrix, 2=VK_NV_cooperative_matrix2, 3=VK_NV_cooperative_matrix2 decode vector",
         [](common_params &, int value) {

@@ -13,7 +13,7 @@
 #endif
 #include <windows.h>
 using LibraryHandle = HMODULE;
-#define LoadLibraryFunc        LoadLibrary
+#define LoadLibraryFunc        LoadLibraryA
 #define GetSymbolFunc          GetProcAddress
 #define UnloadLibraryFunc      FreeLibrary
 #define RENDERDOC_LIBRARY_NAME "renderdoc.dll"
@@ -80,8 +80,6 @@ public:
 
             if (ret == 1)
             {
-                m_api->TriggerCapture();
-
                 m_valid = true;
             }
             else

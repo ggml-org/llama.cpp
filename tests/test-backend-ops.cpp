@@ -19,6 +19,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpp.h"
+#include "vkRenderDocUtil.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -50,6 +51,8 @@
 #else
 #   define N_THREADS std::thread::hardware_concurrency()
 #endif
+
+static bool g_enable_renderdoc = false;
 
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     if (ggml_is_empty(tensor)) {
@@ -1584,9 +1587,23 @@ struct test_case {
         if (fused_nodes_to_verify.size() == 0 && run_whole_graph()) {
             fused_nodes_to_verify.push_back(out);
         }
+
+        const char * backend_reg_name = ggml_backend_reg_name(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(backend1)));
+        const bool capture_renderdoc = g_enable_renderdoc && strcmp(backend_reg_name, "Vulkan") == 0;
+        std::unique_ptr<RenderDocUtil> pRenderDocUtil;
+        if (capture_renderdoc) {
+            pRenderDocUtil = std::make_unique<RenderDocUtil>();
+            pRenderDocUtil->startFrame();
+        }
+
         const bool cmp_ok = ggml_backend_compare_graph_backend(backend1, backend2, gf, callback, &ud,
                                                                run_whole_graph() ? fused_nodes_to_verify.data() : nullptr,
                                                                fused_nodes_to_verify.size());
+
+        if (capture_renderdoc) {
+            pRenderDocUtil->endFrame();
+        }
 
         // Create test result
         bool        test_passed = ud.ok && cmp_ok;
@@ -13632,6 +13649,7 @@ static void usage(char ** argv) {
     printf("  -j <n>                      run tests using <n> parallel worker threads (default: 1, test mode only)\n\n");
     printf("  -coopmat <N>               sets Vulkan cooperative matrix mode: 0=disable, 1=VK_KHR_cooperative_matrix, 2=VK_NV_cooperative_matrix2, 3=VK_NV_cooperative_matrix2 decode vector\n");
     printf("  -vulkandebug <on|off>       enables or disables Vulkan debug logging\n");
+    printf("  -enablerenderdoc           captures the selected Vulkan test case (use -j 1 and select one case)\n");
     printf("Examples:\n");
     printf("  %s -j 8\n", argv[0]);
     printf("  %s -o ADD,MUL_MAT\n", argv[0]);
@@ -13742,10 +13760,17 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (strcmp(argv[i], "-enablerenderdoc") == 0 || strcmp(argv[i], "--enable-renderdoc") == 0) {
+            g_enable_renderdoc = true;
         } else {
             usage(argv);
             return 1;
         }
+    }
+
+    if (g_enable_renderdoc && (mode != MODE_TEST || parallel_workers != 1)) {
+        fprintf(stderr, "-enablerenderdoc requires test mode and -j 1\n");
+        return 1;
     }
 
     // load and enumerate backends
