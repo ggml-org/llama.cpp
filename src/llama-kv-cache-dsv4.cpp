@@ -1110,7 +1110,7 @@ llama_memory_context_ptr llama_kv_cache_dsv4::init_batch(
             if (has_coupled) {
                 ubatch = balloc.split_seq(n_ubatch);
             } else {
-                ubatch = balloc.split_equal(n_ubatch, raw_per_seq || comp_per_seq);
+                ubatch = balloc.split_equal(n_ubatch, raw_per_seq || comp_per_seq, 0);
             }
 
             if (ubatch.n_tokens == 0) {

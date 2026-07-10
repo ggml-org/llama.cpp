@@ -646,7 +646,7 @@ static void dsv4_set_kq_mask(
         return;
     }
 
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
     GGML_ASSERT(n_stream > 0);
     GGML_ASSERT(n_tokens%n_stream == 0);
     GGML_ASSERT(dst->ne[0] == plan.n_kv);
@@ -656,13 +656,27 @@ static void dsv4_set_kq_mask(
     GGML_ASSERT((int64_t) plan.n_visible.size() == (int64_t) n_tokens);
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
 
-    float * data = (float *) dst->data;
+    if (dst->type == GGML_TYPE_F32) {
+        float * data = (float *) dst->data;
 
-    for (int64_t i = 0; i < (int64_t) n_tokens; ++i) {
-        const int32_t n_visible = plan.n_visible[i];
+        for (int64_t i = 0; i < (int64_t) n_tokens; ++i) {
+            const int32_t n_visible = plan.n_visible[i];
 
-        for (int64_t j = 0; j < dst->ne[0]; ++j) {
-            data[i*dst->ne[0] + j] = j < n_visible ? 0.0f : -INFINITY;
+            for (int64_t j = 0; j < dst->ne[0]; ++j) {
+                data[i*dst->ne[0] + j] = j < n_visible ? 0.0f : -INFINITY;
+            }
+        }
+    } else if (dst->type == GGML_TYPE_F16) {
+        ggml_fp16_t * data = (ggml_fp16_t *) dst->data;
+        const ggml_fp16_t fp16_ninf = llama_cast<ggml_fp16_t>(-INFINITY);
+        const ggml_fp16_t fp16_zero = llama_cast<ggml_fp16_t>(0.0f);
+
+        for (int64_t i = 0; i < (int64_t) n_tokens; ++i) {
+            const int32_t n_visible = plan.n_visible[i];
+
+            for (int64_t j = 0; j < dst->ne[0]; ++j) {
+                data[i*dst->ne[0] + j] = j < n_visible ? fp16_zero : fp16_ninf;
+            }
         }
     }
 }
@@ -679,8 +693,7 @@ static ggml_tensor * dsv4_build_raw_kq_mask(
     GGML_ASSERT(n_stream > 0);
     GGML_ASSERT(n_tokens%n_stream == 0);
 
-    const bool use_fattn = cparams.flash_attn && (!cparams.kv_unified || n_stream == 1);
-    const auto type = use_fattn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+    const auto type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
     ggml_tensor * res = ggml_new_tensor_4d(ctx, type, n_kv, n_tokens/n_stream, 1, n_stream);
     ggml_set_input(res);
@@ -814,6 +827,7 @@ static void dsv4_build_comp_inputs(
         llm_graph_input_dsv4::comp_input & inp,
         const llama_kv_cache_dsv4_context::comp_plan & plan,
         const char * name,
+        const llama_cparams & cparams,
         int64_t n_stream) {
     inp.state_pos = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_pos.size(), std::string("dsv4_") + name + "_state_pos");
     inp.state_persist_src_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_persist_src_idxs.size(), std::string("dsv4_") + name + "_state_persist_src_idxs");
@@ -828,7 +842,7 @@ static void dsv4_build_comp_inputs(
         GGML_ASSERT(n_stream > 0);
         GGML_ASSERT(n_tokens%n_stream == 0);
 
-        inp.kq_mask = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, plan.n_kv, n_tokens/n_stream, 1, n_stream);
+        inp.kq_mask = ggml_new_tensor_4d(ctx, cparams.flash_attn && strcmp(name, "lid") != 0 ? GGML_TYPE_F16 : GGML_TYPE_F32, plan.n_kv, n_tokens/n_stream, 1, n_stream);
         ggml_set_input(inp.kq_mask);
         ggml_set_name(inp.kq_mask, (std::string("dsv4_") + name + "_kq_mask").c_str());
     }
@@ -1192,6 +1206,7 @@ void llm_graph_result::reset() {
     params = {};
 
     inputs.clear();
+    fused_nodes.clear();
 
     buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
 
@@ -1293,6 +1308,10 @@ llm_graph_input_i * llm_graph_result::add_input(llm_graph_input_ptr input) {
     return inputs.back().get();
 }
 
+void llm_graph_result::add_fused_node(llm_graph_fused_node result) {
+    fused_nodes.push_back(result);
+}
+
 void llm_graph_result::set_params(const llm_graph_params & params) {
     this->params = params;
 }
@@ -1351,6 +1370,8 @@ void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
         cb_func(ubatch, cur, name, il);
     }
 }
+
+
 
 ggml_tensor * llm_graph_context::build_cvec(
          ggml_tensor * cur,
@@ -2402,7 +2423,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
-        cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
+        res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN, cur, il});
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
@@ -3069,9 +3090,9 @@ llm_graph_input_dsv4 * llm_graph_context::build_inp_dsv4() const {
     inp_raw->self_k_rot = raw_ctx->build_input_k_rot(ctx0);
     auto inp = std::make_unique<llm_graph_input_dsv4>(cparams, std::move(inp_raw), mctx_cur);
 
-    dsv4_build_comp_inputs(ctx0, inp->inp_csa, mctx_cur->get_csa_plan(ubatch), "csa", n_stream);
-    dsv4_build_comp_inputs(ctx0, inp->inp_hca, mctx_cur->get_hca_plan(ubatch), "hca", n_stream);
-    dsv4_build_comp_inputs(ctx0, inp->inp_lid, mctx_cur->get_lid_plan(ubatch), "lid", n_stream);
+    dsv4_build_comp_inputs(ctx0, inp->inp_csa, mctx_cur->get_csa_plan(ubatch), "csa", cparams, n_stream);
+    dsv4_build_comp_inputs(ctx0, inp->inp_hca, mctx_cur->get_hca_plan(ubatch), "hca", cparams, n_stream);
+    dsv4_build_comp_inputs(ctx0, inp->inp_lid, mctx_cur->get_lid_plan(ubatch), "lid", cparams, n_stream);
     inp->inp_csa.k_rot = mctx_cur->get_csa()->build_input_k_rot(ctx0);
     inp->inp_hca.k_rot = mctx_cur->get_hca()->build_input_k_rot(ctx0);
     inp->inp_lid.k_rot = mctx_cur->get_lid()->build_input_k_rot(ctx0);

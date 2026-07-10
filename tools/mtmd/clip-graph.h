@@ -20,8 +20,8 @@ struct clip_graph {
     const clip_hparams & hparams;
     projector_type proj_type;
 
-    // we only support single image per batch
-    const clip_image_f32 & img;
+    const clip_image_f32 & img; // for backward compat
+    const clip_image_f32_batch * img_batch = nullptr;
 
     const int patch_size;
     const int n_patches_x;
@@ -62,6 +62,12 @@ struct clip_graph {
     // utility functions
     //
     void cb(ggml_tensor * cur0, const char * name, int il) const;
+
+    const clip_image_f32 & get_img(size_t idx) const {
+        GGML_ASSERT(img_batch);
+        GGML_ASSERT(idx < img_batch->entries.size());
+        return img_batch->entries[idx];
+    }
 
     // siglip2 naflex
     ggml_tensor * resize_position_embeddings(uint32_t interpolation_mode = DEFAULT_INTERPOLATION_MODE);
