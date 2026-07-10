@@ -569,7 +569,7 @@ static void handle_with_catch(const char * name, std::function<void()> func) {
 }
 
 // treat a null value as absent so clients can send null to request the server default
-static bool has_field(const json & data, const char * n) {
+static bool has_value(const json & data, const char * n) {
     auto it = data.find(n);
     return it != data.end() && !it->is_null();
 }
@@ -577,7 +577,7 @@ static bool has_field(const json & data, const char * n) {
 template <typename T>
 void field_num<T>::eval(field_eval_context & ctx, const json & data) {
     for (const auto & n : name) {
-        if (has_field(data, n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 if (custom_handler) {
                 custom_handler(ctx, data);
@@ -599,7 +599,7 @@ void field_num<T>::eval(field_eval_context & ctx, const json & data) {
 void field_str::eval(field_eval_context & ctx, const json & data) {
     GGML_ASSERT(custom_handler);
     for (const auto & n : name) {
-        if (has_field(data, n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 custom_handler(ctx, data);
             });
@@ -610,7 +610,7 @@ void field_str::eval(field_eval_context & ctx, const json & data) {
 
 void field_bool::eval(field_eval_context & ctx, const json & data) {
     for (const auto & n : name) {
-        if (has_field(data, n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 if (custom_handler) {
                     custom_handler(ctx, data);
@@ -626,7 +626,7 @@ void field_bool::eval(field_eval_context & ctx, const json & data) {
 void field_json::eval(field_eval_context & ctx, const json & data) {
     GGML_ASSERT(custom_handler);
     for (const auto & n : name) {
-        if (has_field(data, n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 custom_handler(ctx, data);
             });
