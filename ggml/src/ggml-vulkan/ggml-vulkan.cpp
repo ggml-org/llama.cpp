@@ -10271,6 +10271,8 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     const bool use_dequant_kv = k_quant && v_quant && neq1 >= 64 &&
                                 k->nb[0] == ggml_type_size(k->type) && v->nb[0] == ggml_type_size(v->type) &&
                                 ggml_is_contiguously_allocated(k) && ggml_is_contiguously_allocated(v) &&
+                                (uint64_t)ggml_nelements(k) * sizeof(ggml_fp16_t) <= ctx->device->properties.limits.maxStorageBufferRange &&
+                                (uint64_t)ggml_nelements(v) * sizeof(ggml_fp16_t) <= ctx->device->properties.limits.maxStorageBufferRange &&
                                 ctx->device->pipeline_dequant_transpose[k->type] != nullptr &&
                                 ctx->device->pipeline_dequant_transpose[v->type] != nullptr;
     const ggml_type k_type_eff = use_dequant_kv ? GGML_TYPE_F16 : k->type;
@@ -10459,10 +10461,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         const uint64_t fp = sizeof(ggml_fp16_t);
         const uint64_t k_f16_sz = (uint64_t)ggml_nelements(k) * fp;
         const uint64_t v_f16_sz = (uint64_t)ggml_nelements(v) * fp;
-        if (k_f16_sz > ctx->device->properties.limits.maxStorageBufferRange ||
-            v_f16_sz > ctx->device->properties.limits.maxStorageBufferRange) {
-            GGML_ABORT("FA dequant scratch exceeds maxStorageBufferRange");
-        }
+        // size vs maxStorageBufferRange is enforced by the use_dequant_kv gate above (falls back rather than aborting)
         if (ctx->prealloc_size_x < k_f16_sz + v_f16_sz) {
             ctx->prealloc_size_x = k_f16_sz + v_f16_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
