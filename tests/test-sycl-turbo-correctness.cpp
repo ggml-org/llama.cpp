@@ -1015,9 +1015,9 @@ int main() {
         // Test matrix: (label, model_fp, head_dim, kv_quant, innerq_quant,
         //                env_set, expected_policy, k_should_be_one)
         // k_should_be_one is independent of expected_policy: k_squared_scale
-        // gates on (head_dim, kv_quant, innerq_quant) and never reads policy.
-        // It returns 1.0 iff (head_dim != 128 OR kv_quant not in turbo set
-        // OR innerq_quant not in {TURBO2/3/4}).
+        // gates on (key, head_dim, kv_quant, innerq_quant) and never reads policy.
+        // It returns 1.0 iff (key == NULL OR head_dim != 128 OR kv_quant not
+        // in turbo set OR innerq_quant not in {TURBO2/3/4}).
         innerq_case_t cases[] = {
             // --- null key: decide rejects (DISABLED), k returns 1.0 ---
             {"null-key (env set)",     {0u, 128, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_set,   want_DISABLED, want_one},
