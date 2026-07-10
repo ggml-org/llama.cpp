@@ -23,6 +23,15 @@ class LagunaModel(TextModel):
     def set_vocab(self) -> None:
         self._set_vocab_gpt2()
 
+        # Some Laguna releases wrap the chat template in tokenizer_config.json as
+        # "{% include 'chat_template.jinja' %}", which SpecialVocab embeds verbatim
+        # and llama.cpp's jinja engine cannot process. Prefer the resolved template
+        # from the chat_template.jinja file so the GGUF is self-contained.
+        tmpl_file = self.dir_model / "chat_template.jinja"
+        if tmpl_file.is_file():
+            self.gguf_writer.add_chat_template(tmpl_file.read_text(encoding="utf-8"))
+            logger.info("gguf: embedded resolved chat_template.jinja (overriding include directive)")
+
         # eos_token_id is a list [2, 24]: token 2 (EOS, also BOS) and token 24
         # (</assistant>, the turn-end). _set_vocab_gpt2 only records the scalar
         # eos, so register the extra id as eot; llama.cpp folds eot into its EOG
