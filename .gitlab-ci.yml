@@ -1,0 +1,29 @@
+# infcore CI (offline РФ-контур). Образы берутся из внутреннего реестра.
+# Замена GitHub Actions апстрима (удалён в compliance-cleanup, AUDIT.md #2).
+# Прод-сборка образа использует профиль CUDA+Vulkan (infcore/cmake/profile-rf.cmake);
+# здесь - быстрый CPU-only прогон юнит-тестов и проверки offline-инварианта.
+stages:
+  - test
+  - egress
+
+variables:
+  GIT_SUBMODULE_STRATEGY: none
+
+unit:
+  stage: test
+  image: registry.internal/astra/base-devel:1.7
+  script:
+    - cmake -S infcore -B build -DINFCORE_BUILD_TESTS=ON
+        -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DCMAKE_BUILD_TYPE=Release
+    - cmake --build build --target infcore_unit_tests -j"$(nproc)"
+    - ctest --test-dir build --output-on-failure -R infcore_unit
+  artifacts:
+    when: on_failure
+    paths: [build/Testing/]
+    expire_in: 1 week
+
+egress:
+  stage: egress
+  image: registry.internal/astra/base:1.7
+  script:
+    - python3 -m pytest -m egress infcore/tests/egress -v

@@ -33,4 +33,10 @@ add_subdirectory(runtime)
 add_subdirectory(gateway)
 add_subdirectory(cli)
 
+option(INFCORE_BUILD_TESTS "Собирать юнит-тесты infcore (ctest)" ON)
+if(INFCORE_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
 message(STATUS "infcore: движок встроен из ${INFCORE_LLAMA_ROOT}")
