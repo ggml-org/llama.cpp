@@ -58,10 +58,10 @@ int main(int argc, char ** argv) {
     // max number of parallel drafting sequences (i.e. tree branches)
     const int n_seq_dft = params.n_parallel;
 
-    params.n_outputs_max = common_speculative_n_outputs_max(
+    const auto output_limits = common_speculative_get_output_limits(
             params.n_batch, params.n_parallel, params.speculative.draft.n_max);
-    params.n_sampling_outputs_per_seq_max = common_speculative_n_outputs_per_seq_max(
-            params.n_batch, params.speculative.draft.n_max);
+    params.n_outputs_max = output_limits.total;
+    params.n_sampling_outputs_per_seq_max = output_limits.per_seq;
 
     // probability threshold for splitting a draft branch (only for n_seq_dft > 1)
     const float p_draft_split = params.speculative.draft.p_split;
