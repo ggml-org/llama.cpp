@@ -6350,6 +6350,36 @@ struct test_l2_norm : public test_case {
     }
 };
 
+// GGML_OP_SINKHORN_NORM
+struct test_sinkhorn_norm : public test_case {
+    const ggml_type type;
+    const int64_t n;
+    const int64_t n_tokens;
+    const int     n_iters;
+    const float   eps;
+
+    std::string vars() override {
+        return VARS_TO_STR5(type, n, n_tokens, n_iters, eps);
+    }
+
+    test_sinkhorn_norm(ggml_type type = GGML_TYPE_F32,
+            int64_t n = 4,
+            int64_t n_tokens = 128,
+            int n_iters = 20,
+            float eps = 1e-6f)
+        : type(type), n(n), n_tokens(n_tokens), n_iters(n_iters), eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_3d(ctx, type, n, n, n_tokens);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_sinkhorn_norm(ctx, a, n_iters, eps);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_ACC
 struct test_acc : public test_case {
     const ggml_type type;
@@ -8437,6 +8467,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // DeepSeek-V4 mHC fused Sinkhorn-Knopp
+    for (int64_t hc : {4}) {
+        for (int64_t nt : {1, 7, 128, 1024}) {
+            for (int iters : {1, 2, 20}) {
+                test_cases.emplace_back(new test_sinkhorn_norm(GGML_TYPE_F32, hc, nt, iters, 1e-6f));
+            }
+        }
+    }
+
     // in-place tests
     test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {64, 5, 4, 3}, false, 1e-6f, true));
 
@@ -9402,6 +9441,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+
+    // DeepSeek-V4 mHC fused Sinkhorn-Knopp (4x4 slices, iters=20)
+    for (int64_t nt : {4096, 65536, 262144}) {
+        test_cases.emplace_back(new test_sinkhorn_norm(GGML_TYPE_F32, 4, nt, 20, 1e-6f));
+    }
 
     // Conv2d: K=CRS=NPQ=4096 matmul performance
     uint32_t                        iwh_idx  = 0;
