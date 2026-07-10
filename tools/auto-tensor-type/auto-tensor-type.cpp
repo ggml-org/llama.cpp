@@ -24,6 +24,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <random>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -116,6 +118,33 @@ struct config {
     // metric already mitigates the worst magnitude bias). Reintroduced on top
     // of the relative-L2 metric to capture role-level architectural sensitivity.
     float importance_alpha       = 0.0f;
+    // Element-weighting exponent for the DP objective. The per-choice cost is
+    //   relative_L2 * n_elements^element_gamma
+    // while the BPW/budget accounting keeps the true n_elements (so the target is
+    // still hit exactly). gamma=1 reproduces the historical "total params perturbed"
+    // objective; gamma<1 raises the effective per-bit price of large tensors and
+    // lowers it for small ones, letting the DP afford high precision on small but
+    // architecturally-critical tensors (attn_k/v, shared experts). gamma=0 is the
+    // pure per-row-relative-L2 objective (size-blind). Applied at DP time only, so
+    // it is free to sweep against a cached cost matrix.
+    float element_gamma          = 1.0f;
+    // ---- Architecture pre-calibrator ----
+    // Blend factor between element-weighting and measured end-to-end sensitivity. On a
+    // cache miss the tool probes each role's true logit-KLD sensitivity s_role by injecting
+    // calibrated noise into that role's MUL_MAT outputs and measuring the logit KLD; the
+    // per-cell cost is then multiplied by clamp((s_role/n_elem)/geomean, 1/C, C)^gamma, so
+    // that combined with the DP's n_elements the effective weight interpolates from
+    // n_elements (gamma=0, default = today's behaviour) to the additive-model-correct
+    // s_role (gamma=1). Cached alongside the cost matrix. 0 disables (no probing).
+    float arch_calib_gamma       = 0.0f;
+    float arch_calib_eps         = 0.05f; // injected per-row relative-L2 RMS for the probes
+    double arch_calib_ratio_clamp = 8.0;  // clamp the per-role sensitivity ratio to [1/C, C]
+    // Attention geometry (read from the model metadata in Phase 1). Used to split a fused
+    // attn_qkv MUL_MAT output into Q/K/V feature ranges so K/V sensitivity isn't hidden
+    // inside the Q-dominated row mean. 0 => unknown (fall back to the uniform metric).
+    int64_t arch_n_head    = 0;
+    int64_t arch_n_head_kv = 0;
+    int64_t arch_head_dim  = 0;
     // Path to a Phase-3 cost-matrix cache file. If the file exists at startup
     // and its header matches the current run's parameters (model size+mtime,
     // sorted quant_types, min_elements, n_layer_buckets, n_reps_per_bucket,
@@ -125,6 +154,20 @@ struct config {
     // Useful for sweeping --target-bpw and --output-tensor-type without redoing
     // ~45 minutes of trained-quant training each iteration.
     std::string cost_matrix_cache;
+
+    // ---- Auto-config (architecture-aware defaults) ----
+    // When enabled (default), Phase 1 detects MoE vs dense from the tensor roles and, for any
+    // knob the user did NOT set explicitly, picks the strategy that won our benchmarks:
+    //   MoE   -> element-gamma 0.25 (redistribute bits away from rarely-activated experts;
+    //            n_elements over-prices them, so gamma<1 recovers those bits).
+    //   dense -> element-gamma 1.0 (dense FFN earns its bits) + floor the quant set at the
+    //            target's uniform type (block the very-low-bit IQ2/IQ3 cliff) + arch-calib-gamma
+    //            0.5 (protect end-to-end-sensitive tensors hand rules miss, e.g. ssm_out on
+    //            hybrids). This reproduces the Bartowski-beating dense recipe with no manual flags.
+    // Disable with --no-auto-config; any explicitly-passed knob is always respected.
+    bool  auto_config          = true;
+    bool  element_gamma_set    = false;  // user passed --element-gamma
+    bool  arch_calib_gamma_set = false;  // user passed --arch-calib-gamma
 };
 
 struct tensor_info {
@@ -275,6 +318,21 @@ static std::vector<ggml_type> sorted_by_bpw(const std::vector<ggml_type> & types
     return result;
 }
 
+// Dense auto-floor: the largest per-type BPW strictly below the target's "uniform type"
+// (the highest type whose all-uniform BPW still fits the target). Types below this BPW are
+// dropped from the dense quant set so the DP can't crater a critical tensor into the
+// very-low-bit IQ2/IQ3 cliff — it may only deviate UP from a near-uniform baseline. Returns
+// -1 when the target sits at/below the lowest available type (no floor: low bits are needed).
+static double dense_floor_bpw(const std::vector<ggml_type> & types, double target_bpw) {
+    auto s = sorted_by_bpw(types);
+    double uniform = -1.0;
+    for (auto t : s) { double b = compute_bpw(t); if (b <= target_bpw + 1e-9) uniform = b; }
+    if (uniform < 0.0) return -1.0;                 // target below everything → keep all types
+    double floor_b = -1.0;
+    for (auto t : s) { double b = compute_bpw(t); if (b < uniform - 1e-9) floor_b = b; }
+    return floor_b;                                  // -1 if uniform is already the lowest type
+}
+
 // Get the highest-BPW quant type from a list
 static ggml_type highest_bpw(const std::vector<ggml_type> & types) {
     if (types.empty()) return GGML_TYPE_COUNT;
@@ -416,9 +474,136 @@ static double compute_avg_kld(const float * ref, const float * quant, int64_t ne
     return valid_rows > 0 ? total / valid_rows : 1e30;
 }
 
+// Relative-L2 over a feature sub-range [off, off+len) of each output row, averaged over rows.
+static double component_rel_l2(const float * ref, const float * quant,
+                               int64_t ne0, int64_t ne1, int64_t off, int64_t len) {
+    double total = 0; int64_t valid = 0;
+    for (int64_t row = 0; row < ne1; row++) {
+        const float * rr = ref   + row * ne0 + off;
+        const float * qr = quant + row * ne0 + off;
+        double num = 0, den = 0;
+        for (int64_t i = 0; i < len; i++) { const double d = (double) rr[i] - (double) qr[i]; num += d*d; den += (double) rr[i]*rr[i]; }
+        const double e = (den > 1e-20) ? num/den : (num > 1e-20 ? 1.0 : 0.0);
+        if (std::isfinite(e)) { total += e; valid++; }
+    }
+    return valid > 0 ? total / valid : 1e30;
+}
+
+// For a fused attn_qkv output ([Q|K|V] concatenated along the feature axis), cost the tensor
+// by the WORST of its Q/K/V component relative-L2 errors, so K/V sensitivity is not hidden
+// inside the Q-dominated row mean. qsize=n_head*head_dim, ksize=vsize=n_head_kv*head_dim.
+static double compute_fused_qkv_kld(const float * ref, const float * quant, int64_t ne0, int64_t ne1,
+                                    int64_t qsize, int64_t ksize, int64_t vsize) {
+    const double lq = component_rel_l2(ref, quant, ne0, ne1, 0,             qsize);
+    const double lk = component_rel_l2(ref, quant, ne0, ne1, qsize,         ksize);
+    const double lv = component_rel_l2(ref, quant, ne0, ne1, qsize + ksize, vsize);
+    return std::max(lq, std::max(lk, lv));
+}
+
+// Read a small integer-valued GGUF metadata key (u16/i16/u32/i32/u64), else default.
+static int64_t gguf_get_int_or(const struct gguf_context * ctx, const char * key, int64_t def) {
+    const int64_t kid = gguf_find_key(ctx, key);
+    if (kid < 0) return def;
+    switch (gguf_get_kv_type(ctx, kid)) {
+        case GGUF_TYPE_UINT16: return (int64_t) gguf_get_val_u16(ctx, kid);
+        case GGUF_TYPE_INT16:  return (int64_t) gguf_get_val_i16(ctx, kid);
+        case GGUF_TYPE_UINT32: return (int64_t) gguf_get_val_u32(ctx, kid);
+        case GGUF_TYPE_INT32:  return (int64_t) gguf_get_val_i32(ctx, kid);
+        case GGUF_TYPE_UINT64: return (int64_t) gguf_get_val_u64(ctx, kid);
+        default:               return def;
+    }
+}
+
+// All GGUF shards of a (possibly split) model, plus a tensor-name -> shard-index map.
+// Fixes the split-model bug: gguf_init_from_file on the first shard only exposes that
+// shard's tensors, so Phase 1 enumeration and Phase 3 reads silently miss later layers.
+struct model_shards {
+    std::vector<struct gguf_context *> gguf;
+    std::vector<struct ggml_context *> meta;
+    std::vector<std::string>           paths;
+    std::unordered_map<std::string, int> tensor_shard; // tensor name -> index into the vectors above
+
+    const struct gguf_context * ctx_for(const std::string & name) const {
+        auto it = tensor_shard.find(name);
+        return it == tensor_shard.end() ? nullptr : gguf[it->second];
+    }
+    const std::string & path_for(const std::string & name) const {
+        static const std::string empty;
+        auto it = tensor_shard.find(name);
+        return it == tensor_shard.end() ? empty : paths[it->second];
+    }
+    struct ggml_context * meta_for(const std::string & name) const {
+        auto it = tensor_shard.find(name);
+        return it == tensor_shard.end() ? nullptr : meta[it->second];
+    }
+    void add(struct gguf_context * g, struct ggml_context * m, const std::string & path) {
+        const int idx = (int) gguf.size();
+        gguf.push_back(g);
+        meta.push_back(m);
+        paths.push_back(path);
+        const int64_t nt = gguf_get_n_tensors(g);
+        for (int64_t i = 0; i < nt; i++) {
+            tensor_shard[gguf_get_tensor_name(g, i)] = idx;
+        }
+    }
+    void free_all() {
+        for (auto * g : gguf) if (g) gguf_free(g);
+        for (auto * m : meta) if (m) ggml_free(m);
+        gguf.clear(); meta.clear(); paths.clear(); tensor_shard.clear();
+    }
+};
+
+// Open all shards of a model given the path to (any) one shard. If the file is not a
+// split GGUF it opens the single file. Returns false only if a file fails to open.
+static bool open_model_shards(const std::string & model_path, model_shards & out) {
+    struct ggml_context * meta0 = nullptr;
+    struct gguf_init_params p0 = { /*no_alloc*/ true, &meta0 };
+    struct gguf_context * g0 = gguf_init_from_file(model_path.c_str(), p0);
+    if (!g0) {
+        LOG_ERR("Failed to open model: %s\n", model_path.c_str());
+        return false;
+    }
+
+    const int split_count = (int) gguf_get_int_or(g0, "split.count", 1);
+    if (split_count <= 1) {
+        out.add(g0, meta0, model_path);
+        return true;
+    }
+
+    const int split_no = (int) gguf_get_int_or(g0, "split.no", 0);
+    char prefix[4096];
+    if (llama_split_prefix(prefix, sizeof(prefix), model_path.c_str(), split_no, split_count) == 0) {
+        LOG_WRN("could not derive split prefix from '%s'; using single shard only\n", model_path.c_str());
+        out.add(g0, meta0, model_path);
+        return true;
+    }
+    // Re-open every shard 0..split_count-1 in order.
+    gguf_free(g0);
+    ggml_free(meta0);
+    LOG("Split model detected: %d shards (prefix '%s')\n", split_count, prefix);
+    for (int s = 0; s < split_count; s++) {
+        char spath[4096];
+        llama_split_path(spath, sizeof(spath), prefix, s, split_count);
+        struct ggml_context * m = nullptr;
+        struct gguf_init_params pp = { /*no_alloc*/ true, &m };
+        struct gguf_context * g = gguf_init_from_file(spath, pp);
+        if (!g) {
+            LOG_ERR("Failed to open model shard: %s\n", spath);
+            out.free_all();
+            return false;
+        }
+        out.add(g, m, spath);
+    }
+    return true;
+}
+
 // Read a tensor's raw data from the GGUF file and dequantize to F32
 static bool read_tensor_f32(const std::string & fname, const struct gguf_context * gguf_ctx,
                             const std::string & tensor_name, std::vector<float> & out) {
+    if (!gguf_ctx || fname.empty()) {
+        LOG_ERR("Tensor '%s' not found in any model shard\n", tensor_name.c_str());
+        return false;
+    }
     int64_t tid = gguf_find_tensor(gguf_ctx, tensor_name.c_str());
     if (tid < 0) {
         LOG_ERR("Tensor '%s' not found in GGUF\n", tensor_name.c_str());
@@ -555,6 +740,14 @@ static bool requires_training(ggml_type type) {
 // Section 4: Eval callback for activation capture
 // ============================================================================
 
+// The single eval callback runs in one of these modes (no post-init API exists to swap
+// the callback, so the mode is switched via the shared user_data between passes).
+enum cb_mode {
+    CB_CAPTURE,   // Phase-2 behaviour: record MUL_MAT inputs/outputs
+    CB_OFF,       // do nothing (clean forward; also used when weights are pre-perturbed)
+    CB_COLLECT,   // architecture pre-calibrator: record ggml_tensor* handles of MUL_MAT weights
+};
+
 struct capture_state {
     // Set of weight tensor names we want to capture MUL_MAT for
     std::unordered_set<std::string> target_weight_names;
@@ -574,6 +767,15 @@ struct capture_state {
 
     // Count of captured MUL_MATs
     int captured = 0;
+
+    // ---- Architecture pre-calibrator state ----
+    cb_mode mode = CB_CAPTURE;
+    // Full weight-name -> role map (ALL quantizable weights, not just the sampled ones).
+    const std::unordered_map<std::string, std::string> * weight_to_role_full = nullptr;
+    // Collected in a CB_COLLECT pass: live weight-tensor handle per name, so we can perturb
+    // the weights directly (they are static graph inputs, so the perturbation propagates,
+    // unlike an in-graph op-output write).
+    std::unordered_map<std::string, ggml_tensor *> weight_handles;
 };
 
 // Copy a tensor's logical (de-strided) contents into `dst`, which must hold
@@ -604,6 +806,19 @@ static void capture_tensor_get(const ggml_tensor * t, void * dst) {
 
 static bool capture_callback(ggml_tensor * t, bool ask, void * user_data) {
     auto * state = (capture_state *) user_data;
+
+    if (state->mode == CB_OFF) return false;
+
+    // Architecture pre-calibrator: record the live weight handle of every quantizable
+    // MUL_MAT so we can perturb the weights (static inputs) directly between forward passes.
+    if (state->mode == CB_COLLECT) {
+        if ((t->op == GGML_OP_MUL_MAT || t->op == GGML_OP_MUL_MAT_ID) && t->src[0] &&
+            state->weight_to_role_full &&
+            state->weight_to_role_full->count(t->src[0]->name)) {
+            state->weight_handles[t->src[0]->name] = t->src[0];
+        }
+        return false;
+    }
 
     if (t->op != GGML_OP_MUL_MAT && t->op != GGML_OP_MUL_MAT_ID) return false;
     if (!t->src[0] || !t->src[1]) return false;
@@ -1002,8 +1217,7 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
         const config & cfg,
         const std::vector<tensor_info> & /*tensors*/,
         std::unordered_map<std::string, std::vector<mul_mat_capture>> & captures_by_role,
-        const std::string & model_path,
-        const struct gguf_context * gguf_ctx,
+        const model_shards & shards,
         const std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
 
     std::map<std::string, std::map<ggml_type, cost_entry>> cost_matrix;
@@ -1140,7 +1354,7 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
         for (const auto & [weight_name, caps_for_weight] : caps_by_weight) {
             // Read weight data as F32 — scoped to this weight, freed at end of iteration
             std::vector<float> weight_f32;
-            if (!read_tensor_f32(model_path, gguf_ctx, weight_name, weight_f32)) {
+            if (!read_tensor_f32(shards.path_for(weight_name), shards.ctx_for(weight_name), weight_name, weight_f32)) {
                 LOG_WRN("  Failed to read weight data for '%s', skipping\n", weight_name.c_str());
                 continue;
             }
@@ -1253,6 +1467,14 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
             for (const auto * cap_ptr : caps_for_weight) {
                 const auto & cap = *cap_ptr;
 
+                // Fused-QKV: if this is an attn_qkv capture and the model's attention geometry
+                // is known and matches the output width, score by the WORST of Q/K/V instead of
+                // the Q-dominated row mean, so K/V sensitivity drives the shared type choice.
+                const int64_t qkv_q = cfg.arch_n_head    * cfg.arch_head_dim;
+                const int64_t qkv_kv = cfg.arch_n_head_kv * cfg.arch_head_dim;
+                const bool use_qkv = (cap.role == "attn_qkv") && cfg.arch_head_dim > 0 &&
+                                     (qkv_q + 2 * qkv_kv == cap.ref_ne0) && qkv_q > 0;
+
                 std::vector<std::future<std::pair<ggml_type, double>>> futures;
                 futures.reserve(n_parallel);
 
@@ -1265,7 +1487,7 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
                         const quant_result * qres = &qit->second;
                         ggml_backend_t backend = pool.get();
                         futures.push_back(std::async(std::launch::async,
-                            [&cap, qtype, qres, backend]() -> std::pair<ggml_type, double> {
+                            [&cap, qtype, qres, backend, use_qkv, qkv_q, qkv_kv]() -> std::pair<ggml_type, double> {
                                 std::vector<float> quant_output;
                                 bool ok;
                                 if (cap.is_id) {
@@ -1284,8 +1506,12 @@ static std::map<std::string, std::map<ggml_type, cost_entry>> build_cost_matrix(
                                 if (!ok) {
                                     return {qtype, std::numeric_limits<double>::quiet_NaN()};
                                 }
-                                return {qtype, compute_avg_kld(cap.ref_output_data.data(), quant_output.data(),
-                                                               cap.ref_ne0, cap.ref_ne1)};
+                                const double kld = use_qkv
+                                    ? compute_fused_qkv_kld(cap.ref_output_data.data(), quant_output.data(),
+                                                            cap.ref_ne0, cap.ref_ne1, qkv_q, qkv_kv, qkv_kv)
+                                    : compute_avg_kld(cap.ref_output_data.data(), quant_output.data(),
+                                                      cap.ref_ne0, cap.ref_ne1);
+                                return {qtype, kld};
                             }));
                     }
 
@@ -1463,6 +1689,304 @@ static void apply_importance_alpha(
     }
 }
 
+// ============================================================================
+// Architecture pre-calibrator: measure per-role end-to-end sensitivity by injecting
+// calibrated noise into a role's MUL_MAT outputs and reading the logit KLD.
+// ============================================================================
+
+// Mean over probe positions of KL(P_ref || P_pert), both given as logits.
+static double logit_kld_mean(const std::vector<std::vector<float>> & ref,
+                             const std::vector<std::vector<float>> & pert, int n_vocab) {
+    const size_t np = std::min(ref.size(), pert.size());
+    double total = 0.0; int cnt = 0;
+    for (size_t p = 0; p < np; p++) {
+        const float * a = ref[p].data();
+        const float * b = pert[p].data();
+        float amax = -INFINITY, bmax = -INFINITY;
+        for (int i = 0; i < n_vocab; i++) { amax = std::max(amax, a[i]); bmax = std::max(bmax, b[i]); }
+        double asum = 0, bsum = 0;
+        for (int i = 0; i < n_vocab; i++) { asum += std::exp((double)a[i]-amax); bsum += std::exp((double)b[i]-bmax); }
+        const double la = std::log(asum) + amax;   // log Z_ref
+        const double lb = std::log(bsum) + bmax;    // log Z_pert
+        double kl = 0.0;
+        for (int i = 0; i < n_vocab; i++) {
+            const double logpa = (double)a[i] - la;
+            const double pa = std::exp(logpa);
+            const double logpb = (double)b[i] - lb;
+            kl += pa * (logpa - logpb);
+        }
+        if (std::isfinite(kl)) { total += kl; cnt++; }
+    }
+    return cnt > 0 ? total / cnt : 0.0;
+}
+
+// Decode a probe token sequence, requesting logits at strided positions, and gather them.
+static bool decode_probe(llama_context * ctx, const std::vector<llama_token> & toks, int stride,
+                         std::vector<std::vector<float>> & out, int n_vocab) {
+    llama_memory_clear(llama_get_memory(ctx), true);
+    const int n = (int) toks.size();
+    if (n == 0) return false;
+    llama_batch batch = llama_batch_init(n, 0, 1);
+    std::vector<int> want;
+    for (int i = 0; i < n; i++) {
+        batch.token[i]    = toks[i];
+        batch.pos[i]      = i;
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[i][0] = 0;
+        const bool w = ((i % stride) == (stride - 1)) || (i == n - 1);
+        batch.logits[i]   = w ? 1 : 0;
+        if (w) want.push_back(i);
+    }
+    batch.n_tokens = n;
+    const int ret = llama_decode(ctx, batch);
+    if (ret != 0) { llama_batch_free(batch); return false; }
+    out.clear();
+    out.reserve(want.size());
+    for (int i : want) {
+        const float * lg = llama_get_logits_ith(ctx, i);
+        if (!lg) continue;
+        out.emplace_back(lg, lg + n_vocab);
+    }
+    llama_batch_free(batch);
+    return !out.empty();
+}
+
+// Probe each role: s_role = logitKLD(perturbed) / eps^2. Runs on the resident fp16 model
+// in Phase-2 scope. Returns {} (and leaves cap in CB_CAPTURE) if the noise-injection
+// self-test fails, so the caller falls back to element-weighting.
+// Read a weight tensor (F32/F16/BF16) into an F32 vector.
+static bool weight_to_f32(const ggml_tensor * t, std::vector<float> & out) {
+    const int64_t n = ggml_nelements(t);
+    out.resize(n);
+    if (t->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_get(t, out.data(), 0, ggml_nbytes(t));
+    } else if (t->type == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> tmp(n);
+        ggml_backend_tensor_get(t, tmp.data(), 0, ggml_nbytes(t));
+        ggml_fp16_to_fp32_row(tmp.data(), out.data(), n);
+    } else if (t->type == GGML_TYPE_BF16) {
+        std::vector<ggml_bf16_t> tmp(n);
+        ggml_backend_tensor_get(t, tmp.data(), 0, ggml_nbytes(t));
+        ggml_bf16_to_fp32_row(tmp.data(), out.data(), n);
+    } else {
+        return false;  // quantized weights not supported (model is loaded at fp16/bf16)
+    }
+    return true;
+}
+// Write an F32 vector back into a weight tensor (F32/F16/BF16).
+static void f32_to_weight(ggml_tensor * t, const std::vector<float> & in) {
+    const int64_t n = ggml_nelements(t);
+    if (t->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_set(t, in.data(), 0, ggml_nbytes(t));
+    } else if (t->type == GGML_TYPE_F16) {
+        std::vector<ggml_fp16_t> tmp(n);
+        ggml_fp32_to_fp16_row(in.data(), tmp.data(), n);
+        ggml_backend_tensor_set(t, tmp.data(), 0, ggml_nbytes(t));
+    } else if (t->type == GGML_TYPE_BF16) {
+        std::vector<ggml_bf16_t> tmp(n);
+        ggml_fp32_to_bf16_row(in.data(), tmp.data(), n);
+        ggml_backend_tensor_set(t, tmp.data(), 0, ggml_nbytes(t));
+    }
+}
+// Per-row RNG seed: independent per (weight, row) so the row loop parallelizes and restore
+// (same seed) subtracts the identical noise.
+static inline uint64_t row_seed(uint64_t base, const char * name, int64_t r) {
+    return base ^ (uint64_t) std::hash<std::string>{}(name) ^ ((uint64_t) r * 0x9E3779B97F4A7C15ULL);
+}
+
+// Add per-row Gaussian noise (sigma = eps*rms(row)) to a weight in place; returns the per-row
+// sigma so restore_weight can subtract the identical noise. Perturbing the weight (a static
+// graph input) propagates correctly through the whole forward, unlike an in-graph output write.
+// Parallelized over rows (independent per-row RNG) — required for MoE expert weights (~10^10 elems).
+static std::vector<float> perturb_weight(ggml_tensor * t, float eps, uint64_t base_seed) {
+    std::vector<float> f32;
+    if (!weight_to_f32(t, f32)) return {};
+    const int64_t ne0 = t->ne[0];
+    const int64_t nrows = ggml_nrows(t);
+    std::vector<float> sigma(nrows);
+    const char * name = t->name;
+    #pragma omp parallel for schedule(static)
+    for (int64_t r = 0; r < nrows; r++) {
+        float * row = f32.data() + (size_t) r * ne0;
+        double n2 = 0.0;
+        for (int64_t i = 0; i < ne0; i++) n2 += (double) row[i] * row[i];
+        const float s = eps * (float) std::sqrt(n2 / (double) ne0);
+        sigma[r] = s;
+        std::mt19937_64 rng(row_seed(base_seed, name, r));
+        std::normal_distribution<float> nd(0.0f, 1.0f);
+        for (int64_t i = 0; i < ne0; i++) row[i] += s * nd(rng);
+    }
+    f32_to_weight(t, f32);
+    return sigma;
+}
+// Undo perturb_weight by subtracting the identical seeded noise (near-exact: bf16 round-trip
+// of add-then-subtract returns to the original when the exponent is unchanged).
+static void restore_weight(ggml_tensor * t, uint64_t base_seed, const std::vector<float> & sigma) {
+    std::vector<float> f32;
+    if (!weight_to_f32(t, f32)) return;
+    const int64_t ne0 = t->ne[0];
+    const int64_t nrows = ggml_nrows(t);
+    const char * name = t->name;
+    #pragma omp parallel for schedule(static)
+    for (int64_t r = 0; r < nrows; r++) {
+        float * row = f32.data() + (size_t) r * ne0;
+        std::mt19937_64 rng(row_seed(base_seed, name, r));
+        std::normal_distribution<float> nd(0.0f, 1.0f);
+        for (int64_t i = 0; i < ne0; i++) row[i] -= sigma[r] * nd(rng);
+    }
+    f32_to_weight(t, f32);
+}
+
+static std::map<std::string, double> measure_arch_sensitivity(
+        llama_context * ctx, const llama_vocab * vocab, capture_state & cap,
+        const std::unordered_map<std::string, std::string> & weight_to_role_full,
+        const std::set<std::string> & roles, const std::vector<llama_token> & probe_tokens,
+        const config & cfg) {
+    std::map<std::string, double> sens;
+    const int n_vocab = llama_vocab_n_tokens(vocab);
+    const int stride  = 8;
+    const uint64_t seed = 0x9E3779B97F4A7C15ULL;
+
+    cap.weight_to_role_full = &weight_to_role_full;
+
+    LOG("\n--- Architecture pre-calibrator: probing %zu roles (eps=%.3f) ---\n", roles.size(), cfg.arch_calib_eps);
+
+    // One pass to collect live weight handles AND the clean reference logits.
+    cap.mode = CB_COLLECT;
+    cap.weight_handles.clear();
+    std::vector<std::vector<float>> ref;
+    if (!decode_probe(ctx, probe_tokens, stride, ref, n_vocab)) {
+        LOG_ERR("arch-calib: reference decode failed; skipping.\n");
+        cap.mode = CB_CAPTURE; cap.weight_to_role_full = nullptr;
+        return sens;
+    }
+    cap.mode = CB_OFF;
+    LOG("arch-calib: collected %zu weight handles\n", cap.weight_handles.size());
+
+    // Noise floor: KLD between two clean decodes detects forward non-determinism, which
+    // would bury a small perturbation signal.
+    {
+        std::vector<std::vector<float>> ref2;
+        decode_probe(ctx, probe_tokens, stride, ref2, n_vocab);
+        LOG("arch-calib noise floor (clean vs clean): logitKLD=%.4g\n", logit_kld_mean(ref, ref2, n_vocab));
+    }
+
+    // Perturb every weight of `role`, run one clean forward, measure logit KLD vs ref, restore.
+    auto probe = [&](const std::string & role, float eps, int * n_weights) -> double {
+        std::vector<std::pair<ggml_tensor *, std::vector<float>>> perturbed;
+        for (const auto & [name, h] : cap.weight_handles) {
+            auto it = weight_to_role_full.find(name);
+            if (it == weight_to_role_full.end() || it->second != role) continue;
+            auto sigma = perturb_weight(h, eps, seed);
+            if (!sigma.empty()) perturbed.emplace_back(h, std::move(sigma));
+        }
+        if (n_weights) *n_weights = (int) perturbed.size();
+        if (perturbed.empty()) return -1.0;
+        std::vector<std::vector<float>> pert;
+        const bool ok = decode_probe(ctx, probe_tokens, stride, pert, n_vocab);
+        const double kld = ok ? logit_kld_mean(ref, pert, n_vocab) : -1.0;
+        for (const auto & [h, sigma] : perturbed) restore_weight(h, seed, sigma);
+        return kld;
+    };
+
+    // Positive control: perturbing 'output' (the final linear projection) must move the
+    // logits (KL is ~ eps^2, ratio ~4). Confirms the perturb->forward->restore path works.
+    // (Per-role quadratic scaling is NOT required — gates/nonlinear roles legitimately
+    // saturate; validity is judged by the spread of s across roles below.)
+    {
+        int nw = 0;
+        const double k1 = probe("output", cfg.arch_calib_eps, &nw);
+        const double k2 = probe("output", 2.0f * cfg.arch_calib_eps, nullptr);
+        const double ratio = (k1 > 1e-12) ? k2 / k1 : 0.0;
+        LOG("arch-calib control: 'output' (%d weights) KLD(eps)=%.4g KLD(2eps)=%.4g ratio=%.2f\n", nw, k1, k2, ratio);
+        if (nw == 0 || k1 <= 1e-9) {
+            LOG_ERR("arch-calib: control 'output' did not respond (KLD=%.3g) — perturbation path is "
+                    "broken. Disabling; use --element-gamma.\n", k1);
+            cap.mode = CB_CAPTURE; cap.weight_to_role_full = nullptr;
+            return sens;
+        }
+    }
+
+    const double eps2 = (double) cfg.arch_calib_eps * (double) cfg.arch_calib_eps;
+    for (const auto & role : roles) {
+        int nw = 0;
+        const double kld = probe(role, cfg.arch_calib_eps, &nw);
+        if (kld < 0) continue;  // role has no perturbable weights (e.g. token_embd via get_rows)
+        sens[role] = kld / eps2;
+        LOG("arch-calib: %-18s weights=%3d logitKLD=%.4g  s=%.4g\n", role.c_str(), nw, kld, sens[role]);
+    }
+
+    // Validity: the measurement must DIFFERENTIATE roles. A near-uniform s means the probe is
+    // not resolving per-role sensitivity (as the broken in-graph path produced) — disable.
+    if (sens.size() >= 3) {
+        double smin = 1e300, smax = 0;
+        for (const auto & [r, s] : sens) { if (s > 0) { smin = std::min(smin, s); smax = std::max(smax, s); } }
+        const double spread = (smin > 0) ? smax / smin : 0.0;
+        LOG("arch-calib: role sensitivity spread max/min = %.2f\n", spread);
+        if (spread < 2.0) {
+            LOG_ERR("arch-calib: per-role sensitivities are near-uniform (spread=%.2f) — probe not "
+                    "resolving. Disabling; use --element-gamma.\n", spread);
+            sens.clear();
+        }
+    }
+
+    cap.mode = CB_CAPTURE; cap.weight_to_role_full = nullptr;
+    return sens;
+}
+
+static void save_sensitivity(const std::string & path, const std::map<std::string, double> & sens) {
+    std::ofstream f(path);
+    if (!f) return;
+    for (const auto & [r, s] : sens) f << r << " " << s << "\n";
+}
+static std::map<std::string, double> load_sensitivity(const std::string & path) {
+    std::map<std::string, double> sens;
+    std::ifstream f(path);
+    std::string r; double s;
+    while (f >> r >> s) sens[r] = s;
+    return sens;
+}
+
+// Fold measured per-role sensitivity into the cost matrix. ratio rho_rb = s_role / n_elem_rb;
+// multiply each cell by clamp(rho/geomean, 1/C, C)^gamma. Combined with the DP's n_elements
+// factor, the effective weight interpolates from n_elements (gamma=0) to ~s_role (gamma=1).
+static void apply_arch_sensitivity(
+        std::map<std::string, std::map<ggml_type, cost_entry>> & cost_matrix,
+        const std::map<std::string, role_info> & roles,
+        const std::map<std::string, double> & sensitivity,
+        float gamma, double ratio_clamp) {
+    if (gamma == 0.0f || sensitivity.empty()) return;
+
+    // per-(role,bucket) ratio s_role / n_elements
+    std::map<std::string, double> ratio;
+    double sum_log = 0; int n = 0;
+    for (const auto & [key, costs] : cost_matrix) {
+        (void) costs;
+        auto sit = sensitivity.find(rb_role(key));
+        auto rit = roles.find(key);
+        if (sit == sensitivity.end() || rit == roles.end()) continue;
+        const double ne = (double) rit->second.n_elements;
+        if (ne <= 0 || sit->second <= 0) continue;
+        const double rho = sit->second / ne;
+        ratio[key] = rho;
+        sum_log += std::log(rho); n++;
+    }
+    if (n == 0) return;
+    const double gmean = std::exp(sum_log / (double) n);
+
+    LOG("Applying arch-calib gamma=%.2f (geomean sensitivity-per-elem=%.4g, clamp=%.1f):\n", gamma, gmean, ratio_clamp);
+    for (auto & [key, costs] : cost_matrix) {
+        auto it = ratio.find(key);
+        if (it == ratio.end()) continue;
+        double m = it->second / gmean;
+        m = std::min(ratio_clamp, std::max(1.0 / ratio_clamp, m));
+        m = std::pow(m, (double) gamma);
+        for (auto & [qt, ce] : costs) {
+            if (ce.kld < 1e29) ce.kld *= m;
+        }
+    }
+}
+
 struct assignment {
     std::map<std::string, ggml_type> role_to_type;
     double total_kld;
@@ -1563,7 +2087,10 @@ static assignment optimize_assignment(
             c.qt = qt;
             c.units = (int)std::round((double)ne * compute_bpw(qt) / bits_per_unit);
             if (c.units < 1) c.units = 1;
-            c.kld = cit->second.kld * (double)ne;
+            // Objective weight uses n_elements^gamma; the bit cost (c.units) above
+            // keeps the true n_elements so the BPW budget stays exact.
+            const double w = (cfg.element_gamma == 1.0f) ? (double)ne : std::pow((double)ne, (double)cfg.element_gamma);
+            c.kld = cit->second.kld * w;
             it.choices.push_back(c);
         }
         if (it.choices.empty()) continue;
@@ -1680,11 +2207,34 @@ static bool write_tensor_type_file(const std::string & path,
                                    const std::map<std::string, ggml_type> & role_to_type,
                                    ggml_type output_tensor_type,
                                    ggml_type token_embd_tensor_type,
-                                   const std::map<std::string, std::vector<int>> & bucket_layers) {
+                                   const std::map<std::string, std::vector<int>> & bucket_layers,
+                                   const std::vector<tensor_info> & quantizable,
+                                   const std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
     std::ofstream file(path);
     if (!file) {
         LOG_ERR("Failed to open output file: %s\n", path.c_str());
         return false;
+    }
+
+    // Imatrix-less auto-pin (first, so it wins via first-match). A tensor that a forward pass
+    // never exercises (e.g. an MTP/nextn head) has no imatrix entry, so it cannot use an
+    // imatrix-requiring quant type (IQ1/IQ2/IQ3_XXS...) — llama-quantize would abort. Pin every
+    // such tensor to IQ4_XS (needs no imatrix). Guarded on a loaded imatrix so a no-imatrix run
+    // (where every tensor is "missing") is untouched. token_embd/output never require imatrix and
+    // are handled below, so skip them here.
+    if (!imatrix_data.empty()) {
+        int pinned = 0;
+        for (const auto & ti : quantizable) {
+            if (ti.role == "token_embd" || ti.role == "output") continue;
+            if (imatrix_data.find(ti.name) != imatrix_data.end()) continue;
+            std::string esc;
+            for (char c : ti.name) { if (c == '.') esc += "\\."; else esc += c; }
+            file << "^" << esc << "$=" << ggml_type_name(GGML_TYPE_IQ4_XS) << "\n";
+            pinned++;
+        }
+        if (pinned > 0) {
+            LOG("Recipe: pinned %d imatrix-less tensor(s) (e.g. MTP/nextn heads) to iq4_xs\n", pinned);
+        }
     }
 
     // Globals first. Anchored with ^ so they don't collide with layer tensors.
@@ -1718,6 +2268,58 @@ static bool write_tensor_type_file(const std::string & path,
 
     file.close();
     LOG("Wrote tensor-type-file to %s\n", path.c_str());
+    return true;
+}
+
+// Verify every quantizable tensor is matched by at least one recipe pattern, mirroring
+// llama-quantize's std::regex_search over the --tensor-type-file. Fails loudly if any
+// tensor would silently fall back to the base ftype — the exact failure mode that a
+// split model (missed shard layers) or an unassigned role produces, which otherwise
+// only shows up as a mysteriously inflated output BPW.
+static bool verify_recipe_coverage(const std::string & path,
+                                   const std::vector<tensor_info> & quantizable) {
+    std::ifstream in(path);
+    if (!in) {
+        LOG_ERR("coverage check: cannot reopen recipe %s\n", path.c_str());
+        return false;
+    }
+    std::vector<std::regex> patterns;
+    std::string line;
+    while (std::getline(in, line)) {
+        const auto eq = line.rfind('=');
+        if (eq == std::string::npos || eq == 0) continue;
+        const std::string pat = line.substr(0, eq);
+        try {
+            patterns.emplace_back(pat);
+        } catch (const std::exception & e) {
+            LOG_ERR("coverage check: invalid regex '%s': %s\n", pat.c_str(), e.what());
+            return false;
+        }
+    }
+
+    int n_uncovered = 0;
+    for (const auto & ti : quantizable) {
+        bool matched = false;
+        for (const auto & re : patterns) {
+            if (std::regex_search(ti.name, re)) { matched = true; break; }
+        }
+        if (!matched) {
+            if (n_uncovered < 20) {
+                LOG_ERR("  UNCOVERED: %-40s (role '%s') — would fall back to the base ftype\n",
+                        ti.name.c_str(), ti.role.c_str());
+            }
+            n_uncovered++;
+        }
+    }
+    if (n_uncovered > 0) {
+        LOG_ERR("coverage check FAILED: %d of %zu quantizable tensors are not matched by the recipe. "
+                "They would silently fall back to the base ftype at quantize time, inflating BPW and "
+                "corrupting any matched-BPW comparison. This usually means a role was not assigned or a "
+                "model shard/layer was missed. Aborting.\n",
+                n_uncovered, quantizable.size());
+        return false;
+    }
+    LOG("Coverage check: all %zu quantizable tensors are matched by the recipe.\n", quantizable.size());
     return true;
 }
 
@@ -1786,6 +2388,23 @@ static void print_usage(int /*argc*/, char ** argv) {
     LOG("                           promoting low-energy residual-write tensors\n");
     LOG("                           (ffn_down, attn_output, ssm_out). 0 = disabled,\n");
     LOG("                           1 = full inverse-energy. Useful range 0..1.5.\n");
+    LOG("  --no-auto-config         Disable architecture-aware defaults. By default the tool\n");
+    LOG("                           detects MoE vs dense from the roles and sets element-gamma\n");
+    LOG("                           (MoE 0.25 / dense 1.0), floors the dense quant set at the\n");
+    LOG("                           target's uniform type, and enables arch-calib 0.5 on dense.\n");
+    LOG("                           Any knob you pass explicitly overrides its auto value.\n");
+    LOG("  --element-gamma G        DP objective weight = relative_L2 * n_elements^G\n");
+    LOG("                           (bit/BPW cost keeps true n_elements). G=1 (default) is\n");
+    LOG("                           the historical size-proportional objective; G<1 lets the\n");
+    LOG("                           DP afford precision on small critical tensors (attn_k/v,\n");
+    LOG("                           shared experts). DP-time only: free to sweep off a cache.\n");
+    LOG("  --arch-calib-gamma G     Architecture pre-calibrator (default 0 = off). On a cache\n");
+    LOG("                           miss, probes each role's true end-to-end sensitivity by\n");
+    LOG("                           injecting noise into its MUL_MAT outputs and measuring\n");
+    LOG("                           logit KLD, then multiplies costs by (s/n_elem/geomean)^G.\n");
+    LOG("                           G interpolates element-weighting (0) -> measured\n");
+    LOG("                           sensitivity (1). Cached to <cost-matrix-cache>.sens.\n");
+    LOG("  --arch-calib-eps E       Injected per-row relative-L2 RMS for the probes (0.05).\n");
     LOG("  --cost-matrix-cache PATH Read/write the Phase-3 cost matrix to PATH. On hit,\n");
     LOG("                           skips Phase 2+3 entirely (~50min savings) when the\n");
     LOG("                           cache header matches model+quants+test-data+sampling.\n");
@@ -1826,6 +2445,9 @@ static const std::set<std::string> & tool_args_with_value() {
         "--layer-buckets",
         "--reps-per-bucket",
         "--importance-alpha",
+        "--element-gamma",
+        "--arch-calib-gamma",
+        "--arch-calib-eps",
         "--cost-matrix-cache",
     };
     return s;
@@ -1851,6 +2473,10 @@ static config parse_args(int argc, char ** argv, common_params & params) {
     const auto & owned = tool_args_with_value();
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
+        if (arg == "--no-auto-config") {   // valueless flag owned by this tool
+            cfg.auto_config = false;
+            continue;
+        }
         if (!owned.count(arg)) {
             forwarded.push_back(argv[i]);
             continue;
@@ -1911,6 +2537,28 @@ static config parse_args(int argc, char ** argv, common_params & params) {
             cfg.importance_alpha = std::stof(val);
             if (cfg.importance_alpha < 0.0f) {
                 LOG_ERR("--importance-alpha must be >= 0\n");
+                exit(1);
+            }
+        } else if (arg == "--element-gamma") {
+            cfg.element_gamma = std::stof(val);
+            cfg.element_gamma_set = true;   // user override: auto-config leaves it alone
+            // gamma>1 over-prices big tensors (protects dense FFN); gamma<1 redistributes toward
+            // small tensors (right for MoE experts). Allow (0, 2] so dense models can push past 1.
+            if (cfg.element_gamma < 0.0f || cfg.element_gamma > 2.0f) {
+                LOG_ERR("--element-gamma must be in [0, 2]\n");
+                exit(1);
+            }
+        } else if (arg == "--arch-calib-gamma") {
+            cfg.arch_calib_gamma = std::stof(val);
+            cfg.arch_calib_gamma_set = true;  // user override: auto-config leaves it alone
+            if (cfg.arch_calib_gamma < 0.0f || cfg.arch_calib_gamma > 1.0f) {
+                LOG_ERR("--arch-calib-gamma must be in [0, 1]\n");
+                exit(1);
+            }
+        } else if (arg == "--arch-calib-eps") {
+            cfg.arch_calib_eps = std::stof(val);
+            if (cfg.arch_calib_eps <= 0.0f) {
+                LOG_ERR("--arch-calib-eps must be > 0\n");
                 exit(1);
             }
         } else if (arg == "--cost-matrix-cache") {
@@ -2155,56 +2803,77 @@ int main(int argc, char ** argv) {
     // no_alloc=true: we only need tensor metadata (dims, type, offset); raw weight data
     // is read from disk in Phase 3 via read_tensor_f32. Loading it here would duplicate
     // the entire model in host RAM alongside the llama-backend copy.
-    struct ggml_context * ggml_ctx = nullptr;
-    struct gguf_init_params gguf_params = {true, &ggml_ctx};
-    struct gguf_context * gguf_ctx = gguf_init_from_file(cfg.model_path.c_str(), gguf_params);
-    if (!gguf_ctx) {
-        LOG_ERR("Failed to open model: %s\n", cfg.model_path.c_str());
+    // Split (sharded) models are enumerated across ALL shards. Reading only the first
+    // shard (gguf_init_from_file on the -00001-of-000NN file) silently drops every layer
+    // stored in later shards, producing a recipe that omits them (they then fall back to
+    // the base ftype at quantize time). open_model_shards handles single + split models.
+    model_shards shards;
+    if (!open_model_shards(cfg.model_path, shards)) {
         return 1;
     }
 
-    int64_t n_tensors = gguf_get_n_tensors(gguf_ctx);
+    // Attention geometry (for fused-QKV component splitting in the cost matrix).
+    {
+        const struct gguf_context * g0 = shards.gguf[0];
+        const int64_t akid = gguf_find_key(g0, "general.architecture");
+        if (akid >= 0 && gguf_get_kv_type(g0, akid) == GGUF_TYPE_STRING) {
+            const std::string arch = gguf_get_val_str(g0, akid);
+            cfg.arch_n_head    = gguf_get_int_or(g0, (arch + ".attention.head_count").c_str(), 0);
+            cfg.arch_n_head_kv = gguf_get_int_or(g0, (arch + ".attention.head_count_kv").c_str(), 0);
+            cfg.arch_head_dim  = gguf_get_int_or(g0, (arch + ".attention.key_length").c_str(), 0);
+            if (cfg.arch_head_dim == 0 && cfg.arch_n_head > 0) {
+                const int64_t n_embd = gguf_get_int_or(g0, (arch + ".embedding_length").c_str(), 0);
+                if (n_embd > 0) cfg.arch_head_dim = n_embd / cfg.arch_n_head;
+            }
+            LOG("Attention geometry: n_head=%lld n_head_kv=%lld head_dim=%lld\n",
+                (long long) cfg.arch_n_head, (long long) cfg.arch_n_head_kv, (long long) cfg.arch_head_dim);
+        }
+    }
+
+    const int64_t n_tensors = (int64_t) shards.tensor_shard.size();
     LOG("Model has %lld tensors\n", (long long)n_tensors);
 
-    // Determine n_layer from tensor names
+    static const std::regex blk_re("blk\\.(\\d+)\\.");
+
+    // Determine n_layer from tensor names (across all shards)
     int n_layer = 0;
-    for (int64_t i = 0; i < n_tensors; i++) {
-        const char * name = gguf_get_tensor_name(gguf_ctx, i);
-        std::string sname(name);
-        static const std::regex blk_re("blk\\.(\\d+)\\.");
+    for (const auto & kv : shards.tensor_shard) {
         std::smatch m;
-        if (std::regex_search(sname, m, blk_re) && m.size() > 1) {
+        if (std::regex_search(kv.first, m, blk_re) && m.size() > 1) {
             int layer = std::stoi(m[1].str());
             if (layer + 1 > n_layer) n_layer = layer + 1;
         }
     }
     LOG("Model has %d layers\n", n_layer);
 
-    // Enumerate tensor info
+    // Enumerate tensor info across all shards
     std::vector<tensor_info> all_tensors;
-    for (int64_t i = 0; i < n_tensors; i++) {
-        tensor_info ti;
-        ti.name = gguf_get_tensor_name(gguf_ctx, i);
-        ti.orig_type = gguf_get_tensor_type(gguf_ctx, i);
-        ti.role = extract_role(ti.name);
-        ti.n_elements = gguf_get_tensor_size(gguf_ctx, i) / ggml_type_size(ti.orig_type) * ggml_blck_size(ti.orig_type);
+    for (size_t si = 0; si < shards.gguf.size(); si++) {
+        const struct gguf_context * g = shards.gguf[si];
+        struct ggml_context * m = shards.meta[si];
+        const int64_t nt = gguf_get_n_tensors(g);
+        for (int64_t i = 0; i < nt; i++) {
+            tensor_info ti;
+            ti.name = gguf_get_tensor_name(g, i);
+            ti.orig_type = gguf_get_tensor_type(g, i);
+            ti.role = extract_role(ti.name);
+            ti.n_elements = gguf_get_tensor_size(g, i) / ggml_type_size(ti.orig_type) * ggml_blck_size(ti.orig_type);
 
-        // Get dimensions from ggml context
-        struct ggml_tensor * gt = ggml_get_tensor(ggml_ctx, ti.name.c_str());
-        if (gt) {
-            for (int d = 0; d < 4; d++) ti.ne[d] = gt->ne[d];
+            // Get dimensions from this shard's ggml metadata context
+            struct ggml_tensor * gt = ggml_get_tensor(m, ti.name.c_str());
+            if (gt) {
+                for (int d = 0; d < 4; d++) ti.ne[d] = gt->ne[d];
+            }
+
+            std::smatch mm;
+            if (std::regex_search(ti.name, mm, blk_re) && mm.size() > 1) {
+                ti.layer = std::stoi(mm[1].str());
+            } else {
+                ti.layer = -1;  // global tensor
+            }
+
+            all_tensors.push_back(ti);
         }
-
-        // Determine layer from name
-        static const std::regex blk_re2("blk\\.(\\d+)\\.");
-        std::smatch m;
-        if (std::regex_search(ti.name, m, blk_re2) && m.size() > 1) {
-            ti.layer = std::stoi(m[1].str());
-        } else {
-            ti.layer = -1;  // global tensor
-        }
-
-        all_tensors.push_back(ti);
     }
 
     // Identify quantizable weight tensors
@@ -2225,6 +2894,50 @@ int main(int argc, char ** argv) {
     LOG("Found %zu unique tensor roles: ", unique_roles.size());
     for (const auto & r : unique_roles) LOG("%s ", r.c_str());
     LOG("\n");
+
+    // ---- Auto-config: architecture-aware recipe strategy ----
+    // Pick the strategy that won our benchmarks from the detected architecture, leaving any
+    // knob the user set explicitly untouched. MoE  -> element-gamma 0.25 (recover bits over-priced
+    // on sparse experts). dense -> element-gamma 1.0 + floor the quant set at the target's uniform
+    // type + arch-calib 0.5 (protect end-to-end-critical tensors, e.g. ssm_out, that transformer
+    // hand rules miss). See IMPROVEMENT_PLAN.md "Dense/hybrid result".
+    if (cfg.auto_config) {
+        bool is_moe = false;
+        for (const auto & r : unique_roles) {
+            if (r.find("_exps") != std::string::npos || r.find("gate_inp") != std::string::npos ||
+                r.find("shexp") != std::string::npos) { is_moe = true; break; }
+        }
+        LOG("Auto-config: %s architecture detected%s\n",
+            is_moe ? "MoE (sparse experts)" : "dense",
+            (cfg.element_gamma_set && cfg.arch_calib_gamma_set) ? " (all knobs user-set; no changes)" : "");
+        if (!cfg.element_gamma_set) {
+            cfg.element_gamma = is_moe ? 0.25f : 1.0f;
+            LOG("  element-gamma = %.2f (%s)\n", cfg.element_gamma,
+                is_moe ? "redistribute bits from rarely-activated experts" : "dense tensors earn their bits");
+        }
+        if (!is_moe) {
+            // Floor the quant set at the target's uniform type so the DP can only deviate UP from
+            // a near-uniform baseline (blocks the very-low-bit cliff that loses to hand rules).
+            if (cfg.target_bpw > 0.0f && cfg.quant_types.size() >= 2) {
+                const double fb = dense_floor_bpw(cfg.quant_types, cfg.target_bpw);
+                if (fb > 0.0) {
+                    std::vector<ggml_type> kept;
+                    for (auto t : cfg.quant_types) if (compute_bpw(t) >= fb - 1e-9) kept.push_back(t);
+                    if (kept.size() >= 2 && kept.size() < cfg.quant_types.size()) {
+                        LOG("  floor quant set at %.2f bpw (%zu -> %zu types; blocks IQ2/IQ3 cliff)\n",
+                            fb, cfg.quant_types.size(), kept.size());
+                        cfg.quant_types = kept;
+                    }
+                }
+            }
+            // Enable the end-to-end sensitivity probe (needs test data or synthetic inputs).
+            if (!cfg.arch_calib_gamma_set && cfg.arch_calib_gamma == 0.0f) {
+                cfg.arch_calib_gamma = 0.5f;
+                LOG("  arch-calib-gamma = 0.50 (protect end-to-end-sensitive tensors hand rules miss)\n");
+            }
+        }
+        LOG("  (override any of these with explicit flags, or disable with --no-auto-config)\n");
+    }
 
     // Determine target layers using layer equivalence classes.
     // Hybrid models (e.g., Qwen3.5) have different layer types (dense attention vs SSM/Mamba)
@@ -2371,6 +3084,8 @@ int main(int argc, char ** argv) {
 
     // ---- Cache check: try to skip Phase 2 + Phase 3 ----
     std::map<std::string, std::map<ggml_type, cost_entry>> cost_matrix;
+    std::map<std::string, double> arch_sensitivity;  // per-role end-to-end sensitivity (pre-calibrator)
+    const std::string sens_cache_path = cfg.cost_matrix_cache.empty() ? std::string() : cfg.cost_matrix_cache + ".sens";
     capture_state cap_state;  // populated only on cache miss; declared here so
                               // its swap-with-empty cleanup later still compiles
     bool cache_hit = false;
@@ -2380,6 +3095,16 @@ int main(int argc, char ** argv) {
 
     if (cache_hit) {
         LOG("\n--- Skipping Phase 2 + Phase 3 (cost-matrix cache hit) ---\n");
+        if (cfg.arch_calib_gamma > 0.0f && !sens_cache_path.empty()) {
+            arch_sensitivity = load_sensitivity(sens_cache_path);
+            if (arch_sensitivity.empty()) {
+                LOG_ERR("arch-calib requested but no sensitivity cache at %s (built without arch-calib). "
+                        "Delete the cost-matrix cache to re-measure, or run without --arch-calib-gamma.\n",
+                        sens_cache_path.c_str());
+            } else {
+                LOG("Loaded %zu role sensitivities from %s\n", arch_sensitivity.size(), sens_cache_path.c_str());
+            }
+        }
     } else {
 
     // ---- Phase 2: Capture reference activations ----
@@ -2529,6 +3254,27 @@ int main(int argc, char ** argv) {
         LOG("  %s: %zu captures\n", rb_display(rb).c_str(), captures.size());
     }
 
+    // ---- Architecture pre-calibrator: measure per-role end-to-end sensitivity ----
+    // Runs on the still-resident fp16 model, reusing the largest probe batch.
+    if (cfg.arch_calib_gamma > 0.0f && !test_token_sets.empty()) {
+        std::unordered_map<std::string, std::string> weight_to_role_full;
+        std::set<std::string> roles_to_probe;
+        for (const auto & ti : quantizable) {
+            weight_to_role_full[ti.name] = ti.role;
+            roles_to_probe.insert(ti.role);
+        }
+        size_t best = 0;
+        for (size_t i = 1; i < test_token_sets.size(); i++) {
+            if (test_token_sets[i].size() > test_token_sets[best].size()) best = i;
+        }
+        arch_sensitivity = measure_arch_sensitivity(ctx, vocab, cap_state, weight_to_role_full,
+                                                    roles_to_probe, test_token_sets[best], cfg);
+        if (!arch_sensitivity.empty() && !sens_cache_path.empty()) {
+            save_sensitivity(sens_cache_path, arch_sensitivity);
+            LOG("Saved %zu role sensitivities to %s\n", arch_sensitivity.size(), sens_cache_path.c_str());
+        }
+    }
+
     // Free the llama model — we don't need it anymore
     llama_init.reset();
     llama_backend_free();
@@ -2547,7 +3293,7 @@ int main(int argc, char ** argv) {
     LOG("\n--- Phase 3: Building cost matrix ---\n");
 
     cost_matrix = build_cost_matrix(cfg, quantizable, cap_state.captures_by_role,
-                                    cfg.model_path, gguf_ctx, imatrix_data);
+                                    shards, imatrix_data);
 
     // Persist for future runs (cache invalidation is by header-field match).
     if (!cfg.cost_matrix_cache.empty()) {
@@ -2567,7 +3313,7 @@ int main(int argc, char ** argv) {
         auto & ri = roles[key];
         ri.role = key;
         ri.n_elements += ti.n_elements;
-        ri.n_bytes_orig += ggml_nbytes(ggml_get_tensor(ggml_ctx, ti.name.c_str()));
+        ri.n_bytes_orig += ggml_nbytes(ggml_get_tensor(shards.meta_for(ti.name), ti.name.c_str()));
         total_quant_elements += ti.n_elements;
     }
 
@@ -2581,6 +3327,17 @@ int main(int argc, char ** argv) {
     if (cfg.importance_alpha > 0.0f) {
         auto role_energy = compute_role_energy(quantizable, imatrix_data, cfg.min_elements);
         apply_importance_alpha(cost_matrix, role_energy, cfg.importance_alpha);
+    }
+
+    // Apply the measured per-role end-to-end sensitivity (architecture pre-calibrator).
+    // Supersedes the imatrix-energy proxy above when both are set. Done after
+    // split_fused_roles so it weights the component roles that carry the elements.
+    if (cfg.arch_calib_gamma > 0.0f) {
+        if (arch_sensitivity.empty()) {
+            LOG_ERR("arch-calib-gamma=%.2f set but no sensitivity data available; skipping.\n", cfg.arch_calib_gamma);
+        } else {
+            apply_arch_sensitivity(cost_matrix, roles, arch_sensitivity, cfg.arch_calib_gamma, cfg.arch_calib_ratio_clamp);
+        }
     }
 
     // Print cost matrix
@@ -2738,12 +3495,21 @@ int main(int argc, char ** argv) {
 
     // ---- Phase 5: Output tensor-type-file ----
     LOG("\n--- Phase 5: Writing output ---\n");
-    write_tensor_type_file(cfg.output_path, result.role_to_type,
-                           output_type, token_embd_type, bucket_layers);
+    if (!write_tensor_type_file(cfg.output_path, result.role_to_type,
+                                output_type, token_embd_type, bucket_layers,
+                                quantizable, imatrix_data)) {
+        shards.free_all();
+        return 1;
+    }
+
+    // Fail loudly if the recipe does not cover every quantizable tensor.
+    if (!verify_recipe_coverage(cfg.output_path, quantizable)) {
+        shards.free_all();
+        return 1;
+    }
 
     // Cleanup
-    gguf_free(gguf_ctx);
-    ggml_free(ggml_ctx);
+    shards.free_all();
 
     LOG("\nDone!\n");
     return 0;
