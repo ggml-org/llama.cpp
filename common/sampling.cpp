@@ -192,15 +192,6 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
     }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
-
-    // if the user did not specify a value for penalty_last_n, set it to the model's context size
-    if (params.penalty_last_n == -1) {
-        params.penalty_last_n = llama_model_n_ctx_train(model);
-    }
-    // ensure that n_prev is at least as large as penalty_last_n,  sampler needs to remember at least that many tokens for the penalties to work correctly
-    params.penalty_last_n = std::max(params.penalty_last_n, 0);
-    params.n_prev = std::max(params.n_prev, params.penalty_last_n);
-
     llama_sampler_chain_params lparams = llama_sampler_chain_default_params();
 
     lparams.no_perf = params.no_perf;
