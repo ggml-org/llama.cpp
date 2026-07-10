@@ -294,6 +294,7 @@ echo "========================================"
 # Exit code: strict mode exits nonzero on any FAIL, any forbidden SKIP,
 PRESERVE_LOGS=0
 if [ "$FAIL_COUNT" -gt 0 ]; then
+  PRESERVE_LOGS=1
   [ "$TIMEOUT_COUNT" -gt 0 ] && exit 124
   exit 1
 fi
