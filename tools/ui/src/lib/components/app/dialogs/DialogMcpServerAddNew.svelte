@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Sparkles } from '@lucide/svelte';
+	import { tick } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Empty from '$lib/components/ui/empty';
@@ -137,6 +138,17 @@
 
 	function handleAgree() {
 		writeConsent('agreed');
+
+		// The Empty.Root block that holds the focused "Load recommendations"
+		// button unmounts after consent flips, and bits-ui's FocusScope then
+		// re-seats focus on whatever firstTabbable is in the dialog. After
+		// the cards mount that's the first card's dismiss button, which
+		// reads as "first card has focus". Pull focus forward to the URL
+		// input after the DOM update so the user lands somewhere useful
+		// instead.
+		void tick().then(() => {
+			document.getElementById('server-url-new-server')?.focus();
+		});
 	}
 
 	function handleDismissAll() {
