@@ -488,12 +488,15 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         task.opts       = opts;
         tasks.push_back(task);
     }
+
+    bool had_spec_url = false;
     if (!params.speculative.draft.mparams.url.empty()) {
         common_download_task task;
         task.url        = params.speculative.draft.mparams.url;
         task.local_path = params.speculative.draft.mparams.path;
         task.opts       = opts;
         tasks.push_back(task);
+        had_spec_url = true;
     }
 
     // handle hf_plan tasks
@@ -513,6 +516,18 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
             });
         }
     };
+
+    // handle plan_spec (e.g. --spec-draft-hf)
+    if (!plan_spec.model_files.empty() && !had_spec_url) {
+        add_tasks(plan_spec.model_files, plan_spec.primary, params.speculative.draft.mparams);
+        had_spec_url = true;
+    }
+
+    // handle vocoder plan (e.g. --hf-repo-v)
+    if (!plan_voc.model_files.empty()) {
+        add_tasks(plan_voc.model_files, plan_voc.primary, params.vocoder.model);
+    }
+
     if (!plan.model_files.empty()) {
         add_tasks(plan.model_files, plan.primary, params.model);
     }
@@ -521,7 +536,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
             params.mmproj.path = hf_cache::finalize_file(plan.mmproj);
         });
     }
-    if (!plan.mtp.local_path.empty()) {
+    if (!plan.mtp.local_path.empty() && !had_spec_url) {
         tasks.emplace_back(plan.mtp, opts, [&]() {
             // only fall back to the discovered MTP head when no draft was explicitly provided
             if (params.speculative.draft.mparams.empty()) {
@@ -540,16 +555,6 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         });
     }
 
-    // handle plan_spec (e.g. --spec-draft-hf)
-    if (!plan_spec.model_files.empty()) {
-        add_tasks(plan_spec.model_files, plan_spec.primary, params.speculative.draft.mparams);
-    }
-
-    // handle vocoder plan (e.g. --hf-repo-v)
-    if (!plan_voc.model_files.empty()) {
-        add_tasks(plan_voc.model_files, plan_voc.primary, params.vocoder.model);
-    }
-
     // run all tasks in parallel
     if (!params.offline) {
         // if duplicated files are found, only download once (but still call on_done for each task)
@@ -562,6 +567,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         }
         std::vector<common_download_task> unique_tasks_vec;
         for (auto & pair : unique_tasks) {
+            LOG_DBG("download task: %s -> %s\n", pair.second->url.c_str(), pair.second->local_path.c_str());
             unique_tasks_vec.push_back(*pair.second);
         }
         common_download_run_tasks(unique_tasks_vec);
