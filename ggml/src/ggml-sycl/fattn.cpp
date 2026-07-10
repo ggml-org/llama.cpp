@@ -153,10 +153,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     }
 
     // Path 2: MKL GEMM — handles SDPA-incompatible shapes (no mask, ALiBi, etc.).
-    static int mkl_enable = -1;
-    if (mkl_enable < 0) {
-        mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
-    }
+    static int mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
     if (mkl_enable == 1 && Q->ne[0] >= 64 && mask && !sinks &&
         Q->ne[1] >= 32 && K->ne[1] >= 1024 &&
         max_bias == 0.0f && logit_softcap == 0.0f &&

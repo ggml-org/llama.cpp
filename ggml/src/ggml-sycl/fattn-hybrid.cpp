@@ -195,13 +195,18 @@ void ggml_sycl_flash_attn_ext_hybrid(ggml_backend_sycl_context & ctx, ggml_tenso
     ggml_sycl_fattn_alloc K_f16(ctx.fattn_buffers().K);
     {
         const char * K_data = (const char *)K->data;
-        const bool k_interleaved =
-            ((int64_t)K->ne[1] * K->nb[1] != K->nb[2]) && K->ne[2] > 1;
+
+        // True Gemma interleave packs heads within a row (nb[2] < ne[1]*nb[1]).
+        // Padded seq-views have nb[2] > ne[1]*nb[1] — use physical strides.
+        // Both satisfy ne[1]*nb[1] != nb[2] but need different dequant paths.
+        const bool k_non_dense = ((int64_t)K->ne[1] * K->nb[1] != K->nb[2]) && K->ne[2] > 1;
+        const bool k_gemma = k_non_dense &&
+            ((int64_t)K->nb[2] < (int64_t)K->ne[1] * (int64_t)K->nb[1]);
 
         K_f16.alloc(ggml_nelements(K));
 
         if (K->type == GGML_TYPE_F16) {
-            if (!k_interleaved) {
+            if (!k_non_dense) {
                 stream->memcpy(K_f16.ptr, K_data, ggml_nelements(K) * sizeof(sycl::half));
             } else {
                 const int64_t ne0 = K->ne[0], ne1 = K->ne[1];
@@ -219,7 +224,7 @@ void ggml_sycl_flash_attn_ext_hybrid(ggml_backend_sycl_context & ctx, ggml_tenso
                         dst[(hb * ne1 + r) * ne0 + c] = src_row[c];
                     });
             }
-        } else if (ggml_is_contiguously_allocated(K) && !k_interleaved) {
+        } else if (ggml_is_contiguously_allocated(K) && !k_non_dense) {
             to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, dst);
             to_fp16(K_data, K_f16.ptr, ggml_nelements(K), stream);
         } else {
@@ -227,7 +232,7 @@ void ggml_sycl_flash_attn_ext_hybrid(ggml_backend_sycl_context & ctx, ggml_tenso
             const size_t ts = ggml_type_size(K->type);
             to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type);
             int64_t s01, s02, s03;
-            if (k_interleaved) {
+            if (k_gemma) {
                 const int64_t blk_per_row = (int64_t)K->ne[0] / bs;
                 s01 = (int64_t)Hkv * blk_per_row;
                 s02 = blk_per_row;
@@ -254,13 +259,18 @@ void ggml_sycl_flash_attn_ext_hybrid(ggml_backend_sycl_context & ctx, ggml_tenso
         V_f16.ptr = K_f16.ptr;  // don't allocate, just alias
     } else {
         const char * V_data = (const char *)V->data;
-        const bool v_interleaved =
-            ((int64_t)V->ne[1] * V->nb[1] != V->nb[2]) && V->ne[2] > 1;
+
+        // True Gemma interleave packs heads within a row (nb[2] < ne[1]*nb[1]).
+        // Padded seq-views have nb[2] > ne[1]*nb[1] — use physical strides.
+        // Both satisfy ne[1]*nb[1] != nb[2] but need different dequant paths.
+        const bool v_non_dense = ((int64_t)V->ne[1] * V->nb[1] != V->nb[2]) && V->ne[2] > 1;
+        const bool v_gemma = v_non_dense &&
+            ((int64_t)V->nb[2] < (int64_t)V->ne[1] * (int64_t)V->nb[1]);
 
         V_f16.alloc(ggml_nelements(V));
 
         if (V->type == GGML_TYPE_F16) {
-            if (!v_interleaved) {
+            if (!v_non_dense) {
                 stream->memcpy(V_f16.ptr, V_data, ggml_nelements(V) * sizeof(sycl::half));
             } else {
                 const int64_t ne0 = V->ne[0], ne1 = V->ne[1];
@@ -278,7 +288,7 @@ void ggml_sycl_flash_attn_ext_hybrid(ggml_backend_sycl_context & ctx, ggml_tenso
                         dst[(hb * ne1 + r) * ne0 + c] = src_row[c];
                     });
             }
-        } else if (ggml_is_contiguously_allocated(V) && !v_interleaved) {
+        } else if (ggml_is_contiguously_allocated(V) && !v_non_dense) {
             to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, dst);
             to_fp16(V_data, V_f16.ptr, ggml_nelements(V), stream);
         } else {
@@ -286,7 +296,7 @@ void ggml_sycl_flash_attn_ext_hybrid(ggml_backend_sycl_context & ctx, ggml_tenso
             const size_t ts = ggml_type_size(V->type);
             to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type);
             int64_t s01, s02, s03;
-            if (v_interleaved) {
+            if (v_gemma) {
                 const int64_t blk_per_row = (int64_t)V->ne[0] / bs;
                 s01 = (int64_t)V->ne[2] * blk_per_row;
                 s02 = blk_per_row;
