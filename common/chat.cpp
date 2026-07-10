@@ -1022,7 +1022,7 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
 
     data.supports_thinking  = true;
     data.thinking_start_tag = "[THINK]";
-    data.thinking_end_tag   = "[/THINK]";
+    data.thinking_end_tags  = {"[/THINK]"};
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
@@ -1147,6 +1147,9 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
+
+    data.thinking_start_tag = "<|channel|>analysis<|message|>";
+    data.thinking_end_tags  = {"<|end|>"};
 
     // These special tokens are required to parse properly, so we include them
     // even if parse_tool_calls is false.
@@ -1292,7 +1295,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
     data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
     data.supports_thinking  = true;
     data.thinking_start_tag = "<|channel>thought";
-    data.thinking_end_tag   = "<channel|>";
+    data.thinking_end_tags  = {"<channel|>"};
 
     data.preserved_tokens = {
         "<|channel>",
@@ -1567,7 +1570,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
     const std::string GEN_PROMPT  = "<|im_assistant|>assistant<|im_middle|>";
 
     data.thinking_start_tag = THINK_START;
-    data.thinking_end_tag   = THINK_END;
+    data.thinking_end_tags  = {THINK_END};
 
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
@@ -1701,7 +1704,7 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     }
 
     data.thinking_start_tag = THINK_START;
-    data.thinking_end_tag   = THINK_END;
+    data.thinking_end_tags  = {THINK_END};
 
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
     auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
@@ -1864,7 +1867,7 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking  = true;
     data.thinking_start_tag = "<think>";
-    data.thinking_end_tag   = "</think>";
+    data.thinking_end_tags  = {"</think>"};
     data.preserved_tokens   = {
         "｜DSML｜",
         "<think>",
@@ -2077,7 +2080,7 @@ static common_chat_params common_chat_params_init_cohere2moe(const common_chat_t
     data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking  = true;
     data.thinking_start_tag = THINK_START;
-    data.thinking_end_tag   = THINK_END;
+    data.thinking_end_tags  = {THINK_END};
     data.preserved_tokens   = {
         TURN_START, TURN_END, CHATBOT, USER, SYSTEM,
         THINK_START, THINK_END,
@@ -2418,7 +2421,7 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
     };
 
     data.thinking_start_tag = "<think>";
-    data.thinking_end_tag   = "</think>";
+    data.thinking_end_tags  = {"</think>"};
 
     data.message_delimiters = {
         { COMMON_CHAT_ROLE_ASSISTANT, "<|im_start|>assistant"             },
@@ -2772,7 +2775,10 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         auto_params.supports_thinking = autoparser.reasoning.mode != autoparser::reasoning_mode::NONE;
         if (auto_params.supports_thinking) {
             auto_params.thinking_start_tag = trim_whitespace(autoparser.reasoning.start);
-            auto_params.thinking_end_tag   = trim_whitespace(autoparser.reasoning.end);
+            auto end_tag = trim_whitespace(autoparser.reasoning.end);
+            if (!end_tag.empty()) {
+                auto_params.thinking_end_tags = {std::move(end_tag)};
+            }
         }
         common_peg_arena arena;
         arena.load(auto_params.parser);

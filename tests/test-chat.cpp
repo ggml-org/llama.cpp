@@ -1135,7 +1135,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         // budget sampler inhibits grammar application while inside thinking blocks —
         // triggers inside <think>...</think> are suppressed.
         bool use_reasoning_budget_path = false;
-        if (parser.params_.grammar_lazy && !parser.params_.thinking_end_tag.empty()) {
+        if (parser.params_.grammar_lazy && !parser.params_.thinking_end_tags.empty()) {
             use_reasoning_budget_path = true;
             for (const auto & trigger : parser.params_.grammar_triggers) {
                 if (trigger.type != COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
@@ -1153,7 +1153,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             // Walk through full_input tracking thinking state; only match triggers
             // when outside thinking blocks.
             const auto & think_start = parser.params_.thinking_start_tag;
-            const auto & think_end   = parser.params_.thinking_end_tag;
+            const auto & think_ends  = parser.params_.thinking_end_tags;
 
             bool in_thinking = false;
             for (size_t i = 0; i < full_input.size(); ++i) {
@@ -1163,12 +1163,14 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                     i += think_start.size() - 1;
                     continue;
                 }
-                if (in_thinking && full_input.compare(i, think_end.size(), think_end) == 0) {
-                    in_thinking = false;
-                    i += think_end.size() - 1;
-                    continue;
-                }
                 if (in_thinking) {
+                    for (const auto & think_end : think_ends) {
+                        if (full_input.compare(i, think_end.size(), think_end) == 0) {
+                            in_thinking = false;
+                            i += think_end.size() - 1;
+                            break;
+                        }
+                    }
                     continue;
                 }
                 // Outside thinking — check if any trigger word starts here
