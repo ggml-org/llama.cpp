@@ -20,8 +20,6 @@ add_library(${HTP_LIB} SHARED
     work-queue.c
     hex-dma.c
     hmx-queue.c
-    matmul-ops.c
-    flash-attn-ops.c
     gated-delta-net-ops.c
     binary-ops.c
     unary-ops.c
@@ -40,6 +38,8 @@ add_library(${HTP_LIB} SHARED
     diag-ops.c
     solve-tri-ops.c
     pad-ops.c
+    flash-attn-ops.c
+    matmul-ops.c
     argsort-ops.c
 )
 

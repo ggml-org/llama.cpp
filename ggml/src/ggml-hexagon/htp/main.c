@@ -794,6 +794,20 @@ static void prep_tensors(struct htp_context *ctx, struct htp_buf_desc *bufs, str
     }
 }
 
+static inline bool hex_l2flush_by_size(struct htp_thread_trace * tr, uint32_t trace_idx, void * addr, size_t size) {
+    if (size > HEX_L2_FLUSH_THRESHOLD) {
+        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, trace_idx);
+        qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, trace_idx);
+        return true;
+    } else {
+        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, trace_idx);
+        hex_l2flush(addr, size);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, trace_idx);
+        return false;
+    }
+}
+
 static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
     memcpy(octx->op_params, op->params, sizeof(octx->op_params));
     memcpy(octx->kernel_params, op->kernel_params, sizeof(octx->kernel_params));
@@ -804,6 +818,8 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
 
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[0] : NULL;
 
+    bool l2clean = false;
+
     // Prep input tensors
     for (uint32_t i=0; i<HTP_OP_MAX_INPUTS; i++) {
         struct htp_tensor *src = op->src[i] == 0xffff ? NULL : tens + op->src[i];
@@ -812,10 +828,10 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         if (!src) continue;
 
         if (!(src->flags & HTP_TENSOR_FLUSHED) && (src->flags & HTP_TENSOR_COMPUTE)) {
-            // flush compute buffers on input
-            htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, i);
-            hex_l2flush((void *) src->data, src->size);
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, i);
+            src->flags |= HTP_TENSOR_FLUSHED;
+            if (!l2clean) {
+                l2clean = hex_l2flush_by_size(tr, i, (void *) src->data, src->size);
+            }
         }
 
         FARF(HIGH, "prep-src #%u: data %p size %u : %u:%u:%u:%u", op->src[i], (void*) src->data, src->size,
@@ -844,15 +860,17 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
     octx->src3_spad.src = NULL;
     octx->dst_spad.src  = NULL;
 
+    l2clean = false;
+
     // flush buffers on output
     for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
         if (octx->dsts[i]) {
             struct htp_tensor *dst = (struct htp_tensor *)octx->dsts[i];
             dst->flags |= HTP_TENSOR_FLUSHED;
 
-            htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, i);
-            hex_l2flush((void *) dst->data, dst->size);
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, i);
+            if (!l2clean) {
+                l2clean = hex_l2flush_by_size(tr, i, (void *) dst->data, dst->size);
+            }
 
             FARF(HIGH, "post-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, op->dst[i], (void*) dst->data, dst->size,
                 dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
