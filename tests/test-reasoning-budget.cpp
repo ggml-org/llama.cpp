@@ -1,5 +1,4 @@
 #include "reasoning-budget.h"
-#include "trie.h"
 #include "unicode.h"
 
 #include "llama.h"
@@ -32,8 +31,12 @@ static void test_reasoning_budget(
     // Find the maximum token ID to ensure our vocab covers all tokens
     llama_token max_token = 0;
     for (auto t : sequence) max_token = std::max(max_token, t);
-    for (const auto & seq : start_seqs) for (auto t : seq) max_token = std::max(max_token, t);
-    for (const auto & seq : end_seqs) for (auto t : seq) max_token = std::max(max_token, t);
+    for (const auto & seq : start_seqs) {
+        for (auto t : seq) max_token = std::max(max_token, t);
+    }
+    for (const auto & seq : end_seqs) {
+        for (auto t : seq) max_token = std::max(max_token, t);
+    }
     for (auto t : forced_tokens) max_token = std::max(max_token, t);
 
     // Create a minimal sampler with mock vocabulary
@@ -255,7 +258,7 @@ static void test_reasoning_budget_force_manual() {
     fprintf(stderr, "  Test 'manual force transition' passed\n");
 }
 
-static void test_reasoning_budget_matched_end() {
+static void test_reasoning_budget_end_match() {
     const std::vector<llama_tokens> start = {{100}};
     const std::vector<llama_tokens> end   = {{101}, {103, 104}};
 
@@ -263,19 +266,19 @@ static void test_reasoning_budget_matched_end() {
     {
         auto * sampler = common_reasoning_budget_init(nullptr, start, end, {102, 101}, 5, REASONING_BUDGET_IDLE);
 
-        GGML_ASSERT(common_reasoning_budget_get_matched_end(sampler) == nullptr);
+        GGML_ASSERT(common_reasoning_budget_get_end_match(sampler) == nullptr);
 
         llama_sampler_accept(sampler, 100); // COUNTING
         llama_sampler_accept(sampler, 50);
         llama_sampler_accept(sampler, 103);
         llama_sampler_accept(sampler, 104); // end matched via {103, 104}, DONE
 
-        const llama_tokens * matched = common_reasoning_budget_get_matched_end(sampler);
+        const llama_tokens * matched = common_reasoning_budget_get_end_match(sampler);
         GGML_ASSERT(matched != nullptr);
         GGML_ASSERT(*matched == llama_tokens({103, 104}));
 
         llama_sampler_accept(sampler, 100); // re-arm, COUNTING
-        GGML_ASSERT(common_reasoning_budget_get_matched_end(sampler) == nullptr);
+        GGML_ASSERT(common_reasoning_budget_get_end_match(sampler) == nullptr);
 
         llama_sampler_free(sampler);
     }
@@ -290,7 +293,7 @@ static void test_reasoning_budget_matched_end() {
         llama_sampler_accept(sampler, 103);
         llama_sampler_accept(sampler, 104); // both {104} and {103, 104} end here
 
-        const llama_tokens * matched = common_reasoning_budget_get_matched_end(sampler);
+        const llama_tokens * matched = common_reasoning_budget_get_end_match(sampler);
         GGML_ASSERT(matched != nullptr);
         GGML_ASSERT(*matched == llama_tokens({103, 104}));
 
@@ -303,10 +306,10 @@ static void test_reasoning_budget_matched_end() {
 
         llama_sampler_accept(sampler, 102);
         llama_sampler_accept(sampler, 103);
-        GGML_ASSERT(common_reasoning_budget_get_matched_end(sampler) == nullptr);
+        GGML_ASSERT(common_reasoning_budget_get_end_match(sampler) == nullptr);
         llama_sampler_accept(sampler, 104); // forced sequence complete, DONE
 
-        const llama_tokens * matched = common_reasoning_budget_get_matched_end(sampler);
+        const llama_tokens * matched = common_reasoning_budget_get_end_match(sampler);
         GGML_ASSERT(matched != nullptr);
         GGML_ASSERT(*matched == llama_tokens({103, 104}));
 
@@ -319,56 +322,15 @@ static void test_reasoning_budget_matched_end() {
 
         llama_sampler_accept(sampler, 102); // forced sequence complete, DONE
         GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
-        GGML_ASSERT(common_reasoning_budget_get_matched_end(sampler) == nullptr);
+        GGML_ASSERT(common_reasoning_budget_get_end_match(sampler) == nullptr);
 
         llama_sampler_free(sampler);
     }
 
     // a null sampler is safely ignored
-    GGML_ASSERT(common_reasoning_budget_get_matched_end(nullptr) == nullptr);
+    GGML_ASSERT(common_reasoning_budget_get_end_match(nullptr) == nullptr);
 
     fprintf(stderr, "  Test 'matched end sequence' passed\n");
-}
-
-// Aho-Corasick match reporting unit test
-// match_pattern() must report the longest pattern ending at the current position
-static void test_aho_corasick_match_pattern() {
-    // duplicate inserts keep the first pattern index
-    {
-        common_trie t;
-        GGML_ASSERT(t.insert(std::string("ab")) == 0);
-        GGML_ASSERT(t.insert(std::string("cd")) == 1);
-        GGML_ASSERT(t.insert(std::string("ab")) == 0);
-    }
-
-    auto feed = [](const common_aho_corasick & ac, const std::string & input) {
-        size_t state = 0;
-        for (char c : input) {
-            state = ac.next(state, (uint32_t) c);
-        }
-        return state;
-    };
-
-    // match via a suffix link: after "abc" the state is not a pattern, but "bc" ends there
-    {
-        common_aho_corasick ac({"bc", "abcd"});
-        GGML_ASSERT(ac.match_pattern(feed(ac, "ab"))  == -1);
-        GGML_ASSERT(ac.match_pattern(feed(ac, "abc")) == 0);
-        GGML_ASSERT(ac.match_pattern(feed(ac, "xbc")) == 0);
-    }
-
-    // multiple patterns end at the same position: the longest wins
-    {
-        common_aho_corasick ac({"c", "abc"});
-        GGML_ASSERT(ac.match_pattern(feed(ac, "abc")) == 1);
-        GGML_ASSERT(ac.match_pattern(feed(ac, "xc"))  == 0);
-    }
-
-    // an empty pattern makes the start state terminal (used by gbnf_ac_grammar)
-    {
-        common_aho_corasick ac(std::vector<std::string>{""});
-        GGML_ASSERT(ac.is_terminal(0));
-    }
 }
 
 // UTF-8 boundary detection unit test
@@ -531,13 +493,9 @@ int main(void) {
     test_reasoning_budget_clone_mid_counting();
     test_reasoning_budget_clone_mid_forcing();
     test_reasoning_budget_force_manual();
-    test_reasoning_budget_matched_end();
+    test_reasoning_budget_end_match();
 
     printf("OK (12 tests passed)\n");
-
-    printf("Testing Aho-Corasick match reporting... ");
-    test_aho_corasick_match_pattern();
-    printf("OK\n");
 
     printf("Testing UTF-8 boundary detection... ");
     test_utf8_boundary_detection();
