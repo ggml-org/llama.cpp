@@ -58,6 +58,16 @@ static int g_xpass    = 0;  // XFAIL probes that PASSed   -> red (promote to GAT
 static int g_xfail    = 0;  // XFAIL probes still failing -> expected, green
 static int g_skips    = 0;
 
+static int set_innerq_env(const char * value) {
+#if defined(_WIN32)
+    return _putenv_s("LLAMA_ENABLE_INNERQ", value != nullptr ? value : "");
+#else
+    return value != nullptr
+        ? setenv("LLAMA_ENABLE_INNERQ", value, 1)
+        : unsetenv("LLAMA_ENABLE_INNERQ");
+#endif
+}
+
 // deterministic N(0,1) data so CPU and SYCL see identical inputs
 static std::vector<float> gen_normal(size_t n, uint32_t seed, float stddev = 1.0f) {
     std::mt19937 rng(seed);
@@ -1052,9 +1062,7 @@ int main() {
         const std::string original_env_value = had_original_env ? original_env : "";
         for (int i = 0; i < n_cases; ++i) {
             const innerq_case_t & c = cases[i];
-            const int env_rc = c.env_should_optin
-                ? setenv("LLAMA_ENABLE_INNERQ", "1", 1)
-                : unsetenv("LLAMA_ENABLE_INNERQ");
+            const int env_rc = set_innerq_env(c.env_should_optin ? "1" : nullptr);
             if (env_rc != 0) {
                 printf("   [8a] FAIL: %s could not set requested env state\n", c.label);
                 ++policy_failures;
@@ -1079,10 +1087,10 @@ int main() {
                 ++k_scale_failures;
             }
         }
-        if (had_original_env) {
-            setenv("LLAMA_ENABLE_INNERQ", original_env_value.c_str(), 1);
-        } else {
-            unsetenv("LLAMA_ENABLE_INNERQ");
+        const int restore_env_rc = set_innerq_env(had_original_env ? original_env_value.c_str() : nullptr);
+        if (restore_env_rc != 0) {
+            printf("   [8a] FAIL: could not restore original LLAMA_ENABLE_INNERQ state\n");
+            ++policy_failures;
         }
         if (policy_failures > 0 || k_scale_failures > 0) {
             printf("   [8a] InnerQ state machine: %d policy failures, %d k_scale failures (per-row env override)\n",

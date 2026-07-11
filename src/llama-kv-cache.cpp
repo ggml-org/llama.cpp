@@ -126,7 +126,7 @@ llama_kv_cache::llama_kv_cache(
     // single env-var check. Without this flag, get_turbo_innerq_scale_inv
     // would return the raw tensor even when LLAMA_ENABLE_INNERQ is unset,
     // silently making the InnerQ datapath active in every kv cache
-    // (violates off-by-default and contaminates the ≤2% latency baseline).
+    // (violates off-by-default and contaminates the <=2% latency baseline).
     {
         const char * env = getenv("LLAMA_ENABLE_INNERQ");
         innerq_active = (env != nullptr && env[0] != '\0' && env[0] != '0');

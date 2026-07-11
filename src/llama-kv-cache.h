@@ -245,9 +245,6 @@ private:
     // reset_innerq=false keeps the published scale alive across chunk clears.
     void do_clear(bool data, bool reset_innerq);
 
-public:
-
-private:
     const llama_model & model;
     const llama_hparams & hparams;
 
@@ -325,7 +322,7 @@ private:
 
     // Per-context InnerQ opt-in flag. Set once at construction from the
     // canonical LLAMA_ENABLE_INNERQ env gate (mirrors llama-context.cpp
-  // innerq_env_enabled and ggml_innerq_state_decide's env-var half).
+    // innerq_env_enabled and ggml_innerq_state_decide's env-var half).
     // When false, get_turbo_innerq_scale_inv() returns nullptr so the
     // graph-build src[1] matches the off-by-default pre-P3.2.4a baseline.
     bool innerq_active = false;

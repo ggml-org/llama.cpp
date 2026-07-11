@@ -4054,7 +4054,7 @@ void llama_memory_clear(llama_memory_t mem, bool data) {
     mem->clear(data);
 }
 
-// Single-dispatch through the llama_memory_i virtual; non-KV types fall back to a metadata clear.
+// Dispatch through the llama_memory_i virtual; non-overriding memory types use its virtual default.
 void llama_memory_clear_data_only(llama_memory_t mem) {
     if (!mem) {
         return;
