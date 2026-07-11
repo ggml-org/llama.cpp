@@ -669,8 +669,9 @@ static bool handcrafted_check_tensors(const gguf_context * gguf_ctx, const unsig
             if (gguf_get_tensor_n_dims(gguf_ctx, id) != n_dims) {
                 ok = false;
             }
+            const int64_t * ne = gguf_get_tensor_ne(gguf_ctx, id);
             for (int j = 0; j < GGML_MAX_DIMS; ++j) {
-                if (gguf_get_tensor_dim(gguf_ctx, id, j) != shape[j]) {
+                if (ne[j] != shape[j]) {
                     ok = false;
                 }
             }
