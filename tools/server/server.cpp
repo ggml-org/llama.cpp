@@ -101,6 +101,11 @@ int llama_server(int argc, char ** argv) {
         return 1;
     }
 
+    // apply the --prio process priority setting; failure is non-fatal
+    if (!set_process_priority(params.cpuparams.priority)) {
+        LOG_WRN("%s: failed to set process priority\n", __func__);
+    }
+
     llama_backend_init();
     llama_numa_init(params.numa);
 
