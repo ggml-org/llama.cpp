@@ -22,10 +22,10 @@ beforeAll(() => {
 });
 
 /**
- * Migration `mcp-default-overrides-merge-v1` is what removes the parallel
- * `mcpDefaultServerOverrides` config entry and folds its values onto
- * `mcpServers[i].enabled` (the single source of truth for new-chat defaults).
- * Tests confirm both the merge and the cleanup paths.
+ * Migration `mcp-default-overrides-merge-v1` folds the values of the parallel
+ * `mcpDefaultServerOverrides` config entry onto `mcpServers[i].enabled` (the
+ * single source of truth for new-chat defaults). The legacy key is kept on
+ * disk for downgrade compatibility.
  */
 describe('mcp-default-overrides-merge-v1 migration', () => {
 	const MIGRATION_STATE_KEY = `${STORAGE_APP_NAME}.migration-state`;
@@ -58,7 +58,7 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
 	}
 
-	it('applies matching overrides onto mcpServers[i].enabled and removes the legacy key', async () => {
+	it('applies matching overrides onto mcpServers[i].enabled and preserves the legacy key', async () => {
 		writeConfig({
 			mcpServers: JSON.stringify([
 				{ id: 'exa', enabled: false, url: 'https://mcp.exa.ai/mcp' },
@@ -80,7 +80,7 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 
 		expect(servers.find((s) => s.id === 'exa')?.enabled).toBe(true);
 		expect(servers.find((s) => s.id === 'hf')?.enabled).toBe(false);
-		expect(MCP_DEFAULT_OVERRIDES_KEY in after).toBe(false);
+		expect(MCP_DEFAULT_OVERRIDES_KEY in after).toBe(true);
 	});
 
 	it('skips override ids that do not match any configured server', async () => {
@@ -102,7 +102,7 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 
 		expect(servers).toHaveLength(1);
 		expect(servers[0].enabled).toBe(true);
-		expect(MCP_DEFAULT_OVERRIDES_KEY in after).toBe(false);
+		expect(MCP_DEFAULT_OVERRIDES_KEY in after).toBe(true);
 	});
 
 	it('is a no-op when there are no legacy overrides', async () => {
@@ -136,7 +136,7 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 
 		const after = readConfig();
 		expect(after.mcpServers).toBe(originalServers);
-		expect(MCP_DEFAULT_OVERRIDES_KEY in after).toBe(false);
+		expect(MCP_DEFAULT_OVERRIDES_KEY in after).toBe(true);
 	});
 
 	it('records itself as completed so subsequent loads do not re-run', async () => {

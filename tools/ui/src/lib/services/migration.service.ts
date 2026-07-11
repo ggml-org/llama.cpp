@@ -591,14 +591,15 @@ const MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID = 'mcp-default-overrides-merge-v1
 
 /**
  * Folds `mcpDefaultServerOverrides` (the legacy "default for new chats" list,
- * JSON-encoded as `[{ serverId, enabled }, ...]`) into `mcpServers[i].enabled`
- * and deletes the redundant override key. Runs after `mcpDefaultEnabledMigration`
- * so any legacy standalone overrides are already inside the config.
+ * JSON-encoded as `[{ serverId, enabled }, ...]`) into `mcpServers[i].enabled`.
+ * The legacy override key is intentionally left in the config so a downgrade
+ * keeps reading it. Runs after `mcpDefaultEnabledMigration` so any legacy
+ * standalone overrides are already inside the config.
  */
 const mcpDefaultOverridesMergeMigration: Migration = {
 	id: MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID,
 	description:
-		'Merge mcpDefaultServerOverrides entries onto mcpServers[i].enabled and drop the legacy key',
+		'Merge mcpDefaultServerOverrides entries onto mcpServers[i].enabled (preserves legacy key)',
 
 	async run(): Promise<void> {
 		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
@@ -652,14 +653,12 @@ const mcpDefaultOverridesMergeMigration: Migration = {
 
 		if (serversChanged) {
 			config[SETTINGS_KEYS.MCP_SERVERS] = JSON.stringify(servers);
+			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
 		}
-
-		delete config[MCP_DEFAULT_OVERRIDES_LEGACY_KEY];
-		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
 
 		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
 			console.log(
-				`[Migration] MCP default overrides merge: applied=${overrides.length} serversChanged=${serversChanged}`
+				`[Migration] MCP default overrides merge: applied=${overrides.length} serversChanged=${serversChanged} (legacy key preserved)`
 			);
 	}
 };
