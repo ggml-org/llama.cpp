@@ -1039,23 +1039,27 @@ int main() {
             {"turbo3 d=128 (env unset)",{0xDEAD, 128, GGML_TYPE_TURBO3_0, GGML_INNERQ_QUANT_TURBO3_0}, env_unset, want_DISABLED, want_other},
             {"turbo4 d=128 (env unset)",{0xDEAD, 128, GGML_TYPE_TURBO4_0, GGML_INNERQ_QUANT_TURBO4_0}, env_unset, want_DISABLED, want_other},
         };
-        // We don't override the env var from C here (the policy contract
-        // reads LLAMA_ENABLE_INNERQ from the process env). The env_unset
-        // case is verified by running this [8] probe ONLY when the harness
-        // is launched without LLAMA_ENABLE_INNERQ in the env (which is
-        // the default). The env_set case is verified by running with
-        // LLAMA_ENABLE_INNERQ=1 (the condition that gates this whole
-        // [8] block in the first place). So env_unset in the matrix
-        // above documents the "should be DISABLED" expectation; we
-        // expect exactly the env_set rows to come out OPTIN.
+        // Exercise both policy states in one deterministic process. The policy
+        // reads LLAMA_ENABLE_INNERQ directly, so set or unset it for each row
+        // and restore the caller's original environment after the matrix.
 
 
         int n_cases = sizeof(cases) / sizeof(cases[0]);
         int policy_failures = 0;
         int k_scale_failures = 0;
-        int env_state = getenv("LLAMA_ENABLE_INNERQ") != nullptr ? env_set : env_unset;
+        const char * original_env = getenv("LLAMA_ENABLE_INNERQ");
+        const bool had_original_env = original_env != nullptr;
+        const std::string original_env_value = had_original_env ? original_env : "";
         for (int i = 0; i < n_cases; ++i) {
             const innerq_case_t & c = cases[i];
+            const int env_rc = c.env_should_optin
+                ? setenv("LLAMA_ENABLE_INNERQ", "1", 1)
+                : unsetenv("LLAMA_ENABLE_INNERQ");
+            if (env_rc != 0) {
+                printf("   [8a] FAIL: %s could not set requested env state\n", c.label);
+                ++policy_failures;
+                continue;
+            }
             // The "null-key" row exercises decide() with a null pointer;
             // pass nullptr there instead of &c.key so the contract is real.
             const ggml_innerq_state_key * pass_key =
@@ -1075,13 +1079,18 @@ int main() {
                 ++k_scale_failures;
             }
         }
+        if (had_original_env) {
+            setenv("LLAMA_ENABLE_INNERQ", original_env_value.c_str(), 1);
+        } else {
+            unsetenv("LLAMA_ENABLE_INNERQ");
+        }
         if (policy_failures > 0 || k_scale_failures > 0) {
-            printf("   [8a] InnerQ state machine: %d policy failures, %d k_scale failures (env state in harness: %d)\n",
-                   policy_failures, k_scale_failures, env_state);
+            printf("   [8a] InnerQ state machine: %d policy failures, %d k_scale failures (per-row env override)\n",
+                   policy_failures, k_scale_failures);
             g_failures++;
         } else {
-            printf("   [8a] InnerQ state machine: %d cases PASS (env state in harness: %d)\n",
-                   n_cases, env_state);
+            printf("   [8a] InnerQ state machine: %d cases PASS (per-row env override)\n",
+                   n_cases);
         }
 
         // [8b] K^2 profile computation probe (P3.2.3 device K^2 kernel, C reference).
