@@ -55,6 +55,12 @@ static const llm_fused_op_probe llm_fused_op_gdn_ch_probe = {
     /*.n_tokens_per_seq =*/ 16,
 };
 
+static const llm_fused_op_probe llm_fused_op_lid_probe = {
+    /*.op               =*/ LLM_FUSED_OP_LIGHTNING_INDEXER,
+    /*.name             =*/ "Lightning Indexer",
+    /*.n_tokens_per_seq =*/ 1,
+};
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -225,6 +231,9 @@ llama_context::llama_context(
     cparams.fused_gdn_ar = true;
     cparams.fused_gdn_ch = true;
     cparams.auto_fgdn    = true;
+
+    cparams.fused_lid    = true;
+    cparams.auto_flid    = true;
 
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
@@ -521,6 +530,12 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         resolve(llm_fused_op_gdn_ar_probe, cparams.fused_gdn_ar);
         resolve(llm_fused_op_gdn_ch_probe, cparams.fused_gdn_ch);
         cparams.auto_fgdn = false;
+    }
+
+    if (cparams.auto_flid) {
+        LLAMA_LOG_INFO("%s: resolving fused Lightning Indexer support:\n", func);
+        resolve(llm_fused_op_lid_probe, cparams.fused_lid);
+        cparams.auto_flid = false;
     }
 }
 
