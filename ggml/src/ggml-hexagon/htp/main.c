@@ -812,14 +812,14 @@ static inline bool hex_l2flush_by_size(struct htp_thread_trace * tr, uint32_t tr
 }
 
 static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
+    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[0] : NULL;
+
     memcpy(octx->op_params, op->params, sizeof(octx->op_params));
     memcpy(octx->kernel_params, op->kernel_params, sizeof(octx->kernel_params));
     octx->flags = op->flags;
     octx->op    = op->opcode;
 
     FARF(HIGH, "proc-op #%u: opcode %u flags 0x%x", idx, octx->op, octx->flags);
-
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[0] : NULL;
 
     bool l2clean = false;
 
@@ -836,8 +836,9 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->src[i]     = src;
         octx->src_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        if (!(src->flags & HTP_TENSOR_FLUSHED) && (src->flags & HTP_TENSOR_COMPUTE)) {
-            src->flags |= HTP_TENSOR_FLUSHED;
+        struct htp_tensor *alias_tensor = tens + src->alias;
+        if (alias_tensor->flags & HTP_TENSOR_DIRTY) {
+            alias_tensor->flags &= ~HTP_TENSOR_DIRTY;
             if (!l2clean) {
                 l2clean = hex_l2flush_by_size(tr, i, (void *) src->data, src->size);
             }
@@ -859,6 +860,9 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->dsts[i]    = dst;
         octx->dst_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
+        struct htp_tensor *alias_tensor = tens + dst->alias;
+        alias_tensor->flags |= HTP_TENSOR_DIRTY;
+
         FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
     }
@@ -870,23 +874,6 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
     octx->src2_spad.src = NULL;
     octx->src3_spad.src = NULL;
     octx->dst_spad.src  = NULL;
-
-    l2clean = false;
-
-    // flush buffers on output
-    for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
-        if (octx->dsts[i]) {
-            struct htp_tensor *dst = (struct htp_tensor *)octx->dsts[i];
-            dst->flags |= HTP_TENSOR_FLUSHED;
-
-            if (!l2clean) {
-                l2clean = hex_l2flush_by_size(tr, i, (void *) dst->data, dst->size);
-            }
-
-            FARF(HIGH, "post-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, op->dst[i], (void*) dst->data, dst->size,
-                dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
-        }
-    }
 
     return status;
 }
@@ -950,6 +937,12 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
 
         FARF(HIGH, "processing opbatch #%u: n-bufs %u n-tensors %u n-ops %u n-traces %u : m-size %u b-size %u t-size %u o-size %u", req.id,
                 n_bufs, n_tens, n_ops, req.n_traces, dbuf.size, b_size, t_size, o_size);
+
+        // Clean cache at the start of the batch
+        struct htp_thread_trace * tr = &ctx->trace[0];
+        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, 0);
+        qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, 0);
 
         // Setup descriptor pointers
         uint8_t * m_ptr = dbuf.ptr;
@@ -1033,6 +1026,12 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         }
 
         dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
+
+        // Flush remaining dirty tensors at the end of the batch
+        tr = &ctx->trace[0];
+        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, 0);
+        qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, 0);
 
         err = dspqueue_write(queue, 0, 1, &dbuf, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
         if (err != 0) {

@@ -1236,6 +1236,20 @@ struct ggml_hexagon_opbatch {
             h.nb[0] = t->nb[0]; h.nb[1] = t->nb[1]; h.nb[2] = t->nb[2]; h.nb[3] = t->nb[3];
         }
 
+        h.alias = ti;
+        for (int j = 0; j < ti; j++) {
+            if (h_tens[j].bi == h.bi) {
+                uint64_t a_start = h_tens[j].data;
+                uint64_t a_end   = a_start + h_tens[j].size;
+                uint64_t b_start = h.data;
+                uint64_t b_end   = b_start + h.size;
+                if ((a_start < b_end) && (b_start < a_end)) {
+                    h.alias = h_tens[j].alias;
+                    break;
+                }
+            }
+        }
+
         h.flags = 0;
         if (ggml_backend_buffer_get_usage(t->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
             h.flags |= HTP_TENSOR_COMPUTE;

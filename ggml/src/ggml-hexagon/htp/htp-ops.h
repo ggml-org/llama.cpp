@@ -117,7 +117,7 @@ enum htp_op_code {
 
 enum htp_tensor_flags {
     HTP_TENSOR_COMPUTE = (1U << 0), // Tensor buffer temporal compute data (not weights)
-    HTP_TENSOR_FLUSHED = (1U << 1)  // Tensor buffer has been flushed (set by the NPU)
+    HTP_TENSOR_DIRTY   = (1U << 1)  // Tensor buffer is dirty and needs to be flushed
 };
 
 // Tensor descriptor
@@ -125,8 +125,9 @@ struct htp_tensor {
     uint32_t data;                 // Buffer offset in the messages, and data pointer on the NPU
     uint32_t size;                 // Data size in bytes
     uint32_t flags;                // Buffer / tensor flags
-    uint16_t type;                 // Data type
-    uint16_t bi;                   // Buffer index
+    uint32_t type;                 // Data type
+    uint32_t bi;                   // Buffer index
+    uint32_t alias;                // Index of the canonical tensor for this memory buffer
     uint32_t ne[HTP_OP_MAX_DIMS];  // Number of elements
     uint32_t nb[HTP_OP_MAX_DIMS];  // Stride in bytes (see ggml.h ggml_tensor)
 };
