@@ -12,6 +12,7 @@
 #include <climits>
 #include <algorithm>
 #include <unordered_set>
+#include <functional>
 
 namespace fs = std::filesystem;
 
@@ -51,7 +52,13 @@ public:
     virtual bool write_file(const std::string & path, const std::string & content) const = 0;
     // paths relative to `base`, '/'-separated; sets `err` if `base` isn't a directory
     virtual std::vector<std::string> list_files(const std::string & base, std::string & err) const = 0;
-    virtual exec_result run(const std::vector<std::string> & args, size_t max_output, int timeout_secs) const = 0;
+    // on_chunk, if set, is called with each chunk of output as it is read (before truncation cuts in);
+    // returning false terminates the process early (e.g. the client disconnected)
+    virtual exec_result run(
+            const std::vector<std::string> & args,
+            size_t max_output,
+            int timeout_secs,
+            const std::function<bool(const std::string &)> & on_chunk = nullptr) const = 0;
 };
 
 class tools_io_basic : public tools_io {
@@ -123,7 +130,11 @@ public:
         return list_files_fallback(base);
     }
 
-    exec_result run(const std::vector<std::string> & args, size_t max_output, int timeout_secs) const override {
+    exec_result run(
+            const std::vector<std::string> & args,
+            size_t max_output,
+            int timeout_secs,
+            const std::function<bool(const std::string &)> & on_chunk = nullptr) const override {
         exec_result res;
 
         subprocess_s proc;
@@ -164,8 +175,14 @@ public:
                     size_t len = strlen(buf);
                     if (output.size() + len <= max_output) {
                         output.append(buf, len);
+                        if (on_chunk && !on_chunk(std::string(buf, len))) {
+                            subprocess_terminate(&proc);
+                            break;
+                        }
                     } else {
-                        output.append(buf, max_output - output.size());
+                        size_t remaining = max_output - output.size();
+                        output.append(buf, remaining);
+                        if (on_chunk && remaining > 0) on_chunk(std::string(buf, remaining));
                         truncated = true;
                     }
                 }
@@ -287,7 +304,7 @@ struct server_tool_read_file : server_tool {
         };
     }
 
-    json invoke(json params) const override {
+    json invoke(json params, server_tool::stream *) const override {
         std::string path  = params.at("path").get<std::string>();
         int  start_line   = json_value(params, "start_line", 1);
         int  end_line     = json_value(params, "end_line",  -1); // -1 = no limit
@@ -376,7 +393,7 @@ struct server_tool_file_glob_search : server_tool {
         };
     }
 
-    json invoke(json params) const override {
+    json invoke(json params, server_tool::stream *) const override {
         std::string base    = params.at("path").get<std::string>();
         std::string include = json_value(params, "include", std::string("**"));
         std::string exclude = json_value(params, "exclude", std::string(""));
@@ -457,7 +474,7 @@ struct server_tool_grep_search : server_tool {
         };
     }
 
-    json invoke(json params) const override {
+    json invoke(json params, server_tool::stream *) const override {
         std::string path        = params.at("path").get<std::string>();
         std::string pat_str     = params.at("pattern").get<std::string>();
         std::string include     = json_value(params, "include", std::string("**"));
@@ -577,6 +594,7 @@ struct server_tool_exec_shell_command : server_tool {
         name = "exec_shell_command";
         display_name = "Execute shell command";
         permission_write = true;
+        support_stream = true;
     }
 
     json get_definition() const override {
@@ -598,7 +616,7 @@ struct server_tool_exec_shell_command : server_tool {
         };
     }
 
-    json invoke(json params) const override {
+    json invoke(json params, server_tool::stream * st) const override {
         std::string command   = params.at("command").get<std::string>();
         int    timeout        = json_value(params, "timeout",         10);
         size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
@@ -612,7 +630,24 @@ struct server_tool_exec_shell_command : server_tool {
         std::vector<std::string> args = {"sh", "-c", command};
 #endif
 
-        auto io  = make_tools_io(params);
+        auto io = make_tools_io(params);
+
+        if (st) {
+            auto res = io->run(args, max_output, timeout, [st](const std::string & chunk) {
+                st->push(chunk);
+                return !st->alive || st->alive();
+            });
+            if (st->alive && !st->alive()) {
+                return json();
+            }
+            std::string tail = string_format("\n[exit code: %d]", res.exit_code);
+            if (res.timed_out) {
+                tail += " [exit due to timed out]";
+            }
+            st->push(tail);
+            return json();
+        }
+
         auto res = io->run(args, max_output, timeout);
 
         std::string text_output = res.output;
@@ -654,7 +689,7 @@ struct server_tool_write_file : server_tool {
         };
     }
 
-    json invoke(json params) const override {
+    json invoke(json params, server_tool::stream *) const override {
         std::string path    = params.at("path").get<std::string>();
         std::string content = params.at("content").get<std::string>();
 
@@ -710,7 +745,7 @@ struct server_tool_edit_file : server_tool {
         };
     }
 
-    json invoke(json params) const override {
+    json invoke(json params, server_tool::stream *) const override {
         std::string path = params.at("path").get<std::string>();
         const json & edits_json = params.at("edits");
 
@@ -1018,13 +1053,66 @@ struct server_tool_get_datetime : server_tool {
         };
     }
 
-    json invoke(json) const override {
+    json invoke(json, server_tool::stream *) const override {
         auto now = std::chrono::system_clock::now();
         auto time = std::chrono::system_clock::to_time_t(now);
 
         return {{"result", std::ctime(&time)}};
     }
 };
+
+struct server_tool_stream_result : server_task_result {
+    std::string chunk;
+    bool done = false;
+    std::string error_msg;
+
+    json to_json() override {
+        if (!done) {
+            return {{"chunk", chunk}};
+        } else {
+            json result = {{"done", true}};
+            if (!error_msg.empty()) {
+                result["error"] = error_msg;
+            }
+            return result;
+        }
+    }
+};
+
+void server_tool::stream::push(const std::string & chunk) {
+    if (chunk.empty()) return;
+    auto r = std::make_unique<server_tool_stream_result>();
+    r->id    = id;
+    r->chunk = chunk;
+    qr.send(std::move(r));
+}
+
+struct server_tools_res : server_http_res {
+    std::thread worker;
+    server_response * qr = nullptr; // set only for streaming responses
+    int id = -1;
+
+    ~server_tools_res() override {
+        if (worker.joinable()) {
+            worker.join();
+        }
+        if (qr) {
+            qr->remove_waiting_task_id(id);
+        }
+    }
+};
+
+static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools, const std::string & name, bool require_stream) {
+    for (auto & t : tools) {
+        if (t->name == name) {
+            if (require_stream && !t->support_stream) {
+                throw std::invalid_argument(string_format("tool \"%s\" does not support stream = true", name.c_str()));
+            }
+            return *t;
+        }
+    }
+    throw std::invalid_argument(string_format("unknown tool \"%s\"", name.c_str()));
+}
 
 //
 // public API
@@ -1090,15 +1178,62 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools) {
     };
 
     handle_post = [this](const server_http_req & req) -> server_http_res_ptr {
-        auto res = std::make_unique<server_http_res>();
+        auto res = std::make_unique<server_tools_res>();
         try {
             json body = json::parse(req.body);
             std::string tool_name = body.at("tool").get<std::string>();
             json params = body.value("params", json::object());
-            json result = invoke(tool_name, params);
-            res->data   = safe_json_to_str(result);
+            bool stream = body.value("stream", false);
+
+            server_tool & tool = find_tool(tools, tool_name, stream);
+
+            if (stream) {
+                int id = res_id.fetch_add(1);
+                queue_res.add_waiting_task_id(id);
+                res->qr = &queue_res;
+                res->id = id;
+
+                res->worker = std::thread([this, id, &req, &tool, params]() mutable {
+                    server_tool::stream st{queue_res, id, [&req]() {
+                        return !req.should_stop();
+                    }};
+
+                    auto done = std::make_unique<server_tool_stream_result>();
+                    try {
+                        tool.invoke(params, &st);
+                    } catch (const std::exception & e) {
+                        done->error_msg = e.what();
+                    } catch (...) {
+                        done->error_msg = "An unknown error occurred";
+                    }
+                    done->id    = st.id;
+                    done->done  = true;
+                    st.qr.send(std::move(done));
+                });
+
+                res->content_type = "text/event-stream";
+                res->status = 200;
+                res->next   = [this, id](std::string & output) -> bool {
+                    auto result = queue_res.recv(id);
+                    auto * r = dynamic_cast<server_tool_stream_result *>(result.get());
+                    GGML_ASSERT(r != nullptr);
+                    output = "data: " + safe_json_to_str(r->to_json()) + "\n\n";
+                    if (r->done) {
+                        queue_res.remove_waiting_task_id(id);
+                        return false;
+                    }
+                    return true;
+                };
+            } else {
+                json result = tool.invoke(params, nullptr);
+                res->status = 200;
+                res->data   = safe_json_to_str(result);
+            }
         } catch (const json::exception & e) {
             res->status = 400;
+            res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+        } catch (const std::invalid_argument & e) {
+            res->status = 404;
             res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
         } catch (const std::exception & e) {
             SRV_ERR("got exception: %s\n", e.what());
@@ -1107,13 +1242,4 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools) {
         }
         return res;
     };
-}
-
-json server_tools::invoke(const std::string & name, const json & params) {
-    for (auto & t : tools) {
-        if (t->name == name) {
-            return t->invoke(params);
-        }
-    }
-    return {{"error", "unknown tool: " + name}};
 }

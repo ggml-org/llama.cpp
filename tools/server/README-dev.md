@@ -235,6 +235,29 @@ That requires `JSON.stringify` when formatted to message content:
 }
 ```
 
+Set `stream: true` in the request body to stream a tool's output as it runs, instead of waiting for it to finish. Only certain tools accept this (for ex. `exec_shell_command`);
+returns 404 if tool doesn't support it.
+
+Response is SSE stream, one `data: <json>` line per chunk:
+
+```json
+{"chunk": "hello\n"}
+```
+
+followed by a final event once the tool returns:
+
+```json
+{"done": true}
+```
+
+or, if `invoke()` threw:
+
+```json
+{"done": true, "error": "..."}
+```
+
+There is no `[DONE]` sentinel (unlike `/chat/completions`), the stream ends after the `done`
+
 ### Router mode: how child <--> router communicates
 
 Upon spawning a new child process using `subprocess`, both child and router listen to the stdout/stderr (combined)
