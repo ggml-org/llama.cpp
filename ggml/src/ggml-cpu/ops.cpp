@@ -1292,7 +1292,6 @@ static void ggml_compute_forward_sum_f32(
     }
 
     assert(ggml_is_scalar(dst));
-    assert(src0->nb[0] == sizeof(float));
 
     GGML_TENSOR_LOCALS(int64_t, ne0, src0, ne)
     GGML_TENSOR_LOCALS(size_t,  nb0, src0, nb)
@@ -1303,10 +1302,16 @@ static void ggml_compute_forward_sum_f32(
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
             for (int64_t i01 = 0; i01 < ne01; i01++) {
-                ggml_vec_sum_f32_ggf(ne00,
-                        &row_sum,
-                        (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03));
-                sum += row_sum;
+                const char * row = (const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
+                if (nb00 == sizeof(float)) {
+                    ggml_vec_sum_f32_ggf(ne00, &row_sum, (const float *) row);
+                    sum += row_sum;
+                } else {
+                    // src rows are not contiguous, e.g. permuted views
+                    for (int64_t i00 = 0; i00 < ne00; i00++) {
+                        sum += *(const float *) (row + i00*nb00);
+                    }
+                }
             }
         }
     }
@@ -1325,8 +1330,6 @@ static void ggml_compute_forward_sum_f16(
 
     assert(ggml_is_scalar(dst));
 
-    assert(src0->nb[0] == sizeof(ggml_fp16_t));
-
     GGML_TENSOR_LOCALS(int64_t, ne0, src0, ne)
     GGML_TENSOR_LOCALS(size_t,  nb0, src0, nb)
 
@@ -1336,10 +1339,16 @@ static void ggml_compute_forward_sum_f16(
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
             for (int64_t i01 = 0; i01 < ne01; i01++) {
-                ggml_vec_sum_f16_ggf(ne00,
-                    &row_sum,
-                    (ggml_fp16_t *) ((char *) src0->data + i01 * nb01 + i02 * nb02 + i03 * nb03));
-                sum += row_sum;
+                const char * row = (const char *) src0->data + i01 * nb01 + i02 * nb02 + i03 * nb03;
+                if (nb00 == sizeof(ggml_fp16_t)) {
+                    ggml_vec_sum_f16_ggf(ne00, &row_sum, (const ggml_fp16_t *) row);
+                    sum += row_sum;
+                } else {
+                    // src rows are not contiguous, e.g. permuted views
+                    for (int64_t i00 = 0; i00 < ne00; i00++) {
+                        sum += GGML_CPU_FP16_TO_FP32(*(const ggml_fp16_t *) (row + i00 * nb00));
+                    }
+                }
             }
         }
     }
@@ -1358,8 +1367,6 @@ static void ggml_compute_forward_sum_bf16(
 
     assert(ggml_is_scalar(dst));
 
-    assert(src0->nb[0] == sizeof(ggml_bf16_t));
-
     GGML_TENSOR_LOCALS(int64_t, ne0, src0, ne)
     GGML_TENSOR_LOCALS(size_t,  nb0, src0, nb)
 
@@ -1369,10 +1376,16 @@ static void ggml_compute_forward_sum_bf16(
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
             for (int64_t i01 = 0; i01 < ne01; i01++) {
-                ggml_vec_sum_bf16_ggf(ne00,
-                    &row_sum,
-                    (ggml_bf16_t *) ((char *) src0->data + i01 * nb01 + i02 * nb02 + i03 * nb03));
-                sum += row_sum;
+                const char * row = (const char *) src0->data + i01 * nb01 + i02 * nb02 + i03 * nb03;
+                if (nb00 == sizeof(ggml_bf16_t)) {
+                    ggml_vec_sum_bf16_ggf(ne00, &row_sum, (const ggml_bf16_t *) row);
+                    sum += row_sum;
+                } else {
+                    // src rows are not contiguous, e.g. permuted views
+                    for (int64_t i00 = 0; i00 < ne00; i00++) {
+                        sum += GGML_BF16_TO_FP32(*(const ggml_bf16_t *) (row + i00 * nb00));
+                    }
+                }
             }
         }
     }
