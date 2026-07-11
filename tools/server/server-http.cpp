@@ -1,7 +1,6 @@
 #include "common.h"
 #include "http.h"
 #include "server-http.h"
-#include "server-stream.h"
 #include "server-common.h"
 #include "ui.h"
 
@@ -530,33 +529,20 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             std::string chunk;
             const bool has_next = response->next(chunk);
             if (!chunk.empty()) {
-                // mirror into the ring buffer first, the session must reflect every SSE chunk
-                // whether or not the wire write below succeeds
-                if (response->spipe) {
-                    response->spipe->write(chunk.data(), chunk.size());
-                }
                 if (!sink.write(chunk.data(), chunk.size())) {
-                    // peer is gone, stop the wire path here
                     return false;
                 }
                 SRV_DBG("http: streamed chunk: %s\n", chunk.c_str());
             }
             if (!has_next) {
-                // producer reached its natural end on the wire, a later close() skips the drain
-                if (response->spipe) {
-                    response->spipe->done();
-                }
                 sink.done();
                 SRV_DBG("%s", "http: stream ended\n");
             }
             return has_next;
         };
         const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
-            // on a dropped peer, close() drains the rest of the generation into the ring buffer
-            if (response->spipe) {
-                response->spipe->close();
-            }
-            response.reset(); // spipe destructor finalizes the session if attached
+            response->on_complete();
+            response.reset();
             request.reset();
         };
         res.set_chunked_content_provider(content_type, chunked_content_provider, on_complete);
@@ -564,6 +550,7 @@ static void process_handler_response(server_http_req_ptr && request, server_http
         res.status = response->status;
         set_headers(res, response->headers);
         res.set_content(response->data, response->content_type);
+        response->on_complete();
     }
 }
 
