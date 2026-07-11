@@ -1402,7 +1402,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         bool    has_bias,
         bool    has_scap,
         bool    has_kvpad,
-        int32_t nsg) {
+        int32_t nsg,
+        bool    use_f16_kv) {
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
     char base[256];
@@ -1411,15 +1412,17 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     const int32_t dk = (int32_t) op->src[1]->ne[0];
     const int32_t dv = (int32_t) op->src[2]->ne[0];
 
-    const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
-    const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
+    const int32_t ns10 = use_f16_kv ? dk : op->src[1]->nb[1]/op->src[1]->nb[0];
+    const int32_t ns20 = use_f16_kv ? dv : op->src[2]->nb[1]/op->src[2]->nb[0];
+
+    const char * type = use_f16_kv ? "f16" : ggml_type_name(op->src[1]->type);
 
     // do bounds checks for the mask?
     const bool bc_mask = op->src[3] && (op->src[3]->ne[1] % 8 != 0);
 
     snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
             "flash_attn_ext",
-            ggml_type_name(op->src[1]->type),
+            type,
             dk,
             dv);
 
