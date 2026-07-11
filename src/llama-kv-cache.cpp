@@ -244,7 +244,7 @@ llama_kv_cache::llama_kv_cache(
 
         const uint32_t n_embd_k_idx = hparams.n_embd_k_idx(il);
         ggml_tensor * k_idx = n_embd_k_idx > 0
-            ? ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_k_idx, kv_size, n_stream)
+            ? ggml_new_tensor_3d(ctx, GGML_TYPE_F16, n_embd_k_idx, kv_size, n_stream)
             : nullptr;
         if (k_idx) {
             ggml_format_name(k_idx, "cache_k_idx_l%d", il);
@@ -318,7 +318,7 @@ llama_kv_cache::llama_kv_cache(
                 (float)memory_size_total / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
                 ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f),
-                ggml_type_name(GGML_TYPE_F32), (float)memory_size_k_idx / (1024.0f * 1024.0f));
+                ggml_type_name(GGML_TYPE_F16), (float)memory_size_k_idx / (1024.0f * 1024.0f));
         } else {
             LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
                 (float)memory_size_total / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,

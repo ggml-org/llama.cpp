@@ -1884,20 +1884,12 @@ struct llama_model_minimax_m3 : public llama_model_base {
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
 
-        // MSA 4-way per-group FA split (exact per-group selection). msa_mask4 is
-        // [n_kv, S, Hd, ns] f16, channel g = group g's combined causal+block mask.
-        ggml_tensor * build_attn_msa_4way(
-                llm_graph_input_attn_kv * inp,
-                ggml_tensor * wo, ggml_tensor * wo_s,
-                ggml_tensor * q_cur, ggml_tensor * k_cur, ggml_tensor * v_cur,
-                ggml_tensor * msa_mask4, float kq_scale, int il) const;
-        // MSA decode-only gather path (S==1): per-group top-k block gather + FA.
-        ggml_tensor * build_attn_msa_decode(
-                llm_graph_input_attn_kv * inp,
-                ggml_tensor * wo, ggml_tensor * wo_s,
-                ggml_tensor * q_cur, ggml_tensor * k_cur, ggml_tensor * v_cur,
-                ggml_tensor * bs, ggml_tensor * local_bias, ggml_tensor * kqm,
-                int topk_blocks, float kq_scale, int il) const;
+        ggml_tensor * build_attn_msa_fa(
+                ggml_tensor * q_cur,   // [D, HQ, S] f32
+                ggml_tensor * k,       // [D, n_keys, 1, C]  C = HKV or HKV*n_stream
+                ggml_tensor * v,       // [D, n_keys, 1, C]
+                ggml_tensor * mask,    // [n_keys, R, 1, C] f16, R = HQ*T/(Gp*C)
+                int64_t Gp, float kq_scale, int il) const;
     };
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
