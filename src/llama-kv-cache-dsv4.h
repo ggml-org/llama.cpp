@@ -21,7 +21,7 @@ public:
             const char    * name,
         const llama_memory_i::layer_filter_cb & filter);
 
-    void clear(bool data);
+    void clear(llama_seq_id seq_id, bool data);
 
     uint32_t get_ratio()    const;
     uint32_t get_state_size() const;
@@ -67,6 +67,8 @@ private:
 // DSV4 uses a normal raw/SWA token cache plus compressed K-only block caches.
 // The compressed caches are storage only; DSV4-specific visibility and block
 // planning are handled by llama_kv_cache_dsv4_context / llm_graph_input_dsv4.
+// FIXME: currently the cache only supports non-unified mode even if unified flag is passed
+// FIXME: we currently conflate token_pos and buffer contents. See https://github.com/ggml-org/llama.cpp/pull/25521#discussion_r3558173819
 
 class llama_kv_cache_dsv4 : public llama_memory_i {
 public:
@@ -146,7 +148,7 @@ private:
     std::unique_ptr<llama_dsv4_comp_state> hca_state;
     std::unique_ptr<llama_dsv4_comp_state> lid_state;
 
-    void clear_compressed(bool data);
+    void clear_compressed(llama_seq_id seq_id, bool data);
 };
 
 // DSV4 raw attention only uses the SWA half of kv_raw. The base half is kept
