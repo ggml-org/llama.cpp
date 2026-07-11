@@ -3460,7 +3460,11 @@ void llm_graph_context::build_sampling() const {
             ggml_build_forward_select(gf, outs.data(), outs.size(), i_out);
         }
 
-        if (data.logits != nullptr) {
+        // Do not expose the original logits input as sampled logits. Samplers
+        // such as greedy only produce a sampled token and leave data.logits
+        // pointing at logits_seq; copying that tensor back to the host defeats
+        // backend sampling, especially over RPC.
+        if (data.logits != nullptr && data.logits != logits_seq) {
             res->t_sampled_logits[seq_id] = data.logits;
             outs[1] = data.logits;
             ggml_build_forward_select(gf, outs.data(), outs.size(), i_out);

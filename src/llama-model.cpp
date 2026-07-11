@@ -25,6 +25,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <functional>
@@ -1018,6 +1019,99 @@ struct llama_model::impl {
     std::vector<float> tensor_split_owned;
 };
 
+static bool llama_model_env_enabled(const char * name) {
+    const char * value = std::getenv(name);
+    return value != nullptr &&
+           value[0] != '\0' &&
+           std::strcmp(value, "0") != 0 &&
+           std::strcmp(value, "false") != 0 &&
+           std::strcmp(value, "False") != 0 &&
+           std::strcmp(value, "FALSE") != 0 &&
+           std::strcmp(value, "off") != 0 &&
+           std::strcmp(value, "Off") != 0 &&
+           std::strcmp(value, "OFF") != 0;
+}
+
+static const char * llama_model_split_mode_name(llama_split_mode split_mode) {
+    switch (split_mode) {
+        case LLAMA_SPLIT_MODE_NONE:   return "none";
+        case LLAMA_SPLIT_MODE_LAYER:  return "layer";
+        case LLAMA_SPLIT_MODE_ROW:    return "row";
+        case LLAMA_SPLIT_MODE_TENSOR: return "tensor";
+        default:                      return "unknown";
+    }
+}
+
+static const char * llama_model_backend_dev_type_name(enum ggml_backend_dev_type type) {
+    switch (type) {
+        case GGML_BACKEND_DEVICE_TYPE_CPU:   return "CPU";
+        case GGML_BACKEND_DEVICE_TYPE_GPU:   return "GPU";
+        case GGML_BACKEND_DEVICE_TYPE_IGPU:  return "IGPU";
+        case GGML_BACKEND_DEVICE_TYPE_ACCEL: return "ACCEL";
+        case GGML_BACKEND_DEVICE_TYPE_META:  return "META";
+        default:                             return "unknown";
+    }
+}
+
+static const char * llama_model_buft_list_name(const buft_list_t * buft_list) {
+    if (buft_list == nullptr || buft_list->empty() || buft_list->front().second == nullptr) {
+        return "none";
+    }
+
+    return ggml_backend_buft_name(buft_list->front().second);
+}
+
+static const char * llama_model_default_buft_name(ggml_backend_dev_t dev) {
+    ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
+    return buft == nullptr ? "none" : ggml_backend_buft_name(buft);
+}
+
+static void llama_model_log_dev_assignment(
+        const char * func,
+        const char * label,
+        ggml_backend_dev_t dev,
+        const buft_list_t * buft_list) {
+    if (dev == nullptr) {
+        LLAMA_LOG_INFO("%s: placement: %s -> none\n", func, label);
+        return;
+    }
+
+    LLAMA_LOG_INFO("%s: placement: %s -> %s (client_device_type = %s), buft_candidate = %s\n",
+            func,
+            label,
+            ggml_backend_dev_name(dev),
+            llama_model_backend_dev_type_name(ggml_backend_dev_type(dev)),
+            llama_model_buft_list_name(buft_list));
+}
+
+static void llama_model_log_layer_range(
+        const char * func,
+        int first,
+        int last,
+        ggml_backend_dev_t dev,
+        const buft_list_t * buft_list) {
+    const int count = last - first + 1;
+    if (first == last) {
+        LLAMA_LOG_INFO("%s: placement: layer %3d -> %s (client_device_type = %s), buft_candidate = %s, count = %d\n",
+                func,
+                first,
+                ggml_backend_dev_name(dev),
+                llama_model_backend_dev_type_name(ggml_backend_dev_type(dev)),
+                llama_model_buft_list_name(buft_list),
+                count);
+        return;
+    }
+
+    LLAMA_LOG_INFO("%s: placement: layers %3d-%3d -> %s (client_device_type = %s), buft_candidate = %s, count = %d\n",
+            func,
+            first,
+            last,
+            ggml_backend_dev_name(dev),
+            llama_model_backend_dev_type_name(ggml_backend_dev_type(dev)),
+            llama_model_buft_list_name(buft_list),
+            count);
+}
+
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
     if (params.tensor_split != nullptr) {
         // llama_model_params stores tensor_split as a borrowed pointer, but the model
@@ -1256,9 +1350,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         throw std::runtime_error(format("%s: no CPU backend found", __func__));
     }
 
+    const bool log_model_placement = llama_model_env_enabled("LLAMA_LOG_MODEL_PLACEMENT");
+
     // calculate the split points
     bool all_zero = tensor_split == nullptr || std::all_of(tensor_split, tensor_split + n_devices(), [](float x) { return x == 0.0f; });
     std::vector<float> splits(n_devices());
+    std::vector<bool> split_host_fallback(log_model_placement ? n_devices() : 0, false);
     if (all_zero) {
         // default split, by free memory
         for (size_t i = 0; i < n_devices(); ++i) {
@@ -1272,12 +1369,16 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             // fixes: https://github.com/ggml-org/llama.cpp/issues/18577
             if (free == 0 && total == 0) {
                 ggml_backend_dev_memory(cpu_dev, &free, &total);
+                if (log_model_placement) {
+                    split_host_fallback[i] = true;
+                }
             }
             splits[i] = free;
         }
     } else {
         std::copy(tensor_split, tensor_split + n_devices(), splits.begin());
     }
+    const std::vector<float> split_weights = log_model_placement ? splits : std::vector<float>{};
 
     // sum and normalize the splits to get the split points
     float split_sum = 0.0f;
@@ -1315,6 +1416,85 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     // assign the output layer
     pimpl->dev_output = get_layer_buft_list(n_layer_all);
+
+    if (log_model_placement) {
+        LLAMA_LOG_INFO("%s: placement: reporting enabled by LLAMA_LOG_MODEL_PLACEMENT\n", __func__);
+        LLAMA_LOG_INFO("%s: placement: n_layer = %d, n_gpu_layers = %d, split_mode = %s, split_source = %s, i_gpu_start = %d, act_gpu_layers = %d, tensor_overrides = %s\n",
+                __func__,
+                n_layer_all,
+                n_gpu_layers,
+                llama_model_split_mode_name(split_mode),
+                all_zero ? "free-memory" : "tensor-split",
+                i_gpu_start,
+                act_gpu_layers,
+                pimpl->has_tensor_overrides ? "true" : "false");
+
+        size_t cpu_free = 0;
+        size_t cpu_total = 0;
+        ggml_backend_dev_memory(cpu_dev, &cpu_free, &cpu_total);
+
+        const char * cpu_desc = ggml_backend_dev_description(cpu_dev);
+        LLAMA_LOG_INFO("%s: placement: cpu: %s (client_device_type = %s, desc = %s), free = %.2f MiB, total = %.2f MiB, default_buft = %s\n",
+                __func__,
+                ggml_backend_dev_name(cpu_dev),
+                llama_model_backend_dev_type_name(ggml_backend_dev_type(cpu_dev)),
+                cpu_desc == nullptr ? "n/a" : cpu_desc,
+                cpu_free / 1024.0 / 1024.0,
+                cpu_total / 1024.0 / 1024.0,
+                llama_model_default_buft_name(cpu_dev));
+
+        for (size_t i = 0; i < devices.size(); ++i) {
+            ggml_backend_dev_t dev = devices[i].dev;
+            size_t free = 0;
+            size_t total = 0;
+            ggml_backend_dev_memory(dev, &free, &total);
+
+            ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+            const char * reg_name = reg == nullptr ? "none" : ggml_backend_reg_name(reg);
+            const char * desc = ggml_backend_dev_description(dev);
+
+            const bool uses_host_fallback = i < split_host_fallback.size() && split_host_fallback[i];
+            const char * split_weight_source = !all_zero ? "tensor-split" :
+                uses_host_fallback ? "client-cpu-fallback" : "reported-free-memory";
+
+            LLAMA_LOG_INFO("%s: placement: device %zu: %s (client_backend = %s, client_device_type = %s, desc = %s), free = %.2f MiB, total = %.2f MiB, split_weight = %.6g, split_point = %.6f, split_weight_source = %s, default_buft = %s\n",
+                    __func__,
+                    i,
+                    ggml_backend_dev_name(dev),
+                    reg_name,
+                    llama_model_backend_dev_type_name(ggml_backend_dev_type(dev)),
+                    desc == nullptr ? "n/a" : desc,
+                    free / 1024.0 / 1024.0,
+                    total / 1024.0 / 1024.0,
+                    split_weights[i],
+                    splits[i],
+                    split_weight_source,
+                    llama_model_default_buft_name(dev));
+        }
+
+        llama_model_log_dev_assignment(__func__, "input", pimpl->dev_input.dev, pimpl->dev_input.buft_list);
+
+        if (pimpl->dev_layer.empty()) {
+            LLAMA_LOG_INFO("%s: placement: repeating layers -> none\n", __func__);
+        } else {
+            int range_start = 0;
+            for (int il = 1; il <= n_layer_all; ++il) {
+                if (il == n_layer_all ||
+                        pimpl->dev_layer[il].dev != pimpl->dev_layer[range_start].dev ||
+                        pimpl->dev_layer[il].buft_list != pimpl->dev_layer[range_start].buft_list) {
+                    llama_model_log_layer_range(
+                            __func__,
+                            range_start,
+                            il - 1,
+                            pimpl->dev_layer[range_start].dev,
+                            pimpl->dev_layer[range_start].buft_list);
+                    range_start = il;
+                }
+            }
+        }
+
+        llama_model_log_dev_assignment(__func__, "output", pimpl->dev_output.dev, pimpl->dev_output.buft_list);
+    }
 
     const auto TENSOR_NOT_REQUIRED = llama_model_loader::TENSOR_NOT_REQUIRED;
 
