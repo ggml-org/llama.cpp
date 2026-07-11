@@ -12,4 +12,8 @@ static inline void * htp_tensor_data(const struct htp_tensor * t) {
     return (void *) (uintptr_t) t->data;
 }
 
+static inline uint32_t * htp_tensor_flags(const struct htp_tensor * t) {
+    return (uint32_t *) &t->flags;
+}
+
 #endif // HTP_TENSOR_H
