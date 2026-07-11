@@ -28,6 +28,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
 #include "htp_iface.h"
 #include "work-queue.h"
 #include "hex-profile.h"
@@ -780,12 +781,14 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
     }
 }
 
-static void prep_tensor(struct htp_context *ctx, struct htp_buf_desc *bufs, uint32_t idx, struct htp_tensor *t) {
+static void prep_tensor(struct htp_context *ctx, struct htp_buf_desc *bufs, struct htp_tensor *tens, uint32_t idx, struct htp_tensor *t) {
     uint32_t offset = t->data;
     uint32_t size   = t->size;
     uint32_t bi     = t->bi;
+    uint32_t alias  = t->alias;
 
-    t->data = bufs[bi].base + offset; // update data to the actual pointer
+    t->data  = (uint32_t) (bufs[bi].base + offset);  // update data to the actual pointer
+    t->alias = (uint32_t) (tens + alias);            // update alias to the actual pointer
 
     FARF(HIGH, "prep-tensor #%u: bi %u offset %u size %u data %p : %u:%u:%u:%u", idx, t->bi, offset, t->size, (void*) t->data,
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
@@ -793,7 +796,7 @@ static void prep_tensor(struct htp_context *ctx, struct htp_buf_desc *bufs, uint
 
 static void prep_tensors(struct htp_context *ctx, struct htp_buf_desc *bufs, struct htp_tensor *tens, uint32_t n_tens) {
     for (uint32_t i=0; i < n_tens; i++) {
-        prep_tensor(ctx, bufs, i, tens + i);
+        prep_tensor(ctx, bufs, tens, i, tens + i);
     }
 }
 
@@ -836,9 +839,9 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->src[i]     = src;
         octx->src_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        struct htp_tensor *alias_tensor = tens + src->alias;
-        if (alias_tensor->flags & HTP_TENSOR_DIRTY) {
-            alias_tensor->flags &= ~HTP_TENSOR_DIRTY;
+        struct htp_tensor *alias = htp_tensor_alias(src);
+        if (alias->flags & HTP_TENSOR_DIRTY) {
+            alias->flags &= ~HTP_TENSOR_DIRTY;
             if (!l2clean) {
                 l2clean = hex_l2flush_by_size(tr, i, (void *) src->data, src->size);
             }
@@ -860,8 +863,7 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->dsts[i]    = dst;
         octx->dst_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        struct htp_tensor *alias_tensor = tens + dst->alias;
-        alias_tensor->flags |= HTP_TENSOR_DIRTY;
+        htp_tensor_alias(dst)->flags |= HTP_TENSOR_DIRTY;
 
         FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
