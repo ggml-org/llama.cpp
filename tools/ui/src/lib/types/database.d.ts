@@ -6,12 +6,18 @@ export interface McpServerOverride {
 	enabled: boolean;
 }
 
+export interface ToolOverride {
+	key: string;
+	enabled: boolean;
+}
+
 export interface DatabaseConversation {
 	currNode: string | null;
 	id: string;
 	lastModified: number;
 	name: string;
 	mcpServerOverrides?: McpServerOverride[];
+	toolOverrides?: ToolOverride[];
 	thinkingEnabled?: boolean;
 	reasoningEffort?: ReasoningEffort;
 	forkedFromConversationId?: string;

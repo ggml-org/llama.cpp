@@ -68,7 +68,7 @@
 
 						{#each group.tools as entry (entry.key)}
 							{@const toolName = entry.definition.function.name}
-							{@const isEnabled = toolsStore.isToolEnabled(entry.key)}
+							{@const isEnabled = toolsStore.isToolEnabledByDefault(entry.key)}
 							{@const permissionKey = entry.key}
 							{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}
 
@@ -78,7 +78,7 @@
 								<div class="flex w-16 shrink-0 justify-center">
 									<Checkbox
 										checked={isEnabled}
-										onCheckedChange={() => toolsStore.toggleTool(entry.key)}
+										onCheckedChange={() => toolsStore.toggleToolDefault(entry.key)}
 										class="h-4 w-4"
 									/>
 								</div>

@@ -117,6 +117,9 @@ export { sanitizeKeyValuePairKey, sanitizeKeyValuePairValue } from './sanitize';
 // Image error fallback utilities
 export { getImageErrorFallbackHtml } from './image-error-fallback';
 
+// Tool utilities
+export { parseToolOverrides } from './tools';
+
 // MCP utilities
 export {
 	detectMcpTransportFromUrl,

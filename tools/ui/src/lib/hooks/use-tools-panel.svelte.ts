@@ -88,7 +88,7 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		// Find current group by label to get up-to-date tool references
 		const group = activeGroups.find((g) => g.label === label);
 		if (!group) return;
-		toolsStore.toggleGroup(group);
+		void toolsStore.toggleGroup(group);
 	}
 
 	function handleOpen(): void {

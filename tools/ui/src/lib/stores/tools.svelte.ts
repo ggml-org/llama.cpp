@@ -1,11 +1,14 @@
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
+import type { ToolOverride } from '$lib/types/database';
 import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$lib/enums';
-import { config } from '$lib/stores/settings.svelte';
+import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { parseToolOverrides } from '$lib/utils';
 import {
-	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	SANDBOX_TOOL_DEFINITION,
+	SETTINGS_KEYS,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
@@ -18,36 +21,23 @@ class ToolsStore {
 	private _builtinTools = $state<OpenAIToolDefinition[]>([]);
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
-	private _disabledTools = $state(new SvelteSet<string>());
 	private _toolsEndpointUnreachable = $state(false);
 
 	constructor() {
-		try {
-			const stored = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
-			if (stored) {
-				const parsed = JSON.parse(stored);
-				if (Array.isArray(parsed)) {
-					for (const key of parsed) {
-						if (typeof key === 'string') this._disabledTools.add(key);
-					}
-				}
-			}
-		} catch (err) {
-			console.error('[ToolsStore] Failed to load disabled tools from localStorage:', err);
-		}
-
 		this.fetchBuiltinTools();
 	}
 
-	private persistDisabledTools(): void {
-		try {
-			localStorage.setItem(
-				DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
-				JSON.stringify([...this._disabledTools])
-			);
-		} catch {
-			// ignore storage errors
-		}
+	/**
+	 * Tool overrides for the current chat: conversation-scoped when a conversation
+	 * is active, pending defaults otherwise. A tool without an override is enabled.
+	 */
+	#chatOverride(key: string): ToolOverride | undefined {
+		return conversationsStore.getToolOverride(key);
+	}
+
+	/** Tool overrides inherited by new chats, stored in the settings config */
+	#defaultOverrides(): ToolOverride[] {
+		return parseToolOverrides(config()[SETTINGS_KEYS.TOOL_DEFAULT_OVERRIDES]);
 	}
 
 	private toolKey(source: ToolSource, name: string, serverId?: string): string {
@@ -316,7 +306,7 @@ class ToolsStore {
 	getEnabledToolsForLLM(): OpenAIToolDefinition[] {
 		const enabledNames = new SvelteSet<string>();
 		for (const entry of this.allTools) {
-			if (!this._disabledTools.has(entry.key)) {
+			if (this.isToolEnabled(entry.key)) {
 				enabledNames.add(entry.definition.function.name);
 			}
 		}
@@ -356,49 +346,43 @@ class ToolsStore {
 		return this._toolsEndpointUnreachable;
 	}
 
-	get disabledTools(): SvelteSet<string> {
-		return this._disabledTools;
-	}
-
 	isToolEnabled(key: string): boolean {
-		return !this._disabledTools.has(key);
+		return this.#chatOverride(key)?.enabled ?? true;
 	}
 
 	toggleTool(key: string): void {
-		if (this._disabledTools.has(key)) {
-			this._disabledTools.delete(key);
-		} else {
-			this._disabledTools.add(key);
-		}
-		this.persistDisabledTools();
+		void this.setToolEnabledAsync(key, !this.isToolEnabled(key));
 	}
 
 	setToolEnabled(key: string, enabled: boolean): void {
-		if (enabled) {
-			this._disabledTools.delete(key);
-		} else {
-			this._disabledTools.add(key);
-		}
+		void this.setToolEnabledAsync(key, enabled);
 	}
 
-	/** Enable all tools belonging to a specific MCP server */
-	enableAllToolsForServer(serverId: string): void {
-		const connection = mcpStore.getConnections().get(serverId);
-		if (!connection) return;
-		for (const tool of connection.tools) {
-			this._disabledTools.delete(this.toolKey(ToolSource.MCP, tool.name, serverId));
-		}
-		this.persistDisabledTools();
+	/** Enabling a tool removes its override, keeping stored lists sparse (absent = enabled) */
+	private setToolEnabledAsync(key: string, enabled: boolean): Promise<void> {
+		return conversationsStore.setToolOverride(key, enabled ? undefined : false);
 	}
 
-	toggleGroup(group: ToolGroup): void {
+	async toggleGroup(group: ToolGroup): Promise<void> {
 		const allEnabled = group.tools.every((t) => this.isToolEnabled(t.key));
 		const target = !allEnabled;
+		// Sequential awaits keep the conversation record consistent across read-modify-writes
 		for (const tool of group.tools) {
-			if (target) this._disabledTools.delete(tool.key);
-			else this._disabledTools.add(tool.key);
+			await this.setToolEnabledAsync(tool.key, target);
 		}
-		this.persistDisabledTools();
+	}
+
+	isToolEnabledByDefault(key: string): boolean {
+		return this.#defaultOverrides().find((o) => o.key === key)?.enabled ?? true;
+	}
+
+	toggleToolDefault(key: string): void {
+		const defaults = this.#defaultOverrides().filter((o) => o.key !== key);
+		if (this.isToolEnabledByDefault(key)) {
+			defaults.push({ key, enabled: false });
+		}
+		settingsStore.updateConfig(SETTINGS_KEYS.TOOL_DEFAULT_OVERRIDES, JSON.stringify(defaults));
+		conversationsStore.reloadPendingToolOverrides();
 	}
 
 	isGroupFullyEnabled(group: ToolGroup): boolean {

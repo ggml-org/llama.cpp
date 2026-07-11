@@ -2,7 +2,7 @@ import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
 import { IDXDB_TABLES, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
-import type { McpServerOverride } from '$lib/types/database';
+import type { McpServerOverride, ToolOverride } from '$lib/types/database';
 
 class LlamaUiDatabase extends Dexie {
 	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
@@ -513,6 +513,12 @@ export class DatabaseService {
 					mcpServerOverrides: sourceConv.mcpServerOverrides
 						? sourceConv.mcpServerOverrides.map((o: McpServerOverride) => ({
 								serverId: o.serverId,
+								enabled: o.enabled
+							}))
+						: undefined,
+					toolOverrides: sourceConv.toolOverrides
+						? sourceConv.toolOverrides.map((o: ToolOverride) => ({
+								key: o.key,
 								enabled: o.enabled
 							}))
 						: undefined

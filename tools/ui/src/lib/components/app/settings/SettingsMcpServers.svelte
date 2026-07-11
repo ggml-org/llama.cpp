@@ -3,7 +3,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { ActionIcon, McpServerCard, McpServerCardSkeleton } from '$lib/components/app';
 	import { DialogMcpServerAddNew } from '$lib/components/app/dialogs';
 	import { HealthCheckStatus } from '$lib/enums';
@@ -122,11 +121,7 @@
 							{server}
 							enabled={conversationsStore.isMcpServerEnabledForChat(server.id)}
 							onToggle={async () => {
-								const wasEnabled = conversationsStore.isMcpServerEnabledForChat(server.id);
 								await conversationsStore.toggleMcpServerForChat(server.id);
-								if (!wasEnabled) {
-									toolsStore.enableAllToolsForServer(server.id);
-								}
 							}}
 							onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
 							onDelete={() => mcpStore.removeServer(server.id)}

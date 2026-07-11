@@ -18,8 +18,6 @@ export const ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.always
 export const CONFIG_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.config`;
 export const DISABLED_TOOLS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledTools`;
 
-/** Disabled tools keyed by stable selection identity, no migration from the name based key */
-export const DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledToolKeys`;
 export const FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteModels`;
 export const REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.reasoningEffortDefault`;
 /** Set when user has interacted with the MCP server recommendations dialog (checked servers, added custom server, or dismissed) */

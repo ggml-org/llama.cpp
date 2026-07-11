@@ -784,7 +784,22 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 		label: 'MCP default server overrides',
 		help: 'Per-server enable/disable defaults inherited by new chats. JSON-serialized list of {serverId, enabled} entries.',
 		defaultValue: '[]',
-		type: SettingsFieldType.INPUT
+		type: SettingsFieldType.INPUT,
+		sync: {
+			serverKey: SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES,
+			paramType: SyncableParameterType.STRING
+		}
+	},
+	{
+		key: SETTINGS_KEYS.TOOL_DEFAULT_OVERRIDES,
+		label: 'Tool default overrides',
+		help: 'Per-tool enable/disable defaults inherited by new chats. JSON-serialized list of {key, enabled} entries.',
+		defaultValue: '[]',
+		type: SettingsFieldType.INPUT,
+		sync: {
+			serverKey: SETTINGS_KEYS.TOOL_DEFAULT_OVERRIDES,
+			paramType: SyncableParameterType.STRING
+		}
 	}
 	// {
 	// 	key: SETTINGS_KEYS.PY_INTERPRETER_ENABLED,

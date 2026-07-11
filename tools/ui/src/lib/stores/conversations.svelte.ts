@@ -24,8 +24,13 @@ import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
-import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
-import type { McpServerOverride } from '$lib/types/database';
+import {
+	filterByLeafNodeId,
+	findLeafNode,
+	generateConversationTitle,
+	parseToolOverrides
+} from '$lib/utils';
+import type { McpServerOverride, ToolOverride } from '$lib/types/database';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import {
 	MessageRole,
@@ -83,6 +88,9 @@ class ConversationsStore {
 	/** Pending MCP server overrides for new conversations (before first message) */
 	pendingMcpServerOverrides = $state<McpServerOverride[]>(ConversationsStore.loadMcpDefaults());
 
+	/** Pending tool overrides for new conversations (before first message) */
+	pendingToolOverrides = $state<ToolOverride[]>(ConversationsStore.loadToolDefaults());
+
 	/** Global (non-conversation-specific) thinking toggle default, derived from reasoning effort */
 	pendingThinkingEnabled = $state(false);
 
@@ -114,6 +122,18 @@ class ConversationsStore {
 			enabled: o.enabled
 		}));
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES, JSON.stringify(plain));
+	}
+
+	private static loadToolDefaults(): ToolOverride[] {
+		return parseToolOverrides(config()[SETTINGS_KEYS.TOOL_DEFAULT_OVERRIDES]);
+	}
+
+	private saveToolDefaults(): void {
+		const plain = this.pendingToolOverrides.map((o) => ({
+			key: o.key,
+			enabled: o.enabled
+		}));
+		settingsStore.updateConfig(SETTINGS_KEYS.TOOL_DEFAULT_OVERRIDES, JSON.stringify(plain));
 	}
 
 	/** Load reasoning effort default from localStorage */
@@ -166,6 +186,7 @@ class ConversationsStore {
 			// Re-read defaults after migrations: a migration may have populated
 			// the settings config (e.g. moved legacy MCP overrides into it).
 			this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
+			this.pendingToolOverrides = ConversationsStore.loadToolDefaults();
 
 			await this.loadConversations();
 			this.isInitialized = true;
@@ -286,6 +307,19 @@ class ConversationsStore {
 			this.pendingMcpServerOverrides = [];
 		}
 
+		if (this.pendingToolOverrides.length > 0) {
+			// Deep clone to plain objects (Svelte 5 $state uses Proxies which can't be cloned to IndexedDB)
+			const plainToolOverrides = this.pendingToolOverrides.map((o) => ({
+				key: o.key,
+				enabled: o.enabled
+			}));
+			conversation.toolOverrides = plainToolOverrides;
+			await DatabaseService.updateConversation(conversation.id, {
+				toolOverrides: plainToolOverrides
+			});
+			this.pendingToolOverrides = [];
+		}
+
 		// Inherit global thinking/reasoning defaults into the new conversation
 		const thinkingEnabled = this.getThinkingEnabled();
 		conversation.thinkingEnabled = thinkingEnabled;
@@ -322,6 +356,7 @@ class ConversationsStore {
 			}
 
 			this.pendingMcpServerOverrides = [];
+			this.pendingToolOverrides = [];
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
@@ -352,6 +387,7 @@ class ConversationsStore {
 		this.activeMessages = [];
 		// reload defaults so new chats inherit persisted state
 		this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
+		this.pendingToolOverrides = ConversationsStore.loadToolDefaults();
 		this.pendingReasoningEffort = ConversationsStore.loadReasoningEffortDefault();
 	}
 
@@ -775,6 +811,107 @@ class ConversationsStore {
 	clearPendingMcpServerOverrides(): void {
 		this.pendingMcpServerOverrides = [];
 		this.saveMcpDefaults();
+	}
+
+	/**
+	 * Gets the tool override for a specific tool key in the active conversation.
+	 * Falls back to pending overrides if no active conversation exists.
+	 * @param key - The tool key to check
+	 * @returns The override if set, undefined if using the default state
+	 */
+	getToolOverride(key: string): ToolOverride | undefined {
+		if (this.activeConversation) {
+			return this.activeConversation.toolOverrides?.find((o: ToolOverride) => o.key === key);
+		}
+		return this.pendingToolOverrides.find((o) => o.key === key);
+	}
+
+	/**
+	 * Get all tool overrides for the current conversation.
+	 * Returns pending overrides if no active conversation.
+	 */
+	getAllToolOverrides(): ToolOverride[] {
+		if (this.activeConversation?.toolOverrides) {
+			return this.activeConversation.toolOverrides;
+		}
+		return this.pendingToolOverrides;
+	}
+
+	/**
+	 * Sets or removes a tool override for the active conversation.
+	 * If no conversation exists, stores as pending override.
+	 * @param key - The tool key to override
+	 * @param enabled - The enabled state, or undefined to remove the override
+	 */
+	async setToolOverride(key: string, enabled: boolean | undefined): Promise<void> {
+		if (!this.activeConversation) {
+			this.setPendingToolOverride(key, enabled);
+			return;
+		}
+
+		// Clone to plain objects to avoid Proxy serialization issues with IndexedDB
+		const currentOverrides = (this.activeConversation.toolOverrides || []).map(
+			(o: ToolOverride) => ({
+				key: o.key,
+				enabled: o.enabled
+			})
+		);
+		let newOverrides: ToolOverride[];
+
+		if (enabled === undefined) {
+			newOverrides = currentOverrides.filter((o: ToolOverride) => o.key !== key);
+		} else {
+			const existingIndex = currentOverrides.findIndex((o: ToolOverride) => o.key === key);
+			if (existingIndex >= 0) {
+				newOverrides = [...currentOverrides];
+				newOverrides[existingIndex] = { key, enabled };
+			} else {
+				newOverrides = [...currentOverrides, { key, enabled }];
+			}
+		}
+
+		await DatabaseService.updateConversation(this.activeConversation.id, {
+			toolOverrides: newOverrides.length > 0 ? newOverrides : undefined
+		});
+
+		this.activeConversation = {
+			...this.activeConversation,
+			toolOverrides: newOverrides.length > 0 ? newOverrides : undefined
+		};
+
+		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		if (convIndex !== -1) {
+			this.conversations[convIndex].toolOverrides =
+				newOverrides.length > 0 ? newOverrides : undefined;
+			this.conversations = [...this.conversations];
+		}
+	}
+
+	private setPendingToolOverride(key: string, enabled: boolean | undefined): void {
+		if (enabled === undefined) {
+			this.pendingToolOverrides = this.pendingToolOverrides.filter((o) => o.key !== key);
+		} else {
+			const existingIndex = this.pendingToolOverrides.findIndex((o) => o.key === key);
+			if (existingIndex >= 0) {
+				const newOverrides = [...this.pendingToolOverrides];
+				newOverrides[existingIndex] = { key, enabled };
+				this.pendingToolOverrides = newOverrides;
+			} else {
+				this.pendingToolOverrides = [...this.pendingToolOverrides, { key, enabled }];
+			}
+		}
+		this.saveToolDefaults();
+	}
+
+	clearPendingToolOverrides(): void {
+		this.pendingToolOverrides = [];
+		this.saveToolDefaults();
+	}
+
+	/** Re-sync pending tool overrides after the defaults changed outside a conversation */
+	reloadPendingToolOverrides(): void {
+		if (this.activeConversation) return;
+		this.pendingToolOverrides = ConversationsStore.loadToolDefaults();
 	}
 
 	/**
