@@ -16,4 +16,18 @@ static inline uint32_t * htp_tensor_flags(const struct htp_tensor * t) {
     return (uint32_t *) &t->flags;
 }
 
+static inline void htp_tensor_make_dirty(const struct htp_tensor * t) {
+    struct htp_tensor * curr = (struct htp_tensor *) t;
+    do {
+        curr->flags |= HTP_TENSOR_DIRTY;
+        curr = htp_tensor_alias(curr);
+    } while (curr != t);
+}
+
+static inline void htp_tensor_make_clean(const struct htp_tensor * t) {
+    if (htp_tensor_alias(t) == t) {
+        *htp_tensor_flags(t) &= ~HTP_TENSOR_DIRTY;
+    }
+}
+
 #endif // HTP_TENSOR_H
