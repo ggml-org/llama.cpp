@@ -30,6 +30,18 @@ This is a pinned baseline, not a current-HEAD claim.
   `4bbccb54b2f034307eb13656e936b432a1e786cfde8ce068d551d30557a338ed`.
 - Both executables report version `10041 (10a70cde8)`; every benchmark JSONL
   row reports `build_commit: 10a70cde8`.
+- A post-run loader audit used the runner's exact
+  `LD_LIBRARY_PATH=build-turbo-aot-discriminator/bin:build-turbo-aot-decode-10a70cde8/bin:...`.
+  `ldd` showed both executables resolving `libllama`, `libggml-base`,
+  `libggml-cpu`, and `libggml-sycl` from
+  `build-turbo-aot-discriminator/bin`; therefore throughput and PPL used the
+  same runtime compute stack. The loaded SYCL-library hash above matches the
+  pristine `10a70cde8` discriminator manifest at
+  `/tmp/p324a-discriminator-manifest.txt`.
+- The discriminator build directory was subsequently reconfigured against a
+  moving checkout, so its generated CMake metadata is not artifact provenance.
+  The executable's live `--version`, matching content hashes, pristine-build
+  manifest, and loader resolution are the binding evidence.
 - Raw evidence: `/tmp/p41-standard-baseline-10a70cde8/`.
 
 The live branch was `turbo-sycl-opt` at `32c4e1e37` when this baseline ran.
