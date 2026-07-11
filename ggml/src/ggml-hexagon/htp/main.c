@@ -814,6 +814,14 @@ static inline bool hex_l2flush_by_size(struct htp_thread_trace * tr, uint32_t tr
     }
 }
 
+static inline void mark_dirty(struct htp_tensor *t) {
+    struct htp_tensor *curr = t;
+    do {
+        curr->flags |= HTP_TENSOR_DIRTY;
+        curr = htp_tensor_alias(curr);
+    } while (curr != t);
+}
+
 static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
     struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[0] : NULL;
 
@@ -839,9 +847,8 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->src[i]     = src;
         octx->src_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        struct htp_tensor *alias = htp_tensor_alias(src);
-        if (alias->flags & HTP_TENSOR_DIRTY) {
-            alias->flags &= ~HTP_TENSOR_DIRTY;
+        if (src->flags & HTP_TENSOR_DIRTY) {
+            src->flags &= ~HTP_TENSOR_DIRTY;
             if (!l2clean) {
                 l2clean = hex_l2flush_by_size(tr, i, (void *) src->data, src->size);
             }
@@ -863,7 +870,7 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->dsts[i]    = dst;
         octx->dst_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        htp_tensor_alias(dst)->flags |= HTP_TENSOR_DIRTY;
+        mark_dirty(dst);
 
         FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);

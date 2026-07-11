@@ -1245,6 +1245,7 @@ struct ggml_hexagon_opbatch {
                 uint64_t b_end   = b_start + h.size;
                 if ((a_start < b_end) && (b_start < a_end)) {
                     h.alias = h_tens[j].alias;
+                    h_tens[j].alias = ti;
                     break;
                 }
             }
