@@ -8,6 +8,22 @@
 #include <sys/sysctl.h>
 #endif
 
+#if !defined(HWCAP_FPHP)
+#define HWCAP_FPHP (1 << 9)
+#endif
+
+#if !defined(HWCAP_ASIMDHP)
+#define HWCAP_ASIMDHP (1 << 10)
+#endif
+
+#if !defined(HWCAP_ASIMDDP)
+#define HWCAP_ASIMDDP (1 << 20)
+#endif
+
+#if !defined(HWCAP_SVE)
+#define HWCAP_SVE (1 << 22)
+#endif
+
 #if !defined(HWCAP2_SVE2)
 #define HWCAP2_SVE2 (1 << 1)
 #endif
