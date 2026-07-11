@@ -314,11 +314,12 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
     GGML_UNUSED(n_expert_used);
 }
 
-template <mmq_q8_1_ds_layout ds_layout>
+// scatter: grid over tokens, quantize once, write to all the token's compact rows
+template <mmq_q8_1_ds_layout ds_layout, bool scatter>
 static __global__ void quantize_mmq_q8_1(
         const float * __restrict__ x, const int32_t * __restrict__ ids, void * __restrict__ vy,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
-        const int64_t ne0, const int ne1, const int ne2) {
+        const int64_t ne0, const int ne1, const int ne2, const int n_expert_used) {
 
     constexpr int vals_per_scale = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 64 : 32;
     constexpr int vals_per_sum   = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 16 : 32;
@@ -329,26 +330,27 @@ static __global__ void quantize_mmq_q8_1(
         return;
     }
 
-    const int64_t i1 = blockIdx.x;
-    const int64_t i2 = blockIdx.z % ne2;
-    const int64_t i3 = blockIdx.z / ne2;
-
     const int64_t i00 = i0;
     ggml_cuda_pdl_sync();
-    const int64_t i01 = ids ? ids[i1] : i1;
-    const int64_t i02 = i2;
-    const int64_t i03 = i3;
+
+    int64_t base_idx;
+    if constexpr (scatter) {
+        base_idx = (int64_t) blockIdx.x * s02; // one physical row per token
+    } else {
+        const int64_t i2  = blockIdx.z % ne2;
+        const int64_t i3  = blockIdx.z / ne2;
+        const int64_t i01 = ids ? ids[blockIdx.x] : blockIdx.x;
+        base_idx = i3*s03 + i2*s02 + i01*s01;
+    }
 
     const float4 * x4 = (const float4 *) x;
-
     block_q8_1_mmq * y = (block_q8_1_mmq *) vy;
 
-    const int64_t ib0 = blockIdx.z*((int64_t)gridDim.x*gridDim.y*blockDim.x/QK8_1); // first block of channel
-    const int64_t ib  = ib0 + (i0 / (4*QK8_1))*ne1 + blockIdx.x;                    // block index in channel
-    const int64_t iqs = i0 % (4*QK8_1);                                             // quant index in block
+    const int64_t k_block = i0 / (4*QK8_1); // column block in the channel
+    const int64_t iqs     = i0 % (4*QK8_1); // quant index in block
 
     // Load 4 floats per thread and calculate max. abs. value between them:
-    const float4 xi = i0 < ne00 ? x4[(i03*s03 + i02*s02 + i01*s01 + i00)/4] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    const float4 xi = i0 < ne00 ? x4[(base_idx + i00)/4] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     float amax = fabsf(xi.x);
     amax = fmaxf(amax, fabsf(xi.y));
     amax = fmaxf(amax, fabsf(xi.z));
@@ -377,40 +379,43 @@ static __global__ void quantize_mmq_q8_1(
     q.y = roundf(xi.y*d_inv);
     q.z = roundf(xi.z*d_inv);
     q.w = roundf(xi.w*d_inv);
-
-    // Write back 4 int8 values as a single 32 bit value for better memory bandwidth:
-    char4 * yqs4 = (char4 *) y[ib].qs;
-    yqs4[iqs/4] = q;
-
-    if (ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6) {
-        if (iqs % 16 != 0 || iqs >= 96) {
-            return;
-        }
-
-        y[ib].d2s6[2 + iqs/16] = sum;
-
-        if (iqs % 64 != 0) {
-            return;
-        }
-
-        const float d = 1.0f / d_inv;
-
-        y[ib].d2s6[iqs/64] = d;
-
-        return;
-    }
-
-    if (iqs % 32 != 0) {
-        return;
-    }
-
     const float d = 1.0f / d_inv;
 
-    if (ds_layout == MMQ_Q8_1_DS_LAYOUT_DS4) {
-        y[ib].ds4[iqs/32] = make_half2(d, sum);
-    } else {
-        y[ib].d4[iqs/32]  = d;
+    // write the block once (normal) or to each of the token's compact rows (scatter)
+    const int nwrite = scatter ? n_expert_used : 1;
+    for (int slot = 0; slot < nwrite; ++slot) {
+        int64_t ib;
+        if constexpr (scatter) {
+            const int64_t i = ids[(int64_t) blockIdx.x * n_expert_used + slot];
+            if (i < 0) {
+                continue;
+            }
+            ib = k_block*ne1 + i;
+        } else {
+            const int64_t ib0 = blockIdx.z*((int64_t)gridDim.x*gridDim.y*blockDim.x/QK8_1); // first block of channel
+            ib = ib0 + k_block*ne1 + blockIdx.x;
+        }
+
+        // Write back 4 int8 values as a single 32 bit value for better memory bandwidth:
+        char4 * yqs4 = (char4 *) y[ib].qs;
+        yqs4[iqs/4] = q;
+
+        if (ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6) {
+            if (iqs % 16 == 0 && iqs < 96) {
+                y[ib].d2s6[2 + iqs/16] = sum;
+                if (iqs % 64 == 0) {
+                    y[ib].d2s6[iqs/64] = d;
+                }
+            }
+        } else if (iqs % 32 == 0) {
+            if (ds_layout == MMQ_Q8_1_DS_LAYOUT_DS4) {
+                y[ib].ds4[iqs/32] = make_half2(d, sum);
+            } else {
+                y[ib].d4[iqs/32]  = d;
+            }
+        }
     }
+    GGML_UNUSED(n_expert_used);
 }
 
 void quantize_row_q8_1_cuda(
@@ -443,16 +448,46 @@ void quantize_mmq_q8_1_cuda(
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
     switch (mmq_get_q8_1_ds_layout(type_src0)) {
         case MMQ_Q8_1_DS_LAYOUT_D4:
-            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D4>
-                <<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
+            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D4, false>
+                <<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2, /*n_expert_used=*/0);
             break;
         case MMQ_Q8_1_DS_LAYOUT_DS4:
-            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4>
-                <<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
+            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4, false>
+                <<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2, /*n_expert_used=*/0);
             break;
         case MMQ_Q8_1_DS_LAYOUT_D2S6:
-            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D2S6>
-                <<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
+            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D2S6, false>
+                <<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2, /*n_expert_used=*/0);
+            break;
+        default:
+            GGML_ABORT("fatal error");
+            break;
+    }
+}
+
+// scatter=true reuses the quant kernel: grid over tokens, ids = inverse map (token slot -> compact row)
+void quantize_scatter_mmq_q8_1_cuda(
+        const float * x, const int32_t * ids_src1_inv, void * vy, const ggml_type type_src0,
+        const int64_t ne00, const int64_t stride_token, const int64_t ne0,
+        const int64_t n_tokens, const int64_t nrows_dst, const int n_expert_used, cudaStream_t stream) {
+    GGML_ASSERT(ne00 % 4 == 0);
+    GGML_ASSERT(ne0 % (4*QK8_1) == 0);
+
+    const int64_t block_num_y = (ne0 + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
+    const dim3 num_blocks(n_tokens, block_num_y, 1);
+    const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
+    switch (mmq_get_q8_1_ds_layout(type_src0)) {
+        case MMQ_Q8_1_DS_LAYOUT_D4:
+            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D4, true><<<num_blocks, block_size, 0, stream>>>(
+                x, ids_src1_inv, vy, ne00, /*s01=*/0, /*s02=*/stride_token, /*s03=*/0, ne0, /*ne1=*/(int) nrows_dst, /*ne2=*/1, n_expert_used);
+            break;
+        case MMQ_Q8_1_DS_LAYOUT_DS4:
+            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4, true><<<num_blocks, block_size, 0, stream>>>(
+                x, ids_src1_inv, vy, ne00, /*s01=*/0, /*s02=*/stride_token, /*s03=*/0, ne0, /*ne1=*/(int) nrows_dst, /*ne2=*/1, n_expert_used);
+            break;
+        case MMQ_Q8_1_DS_LAYOUT_D2S6:
+            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D2S6, true><<<num_blocks, block_size, 0, stream>>>(
+                x, ids_src1_inv, vy, ne00, /*s01=*/0, /*s02=*/stride_token, /*s03=*/0, ne0, /*ne1=*/(int) nrows_dst, /*ne2=*/1, n_expert_used);
             break;
         default:
             GGML_ABORT("fatal error");
