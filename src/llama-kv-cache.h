@@ -18,6 +18,12 @@ struct llama_context;
 // llama_kv_cache
 //
 
+// Selects the TURBO_LAYER_ADAPTIVE layer-precision mode for one KV cache
+// construction. env_val is the raw TURBO_LAYER_ADAPTIVE value (nullptr when
+// unset). Pure and process-state-free: a second cache in the same process
+// must select from its own inputs, never inherit the first construction's.
+int llama_kv_cache_adaptive_mode(const char * env_val, ggml_type type_v, uint32_t n_layer);
+
 class llama_kv_cache : public llama_memory_i {
 public:
     struct stream_copy_info {

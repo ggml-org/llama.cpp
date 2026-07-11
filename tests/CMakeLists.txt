@@ -203,6 +203,8 @@ llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build(test-turbo-innerq-runtime.cpp)
 llama_test(test-turbo-innerq-runtime)
+llama_build(test-kv-cache-adaptive-mode.cpp)
+llama_test(test-kv-cache-adaptive-mode)
 
 if (GGML_SYCL)
     add_executable(test-sycl-turbo test-sycl-turbo.cpp)
