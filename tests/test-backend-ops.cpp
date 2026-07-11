@@ -9950,8 +9950,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {2, 1, 1, 1}, 1));
     for (auto k : {1, 10, 40, 400}) {
-        for (auto nrows : {1, 16}) {
-            for (auto cols : {k, 1000, 65000, 200000}) {
+        for (auto nrows : {1, 2, 4, 8, 16}) {
+            for (auto cols : {k, 1000, 4096, 8192, 16384, 32768, 65000, 200000}) {
                 test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {cols, nrows, 1, 1}, k));
             }
         }
