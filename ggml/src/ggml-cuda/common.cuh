@@ -935,6 +935,21 @@ static __device__ __forceinline__ uint2 fast_div_modulo(uint32_t n, const uint3 
     return make_uint2(div_val, mod_val);
 }
 
+// CUDA-only bf16 sibling of block_q8_1. Identical byte layout, but the (d, s) pair
+// is stored as bf16 instead of fp16 so that s = d * sum(qs) cannot overflow the
+// 16-bit exponent range when activations contain large outliers (Q4_1, Q5_1,
+// Q4_K and Q5_K dot products multiply by s and would otherwise produce NaN).
+// CUDA quantizes Q8_1 activations on-device, so this struct never crosses the
+// CPU/GPU boundary; the host-side block_q8_1 in ggml-common.h is unaffected.
+// (No d/s union view: nv_bfloat16 has a non-trivial constructor, which C++
+// disallows in anonymous structs/unions. All call sites use ds directly.)
+struct block_q8_1_bf16 {
+    nv_bfloat162 ds;
+    int8_t       qs[QK8_1];
+};
+
+static_assert(sizeof(block_q8_1_bf16) == sizeof(block_q8_1), "block_q8_1_bf16 must match block_q8_1 byte layout");
+
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, float2 & v);
 
 static __device__ __forceinline__ float get_alibi_slope(
