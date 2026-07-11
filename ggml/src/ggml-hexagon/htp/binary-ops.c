@@ -16,6 +16,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -864,6 +865,7 @@ int op_binary(struct htp_ops_context * octx) {
 
     const uint32_t src0_type = octx->src[0]->type;
     if ((src0_type == HTP_TYPE_F32) || (src0_type == HTP_TYPE_F16)) {
+        htp_tensor_make_clean(octx->dsts[0]);
         return execute_op_binary(octx);
     }
 

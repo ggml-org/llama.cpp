@@ -19,6 +19,7 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
 #include "htp-vtcm.h"
 #include "hex-profile.h"
 
@@ -922,17 +923,13 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
 }
 
 int op_unary(struct htp_ops_context * octx) {
-    int err = HTP_STATUS_OK;
+    // htp_tensor_make_clean(octx->dst);
 
     switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
-            err = execute_op_unary_f32(octx);
-            break;
+            return execute_op_unary_f32(octx);
 
         default:
-            err = HTP_STATUS_NO_SUPPORT;
-            break;
+            return HTP_STATUS_NO_SUPPORT;
     }
-
-    return err;
 }
