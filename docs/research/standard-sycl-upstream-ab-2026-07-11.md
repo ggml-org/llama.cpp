@@ -106,3 +106,23 @@ those are outside this A/B because only f16 and q8_0 were run. Git blame maps
 the scale-fold form to fork commit `b1566523e`, where it landed amid a broad
 backend-prune/TurboQuant reconciliation commit. That mixed provenance is why
 an isolated-hunk A/B is required before calling it the cause of the q8_0 gain.
+
+## Correction (2026-07-11): scale-fold attribution killed by source
+
+The follow-up recommended above (A/B the `Q_reg` scale-fold to explain the
+q8_0 gain) is withdrawn as non-discriminating. In
+`ggml/src/ggml-sycl/fattn-vec.hpp:113-114`, `Q_q8_1` is compile-time true for
+`type_K = q8_0`, so the `else` branch containing the fold is never
+instantiated for the q8_0/q8_0 cells measured here. The fold exists only in
+F16-K VEC instantiations. Reverting or keeping that hunk cannot change the
+q8_0 kernel that produced the 5.3-6.7% decode delta.
+
+The measured q8_0 result itself stands. Its cause remains [UNVERIFIED];
+candidate explanations (other source deltas in the q8 write/dequant/dispatch
+path, JIT codegen variance from broader tree differences, cache/loader
+effects) are catalogued in the workspace blueprint
+`P4_FINAL_FOUR_IMPLEMENTATION_BLUEPRINT.md` section 10.1. Any future
+attribution experiment must manipulate a branch that is provably compiled
+into the exercised q8_0 template instance. Note the fork-side comparator
+commit `b1566523e47e9b0e25c27b9ae29b51bace1c522b` is an 841-file mixed-scope
+commit; blame from it cannot establish causality for any single hunk.

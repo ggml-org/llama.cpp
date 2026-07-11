@@ -725,8 +725,9 @@ For flash attention (`-fa on`) with a quantized KV cache on Arc, use `q8_0`
 (`--cache-type-k q8_0 --cache-type-v q8_0`): it is near-lossless and runs at
 mainline parity. Both `GGML_SYCL_F16=ON` and `OFF` builds work; `F16=ON` gives
 faster prompt processing. TurboQuant KV cache types (`turbo2`/`turbo3`/`turbo4`)
-are not supported on the SYCL flash-attention path -- they are rejected and fall
-back to the non-FA attention path -- so use `q8_0` for `-fa on`.
+run on the SYCL flash-attention VEC path and are FA-only: always pass `-fa on`
+with turbo KV. The non-FA fallback is architecturally broken for block-quantized
+KV types and must not be combined with them.
 
 ## Compile-time Flags
 

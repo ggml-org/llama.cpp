@@ -55,6 +55,7 @@ All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantiz
 | **SYCL** (Intel Arc / oneAPI) | turbo `mmvq` + WHT custom op | `q8_0` / `f16` KV at mainline parity; turbo3/turbo4 KV FA pass the correctness gate (gated behind `LLAMA_TEST_TURBO_FA=1` for opt-in validation); turbo2 KV FA remains XFAIL (2-bit precision below the cosine floor) | A770 (DG2) is the canonical target; builds with `GGML_SYCL_F16=ON` or `OFF` |
 | **Vulkan** | `TQ4_1S` weights, `SET_ROWS` for `turbo2`/`turbo4` | coopmat flash attention with `turbo3` KV | Compute-shader path; nix-buildable |
 
+
 OpenVINO is shipped in-tree but is not exercised by the TurboQuant+ probes in this fork -- build with `-DGGML_OPENVINO=ON` only if you need the upstream OpenVINO backend.
 
 ### Model-family support
