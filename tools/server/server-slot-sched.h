@@ -43,8 +43,9 @@ struct server_prompt {
     // n_prefix: tokens shared with the new prompt, must be > 0
     // has_new_tokens: the new prompt is longer than n_prefix
     // pos_min: min position of the live state
+    // ckpt_exact: checkpoints are valid only at their exact pos_max (hybrid/recurrent memory)
     // n_past == 0 without a checkpoint means that nothing can be reused
-    server_prompt_reuse get_reuse(int32_t n_prefix, bool has_new_tokens, int32_t n_swa, llama_pos pos_min) const;
+    server_prompt_reuse get_reuse(int32_t n_prefix, bool has_new_tokens, int32_t n_swa, llama_pos pos_min, bool ckpt_exact) const;
 };
 
 struct server_prompt_data {

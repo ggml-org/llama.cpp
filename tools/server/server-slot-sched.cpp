@@ -10,7 +10,7 @@
 // server_prompt
 //
 
-server_prompt_reuse server_prompt::get_reuse(int32_t n_prefix, bool has_new_tokens, int32_t n_swa, llama_pos pos_min) const {
+server_prompt_reuse server_prompt::get_reuse(int32_t n_prefix, bool has_new_tokens, int32_t n_swa, llama_pos pos_min, bool ckpt_exact) const {
     server_prompt_reuse res;
     res.n_past   = n_prefix;
     res.pos_next = tokens.pos_next(n_prefix);
@@ -34,6 +34,12 @@ server_prompt_reuse server_prompt::get_reuse(int32_t n_prefix, bool has_new_toke
             const auto & cur = *ckpt;
             // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
             SRV_TRC("checking checkpoint with [%d, %d] against %d...\n", cur.pos_min, cur.pos_max, pos_min_thold);
+            if (ckpt_exact) {
+                // usable only if the tokens up to and including its position are a prefix of the
+                // new prompt, with at least one token left to process [TAG_PROMPT_LOGITS]. the state
+                // is self-contained, so the SWA slack in pos_min_thold does not apply
+                return cur.pos_max < pos_eval;
+            }
             // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
             if (cur.pos_max > res.pos_next) {
                 return false;
