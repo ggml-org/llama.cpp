@@ -477,7 +477,7 @@ class AgenticStore {
 		conversationId: string;
 		messages: ApiChatMessageData[];
 		options: AgenticFlowOptions;
-		tools: ReturnType<typeof mcpStore.getToolDefinitionsForLLM>;
+		tools: ReturnType<typeof toolsStore.getEnabledToolsForLLM>;
 		agenticConfig: AgenticConfig;
 		callbacks: AgenticFlowCallbacks;
 		signal?: AbortSignal;
@@ -614,7 +614,7 @@ class AgenticStore {
 							throw error;
 						}
 					},
-					undefined,
+					conversationId,
 					signal
 				);
 

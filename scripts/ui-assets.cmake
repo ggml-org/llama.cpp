@@ -20,6 +20,7 @@ set(LLAMA_UI_GZIP     "" CACHE STRING "Apply gzip compress to assets to save ban
 
 set(DIST_DIR     "${UI_BINARY_DIR}/dist")
 set(SRC_DIST_DIR "${UI_SOURCE_DIR}/dist")
+set(WORK_DIR     "${UI_BINARY_DIR}/ui-src")
 set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
 set(UI_H         "${UI_BINARY_DIR}/ui.h")
@@ -64,6 +65,22 @@ function(npm_build_should_skip out_var)
     set(${out_var} TRUE PARENT_SCOPE)
 endfunction()
 
+function(stage_sources)
+    if(EXISTS "${WORK_DIR}")
+        file(GLOB staged RELATIVE "${WORK_DIR}" "${WORK_DIR}/*")
+        list(REMOVE_ITEM staged "node_modules")
+        foreach(entry ${staged})
+            file(REMOVE_RECURSE "${WORK_DIR}/${entry}")
+        endforeach()
+    endif()
+
+    file(COPY "${UI_SOURCE_DIR}/"
+        DESTINATION "${WORK_DIR}"
+        NO_SOURCE_PERMISSIONS
+        PATTERN "node_modules" EXCLUDE
+    )
+endfunction()
+
 function(npm_build out_var)
     set(${out_var} FALSE PARENT_SCOPE)
 
@@ -89,14 +106,16 @@ function(npm_build out_var)
         return()
     endif()
 
+    stage_sources()
+
     # npm writes node_modules/.package-lock.json on every successful install,
     # so a package-lock.json newer than this marker means node_modules is stale
-    set(NPM_MARKER "${UI_SOURCE_DIR}/node_modules/.package-lock.json")
+    set(NPM_MARKER "${WORK_DIR}/node_modules/.package-lock.json")
     set(need_install FALSE)
     if(NOT EXISTS "${NPM_MARKER}")
         set(need_install TRUE)
     else()
-        file(TIMESTAMP "${UI_SOURCE_DIR}/package-lock.json" lock_ts)
+        file(TIMESTAMP "${WORK_DIR}/package-lock.json" lock_ts)
         file(TIMESTAMP "${NPM_MARKER}" marker_ts)
         if(lock_ts STRGREATER marker_ts)
             set(need_install TRUE)
@@ -107,7 +126,7 @@ function(npm_build out_var)
         message(STATUS "UI: running npm install")
         execute_process(
             COMMAND ${NPM_EXECUTABLE} install
-            WORKING_DIRECTORY "${UI_SOURCE_DIR}"
+            WORKING_DIRECTORY "${WORK_DIR}"
             RESULT_VARIABLE rc
             ERROR_VARIABLE  err
         )
@@ -124,7 +143,7 @@ function(npm_build out_var)
     execute_process(
         COMMAND ${CMAKE_COMMAND} -E env "LLAMA_UI_OUT_DIR=${DIST_DIR}" "LLAMA_UI_VERSION=${HF_VERSION}" "LLAMA_BUILD_NUMBER=${LLAMA_BUILD_NUMBER}"
                 ${NPM_EXECUTABLE} run build
-        WORKING_DIRECTORY "${UI_SOURCE_DIR}"
+        WORKING_DIRECTORY "${WORK_DIR}"
         RESULT_VARIABLE rc
         ERROR_VARIABLE  err
     )
@@ -167,6 +186,12 @@ function(hf_download version out_var out_resolved)
 
     set(archive "${UI_BINARY_DIR}/dist.tar.gz")
 
+    # Use HF_TOKEN to benefit from higher rate limits
+    set(auth_headers "")
+    if(DEFINED ENV{HF_TOKEN} AND NOT "$ENV{HF_TOKEN}" STREQUAL "")
+        list(APPEND auth_headers "HTTPHEADER" "Authorization: Bearer $ENV{HF_TOKEN}")
+    endif()
+
     set(candidates "")
     if(NOT "${version}" STREQUAL "")
         list(APPEND candidates "${version}")
@@ -179,7 +204,7 @@ function(hf_download version out_var out_resolved)
         message(STATUS "UI: downloading from ${resolved}: ${base}/dist.tar.gz")
 
         file(DOWNLOAD "${base}/dist.tar.gz?download=true" "${archive}"
-            STATUS status TIMEOUT 300
+            STATUS status TIMEOUT 300 ${auth_headers}
         )
         list(GET status 0 rc)
         if(NOT rc EQUAL 0)
@@ -189,7 +214,7 @@ function(hf_download version out_var out_resolved)
         endif()
 
         file(DOWNLOAD "${base}/dist.tar.gz.sha256?download=true" "${archive}.sha256"
-            STATUS status TIMEOUT 30
+            STATUS status TIMEOUT 30 ${auth_headers}
         )
         list(GET status 0 rc)
         if(NOT rc EQUAL 0)

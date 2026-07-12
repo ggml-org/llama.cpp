@@ -5,6 +5,21 @@ export enum ChatMessageStatsView {
 	SUMMARY = 'summary'
 }
 
+export enum ChatMessageStatisticsMode {
+	SWITCHABLE = 'switchable',
+	READING = 'reading',
+	GENERATION = 'generation'
+}
+
+/**
+ * Connection state of a streamed completion, drives the resume status indicator.
+ */
+export enum StreamConnectionState {
+	STREAMING = 'streaming',
+	RESUMING = 'resuming',
+	LOST = 'lost'
+}
+
 /**
  * Reasoning format options for API requests.
  */

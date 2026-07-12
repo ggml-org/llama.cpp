@@ -1,4 +1,5 @@
 #include "common.h"
+#include "http.h"
 #include "server-http.h"
 #include "server-common.h"
 #include "ui.h"
@@ -82,7 +83,7 @@ bool server_http_context::init(const common_params & params) {
     hostname = params.hostname;
 
     if (gcp.enabled) {
-        SRV_INF("Google Cloud Platform compat: health route = %s, predict route = %s, port = %d\n", gcp.path_health.c_str(), gcp.path_predict.c_str(), gcp.port);
+        SRV_TRC("Google Cloud Platform compat: health route = %s, predict route = %s, port = %d\n", gcp.path_health.c_str(), gcp.path_predict.c_str(), gcp.port);
 
         if (port != gcp.port) {
             SRV_WRN("Google Cloud Platform compat: overriding server port %d with AIP_HTTP_PORT %d\n", port, gcp.port);
@@ -95,13 +96,13 @@ bool server_http_context::init(const common_params & params) {
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (!params.ssl_file_key.empty() && !params.ssl_file_cert.empty()) {
-        SRV_INF("running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
+        SRV_TRC("running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
         srv = std::make_unique<httplib::SSLServer>(
             params.ssl_file_cert.c_str(), params.ssl_file_key.c_str()
         );
         is_ssl = true;
     } else {
-        SRV_INF("%s", "running without SSL\n");
+        SRV_TRC("%s", "running without SSL\n");
         srv = std::make_unique<httplib::Server>();
     }
 #else
@@ -164,14 +165,23 @@ bool server_http_context::init(const common_params & params) {
     if (params.api_keys.size() == 1) {
         const auto key = params.api_keys[0];
         const std::string substr = key.substr(std::max(static_cast<int>(key.length() - 4), 0));
-        SRV_INF("api_keys: ****%s\n", substr.c_str());
+        SRV_TRC("api_keys: ****%s\n", substr.c_str());
     } else if (params.api_keys.size() > 1) {
-        SRV_INF("api_keys: %zu keys loaded\n", params.api_keys.size());
+        SRV_TRC("api_keys: %zu keys loaded\n", params.api_keys.size());
     }
 
     //
     // Middlewares
     //
+
+    // Frontend paths - all embedded UI assets
+    static const std::unordered_set<std::string> frontend_paths = []() {
+        std::unordered_set<std::string> paths { "/" };
+        for (const llama_ui_asset & a : llama_ui_get_assets()) {
+            paths.insert("/" + a.name);
+        }
+        return paths;
+    }();
 
     // Public endpoints - API routes plus all embedded UI assets
     static const std::unordered_set<std::string> get_public_endpoints = []() {
@@ -180,11 +190,8 @@ bool server_http_context::init(const common_params & params) {
             "/v1/health",
             "/models",
             "/v1/models",
-            "/",
         };
-        for (const llama_ui_asset & a : llama_ui_get_assets()) {
-            endpoints.insert("/" + a.name);
-        }
+        endpoints.insert(frontend_paths.begin(), frontend_paths.end());
         return endpoints;
     }();
 
@@ -237,18 +244,9 @@ bool server_http_context::init(const common_params & params) {
 
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
         if (!is_ready.load()) {
-#if defined(LLAMA_UI_HAS_ASSETS)
-            if (const auto tmp = string_split<std::string>(req.path, '.');
-                req.path == "/" || (!tmp.empty() && tmp.back() == "html")) {
-                if (const llama_ui_asset * a = llama_ui_find_asset("loading.html")) {
-                    res.status = 503;
-                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, "text/html; charset=utf-8");
-                    return false;
-                }
+            if (frontend_paths.count(req.path)) {
+                return true; // frontend asset, allow it to load and show "loading"
             }
-#else
-            (void)req;
-#endif
             // no endpoints are allowed to be accessed when the server is not ready
             // this is to prevent any data races or inconsistent states
             res.status = 503;
@@ -292,7 +290,7 @@ bool server_http_context::init(const common_params & params) {
         // +4 threads for monitoring, health and some threads reserved for MCP and other tasks in the future
         n_threads_http = std::max(params.n_parallel + 4, static_cast<int32_t>(std::thread::hardware_concurrency() - 1));
     }
-    SRV_INF("using %d threads for HTTP server\n", n_threads_http);
+    SRV_TRC("using %d threads for HTTP server\n", n_threads_http);
     srv->new_task_queue = [n_threads_http] {
         // spawn n_threads_http fixed thread (always alive), while allow up to 1024 max possible additional threads
         // when n_threads_http is used, server will create new "dynamic" threads that will be destroyed after processing each request
@@ -411,13 +409,13 @@ bool server_http_context::start() {
     auto is_sock = false;
     if (string_ends_with(std::string(hostname), ".sock")) {
         is_sock = true;
-        SRV_INF("%s", "setting address family to AF_UNIX\n");
+        SRV_TRC("%s", "setting address family to AF_UNIX\n");
         srv->set_address_family(AF_UNIX);
         // bind_to_port requires a second arg, any value other than 0 should
         // simply get ignored
         was_bound = srv->bind_to_port(hostname, 8080);
     } else {
-        SRV_INF("%s", "binding port with default address family\n");
+        SRV_TRC("%s", "binding port with default address family\n");
         // bind HTTP listen port
         if (port == 0) {
             const auto bound_port = srv->bind_to_any_port(hostname);
@@ -440,7 +438,7 @@ bool server_http_context::start() {
     srv->wait_until_ready();
 
     listening_address = is_sock ? string_format("unix://%s", hostname.c_str())
-                                : string_format("%s://%s:%d", is_ssl ? "https" : "http", hostname.c_str(), port);
+                                : string_format("%s://%s:%d", is_ssl ? "https" : "http", common_http_format_host(hostname).c_str(), port);
     return true;
 }
 
@@ -456,13 +454,40 @@ static void set_headers(httplib::Response & res, const std::map<std::string, std
     }
 }
 
+// percent-decode a path component (%XX). path params arrive raw from httplib, unlike query
+// params, so a conv id like "conv::model" sent as "conv%3A%3Amodel" must be decoded here to
+// match the value the client put in the X-Conversation-Id header
+static std::string decode_path_component(const std::string & in) {
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); i++) {
+        if (in[i] == '%' && i + 2 < in.size()) {
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            int hi = hex(in[i + 1]);
+            int lo = hex(in[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(char((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(in[i]);
+    }
+    return out;
+}
+
 static std::map<std::string, std::string> get_params(const httplib::Request & req) {
     std::map<std::string, std::string> params;
     for (const auto & [key, value] : req.params) {
         params[key] = value;
     }
     for (const auto & [key, value] : req.path_params) {
-        params[key] = value;
+        params[key] = decode_path_component(value);
     }
     return params;
 }
@@ -492,12 +517,15 @@ using server_http_req_ptr = std::unique_ptr<server_http_req>;
 static void process_handler_response(server_http_req_ptr && request, server_http_res_ptr & response, httplib::Response & res) {
     if (response->is_stream()) {
         res.status = response->status;
+        // Tell Nginx to not buffer any streamed response
+        response->headers["X-Accel-Buffering"] = "no";
         set_headers(res, response->headers);
         const std::string content_type = response->content_type;
         // convert to shared_ptr as both chunked_content_provider() and on_complete() need to use it
-        std::shared_ptr q_ptr = std::move(request);
-        std::shared_ptr r_ptr = std::move(response);
-        const auto chunked_content_provider = [response = r_ptr](size_t, const httplib::DataSink & sink) -> bool {
+        std::shared_ptr<server_http_req> q_ptr = std::move(request);
+        std::shared_ptr<server_http_res> r_ptr = std::move(response);
+
+        const auto chunked_content_provider = [response = r_ptr](size_t, httplib::DataSink & sink) -> bool {
             std::string chunk;
             const bool has_next = response->next(chunk);
             if (!chunk.empty()) {
@@ -513,14 +541,16 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             return has_next;
         };
         const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
-            response.reset(); // trigger the destruction of the response object
-            request.reset();  // trigger the destruction of the request object
+            response->on_complete();
+            response.reset();
+            request.reset();
         };
         res.set_chunked_content_provider(content_type, chunked_content_provider, on_complete);
     } else {
         res.status = response->status;
         set_headers(res, response->headers);
         res.set_content(response->data, response->content_type);
+        response->on_complete();
     }
 }
 
@@ -581,6 +611,23 @@ void server_http_context::post(const std::string & path, const server_http_conte
             build_query_string(req),
             body,
             std::move(files),
+            req.is_connection_closed
+        });
+        server_http_res_ptr response = handler(*request);
+        process_handler_response(std::move(request), response, res);
+    });
+}
+
+void server_http_context::del(const std::string & path, const server_http_context::handler_t & handler) const {
+    handlers.emplace(path, handler);
+    pimpl->srv->Delete(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+        server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
+            get_params(req),
+            get_headers(req),
+            req.path,
+            build_query_string(req),
+            req.body,
+            {},
             req.is_connection_closed
         });
         server_http_res_ptr response = handler(*request);

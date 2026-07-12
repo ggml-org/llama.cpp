@@ -2813,8 +2813,6 @@ static void llama_sampler_top_n_sigma_apply(struct llama_sampler * smpl, llama_t
             cur_p->data[i].logit = -INFINITY;
         }
     }
-
-    llama_sampler_softmax_impl(cur_p, true);
 }
 
 static struct llama_sampler * llama_sampler_top_n_sigma_clone(const struct llama_sampler * smpl) {

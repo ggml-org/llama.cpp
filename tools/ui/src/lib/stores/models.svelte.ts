@@ -1,6 +1,7 @@
+import { base } from '$app/paths';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
-import { ServerModelStatus, ModelModality } from '$lib/enums';
+import { ServerModelStatus, ServerModelsSseEventType, ModelModality } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { PropsService } from '$lib/services/props.service';
 import { serverStore, isRouterMode } from '$lib/stores/server.svelte';
@@ -8,11 +9,15 @@ import {
 	detectThinkingSupport,
 	detectThinkingSupportWithReason
 } from '$lib/utils/chat-template-thinking-detector';
-import { TTLCache } from '$lib/utils';
+import { TTLCache, getAuthHeaders } from '$lib/utils';
 import {
 	MODEL_PROPS_CACHE_TTL_MS,
 	MODEL_PROPS_CACHE_MAX_ENTRIES,
-	FAVORITE_MODELS_LOCALSTORAGE_KEY
+	FAVORITE_MODELS_LOCALSTORAGE_KEY,
+	API_MODELS,
+	SSE_RECORD_SEPARATOR,
+	SSE_LINE_SEPARATOR,
+	SSE_DATA_PREFIX
 } from '$lib/constants';
 
 import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -54,6 +59,15 @@ class ModelsStore {
 
 	private modelUsage = $state<Map<string, SvelteSet<string>>>(new Map());
 	private modelLoadingStates = new SvelteMap<string, boolean>();
+
+	// /models/sse feed state, the single source of truth for status and load progress
+	private statusAbort: AbortController | null = null;
+	private statusReaderActive = false;
+	private loadProgress = new SvelteMap<string, ModelLoadProgress>();
+	private statusWaiters = new Map<
+		string,
+		{ target: ServerModelStatus; resolve: () => void; reject: (e: Error) => void }
+	>();
 
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
 
@@ -131,6 +145,10 @@ class ModelsStore {
 	 */
 
 	getModelModalities(modelId: string): ModelModalities | null {
+		if (!isRouterMode() && serverStore.props?.modalities) {
+			return this.buildModalities(serverStore.props.modalities);
+		}
+
 		const model = this.models.find((m) => m.model === modelId || m.id === modelId);
 		if (model?.modalities) {
 			return model.modalities;
@@ -531,7 +549,8 @@ class ModelsStore {
 	 * 1. Model from active conversation's last assistant response (if loaded)
 	 * 2. Model from active conversation's last assistant response (if not loaded)
 	 * 3. First loaded model (not from active conversation)
-	 * 4. First available model
+	 * 4. A favorite model
+	 * 5. First available model
 	 */
 	async ensureFirstModelSelected(): Promise<void> {
 		if (this.selectedModelName) return;
@@ -557,6 +576,13 @@ class ModelsStore {
 		if (loadedModel) {
 			await this.selectModelById(loadedModel.id);
 			await this.fetchModelProps(loadedModel.model);
+			return;
+		}
+
+		// Try loading a favorite model
+		const favorite = this.favoriteModelIds.values().next()?.value;
+		if (favorite) {
+			await this.selectModelById(favorite);
 			return;
 		}
 
@@ -607,7 +633,12 @@ class ModelsStore {
 	}
 
 	findModelByName(modelName: string): ModelOption | null {
-		return this.models.find((model) => model.model === modelName) ?? null;
+		return (
+			this.models.find(
+				(model) =>
+					model.model === modelName || model.id === modelName || model.aliases?.includes(modelName)
+			) ?? null
+		);
 	}
 
 	findModelById(modelId: string): ModelOption | null {
@@ -626,49 +657,218 @@ class ModelsStore {
 	 *
 	 */
 
-	/**
-	 * WORKAROUND: Polling for model status after load/unload operations.
-	 *
-	 * Currently, `/models/load` and `/models/unload` return success before
-	 * the operation actually completes on the server.
-	 *
-	 * TODO: Remove polling once llama-server properly waits for the operation
-	 * to complete before returning success.
-	 */
-
-	private static readonly STATUS_POLL_INTERVAL = 500;
+	// reconnect delay after the feed drops or the server is not ready yet
+	private static readonly SSE_RECONNECT_MS = 1000;
 
 	/**
-	 * Poll for expected model status after load/unload operation.
-	 * Keeps polling until the model reaches the expected status or fails.
+	 * Open the /models/sse feed and keep it live with auto reconnect.
+	 * Idempotent and router mode only. The feed drives status and progress,
+	 * so it replaces any post-operation polling.
 	 */
-	private async pollForModelStatus(
-		modelId: string,
-		expectedStatus: ServerModelStatus
-	): Promise<void> {
-		let attempt = 0;
-		while (true) {
-			await this.fetchRouterModels();
+	subscribeStatus(): void {
+		if (this.statusReaderActive) return;
+		if (!isRouterMode()) return;
 
-			const currentStatus = this.getModelStatus(modelId);
-			if (currentStatus === expectedStatus) return;
+		this.statusReaderActive = true;
+		this.statusAbort = new AbortController();
+		void this.runStatusReader(this.statusAbort.signal);
+	}
 
-			if (currentStatus === ServerModelStatus.FAILED) {
-				throw new Error(
-					`Model failed to ${expectedStatus === ServerModelStatus.LOADED ? 'load' : 'unload'}`
-				);
+	/**
+	 * Close the /models/sse feed and drop transient progress.
+	 */
+	unsubscribeStatus(): void {
+		this.statusReaderActive = false;
+		this.statusAbort?.abort();
+		this.statusAbort = null;
+		this.loadProgress.clear();
+	}
+
+	/**
+	 * Current load progress for a model, or null when not loading.
+	 */
+	getLoadProgress(modelId: string): ModelLoadProgress | null {
+		return this.loadProgress.get(modelId) ?? null;
+	}
+
+	/**
+	 * Read the feed and reconnect until unsubscribed. Splits the byte stream
+	 * into SSE records on the blank line boundary.
+	 */
+	private async runStatusReader(signal: AbortSignal): Promise<void> {
+		const decoder = new TextDecoder();
+
+		while (!signal.aborted) {
+			try {
+				const response = await fetch(`${base}${API_MODELS.SSE}`, {
+					headers: getAuthHeaders(),
+					signal
+				});
+
+				if (response.ok && response.body) {
+					const reader = response.body.getReader();
+					let buffer = '';
+
+					while (!signal.aborted) {
+						const { value, done } = await reader.read();
+						if (done) break;
+
+						buffer += decoder.decode(value, { stream: true });
+
+						let boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
+						while (boundary !== -1) {
+							this.handleStatusRecord(buffer.slice(0, boundary));
+							buffer = buffer.slice(boundary + SSE_RECORD_SEPARATOR.length);
+							boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
+						}
+					}
+				}
+			} catch {
+				// network drop or abort falls through to the reconnect delay
 			}
 
-			if (
-				expectedStatus === ServerModelStatus.LOADED &&
-				currentStatus === ServerModelStatus.UNLOADED &&
-				attempt > 2
-			) {
-				throw new Error('Model was unloaded unexpectedly during loading');
-			}
+			if (signal.aborted) return;
 
-			attempt++;
-			await new Promise((resolve) => setTimeout(resolve, ModelsStore.STATUS_POLL_INTERVAL));
+			await new Promise((resolve) => setTimeout(resolve, ModelsStore.SSE_RECONNECT_MS));
+		}
+	}
+
+	/**
+	 * Parse one SSE record. The payload rides in the data lines as a JSON
+	 * envelope that carries its own model, event and data fields.
+	 */
+	private handleStatusRecord(record: string): void {
+		const payload = record
+			.split(SSE_LINE_SEPARATOR)
+			.filter((line) => line.startsWith(SSE_DATA_PREFIX))
+			.map((line) => line.slice(SSE_DATA_PREFIX.length).trim())
+			.join(SSE_LINE_SEPARATOR);
+
+		if (payload.length === 0) return;
+
+		let envelope: ApiModelsSseEvent;
+		try {
+			envelope = JSON.parse(payload);
+		} catch {
+			return;
+		}
+
+		this.applyStatusEvent(envelope);
+	}
+
+	/**
+	 * Route one feed record by event kind. Only the status_* events carry a
+	 * status payload, models_reload triggers a list refresh, model_remove drops
+	 * the row, download_* belong to the download surface, not here.
+	 */
+	private applyStatusEvent(event: ApiModelsSseEvent): void {
+		switch (event.event) {
+			case ServerModelsSseEventType.STATUS_CHANGE:
+			case ServerModelsSseEventType.MODEL_STATUS:
+			case ServerModelsSseEventType.STATUS_UPDATE:
+				this.applyModelStatus(event);
+				break;
+			case ServerModelsSseEventType.MODELS_RELOAD:
+				void this.fetchRouterModels();
+				break;
+			case ServerModelsSseEventType.MODEL_REMOVE:
+				this.removeRouterModel(event.model);
+				break;
+			case ServerModelsSseEventType.DOWNLOAD_PROGRESS:
+				break;
+		}
+	}
+
+	/**
+	 * Apply a status envelope: update the model row, track or clear progress,
+	 * settle any pending load or unload awaiter.
+	 */
+	private applyModelStatus(event: ApiModelsSseEvent): void {
+		const model = event.model;
+		const data = event.data;
+		if (!model || !data?.status) return;
+
+		const status = data.status;
+
+		this.setRouterModelStatus(model, status);
+
+		if (status === ServerModelStatus.LOADING) {
+			if (data.progress) this.loadProgress.set(model, data.progress);
+		} else {
+			this.loadProgress.delete(model);
+		}
+
+		if (status === ServerModelStatus.LOADED) {
+			void this.updateModelModalities(model);
+		}
+
+		const failed =
+			status === ServerModelStatus.FAILED ||
+			(status === ServerModelStatus.UNLOADED && (data.exit_code ?? 0) !== 0);
+
+		if (failed) {
+			this.rejectStatus(model, new Error(`Model failed: ${this.toDisplayName(model)}`));
+			return;
+		}
+
+		this.settleStatus(model, status);
+	}
+
+	/**
+	 * Drop a model row reported gone by the feed and settle its awaiters.
+	 */
+	private removeRouterModel(modelId: string): void {
+		if (this.routerModels.findIndex((m) => m.id === modelId) === -1) return;
+
+		this.routerModels = this.routerModels.filter((m) => m.id !== modelId);
+		this.loadProgress.delete(modelId);
+		this.rejectStatus(modelId, new Error(`Model removed: ${this.toDisplayName(modelId)}`));
+	}
+
+	/**
+	 * Update one model row status in place, reassigning to trigger reactivity.
+	 */
+	private setRouterModelStatus(modelId: string, status: ServerModelStatus): void {
+		const idx = this.routerModels.findIndex((m) => m.id === modelId);
+		if (idx === -1) return;
+
+		const current = this.routerModels[idx];
+		if (current.status.value === status) return;
+
+		const next = [...this.routerModels];
+		next[idx] = { ...current, status: { ...current.status, value: status } };
+		this.routerModels = next;
+	}
+
+	/**
+	 * Register an awaiter that resolves when the feed reports target status.
+	 * One operation runs per model at a time, so one awaiter per model is kept.
+	 */
+	private waitForStatus(modelId: string, target: ServerModelStatus): Promise<void> {
+		return new Promise((resolve, reject) => {
+			this.statusWaiters.set(modelId, { target, resolve, reject });
+		});
+	}
+
+	/**
+	 * Resolve and drop the awaiter when the model reaches its target status.
+	 */
+	private settleStatus(modelId: string, status: ServerModelStatus): void {
+		const waiter = this.statusWaiters.get(modelId);
+		if (waiter && waiter.target === status) {
+			this.statusWaiters.delete(modelId);
+			waiter.resolve();
+		}
+	}
+
+	/**
+	 * Reject and drop the awaiter for a model.
+	 */
+	private rejectStatus(modelId: string, error: Error): void {
+		const waiter = this.statusWaiters.get(modelId);
+		if (waiter) {
+			this.statusWaiters.delete(modelId);
+			waiter.reject(error);
 		}
 	}
 
@@ -679,12 +879,18 @@ class ModelsStore {
 		this.modelLoadingStates.set(modelId, true);
 		this.error = null;
 
+		// the feed drives completion, so it must be live before the request
+		this.subscribeStatus();
+
+		const reachedLoaded = this.waitForStatus(modelId, ServerModelStatus.LOADED);
+		reachedLoaded.catch(() => {});
+
 		try {
 			await ModelsService.load(modelId);
-			await this.pollForModelStatus(modelId, ServerModelStatus.LOADED);
-			await this.updateModelModalities(modelId);
+			await reachedLoaded;
 			toast.success(`Model loaded: ${this.toDisplayName(modelId)}`);
 		} catch (error) {
+			this.rejectStatus(modelId, error instanceof Error ? error : new Error('load failed'));
 			this.error = error instanceof Error ? error.message : 'Failed to load model';
 			toast.error(`Failed to load model: ${this.toDisplayName(modelId)}`);
 			throw error;
@@ -700,11 +906,17 @@ class ModelsStore {
 		this.modelLoadingStates.set(modelId, true);
 		this.error = null;
 
+		this.subscribeStatus();
+
+		const reachedUnloaded = this.waitForStatus(modelId, ServerModelStatus.UNLOADED);
+		reachedUnloaded.catch(() => {});
+
 		try {
 			await ModelsService.unload(modelId);
-			await this.pollForModelStatus(modelId, ServerModelStatus.UNLOADED);
+			await reachedUnloaded;
 			toast.info(`Model unloaded: ${this.toDisplayName(modelId)}`);
 		} catch (error) {
+			this.rejectStatus(modelId, error instanceof Error ? error : new Error('unload failed'));
 			this.error = error instanceof Error ? error.message : 'Failed to unload model';
 			toast.error(`Failed to unload model: ${this.toDisplayName(modelId)}`);
 			throw error;
@@ -783,6 +995,9 @@ class ModelsStore {
 	}
 
 	clear(): void {
+		this.unsubscribeStatus();
+		this.statusWaiters.forEach((waiter) => waiter.reject(new Error('Models store cleared')));
+		this.statusWaiters.clear();
 		this.models = [];
 		this.routerModels = [];
 		this.loading = false;

@@ -7,8 +7,17 @@
 #include <unordered_set>
 #include <list>
 #include <map>
+#include <algorithm>
+#include <cctype>
 
 #include "server-http.h"
+
+static std::string proxy_header_to_lower(std::string header) {
+    std::transform(header.begin(), header.end(), header.begin(), [](unsigned char c) {
+        return std::tolower(c);
+    });
+    return header;
+}
 
 static server_http_res_ptr proxy_request(const server_http_req & req, std::string method) {
     std::string target_url = req.get_param("url");
@@ -30,14 +39,21 @@ static server_http_res_ptr proxy_request(const server_http_req & req, std::strin
         throw std::runtime_error("unsupported URL scheme in target URL: " + parsed_url.scheme);
     }
 
-    SRV_INF("proxying %s request to %s://%s:%i%s\n", method.c_str(), parsed_url.scheme.c_str(), parsed_url.host.c_str(), parsed_url.port, parsed_url.path.c_str());
+    SRV_INF("proxying %s request to %s://%s:%i%s\n", method.c_str(), parsed_url.scheme.c_str(), common_http_format_host(parsed_url.host).c_str(), parsed_url.port, parsed_url.path.c_str());
 
     std::map<std::string, std::string> headers;
+    const std::string proxy_header_prefix = "x-llama-server-proxy-header-";
     for (auto [key, value] : req.headers) {
-        auto new_key = key;
-        if (string_starts_with(new_key, "x-proxy-header-")) {
-            string_replace_all(new_key, "x-proxy-header-", "");
+        const std::string lowered_key = proxy_header_to_lower(key);
+        if (!string_starts_with(lowered_key, proxy_header_prefix)) {
+            continue;
         }
+
+        auto new_key = key.substr(proxy_header_prefix.size());
+        if (new_key.empty()) {
+            continue;
+        }
+
         headers[new_key] = value;
     }
 

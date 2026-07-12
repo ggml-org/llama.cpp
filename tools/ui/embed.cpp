@@ -1,7 +1,7 @@
 // llama-ui-embed: generate ui.cpp / ui.h that embed UI assets as C arrays.
 //
 // Usage:
-//   llama-ui-embed <out_cpp> <out_h> <asset_dir>
+//   llama-ui-embed <out_cpp> <out_h> [<asset_dir>]
 //
 // Recursively embeds every regular file under <asset_dir>.
 // Asset names are relative paths from <asset_dir> (e.g. "_app/immutable/bundle.HASH.js").
@@ -147,9 +147,9 @@ int main(int argc, char ** argv) {
 
     const std::string out_cpp   = argv[1];
     const std::string out_h     = argv[2];
-    const std::string asset_dir = argv[3];
+    const std::string asset_dir = (argc >= 4) ? argv[3] : std::string();
 
-    const bool        use_gzip = std::filesystem::exists(asset_dir + "/_gzip");
+    const bool        use_gzip = !asset_dir.empty() && std::filesystem::exists(asset_dir + "/_gzip");
     const std::string in_dir   = use_gzip ? (asset_dir + "/_gzip") : asset_dir;
 
     std::vector<asset_entry> assets;
@@ -187,7 +187,6 @@ int main(int argc, char ** argv) {
         struct required_check { const char * label; match_fn match; bool found; };
         required_check checks[] = {
             { "index.html",           exact("index.html"),           false },
-            { "loading.html",         exact("loading.html"),         false },
             { "manifest.webmanifest", exact("manifest.webmanifest"), false },
             { "sw.js",                exact("sw.js"),                false },
             { "build.json",           exact("build.json"),           false },

@@ -9,9 +9,11 @@ requires packed_4x8_integer_dot_product;
 
 struct Params {
     offset_src1: u32,
+    stride_11: u32,
     stride_12: u32,
     stride_13: u32,
     ne0: u32,
+    ne1: u32,
     ne2: u32,
     ne3: u32,
 };
@@ -57,25 +59,28 @@ fn main(
     @builtin(num_workgroups) num_wg: vec3<u32>
 ) {
     let thread_id = local_id.x;
-    let num_vec4 = params.ne0 / 4u;
+    let ne0_vec4 = params.ne0 / 4u;
 
-    let wg_per_vec = (num_vec4 + (WG_SIZE - 1u)) / WG_SIZE;
-    let total_batches = wg_per_vec * params.ne2 * params.ne3;
+    let wg_per_vec = (ne0_vec4 + (WG_SIZE - 1u)) / WG_SIZE;
+    let total_batches = wg_per_vec * params.ne1 * params.ne2 * params.ne3;
 
     let wg_linear = wg_id.y * num_wg.x + wg_id.x;
     if (wg_linear >= total_batches) {
         return;
     }
 
-    let src13_idx = wg_linear / (params.ne2 * wg_per_vec);
-    let src12_idx = (wg_linear - src13_idx * (params.ne2 * wg_per_vec)) / wg_per_vec;
-    let src11_wg_idx = wg_linear % wg_per_vec;
-    let src1_idx_base = params.offset_src1 + src13_idx * params.stride_13 + src12_idx * params.stride_12;
+    let vec_idx = wg_linear / wg_per_vec;
+    let src13_idx = vec_idx / (params.ne2 * params.ne1);
+    let vec_ne12_num       = vec_idx % (params.ne2 * params.ne1);
+    let src12_idx = vec_ne12_num / params.ne1;
+    let src11_idx = vec_ne12_num % params.ne1;
+    let src1_idx_base = params.offset_src1 + src13_idx * params.stride_13 + src12_idx * params.stride_12 + src11_idx * params.stride_11;
     let src1_idx_vec4_base = src1_idx_base / 4u;
 
     let blocks_per_row = params.ne0 / 32u;
     let blocks_per_wg = (WG_SIZE * 4u) / 32u;
-    let src1q_idx_base = (src13_idx * params.ne2 + src12_idx) * blocks_per_row;
+    let src1q_idx_base = ((src13_idx * params.ne2 + src12_idx) * params.ne1 + src11_idx) * blocks_per_row;
+    let src11_wg_idx = wg_linear % wg_per_vec;
     let src1q_idx = src1q_idx_base + src11_wg_idx * blocks_per_wg + thread_id / 8u;
     let qs_idx = thread_id % 8u;
 
@@ -85,7 +90,7 @@ fn main(
     var thread_amax = 0.0;
 
     let src11_vec4_idx = src11_wg_idx * WG_SIZE + thread_id;
-    let is_valid = src11_vec4_idx < num_vec4;
+    let is_valid = src11_vec4_idx < ne0_vec4;
 
 #ifdef USE_SUBGROUP_REDUCTION
 
