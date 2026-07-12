@@ -1,4 +1,4 @@
-# Standard SYCL f16/q8_0 baseline — 2026-07-11
+# Standard SYCL f16/q8_0 baseline - 2026-07-11
 
 ## Verdict
 

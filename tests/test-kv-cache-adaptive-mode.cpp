@@ -22,7 +22,14 @@ int main() {
     check(llama_kv_cache_adaptive_mode("7", GGML_TYPE_TURBO4_0, 32), 7, "env 7 applies regardless of V type");
     check(llama_kv_cache_adaptive_mode("5", GGML_TYPE_F16, 32),      5, "env 5 applies regardless of V type");
     check(llama_kv_cache_adaptive_mode("2", GGML_TYPE_TURBO3_0, 32), 2, "env 2 applies");
-    check(llama_kv_cache_adaptive_mode("", GGML_TYPE_TURBO2_0, 32),  0, "empty env suppresses auto-enable (atoi semantics)");
+    check(llama_kv_cache_adaptive_mode("", GGML_TYPE_TURBO2_0, 32),  0, "empty env suppresses auto-enable");
+    // unsupported env values must NOT silently fall through; mode 0 = uniform
+    check(llama_kv_cache_adaptive_mode("3", GGML_TYPE_F16, 32), 0, "unsupported mode 3 falls back to uniform");
+    check(llama_kv_cache_adaptive_mode("4", GGML_TYPE_F16, 32), 0, "unsupported mode 4 falls back to uniform");
+    check(llama_kv_cache_adaptive_mode("8", GGML_TYPE_F16, 32), 0, "out-of-range mode 8 falls back to uniform");
+    check(llama_kv_cache_adaptive_mode("99", GGML_TYPE_F16, 32), 0, "two-digit mode 99 falls back to uniform");
+    check(llama_kv_cache_adaptive_mode("1junk", GGML_TYPE_F16, 32), 0, "trailing junk rejected (not 1)");
+    check(llama_kv_cache_adaptive_mode("-1", GGML_TYPE_F16, 32), 0, "negative sign rejected");
     // per-call independence: same process, interleaved differing inputs
     check(llama_kv_cache_adaptive_mode(nullptr, GGML_TYPE_TURBO2_0, 32), 7, "call A unaffected by prior calls");
     check(llama_kv_cache_adaptive_mode(nullptr, GGML_TYPE_F16, 32),      0, "call B after A does not inherit A's mode");

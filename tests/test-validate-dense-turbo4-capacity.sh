@@ -314,7 +314,7 @@ pass "decode lower confidence bound below -2 returns KILL"
 make_fixture success
 out="$FIXTURE/out"
 set +e
-run_driver success "$out"
+run_driver success "$out" DEVICE_SELECTOR=test-selector
 rc=$?
 set -e
 assert_status "$out" 0 GO "$rc"
@@ -328,6 +328,11 @@ jq -e '
 ' "$out/verdict.json" >/dev/null || fail "GO verdict contract is incomplete"
 jq -e '.models.mistral.bytes == 8' "$out/manifest.json" >/dev/null \
   || fail "manifest byte count did not follow the model symlink"
+jq -e --arg expected_host "$(hostname)" --arg expected_device "test-selector" '
+  .host == $expected_host and
+  .device_selector == $expected_device
+' "$out/manifest.json" >/dev/null \
+  || fail "manifest host/device_selector are not runtime-captured (got host=\(.host), device=\(.device_selector))"
 
 required=(
   manifest.json ppl.json capacity.json bench.json verdict.json EXIT harness.log commands.txt
@@ -347,7 +352,7 @@ for model in mistral llama31; do
     [ -s "$out/capacity-${model}-${kv}.log" ] || fail "missing capacity log for $model/$kv"
   done
 done
-grep -Fq 'ONEAPI_DEVICE_SELECTOR=level_zero:0' "$out/commands.txt" \
+grep -Fq 'ONEAPI_DEVICE_SELECTOR=test-selector' "$out/commands.txt" \
   || fail "commands.txt did not preserve shell-escaped environment"
 grep -Fq '\ ' "$out/commands.txt" \
   || fail "commands.txt does not demonstrate shell escaping"

@@ -1,4 +1,4 @@
-# Standard SYCL fork-vs-upstream A/B — 2026-07-11
+# Standard SYCL fork-vs-upstream A/B - 2026-07-11
 
 ## Decision
 

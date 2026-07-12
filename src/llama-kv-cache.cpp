@@ -84,9 +84,15 @@ static constexpr int LLAMA_TURBO_INNERQ_CHANNELS =
 
 int llama_kv_cache_adaptive_mode(const char * env_val, ggml_type type_v, uint32_t n_layer) {
     if (env_val) {
-        return atoi(env_val);
+        // Exact-string match: a single ASCII digit, no sign, no trailing junk.
+        if (env_val[0] < '0' || env_val[0] > '9' || env_val[1] != '\0') {
+            return 0;
+        }
+        const char requested = env_val[0];
+        // Valid modes: 1, 2, 5, 6, 7; anything else is uniform.
+        return (requested == '1' || requested == '2' ||
+                requested == '5' || requested == '6' || requested == '7') ? (requested - '0') : 0;
     }
-    // Auto-enable Boundary V (mode 7) when V is turbo2
     if (type_v == GGML_TYPE_TURBO2_0 && n_layer >= 8) {
         return 7;
     }
@@ -267,9 +273,10 @@ llama_kv_cache::llama_kv_cache(
     //   7 = Boundary V (recommended): first2+last2 V=q8_0, rest V=turbo2 (K unchanged)
     // Selected once per cache construction -- deliberately NOT static: each
     // cache must decide from its own type_v/model shape/env.
-    const int adaptive_mode = llama_kv_cache_adaptive_mode(getenv("TURBO_LAYER_ADAPTIVE"), type_v, hparams.n_layer());
+    const char * const turbo_layer_adaptive_env = getenv("TURBO_LAYER_ADAPTIVE");
+    const int adaptive_mode = llama_kv_cache_adaptive_mode(turbo_layer_adaptive_env, type_v, hparams.n_layer());
     if (adaptive_mode > 0) {
-        if (getenv("TURBO_LAYER_ADAPTIVE") != nullptr) {
+        if (turbo_layer_adaptive_env != nullptr) {
             LLAMA_LOG_INFO("llama_kv_cache: layer-adaptive mode %d enabled (env)\n", adaptive_mode);
         } else {
             LLAMA_LOG_INFO("llama_kv_cache: Boundary V auto-enabled for turbo2-V (opt-out: TURBO_LAYER_ADAPTIVE=0)\n");

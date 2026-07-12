@@ -4,7 +4,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEVICE_SELECTOR="level_zero:0"
+DEVICE_SELECTOR="${DEVICE_SELECTOR:-level_zero:0}"
 RUN_TIMEOUT="${P45A_RUN_TIMEOUT:-7200}"
 
 GATE_PROVENANCE=false
@@ -277,15 +277,17 @@ jq -n \
   --arg corpus_path "$(realpath "$WIKI")" \
   --argjson corpus_bytes "$(stat -Lc %s "$WIKI")" \
   --arg corpus_sha "$(sha256sum "$WIKI" | cut -d' ' -f1)" \
-  '{
+  --arg device_selector "$DEVICE_SELECTOR" \
+  --arg host "$(hostname)" \
+   '{
     schema_version:1,
     source_sha:$source_sha,
     tracked_source_clean:true,
     untracked_files:$untracked,
     build_mode:"JIT",
     sycl_device_arch:"",
-    device_selector:"level_zero:0",
-    host:"vinbonesjr",
+    device_selector:$device_selector,
+    host:$host,
     artifacts:{
       llama_perplexity:{path:$perplexity_path,sha256:$perplexity_sha},
       llama_bench:{path:$bench_path,sha256:$bench_sha},

@@ -144,6 +144,20 @@ if (NOT WIN32)
     )
 endif()
 
+# Linux-only: depends on GNU coreutils (stat -L, sha256sum, timeout, realpath) and jq.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_program(P45A_TEST_BASH NAMES bash)
+    find_program(P45A_TEST_JQ NAMES jq)
+    if (P45A_TEST_BASH AND P45A_TEST_JQ)
+        llama_test_cmd(
+            ${P45A_TEST_BASH}
+            NAME test-validate-dense-turbo4-capacity
+            WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+            ARGS ${CMAKE_CURRENT_SOURCE_DIR}/test-validate-dense-turbo4-capacity.sh
+        )
+    endif()
+endif()
+
 if (LLAMA_LLGUIDANCE)
     llama_build_and_test(test-grammar-llguidance.cpp ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
 endif ()
