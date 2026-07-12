@@ -146,7 +146,7 @@ endif()
 
 # Linux-only: skip cleanly when any required tool is missing.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(P45A_DEPS bash jq timeout sha256sum ldd fuser git realpath stat)
+    set(P45A_DEPS bash jq timeout sha256sum ldd fuser git realpath stat grep hostname)
     foreach (P45A_DEP ${P45A_DEPS})
         find_program(P45A_TEST_${P45A_DEP} NAMES ${P45A_DEP})
     endforeach()
