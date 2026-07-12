@@ -680,14 +680,14 @@ static void dequantize_mul_mat_vec_q4_k(const void *__restrict__ vx,
             q16[2] = q2[0] & 0x0f0f;
             q16[3] = q2[0] & 0xf0f0;
 
-            float4 s = {0.f, 0.f, 0.f, 0.f};
+            sycl::float4 s = {0.f, 0.f, 0.f, 0.f};
             float smin = 0;
             for (int l = 0; l < 2; ++l) {
-                s.x += y1[l] * q4[l+0]; s.y += y1[l+32] * q4[l+2];
-                s.z += y2[l] * q4[l+4]; s.w += y2[l+32] * q4[l+6];
+                s.x() += y1[l] * q4[l+0]; s.y() += y1[l+32] * q4[l+2];
+                s.z() += y2[l] * q4[l+4]; s.w() += y2[l+32] * q4[l+6];
                 smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
             }
-            tmp += dall * (s.x * sc[0] + s.y * sc[1] * 1.f/16.f + s.z * sc[4] + s.w * sc[5] * 1.f/16.f) - dmin * smin;
+            tmp += dall * (s.x() * sc[0] + s.y() * sc[1] * 1.f/16.f + s.z() * sc[4] + s.w() * sc[5] * 1.f/16.f) - dmin * smin;
 #endif
         }
 
@@ -835,14 +835,14 @@ static void dequantize_mul_mat_vec_q4_k_reorder(const void *__restrict__ vx,
             q16[2] = q2[0] & 0x0f0f;
             q16[3] = q2[0] & 0xf0f0;
 
-            float4 s = {0.f, 0.f, 0.f, 0.f};
+            sycl::float4 s = {0.f, 0.f, 0.f, 0.f};
             float smin = 0;
             for (int l = 0; l < 2; ++l) {
-                s.x += y1[l] * q4[l+0]; s.y += y1[l+32] * q4[l+2];
-                s.z += y2[l] * q4[l+4]; s.w += y2[l+32] * q4[l+6];
+                s.x() += y1[l] * q4[l+0]; s.y() += y1[l+32] * q4[l+2];
+                s.z() += y2[l] * q4[l+4]; s.w() += y2[l+32] * q4[l+6];
                 smin += y1[l] * sc[2] + y1[l+32] * sc[3] + y2[l] * sc[6] + y2[l+32] * sc[7];
             }
-            tmp += dall * (s.x * sc[0] + s.y * sc[1] * 1.f/16.f + s.z * sc[4] + s.w * sc[5] * 1.f/16.f) - dmin * smin;
+            tmp += dall * (s.x() * sc[0] + s.y() * sc[1] * 1.f/16.f + s.z() * sc[4] + s.w() * sc[5] * 1.f/16.f) - dmin * smin;
 #endif
         }
 
@@ -1126,7 +1126,7 @@ static void dequantize_mul_mat_vec_q5_k_reorder(const void *__restrict__ vx,
 
     // sum up partial sums and write back result
 #pragma unroll
-    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
             dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
     }
@@ -1762,10 +1762,13 @@ static void dequantize_mul_mat_vec_q5_K_sycl_reorder(const void *vx, const float
                                                      const int nrows,
                                                      dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
-    const sycl::range<3> block_dims(1, 1, QK_WARP_SIZE);
+    const int ny = 2 / K_QUANTS_PER_ITERATION;
+    const int block_num_y = (nrows + ny - 1) / ny;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
     stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, nrows) * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+        sycl::nd_range<3>(block_nums * block_dims, block_dims),
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q5_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
         });
 }

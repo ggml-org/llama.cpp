@@ -256,6 +256,25 @@ def test_router_reload_models():
         os.remove(preset_path)
 
 
+def test_router_remote_preset():
+    global server
+    server.model_hf_repo = "ggml-org/test-preset-ci"
+    server.model_hf_file = None
+    server.offline = False
+    server.start()
+
+    # Should see preset models in GET /models
+    res = server.make_request("GET", "/models")
+    assert res.status_code == 200
+    ids = {item["id"] for item in res.body.get("data", [])}
+    assert "tinygemma3-preset" in ids
+    assert "stories260K-test" in ids
+
+    # Should be able to load a preset model
+    model_id = "tinygemma3-preset"
+    _load_model_and_wait(model_id)
+
+
 MODEL_DOWNLOAD_ID = "ggml-org/test-model-router-download:F16"
 MODEL_DOWNLOAD_TIMEOUT = 30
 

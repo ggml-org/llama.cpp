@@ -5,6 +5,7 @@
 #include "server-task.h"
 #include "server-queue.h"
 #include "server-schema.h"
+#include "server-stream.h"
 
 #include "build-info.h"
 #include "common.h"
@@ -89,7 +90,9 @@ struct server_batch {
     }
 
     ~server_batch() {
-        llama_batch_free(batch);
+        if (batch.token != nullptr) {
+            llama_batch_free(batch);
+        }
     }
 
     void init(int32_t n_tokens_alloc) {
@@ -103,7 +106,6 @@ struct server_batch {
         if ((int32_t)tokens.size() >= n_tokens_alloc) {
             return false;
         }
-        // LOG_INF("adding token to batch: slot=%d, token=%d, pos=%d, output=%d\n", id_slot, token, pos, output);
         tokens.push_back({ id_slot, token, pos, output });
         return true;
     }
@@ -225,7 +227,7 @@ struct server_slot {
 
         const size_t cur_size = cur_size_tgt + cur_size_dft;
 
-        SRV_WRN(" - saving prompt with length %d, total state size = %.3f MiB (draft: %.3f MiB)\n",
+        SRV_TRC(" - saving prompt with length %d, total state size = %.3f MiB (draft: %.3f MiB)\n",
                 (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0), cur_size_dft / (1024.0 * 1024.0));
 
         auto * cur = prompt_cache.alloc(prompt, cur_size_tgt, cur_size_dft);
@@ -255,7 +257,7 @@ struct server_slot {
             GGML_ASSERT(!is_processing());
         }
 
-        SLT_INF(*this, "clearing prompt with %zu tokens\n", prompt.tokens.size());
+        SLT_TRC(*this, "clearing prompt with %zu tokens\n", prompt.tokens.size());
 
         common_context_seq_rm(ctx_tgt, id, -1, -1);
         if (ctx_dft) {
@@ -624,8 +626,10 @@ struct server_slot {
             }
 
             SLT_INF(*this,
-                    "draft acceptance = %0.5f (%5d accepted / %5d generated), mean acceptance length = %5.2f, acceptance rate per position = (%s)\n",
-                    draft_ratio, n_draft_accepted, n_draft_total, mean_acc_len, acceptance_rates_per_pos.c_str());
+                    "draft acceptance = %0.5f (%5d accepted / %5d generated), mean len = %5.2f\n",
+                    draft_ratio, n_draft_accepted, n_draft_total, mean_acc_len);
+            SLT_TRC(*this,
+                    "     acc per pos = (%s)\n", acceptance_rates_per_pos.c_str());
         }
 
         common_speculative_print_stats(spec);
@@ -768,7 +772,7 @@ struct server_slot {
         }
 
         // TODO @ngxson : move this log line to debug when it become more stable
-        SLT_INF(*this, "encoding mtmd batch from idx = %zu, n_chunks = %d\n", idx, n_added);
+        SLT_TRC(*this, "encoding mtmd batch from idx = %zu, n_chunks = %d\n", idx, n_added);
 
         res = mtmd_batch_encode(mbatch.get());
         if (res != 0) {
@@ -893,8 +897,10 @@ private:
 
     server_batch batch;
 
-    llama_model_ptr model_dft;
-    llama_context_ptr ctx_dft;
+    llama_model   * model_dft = nullptr;
+    llama_context * ctx_dft   = nullptr;
+
+    common_speculative_init_result_ptr spec_init;
 
     common_context_seq_rm_type ctx_tgt_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
     common_context_seq_rm_type ctx_dft_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
@@ -935,8 +941,10 @@ private:
 
     void destroy() {
         spec.reset();
-        ctx_dft.reset();
-        model_dft.reset();
+        spec_init.reset();
+
+        ctx_dft   = nullptr;
+        model_dft = nullptr;
 
         llama_init.reset();
 
@@ -1029,7 +1037,8 @@ private:
         }
 
 
-        SRV_INF("loading model '%s'\n", params.model.path.c_str());
+        SRV_INF("loading model '%s'\n", params.model.get_name().c_str());
+        SRV_TRC("local path '%s'\n", params.model.path.c_str());
 
         std::string & mmproj_path = params_base.mmproj.path;
         mtmd_context_params mparams = mtmd_context_params_default();
@@ -1058,7 +1067,7 @@ private:
                 for (auto & [dev, size] : mmproj_mem) {
                     total += size;
                 }
-                SRV_INF("[mtmd] estimated worst-case memory usage of mmproj is %.2f MiB (took %.2f ms)\n", total / (1024.0 * 1024.0), t_elapsed / 1000.0);
+                SRV_TRC("[mtmd] estimated worst-case memory usage of mmproj is %.2f MiB (took %.2f ms)\n", total / (1024.0 * 1024.0), t_elapsed / 1000.0);
                 GGML_ASSERT(!params_base.fit_params_target.empty());
                 for (auto & [dev, size] : mmproj_mem) {
                     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
@@ -1079,30 +1088,15 @@ private:
         // optionally reserve VRAM for the draft / MTP context before fitting the target model
         if (params_base.fit_params) {
             if (has_spec) {
-                common_params params_dft = params_base;
-                bool measure_model_bytes = true;
+                // MTP draft context lives on the target model, only context+compute are new
+                bool measure_model_bytes = has_draft;
 
-                if (has_draft) {
-                    const auto & params_spec = params_base.speculative.draft;
-                    params_dft.devices               = params_spec.devices;
-                    params_dft.model                 = params_spec.mparams;
-                    params_dft.n_gpu_layers          = params_spec.n_gpu_layers;
-                    params_dft.cache_type_k          = params_spec.cache_type_k;
-                    params_dft.cache_type_v          = params_spec.cache_type_v;
-                    params_dft.tensor_buft_overrides = params_spec.tensor_buft_overrides;
-                } else {
-                    // MTP draft context lives on the target model, only context+compute are new
-                    measure_model_bytes = false;
-                }
-
-                params_dft.n_outputs_max = params_base.n_parallel;
+                common_params params_dft = common_base_params_to_speculative(params_base);
 
                 auto mparams_dft = common_model_params_to_llama(params_dft);
                 auto cparams_dft = common_context_params_to_llama(params_dft);
                 if (spec_mtp) {
                     cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
-                    cparams_dft.type_k   = params_base.speculative.draft.cache_type_k;
-                    cparams_dft.type_v   = params_base.speculative.draft.cache_type_v;
                 }
                 cparams_dft.n_rs_seq = 0;
 
@@ -1138,7 +1132,7 @@ private:
                             }
                         }
                     }
-                    SRV_INF("[spec] estimated memory usage of %s is %.2f MiB\n",
+                    SRV_TRC("[spec] estimated memory usage of %s is %.2f MiB\n",
                             has_draft ? "draft model" : "MTP context",
                             total / (1024.0 * 1024.0));
                 } catch (const std::exception & e) {
@@ -1170,77 +1164,35 @@ private:
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
 
-        if (has_draft) {
-            // TODO speculative: move to common/speculative.cpp?
-            const auto & params_spec = params_base.speculative.draft;
-
-            SRV_INF("loading draft model '%s'\n", params_spec.mparams.path.c_str());
-
-            auto params_dft = params_base;
-
-            params_dft.devices      = params_spec.devices;
-            params_dft.model        = params_spec.mparams;
-            params_dft.n_gpu_layers = params_spec.n_gpu_layers;
-            params_dft.cache_type_k = params_spec.cache_type_k;
-            params_dft.cache_type_v = params_spec.cache_type_v;
-
-            if (params_spec.cpuparams.n_threads > 0) {
-                params_dft.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
-                params_dft.cpuparams_batch.n_threads = params_spec.cpuparams_batch.n_threads;
-            }
-
-            params_dft.tensor_buft_overrides = params_spec.tensor_buft_overrides;
-
-            auto mparams_dft = common_model_params_to_llama(params_dft);
-
-            // progress callback
-            mparams_dft.progress_callback           = load_progress_callback;
-            mparams_dft.progress_callback_user_data = &load_progress_spec;
-
-            model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
-            if (model_dft == nullptr) {
-                SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
-                return false;
-            }
-
-            auto cparams = common_context_params_to_llama(params_dft);
-
-            if (spec_mtp) {
-                cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
-            }
-
-            // note: for small models maybe we can set this to the maximum possible draft from all speculative types
-            //       the extra memory for small models is likely negligible?
-            cparams.n_rs_seq  = 0;
-            cparams.ctx_other = ctx_tgt;
-
-            ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
-
-            params_base.speculative.draft.ctx_tgt = ctx_tgt;
-            params_base.speculative.draft.ctx_dft = ctx_dft.get();
-        } else if (spec_mtp) {
-            // no new model load, so we simply report 0.0 and 1.0 progress
+        if (has_spec) {
+            // spec_mtp doesn't use load a model internally, so we report 0.0 and 1.0 manually
             load_progress_callback(0.0f, &load_progress_spec);
+            load_progress_spec.t_last_load_progress_ms = 0;  // reset so internal cbs aren't delayed
 
-            SRV_INF("creating MTP draft context against the target model '%s'\n",
-                    params_base.model.path.c_str());
+            {
+                common_params params_dft = common_base_params_to_speculative(params_base);
 
-            auto cparams_mtp = common_context_params_to_llama(params_base);
-            cparams_mtp.ctx_type      = LLAMA_CONTEXT_TYPE_MTP;
-            cparams_mtp.type_k        = params_base.speculative.draft.cache_type_k;
-            cparams_mtp.type_v        = params_base.speculative.draft.cache_type_v;
-            cparams_mtp.n_rs_seq      = 0;
-            cparams_mtp.n_outputs_max = params_base.n_parallel;
-            cparams_mtp.ctx_other     = ctx_tgt;
+                // progress callback
+                params_dft.load_progress_callback           = load_progress_callback;
+                params_dft.load_progress_callback_user_data = &load_progress_spec;
 
-            ctx_dft.reset(llama_init_from_model(model_tgt, cparams_mtp));
-            if (ctx_dft == nullptr) {
-                SRV_ERR("%s", "failed to create MTP context\n");
-                return false;
+                spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
+                model_dft = spec_init->model();
+                ctx_dft   = spec_init->context();
+
+                if (has_draft && model_dft == nullptr) {
+                    SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
+                    return false;
+                }
+
+                if (ctx_dft == nullptr) {
+                    SRV_ERR("%s", "failed to create MTP context\n");
+                    return false;
+                }
+
+                params_base.speculative.draft.ctx_tgt = ctx_tgt;
+                params_base.speculative.draft.ctx_dft = ctx_dft;
             }
-
-            params_base.speculative.draft.ctx_tgt = ctx_tgt;
-            params_base.speculative.draft.ctx_dft = ctx_dft.get();
 
             load_progress_callback(1.0f, &load_progress_spec);
         }
@@ -1296,9 +1248,6 @@ private:
         // Necessary similarity of prompt for slot selection
         slot_prompt_similarity = params_base.slot_prompt_similarity;
 
-        // setup slots
-        SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);
-
         const int n_ctx_train = llama_model_n_ctx_train(model_tgt);
 
         int n_ctx_slot = llama_n_ctx_seq(ctx_tgt);
@@ -1315,8 +1264,12 @@ private:
         }
 
         if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
-            SRV_WRN("%s", "speculative decoding will use checkpoints\n");
+            SRV_TRC("%s", "speculative decoding will use checkpoints\n");
         }
+
+        // setup slots
+        SRV_INF("initializing, n_slots = %d, n_ctx_slot = %d, kv_unified = '%s'\n",
+                params_base.n_parallel, n_ctx_slot, params_base.kv_unified ? "true" : "false");
 
         // initialize slots
         for (int i = 0; i < params_base.n_parallel; i++) {
@@ -1333,13 +1286,15 @@ private:
         }
 
         if (ctx_dft) {
-            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
+            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft);
         }
 
         if (spec) {
-            SRV_INF("%s", "speculative decoding context initialized\n");
+            SRV_TRC("%s", "speculative decoding context initialized\n");
         } else {
-            ctx_dft.reset();
+            spec_init.reset();
+            ctx_dft   = nullptr;
+            model_dft = nullptr;
         }
 
         for (int i = 0; i < params_base.n_parallel; i++) {
@@ -1347,14 +1302,14 @@ private:
 
             slot.id      = i;
             slot.ctx_tgt = ctx_tgt;
-            slot.ctx_dft = ctx_dft.get();
+            slot.ctx_dft = ctx_dft;
             slot.spec    = spec.get();
             slot.n_ctx   = n_ctx_slot;
 
             slot.mctx                   = mctx;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
-            SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
+            SLT_TRC(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
 
             slot.callback_on_release = [this](int id_slot) {
                 queue_tasks.pop_deferred_task(id_slot);
@@ -1390,23 +1345,23 @@ private:
 
         if (params_base.cache_ram_mib != 0) {
             if (params_base.cache_ram_mib < 0) {
-                SRV_INF("prompt cache is enabled, size limit: %s\n", "no limit");
+                SRV_TRC("prompt cache is enabled, size limit: %s\n", "no limit");
             } else {
-                SRV_INF("prompt cache is enabled, size limit: %d MiB\n", params_base.cache_ram_mib);
+                SRV_TRC("prompt cache is enabled, size limit: %d MiB\n", params_base.cache_ram_mib);
             }
-            SRV_INF("%s", "use `--cache-ram 0` to disable the prompt cache\n");
+            SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
 
             prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
         } else {
-            SRV_INF("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+            SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
-        SRV_INF("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
+        SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
         if (params_base.n_ctx_checkpoints > 0) {
-            SRV_INF("context checkpoints enabled, max = %d, min spacing = %d\n",
+            SRV_TRC("context checkpoints enabled, max = %d, min spacing = %d\n",
                     params_base.n_ctx_checkpoints, params_base.checkpoint_min_step);
         } else {
-            SRV_INF("%s", "context checkpoints disabled\n");
+            SRV_TRC("%s", "context checkpoints disabled\n");
         }
 
         if (!params_base.model_alias.empty()) {
@@ -1463,11 +1418,11 @@ private:
                 params_base.cache_idle_slots = false;
             } else {
                 if (params_base.kv_unified) {
-                    SRV_INF("%s", "idle slots will be saved to prompt cache and cleared upon starting a new task\n");
+                    SRV_TRC("%s", "idle slots will be saved to prompt cache and cleared upon starting a new task\n");
                 } else {
                     // without a unified KV cache, clearing a slot frees no reusable room, so we only
                     // publish a RAM-cache copy of idle slots (their KV stays in VRAM) [TAG_IDLE_SLOT_CLEAR]
-                    SRV_INF("%s", "idle slots will be saved to prompt cache upon starting a new task\n");
+                    SRV_TRC("%s", "idle slots will be saved to prompt cache upon starting a new task\n");
                 }
                 SRV_DBG("%s", "__TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__\n");
             }
@@ -1489,26 +1444,26 @@ private:
         // populate chat template params
         {
             common_chat_templates_ptr chat_templates;
+            bool enable_thinking = false;
 
             try {
                 chat_templates = common_chat_templates_init(model_tgt, params_base.chat_template);
 
-                LOG_INF("%s: chat template, example_format: '%s'\n", __func__,
+                SRV_TRC("%s: chat template, example_format: '%s'\n", __func__,
                     common_chat_format_example(chat_templates.get(), params_base.use_jinja, params_base.default_template_kwargs).c_str());
 
+                // thinking is enabled if:
+                // 1. It's not explicitly disabled via --reasoning off
+                // 2. The chat template supports it
+                const bool template_supports_thinking = params_base.use_jinja && common_chat_templates_support_enable_thinking(chat_templates.get());
+                enable_thinking = params_base.enable_reasoning != 0 && template_supports_thinking;
+                SRV_TRC("%s: chat template, thinking = %d\n", __func__, enable_thinking);
             } catch (const std::exception & e) {
                 SRV_ERR("%s: chat template parsing error: %s\n", __func__, e.what());
                 SRV_ERR("%s: please consider disabling jinja via --no-jinja, or use a custom chat template via --chat-template\n", __func__);
                 SRV_ERR("%s: for example: --no-jinja --chat-template chatml\n", __func__);
                 return false;
             }
-
-            // thinking is enabled if:
-            // 1. It's not explicitly disabled via --reasoning off
-            // 2. The chat template supports it
-            const bool template_supports_thinking = params_base.use_jinja && common_chat_templates_support_enable_thinking(chat_templates.get());
-            const bool enable_thinking = params_base.enable_reasoning != 0 && template_supports_thinking;
-            SRV_INF("%s: chat template, thinking = %d\n", __func__, enable_thinking);
 
             // IMPORTANT: chat_params is reused across sleeping / resuming states,
             //            never store llama_context/llama_model pointers in chat_params,
@@ -1528,6 +1483,19 @@ private:
                 /* media_path            */ params_base.media_path,
                 /* force_pure_content    */ params_base.force_pure_content_parser
             };
+
+            {
+                auto caps = common_chat_templates_get_caps(chat_params.tmpls.get());
+                auto it = params_base.default_template_kwargs.find("preserve_reasoning");
+                bool supported = caps.at("supports_preserve_reasoning");
+                bool enabled = it != params_base.default_template_kwargs.end();
+                if (supported && !enabled) {
+                    SRV_INF("%s", "chat template supports preserving reasoning, consider enabling it via --reasoning-preserve\n");
+                }
+                if (!supported && enabled) {
+                    SRV_WRN("%s", "chat template does NOT support preserving reasoning, --reasoning-preserve has no effect\n");
+                }
+            }
         }
 
         return true;
@@ -1651,7 +1619,7 @@ private:
             update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
 
             if (update_cache) {
-                SRV_INF("%s", "updating prompt cache\n");
+                SRV_TRC("%s", "updating prompt cache\n");
 
                 const int64_t t_start = ggml_time_us();
 
@@ -1663,7 +1631,7 @@ private:
 
                 prompt_cache->update();
 
-                SRV_INF("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
+                SRV_TRC("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
         }
 
@@ -2283,7 +2251,7 @@ private:
 
         int id_parent = parent_task.id;
 
-        SRV_INF("launching slots for parent task id_task = %d with %zu child tasks\n", id_parent, parent_task.child_tasks.size());
+        SRV_TRC("launching slots for parent task id_task = %d with %zu child tasks\n", id_parent, parent_task.child_tasks.size());
 
         // to be called in case of failure to release all launched slots
         auto release_slots = [this, id_parent]() {
@@ -2339,12 +2307,12 @@ private:
         //       this is not true for SWA models: https://github.com/ggml-org/llama.cpp/pull/24411#issuecomment-4677983225
         cur.update_pos(slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max);
 
-        cur.update_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-        cur.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        cur.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        cur.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
         // stash the draft's speculative state with the checkpoint
         common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
 
-        SLT_INF(slot,
+        SLT_TRC(slot,
                 "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
@@ -2408,7 +2376,7 @@ private:
                     if (params_base.cache_idle_slots) {
                         for (auto & slot : slots) {
                             if (!slot.is_processing()) {
-                                SLT_INF(slot, "%s", "saving idle slot to prompt cache\n");
+                                SLT_TRC(slot, "%s", "saving idle slot to prompt cache\n");
 
                                 if (slot.prompt_save(*prompt_cache)) {
                                     SLT_DBG(slot, "%s", "__TEST_TAG_CACHE_IDLE_SLOT__\n");
@@ -2440,6 +2408,8 @@ private:
 
                     server_slot * slot = get_slot_by_cmpl_id(task.params.control_cmpl_id);
                     if (slot == nullptr) {
+                        SRV_WRN("control %s on unknown completion id=%s, no live slot\n",
+                                task.params.control_action.c_str(), task.params.control_cmpl_id.c_str());
                         res->success = false;
                         res->message = "no active completion for this id";
                         queue_results.send(std::move(res));
@@ -2664,7 +2634,7 @@ private:
                     auto new_loras = construct_lora_list(task.set_lora);
                     // logging
                     for (size_t i = 0; i < new_loras.size(); ++i) {
-                        SRV_INF("set lora adapter idx=%zu scale=%f\n", i, new_loras[i].scale);
+                        SRV_TRC("set lora adapter idx=%zu scale=%f\n", i, new_loras[i].scale);
                     }
                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
                     params_base.lora_adapters = new_loras;
@@ -2764,7 +2734,7 @@ private:
             }
 
             if (all_idle) {
-                SRV_INF("%s", "all slots are idle\n");
+                SRV_TRC("%s", "all slots are idle\n");
                 return; // skip further processing
 
             } else {
@@ -2874,8 +2844,8 @@ private:
                 common_context_seq_add(ctx_tgt, slot.id, n_keep + n_discard, slot.prompt.n_tokens(), -n_discard);
 
                 if (ctx_dft) {
-                    common_context_seq_rm (ctx_dft.get(), slot.id, n_keep            , n_keep + n_discard);
-                    common_context_seq_add(ctx_dft.get(), slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
+                    common_context_seq_rm (ctx_dft, slot.id, n_keep            , n_keep + n_discard);
+                    common_context_seq_add(ctx_dft, slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
                 }
 
                 // add generated tokens to cache
@@ -2947,7 +2917,7 @@ private:
                                 llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id));
 
                         if (use_ckpt_dft) {
-                            slot.spec_ckpt.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                            slot.spec_ckpt.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                         }
 
                         slot.spec_prompt = slot.prompt.tokens.get_text_tokens();
@@ -2984,10 +2954,10 @@ private:
 
             if (ctx_dft) {
                 if (use_ckpt_dft) {
-                    ckpt.load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    ckpt.load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                 }
 
-                common_context_seq_rm(ctx_dft.get(), slot.id, ckpt.pos_max + 1, -1);
+                common_context_seq_rm(ctx_dft, slot.id, ckpt.pos_max + 1, -1);
             }
 
             if (!draft.empty()) {
@@ -2996,7 +2966,7 @@ private:
                    (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && draft.size() > llama_n_rs_seq(ctx_tgt));
 
                 const bool use_ckpt_dft =
-                   (ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && draft.size() > llama_n_rs_seq(ctx_dft.get()));
+                   (ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && draft.size() > llama_n_rs_seq(ctx_dft));
 
                 if (use_ckpt_tgt) {
                     //const int64_t t_start = ggml_time_us();
@@ -3013,7 +2983,7 @@ private:
                 }
 
                 if (use_ckpt_dft) {
-                    ckpt.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    ckpt.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                 }
             }
         });
@@ -3194,8 +3164,8 @@ private:
                                             common_context_seq_add(ctx_tgt, slot.id, head_c, head_c + n_match, kv_shift);
 
                                             if (ctx_dft) {
-                                                common_context_seq_rm (ctx_dft.get(), slot.id, head_p, head_c);
-                                                common_context_seq_add(ctx_dft.get(), slot.id, head_c, head_c + n_match, kv_shift);
+                                                common_context_seq_rm (ctx_dft, slot.id, head_p, head_c);
+                                                common_context_seq_add(ctx_dft, slot.id, head_c, head_c + n_match, kv_shift);
                                             }
 
                                             for (size_t i = 0; i < n_match; i++) {
@@ -3280,10 +3250,9 @@ private:
                                     const auto it = std::find_if(
                                         slot.prompt.checkpoints.rbegin(),
                                         slot.prompt.checkpoints.rend(),
-                                        [&, func_name = __func__](const auto & cur) {
+                                        [&](const auto & cur) {
                                             // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
-                                            LOG_INF("slot %12.*s: id %2d | task %d | Checking checkpoint with [%d, %d] against %d...\n", 12,
-                                                func_name, (slot).id, ((slot).task ? (slot).task->id : -1), cur.pos_min, cur.pos_max, pos_min_thold);
+                                            SLT_TRC(slot, "checking checkpoint with [%d, %d] against %d...\n", cur.pos_min, cur.pos_max, pos_min_thold);
                                             // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
                                             if (cur.pos_max > pos_next) {
                                                 return false;
@@ -3296,18 +3265,18 @@ private:
 
                                     if (!do_reset) {
                                         // restore the context checkpoint
-                                        it->load_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                                        it->load_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         // restore the draft's speculative state
                                         common_speculative_set_state(spec.get(), slot.id, it->data_spec);
 
                                         pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
                                         n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
-                                        SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
+                                        SLT_TRC(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
                                     }
 
                                     if (do_reset) {
-                                        SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
+                                        SLT_TRC(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
                                                 "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
                                         pos_next = 0;
                                         n_past = 0;
@@ -3320,7 +3289,7 @@ private:
                                 for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end();) {
                                     const auto & cur = *it;
                                     if (cur.pos_max > pos_next) {
-                                        SLT_WRN(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.size() / 1024 / 1024);
+                                        SLT_TRC(slot, "erased invalidated context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_swa = %d, pos_next = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, n_swa, pos_next, (float) cur.size() / 1024 / 1024);
                                         it = slot.prompt.checkpoints.erase(it);
                                     } else {
                                         ++it;
@@ -3371,7 +3340,7 @@ private:
 
                     common_context_seq_rm(ctx_tgt, slot.id, p0, -1);
                     if (ctx_dft) {
-                        common_context_seq_rm(ctx_dft.get(), slot.id, p0, -1);
+                        common_context_seq_rm(ctx_dft, slot.id, p0, -1);
                     }
 
                     // If using an alora, there may be uncached tokens that come
@@ -3466,9 +3435,14 @@ private:
 
                         slot.n_prompt_tokens_processed++;
 
-                        // stop the prompt batch exactly before a user message
-                        if (spans.is_user_start(slot.prompt.n_tokens())) {
-                            break;
+                        // break at the last user message, or at user messages at least min step past the last checkpoint
+                        if (do_checkpoint && spans.is_user_start(slot.prompt.n_tokens())) {
+                            const auto pos = slot.prompt.n_tokens();
+                            const auto & checkpoints = slot.prompt.checkpoints;
+
+                            if (pos == last_user_pos || checkpoints.empty() || pos > checkpoints.back().n_tokens + params_base.checkpoint_min_step) {
+                                break;
+                            }
                         }
 
                         // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
@@ -3667,7 +3641,7 @@ private:
                 // all children slots should already launched by launch_slots_with_parent_task()
                 // copy state to the child slots
                 for (auto & child : children) {
-                    SLT_INF(slot, " - copying state to child %d\n", child->id);
+                    SLT_TRC(slot, " - copying state to child %d\n", child->id);
 
                     GGML_ASSERT(child->state == SLOT_STATE_WAIT_OTHER);
 
@@ -3965,6 +3939,8 @@ server_context_meta server_context::get_meta() const {
     auto bos_token_str = bos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx_tgt, bos_id, true) : "";
     auto eos_token_str = eos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx_tgt, eos_id, true) : "";
 
+    const char * ftype_name = llama_ftype_name(llama_model_ftype(impl->model_tgt));
+
     return server_context_meta {
         /* build_info             */ std::string(llama_build_info()),
         /* model_name             */ impl->model_name,
@@ -3999,14 +3975,13 @@ server_context_meta server_context::get_meta() const {
         /* model_n_embd_inp       */ llama_model_n_embd(impl->model_tgt),
         /* model_n_params         */ llama_model_n_params(impl->model_tgt),
         /* model_size             */ llama_model_size(impl->model_tgt),
+        /* model_ftype            */ ftype_name,
     };
 }
 
-
-
 // generator-like API for HTTP response generation
 // may have bypass_sleep = true if the task does not use ctx_server
-struct server_res_generator : server_http_res {
+struct server_res_generator : server_res_spipe {
     server_response_reader rd;
     server_res_generator(server_queue & queue_tasks, server_response & queue_results, int sleep_idle_seconds, bool bypass_sleep = false)
             : rd(queue_tasks, queue_results, HTTP_POLLING_SECONDS) {
@@ -4052,6 +4027,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     auto completion_id = gen_chatcmplid();
     auto & rd = res->rd;
     auto & params = this->params;
+
+    res->set_req(&req); // will also set spipe if needed
+
+    int32_t sse_ping_interval = params.sse_ping_interval;
 
     try {
         std::vector<server_task> tasks;
@@ -4103,6 +4082,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.params.message_spans = task.tokens.find_message_spans(delimiters);
 
             task.id_slot = json_value(data, "id_slot", -1);
+            sse_ping_interval = task.params.sse_ping_interval;
 
             // OAI-compat
             task.params.res_type          = res_type;
@@ -4192,7 +4172,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         }
         res->status = 200;
         res->content_type = "text/event-stream";
-        res->next = [res_this = res.get(), res_type, &req, &params](std::string & output) -> bool {
+        res->set_next([res_this = res.get(), res_type, sse_ping_interval](std::string & output) -> bool {
             static auto format_error = [](task_response_type res_type, const json & res_json) {
                 if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                     return format_anthropic_sse({
@@ -4204,8 +4184,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 }
             };
 
+            auto effective_should_stop = [&res_this]() {
+                return res_this->should_stop();
+            };
+
             try {
-                if (req.should_stop()) {
+                if (effective_should_stop()) {
                     SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
                     return false; // should_stop condition met
                 }
@@ -4239,10 +4223,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 // receive subsequent results
                 bool timeout = false;
                 int64_t start_time = ggml_time_ms();
-                auto result = rd.next([&timeout, &req, &start_time, &params]() {
-                    if (req.should_stop()) {
+                auto result = rd.next([&timeout, &start_time, sse_ping_interval, &effective_should_stop]() {
+                    if (effective_should_stop()) {
                         return true; // should_stop condition met
-                    } else if (params.sse_ping_interval > 0 && ggml_time_ms() - start_time > (int64_t)params.sse_ping_interval * 1000) {
+                    } else if (sse_ping_interval > 0 && ggml_time_ms() - start_time > (int64_t)sse_ping_interval * 1000) {
                         timeout = true;
                         return true; // timeout
                     }
@@ -4258,7 +4242,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
                 if (result == nullptr) {
                     SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
-                    GGML_ASSERT(req.should_stop());
+                    GGML_ASSERT(effective_should_stop());
                     return false; // should_stop condition met
                 }
 
@@ -4293,7 +4277,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 // terminate on exception
                 return false;
             }
-        };
+        });
     }
 
     return res;
@@ -4531,6 +4515,7 @@ void server_routes::init_routes() {
             { "default_generation_settings", default_generation_settings_for_props },
             { "total_slots",                 params.n_parallel },
             { "model_alias",                 meta->model_name },
+            { "model_ftype",                 meta->model_ftype },
             { "model_path",                  meta->model_path },
             { "modalities",                  json {
                 {"vision", meta->has_inp_image},
@@ -5079,6 +5064,7 @@ json server_routes::get_model_info() const {
             {"n_embd",      meta->model_n_embd_inp},
             {"n_params",    meta->model_n_params},
             {"size",        meta->model_size},
+            {"ftype",       meta->model_ftype},
         }},
     };
 }

@@ -63,8 +63,8 @@ ggml_cgraph * clip_graph_pixtral::build() {
         // and then concatenate the [IMG_BREAK] token to the end of each row, aka n_patches_per_row dimension
         // after the concatenation, we have a tensor with shape [n_embd, n_patches_per_row + 1, n_rows]
 
-        const int p_y             = n_merge > 0 ? n_patches_y / n_merge : n_patches_y;
-        const int p_x             = n_merge > 0 ? n_patches_x / n_merge : n_patches_x;
+        const int p_y             = n_patches_y / n_merge;
+        const int p_x             = n_patches_x / n_merge;
         const int p_total         = p_x * p_y;
         const int n_embd_text     = cur->ne[0];
         const int n_tokens_output = p_total + p_y - 1; // one [IMG_BREAK] per row, except the last row
