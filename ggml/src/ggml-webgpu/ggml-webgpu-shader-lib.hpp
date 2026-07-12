@@ -2821,23 +2821,16 @@ class ggml_webgpu_shader_lib {
             variant.resize(variant.size() - (sizeof("_mask") - 1));
             variant += "_mask_blk";
         }
-        uint32_t vec_ne = 1u;
-        if (key.common.k_type == GGML_TYPE_F16 && key.common.v_type == GGML_TYPE_F16 &&
-            key.common.head_dim_qk == key.common.head_dim_v) {
-            switch (key.common.head_dim_qk) {
-                case 64:
-                case 192:
-                case 576:
-                    vec_ne = 2u;
-                    break;
-                case 96:
-                    vec_ne = 4u;
-                    break;
-                default:
-                    break;
-            }
+
+        uint32_t d_split = context.min_subgroup_size;
+        if (key.common.k_type == GGML_TYPE_F16 && key.common.v_type == GGML_TYPE_F16) {
+            const uint32_t D     = key.common.head_dim_qk | key.common.head_dim_v;
+            const uint32_t D_lsb = D & (~(D - 1u));
+            d_split              = std::min(std::min(context.min_subgroup_size, 4u), std::max(D_lsb / 4u, 1u));
         }
-        defines.push_back(std::string("VEC_NE=") + std::to_string(vec_ne) + "u");
+
+        defines.push_back(std::string("D_SPLIT=") + std::to_string(d_split));
+        variant += "_dsplit" + std::to_string(d_split);
 
         auto            pipeline_decisions = std::make_shared<ggml_webgpu_flash_attn_vec_decisions>(decisions);
         webgpu_pipeline pipeline =
