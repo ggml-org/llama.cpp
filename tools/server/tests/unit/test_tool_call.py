@@ -643,3 +643,36 @@ def do_test_hello_world(server: ServerProcess, **kwargs):
     code = actual_arguments["code"]
     assert isinstance(code, str), f"Expected code to be a string, got {type(code)}: {json.dumps(code)}"
     assert re.match(r'''print\(("[Hh]ello,? [Ww]orld!?"|'[Hh]ello,? [Ww]orld!?')\)''', re.sub(r'#.*\n?', '', code)), f'Expected hello world, got {code}'
+
+
+def test_malformed_tool_call_args_rejected():
+    """Regression test for issue #25510: malformed tool_calls arguments in
+    prior assistant history must return HTTP 400, not HTTP 500."""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja'
+    server.start()
+
+    res = server.make_request("POST", "/v1/chat/completions", data={
+        "max_tokens": 128,
+        "messages": [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "test",
+                        "arguments": "{"
+                    }
+                }
+            ]},
+        ],
+    })
+
+    assert res.status_code == 400, f"Expected HTTP 400, got {res.status_code}: {res.body}"
+    error = res.body["error"]
+    assert error["type"] == "invalid_request_error", \
+        f"Expected invalid_request_error, got {error['type']}: {error}"
+    assert any(kw in error["message"].lower() for kw in ["json", "parse", "arguments"]), \
+        f"Expected JSON parse error, got: {error['message']}"

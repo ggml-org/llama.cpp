@@ -2360,7 +2360,8 @@ static void convert_tool_responses_gemma4(json & messages) {
 
 static void func_args_not_string(json & messages) {
     GGML_ASSERT(messages.is_array());
-    for (auto & message : messages) {
+    for (size_t i = 0; i < messages.size(); i++) {
+        auto & message = messages[i];
         if (message.contains("tool_calls")) {
             for (auto & tool_call : message["tool_calls"]) {
                 if (tool_call.contains("function") && tool_call["function"].contains("arguments")) {
@@ -2369,7 +2370,8 @@ static void func_args_not_string(json & messages) {
                         try {
                             args = json::parse(args.get<std::string>());
                         } catch (const std::exception & e) {
-                            throw std::runtime_error("Failed to parse tool call arguments as JSON: " + std::string(e.what()));
+                            throw std::invalid_argument("Failed to parse tool call arguments as JSON in message "
+                                + std::to_string(i) + ": " + std::string(e.what()));
                         }
                     }
                 }
@@ -2696,6 +2698,12 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         workaround::map_developer_role_to_system(params.messages);
     }
 
+    if (tmpl.original_caps().supports_object_arguments) {
+        // must run before system_message_not_supported so error messages
+        // reference the correct history entry index
+        workaround::func_args_not_string(params.messages);
+    }
+
     if (!tmpl.original_caps().supports_system_role) {
         workaround::system_message_not_supported(params.messages);
     }
@@ -2705,10 +2713,6 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         // to still be non-null, this puts an empty string everywhere where the
         // content field is null
         workaround::requires_non_null_content(params.messages);
-    }
-
-    if (tmpl.original_caps().supports_object_arguments) {
-        workaround::func_args_not_string(params.messages);
     }
 
     params.extra_context = common_chat_extra_context();
