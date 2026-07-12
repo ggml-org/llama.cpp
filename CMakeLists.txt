@@ -206,7 +206,7 @@ if (Git_FOUND)
             OUTPUT_STRIP_TRAILING_WHITESPACE
             RESULT_VARIABLE LLAMA_BUILD_COMMIT_FULL_RESULT
         )
-        foreach(LLAMA_GIT_METADATA_NAME HEAD index packed-refs)
+        foreach(LLAMA_GIT_METADATA_NAME HEAD index packed-refs logs/HEAD)
             execute_process(
                 COMMAND ${GIT_EXECUTABLE} rev-parse --git-path "${LLAMA_GIT_METADATA_NAME}"
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
