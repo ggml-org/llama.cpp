@@ -298,6 +298,7 @@ class _QwenMtpMixin:
 
         # Qwen-3-Next doesn't include `mtp_num_hidden_layers` in config.
         if not self.no_mtp and "mtp_num_hidden_layers" not in self.hparams:
+            assert self._original_block_count is not None
             n_mtp = 0
             for name in tensors:
                 if name.startswith("model.layers."):
