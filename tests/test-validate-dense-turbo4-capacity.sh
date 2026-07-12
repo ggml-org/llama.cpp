@@ -8,7 +8,7 @@ TEST_ROOT="$(mktemp -d -t p45a-contract.XXXXXX)"
 TEST_REPO="$TEST_ROOT/repo"
 mkdir -p "$TEST_REPO/scripts"
 cp "$SOURCE_DRIVER" "$TEST_REPO/scripts/validate-dense-turbo4-capacity.sh"
-git -C "$TEST_REPO" init -q --object-format=sha1
+GIT_DEFAULT_HASH=sha1 git -C "$TEST_REPO" init -q
 git -C "$TEST_REPO" add scripts/validate-dense-turbo4-capacity.sh
 git -C "$TEST_REPO" -c user.name=Fixture -c user.email=fixture.invalid -c commit.gpgsign=false \
   commit -q -m "fixture driver"

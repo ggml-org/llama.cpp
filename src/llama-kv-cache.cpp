@@ -293,6 +293,11 @@ llama_kv_cache::llama_kv_cache(
         } else {
             LLAMA_LOG_INFO("llama_kv_cache: Boundary V auto-enabled for turbo2-V (opt-out: TURBO_LAYER_ADAPTIVE=0)\n");
         }
+    } else if (turbo_layer_adaptive_env != nullptr &&
+               turbo_layer_adaptive_env[0] != '\0' &&
+               strcmp(turbo_layer_adaptive_env, "0") != 0) {
+        LLAMA_LOG_WARN("llama_kv_cache: unsupported TURBO_LAYER_ADAPTIVE value '%s' ignored\n",
+            turbo_layer_adaptive_env);
     }
 
     for (uint32_t il = 0; il < n_layer; il++) {
