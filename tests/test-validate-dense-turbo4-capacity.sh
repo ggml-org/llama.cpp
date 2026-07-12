@@ -3,10 +3,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DRIVER="$REPO_ROOT/scripts/validate-dense-turbo4-capacity.sh"
-SOURCE_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+SOURCE_DRIVER="$SCRIPT_DIR/../scripts/validate-dense-turbo4-capacity.sh"
 TEST_ROOT="$(mktemp -d -t p45a-contract.XXXXXX)"
+TEST_REPO="$TEST_ROOT/repo"
+mkdir -p "$TEST_REPO/scripts"
+cp "$SOURCE_DRIVER" "$TEST_REPO/scripts/validate-dense-turbo4-capacity.sh"
+git -C "$TEST_REPO" init -q --object-format=sha1
+git -C "$TEST_REPO" add scripts/validate-dense-turbo4-capacity.sh
+git -C "$TEST_REPO" -c user.name=Fixture -c user.email=fixture.invalid -c commit.gpgsign=false \
+  commit -q -m "fixture driver"
+DRIVER="$TEST_REPO/scripts/validate-dense-turbo4-capacity.sh"
+SOURCE_SHA="$(git -C "$TEST_REPO" rev-parse HEAD)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 PASS_COUNT=0
