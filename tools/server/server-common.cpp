@@ -705,7 +705,8 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & promp
     std::vector<server_tokens> inputs;
     // multimodal
     mtmd_input_text inp_txt = {
-        prompt.c_str(),
+        prompt.data(),
+        prompt.size(),
         /* add_special */   true,
         /* parse_special */ true,
     };
