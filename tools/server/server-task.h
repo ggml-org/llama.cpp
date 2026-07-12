@@ -94,6 +94,9 @@ struct task_params {
     // per-request parameters for chat parsing
     common_chat_parser_params chat_parser_params;
 
+    // message spans for checkpointing
+    common_chat_msg_spans message_spans;
+
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
 

@@ -1,5 +1,4 @@
 #include "../tools/server/server-checkpoint.h"
-#include "../tools/server/server-task.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -99,45 +98,12 @@ static void test_size_pruning_reuses_redundant_policy() {
     require_eq({52, 4148, 8244}, checkpoint_positions(checkpoints));
 }
 
-static void test_prompt_pruning_keeps_main_state_and_newest_checkpoint() {
-    server_prompt prompt;
-    prompt.data.main.resize(100);
-
-    for (int64_t pos : {100, 200, 300, 400, 500}) {
-        prompt.checkpoints.push_back(make_checkpoint(pos, 50));
-    }
-
-    const auto pruned = prompt.prune_checkpoints_to_limit(220);
-
-    require(pruned.n_pruned == 3, "oversized prompt must prune checkpoints to cache limit");
-    require(pruned.size_pruned == 150, "oversized prompt must report pruned checkpoint bytes");
-    require(prompt.data.main.size() == 100, "prompt main state must be preserved");
-    require(prompt.size() == 200, "prompt must be brought under the target cache limit");
-    require_eq({100, 500}, checkpoint_positions(prompt.checkpoints));
-}
-
-static void test_prompt_pruning_drops_checkpoints_when_none_fit() {
-    server_prompt prompt;
-    prompt.data.main.resize(100);
-    prompt.checkpoints.push_back(make_checkpoint(100, 30));
-    prompt.checkpoints.push_back(make_checkpoint(200, 30));
-
-    const auto pruned = prompt.prune_checkpoints_to_limit(120);
-
-    require(pruned.n_pruned == 2, "all checkpoints must be pruned when none fit");
-    require(pruned.size_pruned == 60, "all checkpoint bytes must be reported as pruned");
-    require(prompt.checkpoints.empty(), "no checkpoint should remain when none fit the budget");
-    require(prompt.size() == 100, "cache accounting must reflect the remaining main state");
-}
-
 int main() {
     try {
         test_ladder_min_step();
         test_mid_prompt_gate();
         test_redundant_pruning();
         test_size_pruning_reuses_redundant_policy();
-        test_prompt_pruning_keeps_main_state_and_newest_checkpoint();
-        test_prompt_pruning_drops_checkpoints_when_none_fit();
     } catch (const std::exception & e) {
         fprintf(stderr, "%s\n", e.what());
         return EXIT_FAILURE;

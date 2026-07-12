@@ -3275,7 +3275,7 @@ private:
 
                                         if (ctx_dft &&
                                             (ctx_dft_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
-                                             n_rollback > (llama_pos) llama_n_rs_seq(ctx_dft.get()))) {
+                                             n_rollback > (llama_pos) llama_n_rs_seq(ctx_dft))) {
                                             return false;
                                         }
 
@@ -3443,6 +3443,9 @@ private:
                         has_mtmd = true;
                     }
 
+                    const auto & spans = slot.task->params.message_spans;
+                    const auto last_user_pos = spans.last_user_message_pos();
+
                     // add prompt tokens for processing in the current batch
                     while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.size() < n_batch) {
                         // get next token to process
@@ -3536,19 +3539,12 @@ private:
                             slot.task->n_tokens(),
                             near_prompt_end);
 
+                    const bool is_user_start = spans.is_user_start(n_tokens_start);
+
                     {
-                        const bool is_on_user =
-                            n_before_user_known &&
-                            n_tokens_start == n_before_user;
-
-                        const bool is_after_user =
-                            n_before_user_known &&
-                            n_tokens_start > n_before_user;
-
                         const bool is_allowed =
-                            (!n_before_user_known && near_prompt_end) ||
-                            is_on_user ||
-                            (is_after_user && near_prompt_end) ||
+                            is_user_start ||
+                            near_prompt_end ||
                             is_ladder_checkpoint;
 
                         if (do_checkpoint && !is_allowed) {
@@ -4169,6 +4165,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
 
+        // message delimiters for checkpointing
+        auto delimiters = common_chat_msg_delimiters_parse(json_value(data, "message_delimiters", json::array()));
+        delimiters.tokenize(ctx_server.vocab);
+
         for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
@@ -4181,6 +4181,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     meta->slot_n_ctx,
                     meta->logit_bias_eog,
                     data);
+
+            task.params.message_spans = task.tokens.find_message_spans(delimiters);
 
             const auto message_spans = json_value(data, "message_spans", json::array());
             if (prompt.is_string() && message_spans.is_array()) {
