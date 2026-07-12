@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { ChevronDown } from '@lucide/svelte';
+	import { persisted } from '$lib/stores/persisted.svelte';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { STATS_UNITS } from '$lib/constants';
+	import { STATS_UNITS, CONTEXT_GAUGE_DETAILS_OPEN_LOCALSTORAGE_KEY } from '$lib/constants';
 	import ContextGaugeDetailRow from './ContextGaugeDetailRow.svelte';
 
 	interface Props {
@@ -30,7 +31,11 @@
 		transientDetails
 	}: Props = $props();
 
-	let open = $state(false);
+	const detailsOpen = persisted<boolean>(CONTEXT_GAUGE_DETAILS_OPEN_LOCALSTORAGE_KEY, false);
+	let open = $state(detailsOpen.value);
+	$effect(() => {
+		detailsOpen.value = open;
+	});
 
 	const hasCumulative = $derived(cumulativeRead > 0 || cumulativeOutput > 0);
 	const hasCurrent = $derived(currentRead > 0 || currentOutput > 0);
