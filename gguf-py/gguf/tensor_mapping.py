@@ -549,6 +549,18 @@ class TensorNameMap:
             "transformer.blocks.{bid}.ffn.act",  # mpt
         ),
 
+        MODEL_TENSOR.FFN_MOE_ADAPTER_GATE: (
+            "model.layers.{bid}.mlp.moe_adapter.router", # sparsetral
+        ),
+
+        MODEL_TENSOR.FFN_MOE_ADAPTER_DOWN: (
+            "model.layers.{bid}.mlp.moe_adapter.experts.adapter_down", # sparsetral
+        ),
+
+        MODEL_TENSOR.FFN_MOE_ADAPTER_UP: (
+            "model.layers.{bid}.mlp.moe_adapter.experts.adapter_up",
+        ),
+
         # Feed-forward gate
         MODEL_TENSOR.FFN_GATE: (
             "model.layers.{bid}.mlp.gate_proj",               # llama-hf refact olmo2

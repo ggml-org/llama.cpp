@@ -109,6 +109,7 @@ class Keys:
         BLOCK_COUNT                       = "{arch}.block_count"
         LEADING_DENSE_BLOCK_COUNT         = "{arch}.leading_dense_block_count"
         FEED_FORWARD_LENGTH               = "{arch}.feed_forward_length"
+        ADAPTER_FEED_FORWARD_LENGTH       = "{arch}.adapter_feed_forward_length"
         EXPERT_FEED_FORWARD_LENGTH        = "{arch}.expert_feed_forward_length"
         EXPERT_SHARED_FEED_FORWARD_LENGTH = "{arch}.expert_shared_feed_forward_length"
         EXPERT_CHUNK_FEED_FORWARD_LENGTH  = "{arch}.expert_chunk_feed_forward_length"
@@ -561,6 +562,9 @@ class MODEL_TENSOR(IntEnum):
     ATTN_GATE            = auto()
     FFN_GATE_INP         = auto()
     FFN_GATE_INP_SHEXP   = auto()
+    FFN_MOE_ADAPTER_GATE = auto()
+    FFN_MOE_ADAPTER_DOWN = auto()
+    FFN_MOE_ADAPTER_UP   = auto()
     FFN_NORM             = auto()
     FFN_PRE_NORM         = auto() # alias of FFN_NORM
     FFN_PRE_NORM_2       = auto() # gemma4
@@ -1120,6 +1124,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_GATE:                  "blk.{bid}.ffn_gate",
     MODEL_TENSOR.FFN_DOWN:                  "blk.{bid}.ffn_down",
     MODEL_TENSOR.FFN_UP:                    "blk.{bid}.ffn_up",
+    MODEL_TENSOR.FFN_MOE_ADAPTER_GATE:      "blk.{bid}.ffn_moe_adapter_gate",
+    MODEL_TENSOR.FFN_MOE_ADAPTER_DOWN:      "blk.{bid}.ffn_moe_adapter_down_exps",
+    MODEL_TENSOR.FFN_MOE_ADAPTER_UP:        "blk.{bid}.ffn_moe_adapter_up_exps",
     MODEL_TENSOR.FFN_GATE_SHEXP:            "blk.{bid}.ffn_gate_shexp",
     MODEL_TENSOR.FFN_DOWN_SHEXP:            "blk.{bid}.ffn_down_shexp",
     MODEL_TENSOR.FFN_UP_SHEXP:              "blk.{bid}.ffn_up_shexp",
@@ -1695,6 +1702,9 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_MOE_ADAPTER_GATE,
+        MODEL_TENSOR.FFN_MOE_ADAPTER_DOWN,
+        MODEL_TENSOR.FFN_MOE_ADAPTER_UP,
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,

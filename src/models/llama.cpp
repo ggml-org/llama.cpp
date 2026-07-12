@@ -6,6 +6,8 @@ void llama_model_llama::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
+    ml.get_key(LLM_KV_ADAPTER_FEED_FORWARD_LENGTH, hparams.n_ff_adapter, false);
+
     if (hparams.n_expert == 8) {
         switch (hparams.n_layer()) {
             case 32: type = LLM_TYPE_8x7B; break;
@@ -66,7 +68,23 @@ void llama_model_llama::load_arch_tensors(llama_model_loader &) {
             layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
         }
 
-        if (n_expert == 0) {
+        if (hparams.n_ff_adapter > 0)
+        {
+            // sparse adapter MoE: dense FFN plus optional routed adapter tensors
+            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,  n_ff},  0);
+            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff , n_embd},  0);
+            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+
+            layer.ffn_gate_b = create_tensor(tn(LLM_TENSOR_FFN_GATE, "bias", i), {n_ff},   TENSOR_NOT_REQUIRED);
+            layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
+            layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i), {n_ff},   TENSOR_NOT_REQUIRED);
+
+            layer.ffn_moe_adapter_gate = create_tensor(tn(LLM_TENSOR_FFN_MOE_ADAPTER_GATE, "weight", i), {n_embd, n_expert}, TENSOR_NOT_REQUIRED);
+            layer.ffn_moe_adapter_down = create_tensor(tn(LLM_TENSOR_FFN_MOE_ADAPTER_DOWN, "weight", i), {n_embd, hparams.n_ff_adapter, n_expert}, TENSOR_NOT_REQUIRED);
+            layer.ffn_moe_adapter_up   = create_tensor(tn(LLM_TENSOR_FFN_MOE_ADAPTER_UP,   "weight", i), {hparams.n_ff_adapter, n_embd, n_expert}, TENSOR_NOT_REQUIRED);
+        }
+        
+        else if (n_expert == 0) {
             layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
