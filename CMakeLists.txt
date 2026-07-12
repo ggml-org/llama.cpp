@@ -206,15 +206,19 @@ if (Git_FOUND)
             OUTPUT_STRIP_TRAILING_WHITESPACE
             RESULT_VARIABLE LLAMA_BUILD_COMMIT_FULL_RESULT
         )
-        execute_process(
-            COMMAND ${GIT_EXECUTABLE} rev-parse --git-path HEAD
-            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-            OUTPUT_VARIABLE LLAMA_GIT_HEAD_FILE
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-        )
-        get_filename_component(LLAMA_GIT_HEAD_FILE "${LLAMA_GIT_HEAD_FILE}" ABSOLUTE
-            BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_HEAD_FILE}")
+        foreach(LLAMA_GIT_METADATA_NAME HEAD index packed-refs)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} rev-parse --git-path "${LLAMA_GIT_METADATA_NAME}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE LLAMA_GIT_METADATA_FILE
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            get_filename_component(LLAMA_GIT_METADATA_FILE "${LLAMA_GIT_METADATA_FILE}" ABSOLUTE
+                BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            if (EXISTS "${LLAMA_GIT_METADATA_FILE}")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_METADATA_FILE}")
+            endif()
+        endforeach()
 
         execute_process(
             COMMAND ${GIT_EXECUTABLE} symbolic-ref -q HEAD
@@ -232,7 +236,9 @@ if (Git_FOUND)
             )
             get_filename_component(LLAMA_GIT_HEAD_REF_FILE "${LLAMA_GIT_HEAD_REF_FILE}" ABSOLUTE
                 BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_HEAD_REF_FILE}")
+            if (EXISTS "${LLAMA_GIT_HEAD_REF_FILE}")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_HEAD_REF_FILE}")
+            endif()
         endif()
     endif()
 endif()
