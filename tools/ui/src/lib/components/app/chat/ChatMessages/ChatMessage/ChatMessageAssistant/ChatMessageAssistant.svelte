@@ -11,11 +11,10 @@
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { copyToClipboard, deriveAgenticSections, modelLoadProgressText } from '$lib/utils';
-	import { AgenticSectionType } from '$lib/enums';
+	import { AgenticSectionType, ChatMessageStatisticsMode } from '$lib/enums';
 	import { REASONING_TAGS } from '$lib/constants/agentic';
-	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
-	import { MessageRole, ChatMessageStatsView } from '$lib/enums';
+	import { MessageRole } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
@@ -121,62 +120,6 @@
 
 		return parts.join('\n\n\n');
 	});
-
-	let activeStatsView = $state<ChatMessageStatsView>(ChatMessageStatsView.GENERATION);
-	let statsContainerEl: HTMLDivElement | undefined = $state();
-
-	function getScrollParent(el: HTMLElement): HTMLElement | null {
-		let parent = el.parentElement;
-		while (parent) {
-			const style = getComputedStyle(parent);
-			if (/(auto|scroll)/.test(style.overflowY)) {
-				return parent;
-			}
-			parent = parent.parentElement;
-		}
-		return null;
-	}
-
-	async function handleStatsViewChange(view: ChatMessageStatsView) {
-		const el = statsContainerEl;
-		if (!el) {
-			activeStatsView = view;
-
-			return;
-		}
-
-		const scrollParent = getScrollParent(el);
-		if (!scrollParent) {
-			activeStatsView = view;
-
-			return;
-		}
-
-		const yBefore = el.getBoundingClientRect().top;
-
-		activeStatsView = view;
-
-		await tick();
-
-		const delta = el.getBoundingClientRect().top - yBefore;
-		if (delta !== 0) {
-			scrollParent.scrollTop += delta;
-		}
-
-		// Correct any drift after browser paint
-		requestAnimationFrame(() => {
-			const drift = el.getBoundingClientRect().top - yBefore;
-
-			if (Math.abs(drift) > 1) {
-				scrollParent.scrollTop += drift;
-			}
-		});
-	}
-
-	let highlightAgenticTurns = $derived(
-		isAgentic &&
-			(currentConfig.alwaysShowAgenticTurns || activeStatsView === ChatMessageStatsView.SUMMARY)
-	);
 
 	let displayedModel = $derived(message.model ?? null);
 
@@ -291,7 +234,6 @@
 				{toolMessages}
 				isStreaming={isChatStreaming()}
 				{isLastAssistantMessage}
-				highlightTurns={highlightAgenticTurns}
 			/>
 		{/if}
 	{:else}
@@ -315,10 +257,7 @@
 
 	<div class="info my-6 grid gap-4 tabular-nums">
 		{#if displayedModel}
-			<div
-				bind:this={statsContainerEl}
-				class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground"
-			>
+			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				{#if isRouter}
 					<ModelsSelectorDropdown
 						currentModel={pendingModel ?? displayedModel}
@@ -347,28 +286,25 @@
 				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
 					{@const agentic = message.timings.agentic}
 					<ChatMessageStatistics
+						mode={ChatMessageStatisticsMode.GENERATION}
 						promptTokens={agentic ? agentic.llm.prompt_n : message.timings.prompt_n}
 						promptMs={agentic ? agentic.llm.prompt_ms : message.timings.prompt_ms}
 						predictedTokens={agentic ? agentic.llm.predicted_n : message.timings.predicted_n}
 						predictedMs={agentic ? agentic.llm.predicted_ms : message.timings.predicted_ms}
 						agenticTimings={agentic}
-						onActiveViewChange={handleStatsViewChange}
 					/>
 				{:else if isLoading() && currentConfig.showMessageStats}
 					{@const liveStats = processingState.getLiveProcessingStats()}
 					{@const genStats = processingState.getLiveGenerationStats()}
-					{@const promptProgress = processingState.processingState?.promptProgress}
-					{@const isStillProcessingPrompt =
-						promptProgress && promptProgress.processed < promptProgress.total}
 
-					{#if liveStats || genStats}
+					{#if genStats}
 						<ChatMessageStatistics
+							mode={ChatMessageStatisticsMode.GENERATION}
 							isLive
-							isProcessingPrompt={!!isStillProcessingPrompt}
 							promptTokens={liveStats?.tokensProcessed}
 							promptMs={liveStats?.timeMs}
-							predictedTokens={genStats?.tokensGenerated}
-							predictedMs={genStats?.timeMs}
+							predictedTokens={genStats.tokensGenerated}
+							predictedMs={genStats.timeMs}
 						/>
 					{/if}
 				{/if}

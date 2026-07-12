@@ -6,6 +6,7 @@ import type { ReasoningEffortLevel } from '$lib/types';
  * Keys match the ReasoningEffort enum values for type-safe lookups.
  */
 export const REASONING_EFFORT_LABELS: Record<string, string> = {
+	[ReasoningEffort.OFF]: 'Off',
 	[ReasoningEffort.LOW]: 'Low',
 	[ReasoningEffort.MEDIUM]: 'Medium',
 	[ReasoningEffort.HIGH]: 'High',
@@ -13,7 +14,7 @@ export const REASONING_EFFORT_LABELS: Record<string, string> = {
 };
 
 export const REASONING_EFFORT_LEVELS: ReasoningEffortLevel[] = [
-	{ value: 'off', label: 'Off', isOff: true },
+	{ value: ReasoningEffort.OFF, label: 'Off', isOff: true },
 	{ value: ReasoningEffort.LOW, label: 'Low' },
 	{ value: ReasoningEffort.MEDIUM, label: 'Medium' },
 	{ value: ReasoningEffort.HIGH, label: 'High' },

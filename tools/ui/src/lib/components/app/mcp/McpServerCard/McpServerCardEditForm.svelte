@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { McpServerForm } from '$lib/components/app/mcp';
+	import { parseHeadersToArray } from '$lib/utils';
 
 	interface Props {
 		serverId: string;
@@ -26,11 +27,19 @@
 		}
 	});
 
-	let canSave = $derived(!urlError);
+	let headerPairsValid = $derived(
+		parseHeadersToArray(editHeaders).every((p) => p.key.trim() && p.value.trim())
+	);
+	let canSave = $derived(!urlError && headerPairsValid);
 
 	function handleSave() {
 		if (!canSave) return;
 		onSave(editUrl.trim(), editHeaders.trim(), editUseProxy);
+	}
+
+	function handleSubmit(event: SubmitEvent) {
+		event.preventDefault();
+		handleSave();
 	}
 
 	export function setInitialValues(url: string, headers: string, useProxy: boolean) {
@@ -40,25 +49,27 @@
 	}
 </script>
 
-<div class="space-y-4">
-	<p class="font-medium">Configure Server</p>
+<form onsubmit={handleSubmit} class="contents">
+	<div class="space-y-4">
+		<p class="font-medium">Configure Server</p>
 
-	<McpServerForm
-		url={editUrl}
-		headers={editHeaders}
-		useProxy={editUseProxy}
-		onUrlChange={(v) => (editUrl = v)}
-		onHeadersChange={(v) => (editHeaders = v)}
-		onUseProxyChange={(v) => (editUseProxy = v)}
-		urlError={editUrl ? urlError : null}
-		id={serverId}
-	/>
+		<McpServerForm
+			url={editUrl}
+			headers={editHeaders}
+			useProxy={editUseProxy}
+			onUrlChange={(v) => (editUrl = v)}
+			onHeadersChange={(v) => (editHeaders = v)}
+			onUseProxyChange={(v) => (editUseProxy = v)}
+			urlError={editUrl ? urlError : null}
+			id={serverId}
+		/>
 
-	<div class="flex items-center justify-end gap-2">
-		<Button variant="secondary" size="sm" onclick={onCancel}>Cancel</Button>
+		<div class="flex items-center justify-end gap-2">
+			<Button variant="secondary" size="sm" onclick={onCancel}>Cancel</Button>
 
-		<Button size="sm" onclick={handleSave} disabled={!canSave}>
-			{serverUrl.trim() ? 'Update' : 'Add'}
-		</Button>
+			<Button size="sm" type="submit" disabled={!canSave}>
+				{serverUrl.trim() ? 'Update' : 'Add'}
+			</Button>
+		</div>
 	</div>
-</div>
+</form>

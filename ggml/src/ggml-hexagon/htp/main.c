@@ -667,7 +667,7 @@ static int execute_op(struct htp_ops_context * octx) {
             return op_gated_delta_net(octx);
 
         case HTP_OP_TRI:
-            return op_tri(octx);
+            return op_unary(octx);
 
         case HTP_OP_INVALID:
             break;
@@ -948,6 +948,8 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         int      op_status = HTP_STATUS_OK;
         uint32_t op_wakeup = n_ops / 2; // half-way throgh the batch
 
+        hmx_queue_wakeup(ctx->hmx_queue);
+
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
 
@@ -975,6 +977,8 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 }
             }
         }
+
+        hmx_queue_suspend(ctx->hmx_queue);
 
         struct htp_opbatch_rsp rsp;
         rsp.id        = req.id;

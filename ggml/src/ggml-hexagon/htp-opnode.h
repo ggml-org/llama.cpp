@@ -12,6 +12,7 @@
 #include "htp-ops.h"
 #include "htp/matmul-ops.h"
 #include "htp/flash-attn-ops.h"
+#include "htp/unary-ops.h"
 
 struct htp_opnode {
     ggml_tensor * node = nullptr;
@@ -362,6 +363,9 @@ struct htp_opformat {
                 path = "hvx";
             }
             snprintf(str, max_size, "%s vtcm %d", path, (int) kparams->vtcm_size);
+        } else if (htp_op_is_unary(node.opcode)) {
+            const auto * kparams = (const struct htp_unary_kernel_params *) node.kernel_params;
+            snprintf(str, max_size, "%s vtcm %d", kparams->col_tile ? "wide-row" : "row-block", (int) kparams->vtcm_size);
         } else {
             snprintf(str, max_size, "----");
         }

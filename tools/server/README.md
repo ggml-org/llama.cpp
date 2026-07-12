@@ -228,7 +228,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled) |
 | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
 | `--sleep-idle-seconds SECONDS` | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled) |
-| `--log-prompts-dir PATH` | Log prompts to directory (only used for debugging, default: disabled) |
+| `--log-prompts-dir PATH` | Log prompts to directory (auto-created if not present; only used for debugging, default: disabled) |
 | `--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]` | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_HF_REPO) |
 | `--spec-draft-threads, -td, --threads-draft N` | number of threads to use during generation (default: same as --threads) |
 | `--spec-draft-threads-batch, -tbd, --threads-batch-draft N` | number of threads to use during batch and prompt processing (default: same as --threads-draft) |
@@ -520,6 +520,8 @@ These words will not be included in the completion, so make sure to add them to 
 `timings_per_token`: Include prompt processing and text generation speed information in each response.  Default: `false`
 
 `return_progress`: Include prompt processing progress in `stream` mode. The progress will be contained inside `prompt_progress` with 4 values: `total`, `cache`, `processed`, and `time_ms`. The overall progress is `processed/total`, while the actual timed progress is `(processed-cache)/(total-cache)`. The `time_ms` field contains the elapsed time in milliseconds since prompt processing started. Default: `false`
+
+`sse_ping_interval`: Interval in seconds between SSE comment pings emitted while the stream stays silent, keeping the connection observable during long prompt processing. Overrides the server `--sse-ping-interval` setting for this request, `-1` disables pings. Default: server setting
 
 `post_sampling_probs`: Returns the probabilities of top `n_probs` tokens after applying sampling chain.
 

@@ -604,6 +604,16 @@ typedef struct {
 } ggml_metal_kargs_conv_transpose_1d;
 
 typedef struct {
+    int32_t  T_in;
+    int32_t  T_out;
+    int32_t  OC;
+    int32_t  K;
+    int32_t  K_OC;
+    int32_t  s0;
+    int32_t  p0;
+} ggml_metal_kargs_col2im_1d;
+
+typedef struct {
     int32_t  IC;
     int32_t  IH;
     int32_t  IW;
@@ -645,6 +655,34 @@ typedef struct {
     int32_t  d0;
     int32_t  d1;
 } ggml_metal_kargs_conv_2d;
+
+typedef struct {
+    uint64_t nb00;  // kernel strides
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb10;  // input strides
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb13;
+    uint64_t nb0;   // output strides
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    int32_t  IW;    // input width
+    int32_t  IH;    // input height
+    int32_t  KW;    // kernel width
+    int32_t  KH;    // kernel height
+    int32_t  C;     // channels (IC == OC for depthwise)
+    int32_t  OW;    // output width
+    int32_t  OH;    // output height
+    int32_t  N;     // batch size
+    int32_t  s0;    // stride x
+    int32_t  s1;    // stride y
+    int32_t  p0;    // padding x
+    int32_t  p1;    // padding y
+    int32_t  d0;    // dilation x
+    int32_t  d1;    // dilation y
+} ggml_metal_kargs_conv_2d_dw;
 
 typedef struct {
     uint64_t  ofs0;

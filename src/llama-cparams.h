@@ -41,6 +41,8 @@ struct llama_cparams {
     bool fused_gdn_ar;       // use fused gated delta net (autoregressive)
     bool fused_gdn_ch;       // use fused gated delta net (chunked)
     bool auto_fgdn;
+    bool fused_lid;          // use fused lightning indexer
+    bool auto_flid;
     bool no_perf;
     bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;

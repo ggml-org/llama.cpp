@@ -6,6 +6,7 @@
 	import { REASONING_EFFORT_TOKENS } from '$lib/constants/reasoning-effort-tokens';
 	import { REASONING_EFFORT_LEVELS } from '$lib/constants/reasoning-effort';
 	import type { ReasoningEffortLevel } from '$lib/types';
+	import { DIALOG_SUBMENU_CONTENT } from '$lib/constants/css-classes';
 	import {
 		modelsStore,
 		checkModelSupportsThinking,
@@ -71,9 +72,7 @@
 
 {#if modelSupportsThinking}
 	<DropdownMenu.Sub bind:open={subOpen}>
-		<DropdownMenu.SubTrigger
-			class="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-sm transition-colors outline-none hover:bg-accent focus:bg-accent"
-		>
+		<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 			{#if thinkingEnabled}
 				<Lightbulb class="h-4 w-4 shrink-0 text-amber-400" />
 			{:else}
@@ -89,23 +88,15 @@
 			{/if}
 		</DropdownMenu.SubTrigger>
 
-		<DropdownMenu.SubContent
-			class="w-60 rounded-xl bg-popover p-3 text-popover-foreground shadow-md outline-none data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
-		>
+		<DropdownMenu.SubContent class={DIALOG_SUBMENU_CONTENT}>
 			{#each REASONING_EFFORT_LEVELS as level (level.value)}
 				<button
 					type="button"
-					class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-accent"
+					class="flex w-full cursor-pointer items-center gap-2"
 					class:bg-accent={isSelected(level)}
 					onclick={() => handleSelection(level)}
 				>
-					{#if isSelected(level)}
-						<Check class="h-4 w-4 shrink-0 text-foreground" />
-					{:else}
-						<div class="h-4 w-4 shrink-0"></div>
-					{/if}
-
-					<span class="flex-1">{level.label}</span>
+					<span class="flex-1 text-left">{level.label}</span>
 
 					{#if !level.isOff}
 						<span class="text-[11px] text-muted-foreground opacity-60">
@@ -124,6 +115,10 @@
 								<p>Maximum thinking effort with extended context usage</p>
 							</Tooltip.Content>
 						</Tooltip.Root>
+					{/if}
+
+					{#if isSelected(level)}
+						<Check class="h-4 w-4 shrink-0 text-foreground" />
 					{/if}
 				</button>
 			{/each}
