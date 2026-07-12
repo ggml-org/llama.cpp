@@ -97,13 +97,17 @@ git -C "$SRC" status --short --branch
 "$BUILD/bin/llama-bench" --version
 sha256sum "$BUILD/bin/llama-bench" \
   "$BUILD/bin/llama-perplexity" \
-  "$BUILD/bin/libggml-sycl.so.0.15.1"
+  "$BUILD/bin/libggml-sycl.so.0.15.1" \
+  "$MODEL_1" "$MODEL_2" "$EVAL_CORPUS"
 ```
 
 Also record branch, full commit, binary path, build directory, host, oneAPI
-version, JIT/AOT mode, exact command, model path, and render-node occupancy.
+version, JIT/AOT mode, exact command, model paths, evaluation-corpus path, and
+render-node occupancy. Every model and evaluation corpus must have an immutable
+identity in the evidence record: SHA-256 for local files, or an equivalent
+content hash plus immutable dataset revision. This includes WikiText inputs.
 For benchmark JSONL, retain the `build_commit` field. A binary version plus a
-matching SHA-256 is the minimum identity proof; an mtime is never proof.
+matching SHA-256 is the minimum binary identity proof; an mtime is never proof.
 
 ## AOT exception
 

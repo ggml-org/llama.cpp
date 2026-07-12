@@ -39,6 +39,10 @@ make_fixture() {
   printf 'llama31\n' >"$LLAMA31_MODEL"
   printf 'corpus\n' >"$WIKI"
   printf 'sycl\n' >"$FAKE_LIB"
+  BUILD_METADATA="$FIXTURE/build/build-metadata.json"
+  jq -n \
+    --arg source_sha "$SOURCE_SHA" \
+    '{source_sha:$source_sha,build_mode:"JIT",sycl_device_arch:""}' >"$BUILD_METADATA"
 
   cat >"$FAKE_BIN/ldd" <<'EOF'
 #!/bin/bash
@@ -51,6 +55,7 @@ count_file="$CALL_DIR/fuser"
 count=0
 [ ! -f "$count_file" ] || count="$(cat "$count_file")"
 printf '%s\n' "$((count + 1))" >"$count_file"
+printf '%s\n' "$*" >"$CALL_DIR/fuser-args"
 if [ "${FAKE_CASE:-}" = occupied ]; then
   printf '                     USER        PID ACCESS COMMAND\n' >&2
   printf '/dev/dri/renderD128: test       4242 F...m holder\n' >&2
@@ -181,7 +186,7 @@ EOF
   chmod +x "$FAKE_BIN/ldd" "$FAKE_BIN/fuser" "$FAKE_BIN/sycl-ls" \
     "$BUILD_BIN/test-sycl-turbo-correctness" "$BUILD_BIN/llama-perplexity" "$BUILD_BIN/llama-bench"
   CORRECTNESS_BIN="$BUILD_BIN/test-sycl-turbo-correctness"
-  export FIXTURE FAKE_BIN BUILD_BIN CALL_DIR MODEL_DIR MISTRAL_MODEL LLAMA31_MODEL WIKI FAKE_LIB CORRECTNESS_BIN
+  export FIXTURE FAKE_BIN BUILD_BIN BUILD_METADATA CALL_DIR MODEL_DIR MISTRAL_MODEL LLAMA31_MODEL WIKI FAKE_LIB CORRECTNESS_BIN
 }
 
 run_driver() {
@@ -222,6 +227,19 @@ assert_status "$out" 2 ERROR "$rc"
 [ ! -e "$CALL_DIR/fuser" ] || fail "missing-input case touched GPU occupancy"
 [ ! -e "$CALL_DIR/harness" ] || fail "missing-input case invoked harness"
 pass "missing required input returns ERROR=2 before GPU work"
+
+make_fixture bad-build-metadata
+jq '.source_sha = "0000000000000000000000000000000000000000"' \
+  "$BUILD_METADATA" >"$BUILD_METADATA.tmp"
+mv "$BUILD_METADATA.tmp" "$BUILD_METADATA"
+out="$FIXTURE/out"
+set +e
+run_driver bad_build_metadata "$out"
+rc=$?
+set -e
+assert_status "$out" 2 ERROR "$rc"
+[ ! -e "$CALL_DIR/fuser" ] || fail "bad build metadata touched GPU occupancy"
+pass "mismatched build metadata returns ERROR=2 before GPU work"
 
 make_fixture occupied
 out="$FIXTURE/out"
@@ -314,7 +332,7 @@ pass "decode lower confidence bound below -2 returns KILL"
 make_fixture success
 out="$FIXTURE/out"
 set +e
-run_driver success "$out" DEVICE_SELECTOR=test-selector
+run_driver success "$out" DEVICE_SELECTOR=test-selector P45A_RENDER_NODE=/dev/dri/renderD999
 rc=$?
 set -e
 assert_status "$out" 0 GO "$rc"
@@ -328,11 +346,19 @@ jq -e '
 ' "$out/verdict.json" >/dev/null || fail "GO verdict contract is incomplete"
 jq -e '.models.mistral.bytes == 8' "$out/manifest.json" >/dev/null \
   || fail "manifest byte count did not follow the model symlink"
-jq -e --arg expected_host "$(hostname)" --arg expected_device "test-selector" '
+jq -e \
+  --arg expected_host "$(hostname)" \
+  --arg expected_device "test-selector" \
+  --arg expected_render_node "/dev/dri/renderD999" \
+  --arg expected_source_sha "$SOURCE_SHA" '
   .host == $expected_host and
-  .device_selector == $expected_device
+  .device_selector == $expected_device and
+  .render_node == $expected_render_node and
+  .source_sha == $expected_source_sha and
+  .build_mode == "JIT" and
+  .sycl_device_arch == ""
 ' "$out/manifest.json" >/dev/null \
-  || fail "manifest host/device_selector are not runtime-captured (got host=\(.host), device=\(.device_selector))"
+  || fail "manifest runtime/build provenance does not match the fixture"
 
 required=(
   manifest.json ppl.json capacity.json bench.json verdict.json EXIT harness.log commands.txt
@@ -354,9 +380,13 @@ for model in mistral llama31; do
 done
 grep -Fq 'ONEAPI_DEVICE_SELECTOR=test-selector' "$out/commands.txt" \
   || fail "commands.txt did not preserve shell-escaped environment"
+grep -Fq 'fuser -v /dev/dri/renderD999' "$out/commands.txt" \
+  || fail "commands.txt did not record the paired render node"
+[ "$(cat "$CALL_DIR/fuser-args")" = "-v /dev/dri/renderD999" ] \
+  || fail "GPU occupancy probe did not use the paired render node"
 grep -Fq '\ ' "$out/commands.txt" \
   || fail "commands.txt does not demonstrate shell escaping"
 pass "complete fixture returns GO=0 with all durable artifacts"
 
-[ "$PASS_COUNT" -eq 9 ] || fail "expected 9 contract cases, observed $PASS_COUNT"
+[ "$PASS_COUNT" -eq 10 ] || fail "expected 10 contract cases, observed $PASS_COUNT"
 printf '== summary: %s contract cases passed ==\n' "$PASS_COUNT"

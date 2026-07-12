@@ -30,8 +30,9 @@ This is a pinned baseline, not a current-HEAD claim.
   `4bbccb54b2f034307eb13656e936b432a1e786cfde8ce068d551d30557a338ed`.
 - Both executables report version `10041 (10a70cde8)`; every benchmark JSONL
   row reports `build_commit: 10a70cde8`.
-- A post-run loader audit used the runner's exact
-  `LD_LIBRARY_PATH=build-turbo-aot-discriminator/bin:build-turbo-aot-decode-10a70cde8/bin:...`.
+- A post-run loader audit used the runner's `LD_LIBRARY_PATH`, displayed here
+  in abbreviated form:
+  `build-turbo-aot-discriminator/bin:build-turbo-aot-decode-10a70cde8/bin:...`.
   `ldd` showed both executables resolving `libllama`, `libggml-base`,
   `libggml-cpu`, and `libggml-sycl` from
   `build-turbo-aot-discriminator/bin`; therefore throughput and PPL used the

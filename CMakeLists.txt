@@ -180,6 +180,28 @@ if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
 endif()
 
+if (GGML_SYCL_DEVICE_ARCH)
+    set(LLAMA_SYCL_BUILD_MODE "AOT")
+else()
+    set(LLAMA_SYCL_BUILD_MODE "JIT")
+endif()
+if (Git_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE LLAMA_BUILD_COMMIT_FULL
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE LLAMA_BUILD_COMMIT_FULL_RESULT
+    )
+endif()
+if (NOT Git_FOUND OR NOT LLAMA_BUILD_COMMIT_FULL_RESULT EQUAL 0)
+    set(LLAMA_BUILD_COMMIT_FULL "unknown")
+endif()
+file(GENERATE
+    OUTPUT "${CMAKE_BINARY_DIR}/build-metadata.json"
+    CONTENT "{\n  \"source_sha\": \"${LLAMA_BUILD_COMMIT_FULL}\",\n  \"build_mode\": \"${LLAMA_SYCL_BUILD_MODE}\",\n  \"sycl_device_arch\": \"${GGML_SYCL_DEVICE_ARCH}\"\n}\n"
+)
+
 #
 # build the library
 #

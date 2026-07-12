@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEVICE_SELECTOR="${DEVICE_SELECTOR:-level_zero:0}"
+RENDER_NODE="${P45A_RENDER_NODE:-/dev/dri/renderD128}"
 RUN_TIMEOUT="${P45A_RUN_TIMEOUT:-7200}"
 
 GATE_PROVENANCE=false
@@ -134,8 +135,8 @@ run_logged() {
 require_empty_gpu() {
   local stage="$1"
   local record="$OUT_DIR/${stage}.fuser"
-  append_command fuser -v /dev/dri/renderD128
-  fuser -v /dev/dri/renderD128 >"$record" 2>&1
+  append_command fuser -v "$RENDER_NODE"
+  fuser -v "$RENDER_NODE" >"$record" 2>&1
   local rc=$?
   if [ "$rc" -eq 1 ] && [ ! -s "$record" ]; then
     return 0
@@ -215,7 +216,7 @@ require_regular_nonempty MISTRAL_MODEL "$MISTRAL_MODEL"
 require_regular_nonempty LLAMA31_MODEL "$LLAMA31_MODEL"
 require_regular_nonempty WIKI "$WIKI"
 
-for command_name in git sha256sum ldd fuser jq; do
+for command_name in git sha256sum ldd fuser jq timeout realpath stat grep hostname find cut sed sort env; do
   command -v "$command_name" >/dev/null 2>&1 || fail_config "required command is unavailable: $command_name"
 done
 
@@ -238,6 +239,25 @@ case "$lib_sycl" in
   *) fail_config "libggml-sycl.so resolves outside the commit-scoped build: $lib_sycl" ;;
 esac
 require_regular_nonempty libggml-sycl.so "$lib_sycl"
+
+build_metadata="${BUILD_METADATA:-$build_root/build-metadata.json}"
+require_regular_nonempty build-metadata.json "$build_metadata"
+build_metadata="$(realpath "$build_metadata" 2>/dev/null)" || fail_config "cannot resolve build metadata path"
+case "$build_metadata" in
+  "$build_root"/*) ;;
+  *) fail_config "build metadata resolves outside the commit-scoped build: $build_metadata" ;;
+esac
+build_source_sha="$(jq -er '.source_sha | select(type == "string")' "$build_metadata" 2>/dev/null)" \
+  || fail_config "build metadata has no string source_sha"
+[ "$build_source_sha" = "$SOURCE_SHA" ] \
+  || fail_config "build metadata source_sha does not match SOURCE_SHA: $build_source_sha"
+build_mode="$(jq -er '.build_mode | select(. == "JIT" or . == "AOT")' "$build_metadata" 2>/dev/null)" \
+  || fail_config "build metadata build_mode must be JIT or AOT"
+sycl_device_arch="$(jq -er '.sycl_device_arch | select(type == "string")' "$build_metadata" 2>/dev/null)" \
+  || fail_config "build metadata has no string sycl_device_arch"
+if [ "$build_mode" = AOT ] && [ -z "$sycl_device_arch" ]; then
+  fail_config "AOT build metadata requires a nonempty sycl_device_arch"
+fi
 
 untracked_json="$(git ls-files --others --exclude-standard | jq -Rsc 'split("\n") | map(select(length > 0))')"
 
@@ -278,15 +298,19 @@ jq -n \
   --argjson corpus_bytes "$(stat -Lc %s "$WIKI")" \
   --arg corpus_sha "$(sha256sum "$WIKI" | cut -d' ' -f1)" \
   --arg device_selector "$DEVICE_SELECTOR" \
+  --arg render_node "$RENDER_NODE" \
   --arg host "$(hostname)" \
-   '{
+  --arg build_mode "$build_mode" \
+  --arg sycl_device_arch "$sycl_device_arch" \
+  '{
     schema_version:1,
     source_sha:$source_sha,
     tracked_source_clean:true,
     untracked_files:$untracked,
-    build_mode:"JIT",
-    sycl_device_arch:"",
+    build_mode:$build_mode,
+    sycl_device_arch:$sycl_device_arch,
     device_selector:$device_selector,
+    render_node:$render_node,
     host:$host,
     artifacts:{
       llama_perplexity:{path:$perplexity_path,sha256:$perplexity_sha},
