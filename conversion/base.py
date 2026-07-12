@@ -1680,6 +1680,10 @@ class TextModel(ModelBase):
         if chkhsh == "9dcf830ee9990cdbf78cc523a5f7bd9ad8f3f9890c2d3581d2785ad10f07049d":
             # ref: https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base
             res = "mellum2"
+        if chkhsh == "972da7b59cec44d1f0a490a86c96df53859e486e481563e5dddac155013d87ac":
+            # ref: https://huggingface.co/poolside/Laguna-XS-2.1
+            # GPT-2/GPT-4-style byte-level BPE with a leading newline-merge split.
+            res = "laguna"
 
         if res is None:
             logger.warning("\n")

@@ -485,6 +485,19 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_LAGUNA:
+                // Laguna's tokenizer.json pre_tokenizer is a Sequence:
+                //   1. Split "(?:\r?\n)+(?!\r?\n)" MergedWithNext (newline run merges with next token)
+                //   2. Split (the GPT-4 / "mistral incorrect regex" below, single \p{N})
+                //   3. ByteLevel
+                // Stage 2 is byte-for-byte the GROK_2 regex. Stage 1 is a newline
+                // pre-merge added as an isolated split. Tokenization is verified
+                // against HF AutoTokenizer (see CORRECTNESS GATES in HANDOFF.md).
+                regex_exprs = {
+                    "(?:\\r?\\n)+(?!\\r?\\n)",
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_AFMOE:
                 regex_exprs = {
                     // Digit handling - uses custom implementation in unicode.cpp
@@ -2341,6 +2354,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "mellum2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MELLUM2;
+            } else if (
+                tokenizer_pre == "laguna") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_LAGUNA;
+                clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
