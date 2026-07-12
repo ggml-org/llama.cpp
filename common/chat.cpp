@@ -2370,7 +2370,7 @@ static void func_args_not_string(json & messages) {
                         try {
                             args = json::parse(args.get<std::string>());
                         } catch (const std::exception & e) {
-                            std::string role = message.contains("role") && message["role"].is_string()
+                            const std::string role = message.contains("role") && message["role"].is_string()
                                 ? message["role"].get<std::string>() : "unknown";
                             throw std::invalid_argument("Failed to parse tool call arguments as JSON in message "
                                 + std::to_string(i) + " (role: " + role + "): " + std::string(e.what()));
