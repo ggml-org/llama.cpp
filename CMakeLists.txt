@@ -246,7 +246,7 @@ if (NOT LLAMA_BUILD_COMMIT_FULL_RESULT EQUAL 0)
     set(LLAMA_BUILD_COMMIT_FULL "unknown")
 endif()
 file(GENERATE
-    OUTPUT "${CMAKE_BINARY_DIR}/build-metadata.json"
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/build-metadata.json"
     CONTENT "{\n  \"source_sha\": \"${LLAMA_BUILD_COMMIT_FULL}\",\n  \"build_mode\": \"${LLAMA_SYCL_BUILD_MODE}\",\n  \"sycl_device_arch\": \"${GGML_SYCL_DEVICE_ARCH}\"\n}\n"
 )
 
