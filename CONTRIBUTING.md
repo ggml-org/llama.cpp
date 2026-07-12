@@ -11,6 +11,12 @@ repository root. Read `AGENTS.md` first; it covers:
 - Code and commit standards, including reuse of existing
   infrastructure and pattern conformance with the surrounding code.
 
+## Security issues
+
+Do not disclose suspected vulnerabilities in a public issue or pull request.
+Report them privately to `sveinbjorn@sveinbjorn.dev` with the affected commit,
+reproduction details, impact, and any proposed mitigation.
+
 ## Hardware and runtime notes
 
 Build, run, and benchmark guidance specific to this fork lives in
