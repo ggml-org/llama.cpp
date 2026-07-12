@@ -10,7 +10,7 @@ layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 const uint BLOCK_SIZE = 32;
 #endif
 
-layout (binding = 0) readonly buffer S {float data_s[];};
+layout (binding = 0) readonly buffer S {D_TYPE data_s[];};
 
 #if defined(SET_ROWS)
 #include "generic_binary_head.glsl"
