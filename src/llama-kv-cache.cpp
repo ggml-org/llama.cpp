@@ -276,7 +276,19 @@ llama_kv_cache::llama_kv_cache(
     const char * const turbo_layer_adaptive_env = getenv("TURBO_LAYER_ADAPTIVE");
     const int adaptive_mode = llama_kv_cache_adaptive_mode(turbo_layer_adaptive_env, type_v, hparams.n_layer());
     if (adaptive_mode > 0) {
-        if (turbo_layer_adaptive_env != nullptr) {
+        // The per-layer switch ignores the mode for non-turbo KV types or
+        // shallow models; only log "enabled" when the mode will actually
+        // engage so users are not misled.
+        const bool is_turbo_k = (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0 || type_k == GGML_TYPE_TURBO2_0);
+        const bool is_turbo_v = (type_v == GGML_TYPE_TURBO3_0 || type_v == GGML_TYPE_TURBO4_0 || type_v == GGML_TYPE_TURBO2_0);
+        const bool n_layer_ok  = hparams.n_layer() >= 8;
+        const bool will_engage = n_layer_ok && (
+            ((adaptive_mode == 1 || adaptive_mode == 2) && is_turbo_k) ||
+            ((adaptive_mode == 5 || adaptive_mode == 6 || adaptive_mode == 7) && is_turbo_v));
+        if (!will_engage) {
+            LLAMA_LOG_WARN("llama_kv_cache: layer-adaptive mode %d requested but inert for type_k=%s type_v=%s n_layer=%u (ignored)\n",
+                adaptive_mode, ggml_type_name(type_k), ggml_type_name(type_v), hparams.n_layer());
+        } else if (turbo_layer_adaptive_env != nullptr) {
             LLAMA_LOG_INFO("llama_kv_cache: layer-adaptive mode %d enabled (env)\n", adaptive_mode);
         } else {
             LLAMA_LOG_INFO("llama_kv_cache: Boundary V auto-enabled for turbo2-V (opt-out: TURBO_LAYER_ADAPTIVE=0)\n");

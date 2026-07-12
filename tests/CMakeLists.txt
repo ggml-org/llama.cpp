@@ -144,11 +144,17 @@ if (NOT WIN32)
     )
 endif()
 
-# Linux-only: depends on GNU coreutils (stat -L, sha256sum, timeout, realpath) and jq.
+# Linux-only: skip cleanly when any required tool is missing.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    find_program(P45A_TEST_BASH NAMES bash)
-    find_program(P45A_TEST_JQ NAMES jq)
-    if (P45A_TEST_BASH AND P45A_TEST_JQ)
+    set(P45A_DEPS bash jq timeout sha256sum ldd fuser git realpath stat)
+    set(P45A_FOUND TRUE)
+    foreach (P45A_DEP ${P45A_DEPS})
+        find_program(P45A_TEST_${P45A_DEP} NAMES ${P45A_DEP})
+        if (NOT P45A_TEST_${P45A_DEP})
+            set(P45A_FOUND FALSE)
+        endif()
+    endforeach()
+    if (P45A_FOUND)
         llama_test_cmd(
             ${P45A_TEST_BASH}
             NAME test-validate-dense-turbo4-capacity
