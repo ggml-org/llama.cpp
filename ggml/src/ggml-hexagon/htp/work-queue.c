@@ -57,10 +57,6 @@ static void work_queue_thread(void * context) {
     while (!atomic_load_explicit(&q->killed, memory_order_relaxed)) {
         unsigned int seqn = atomic_load_explicit(&q->seqn, memory_order_acquire);
         if (seqn == prev_seqn) {
-            // drop HVX context while spinning
-            if (poll_cnt > 1 && poll_cnt == WORK_QUEUE_POLL_COUNT) {
-                qurt_hvx_unlock();
-            }
             if (--poll_cnt) {
                 hex_pause();
                 continue;
