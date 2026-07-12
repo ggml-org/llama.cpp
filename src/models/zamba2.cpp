@@ -72,8 +72,11 @@ void llama_model_zamba2::load_arch_tensors(llama_model_loader &) {
 
             // FFN
             layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
-            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
-            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
+            // Zamba2 uses a FUSED gate_up projection: the converter emits a single
+            // FFN_UP of width 2*n_ff (gate||up), and build_ffn() below runs it through
+            // ggml_geglu (LLM_FFN_GEGLU, NULL gate) which splits it internally.
+            // Do NOT declare a separate FFN_GATE — it is never produced or used.
+            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, 2*n_ff}, 0);
             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
 
             // Linear mixing (transformer output -> mamba input adjustment)
