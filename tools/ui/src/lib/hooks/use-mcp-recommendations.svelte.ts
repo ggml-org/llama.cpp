@@ -54,11 +54,6 @@ export function useMcpRecommendations() {
 		// effect, and we must not wipe the timeout that was just scheduled.
 		if (checked) return;
 
-		if (mcpStore.optedInRecommendationIds.size > 0) {
-			checked = true;
-			return;
-		}
-
 		const hasRecommendations = mcpStore
 			.getServers()
 			.some((server) => RECOMMENDED_MCP_SERVER_IDS.has(server.id));

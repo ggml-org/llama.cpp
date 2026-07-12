@@ -230,6 +230,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
     },
+    [GGML_TYPE_Q2_0] = {
+        .from_float               = quantize_row_q2_0,
+        .vec_dot                  = ggml_vec_dot_q2_0_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_Q4_0] = {
         .from_float               = quantize_row_q4_0,
         .vec_dot                  = ggml_vec_dot_q4_0_q8_0,
@@ -2054,6 +2060,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_gated_delta_net(params, tensor);
             } break;
+        case GGML_OP_LIGHTNING_INDEXER:
+            {
+                ggml_compute_forward_lightning_indexer(params, tensor);
+            } break;
         case GGML_OP_MAP_CUSTOM1:
             {
                 ggml_compute_forward_map_custom1(params, tensor);
@@ -2374,6 +2384,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_FLASH_ATTN_BACK:
         case GGML_OP_SSM_CONV:
         case GGML_OP_SSM_SCAN:
+        case GGML_OP_LIGHTNING_INDEXER:
             {
                 n_tasks = n_threads;
             } break;
@@ -2959,6 +2970,12 @@ struct ggml_cplan ggml_graph_plan(
                     {
                         GGML_ABORT("fatal error");
                     }
+                case GGML_OP_LIGHTNING_INDEXER:
+                    {
+                        // temp buffer for dequantizing lightning indexer keys
+                        const int64_t ne10 = node->src[1]->ne[0];
+                        cur += sizeof(float)*ne10*n_tasks;
+                    } break;
                 default:
                     break;
             }

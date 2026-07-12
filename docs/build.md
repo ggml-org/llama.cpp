@@ -270,13 +270,10 @@ The environment variable [`CUDA_SCALE_LAUNCH_QUEUES`](https://docs.nvidia.com/cu
 
 Consider setting `CUDA_SCALE_LAUNCH_QUEUES=4x`, which increases the CUDA command buffer to 4 times its default size. This optimization is particularly beneficial for **Multi-GPU setups with pipeline parallelism**, where it significantly improves prompt processing throughput by allowing more operations to be enqueued across GPUs.
 
-#### GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F
+#### GGML_CUDA_CUBLAS_COMPUTE_TYPE
 
-Use `GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F` environment variable to use FP32 compute type on all GPUs in FP16 cuBLAS for preventing possible numerical overflows in exchange for slower prompt processing (small impact on RTX PRO/Datacenter products and significant on GeForce products).
-
-#### GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F
-
-Use `GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F` environment variable to force use FP16 compute type (instead of default FP32) in FP16 cuBLAS for V100, CDNA and RDNA4.
+Override default, speed-optimized compute types for cuBLAS matrix multiplications.
+Legal values: `auto`, `f16`, `fp16`, `bf16`, `f32`, `fp32`.
 
 ### Unified Memory
 
