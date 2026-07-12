@@ -845,8 +845,6 @@ class Gemma4DSparkModel(Gemma4Model):
             extract_layer_ids = [i + 1 for i in target_layer_ids]
             self.gguf_writer.add_target_layers(extract_layer_ids)
 
-        self.gguf_writer.add_markov_rank(self.hparams.get("markov_rank", 0))
-
         # Gemma4TextScaledWordEmbedding scales the shared token embeddings by sqrt(hidden_size)
         self.gguf_writer.add_embedding_scale(self.hparams["hidden_size"] ** 0.5)
         # Gemma4DSparkAttention uses scaling = 1.0
