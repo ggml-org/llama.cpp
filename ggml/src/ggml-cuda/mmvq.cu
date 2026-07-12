@@ -887,7 +887,11 @@ static void mul_mat_vec_q_switch_ncols_dst(
         const bool is_nvidia_pascal_older = GGML_CUDA_CC_IS_NVIDIA(cc) && cc < GGML_CUDA_CC_VOLTA;
 
         if (is_nvidia_turing_plus) {
-            if (ncols_dst == 1 &&
+            // The LUT-heavy IQ3 vec_dot regresses with small_k at regular K sizes, but when K is
+            // small enough that most of the thread block would sit idle (e.g. the 512-wide expert
+            // FFNs of Qwen3.6-35B-A3B, where blocks_per_row_x is 2) small_k is still a clear win:
+            // -29% for iq3_xxs and -10% for iq3_s at m=2048, n=1, k=512 on RTX 4060 Ti.
+            if (ncols_dst == 1 && blocks_per_row_x >= nwarps * blocks_per_iter_1warp / 2 &&
                     std::find(iq_slow_turing.begin(), iq_slow_turing.end(), type) != iq_slow_turing.end()) {
                 use = false;
             }

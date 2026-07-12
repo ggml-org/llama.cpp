@@ -9643,6 +9643,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     }
 
 
+    // qwen3.6-35b-a3b (256 experts, top-8, tiny expert FFN: exercises small-k mmvq)
+    for (int bs : {1, 4, 8, 512}) {
+        for (ggml_type type_a : {GGML_TYPE_Q4_K, GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_S, GGML_TYPE_IQ3_XXS}) {
+            for (ggml_type type_b : {GGML_TYPE_F32}) {
+                test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 256, 8, false, 512, bs, 2048));
+                test_cases.emplace_back(new test_mul_mat_id(type_a, type_b, 256, 8, false, 2048, bs, 512));
+                test_cases.emplace_back(new test_mul_mat_id_fusion(type_a, type_b, 256, 8, false, 512, bs, 2048, 1));
+            }
+        }
+    }
+
     // gpt-oss-20b
     for (int bs : {1, 4, 8, 512}) {
         for (ggml_type type_a : {GGML_TYPE_MXFP4}) {
