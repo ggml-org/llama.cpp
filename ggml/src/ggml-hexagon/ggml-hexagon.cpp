@@ -1099,6 +1099,14 @@ struct ggml_hexagon_opbatch {
     std::unordered_map<const ggml_tensor*, int> t_map; // tensor ptr  to index
     std::unordered_multimap<void*, int>         d_map; // tensor data to index
 
+    struct tensor_range {
+        uint64_t start;
+        uint64_t end;
+        int bi;
+        std::vector<int> tensors;
+    };
+    std::vector<tensor_range> ranges;
+
     unsigned int n_bufs;     // num buffers in the batch
     unsigned int n_tens;     // num tensors ...
     unsigned int n_ops;      // num ops ...
@@ -1118,6 +1126,7 @@ struct ggml_hexagon_opbatch {
         b_map.clear();
         t_map.clear();
         d_map.clear();
+        ranges.clear();
     }
 
     ggml_hexagon_opbatch(ggml_hexagon_session *sess, size_t batch_size, size_t max_vmem) {
@@ -1169,6 +1178,71 @@ struct ggml_hexagon_opbatch {
         HEX_VERBOSE("ggml-hex: %s add-buffer #%u : fd %d base %p size %zu : vmem %zu\n", sess->c_name(), bi, b.fd, (void*) sbuf->base, (size_t) b.size, b_vmem);
 
         return bi;
+    }
+
+    void add_range(const htp_tensor * h, int ti) {
+        uint64_t t_start = h->data;
+        uint64_t t_end   = t_start + h->size;
+        int      bi      = h->bi;
+
+        int first_match = -1;
+        int unused_idx  = -1;
+        for (size_t i = 0; i < ranges.size(); i++) {
+            if (ranges[i].bi == -1) {
+                unused_idx = i;
+                continue;
+            }
+            if (ranges[i].bi != bi) {
+                continue;
+            }
+            if (ranges[i].start >= t_end || ranges[i].end <= t_start) {
+                continue;
+            }
+
+            if (first_match == -1) {
+                first_match = i;
+                HEX_VERBOSE("ggml-hex: %s range-grow #%d : bi %d [%p, %p) + #%d [%p, %p) -> [%p, %p)\n",
+                    sess->c_name(), (int) i, ranges[i].bi,
+                    (void *) (h_bufs[ranges[i].bi].base + ranges[i].start),
+                    (void *) (h_bufs[ranges[i].bi].base + ranges[i].end),
+                    ti,
+                    (void *) (h_bufs[bi].base + t_start),
+                    (void *) (h_bufs[bi].base + t_end),
+                    (void *) (h_bufs[ranges[i].bi].base + std::min(ranges[i].start, t_start)),
+                    (void *) (h_bufs[ranges[i].bi].base + std::max(ranges[i].end, t_end)));
+
+                ranges[i].start = std::min(ranges[i].start, t_start);
+                ranges[i].end   = std::max(ranges[i].end, t_end);
+                ranges[i].tensors.push_back(ti);
+            } else {
+                HEX_VERBOSE("ggml-hex: %s range-merge #%d [%p, %p) + #%d [%p, %p) -> [%p, %p)\n",
+                    sess->c_name(), first_match,
+                    (void *) (h_bufs[bi].base + ranges[first_match].start),
+                    (void *) (h_bufs[bi].base + ranges[first_match].end),
+                    (int) i,
+                    (void *) (h_bufs[bi].base + ranges[i].start),
+                    (void *) (h_bufs[bi].base + ranges[i].end),
+                    (void *) (h_bufs[bi].base + std::min(ranges[first_match].start, ranges[i].start)),
+                    (void *) (h_bufs[bi].base + std::max(ranges[first_match].end, ranges[i].end)));
+
+                ranges[first_match].start = std::min(ranges[first_match].start, ranges[i].start);
+                ranges[first_match].end   = std::max(ranges[first_match].end, ranges[i].end);
+                ranges[first_match].tensors.insert(
+                    ranges[first_match].tensors.end(),
+                    ranges[i].tensors.begin(),
+                    ranges[i].tensors.end()
+                );
+                ranges[i].bi = -1;
+            }
+        }
+
+        if (first_match == -1) {
+            if (unused_idx != -1) {
+                ranges[unused_idx] = {t_start, t_end, bi, {ti}};
+            } else {
+                ranges.push_back({t_start, t_end, bi, {ti}});
+            }
+        }
     }
 
     bool same_shape(const htp_tensor * h, const ggml_tensor * t) const {
@@ -1237,19 +1311,7 @@ struct ggml_hexagon_opbatch {
         }
 
         h.alias = ti;
-        for (int j = 0; j < ti; j++) {
-            if (h_tens[j].bi == h.bi) {
-                uint64_t a_start = h_tens[j].data;
-                uint64_t a_end   = a_start + h_tens[j].size;
-                uint64_t b_start = h.data;
-                uint64_t b_end   = b_start + h.size;
-                if ((a_start < b_end) && (b_start < a_end)) {
-                    h.alias = h_tens[j].alias;
-                    h_tens[j].alias = ti;
-                    break;
-                }
-            }
-        }
+        add_range(&h, ti);
 
         h.flags = 0;
         if (ggml_backend_buffer_get_usage(t->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
@@ -1327,6 +1389,17 @@ struct ggml_hexagon_opbatch {
         auto outputs = node.get_outputs();
         for (unsigned int i=0; i < HTP_OP_MAX_OUTPUTS; i++) {
             o.dst[i] = (i < outputs.size() && outputs[i]) ? add_tensor(outputs[i]) : 0xffff;
+        }
+    }
+
+    void finalize_ranges() {
+        for (const auto & r : ranges) {
+            if (r.bi == -1) {
+                continue;
+            }
+            for (size_t i = 0; i < r.tensors.size(); i++) {
+                h_tens[r.tensors[i]].alias = r.tensors[(i + 1) % r.tensors.size()];
+            }
         }
     }
 };
@@ -1586,6 +1659,8 @@ void ggml_hexagon_session::flush_pending(bool all) {
 
 void ggml_hexagon_session::flush_batch() {
     if (op_batch->empty()) { return; }
+
+    op_batch->finalize_ranges();
 
     htp_opbatch_req req {};
     dspqueue_buffer dbuf{};
