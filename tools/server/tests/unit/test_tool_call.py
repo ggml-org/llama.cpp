@@ -667,6 +667,7 @@ def test_malformed_tool_call_args_rejected():
                     }
                 }
             ]},
+            {"role": "user", "content": "Continue"},
         ],
     })
 
@@ -676,3 +677,5 @@ def test_malformed_tool_call_args_rejected():
         f"Expected invalid_request_error, got {error['type']}: {error}"
     assert any(kw in error["message"].lower() for kw in ["json", "parse", "arguments"]), \
         f"Expected JSON parse error, got: {error['message']}"
+    assert "role" in error["message"].lower(), \
+        f"Expected 'role' in error message, got: {error['message']}"
