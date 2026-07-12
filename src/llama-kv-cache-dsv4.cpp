@@ -1174,14 +1174,19 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
     }
 
     if (p0 > 0) {
-        // DSV4 compressed cache rows are derived from running compressor state,
-        // so arbitrary rollback is not reconstructible from the raw cache alone.
-        // Allow the common prompt-cache cleanup no-op: remove [end, infinity).
-        if (seq_id >= 0 && p0 > kv_raw->seq_pos_max(seq_id)) {
-            return true;
+        if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max ||
+                p0 <= kv_raw->seq_pos_max(seq_id)) {
+            return false;
         }
 
-        return false;
+        bool res = true;
+
+        res = res & kv_raw->seq_rm(seq_id, p0, -1);
+        res = res & kv_csa->seq_rm(seq_id, p0/DSV4_CSA_RATIO, -1);
+        res = res & kv_hca->seq_rm(seq_id, p0/DSV4_HCA_RATIO, -1);
+        res = res & kv_lid->seq_rm(seq_id, p0/DSV4_CSA_RATIO, -1);
+
+        return res;
     }
 
     const bool res = kv_raw->seq_rm(seq_id, p0, p1);
