@@ -583,6 +583,31 @@ static void test_reallocation() {
     }
 }
 
+// Parent nbytes > max_size leaves cur_buf_size > max_size. A following view
+// then triggers a split with this_size == 0, so the view-only residual range
+// skips alloc_tensor_range unless views are finalized after all splits.
+static void test_view_init_after_max_size_split() {
+    const size_t max_size = 16;
+    dummy_backend backend = dummy_backend_init(max_size);
+    auto [ctx, graph, ctx_ptr] = make_context();
+    (void) graph;
+
+    ggml_tensor * parent = make_input_with_size(ctx, 24); // 6 x f32, > max_size
+    ggml_tensor * view0  = ggml_view_1d(ctx, parent, 2, 0);
+    ggml_tensor * view1  = ggml_view_1d(ctx, parent, 2, 2 * sizeof(float));
+    assign_names(ctx);
+
+    ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors_from_buft(ctx, &backend.buffer_type));
+    GGML_ASSERT(buf);
+
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+        GGML_ASSERT(t->buffer != nullptr);
+        GGML_ASSERT(t->data != nullptr);
+    }
+    GGML_ASSERT(view0->view_src == parent);
+    GGML_ASSERT(view1->view_src == parent);
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -604,5 +629,6 @@ int main() {
     run("test_multiple_buffer_types", test_multiple_buffer_types);
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
+    run("test_view_init_after_max_size_split", test_view_init_after_max_size_split);
     return 0;
 }
