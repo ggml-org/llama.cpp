@@ -461,6 +461,9 @@ const char * llama_grammar_parser::parse_sequence(
     // (though it's technically the same as -1 now)
     auto handle_repetitions = [&](uint64_t min_times, uint64_t max_times) {
         bool no_max = max_times == UINT64_MAX;
+        if (!no_max && max_times < min_times) {
+            throw std::runtime_error("invalid repetition range: max < min");
+        }
         if (last_sym_start == rule.size()) {
             throw std::runtime_error(std::string("expecting preceding item to */+/?/{ at ") + pos);
         }
