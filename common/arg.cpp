@@ -2916,6 +2916,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--mtp"},
+        string_format("also activate the MTP/NextN draft head during imatrix collection so its tensors "
+                      "(blk.<n>.nextn.eh_proj etc.) receive activations. No-op if the model has no MTP layers. "
+                      "(default: %s)", params.imat_mtp ? "true" : "false"),
+        [](common_params & params) {
+            params.imat_mtp = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"-pps"},
         string_format("is the prompt shared across parallel sequences (default: %s)", params.is_pp_shared ? "true" : "false"),
         [](common_params & params) {
