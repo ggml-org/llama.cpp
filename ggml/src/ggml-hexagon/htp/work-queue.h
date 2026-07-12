@@ -14,10 +14,11 @@ typedef struct work_queue_s * work_queue_t;
 
 #define WORK_QUEUE_SIZE               16
 
-#define WORK_QUEUE_POLL_COUNT         2000
-
 work_queue_t work_queue_create(uint32_t n_threads);
 void work_queue_delete(work_queue_t q);
+
+void work_queue_wakeup(work_queue_t q);
+void work_queue_suspend(work_queue_t q);
 
 bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, unsigned int n);
 

@@ -972,6 +972,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         int      op_status = HTP_STATUS_OK;
         uint32_t op_wakeup = n_ops / 2; // half-way throgh the batch
 
+        work_queue_wakeup(ctx->worker_pool);
         hmx_queue_wakeup(ctx->hmx_queue);
 
         for (uint32_t i=0; i < n_ops; i++) {
@@ -1003,6 +1004,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         }
 
         hmx_queue_suspend(ctx->hmx_queue);
+        work_queue_suspend(ctx->worker_pool);
 
         struct htp_opbatch_rsp rsp;
         rsp.id        = req.id;

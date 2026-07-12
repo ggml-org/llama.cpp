@@ -42,6 +42,7 @@ struct work_queue_s {
     unsigned int       n_threads;                          // total threads (workers + main)
     unsigned int       n_workers;                          // number of active threads (just workers)
 
+    atomic_bool        active;                             // workers are polling/active
     atomic_bool        killed;                             // threads need to exit
 };
 
@@ -52,22 +53,19 @@ static void work_queue_thread(void * context) {
     FARF(HIGH, "work-queue: thread %u started", me->id);
 
     unsigned int prev_seqn = 0;
-    unsigned int poll_cnt  = WORK_QUEUE_POLL_COUNT;
 
     while (!atomic_load_explicit(&q->killed, memory_order_relaxed)) {
         unsigned int seqn = atomic_load_explicit(&q->seqn, memory_order_acquire);
         if (seqn == prev_seqn) {
-            if (--poll_cnt) {
+            if (atomic_load_explicit(&q->active, memory_order_relaxed)) {
                 hex_pause();
-                continue;
+            } else {
+                qurt_futex_wait(&q->seqn, prev_seqn);
             }
-            qurt_futex_wait(&q->seqn, prev_seqn);
-            poll_cnt = WORK_QUEUE_POLL_COUNT;
             continue;
         }
 
         prev_seqn = seqn;
-        poll_cnt  = WORK_QUEUE_POLL_COUNT;
 
         // Process all active tasks in the queue
         unsigned int ir = atomic_load_explicit(&q->idx_read, memory_order_relaxed);
@@ -117,9 +115,8 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, u
 
     q->idx_write = (iw + 1) & q->idx_mask;
 
-    // wake up workers
+    // publish job to workers (already awake and polling)
     atomic_fetch_add_explicit(&q->seqn, 1, memory_order_release);
-    qurt_futex_wake(&q->seqn, q->n_workers);
 
     // main thread runs job #0
     func(n, 0, data);
@@ -164,6 +161,7 @@ work_queue_t work_queue_create(uint32_t n_threads) {
 
     atomic_init(&q->idx_read, 0);
     atomic_init(&q->seqn,     0);
+    atomic_init(&q->active,   false);
     q->idx_write = 0;
     q->idx_mask  = WORK_QUEUE_SIZE - 1;
     q->killed    = 0;
@@ -226,4 +224,17 @@ void work_queue_delete(work_queue_t q) {
     if (q->stack[0]) {
         free(q->stack[0]);
     }
+}
+
+void work_queue_wakeup(work_queue_t q) {
+    if (!atomic_load_explicit(&q->active, memory_order_relaxed)) {
+        atomic_store_explicit(&q->active, true, memory_order_release);
+        // Increment seqn and wake workers to transition them out of sleep
+        atomic_fetch_add_explicit(&q->seqn, 1, memory_order_release);
+        qurt_futex_wake(&q->seqn, q->n_workers);
+    }
+}
+
+void work_queue_suspend(work_queue_t q) {
+    atomic_store_explicit(&q->active, false, memory_order_release);
 }
