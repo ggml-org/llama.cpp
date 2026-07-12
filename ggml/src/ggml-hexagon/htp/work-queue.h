@@ -13,7 +13,6 @@ typedef struct work_queue_s * work_queue_t;
 #define WORK_QUEUE_THREAD_STACK_SIZE  (2 * 16384)
 
 #define WORK_QUEUE_SIZE               16
-#define WORK_QUEUE_MASK               (WORK_QUEUE_SIZE - 1)
 
 #define WORK_QUEUE_POLL_COUNT         2000
 
