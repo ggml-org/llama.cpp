@@ -1244,6 +1244,10 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `reasoning_control`: Arms realtime reasoning control for this completion so it can be ended early via `/v1/chat/completions/control`. Defaults to `false`.
 
+`thinking_budget_tokens`: Per-request tweak of the thinking budget. `-1` for unrestricted, `0` for immediate end, `N>0` for a token budget. The server-side `--reasoning-budget` flag is **always respected** as a hard ceiling and this field can only lower the budget below that cap, never raise it. A server started with `--reasoning-budget 0` forbids thinking regardless of what any client sends; a server started with `--reasoning-budget 100` lets a client request 10 (honored) or 200 (clamped back to 100). Only applies when the chat template exposes start/end-of-thinking tags; otherwise the field is silently ignored. The raw `/completion` endpoint accepts the equivalent field as `reasoning_budget_tokens` (with explicit `reasoning_budget_start_tag` / `reasoning_budget_end_tag` strings) since it has no Jinja template to introspect.
+
+`thinking_budget_message`: Per-request text spliced before the end-of-thinking tag when the budget is exhausted, used as a graceful "wrap it up" phrase that primes the model for its final answer (e.g., `"\nOk, I'll answer now.\n"`). Only honored when the server was started **without** `--reasoning-budget-message`; if the admin set that flag, their value is **always respected** and the body field is silently ignored. Like `thinking_budget_tokens`, this only applies when the chat template exposes thinking tags, and only fires when the budget actually runs out, not on natural end-of-thinking.
+
 `generation_prompt`: The generation prompt that was prefilled in by the template. Prepended to model output before parsing.
 
 `parse_tool_calls`: Whether to parse the generated tool call.
