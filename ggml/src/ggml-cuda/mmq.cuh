@@ -111,9 +111,16 @@ struct tile_x_sizes {
 // (Q4_K/Q4_0/Q5_0/Q8_0, high AI) regress with nwarps=4/mmq_y=64 and need the
 // stock 128/128/8 geometry. Gate the RDNA4-special values on type==Q6_K; all
 // other types fall through to the stock (per-arch) values.
+// Q2_K: mmq_x_max is capped at 64 (vs stock 128). Stock mmq_x=128 leaves Q2_K at
+// ~2 TFLOPS (dequant-bound, low arithmetic intensity); mmq_x=64 gives 3x more blocks
+// and smaller per-block work, lifting Q2_K prefill to ~6.5 TFLOPS (+200% vs stock).
+// Q2_K is also excluded from A6 (see mul_mat_q_process_tile): at both mmq_x=128 and
+// mmq_x=64 the y1_reg[] register pressure adds net overhead for Q2_K, so the +200%
+// gain comes entirely from the tile-size change, not A6. mmq_y/nwarps stay at stock
+// 128/8 (only the N-tile cap changes).
 static int get_mmq_x_max_host(const int cc, const ggml_type type) {
     if (GGML_CUDA_CC_IS_RDNA4(cc)) {
-        return type == GGML_TYPE_Q6_K ? 64 : 128;
+        return (type == GGML_TYPE_Q6_K || type == GGML_TYPE_Q2_K) ? 64 : 128;
     }
     return (turing_mma_available(cc) || amd_wmma_available(cc)) ? 128 :
         GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA ?
@@ -127,7 +134,7 @@ static int get_mmq_x_max_host(const int cc, const ggml_type type) {
 template <ggml_type type>
 static constexpr __device__ int get_mmq_x_max_device() {
 #if defined(RDNA4)
-    return type == GGML_TYPE_Q6_K ? 64 : 128;
+    return (type == GGML_TYPE_Q6_K || type == GGML_TYPE_Q2_K) ? 64 : 128;
 #elif defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     return 128;
 #else // defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
@@ -3934,11 +3941,15 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 #if defined(RDNA4)
         // RDNA4: prefetch the second Y half (y1) into registers before load_tiles, then
         // copy it back into LDS for the second vec_dot. Avoids a second HBM read of y1
-        // and lets the y0 load overlap with load_tiles. Gated on type != Q4_K: the
-        // y1_reg[] register pressure at mmq_x=128 pushes Q4_K's scale-heavy dequant over
-        // an occupancy cliff, so Q4_K keeps the stock second-HBM-read path. The N13
-        // next-kb0 pointer prefetch inside is Q6_K-only (uses block_q6_K).
-        if constexpr (type != GGML_TYPE_Q4_K) {
+        // and lets the y0 load overlap with load_tiles. Gated on type != Q4_K && type != Q3_K
+        // && type != Q2_K: the y1_reg[] register pressure at mmq_x=128 pushes scale-heavy
+        // K-quants (Q4_K with scales+mins, Q3_K with 6-bit scales) over an occupancy cliff,
+        // so they keep the stock second-HBM-read path. Q2_K also stays on the stock path:
+        // at mmq_x=64 (capped for Q2_K to fix the N=128 occupancy cliff) A6's y1_reg[] still
+        // adds net overhead, so the +200% Q2_K prefill gain comes entirely from mmq_x=64,
+        // not A6. Compute-bound block types (Q4_0/Q5_0/Q8_0) and Q5_K do benefit from A6
+        // (+1..6%). The N13 next-kb0 pointer prefetch inside is Q6_K-only (uses block_q6_K).
+        if constexpr (type != GGML_TYPE_Q4_K && type != GGML_TYPE_Q3_K && type != GGML_TYPE_Q2_K) {
             constexpr int n_y_ld = (mmq_x * MMQ_TILE_Y_K + nwarps * warp_size - 1) / (nwarps * warp_size);
             int y1_reg[n_y_ld];
             {
