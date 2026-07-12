@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.49.0"
-#define CPPHTTPLIB_VERSION_NUM "0x003100"
+#define CPPHTTPLIB_VERSION "0.50.1"
+#define CPPHTTPLIB_VERSION_NUM "0x003201"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -2219,6 +2219,7 @@ public:
   Result Get(const std::string &path, const Headers &headers, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Headers &headers, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Headers &headers, ResponseHandler response_handler, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
+  Result Get(const std::string &path, const Params &params, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, ResponseHandler response_handler, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
@@ -2602,6 +2603,7 @@ public:
   Result Get(const std::string &path, const Headers &headers, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Headers &headers, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Headers &headers, ResponseHandler response_handler, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
+  Result Get(const std::string &path, const Params &params, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, ResponseHandler response_handler, ContentReceiver content_receiver, DownloadProgress progress = nullptr);

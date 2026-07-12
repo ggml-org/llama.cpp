@@ -3705,6 +3705,12 @@ write_content_chunked(Stream &strm, const ContentProvider &content_provider,
     // Trailer
     if (trailer) {
       for (const auto &kv : *trailer) {
+        // Skip fields with invalid names or values to prevent response
+        // splitting via CR/LF injection, matching set_header().
+        if (!fields::is_field_name(kv.first) ||
+            !fields::is_field_value(kv.second)) {
+          continue;
+        }
         std::string field_line = kv.first + ": " + kv.second + "\r\n";
         if (!write_data(strm, field_line.data(), field_line.size())) {
           ok = false;
@@ -8301,8 +8307,8 @@ void Server::apply_ranges(const Request &req, Response &res,
       }
     }
 
-    auto length = std::to_string(res.body.size());
-    res.set_header("Content-Length", length);
+    res.content_length_ = res.body.size();
+    res.set_header("Content-Length", std::to_string(res.content_length_));
   }
 }
 
@@ -10271,6 +10277,11 @@ Result ClientImpl::Get(const std::string &path,
 }
 
 Result ClientImpl::Get(const std::string &path, const Params &params,
+                              DownloadProgress progress) {
+  return Get(path, params, Headers(), std::move(progress));
+}
+
+Result ClientImpl::Get(const std::string &path, const Params &params,
                               const Headers &headers,
                               DownloadProgress progress) {
   if (params.empty()) { return Get(path, headers); }
@@ -11349,6 +11360,10 @@ Result Client::Get(const std::string &path, const Headers &headers,
                    std::move(content_receiver), std::move(progress));
 }
 Result Client::Get(const std::string &path, const Params &params,
+                          DownloadProgress progress) {
+  return cli_->Get(path, params, std::move(progress));
+}
+Result Client::Get(const std::string &path, const Params &params,
                           const Headers &headers, DownloadProgress progress) {
   return cli_->Get(path, params, headers, std::move(progress));
 }
@@ -12076,11 +12091,18 @@ bool SSLServer::update_certs_pem(const char *cert_pem,
 
 // SSL HTTP client implementation
 SSLClient::~SSLClient() {
-  if (ctx_) { tls::free_context(ctx_); }
   // Make sure to shut down SSL since shutdown_ssl will resolve to the
   // base function rather than the derived function once we get to the
   // base class destructor, and won't free the SSL (causing a leak).
+  // This must happen before the context is freed below: some backends
+  // (e.g. mbedTLS) have the SSL session borrow a raw pointer into the
+  // context, so freeing the context first leaves close_notify reading
+  // freed memory.
   shutdown_ssl_impl(socket_, true);
+  if (ctx_) {
+    tls::free_context(ctx_);
+    ctx_ = nullptr;
+  }
 }
 
 bool SSLClient::is_valid() const { return ctx_ != nullptr; }
@@ -16501,6 +16523,11 @@ WebSocketClient::~WebSocketClient() {
 bool WebSocketClient::is_valid() const { return is_valid_; }
 
 void WebSocketClient::shutdown_and_close() {
+  // Send the close frame while the TLS session is still alive: ws_ holds an
+  // SSLSocketStream that keeps a raw pointer to tls_session_, so the session
+  // must outlive ws_->close() and ws_.reset() to avoid a use-after-free.
+  if (ws_ && ws_->is_open()) { ws_->close(); }
+  ws_.reset();
 #ifdef CPPHTTPLIB_SSL_ENABLED
   if (is_ssl_) {
     if (tls_session_) {
@@ -16510,8 +16537,6 @@ void WebSocketClient::shutdown_and_close() {
     }
   }
 #endif
-  if (ws_ && ws_->is_open()) { ws_->close(); }
-  ws_.reset();
   if (sock_ != INVALID_SOCKET) {
     detail::shutdown_socket(sock_);
     detail::close_socket(sock_);
