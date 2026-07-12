@@ -117,6 +117,7 @@ struct task_result_state {
     bool text_block_started = false;
 
     // for OpenAI Responses streaming API
+    bool oai_resp_created = false;
     const std::string oai_resp_id;
     const std::string oai_resp_reasoning_id;
     const std::string oai_resp_message_id;
@@ -440,6 +441,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     bool text_block_started     = false;
 
     // for OpenAI Responses API
+    bool oai_resp_created = false;
     std::string oai_resp_id;
     std::string oai_resp_reasoning_id;
     std::string oai_resp_message_id;

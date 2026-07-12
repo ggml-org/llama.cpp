@@ -129,7 +129,7 @@ typedef struct VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE {
 #endif
 
 #define ROUNDUP_POW2(M, N) (((M) + (N) - 1) & ~((N) - 1))
-#define CEIL_DIV(M, N) (((M) + (N)-1) / (N))
+#define CEIL_DIV(M, N) (((M) / (N)) + (((M) % (N)) != 0))
 static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define VK_VENDOR_ID_AMD 0x1002
@@ -6501,6 +6501,14 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->mul_mat_id_m[i] = true;
                 device->mul_mat_id_s[i] = false;
                 break;
+            case VK_VENDOR_ID_QUALCOMM:
+                device->mul_mat_l[i] = false;
+                device->mul_mat_m[i] = true;
+                device->mul_mat_s[i] = true;
+                device->mul_mat_id_l[i] = false;
+                device->mul_mat_id_m[i] = true;
+                device->mul_mat_id_s[i] = true;
+                break;
 #endif
             default:
                 device->mul_mat_l[i] = true;
@@ -10310,7 +10318,8 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     }
 
     // Only use mask opt when the mask is fairly large. This hasn't been tuned extensively.
-    bool use_mask_opt = mask && nem1 >= 32 && nem0 * nem1 > 32768 && nem0 >= tuning_params.block_cols * 16;
+    bool use_mask_opt = mask && nem1 >= 32 && nem0 * nem1 > 32768 && nem0 >= tuning_params.block_cols * 16
+                        && (ctx->device->architecture != vk_device_architecture::AMD_GCN || HSK > 256 || HSV > 256);
     vk_fa_pipeline_state fa_pipeline_state = get_fa_pipeline_state(ctx->device, tuning_params, HSK, HSV, aligned, f32acc,
                                                                    mask != nullptr, use_mask_opt, logit_softcap != 0, k->type, v->type);
 
@@ -16308,7 +16317,18 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     uint32_t submit_count = 0;
     uint64_t batch_flops = 0;
     uint64_t total_flops = 0;
-    uint64_t flops_per_submit = std::min(uint64_t(200'000'000'000), ctx->last_total_flops / 40u);
+    uint64_t flops_cap = 200'000'000'000ULL;
+
+    // On weaker AMD GPUs larger submissions can hit a driver timeout, submit more often to avoid this
+    if (ctx->device->vendor_id == VK_VENDOR_ID_AMD && ctx->device->shader_core_count > 0) {
+        if (ctx->device->architecture == AMD_GCN && ctx->device->shader_core_count < 32) {
+            flops_cap = 500'000'000ULL * ctx->device->shader_core_count;
+        } else if (ctx->device->architecture != AMD_GCN && ctx->device->shader_core_count < 24) {
+            flops_cap = 2'000'000'000ULL * ctx->device->shader_core_count;
+        }
+    }
+    uint64_t flops_per_submit = std::min(flops_cap, ctx->last_total_flops / 40u);
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (first_node_in_batch) {
             submit_node_idx = i;
@@ -17370,21 +17390,24 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_SET_ROWS:
             {
-                switch (op->type) {
-                    case GGML_TYPE_F32:
-                    case GGML_TYPE_F16:
-                    case GGML_TYPE_BF16:
-                    case GGML_TYPE_Q1_0:
-                    case GGML_TYPE_Q4_0:
-                    case GGML_TYPE_Q4_1:
-                    case GGML_TYPE_Q5_0:
-                    case GGML_TYPE_Q5_1:
-                    case GGML_TYPE_Q8_0:
-                    case GGML_TYPE_IQ4_NL:
-                        return true;
-                    default:
-                        return false;
+                if (op->src[0]->type == GGML_TYPE_F32) {
+                    switch (op->type) {
+                        case GGML_TYPE_F32:
+                        case GGML_TYPE_F16:
+                        case GGML_TYPE_BF16:
+                        case GGML_TYPE_Q1_0:
+                        case GGML_TYPE_Q4_0:
+                        case GGML_TYPE_Q4_1:
+                        case GGML_TYPE_Q5_0:
+                        case GGML_TYPE_Q5_1:
+                        case GGML_TYPE_Q8_0:
+                        case GGML_TYPE_IQ4_NL:
+                            return true;
+                        default:
+                            return false;
+                    }
                 }
+                return false;
             }
         case GGML_OP_CONT:
         case GGML_OP_CPY:

@@ -1,6 +1,7 @@
-#include "llama-ext.h"
-#include "llama-model-loader.h"
+#include "llama-impl.h"
 #include "llama-model.h"
+#include "llama-model-loader.h"
+#include "llama-ext.h"
 #include "llama-quant.h"
 
 #include <atomic>
@@ -302,6 +303,7 @@ static ggml_type fallback_type_for(const ggml_type target_type) {
         case GGML_TYPE_IQ3_XXS:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ4_XS: return GGML_TYPE_IQ4_NL;
+        case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_TQ1_0:
@@ -407,7 +409,7 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) {
                 new_type = GGML_TYPE_IQ3_S;
             }
-            else if (ftype == LLAMA_FTYPE_MOSTLY_TQ1_0 || ftype == LLAMA_FTYPE_MOSTLY_TQ2_0) {
+            else if (ftype == LLAMA_FTYPE_MOSTLY_TQ1_0 || ftype == LLAMA_FTYPE_MOSTLY_TQ2_0 || ftype == LLAMA_FTYPE_MOSTLY_Q2_0) {
                 new_type = GGML_TYPE_Q4_K;
             }
         }
@@ -2434,6 +2436,7 @@ ggml_type llama_ftype_get_default_type(const llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_BF16: return GGML_TYPE_BF16;
         case LLAMA_FTYPE_ALL_F32:     return GGML_TYPE_F32;
         case LLAMA_FTYPE_MOSTLY_Q1_0: return GGML_TYPE_Q1_0;
+        case LLAMA_FTYPE_MOSTLY_Q2_0: return GGML_TYPE_Q2_0;
 
         case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return GGML_TYPE_MXFP4;
 

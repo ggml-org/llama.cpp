@@ -7,18 +7,22 @@
 
 #include "hex-fastdiv.h"
 #include "hex-common.h"
+#include "htp-vtcm.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 // Tile constants (mirrored from hmx-utils.h for use on host side if needed)
+#define HTP_FA_HMX_TILE_SIZE   2048
+#define HMX_FP16_TILE_SIZE     2048
 #define HMX_FP16_TILE_N_ROWS   32
 #define HMX_FP16_TILE_N_COLS   32
 #define HMX_FP16_TILE_N_ELMS   1024
-#define HMX_FP16_TILE_SIZE     2048
+
 #define HVX_FA_DMA_CACHE_SIZE  128
 #define HMX_FA_DMA_CACHE_SIZE  4
+
 
 #define HTP_FA_M_INITIAL_VAL  -10000.0f
 
@@ -54,6 +58,11 @@ struct htp_fa_kernel_params {
     struct fastdiv_values src3_div2;
     struct fastdiv_values src3_div3;
 
+    struct fastdiv_values broadcast_rk2;
+    struct fastdiv_values broadcast_rk3;
+    struct fastdiv_values broadcast_rv2;
+    struct fastdiv_values broadcast_rv3;
+
     union {
         struct {
             uint32_t g_br;
@@ -69,10 +78,6 @@ struct htp_fa_kernel_params {
             uint32_t size_v_row_padded;
             struct fastdiv_values src0_div21;
             struct fastdiv_values src0_div1;
-            struct fastdiv_values broadcast_rk2;
-            struct fastdiv_values broadcast_rk3;
-            struct fastdiv_values broadcast_rv2;
-            struct fastdiv_values broadcast_rv3;
         } hvx;
     } u;
 };
@@ -81,39 +86,124 @@ struct htp_fa_kernel_params {
 static_assert(sizeof(struct htp_fa_kernel_params) <= 128, "htp_fa_kernel_params is too large for kernel_params blob");
 #endif
 
-// Exact VTCM usage for a given (gqa_factor, DK, DV, Br, Bc) configuration.
-// g_br = hex_align_up(gqa_factor * Br, 32) replaces Br for all Q/O/S/P/D dimensions.
-// Layout: Q + O_ping + O_pong + K_dma*2 + V_dma*2 + K_tile + V_tile + S + P + D + vectors + scales
-// Mask is DMA'd into a VTCM buffer (Br rows per KV block) to avoid DDR reads in softmax.
-static inline size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_threads, bool pipeline) {
+// VTCM region layout for the HMX flash-attention kernel.
+//
+// Single source of truth for both the host (which needs the total size to pick a
+// (Br, Bc) tiling that fits the VTCM budget) and the device (which needs the actual
+// byte offsets to place each scratch buffer). Building the layout once and reading
+// offsets/total from it makes host estimate and device allocation impossible to
+// desync -- previously they were duplicated formulas in two files and drifted.
+//
+// All fields are byte offsets / byte sizes -- no HVX_Vector type is named here so the
+// header stays host-includable. The device casts (base + off_*) to the proper type.
+// An offset of 0 marks a region that is not allocated for this configuration (only
+// off_v_tiles[1], which exists only when pipelining); the device sets such pointers NULL.
+struct hmx_fa_vtcm_layout {
+    // Byte offsets from vtcm_base for each region.
+    size_t off_q_tiles;
+    size_t off_o_tiles[2];
+    size_t off_k_fp16[2];
+    size_t off_v_fp16[2];
+    size_t off_k_tiles;
+    size_t off_v_tiles[2];     // [1] allocated only when pipeline, else 0
+    size_t off_s_tiles;
+    size_t off_p_tiles;
+    size_t off_d_tiles;
+    size_t off_m_vec;
+    size_t off_l_vec;
+    size_t off_s_rowmax;
+    size_t off_p_rowsum;
+    size_t off_row_bufs;
+    size_t off_hmx_scales_id;
+    size_t off_hmx_scales_qk;
+    size_t off_mask_buf;
+    size_t off_slopes;
+
+    // Region byte sizes reused by the device at runtime (not just for allocation).
+    size_t q_tile_bytes;
+    size_t o_tile_bytes;
+    size_t s_tile_bytes;       // S and P tiles (same size)
+    size_t d_tile_bytes;
+    size_t m_line_bytes;       // one mask row
+    size_t m_buf_slot_bytes;   // one dma_cache slot = align_up(Br * m_line_bytes, 4096)
+    size_t col_vec_bytes;
+
+    // Derived strides.
+    size_t row_buf_stride;       // HVX vectors (128B) per row buffer
+    size_t mask_buf_row_stride;  // __fp16 elements per row in the mask buffer
+
+    bool   pipeline;
+    size_t total_bytes;
+};
+
+// Build the VTCM layout.
+
+static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
+                                       size_t gqa_factor, size_t DK, size_t DV,
+                                       size_t Br, size_t Bc, size_t n_threads, bool pipeline) {
     const size_t g_br         = hex_align_up(gqa_factor * Br, HMX_FP16_TILE_N_ROWS);
-    const size_t q_tile_size  = hex_align_up(g_br * DK * sizeof(__fp16), 4096);    // Q:  [g_br, DK]
-    const size_t o_tile_size  = hex_align_up(g_br * DV * sizeof(__fp16), 4096);    // O:  [g_br, DV] x2 ping-pong
-    const size_t k_dma_size   = hex_align_up(Bc * hex_round_up(DK * sizeof(__fp16), 128), 4096);      // K DMA: [Bc, DK] x2 double-buf
-    const size_t v_dma_size   = hex_align_up(Bc * hex_round_up(DV * sizeof(__fp16), 128), 4096);      // V DMA: [Bc, DV] x2 double-buf
-    const size_t k_tile_size  = hex_align_up(Bc * DK * sizeof(__fp16), 4096);      // K tiles: [Bc, DK] interleaved
-    const size_t v_tile_size  = hex_align_up(Bc * DV * sizeof(__fp16), 4096);      // V tiles: [Bc, DV] interleaved
-    const size_t s_tile_size  = hex_align_up(g_br * Bc * sizeof(__fp16), 4096);    // S/P:[g_br, Bc]
-    const size_t d_tile_size  = hex_align_up(g_br * g_br * sizeof(__fp16), 4096);  // D:  [g_br, g_br]
-    const size_t col_vec_size = hex_align_up(g_br * sizeof(float), 256);          // m, l, etc.
-    const size_t row_vec_size = hex_align_up(Bc * sizeof(__fp16), 256);
-    const size_t m_line_size  = hex_align_up(Bc * sizeof(__fp16), 128);
-    const size_t m_buf_size   = hex_align_up(Br * m_line_size, 4096) * HMX_FA_DMA_CACHE_SIZE;
+    const size_t q_tile_size  = hex_align_up(g_br * DK   * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
+    const size_t o_tile_size  = hex_align_up(g_br * DV   * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
+    const size_t k_tile_size  = hex_align_up(Bc   * DK   * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
+    const size_t v_tile_size  = hex_align_up(Bc   * DV   * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
+    const size_t s_tile_size  = hex_align_up(g_br * Bc   * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
+    const size_t d_tile_size  = hex_align_up(g_br * g_br * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
+
+    const size_t k_dma_size   = hex_align_up(Bc * hex_round_up(DK * sizeof(__fp16), 128), 128);
+    const size_t v_dma_size   = hex_align_up(Bc * hex_round_up(DV * sizeof(__fp16), 128), 128);
+    const size_t col_vec_size = hex_align_up(g_br * sizeof(float),  256);
+    const size_t row_vec_size = hex_align_up(Bc   * sizeof(__fp16), 256);
+    const size_t m_line_size  = hex_align_up(Bc   * sizeof(__fp16), 128);
+    const size_t m_buf_slot   = hex_align_up(Br * m_line_size, 256);
+    const size_t m_buf_size   = m_buf_slot * HMX_FA_DMA_CACHE_SIZE;
     const size_t slopes_size  = hex_align_up(g_br * sizeof(__fp16), 128);
 
-    return   q_tile_size * 1               // Q tiles
-           + o_tile_size * 2               // O ping-pong
-           + k_dma_size  * 2               // K DMA x2
-           + v_dma_size  * 2               // V DMA x2
-           + k_tile_size * 1               // K tiles
-           + v_tile_size * (pipeline ? 2 : 1) // V tiles (double-buffered if pipelining)
-           + s_tile_size * 2               // S + P
-           + d_tile_size * 1               // D (diagonal matrix)
-           + col_vec_size * 4              // m_vec, l_vec, s_rowmax, p_rowsum
-           + row_vec_size * 2 * n_threads  // per-thread softmax row scratch
-           + m_buf_size * 1                // mask VTCM buffer [Br rows]
-           + slopes_size                   // Slopes
-           + 256 * 2;                      // HMX scales (id + qk)
+    size_t off = 0;
+
+    // Section 1: HMX Tiled Buffers (FA_HMX_TILE_SIZE = 2KB Aligned)
+    VTCM_LAYOUT_ALLOC(off, off_q_tiles,       q_tile_size);
+    VTCM_LAYOUT_ALLOC(off, off_o_tiles[0],    o_tile_size);
+    VTCM_LAYOUT_ALLOC(off, off_o_tiles[1],    o_tile_size);
+    VTCM_LAYOUT_ALLOC(off, off_k_tiles,       k_tile_size);
+    VTCM_LAYOUT_ALLOC(off, off_v_tiles[0],    v_tile_size);
+    VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_v_tiles[1], v_tile_size, pipeline);
+    VTCM_LAYOUT_ALLOC(off, off_s_tiles,       s_tile_size);
+    VTCM_LAYOUT_ALLOC(off, off_p_tiles,       s_tile_size);
+    VTCM_LAYOUT_ALLOC(off, off_d_tiles,       d_tile_size);
+
+    // Section 2: HVX/DMA flat and vector buffers (128B / 256B Aligned)
+    VTCM_LAYOUT_ALLOC(off, off_k_fp16[0],     k_dma_size);
+    VTCM_LAYOUT_ALLOC(off, off_k_fp16[1],     k_dma_size);
+    VTCM_LAYOUT_ALLOC(off, off_v_fp16[0],     v_dma_size);
+    VTCM_LAYOUT_ALLOC(off, off_v_fp16[1],     v_dma_size);
+    VTCM_LAYOUT_ALLOC(off, off_m_vec,         col_vec_size);
+    VTCM_LAYOUT_ALLOC(off, off_l_vec,         col_vec_size);
+    VTCM_LAYOUT_ALLOC(off, off_s_rowmax,      col_vec_size);
+    VTCM_LAYOUT_ALLOC(off, off_p_rowsum,      col_vec_size);
+    VTCM_LAYOUT_ALLOC(off, off_row_bufs,      row_vec_size * 2 * n_threads);
+    VTCM_LAYOUT_ALLOC(off, off_hmx_scales_id, 256);
+    VTCM_LAYOUT_ALLOC(off, off_hmx_scales_qk, 256);
+    VTCM_LAYOUT_ALLOC(off, off_mask_buf,      m_buf_size);
+    VTCM_LAYOUT_ALLOC(off, off_slopes,        slopes_size);
+
+    L->q_tile_bytes        = q_tile_size;
+    L->o_tile_bytes        = o_tile_size;
+    L->col_vec_bytes       = col_vec_size;
+    L->s_tile_bytes        = s_tile_size;
+    L->d_tile_bytes        = d_tile_size;
+    L->m_line_bytes        = m_line_size;
+    L->m_buf_slot_bytes    = m_buf_slot;
+    L->row_buf_stride      = row_vec_size / 128;
+    L->mask_buf_row_stride = m_line_size / sizeof(__fp16);
+    L->pipeline            = pipeline;
+    L->total_bytes         = off;
+}
+
+// Exact VTCM usage for a given (gqa_factor, DK, DV, Br, Bc) configuration.
+static inline size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_threads, bool pipeline) {
+    struct hmx_fa_vtcm_layout L;
+    hmx_fa_vtcm_layout_build(&L, gqa_factor, DK, DV, Br, Bc, n_threads, pipeline);
+    return L.total_bytes;
 }
 
 #define FA_HVX_BLOCK_SIZE 64
@@ -153,22 +243,7 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
     const size_t T       = HMX_FP16_TILE_N_ROWS;  // 32
     const size_t br_unit = hmx_ceil_div(T, gqa_factor);
     const size_t bc_unit = HMX_FP16_TILE_N_COLS * 2;  // 64
-    const size_t fp16    = sizeof(__fp16);
     const bool   can_pipeline = (kv_len >= FA_MIN_KV_BLOCKS * bc_unit && n_threads >= 2);
-
-    // Approximate per-unit VTCM costs (without per-buffer alignment padding).
-    const size_t per_gbr  = (DK + 2 * DV) * fp16 + 4 * sizeof(float);  // Q + O*2 + 4 col vectors
-    const size_t per_gbr2 = fp16;                             // D diagonal matrix
-    const size_t per_bc =
-        3 * DK * fp16 + (can_pipeline ? 4 : 3) * DV * fp16 + 2 * n_threads * fp16;          // K/V DMA x2 + tiles + row bufs
-    const size_t per_gbr_bc = 2 * fp16;                       // S + P
-
-    const size_t overhead = 256 * 2 + 13 * 4096;
-
-    if (vtcm_budget <= overhead) {
-        return -1;
-    }
-    const size_t usable = vtcm_budget - overhead;
 
     // Br_max: largest Br aligned to br_unit that does not exceed qo_len.
     const size_t Br_max = qo_len >= br_unit ? hex_align_down(qo_len, br_unit) : br_unit;
@@ -185,51 +260,26 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
     size_t best_Br = 0, best_Bc = 0;
 
     for (size_t Br = Br_max; Br >= br_unit; Br -= br_unit) {
-        const size_t g_br = hex_align_up(gqa_factor * Br, T);
+        // Try all Bc candidates from Bc_limit down to bc_unit
+        for (size_t Bc = Bc_limit; Bc >= bc_unit; Bc -= bc_unit) {
+            size_t vtcm_needed = hmx_fa_compute_vtcm_usage(gqa_factor, DK, DV, Br, Bc, n_threads, can_pipeline);
+            if (vtcm_needed <= vtcm_budget) {
+                // This Bc fits for this Br!
+                const size_t q_blocks  = (qo_len + Br - 1) / Br;
+                const size_t kv_blocks = (kv_len + Bc - 1) / Bc;
+                const size_t cost      = q_blocks * (c_q_fixed + kv_blocks * c_iter_fixed);
+                const size_t mn        = Br * Bc;
 
-        // g_br-dependent VTCM cost: g_br * per_gbr + g_br*g_br * per_gbr2
-        const size_t gbr_cost = g_br * per_gbr + g_br * g_br * per_gbr2;
-        if (gbr_cost >= usable) {
-            if (Br == br_unit) {
+                if (cost < best_cost || (cost == best_cost && mn > best_mn)) {
+                    best_cost = cost;
+                    best_mn   = mn;
+                    best_Br   = Br;
+                    best_Bc   = Bc;
+                }
+                // Since we iterate Bc from largest to smallest, this is the largest Bc that fits
+                // for this Br. We can break to the next Br.
                 break;
             }
-            continue;
-        }
-
-        // Analytically solve for max Bc:
-        //   remain >= Bc * (per_bc + g_br * per_gbr_bc + Br * fp16 * HMX_FA_DMA_CACHE_SIZE)
-        // The Br * fp16 term accounts for the VTCM mask buffer [Br * Bc].
-        const size_t remain   = usable - gbr_cost;
-        const size_t bc_denom = per_bc + g_br * per_gbr_bc + Br * fp16 * HMX_FA_DMA_CACHE_SIZE;
-        size_t       Bc       = hex_smin(hex_align_down(remain / bc_denom, bc_unit), Bc_limit);
-        if (Bc < bc_unit) {
-            if (Br == br_unit) {
-                break;
-            }
-            continue;
-        }
-
-        // Exact VTCM verification (alignment padding may push over budget)
-        while (Bc >= bc_unit && hmx_fa_compute_vtcm_usage(gqa_factor, DK, DV, Br, Bc, n_threads, can_pipeline) > vtcm_budget) {
-            Bc -= bc_unit;
-        }
-        if (Bc < bc_unit) {
-            if (Br == br_unit) {
-                break;
-            }
-            continue;
-        }
-
-        const size_t q_blocks  = (qo_len + Br - 1) / Br;
-        const size_t kv_blocks = (kv_len + Bc - 1) / Bc;
-        const size_t cost      = q_blocks * (c_q_fixed + kv_blocks * c_iter_fixed);
-        const size_t mn        = Br * Bc;
-
-        if (cost < best_cost || (cost == best_cost && mn > best_mn)) {
-            best_cost = cost;
-            best_mn   = mn;
-            best_Br   = Br;
-            best_Bc   = Bc;
         }
 
         if (Br == br_unit) {
@@ -237,7 +287,7 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
         }
     }
 
-    if (best_Br == 0) {
+    if (best_Br == 0 || best_Bc == 0) {
         return -1;
     }
 

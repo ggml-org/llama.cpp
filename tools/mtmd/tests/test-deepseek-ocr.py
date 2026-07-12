@@ -29,12 +29,15 @@ class ModelSpec:
     mmproj_arg: str
     model_default: str
     mmproj_default: str
-    prompt: str = "Free OCR. "
+    prompt: str = "Free OCR."
     n_predict: int = 512
     n_ctx: int | None = None
     # Unlimited-OCR's "document parsing" prompt emits <|det|> grounding markup that
     # the HF reference strips in result.md; drop it before scoring to match.
     strip_grounding: bool = False
+    # v2/Unlimited loop on hard tiles; DRY caps it the way HF's
+    # no_repeat_ngram_size does. v1 scores fine without it.
+    dry: bool = False
 
 
 @dataclass
@@ -69,6 +72,9 @@ MODELS = {
         model_arg="--llama-model-2", mmproj_arg="--mmproj-2",
         model_default="gguf_models/deepseek-ai/deepseek-ocr-2-bf16.gguf",
         mmproj_default="gguf_models/deepseek-ai/mmproj-deepseek-ocr-2-bf16.gguf",
+        # v2 keeps generating past 512 on multi-tile; give it room to match the HF ref.
+        n_predict=2048,
+        dry=True,
     ),
     "unlimited": ModelSpec(
         key="unlimited", label="Unlimited-OCR",
@@ -83,6 +89,7 @@ MODELS = {
         n_predict=4096,
         n_ctx=16384,
         strip_grounding=True,
+        dry=True,
     ),
 }
 
@@ -91,7 +98,9 @@ CASES = [
         model_key="v1", label="single-view scan",
         image="tools/mtmd/test-1.jpeg",
         ground_truth="tools/mtmd/tests/test-1-ground-truth.txt",
-        hf_cer=0.3030, hf_chrf=67.52, cer_tol=0.02, chrf_tol=2.0,
+        # Fragile image: the HF ref itself swings ~0.286-0.314 across precision
+        # configs -- hence the wide tol. llama.cpp bf16 ~0.322/63.8.
+        hf_cer=0.3140, hf_chrf=67.57, cer_tol=0.04, chrf_tol=5.0,
     ),
     TestCase(
         model_key="v2", label="single-view scan",
@@ -102,6 +111,24 @@ CASES = [
         # the transformers HF processor is *not* the reference -- its pad_to_square
         # is one pixel off and lands at ~0.69 instead.
         hf_cer=0.7761, hf_chrf=28.70, cer_tol=0.12, chrf_tol=8.0,
+    ),
+    TestCase(
+        model_key="v1", label="multi-tile (dynamic resolution)",
+        image="tools/mtmd/tests/test-1-positive.png",
+        ground_truth="tools/mtmd/tests/test-1-ground-truth.txt",
+        # 429x806 -- 806 > 640 triggers the v1 "Gundam" path: (1,2) grid ->
+        # 2 local 640 tiles + 1 global 1024 view. Regression guard for the
+        # tiling preprocessor -- a broken tile path craters the score.
+        # hf_cer/hf_chrf are HF v1's measured scores -- it reads this clean crop exactly.
+        hf_cer=0.0000, hf_chrf=100.00, cer_tol=0.03, chrf_tol=3.0,
+    ),
+    TestCase(
+        model_key="v2", label="multi-tile (dynamic resolution)",
+        image="tools/mtmd/tests/test-1-positive.png",
+        ground_truth="tools/mtmd/tests/test-1-ground-truth.txt",
+        # 429x806 -- 806 > 768 triggers the v2 path: (1,2) grid ->
+        # 2 local 768 tiles + 1 global 1024 view = 545 image tokens.
+        hf_cer=0.0236, hf_chrf=97.05, cer_tol=0.03, chrf_tol=3.0,
     ),
     TestCase(
         model_key="unlimited", label="single-view scan",
@@ -180,14 +207,17 @@ def run_mtmd_cli(spec: "ModelSpec", model_path, mmproj_path, image_path, bin_pat
         "--flash-attn", "off",  # match the HF "eager" attention reference
         "--no-warmup",
         "-n", str(spec.n_predict),  # cap loops on hard images (KV would otherwise fill)
+    ]
+    if spec.dry:
         # HF decodes with no_repeat_ngram_size; llama.cpp's analog is DRY.
         # Default DRY breakers include "\n", so they are cleared below.
-        "--dry-multiplier", "0.8",
-        "--dry-base", "1.75",
-        "--dry-allowed-length", "2",
-        "--dry-penalty-last-n", "-1",
-        "--dry-sequence-breaker", "none",
-    ]
+        cmd += [
+            "--dry-multiplier", "0.8",
+            "--dry-base", "1.75",
+            "--dry-allowed-length", "2",
+            "--dry-penalty-last-n", "-1",
+            "--dry-sequence-breaker", "none",
+        ]
     if spec.n_ctx is not None:
         cmd += ["-c", str(spec.n_ctx)]
     logger.debug(f"  command: {' '.join(cmd)}")

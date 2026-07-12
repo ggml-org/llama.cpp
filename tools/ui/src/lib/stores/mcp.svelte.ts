@@ -12,21 +12,22 @@
  * - Lifecycle management (initialize, shutdown)
  * - Multi-server coordination
  * - Tool name conflict detection and resolution
- * - OpenAI-compatible tool definition generation
  * - Automatic tool-to-server routing
  * - Health checks
+ *
+ * MCP connection state and raw `Tool[]` per server are owned here; the
+ * OpenAI-compatible wire format for those tools is built in `toolsStore`
+ * (see {@link toolsStore.mcpEntries} / {@link toolsStore.getEnabledToolsForLLM}).
  *
  * @see MCPService in services/mcp.service.ts for protocol operations
  */
 
 import { browser } from '$app/environment';
-import { SvelteSet } from 'svelte/reactivity';
 import { SETTINGS_KEYS } from '$lib/constants';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mode } from 'mode-watcher';
 import {
 	parseMcpServerSettings,
@@ -40,9 +41,7 @@ import {
 	HealthCheckStatus,
 	MCPRefType,
 	ColorMode,
-	UrlProtocol,
-	JsonSchemaType,
-	ToolCallType
+	UrlProtocol
 } from '$lib/enums';
 import {
 	DEFAULT_CACHE_TTL_MS,
@@ -53,12 +52,10 @@ import {
 	MCP_RECONNECT_BACKOFF_MULTIPLIER,
 	MCP_RECONNECT_INITIAL_DELAY,
 	MCP_RECONNECT_MAX_DELAY,
-	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS,
-	RECOMMENDED_MCP_SERVER_IDS
+	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS
 } from '$lib/constants';
 import type {
 	MCPToolCall,
-	OpenAIToolDefinition,
 	ServerStatus,
 	ToolExecutionResult,
 	MCPClientConfig,
@@ -582,30 +579,10 @@ class MCPStore {
 	}
 
 	/**
-	 * Recommended MCP server IDs the user opted in to via per-chat overrides.
-	 * Single source of truth for "which recommendations has the user accepted",
-	 * shared by the recommendations hook and the visible-servers getter.
-	 */
-	get optedInRecommendationIds(): ReadonlySet<string> {
-		const ids = new SvelteSet<string>();
-		for (const override of conversationsStore.pendingMcpServerOverrides) {
-			if (RECOMMENDED_MCP_SERVER_IDS.has(override.serverId) && override.enabled) {
-				ids.add(override.serverId);
-			}
-		}
-		return ids;
-	}
-
-	/**
-	 * MCP servers selectable in chat-add UIs and the settings page:
-	 * enabled in settings and either non-recommended or explicitly opted in.
+	 * MCP servers selectable in chat-add UIs and the settings page.
 	 */
 	get visibleMcpServers(): MCPServerSettingsEntry[] {
-		const optedIn = this.optedInRecommendationIds;
-		return this.getServersSorted().filter(
-			(server) =>
-				server.enabled && (!RECOMMENDED_MCP_SERVER_IDS.has(server.id) || optedIn.has(server.id))
-		);
+		return this.getServersSorted().filter((server) => server.enabled);
 	}
 
 	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {
@@ -977,73 +954,6 @@ class MCPStore {
 				this.autoReconnect(serverName);
 			}
 		}
-	}
-
-	getToolDefinitionsForLLM(): OpenAIToolDefinition[] {
-		const tools: OpenAIToolDefinition[] = [];
-
-		for (const connection of this.connections.values()) {
-			for (const tool of connection.tools) {
-				const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
-					type: JsonSchemaType.OBJECT,
-					properties: {},
-					required: []
-				};
-
-				tools.push({
-					type: ToolCallType.FUNCTION as const,
-					function: {
-						name: tool.name,
-						description: tool.description,
-						parameters: this.normalizeSchemaProperties(rawSchema)
-					}
-				});
-			}
-		}
-
-		return tools;
-	}
-
-	private normalizeSchemaProperties(schema: Record<string, unknown>): Record<string, unknown> {
-		if (!schema || typeof schema !== 'object') {
-			return schema;
-		}
-
-		const normalized = { ...schema };
-		if (normalized.properties && typeof normalized.properties === 'object') {
-			const props = normalized.properties as Record<string, Record<string, unknown>>;
-			const normalizedProps: Record<string, Record<string, unknown>> = {};
-			for (const [key, prop] of Object.entries(props)) {
-				if (!prop || typeof prop !== 'object') {
-					normalizedProps[key] = prop;
-					continue;
-				}
-				const normalizedProp = { ...prop };
-				if (!normalizedProp.type && normalizedProp.default !== undefined) {
-					const defaultVal = normalizedProp.default;
-					if (typeof defaultVal === 'string') normalizedProp.type = 'string';
-					else if (typeof defaultVal === 'number')
-						normalizedProp.type = Number.isInteger(defaultVal) ? 'integer' : 'number';
-					else if (typeof defaultVal === 'boolean') normalizedProp.type = 'boolean';
-					else if (Array.isArray(defaultVal)) normalizedProp.type = 'array';
-					else if (typeof defaultVal === 'object' && defaultVal !== null)
-						normalizedProp.type = 'object';
-				}
-				if (normalizedProp.properties)
-					Object.assign(
-						normalizedProp,
-						this.normalizeSchemaProperties(normalizedProp as Record<string, unknown>)
-					);
-				if (normalizedProp.items && typeof normalizedProp.items === 'object')
-					normalizedProp.items = this.normalizeSchemaProperties(
-						normalizedProp.items as Record<string, unknown>
-					);
-				normalizedProps[key] = normalizedProp;
-			}
-			normalized.properties = normalizedProps;
-		}
-
-		return normalized;
 	}
 
 	getToolNames(): string[] {

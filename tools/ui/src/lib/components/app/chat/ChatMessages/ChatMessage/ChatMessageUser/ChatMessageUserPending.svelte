@@ -2,7 +2,6 @@
 	import { ActionIcon, ChatMessageEditForm, ChatMessageUserBubble } from '$lib/components/app';
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { ArrowUp, Edit, Trash2 } from '@lucide/svelte';
-	import { getProcessingInfoContext } from '$lib/contexts';
 	import { useMessageEditContext } from '$lib/hooks/use-message-edit-context.svelte';
 
 	interface Props {
@@ -23,9 +22,6 @@
 		onDelete
 	}: Props = $props();
 
-	const processingInfoCtx = getProcessingInfoContext();
-	let showProcessingInfo = $derived(processingInfoCtx.showProcessingInfo);
-
 	const editCtx = useMessageEditContext({
 		getContent: () => content,
 		getExtras: () => extras,
@@ -36,9 +32,7 @@
 <div
 	use:fadeInView
 	aria-label="Pending user message"
-	class="group flex flex-col items-end gap-3 transition-opacity hover:opacity-80 md:gap-2 {className} sticky {showProcessingInfo
-		? 'bottom-44'
-		: 'bottom-32'}"
+	class="group flex flex-col items-end gap-3 transition-opacity hover:opacity-80 md:gap-2 {className} sticky bottom-32"
 	role="group"
 >
 	{#if editCtx.isEditing}
