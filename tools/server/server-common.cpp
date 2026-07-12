@@ -1116,24 +1116,17 @@ json oaicompat_chat_params_parse(
 
     // Reasoning budget: pass parameters through to sampling layer
     {
-        // Per-request overrides, read before writing to llama_params so the generic copy
-        // loop (which skips keys already present) won't clobber the caller-supplied values.
-        // Precedence: canonical reasoning_budget_tokens > Anthropic thinking_budget_tokens
-        // alias > server-level default.
-        int reasoning_budget = json_value(body, "reasoning_budget_tokens", -1);
-        if (reasoning_budget == -1) {
-            reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
-        }
+        int reasoning_budget = json_value(body, "reasoning_budget_tokens",
+                               json_value(body, "thinking_budget_tokens", -1));
         if (reasoning_budget == -1) {
             reasoning_budget = opt.reasoning_budget;
         }
-        std::string reasoning_budget_message = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
 
         if (!chat_params.thinking_end_tag.empty()) {
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
             llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
-            llama_params["reasoning_budget_message"] = reasoning_budget_message;
+            llama_params["reasoning_budget_message"] = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
     }
