@@ -158,6 +158,22 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
         endif()
     endforeach()
     if (P45A_FOUND)
+        execute_process(
+            COMMAND ${P45A_TEST_git} rev-parse --show-toplevel
+            WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+            OUTPUT_VARIABLE P45A_GIT_TOPLEVEL
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE P45A_GIT_TOPLEVEL_RESULT
+        )
+        file(REAL_PATH "${PROJECT_SOURCE_DIR}" P45A_SOURCE_ROOT)
+        if (P45A_GIT_TOPLEVEL_RESULT EQUAL 0)
+            file(REAL_PATH "${P45A_GIT_TOPLEVEL}" P45A_GIT_ROOT)
+        endif()
+        if (NOT P45A_GIT_TOPLEVEL_RESULT EQUAL 0 OR NOT P45A_GIT_ROOT STREQUAL P45A_SOURCE_ROOT)
+            set(P45A_FOUND FALSE)
+        endif()
+    endif()
+    if (P45A_FOUND)
         llama_test_cmd(
             ${P45A_TEST_bash}
             NAME test-validate-dense-turbo4-capacity
@@ -215,6 +231,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # llama_build_and_test(test-double-float.cpp) # SLOW
 
     llama_build_and_test(test-llama-archs.cpp)
+    llama_build(test-kv-cache-adaptive-mode.cpp)
+    llama_test(test-kv-cache-adaptive-mode)
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
@@ -226,8 +244,6 @@ llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build(test-turbo-innerq-runtime.cpp)
 llama_test(test-turbo-innerq-runtime)
-llama_build(test-kv-cache-adaptive-mode.cpp)
-llama_test(test-kv-cache-adaptive-mode)
 
 if (GGML_SYCL)
     add_executable(test-sycl-turbo test-sycl-turbo.cpp)
