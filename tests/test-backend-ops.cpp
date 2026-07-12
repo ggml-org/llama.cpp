@@ -1142,12 +1142,6 @@ struct test_case {
         return build_graph(ctx);
     }
 
-    virtual bool compare_with_reference_graph() { return false; }
-
-    virtual ggml_tensor * build_reference_graph(ggml_context * ctx) {
-        return build_graph(ctx);
-    }
-
     virtual double max_nmse_err() {
         return 1e-7;
     }
@@ -1319,151 +1313,10 @@ struct test_case {
         }
     }
 
-    test_status_t eval_reference_graph(ggml_backend_t backend1,
-                                       ggml_backend_t backend2,
-                                       const char *   op_names_filter,
-                                       printer *      output_printer) {
-        mode = MODE_TEST;
-
-        ggml_init_params params = {
-            /* .mem_size = */ ggml_tensor_overhead()*256 + ggml_graph_overhead(),
-            /* .mem_base = */ NULL,
-            /* .no_alloc = */ true,
-        };
-        ggml_context * ctx_eval = ggml_init(params);
-        ggml_context * ctx_ref  = ggml_init(params);
-        GGML_ASSERT(ctx_eval);
-        GGML_ASSERT(ctx_ref);
-
-        gf = ggml_new_graph(ctx_eval);
-        ggml_cgraph * gf_ref = ggml_new_graph(ctx_ref);
-
-        ggml_tensor * out_eval = build_graph(ctx_eval);
-        current_op_name = op_desc(out_eval);
-        check_for_f16_tensor(ctx_eval);
-
-        if (!matches_filter(out_eval, op_names_filter)) {
-            ggml_free(ctx_eval);
-            ggml_free(ctx_ref);
-            return test_status_t::SKIPPED;
-        }
-
-        ggml_tensor * out_ref = build_reference_graph(ctx_ref);
-
-        bool supported = true;
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx_eval); t != NULL; t = ggml_get_next_tensor(ctx_eval, t)) {
-            if (!ggml_backend_supports_op(backend1, t)) {
-                supported = false;
-                break;
-            }
-        }
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx_ref); supported && t != NULL; t = ggml_get_next_tensor(ctx_ref, t)) {
-            if (!ggml_backend_supports_op(backend2, t)) {
-                supported = false;
-                break;
-            }
-        }
-
-        if (!supported) {
-            test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test",
-                             false, false, "not supported");
-            print_test_result_locked(output_printer, result);
-            ggml_free(ctx_eval);
-            ggml_free(ctx_ref);
-            return test_status_t::NOT_SUPPORTED;
-        }
-
-        ggml_backend_buffer_t buf_eval = ggml_backend_alloc_ctx_tensors(ctx_eval, backend1);
-        ggml_backend_buffer_t buf_ref  = ggml_backend_alloc_ctx_tensors(ctx_ref,  backend2);
-
-        if (buf_eval == NULL || buf_ref == NULL) {
-            printf("failed to allocate tensors [%s] ", ggml_backend_name(backend1));
-            if (buf_eval) {
-                ggml_backend_buffer_free(buf_eval);
-            }
-            if (buf_ref) {
-                ggml_backend_buffer_free(buf_ref);
-            }
-            ggml_free(ctx_eval);
-            ggml_free(ctx_ref);
-            return test_status_t::FAIL;
-        }
-
-        ggml_build_forward_expand(gf, out_eval);
-        ggml_build_forward_expand(gf_ref, out_ref);
-
-        initialize_tensors(ctx_eval);
-        initialize_tensors(ctx_ref);
-
-        bool ok = true;
-        ggml_status status = ggml_backend_graph_compute(backend1, gf);
-        if (status != GGML_STATUS_SUCCESS) {
-            fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
-            ok = false;
-        }
-        status = ggml_backend_graph_compute(backend2, gf_ref);
-        if (status != GGML_STATUS_SUCCESS) {
-            fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
-            ok = false;
-        }
-
-        if (ok) {
-            const char * bn1 = ggml_backend_name(backend1);
-            const char * bn2 = ggml_backend_name(backend2);
-            std::vector<float> f1 = tensor_to_float(out_eval);
-            std::vector<float> f2 = tensor_to_float(out_ref);
-
-            GGML_ASSERT(f1.size() == f2.size());
-            for (size_t i = 0; i < f1.size(); i++) {
-                if (std::isnan(f1[i]) || std::isnan(f2[i])) {
-                    printf("[%s] NaN at index %zu (%s=%f %s=%f) ", current_op_name.c_str(), i, bn1, f1[i], bn2, f2[i]);
-                    ok = false;
-                    break;
-                }
-                if (isinf_or_max(f1[i]) || isinf_or_max(f2[i])) {
-                    if (isinf_or_max(f1[i]) && isinf_or_max(f2[i])) {
-                        if (std::signbit(f1[i]) != std::signbit(f2[i])) {
-                            printf("[%s] inf sign mismatch: %s=%f %s=%f ", current_op_name.c_str(), bn1, f1[i], bn2, f2[i]);
-                            ok = false;
-                            break;
-                        }
-                    } else {
-                        printf("[%s] inf mismatch: %s=%f %s=%f ", current_op_name.c_str(), bn1, f1[i], bn2, f2[i]);
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-
-            if (ok) {
-                const double error = err(f1.data(), f2.data(), f1.size());
-                if (error > max_err(backend1)) {
-                    printf("[%s] ERR = %.9f > %.9f ", current_op_name.c_str(), error, max_err(backend1));
-                    ok = false;
-                }
-            }
-        }
-
-        ggml_backend_buffer_free(buf_eval);
-        ggml_backend_buffer_free(buf_ref);
-        ggml_free(ctx_eval);
-        ggml_free(ctx_ref);
-
-        test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test", supported, ok,
-                           ok ? "" : "test failed");
-        print_test_result_locked(output_printer, result);
-
-        return ok ? test_status_t::OK : test_status_t::FAIL;
-    }
-
     test_status_t eval(ggml_backend_t backend1,
                        ggml_backend_t backend2,
                        const char *   op_names_filter,
                        printer *      output_printer) {
-        if (compare_with_reference_graph()) {
-            return eval_reference_graph(backend1, backend2, op_names_filter, output_printer);
-        }
-
         mode = MODE_TEST;
 
         ggml_init_params params = {
@@ -3902,8 +3755,6 @@ struct test_dsv4_hc : public test_case {
 
     ggml_tensor * out = nullptr;
 
-    bool compare_with_reference_graph() override { return true; }
-
     double err(const float * a, const float * b, size_t n) override {
         double max_abs = 0.0;
         for (size_t i = 0; i < n; ++i) {
@@ -3921,51 +3772,6 @@ struct test_dsv4_hc : public test_case {
         return max_err();
     }
 
-    static ggml_tensor * view_1d(ggml_context * ctx, ggml_tensor * t, int64_t ne0, int64_t i0) {
-        return ggml_view_1d(ctx, t, ne0, i0*ggml_element_size(t));
-    }
-
-    static ggml_tensor * view_2d(ggml_context * ctx, ggml_tensor * t, int64_t ne0, int64_t ne1, int64_t i0) {
-        return ggml_view_2d(ctx, t, ne0, ne1, t->nb[1], i0*ggml_element_size(t));
-    }
-
-    static ggml_tensor * hc_affine(ggml_context * ctx, ggml_tensor * x, ggml_tensor * scale, ggml_tensor * base) {
-        x = ggml_mul(ctx, x, scale);
-        x = ggml_add(ctx, x, base);
-        return x;
-    }
-
-    static ggml_tensor * hc_sinkhorn_ref(ggml_context * ctx, ggml_tensor * comb, float eps, int32_t n_iter) {
-        comb = ggml_soft_max(ctx, comb);
-
-        ggml_tensor * eps_t = ::ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-        eps_t = ggml_fill(ctx, eps_t, eps);
-
-        comb = ggml_add(ctx, comb, eps_t);
-
-        auto norm_cols = [&]() {
-            ggml_tensor * comb_src_dst = ggml_cont(ctx, ggml_permute(ctx, comb, 1, 0, 2, 3));
-            ggml_tensor * col_sum = ggml_sum_rows(ctx, comb_src_dst);
-            col_sum = ggml_add(ctx, col_sum, eps_t);
-            col_sum = ggml_permute(ctx, col_sum, 1, 0, 2, 3);
-            comb = ggml_div(ctx, comb, col_sum);
-        };
-
-        auto norm_rows = [&]() {
-            ggml_tensor * row_sum = ggml_sum_rows(ctx, comb);
-            row_sum = ggml_add(ctx, row_sum, eps_t);
-            comb = ggml_div(ctx, comb, row_sum);
-        };
-
-        norm_cols();
-        for (int32_t i = 1; i < n_iter; ++i) {
-            norm_rows();
-            norm_cols();
-        }
-
-        return comb;
-    }
-
     static uint32_t tensor_seed(const ggml_tensor * t) {
         uint32_t seed = 2166136261u;
         for (const char * p = ggml_get_name(t); *p; ++p) {
@@ -3980,9 +3786,6 @@ struct test_dsv4_hc : public test_case {
     }
 
     static bool tensor_range(const std::string & name, float & lo, float & hi) {
-        if (name.rfind("sent_", 0) == 0) {
-            lo = -1.0f; hi = 1.0f; return true;
-        }
         if (name == "mixes") {
             lo = -2.0f; hi = 2.0f; return true;
         }
@@ -4056,32 +3859,11 @@ struct test_dsv4_hc_comb : public test_dsv4_hc {
         ggml_set_name(out, "out");
         return out;
     }
-
-    ggml_tensor * build_reference_graph(ggml_context * ctx) override {
-        ggml_tensor * mixes = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, (2 + hc)*hc, n_tokens);
-        ggml_set_name(mixes, "mixes");
-
-        ggml_tensor * scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3);
-        ggml_set_name(scale, "scale");
-
-        ggml_tensor * base = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (2 + hc)*hc);
-        ggml_set_name(base, "base");
-
-        ggml_tensor * scale_comb = view_1d(ctx, scale, 1, 2);
-        ggml_tensor * base_comb  = view_1d(ctx, base, hc*hc, 2*hc);
-        out = view_2d(ctx, mixes, hc*hc, n_tokens, 2*hc);
-        out = hc_affine(ctx, out, scale_comb, base_comb);
-        out = ggml_reshape_3d(ctx, out, hc, hc, n_tokens);
-        out = hc_sinkhorn_ref(ctx, out, eps, n_iter);
-        ggml_set_name(out, "out");
-        return out;
-    }
 };
 
 struct test_dsv4_hc_pre : public test_dsv4_hc {
     const int64_t n_embd;
     const int64_t n_tokens;
-    const bool model_graph;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -4089,90 +3871,22 @@ struct test_dsv4_hc_pre : public test_dsv4_hc {
     }
 
     std::string vars() override {
-        return VARS_TO_STR3(n_embd, n_tokens, model_graph);
+        return VARS_TO_STR2(n_embd, n_tokens);
     }
 
-    test_dsv4_hc_pre(int64_t n_embd = 31, int64_t n_tokens = 17, bool model_graph = false)
-        : n_embd(n_embd), n_tokens(n_tokens), model_graph(model_graph) {}
-
-    ggml_tensor * build_x(ggml_context * ctx) {
-        if (!model_graph) {
-            ggml_tensor * x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
-            ggml_set_name(x, "x");
-            return x;
-        }
-
-        ggml_tensor * sent = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
-        ggml_set_name(sent, "sent_x");
-
-        ggml_tensor * x = ggml_reshape_3d(ctx, sent, n_embd, 1, n_tokens);
-        x = ggml_repeat_4d(ctx, x, n_embd, hc, n_tokens, 1);
-        return x;
-    }
-
-    ggml_tensor * build_weights(ggml_context * ctx) {
-        if (!model_graph) {
-            ggml_tensor * weights = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hc, n_tokens);
-            ggml_set_name(weights, "weights");
-            return weights;
-        }
-
-        ggml_tensor * mixes = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, (2 + hc)*hc, n_tokens);
-        ggml_set_name(mixes, "mixes");
-
-        ggml_tensor * scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3);
-        ggml_set_name(scale, "scale");
-
-        ggml_tensor * base = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (2 + hc)*hc);
-        ggml_set_name(base, "base");
-
-        ggml_tensor * scale_pre = view_1d(ctx, scale, 1, 0);
-        ggml_tensor * base_pre  = view_1d(ctx, base, hc, 0);
-
-        ggml_tensor * weights = view_2d(ctx, mixes, hc, n_tokens, 0);
-        weights = hc_affine(ctx, weights, scale_pre, base_pre);
-        weights = ggml_sigmoid(ctx, weights);
-        weights = ggml_scale_bias(ctx, weights, 1.0f, 1e-6f);
-        return weights;
-    }
+    test_dsv4_hc_pre(int64_t n_embd = 31, int64_t n_tokens = 17)
+        : n_embd(n_embd), n_tokens(n_tokens) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * x = build_x(ctx);
-        ggml_tensor * weights = build_weights(ctx);
+        ggml_tensor * x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
+        ggml_set_name(x, "x");
+
+        ggml_tensor * weights = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hc, n_tokens);
+        ggml_set_name(weights, "weights");
 
         out = ggml_dsv4_hc_pre(ctx, x, weights);
         ggml_set_name(out, "out");
         return out;
-    }
-
-    ggml_tensor * build_reference_graph(ggml_context * ctx) override {
-        ggml_tensor * x = build_x(ctx);
-        ggml_tensor * weights = build_weights(ctx);
-
-        out = nullptr;
-        for (int64_t ih = 0; ih < hc; ++ih) {
-            ggml_tensor * xh = ggml_view_2d(ctx, x, n_embd, n_tokens, x->nb[2], ih*x->nb[1]);
-            ggml_tensor * wh = ggml_view_2d(ctx, weights, 1, n_tokens, weights->nb[1], ih*weights->nb[0]);
-            ggml_tensor * cur = ggml_mul(ctx, xh, wh);
-            out = out ? ggml_add(ctx, out, cur) : cur;
-        }
-
-        ggml_set_name(out, "out");
-        return out;
-    }
-};
-
-struct test_dsv4_hc_pre_ref : public test_dsv4_hc_pre {
-    test_dsv4_hc_pre_ref(int64_t n_embd = 31, int64_t n_tokens = 17, bool model_graph = false)
-        : test_dsv4_hc_pre(n_embd, n_tokens, model_graph) {}
-
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return "DSV4_HC_PRE_REF";
-    }
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        return build_reference_graph(ctx);
     }
 };
 
@@ -4206,39 +3920,6 @@ struct test_dsv4_hc_post : public test_dsv4_hc {
         ggml_set_name(comb, "comb");
 
         out = ggml_dsv4_hc_post(ctx, x, residual, post, comb);
-        ggml_set_name(out, "out");
-        return out;
-    }
-
-    ggml_tensor * build_reference_graph(ggml_context * ctx) override {
-        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
-        ggml_set_name(x, "x");
-
-        ggml_tensor * residual = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
-        ggml_set_name(residual, "residual");
-
-        ggml_tensor * post = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hc, n_tokens);
-        ggml_set_name(post, "post");
-
-        ggml_tensor * comb = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hc, hc, n_tokens);
-        ggml_set_name(comb, "comb");
-
-        out = nullptr;
-        for (int64_t dst = 0; dst < hc; ++dst) {
-            ggml_tensor * post_dst = ggml_view_2d(ctx, post, 1, n_tokens, post->nb[1], dst*post->nb[0]);
-            ggml_tensor * cur = ggml_mul(ctx, x, post_dst);
-
-            for (int64_t src = 0; src < hc; ++src) {
-                ggml_tensor * res_src = ggml_view_2d(ctx, residual, n_embd, n_tokens, residual->nb[2], src*residual->nb[1]);
-                ggml_tensor * comb_src_dst = ggml_view_2d(ctx, comb, 1, n_tokens, comb->nb[2],
-                        dst*comb->nb[0] + src*comb->nb[1]);
-                cur = ggml_add(ctx, cur, ggml_mul(ctx, res_src, comb_src_dst));
-            }
-
-            cur = ggml_reshape_3d(ctx, cur, n_embd, 1, n_tokens);
-            out = out ? ggml_concat(ctx, out, cur, 1) : cur;
-        }
-
         ggml_set_name(out, "out");
         return out;
     }
@@ -8369,8 +8050,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dsv4_hc_pre(1, 1));
     test_cases.emplace_back(new test_dsv4_hc_pre(31, 17));
     test_cases.emplace_back(new test_dsv4_hc_pre(128, 257));
-    test_cases.emplace_back(new test_dsv4_hc_pre(4096, 21, true));
-    test_cases.emplace_back(new test_dsv4_hc_pre_ref(4096, 21, true));
+    test_cases.emplace_back(new test_dsv4_hc_pre(4096, 21));
 
     test_cases.emplace_back(new test_dsv4_hc_post(1, 1));
     test_cases.emplace_back(new test_dsv4_hc_post(31, 17));
