@@ -5,7 +5,7 @@
 
 ---
 
-### Code and Commit Standards
+## Code and Commit Standards
 
 - Avoid emdash `—`, unicode arrow `→` or any unicode characters: `×`, `…` ; use ASCII equivalents instead: `-`, `->`, `x`, `...`
 - Keep code comments concise; avoid redundant or excessive inline commentary

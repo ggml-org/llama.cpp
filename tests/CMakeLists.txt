@@ -147,16 +147,18 @@ endif()
 # Linux-only: skip cleanly when any required tool is missing.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(P45A_DEPS bash jq timeout sha256sum ldd fuser git realpath stat)
-    set(P45A_FOUND TRUE)
     foreach (P45A_DEP ${P45A_DEPS})
         find_program(P45A_TEST_${P45A_DEP} NAMES ${P45A_DEP})
+    endforeach()
+    set(P45A_FOUND TRUE)
+    foreach (P45A_DEP ${P45A_DEPS})
         if (NOT P45A_TEST_${P45A_DEP})
             set(P45A_FOUND FALSE)
         endif()
     endforeach()
     if (P45A_FOUND)
         llama_test_cmd(
-            ${P45A_TEST_BASH}
+            ${P45A_TEST_bash}
             NAME test-validate-dense-turbo4-capacity
             WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
             ARGS ${CMAKE_CURRENT_SOURCE_DIR}/test-validate-dense-turbo4-capacity.sh
