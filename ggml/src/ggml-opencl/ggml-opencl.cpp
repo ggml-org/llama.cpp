@@ -7291,6 +7291,28 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                        op->src[0]->type == GGML_TYPE_Q4_K  ||
                        op->src[0]->type == GGML_TYPE_Q5_K  ||
                        op->src[0]->type == GGML_TYPE_Q6_K) {
+                // The Adreno A7X (E031.41) compiler miscompiles the flat K-quant GEMV
+                // (kernel_mul_mv_q*_K_f32_flat) so severely that a vocab-scale lm_head runs
+                // ~54x slower than on the A8X (390 vs 7 ms/token on gemma) and dominates
+                // decode. Declining it here makes llama BOTH place that weight in a CPU
+                // buffer at load time (weight_buft_supported consults supports_op) AND run
+                // the op on the CPU -- so there is no per-token weight copy, matching an
+                // explicit "-ot token_embd.weight=CPU". Do NOT also gate on src1->ne[1]==1:
+                // that made the placement probe (batch>1) pass while the decode op (batch==1)
+                // declined, stranding the weight on the GPU and copying it every token.
+                // Measured tg on the A7X: gemma-4-E2B 2.2->15.2 (+583%), gemma-4-E4B 1.5->9.4,
+                // Qwen3-4B 6.7->14.0 (+110%). The A8X runs the same kernel fine, so A7X-only.
+                // Gate on a vocab-scale weight so only the lm_head/embedding is affected.
+                // Override with GGML_OPENCL_A7X_LMHEAD_CPU=0.
+                static const char * a7x_lmhead_env = getenv("GGML_OPENCL_A7X_LMHEAD_CPU");
+                static const bool   a7x_lmhead_cpu = (a7x_lmhead_env == nullptr || a7x_lmhead_env[0] != '0');
+                if (a7x_lmhead_cpu &&
+                    backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X &&
+                    (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K ||
+                     op->src[0]->type == GGML_TYPE_Q6_K) &&
+                    op->src[0]->ne[1] >= 32768) {   // vocab-scale weight; no FFN/attn weight is this tall
+                    return false;
+                }
                 return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
             } else if (op->src[0]->type == GGML_TYPE_Q8_0) {
                 return op->src[1]->type == GGML_TYPE_F32;
