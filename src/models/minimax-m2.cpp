@@ -61,6 +61,7 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
 
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = inpL;
+
         ggml_tensor * inpSA = inpL;
 
         cur = inpL;
