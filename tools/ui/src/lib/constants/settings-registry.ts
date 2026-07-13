@@ -744,7 +744,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			{
 				key: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
 				label: 'Request timeout (seconds)',
-				help: 'Default timeout for individual MCP tool calls. Can be overridden per server.',
+				help: 'Timeout for individual MCP tool calls.',
 				defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.MCP,

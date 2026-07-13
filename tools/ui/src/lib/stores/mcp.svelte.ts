@@ -148,13 +148,20 @@ class MCPStore {
 				enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 				url,
 				name: (entry as { name?: string })?.name,
-				requestTimeoutSeconds:
-					(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
-					DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 				headers: headers || undefined,
 				useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 			} satisfies MCPServerSettingsEntry;
 		});
+	}
+
+	/**
+	 * Request timeout in milliseconds, read live from the global setting
+	 * so a change in Settings applies to every server immediately.
+	 */
+	#requestTimeoutMs(): number {
+		const seconds =
+			Number(config().mcpRequestTimeoutSeconds) || DEFAULT_MCP_CONFIG.requestTimeoutSeconds;
+		return Math.round(seconds * 1000);
 	}
 
 	/**
@@ -183,7 +190,7 @@ class MCPStore {
 			url: entry.url,
 			transport: detectMcpTransportFromUrl(entry.url),
 			handshakeTimeoutMs: connectionTimeoutMs,
-			requestTimeoutMs: Math.round(entry.requestTimeoutSeconds * 1000),
+			requestTimeoutMs: this.#requestTimeoutMs(),
 			headers,
 			useProxy: entry.useProxy
 		};
@@ -230,7 +237,7 @@ class MCPStore {
 			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
 			capabilities: DEFAULT_MCP_CONFIG.capabilities,
 			clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
-			requestTimeoutMs: Math.round(DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000),
+			requestTimeoutMs: this.#requestTimeoutMs(),
 			servers
 		};
 	}
@@ -500,7 +507,7 @@ class MCPStore {
 	}
 
 	addServer(
-		serverData: Omit<MCPServerSettingsEntry, 'id' | 'requestTimeoutSeconds'> & { id?: string }
+		serverData: Omit<MCPServerSettingsEntry, 'id'> & { id?: string }
 	): MCPServerSettingsEntry {
 		const servers = this.getServers();
 		const newServer: MCPServerSettingsEntry = {
@@ -509,8 +516,6 @@ class MCPStore {
 			url: serverData.url.trim(),
 			name: serverData.name,
 			headers: serverData.headers?.trim() || undefined,
-			requestTimeoutSeconds:
-				Number(config().mcpRequestTimeoutSeconds) || DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			useProxy: serverData.useProxy
 		};
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));
@@ -1218,7 +1223,6 @@ class MCPStore {
 			id: string;
 			enabled: boolean;
 			url: string;
-			requestTimeoutSeconds: number;
 			headers?: string;
 		}[],
 		skipIfChecked = true,
@@ -1309,7 +1313,7 @@ class MCPStore {
 			logs: []
 		});
 
-		const timeoutMs = Math.round(server.requestTimeoutSeconds * 1000);
+		const timeoutMs = this.#requestTimeoutMs();
 		const headers = this.parseHeaders(server.headers);
 
 		try {
