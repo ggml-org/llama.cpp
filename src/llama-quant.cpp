@@ -297,6 +297,13 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // This used to be a regex, but <regex> has an extreme cost to compile times.
     bool quantize = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
 
+    // never quantize integer tensors - they are lookup/routing tables
+    // (e.g. deepseek4 ffn_gate_tid2eid hash routing), not weights
+    quantize &= tensor->type != GGML_TYPE_I64 &&
+                tensor->type != GGML_TYPE_I32 &&
+                tensor->type != GGML_TYPE_I16 &&
+                tensor->type != GGML_TYPE_I8;
+
     // do not quantize norm tensors
     quantize &= name.find("_norm.weight") == std::string::npos;
 
