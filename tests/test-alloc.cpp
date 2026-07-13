@@ -1,8 +1,8 @@
-#include <ggml-alloc.h>
-#include <ggml-backend-impl.h>
-#include <ggml-cpp.h>
-#include <ggml-impl.h>
-#include <ggml.h>
+#include "ggml-alloc.h"
+#include "../ggml/src/ggml-backend-impl.h"
+#include "ggml-cpp.h"
+#include "../ggml/src/ggml-impl.h"
+#include "ggml.h"
 
 #include <algorithm>
 #include <exception>
