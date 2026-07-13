@@ -39,7 +39,7 @@ static server_http_res_ptr proxy_request(const server_http_req & req, std::strin
         throw std::runtime_error("unsupported URL scheme in target URL: " + parsed_url.scheme);
     }
 
-    SRV_INF("proxying %s request to %s://%s:%i%s\n", method.c_str(), parsed_url.scheme.c_str(), parsed_url.host.c_str(), parsed_url.port, parsed_url.path.c_str());
+    SRV_INF("proxying %s request to %s://%s:%i%s\n", method.c_str(), parsed_url.scheme.c_str(), common_http_format_host(parsed_url.host).c_str(), parsed_url.port, parsed_url.path.c_str());
 
     std::map<std::string, std::string> headers;
     const std::string proxy_header_prefix = "x-llama-server-proxy-header-";

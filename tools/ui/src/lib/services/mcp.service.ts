@@ -314,6 +314,30 @@ export class MCPService {
 					)
 				);
 
+				if (method === 'DELETE' && url.includes(CORS_PROXY_ENDPOINT)) {
+					const response = new Response(null, { status: 200, statusText: 'OK' });
+
+					logIfEnabled(
+						this.createLog(
+							MCPConnectionPhase.INITIALIZING,
+							`HTTP 200 ${method} ${url} (fake response)`,
+							MCPLogLevel.INFO,
+							{
+								response: {
+									url,
+									status: response.status,
+									statusText: response.statusText,
+									durationMs: 0,
+									isFake: true
+								}
+							}
+						)
+					);
+
+					// fake response, bypass real fetch()
+					return response;
+				}
+
 				try {
 					const response = await fetch(input, {
 						...baseInit,

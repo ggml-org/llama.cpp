@@ -31,6 +31,9 @@ import wget
 
 DEFAULT_HTTP_TIMEOUT = 60
 
+# per-request timeout, a hung server fails the test instead of stalling the CI for hours
+DEFAULT_REQUEST_TIMEOUT = 600
+
 
 class ServerResponse:
     headers: dict
@@ -110,6 +113,7 @@ class ServerProcess:
     ui_mcp_proxy: bool = False
     backend_sampling: bool = False
     gcp_compat: bool = False
+    server_tools: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -253,6 +257,8 @@ class ServerProcess:
             server_args.append("--no-cache-idle-slots")
         if self.ui_mcp_proxy:
             server_args.append("--ui-mcp-proxy")
+        if self.server_tools:
+            server_args.extend(["--tools", self.server_tools])
         if self.backend_sampling:
             server_args.append("--backend_sampling")
         if self.gcp_compat:
@@ -330,7 +336,7 @@ class ServerProcess:
         path: str,
         data: dict | Any | None = None,
         headers: dict | None = None,
-        timeout: float | None = None,
+        timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     ) -> ServerResponse:
         url = f"http://{self.server_host}:{self.server_port}{path}"
         parse_body = False
@@ -389,7 +395,7 @@ class ServerProcess:
         path: str,
         data: dict | None = None,
         headers: dict | None = None,
-        timeout: float | None = None,
+        timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     ) -> dict:
         stream = data.get('stream', False)
         if stream:

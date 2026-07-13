@@ -230,6 +230,12 @@ def print_ascii_timeline(op_name, dims, types, usec, cycles, events, evt_val=Non
             char = 'Q'
         elif norm_evt == 'A-PREP':
             char = 'A'
+        elif norm_evt == 'Q-PREP':
+            char = 'q'
+        elif norm_evt == 'K-PREP':
+            char = 'k'
+        elif norm_evt == 'V-PREP':
+            char = 'v'
         elif norm_evt == 'W-DEQUANT':
             char = 'D'
         elif norm_evt == 'O-PROC':

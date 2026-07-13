@@ -1,6 +1,9 @@
 #include "worker-pool.h"
+#include "hex-utils.h"
 
 #include <qurt.h>
+#include <qurt_hvx.h>
+
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -9,7 +12,6 @@
 
 #include "HAP_farf.h"
 
-#define WORKER_THREAD_STACK_SZ  (2 * 16384)
 #define LOWEST_USABLE_QURT_PRIO (254)
 
 struct worker_pool_s;
@@ -42,17 +44,27 @@ static void worker_pool_main(void * context) {
     FARF(HIGH, "worker-pool: thread %u started", me->id);
 
     unsigned int prev_seqn = 0;
+    unsigned int poll_cnt  = WORKER_POOL_POLL_COUNT;
     while (!atomic_load(&pool->killed)) {
         unsigned int seqn = atomic_load(&pool->seqn);
         if (seqn == prev_seqn) {
-            // Nothing to do
+            // drop HVX context while spinning
+            if (poll_cnt > 1 && poll_cnt == WORKER_POOL_POLL_COUNT) {
+                qurt_hvx_unlock();
+            }
+            if (--poll_cnt) {
+                hex_pause();
+                continue;
+            }
             qurt_futex_wait(&pool->seqn, prev_seqn);
+            poll_cnt = WORKER_POOL_POLL_COUNT;
             continue;
         }
 
-        // New job
         prev_seqn = seqn;
+        poll_cnt  = WORKER_POOL_POLL_COUNT;
 
+        // New job
         unsigned int n = atomic_load(&pool->n_jobs);
         unsigned int i = atomic_fetch_add(&pool->next_job, 1);
         if (i >= n) {

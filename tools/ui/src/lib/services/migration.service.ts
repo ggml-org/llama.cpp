@@ -20,6 +20,7 @@
 import Dexie from 'dexie';
 import {
 	STORAGE_APP_NAME,
+	STORAGE_APP_NAME_DEPRECATED,
 	DB_APP_NAME_DEPRECATED,
 	CONFIG_LOCALSTORAGE_KEY,
 	IDXDB_TABLES,
@@ -494,12 +495,183 @@ const customJsonKeyMigration: Migration = {
 	}
 };
 
+const MCP_DEFAULT_ENABLED_MIGRATION_ID = 'mcp-default-enabled-to-config-v1';
+
+const LEGACY_MCP_DEFAULT_ENABLED_KEY = `${STORAGE_APP_NAME}.mcpDefaultEnabled`;
+const DEPRECATED_LEGACY_MCP_DEFAULT_ENABLED_KEY = `${STORAGE_APP_NAME_DEPRECATED}.mcpDefaultEnabled`;
+
+const mcpDefaultEnabledMigration: Migration = {
+	id: MCP_DEFAULT_ENABLED_MIGRATION_ID,
+	description:
+		'Copy mcpDefaultEnabled localStorage key into settings config (preserves legacy keys)',
+
+	async run(): Promise<void> {
+		const raw =
+			localStorage.getItem(LEGACY_MCP_DEFAULT_ENABLED_KEY) ??
+			localStorage.getItem(DEPRECATED_LEGACY_MCP_DEFAULT_ENABLED_KEY);
+
+		// Legacy keys intentionally left in place so a downgrade keeps reading them.
+
+		if (raw === null) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] MCP default enabled: no legacy key found, skipping');
+			return;
+		}
+
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+		const config = configRaw ? JSON.parse(configRaw) : {};
+
+		// Don't overwrite an existing config entry — current data wins.
+		if (MCP_DEFAULT_OVERRIDES_LEGACY_KEY in config) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] MCP default enabled: config already has overrides, skipping');
+			return;
+		}
+
+		try {
+			const parsed = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return;
+			const valid = parsed.every(
+				(o) =>
+					typeof o === 'object' &&
+					o !== null &&
+					typeof (o as Record<string, unknown>).serverId === 'string' &&
+					typeof (o as Record<string, unknown>).enabled === 'boolean'
+			);
+			if (!valid) return;
+		} catch {
+			return;
+		}
+
+		config[MCP_DEFAULT_OVERRIDES_LEGACY_KEY] = raw;
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] MCP default enabled: moved legacy key into config');
+	}
+};
+
+const CONFIG_TYPES_MIGRATION_ID = 'config-type-normalization-v1';
+
+const configTypesMigration: Migration = {
+	id: CONFIG_TYPES_MIGRATION_ID,
+	description: 'Coerce legacy string-encoded booleans in persisted config to real booleans',
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+		let changed = false;
+
+		// Pre-schema configs persisted booleans as "true"/"false" strings; the strict server
+		// schema rejects them. No config string field holds exactly "true"/"false", so the
+		// match is unambiguous.
+		for (const key of Object.keys(config)) {
+			if (config[key] === 'true') {
+				config[key] = true;
+				changed = true;
+			} else if (config[key] === 'false') {
+				config[key] = false;
+				changed = true;
+			}
+		}
+
+		if (changed) {
+			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(`[Migration] Config types: coerced string booleans (changed=${changed})`);
+	}
+};
+
+const MCP_DEFAULT_OVERRIDES_LEGACY_KEY = `${STORAGE_APP_NAME}.mcpDefaultServerOverrides`;
+const MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID = 'mcp-default-overrides-merge-v1';
+
+/**
+ * Folds `mcpDefaultServerOverrides` (the legacy "default for new chats" list,
+ * JSON-encoded as `[{ serverId, enabled }, ...]`) into `mcpServers[i].enabled`.
+ * The legacy override key is intentionally left in the config so a downgrade
+ * keeps reading it. Runs after `mcpDefaultEnabledMigration` so any legacy
+ * standalone overrides are already inside the config.
+ */
+const mcpDefaultOverridesMergeMigration: Migration = {
+	id: MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID,
+	description:
+		'Merge mcpDefaultServerOverrides entries onto mcpServers[i].enabled (preserves legacy key)',
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+		const raw = config[MCP_DEFAULT_OVERRIDES_LEGACY_KEY];
+
+		if (typeof raw !== 'string' || raw.length === 0) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] MCP default overrides merge: nothing to merge');
+			return;
+		}
+
+		let overrides: { serverId: string; enabled: boolean }[];
+		try {
+			const parsed = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return;
+			overrides = parsed.filter(
+				(o) =>
+					typeof o === 'object' &&
+					o !== null &&
+					typeof (o as Record<string, unknown>).serverId === 'string' &&
+					typeof (o as Record<string, unknown>).enabled === 'boolean'
+			) as { serverId: string; enabled: boolean }[];
+		} catch {
+			return;
+		}
+
+		const serversRaw = config[SETTINGS_KEYS.MCP_SERVERS];
+		let servers: { id: string; enabled?: boolean }[];
+		try {
+			servers = typeof serversRaw === 'string' ? JSON.parse(serversRaw) : [];
+		} catch {
+			return;
+		}
+
+		if (!Array.isArray(servers)) servers = [];
+
+		let serversChanged = false;
+		const knownIds = new Set(servers.map((s) => s.id));
+		for (const override of overrides) {
+			if (!knownIds.has(override.serverId)) continue;
+			const index = servers.findIndex((s) => s.id === override.serverId);
+
+			if (index >= 0 && servers[index].enabled !== override.enabled) {
+				servers[index] = { ...servers[index], enabled: override.enabled };
+				serversChanged = true;
+			}
+		}
+
+		if (serversChanged) {
+			config[SETTINGS_KEYS.MCP_SERVERS] = JSON.stringify(servers);
+			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(
+				`[Migration] MCP default overrides merge: applied=${overrides.length} serversChanged=${serversChanged} (legacy key preserved)`
+			);
+	}
+};
+
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
 	legacyMessageMigration,
 	themeMigration,
-	customJsonKeyMigration
+	customJsonKeyMigration,
+	mcpDefaultEnabledMigration,
+	mcpDefaultOverridesMergeMigration,
+	configTypesMigration
 ];
 
 export const MigrationService = {
