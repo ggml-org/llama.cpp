@@ -877,6 +877,16 @@ static void ggml_backend_metal_clear_fa_vec_override(void) {
     ggml_metal_tuning::fa_vec_clear_override();
 }
 
+static int ggml_backend_metal_fa_vec_ne11_bucket(int64_t ne11) {
+    return ggml_metal_tuning::fa_vec_ne11_bucket(ne11);
+}
+static int ggml_backend_metal_fa_vec_ne01_bucket(int64_t ne01) {
+    return ggml_metal_tuning::fa_vec_ne01_bucket(ne01);
+}
+static int ggml_backend_metal_fa_vec_baseline_ne(int dk, int dv) {
+    return ggml_metal_tuning::fa_vec_baseline_ne(dk, dv);
+}
+
 static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_metal_get_features;
@@ -886,6 +896,15 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const 
     }
     if (strcmp(name, "ggml_backend_metal_clear_fa_vec_override") == 0) {
         return (void *)ggml_backend_metal_clear_fa_vec_override;
+    }
+    if (strcmp(name, "ggml_backend_metal_fa_vec_ne11_bucket") == 0) {
+        return (void *)ggml_backend_metal_fa_vec_ne11_bucket;
+    }
+    if (strcmp(name, "ggml_backend_metal_fa_vec_ne01_bucket") == 0) {
+        return (void *)ggml_backend_metal_fa_vec_ne01_bucket;
+    }
+    if (strcmp(name, "ggml_backend_metal_fa_vec_baseline_ne") == 0) {
+        return (void *)ggml_backend_metal_fa_vec_baseline_ne;
     }
 
     return NULL;
