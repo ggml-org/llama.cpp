@@ -170,6 +170,8 @@ enum htp_profiler_mode {
 
 enum htp_trace_event_id {
     HTP_TRACE_EVT_DMA                 = 0,
+    HTP_TRACE_EVT_L2FLUSH             = 1,
+    HTP_TRACE_EVT_INIT                = 2,
 
     HTP_TRACE_EVT_HVX_COMP            = 20,
     HTP_TRACE_EVT_HVX_A_QUANT         = 21,
@@ -184,7 +186,6 @@ enum htp_trace_event_id {
     HTP_TRACE_EVT_HVX_FA_V_PREP       = 30,
 
     HTP_TRACE_EVT_HMX_COMP            = 40,
-    HTP_TRACE_EVT_L2FLUSH             = 50,
 };
 
 struct htp_trace_desc {
