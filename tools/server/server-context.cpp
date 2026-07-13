@@ -4068,52 +4068,6 @@ void server_context::set_state_callback(server_state_callback_t callback) {
     });
 }
 
-// compute the number of tokens before the last user message in the prompt
-static int32_t prompt_get_n_before_user(
-        const json & message_spans,
-        const std::string & prompt,
-        const std::vector<raw_buffer> & files,
-        const llama_vocab * vocab,
-        mtmd_context * mctx) {
-    int32_t result = -1;
-    int32_t byte_pos = -1;
-
-    for (const auto & span : message_spans) {
-        const std::string role = json_value(span, "role", std::string());
-
-        if (role == "user") {
-            byte_pos = json_value(span, "pos", -1);
-        }
-    }
-
-    if (byte_pos >= 0) {
-        GGML_ASSERT((size_t) byte_pos <= prompt.size());
-
-        const std::string prefix = prompt.substr(0, (size_t) byte_pos);
-
-        const std::string marker = get_media_marker();
-        size_t n_prefix_media = 0;
-        for (size_t pos = 0; (pos = prefix.find(marker, pos)) != std::string::npos; pos += marker.size()) {
-            n_prefix_media++;
-        }
-
-        GGML_ASSERT(n_prefix_media <= files.size());
-
-        if (mctx != nullptr && n_prefix_media > 0) {
-            std::vector<raw_buffer> prefix_files(files.begin(), files.begin() + n_prefix_media);
-
-            result = (int32_t) process_mtmd_prompt(mctx, prefix, prefix_files).size();
-        } else {
-            result = (int32_t) tokenize_input_prompts(vocab, nullptr, prefix, true, true)[0].size();
-        }
-
-        SRV_TRC("message_spans: last user message: byte_pos=%d, media=%zu, n_before_user=%d\n",
-                byte_pos, n_prefix_media, result);
-    }
-
-    return result;
-}
-
 //
 // server_routes
 //
@@ -4183,17 +4137,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     data);
 
             task.params.message_spans = task.tokens.find_message_spans(delimiters);
-
-            const auto message_spans = json_value(data, "message_spans", json::array());
-            if (prompt.is_string() && message_spans.is_array()) {
-                task.params.n_before_user =
-                    prompt_get_n_before_user(
-                        message_spans,
-                        prompt.get<std::string>(),
-                        files,
-                        ctx_server.vocab,
-                        ctx_server.mctx);
-            }
 
             task.id_slot = json_value(data, "id_slot", -1);
             sse_ping_interval = task.params.sse_ping_interval;

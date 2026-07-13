@@ -7,10 +7,10 @@
 #include <stdexcept>
 #include <vector>
 
-static common_prompt_checkpoint make_checkpoint(int64_t n_tokens, size_t size = 1) {
+static common_prompt_checkpoint make_checkpoint(int64_t n_tokens) {
     common_prompt_checkpoint ckpt;
     ckpt.update_pos(n_tokens, (llama_pos) n_tokens, (llama_pos) n_tokens);
-    ckpt.data_tgt.resize(size);
+    ckpt.data_tgt.resize(1);
     return ckpt;
 }
 
@@ -85,25 +85,11 @@ static void test_redundant_pruning() {
     require_eq({52, 4148, 8244}, checkpoint_positions(checkpoints));
 }
 
-static void test_size_pruning_reuses_redundant_policy() {
-    std::list<common_prompt_checkpoint> checkpoints;
-    for (int64_t pos : {52, 2100, 4148, 6196, 8244}) {
-        checkpoints.push_back(make_checkpoint(pos, 10));
-    }
-
-    const auto pruned = server_checkpoint::prune_checkpoints_to_limit(checkpoints, 30);
-
-    require(pruned.n_pruned == 2, "size pruning must report pruned checkpoint count");
-    require(pruned.size_pruned == 20, "size pruning must report pruned checkpoint bytes");
-    require_eq({52, 4148, 8244}, checkpoint_positions(checkpoints));
-}
-
 int main() {
     try {
         test_ladder_min_step();
         test_mid_prompt_gate();
         test_redundant_pruning();
-        test_size_pruning_reuses_redundant_policy();
     } catch (const std::exception & e) {
         fprintf(stderr, "%s\n", e.what());
         return EXIT_FAILURE;

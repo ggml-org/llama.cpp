@@ -58,40 +58,4 @@ static inline std::list<common_prompt_checkpoint>::iterator find_redundant_check
     return best_it;
 }
 
-struct prune_result {
-    size_t n_pruned = 0;
-    size_t size_pruned = 0;
-};
-
-static inline size_t checkpoint_size(const std::list<common_prompt_checkpoint> & checkpoints) {
-    size_t res = 0;
-
-    for (const auto & ckpt : checkpoints) {
-        res += ckpt.size();
-    }
-
-    return res;
-}
-
-static inline prune_result prune_checkpoints_to_limit(
-        std::list<common_prompt_checkpoint> & checkpoints,
-        size_t max_size) {
-    prune_result res;
-
-    size_t cur_size = checkpoint_size(checkpoints);
-
-    while (!checkpoints.empty() && cur_size > max_size) {
-        auto it = find_redundant_checkpoint(checkpoints);
-        const size_t size_pruned = it->size();
-
-        checkpoints.erase(it);
-        cur_size -= size_pruned;
-
-        ++res.n_pruned;
-        res.size_pruned += size_pruned;
-    }
-
-    return res;
-}
-
 } // namespace server_checkpoint
