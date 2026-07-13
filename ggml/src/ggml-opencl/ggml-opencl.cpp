@@ -5897,6 +5897,19 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     // check for cl_khr_integer_dot_product
     // cl_qcom_dot_product8 uses signed * unsigned
     // while cl_khr_integer_dot_product uses signed * signed -- we stick with khr for now
+    //
+    // 4x8-packed integer dot product (dp4a), used by the int8 prefill GEMM kernels. Those
+    // kernels call dot_acc_sat_4x8packed_ss_int unconditionally, so on a device that does
+    // not declare it the program fails to build -- and since the build is fatal, the whole
+    // backend fails to initialize. Skip those programs there instead (see load_cl_kernels).
+    //
+    // Only the KHR name is accepted. Qualcomm exposes an equivalent-looking builtin under
+    // cl_qcom_dot_product8, but it is NOT a drop-in: forcing the kernels onto it on an
+    // Adreno X2-90 (which advertises both) fails test-backend-ops
+    // MUL_MAT(q8_0, m=2880, n=32, k=2880) with ERR 1.50 -- garbage, not precision -- while
+    // every nibble-quantized case still passes, which is what a difference in how the two
+    // sign-extend their operands would look like (q8_0 is the only path that feeds them
+    // the full signed int8 range). Do not map one onto the other without settling that.
     backend_ctx->has_integer_dot =
         strstr(ext_buffer, "cl_khr_integer_dot_product") != NULL;
 
