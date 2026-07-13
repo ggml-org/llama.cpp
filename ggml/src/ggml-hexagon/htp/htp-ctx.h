@@ -52,6 +52,9 @@ struct htp_ops_context {
         const struct htp_tensor * dsts[HTP_OP_MAX_OUTPUTS];
     };
 
+    dma_queue **    src_dma[HTP_OP_MAX_INPUTS];
+    dma_queue **    dst_dma[HTP_OP_MAX_OUTPUTS];
+
     // TODO convert these to an array
     struct htp_spad src0_spad;
     struct htp_spad src1_spad;
@@ -66,9 +69,13 @@ struct htp_ops_context {
 // Main context for htp DSP backend
 struct htp_context {
     dspqueue_t             queue;
-    dma_queue *            dma[HTP_MAX_NTHREADS];
+
     struct htp_mmap        mmap[HTP_MAX_MMAPS];
+    dma_queue *            dma[HTP_MAX_NTHREADS];
+    dma_queue *            dma_cached[HTP_MAX_NTHREADS];
     work_queue_t           work_queue;
+    struct hmx_queue *     hmx_queue;
+
     uint32_t               n_threads;
 
     int                    thread_id;
@@ -92,8 +99,6 @@ struct htp_context {
     size_t                 ddr_spad_size;
 
     struct htp_ops_context octx;
-
-    struct hmx_queue *     hmx_queue; // Async HMX queue for pipeline overlap
 };
 
 int op_matmul(struct htp_ops_context * octx);

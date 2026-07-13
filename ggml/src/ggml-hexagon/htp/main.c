@@ -425,9 +425,11 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
 
     ctx->n_threads = n_hvx;
     for (int i = 0; i < ctx->n_threads; i++) {
-        ctx->dma[i] = dma_queue_create(256); // queue depth
-        if (ctx->dma[i]) {
-            ctx->dma[i]->trace = &ctx->trace[i];
+        ctx->dma_cached[i] = dma_queue_create(256, (uintptr_t) ctx->vtcm_base, ctx->vtcm_size, &ctx->trace[i]); // queue depth
+        if (ctx->dma_cached[i]) {
+            ctx->dma[i] = dma_queue_create_alias(ctx->dma_cached[i], 1);
+        } else {
+            ctx->dma[i] = NULL;
         }
     }
 
@@ -476,6 +478,7 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
 
     for (int i = 0; i < ctx->n_threads; i++) {
         dma_queue_delete(ctx->dma[i]);
+        dma_queue_delete(ctx->dma_cached[i]);
     }
 
     if (ctx->hmx_queue) {
@@ -822,10 +825,16 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
 
     // Prep input tensors
     for (uint32_t i=0; i<HTP_OP_MAX_INPUTS; i++) {
-        struct htp_tensor *src = op->src[i] == 0xffff ? NULL : tens + op->src[i];
+        uint16_t src_idx = op->src[i];
+        if (src_idx == 0xffff) {
+            octx->src[i]     = NULL;
+            octx->src_dma[i] = NULL;
+            continue;
+        }
 
-        octx->src[i] = src;
-        if (!src) continue;
+        struct htp_tensor *src = tens + src_idx;
+        octx->src[i]     = src;
+        octx->src_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
         if (!(src->flags & HTP_TENSOR_FLUSHED) && (src->flags & HTP_TENSOR_COMPUTE)) {
             src->flags |= HTP_TENSOR_FLUSHED;
@@ -842,11 +851,13 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
     for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
         uint16_t dst_idx = op->dst[i];
         if (dst_idx == 0xffff) {
-            octx->dsts[i] = NULL;
+            octx->dsts[i]    = NULL;
+            octx->dst_dma[i] = NULL;
             continue;
         }
         struct htp_tensor *dst = tens + dst_idx;
-        octx->dsts[i] = dst;
+        octx->dsts[i]    = dst;
+        octx->dst_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
         FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);

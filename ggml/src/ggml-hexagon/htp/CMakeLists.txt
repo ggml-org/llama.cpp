@@ -18,7 +18,7 @@ add_library(${HTP_LIB} SHARED
     main.c
     htp_iface_skel.c
     work-queue.c
-    hex-dma.c
+    dma-queue.c
     hmx-queue.c
     gated-delta-net-ops.c
     binary-ops.c
