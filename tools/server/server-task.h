@@ -600,6 +600,12 @@ struct server_prompt {
 
     std::list<common_prompt_checkpoint> checkpoints;
 
+    // drops tokens and checkpoint to avoid buffers leaking once the underlying KV-cache rows are removed
+    void clear() {
+        tokens.clear();
+        checkpoints.clear();
+    }
+
     size_t size() const {
         size_t res = 0;
 

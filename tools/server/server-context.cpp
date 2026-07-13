@@ -264,7 +264,7 @@ struct server_slot {
             common_context_seq_rm(ctx_dft, id, -1, -1);
         }
 
-        prompt.tokens.clear();
+        prompt.clear();
     }
 
     std::vector<common_adapter_lora_info> lora;
