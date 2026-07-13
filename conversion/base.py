@@ -246,7 +246,7 @@ class ModelBase:
             if is_safetensors:
                 ctx = cast(ContextManager[Any], gguf.utility.SafetensorsLocal(self.dir_model / part_name))
             else:
-                ctx = contextlib.nullcontext(torch.load(str(self.dir_model / part_name), map_location="cpu", mmap=True, weights_only=True))
+                ctx = contextlib.nullcontext(torch.load(str(self.dir_model / part_name), map_location="cpu", mmap=True, weights_only=True))  # nosemgrep: trailofbits.python.pickles-in-pytorch.pickles-in-pytorch
 
             with ctx as model_part:
                 assert model_part is not None
