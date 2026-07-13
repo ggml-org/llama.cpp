@@ -24,7 +24,6 @@ import type {
 	SettingsSection
 } from '$lib/types';
 import { CLI_FLAGS, DEFAULT_MCP_CONFIG } from '$lib/constants';
-import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
 import { TITLE_GENERATION } from './title-generation';
@@ -36,7 +35,6 @@ export const SETTINGS_SECTION_TITLES = {
 	PENALTIES: 'Penalties',
 	AGENTIC: 'Agentic',
 	TOOLS: 'Tools',
-	MCP: 'MCP',
 	IMPORT_EXPORT: 'Import/Export',
 	DEVELOPER: 'Developer'
 } as const;
@@ -646,6 +644,19 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 					serverKey: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
 					paramType: SyncableParameterType.NUMBER
 				}
+			},
+			{
+				key: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
+				label: 'MCP request timeout (seconds)',
+				help: 'Timeout for individual MCP tool calls.',
+				defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
+				type: SettingsFieldType.INPUT,
+				section: SETTINGS_SECTION_SLUGS.AGENTIC,
+				isPositiveInteger: true,
+				sync: {
+					serverKey: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
+					paramType: SyncableParameterType.NUMBER
+				}
 			}
 		]
 	},
@@ -732,26 +743,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				sync: {
 					serverKey: SETTINGS_KEYS.CUSTOM_CSS,
 					paramType: SyncableParameterType.STRING
-				}
-			}
-		]
-	},
-	[SETTINGS_SECTION_SLUGS.MCP]: {
-		title: SETTINGS_SECTION_TITLES.MCP,
-		slug: SETTINGS_SECTION_SLUGS.MCP,
-		icon: McpLogo,
-		settings: [
-			{
-				key: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
-				label: 'Request timeout (seconds)',
-				help: 'Timeout for individual MCP tool calls.',
-				defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
-				type: SettingsFieldType.INPUT,
-				section: SETTINGS_SECTION_SLUGS.MCP,
-				isPositiveInteger: true,
-				sync: {
-					serverKey: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
-					paramType: SyncableParameterType.NUMBER
 				}
 			}
 		]
