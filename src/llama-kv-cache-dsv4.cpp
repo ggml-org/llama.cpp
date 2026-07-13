@@ -720,7 +720,7 @@ llama_dsv4_comp_state::llama_dsv4_comp_state(
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
-                /*.mem_size   =*/ size_t(2u*hparams.n_layer()*ggml_tensor_overhead()),
+                /*.mem_size   =*/ size_t(2u*(1 + n_stream)*hparams.n_layer()*ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -767,9 +767,17 @@ llama_dsv4_comp_state::llama_dsv4_comp_state(
         ggml_format_name(kv,    "dsv4_%s_state_kv_l%d",    name, il);
         ggml_format_name(score, "dsv4_%s_state_score_l%d", name, il);
 
+        std::vector<ggml_tensor *> kv_stream;
+        std::vector<ggml_tensor *> score_stream;
+
+        for (uint32_t s = 0; s < n_stream; ++s) {
+            kv_stream.push_back(ggml_view_2d(ctx, kv, n_embd_state, state_size, kv->nb[1], s*kv->nb[2]));
+            score_stream.push_back(ggml_view_2d(ctx, score, n_embd_state, state_size, score->nb[1], s*score->nb[2]));
+        }
+
         map_layer_ids[il] = layers.size();
 
-        layers.push_back({ il, kv, score });
+        layers.push_back({ il, kv, score, std::move(kv_stream), std::move(score_stream) });
     }
 
     for (auto & [buft, ctx] : ctx_map) {
@@ -807,6 +815,33 @@ void llama_dsv4_comp_state::clear(llama_seq_id seq_id, bool data) {
     for (auto & [_, buf] : ctxs_bufs) {
         ggml_backend_buffer_clear(buf.get(), 0);
     }
+}
+
+void llama_dsv4_comp_state::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst) {
+    GGML_ASSERT(seq_id_src >= 0 && (uint32_t) seq_id_src < n_stream);
+    GGML_ASSERT(seq_id_dst >= 0 && (uint32_t) seq_id_dst < n_stream);
+
+    if (seq_id_src == seq_id_dst) {
+        return;
+    }
+
+    sc_info.ssrc.push_back((uint32_t) seq_id_src);
+    sc_info.sdst.push_back((uint32_t) seq_id_dst);
+}
+
+void llama_dsv4_comp_state::apply_copies() {
+    for (size_t i = 0; i < sc_info.ssrc.size(); ++i) {
+        const uint32_t ssrc = sc_info.ssrc[i];
+        const uint32_t sdst = sc_info.sdst[i];
+
+        for (const auto & layer : layers) {
+            ggml_backend_tensor_copy(layer.kv_stream[ssrc], layer.kv_stream[sdst]);
+            ggml_backend_tensor_copy(layer.score_stream[ssrc], layer.score_stream[sdst]);
+        }
+    }
+
+    sc_info.ssrc.clear();
+    sc_info.sdst.clear();
 }
 
 uint32_t llama_dsv4_comp_state::get_ratio() const {
@@ -1199,7 +1234,16 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
 }
 
 void llama_kv_cache_dsv4::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    GGML_ASSERT(p0 <= 0 && p1 < 0 && "DSV4 only supports full sequence copies");
+
     kv_raw->seq_cp(seq_id_src, seq_id_dst, p0, p1);
+    kv_csa->seq_cp(seq_id_src, seq_id_dst, -1, -1);
+    kv_hca->seq_cp(seq_id_src, seq_id_dst, -1, -1);
+    kv_lid->seq_cp(seq_id_src, seq_id_dst, -1, -1);
+
+    csa_state->seq_cp(seq_id_src, seq_id_dst);
+    hca_state->seq_cp(seq_id_src, seq_id_dst);
+    lid_state->seq_cp(seq_id_src, seq_id_dst);
 }
 
 void llama_kv_cache_dsv4::seq_keep(llama_seq_id seq_id) {
@@ -1724,6 +1768,16 @@ bool llama_kv_cache_dsv4_context::apply() {
     bool res = true;
 
     res = res & ctx_raw->apply();
+
+    if (ctx_csa_mem) {
+        res = res & ctx_csa_mem->apply();
+        res = res & ctx_hca_mem->apply();
+        res = res & ctx_lid_mem->apply();
+
+        csa_state->apply_copies();
+        hca_state->apply_copies();
+        lid_state->apply_copies();
+    }
 
     return res;
 }

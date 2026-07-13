@@ -22,6 +22,8 @@ public:
         const llama_memory_i::layer_filter_cb & filter);
 
     void clear(llama_seq_id seq_id, bool data);
+    void seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst);
+    void apply_copies();
 
     uint32_t get_ratio()    const;
     uint32_t get_state_size() const;
@@ -44,6 +46,9 @@ private:
 
         ggml_tensor * kv;
         ggml_tensor * score;
+
+        std::vector<ggml_tensor *> kv_stream;
+        std::vector<ggml_tensor *> score_stream;
     };
 
     const uint32_t ratio;
@@ -56,6 +61,8 @@ private:
     std::vector<layer> layers;
 
     std::unordered_map<int32_t, int32_t> map_layer_ids;
+
+    llama_kv_cache::stream_copy_info sc_info;
 
     size_t total_size() const;
 };
@@ -351,9 +358,9 @@ private:
     const std::unique_ptr<llama_kv_cache_dsv4_comp_context> ctx_hca;
     const std::unique_ptr<llama_kv_cache_dsv4_comp_context> ctx_lid;
 
-    const llama_dsv4_comp_state * csa_state = nullptr;
-    const llama_dsv4_comp_state * hca_state = nullptr;
-    const llama_dsv4_comp_state * lid_state = nullptr;
+    llama_dsv4_comp_state * csa_state = nullptr;
+    llama_dsv4_comp_state * hca_state = nullptr;
+    llama_dsv4_comp_state * lid_state = nullptr;
 
     bool reserve_plans = false;
     mutable comp_plan reserve_plan_csa;
