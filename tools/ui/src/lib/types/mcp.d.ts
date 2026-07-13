@@ -226,15 +226,6 @@ export type MCPServerSettingsEntry = MCPServerDisplayInfo & {
 	useProxy?: boolean;
 };
 
-/**
- * Pre-defined recommended MCP server shown to the user in onboarding/picker UIs.
- */
-export interface RecommendedMCPServer extends MCPServerDisplayInfo {
-	description: string;
-	enabled: boolean;
-	requestTimeoutSeconds: number;
-}
-
 export interface MCPHostManagerConfig {
 	servers: MCPClientConfig['servers'];
 	clientInfo?: Implementation;

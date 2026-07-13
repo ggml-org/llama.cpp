@@ -258,12 +258,6 @@ export const GLOB_PATTERNS: string[] = [
 	'**/*.{js,css,html,ico,svg,png,webp,woff,woff2,json,webmanifest}'
 ];
 
-// loading.html is the model loading page served by llama-server itself.
-// The SvelteKit PWA manifest transform strips the html extension from every
-// precache entry to match clean URLs, but loading.html is a plain static asset
-// with no clean URL, so static servers answer 404 and the SW install fails.
-export const GLOB_IGNORES: string[] = ['**/loading.html'];
-
 export const SW_CONFIG = {
 	CHECK_INTERVAL_MS: 60000,
 	UPDATE_FETCH_OPTIONS: {
@@ -317,7 +311,6 @@ export const SVELTEKIT_PWA_OPTIONS: SvelteKitPWAOptions = {
 		// Uses '**/' because SvelteKit outputs files under _app/immutable/
 		// subdirectories.
 		globPatterns: GLOB_PATTERNS,
-		globIgnores: GLOB_IGNORES,
 		maximumFileSizeToCacheInBytes: CACHE_SETTINGS.MAX_FILE_SIZE_BYTES,
 
 		// Prevent @vite-pwa/sveltekit from auto-adding a NavigationRoute by

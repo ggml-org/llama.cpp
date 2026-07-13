@@ -667,7 +667,7 @@ static int execute_op(struct htp_ops_context * octx) {
             return op_gated_delta_net(octx);
 
         case HTP_OP_TRI:
-            return op_tri(octx);
+            return op_unary(octx);
 
         case HTP_OP_INVALID:
             break;

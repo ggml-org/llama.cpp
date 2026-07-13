@@ -705,7 +705,8 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & promp
     std::vector<server_tokens> inputs;
     // multimodal
     mtmd_input_text inp_txt = {
-        prompt.c_str(),
+        prompt.data(),
+        prompt.size(),
         /* add_special */   true,
         /* parse_special */ true,
     };
@@ -1116,7 +1117,8 @@ json oaicompat_chat_params_parse(
 
     // Reasoning budget: pass parameters through to sampling layer
     {
-        int reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        int reasoning_budget = json_value(body, "reasoning_budget_tokens",
+                               json_value(body, "thinking_budget_tokens", -1));
         if (reasoning_budget == -1) {
             reasoning_budget = opt.reasoning_budget;
         }
@@ -1125,7 +1127,7 @@ json oaicompat_chat_params_parse(
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
             llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
-            llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+            llama_params["reasoning_budget_message"] = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
     }

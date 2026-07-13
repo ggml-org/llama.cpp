@@ -4493,7 +4493,14 @@ static bool ggml_backend_cuda_get_available_uma_memory(long * available_memory_k
 static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
     ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaMemGetInfo(free, total));
+    cudaError_t err = cudaMemGetInfo(free, total);
+    if (err != cudaSuccess) {
+        (void)cudaGetLastError();
+        GGML_LOG_WARN("%s: cudaMemGetInfo failed (%s), returning 0/0\n", __func__, cudaGetErrorString(err));
+        *free = 0;
+        *total = 0;
+        return;
+    }
 
 // ref: https://github.com/ggml-org/llama.cpp/pull/17368
 #if defined(__linux__)
