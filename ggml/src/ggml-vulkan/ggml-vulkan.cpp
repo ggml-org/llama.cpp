@@ -8777,17 +8777,12 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         if (k < 2048) {
             return false;
         }
-        // On UMA, MMVQ's quantization overhead outweighs bandwidth savings
-        // because CPU and GPU share the same memory pool.
-        if (device->uma) {
-            return false;
-        }
 
         switch (src0_type) {
         case GGML_TYPE_Q8_0:
             return device->architecture == vk_device_architecture::AMD_GCN;
         default:
-            return true;
+            return !device->uma;
         }
     case VK_VENDOR_ID_INTEL:
         if (device->architecture == vk_device_architecture::INTEL_XE2) {
