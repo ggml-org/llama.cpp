@@ -99,6 +99,10 @@ struct htp_context {
     size_t                 ddr_spad_size;
 
     struct htp_ops_context octx;
+
+    qurt_thread_t          main_thread;
+    void *                 main_stack;
+    atomic_bool            killed;
 };
 
 int op_matmul(struct htp_ops_context * octx);
