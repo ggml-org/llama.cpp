@@ -758,14 +758,6 @@ const func_builtins & value_string_t::get_builtins() const {
             const jinja::string & fmt = val_input->as_string();
             const bool fmt_is_input = fmt.all_parts_are_input();
 
-            std::vector<value> pos_args;
-            const auto & all_args = args.get_args();
-            for (size_t i = 1; i < all_args.size(); ++i) {
-                if (!is_val<value_kwarg>(all_args[i])) {
-                    pos_args.push_back(all_args[i]);
-                }
-            }
-
             const std::string str = fmt.str();
             jinja::string result;
             std::string literal;
@@ -776,43 +768,18 @@ const func_builtins & value_string_t::get_builtins() const {
                 }
             };
 
-            size_t auto_idx = 0;
+            size_t arg_idx = 1; // positional args follow the format string
             for (size_t i = 0; i < str.size(); ++i) {
-                const char c = str[i];
-                if (c == '{' && i + 1 < str.size() && str[i + 1] == '{') {
-                    literal += '{';
-                    ++i;
+                if (str[i] != '{') {
+                    literal += str[i];
                     continue;
                 }
-                if (c == '}' && i + 1 < str.size() && str[i + 1] == '}') {
-                    literal += '}';
-                    ++i;
-                    continue;
-                }
-                if (c == '}') {
-                    throw raised_exception("single '}' encountered in format string");
-                }
-                if (c != '{') {
-                    literal += c;
-                    continue;
-                }
-                const size_t end = str.find('}', i + 1);
-                if (end == std::string::npos) {
-                    throw raised_exception("single '{' encountered in format string");
-                }
-                const std::string field = str.substr(i + 1, end - i - 1);
-                i = end;
-                if (!field.empty()) {
-                    // Hy3 template only uses simple '{}' placeholders; indexed,
-                    // named, conversion and format-spec fields are unsupported.
+                if (i + 1 >= str.size() || str[i + 1] != '}') {
                     throw not_implemented_exception("format() only supports simple '{}' placeholders");
                 }
-                if (auto_idx >= pos_args.size()) {
-                    throw raised_exception("format() replacement index " + std::to_string(auto_idx) + " out of range");
-                }
-                value arg = pos_args[auto_idx++];
+                ++i;
                 flush_literal();
-                const jinja::string arg_str = arg->as_string();
+                const jinja::string arg_str = args.get_pos(arg_idx++)->as_string();
                 result.parts.insert(result.parts.end(), arg_str.parts.begin(), arg_str.parts.end());
             }
             flush_literal();
