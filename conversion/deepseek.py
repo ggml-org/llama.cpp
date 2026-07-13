@@ -475,10 +475,8 @@ class DeepseekV32Model(DeepseekV2Model):
 @ModelBase.register("DeepseekV4ForCausalLM")
 class DeepseekV4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK4
-    _skipped_mtp_tensors = 0
 
     def __init__(self, *args, **kwargs):
-        type(self)._skipped_mtp_tensors = 0
         super().__init__(*args, **kwargs)
 
         with open(self.dir_model / "config.json", "r", encoding="utf-8") as f:
@@ -489,28 +487,36 @@ class DeepseekV4Model(TextModel):
         self.block_count = self.hparams["num_hidden_layers"]
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
+        # NextN/MTP blocks are stored under mtp.{i}.* and are structurally full V4
+        # layers (attention + MoE + hc) plus a few glue tensors. Rekey them to
+        # layers.{n_layer + i}.* so the standard DSV4 machinery (FP8 scale pairing,
+        # dtype collection, expert merging, MXFP4 repack) applies unchanged.
+        self._n_nextn = int(self.hparams.get("num_nextn_predict_layers", 0) or 0)
+        if self._n_nextn:
+            n_kept = 0
+            for name in list(self.model_tensors.keys()):
+                m = re.match(r"mtp\.(\d+)\.(.*)", name)
+                if m is not None:
+                    new_key = f"layers.{self.block_count + int(m.group(1))}.{m.group(2)}"
+                    self.model_tensors[new_key] = self.model_tensors.pop(name)
+                    n_kept += 1
+            if n_kept:
+                logger.info("Keeping %d DeepSeek-V4 MTP tensor(s) as NextN layer(s) %d..%d",
+                            n_kept, self.block_count, self.block_count + self._n_nextn - 1)
+        # e_proj/h_proj pairs awaiting concat into nextn.eh_proj, keyed by layer id
+        self._mtp_proj: dict[int, dict[str, Tensor]] = {}
+
         self._dsv4_fp8_dequantized: set[str] = set()
         self._dsv4_bf16_tensors: set[str] = set()
         self._dsv4_f32_tensors: set[str] = set()
         self._dsv4_mxfp4_generated = False
         self._collect_source_dtypes()
 
-        if type(self)._skipped_mtp_tensors:
-            logger.info("Skipping %d DeepSeek-V4 MTP tensor(s) for conversion v0", type(self)._skipped_mtp_tensors)
-
         # add a default chat template; if the model has a built-in template, it will be overridden later
         template_path = Path(__file__).parent.parent / "models" / "templates" / "deepseek-ai-DeepSeek-V4.jinja"
         if template_path.is_file():
             with open(template_path, "r", encoding="utf-8") as f:
                 self.gguf_writer.add_chat_template(f.read())
-
-    @classmethod
-    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, _ = item
-        if name.startswith("mtp."):
-            cls._skipped_mtp_tensors += 1
-            return None
-        return super().filter_tensors(item)
 
     @staticmethod
     def _float8_dtypes() -> tuple[torch.dtype, ...]:
@@ -670,7 +676,8 @@ class DeepseekV4Model(TextModel):
             return ()
 
         consumed: list[str] = self._write_hash_routing_tensors()
-        for bid in range(self.block_count):
+        # includes the NextN/MTP layer(s) at bid >= block_count, which carry their own experts
+        for bid in range(self.block_count + self._n_nextn):
             consumed.extend(self._write_mxfp4_expert_tensor(bid, "w1", gguf.MODEL_TENSOR.FFN_GATE_EXP))
             consumed.extend(self._write_mxfp4_expert_tensor(bid, "w2", gguf.MODEL_TENSOR.FFN_DOWN_EXP))
             consumed.extend(self._write_mxfp4_expert_tensor(bid, "w3", gguf.MODEL_TENSOR.FFN_UP_EXP))
@@ -737,6 +744,14 @@ class DeepseekV4Model(TextModel):
             "ffn.shared_experts.w1.weight": (gguf.MODEL_TENSOR.FFN_GATE_SHEXP, ".weight"),
             "ffn.shared_experts.w2.weight": (gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, ".weight"),
             "ffn.shared_experts.w3.weight": (gguf.MODEL_TENSOR.FFN_UP_SHEXP, ".weight"),
+            # NextN/MTP glue tensors — only present on the MTP layer(s) (bid >= n_layer);
+            # e_proj/h_proj are handled separately in modify_tensors (concat -> eh_proj).
+            "enorm.weight": (gguf.MODEL_TENSOR.NEXTN_ENORM, ".weight"),
+            "hnorm.weight": (gguf.MODEL_TENSOR.NEXTN_HNORM, ".weight"),
+            "norm.weight": (gguf.MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM, ".weight"),
+            "hc_head_fn": (gguf.MODEL_TENSOR.NEXTN_HC_HEAD_FN, ".weight"),
+            "hc_head_base": (gguf.MODEL_TENSOR.NEXTN_HC_HEAD_BASE, ".weight"),
+            "hc_head_scale": (gguf.MODEL_TENSOR.NEXTN_HC_HEAD_SCALE, ".weight"),
         }
 
         tensor_name = match.group(2)
@@ -751,6 +766,21 @@ class DeepseekV4Model(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if re.match(r"layers\.\d+\.ffn\.experts\.\d+\.w[123]\.(weight|scale)$", name):
             return []
+
+        # NextN/MTP e_proj + h_proj: the reference computes e_proj(e) + h_proj(x),
+        # which equals eh_proj(concat[e; x]) with W_eh = [W_e | W_h]. Stash the pair
+        # and emit a single nextn.eh_proj tensor matching the established GGUF shape
+        # {2*n_embd, n_embd} used by other MTP-capable archs.
+        m = re.match(r"layers\.(\d+)\.(e_proj|h_proj)\.weight$", name)
+        if m is not None:
+            proj_bid = int(m.group(1))
+            parts = self._mtp_proj.setdefault(proj_bid, {})
+            parts[m.group(2)] = data_torch
+            if len(parts) < 2:
+                return []
+            eh = torch.cat((parts["e_proj"], parts["h_proj"]), dim=1)  # [n_embd, 2*n_embd]
+            del self._mtp_proj[proj_bid]
+            return [(self._format_dsv4_tensor_name(gguf.MODEL_TENSOR.NEXTN_EH_PROJ, proj_bid, ".weight"), eh)]
 
         tensor_key, suffix = self._map_dsv4_tensor_name(name, bid)
         if tensor_key == gguf.MODEL_TENSOR.FFN_GATE_TID2EID:
