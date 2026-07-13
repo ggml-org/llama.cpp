@@ -192,9 +192,10 @@ struct tool_format_analysis {
 };
 
 struct tool_function_analysis {
-    std::string name_prefix;  // e.g., "<function=", "\"name\": \"", "functions."
-    std::string name_suffix;  // e.g., ">", "\"", ":0"
-    std::string close;        // e.g., "</function>", "" (for tag-based)
+    std::string name_prefix;     // e.g., "<function=", "\"name\": \"", "functions."
+    std::string name_suffix;     // e.g., ">", "\"", ":0"
+    std::string args_separator;  // e.g., "<tool_sep>" (marker between function name and arguments)
+    std::string close;           // e.g., "</function>", "" (for tag-based)
 };
 
 struct tool_arguments_analysis {

@@ -262,6 +262,10 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, 
     bool              matched_atomic = false;
     common_peg_parser func_parser    = p.eps();
 
+    if (!function.args_separator.empty()) {
+        open = open + p.space() + p.literal(function.args_separator);
+    }
+
     if (!function.name_suffix.empty()) {
         func_parser    = open + call_id_section + p.space() + args;
         matched_atomic = true;
