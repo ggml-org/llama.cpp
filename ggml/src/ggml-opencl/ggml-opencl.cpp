@@ -6924,7 +6924,14 @@ inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, c
 }
 
 inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-    GGML_UNUSED(backend_ctx);
+    // The Adreno MoE weight layout is built by the *_trans4_ns, which alias a private
+    // ushort8 through a uchar*. Certain compilers for A7x (E031.41) miscompiles this,
+    // causing the weights to become garbage. So, we exclude A7x from using Adreno MoE kernels.
+    // The quants that have a general mul_mat_id kernel fallback to the general version; the
+    // rest fallback to CPU.
+    if (backend_ctx && backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X) {
+        return false;
+    }
     int ne01 = tensor->ne[1];
     return (((strstr(tensor->name, "ffn") != NULL) && (strstr(tensor->name, "exps") != NULL)) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 32 == 0);
 }
