@@ -274,8 +274,11 @@ kernel void kernel_gemm_moe_mxfp4_f32_ns(
         shared_b[b_local_offset.y] = bx8_f16.hi;
 
         // Dequantization
-        reg_a.lo = mxfp4_to_fp16_packed8(as_ushort2(mxfp4x16.lo)) * s;
-        reg_a.hi = mxfp4_to_fp16_packed8(as_ushort2(mxfp4x16.hi)) * s;
+        // Cast the e8m0 scale to half: a bare half8 * float is a vector-by-higher-rank-scalar
+        // multiply, which the art.api37 (E17) shader compiler rejects. OpenCL converts the
+        // scalar to the vector element type anyway, so this is identical on every device.
+        reg_a.lo = mxfp4_to_fp16_packed8(as_ushort2(mxfp4x16.lo)) * (half)s;
+        reg_a.hi = mxfp4_to_fp16_packed8(as_ushort2(mxfp4x16.hi)) * (half)s;
 
         sub_group_barrier(CLK_LOCAL_MEM_FENCE);
 
@@ -304,8 +307,11 @@ kernel void kernel_gemm_moe_mxfp4_f32_ns(
         shared_b[b_local_offset.y] = bx8_f16.hi;
 
         // Dequantization
-        reg_a.lo = mxfp4_to_fp16_packed8(as_ushort2(mxfp4x16.lo)) * s;
-        reg_a.hi = mxfp4_to_fp16_packed8(as_ushort2(mxfp4x16.hi)) * s;
+        // Cast the e8m0 scale to half: a bare half8 * float is a vector-by-higher-rank-scalar
+        // multiply, which the art.api37 (E17) shader compiler rejects. OpenCL converts the
+        // scalar to the vector element type anyway, so this is identical on every device.
+        reg_a.lo = mxfp4_to_fp16_packed8(as_ushort2(mxfp4x16.lo)) * (half)s;
+        reg_a.hi = mxfp4_to_fp16_packed8(as_ushort2(mxfp4x16.hi)) * (half)s;
 
         sub_group_barrier(CLK_LOCAL_MEM_FENCE);
 
