@@ -5476,38 +5476,54 @@ extern struct ggml_backend_device_i ggml_backend_opencl_device_i;
 //
 // False if the CPU is homogeneous, has no little cores, or does not publish capacities (a
 // desktop x86 kernel typically does not) -- in which case affinity is left alone.
+//
+// Read once: capacities are fixed at boot, and this sits on the very dispatch path the pinning
+// exists to shorten.
 static bool ggml_cl_fast_cores(cpu_set_t * set) {
-    long cap[CPU_SETSIZE] = {};
-    int  n       = 0;
-    long biggest = 0;
+    struct fast_cores {
+        cpu_set_t set;
+        bool      ok;
+    };
 
-    for (int i = 0; i < CPU_SETSIZE; i++) {
-        char path[128];
-        snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpu_capacity", i);
+    static const fast_cores cached = [] {
+        fast_cores res;
+        CPU_ZERO(&res.set);
 
-        std::ifstream f(path);
-        long v = 0;
-        if (!f || !(f >> v) || v <= 0) {
-            break;
+        long cap[CPU_SETSIZE] = {};
+        int  n       = 0;
+        long biggest = 0;
+
+        for (int i = 0; i < CPU_SETSIZE; i++) {
+            char path[128];
+            snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpu_capacity", i);
+
+            std::ifstream f(path);
+            long v = 0;
+            if (!f || !(f >> v) || v <= 0) {
+                break;
+            }
+
+            cap[n++] = v;
+            biggest  = MAX(biggest, v);
         }
 
-        cap[n++] = v;
-        biggest  = MAX(biggest, v);
-    }
+        for (int i = 0; i < n; i++) {
+            if (2*cap[i] >= biggest) {
+                CPU_SET(i, &res.set);
+            }
+        }
 
-    if (n == 0) {
+        // Nothing to gain unless some core was actually left out.
+        res.ok = CPU_COUNT(&res.set) > 0 && CPU_COUNT(&res.set) < n;
+        return res;
+    }();
+
+    if (!cached.ok) {
         return false;
     }
 
-    CPU_ZERO(set);
-    for (int i = 0; i < n; i++) {
-        if (2*cap[i] >= biggest) {
-            CPU_SET(i, set);
-        }
-    }
-
-    // Nothing to gain unless some core was actually left out.
-    return CPU_COUNT(set) > 0 && CPU_COUNT(set) < n;
+    *set = cached.set;
+    return true;
 }
 
 static bool ggml_cl_pin_cores_enabled() {
@@ -5620,7 +5636,12 @@ struct ggml_cl_pin_self {
 
 #else
 
-struct ggml_cl_pin_self {};
+// The constructor is not decoration: an empty struct is trivial, which makes the scoped local at
+// the call site a plain unused variable and trips -Wunused-variable -- an error under
+// GGML_FATAL_WARNINGS.
+struct ggml_cl_pin_self {
+    ggml_cl_pin_self() {}
+};
 static std::set<int> ggml_cl_thread_ids() { return {}; }
 static void ggml_cl_pin_driver_threads(const std::set<int> &) {}
 
