@@ -24,8 +24,16 @@ typedef struct {
     void *            data;
 } worker_pool_job_t;
 
+#define WORKER_THREAD_STACK_SZ  (2 * 16384)
+
 /// Maximum supported number of worker threads.
 #define MAX_NUM_WORKERS 10
+
+#if __HVX_ARCH__ > 79
+#define WORKER_POOL_POLL_COUNT  2000
+#else
+#define WORKER_POOL_POLL_COUNT  1
+#endif
 
 // Initialize worker pool.
 WORKERPOOL_API AEEResult worker_pool_init(worker_pool_context_t * context, uint32_t n_threads);

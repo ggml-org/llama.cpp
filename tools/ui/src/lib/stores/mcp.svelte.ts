@@ -12,9 +12,12 @@
  * - Lifecycle management (initialize, shutdown)
  * - Multi-server coordination
  * - Tool name conflict detection and resolution
- * - OpenAI-compatible tool definition generation
  * - Automatic tool-to-server routing
  * - Health checks
+ *
+ * MCP connection state and raw `Tool[]` per server are owned here; the
+ * OpenAI-compatible wire format for those tools is built in `toolsStore`
+ * (see {@link toolsStore.mcpEntries} / {@link toolsStore.getEnabledToolsForLLM}).
  *
  * @see MCPService in services/mcp.service.ts for protocol operations
  */
@@ -38,9 +41,7 @@ import {
 	HealthCheckStatus,
 	MCPRefType,
 	ColorMode,
-	UrlProtocol,
-	JsonSchemaType,
-	ToolCallType
+	UrlProtocol
 } from '$lib/enums';
 import {
 	DEFAULT_CACHE_TTL_MS,
@@ -48,14 +49,13 @@ import {
 	EXPECTED_THEMED_ICON_PAIR_COUNT,
 	MCP_ALLOWED_ICON_MIME_TYPES,
 	MCP_SERVER_ID_PREFIX,
-	MCP_RECONNECT_INITIAL_DELAY,
 	MCP_RECONNECT_BACKOFF_MULTIPLIER,
+	MCP_RECONNECT_INITIAL_DELAY,
 	MCP_RECONNECT_MAX_DELAY,
 	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS
 } from '$lib/constants';
 import type {
 	MCPToolCall,
-	OpenAIToolDefinition,
 	ServerStatus,
 	ToolExecutionResult,
 	MCPClientConfig,
@@ -70,6 +70,7 @@ import type {
 	Tool,
 	HealthCheckState,
 	MCPServerSettingsEntry,
+	MCPServerDisplayInfo,
 	MCPServerConfig,
 	MCPResourceIcon,
 	MCPResourceAttachment,
@@ -365,7 +366,7 @@ class MCPStore {
 		return this.connections;
 	}
 
-	getServerLabel(server: MCPServerSettingsEntry): string {
+	getServerLabel(server: MCPServerDisplayInfo): string {
 		const healthState = this.getHealthCheckState(server.id);
 
 		if (healthState?.status === HealthCheckStatus.SUCCESS)
@@ -469,18 +470,12 @@ class MCPStore {
 			}
 		}
 
-		// Fallback: try favicon from root domain
-		const fallbackUrl = this.#getServerFaviconFallback(server.url);
-		if (fallbackUrl) {
-			return fallbackUrl;
-		}
-
-		return null;
+		return this.#getServerFaviconFallback(server.url);
 	}
 
 	/**
 	 * Construct a fallback favicon URL from the MCP server URL.
-	 * e.g. https://mcp.exa.ai/mcp -> https://exa.ai/favicon.ico
+	 * e.g. https://mcp.example.com/sse -> https://example.com/favicon.ico
 	 */
 	#getServerFaviconFallback(serverUrl: string): string | null {
 		try {
@@ -504,30 +499,9 @@ class MCPStore {
 		return null;
 	}
 
-	isAnyServerLoading(): boolean {
-		return this.getServers().some((s) => {
-			const state = this.getHealthCheckState(s.id);
-
-			return (
-				state.status === HealthCheckStatus.IDLE || state.status === HealthCheckStatus.CONNECTING
-			);
-		});
-	}
-
-	getServersSorted(): MCPServerSettingsEntry[] {
-		const servers = this.getServers();
-		if (this.isAnyServerLoading()) {
-			return servers;
-		}
-
-		return [...servers].sort((a, b) =>
-			this.getServerLabel(a).localeCompare(this.getServerLabel(b))
-		);
-	}
-
 	addServer(
 		serverData: Omit<MCPServerSettingsEntry, 'id' | 'requestTimeoutSeconds'> & { id?: string }
-	): void {
+	): MCPServerSettingsEntry {
 		const servers = this.getServers();
 		const newServer: MCPServerSettingsEntry = {
 			id: serverData.id || (uuid() ?? `server-${Date.now()}`),
@@ -540,6 +514,7 @@ class MCPStore {
 			useProxy: serverData.useProxy
 		};
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));
+		return newServer;
 	}
 
 	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
@@ -574,6 +549,14 @@ class MCPStore {
 		return this.getServers().filter((server) => {
 			return this.#checkServerEnabled(server, perChatOverrides);
 		});
+	}
+
+	/**
+	 * MCP servers selectable in chat-add UIs and the settings page,
+	 * in the order they were added to the config.
+	 */
+	get visibleMcpServers(): MCPServerSettingsEntry[] {
+		return this.getServers().filter((server) => server.enabled);
 	}
 
 	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {
@@ -945,73 +928,6 @@ class MCPStore {
 				this.autoReconnect(serverName);
 			}
 		}
-	}
-
-	getToolDefinitionsForLLM(): OpenAIToolDefinition[] {
-		const tools: OpenAIToolDefinition[] = [];
-
-		for (const connection of this.connections.values()) {
-			for (const tool of connection.tools) {
-				const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
-					type: JsonSchemaType.OBJECT,
-					properties: {},
-					required: []
-				};
-
-				tools.push({
-					type: ToolCallType.FUNCTION as const,
-					function: {
-						name: tool.name,
-						description: tool.description,
-						parameters: this.normalizeSchemaProperties(rawSchema)
-					}
-				});
-			}
-		}
-
-		return tools;
-	}
-
-	private normalizeSchemaProperties(schema: Record<string, unknown>): Record<string, unknown> {
-		if (!schema || typeof schema !== 'object') {
-			return schema;
-		}
-
-		const normalized = { ...schema };
-		if (normalized.properties && typeof normalized.properties === 'object') {
-			const props = normalized.properties as Record<string, Record<string, unknown>>;
-			const normalizedProps: Record<string, Record<string, unknown>> = {};
-			for (const [key, prop] of Object.entries(props)) {
-				if (!prop || typeof prop !== 'object') {
-					normalizedProps[key] = prop;
-					continue;
-				}
-				const normalizedProp = { ...prop };
-				if (!normalizedProp.type && normalizedProp.default !== undefined) {
-					const defaultVal = normalizedProp.default;
-					if (typeof defaultVal === 'string') normalizedProp.type = 'string';
-					else if (typeof defaultVal === 'number')
-						normalizedProp.type = Number.isInteger(defaultVal) ? 'integer' : 'number';
-					else if (typeof defaultVal === 'boolean') normalizedProp.type = 'boolean';
-					else if (Array.isArray(defaultVal)) normalizedProp.type = 'array';
-					else if (typeof defaultVal === 'object' && defaultVal !== null)
-						normalizedProp.type = 'object';
-				}
-				if (normalizedProp.properties)
-					Object.assign(
-						normalizedProp,
-						this.normalizeSchemaProperties(normalizedProp as Record<string, unknown>)
-					);
-				if (normalizedProp.items && typeof normalizedProp.items === 'object')
-					normalizedProp.items = this.normalizeSchemaProperties(
-						normalizedProp.items as Record<string, unknown>
-					);
-				normalizedProps[key] = normalizedProp;
-			}
-			normalized.properties = normalizedProps;
-		}
-
-		return normalized;
 	}
 
 	getToolNames(): string[] {

@@ -138,7 +138,7 @@
 	}
 
 	let filteredResources = $derived.by(() => {
-		const sortedServers = mcpStore.getServersSorted();
+		const sortedServers = mcpStore.getServers();
 		const serverOrderMap = new Map(sortedServers.map((server, index) => [server.id, index]));
 
 		const sortedResources = [...resources].sort((a, b) => {

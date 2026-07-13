@@ -402,6 +402,65 @@ def test_anthropic_tool_result_with_text():
     assert len(res.body["content"]) > 0
 
 
+def test_anthropic_tool_result_with_image():
+    """Test tool result containing mixed text and image blocks
+
+    Verifies that image blocks inside Anthropic tool_result content are
+    properly converted to OpenAI image_url format rather than being
+    silently dropped. With a non-multimodal model, the converted image
+    triggers a clear error message instead of being ignored.
+    """
+    server.jinja = True
+    server.start()
+
+    # Small 1x1 red PNG image in base64 (same as vision tests)
+    red_pixel_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+
+    res = server.make_request("POST", "/v1/messages", data={
+        "model": "test",
+        "max_tokens": 100,
+        "messages": [
+            {"role": "user", "content": "What is in this image?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tool_1",
+                        "name": "read",
+                        "input": {"file": "test.png"}
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool_1",
+                        "content": [
+                            {"type": "text", "text": "File: test.png"},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": red_pixel_png
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    })
+
+    # Without the fix, image block would cause "unsupported content[].type"
+    # With the fix, image is converted to image_url but tinyllama doesn't support images
+    assert res.status_code == 500
+    assert "image input is not supported" in res.body.get("error", {}).get("message", "").lower()
+
+
 def test_anthropic_tool_result_error():
     """Test tool result with error flag"""
     server.jinja = True

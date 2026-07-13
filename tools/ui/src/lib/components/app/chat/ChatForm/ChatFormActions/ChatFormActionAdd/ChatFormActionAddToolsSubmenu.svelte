@@ -10,7 +10,7 @@
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 
 	const toolsPanel = useToolsPanel();
-	const hasMcpServersAvailable = $derived(mcpStore.getServersSorted().length > 0);
+	const hasMcpServersAvailable = $derived(mcpStore.getServers().length > 0);
 </script>
 
 <DropdownMenu.Sub onOpenChange={(open) => open && toolsPanel.handleOpen()}>

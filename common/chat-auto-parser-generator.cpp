@@ -147,7 +147,8 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs, cons
         } else {
             parser = content.build_parser(ctx);
         }
-        return pure_content ? p.prefix(generation_prompt, reasoning.start) + parser : p.prefix(generation_prompt, reasoning.start) << parser;
+        const std::string reasoning_start = trim_whitespace(reasoning.start);
+        return pure_content ? p.prefix(generation_prompt, reasoning_start) + parser : p.prefix(generation_prompt, reasoning_start) << parser;
     });
 }
 

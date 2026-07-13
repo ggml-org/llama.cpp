@@ -618,15 +618,10 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_DEEPSEEKOCR:
-                {
-                    img_end = "\n"; // prevent empty batch on llama-server
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
-                    ov_img_first = false;
-                } break;
             case PROJECTOR_TYPE_DEEPSEEKOCR2:
                 {
                     img_end = "\n"; // prevent empty batch on llama-server
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr2>(ctx_v);
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseekocr>(ctx_v);
                     ov_img_first = false;
                 } break;
             case PROJECTOR_TYPE_HUNYUANVL:
@@ -814,7 +809,7 @@ void mtmd_free(mtmd_context * ctx) {
 struct mtmd_tokenizer {
     mtmd_context * ctx;
 
-    std::string input_text;
+    std::string input_text; // note: can contain null bytes; do not use c_str()
     bool add_special;
     bool parse_special;
     const llama_vocab * vocab;
@@ -844,8 +839,9 @@ struct mtmd_tokenizer {
             size_t n_bitmaps) : ctx(ctx) {
         add_special   = text->add_special;
         parse_special = text->parse_special;
-        input_text    = text->text;
         vocab         = ctx->vocab;
+
+        input_text.assign(text->text, text->text_len);
 
         std::vector<const mtmd_bitmap *> bitmaps(bmps, bmps + n_bitmaps);
         auto parts_str = split_text(input_text, ctx->media_marker);
@@ -1132,6 +1128,7 @@ struct mtmd_tokenizer {
 
                 // add slices (or tiles)
                 if (!chunks.empty()) {
+                    LOG_DBG("%s: adding %d slices (%d rows x %d cols)\n", __func__, (int)chunks.size(), n_row, n_col);
                     GGML_ASSERT((int)chunks.size() == n_row * n_col);
                     add_text(ctx->tok_slices_start);
                     for (int y = 0; y < n_row; y++) {
@@ -1174,7 +1171,6 @@ struct mtmd_tokenizer {
                     cur.entries.emplace_back(std::move(ov_chunk));
                     add_text(ctx->tok_ov_img_end);
                 }
-
             } else {
 
                 if (preproc_out.entries.size() == 0) {
