@@ -633,19 +633,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
-				label: 'Max lines per tool preview',
-				help: 'Number of lines shown in tool output previews (last N lines). Only these previews and the final LLM response persist after the agentic loop completes.',
-				defaultValue: 25,
-				type: SettingsFieldType.INPUT,
-				section: SETTINGS_SECTION_SLUGS.AGENTIC,
-				isPositiveInteger: true,
-				sync: {
-					serverKey: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
-					paramType: SyncableParameterType.NUMBER
-				}
-			},
-			{
 				key: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
 				label: 'MCP request timeout (seconds)',
 				help: 'Timeout for individual MCP tool calls.',
