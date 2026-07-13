@@ -548,6 +548,12 @@ class DeepseekV4Model(TextModel):
         super().set_gguf_parameters()
         hparams = self.hparams
 
+        # llama.cpp convention (matches qwen35/glm): block_count includes the
+        # NextN/MTP layer(s); n_layer() is derived as block_count - nextn_predict_layers.
+        if self._n_nextn:
+            self.gguf_writer.add_block_count(self.block_count + self._n_nextn)
+            self.gguf_writer.add_nextn_predict_layers(self._n_nextn)
+
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
         self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
         self.gguf_writer.add_sliding_window(hparams["sliding_window"])

@@ -1242,8 +1242,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
         GGML_ASSERT(ctx_tgt && ctx_dft && "MTP requires ctx_tgt and ctx_dft to be set");
 
-        n_embd = llama_model_n_embd_out(llama_get_model(ctx_dft));
-        GGML_ASSERT(n_embd == llama_model_n_embd(llama_get_model(ctx_tgt)) &&
+        n_embd = llama_model_n_embd_nextn(llama_get_model(ctx_dft));
+        GGML_ASSERT(n_embd == llama_model_n_embd_nextn(llama_get_model(ctx_tgt)) &&
                 "MTP input row width must match the target h_nextn width");
         n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
 
@@ -1460,6 +1460,17 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             for (int32_t i = 0; i < n_rows; ++i) {
                 const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, i_batch_beg[seq_id] + i);
                 std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
+            }
+
+            // debug: per-row stats of the captured target h_nextn (enable with -lv 2+)
+            {
+                const float * h0 = verify_h[seq_id].data();
+                float mn = h0[0], mx = h0[0]; double sum = 0.0;
+                for (int32_t k = 0; k < n_embd; ++k) {
+                    mn = std::min(mn, h0[k]); mx = std::max(mx, h0[k]); sum += h0[k];
+                }
+                SPC_TRC("verify_h seq=%d rows=%d width=%d row0 min=%.4f max=%.4f mean=%.6f\n",
+                        (int) seq_id, n_rows, n_embd, mn, mx, sum / n_embd);
             }
 
             std::memcpy(pending_h[seq_id].data(),
