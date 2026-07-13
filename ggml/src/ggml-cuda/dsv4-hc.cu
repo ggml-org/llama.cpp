@@ -2,34 +2,33 @@
 #include "dsv4-hc.cuh"
 
 
-static __device__ void dsv4_hc_comb_norm_cols(float * comb, float eps) {
-    constexpr int64_t hc = 4;
+static constexpr int DSV4_HC = 4;
 
-    for (int64_t idst = 0; idst < hc; ++idst) {
+
+static __device__ void dsv4_hc_comb_norm_cols(float * comb, float eps) {
+    for (int idst = 0; idst < DSV4_HC; ++idst) {
         float sum = eps;
-        for (int64_t isrc = 0; isrc < hc; ++isrc) {
-            sum += comb[idst + hc*isrc];
+        for (int isrc = 0; isrc < DSV4_HC; ++isrc) {
+            sum += comb[idst + DSV4_HC*isrc];
         }
 
         const float inv_sum = 1.0f / sum;
-        for (int64_t isrc = 0; isrc < hc; ++isrc) {
-            comb[idst + hc*isrc] *= inv_sum;
+        for (int isrc = 0; isrc < DSV4_HC; ++isrc) {
+            comb[idst + DSV4_HC*isrc] *= inv_sum;
         }
     }
 }
 
 static __device__ void dsv4_hc_comb_norm_rows(float * comb, float eps) {
-    constexpr int64_t hc = 4;
-
-    for (int64_t isrc = 0; isrc < hc; ++isrc) {
+    for (int isrc = 0; isrc < DSV4_HC; ++isrc) {
         float sum = eps;
-        for (int64_t idst = 0; idst < hc; ++idst) {
-            sum += comb[idst + hc*isrc];
+        for (int idst = 0; idst < DSV4_HC; ++idst) {
+            sum += comb[idst + DSV4_HC*isrc];
         }
 
         const float inv_sum = 1.0f / sum;
-        for (int64_t idst = 0; idst < hc; ++idst) {
-            comb[idst + hc*isrc] *= inv_sum;
+        for (int idst = 0; idst < DSV4_HC; ++idst) {
+            comb[idst + DSV4_HC*isrc] *= inv_sum;
         }
     }
 }
@@ -49,8 +48,7 @@ static __global__ void dsv4_hc_comb_f32(
         int64_t sd2,
         float eps,
         int32_t n_iter) {
-    constexpr int64_t hc = 4;
-    constexpr int64_t comb_offset = 2*hc;
+    constexpr int comb_offset = 2*DSV4_HC;
 
     ggml_cuda_pdl_lc();
     const int64_t it = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
@@ -62,28 +60,28 @@ static __global__ void dsv4_hc_comb_f32(
     ggml_cuda_pdl_sync();
 
     const float scale_comb = scale[2*ss0];
-    float comb[hc*hc];
+    float comb[DSV4_HC*DSV4_HC];
 
-    for (int64_t isrc = 0; isrc < hc; ++isrc) {
+    for (int isrc = 0; isrc < DSV4_HC; ++isrc) {
         float max = -INFINITY;
-        for (int64_t idst = 0; idst < hc; ++idst) {
-            const int64_t idx = idst + hc*isrc;
+        for (int idst = 0; idst < DSV4_HC; ++idst) {
+            const int idx = idst + DSV4_HC*isrc;
             const float v = mixes[(comb_offset + idx)*sm0 + it*sm1] * scale_comb + base[(comb_offset + idx)*sb0];
             comb[idx] = v;
             max = fmaxf(max, v);
         }
 
         float sum = 0.0f;
-        for (int64_t idst = 0; idst < hc; ++idst) {
-            const int64_t idx = idst + hc*isrc;
+        for (int idst = 0; idst < DSV4_HC; ++idst) {
+            const int idx = idst + DSV4_HC*isrc;
             const float v = expf(comb[idx] - max);
             comb[idx] = v;
             sum += v;
         }
 
         const float inv_sum = 1.0f / sum;
-        for (int64_t idst = 0; idst < hc; ++idst) {
-            const int64_t idx = idst + hc*isrc;
+        for (int idst = 0; idst < DSV4_HC; ++idst) {
+            const int idx = idst + DSV4_HC*isrc;
             comb[idx] = comb[idx] * inv_sum + eps;
         }
     }
@@ -94,9 +92,9 @@ static __global__ void dsv4_hc_comb_f32(
         dsv4_hc_comb_norm_cols(comb, eps);
     }
 
-    for (int64_t isrc = 0; isrc < hc; ++isrc) {
-        for (int64_t idst = 0; idst < hc; ++idst) {
-            const int64_t idx = idst + hc*isrc;
+    for (int isrc = 0; isrc < DSV4_HC; ++isrc) {
+        for (int idst = 0; idst < DSV4_HC; ++idst) {
+            const int idx = idst + DSV4_HC*isrc;
             dst[idst*sd0 + isrc*sd1 + it*sd2] = comb[idx];
         }
     }
@@ -129,11 +127,11 @@ static __global__ void dsv4_hc_pre_f32(
     const int64_t i0 = ir % n_embd;
     const int64_t it = ir / n_embd;
 
-    float sum = __fmul_rn(x[i0*sx0 + it*sx2], weights[it*sw1]);
+    float sum = x[i0*sx0 + it*sx2] * weights[it*sw1];
     for (int64_t ih = 1; ih < hc; ++ih) {
         const float xv = x[i0*sx0 + ih*sx1 + it*sx2];
         const float wv = weights[ih*sw0 + it*sw1];
-        sum = __fadd_rn(sum, __fmul_rn(xv, wv));
+        sum += xv * wv;
     }
 
     dst[i0*sd0 + it*sd1] = sum;
@@ -193,12 +191,11 @@ void ggml_cuda_op_dsv4_hc_comb(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     GGML_ASSERT(base->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    constexpr int64_t hc = 4;
-    constexpr int64_t hc_mix_dim = (2 + hc)*hc;
+    constexpr int64_t hc_mix_dim = (2 + DSV4_HC)*DSV4_HC;
 
     GGML_ASSERT(mixes->ne[0] == hc_mix_dim);
-    GGML_ASSERT(dst->ne[0] == hc);
-    GGML_ASSERT(dst->ne[1] == hc);
+    GGML_ASSERT(dst->ne[0] == DSV4_HC);
+    GGML_ASSERT(dst->ne[1] == DSV4_HC);
     GGML_ASSERT(dst->ne[2] == mixes->ne[1]);
     GGML_ASSERT(scale->ne[0] >= 3);
     GGML_ASSERT(base->ne[0] == hc_mix_dim);
