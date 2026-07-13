@@ -9,16 +9,10 @@
 
 ## 1. Что это за проект
 Форк `llama.cpp` → внутренняя **gateway/SDK-библиотека** для локального инференса
-LLM (offline РФ-контур, реестр Минцифры).
+LLM (offline, локальное развёртывание на компьютере/сервере в РФ).
 - **Модели:** любые локальные GGUF (цель — Qwen3-MoE `qwen3moe`, поддержана из
   коробки; на Qwen не завязываемся).
-- **Модальности:** текст, embeddings, vision (VLM). Audio — **вход** (аудио в чат-запросе
-  через `input_audio` + audio-mmproj) работает passthrough'ом на llama-server, если модель
-  это поддерживает. Отдельные OpenAI-эндпоинты `/v1/audio/transcriptions` (ASR) и
-  `/v1/audio/speech` (TTS) **сознательно НЕ реализованы**: в llama-server их нет — ASR
-  живёт в отдельном whisper.cpp (в дереве форка отсутствует, интеграция нарушила бы
-  wrap-not-touch), а `tools/tts` — это CLI-бинарь `llama-tts`, а не серверный эндпоинт.
-  Требует отдельного проектирования (см. §6). Профиль сборки движок под аудио сохраняет.
+- **Модальности:** текст, embeddings, vision (VLM). Audio — вне области проекта (не нужен).
 - **Железо:** NVIDIA CUDA + Vulkan + CPU.
 - **Жёстко:** полностью offline (нулевой egress в рантайме), требования рос. ПО,
   open-source compliance без сокрытия происхождения.
@@ -49,7 +43,7 @@ remotes: `origin`=Nasferatuss/llama.cpp, `upstream`=ggml-org/llama.cpp.
 - **Сборка:** `infcore/CMakeLists.txt` встраивает движок через `add_subdirectory(..)`
   без правок апстрима (форсит `LLAMA_BUILD_COMMON=ON`); профиль
   `infcore/cmake/profile-rf.cmake` (cpu+cuda+vulkan ON; metal/sycl/opencl/cann/musa/
-  hexagon/openvino/webgpu/zdnn/zendnn/virtgpu/hip/rpc=OFF; server+mtmd+tts ON;
+  hexagon/openvino/webgpu/zdnn/zendnn/virtgpu/hip/rpc=OFF; server+mtmd ON;
   UI/app/examples=OFF). Проверено на macOS (сборка `llama-server` и
   `infcore_gateway`); CUDA/Vulkan — только на целевом железе.
 - **Gateway** (`infcore/gateway/`, proxy-front): OpenAI-совместимый control-plane
@@ -72,7 +66,7 @@ remotes: `origin`=Nasferatuss/llama.cpp, `upstream`=ggml-org/llama.cpp.
   возвращается обычным JSON-ошибкой (OpenAI shape), а не SSE внутри 200; синтетические
   ошибки завершают стрим `data: [DONE]`.
 - **Vision mmproj:** модель задаёт `mmproj_path` -> `llama-server --mmproj`;
-  управляемые vision/audio без `mmproj_path` отклоняются при загрузке конфига.
+  управляемые vision без `mmproj_path` отклоняются при загрузке конфига.
 - **enforce_no_egress / секреты:** любой внешний `backend_url` валидируется как
   loopback/RFC1918 (иначе fail-fast); API-ключи сравниваются constant-time;
   placeholder-ключи `change-me*` отклоняются на старте; legacy `security.api_keys`
@@ -96,11 +90,6 @@ remotes: `origin`=Nasferatuss/llama.cpp, `upstream`=ggml-org/llama.cpp.
   egress режется на инфра-уровне (systemd/docker) и валидацией конфига.
 
 ## 6. Следующие шаги (по приоритету)
-- 🟡 Audio-эндпоинты `/v1/audio/transcriptions` (ASR) и `/v1/audio/speech` (TTS).
-  БОЛЬШАЯ отдельная задача, НЕ входит в hardening-пасс: llama-server этих эндпоинтов
-  не даёт. ASR потребует вендоринга whisper.cpp (конфликт с wrap-not-touch — нужен
-  отдельный «audio-sidecar»-процесс по аналогии с llama-server), TTS — оркестрации
-  `llama-tts`. Audio-**вход** через чат уже работает (см. §1). Проектировать отдельно.
 - ✅ `model-toolkit` (offline quantize/split/imatrix/export-lora обёртки; не рантайм) —
   `infcore/model-toolkit/`.
 - ⚪ Полноценное хранилище секретов (secrets store).

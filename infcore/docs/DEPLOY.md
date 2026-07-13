@@ -70,7 +70,7 @@ cmake --build build -j"$(nproc)"
 - `runtime` - `llama_server_bin` (путь к llama-server), `port_range_start` (порты
   под управляемые модели), таймауты простоя/старта.
 - `models` - каталог моделей (logical_name, gguf_path, modality, n_ctx, n_gpu_layers,
-  `mmproj_path`). Для управляемых моделей модальности `vision`/`audio` поле
+  `mmproj_path`). Для управляемых моделей модальности `vision` поле
   `mmproj_path` (проектор mtmd) ОБЯЗАТЕЛЬНО - иначе fail-fast при старте.
 
 В Docker шлюз должен слушать `0.0.0.0` (наружу публикуется только `127.0.0.1:8080`).

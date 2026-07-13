@@ -22,7 +22,7 @@
    небольшого compliance-набора (см. §4).
 
 ### Параметры контура (зафиксированы)
-- **Модальности:** текст (chat/LLM), embeddings/reranking, vision (VLM), audio (ASR/TTS) — **все**.
+- **Модальности:** текст (chat/LLM), embeddings/reranking, vision (VLM). Audio (ASR/TTS) — вне области проекта.
 - **Железо:** NVIDIA CUDA + Vulkan + CPU (обязателен).
 - **Владение ядром:** обёртка без правок внутри; drop-in апдейты сохраняем.
 
@@ -39,7 +39,7 @@
 | `common/` | общая обвязка апстрима (нужна серверу) |
 | `vendor/` (cpp-httplib, nlohmann, **stb, miniaudio**, sheredom) | бандл-зависимости ядра/сервера/мультимодальности |
 | `gguf-py/`, `convert_hf_to_gguf.py`, `conversion/` | конвертер HF→GGUF (offline, под любые арки) |
-| `tools/mtmd/`, `tools/tts/` | мультимодальность (vision/audio) — **нужны по требованиям** |
+| `tools/mtmd/` | мультимодальность (vision) — **нужна**. `tools/tts/` не задействован (audio вне проекта), но не удаляется — wrap-not-touch, гасится составом сборки |
 | `tools/server/` | in-tree OpenAI-совместимый сервер (chat/completions/embeddings + SSE) — **основа gateway** |
 | `cmake/`, корневой `CMakeLists.txt`, `ggml/CMakeLists.txt`, `Makefile` | сборка (минимальная сверка при апдейте) |
 
@@ -88,7 +88,7 @@
 -DGGML_METAL=OFF -DGGML_SYCL=OFF -DGGML_OPENCL=OFF -DGGML_CANN=OFF \
 -DGGML_MUSA=OFF -DGGML_HEXAGON=OFF -DGGML_OPENVINO=OFF -DGGML_WEBGPU=OFF \
 -DGGML_ZDNN=OFF -DGGML_ZENDNN=OFF -DGGML_VIRTGPU=OFF -DGGML_HIP=OFF -DGGML_RPC=OFF
--DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON   # tools: только нужные (server, mtmd, tts)
+-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON   # tools нужны для server, mtmd (vision)
 ```
 > `ggml-cpu` собирается всегда (референс/fallback). `GGML_RPC=OFF` обязателен для offline
 > (сетевой распределённый бэкенд). `blas` — опционально для CPU-ускорения.
@@ -102,7 +102,8 @@
   (`src/models/qwen3moe.cpp`), патч ядра не нужен.
 - **Embeddings/reranking:** ядро поддерживает pooling; сервер отдаёт `/v1/embeddings`.
 - **Vision (VLM):** через `tools/mtmd` (+ `vendor/stb`). **Сохраняем.**
-- **Audio (ASR/TTS):** через `tools/mtmd` + `tools/tts` (+ `vendor/miniaudio`). **Сохраняем.**
+- **Audio (ASR/TTS):** вне области проекта. `tools/tts`/`vendor/miniaudio` физически не
+  удаляем (wrap-not-touch), эндпоинты не поднимаем.
 - Новые арки добавляются апстримом в `src/models/*` + `conversion/*` — приедут с drop-in
   апдейтом ядра. Это и есть «как у llama.cpp по моделям».
 

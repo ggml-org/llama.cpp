@@ -11,7 +11,7 @@
 
 namespace infcore {
 
-enum class Modality { Text, Embedding, Vision, Audio };
+enum class Modality { Text, Embedding, Vision };
 
 struct ModelEntry {
     std::string logical_name;   // напр. "qwen3-moe-a3b"
@@ -19,7 +19,7 @@ struct ModelEntry {
     std::string arch;           // напр. "qwen3moe" (из метаданных GGUF)
     std::string backend_url;    // базовый URL бэкенда llama-server, напр. http://127.0.0.1:8081
     std::string upstream_model; // имя модели на бэкенде (если отличается); по умолч. = logical_name
-    std::string mmproj_path;    // проектор mtmd для vision/audio (--mmproj); обязателен для этих модальностей
+    std::string mmproj_path;    // проектор mtmd для vision (--mmproj); обязателен для этой модальности
     Modality    modality = Modality::Text;
     bool        enabled  = true;
     int32_t     n_ctx        = 8192;

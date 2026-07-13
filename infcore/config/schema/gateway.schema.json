@@ -107,11 +107,11 @@
         "arch": { "type": "string", "description": "general.architecture из метаданных GGUF" },
         "backend_url": { "type": "string", "description": "Внешний llama-server; если пусто - бэкенд управляется runtime-supervisor" },
         "upstream_model": { "type": "string", "description": "Имя модели на бэкенде, если отличается от logical_name" },
-        "modality": { "enum": ["text", "embedding", "vision", "audio"], "default": "text" },
+        "modality": { "enum": ["text", "embedding", "vision"], "default": "text" },
         "enabled": { "type": "boolean", "default": true },
         "n_ctx": { "type": "integer", "minimum": 512, "default": 8192 },
         "n_gpu_layers": { "type": "integer", "minimum": 0, "default": 0 },
-        "mmproj_path": { "type": "string", "description": "Проектор для vision/audio (mtmd), если применимо" }
+        "mmproj_path": { "type": "string", "description": "Проектор для vision (mtmd), если применимо" }
       }
     }
   }

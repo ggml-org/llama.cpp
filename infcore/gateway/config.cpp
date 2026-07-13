@@ -18,7 +18,6 @@ namespace infcore {
 static Modality parse_modality(const std::string& s) {
     if (s == "embedding") return Modality::Embedding;
     if (s == "vision")    return Modality::Vision;
-    if (s == "audio")     return Modality::Audio;
     return Modality::Text;
 }
 
@@ -205,7 +204,7 @@ GatewayConfig load_config(const std::string& path) {
     }
 
     for (const auto& m : cfg.models) {
-        const bool vlm = (m.modality == Modality::Vision || m.modality == Modality::Audio);
+        const bool vlm = (m.modality == Modality::Vision);
         if (!m.backend_url.empty()) {
             // Внешний бэкенд: при жёстком offline обязан быть локальным (не в интернет).
             if (cfg.enforce_no_egress && !is_local_host(m.backend_url))
@@ -220,10 +219,10 @@ GatewayConfig load_config(const std::string& path) {
         if (m.gguf_path.empty())
             throw std::runtime_error("infcore: управляемая модель '" + m.logical_name +
                 "' требует gguf_path");
-        // Vision/audio без проектора запустились бы битыми - ловим на старте.
+        // Vision без проектора запустилась бы битой - ловим на старте.
         if (vlm && m.mmproj_path.empty())
             throw std::runtime_error("infcore: модель '" + m.logical_name +
-                "' модальности vision/audio требует mmproj_path");
+                "' модальности vision требует mmproj_path");
     }
 
     return cfg;

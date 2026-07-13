@@ -13,8 +13,7 @@
 
 ## Возможности
 - OpenAI-совместимый API (chat/completions, completions, embeddings, models) + SSE.
-- Любые локальные GGUF-модели: text / embeddings / vision (VLM). Audio (ASR/TTS) —
-  движок сохранён, эндпоинты `/v1/audio/*` пока не реализованы (roadmap).
+- Любые локальные GGUF-модели: text / embeddings / vision (VLM). Audio — вне области проекта.
 - Multi-model registry, ленивый супервайзер (авто-подъём/гашение llama-server),
   authn/RBAC, audit, pull-метрики на `/metrics`, клиентский SDK/CLI.
 - Изоляция бэкендов: управляемые `llama-server` слушают только 127.0.0.1 и защищены

@@ -8,7 +8,6 @@ const char* modality_to_string(Modality m) {
         case Modality::Text:      return "text";
         case Modality::Embedding: return "embedding";
         case Modality::Vision:    return "vision";
-        case Modality::Audio:     return "audio";
     }
     return "text";
 }

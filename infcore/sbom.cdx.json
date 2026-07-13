@@ -24,7 +24,7 @@
       "licenses": [ { "license": { "id": "MIT" } }, { "license": { "id": "Unlicense" } } ],
       "purl": "pkg:github/nothings/stb" },
     { "type": "library", "name": "miniaudio", "version": "0.11.25",
-      "description": "Аудио-ввод/вывод, используется audio-модальностью (tools/tts, tools/mtmd).",
+      "description": "Аудио-ввод/вывод; бандл-зависимость движка (tools/tts/mtmd). В infcore не задействована (audio вне области проекта), но не удаляется по wrap-not-touch.",
       "licenses": [ { "license": { "id": "MIT-0" } }, { "license": { "id": "Unlicense" } } ],
       "purl": "pkg:github/mackron/miniaudio@0.11.25" },
     { "type": "library", "name": "sheredom",
