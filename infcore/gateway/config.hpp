@@ -39,8 +39,9 @@ struct GatewayConfig {
     std::vector<Role>            roles;
 
     // audit: локальный append-only журнал.
-    std::string audit_sink = "file";     // "file" | "none"
-    std::string audit_path = "infcore-audit.log";
+    std::string audit_sink = "file";                    // "file" | "none"
+    std::string audit_path = "/var/log/infcore/audit.log";
+    bool        audit_require = true;                    // sink=file и журнал не открылся -> fail-fast
 };
 
 // Загружает конфиг из файла. Бросает std::runtime_error при ошибке/невалидности.

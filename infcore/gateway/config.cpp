@@ -142,8 +142,9 @@ GatewayConfig load_config(const std::string& path) {
         }
         if (s.contains("audit")) {
             const auto& a = s.at("audit");
-            cfg.audit_sink = a.value("sink", cfg.audit_sink);
-            cfg.audit_path = a.value("path", cfg.audit_path);
+            cfg.audit_sink    = a.value("sink", cfg.audit_sink);
+            cfg.audit_path    = a.value("path", cfg.audit_path);
+            cfg.audit_require = a.value("require", cfg.audit_require);
         }
     }
     if (j.contains("offline"))
@@ -190,6 +191,17 @@ GatewayConfig load_config(const std::string& path) {
                 throw std::runtime_error("infcore: роль '" + ap.principal.role +
                     "' principal'а '" + ap.principal.subject + "' не объявлена в security.roles");
         }
+    }
+
+    // Оркестрация/Docker: host и port можно переопределить окружением, НЕ редактируя
+    // смонтированный read-only конфиг. В контейнере INFCORE_HOST=0.0.0.0 (наружу
+    // публикуется только loopback хоста), на bare-metal обычно не задаётся.
+    if (const char* h = std::getenv("INFCORE_HOST"); h && *h) cfg.host = h;
+    if (const char* p = std::getenv("INFCORE_PORT"); p && *p) {
+        int v = std::atoi(p);
+        if (v < 1 || v > 65535)
+            throw std::runtime_error("infcore: INFCORE_PORT вне диапазона 1..65535: " + std::string(p));
+        cfg.port = v;
     }
 
     for (const auto& m : cfg.models) {

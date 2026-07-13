@@ -1,6 +1,7 @@
 # infcore — образ для offline РФ-контура. Контекст сборки = КОРЕНЬ форка.
 # Интернет допустим ТОЛЬКО на стадии build; рантайм — строго offline.
 # Базовые образы — из внутреннего реестра (Astra Linux / РЕД ОС / ALT).
+# Рецепт/состав этих base-образов: infcore/deploy/docker/base/ (README + скелеты).
 
 # --- build stage ---
 ARG BASE_BUILD=registry.internal/astra/base-devel:1.7

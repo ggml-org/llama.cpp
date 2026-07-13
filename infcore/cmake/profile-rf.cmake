@@ -6,6 +6,18 @@
 set(GGML_CUDA      ON  CACHE BOOL "" FORCE)
 set(GGML_VULKAN    ON  CACHE BOOL "" FORCE)
 
+# CUDA-архитектуры: НЕ полагаемся на дефолт "native" (llama.cpp его выставляет при
+# CUDA>=11.6 + CMake>=3.24). "native" требует ВИДИМЫЙ GPU на стадии configure - в
+# `docker build` GPU нет, и конфигурация падает. Пинуем реальный набор архитектур:
+#   75=Turing(T4/2080) 80=Ampere(A100) 86=Ampere(A10/3090) 89=Ada(L40/4090) 90=Hopper(H100).
+# Урезать/расширить под парк GPU: -DCMAKE_CUDA_ARCHITECTURES=86 (быстрее сборка, меньше образ).
+set(CMAKE_CUDA_ARCHITECTURES "75;80;86;89;90" CACHE STRING "" FORCE)
+
+# GGML_NATIVE=OFF: не завязываем бинарь на -march=native хоста сборки. Иначе образ,
+# собранный на одной CPU-микроархитектуре, падал бы с SIGILL на другой в парке.
+# Для сборки строго под конкретный сервер можно вернуть -DGGML_NATIVE=ON.
+set(GGML_NATIVE    OFF CACHE BOOL "" FORCE)
+
 # Выключаем всё, что не под наше железо / нарушает offline:
 set(GGML_METAL     OFF CACHE BOOL "" FORCE)
 set(GGML_SYCL      OFF CACHE BOOL "" FORCE)

@@ -22,7 +22,9 @@
       { "name": "embeddings-only", "allow_models": ["bge-m3-embed"],
         "allow_endpoints": ["/v1/embeddings", "/v1/models"] }
     ],
-    "audit": { "sink": "file", "path": "/var/log/infcore/audit.log" }
+    // require=true (по умолчанию): если журнал не открылся - шлюз не стартует
+    // (не отдаём трафик без аудита). Каталог создаёт systemd (LogsDirectory) / смонтируйте в Docker.
+    "audit": { "sink": "file", "path": "/var/log/infcore/audit.log", "require": true }
   },
   "observability": { "metrics_enabled": true, "metrics_path": "/metrics" },
   "offline": { "enforce_no_egress": true },

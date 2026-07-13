@@ -1,0 +1,18 @@
+# СКЕЛЕТ runtime-образа infcore (registry.internal/astra/base). Строго offline в бою.
+# ТОЛЬКО рантайм-библиотеки, без toolchain/SDK (минимальный attack surface).
+# Имена пакетов - под репозиторий вашей ОС (пример - Astra/Debian-подобная).
+
+FROM registry.internal/astra/base:1.7
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libgomp1 libstdc++6 \
+      # Vulkan loader + ICD (при GGML_VULKAN=ON). ICD - под ваш GPU-драйвер.
+      libvulkan1 \
+ && rm -rf /var/lib/apt/lists/*
+
+# CUDA runtime (при GGML_CUDA=ON) из внутреннего зеркала. Только runtime, не toolkit:
+#   RUN apt-get update && apt-get install -y cuda-cudart-12-4 libcublas-12-4 \
+#    && rm -rf /var/lib/apt/lists/*
+# Драйвер NVIDIA НЕ ставим - он пробрасывается nvidia-container-toolkit с хоста.
+
+# Для CPU-only контура ни CUDA, ни Vulkan рантайм не нужны - оставьте только libgomp/libstdc++.

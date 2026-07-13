@@ -3,9 +3,10 @@
 #
 # Перед запуском:
 #   1. cp gateway.env.example gateway.env  и вписать реальные ключи (openssl rand -hex 32).
-#   2. В своём конфиге (../../config/gateway.yaml) задать "host": "0.0.0.0" -
-#      внутри контейнера gateway слушает все интерфейсы, а наружу опубликован
-#      только 127.0.0.1:8080. Управляемые llama-server всё равно слушают loopback
+#   2. Больше НИЧЕГО править не нужно: INFCORE_HOST=0.0.0.0 (ниже) заставляет gateway
+#      слушать все интерфейсы ВНУТРИ контейнера, при этом наружу опубликован только
+#      127.0.0.1:8080. Смонтированный конфиг остаётся read-only и с host=127.0.0.1 -
+#      env-override имеет приоритет. Управляемые llama-server всё равно слушают loopback
 #      внутри контейнера и требуют per-boot api-key (прямого доступа к ним нет).
 services:
   gateway:
@@ -13,14 +14,17 @@ services:
     build:
       context: ../../..          # корень форка
       dockerfile: infcore/deploy/docker/Dockerfile
+    restart: unless-stopped                        # упавший контейнер сам поднимается
     volumes:
       - /opt/infcore/models:/opt/infcore/models:ro
-      - ../../config/gateway.yaml:/opt/infcore/config/gateway.yaml:ro   # свой конфиг (host=0.0.0.0)
+      - ../../config/gateway.yaml:/opt/infcore/config/gateway.yaml:ro   # read-only; host правит INFCORE_HOST
       - /var/log/infcore:/var/log/infcore          # append-only audit-журнал (на запись)
+    environment:
+      - INFCORE_HOST=0.0.0.0                        # слушать все интерфейсы ВНУТРИ контейнера
     env_file:
-      - path: ./gateway.env                        # секреты для env:VAR в конфиге
+      - path: ./gateway.env                        # секреты для env:VAR в конфиге (Compose >= 2.24)
         required: false
-    ports: ["127.0.0.1:8080:8080"]                 # /metrics отдаётся на том же порту
+    ports: ["127.0.0.1:8080:8080"]                 # наружу только loopback; /metrics на том же порту
     networks: [internal]
     deploy:
       resources:

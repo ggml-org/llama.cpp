@@ -62,7 +62,8 @@
           "additionalProperties": false,
           "properties": {
             "sink": { "enum": ["file", "none"], "default": "file" },
-            "path": { "type": "string", "description": "Путь к append-only JSONL-журналу" }
+            "path": { "type": "string", "description": "Путь к append-only JSONL-журналу" },
+            "require": { "type": "boolean", "default": true, "description": "sink=file и журнал не открылся -> fail-fast (не отдавать трафик без аудита)" }
           }
         }
       }

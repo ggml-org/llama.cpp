@@ -1,0 +1,22 @@
+# СКЕЛЕТ build-образа infcore (registry.internal/astra/base-devel).
+# Собрать и запушить во внутренний реестр ОДИН раз; интернет допустим только здесь.
+# Имена пакетов - под репозиторий вашей ОС (пример - Astra/Debian-подобная).
+# Для РЕД ОС/ALT замените apt на dnf/apt-rpm и имена пакетов соответственно.
+
+# FROM - отечественная базовая ОС из внутреннего реестра:
+FROM registry.internal/astra/base:1.7
+
+# Toolchain + CMake + утилиты сборки (из внутреннего зеркала пакетов).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential g++ make ninja-build cmake git ca-certificates \
+      # Vulkan SDK: заголовки + компилятор шейдеров (glslc/glslangValidator)
+      libvulkan-dev glslang-tools spirv-tools \
+ && rm -rf /var/lib/apt/lists/*
+
+# CUDA toolkit (nvcc + dev-библиотеки) под ваш парк GPU. Ставится из внутреннего
+# зеркала NVIDIA. Версия должна покрывать арх 75..90 (см. profile-rf.cmake).
+# Пример (адаптируйте версию/канал под зеркало):
+#   RUN apt-get update && apt-get install -y cuda-toolkit-12-4 && rm -rf /var/lib/apt/lists/*
+# GPU на стадии сборки НЕ требуется (CMAKE_CUDA_ARCHITECTURES пиновано, не "native").
+
+# Проверка: cmake --version >= 3.21, nvcc --version, glslc --version.

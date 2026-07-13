@@ -1,4 +1,9 @@
 # infcore gateway - systemd unit для offline РФ-контура.
+# ПРЕДВАРИТЕЛЬНО (один раз, от root):
+#   useradd -r -s /usr/sbin/nologin infcore          # сервисный пользователь
+#   install -d -o infcore -g infcore /opt/infcore/bin /opt/infcore/config
+#   # положить бинари в /opt/infcore/bin, конфиг в /opt/infcore/config/gateway.yaml
+#   # каталог журнала /var/log/infcore создаёт сам systemd (LogsDirectory=, см. ниже)
 # Установка: cp в /etc/systemd/system/, затем systemctl daemon-reload && enable --now.
 [Unit]
 Description=infcore gateway (OpenAI-совместимый шлюз к локальным LLM)
@@ -28,7 +33,10 @@ RestartSec=2
 NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=yes
-ReadWritePaths=/var/log/infcore
+# systemd создаёт /var/log/infcore с владельцем User= (mode 0750) до старта сервиса -
+# отдельный mkdir/chown не нужен; каталог автоматически в ReadWritePaths.
+LogsDirectory=infcore
+LogsDirectoryMode=0750
 LimitNOFILE=65536
 
 # Offline-инвариант на уровне ядра: запрещаем весь egress, кроме loopback.

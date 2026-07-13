@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <thread>
 
 #include "httplib.h"
@@ -45,8 +46,15 @@ GatewayServer::GatewayServer(GatewayConfig cfg) : cfg_(std::move(cfg)) {
         for (const auto& k : cfg_.api_keys) authn_.add_key(k, Principal{"legacy", "admin"});
     }
 
-    if (cfg_.audit_sink == "file" && !audit_.open(cfg_.audit_path))
-        std::fprintf(stderr, "infcore: не удалось открыть audit-журнал: %s\n", cfg_.audit_path.c_str());
+    // Аудит обязателен для контура: если журнал (sink=file) не открылся, НЕ отдаём
+    // трафик с молча выключенным аудитом - fail-fast (пока audit.require не снят явно).
+    if (cfg_.audit_sink == "file" && !audit_.open(cfg_.audit_path)) {
+        std::string msg = "infcore: не удалось открыть audit-журнал: " + cfg_.audit_path +
+            " (проверьте, что каталог существует и доступен на запись пользователю сервиса)";
+        if (cfg_.audit_require)
+            throw std::runtime_error(msg + "; audit.require=true -> старт прерван");
+        std::fprintf(stderr, "%s; audit.require=false -> продолжаю БЕЗ аудита\n", msg.c_str());
+    }
 }
 
 void GatewayServer::audit_event(const Principal& pr, const std::string& client_ip,
