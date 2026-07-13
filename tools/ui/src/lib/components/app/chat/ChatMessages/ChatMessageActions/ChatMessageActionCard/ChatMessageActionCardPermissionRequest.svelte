@@ -21,7 +21,7 @@
 <ChatMessageActionCard icon={ShieldQuestion}>
 	{#snippet message()}
 		Allow use of <span class="font-semibold">{toolName}</span>{#if serverLabel}
-			from <span class="font-semibold">{serverLabel}</span>{/if}?
+			&nbsp;from <span class="font-semibold">{serverLabel}</span>{/if}?
 	{/snippet}
 
 	{#snippet actions()}
