@@ -777,8 +777,6 @@ const func_builtins & value_string_t::get_builtins() const {
             };
 
             size_t auto_idx = 0;
-            bool manual = false;
-            bool automatic = false;
             for (size_t i = 0; i < str.size(); ++i) {
                 const char c = str[i];
                 if (c == '{' && i + 1 < str.size() && str[i + 1] == '{') {
@@ -804,35 +802,15 @@ const func_builtins & value_string_t::get_builtins() const {
                 }
                 const std::string field = str.substr(i + 1, end - i - 1);
                 i = end;
-                if (field.find_first_of(":!.[") != std::string::npos) {
-                    throw not_implemented_exception("format() conversions, format specs and nested fields not implemented");
+                if (!field.empty()) {
+                    // Hy3 template only uses simple '{}' placeholders; indexed,
+                    // named, conversion and format-spec fields are unsupported.
+                    throw not_implemented_exception("format() only supports simple '{}' placeholders");
                 }
-                value arg;
-                if (field.empty()) {
-                    if (manual) {
-                        throw raised_exception("cannot switch from manual field specification to automatic field numbering");
-                    }
-                    automatic = true;
-                    if (auto_idx >= pos_args.size()) {
-                        throw raised_exception("format() replacement index " + std::to_string(auto_idx) + " out of range");
-                    }
-                    arg = pos_args[auto_idx++];
-                } else if (std::all_of(field.begin(), field.end(), [](unsigned char ch) { return std::isdigit(ch); })) {
-                    if (automatic) {
-                        throw raised_exception("cannot switch from automatic field numbering to manual field specification");
-                    }
-                    manual = true;
-                    const size_t idx = std::stoul(field);
-                    if (idx >= pos_args.size()) {
-                        throw raised_exception("format() replacement index " + field + " out of range");
-                    }
-                    arg = pos_args[idx];
-                } else {
-                    arg = args.get_kwarg(field, mk_val<value_undefined>());
-                    if (arg->is_undefined()) {
-                        throw raised_exception("format() missing keyword argument '" + field + "'");
-                    }
+                if (auto_idx >= pos_args.size()) {
+                    throw raised_exception("format() replacement index " + std::to_string(auto_idx) + " out of range");
                 }
+                value arg = pos_args[auto_idx++];
                 flush_literal();
                 const jinja::string arg_str = arg->as_string();
                 result.parts.insert(result.parts.end(), arg_str.parts.begin(), arg_str.parts.end());

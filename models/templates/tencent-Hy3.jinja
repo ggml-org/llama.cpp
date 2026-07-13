@@ -1,4 +1,4 @@
-{#- ----------‑‑‑ special token variables ‑‑‑---------- -#}
+{#- ------------- special token variables ------------- -#}
 {%- set HYTK = ':opensource' %}
 {%- set eos_token = '<｜hy_eos{}｜>'.format(HYTK) %}
 {%- set bos_token = '<｜hy_begin_of_sentence{}｜>'.format(HYTK) %}
@@ -22,7 +22,7 @@
 {%- set toolresponse_end_token = '</tool_response{}>'.format(HYTK) %}
 {%- set reasoning_mode_token = '<｜reasoning_mode{}｜>'.format(HYTK) %}
 
-{#- ----------‑‑‑ hyperparameters variables ‑‑‑---------- -#}
+{#- ------------- hyperparameters variables ------------- -#}
 {%- if not add_generation_prompt is defined %}
     {%- set add_generation_prompt = false %}
 {%- endif %}
