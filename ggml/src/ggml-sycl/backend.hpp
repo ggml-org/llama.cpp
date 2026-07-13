@@ -42,6 +42,7 @@
 #include "set_rows.hpp"
 #include "ssm_conv.hpp"
 #include "softmax.hpp"
+#include "topk-moe.hpp"
 #include "tsembd.hpp"
 #include "upscale.hpp"
 #include "wkv.hpp"
