@@ -262,6 +262,26 @@ export { ParameterSyncService } from './parameter-sync.service';
 export { MCPService } from './mcp.service';
 
 /**
+ * **SandboxService** - Frontend JavaScript execution in a browser sandbox
+ *
+ * Stateless executor for the run_javascript frontend tool. Model generated
+ * code runs in a Web Worker spawned inside a sandboxed iframe with an opaque
+ * origin: no access to the app origin, its storage or its API, and outgoing
+ * requests carry a null origin. The code never touches a main thread, so the
+ * parent enforces the timeout by removing the iframe, which terminates the
+ * worker at the browser level.
+ *
+ * **Architecture & Relationships:**
+ * - **SandboxService** (this class): Stateless sandbox execution
+ * - **toolsStore**: Exposes the tool definition when the sandbox is enabled
+ * - **agenticStore**: Dispatches ToolSource.FRONTEND calls here
+ *
+ * @see SANDBOX_TOOL_DEFINITION in constants/sandbox.ts - tool schema sent to the LLM
+ * @see agenticStore in stores/agentic.svelte.ts - tool dispatch
+ */
+export { SandboxService } from './sandbox.service';
+
+/**
  * **RouterService** — Dynamic route URL construction utility
  *
  * Stateless utility for building dynamic route URLs from ROUTES base paths.

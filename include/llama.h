@@ -155,9 +155,13 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_MXFP4_MOE     = 38, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
+
+    // Get the model file type (quantization) as a string, e.g. "Q8_0" or "Q4_K - Medium"
+    LLAMA_API const char * llama_ftype_name(enum llama_ftype ftype);
 
     enum llama_rope_scaling_type {
         LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED = -1,
@@ -388,6 +392,10 @@ extern "C" {
         // note: the samplers must be sampler chains (i.e. use llama_sampler_chain_init)
         struct llama_sampler_seq_config * samplers;
         size_t                            n_samplers;
+
+        // a source/target/parent context
+        // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
+        struct llama_context * ctx_other;
     };
 
     struct llama_model_tensor_override {
@@ -554,14 +562,15 @@ extern "C" {
     LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
     LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);
 
-    LLAMA_API int32_t llama_model_n_ctx_train(const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_embd     (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_embd_inp (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_embd_out (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_layer    (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
-    LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_ctx_train  (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_embd_out   (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_layer      (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_layer_nextn(const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_head       (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_head_kv    (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_swa        (const struct llama_model * model);
 
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
@@ -600,6 +609,9 @@ extern "C" {
 
     // Get a string describing the model type
     LLAMA_API int32_t llama_model_desc(const struct llama_model * model, char * buf, size_t buf_size);
+
+    // Get the model file type (quantization), e.g. LLAMA_FTYPE_MOSTLY_Q8_0
+    LLAMA_API enum llama_ftype llama_model_ftype(const struct llama_model * model);
 
     // Returns the total size of all the tensors in the model in bytes
     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);

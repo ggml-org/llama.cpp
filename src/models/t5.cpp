@@ -9,10 +9,10 @@ void llama_model_t5::load_arch_hparams(llama_model_loader & ml) {
         hparams.dec_start_token_id = dec_start_token_id;
     }
 
-    hparams.dec_n_layer = hparams.n_layer;
+    hparams.dec_n_layer = hparams.n_layer();
     ml.get_key(LLM_KV_DECODER_BLOCK_COUNT, hparams.dec_n_layer, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 6:  type = LLM_TYPE_60M;  break; // t5-small
         case 8:  type = LLM_TYPE_80M;  break; // flan-t5-small
         case 12:

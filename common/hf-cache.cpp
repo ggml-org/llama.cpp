@@ -495,4 +495,19 @@ std::string finalize_file(const hf_file & file) {
     return file.final_path;
 }
 
+bool remove_cached_repo(const std::string & repo_id) {
+    if (!is_valid_repo_id(repo_id)) {
+        LOG_WRN("%s: invalid repository: %s\n", __func__, repo_id.c_str());
+        return false;
+    }
+    fs::path repo_path = get_repo_path(repo_id);
+    std::error_code ec;
+    auto removed = fs::remove_all(repo_path, ec);
+    if (ec) {
+        LOG_ERR("%s: failed to remove repo cache %s: %s\n", __func__, repo_path.string().c_str(), ec.message().c_str());
+        return false;
+    }
+    return removed > 0;
+}
+
 } // namespace hf_cache

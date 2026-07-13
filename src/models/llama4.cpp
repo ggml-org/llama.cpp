@@ -8,7 +8,7 @@ void llama_model_llama4::load_arch_hparams(llama_model_loader & ml) {
     const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
     if (found_swa && hparams.n_swa == 0) {
         hparams.swa_type             = LLAMA_SWA_TYPE_NONE;
-        hparams.n_no_rope_layer_step = hparams.n_layer; // always use rope
+        hparams.n_no_rope_layer_step = hparams.n_layer(); // always use rope
     } else {
         hparams.swa_type                = LLAMA_SWA_TYPE_CHUNKED;
         hparams.n_swa                   = 8192;

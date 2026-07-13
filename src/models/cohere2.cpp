@@ -5,6 +5,7 @@ void llama_model_cohere2::load_arch_hparams(llama_model_loader & ml) {
     uint32_t swa_period = 4;
     ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
     hparams.set_swa_pattern(swa_period);
+
     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
 
@@ -12,7 +13,8 @@ void llama_model_cohere2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
     ml.get_key(LLM_KV_LOGIT_SCALE,              hparams.f_logit_scale);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,  hparams.f_norm_eps);
-    switch (hparams.n_layer) {
+
+    switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_8B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
@@ -120,9 +122,9 @@ llama_model_cohere2::graph::graph(const llama_model & model, const llm_graph_par
         // feed-forward network
         {
             cur = build_ffn(ffn_inp,
-                    model.layers[il].ffn_up, NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
+                    model.layers[il].ffn_up, NULL, model.layers[il].ffn_up_s,
+                    model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
+                    model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
                     NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         }

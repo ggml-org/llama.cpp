@@ -19,7 +19,10 @@ import {
 	DISPLAY_NAME_SEPARATOR_REGEX,
 	PATH_SEPARATOR,
 	RESOURCE_TEXT_CONTENT_SEPARATOR,
-	DEFAULT_RESOURCE_FILENAME
+	DEFAULT_RESOURCE_FILENAME,
+	MCP_SSE_ENDPOINT,
+	MCP_SSE_ENDPOINT_SLASH,
+	MCP_SSE_ENDPOINT_QUERY
 } from '$lib/constants';
 import {
 	Database,
@@ -41,10 +44,22 @@ import type { MimeTypeUnion } from '$lib/types/common';
 export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 	const normalized = url.trim().toLowerCase();
 
-	return normalized.startsWith(UrlProtocol.WEBSOCKET) ||
+	if (
+		normalized.startsWith(UrlProtocol.WEBSOCKET) ||
 		normalized.startsWith(UrlProtocol.WEBSOCKET_SECURE)
-		? MCPTransportType.WEBSOCKET
-		: MCPTransportType.STREAMABLE_HTTP;
+	) {
+		return MCPTransportType.WEBSOCKET;
+	}
+
+	if (
+		normalized.endsWith(MCP_SSE_ENDPOINT) ||
+		normalized.endsWith(MCP_SSE_ENDPOINT_SLASH) ||
+		normalized.includes(MCP_SSE_ENDPOINT_QUERY)
+	) {
+		return MCPTransportType.SSE;
+	}
+
+	return MCPTransportType.STREAMABLE_HTTP;
 }
 
 /**

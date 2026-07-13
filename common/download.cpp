@@ -292,10 +292,6 @@ static int common_download_file_single_online(const std::string & url,
 
     const bool file_exists = std::filesystem::exists(path);
 
-    if (!file_exists && opts.skip_download) {
-        return -2; // file is missing and download is disabled
-    }
-
     if (file_exists && skip_etag) {
         LOG_DBG("%s: using cached file: %s\n", __func__, path.c_str());
         return 304; // 304 Not Modified - fake cached response
@@ -362,9 +358,6 @@ static int common_download_file_single_online(const std::string & url,
             return 304; // 304 Not Modified - fake cached response
         }
         // pass this point, the file exists but is different from the server version, so we need to redownload it
-        if (opts.skip_download) {
-            return -2; // special code to indicate that the download was skipped due to etag mismatch
-        }
         if (remove(path.c_str()) != 0) {
             LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
             return -1;
@@ -691,18 +684,8 @@ static void list_available_gguf_files(const hf_cache::hf_files & files) {
     }
 }
 
-struct hf_plan {
-    hf_cache::hf_file primary;
-    hf_cache::hf_files model_files;
-    hf_cache::hf_file mmproj;
-    hf_cache::hf_file mtp;
-};
-
-static hf_plan get_hf_plan(const common_params_model  & model,
-                           const common_download_opts & opts,
-                           bool download_mmproj,
-                           bool download_mtp) {
-    hf_plan plan;
+common_download_hf_plan common_download_get_hf_plan(const common_params_model & model, const common_download_opts & opts) {
+    common_download_hf_plan plan;
     hf_cache::hf_files all;
 
     auto [repo, tag] = common_download_split_repo_tag(model.hf_repo);
@@ -715,6 +698,14 @@ static hf_plan get_hf_plan(const common_params_model  & model,
     }
     if (all.empty()) {
         return plan;
+    }
+
+    // if preset.ini exists in the repo root, download only that file
+    for (const auto & f : all) {
+        if (f.path == "preset.ini") {
+            plan.preset = f;
+            return plan;
+        }
     }
 
     hf_cache::hf_file primary;
@@ -743,115 +734,49 @@ static hf_plan get_hf_plan(const common_params_model  & model,
     plan.primary = primary;
     plan.model_files = get_split_files(all, primary);
 
-    if (download_mmproj) {
+    if (opts.download_mmproj) {
         plan.mmproj = find_best_mmproj(all, primary.path);
     }
-
-    if (download_mtp) {
+    if (opts.download_mtp) {
         plan.mtp = find_best_mtp(all, primary.path);
     }
 
     return plan;
 }
 
-struct download_task {
-    std::string url;
-    std::string path;
-};
-
-static std::vector<download_task> get_url_tasks(const common_params_model & model) {
-    auto split = get_gguf_split_info(model.url);
-
-    if (split.count <= 1) {
-        return {{model.url, model.path}};
-    }
-
-    auto filename = split.prefix;
-    if (auto pos = split.prefix.rfind('/'); pos != std::string::npos) {
-        filename = split.prefix.substr(pos + 1);
-    }
-
-    auto parent_path = std::filesystem::path(model.path).parent_path();
-    auto prefix_path = (parent_path / filename).string();
-
-    std::vector<download_task> tasks;
-    for (int i = 1; i <= split.count; i++) {
-        auto suffix = string_format("-%05d-of-%05d.gguf", i, split.count);
-        tasks.push_back({split.prefix + suffix, prefix_path + suffix});
-    }
-    return tasks;
-}
-
-common_download_model_result common_download_model(const common_params_model  & model,
-                                                   const common_download_opts & opts) {
-    common_download_model_result result;
-    std::vector<download_task> tasks;
-    hf_plan hf;
-
-    bool download_mmproj = opts.download_mmproj;
-    bool download_mtp = opts.download_mtp;
-    bool is_hf = !model.hf_repo.empty();
-
-    if (is_hf) {
-        hf = get_hf_plan(model, opts, download_mmproj, download_mtp);
-        for (const auto & f : hf.model_files) {
-            tasks.push_back({f.url, f.local_path});
-        }
-        if (!hf.mmproj.path.empty()) {
-            tasks.push_back({hf.mmproj.url, hf.mmproj.local_path});
-        }
-        if (!hf.mtp.path.empty()) {
-            tasks.push_back({hf.mtp.url, hf.mtp.local_path});
-        }
-    } else if (!model.url.empty()) {
-        tasks = get_url_tasks(model);
-    } else {
-        result.model_path = model.path;
-        return result;
-    }
-
-    if (tasks.empty()) {
-        return result;
-    }
-
+void common_download_run_tasks(const std::vector<common_download_task> & tasks) {
     std::vector<std::future<int>> futures;
     for (const auto & task : tasks) {
         futures.push_back(std::async(std::launch::async,
-            [&task, &opts, is_hf]() {
-                return common_download_file_single(task.url, task.path, opts, is_hf);
+            [&task]() {
+                return common_download_file_single(task.url, task.local_path, task.opts, task.is_hf);
             }
         ));
     }
 
-    for (auto & f : futures) {
-        int status = f.get();
-        if (status == -2 && opts.skip_download) {
-            throw common_skip_download_exception();
-        }
+    for (size_t i = 0; i < futures.size(); ++i) {
+        std::string url = tasks[i].url;
+        int status = futures[i].get();
         bool is_ok = is_http_status_ok(status);
         if (!is_ok) {
-            return {};
+            throw std::runtime_error(string_format("Download '%s' failed with status code: %d", url.c_str(), status));
         }
     }
+}
 
-    if (is_hf) {
-        for (const auto & f : hf.model_files) {
-            hf_cache::finalize_file(f);
-        }
-        result.model_path = hf.primary.final_path;
+std::vector<std::string> common_download_get_all_parts(const std::string & url) {
+    auto split = get_gguf_split_info(url);
 
-        if (!hf.mmproj.path.empty()) {
-            result.mmproj_path = hf_cache::finalize_file(hf.mmproj);
-        }
-
-        if (!hf.mtp.path.empty()) {
-            result.mtp_path = hf_cache::finalize_file(hf.mtp);
-        }
-    } else {
-        result.model_path = model.path;
+    if (split.count <= 1) {
+        return {url};
     }
 
-    return result;
+    std::vector<std::string> parts;
+    for (int i = 1; i <= split.count; i++) {
+        auto suffix = string_format("-%05d-of-%05d.gguf", i, split.count);
+        parts.push_back(split.prefix + suffix);
+    }
+    return parts;
 }
 
 //
@@ -996,4 +921,88 @@ std::vector<common_cached_model_info> common_list_cached_models() {
     }
 
     return result;
+}
+
+bool common_download_remove(const std::string & hf_repo_with_tag) {
+    namespace fs = std::filesystem;
+
+    auto [repo_id, tag] = common_download_split_repo_tag(hf_repo_with_tag);
+
+    if (tag.empty()) {
+        return hf_cache::remove_cached_repo(repo_id);
+    }
+
+    std::string tag_upper = tag;
+    for (char & c : tag_upper) {
+        c = (char) std::toupper((unsigned char) c);
+    }
+
+    auto files = hf_cache::get_cached_files(repo_id);
+    if (files.empty()) {
+        return false;
+    }
+
+    // collect snapshot entries whose tag matches
+    std::vector<fs::path> to_remove;
+    for (const auto & f : files) {
+        auto split = get_gguf_split_info(f.path);
+        if (split.tag == tag_upper) {
+            to_remove.emplace_back(f.local_path);
+        }
+    }
+
+    if (to_remove.empty()) {
+        return false;
+    }
+
+    // resolve blob paths from symlinks before deleting snapshot entries
+    std::vector<fs::path> blobs_to_check;
+    for (const auto & p : to_remove) {
+        std::error_code ec;
+        if (fs::is_symlink(p, ec)) {
+            auto target = fs::read_symlink(p, ec);
+            if (!ec) {
+                blobs_to_check.push_back((p.parent_path() / target).lexically_normal());
+            }
+        }
+    }
+
+    // remove snapshot entries
+    for (const auto & p : to_remove) {
+        std::error_code ec;
+        fs::remove(p, ec);
+        if (ec) {
+            LOG_WRN("%s: failed to remove %s: %s\n", __func__, p.string().c_str(), ec.message().c_str());
+        }
+    }
+
+    if (blobs_to_check.empty()) {
+        return true;
+    }
+
+    // collect blobs still referenced by remaining snapshot entries
+    std::unordered_set<std::string> still_referenced;
+    for (const auto & f : hf_cache::get_cached_files(repo_id)) {
+        fs::path p(f.local_path);
+        std::error_code ec;
+        if (fs::is_symlink(p, ec)) {
+            auto target = fs::read_symlink(p, ec);
+            if (!ec) {
+                still_referenced.insert((p.parent_path() / target).lexically_normal().string());
+            }
+        }
+    }
+
+    // remove orphaned blobs
+    for (const auto & blob : blobs_to_check) {
+        if (still_referenced.find(blob.string()) == still_referenced.end()) {
+            std::error_code ec;
+            fs::remove(blob, ec);
+            if (ec) {
+                LOG_WRN("%s: failed to remove blob %s: %s\n", __func__, blob.string().c_str(), ec.message().c_str());
+            }
+        }
+    }
+
+    return true;
 }

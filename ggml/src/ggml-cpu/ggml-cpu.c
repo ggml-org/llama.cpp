@@ -82,6 +82,9 @@ float ggml_table_f32_f16[1 << 16];
 // precomputed f32 table for e8m0 half (1 KB) (simd-mappings.h)
 float ggml_table_f32_e8m0_half[1 << 8];
 
+// precomputed f32 table for ue4m3 (1 KB) (simd-mappings.h)
+float ggml_table_f32_ue4m3[1 << 8];
+
 #if defined(__ARM_ARCH)
 struct ggml_arm_arch_features_type {
     int sve_cnt;
@@ -224,6 +227,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_Q1_0] = {
         .from_float               = quantize_row_q1_0,
         .vec_dot                  = ggml_vec_dot_q1_0_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_Q2_0] = {
+        .from_float               = quantize_row_q2_0,
+        .vec_dot                  = ggml_vec_dot_q2_0_q8_0,
         .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
     },
@@ -1912,6 +1921,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_im2col_3d(params, tensor);
             } break;
+        case GGML_OP_COL2IM_1D:
+            {
+                ggml_compute_forward_col2im_1d(params, tensor);
+            } break;
         case GGML_OP_CONV_2D:
             {
                 ggml_compute_forward_conv_2d(params, tensor);
@@ -2046,6 +2059,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_GATED_DELTA_NET:
             {
                 ggml_compute_forward_gated_delta_net(params, tensor);
+            } break;
+        case GGML_OP_LIGHTNING_INDEXER:
+            {
+                ggml_compute_forward_lightning_indexer(params, tensor);
             } break;
         case GGML_OP_MAP_CUSTOM1:
             {
@@ -2343,6 +2360,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_3D:
         case GGML_OP_CONV_2D_DW:
+        case GGML_OP_COL2IM_1D:
         case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_CONV_TRANSPOSE_2D:
             {
@@ -2366,6 +2384,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_FLASH_ATTN_BACK:
         case GGML_OP_SSM_CONV:
         case GGML_OP_SSM_SCAN:
+        case GGML_OP_LIGHTNING_INDEXER:
             {
                 n_tasks = n_threads;
             } break;
@@ -2943,7 +2962,7 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_GATED_DELTA_NET:
                     {
                         const int64_t S_v = node->src[2]->ne[0];
-                        const int64_t K   = node->src[5]->ne[1];  // state is (D, K, n_seqs)
+                        const int64_t K   = ggml_get_op_params_i32(node, 0);
                         const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
                         cur = per_thread * sizeof(float) * n_tasks;
                     } break;
@@ -2951,6 +2970,12 @@ struct ggml_cplan ggml_graph_plan(
                     {
                         GGML_ABORT("fatal error");
                     }
+                case GGML_OP_LIGHTNING_INDEXER:
+                    {
+                        // temp buffer for dequantizing lightning indexer keys
+                        const int64_t ne10 = node->src[1]->ne[0];
+                        cur += sizeof(float)*ne10*n_tasks;
+                    } break;
                 default:
                     break;
             }
@@ -3791,6 +3816,11 @@ void ggml_cpu_init(void) {
             // initialize E8M0 half table (256 entries)
             for (int i = 0; i < (1 << 8); ++i) {
                 ggml_table_f32_e8m0_half[i] = GGML_E8M0_TO_FP32_HALF(i);
+            }
+
+            // initialize UE4M3 table (256 entries)
+            for (int i = 0; i < (1 << 8); ++i) {
+                ggml_table_f32_ue4m3[i] = ggml_ue4m3_to_fp32(i);
             }
 
             const uint64_t t_end = ggml_time_us(); UNUSED(t_end);

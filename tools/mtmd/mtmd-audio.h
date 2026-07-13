@@ -10,16 +10,16 @@
 #define MTMD_INTERNAL_HEADER
 
 struct mtmd_audio_mel {
-    int n_len;
-    int n_len_org;
-    int n_mel;
+    int64_t n_len;
+    int64_t n_len_org;
+    int64_t n_mel;
 
     std::vector<float> data;
 };
 
 struct mtmd_audio_mel_filters {
-    int32_t n_mel;
-    int32_t n_fft;
+    int64_t n_mel;
+    int64_t n_fft;
 
     std::vector<float> data;
 };
@@ -39,8 +39,8 @@ struct mtmd_audio_cache {
 
     // Build mel filterbank matrix [n_mel × n_fft_bins] at runtime.
     // n_fft_bins must be (N_fft / 2 + 1). Example: if N_fft=512 -> n_fft_bins=257.
-    void fill_mel_filterbank_matrix(int   n_mel,
-                                    int   n_fft,
+    void fill_mel_filterbank_matrix(int64_t n_mel,
+                                    int64_t n_fft,
                                     int   sample_rate,               // e.g. 16000
                                     float fmin             = 0.0f,   // e.g. 0.0
                                     float fmax             = -1.0f,  // e.g. sr/2; pass -1 for auto

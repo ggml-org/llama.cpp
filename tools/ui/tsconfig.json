@@ -24,7 +24,8 @@
 		"tests/**/*.svelte",
 		".storybook/**/*.ts",
 		".storybook/**/*.svelte"
-	]
+	],
+	"exclude": ["src/lib/services/sandbox-worker.js"]
 	// Path aliases are handled by https://svelte.dev/docs/kit/configuration#alias
 	// except $lib which is handled by https://svelte.dev/docs/kit/configuration#files
 	//

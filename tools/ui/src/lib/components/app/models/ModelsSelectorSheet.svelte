@@ -8,6 +8,10 @@
 		ModelsSelectorList,
 		SearchInput
 	} from '$lib/components/app';
+	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
+	import { ServerModelStatus } from '$lib/enums';
+	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { modelLoadFraction } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -61,12 +65,23 @@
 		<p class="text-xs text-muted-foreground">No models available.</p>
 	{:else}
 		{@const selectedOption = ms.getDisplayOption()}
+		{@const triggerModel = selectedOption?.model}
+		{@const triggerStatus = triggerModel
+			? routerModels().find((m) => m.id === triggerModel)?.status?.value
+			: undefined}
+		{@const triggerLoading =
+			!!triggerModel &&
+			(triggerStatus === ServerModelStatus.LOADING ||
+				modelsStore.isModelOperationInProgress(triggerModel))}
+		{@const triggerLoadPercent = triggerLoading
+			? Math.round(modelLoadFraction(modelsStore.getLoadProgress(triggerModel)) * 100)
+			: 0}
 
 		{#if ms.isRouter}
 			<button
 				type="button"
 				class={[
-					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+					`relative inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 max-sm:px-3 max-sm:py-2 max-sm:text-sm dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 					!ms.isCurrentModelInCache
 						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 						: forceForegroundText
@@ -98,6 +113,10 @@
 					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 				{:else}
 					<ChevronDown class="h-3 w-3.5 shrink-0" />
+				{/if}
+
+				{#if triggerLoading}
+					<ModelLoadHighlight percent={triggerLoadPercent} />
 				{/if}
 			</button>
 

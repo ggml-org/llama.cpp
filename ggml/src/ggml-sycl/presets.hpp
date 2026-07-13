@@ -19,6 +19,7 @@
 #define WARP_SIZE GGML_SYCL_WARP_SIZE
 #define MATRIX_ROW_PADDING 512 // last row of quant. matrices is a multiple of this to avoid out-of-bounds memory accesses
 
+#define SYCL_COL2IM_1D_BLOCK_SIZE 256
 #define SYCL_GELU_BLOCK_SIZE 256
 #define SYCL_SILU_BLOCK_SIZE 256
 #define SYCL_TANH_BLOCK_SIZE 256
@@ -46,6 +47,7 @@
 #define SYCL_PAD_BLOCK_SIZE 256
 #define SYCL_ACC_BLOCK_SIZE 256
 #define SYCL_IM2COL_BLOCK_SIZE 256
+#define SYCL_POOL1D_BLOCK_SIZE 256
 #define SYCL_POOL2D_BLOCK_SIZE 256
 #define SYCL_ARGMAX_BLOCK_SIZE 256
 #define SYCL_CONV_TRANPOSE_1D_BLOCK_SIZE 256
@@ -61,7 +63,7 @@
 #endif
 
 #ifndef K_QUANTS_PER_ITERATION
-#define K_QUANTS_PER_ITERATION 2
+#define K_QUANTS_PER_ITERATION 1
 #else
 static_assert(K_QUANTS_PER_ITERATION == 1 || K_QUANTS_PER_ITERATION == 2, "K_QUANTS_PER_ITERATION must be 1 or 2");
 #endif

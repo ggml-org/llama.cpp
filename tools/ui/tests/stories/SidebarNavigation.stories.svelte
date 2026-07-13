@@ -14,10 +14,6 @@
 </script>
 
 <script lang="ts">
-	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
-
-	let sidebarOpen = $state(true);
-
 	// Mock conversations for the sidebar
 	const mockConversations: DatabaseConversation[] = [
 		{
@@ -58,17 +54,17 @@
 	name="Default"
 	play={async () => {
 		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
-		
-		waitFor(() => setTimeout(() => {
-			conversationsStore.conversations = mockConversations;
-		}, 0));
+
+		waitFor(() =>
+			setTimeout(() => {
+				conversationsStore.conversations = mockConversations;
+			}, 0)
+		);
 	}}
 >
-	<Sidebar.Provider bind:open={sidebarOpen}>
-		<div class="flex-column h-full h-screen w-72 bg-background">
-			<SidebarNavigation />
-		</div>
-	</Sidebar.Provider>
+	<div class="flex-column h-screen w-72 bg-background">
+		<SidebarNavigation />
+	</div>
 </Story>
 
 <Story
@@ -76,20 +72,23 @@
 	name="SearchActive"
 	play={async ({ userEvent }) => {
 		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
-		
-		waitFor(() => setTimeout(() => {
-			conversationsStore.conversations = mockConversations;
-		}, 0));
-		
+
+		waitFor(() =>
+			setTimeout(() => {
+				conversationsStore.conversations = mockConversations;
+			}, 0)
+		);
+
+		// Expand sidebar first, then click Search in the expanded button list
+		const logoTrigger = screen.getByRole('button', { name: /expand navigation/i });
+		await userEvent.click(logoTrigger);
 		const searchTrigger = screen.getByText('Search');
 		userEvent.click(searchTrigger);
 	}}
 >
-	<Sidebar.Provider bind:open={sidebarOpen}>
-		<div class="flex-column h-full h-screen w-72 bg-background">
-			<SidebarNavigation />
-		</div>
-	</Sidebar.Provider>
+	<div class="flex-column h-screen w-72 bg-background">
+		<SidebarNavigation />
+	</div>
 </Story>
 
 <Story
@@ -101,9 +100,7 @@
 		conversationsStore.conversations = [];
 	}}
 >
-	<Sidebar.Provider bind:open={sidebarOpen}>
-		<div class="flex-column h-full h-screen w-72 bg-background">
-			<SidebarNavigation />
-		</div>
-	</Sidebar.Provider>
+	<div class="flex-column h-screen w-72 bg-background">
+		<SidebarNavigation />
+	</div>
 </Story>

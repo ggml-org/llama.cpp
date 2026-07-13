@@ -153,6 +153,15 @@ def parse_args() -> argparse.Namespace:
         help="Store tensors dequantized from FP8 as Q8_0 instead of BF16/F16.",
     )
 
+    parser.add_argument(
+        "--target-model-dir", type=str, default=None,
+        help=(
+            "path to the target model directory; required when converting a standalone draft model "
+            "(e.g. EAGLE3 / DFlash) that needs target-model metadata such as tokenizer, hidden size, and "
+            "layer count to populate its GGUF."
+        ),
+    )
+
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
@@ -238,7 +247,7 @@ def main() -> None:
             assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
             from conversion.pixtral import PixtralModel
             model_class = PixtralModel
-        elif "moe" in hparams:
+        elif hparams.get("moe") is not None:
             from conversion.mistral import MistralMoeModel
             model_class = MistralMoeModel
         else:
@@ -269,6 +278,7 @@ def main() -> None:
                                      small_first_shard=args.no_tensor_first_split,
                                      remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template,
                                      sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
+                                     target_model_dir=Path(args.target_model_dir) if args.target_model_dir else None,
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
                                      )

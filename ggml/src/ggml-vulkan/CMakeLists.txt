@@ -97,6 +97,18 @@ if (Vulkan_FOUND)
         "GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT"
     )
 
+    test_shader_extension_support(
+        "GL_EXT_float_e2m1"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/float_e2m1.comp"
+        "GGML_VULKAN_FLOAT_E2M1_GLSLC_SUPPORT"
+    )
+
+    test_shader_extension_support(
+        "GL_EXT_float_e4m3"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/float_e4m3.comp"
+        "GGML_VULKAN_FLOAT_E4M3_GLSLC_SUPPORT"
+    )
+
     target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan)
     target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -108,6 +120,9 @@ if (Vulkan_FOUND)
 
     if (GGML_VULKAN_CHECK_RESULTS)
         add_compile_definitions(GGML_VULKAN_CHECK_RESULTS)
+        # the result-checking path computes a CPU reference graph via
+        # ggml_graph_compute_with_ctx(), which is defined in ggml-cpu
+        target_link_libraries(ggml-vulkan PRIVATE ggml-cpu)
     endif()
 
     if (GGML_VULKAN_DEBUG)
@@ -129,6 +144,8 @@ if (Vulkan_FOUND)
 
     if (GGML_VULKAN_RUN_TESTS)
         add_compile_definitions(GGML_VULKAN_RUN_TESTS)
+        # the test path also calls ggml_graph_compute_with_ctx() (ggml-cpu)
+        target_link_libraries(ggml-vulkan PRIVATE ggml-cpu)
     endif()
 
     # Set up toolchain for host compilation whether cross-compiling or not

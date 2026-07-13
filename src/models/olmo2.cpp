@@ -17,7 +17,7 @@ void llama_model_olmo2::load_arch_hparams(llama_model_loader & ml) {
         hparams.swa_type = LLAMA_SWA_TYPE_NONE;
     }
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 16: type = LLM_TYPE_1B; break;
         case 32: type = LLM_TYPE_7B; break;
         case 40: type = LLM_TYPE_13B; break;

@@ -33,12 +33,8 @@
 #endif
 
 static llama_context           ** g_ctx;
-static llama_model             ** g_model;
 static common_sampler          ** g_smpl;
 static common_params            * g_params;
-static std::vector<llama_token> * g_input_tokens;
-static std::ostringstream       * g_output_ss;
-static std::vector<llama_token> * g_output_tokens;
 static bool is_interacting  = false;
 static bool need_insert_eot = false;
 
@@ -136,7 +132,6 @@ int llama_completion(int argc, char ** argv) {
     llama_context * ctx = nullptr;
     common_sampler * smpl = nullptr;
 
-    g_model = &model;
     g_ctx = &ctx;
     g_smpl = &smpl;
 
@@ -549,9 +544,9 @@ int llama_completion(int argc, char ** argv) {
     int n_consumed         = 0;
     int n_session_consumed = 0;
 
-    std::vector<int>   input_tokens;  g_input_tokens  = &input_tokens;
-    std::vector<int>   output_tokens; g_output_tokens = &output_tokens;
-    std::ostringstream output_ss;     g_output_ss     = &output_ss;
+    std::vector<int>   input_tokens;
+    std::vector<int>   output_tokens;
+    std::ostringstream output_ss;
     std::ostringstream assistant_ss; // for storing current assistant message, used in conversation mode
 
     // the first thing we will do is to output the prompt, so set color accordingly
@@ -989,7 +984,7 @@ int llama_completion(int argc, char ** argv) {
         LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
         session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
-        LOG_INF("saved final session to %s, n_tokens = %ld\n", path_session.data(), session_tokens.size());
+        LOG_INF("saved final session to %s, n_tokens = %zu\n", path_session.data(), session_tokens.size());
 
     }
 

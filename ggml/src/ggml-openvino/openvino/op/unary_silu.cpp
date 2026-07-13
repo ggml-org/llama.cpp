@@ -14,7 +14,7 @@ namespace op {
 OutputVector translate_unary_silu(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
-    auto input = context.get_input(0);
+    auto input = process_view_input_new(context, 0);
     auto sigmoid = std::make_shared<ov::op::v0::Sigmoid>(input);
     auto res = std::make_shared<ov::op::v1::Multiply>(input, sigmoid);
 

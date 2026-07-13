@@ -90,14 +90,14 @@ static T slice(const T & array, int64_t start, int64_t stop, int64_t step = 1) {
             stop_val = std::min(stop_val, len);
         }
     } else {
-        start_val = len - 1;
+        start_val = start;
         if (start_val < 0) {
-            start_val = std::max(len + start_val, (int64_t)-1);
+            start_val = std::max(len + start_val, (int64_t)0);
         } else {
             start_val = std::min(start_val, len - 1);
         }
 
-        stop_val = -1;
+        stop_val = stop;
         if (stop_val < -1) {
             stop_val = std::max(len + stop_val, (int64_t)-1);
         } else {
@@ -673,6 +673,9 @@ const func_builtins & value_string_t::get_builtins() const {
             std::string str = val_input->as_string().str();
             // FIXME: Support non-specified delimiter (split on consecutive (no leading or trailing) whitespace)
             std::string delim = (args.count() > 1) ? args.get_pos(1)->as_string().str() : " ";
+            if (delim.empty()) {
+                throw raised_exception("empty separator");
+            }
             int64_t maxsplit = (args.count() > 2) ? args.get_pos(2)->as_int() : -1;
             auto result = mk_val<value_array>();
             size_t pos = 0;
@@ -697,6 +700,9 @@ const func_builtins & value_string_t::get_builtins() const {
             std::string str = val_input->as_string().str();
             // FIXME: Support non-specified delimiter (split on consecutive (no leading or trailing) whitespace)
             std::string delim = (args.count() > 1) ? args.get_pos(1)->as_string().str() : " ";
+            if (delim.empty()) {
+                throw raised_exception("empty separator");
+            }
             int64_t maxsplit = (args.count() > 2) ? args.get_pos(2)->as_int() : -1;
             auto result = mk_val<value_array>();
             size_t pos = 0;
@@ -722,10 +728,23 @@ const func_builtins & value_string_t::get_builtins() const {
             if (count > 0) {
                 throw not_implemented_exception("String replace with count argument not implemented");
             }
-            size_t pos = 0;
-            while ((pos = str.find(old_str, pos)) != std::string::npos) {
-                str.replace(pos, old_str.length(), new_str);
-                pos += new_str.length();
+            if (old_str != new_str) {
+                size_t pos = 0;
+                if (old_str.empty()) {
+                    std::string new_res;
+                    new_res.reserve(str.length() + new_str.length() * (str.length() + 1));
+                    new_res += new_str;
+                    for (const char c : str) {
+                        new_res.push_back(c);
+                        new_res += new_str;
+                    }
+                    str = new_res;
+                } else {
+                    while ((pos = str.find(old_str, pos)) != std::string::npos) {
+                        str.replace(pos, old_str.length(), new_str);
+                        pos += new_str.length();
+                    }
+                }
             }
             auto res = mk_val<value_string>(str);
             res->val_str.mark_input_based_on(args.get_pos(0)->val_str);
@@ -1088,6 +1107,50 @@ const func_builtins & value_array_t::get_builtins() const {
             std::vector<value> arr = val->as_array(); // copy
             std::reverse(arr.begin(), arr.end());
             return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
+        }},
+        {"min", [](const func_args & args) -> value {
+            args.ensure_count(1, 4);
+            args.ensure_vals<value_array>();
+            value val_case    = args.get_kwarg_or_pos("case_sensitive", 1);
+            value attribute   = args.get_kwarg_or_pos("attribute",      2);
+            if (!attribute->is_undefined()) {
+                throw not_implemented_exception("min: attribute not implemented");
+            }
+            // FIXME: min is currently always case sensitive
+            (void) val_case;
+            const auto & arr = args.get_pos(0)->as_array();
+            if (arr.empty()) {
+                return mk_val<value_undefined>();
+            }
+            value result = arr[0];
+            for (size_t i = 1; i < arr.size(); ++i) {
+                if (value_compare(arr[i], result, value_compare_op::lt)) {
+                    result = arr[i];
+                }
+            }
+            return result;
+        }},
+        {"max", [](const func_args & args) -> value {
+            args.ensure_count(1, 4);
+            args.ensure_vals<value_array>();
+            value val_case    = args.get_kwarg_or_pos("case_sensitive", 1);
+            value attribute   = args.get_kwarg_or_pos("attribute",      2);
+            if (!attribute->is_undefined()) {
+                throw not_implemented_exception("max: attribute not implemented");
+            }
+            // FIXME: max is currently always case sensitive
+            (void) val_case;
+            const auto & arr = args.get_pos(0)->as_array();
+            if (arr.empty()) {
+                return mk_val<value_undefined>();
+            }
+            value result = arr[0];
+            for (size_t i = 1; i < arr.size(); ++i) {
+                if (value_compare(arr[i], result, value_compare_op::gt)) {
+                    result = arr[i];
+                }
+            }
+            return result;
         }},
         {"unique", array_unique_not_implemented},
     };
