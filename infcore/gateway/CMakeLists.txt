@@ -37,7 +37,6 @@ target_include_directories(infcore_gateway PRIVATE
 # include движка (см. AUDIT.md §5, граница по C-API llama.h).
 target_link_libraries(infcore_gateway PRIVATE
     infcore_security
-    infcore_observability
     infcore_registry
     infcore_runtime       # lazy-supervisor дочерних llama-server
     cpp-httplib           # vendored HTTP сервер/клиент (REST + прокси)

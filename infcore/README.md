@@ -16,7 +16,7 @@
 - Любые локальные GGUF-модели: text / embeddings / vision (VLM). Audio (ASR/TTS) —
   движок сохранён, эндпоинты `/v1/audio/*` пока не реализованы (roadmap).
 - Multi-model registry, ленивый супервайзер (авто-подъём/гашение llama-server),
-  authn/RBAC, audit, observability (pull-метрики на `/metrics`), клиентский SDK/CLI.
+  authn/RBAC, audit, pull-метрики на `/metrics`, клиентский SDK/CLI.
 - Изоляция бэкендов: управляемые `llama-server` слушают только 127.0.0.1 и защищены
   per-boot `--api-key`; прямой доступ к их портам без ключа -> 401.
 - Полностью offline: нулевой исходящий трафик в рантайме (`enforce_no_egress` +
@@ -40,11 +40,12 @@ cmake --build build -j
 ```
 cmake/profile-rf.cmake   профиль бэкендов/состава (cpu+cuda+vulkan, server+mtmd)
 CMakeLists.txt           супер-проект: add_subdirectory(.. ) движка + слой infcore
-gateway/                 надстройка над tools/server: OpenAI-surface, routing, policy, supervisor
-security/                authn / rbac / audit / secrets
-observability/           pull-метрики (VictoriaMetrics/Prometheus)
+gateway/                 надстройка над tools/server: OpenAI-surface, routing, policy, supervisor,
+                         pull-метрики на /metrics (VictoriaMetrics/Prometheus)
+security/                authn / rbac / audit
 registry/                реестр моделей (multi-model, идея из llm_gateway)
-sdk/python/              клиентский SDK
+runtime/                 lazy-supervisor дочерних llama-server
+sdk/python/              клиентский SDK (stdlib-клиент REST)
 config/                  конфиги + JSON-Schema
 deploy/                  docker / compose / systemd (РФ-образы)
 tests/unit/              ctest: RBAC / authn / json-schema / config

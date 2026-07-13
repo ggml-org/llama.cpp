@@ -27,7 +27,6 @@ endif()
 # llama.h и через хелперы llama-common; файлы апстрима не редактируются.
 # -----------------------------------------------------------------------------
 add_subdirectory(security)
-add_subdirectory(observability)
 add_subdirectory(registry)
 add_subdirectory(runtime)
 add_subdirectory(gateway)

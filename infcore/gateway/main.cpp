@@ -7,14 +7,11 @@
 #include "config.hpp"
 #include "server.hpp"
 
-namespace infcore { void metrics_init(); }
-
 int main(int argc, char** argv) {
     const char* cfg_path = (argc > 1) ? argv[1] : "infcore/config/gateway.yaml";
     std::printf("infcore gateway 0.1.0\n");
 
     try {
-        infcore::metrics_init();
         infcore::GatewayConfig cfg = infcore::load_config(cfg_path);
         infcore::GatewayServer server(std::move(cfg));
         return server.run();

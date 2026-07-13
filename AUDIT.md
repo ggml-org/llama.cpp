@@ -12,7 +12,8 @@
 1. **Движок остаётся функционально полным и неизменным** — это и есть «функции
    llama.cpp по моделям». Содержимое ядра руками не редактируем.
 2. **«Своё» = слой-обвязка в новых каталогах** поверх C-API `llama.h`
-   (gateway, security, observability, registry, RAG/agents, SDK, deploy).
+   (gateway, security, registry, runtime, SDK, deploy). RAG/agents ИСКЛЮЧЕНЫ из проекта
+   (решение 2026-06-29) — каталог `extensions/` не создаётся.
 3. **Удаляем только то, что не относится к моделям**: чужое железо, периферию,
    сетевые/онлайн-пути, брендинг/CI апстрима.
 4. **Обновления из оригинала остаются возможны (drop-in)** — поэтому ненужное
@@ -53,9 +54,10 @@
 | ggml-бэкенды не под наше железо: `metal`, `sycl`, `opencl`, `cann`, `musa`, `hexagon`, `openvino`, `webgpu`, `zdnn`, `zendnn`, `virtgpu`, `hip`, `rpc` | выключить флагами (см. §3) |
 
 ### 1.3 СВОЁ — новые каталоги (апстрим их не создаёт → нулевой конфликт при апдейте)
-`gateway/` (надстройка над tools/server: routing, policy, OpenAI-surface), `security/`
-(authn/RBAC/audit/secrets), `observability/`, `registry/` (multi-model), `extensions/`
-(agents, rag), `sdk/`, `deploy/`, `model-toolkit/`, `docs/`, compliance-артефакты.
+`gateway/` (надстройка над tools/server: routing, policy, OpenAI-surface, pull-метрики
+`/metrics`), `security/` (authn/RBAC/audit), `registry/` (multi-model), `runtime/`
+(lazy-supervisor бэкендов), `sdk/`, `deploy/`, `model-toolkit/`, `docs/`, compliance-артефакты.
+(RAG/agents и `extensions/` исключены из проекта.)
 
 ---
 
@@ -123,7 +125,7 @@
   корректно — «на базе open-source llama.cpp (ggml authors, MIT); собственная разработка —
   слой gateway/security/SDK/расширений и сборка/поставка под РФ-контур».
 - РФ-замены: образы Astra/РЕД ОС/ALT, reverse-proxy Angie, метрики VictoriaMetrics,
-  RAG vector store Postgres Pro + pgvector, внутреннее PyPI-зеркало, GitLab CI/Jenkins.
+  внутреннее PyPI-зеркало, GitLab CI/Jenkins.
 
 ---
 

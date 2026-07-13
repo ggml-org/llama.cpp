@@ -20,3 +20,12 @@ models/*
 arm_neon.h
 compile_commands.json
 Dockerfile
+
+# infcore: не тащим в build-контекст то, что не нужно C++-сборке (движок+infcore).
+# Всё ниже отключено флагами (EXAMPLES/TESTS=OFF) или не участвует в сборке.
+docs/
+benches/
+examples/
+pocs/
+tests/
+.claude/
