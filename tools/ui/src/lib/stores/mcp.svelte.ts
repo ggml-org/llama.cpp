@@ -551,16 +551,6 @@ class MCPStore {
 		});
 	}
 
-	/**
-	 * MCP servers selectable in chat-add UIs and the settings page,
-	 * in the order they were added to the config. Disabled servers stay
-	 * listed so their toggle remains reachable; `enabled` is the on/off
-	 * state, not a visibility filter.
-	 */
-	get visibleMcpServers(): MCPServerSettingsEntry[] {
-		return this.getServers();
-	}
-
 	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {
 		if (!browser) {
 			return false;

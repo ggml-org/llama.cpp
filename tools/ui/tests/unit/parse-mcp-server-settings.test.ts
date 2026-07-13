@@ -108,6 +108,22 @@ describe('parseMcpServerSettings', () => {
 		expect(parsed[3]?.useProxy).toBe(true);
 	});
 
+	it('keeps disabled entries in the list, enabled is state and never a visibility filter', () => {
+		// Regression guard for issue #25625: filtering the server list on
+		// `enabled` hides a toggled-off server from every UI surface with
+		// no way to re-enable it. Any list derived from this parser must
+		// contain disabled entries.
+		const parsed = parseMcpServerSettings(
+			JSON.stringify([
+				{ id: 'on', url: 'https://on.test', enabled: true },
+				{ id: 'off', url: 'https://off.test', enabled: false }
+			])
+		);
+
+		expect(parsed.map((entry) => entry.id)).toEqual(['on', 'off']);
+		expect(parsed[1]?.enabled).toBe(false);
+	});
+
 	it('preserves input order when mapping entries', () => {
 		const source = [
 			{ id: 'gamma', url: 'https://c.test' },
