@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { X, Plus } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import * as Empty from '$lib/components/ui/empty';
 	import { ActionIcon, McpServerCard, McpServerCardSkeleton } from '$lib/components/app';
 	import { DialogMcpServerAddNew } from '$lib/components/app/dialogs';
 	import { HealthCheckStatus } from '$lib/enums';
@@ -23,7 +24,6 @@
 
 	let servers = $derived(mcpStore.visibleMcpServers);
 
-	let initialLoadComplete = $state(false);
 	let isAddingServer = $state(false);
 
 	let previousRouteId = $state<string | null>(null);
@@ -55,26 +55,16 @@
 		}
 	});
 
-	$effect(() => {
-		if (initialLoadComplete) return;
-
-		const allChecked =
-			servers.length > 0 &&
-			servers.every((server) => {
-				const state = mcpStore.getHealthCheckState(server.id);
-
-				return (
-					state.status === HealthCheckStatus.SUCCESS || state.status === HealthCheckStatus.ERROR
-				);
-			});
-
-		if (allChecked) {
-			initialLoadComplete = true;
-		}
-	});
+	// Each card decides for itself whether to render based on its own
+	// health-check state, so adding a server only flashes the new card
+	// (not every other already-loaded card) until its health check resolves.
+	function isServerPending(serverId: string): boolean {
+		const status = mcpStore.getHealthCheckState(serverId).status;
+		return status === HealthCheckStatus.IDLE || status === HealthCheckStatus.CONNECTING;
+	}
 </script>
 
-<div in:fade={{ duration: 150 }}>
+<div in:fade={{ duration: 150 }} class="flex min-h-[calc(100dvh-4rem)] flex-col">
 	<div class="fixed top-4.5 right-4 z-50 md:hidden">
 		<ActionIcon icon={X} tooltip="Close" onclick={handleClose} />
 	</div>
@@ -87,53 +77,78 @@
 
 			<h1 class="text-lg font-semibold md:text-2xl">MCP Servers</h1>
 		</div>
-
-		<Button
-			variant="outline"
-			size="lg"
-			class="shrink-0 fixed md:static bottom-6 right-6"
-			onclick={() => (isAddingServer = true)}
-		>
-			<Plus class="h-4 w-4" />
-
-			Add New Server
-		</Button>
 	</div>
 
 	<DialogMcpServerAddNew bind:open={isAddingServer} />
 
-	<div class="grid gap-5 md:space-y-4 {className}">
-		{#if servers.length === 0 && !isAddingServer}
-			<div class="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-				No MCP Servers configured yet. Add one to enable agentic features.
-			</div>
-		{/if}
+	{#if servers.length === 0}
+		<div class="flex flex-1 items-center justify-center py-16">
+			<Empty.Root class="max-w-md">
+				<Empty.Header>
+					<Empty.Media variant="icon">
+						<Plus />
+					</Empty.Media>
 
-		{#if servers.length > 0}
-			<div
-				class="grid gap-3"
-				style="grid-template-columns: repeat(auto-fill, minmax(min(32rem, calc(100dvw - 2rem)), 1fr));"
-			>
-				{#each servers as server (server.id)}
-					{#if !initialLoadComplete}
-						<McpServerCardSkeleton />
-					{:else}
-						<McpServerCard
-							{server}
-							enabled={conversationsStore.isMcpServerEnabledForChat(server.id)}
-							onToggle={async () => {
-								const wasEnabled = conversationsStore.isMcpServerEnabledForChat(server.id);
-								await conversationsStore.toggleMcpServerForChat(server.id);
-								if (!wasEnabled) {
-									toolsStore.enableAllToolsForServer(server.id);
-								}
-							}}
-							onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
-							onDelete={() => mcpStore.removeServer(server.id)}
-						/>
-					{/if}
-				{/each}
-			</div>
-		{/if}
-	</div>
+					<Empty.Title>Add your first MCP server</Empty.Title>
+
+					<Empty.Description>Connect a remote MCP server by URL.</Empty.Description>
+				</Empty.Header>
+
+				<Empty.Content>
+					<Button size="sm" onclick={() => (isAddingServer = true)}>
+						<Plus />
+
+						Add New Server
+					</Button>
+				</Empty.Content>
+			</Empty.Root>
+		</div>
+	{:else}
+		<div
+			class="grid gap-3 {className}"
+			style="grid-template-columns: repeat(auto-fill, minmax(min(32rem, calc(100dvw - 2rem)), 1fr));"
+		>
+			{#each servers as server (server.id)}
+				{#if isServerPending(server.id)}
+					<McpServerCardSkeleton />
+				{:else}
+					<McpServerCard
+						{server}
+						enabled={conversationsStore.isMcpServerEnabledForChat(server.id)}
+						onToggle={async () => {
+							const wasEnabled = conversationsStore.isMcpServerEnabledForChat(server.id);
+							await conversationsStore.toggleMcpServerForChat(server.id);
+							if (!wasEnabled) {
+								toolsStore.enableAllToolsForServer(server.id);
+							}
+						}}
+						onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
+						onDelete={() => mcpStore.removeServer(server.id)}
+					/>
+				{/if}
+			{/each}
+
+			{#if !isAddingServer}
+				<Empty.Root class="border">
+					<Empty.Header>
+						<Empty.Media variant="icon">
+							<Plus />
+						</Empty.Media>
+
+						<Empty.Title>Add another MCP server</Empty.Title>
+
+						<Empty.Description>Connect a remote MCP server by URL.</Empty.Description>
+					</Empty.Header>
+
+					<Empty.Content>
+						<Button size="sm" onclick={() => (isAddingServer = true)}>
+							<Plus />
+
+							Add New Server
+						</Button>
+					</Empty.Content>
+				</Empty.Root>
+			{/if}
+		</div>
+	{/if}
 </div>

@@ -5,11 +5,10 @@ import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
 /**
  * Tests for the mcpServers settings parser.
  *
- * The branch seeds the MCP servers setting with a default value of
- * `JSON.stringify(RECOMMENDED_MCP_SERVERS)`, so the parser has to be
- * resilient to anything that may live in the user's localStorage: malformed
- * JSON, wrong shapes, missing fields, falsy-but-not-zero numbers, and entry
- * arrays that have been mutated by the user via the settings form.
+ * The parser has to be resilient to anything that may live in the
+ * user's localStorage: malformed JSON, wrong shapes, missing fields,
+ * falsy-but-not-zero numbers, and entry arrays that have been mutated
+ * by the user via the settings form.
  */
 describe('parseMcpServerSettings', () => {
 	it('returns an empty array for falsy or whitespace-only input', () => {

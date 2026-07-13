@@ -28,7 +28,6 @@ import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
 import { TITLE_GENERATION } from './title-generation';
-import { RECOMMENDED_MCP_SERVERS } from './recommended-mcp-servers';
 
 export const SETTINGS_SECTION_TITLES = {
 	GENERAL: 'General',
@@ -775,16 +774,9 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 		key: SETTINGS_KEYS.MCP_SERVERS,
 		label: 'MCP servers',
 		help: 'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
-		defaultValue: JSON.stringify(RECOMMENDED_MCP_SERVERS),
+		defaultValue: '[]',
 		type: SettingsFieldType.INPUT,
 		sync: { serverKey: SETTINGS_KEYS.MCP_SERVERS, paramType: SyncableParameterType.STRING }
-	},
-	{
-		key: SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES,
-		label: 'MCP default server overrides',
-		help: 'Per-server enable/disable defaults inherited by new chats. JSON-serialized list of {serverId, enabled} entries.',
-		defaultValue: '[]',
-		type: SettingsFieldType.INPUT
 	}
 	// {
 	// 	key: SETTINGS_KEYS.PY_INTERPRETER_ENABLED,

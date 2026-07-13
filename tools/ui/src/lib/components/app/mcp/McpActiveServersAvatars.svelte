@@ -13,7 +13,7 @@
 
 	let { class: className = '', onclick }: Props = $props();
 
-	let mcpServers = $derived(mcpStore.getServersSorted().filter((s) => s.enabled));
+	let mcpServers = $derived(mcpStore.getServers().filter((s) => s.enabled));
 	let enabledMcpServersForChat = $derived(
 		mcpServers.filter((s) => conversationsStore.isMcpServerEnabledForChat(s.id) && s.url.trim())
 	);

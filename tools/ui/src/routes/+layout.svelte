@@ -8,7 +8,6 @@
 	import { onMount } from 'svelte';
 
 	import { SidebarNavigation, DialogConversationTitleUpdate } from '$lib/components/app';
-	import { DialogMcpServerRecommendations } from '$lib/components/app/dialogs';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
@@ -27,7 +26,6 @@
 	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
-	import { useMcpRecommendations } from '$lib/hooks/use-mcp-recommendations.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { theme } from '$lib/stores/theme.svelte';
@@ -38,8 +36,6 @@
 	let { children } = $props();
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
-
-	const mcpRecommendations = useMcpRecommendations();
 
 	let chatSidebar:
 		| {
@@ -239,7 +235,10 @@
 	});
 
 	// Background MCP server health checks on app load
-	// Fetch enabled servers from settings and run health checks in background
+	// Fetch enabled servers from settings and run health checks in background.
+	// Only IDLE servers are checked; already-resolved (SUCCESS / ERROR) servers
+	// keep their existing state, so adding or removing a server does not flash
+	// every other card back through skeleton state.
 	$effect(() => {
 		if (!browser) return;
 
@@ -251,7 +250,7 @@
 		if (enabledServers.length > 0) {
 			untrack(() => {
 				// Run health checks in background (don't await)
-				mcpStore.runHealthChecksForServers(enabledServers, false).catch((error) => {
+				mcpStore.runHealthChecksForServers(enabledServers, true).catch((error) => {
 					console.warn('[layout] MCP health checks failed:', error);
 				});
 			});
@@ -324,11 +323,6 @@
 		newTitle={titleUpdateNewTitle}
 		onConfirm={handleTitleUpdateConfirm}
 		onCancel={handleTitleUpdateCancel}
-	/>
-
-	<DialogMcpServerRecommendations
-		open={mcpRecommendations.open}
-		onOpenChange={mcpRecommendations.handleOpenChange}
 	/>
 </Tooltip.Provider>
 

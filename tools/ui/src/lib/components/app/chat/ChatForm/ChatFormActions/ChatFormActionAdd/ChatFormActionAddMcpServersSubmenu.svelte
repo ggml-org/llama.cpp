@@ -17,7 +17,7 @@
 	let { onMcpSettingsClick }: Props = $props();
 
 	let mcpSearchQuery = $state('');
-	let allMcpServers = $derived(mcpStore.getServersSorted());
+	let allMcpServers = $derived(mcpStore.getServers());
 	let mcpServers = $derived(mcpStore.visibleMcpServers);
 	let hasMcpServers = $derived(mcpServers.length > 0);
 	// let hasAnyMcpServers = $derived(allMcpServers.length > 0);
