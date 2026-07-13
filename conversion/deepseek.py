@@ -357,7 +357,7 @@ class DeepseekV2Model(TextModel):
 
         # Unlimited-OCR R-SWA sliding window; the deepseek2-ocr decoder reads it
         if is_ocr:
-            sliding_window = hparams.get("sliding_window_size") or hparams.get("sliding_window")
+            sliding_window = hparams.get("sliding_window_size", hparams.get("sliding_window"))
             if sliding_window:
                 self.gguf_writer.add_sliding_window(sliding_window)
 

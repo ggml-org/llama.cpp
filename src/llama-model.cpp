@@ -2049,17 +2049,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             } break;
         case LLM_ARCH_DEEPSEEK2OCR:
             {
-                // R-SWA runs on one full cache - the REFERENCE mask keeps the
-                // prefix visible, so no eviction and no iswa.
-                //
-                // The V cache must be F32. This OCR decoder reads dense layout
-                // (e.g. tables) by attending over the always-visible visual
-                // prefix; an F16 V cache truncates those value vectors enough to
-                // garble the output (table headers come out as "&quot;"). The HF
-                // reference accumulates attention in F32, so match it here. We
-                // promote the F16 default to F32 by default while still honoring
-                // an explicit lower-precision -ctv (e.g. q8_0). See PR #24975.
-                const ggml_type type_v = params.type_v == GGML_TYPE_F16 ? GGML_TYPE_F32 : params.type_v;
+                // one full cache: the REFERENCE mask keeps the prefix visible, iswa would evict it.
+                // an F16 V cache truncates enough to garble dense-table OCR (HF attends in F32).
+                ggml_type type_v = params.type_v;
+                if (hparams.swa_type == LLAMA_SWA_TYPE_REFERENCE && type_v == GGML_TYPE_F16) {
+                    type_v = GGML_TYPE_F32;
+                    LLAMA_LOG_WARN("%s: promoting V cache type to f32 for R-SWA (pass a quantized -ctv to override)\n", __func__);
+                }
                 res = new llama_kv_cache(
                         *this,
                         hparams,
@@ -2400,6 +2396,11 @@ int32_t llama_model_n_swa(const llama_model * model) {
     // dsv4 kv-cache has SWA but it cannot be used as a rollback because of
     // other compression ratios, so we return 0 here
     if (model->arch == LLM_ARCH_DEEPSEEK4) {
+        return 0;
+    }
+    // deepseek2-ocr R-SWA runs on a full cache that never evicts, so no SWA
+    // cache-invalidation applies
+    if (model->arch == LLM_ARCH_DEEPSEEK2OCR) {
         return 0;
     }
     return model->hparams.n_swa;

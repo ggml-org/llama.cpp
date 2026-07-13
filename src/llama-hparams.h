@@ -403,11 +403,7 @@ struct llama_hparams {
                 } break;
             case LLAMA_SWA_TYPE_REFERENCE:
                 {
-                    // visible iff in the prefix (p0 < n_ref) or within the window (p1 - p0 < n_swa)
-                    const bool windowed  = p1 - p0 >= (int32_t) n_swa;
-                    const bool in_prefix = n_ref < 0 || p0 < n_ref;
-
-                    if (windowed && !in_prefix) {
+                    if (p1 - p0 >= (int32_t) n_swa && n_ref >= 0 && p0 >= n_ref) {
                         return true;
                     }
                 } break;

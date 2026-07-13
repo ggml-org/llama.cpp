@@ -396,12 +396,17 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
         p1 = std::numeric_limits<llama_pos>::max();
     }
 
-    // dropping from pos 0 invalidates the latched prefix
-    if (p0 == 0) {
-        if (seq_id >= 0) {
+    // removal at or into the prefix [0, n_ref) invalidates the latch; a re-extended
+    // prompt then re-latches at its new boundary on the next single-token decode
+    if (seq_id >= 0) {
+        if (p0 <= n_ref[seq_id]) {
             n_ref[seq_id] = -1;
-        } else {
-            n_ref.fill(-1);
+        }
+    } else {
+        for (auto & r : n_ref) {
+            if (p0 <= r) {
+                r = -1;
+            }
         }
     }
 
@@ -617,9 +622,10 @@ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, ll
         return;
     }
 
-    // the prefix boundary is an absolute pos -> shift it with its cells
+    // the prefix boundary is an absolute pos -> shift it with its cells; a shift below
+    // pos 0 empties the prefix rather than colliding with the -1 unlatched sentinel
     if (n_ref[seq_id] >= 0 && n_ref[seq_id] >= p0 && n_ref[seq_id] < p1) {
-        n_ref[seq_id] += shift;
+        n_ref[seq_id] = std::max(n_ref[seq_id] + shift, 0);
     }
 
     for (uint32_t i = 0; i < cells.size(); ++i) {
@@ -669,9 +675,9 @@ void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, in
         return;
     }
 
-    // the prefix boundary is an absolute pos -> divide it with its cells
+    // the boundary is one-past-end -> ceil-divide so the last prefix cell (floored) stays inside
     if (n_ref[seq_id] >= 0 && n_ref[seq_id] >= p0 && n_ref[seq_id] < p1) {
-        n_ref[seq_id] /= d;
+        n_ref[seq_id] = (n_ref[seq_id] + d - 1) / d;
     }
 
     for (uint32_t i = 0; i < cells.size(); ++i) {
@@ -791,6 +797,9 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
     // remember the old state of the cells so we can restore it in the end
     std::vector<state_t> states;
 
+    // apply_ubatch's R-SWA latch is a side effect that must not survive the dry run
+    const auto n_ref_old = n_ref;
+
     bool success = true;
 
     for (const auto & ubatch : ubatches) {
@@ -835,6 +844,8 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
             head = it->v_heads_old[s];
         }
     }
+
+    n_ref = n_ref_old;
 
     if (!success) {
         return {};
@@ -1129,18 +1140,27 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
         return;
     }
 
-    // latch L_m at the prefill->decode boundary (first single-token append to a populated
-    // seq); until then the mask is full causal. assumes single-token decode (mtmd-cli/server).
+    // latch L_m at the prefill->decode boundary: the first single-token append to a
+    // populated seq that requests output. prefill remainders (ubatch-split tails, mtmd
+    // separator chunks) carry no output flag and must not latch mid-prompt. assumes
+    // single-token decode (mtmd-cli/server).
     if (swa_type == LLAMA_SWA_TYPE_REFERENCE) {
         uint32_t n_tok_seq[LLAMA_MAX_SEQ] = { 0 };
         for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-            n_tok_seq[ubatch.seq_id[i][0]]++;
+            for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
+                n_tok_seq[ubatch.seq_id[i][s]]++;
+            }
         }
         for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-            const llama_seq_id seq_id = ubatch.seq_id[i][0];
-            if (n_ref[seq_id] < 0 && n_tok_seq[seq_id] == 1 &&
-                v_cells[seq_to_stream[seq_id]].seq_pos_max(seq_id) >= 0) {
-                n_ref[seq_id] = ubatch.pos[i];
+            if (!ubatch.output[i]) {
+                continue;
+            }
+            for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
+                const llama_seq_id seq_id = ubatch.seq_id[i][s];
+                if (n_ref[seq_id] < 0 && n_tok_seq[seq_id] == 1 &&
+                    v_cells[seq_to_stream[seq_id]].seq_pos_max(seq_id) >= 0) {
+                    n_ref[seq_id] = ubatch.pos[i];
+                }
             }
         }
     }
