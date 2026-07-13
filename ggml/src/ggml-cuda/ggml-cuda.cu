@@ -45,6 +45,7 @@
 #include "ggml-cuda/snake.cuh"
 #include "ggml-cuda/softcap.cuh"
 #include "ggml-cuda/softmax.cuh"
+#include "ggml-cuda/ppu-so.h"
 #include "ggml-cuda/ssm-conv.cuh"
 #include "ggml-cuda/ssm-scan.cuh"
 #include "ggml-cuda/sum.cuh"
@@ -1770,6 +1771,122 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
 }
 
+#ifdef GGML_PPU_SO
+// Route a bf16-weight MoE mul_mat_id through the external DeepGEMM grouped-GEMM .so (libppu_moe.so).
+// Reuses ggml's own ragged->compact machinery: sort the (token,slot) pairs by expert (grouped, expert-ordered),
+// gather src1 activations F32->bf16 into compact rows (get_rows_cuda), build m_indices (expert id per row), run
+// ONE grouped GEMM, then scatter the bf16 result back to dst as F32 (get_rows_cuda). Returns false (fall through to
+// the inline path) if unsupported or if the .so has no kernel for this shape.
+static bool ggml_cuda_mul_mat_id_ppu_so(ggml_backend_cuda_context & ctx,
+        const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
+    if (!ggml_ppu_so_moe_available()) {
+        return false;
+    }
+    // DeepGEMM entry is bf16 A x bf16 B -> bf16 out. Require bf16 expert weights, F32 activations/out.
+    if (src0->type != GGML_TYPE_BF16 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    // The compact gather/scatter (get_rows_cuda with flat row indexing) assumes contiguous operands.
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+        return false;                              // rhs [n_experts, N, K] must be contiguous; so must src1/dst
+    }
+
+    const int64_t K             = src0->ne[0];
+    const int64_t N             = src0->ne[1];
+    const int64_t n_experts     = src0->ne[2];
+    const int64_t n_expert_used = ids->ne[0];
+    const int64_t n_tokens      = src1->ne[2];
+    const int64_t ne11          = src1->ne[1];
+    const int64_t total_rows    = n_tokens * n_expert_used;
+    if (src1->ne[0] != K || dst->ne[0] != N) {
+        return false;
+    }
+
+    // DeepGEMM's grouped-contiguous kernel pins BLOCK_M to this alignment and reads ONE expert id per BLOCK_M row
+    // block (from the block's first row). So every expert's compact row segment must start and end on a multiple of
+    // it; otherwise a block straddles two experts and is silently multiplied by the wrong weights. We therefore pad
+    // each expert's segment up to the alignment. Padding rows gather row 0 of src1 (their result is never read) and
+    // carry their own expert's id so the block stays uniform.
+    const int64_t align = ggml_ppu_so_moe_row_alignment();
+    if (align <= 0 || (align & (align - 1)) != 0) {
+        return false;                              // .so didn't report a sane power-of-two alignment
+    }
+
+    cudaStream_t stream = ctx.stream();
+    const size_t ts = ggml_type_size(GGML_TYPE_BF16);
+
+    // --- sort (token,slot) pairs by expert: compact rows are grouped by expert, in expert order, each expert's
+    //     segment padded up to `align` rows ---
+    std::vector<char> ids_host(ggml_nbytes(ids));
+    CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids->data, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    std::vector<int32_t> ids_to_sorted;                                        // padded row -> src1 row
+    std::vector<int32_t> ids_from_sorted(total_rows);                          // (token*used+slot) -> padded row
+    std::vector<int32_t> m_indices_host;                                       // padded row -> expert id
+    ids_to_sorted.reserve(total_rows + n_experts*align);
+    m_indices_host.reserve(total_rows + n_experts*align);
+    int64_t n_assigned = 0;
+    for (int64_t i02 = 0; i02 < n_experts; ++i02) {
+        const int64_t seg_begin = (int64_t) ids_to_sorted.size();
+        for (int64_t it = 0; it < n_tokens; ++it) {
+            for (int64_t iex = 0; iex < n_expert_used; ++iex) {
+                const int32_t e = *(const int32_t *)(ids_host.data() + it*ids->nb[1] + iex*ids->nb[0]);
+                if (e == i02) {
+                    ids_from_sorted[it*n_expert_used + iex] = (int32_t) ids_to_sorted.size();
+                    ids_to_sorted.push_back((int32_t)(it*ne11 + iex % ne11));
+                    m_indices_host.push_back((int32_t) i02);
+                    ++n_assigned;
+                    break;
+                }
+            }
+        }
+        const int64_t seg_rows   = (int64_t) ids_to_sorted.size() - seg_begin;
+        const int64_t seg_padded = (seg_rows + align - 1) / align * align;
+        for (int64_t r = seg_rows; r < seg_padded; ++r) {
+            ids_to_sorted.push_back(0);            // dummy source row; this output row is never read back
+            m_indices_host.push_back((int32_t) i02);
+        }
+    }
+    if (n_assigned != total_rows) {
+        return false;                              // a slot's expert id was out of range
+    }
+    const int64_t padded_rows = (int64_t) ids_to_sorted.size();
+
+    ggml_cuda_pool_alloc<int32_t> ids_to_dev(ctx.pool(), padded_rows);
+    ggml_cuda_pool_alloc<int32_t> ids_from_dev(ctx.pool(), total_rows);
+    ggml_cuda_pool_alloc<int32_t> m_indices_dev(ctx.pool(), padded_rows);
+    CUDA_CHECK(cudaMemcpyAsync(ids_to_dev.ptr,    ids_to_sorted.data(),   padded_rows*sizeof(int32_t), cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(ids_from_dev.ptr,  ids_from_sorted.data(), total_rows *sizeof(int32_t), cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(m_indices_dev.ptr, m_indices_host.data(),  padded_rows*sizeof(int32_t), cudaMemcpyHostToDevice, stream));
+
+    // --- gather src1 (F32) -> A_bf16 [padded_rows, K], compact & expert-grouped ---
+    ggml_cuda_pool_alloc<char> A_bf16(ctx.pool(), padded_rows*K*ts);
+    get_rows_cuda(src1->data, src1->type, ids_to_dev.ptr, A_bf16.ptr, GGML_TYPE_BF16,
+        K, src1->nb[1], src1->nb[2], src1->nb[3],
+        padded_rows, 1, 1, sizeof(int32_t), padded_rows*sizeof(int32_t), padded_rows*sizeof(int32_t),
+        K*ts, padded_rows*K*ts, padded_rows*K*ts, stream);
+    CUDA_CHECK(cudaGetLastError());
+
+    // --- one grouped GEMM: out_bf16[padded_rows, N] = A_bf16 x src0(per-expert) ---
+    ggml_cuda_pool_alloc<char> out_bf16(ctx.pool(), padded_rows*N*ts);
+    const int rc = ggml_ppu_so_moe_grouped_gemm_bf16_nopad(
+        A_bf16.ptr, src0->data, out_bf16.ptr, m_indices_dev.ptr,
+        (int) padded_rows, (int) N, (int) K, (int) n_experts, (int) (padded_rows / n_experts), stream);
+    if (rc != 0) {
+        return false;                              // .so has no kernel for this shape -> inline fallback
+    }
+
+    // --- scatter the real rows of out_bf16 -> dst (F32); the pad rows are dropped here ---
+    get_rows_cuda(out_bf16.ptr, GGML_TYPE_BF16, ids_from_dev.ptr, dst->data, dst->type,
+        N, N*ts, padded_rows*N*ts, padded_rows*N*ts,
+        total_rows, 1, 1, sizeof(int32_t), total_rows*sizeof(int32_t), total_rows*sizeof(int32_t),
+        dst->nb[1], dst->nb[2], dst->nb[3], stream);
+    CUDA_CHECK(cudaGetLastError());
+    return true;
+}
+#endif // GGML_PPU_SO
+
 static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -1781,6 +1898,14 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+
+#ifdef GGML_PPU_SO
+    // Try the external MoE grouped-GEMM .so (libppu_moe.so, wraps DeepGEMM) for bf16-weight MoE. Handles the
+    // ragged->compact gather + m_indices + bf16 cast + scatter; returns false if unsupported -> inline path below.
+    if (ggml_cuda_mul_mat_id_ppu_so(ctx, src0, src1, ids, dst)) {
+        return;
+    }
+#endif // GGML_PPU_SO
 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {

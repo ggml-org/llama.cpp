@@ -2428,6 +2428,13 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
+        // causal hint: when the mask is a pure bottom-right causal mask, a backend can compute it from positions
+        // and skip reading the mask tensor. Only safe when: causal_attn and no ALiBi (positional path adds no bias),
+        // not a sliding-window layer (SWA masks the far past too), and not the unified KV cache (it packs multiple
+        // sequences into the mask, which the single-stream mask->ne[3]==1 guard can't detect).
+        ggml_flash_attn_ext_set_causal(cur,
+            cparams.causal_attn && hparams.f_max_alibi_bias == 0.0f && !hparams.is_swa(il) && !cparams.kv_unified);
+
         if (v_mla) {
 #if 0
             // v_mla can be applied as a matrix-vector multiplication with broadcasting across dimension 3 == n_tokens.

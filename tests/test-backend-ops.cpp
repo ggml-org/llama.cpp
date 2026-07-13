@@ -9518,6 +9518,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_snake_fuse(GGML_TYPE_BF16, {7680, 192, 1, 1}));
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 16416, 1, 128, {8,  1}, {4, 1}, {0, 2, 1, 3}));
+
+    // PPU port: prefill-scale quantized MUL_MAT, to establish the target MMQ actually hits.
+    for (ggml_type t : {GGML_TYPE_Q4_K, GGML_TYPE_Q4_0}) {
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  4096, 2048,  4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 14336, 2048,  4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  4096, 2048, 14336, {1, 1}, {1, 1}));
+    }
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 128, 1, 16416, {8,  1}, {4, 1}, {0, 1, 2, 3}, 2*16416));
 
     // FWHT tests

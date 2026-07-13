@@ -155,6 +155,14 @@ if (CUDAToolkit_FOUND)
         add_compile_definitions(GGML_CUDA_NO_PEER_COPY)
     endif()
 
+    # External kernel .so support: dlopen libppu_fa.so / libppu_moe.so at runtime (built separately from the
+    # thirdparty/ submodules). llama.cpp itself pulls in NO cutlass/FA/DeepGEMM/torch headers -- only the thin
+    # C ABI (ppu-fa-so.h / ppu-moe-so.h) + the dlopen loader (ppu-so.cu). Default OFF -> fully inert.
+    if (GGML_PPU_SO)
+        add_compile_definitions(GGML_PPU_SO)
+        target_link_libraries(ggml-cuda PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+
     if (GGML_STATIC)
         if (WIN32)
             # As of 12.3.1 CUDA Toolkit for Windows does not offer a static cublas library

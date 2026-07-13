@@ -1,0 +1,13 @@
+[submodule "thirdparty/flash-attention"]
+	path = thirdparty/flash-attention
+	url = https://github.com/Dao-AILab/flash-attention.git
+	branch = main
+	shallow = true
+[submodule "thirdparty/DeepGEMM"]
+	path = thirdparty/DeepGEMM
+	url = https://github.com/deepseek-ai/DeepGEMM.git
+	branch = main
+	shallow = true
+[submodule "thirdparty/flash-linear-attention"]
+	path = thirdparty/flash-linear-attention
+	url = https://github.com/fla-org/flash-linear-attention.git

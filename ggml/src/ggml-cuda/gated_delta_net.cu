@@ -1,5 +1,31 @@
 #include "gated_delta_net.cuh"
 #include "ggml-cuda/common.cuh"
+#include "ppu-so.h"
+#include <cstdlib>
+
+#ifdef GGML_PPU_SO
+// Transpose each [S,S] state block between ggml's [v][k] and FLA's [k][v]. grid = n_seqs*HV blocks.
+static __global__ void ppu_gdn_state_transpose(const float * __restrict__ in, float * __restrict__ out, int S) {
+    const int blk = blockIdx.x;
+    const float * bi = in  + (size_t) blk * S * S;
+    float *       bo = out + (size_t) blk * S * S;
+    for (int idx = threadIdx.x; idx < S * S; idx += blockDim.x) {
+        const int i = idx / S, j = idx % S;   // out[i][j] = in[j][i]
+        bo[i * S + j] = bi[j * S + i];
+    }
+}
+// Copy a possibly-strided src (nb in elements) into a contiguous [n_seqs,T,HV,S] buffer. grid = n_seqs*T*HV rows.
+static __global__ void ppu_gdn_make_contig(const float * __restrict__ src, float * __restrict__ dst, int S,
+        long long s1, long long s2, long long s3, int HV, int T) {
+    const int row = blockIdx.x;                 // flat (seq*T + t)*HV + hv
+    const int hv  = row % HV;
+    const int t   = (row / HV) % T;
+    const int seq = row / (HV * T);
+    const float * sp = src + (long long) seq * s3 + (long long) t * s2 + (long long) hv * s1;
+    float * dp = dst + (long long) row * S;
+    for (int i = threadIdx.x; i < S; i += blockDim.x) dp[i] = sp[i];
+}
+#endif
 
 template <int S_v, bool KDA, bool keep_rs_t>
 __global__ void __launch_bounds__((ggml_cuda_get_physical_warp_size() < S_v ? ggml_cuda_get_physical_warp_size() : S_v) * 4, 2)
@@ -293,6 +319,60 @@ static void ggml_cuda_op_gated_delta_net_impl(
         state_d           = cache->data;
         state_slot_stride = cache->slot_stride;
     }
+
+
+#ifdef GGML_PPU_SO
+    // Try the external FLA recurrent gated-delta-net .so (libppu_gdn.so). Engages only where ggml's math+layout map
+    // 1:1 to FLA (verified): non-KDA scalar gate, K_snapshot==1 (final state only), all tensors F32 and contiguous,
+    // and a matching (H,HV,S) AOT specialization exists. Anything else -> fall through to the inline kernels.
+    // Chunked prefill path (FLA WY tensor-core chain) -- OPT-IN via GGML_PPU_GDN_CHUNKED, and only for real prefills
+    // (T >= 2 chunks). Needs L2-normalized k to be numerically stable, so it is NOT enabled by default (random/test
+    // inputs would diverge); real GDN models L2-norm k upstream. ggml state is [v][k]; the .so wants [k][v], so we
+    // transpose h0 in and ht out. g (src_g) is the RAW per-token gate; the chain cumsums it internally.
+    {
+        static const bool chunk_on = getenv("GGML_PPU_GDN_CHUNKED") != nullptr;
+        if (chunk_on && !kda && !keep_rs && (int) n_tokens >= 128 &&
+            src_q->type == GGML_TYPE_F32 && src_k->type == GGML_TYPE_F32 && src_v->type == GGML_TYPE_F32 &&
+            ggml_is_contiguous(src_q) && ggml_is_contiguous(src_k) && ggml_is_contiguous(src_v) &&
+            ggml_is_contiguous(src_g) && ggml_is_contiguous(src_beta) && ggml_is_contiguous(src_state) &&
+            ggml_is_contiguous(dst) && ggml_ppu_so_gdn_chunked_available()) {
+            const int nblk = (int) (n_seqs * H);           // H here == HV (v heads)
+            ggml_cuda_pool_alloc<float> h0t(ctx.pool(), (size_t) nblk * S_v * S_v);
+            ggml_cuda_pool_alloc<float> htt(ctx.pool(), (size_t) nblk * S_v * S_v);
+            ppu_gdn_state_transpose<<<nblk, 256, 0, stream>>>(s_d, h0t.ptr, (int) S_v);   // [v][k] -> [k][v]
+            const int rc = ggml_ppu_so_gdn_chunked(
+                q_d, k_d, v_d, g_d, b_d, h0t.ptr, dst_d, htt.ptr,
+                (int) n_seqs, (int) n_tokens, (int) neqk1, (int) H, (int) S_v, scale, stream);
+            if (rc == 0) {
+                ppu_gdn_state_transpose<<<nblk, 256, 0, stream>>>(htt.ptr, state_d, (int) S_v);  // [k][v] -> [v][k]
+                return;
+            }
+        }
+    }
+
+    if (!kda && !keep_rs && ggml_ppu_so_gdn_available() &&
+        src_q->type == GGML_TYPE_F32 && src_k->type == GGML_TYPE_F32 && src_v->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(src_q) && ggml_is_contiguous(src_k) &&
+        ggml_is_contiguous(src_g) && ggml_is_contiguous(src_beta) && ggml_is_contiguous(src_state) &&
+        ggml_is_contiguous(dst) && src_v->nb[0] == sizeof(float)) {
+        // v may be a non-contiguous view (head/token strided) -- copy to a contiguous [n_seqs,T,HV,S] buffer.
+        const float * v_use = v_d;
+        ggml_cuda_pool_alloc<float> v_contig(ctx.pool());
+        if (!ggml_is_contiguous(src_v)) {
+            v_contig.alloc((size_t) n_seqs * n_tokens * H * S_v);
+            const int nrow = (int) (n_seqs * n_tokens * H);
+            ppu_gdn_make_contig<<<nrow, 128, 0, stream>>>(v_d, v_contig.ptr, (int) S_v,
+                sv1, sv2, sv3, (int) H, (int) n_tokens);
+            v_use = v_contig.ptr;
+        }
+        const int rc = ggml_ppu_so_gdn_recurrent(
+            q_d, k_d, v_use, g_d, b_d, s_d, dst_d, state_d,
+            (int) n_seqs, (int) n_tokens, (int) neqk1 /*H*/, (int) H /*HV*/, (int) S_v, scale, stream);
+        if (rc == 0) {
+            return;
+        }
+    }
+#endif // GGML_PPU_SO
 
     if (kda) {
         if (keep_rs) {

@@ -2425,6 +2425,15 @@ extern "C" {
     GGML_API enum ggml_prec ggml_flash_attn_ext_get_prec(
             const struct ggml_tensor * a);
 
+    // hint that the mask is a pure bottom-right causal mask (no interior masking / sliding window): lets a backend
+    // compute the mask from positions instead of reading the mask tensor. Default off; safe to ignore.
+    GGML_API void ggml_flash_attn_ext_set_causal(
+            struct ggml_tensor * a,
+            bool                 causal);
+
+    GGML_API bool ggml_flash_attn_ext_get_causal(
+            const struct ggml_tensor * a);
+
     GGML_API void ggml_flash_attn_ext_add_sinks(
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);

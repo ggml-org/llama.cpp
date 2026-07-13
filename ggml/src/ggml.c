@@ -5442,6 +5442,23 @@ enum ggml_prec ggml_flash_attn_ext_get_prec(
     return (enum ggml_prec) prec_i32;
 }
 
+// Optional hint: the mask is a pure bottom-right causal mask (no interior masking, no sliding window). Lets a
+// backend compute the mask from positions instead of reading the mask tensor (op_params[4]; default 0 = off).
+void ggml_flash_attn_ext_set_causal(
+        struct ggml_tensor * a,
+        bool                 causal) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+
+    ggml_set_op_params_i32(a, 4, causal ? 1 : 0); // [0]=scale [1]=max_bias [2]=softcap [3]=prec [4]=causal-hint
+}
+
+bool ggml_flash_attn_ext_get_causal(
+        const struct ggml_tensor * a) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+
+    return ggml_get_op_params_i32(a, 4) != 0;
+}
+
 void ggml_flash_attn_ext_add_sinks(
         struct ggml_tensor * a,
         struct ggml_tensor * sinks) {

@@ -1,0 +1,47 @@
+diff --git a/csrc/jit/device_runtime.hpp b/csrc/jit/device_runtime.hpp
+index 2321ade..3dcfd51 100644
+--- a/csrc/jit/device_runtime.hpp
++++ b/csrc/jit/device_runtime.hpp
+@@ -21,8 +21,10 @@ class DeviceRuntime {
+ 
+ public:
+     // Create the cuBLASLt handle ourselves
++#ifndef DG_NO_TORCH
+     cublasLtHandle_t cublaslt_handle;
+     torch::Tensor cublaslt_workspace;
++#endif
+     bool use_pytorch_managed_cublaslt_handle;
+     bool use_temp_cublaslt_workspace;
+ 
+@@ -41,18 +43,23 @@ public:
+         // when the workspace tensor is destructed after CUDA driver shutdown.
+         use_temp_cublaslt_workspace = get_env<int>("DG_USE_TEMP_CUBLASLT_WORKSPACE", 0) > 0;
+ 
++#ifndef DG_NO_TORCH
+         if (not use_pytorch_managed_cublaslt_handle)
+             DG_CUBLASLT_CHECK(cublasLtCreate(&cublaslt_handle));
+ 
+         if (not use_temp_cublaslt_workspace)
+             cublaslt_workspace = torch::empty({kCublasLtWorkspaceSize}, dtype(torch::kByte).device(at::kCUDA));
++#endif
+     }
+ 
+     ~DeviceRuntime() noexcept(false) {
++#ifndef DG_NO_TORCH
+         if (not use_pytorch_managed_cublaslt_handle)
+             DG_CUBLASLT_CHECK(cublasLtDestroy(cublaslt_handle));
++#endif
+     }
+ 
++#ifndef DG_NO_TORCH
+     cublasLtHandle_t get_cublaslt_handle() const {
+ #if PYTORCH_SUPPORTS_GET_CUBLASLT_HANDLE
+         if (use_pytorch_managed_cublaslt_handle)
+@@ -68,6 +75,7 @@ public:
+             return torch::empty({kCublasLtWorkspaceSize}, dtype(torch::kByte).device(at::kCUDA));
+         return cublaslt_workspace;
+     }
++#endif  // DG_NO_TORCH
+ 
+     std::shared_ptr<cudaDeviceProp> get_prop() {
+         if (cached_prop == nullptr) {

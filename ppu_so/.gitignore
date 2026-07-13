@@ -1,0 +1,18 @@
+# generated / built artifacts -- reproduce with the build scripts, do not commit
+build/
+*.so
+*.o
+# GDN: AOT-generated C (embedded cubins), JIT cubins, goldens, and the test harnesses built from them
+gdn/aot/
+gdn/aot_chunk/
+gdn/aot_chunk_so/
+gdn/cubin/
+gdn/cubin_chunk/
+gdn/golden/
+gdn/golden_chunk/
+gdn/test_abi
+# FA3
+fa3/build/
+fa3/test_fa3
+fa/test_fa
+moe/test_moe
