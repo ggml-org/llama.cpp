@@ -471,10 +471,7 @@ ggml_tensor * llama_model_gigachat35::graph_common::build_zero_centered_norm(
         int           il) {
     GGML_ASSERT(weight != nullptr);
 
-    ggml_tensor * cur = build_norm(input, nullptr, nullptr, LLM_NORM_RMS, il);
-    ggml_tensor * scale = ggml_scale_bias(ctx0, weight, 1.0f, 1.0f);
-
-    return ggml_mul(ctx0, cur, scale);
+    return build_norm(input, weight, nullptr, LLM_NORM_RMS, il);
 }
 
 ggml_tensor * llama_model_gigachat35::graph_common::build_zero_centered_gated_norm(
