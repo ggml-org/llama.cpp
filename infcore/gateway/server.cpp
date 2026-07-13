@@ -217,6 +217,11 @@ int GatewayServer::run() {
         if (!registry_.set_enabled(name, enable)) { inc("errors_total{type=\"model_not_found\"}");
             audit_event(pr, req.remote_addr, "/admin/models", name, "deny", "model not found", 404);
             return error_json(res, 404, "invalid_request_error", "model not found: " + name); }
+        // disable управляемой модели -> гасим её llama-server (иначе висел бы до idle-таймаута).
+        if (!enable) {
+            ModelEntry me;
+            if (registry_.get(name, me) && me.backend_url.empty()) supervisor_->stop(name);
+        }
         audit_event(pr, req.remote_addr, "/admin/models", name, "allow",
                     enable ? "enabled" : "disabled", 200);
         res.set_content(json{{"id", name}, {"enabled", enable}}.dump(), "application/json");

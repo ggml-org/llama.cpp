@@ -45,6 +45,11 @@ public:
     void acquire(const std::string& logical_name);
     void release(const std::string& logical_name);
 
+    // Немедленно погасить управляемый бэкенд модели (напр. при disable через /admin).
+    // Если есть активные запросы - гасим сразу после их завершения (не рвём stream).
+    // No-op для внешних/не запущенных моделей.
+    void stop(const std::string& logical_name);
+
 private:
     enum class State { Stopped, Starting, Ready, Failed };
 
@@ -58,6 +63,7 @@ private:
         long long    retry_after_ms = 0; // backoff: не пересоздавать раньше этого времени
         int          fail_count = 0;
         int          active = 0;
+        bool         stop_requested = false; // /admin disable: погасить, как только active==0
         std::condition_variable cv;
     };
 

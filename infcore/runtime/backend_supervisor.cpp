@@ -159,6 +159,7 @@ std::string BackendSupervisor::ensure_ready(const ModelEntry& e, std::string& er
             case State::Stopped: {
                 if (now_ms() < b.retry_after_ms) { err = b.last_error; return std::string(); }
                 if (b.port == 0) b.port = next_port_++;  // порт назначаем под mu_ (без гонки)
+                b.stop_requested = false;                // новый старт отменяет прежний запрос на стоп
                 b.state = State::Starting;
                 const int port = b.port;
                 std::string serr;
@@ -206,6 +207,21 @@ void BackendSupervisor::release(const std::string& name) {
     Backend& b = *it->second;
     if (b.active > 0) b.active--;
     b.last_used_ms = now_ms();
+    if (b.active == 0 && b.stop_requested) reaper_cv_.notify_all();  // отложенный стоп — будим reaper
+}
+
+void BackendSupervisor::stop(const std::string& logical_name) {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = backends_.find(logical_name);
+    if (it == backends_.end()) return;
+    Backend& b = *it->second;
+    if (b.state == State::Stopped || b.state == State::Failed) { b.stop_requested = false; return; }
+    if (b.active == 0) {
+        stop_backend(b);          // никого не рвём — гасим немедленно
+        b.stop_requested = false;
+    } else {
+        b.stop_requested = true;  // reaper погасит, как только завершатся активные запросы
+    }
 }
 
 void BackendSupervisor::reaper_loop() {
@@ -229,8 +245,11 @@ void BackendSupervisor::reaper_loop() {
                     continue;
                 }
             }
-            if (b.active == 0 && t - b.last_used_ms > opt_.idle_timeout_ms)
+            if (b.active == 0 &&
+                (b.stop_requested || t - b.last_used_ms > opt_.idle_timeout_ms)) {
                 stop_backend(b);
+                b.stop_requested = false;
+            }
         }
     }
 }

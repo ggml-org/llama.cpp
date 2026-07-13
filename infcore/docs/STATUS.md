@@ -12,8 +12,13 @@
 LLM (offline РФ-контур, реестр Минцифры).
 - **Модели:** любые локальные GGUF (цель — Qwen3-MoE `qwen3moe`, поддержана из
   коробки; на Qwen не завязываемся).
-- **Модальности:** текст, embeddings, vision (VLM). Audio (ASR/TTS) — движок
-  сохранён профилем сборки, но эндпоинты `/v1/audio/*` пока не реализованы (roadmap).
+- **Модальности:** текст, embeddings, vision (VLM). Audio — **вход** (аудио в чат-запросе
+  через `input_audio` + audio-mmproj) работает passthrough'ом на llama-server, если модель
+  это поддерживает. Отдельные OpenAI-эндпоинты `/v1/audio/transcriptions` (ASR) и
+  `/v1/audio/speech` (TTS) **сознательно НЕ реализованы**: в llama-server их нет — ASR
+  живёт в отдельном whisper.cpp (в дереве форка отсутствует, интеграция нарушила бы
+  wrap-not-touch), а `tools/tts` — это CLI-бинарь `llama-tts`, а не серверный эндпоинт.
+  Требует отдельного проектирования (см. §6). Профиль сборки движок под аудио сохраняет.
 - **Железо:** NVIDIA CUDA + Vulkan + CPU.
 - **Жёстко:** полностью offline (нулевой egress в рантайме), требования рос. ПО,
   open-source compliance без сокрытия происхождения.
@@ -91,8 +96,13 @@ remotes: `origin`=Nasferatuss/llama.cpp, `upstream`=ggml-org/llama.cpp.
   egress режется на инфра-уровне (systemd/docker) и валидацией конфига.
 
 ## 6. Следующие шаги (по приоритету)
-- 🟡 Audio-эндпоинты `/v1/audio/*` (движок `tools/mtmd`/`tools/tts` уже в профиле).
-- 🟡 `model-toolkit` (offline convert/quantize/bench, не рантайм).
+- 🟡 Audio-эндпоинты `/v1/audio/transcriptions` (ASR) и `/v1/audio/speech` (TTS).
+  БОЛЬШАЯ отдельная задача, НЕ входит в hardening-пасс: llama-server этих эндпоинтов
+  не даёт. ASR потребует вендоринга whisper.cpp (конфликт с wrap-not-touch — нужен
+  отдельный «audio-sidecar»-процесс по аналогии с llama-server), TTS — оркестрации
+  `llama-tts`. Audio-**вход** через чат уже работает (см. §1). Проектировать отдельно.
+- ✅ `model-toolkit` (offline quantize/split/imatrix/export-lora обёртки; не рантайм) —
+  `infcore/model-toolkit/`.
 - ⚪ Полноценное хранилище секретов (secrets store).
 - ⚪ platform-pass (убрать `scripts/apple`,`hip`), целевая сборка CUDA/Vulkan,
   обкатка РФ-деплоя.
