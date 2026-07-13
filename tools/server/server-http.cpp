@@ -267,14 +267,44 @@ bool server_http_context::init(const common_params & params) {
 
     // register server middlewares
     srv->set_pre_routing_handler([middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        // SECURITY (saudit HIGH-2): do not reflect arbitrary Origin with credentials.
+        // Reflecting any Origin enables browser CSRF of the unauthenticated local API.
+        const std::string req_origin = req.get_header_value("Origin");
+        const bool origin_ok = req_origin.empty() ||
+            req_origin.rfind("http://127.0.0.1", 0) == 0 ||
+            req_origin.rfind("http://localhost", 0) == 0 ||
+            req_origin.rfind("https://127.0.0.1", 0) == 0 ||
+            req_origin.rfind("https://localhost", 0) == 0;
+        if (origin_ok && !req_origin.empty()) {
+            res.set_header("Access-Control-Allow-Origin", req_origin);
+            res.set_header("Vary", "Origin");
+        }
         // If this is OPTIONS request, skip validation because browsers don't include Authorization header
         if (req.method == "OPTIONS") {
+            if (!origin_ok) {
+                res.status = 403;
+                res.set_content("{\"error\":\"origin not allowed\"}", "application/json");
+                return httplib::Server::HandlerResponse::Handled;
+            }
             res.set_header("Access-Control-Allow-Credentials", "true");
             res.set_header("Access-Control-Allow-Methods",     "GET, POST");
-            res.set_header("Access-Control-Allow-Headers",     "*");
+            res.set_header("Access-Control-Allow-Headers",     "Authorization, Content-Type, X-Api-Key");
             res.set_content("", "text/html"); // blank response, no data
             return httplib::Server::HandlerResponse::Handled; // skip further processing
+        }
+        if (!origin_ok) {
+            res.status = 403;
+            res.set_content(
+                safe_json_to_str(json {
+                    {"error", {
+                        {"message", "Origin not allowed"},
+                        {"type", "cors_error"},
+                        {"code", 403}
+                    }}
+                }),
+                "application/json; charset=utf-8"
+            );
+            return httplib::Server::HandlerResponse::Handled;
         }
         if (!middleware_server_state(req, res)) {
             return httplib::Server::HandlerResponse::Handled;
