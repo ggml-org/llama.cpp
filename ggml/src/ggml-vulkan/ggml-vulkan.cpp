@@ -49,6 +49,7 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #endif
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
@@ -131,6 +132,60 @@ typedef struct VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE {
 #define ROUNDUP_POW2(M, N) (((M) + (N) - 1) & ~((N) - 1))
 #define CEIL_DIV(M, N) (((M) / (N)) + (((M) % (N)) != 0))
 static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
+
+static bool ggml_vk_parse_intel_windows_driver_version(const std::string & driver_info, int & major, int & minor) {
+#if defined(_WIN32)
+    // Require exactly one separator and non-empty major/minor components.
+    const size_t dot = driver_info.find('.');
+    if (dot == std::string::npos || dot == 0 || dot + 1 >= driver_info.size()) {
+        return false;
+    }
+
+    // Reject inputs with more than one '.' to keep strict xxx.yyyy parsing.
+    if (driver_info.find('.', dot + 1) != std::string::npos) {
+        return false;
+    }
+
+    const char * major_begin = driver_info.data();
+    const char * major_end = major_begin + dot;
+    const char * minor_begin = major_end + 1;
+    const char * minor_end = driver_info.data() + driver_info.size();
+
+    auto major_result = std::from_chars(major_begin, major_end, major);
+    if (major_result.ec != std::errc() || major_result.ptr != major_end || major < 0) {
+        return false;
+    }
+
+    auto minor_result = std::from_chars(minor_begin, minor_end, minor);
+    if (minor_result.ec != std::errc() || minor_result.ptr != minor_end || minor < 0) {
+        return false;
+    }
+
+    return true;
+#else
+    (void) driver_info;
+    (void) major;
+    (void) minor;
+    return false;
+#endif
+}
+
+static bool ggml_vk_intel_windows_driver_newer_than(const std::string & driver_info, int threshold_major, int threshold_minor) {
+#if defined(_WIN32)
+    int major = 0;
+    int minor = 0;
+    if (!ggml_vk_parse_intel_windows_driver_version(driver_info, major, minor)) {
+        return false;
+    }
+
+    return major > threshold_major || (major == threshold_major && minor >= threshold_minor);
+#else
+    (void) driver_info;
+    (void) threshold_major;
+    (void) threshold_minor;
+    return true;
+#endif
+}
 
 #define VK_VENDOR_ID_AMD 0x1002
 #define VK_VENDOR_ID_APPLE 0x106b
@@ -683,6 +738,7 @@ struct vk_device_struct {
     vk::Device device;
     uint32_t vendor_id;
     vk::DriverId driver_id;
+    std::string driver_info;
     vk_device_architecture architecture;
     vk_queue compute_queue;
     vk_queue transfer_queue;
@@ -5351,20 +5407,24 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_argmax_f32, "argmax_f32", argmax_f32_len, argmax_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_sum_rows_f32, "sum_rows_f32", sum_rows_f32_len, sum_rows_f32_data, "main", 2, sizeof(vk_op_sum_rows_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
-    if (device->subgroup_basic && device->subgroup_shuffle) {
-        int idx = 0;
-        for (uint32_t n : {64, 128, 256, 512}) {
-            if (device->subgroup_size <= n) {
-                ggml_vk_create_pipeline(device, device->pipeline_fwht_f32[idx], "fwht_f32", fwht_f32_len, fwht_f32_data, "main", 2, sizeof(vk_op_fwht_push_constants), {1, 1, 1}, { device->subgroup_size, n }, 1, true, true, device->subgroup_size);
+    const bool can_use_fwht = device->driver_id != vk::DriverId::eIntelProprietaryWindows ||
+        ggml_vk_intel_windows_driver_newer_than(device->driver_info, 101, 8860);
+    if (can_use_fwht) {
+        if (device->subgroup_basic && device->subgroup_shuffle) {
+            int idx = 0;
+            for (uint32_t n : {64, 128, 256, 512}) {
+                if (device->subgroup_size <= n) {
+                    ggml_vk_create_pipeline(device, device->pipeline_fwht_f32[idx], "fwht_f32", fwht_f32_len, fwht_f32_data, "main", 2, sizeof(vk_op_fwht_push_constants), {1, 1, 1}, { device->subgroup_size, n }, 1, true, true, device->subgroup_size);
+                }
+                ++idx;
             }
-            ++idx;
-        }
-    } else {
-        int idx = 0;
-        for (uint32_t n : {64, 128, 256, 512}) {
-            const uint32_t block_size = std::min(device->subgroup_size, n);
-            ggml_vk_create_pipeline(device, device->pipeline_fwht_f32[idx], "fwht_shmem_f32", fwht_shmem_f32_len, fwht_shmem_f32_data, "main", 2, sizeof(vk_op_fwht_push_constants), {1, 1, 1}, { block_size, n }, 1);
-            ++idx;
+        } else {
+            int idx = 0;
+            for (uint32_t n : {64, 128, 256, 512}) {
+                const uint32_t block_size = std::min(device->subgroup_size, n);
+                ggml_vk_create_pipeline(device, device->pipeline_fwht_f32[idx], "fwht_shmem_f32", fwht_shmem_f32_len, fwht_shmem_f32_data, "main", 2, sizeof(vk_op_fwht_push_constants), {1, 1, 1}, { block_size, n }, 1);
+                ++idx;
+            }
         }
     }
 
@@ -5912,6 +5972,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->properties = props2.properties;
         device->vendor_id = device->properties.vendorID;
         device->driver_id = driver_props.driverID;
+        device->driver_info = driver_props.driverInfo.data();
 
         if (device->driver_id == vk::DriverId::eMoltenvk) {
             // Disable external_memory_host until https://github.com/KhronosGroup/MoltenVK/pull/2622
