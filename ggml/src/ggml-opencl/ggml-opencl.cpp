@@ -20814,17 +20814,28 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                     if (backend_ctx->f16_mrow && backend_ctx->gpu_family != INTEL &&
                         backend_ctx->kernel_mul_mat_f16_f32_mrow != nullptr &&
                         ne00 >= 128 && ne01 >= 8 && ne00 % 4 == 0 && ne00 <= 8192) {
+                        // The register-blocked / half8 variants cast the src0 row pointer to
+                        // half4 / half8 (8- and 16-byte loads) with no scalar fallback inside
+                        // the kernel. ne00 % 4 == 0 constrains the element count per row, NOT
+                        // the byte stride between rows: a permuted or strided src0 (or a view
+                        // at an odd offset) can leave nb01/nb02/nb03 unaligned. Only take them
+                        // when every row this dispatch touches is aligned; the base mrow kernel
+                        // re-checks per row and falls back to its scalar loop.
+                        const cl_ulong row_addr_bits = offset0 | nb01 | nb02 | nb03;
+                        const bool aligned8  = (row_addr_bits & 7)  == 0;
+                        const bool aligned16 = (row_addr_bits & 15) == 0;
+
                         // Register-blocked variants: each subgroup does RPT rows (more
                         // weight loads in flight per lane). 8/16 use half8 (128-bit)
                         // loads, gated on ne00 % 8 == 0.
                         const int rpt = backend_ctx->f16_mrow_rpt;
-                        if (rpt == 16 && ne00 % 8 == 0 && backend_ctx->kernel_mul_mat_f16_f32_mrow_h8r2 != nullptr) {
+                        if (rpt == 16 && ne00 % 8 == 0 && aligned16 && backend_ctx->kernel_mul_mat_f16_f32_mrow_h8r2 != nullptr) {
                             kernel = backend_ctx->kernel_mul_mat_f16_f32_mrow_h8r2;
-                        } else if (rpt == 8 && ne00 % 8 == 0 && backend_ctx->kernel_mul_mat_f16_f32_mrow_h8 != nullptr) {
+                        } else if (rpt == 8 && ne00 % 8 == 0 && aligned16 && backend_ctx->kernel_mul_mat_f16_f32_mrow_h8 != nullptr) {
                             kernel = backend_ctx->kernel_mul_mat_f16_f32_mrow_h8;
-                        } else if (rpt == 4 && backend_ctx->kernel_mul_mat_f16_f32_mrow_r4 != nullptr) {
+                        } else if (rpt == 4 && aligned8 && backend_ctx->kernel_mul_mat_f16_f32_mrow_r4 != nullptr) {
                             kernel = backend_ctx->kernel_mul_mat_f16_f32_mrow_r4;
-                        } else if (rpt == 2 && backend_ctx->kernel_mul_mat_f16_f32_mrow_r2 != nullptr) {
+                        } else if (rpt == 2 && aligned8 && backend_ctx->kernel_mul_mat_f16_f32_mrow_r2 != nullptr) {
                             kernel = backend_ctx->kernel_mul_mat_f16_f32_mrow_r2;
                         } else {
                             kernel = backend_ctx->kernel_mul_mat_f16_f32_mrow;
