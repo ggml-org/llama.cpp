@@ -629,7 +629,7 @@ bool server_res_spipe::should_stop() {
 }
 
 void server_res_spipe::on_complete() {
-    if (!spipe || next_finished) {
+    if (!spipe || next_finished || !next_orig) {
         return;
     }
     std::string chunk;
