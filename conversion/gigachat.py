@@ -316,6 +316,10 @@ class Gigachat35Model(TextModel):
             logger.info("Skipping tied output layer 'lm_head.weight' (will use token_embd.weight)")
             return
 
+        # zero-centered (Gemma-style) norm: fold the +1 into the weights (see conversion/gemma.py)
+        if name.endswith("norm.weight"):
+            data_torch = data_torch.to(torch.float32) + 1
+
         if bid is not None and bid >= self.n_main_layers:
             if self.no_mtp:
                 return
