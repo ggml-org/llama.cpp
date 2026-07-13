@@ -823,7 +823,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_convert_block_iq4_nl_noshuffle;
     cl_kernel kernel_restore_block_iq4_nl_noshuffle;
     cl_kernel kernel_mul_mv_q1_0_f32, kernel_mul_mv_q1_0_f32_flat;
-    cl_kernel kernel_mul_mat_q4_0_f32_1d_8x_flat, kernel_mul_mat_q4_0_f32_1d_16x_flat;
+    cl_kernel kernel_mul_mat_q4_0_f32_1d_8x_flat = nullptr, kernel_mul_mat_q4_0_f32_1d_16x_flat = nullptr;
     cl_kernel kernel_mul_mv_q4_1_f32;
     cl_kernel kernel_mul_mv_q4_1_f32_flat;
     cl_kernel kernel_mul_mv_q5_0_f32;
@@ -19573,10 +19573,19 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         return;
     }
 
+    // mul_mv_q4_0_f32_1d_{8x,16x}_flat do not build on Adreno compilers older than
+    // E031.38.11 and are skipped at load, but this dispatch selected them regardless, so the
+    // first q4_0 GEMM died with CL_INVALID_KERNEL. Fall through to the general path instead.
+    const bool have_q4_0_flat_gemm =
+        src0t != GGML_TYPE_Q4_0 ||
+        (backend_ctx->gpu_family == ADRENO ? backend_ctx->kernel_mul_mat_q4_0_f32_1d_8x_flat  != nullptr :
+         backend_ctx->gpu_family == INTEL  ? backend_ctx->kernel_mul_mat_q4_0_f32_1d_16x_flat != nullptr : true);
+
     if (!ggml_is_transposed(src0) &&
         !ggml_is_transposed(src1) &&
         src1t == GGML_TYPE_F32 &&
         ne00%32 == 0 &&
+        have_q4_0_flat_gemm &&
         ne11 > 2) {
 #ifdef GGML_OPENCL_SOA_Q
         // Set up kernel.
