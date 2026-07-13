@@ -4843,8 +4843,6 @@ struct ggml_tensor * ggml_conv_2d_direct(
         int                   d1) {// dilation dimension 1
 
     GGML_ASSERT(a->ne[2] == b->ne[2]);
-    if (!ggml_is_contiguous(a))
-        GGML_ABORT("unsupported layout: convolution kernel must be contiguous");
     //GGML_ASSERT(a->type == b->type);
 
     int64_t ne[4];
