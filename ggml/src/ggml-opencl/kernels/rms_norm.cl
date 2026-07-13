@@ -18,6 +18,7 @@
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
 #endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 1
 //------------------------------------------------------------------------------
 // rms_norm
 //------------------------------------------------------------------------------
@@ -94,7 +95,9 @@ kernel void kernel_rms_norm(
         }
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 2
 //------------------------------------------------------------------------------
 // rms_norm_mul
 //------------------------------------------------------------------------------
@@ -188,3 +191,4 @@ kernel void kernel_rms_norm_mul(
         y[i00] = (x[i00] * scale) * f[i00%(ne10/4)];
     }
 }
+#endif

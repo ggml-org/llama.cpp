@@ -563,6 +563,10 @@ struct ggml_backend_opencl_context {
     size_t max_workgroup_size;
     bool fp16_support;
     bool has_vector_subgroup_broadcast;
+    // Some Adreno compilers cannot build a program that holds more than one kernel: they
+    // crash or exhaust the host heap, while each of those kernels compiles fine on its own.
+    // Such a device gets one program per kernel.
+    bool split_kernel_programs = false;
     bool has_subgroup_shuffle = false;       // cl_khr_subgroup_shuffle or cl_qcom_subgroup_shuffle
     bool has_integer_dot      = false;       // cl_khr_integer_dot_product or cl_qcom_dot_product8
     bool has_qcom_subgroup_shuffle = false;  // specifically cl_qcom_subgroup_shuffle
@@ -1218,6 +1222,29 @@ static cl_program build_program_from_source(ggml_backend_opencl_context * backen
     }
     return p;
 }
+
+static cl_program cl_program_for_kernel(ggml_backend_opencl_context * backend_ctx,
+                                        const std::string & kernel_src,
+                                        const std::string & opts,
+                                        cl_program & shared, int idx) {
+    if (!backend_ctx->split_kernel_programs) {
+        if (!shared) {
+            shared = build_program_from_source(backend_ctx, kernel_src.c_str(), opts);
+        }
+        return shared;
+    }
+    return build_program_from_source(backend_ctx, kernel_src.c_str(),
+                                     opts + " -DGGML_CL_ONLY=" + std::to_string(idx));
+}
+
+// Returns the program a kernel should be created from. Where a program may hold only one
+// kernel, each kernel is compiled from its own program, selected in the .cl source with
+// -DGGML_CL_ONLY=<idx> (idx being the kernel's position in the file). Everywhere else the
+// file is built once and shared, with GGML_CL_ONLY undefined so every kernel is emitted.
+static cl_program cl_program_for_kernel(ggml_backend_opencl_context * backend_ctx,
+                                        const std::string & kernel_src,
+                                        const std::string & opts,
+                                        cl_program & shared, int idx);
 
 static cl_program build_program_from_binary(cl_context ctx, cl_device_id dev, const char* program_buffer, const std::string &compile_opts, size_t bin_size = 0) {
     cl_program p;
@@ -2107,59 +2134,63 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("mul_mv_f16_f32_l4.cl");
 #endif
-        backend_ctx->program_mul_mv_f16_f32_l4 =
-            build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        cl_program shared_l4 = nullptr;
 
-        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4   = clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4_dr = clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_dr", &err), err));
+        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4   = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 1), "kernel_mul_mat_f16_f32_l4", &err), err));
+        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4_dr = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 2), "kernel_mul_mat_f16_f32_l4_dr", &err), err));
         if (backend_ctx->gpu_family == ADRENO) {
-            CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4_dr_ls = clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_dr_ls", &err), err));
-            CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4_dr_lq = clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_dr_lq", &err), err));
+            CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4_dr_ls = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 3), "kernel_mul_mat_f16_f32_l4_dr_ls", &err), err));
+            CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4_dr_lq = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 4), "kernel_mul_mat_f16_f32_l4_dr_lq", &err), err));
         }
 
         cl_int err_x8 = CL_SUCCESS;
         backend_ctx->kernel_mul_mat_f16_f32_l4_x8 =
-            clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_x8", &err_x8);
+            clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 5), "kernel_mul_mat_f16_f32_l4_x8", &err_x8);
         if (err_x8 != CL_SUCCESS) { backend_ctx->kernel_mul_mat_f16_f32_l4_x8 = nullptr; }
 
         cl_int err_x8p = CL_SUCCESS;
         backend_ctx->kernel_mul_mat_f16_f32_l4_x8_pair =
-            clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_x8_pair", &err_x8p);
+            clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 7), "kernel_mul_mat_f16_f32_l4_x8_pair", &err_x8p);
         if (err_x8p != CL_SUCCESS) { backend_ctx->kernel_mul_mat_f16_f32_l4_x8_pair = nullptr; }
 
         cl_int err_x8g = CL_SUCCESS;
         backend_ctx->kernel_mul_mat_f16_f32_l4_x8_gqa4 =
-            clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_x8_gqa4", &err_x8g);
+            clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 8), "kernel_mul_mat_f16_f32_l4_x8_gqa4", &err_x8g);
         if (err_x8g != CL_SUCCESS) { backend_ctx->kernel_mul_mat_f16_f32_l4_x8_gqa4 = nullptr; }
 
         cl_int err_x8gi = CL_SUCCESS;
         backend_ctx->kernel_mul_mat_f16_f32_l4_x8_gqa4_img =
-            clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_x8_gqa4_img", &err_x8gi);
+            clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 10), "kernel_mul_mat_f16_f32_l4_x8_gqa4_img", &err_x8gi);
         if (err_x8gi != CL_SUCCESS) { backend_ctx->kernel_mul_mat_f16_f32_l4_x8_gqa4_img = nullptr; }
 
         cl_int err_x8gi_r4 = CL_SUCCESS;
-        backend_ctx->kernel_mul_mat_f16_f32_l4_x8_gqa_r4_img =
-            clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_x8_gqa_r4_img", &err_x8gi_r4);
+        // The same compiler miscompiles this one: permuted n=1 nr=[4,1] f16/bf16 comes out
+        // wrong. It is an optional variant and the dispatch null-checks it, so skip it there.
+        if (!backend_ctx->split_kernel_programs) {
+            backend_ctx->kernel_mul_mat_f16_f32_l4_x8_gqa_r4_img =
+                clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 12), "kernel_mul_mat_f16_f32_l4_x8_gqa_r4_img", &err_x8gi_r4);
+        }
+
         if (err_x8gi_r4 != CL_SUCCESS) { backend_ctx->kernel_mul_mat_f16_f32_l4_x8_gqa_r4_img = nullptr; }
 
         cl_int err_r2dk256 = CL_SUCCESS;
         backend_ctx->kernel_mul_mat_f16_f32_l4_x8_gqa_r2_dk256_img =
-            clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_x8_gqa_r2_dk256_img", &err_r2dk256);
+            clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 13), "kernel_mul_mat_f16_f32_l4_x8_gqa_r2_dk256_img", &err_r2dk256);
         if (err_r2dk256 != CL_SUCCESS) { backend_ctx->kernel_mul_mat_f16_f32_l4_x8_gqa_r2_dk256_img = nullptr; }
 
         cl_int err_y8 = CL_SUCCESS;
         backend_ctx->kernel_mul_mat_f16_f32_l4_y8 =
-            clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_y8", &err_y8);
+            clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 6), "kernel_mul_mat_f16_f32_l4_y8", &err_y8);
         if (err_y8 != CL_SUCCESS) { backend_ctx->kernel_mul_mat_f16_f32_l4_y8 = nullptr; }
 
         cl_int err_y8g = CL_SUCCESS;
         backend_ctx->kernel_mul_mat_f16_f32_l4_y8_gqa =
-            clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_y8_gqa", &err_y8g);
+            clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 9), "kernel_mul_mat_f16_f32_l4_y8_gqa", &err_y8g);
         if (err_y8g != CL_SUCCESS) { backend_ctx->kernel_mul_mat_f16_f32_l4_y8_gqa = nullptr; }
 
         cl_int err_y8gi = CL_SUCCESS;
         backend_ctx->kernel_mul_mat_f16_f32_l4_y8_gqa_img =
-            clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4_y8_gqa_img", &err_y8gi);
+            clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_l4, 11), "kernel_mul_mat_f16_f32_l4_y8_gqa_img", &err_y8gi);
         if (err_y8gi != CL_SUCCESS) { backend_ctx->kernel_mul_mat_f16_f32_l4_y8_gqa_img = nullptr; }
         GGML_LOG_CONT(".");
     }
@@ -2515,11 +2546,10 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("rms_norm.cl");
 #endif
-        backend_ctx->program_rms_norm =
-            build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        cl_program shared_rms_norm = nullptr;
 
-        CL_CHECK((backend_ctx->kernel_rms_norm     = clCreateKernel(backend_ctx->program_rms_norm, "kernel_rms_norm", &err), err));
-        CL_CHECK((backend_ctx->kernel_rms_norm_mul = clCreateKernel(backend_ctx->program_rms_norm, "kernel_rms_norm_mul", &err), err));
+        CL_CHECK((backend_ctx->kernel_rms_norm     = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_rms_norm, 1), "kernel_rms_norm", &err), err));
+        CL_CHECK((backend_ctx->kernel_rms_norm_mul = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_rms_norm, 2), "kernel_rms_norm_mul", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -2735,13 +2765,10 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("mean.cl");
 #endif
-        cl_program prog =
-            build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        cl_program shared_mean = nullptr;
 
-        CL_CHECK((backend_ctx->kernel_mean_f32 = clCreateKernel(prog, "kernel_mean_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_mean_f32_4 = clCreateKernel(prog, "kernel_mean_f32_4", &err), err));
-
-        CL_CHECK(clReleaseProgram(prog));
+        CL_CHECK((backend_ctx->kernel_mean_f32 = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_mean, 1), "kernel_mean_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_mean_f32_4 = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_mean, 2), "kernel_mean_f32_4", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -2773,11 +2800,10 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("sum_rows.cl");
 #endif
-        backend_ctx->program_sum_rows_f32 =
-            build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        cl_program shared_sum_rows = nullptr;
 
-        CL_CHECK((backend_ctx->kernel_sum_rows_f32 = clCreateKernel(backend_ctx->program_sum_rows_f32, "kernel_sum_rows_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_sum_rows_f32_4 = clCreateKernel(backend_ctx->program_sum_rows_f32, "kernel_sum_rows_f32_4", &err), err));
+        CL_CHECK((backend_ctx->kernel_sum_rows_f32 = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_sum_rows, 1), "kernel_sum_rows_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_sum_rows_f32_4 = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_sum_rows, 2), "kernel_sum_rows_f32_4", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -2790,13 +2816,11 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("cumsum.cl");
 #endif
-        cl_program prog;
-        prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        cl_program shared_cumsum = nullptr;
 
-        CL_CHECK((backend_ctx->kernel_cumsum_blk = clCreateKernel(prog, "kernel_cumsum_blk", &err), err));
-        CL_CHECK((backend_ctx->kernel_cumsum_add = clCreateKernel(prog, "kernel_cumsum_add", &err), err));
+        CL_CHECK((backend_ctx->kernel_cumsum_blk = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_cumsum, 1), "kernel_cumsum_blk", &err), err));
+        CL_CHECK((backend_ctx->kernel_cumsum_add = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_cumsum, 2), "kernel_cumsum_add", &err), err));
         GGML_LOG_CONT(".");
-        CL_CHECK(clReleaseProgram(prog));
     }
 
     // sigmoid
@@ -2825,11 +2849,10 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("group_norm.cl");
 #endif
-        backend_ctx->program_group_norm =
-            build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        cl_program shared_group_norm = nullptr;
 
-        CL_CHECK((backend_ctx->kernel_group_norm         = clCreateKernel(backend_ctx->program_group_norm, "kernel_group_norm", &err), err));
-        CL_CHECK((backend_ctx->kernel_group_norm_mul_add = clCreateKernel(backend_ctx->program_group_norm, "kernel_group_norm_mul_add", &err), err));
+        CL_CHECK((backend_ctx->kernel_group_norm         = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_group_norm, 1), "kernel_group_norm", &err), err));
+        CL_CHECK((backend_ctx->kernel_group_norm_mul_add = clCreateKernel(cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, shared_group_norm, 2), "kernel_group_norm_mul_add", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -5867,6 +5890,26 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     backend_ctx->driver_version = driver_version;
 
     backend_ctx->adreno_cl_compiler_version = get_adreno_cl_compiler_version(driver_version);
+
+    // The Adreno 642L's compiler (E031.38.01) miscompiles a program in which any kernel is
+    // defined AFTER a kernel that calls a subgroup builtin (sub_group_reduce_*, _scan_*,
+    // _shuffle_*): the build returns CL_OUT_OF_HOST_MEMORY, or segfaults outright in the
+    // larger files. A subgroup-using kernel that is LAST in its program is fine, and so is a
+    // program with no subgroup builtins at all, at any size -- cvt.cl holds 66 kernels and
+    // builds. So this is not a limit on how many kernels a program may hold; it is per-kernel
+    // state the compiler emits for subgroup lowering and then fails to carry across the next
+    // kernel in the same program.
+    //
+    // Reordering each file so its subgroup kernel comes last would satisfy the compiler, but
+    // it only works while there is at most ONE such kernel per file and it silently breaks the
+    // day someone appends a kernel below it. One program per kernel removes the ordering
+    // constraint entirely, which is why it is done that way. Same version boundary the
+    // mul_mv_q4_0_f32_1d_8x_flat skip below already uses.
+    backend_ctx->split_kernel_programs =
+        backend_ctx->gpu_family == GPU_FAMILY::ADRENO &&
+        backend_ctx->adreno_cl_compiler_version.major >= 0 &&
+        backend_ctx->adreno_cl_compiler_version.type != DX &&
+        !backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0);
     backend_ctx->has_vector_subgroup_broadcast =
         (backend_ctx->adreno_cl_compiler_version.type == E031 && backend_ctx->adreno_cl_compiler_version.major >= 47) ||
         (backend_ctx->adreno_cl_compiler_version.type == DX   && backend_ctx->adreno_cl_compiler_version.major >= 17);
@@ -7389,6 +7432,13 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_FLASH_ATTN_EXT: {
             // The E17 compilers segfault while building FA kernels, skip E17 for now
             if (adreno_e17_compiler_quirks(backend_ctx)) {
+                return false;
+            }
+
+            // The flash_attn programs hold 7-11 kernels each and cannot be split the way the
+            // single-purpose programs are. Decline the op where a program may hold only one
+            // kernel; attention falls back to the unfused path, which is correct.
+            if (backend_ctx->split_kernel_programs) {
                 return false;
             }
             const ggml_tensor * q = op->src[0];
