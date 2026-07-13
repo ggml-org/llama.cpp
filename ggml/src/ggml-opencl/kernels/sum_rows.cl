@@ -4,6 +4,7 @@
 // Most devices have max workgroup size of 1024, so this is enough for subgroup
 // sizes of 16, 32, 64 and 128. Increase this value for smaller subgroups sizes
 #define MAX_SUBGROUPS 64
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 1
 kernel void kernel_sum_rows_f32(
     global char *  src0,
     ulong           offset0,
@@ -70,7 +71,9 @@ kernel void kernel_sum_rows_f32(
         dst_row[0] = sumf;
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 2
 kernel void kernel_sum_rows_f32_4(
     global char *  src0,
     ulong           offset0,
@@ -138,3 +141,4 @@ kernel void kernel_sum_rows_f32_4(
         dst_row[0] = sumf;
     }
 }
+#endif
