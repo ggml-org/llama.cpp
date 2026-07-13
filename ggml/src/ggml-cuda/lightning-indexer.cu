@@ -59,7 +59,7 @@ static __global__ void lightning_indexer_kernel_wmma(
     // number of registers needed in each thread to store Q tile in thread block
     constexpr int n_q_next = (n_q_tile + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
-    #pragma unroll
+#pragma unroll
     for (int i_q = tid; i_q < n_q_tile; i_q += THREADS_PER_BLOCK) {
         const int i_head = i_q / (n_embd / 4);
         const int i_embd = i_q % (n_embd / 4);
@@ -77,7 +77,7 @@ static __global__ void lightning_indexer_kernel_wmma(
     constexpr int n_k = K_VECS_PER_BLOCK * (n_embd / 4);
 
     if constexpr (type_K == GGML_TYPE_F16) {
-        #pragma unroll
+#pragma unroll
         for (int i_k = tid; i_k < n_k; i_k += THREADS_PER_BLOCK) {
             const int i_k_vec = i_k / (n_embd / 4);
             const int i_embd = i_k % (n_embd / 4);
@@ -91,7 +91,7 @@ static __global__ void lightning_indexer_kernel_wmma(
         }
     } else {
         constexpr dequantize_V_t dequantize_k = get_dequantize_V<type_K, half, 4>();
-        #pragma unroll
+#pragma unroll
         for (int i_k = tid; i_k < n_k; i_k += THREADS_PER_BLOCK) {
             const int i_k_vec = i_k / (n_embd / 4);
             const int i_embd = i_k % (n_embd / 4);
@@ -132,7 +132,7 @@ static __global__ void lightning_indexer_kernel_wmma(
         float4 q_next[n_q_next];
 
         if (i_head_next < n_head) {
-            #pragma unroll
+#pragma unroll
             for (int i_q = tid, i_q_next = 0; i_q < n_q_tile; i_q += THREADS_PER_BLOCK) {
                 const int i_head = i_head_next + i_q / (n_embd / 4);
                 const int i_embd =               i_q % (n_embd / 4);
@@ -149,7 +149,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 
         // write preloaded Q tile to shared memory
         if (i_head_next < n_head) {
-            #pragma unroll
+#pragma unroll
             for (int i_q = tid, i_q_next = 0; i_q < n_q_tile; i_q += THREADS_PER_BLOCK) {
                 const int i_head = i_q / (n_embd / 4);
                 const int i_embd = i_q % (n_embd / 4);
@@ -169,7 +169,7 @@ static __global__ void lightning_indexer_kernel_wmma(
         const float w_val = w_shared[i_head_0 + h];
 
         float sum = 0.0f;
-        #pragma unroll
+#pragma unroll
         for (int w = 0; w < WARPS_PER_BLOCK; ++w) {
             sum += qk_shared[w][h][k];
         }
@@ -189,7 +189,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 
         // accumulate result over heads
         if (tid < K_VECS_PER_BLOCK) {
-            #pragma unroll
+#pragma unroll
             for (int i_head = 0; i_head < HEADS_PER_INNER_LOOP; ++i_head) {
                 score_k += qk_shared[0][i_head][tid];
             }
@@ -275,7 +275,7 @@ static __global__ void lightning_indexer_kernel_vec(
 
     if constexpr (type_K == GGML_TYPE_F32) {
         // direct copy of float4
-        #pragma unroll
+#pragma unroll
         for (int k = 0; k < K_VECS_PER_WARP; ++k) {
             int i_kv = start_kv + k;
             if (i_kv < n_kv) {
@@ -288,7 +288,7 @@ static __global__ void lightning_indexer_kernel_vec(
     } else {
         // dequantize remaining types to float
         constexpr dequantize_V_t dequantize_k = get_dequantize_V<type_K, float, 4>();
-        #pragma unroll
+#pragma unroll
         for (int k = 0; k < K_VECS_PER_WARP; ++k) {
             int i_kv = start_kv + k;
             if (i_kv < n_kv) {
@@ -316,7 +316,7 @@ static __global__ void lightning_indexer_kernel_vec(
         }
 
         constexpr int n_q = n_head_inner * (n_embd / 4);
-        #pragma unroll
+#pragma unroll
         for (int i_q = tid; i_q < n_q; i_q += THREADS_PER_BLOCK) {
             const int i_head_inner = i_q / (n_embd / 4);
             const int i_head = i_head_0 + i_head_inner;
@@ -335,7 +335,7 @@ static __global__ void lightning_indexer_kernel_vec(
             // dot product of floats
             const float4 q_vec = q_shared_f[i_head_inner][i_lane];
 
-            #pragma unroll
+#pragma unroll
             for (int k = 0; k < K_VECS_PER_WARP; ++k) {
                 ggml_cuda_mad(qk[k], q_vec.x, k_reg_f[k].x);
                 ggml_cuda_mad(qk[k], q_vec.y, k_reg_f[k].y);
@@ -343,7 +343,7 @@ static __global__ void lightning_indexer_kernel_vec(
                 ggml_cuda_mad(qk[k], q_vec.w, k_reg_f[k].w);
             }
 
-            #pragma unroll
+#pragma unroll
             for (int k = 0; k < K_VECS_PER_WARP; ++k) {
                 float sum = warp_reduce_sum(qk[k]);
 
@@ -363,7 +363,7 @@ static __global__ void lightning_indexer_kernel_vec(
     __shared__ float dst_shared[WARPS_PER_BLOCK * K_VECS_PER_WARP];
 
     if (i_lane == 0) {
-        #pragma unroll
+#pragma unroll
         for (int k = 0; k < K_VECS_PER_WARP; ++k) {
             dst_shared[i_warp * K_VECS_PER_WARP + k] = score_k[k];
         }
