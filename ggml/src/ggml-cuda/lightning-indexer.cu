@@ -17,7 +17,7 @@ namespace wmma = nvcuda::wmma;
 
 template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t n_embd, int64_t n_head, ggml_type type_K>
 static __global__ void lightning_indexer_kernel_wmma(
-        const float * q, const char * k, const float * w, const half * m, float * dst,
+        const float * Q, const char * K, const float * W, const half * M, float * dst,
         int64_t n_stream, int64_t n_batch, int64_t n_kv,
         size_t nb1, size_t nb2, size_t nb3,
         size_t nbq1, size_t nbq2, size_t nbq3,
@@ -41,8 +41,8 @@ static __global__ void lightning_indexer_kernel_wmma(
     // each block processes K_VECS_PER_BLOCK K vectors
     const int start_kv = blockIdx.x * K_VECS_PER_BLOCK;
 
-    const char  * q_base = (const char  *)                 q + i_batch*nbq2 + i_stream*nbq3;
-    const float * w_base = (const float *) ((const char *) w + i_batch*nbw1 + i_stream*nbw3);
+    const char  * q_base = (const char  *)                 Q + i_batch*nbq2 + i_stream*nbq3;
+    const float * w_base = (const float *) ((const char *) W + i_batch*nbw1 + i_stream*nbw3);
 
     // phase 1 - load weights and first Q tile to shared memory
 
@@ -82,7 +82,7 @@ static __global__ void lightning_indexer_kernel_wmma(
             const int i_embd = i_k % (n_embd / 4);
             const int i_kv = start_kv + i_k_vec;
             if (i_kv < n_kv) {
-                const int2 * k_base = (const int2 *) ((const char *) k + i_kv*nbk2 + i_stream*nbk3);
+                const int2 * k_base = (const int2 *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3);
                 *(int2*) &k_shared_h[i_k_vec][i_embd] = k_base[i_embd];
             } else {
                 *(int2*) &k_shared_h[i_k_vec][i_embd] = make_int2(0, 0);
@@ -96,7 +96,7 @@ static __global__ void lightning_indexer_kernel_wmma(
             const int i_embd = i_k % (n_embd / 4);
             const int i_kv = start_kv + i_k_vec;
             if (i_kv < n_kv) {
-                const void * k_base = (const void *) ((const char *) k + i_kv*nbk2 + i_stream*nbk3);
+                const void * k_base = (const void *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3);
                 dequantize_k(k_base, &k_shared_h[i_k_vec][i_embd][0], i_embd * 4);
             } else {
                 *(int2*) &k_shared_h[i_k_vec][i_embd] = make_int2(0, 0);
@@ -203,7 +203,7 @@ static __global__ void lightning_indexer_kernel_wmma(
     if (tid < K_VECS_PER_BLOCK) {
         const int i_kv = start_kv + tid;
         if (i_kv < n_kv) {
-            const half * m_base = (const half *) ((const char *) m + i_batch*nbm1 + (i_stream%nem3)*nbm3);
+            const half * m_base = (const half *) ((const char *) M + i_batch*nbm1 + (i_stream%nem3)*nbm3);
             float * dst_base = (float *) ((char *) dst + i_batch*nb1 + i_stream*nb3);
             dst_base[i_kv] = score_k + __half2float(m_base[i_kv]);
         }
@@ -214,7 +214,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 
 template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t n_embd, int64_t n_head, ggml_type type_K>
 static __global__ void lightning_indexer_kernel_wmma(
-        const float * q, const char * k, const float * w, const half * m, float * dst,
+        const float * Q, const char * K, const float * W, const half * M, float * dst,
         int64_t n_stream, int64_t n_batch, int64_t n_kv,
         size_t nb1, size_t nb2, size_t nb3,
         size_t nbq1, size_t nbq2, size_t nbq3,
@@ -223,7 +223,7 @@ static __global__ void lightning_indexer_kernel_wmma(
         size_t nbm1, size_t nbm2, size_t nbm3,
         int64_t nem3
     ) {
-    GGML_UNUSED_VARS(q, k, w, m, dst,
+    GGML_UNUSED_VARS(Q, K, W, M, dst,
         n_stream, n_batch, n_kv,
         nb1, nb2, nb3,
         nbq1, nbq2, nbq3,
@@ -242,7 +242,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 
 template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t n_embd, int64_t n_head, ggml_type type_K>
 static __global__ void lightning_indexer_kernel_vec(
-        const float * q, const char * k, const float * w, const half * m, float * dst,
+        const float * Q, const char * K, const float * W, const half * M, float * dst,
         int64_t n_stream, int64_t n_batch, int64_t n_kv,
         size_t nb1, size_t nb2, size_t nb3,
         size_t nbq1, size_t nbq2, size_t nbq3,
@@ -265,8 +265,8 @@ static __global__ void lightning_indexer_kernel_vec(
     const int start_kv_block = blockIdx.x * K_VECS_PER_BLOCK;
     const int start_kv = start_kv_block + i_warp * K_VECS_PER_WARP;
 
-    const char  * q_base = (const char  *)                 q + i_batch*nbq2 + i_stream*nbq3;
-    const float * w_base = (const float *) ((const char *) w + i_batch*nbw1 + i_stream*nbw3);
+    const char  * q_base = (const char  *)                 Q + i_batch*nbq2 + i_stream*nbq3;
+    const float * w_base = (const float *) ((const char *) W + i_batch*nbw1 + i_stream*nbw3);
 
     // phase 1 - load (and dequantize if needed) K to registers
 
@@ -278,7 +278,7 @@ static __global__ void lightning_indexer_kernel_vec(
         for (int k = 0; k < K_VECS_PER_WARP; ++k) {
             int i_kv = start_kv + k;
             if (i_kv < n_kv) {
-                const float4 * k_base = (const float4 *) ((const char *) k + i_kv*nbk2 + i_stream*nbk3);
+                const float4 * k_base = (const float4 *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3);
                 k_reg_f[k] = k_base[i_lane];
             } else {
                 k_reg_f[k] = make_float4(0, 0, 0, 0);
@@ -291,7 +291,7 @@ static __global__ void lightning_indexer_kernel_vec(
         for (int k = 0; k < K_VECS_PER_WARP; ++k) {
             int i_kv = start_kv + k;
             if (i_kv < n_kv) {
-                const void * k_base = (const void *) ((const char *) k + i_kv*nbk2 + i_stream*nbk3);
+                const void * k_base = (const void *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3);
                 dequantize_k(k_base, &k_reg_f[k], i_lane * 4);
             } else {
                 k_reg_f[k] = make_float4(0, 0, 0, 0);
@@ -375,7 +375,7 @@ static __global__ void lightning_indexer_kernel_vec(
     if (tid < K_VECS_PER_BLOCK) {
         int i_kv = start_kv_block + tid;
         if (i_kv < n_kv) {
-            const half * m_base = (const half *) ((const char *) m + i_batch*nbm1 + (i_stream%nem3)*nbm3);
+            const half * m_base = (const half *) ((const char *) M + i_batch*nbm1 + (i_stream%nem3)*nbm3);
             float * dst_base = (float *) ((char *) dst + i_batch*nb1 + i_stream*nb3);
             dst_base[i_kv] = dst_shared[tid] + __half2float(m_base[i_kv]);
         }
