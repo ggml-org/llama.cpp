@@ -176,6 +176,11 @@ struct server_slot {
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
 
+    // `spec_draft` currently holds tokens the target already accepted, kept only to be re-evaluated
+    // after a checkpoint restore [TAG_SPEC_AVOID_DRAFT_REEVAL]. They are not a draft: they are
+    // accepted by construction and must not enter the acceptance statistics.
+    bool spec_replay = false;
+
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
     std::unique_ptr<const server_task> task;
@@ -296,6 +301,19 @@ struct server_slot {
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
     int32_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
     std::vector<int32_t> n_accepted_per_pos; // Accepted tokens per draft position
+
+    void update_spec_stats(size_t n_accepted, int n_max) {
+        n_draft_accepted   += n_accepted;
+        n_draft_verif_steps += 1;
+
+        if (n_accepted_per_pos.empty()) {
+            n_accepted_per_pos.resize(n_max, 0);
+        }
+
+        for (size_t i = 0; i < n_accepted && i < n_accepted_per_pos.size(); ++i) {
+            n_accepted_per_pos[i]++;
+        }
+    }
 
     void reset() {
         SLT_DBG(*this, "%s", "\n");
@@ -3805,8 +3823,18 @@ private:
                             SLT_INF(slot, "accepted %2zu/%2zu draft tokens (restore checkpoint)\n", accepted.size() - 1, slot.spec_draft.size());
                         }
 
+                        // this is a real verification of a real draft: account for it here, because the
+                        // restore path returns before the statistics below. without this, every partial
+                        // acceptance counts as zero accepted tokens, which is every partial acceptance
+                        // when the target's context cannot roll back (SWA, recurrent).
+                        slot.update_spec_stats(accepted.size() - 1, common_speculative_n_max(&params_base.speculative));
+
                         // partial acceptance is not supported by the context -> truncate the draft and restore the state
                         slot.spec_draft = std::move(accepted);
+
+                        // the accepted tokens are kept only to be re-evaluated on the next iteration; they
+                        // are not a draft and must not be counted again when they come back through here
+                        slot.spec_replay = true;
 
                         const auto & ckpt = slot.spec_ckpt;
 
@@ -3846,16 +3874,14 @@ private:
 
             slot.t_token_generation = std::max<int64_t>(1, t_now - slot.t_start_generation) / 1e3;
 
-            // update how many tokens out of those tested were accepted
-            slot.n_draft_accepted += ids.size() - 1;
-            slot.n_draft_verif_steps += 1;
+            // update how many tokens out of those tested were accepted. a replay carries tokens the target
+            // already accepted, so it is accepted 100% by construction -- counting it would report the
+            // acceptance of the re-evaluation, not of the draft.
+            if (!slot.spec_replay) {
+                slot.update_spec_stats(ids.size() - 1, common_speculative_n_max(&params_base.speculative));
+            }
 
-            if (slot.n_accepted_per_pos.empty()) {
-                slot.n_accepted_per_pos.resize(common_speculative_n_max(&params_base.speculative), 0);
-            }
-            for (size_t i = 0; i < ids.size() - 1 && i < slot.n_accepted_per_pos.size(); ++i) {
-                slot.n_accepted_per_pos[i]++;
-            }
+            slot.spec_replay = false;
 
             // add accepted tokens to the prompt
             slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);
