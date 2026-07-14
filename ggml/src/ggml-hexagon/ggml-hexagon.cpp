@@ -1289,6 +1289,7 @@ struct ggml_hexagon_opbatch {
 
         htp_tensor &h = h_tens[ti];
         h.bi    = add_buffer(sbuf);
+        h.ti    = ti;
         h.data  = t_offset;
         h.type  = t->type;
 

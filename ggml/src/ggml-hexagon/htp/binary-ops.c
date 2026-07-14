@@ -865,7 +865,7 @@ int op_binary(struct htp_ops_context * octx) {
 
     const uint32_t src0_type = octx->src[0]->type;
     if ((src0_type == HTP_TYPE_F32) || (src0_type == HTP_TYPE_F16)) {
-        htp_tensor_make_clean(octx->dsts[0]);
+        htp_tensor_make_clean(octx->dsts[0], octx->ctx->dirty_map);
         return execute_op_binary(octx);
     }
 

@@ -30,8 +30,9 @@ static inline void hex_l2fetch(const void * p, uint32_t width, uint32_t stride, 
     Q6_l2fetch_AP((void *) p, control);
 }
 
-#define HEX_L2_LINE_SIZE       64
-#define HEX_L2_FLUSH_THRESHOLD (128 * 1024)
+#define HEX_L2_LINE_SIZE           128
+#define HEX_L2_FLUSH_WQ_THRESHOLD  (4 * 1024)
+#define HEX_L2_FLUSH_ALL_THRESHOLD (4 * 1024 * 1024)
 
 static inline void hex_l2flush(void * addr, size_t size) {
     const uint32_t s = ((uint32_t) addr) & ~(HEX_L2_LINE_SIZE - 1);

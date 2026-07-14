@@ -25,6 +25,7 @@
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
+#include "hex-bitmap.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-ops.h"
@@ -431,6 +432,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     }
 
     ctx->n_threads = n_hvx;
+    ctx->n_threads_div = init_fastdiv_values(ctx->n_threads);
     for (int i = 0; i < ctx->n_threads; i++) {
         ctx->dma_cached[i] = dma_queue_create(256, (uintptr_t) ctx->vtcm_base, ctx->vtcm_size, &ctx->trace[i]); // queue depth
         if (ctx->dma_cached[i]) {
@@ -843,18 +845,61 @@ static void prep_tensors(struct htp_context *ctx, struct htp_buf_desc *bufs, str
     }
 }
 
-static inline bool hex_l2flush_by_size(struct htp_thread_trace * tr, uint32_t trace_idx, void * addr, size_t size) {
-    if (size > HEX_L2_FLUSH_THRESHOLD) {
-        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, trace_idx);
-        qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, trace_idx);
-        return true;
-    } else {
-        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, trace_idx);
-        hex_l2flush(addr, size);
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, trace_idx);
-        return false;
+struct l2flush_task {
+    struct htp_thread_trace * trace;
+    uint32_t start;
+    uint32_t end;
+    uint32_t chunk_size;
+    uint32_t ti;
+};
+
+static void l2flush_thread_worker(unsigned int n, unsigned int i, void * data) {
+    struct l2flush_task * task = (struct l2flush_task *) data;
+    const uint32_t start = task->start;
+    const uint32_t end   = task->end;
+    const uint32_t ti    = task->ti;
+    const uint32_t chunk_size = task->chunk_size;
+
+    const uint32_t thread_s = start + i * chunk_size;
+    const uint32_t thread_e = (i == n - 1) ? end : (thread_s + chunk_size);
+
+    struct htp_thread_trace * tr = task->trace ? &task->trace[i] : NULL;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, ti);
+    hex_l2flush((void *) (uintptr_t) thread_s, thread_e - thread_s);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, ti);
+}
+
+static inline void flush_tensor(struct htp_ops_context * octx, struct htp_tensor * t, struct htp_thread_trace * tr) {
+    if (!bitmap_test(octx->ctx->dirty_map, t->ti)) {
+        return;
     }
+
+    if (t->size > HEX_L2_FLUSH_ALL_THRESHOLD) {
+        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
+        qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_ALL, QURT_MEM_DCACHE);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
+        bitmap_reset(octx->ctx->dirty_map, HTP_OP_MAX_TENSORS);
+        return;
+    }
+
+    if (t->size > HEX_L2_FLUSH_WQ_THRESHOLD && octx->n_threads > 1) {
+        struct l2flush_task task;
+        task.start = hex_align_down((size_t) t->data, HEX_L2_LINE_SIZE);
+        task.end   = hex_align_up((size_t) t->data + t->size, HEX_L2_LINE_SIZE);
+        task.ti    = t->ti;
+        task.trace = octx->ctx ? octx->ctx->trace : NULL;
+
+        const uint32_t total_size = task.end - task.start;
+        task.chunk_size = (fastdiv(total_size, &octx->ctx->n_threads_div)) & ~((HEX_L2_LINE_SIZE * 4) - 1);
+
+        work_queue_run(octx->ctx->work_queue, l2flush_thread_worker, &task, octx->n_threads);
+    } else {
+        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
+        hex_l2flush((void *) t->data, t->size);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
+    }
+
+    htp_tensor_make_clean(t, octx->ctx->dirty_map);
 }
 
 static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
@@ -866,8 +911,6 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
     octx->op    = op->opcode;
 
     FARF(HIGH, "proc-op #%u: opcode %u flags 0x%x", idx, octx->op, octx->flags);
-
-    bool l2clean = false;
 
     // Prep input tensors
     for (uint32_t i=0; i<HTP_OP_MAX_INPUTS; i++) {
@@ -882,12 +925,7 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->src[i]     = src;
         octx->src_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        if (src->flags & HTP_TENSOR_DIRTY) {
-            src->flags &= ~HTP_TENSOR_DIRTY;
-            if (!l2clean) {
-                l2clean = hex_l2flush_by_size(tr, i, (void *) src->data, src->size);
-            }
-        }
+        flush_tensor(octx, src, tr);
 
         FARF(HIGH, "prep-src #%u: data %p size %u : %u:%u:%u:%u", op->src[i], (void*) src->data, src->size,
             src->ne[0], src->ne[1], src->ne[3], src->ne[3]);
@@ -905,7 +943,7 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->dsts[i]    = dst;
         octx->dst_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        htp_tensor_make_dirty(dst);
+        htp_tensor_make_dirty(dst, octx->ctx->dirty_map);
 
         FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
@@ -986,6 +1024,7 @@ static void process_ops(struct htp_context * ctx) {
         htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, 0);
         qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, 0);
+        bitmap_reset(ctx->dirty_map, HTP_OP_MAX_TENSORS);
 
         // Setup descriptor pointers
         uint8_t * m_ptr = dbuf.ptr;
@@ -1002,17 +1041,12 @@ static void process_ops(struct htp_context * ctx) {
         octx->n_threads = ctx->n_threads;
         octx->ctx       = ctx;
 
+        memset(ctx->trace, 0, sizeof(ctx->trace));
         if (ctx->profiler == HTP_PROF_TRACE) {
-            memset(ctx->trace, 0, sizeof(ctx->trace));
             struct htp_trace_desc * trace_events = (struct htp_trace_desc *) (m_ptr + p_size);
             for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
-                ctx->trace[t].events = &trace_events[t * req.n_traces];
+                ctx->trace[t].events     = &trace_events[t * req.n_traces];
                 ctx->trace[t].max_events = req.n_traces;
-            }
-        } else {
-            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
-                ctx->trace[t].events = NULL;
-                ctx->trace[t].max_events = 0;
             }
         }
 

@@ -6,6 +6,7 @@
 #include "htp-ops.h"
 #include "hex-profile.h"
 #include "work-queue.h"
+#include "hex-fastdiv.h"
 
 #include <assert.h>
 #include <dspqueue.h>
@@ -77,6 +78,7 @@ struct htp_context {
     struct hmx_queue *     hmx_queue;
 
     uint32_t               n_threads;
+    struct fastdiv_values  n_threads_div;
 
     int                    thread_id;
     int                    thread_prio;
@@ -93,6 +95,7 @@ struct htp_context {
     atomic_bool            vtcm_needs_release;
 
     uint64_t               max_vmem;
+    uint32_t               dirty_map[HTP_OP_MAX_TENSORS / 32];
 
     // Persistent DDR scratchpad for MUL_MAT_ID mappings
     void *                 ddr_spad_base;
