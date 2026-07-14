@@ -2769,6 +2769,27 @@ private:
             abort_all_slots("pre_decode() failed: " + std::string(e.what()));
         }
 
+        GGML_ASSERT(batch.slot_batched || batch.size() == 0);
+
+        if (batch.slot_batched) {
+            auto & slot_batched      = batch.slot_batched;
+            auto & alora_scale       = batch.alora_scale;
+            auto & alora_disabled_id = batch.alora_disabled_id;
+
+            // TODO @ngxson : alora handling is too messy, need to refactor it to be more clear and maintainable
+            // apply lora, only need to do it once per batch
+            common_set_adapter_lora(ctx_tgt, slot_batched->lora);
+
+            // if the lora is temporarily disabled for an alora, re-enable it
+            // for next time
+            if (alora_scale > 0.0f) {
+                SRV_DBG("re-enabling alora with scale %f\n", alora_scale);
+                slot_batched->lora[alora_disabled_id].scale = alora_scale;
+            }
+
+            llama_set_embeddings(ctx_tgt, slot_batched->need_embd());
+        }
+
         llama_batch batch_view;
         int32_t off_next = 0;
         int32_t n_batch = llama_n_batch(ctx_tgt);
@@ -2808,7 +2829,6 @@ private:
                 abort_all_slots("post_decode() failed: " + std::string(e.what()));
                 break; // stop any further processing
             }
-
         }
     }
 
@@ -3549,25 +3569,6 @@ private:
     // throw std::runtime_error on fatal error
     bool decode(int32_t & n_batch, int32_t off, llama_batch & batch_view) {
         SRV_DBG("n_batch (effective) = %d, off = %d\n", n_batch, off);
-
-        auto & slot_batched      = batch.slot_batched;
-        auto & alora_scale       = batch.alora_scale;
-        auto & alora_disabled_id = batch.alora_disabled_id;
-
-        // TODO @ngxson : alora handling is too messy, need to refactor it to be more clear and maintainable
-        if (slot_batched) {
-            // apply lora, only need to do it once per batch
-            common_set_adapter_lora(ctx_tgt, slot_batched->lora);
-
-            // if the lora is temporarily disabled for an alora, re-enable it
-            // for next time
-            if (alora_scale > 0.0f) {
-                SRV_DBG("re-enabling alora with scale %f\n", alora_scale);
-                slot_batched->lora[alora_disabled_id].scale = alora_scale;
-            }
-
-            llama_set_embeddings(ctx_tgt, slot_batched->need_embd());
-        }
 
         if (batch.size() == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
