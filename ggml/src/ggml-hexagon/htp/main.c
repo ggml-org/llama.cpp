@@ -863,7 +863,7 @@ static void l2flush_thread_worker(unsigned int n, unsigned int i, void * data) {
     const uint32_t thread_s = start + i * chunk_size;
     const uint32_t thread_e = (i == n - 1) ? end : (thread_s + chunk_size);
 
-    struct htp_thread_trace * tr = task->trace ? &task->trace[i] : NULL;
+    struct htp_thread_trace * tr = &task->trace[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, ti);
     hex_l2flush((void *) (uintptr_t) thread_s, thread_e - thread_s);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, ti);
@@ -887,7 +887,7 @@ static inline void flush_tensor(struct htp_ops_context * octx, struct htp_tensor
         task.start = hex_align_down((size_t) t->data, HEX_L2_LINE_SIZE);
         task.end   = hex_align_up((size_t) t->data + t->size, HEX_L2_LINE_SIZE);
         task.ti    = t->ti;
-        task.trace = octx->ctx ? octx->ctx->trace : NULL;
+        task.trace = octx->ctx->trace;
 
         const uint32_t total_size = task.end - task.start;
         task.chunk_size = (fastdiv(total_size, &octx->ctx->n_threads_div)) & ~((HEX_L2_LINE_SIZE * 4) - 1);
@@ -903,7 +903,7 @@ static inline void flush_tensor(struct htp_ops_context * octx, struct htp_tensor
 }
 
 static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[0] : NULL;
+    struct htp_thread_trace * tr = &octx->ctx->trace[0];
 
     memcpy(octx->op_params, op->params, sizeof(octx->op_params));
     memcpy(octx->kernel_params, op->kernel_params, sizeof(octx->kernel_params));

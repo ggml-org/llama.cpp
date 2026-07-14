@@ -398,7 +398,7 @@ static void unary_task_f32_##NAME(unsigned int nth, unsigned int ith, void * dat
     struct htp_ops_context * octx = uctx->octx;                                                                     \
     const struct htp_tensor * src = octx->src[0];                                                                   \
     const struct htp_tensor * dst = octx->dst;                                                                      \
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                       \
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];                                                          \
                                                                                                                     \
     htp_unary_preamble;                                                                                             \
                                                                                                                     \
@@ -559,7 +559,7 @@ static void unary_task_f32_tiled_##NAME(unsigned int nth, unsigned int ith, void
     struct htp_ops_context * octx = uctx->octx;                                                                     \
     const struct htp_tensor * src = octx->src[0];                                                                   \
     const struct htp_tensor * dst = octx->dst;                                                                      \
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                       \
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];                                                          \
                                                                                                                     \
     htp_unary_preamble;                                                                                             \
                                                                                                                     \

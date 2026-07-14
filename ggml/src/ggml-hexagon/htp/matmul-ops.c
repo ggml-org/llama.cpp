@@ -1875,7 +1875,7 @@ static void hvx_mm_ffn_2d(unsigned int nth, unsigned int ith, void * data) {
 #define DEQUANTIZE_WORKER_LOOP_IMPL(SUFFIX)                                                     \
 static void dequantize_tiled_worker_loop_##SUFFIX(unsigned int n, unsigned int i, void *data) { \
     tiled_dequantize_state_t *state = (tiled_dequantize_state_t *)data;                         \
-    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;                    \
+    struct htp_thread_trace * tr = &state->traces[i];                                           \
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);                                  \
     for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {      \
         int start = task_id * state->n_tiles_per_task;                                          \
@@ -1893,7 +1893,7 @@ DEQUANTIZE_WORKER_LOOP_IMPL(q8_0)
 
 static void convert_f16_worker_loop(unsigned int n, unsigned int i, void *data) {
     tiled_dequantize_state_t *state = (tiled_dequantize_state_t *)data;
-    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
+    struct htp_thread_trace * tr = &state->traces[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
     for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
         int start = task_id * state->n_tiles_per_task;
@@ -1906,7 +1906,7 @@ static void convert_f16_worker_loop(unsigned int n, unsigned int i, void *data) 
 static void quantize_f32_worker_loop(unsigned int n, unsigned int i, void *data) {
     tiled_dequantize_state_t *state = (tiled_dequantize_state_t *)data;
 
-    struct htp_thread_trace * tr = state->traces ? &state->traces[i] : NULL;
+    struct htp_thread_trace * tr = &state->traces[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, i);
 
     for (unsigned int task_id = i; task_id < (unsigned int)state->n_tasks; task_id += n) {
@@ -1921,7 +1921,7 @@ static void quantize_f32_worker_loop(unsigned int n, unsigned int i, void *data)
 static void transfer_output_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
     output_transfer_task_state_t *st = (output_transfer_task_state_t *) data;
 
-    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+    struct htp_thread_trace * tr = &st->traces[i];
 
     int start_chunk_idx = i * st->n_chunks_per_task;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, start_chunk_idx);
@@ -2081,7 +2081,7 @@ static void transfer_activation_chunk_fp32_to_fp16_col_chunk(
 
 static void transfer_activation_chunk_col_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
     activation_transfer_col_chunk_state_t *st = (activation_transfer_col_chunk_state_t *) data;
-    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+    struct htp_thread_trace * tr = &st->traces[i];
 
     uint32_t n_blocks = st->k_block / 32;
     uint32_t b_first = (n_blocks * i) / n;
@@ -2188,7 +2188,7 @@ static void transfer_activation_chunk_fp32_to_fp16_dma_pipelined(
 static void transfer_activation_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
     activation_transfer_task_state_t *st = (activation_transfer_task_state_t *) data;
 
-    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+    struct htp_thread_trace * tr = &st->traces[i];
 
     for (unsigned int task_id = i; task_id < (unsigned int)st->n_tasks; task_id += n) {
         int    chunk_idx  = task_id * st->n_chunks_per_task;
@@ -2249,7 +2249,7 @@ typedef struct {
 
 static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigned int i, void *data) {
     activation_transfer_gathered_task_state_t *st = data;
-    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+    struct htp_thread_trace * tr = &st->traces[i];
     int chunk_idx = i;
     int chunk_size = st->n_chunks_per_task;
     int start_row = st->start_row + chunk_idx * chunk_size;
@@ -2266,7 +2266,7 @@ static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigne
 
 static void transfer_activation_chunk_gathered_worker_flat_fn(unsigned int n, unsigned int i, void *data) {
     activation_transfer_gathered_task_state_t *st = data;
-    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+    struct htp_thread_trace * tr = &st->traces[i];
     int chunk_idx = i;
     int chunk_size = st->n_chunks_per_task;
     int start_row = st->start_row + chunk_idx * chunk_size;
@@ -2283,7 +2283,7 @@ static void transfer_activation_chunk_gathered_worker_flat_fn(unsigned int n, un
 
 static void transfer_output_chunk_scattered_worker_fn(unsigned int n, unsigned int i, void *data) {
     output_transfer_scattered_task_state_t *st = data;
-    struct htp_thread_trace * tr = st->traces ? &st->traces[i] : NULL;
+    struct htp_thread_trace * tr = &st->traces[i];
     int chunk_idx = i;
     int chunk_size = st->n_chunks_per_task;
     int start_row = st->start_row + chunk_idx * chunk_size;

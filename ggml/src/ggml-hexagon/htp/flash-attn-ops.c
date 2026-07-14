@@ -204,7 +204,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
     if (ir0 >= ir1) return;
 
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
 
     dma_queue * dma = octx->ctx->dma[ith];
 
@@ -486,7 +486,7 @@ static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) 
         return;
     }
 
-    struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
+    struct htp_thread_trace * tr = &factx->octx->ctx->trace[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_K_PREP, (uint16_t) (args->kv_start + start));
     hmx_interleave_rows_to_tiles(factx->vtcm_k_tiles, (const __fp16 *) args->curr_k, total_rows, factx->DK,
                              args->src_stride, start, end);
@@ -534,7 +534,7 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
 
     __fp16 * v_tiles_dst = (__fp16 *) args->v_tiles_dst;
 
-    struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
+    struct htp_thread_trace * tr = &factx->octx->ctx->trace[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, (uint16_t) (args->kv_start + start));
     hmx_interleave_cols_to_tiles(v_tiles_dst, (const __fp16 *) args->v_src, total_rows, factx->DV,
                              args->src_stride, (uint32_t) args->n_col_tiles, start, end);
@@ -589,7 +589,7 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
     const size_t start      = (size_t) i * rows_per_t;
     const size_t end        = hex_smin(start + rows_per_t, factx->g_br);
 
-    struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
+    struct htp_thread_trace * tr = &factx->octx->ctx->trace[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_Q_PREP, (uint16_t) (args->q_start * G + start));
 
     // Parallel initialization of per-block state
@@ -772,7 +772,7 @@ static void fa_o_store_thread_f32(unsigned int n, unsigned int i, void * data) {
         return;
     }
 
-    struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
+    struct htp_thread_trace * tr = &factx->octx->ctx->trace[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) (args->q_start * G + start));
 
     const struct htp_tensor * dst        = args->dst;
@@ -820,7 +820,7 @@ static void fa_o_store_thread_f16(unsigned int n, unsigned int i, void * data) {
         return;
     }
 
-    struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
+    struct htp_thread_trace * tr = &factx->octx->ctx->trace[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) (args->q_start * G + start));
 
     const struct htp_tensor * dst        = args->dst;
@@ -930,7 +930,7 @@ static inline void fa_softmax_impl(
         return;
     }
 
-    struct htp_thread_trace * tr = factx->octx->ctx ? &factx->octx->ctx->trace[i] : NULL;
+    struct htp_thread_trace * tr = &factx->octx->ctx->trace[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, (uint16_t) (args->q_start * G + vec_start * 64));
 
     // Per-thread row scratch: thread i uses bufs at offset i * 2 * stride
@@ -1519,8 +1519,8 @@ static void fa_pop_mask_dma_gqa(dma_queue * dma, uint32_t G) {
 // ============================================================================
 
 int hmx_flash_attn_ext(struct htp_ops_context * octx) {
-    struct htp_thread_trace * tr_hvx = octx->ctx ? &octx->ctx->trace[0] : NULL;
-    struct htp_thread_trace * tr_hmx = octx->ctx ? &octx->ctx->trace[HTP_MAX_NTHREADS] : NULL;
+    struct htp_thread_trace * tr_hvx = &octx->ctx->trace[0];
+    struct htp_thread_trace * tr_hmx = &octx->ctx->trace[HTP_MAX_NTHREADS];
     const struct htp_tensor * q    = octx->src[0];
     const struct htp_tensor * k    = octx->src[1];
     const struct htp_tensor * v    = octx->src[2];

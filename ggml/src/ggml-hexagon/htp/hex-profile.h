@@ -44,7 +44,7 @@ struct htp_thread_trace {
 };
 
 static inline void htp_trace_event(struct htp_thread_trace * tr, uint16_t id, uint16_t info, uint32_t type) {
-    if (tr && tr->count < tr->max_events) {
+    if (tr->count < tr->max_events) {
         uint32_t i = tr->count;
         tr->events[i].id     = id;
         tr->events[i].info   = info | (type == HTP_TRACE_EVT_STOP ? 0x8000 : 0);
