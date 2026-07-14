@@ -658,10 +658,6 @@ extern "C" {
             struct llama_model * model,
             const char * path_lora);
 
-    // Move adapter weights to CPU memory. The graph scheduler transfers them to the
-    // compute backend when a LoRA operation needs them.
-    LLAMA_API bool llama_adapter_lora_offload_to_cpu(struct llama_adapter_lora * adapter);
-
     // Functions to access the adapter's GGUF metadata scalar values
     // - The functions return the length of the string on success, or -1 on failure
     // - The output string is always null-terminated and cleared on failure
@@ -1595,7 +1591,6 @@ extern "C" {
         // Set to 0 (default) to disable.  Good values: 32–64 nodes ≈ every 1–2 transformer layers.
         int32_t grad_checkpoint_interval;
 
-        bool grad_offload;
     };
 
     LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);

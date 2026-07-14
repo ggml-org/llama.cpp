@@ -442,56 +442,6 @@ llama_adapter_lora * llama_adapter_lora_init(llama_model * model, const char * p
     return nullptr;
 }
 
-bool llama_adapter_lora_offload_to_cpu(llama_adapter_lora * adapter) {
-    if (!adapter) {
-        return false;
-    }
-
-    struct ggml_init_params params = {
-        /*.mem_size   =*/ (2*adapter->ab_map.size() + 1)*ggml_tensor_overhead(),
-        /*.mem_buffer =*/ nullptr,
-        /*.no_alloc   =*/ true,
-    };
-    ggml_context_ptr ctx_cpu { ggml_init(params) };
-    if (!ctx_cpu) {
-        return false;
-    }
-
-    std::unordered_map<std::string, llama_adapter_lora_weight> cpu_weights;
-    cpu_weights.reserve(adapter->ab_map.size());
-    for (const auto & it : adapter->ab_map) {
-        ggml_tensor * a = ggml_dup_tensor(ctx_cpu.get(), it.second.a);
-        ggml_tensor * b = ggml_dup_tensor(ctx_cpu.get(), it.second.b);
-        ggml_set_name(a, it.second.a->name);
-        ggml_set_name(b, it.second.b->name);
-        cpu_weights.emplace(it.first, llama_adapter_lora_weight(a, b));
-    }
-
-    ggml_backend_buffer_ptr buf_cpu {
-        ggml_backend_alloc_ctx_tensors_from_buft(ctx_cpu.get(), ggml_backend_cpu_buffer_type())
-    };
-    if (!buf_cpu) {
-        return false;
-    }
-
-    for (const auto & it : adapter->ab_map) {
-        const llama_adapter_lora_weight & src = it.second;
-        const llama_adapter_lora_weight & dst = cpu_weights.at(it.first);
-        ggml_backend_tensor_get(src.a, dst.a->data, 0, ggml_nbytes(src.a));
-        ggml_backend_tensor_get(src.b, dst.b->data, 0, ggml_nbytes(src.b));
-    }
-
-    const size_t nbytes = ggml_backend_buffer_get_size(buf_cpu.get());
-    adapter->bufs.clear();
-    adapter->ctxs.clear();
-    adapter->ab_map = std::move(cpu_weights);
-    adapter->ctxs.emplace_back(std::move(ctx_cpu));
-    adapter->bufs.emplace_back(std::move(buf_cpu));
-    LLAMA_LOG_INFO("%s: offloaded %zu LoRA tensors to CPU (%.2f MiB)\n", __func__,
-        adapter->ab_map.size()*2, nbytes/1024.0/1024.0);
-    return true;
-}
-
 int32_t llama_adapter_meta_val_str(const llama_adapter_lora * adapter, const char * key, char * buf, size_t buf_size) {
     const auto & it = adapter->gguf_kv.find(key);
     if (it == adapter->gguf_kv.end()) {

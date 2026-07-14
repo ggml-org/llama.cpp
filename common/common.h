@@ -614,7 +614,6 @@ struct common_params {
     int32_t save_every             = 0;     // save checkpoint every N optimizer steps (0 = disabled)
     int32_t lora_freeze_layers     = 0;     // do not apply LoRA to the first N transformer layers
     int32_t grad_checkpoint_interval = 0;  // gradient checkpointing interval to reduce peak VRAM (0 = disabled)
-    bool    grad_offload             = false; // keep LoRA parameter gradient accumulators on CPU
     int32_t optimizer_restart_every = 0;   // reset optimizer state every N epochs (0 = disabled)
     std::string lora_qat             = "none"; // none, q3_k, q4_k, q4_0
     bool    train_on_prompt        = false; // include prompt tokens in training loss (default: response tokens only)

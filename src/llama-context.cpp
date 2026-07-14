@@ -3303,7 +3303,6 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
     opt_params.get_opt_pars_ud           = lopt_params.get_opt_pars_ud;
     opt_params.optimizer                 = lopt_params.optimizer_type;
     opt_params.grad_checkpoint_interval  = lopt_params.grad_checkpoint_interval;
-    opt_params.grad_offload              = lopt_params.grad_offload;
     cparams.lora_qat_type                = lopt_params.lora_qat_type;
     opt_ctx = ggml_opt_init(opt_params);
 

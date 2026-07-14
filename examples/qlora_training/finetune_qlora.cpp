@@ -961,7 +961,6 @@ static int run_grpo_mode(
         /*.optimizer_type           =*/params.optimizer,
         /*.lora_qat_type            =*/lora_qat_type_from_string(params.lora_qat),
         /*.grad_checkpoint_interval =*/params.grad_checkpoint_interval,
-        /*.grad_offload             =*/params.grad_offload,
     };
     llama_opt_init(ctx, model, lopt_params);
 
@@ -1243,10 +1242,6 @@ int main(int argc, char ** argv) {
             LOG_ERR("%s: adapter was not loaded by common_init_from_params\n", __func__);
             return 1;
         }
-        if (params.grad_offload && !llama_adapter_lora_offload_to_cpu(loaded)) {
-            LOG_ERR("%s: failed to offload LoRA weights to CPU\n", __func__);
-            return 1;
-        }
         for (auto & kv : loaded->ab_map) {
             ggml_set_param(kv.second.a);  // lora_a → trainable
             ggml_set_param(kv.second.b);  // lora_b → trainable
@@ -1304,7 +1299,6 @@ int main(int argc, char ** argv) {
         /*.optimizer_type           =*/params.optimizer,
         /*.lora_qat_type            =*/lora_qat_type_from_string(params.lora_qat),
         /*.grad_checkpoint_interval =*/params.grad_checkpoint_interval,
-        /*.grad_offload             =*/params.grad_offload,
     };
     llama_opt_init(ctx, model, lopt_params);
 

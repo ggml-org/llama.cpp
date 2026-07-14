@@ -70,13 +70,11 @@ struct ggml_opt_context {
     std::vector<quantized_state> quantized_states;
     std::vector<struct ggml_tensor *> quantized_params;
     std::vector<struct ggml_tensor *> quantized_grads;
-    std::vector<std::vector<float>>   offloaded_grads;
 
     int64_t iter               = 1;
     int32_t opt_period         = 1;
     int32_t opt_i              = 0;
     int32_t grad_checkpoint_interval = 0;
-    bool    grad_offload            = false;
     bool    loss_per_datapoint = false;
 
     ggml_opt_get_optimizer_params get_opt_pars    = nullptr;
@@ -342,7 +340,6 @@ struct ggml_opt_params ggml_opt_default_params(
         /*get_opt_pars              =*/ ggml_opt_get_default_optimizer_params,
         /*get_opt_pars_ud          =*/ nullptr,
         /*grad_checkpoint_interval =*/ 0,
-        /*grad_offload             =*/ false,
         /*optimizer                =*/ GGML_OPT_OPTIMIZER_TYPE_ADAMW,
     };
 }
@@ -414,7 +411,6 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     const enum ggml_opt_optimizer_type optimizer = opt_ctx->optimizer;
 
     const bool accumulate = opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_GRAD &&
-        !opt_ctx->grad_offload &&
         !(opt_ctx->static_graphs && opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT && opt_ctx->opt_period == 1);
 
     const bool need_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
@@ -659,13 +655,6 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             state_i++;
         }
         GGML_ASSERT(state_i == opt_ctx->quantized_states.size());
-        if (opt_ctx->grad_offload) {
-            opt_ctx->offloaded_grads.resize(opt_ctx->quantized_states.size());
-            for (size_t i = 0; i < opt_ctx->quantized_states.size(); ++i) {
-                opt_ctx->offloaded_grads[i].assign(opt_ctx->quantized_states[i].ne, 0.0f);
-            }
-            GGML_LOG_INFO("%s: gradients are accumulated on CPU and copied to GPU only for the optimizer step\n", __func__);
-        }
     }
 
     if (opt_ctx->buf_static) {
@@ -737,10 +726,6 @@ ggml_opt_context_t ggml_opt_init(struct ggml_opt_params params) {
     result->outputs          = params.outputs;
     result->opt_period                = params.opt_period;
     result->grad_checkpoint_interval  = params.grad_checkpoint_interval;
-    result->grad_offload              = params.grad_offload && ggml_opt_optimizer_state_type(params.optimizer) != GGML_TYPE_COUNT;
-    if (params.grad_offload && !result->grad_offload) {
-        GGML_LOG_WARN("%s: gradient CPU offload requires a quantized AdamW optimizer\n", __func__);
-    }
     result->get_opt_pars              = params.get_opt_pars;
     result->get_opt_pars_ud           = params.get_opt_pars_ud;
     result->optimizer                 = params.optimizer;
@@ -793,9 +778,6 @@ void ggml_opt_reset(ggml_opt_context_t opt_ctx, bool optimizer) {
         for (ggml_opt_context::quantized_state & state : opt_ctx->quantized_states) {
             std::fill(state.m.begin(), state.m.end(), 0);
             std::fill(state.v.begin(), state.v.end(), 0);
-        }
-        for (std::vector<float> & grad : opt_ctx->offloaded_grads) {
-            std::fill(grad.begin(), grad.end(), 0.0f);
         }
         opt_ctx->iter = 1;
     } else {
@@ -1041,30 +1023,9 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
     }
 
     ggml_backend_sched_graph_compute(opt_ctx->backend_sched, opt_ctx->allocated_graph_copy);
-    if (opt_ctx->grad_offload && ggml_opt_optimizer_state_type(opt_ctx->optimizer) != GGML_TYPE_COUNT) {
-        GGML_ASSERT(opt_ctx->offloaded_grads.size() == opt_ctx->quantized_grads.size());
-        for (size_t i = 0; i < opt_ctx->quantized_grads.size(); ++i) {
-            ggml_tensor * grad = opt_ctx->quantized_grads[i];
-            std::vector<float> local(opt_ctx->offloaded_grads[i].size());
-            ggml_backend_tensor_get(grad, local.data(), 0, local.size()*sizeof(float));
-            for (size_t j = 0; j < local.size(); ++j) {
-                opt_ctx->offloaded_grads[i][j] += local[j];
-            }
-        }
-
-        if (do_optimizer_step) {
-            for (size_t i = 0; i < opt_ctx->quantized_grads.size(); ++i) {
-                ggml_backend_tensor_set(opt_ctx->quantized_grads[i], opt_ctx->offloaded_grads[i].data(), 0,
-                    opt_ctx->offloaded_grads[i].size()*sizeof(float));
-            }
-        }
-    }
     if (do_optimizer_step && ggml_opt_optimizer_state_type(opt_ctx->optimizer) != GGML_TYPE_COUNT) {
         const ggml_opt_optimizer_params & opt_pars = opt_ctx->get_opt_pars(opt_ctx->get_opt_pars_ud);
         ggml_opt_step_adamw_quantized(opt_ctx, opt_pars);
-        for (std::vector<float> & grad : opt_ctx->offloaded_grads) {
-            std::fill(grad.begin(), grad.end(), 0.0f);
-        }
     }
     opt_ctx->iter += opt_ctx->allocated_graph == opt_ctx->gb_opt;
     opt_ctx->opt_i = (opt_ctx->opt_i + 1) % opt_ctx->opt_period;
