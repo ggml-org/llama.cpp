@@ -1389,7 +1389,7 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
     }
 }
 
-void llama_model_loader::unmap_weight(const llama_tensor_weight & w) {
+void llama_model_loader::unmap_weight(const llama_tensor_weight & w) const {
     if (!use_mmap) { return; }
     mappings.at(w.idx)->unmap_fragment(w.offs, w.offs + ggml_nbytes(w.tensor));
 }
