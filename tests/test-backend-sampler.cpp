@@ -1260,6 +1260,13 @@ static void test_backend_penalties_sampling(const test_params & params) {
         }
     });
 
+    printf("Testing backend penalties without filler entries\n");
+    compare_penalties_logits(params, 64, 1.1f, 0.5f, 0.25f, "Hello", [](llama_sampler * smpl) {
+        for (llama_token token = 0; token < 64; ++token) {
+            llama_sampler_accept(smpl, token);
+        }
+    });
+
     printf("Testing backend top-k followed by penalties\n");
     compare_top_k_penalties_logits(params, 8, 64, 1.1f, 0.5f, 0.25f, "Hello",
             penalties_position::after_filter);
