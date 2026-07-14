@@ -122,43 +122,27 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
 
         const block_q2_0 * bxi = (const block_q2_0 *) x + kbx0 + i*stride + kbx;
-        // Each 32-element chunk occupies 8 bytes of qs (32 elements * 2 bits = 64 bits)
-        const int qs_offset = 8*kqsx;
-        const int qs0 = bxi->qs[qs_offset + 0] | (bxi->qs[qs_offset + 1] << 8) |
-                        (bxi->qs[qs_offset + 2] << 16) | (bxi->qs[qs_offset + 3] << 24);
-        const int qs1 = bxi->qs[qs_offset + 4] | (bxi->qs[qs_offset + 5] << 8) |
-                        (bxi->qs[qs_offset + 6] << 16) | (bxi->qs[qs_offset + 7] << 24);
-
-        // Unpack 32 2-bit codes into 8 int32s, each holding 4 signed int8s in {-1,0,1,2}.
-        int unpacked_bytes[8];
-#pragma unroll
-        for (int j = 0; j < 4; ++j) {
-            const int shift = j * 8;
-            const int codes = (qs0 >> shift) & 0xFF;
-            const int c0 = ((codes >> 0) & 0x3) - 1;
-            const int c1 = ((codes >> 2) & 0x3) - 1;
-            const int c2 = ((codes >> 4) & 0x3) - 1;
-            const int c3 = ((codes >> 6) & 0x3) - 1;
-            unpacked_bytes[j] = (c0 & 0xFF) | ((c1 & 0xFF) << 8) | ((c2 & 0xFF) << 16) | ((c3 & 0xFF) << 24);
-        }
-#pragma unroll
-        for (int j = 0; j < 4; ++j) {
-            const int shift = j * 8;
-            const int codes = (qs1 >> shift) & 0xFF;
-            const int c0 = ((codes >> 0) & 0x3) - 1;
-            const int c1 = ((codes >> 2) & 0x3) - 1;
-            const int c2 = ((codes >> 4) & 0x3) - 1;
-            const int c3 = ((codes >> 6) & 0x3) - 1;
-            unpacked_bytes[4 + j] = (c0 & 0xFF) | ((c1 & 0xFF) << 8) | ((c2 & 0xFF) << 16) | ((c3 & 0xFF) << 24);
-        }
+        const int16_t    * qxi = (const int16_t *) bxi->qs + kqsx * 4;
 
         const int dst_offset = kbx*(scale_entries_per_block*QI8_0) + kqsx*QI8_0;
+
 #pragma unroll
-        for (int j = 0; j < 8; ++j) {
+        for (int j = 0; j < 4; ++j) {
+            const int q  = qxi[j];
+
+            // unpack even and odd crumbs into byte values
+            const int qe = __byte_perm(0x020100FF, 0x020100FF, q >> 0);
+            const int qo = __byte_perm(0x020100FF, 0x020100FF, q >> 2);
+            // unshuffle values
+            const int qx = __byte_perm(qe, qo, 0x5140);
+            const int qy = __byte_perm(qe, qo, 0x7362);
+
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-            x_qs[i*sram_stride           + dst_offset + j] = unpacked_bytes[j];
+            x_qs[i*sram_stride           + dst_offset + j*2+0] = qx;
+            x_qs[i*sram_stride           + dst_offset + j*2+1] = qy;
 #else
-            x_qs[i*(2*MMQ_TILE_NE_K + 1) + dst_offset + j] = unpacked_bytes[j];
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + dst_offset + j*2+0] = qx;
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + dst_offset + j*2+1] = qy;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         }
     }
