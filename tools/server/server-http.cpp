@@ -285,6 +285,8 @@ bool server_http_context::init(const common_params & params) {
             std::string origin = req.get_header_value("Origin");
             if (origin_is_localhost(origin)) {
                 res.set_header("Access-Control-Allow-Origin", origin);
+            } else {
+                SRV_WRN("(CORS) skip non-localhost origin: %s\n", origin.c_str());
             }
         } else {
             res.set_header("Access-Control-Allow-Origin", params.cors_origins);

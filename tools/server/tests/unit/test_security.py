@@ -91,7 +91,7 @@ def test_openai_library_correct_api_key():
     ("localhost", "Access-Control-Allow-Origin", "localhost"),
     ("web.mydomain.fr", "Access-Control-Allow-Origin", "web.mydomain.fr"),
     ("origin", "Access-Control-Allow-Credentials", "true"),
-    ("web.mydomain.fr", "Access-Control-Allow-Methods", "GET, POST"),
+    ("web.mydomain.fr", "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"),
     ("web.mydomain.fr", "Access-Control-Allow-Headers", "*"),
 ])
 def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
@@ -116,6 +116,7 @@ def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
     "http://[::1]:3000",
 ])
 def test_cors_origins_localhost_reflects(origin: str):
+    global server
     server = ServerPreset.router()
     server.cors_origins = "localhost"
     server.start()
@@ -135,6 +136,7 @@ def test_cors_origins_localhost_reflects(origin: str):
     "http://localhost.evil.com",
 ])
 def test_cors_origins_localhost_rejects(origin: str):
+    global server
     server = ServerPreset.router()
     server.cors_origins = "localhost"
     server.start()
@@ -148,6 +150,7 @@ def test_cors_origins_localhost_rejects(origin: str):
 
 
 def test_cors_origins_defaults_to_localhost_with_tools_enabled():
+    global server
     server = ServerPreset.router()
     server.server_tools = "all"
     server.start()

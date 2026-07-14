@@ -362,7 +362,7 @@ class ServerProcess:
         if parse_body:
             try:
                 result.body = response.json()
-            except JSONDecodeError:
+            except (JSONDecodeError, requests.exceptions.JSONDecodeError):
                 result.body = response.text
         else:
             result.body = None
