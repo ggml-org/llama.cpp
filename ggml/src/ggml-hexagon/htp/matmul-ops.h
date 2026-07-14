@@ -95,6 +95,8 @@ struct htp_mm_kernel_params {
     struct fastdiv_values div_r2;
     struct fastdiv_values div_r3;
     struct fastdiv_values div_ne11;
+    struct fastdiv_values div_n_act_threads;
+    struct fastdiv_values div_ne00_padded;
 };
 
 #if defined(__cplusplus)

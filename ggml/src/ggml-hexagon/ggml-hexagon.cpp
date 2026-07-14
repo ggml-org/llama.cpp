@@ -2351,6 +2351,8 @@ static bool ggml_hexagon_precompute_hmx_mm_params(
     kparams->src1_row_size = (wtype == GGML_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
     kparams->vtcm_size = vtcm_size;
     kparams->vtcm_src0_size = 0;
+    kparams->div_n_act_threads = init_fastdiv_values(act_threads_selected);
+    kparams->div_ne00_padded   = init_fastdiv_values(ne00_padded);
     kparams->vtcm_src1_size = 0;
     kparams->vtcm_dst_size = 0;
 

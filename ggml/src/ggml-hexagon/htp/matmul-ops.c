@@ -1964,6 +1964,7 @@ typedef struct {
     uint32_t                        k_stride;
     uint32_t                        k_valid;
     uint32_t                        n_col_chunks;
+    struct fastdiv_values           n_threads_div;
     float                          *vtcm_f32_act;
     size_t                          vtcm_f32_act_bytes;
     struct htp_thread_trace        *traces;
@@ -2084,8 +2085,8 @@ static void transfer_activation_chunk_col_chunk_worker_fn(unsigned int n, unsign
     struct htp_thread_trace * tr = &st->traces[i];
 
     uint32_t n_blocks = st->k_block / 32;
-    uint32_t b_first = (n_blocks * i) / n;
-    uint32_t b_last = (n_blocks * (i + 1)) / n;
+    uint32_t b_first = fastdiv(n_blocks * i, &st->n_threads_div);
+    uint32_t b_last  = fastdiv(n_blocks * (i + 1), &st->n_threads_div);
     uint32_t c_first = b_first * 32;
     uint32_t c_last = b_last * 32;
     uint32_t c_len = c_last - c_first;
@@ -2103,7 +2104,7 @@ static void transfer_activation_chunk_col_chunk_worker_fn(unsigned int n, unsign
     const float *src = st->src;
 
     if (st->vtcm_f32_act) {
-        size_t thread_scratch_bytes = hex_align_down(st->vtcm_f32_act_bytes / n, 128);
+        size_t thread_scratch_bytes = hex_align_down(fastdiv(st->vtcm_f32_act_bytes, &st->n_threads_div), 128);
         float *thread_f32_act = (float *)((char *)st->vtcm_f32_act + i * thread_scratch_bytes);
 
         transfer_activation_chunk_fp32_to_fp16_dma_pipelined_col_chunk(
@@ -2374,35 +2375,51 @@ static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, 
     }
 }
 
-static void transfer_activation_chunk_threaded(
-        struct htp_context *ctx,
-        __fp16 *dst,
-        const float *src,
-        int n_rows,
-        int k_block,
-        int k_stride,
-        int n_threads,
-        int k_valid,
-        float *vtcm_f32_act,
-        size_t vtcm_f32_act_bytes) {
+struct activation_transfer_params {
+    struct htp_context *          ctx;
+    __fp16 *                      dst;
+    const float *                 src;
+    int                           n_rows;
+    int                           k_block;
+    int                           k_stride;
+    int                           n_threads;
+    const struct fastdiv_values * act_threads_div;
+    const struct fastdiv_values * k_div;
+    int                           k_valid;
+    float *                       vtcm_f32_act;
+    size_t                        vtcm_f32_act_bytes;
+};
+
+static void transfer_activation_chunk_threaded(const struct activation_transfer_params * params) {
+    struct htp_context *          ctx                = params->ctx;
+    __fp16 *                      dst                = params->dst;
+    const float *                 src                = params->src;
+    int                           n_rows             = params->n_rows;
+    int                           k_block            = params->k_block;
+    int                           k_stride           = params->k_stride;
+    int                           n_threads          = params->n_threads;
+    const struct fastdiv_values * act_threads_div    = params->act_threads_div;
+    const struct fastdiv_values * k_div              = params->k_div;
+    int                           k_valid            = params->k_valid;
+    float *                       vtcm_f32_act       = params->vtcm_f32_act;
+    size_t                        vtcm_f32_act_bytes = params->vtcm_f32_act_bytes;
+
     if (n_rows <= 0) {
         return;
     }
 
-    const size_t n_tasks = (n_rows + 31) / 32;
+    const size_t n_tasks = (n_rows + 31) >> 5;
     if (n_threads > 1 && k_block > 32 && n_tasks < (size_t) n_threads) {
         // Calculate step rows parameters for column-chunked dma pipelining
         uint32_t dma_step_rows = 2;
         uint32_t dma_step_rows_shift = 1;
         if (vtcm_f32_act && vtcm_f32_act_bytes > 0 && k_block > 0) {
-            size_t thread_scratch_elements = vtcm_f32_act_bytes / (n_threads * sizeof(float));
-            size_t dma_step_rows_max = (thread_scratch_elements / 2) / k_block;
+            size_t thread_scratch_bytes = hex_align_down(fastdiv(vtcm_f32_act_bytes, act_threads_div), 128);
+            size_t thread_scratch_elements = thread_scratch_bytes / sizeof(float);
+            size_t dma_step_rows_max = fastdiv(thread_scratch_elements / 2, k_div);
             if (dma_step_rows_max >= 4) {
                 dma_step_rows = 4;
                 dma_step_rows_shift = 2;
-            } else {
-                dma_step_rows = 2;
-                dma_step_rows_shift = 1;
             }
         }
 
@@ -2414,6 +2431,7 @@ static void transfer_activation_chunk_threaded(
         col_state.k_stride = k_stride;
         col_state.k_valid = k_valid;
         col_state.n_col_chunks = n_threads;
+        col_state.n_threads_div = *act_threads_div;
         col_state.vtcm_f32_act = vtcm_f32_act;
         col_state.vtcm_f32_act_bytes = vtcm_f32_act_bytes;
         col_state.traces = ctx->trace;
@@ -2430,22 +2448,8 @@ static void transfer_activation_chunk_threaded(
     size_t n_tot_chunks      = n_rows;
     size_t n_chunks_per_task = (n_threads == 1) ? n_tot_chunks : 32;  // must be multiple of 32 to ensure correct destination address
 
-    uint32_t dma_step_rows = 2;
-    uint32_t dma_step_rows_shift = 1;
-    if (vtcm_f32_act && vtcm_f32_act_bytes > 0 && k_block > 0) {
-        size_t thread_scratch_elements = vtcm_f32_act_bytes / (n_threads * sizeof(float));
-        size_t dma_step_rows_max = (thread_scratch_elements / 2) / k_block;
-        if (dma_step_rows_max >= 4) {
-            dma_step_rows = 4;
-            dma_step_rows_shift = 2;
-        } else {
-            dma_step_rows = 2;
-            dma_step_rows_shift = 1;
-        }
-    }
-
     activation_transfer_task_state_t state;
-    state.n_tasks            = (n_tot_chunks + n_chunks_per_task - 1) / n_chunks_per_task;
+    state.n_tasks            = (n_threads == 1) ? 1 : hmx_ceil_div(n_tot_chunks, 32);
     state.n_tot_chunks       = n_tot_chunks;
     state.n_chunks_per_task  = n_chunks_per_task;
     state.dst                = dst;
@@ -2459,6 +2463,17 @@ static void transfer_activation_chunk_threaded(
 
     int active_threads = hex_smin(n_threads, (int)state.n_tasks);
     state.vtcm_f32_act_bytes_per_thread = hex_align_down(vtcm_f32_act_bytes / active_threads, 128);
+
+    uint32_t dma_step_rows = 2;
+    uint32_t dma_step_rows_shift = 1;
+    if (vtcm_f32_act && state.vtcm_f32_act_bytes_per_thread > 0 && k_block > 0) {
+        size_t thread_scratch_elements = state.vtcm_f32_act_bytes_per_thread / sizeof(float);
+        size_t dma_step_rows_max = fastdiv(thread_scratch_elements / 2, k_div);
+        if (dma_step_rows_max >= 4) {
+            dma_step_rows = 4;
+            dma_step_rows_shift = 2;
+        }
+    }
     state.dma_step_rows      = dma_step_rows;
     state.dma_step_rows_shift = dma_step_rows_shift;
 
@@ -2521,6 +2536,8 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
                                   int pipeline,
                                   int n_threads,
                                   int act_threads,
+                                  const struct fastdiv_values * act_threads_div,
+                                  const struct fastdiv_values * k_div,
                                   int tile_size,
                                   int aligned_tile_size,
                                   int vtcm_size) {
@@ -2608,7 +2625,21 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
             void *vtcm_weight_bufs[2] = { vtcm_scratch0, vtcm_scratch1 };
             void *vtcm_output_bufs[2] = { vtcm_output,   vtcm_scratch2 };
 
-            transfer_activation_chunk_threaded(ctx, vtcm_f16_act, activation + mr * act_stride, n_rows, k, act_stride, act_threads, k_valid, vtcm_f32_act, L.act_f32_bytes);
+            struct activation_transfer_params act_params = {
+                .ctx = ctx,
+                .dst = vtcm_f16_act,
+                .src = activation + mr * act_stride,
+                .n_rows = (int) n_rows,
+                .k_block = k,
+                .k_stride = act_stride,
+                .n_threads = act_threads,
+                .act_threads_div = act_threads_div,
+                .k_div = k_div,
+                .k_valid = k_valid,
+                .vtcm_f32_act = vtcm_f32_act,
+                .vtcm_f32_act_bytes = L.act_f32_bytes,
+            };
+            transfer_activation_chunk_threaded(&act_params);
 
             // Prologue: push A0 and optionally A1 (if n_chunk_cnt > 1)
             const size_t   n_cols_A0 = hex_smin(n - 0 * n_chunk_n_cols, n_chunk_n_cols);
@@ -2685,7 +2716,21 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
         for (size_t mr = 0; mr < m; mr += m_chunk_n_rows) {
             const size_t n_rows = hex_smin(m - mr, m_chunk_n_rows);
 
-            transfer_activation_chunk_threaded(ctx, vtcm_f16_act, activation + mr * act_stride, n_rows, k, act_stride, act_threads, k_valid, vtcm_f32_act, L.act_f32_bytes);
+            struct activation_transfer_params act_params = {
+                .ctx = ctx,
+                .dst = vtcm_f16_act,
+                .src = activation + mr * act_stride,
+                .n_rows = (int) n_rows,
+                .k_block = k,
+                .k_stride = act_stride,
+                .n_threads = act_threads,
+                .act_threads_div = act_threads_div,
+                .k_div = k_div,
+                .k_valid = k_valid,
+                .vtcm_f32_act = vtcm_f32_act,
+                .vtcm_f32_act_bytes = L.act_f32_bytes,
+            };
+            transfer_activation_chunk_threaded(&act_params);
 
             // A0: Pre-fetch the first weight chunk (nc = 0)
             if (n > 0) {
@@ -2775,7 +2820,8 @@ static inline const float *hmx_mm_src2_batch_ptr(const hmx_mm_f16_f32_batched_pa
 
 static int hmx_mm_f16_f32_batched_simple(struct htp_context *ctx,
                                                         const hmx_mm_f16_f32_batched_params_t *params,
-                                                        int m_chunk, int n_chunk, int pipeline, int n_threads, int act_threads, int vtcm_size) {
+                                                        int m_chunk, int n_chunk, int pipeline, int n_threads, int act_threads, int vtcm_size,
+                                                        const struct fastdiv_values * act_threads_div, const struct fastdiv_values * k_div) {
     int ret = 0;
     for (int b3 = 0; b3 < params->ne13 && ret == 0; ++b3) {
         for (int b2 = 0; b2 < params->ne12 && ret == 0; ++b2) {
@@ -2787,14 +2833,17 @@ static int hmx_mm_f16_f32_batched_simple(struct htp_context *ctx,
                                            params->act_stride, params->weight_stride * (int)sizeof(__fp16),
                                            HTP_TYPE_F16, params->k, params->dst_stride, params->src2_stride, params->n,
                                            m_chunk, n_chunk, pipeline, n_threads, act_threads,
-                                           0, 0, vtcm_size);
+                                           act_threads_div, k_div, 0, 0, vtcm_size);
         }
     }
     return ret;
 }
 
 static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_batched_params_t *params,
-                               int m_chunk, int n_chunk, int pipeline, int n_threads, int act_threads, int vtcm_size) {
+                               int m_chunk, int n_chunk, int pipeline, int n_threads, int act_threads,
+                               const struct fastdiv_values * act_threads_div,
+                               const struct fastdiv_values * k_div,
+                               int vtcm_size) {
     if (params->act_stride < params->k || params->weight_stride < params->k || params->dst_stride < params->n) { return -1; }
     if (params->ne02 <= 0 || params->ne03 <= 0 || params->ne12 <= 0 || params->ne13 <= 0) { return -1; }
     if (params->ne12 % params->ne02 != 0 || params->ne13 % params->ne03 != 0) { return -1; }
@@ -2809,7 +2858,7 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
     // Grouped path is only valid if group_size > 1 and it fits within VTCM budget.
     bool run_grouped = (group_size > 1 && (size_t)vtcm_size <= vtcm_budget);
     if (!run_grouped) {
-        return hmx_mm_f16_f32_batched_simple(ctx, params, m_chunk, n_chunk, pipeline, n_threads, act_threads, vtcm_size);
+        return hmx_mm_f16_f32_batched_simple(ctx, params, m_chunk, n_chunk, pipeline, n_threads, act_threads, vtcm_size, act_threads_div, k_div);
     }
 
     struct htp_thread_trace * tr = &ctx->trace[0];
@@ -2831,7 +2880,7 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
     if (L.total_bytes > vtcm_budget) {
         FARF(HIGH, "%s: grouped layout overflowed VTCM, falling back to simple batched loop", __func__);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_INIT, 0);
-        return hmx_mm_f16_f32_batched_simple(ctx, params, m_chunk, n_chunk, pipeline, n_threads, act_threads, vtcm_size);
+        return hmx_mm_f16_f32_batched_simple(ctx, params, m_chunk, n_chunk, pipeline, n_threads, act_threads, vtcm_size, act_threads_div, k_div);
     }
 
     uint8_t * const base = (uint8_t *) ctx->vtcm_base;
@@ -2873,9 +2922,21 @@ static int hmx_mm_f16_f32_batched(struct htp_context *ctx, const hmx_mm_f16_f32_
                 for (int g = 0; g < group_size; ++g) {
                     const float *activation_chunk = hmx_mm_activation_batch_ptr(params, b2_base + g, b3) + mr * params->act_stride;
                     __fp16 *vtcm_act_g = vtcm_f16_act + (size_t) g * L.act_head_stride;
-                    transfer_activation_chunk_threaded(ctx, vtcm_act_g,
-                                                           activation_chunk, (int) n_rows,
-                                                           params->k, params->act_stride, act_threads, params->k, vtcm_f32_act, L.act_f32_bytes);
+                    struct activation_transfer_params act_params = {
+                        .ctx = ctx,
+                        .dst = vtcm_act_g,
+                        .src = activation_chunk,
+                        .n_rows = (int) n_rows,
+                        .k_block = params->k,
+                        .k_stride = params->act_stride,
+                        .n_threads = act_threads,
+                        .act_threads_div = act_threads_div,
+                        .k_div = k_div,
+                        .k_valid = params->k,
+                        .vtcm_f32_act = vtcm_f32_act,
+                        .vtcm_f32_act_bytes = L.act_f32_bytes,
+                    };
+                    transfer_activation_chunk_threaded(&act_params);
                 }
 
                 // Prologue: Push A0 and A1 (if exists)
@@ -3239,6 +3300,8 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
                                      kparams->m_chunk, kparams->n_chunk,
                                      kparams->pipeline, n_threads,
                                      kparams->n_act_threads,
+                                     &kparams->div_n_act_threads,
+                                     &kparams->div_ne00_padded,
                                      kparams->vtcm_size);
     } else {
         ret = hmx_mm_2d_f32(
@@ -3247,6 +3310,8 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
             (int)(dst->nb[1] / sizeof(float)), src2_stride, (int)dst->ne[0],
             kparams->m_chunk, kparams->n_chunk, kparams->pipeline, n_threads,
             kparams->n_act_threads,
+            &kparams->div_n_act_threads,
+            &kparams->div_ne00_padded,
             kparams->tile_size, kparams->aligned_tile_size, kparams->vtcm_size
         );
     }
