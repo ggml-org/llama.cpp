@@ -12,13 +12,6 @@
 #include <cmath>
 #include <vector>
 
-static void fill_random_f16(ggml_fp16_t * data, int n) {
-    for (int i = 0; i < n; i++) {
-        float v = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
-        data[i] = ggml_fp32_to_fp16(v);
-    }
-}
-
 static void fill_random_f32(float * data, int n) {
     for (int i = 0; i < n; i++) {
         data[i] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
@@ -159,22 +152,25 @@ int main(void) {
 
     int n_pass = 0, n_fail = 0;
 
-    auto check = [&](const char * label, int IC, int OC, int K, int L, int G, int s, int p) {
-        if (run_test(label, IC, OC, K, L, G, s, p)) { n_pass++; } else { n_fail++; }
+    struct { const char * label; int IC, OC, K, L, G, s, p; } scenarios[] = {
+        { "groups=1 (standard conv1d)", 128, 256, 3, 32,  1, 1, 0 },
+        { "ZAYA1-8B exact params",      1280, 1280, 2, 16,  10, 1, 0 },
+        { "small 2 groups",             4, 4, 2, 8,    2, 1, 0 },
+        { "with padding",               8, 8, 2, 16,   4, 1, 1 },
+        { "IC != OC",                   12, 6, 3, 10,  3, 1, 0 },
+        { "stride=2",                   8, 8, 2, 16,   4, 2, 0 },
+        { "longer sequence",            1280, 1280, 2, 128, 10, 1, 0 },
     };
 
-    check("groups=1 (standard conv1d)", 128, 256, 3, 32, 1, 1, 0);
-    check("ZAYA1-8B exact params",      1280, 1280, 2, 16, 10, 1, 0);
-    check("small 2 groups",             4, 4, 2, 8, 2, 1, 0);
-    check("with padding",              8, 8, 2, 16, 4, 1, 1);
-    check("IC != OC",                  12, 6, 3, 10, 3, 1, 0);
-    check("stride=2",                  8, 8, 2, 16, 4, 2, 0);
-    check("longer sequence",           1280, 1280, 2, 128, 10, 1, 0);
-
-    printf("\n--- Quantized types ---\n\n");
-
-    if (run_test("BF16 kernel",        128, 256, 3, 32, 1, 1, 0, GGML_TYPE_BF16)) { n_pass++; } else { n_fail++; }
-    if (run_test("BF16 kernel padding", 8, 8, 2, 16, 4, 1, 1, GGML_TYPE_BF16)) { n_pass++; } else { n_fail++; }
+    enum ggml_type kernel_types[] = { GGML_TYPE_F16, GGML_TYPE_BF16 };
+    for (auto kt : kernel_types) {
+        if (kt != GGML_TYPE_F16) {
+            printf("\n--- %s ---\n\n", ggml_type_name(kt));
+        }
+        for (auto &s : scenarios) {
+            if (run_test(s.label, s.IC, s.OC, s.K, s.L, s.G, s.s, s.p, kt)) { n_pass++; } else { n_fail++; }
+        }
+    }
 
     printf("\nResult: %d passed, %d failed\n", n_pass, n_fail);
     return n_fail > 0 ? 1 : 0;
