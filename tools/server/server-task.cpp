@@ -10,8 +10,6 @@
 #include "speculative.h"
 #include "server-common.h"
 
-#include <cmath>
-
 using json = nlohmann::ordered_json;
 
 //
