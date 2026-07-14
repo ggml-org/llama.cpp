@@ -1566,6 +1566,13 @@ extern "C" {
     // always returns true
     LLAMA_API bool llama_opt_param_filter_all(const struct ggml_tensor * tensor, void * userdata);
 
+    enum llama_lora_qat_type {
+        LLAMA_LORA_QAT_TYPE_NONE,
+        LLAMA_LORA_QAT_TYPE_Q3_K,
+        LLAMA_LORA_QAT_TYPE_Q4_K,
+        LLAMA_LORA_QAT_TYPE_Q4_0,
+    };
+
     struct llama_opt_params {
         uint32_t n_ctx_train; // assumed context size post training, use context size specified in llama_context if 0
 
@@ -1576,6 +1583,7 @@ extern "C" {
         void * get_opt_pars_ud;                     // userdata for calculating optimizer parameters
 
         enum ggml_opt_optimizer_type optimizer_type;
+        enum llama_lora_qat_type     lora_qat_type;
 
         // Gradient checkpointing: mark every Nth forward graph node as persistent so the
         // allocator cannot reuse its memory during backward.  Reduces peak activation VRAM

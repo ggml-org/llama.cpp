@@ -1973,6 +1973,18 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char * n) {
     if (eq_case_insensitive("adamw", n)) {
         return GGML_OPT_OPTIMIZER_TYPE_ADAMW;
     }
+    if (eq_case_insensitive("adamw_f16", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_ADAMW_F16;
+    }
+    if (eq_case_insensitive("adamw_q8_0", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0;
+    }
+    if (eq_case_insensitive("adamw_q6_k", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q6_K;
+    }
+    if (eq_case_insensitive("adamw_iq4_nl", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_ADAMW_IQ4_NL;
+    }
     if (eq_case_insensitive("sgd", n)) {
         return GGML_OPT_OPTIMIZER_TYPE_SGD;
     }

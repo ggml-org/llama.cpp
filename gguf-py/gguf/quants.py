@@ -381,10 +381,11 @@ class Q8_0(__Quant, qtype=GGMLQuantizationType.Q8_0):
     # Implementation of Q8_0 with bit-exact same results as reference implementation in ggml-quants.c
     def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
 
-        d = abs(blocks).max(axis=1, keepdims=True) / 127
+        max_indices = abs(blocks).argmax(axis=1, keepdims=True)
+        d = np.take_along_axis(blocks, max_indices, axis=1) / -128
         with np.errstate(divide="ignore"):
             id = np.where(d == 0, 0, 1 / d)
-        qs = np_roundf(blocks * id)
+        qs = np.minimum(127, np_roundf(blocks * id))
 
         # (n_blocks, 2)
         d = d.astype(np.float16).view(np.uint8)

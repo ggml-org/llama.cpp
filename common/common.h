@@ -615,6 +615,7 @@ struct common_params {
     int32_t lora_freeze_layers     = 0;     // do not apply LoRA to the first N transformer layers
     int32_t grad_checkpoint_interval = 0;  // gradient checkpointing interval to reduce peak VRAM (0 = disabled)
     int32_t optimizer_restart_every = 0;   // reset optimizer state every N epochs (0 = disabled)
+    std::string lora_qat             = "none"; // none, q3_k, q4_k, q4_0
     bool    train_on_prompt        = false; // include prompt tokens in training loss (default: response tokens only)
     bool    shuffle_dataset        = false; // shuffle dataset windows at the start of each epoch
 
@@ -1092,7 +1093,7 @@ inline llama_model_tensor_buft_override llm_ffn_exps_cpu_override() {
 
 ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std::vector<llama_token> & tokens, int64_t stride);
 
-// "adamw" or "sgd" (case insensitive)
+// "adamw", "adamw_f16", "adamw_q8_0", "adamw_q6_k", "adamw_iq4_nl", or "sgd" (case insensitive)
 enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
 
 //

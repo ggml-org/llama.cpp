@@ -1398,9 +1398,32 @@ ggml_tensor * llm_graph_context::build_lora_mm(
         const float adapter_scale = lora.second;
         const float scale = lw->get_scale(lora.first->alpha, adapter_scale);
 
+        auto fake_quant = [&](ggml_tensor * tensor) {
+            enum ggml_type type = GGML_TYPE_COUNT;
+            switch (cparams.lora_qat_type) {
+                case LLAMA_LORA_QAT_TYPE_Q3_K: type = GGML_TYPE_Q3_K; break;
+                case LLAMA_LORA_QAT_TYPE_Q4_K: type = GGML_TYPE_Q4_K; break;
+                case LLAMA_LORA_QAT_TYPE_Q4_0: type = GGML_TYPE_Q4_0; break;
+                default: return tensor;
+            }
+
+            const int64_t ne = ggml_nelements(tensor);
+            if (ne % ggml_blck_size(type) != 0) {
+                return tensor;
+            }
+            ggml_tensor * flat = ggml_reshape_1d(ctx0, tensor, ne);
+            ggml_tensor * quant = ggml_new_tensor_1d(ctx0, type, ne);
+            quant = ggml_cpy(ctx0, flat, quant);
+            ggml_tensor * fake = ggml_cast(ctx0, quant, GGML_TYPE_F32);
+            fake = ggml_reshape(ctx0, fake, tensor);
+            ggml_tensor * fake_stop = ggml_cpy_no_grad(ctx0, fake, ggml_dup_tensor(ctx0, fake));
+            ggml_tensor * master_stop = ggml_cpy_no_grad(ctx0, tensor, ggml_dup_tensor(ctx0, tensor));
+            return ggml_add(ctx0, tensor, ggml_sub(ctx0, fake_stop, master_stop));
+        };
+
         ggml_tensor * ab_cur = ggml_mul_mat(
-                ctx0, lw->b,
-                ggml_mul_mat(ctx0, lw->a, cur)
+                ctx0, fake_quant(lw->b),
+                ggml_mul_mat(ctx0, fake_quant(lw->a), cur)
                 );
 
         ab_cur = ggml_scale(ctx0, ab_cur, scale);

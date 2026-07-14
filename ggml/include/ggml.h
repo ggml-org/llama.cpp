@@ -1547,6 +1547,12 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // copy a to b while stopping gradients through a
+    GGML_API struct ggml_tensor * ggml_cpy_no_grad(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
     // note: casting from f32 to i32 will discard the fractional part
     GGML_API struct ggml_tensor * ggml_cast(
             struct ggml_context * ctx,

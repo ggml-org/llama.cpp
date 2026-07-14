@@ -4099,6 +4099,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) { params.grad_checkpoint_interval = value; }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
+        {"--lora-qat"}, "TYPE",
+        "LoRA fake quantization: none, q3_k, q4_k, q4_0 (default: none)",
+        [](common_params & params, const std::string & value) {
+            if (value != "none" && value != "q3_k" && value != "q4_k" && value != "q4_0") {
+                throw std::invalid_argument("invalid --lora-qat");
+            }
+            params.lora_qat = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
         {"--optimizer-restart-every"}, "N",
         "reset optimizer state every N epochs, matching repeated resume runs (0 = disabled)",
         [](common_params & params, int value) { params.optimizer_restart_every = value; }
@@ -4144,11 +4154,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int epochs) { params.lr.epochs = epochs; }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
-        {"-opt", "--optimizer"}, "sgd|adamw", "adamw or sgd",
+        {"-opt", "--optimizer"}, "sgd|adamw|adamw_f16|adamw_q8_0|adamw_q6_k|adamw_iq4_nl",
+        "optimizer (adamw_q8_0/q6_k/iq4_nl keep optimizer state on CPU)",
         [](common_params & params, const std::string & name) {
             params.optimizer = common_opt_get_optimizer(name.c_str());
             if (params.optimizer == GGML_OPT_OPTIMIZER_TYPE_COUNT) {
-                throw std::invalid_argument("invalid --optimizer, valid options: adamw, sgd");
+                throw std::invalid_argument("invalid --optimizer");
             }
         }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));

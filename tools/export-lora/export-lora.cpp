@@ -406,9 +406,53 @@ struct lora_merge_ctx {
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
-    printf("\n  %s -m base-model.gguf --lora lora-file.gguf -o merged-model-f16.gguf\n", argv[0]);
-    printf("\nNOTE: output model is F16\n");
+    printf("\n  %s -m base-model.gguf --lora lora-file.gguf -o merged-model.gguf --type q4_0\n", argv[0]);
+    printf("\n  %s -m base-model.gguf --lora lora-file.gguf -o merged-model.gguf --qat q4_0\n", argv[0]);
+    printf("\n--type accepts any ggml tensor type that can be produced from F32, e.g.:\n  ");
+    auto names = list_supported_type_names();
+    for (size_t i = 0; i < names.size(); ++i) {
+        printf("%s%s", names[i].c_str(), (i + 1 < names.size()) ? ", " : "\n");
+    }
     printf("\n");
+}
+
+// Pulls "--type <value>" out of argv (if present) and returns argv/argc
+// with it stripped, so downstream common_params_parse() doesn't choke on
+// an option it doesn't know about. Returns the requested type via out_type.
+static std::vector<std::string> extract_type_arg(int argc, char ** argv, ggml_type & out_type) {
+    std::vector<std::string> filtered;
+    filtered.reserve(argc);
+
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--type") == 0 && i + 1 < argc) {
+            std::string type_str = argv[i + 1];
+            if (!ggml_type_from_name(type_str, out_type)) {
+                throw std::runtime_error("unknown --type '" + type_str + "', see --help for the supported list");
+            }
+            if (!is_valid_output_type(out_type)) {
+                throw std::runtime_error("--type '" + type_str + "' cannot be produced from F32 data "
+                                          "(no from_float converter), see --help for the supported list");
+            }
+            i++; // skip the value too
+            continue;
+        }
+        if (strcmp(argv[i], "--qat") == 0 && i + 1 < argc) {
+            const std::string type_str = argv[i + 1];
+            if (type_str == "q3_k") {
+                out_type = GGML_TYPE_Q3_K;
+            } else if (type_str == "q4_k") {
+                out_type = GGML_TYPE_Q4_K;
+            } else if (type_str == "q4_0") {
+                out_type = GGML_TYPE_Q4_0;
+            } else {
+                throw std::runtime_error("unknown --qat '" + type_str + "', valid values: q3_k, q4_k, q4_0");
+            }
+            i++;
+            continue;
+        }
+        filtered.push_back(argv[i]);
+    }
+    return filtered;
 }
 
 int main(int argc, char ** argv) {

@@ -48,6 +48,7 @@ struct llama_cparams {
     bool op_offload;
     bool kv_unified;
     bool pipeline_parallel;
+    enum llama_lora_qat_type lora_qat_type = LLAMA_LORA_QAT_TYPE_NONE;
 
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
 

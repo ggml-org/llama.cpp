@@ -589,6 +589,13 @@ static bool lora_param_filter(const struct ggml_tensor * t, void * /*ud*/) {
     return false;
 }
 
+static enum llama_lora_qat_type lora_qat_type_from_string(const std::string & type) {
+    if (type == "q3_k") return LLAMA_LORA_QAT_TYPE_Q3_K;
+    if (type == "q4_k") return LLAMA_LORA_QAT_TYPE_Q4_K;
+    if (type == "q4_0") return LLAMA_LORA_QAT_TYPE_Q4_0;
+    return LLAMA_LORA_QAT_TYPE_NONE;
+}
+
 // ---------------------------------------------------------------------------
 // Save adapter GGUF
 // ---------------------------------------------------------------------------
@@ -920,6 +927,7 @@ static int run_grpo_mode(
         /*.get_opt_pars             =*/common_opt_lr_pars,
         /*.get_opt_pars_ud          =*/&params.lr,
         /*.optimizer_type           =*/params.optimizer,
+        /*.lora_qat_type            =*/lora_qat_type_from_string(params.lora_qat),
         /*.grad_checkpoint_interval =*/params.grad_checkpoint_interval,
     };
     llama_opt_init(ctx, model, lopt_params);
@@ -1257,6 +1265,7 @@ int main(int argc, char ** argv) {
         /*.get_opt_pars             =*/common_opt_lr_pars,
         /*.get_opt_pars_ud          =*/&params.lr,
         /*.optimizer_type           =*/params.optimizer,
+        /*.lora_qat_type            =*/lora_qat_type_from_string(params.lora_qat),
         /*.grad_checkpoint_interval =*/params.grad_checkpoint_interval,
     };
     llama_opt_init(ctx, model, lopt_params);

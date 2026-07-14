@@ -955,13 +955,19 @@ int main(void) {
                 ggml_tensor * t = nullptr;
                 switch (optim) {
                     case GGML_OPT_OPTIMIZER_TYPE_ADAMW: {
-                        ggml_tensor * p = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 7);
+                        ggml_tensor * p = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
                         t = ggml_opt_step_adamw(ctx, a, b, c, d, p);
                     } break;
                     case GGML_OPT_OPTIMIZER_TYPE_SGD: {
                         ggml_tensor * p = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2);
                         t = ggml_opt_step_sgd(ctx, a, b, p);
                     } break;
+                    case GGML_OPT_OPTIMIZER_TYPE_ADAMW_F16:
+                    case GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0:
+                    case GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q6_K:
+                    case GGML_OPT_OPTIMIZER_TYPE_ADAMW_IQ4_NL:
+                        GGML_ABORT("quantized optimizers do not use a backend optimizer op");
+                        break;
                     case GGML_OPT_OPTIMIZER_TYPE_COUNT: {
                         GGML_ABORT("fatal error");
                     }

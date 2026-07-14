@@ -3566,6 +3566,15 @@ struct ggml_tensor * ggml_cpy(
     return ggml_cpy_impl(ctx, a, b);
 }
 
+struct ggml_tensor * ggml_cpy_no_grad(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    struct ggml_tensor * result = ggml_cpy_impl(ctx, a, b);
+    ggml_set_op_params_i32(result, 0, 1);
+    return result;
+}
+
 struct ggml_tensor * ggml_cast(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -6792,7 +6801,7 @@ static void ggml_compute_backward(
             // cpy overwrites value of src1 by src0 and returns view(src1)
             // the overwriting is mathematically equivalent to:
             // tensor = src0 * 1 + src1 * 0
-            if (src0_needs_grads) {
+            if (src0_needs_grads && ggml_get_op_params_i32(tensor, 0) == 0) {
                 // dsrc0 = dtensor * 1
                 ggml_add_or_set(ctx, cgraph, isrc0, ggml_reshape(ctx, grad, src0));
             }
@@ -7269,6 +7278,9 @@ void ggml_build_backward_expand(
             case GGML_OP_GET_ROWS_BACK: // same as for GET_ROWS
             case GGML_OP_ROPE:          // positions not differentiable
                 ignore_src[1] = true;
+                if (node->op == GGML_OP_CPY && (ggml_get_op_params_i32(node, 0) != 0 || ggml_is_quantized(node->src[0]->type))) {
+                    ignore_src[0] = true;
+                }
                 break;
             case GGML_OP_ADD_ID:
                 ignore_src[2] = true;
