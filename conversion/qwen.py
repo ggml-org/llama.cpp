@@ -282,7 +282,7 @@ class _QwenMtpMixin:
     no_mtp: bool
     mtp_only: bool
     _original_block_count: int | None = None
-    opt_num_mtp_layers: int | None = None
+    opt_num_mtp_layers: int = 0
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -291,7 +291,7 @@ class _QwenMtpMixin:
             n_mtp = self.hparams.get("mtp_num_hidden_layers", 0)
             # Qwen-3-Next doesn't include `mtp_num_hidden_layers` in config.
             if n_mtp == 0:
-                assert self.opt_num_mtp_layers is not None
+                assert self.opt_num_mtp_layers != 0
                 n_mtp = self.opt_num_mtp_layers
             self.block_count += n_mtp
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
