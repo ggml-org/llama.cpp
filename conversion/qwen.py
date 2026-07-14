@@ -268,7 +268,7 @@ class Qwen3MoeModel(Qwen2MoeModel):
 
 class _QwenMtpMixin:
     """Shared MTP wiring for Qwen3-Next and Qwen3.5/3.6 text variants. The HF
-    config carries the MTP block under `mtp_num_hidden_layers` (calculated from
+    config carries the MTP block under `mtp_num_hidden_layers` (computed from
     the checkpoint when absent, e.g. Qwen3-Next) and the tensors under
     `mtp.*`; we extend block_count, emit the nextn metadata key, and remap
     `mtp.*` to the standard layer-indexed nextn naming so the existing
@@ -282,15 +282,16 @@ class _QwenMtpMixin:
     no_mtp: bool
     mtp_only: bool
     _original_block_count: int | None = None
-    opt_num_mtp_layers: int
+    opt_num_mtp_layers: int | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.block_count = self.hparams["num_hidden_layers"]
         if not self.no_mtp:
             n_mtp = self.hparams.get("mtp_num_hidden_layers", 0)
+            # Qwen-3-Next doesn't include `mtp_num_hidden_layers` in config.
             if n_mtp == 0:
-                assert self.opt_num_mtp_layers != 0
+                assert self.opt_num_mtp_layers is not None
                 n_mtp = self.opt_num_mtp_layers
             self.block_count += n_mtp
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
