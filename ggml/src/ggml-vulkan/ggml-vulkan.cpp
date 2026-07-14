@@ -49,7 +49,6 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #endif
 
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
@@ -133,54 +132,15 @@ typedef struct VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE {
 #define CEIL_DIV(M, N) (((M) / (N)) + (((M) % (N)) != 0))
 static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
-static bool ggml_vk_parse_intel_windows_driver_version(const std::string & driver_info, int & major, int & minor) {
+static bool ggml_vk_intel_windows_driver_equals_or_newer_than(uint32_t driver_version, int threshold_major, int threshold_minor) {
 #if defined(_WIN32)
-    // Require exactly one separator and non-empty major/minor components.
-    const size_t dot = driver_info.find('.');
-    if (dot == std::string::npos || dot == 0 || dot + 1 >= driver_info.size()) {
-        return false;
-    }
-
-    // Reject inputs with more than one '.' to keep strict xxx.yyyy parsing.
-    if (driver_info.find('.', dot + 1) != std::string::npos) {
-        return false;
-    }
-
-    const char * major_begin = driver_info.data();
-    const char * major_end = major_begin + dot;
-    const char * minor_begin = major_end + 1;
-    const char * minor_end = driver_info.data() + driver_info.size();
-
-    auto major_result = std::from_chars(major_begin, major_end, major);
-    if (major_result.ec != std::errc() || major_result.ptr != major_end || major < 0) {
-        return false;
-    }
-
-    auto minor_result = std::from_chars(minor_begin, minor_end, minor);
-    if (minor_result.ec != std::errc() || minor_result.ptr != minor_end || minor < 0) {
-        return false;
-    }
-
-    return true;
-#else
-    (void) driver_info;
-    (void) major;
-    (void) minor;
-    return false;
-#endif
-}
-
-static bool ggml_vk_intel_windows_driver_newer_than(const std::string & driver_info, int threshold_major, int threshold_minor) {
-#if defined(_WIN32)
-    int major = 0;
-    int minor = 0;
-    if (!ggml_vk_parse_intel_windows_driver_version(driver_info, major, minor)) {
-        return false;
-    }
+    // Intel Windows encodes xxx.yyyy as [31:14].[13:0].
+    const int major = int(driver_version >> 14);
+    const int minor = int(driver_version & 0x3fff);
 
     return major > threshold_major || (major == threshold_major && minor >= threshold_minor);
 #else
-    (void) driver_info;
+    (void) driver_version;
     (void) threshold_major;
     (void) threshold_minor;
     return true;
@@ -738,7 +698,6 @@ struct vk_device_struct {
     vk::Device device;
     uint32_t vendor_id;
     vk::DriverId driver_id;
-    std::string driver_info;
     vk_device_architecture architecture;
     vk_queue compute_queue;
     vk_queue transfer_queue;
@@ -5407,8 +5366,9 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_argmax_f32, "argmax_f32", argmax_f32_len, argmax_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_sum_rows_f32, "sum_rows_f32", sum_rows_f32_len, sum_rows_f32_data, "main", 2, sizeof(vk_op_sum_rows_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
+    // Intel Windows driver older than 32.0.101.8860 will crash when using fwht kernels on Xe2+ GPUS so we gate that here
     const bool can_use_fwht = device->driver_id != vk::DriverId::eIntelProprietaryWindows ||
-        ggml_vk_intel_windows_driver_newer_than(device->driver_info, 101, 8860);
+        (device->architecture == vk_device_architecture::INTEL_XE2 && ggml_vk_intel_windows_driver_equals_or_newer_than(device->properties.driverVersion, 101, 8860));
     if (can_use_fwht) {
         if (device->subgroup_basic && device->subgroup_shuffle) {
             int idx = 0;
@@ -5972,7 +5932,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->properties = props2.properties;
         device->vendor_id = device->properties.vendorID;
         device->driver_id = driver_props.driverID;
-        device->driver_info = driver_props.driverInfo.data();
 
         if (device->driver_id == vk::DriverId::eMoltenvk) {
             // Disable external_memory_host until https://github.com/KhronosGroup/MoltenVK/pull/2622
