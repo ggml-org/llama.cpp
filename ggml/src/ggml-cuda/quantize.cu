@@ -164,6 +164,7 @@ static __global__ void quantize_mmq_nvfp4(
 
     block_fp4_mmq * y = (block_fp4_mmq *) vy;
     if constexpr (scatter) {
+#pragma unroll
         for (int slot = 0; slot < n_expert_used; ++slot) {
             const int64_t i = ids[(int64_t) blockIdx.x * n_expert_used + slot];
             if (i < 0) {
@@ -284,6 +285,7 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
 
     block_fp4_mmq * y = (block_fp4_mmq *) vy;
     if constexpr (scatter) {
+#pragma unroll
         for (int slot = 0; slot < n_expert_used; ++slot) {
             const int64_t i = ids[(int64_t) blockIdx.x * n_expert_used + slot];
             if (i < 0) {
@@ -383,6 +385,7 @@ static __global__ void quantize_mmq_q8_1(
 
     // write the block once (normal) or to each of the token's compact rows (scatter)
     const int nwrite = scatter ? n_expert_used : 1;
+#pragma unroll
     for (int slot = 0; slot < nwrite; ++slot) {
         int64_t ib;
         if constexpr (scatter) {
