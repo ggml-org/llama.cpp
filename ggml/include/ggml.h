@@ -443,7 +443,7 @@ extern "C" {
     enum ggml_op_hint {
         GGML_HINT_NONE             = 0,
         GGML_HINT_SRC0_IS_HADAMARD = 1,
-        GGML_HINT_NO_QUANT_SRC1    = 2, // W4A16_NVFP4: keep activations higher precision.
+        GGML_HINT_NO_QUANT_SRC1    = 2, // keep src1 at higher precision (skip 4-bit activation quant).
     };
 
     // model file types

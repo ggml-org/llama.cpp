@@ -25,9 +25,9 @@ class Keys:
         ALIGNMENT                  = "general.alignment"
         FILE_TYPE                  = "general.file_type"
 
-        # NVFP4 W4A16: Layer indices for which activations were not quantized.
-        NVFP4_W4A16_BLOCKS         = "general.nvfp4.w4a16_blocks"
-        NVFP4_W4A16_OUTPUT         = "general.nvfp4.w4a16_output"
+        # Per-tensor activation precision policy (tensor name -> allow 4-bit activations).
+        ALLOW_4BIT_ACT_TENSOR      = "general.allow_4bit_act.tensor"
+        ALLOW_4BIT_ACT_VALUE       = "general.allow_4bit_act.value"
 
         # Recommended Sampler Parameters
         SAMPLING_SEQUENCE           = "general.sampling.sequence"

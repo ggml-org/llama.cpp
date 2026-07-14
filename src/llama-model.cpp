@@ -1030,6 +1030,47 @@ struct llama_model::impl {
     std::vector<float> tensor_split_owned;
 };
 
+bool llama_weight_act_policy::allows_4bit_act(const ggml_tensor * w) const {
+    if (!w) {
+        return true;
+    }
+
+    const auto it = per_tensor.find(w->name);
+    if (it != per_tensor.end()) {
+        return it->second;
+    }
+
+    return true;
+}
+
+static void load_act_policy(llama_model_loader & ml, llama_weight_act_policy & policy) {
+    std::vector<std::string> tensor_names;
+    if (!ml.get_arr(LLM_KV_GENERAL_ALLOW_4BIT_ACT_TENSOR, tensor_names, false)) {
+        return;
+    }
+
+    const gguf_context * ctx = ml.metadata;
+    const int kid = gguf_find_key(ctx, ml.llm_kv(LLM_KV_GENERAL_ALLOW_4BIT_ACT_VALUE).c_str());
+    if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY) {
+        throw std::runtime_error("missing general.allow_4bit_act.value array");
+    }
+    if (gguf_get_arr_type(ctx, kid) != GGUF_TYPE_BOOL) {
+        throw std::runtime_error("general.allow_4bit_act.value must be a bool array");
+    }
+
+    const size_t n_values = gguf_get_arr_n(ctx, kid);
+    if (n_values != tensor_names.size()) {
+        throw std::runtime_error(format(
+            "general.allow_4bit_act tensor/value length mismatch (%zu vs %zu)",
+            tensor_names.size(), n_values));
+    }
+
+    const int8_t * values = (const int8_t *) gguf_get_arr_data(ctx, kid);
+    for (size_t i = 0; i < n_values; ++i) {
+        policy.per_tensor.emplace(tensor_names[i], values[i] != 0);
+    }
+}
+
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
     if (params.tensor_split != nullptr) {
         // llama_model_params stores tensor_split as a borrowed pointer, but the model
@@ -1081,17 +1122,8 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_POOLING_TYPE,            hparams.pooling_type,    false);
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer_all);
 
-    // NVFP4 W4A16 flags: a packed array of block indices + LM head bool
-    GGML_ASSERT(hparams.n_layer_all <= LLAMA_MAX_LAYERS);
-    std::vector<uint32_t> nvfp4_w4a16_blocks;
-    ml.get_arr(LLM_KV_GENERAL_NVFP4_W4A16_BLOCKS, nvfp4_w4a16_blocks, false);
-    for (uint32_t il : nvfp4_w4a16_blocks) {
-        if (il >= hparams.n_layer_all) {
-            throw std::runtime_error(format("invalid NVFP4 W4A16 block index %u (n_layer_all = %u)", il, hparams.n_layer_all));
-        }
-        hparams.nvfp4_w4a16_layer_arr[il] = true;
-    }
-    ml.get_key(LLM_KV_GENERAL_NVFP4_W4A16_OUTPUT, hparams.nvfp4_w4a16_output, false);
+    // per-tensor activation precision policy 
+    load_act_policy(ml, act_policy);
 
     ml.get_key(LLM_KV_EXPERT_COUNT,            hparams.n_expert,        false);
     ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);

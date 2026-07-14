@@ -170,8 +170,8 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_GENERAL_LICENSE,                  "general.license"                       },
     { LLM_KV_GENERAL_SOURCE_URL,               "general.source.url"                    },
     { LLM_KV_GENERAL_SOURCE_HF_REPO,           "general.source.huggingface.repository" },
-    { LLM_KV_GENERAL_NVFP4_W4A16_BLOCKS,       "general.nvfp4.w4a16_blocks"            },
-    { LLM_KV_GENERAL_NVFP4_W4A16_OUTPUT,       "general.nvfp4.w4a16_output"            },
+    { LLM_KV_GENERAL_ALLOW_4BIT_ACT_TENSOR,    "general.allow_4bit_act.tensor"         },
+    { LLM_KV_GENERAL_ALLOW_4BIT_ACT_VALUE,     "general.allow_4bit_act.value"          },
 
     { LLM_KV_VOCAB_SIZE,                        "%s.vocab_size"                        },
     { LLM_KV_CONTEXT_LENGTH,                    "%s.context_length"                    },

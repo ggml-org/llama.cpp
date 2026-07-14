@@ -162,10 +162,6 @@ struct llama_hparams {
     // for Kimi Linear KDA
     uint32_t n_embd_head_kda = 0;
 
-    // NVFP4 W4A16: per-layer + LM head flag, true where NVFP4 weights skip activation quantization.
-    std::array<bool, LLAMA_MAX_LAYERS> nvfp4_w4a16_layer_arr = {};
-    bool nvfp4_w4a16_output = false;
-
     bool ssm_dt_b_c_rms = false;
 
     float f_clamp_kqv      = 0.0f;

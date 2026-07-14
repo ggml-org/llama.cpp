@@ -275,9 +275,9 @@ Consider setting `CUDA_SCALE_LAUNCH_QUEUES=4x`, which increases the CUDA command
 Override default, speed-optimized compute types for cuBLAS matrix multiplications.
 Legal values: `auto`, `f16`, `fp16`, `bf16`, `f32`, `fp32`.
 
-#### GGML_CUDA_DISABLE_FORCE_W4A8
+#### GGML_CUDA_FORCE_W4A4
 
-NVFP4 models that carry W4A16 layers request higher-precision activations, so on Blackwell those layers run through the W4A8 path instead of the native W4A4 path. Set `GGML_CUDA_DISABLE_FORCE_W4A8=1` to ignore that request and keep the native W4A4 path for faster prompt processing at the cost of accuracy.
+NVFP4 models that carry W4A16 layers request higher-precision activations (W4A8), so on Blackwell those layers run through the W4A8 path instead of the native W4A4 path. Set `GGML_CUDA_FORCE_W4A4=1` to override that request and keep the native W4A4 path for faster prompt processing at the cost of accuracy.
 
 ### Unified Memory
 

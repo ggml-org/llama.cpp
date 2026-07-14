@@ -84,14 +84,13 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
     }
 }
 
-// True iff src0 is NVFP4 and dst carries the no-quant-src1 hint: gates the W4A8 mmq path.
-// GGML_CUDA_DISABLE_FORCE_W4A8 overrides the GGUF intent and keeps the native W4A4 path.
+// NVFP4 + no-quant-src1 hint selects the W4A8 path, unless GGML_CUDA_FORCE_W4A4 overrides it.
 static inline bool ggml_cuda_mmq_force_w4a8(const ggml_tensor * src0, const ggml_tensor * dst) {
-    static const bool disable = []() {
-        const char * env = getenv("GGML_CUDA_DISABLE_FORCE_W4A8");
+    static const bool force_w4a4 = []() {
+        const char * env = getenv("GGML_CUDA_FORCE_W4A4");
         return env != nullptr && std::atoi(env) != 0;
     }();
-    return !disable &&
+    return !force_w4a4 &&
            src0->type == GGML_TYPE_NVFP4 &&
            ggml_get_op_params_i32(dst, 1) == GGML_HINT_NO_QUANT_SRC1;
 }

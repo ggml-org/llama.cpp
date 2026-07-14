@@ -1361,6 +1361,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
+    act_policy       (params.act_policy),
     ctx0             (res->get_ctx()),
     gf               (res->get_gf()) {
         res->set_params(params);
@@ -1380,16 +1381,9 @@ ggml_tensor * llm_graph_context::build_cvec(
     return cvec->apply_to(ctx0, cur, il);
 }
 
-// True iff `w` is an NVFP4 W4A16 weight (layer block or LM head).
-static bool nvfp4_w4a16_for_weight(const llama_hparams & hparams, const ggml_tensor * w) {
-    if (w->type != GGML_TYPE_NVFP4) {
-        return false;
-    }
-    int il = -1;
-    if (sscanf(w->name, "blk.%d.", &il) == 1) {
-        return il >= 0 && (uint32_t) il < hparams.n_layer_all && hparams.nvfp4_w4a16_layer_arr[il];
-    }
-    return hparams.nvfp4_w4a16_output && strcmp(w->name, "output.weight") == 0;
+// True iff `w` should keep activations at higher precision (no 4-bit activation path).
+static bool no_quant_src1_for_weight(const llama_weight_act_policy * act_policy, const ggml_tensor * w) {
+    return act_policy && w && !act_policy->allows_4bit_act(w);
 }
 
 ggml_tensor * llm_graph_context::build_lora_mm(
@@ -1398,8 +1392,7 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
 
-    // W4A16 NVFP4: ask the backend to keep activations (src1) at higher precision
-    if (nvfp4_w4a16_for_weight(hparams, w)) {
+    if (no_quant_src1_for_weight(act_policy, w)) {
         ggml_mul_mat_set_hint(res, GGML_HINT_NO_QUANT_SRC1);
     }
 
@@ -1435,7 +1428,7 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
 
-    if (nvfp4_w4a16_for_weight(hparams, w)) {
+    if (no_quant_src1_for_weight(act_policy, w)) {
         ggml_mul_mat_set_hint(res, GGML_HINT_NO_QUANT_SRC1);
     }
 

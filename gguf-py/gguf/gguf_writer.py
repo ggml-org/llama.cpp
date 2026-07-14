@@ -511,11 +511,11 @@ class GGUFWriter:
     def add_file_type(self, ftype: int) -> None:
         self.add_uint32(Keys.General.FILE_TYPE, ftype)
 
-    def add_nvfp4_w4a16_blocks(self, blocks: Sequence[int]) -> None:
-        self.add_array(Keys.General.NVFP4_W4A16_BLOCKS, list(blocks))
-
-    def add_nvfp4_w4a16_output(self) -> None:
-        self.add_bool(Keys.General.NVFP4_W4A16_OUTPUT, True)
+    def add_allow_4bit_act(self, tensor_names: Sequence[str], values: Sequence[bool]) -> None:
+        if len(tensor_names) != len(values):
+            raise ValueError("allow_4bit_act tensor names and values must have the same length")
+        self.add_array(Keys.General.ALLOW_4BIT_ACT_TENSOR, list(tensor_names))
+        self.add_array(Keys.General.ALLOW_4BIT_ACT_VALUE, list(values))
 
     def add_sampling_sequence(self, sequence: str) -> None:
         self.add_string(Keys.General.SAMPLING_SEQUENCE, sequence)

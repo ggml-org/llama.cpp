@@ -194,18 +194,17 @@ void llama_model_saver::add_kv_from_model() {
     // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT_ETA,     ???);
     add_kv(LLM_KV_GENERAL_NAME,                      model->name);
 
-    // NVFP4 W4A16 flags: a packed array of layer indices + LM head flag.
-    std::vector<uint32_t> nvfp4_w4a16_blocks;
-    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
-        if (hparams.nvfp4_w4a16_layer_arr[il]) {
-            nvfp4_w4a16_blocks.push_back(il);
+    if (!model->act_policy.per_tensor.empty()) {
+        std::vector<std::string> tensor_names;
+        std::vector<int8_t> values;
+        tensor_names.reserve(model->act_policy.per_tensor.size());
+        values.reserve(model->act_policy.per_tensor.size());
+        for (const auto & [name, allow] : model->act_policy.per_tensor) {
+            tensor_names.push_back(name);
+            values.push_back(allow ? 1 : 0);
         }
-    }
-    if (!nvfp4_w4a16_blocks.empty()) {
-        add_kv(LLM_KV_GENERAL_NVFP4_W4A16_BLOCKS, nvfp4_w4a16_blocks);
-    }
-    if (hparams.nvfp4_w4a16_output) {
-        add_kv(LLM_KV_GENERAL_NVFP4_W4A16_OUTPUT, true);
+        add_kv(LLM_KV_GENERAL_ALLOW_4BIT_ACT_TENSOR, tensor_names);
+        gguf_set_arr_data(gguf_ctx, llm_kv(LLM_KV_GENERAL_ALLOW_4BIT_ACT_VALUE).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
     }
     // add_kv(LLM_KV_GENERAL_AUTHOR,                    ???);
     // add_kv(LLM_KV_GENERAL_VERSION,                   ???);

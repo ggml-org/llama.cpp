@@ -154,8 +154,7 @@ class ModelBase:
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
         self._is_nvfp4 = False
         self._is_mxfp4 = False
-        self._nvfp4_w4a16_blocks: set[int] = set() # Store block ids with W4A16_NVFP4 weights to force them to use W4A8 path.
-        self._nvfp4_w4a16_output = False # Store whether the LM head has W4A16_NVFP4 weights to force it to use W4A8 path.
+        self._allow_4bit_act: dict[str, bool] = {} # gguf tensor name -> allow 4-bit activations (False = keep higher precision)
         self._fp8_as_q8 = fp8_as_q8
         self._fp8_dequantized: set[str] = set()
 
@@ -613,6 +612,40 @@ class ModelBase:
             raise ValueError(f"Can not map tensor {name!r}")
         return new_name
 
+    def _gguf_weight_name(self, name: str) -> str:
+        if name.endswith((".weight", ".bias")):
+            return name
+        return name + ".weight"
+
+    def _hf_quant_tensors_to_gguf(self, hf_name: str) -> list[str]:
+        # Map an HF quantized-layer name to its GGUF tensor name(s).
+        if hf_name == "lm_head" or hf_name.endswith(".lm_head"):
+            return ["output.weight"]
+
+        name = hf_name
+        if name.startswith("model.language_model."):
+            name = "model." + name[len("model.language_model."):]
+
+        m = re.fullmatch(r"model\.layers\.(\d+)\.mlp\.experts", name)
+        if m:
+            bid = int(m.group(1))
+            return [
+                self._gguf_weight_name(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid)),
+                self._gguf_weight_name(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid)),
+                self._gguf_weight_name(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid)),
+            ]
+
+        candidates = [name]
+        if not name.endswith((".weight", ".bias")):
+            candidates.append(name + ".weight")
+
+        for cand in candidates:
+            try:
+                return [self._gguf_weight_name(self.map_tensor_name(cand))]
+            except ValueError:
+                continue
+        return []
+
     def set_gguf_parameters(self):
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
@@ -828,17 +861,13 @@ class ModelBase:
         self._is_nvfp4 = quant_algo == "NVFP4"
         self._is_mxfp4 = quant_method == "mxfp4"
 
-        # Collect W4A16_NVFP4 block id and LM head if it has W4A16_NVFP4 weights.
+        # Collect per-tensor W4A16_NVFP4 metadata (activations were not quantized to 4-bit).
         if self._is_nvfp4:
             for tensor_name, entry in quant_layers.items():
                 if not isinstance(entry, dict) or entry.get("quant_algo") != "W4A16_NVFP4":
                     continue
-                if "lm_head" in tensor_name or "output" in tensor_name:
-                    self._nvfp4_w4a16_output = True
-                    continue
-                bid_m = re.search(r'\.layers\.(\d+)\.', tensor_name)
-                if bid_m:
-                    self._nvfp4_w4a16_blocks.add(int(bid_m.group(1)))
+                for gguf_name in self._hf_quant_tensors_to_gguf(tensor_name):
+                    self._allow_4bit_act[gguf_name] = False
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
@@ -1032,13 +1061,11 @@ class ModelBase:
         logger.info("Set model quantization version")
         self.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
 
-        if self._nvfp4_w4a16_blocks or self._nvfp4_w4a16_output:
-            logger.info(f"Set NVFP4 W4A16 flag for {len(self._nvfp4_w4a16_blocks)} block(s)"
-                        f"{' + output' if self._nvfp4_w4a16_output else ''}")
-            if self._nvfp4_w4a16_blocks:
-                self.gguf_writer.add_nvfp4_w4a16_blocks(sorted(self._nvfp4_w4a16_blocks))
-            if self._nvfp4_w4a16_output:
-                self.gguf_writer.add_nvfp4_w4a16_output()
+        if self._allow_4bit_act:
+            names = sorted(self._allow_4bit_act.keys())
+            values = [self._allow_4bit_act[n] for n in names]
+            logger.info(f"Set allow_4bit_act metadata for {len(names)} tensor(s)")
+            self.gguf_writer.add_allow_4bit_act(names, values)
 
     def write_vocab(self):
         raise NotImplementedError("write_vocab() must be implemented in subclasses")
