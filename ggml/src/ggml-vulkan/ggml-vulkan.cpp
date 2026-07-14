@@ -140,9 +140,9 @@ static bool ggml_vk_intel_windows_driver_equals_or_newer_than(uint32_t driver_ve
 
     return major > threshold_major || (major == threshold_major && minor >= threshold_minor);
 #else
-    (void) driver_version;
-    (void) threshold_major;
-    (void) threshold_minor;
+    GGML_UNUSED(driver_version);
+    GGML_UNUSED(threshold_major);
+    GGML_UNUSED(threshold_minor);
     return true;
 #endif
 }
@@ -5369,22 +5369,20 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     // Intel Windows driver older than 32.0.101.8860 will crash when using fwht kernels on Xe2+ GPUS so we gate that here
     const bool can_use_fwht = device->driver_id != vk::DriverId::eIntelProprietaryWindows ||
         (device->architecture == vk_device_architecture::INTEL_XE2 && ggml_vk_intel_windows_driver_equals_or_newer_than(device->properties.driverVersion, 101, 8860));
-    if (can_use_fwht) {
-        if (device->subgroup_basic && device->subgroup_shuffle) {
-            int idx = 0;
-            for (uint32_t n : {64, 128, 256, 512}) {
-                if (device->subgroup_size <= n) {
-                    ggml_vk_create_pipeline(device, device->pipeline_fwht_f32[idx], "fwht_f32", fwht_f32_len, fwht_f32_data, "main", 2, sizeof(vk_op_fwht_push_constants), {1, 1, 1}, { device->subgroup_size, n }, 1, true, true, device->subgroup_size);
-                }
-                ++idx;
+    if (can_use_fwht && device->subgroup_basic && device->subgroup_shuffle) {
+        int idx = 0;
+        for (uint32_t n : {64, 128, 256, 512}) {
+            if (device->subgroup_size <= n) {
+                ggml_vk_create_pipeline(device, device->pipeline_fwht_f32[idx], "fwht_f32", fwht_f32_len, fwht_f32_data, "main", 2, sizeof(vk_op_fwht_push_constants), {1, 1, 1}, { device->subgroup_size, n }, 1, true, true, device->subgroup_size);
             }
-        } else {
-            int idx = 0;
-            for (uint32_t n : {64, 128, 256, 512}) {
-                const uint32_t block_size = std::min(device->subgroup_size, n);
-                ggml_vk_create_pipeline(device, device->pipeline_fwht_f32[idx], "fwht_shmem_f32", fwht_shmem_f32_len, fwht_shmem_f32_data, "main", 2, sizeof(vk_op_fwht_push_constants), {1, 1, 1}, { block_size, n }, 1);
-                ++idx;
-            }
+            ++idx;
+        }
+    } else if (can_use_fwht) {
+        int idx = 0;
+        for (uint32_t n : {64, 128, 256, 512}) {
+            const uint32_t block_size = std::min(device->subgroup_size, n);
+            ggml_vk_create_pipeline(device, device->pipeline_fwht_f32[idx], "fwht_shmem_f32", fwht_shmem_f32_len, fwht_shmem_f32_data, "main", 2, sizeof(vk_op_fwht_push_constants), {1, 1, 1}, { block_size, n }, 1);
+            ++idx;
         }
     }
 
