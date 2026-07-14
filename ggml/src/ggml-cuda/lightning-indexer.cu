@@ -560,6 +560,18 @@ bool ggml_cuda_lightning_indexer_supported(int device, const ggml_tensor * dst) 
         return false;
     }
 
+    // alignment checks
+    for (const ggml_tensor * t : {q, k}) {
+        if (ggml_is_quantized(t->type)) {
+            continue;
+        }
+        for (size_t i = 1; i < GGML_MAX_DIMS; ++i) {
+            if (t->nb[i] % 16 != 0) {
+                return false;
+            }
+        }
+    }
+
     switch(k->type) {
         case GGML_TYPE_F32:
         case GGML_TYPE_BF16:
