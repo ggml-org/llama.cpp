@@ -9,7 +9,11 @@ void llama_model_granite_swa::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE,             hparams.f_attention_scale, false);
 
-    // iSWA configuration
+    // MoE expert configuration
+    ml.get_key(LLM_KV_EXPERT_COUNT,                hparams.n_expert, false);
+    ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used, false);
+
+     // iSWA configuration
     ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
