@@ -1574,6 +1574,7 @@ bool llama_model_loader::load_all_data(
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
+                if (!check_tensors) { unmap_weight(*weight); } // unmap weights offloaded to backend
             }
         } else {
             const auto & file = files.at(weight->idx);
