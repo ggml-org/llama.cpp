@@ -23,8 +23,8 @@ export const DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabled
 export const FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteModels`;
 export const REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.reasoningEffortDefault`;
 export const USER_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.userOverrides`;
-/** JSON-encoded array of recommended MCP server ids the user dismissed from the "Add New Server" dialog. Once non-empty the entire recommendations section stays hidden across dialog opens. */
-export const DISMISSED_RECOMMENDED_MCP_SERVER_IDS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.dismissedRecommendedMcpServers`;
+/** Whether the user dismissed the recommendations section from the "Add New Server" dialog. Stored as a boolean string ("true"/"false"); once non-empty the entire recommendations section stays hidden across dialog opens. */
+export const DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.dismissedRecommendedMcpServers`;
 
 /** Key prefix for per-conversation resumable stream state, conversationId is appended */
 export const STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX = `${STORAGE_APP_NAME}.streamResume.`;

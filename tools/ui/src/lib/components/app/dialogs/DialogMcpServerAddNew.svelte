@@ -6,7 +6,7 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { parseHeadersToArray, uuid, canonicalizeServerUrl } from '$lib/utils';
 	import {
-		DISMISSED_RECOMMENDED_MCP_SERVER_IDS_LOCALSTORAGE_KEY,
+		DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY,
 		MCP_SERVER_ID_PREFIX,
 		RECOMMENDED_MCP_SERVERS
 	} from '$lib/constants';
@@ -78,34 +78,40 @@
 		!newServerUrlError && newServerHeaderPairsValid && (!authRequired || bearerTokenFilled)
 	);
 
-	function readDismissedRecommendationIds(): string[] {
-		if (!browser) return [];
-		const raw = localStorage.getItem(DISMISSED_RECOMMENDED_MCP_SERVER_IDS_LOCALSTORAGE_KEY);
+	// Stored as a boolean string ("true"/"false"). Reads also tolerate the
+	// legacy JSON-array payload: anything non-empty in the old shape counted
+	// as "dismissed" because the only writer back then wrote every rec id at
+	// once, so users who dismissed under the previous schema keep the
+	// section hidden after upgrading.
+	function readRecommendationsDismissed(): boolean {
+		if (!browser) return false;
+		const raw = localStorage.getItem(DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY);
 
-		if (!raw) return [];
+		if (!raw) return false;
+
+		if (raw === 'true') return true;
+		if (raw === 'false') return false;
 
 		try {
 			const parsed = JSON.parse(raw);
-			return Array.isArray(parsed)
-				? parsed.filter((id): id is string => typeof id === 'string')
-				: [];
+			return Array.isArray(parsed) && parsed.length > 0;
 		} catch {
-			return [];
+			return false;
 		}
 	}
 
-	function writeDismissedRecommendationIds(ids: string[]) {
-		dismissedRecommendationIds = ids;
+	function writeRecommendationsDismissed(dismissed: boolean) {
+		recommendationsDismissed = dismissed;
 
 		if (browser) {
 			localStorage.setItem(
-				DISMISSED_RECOMMENDED_MCP_SERVER_IDS_LOCALSTORAGE_KEY,
-				JSON.stringify(ids)
+				DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY,
+				dismissed ? 'true' : 'false'
 			);
 		}
 	}
 
-	let dismissedRecommendationIds = $state<string[]>(readDismissedRecommendationIds());
+	let recommendationsDismissed = $state<boolean>(readRecommendationsDismissed());
 
 	// Keep the Authorization intent on whenever the picked recommendation
 	// requires it. Pairs with the `disabled` switch on the form so the user
@@ -136,9 +142,7 @@
 		);
 	});
 
-	let recommendationsToShow = $derived(
-		unconfiguredRecommendations.filter((rec) => !dismissedRecommendationIds.includes(rec.id))
-	);
+	let recommendationsToShow = $derived(recommendationsDismissed ? [] : unconfiguredRecommendations);
 
 	function handleRecommendationClick(recommendedId: string) {
 		const recommendation = RECOMMENDED_MCP_SERVERS.find((rec) => rec.id === recommendedId);
@@ -159,10 +163,10 @@
 	}
 
 	function handleDismissAll() {
-		// Persist every recommendation id so the section stays hidden on
-		// future opens, even after the user re-configures a server that
-		// currently makes one disappear from the list above.
-		writeDismissedRecommendationIds(RECOMMENDED_MCP_SERVERS.map((rec) => rec.id));
+		// Keep the section hidden on future opens, even after the user
+		// re-configures a server that currently makes one disappear from
+		// the unconfigured list above.
+		writeRecommendationsDismissed(true);
 	}
 
 	function handleOpenChange(value: boolean) {
