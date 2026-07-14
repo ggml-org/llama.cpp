@@ -9012,6 +9012,13 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         return false;
     }
 
+    const bool is_k_quant =
+        src0_type == GGML_TYPE_Q2_K ||
+        src0_type == GGML_TYPE_Q3_K ||
+        src0_type == GGML_TYPE_Q4_K ||
+        src0_type == GGML_TYPE_Q5_K ||
+        src0_type == GGML_TYPE_Q6_K;
+
     // q6_k only has 2-byte alignment which makes it somewhat problematic,
     // using MMVQ is only a win on Intel.
     bool mmvq_q6 = device->vendor_id == VK_VENDOR_ID_INTEL;
@@ -9051,7 +9058,9 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         case GGML_TYPE_Q8_0:
             return device->architecture == vk_device_architecture::AMD_GCN;
         default:
-            return true;
+            // For k-quants the extra Q8_1 quantization does not pay for itself at
+            // small k; plain DMMV is faster.
+            return !is_k_quant || k >= 4096;
         }
     case VK_VENDOR_ID_INTEL:
         if (device->architecture == vk_device_architecture::INTEL_XE2) {
