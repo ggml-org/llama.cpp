@@ -763,6 +763,9 @@ static void ggml_backend_rpc_get_tensor_async(
     if (state->bytes + size > RPC_ASYNC_MAX_INFLIGHT) {
         bool status = drain_async_reads_unlocked(ctx->sock);
         RPC_STATUS_ASSERT(status);
+
+        // the drain erases the registry entry, re-acquire it
+        state = get_async_state(ctx->sock, true);
     }
 
     rpc_msg_get_tensor_req request;
