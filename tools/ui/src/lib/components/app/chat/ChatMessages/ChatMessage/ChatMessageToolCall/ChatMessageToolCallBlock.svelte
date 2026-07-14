@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { BuiltInTool } from '$lib/enums';
-	import { extractSearchResults, type AgenticSection } from '$lib/utils';
+	import { extractSearchQuery, extractSearchResults, type AgenticSection } from '$lib/utils';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import ChatMessageToolCallBlockDefault from './ChatMessageToolCallBlockDefault.svelte';
 	import ChatMessageToolCallBlockEditFile from './ChatMessageToolCallBlockEditFile.svelte';
@@ -29,11 +29,17 @@
 	let { section, attachments, open, isStreaming, isExecuting, onToggle }: Props = $props();
 
 	// Search-result runs render via the dedicated hover-card block even
-	// outside the BuiltInTool namespace, so the matcher runs first.
+	// outside the BuiltInTool namespace. The block already handles the
+	// pending state (formatted heading from query + "Searching..." spinner),
+	// so routing off `toolArgs.query` as well as parsed results lets the
+	// rich UI show from the moment the args arrive rather than after the
+	// tool returns.
 	const searchResults = $derived(extractSearchResults(section.toolResult));
+	const searchQuery = $derived(extractSearchQuery(section.toolArgs));
+	const isSearchCall = $derived(searchResults.length > 0 || searchQuery.length > 0);
 </script>
 
-{#if searchResults.length > 0}
+{#if isSearchCall}
 	<ChatMessageToolCallBlockSearchResults {section} {open} {isStreaming} {onToggle} />
 {:else if section.toolName === BuiltInTool.GET_DATETIME}
 	<ChatMessageToolCallBlockGetDatetime {section} {isStreaming} />

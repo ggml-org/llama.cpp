@@ -36,7 +36,14 @@
 	const icon = $derived(showSpinner ? Loader2 : undefined);
 	const iconClass = $derived(showSpinner ? 'h-4 w-4 animate-spin' : 'h-4 w-4');
 
-	const title = $derived(query ? `Searched web for "${query}"` : 'Searched web');
+	// Verb reflects state: "Searching" while the call is in flight, "Searched"
+	// once results (or a definitive empty response) have arrived. Lets the
+	// heading read as a live progress indicator rather than a completed
+	// retrospective.
+	const title = $derived.by(() => {
+		const verb = showSpinner ? 'Searching' : 'Searched';
+		return query ? `${verb} web for "${query}"` : `${verb} web`;
+	});
 
 	function hideBrokenIcon(event: Event) {
 		(event.currentTarget as HTMLImageElement).style.display = 'none';
