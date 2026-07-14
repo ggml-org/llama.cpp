@@ -1,0 +1,67 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+
+#include "types.glsl"
+#include "generic_binary_head.glsl"
+#if !defined(DATA_A_F32)
+#include "dequant_funcs.glsl"
+#endif
+
+const uint num_threads = 256;
+
+layout(local_size_x = num_threads, local_size_y = 1, local_size_z = 1) in;
+
+float load_src0(uint i0, uint ik, uint i02, uint i03) {
+#if !defined(DATA_A_F32)
+    const uint ib = get_aoffset() + ik*p.nb01 + i02*p.nb02 + i03*p.nb03 + i0/QUANT_K;
+    const uint q = i0 % QUANT_K;
+#if QUANT_R == 2
+    const uint y_offset = QUANT_K/2;
+    const uint iqs = q < y_offset ? q : q - y_offset;
+    const bool lane_y = q >= y_offset;
+#else
+    const uint iqs = q & ~1u;
+    const bool lane_y = (q & 1u) != 0;
+#endif
+    const vec2 v = dequantize(ib, iqs, 0);
+    const vec2 dm = get_dm(ib, 0);
+    return (lane_y ? v.y : v.x) * dm.x + dm.y;
+#else
+    return data_a[get_aoffset() + i0*p.nb00 + ik*p.nb01 + i02*p.nb02 + i03*p.nb03];
+#endif
+}
+
+void main() {
+#ifdef NEEDS_INIT_IQ_SHMEM
+    init_iq_shmem(gl_WorkGroupSize);
+#endif
+
+    uint idx = get_idx();
+
+    const uint num_iter = 2;
+
+    [[unroll]] for (uint i = 0; i < num_iter; ++i) {
+        if (idx >= p.ne) {
+            continue;
+        }
+
+        uint i0, i1, i2, i3;
+        get_indices(idx, i0, i1, i2, i3, p.ne20, p.ne21, p.ne22, p.ne23);
+
+        const uint dps2 = p.ne22 / p.ne02;
+        const uint dps3 = p.ne23 / p.ne03;
+        const uint i02 = i2 / dps2;
+        const uint i03 = i3 / dps3;
+
+        float acc = 0.0f;
+        for (uint ik = 0; ik < p.ne01; ++ik) {
+            const uint b_idx = get_boffset() + i1*p.nb10 + ik*p.nb11 + i2*p.nb12 + i3*p.nb13;
+            acc += load_src0(i0, ik, i02, i03) * data_b[b_idx];
+        }
+
+        data_d[get_doffset() + dst_idx(i0, i1, i2, i3)] = acc;
+
+        idx += num_threads;
+    }
+}

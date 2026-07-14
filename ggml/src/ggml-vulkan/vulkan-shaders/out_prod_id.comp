@@ -1,0 +1,64 @@
+#version 450
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform parameter {
+    uint ne;
+    uint cols;
+    uint rows;
+    uint n_exp_used;
+    uint n_tokens;
+    uint n_expert;
+
+    uint nb00;
+    uint nb01;
+    uint nb02;
+    uint nb10;
+    uint nb11;
+    uint nb12;
+    uint nb20;
+    uint nb21;
+    uint nb30;
+    uint nb31;
+    uint nb32;
+
+    uint a_offset;
+    uint b_offset;
+    uint ids_offset;
+    uint d_offset;
+} p;
+
+layout(binding = 0) readonly  buffer A   { float data_a[]; };
+layout(binding = 1) readonly  buffer B   { float data_b[]; };
+layout(binding = 2) readonly  buffer IDS { int   data_ids[]; };
+layout(binding = 3) writeonly buffer D   { float data_d[]; };
+
+uint get_idx() {
+    return gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
+}
+
+void main() {
+    uint idx = get_idx();
+    if (idx >= p.ne) {
+        return;
+    }
+
+    const uint c = idx % p.cols;
+    idx /= p.cols;
+    const uint r = idx % p.rows;
+    const uint e = idx / p.rows;
+
+    float acc = 0.0f;
+    for (uint iexp = 0; iexp < p.n_exp_used; ++iexp) {
+        for (uint itok = 0; itok < p.n_tokens; ++itok) {
+            const int eid = data_ids[p.ids_offset + iexp*p.nb20 + itok*p.nb21];
+            if (eid == int(e)) {
+                const float a = data_a[p.a_offset + c*p.nb00 + iexp*p.nb01 + itok*p.nb02];
+                const float b = data_b[p.b_offset + r*p.nb10 + iexp*p.nb11 + itok*p.nb12];
+                acc += a*b;
+            }
+        }
+    }
+
+    data_d[p.d_offset + c*p.nb30 + r*p.nb31 + e*p.nb32] = acc;
+}

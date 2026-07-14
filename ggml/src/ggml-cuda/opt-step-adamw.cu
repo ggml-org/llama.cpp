@@ -20,8 +20,9 @@ static __global__ void opt_step_adamw_f32(
     const float wd     = pars[4];
     const float beta1h = pars[5];
     const float beta2h = pars[6];
+    const float gclip  = pars[7]; // element-wise gradient clip (0 = disabled)
 
-    const float gi = g[i];
+    const float gi = (gclip > 0.0f) ? fmaxf(-gclip, fminf(gclip, g[i])) : g[i];
     const float gmi = g_m[i]*beta1 +    gi*(1.0f - beta1);
     const float gvi = g_v[i]*beta2 + gi*gi*(1.0f - beta2);
 
@@ -62,7 +63,7 @@ void ggml_cuda_opt_step_adamw(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad));
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad_m));
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad_v));
-    GGML_ASSERT(ggml_nelements(adamw_params) == 7);
+    GGML_ASSERT(ggml_nelements(adamw_params) == 8);
 
     float       * src0_d         = (float       *) src0->data;
     const float * src0_grad_d    = (const float *) src0_grad->data;

@@ -84,10 +84,18 @@ static __global__ void cross_entropy_loss_back_f32(
     sum = warp_reduce_sum(sum);
     const float sm_scale = 1.0f/sum;
 
+    // Sum of labels for this row. For standard one-hot labels this is 1;
+    // for masked/unlabeled rows it is 0 and the gradient must be 0 too.
+    float labels_sum = 0.0f;
+    for (int i = threadIdx.x; i < nclasses; i += WARP_SIZE) {
+        labels_sum += labels[i];
+    }
+    labels_sum = warp_reduce_sum(labels_sum);
+
     const float d_by_nrows = *grad/gridDim.x;
     for (int i = threadIdx.x; i < nclasses; i += WARP_SIZE) {
         const float val = use_shared ? tmp[i] : dst[i];
-        dst[i] = (val*sm_scale - labels[i])*d_by_nrows;
+        dst[i] = (val*sm_scale*labels_sum - labels[i])*d_by_nrows;
     }
 }
 

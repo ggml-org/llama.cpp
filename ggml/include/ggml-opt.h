@@ -89,6 +89,7 @@ extern "C" {
             float beta2; // second AdamW momentum
             float eps;   // epsilon for numerical stability
             float wd;    // weight decay - 0.0f to disable
+            float gclip; // element-wise gradient clipping threshold - 0.0f to disable
         } adamw;
         struct {
             float alpha; // learning rate
@@ -124,6 +125,13 @@ extern "C" {
 
         ggml_opt_get_optimizer_params get_opt_pars;    // callback for calculating optimizer parameters
         void *                        get_opt_pars_ud; // userdata for calculating optimizer parameters
+
+        // Gradient checkpointing: keep the output of every Nth forward node alive through
+        // the backward pass so the allocator cannot reuse its memory for other tensors.
+        // This trades compute for VRAM — intermediate activations between checkpoints are
+        // freed and recomputed during the backward pass by the existing graph structure.
+        // Set to 0 (default) to disable.  A value of ~32–64 cuts activation VRAM by ~50%.
+        int32_t grad_checkpoint_interval;
 
         // only GGML_OPT_OPTIMIZER_TYPE_ADAMW needs m, v momenta per parameter tensor
         enum ggml_opt_optimizer_type optimizer;
