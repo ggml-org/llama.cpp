@@ -265,6 +265,7 @@ struct server_slot {
         }
 
         prompt.tokens.clear();
+        prompt.checkpoints.clear();
     }
 
     std::vector<common_adapter_lora_info> lora;
@@ -647,9 +648,13 @@ struct server_slot {
 
         const auto & ptask = task ? task : task_prev;
 
+        // /slots/restore restores tokens, but not task info.
+        if (ptask || !prompt.tokens.empty()) {
+            res["n_prompt_tokens"] = (int32_t) prompt.tokens.size();
+        }
+
         if (ptask) {
             res["id_task"] = ptask->id;
-            res["n_prompt_tokens"]           = (int32_t) prompt.tokens.size();
             res["n_prompt_tokens_processed"] = n_prompt_tokens_processed;
             res["n_prompt_tokens_cache"]     = n_prompt_tokens_cache;
             res["params"] = ptask->params.to_json(only_metrics);
@@ -1573,8 +1578,13 @@ private:
                 }
             }
 
-            if (ret != nullptr) {
-                const float f_keep = (sim_best*task.tokens.size()) / ret->prompt.tokens.size();
+            // if ret->task_prev is null, /slots/restore was used, and partial information was restored,
+            // we can not proceed here
+            if (ret != nullptr && ret->task_prev != nullptr) {
+                // use last prompt, ignore tokens generated since, so it does not confuse how much to keep
+                const int32_t n_prompt_prev = ret->task_prev->n_tokens();
+
+                const float f_keep = (sim_best*task.tokens.size()) / std::max(1, n_prompt_prev);
 
                 if (task.id_slot == -1) {
                     SLT_INF(*ret, "selected slot by LCP similarity, sim_best = %.3f (> %.3f thold), f_keep = %.3f\n",
@@ -2574,12 +2584,14 @@ private:
                     size_t nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, tokens.data(), tokens.size(), &token_count);
                     if (nread == 0) {
                         slot->prompt.tokens.clear(); // KV may already been invalidated?
+                        slot->prompt.checkpoints.clear();
                         send_error(task, "Unable to restore slot, no available space in KV cache or invalid slot save file", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
                     tokens.resize(token_count);
                     slot->prompt.tokens.clear();
                     slot->prompt.tokens.insert(tokens);
+                    slot->prompt.checkpoints.clear();
 
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
@@ -4500,6 +4512,11 @@ void server_routes::init_routes() {
             return res;
         }
 
+        if (id_slot < 0) {
+            res->error(format_error_response("Invalid slot ID", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
         std::string action = req.get_param("action");
 
         if (action == "save") {
@@ -5095,7 +5112,9 @@ json server_routes::get_model_info() const {
 std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const server_http_req & req, int id_slot) {
     auto res = create_response();
     const json request_data = json::parse(req.body);
-    std::string filename = request_data.at("filename");
+    std::string filename = request_data.contains("filename") && request_data.at("filename").is_string()
+        ? request_data.at("filename").get<std::string>()
+        : "";
     if (!fs_validate_filename(filename)) {
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
@@ -5131,7 +5150,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const ser
 std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const server_http_req & req, int id_slot) {
     auto res = create_response();
     const json request_data = json::parse(req.body);
-    std::string filename = request_data.at("filename");
+    std::string filename = request_data.contains("filename") && request_data.at("filename").is_string()
+        ? request_data.at("filename").get<std::string>()
+        : "";
     if (!fs_validate_filename(filename)) {
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
