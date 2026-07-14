@@ -584,40 +584,14 @@ struct server_task_result_apply_lora : server_task_result {
     virtual json to_json() override;
 };
 
-struct server_prompt_data {
-    std::vector<uint8_t> main;
-    std::vector<uint8_t> drft;
-
-    size_t size() const {
-        return main.size() + drft.size();
-    }
-};
-
 struct server_prompt {
     server_tokens tokens;
-
-    // TODO: move to server_prompt_cache
-    server_prompt_data data;
 
     std::list<common_prompt_checkpoint> checkpoints;
 
     void clear() {
         tokens.clear();
         checkpoints.clear();
-
-        GGML_ASSERT(data.size() == 0);
-    }
-
-    size_t size() const {
-        size_t res = 0;
-
-        res += data.size();
-
-        for (const auto & ckpt : checkpoints) {
-            res += ckpt.size();
-        }
-
-        return res;
     }
 
     int n_tokens() const {
@@ -627,9 +601,32 @@ struct server_prompt {
     server_prompt clone() const {
         return server_prompt {
             tokens.clone(),
-            data,
             checkpoints,
         };
+    }
+};
+
+struct server_prompt_data {
+    std::vector<uint8_t> main;
+    std::vector<uint8_t> drft;
+
+    size_t size() const {
+        return main.size() + drft.size();
+    }
+};
+
+struct server_prompt_cache_state {
+    server_prompt prompt;
+    server_prompt_data data;
+
+    size_t size() const {
+        size_t res = data.size();
+
+        for (const auto & ckpt : prompt.checkpoints) {
+            res += ckpt.size();
+        }
+
+        return res;
     }
 };
 
@@ -639,7 +636,7 @@ struct server_prompt_cache {
         this->limit_tokens = limit_tokens;
     }
 
-    std::list<server_prompt> states;
+    std::list<server_prompt_cache_state> states;
 
     // in bytes, 0 = no limit
     size_t limit_size = 0;
@@ -651,7 +648,7 @@ struct server_prompt_cache {
 
     size_t n_tokens() const;
 
-    server_prompt * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
+    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_main, llama_context * ctx_drft, int32_t id_slot);
 
