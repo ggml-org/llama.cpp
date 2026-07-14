@@ -4816,13 +4816,23 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             {
                 ggml_type src0_type = op->src[0]->type;
                 ggml_type src1_type = op->src[1]->type;
+                const int32_t dim = op->op_params[0];
                 return src0_type == src1_type &&
                        src0_type == op->type &&
                        (
                            (
                                ggml_is_quantized(src0_type) &&
-                               ggml_is_contiguous(op->src[0]) &&
-                               ggml_is_contiguous(op->src[1]) &&
+                               (
+                                   (
+                                       dim == 3 &&
+                                       ggml_is_contiguous(op->src[0]) &&
+                                       ggml_is_contiguous(op->src[1])
+                                   ) || (
+                                       dim != 3 &&
+                                       ggml_is_contiguous_to_3(op->src[0]) &&
+                                       ggml_is_contiguous_to_3(op->src[1])
+                                   )
+                               ) &&
                                op->src[0]->ne[0] % ggml_blck_size(src0_type) == 0 &&
                                op->src[1]->ne[0] % ggml_blck_size(src0_type) == 0
                            ) || (
