@@ -115,6 +115,8 @@ class ServerProcess:
     gcp_compat: bool = False
     server_tools: str | None = None
     cors_origins: str | None = None
+    devices: str | None = None
+    rpc_servers: str | None = None
     prefill_devices: List[str] | None = None
     prefill_min_tokens: int | None = None
 
@@ -175,6 +177,10 @@ class ServerProcess:
             server_args.extend(["--models-preset", self.models_preset])
         if self.cors_origins:
             server_args.extend(["--cors-origins", self.cors_origins])
+        if self.rpc_servers:
+            server_args.extend(["--rpc", self.rpc_servers])
+        if self.devices:
+            server_args.extend(["--device", self.devices])
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
