@@ -44,7 +44,7 @@ export { setConfigValue, getConfigValue, configToParameterRecord } from './confi
 export { buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
 
 // URL utilities
-export { extractRootDomain, sanitizeExternalUrl } from './url';
+export { extractRootDomain, sanitizeExternalUrl, canonicalizeServerUrl } from './url';
 
 // Progress helpers
 export { modelLoadFraction, modelLoadProgressText } from './progress';

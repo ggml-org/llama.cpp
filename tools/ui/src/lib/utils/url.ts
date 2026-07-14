@@ -70,3 +70,27 @@ export function sanitizeExternalUrl(raw: string): string | null {
 		return null;
 	}
 }
+
+/**
+ * Canonicalize a server URL for "is this the same server?" checks across
+ * the user's settings and the recommended-server list. Lowercases scheme
+ * and host, drops default ports, and strips any trailing slashes off the
+ * path so a stored `https://api.example.com/mcp/` matches the recommended
+ * `https://api.example.com/mcp`. Falls back to a cheap trim+lowercase+strip
+ * pass when the input isn't a parseable URL.
+ *
+ * Query strings are preserved deliberately - if the user entered one,
+ * it's part of their endpoint.
+ */
+export function canonicalizeServerUrl(raw: string): string {
+	const trimmed = raw.trim();
+
+	try {
+		const parsed = new URL(trimmed);
+		const pathname = parsed.pathname.replace(/\/+$/, '');
+
+		return `${parsed.protocol}//${parsed.host}${pathname}${parsed.search}`;
+	} catch {
+		return trimmed.toLowerCase().replace(/\/+$/, '');
+	}
+}
