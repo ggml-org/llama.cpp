@@ -132,11 +132,11 @@ typedef struct VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE {
 #define CEIL_DIV(M, N) (((M) / (N)) + (((M) % (N)) != 0))
 static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
-static bool ggml_vk_intel_windows_driver_equals_or_newer_than(uint32_t driver_version, int threshold_major, int threshold_minor) {
+static bool ggml_vk_intel_windows_driver_equals_or_newer_than(uint32_t driver_version, uint32_t threshold_major, uint32_t threshold_minor) {
 #if defined(_WIN32)
     // Intel Windows encodes xxx.yyyy as [31:14].[13:0].
-    const int major = int(driver_version >> 14);
-    const int minor = int(driver_version & 0x3fff);
+    const uint32_t major = driver_version >> 14;
+    const uint32_t minor = driver_version & 0x3fff;
 
     return major > threshold_major || (major == threshold_major && minor >= threshold_minor);
 #else
