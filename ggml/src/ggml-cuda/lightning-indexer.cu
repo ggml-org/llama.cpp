@@ -403,10 +403,10 @@ void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const ggml_tensor * w = dst->src[2]; // weights
     const ggml_tensor * m = dst->src[3]; // mask
 
-    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
-    GGML_ASSERT(   q->type == GGML_TYPE_F32);
-    GGML_ASSERT(   w->type == GGML_TYPE_F32);
-    GGML_ASSERT(   m->type == GGML_TYPE_F16);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(  q->type == GGML_TYPE_F32);
+    GGML_ASSERT(  w->type == GGML_TYPE_F32);
+    GGML_ASSERT(  m->type == GGML_TYPE_F16);
 
     GGML_TENSOR_LOCALS(int64_t, neq,  q, ne)
     GGML_TENSOR_LOCALS(size_t,  nbq,  q, nb)
