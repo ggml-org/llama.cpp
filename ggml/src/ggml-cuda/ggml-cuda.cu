@@ -2259,7 +2259,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_fill(ctx, dst);
             break;
         case GGML_OP_LIGHTNING_INDEXER:
-            ggml_cuda_op_lightning_indexer(ctx, dst);
+            ggml_cuda_lightning_indexer(ctx, dst);
             break;
         default:
             return false;
