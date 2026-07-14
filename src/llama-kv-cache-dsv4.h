@@ -93,6 +93,7 @@ public:
                      uint32_t   n_seq_max,
                      uint32_t   n_ubatch,
                      uint32_t   n_pad,
+                     uint32_t   n_rs_seq,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse);
 
@@ -148,6 +149,11 @@ private:
     llama_hparams hparams_lid;
 
     const uint32_t n_seq_max;
+
+    // rollback budget: the compressor-state rings are oversized by this many rows so that the last
+    // n_rs_seq tokens can be removed without having overwritten a row that an unfinished block still
+    // has to read. 0 disables partial rollback.
+    const uint32_t n_rs_seq;
 
     std::unique_ptr<llama_kv_cache_iswa> kv_raw;
     std::unique_ptr<llama_kv_cache>      kv_csa;

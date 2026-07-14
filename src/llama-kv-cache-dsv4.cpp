@@ -979,13 +979,15 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
                  uint32_t   n_seq_max,
                  uint32_t   n_ubatch,
                  uint32_t   n_pad,
+                 uint32_t   n_rs_seq,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse) :
     hparams_raw(model.hparams),
     hparams_csa(model.hparams),
     hparams_hca(model.hparams),
     hparams_lid(model.hparams),
-    n_seq_max(n_seq_max) {
+    n_seq_max(n_seq_max),
+    n_rs_seq(n_rs_seq) {
 
     const layer_filter_cb filter_raw = [&](int32_t il) {
         if (filter && !filter(il)) {
@@ -1065,19 +1067,19 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     LLAMA_LOG_INFO("%s: creating DSV4 CSA compressor state\n", __func__);
 
     csa_state = std::make_unique<llama_dsv4_comp_state>(
-            model, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
+            model, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO + n_rs_seq,
             2*model.hparams.n_embd_head_k(), "csa", filter_csa);
 
     LLAMA_LOG_INFO("%s: creating DSV4 HCA compressor state\n", __func__);
 
     hca_state = std::make_unique<llama_dsv4_comp_state>(
-            model, offload, unified_compressed, n_seq_max, DSV4_HCA_RATIO, DSV4_HCA_RATIO,
+            model, offload, unified_compressed, n_seq_max, DSV4_HCA_RATIO, DSV4_HCA_RATIO + n_rs_seq,
             model.hparams.n_embd_head_k(), "hca", filter_hca);
 
     LLAMA_LOG_INFO("%s: creating DSV4 lightning-indexer compressor state\n", __func__);
 
     lid_state = std::make_unique<llama_dsv4_comp_state>(
-            model, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
+            model, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO + n_rs_seq,
             2*model.hparams.indexer_head_size, "lid", filter_csa);
 
     // DSV4 attention reads compressed-K / compressor-state rows that the current
@@ -1212,8 +1214,22 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
     }
 
     if (p0 > 0) {
-        if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max ||
-                p0 <= kv_raw->seq_pos_max(seq_id)) {
+        if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max) {
+            return false;
+        }
+
+        // A compressed block row is derived from a compressor-state ring addressed by
+        // pos%state_size, so a token cannot be removed once the rows it wrote have been
+        // overwritten. The rings are oversized by n_rs_seq rows, which makes exactly the last
+        // n_rs_seq positions removable: their rows have not aliased onto any row that an
+        // unfinished block still reads, and they are simply rewritten by whatever is decoded
+        // next. A compressed row that a removed token completed keeps stale contents, but it
+        // sits at block index pos/ratio and is only exposed to a token once (pos + 1)/ratio
+        // exceeds it - which cannot happen again before that same position is re-decoded and
+        // rewrites the row.
+        const llama_pos rollback = kv_raw->seq_pos_max(seq_id) - (p0 - 1);
+
+        if (rollback > (llama_pos) n_rs_seq) {
             return false;
         }
 
