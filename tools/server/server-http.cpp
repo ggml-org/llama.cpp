@@ -266,13 +266,18 @@ bool server_http_context::init(const common_params & params) {
     };
 
     // register server middlewares
-    srv->set_pre_routing_handler([middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+    srv->set_pre_routing_handler([&params, middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
+        // special case (for convenience): echo back the Origin header to allow any origin to access the server with credentials
+        if (params.cors_credentials && params.cors_origins == "*") {
+            res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        } else {
+            res.set_header("Access-Control-Allow-Origin", params.cors_origins);
+        }
         // If this is OPTIONS request, skip validation because browsers don't include Authorization header
         if (req.method == "OPTIONS") {
-            res.set_header("Access-Control-Allow-Credentials", "true");
-            res.set_header("Access-Control-Allow-Methods",     "GET, POST");
-            res.set_header("Access-Control-Allow-Headers",     "*");
+            res.set_header("Access-Control-Allow-Credentials", params.cors_credentials ? "true" : "false");
+            res.set_header("Access-Control-Allow-Methods",     params.cors_methods);
+            res.set_header("Access-Control-Allow-Headers",     params.cors_headers);
             res.set_content("", "text/html"); // blank response, no data
             return httplib::Server::HandlerResponse::Handled; // skip further processing
         }
