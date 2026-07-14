@@ -307,7 +307,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
         SRV_WRN("%s", "CORS is set to allow all origins ('*') and no API key is set\n");
         SRV_WRN("%s", "this can be a security risk (cross-origin attacks)\n");
-        SRV_WRN("%s", "more info: ...\n");
+        SRV_WRN("%s", "more info: https://github.com/ggml-org/llama.cpp/pull/25655\n");
         SRV_WRN("%s", "-----------------\n");
     }
 
