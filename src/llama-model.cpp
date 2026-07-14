@@ -2541,8 +2541,13 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_STEP35:
         case LLM_ARCH_TALKIE:
         case LLM_ARCH_MELLUM:
-        case LLM_ARCH_DFLASH:
             return LLAMA_ROPE_TYPE_NEOX;
+
+        case LLM_ARCH_DFLASH:
+            // a drafter has to rotate exactly like the target it drafts for: the DeepSeek-V4
+            // backbone pairs the rotary dimensions like deepseek2/4 (NORM), the original
+            // Qwen3-style backbone pairs them like Qwen (NEOX).
+            return model->hparams.dflash_dsv4_backbone ? LLAMA_ROPE_TYPE_NORM : LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
         case LLM_ARCH_PADDLEOCR:
