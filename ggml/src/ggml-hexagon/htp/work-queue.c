@@ -215,24 +215,6 @@ work_queue_t work_queue_init(void * ptr, uint32_t n_threads, uint32_t capacity, 
     return q;
 }
 
-work_queue_t work_queue_create(uint32_t n_threads, uint32_t capacity, uint32_t stack_size) {
-    size_t size = work_queue_sizeof(n_threads, capacity, stack_size);
-
-    unsigned char * mem_blob = (unsigned char *) memalign(4096, size);
-    if (!mem_blob) {
-        FARF(ERROR, "Could not allocate memory for work queue!!");
-        return NULL;
-    }
-
-    work_queue_t q = work_queue_init(mem_blob, n_threads, capacity, stack_size);
-    if (!q) {
-        free(mem_blob);
-        return NULL;
-    }
-    q->external_mem = false;
-    return q;
-}
-
 void work_queue_free(work_queue_t q) {
     if (!q) { return; }
 
@@ -245,17 +227,6 @@ void work_queue_free(work_queue_t q) {
             int status;
             (void) qurt_thread_join(q->thread[i], &status);
         }
-    }
-}
-
-void work_queue_delete(work_queue_t q) {
-    if (!q) { return; }
-
-    work_queue_free(q);
-
-    // free allocated memory if it was allocated internally by work_queue_create
-    if (!q->external_mem && q->stack[0]) {
-        free(q->stack[0]);
     }
 }
 

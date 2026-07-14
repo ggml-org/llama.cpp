@@ -101,36 +101,6 @@ void dma_queue_alias_free(dma_queue_t q) {
     (void) q;
 }
 
-dma_queue_t dma_queue_create(size_t capacity, uintptr_t vtcm_base, size_t vtcm_size, struct htp_thread_trace * trace) {
-    size_t total_size = dma_queue_sizeof(capacity);
-
-    void * block = memalign(64, total_size);
-    if (block == NULL) {
-        FARF(ERROR, "%s: failed to allocate unified DMA memory block of size %zu\n", __FUNCTION__, total_size);
-        return NULL;
-    }
-
-    return dma_queue_init(block, capacity, vtcm_base, vtcm_size, trace);
-}
-
-dma_queue_t dma_queue_create_alias(dma_queue_t main_q, uint8_t nocache) {
-    size_t size = dma_queue_alias_sizeof();
-    void * block = memalign(32, size);
-    if (block == NULL) {
-        FARF(ERROR, "%s: failed to allocate DMA queue alias\n", __FUNCTION__);
-        return NULL;
-    }
-
-    return dma_queue_alias_init(block, main_q, nocache);
-}
-
-void dma_queue_delete(dma_queue_t q) {
-    if (!q) {
-        return;
-    }
-    free(q);
-}
-
 void dma_queue_flush(dma_queue_t q) {
     while (dma_queue_pop(q).dst != NULL) ;
 }

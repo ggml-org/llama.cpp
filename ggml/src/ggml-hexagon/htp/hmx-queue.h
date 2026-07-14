@@ -58,12 +58,9 @@ struct hmx_queue_s {
 
 typedef struct hmx_queue_s * hmx_queue_t;
 
-hmx_queue_t hmx_queue_create(size_t capacity, uint32_t hap_rctx);
-void        hmx_queue_delete(hmx_queue_t q);
-
 size_t      hmx_queue_sizeof(size_t capacity, uint32_t stack_size);
 size_t      hmx_queue_alignof(void);
-hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uint32_t hap_rctx);
+hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uint32_t hap_rctx, struct htp_thread_trace * trace);
 void        hmx_queue_free(hmx_queue_t q);
 
 static inline struct hmx_queue_desc hmx_queue_make_desc(hmx_queue_func func, void * data) {

@@ -519,13 +519,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     ctx->hmx_queue   = NULL;
     if (n_hmx) {
         void * hmx_ptr = (void *) ((uintptr_t) block + offset_hmx);
-        ctx->hmx_queue = hmx_queue_init(hmx_ptr, HMX_QUEUE_CAPACITY, HMX_QUEUE_STACK_SIZE, ctx->vtcm_rctx);
-        if (ctx->hmx_queue) {
-            ctx->hmx_queue->trace = &ctx->trace[HTP_MAX_NTHREADS];
-        } else {
-            FARF(ERROR, "hmx-queue-init failed");
-            ctx->hmx_enabled = false;
-        }
+        ctx->hmx_queue = hmx_queue_init(hmx_ptr, HMX_QUEUE_CAPACITY, HMX_QUEUE_STACK_SIZE, ctx->vtcm_rctx, &ctx->trace[HTP_MAX_NTHREADS]);
     }
     FARF(HIGH, "HMX %s (n_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", n_hmx);
 
@@ -1156,7 +1150,9 @@ static void process_ops(struct htp_context * ctx) {
         uint32_t op_wakeup = n_ops / 2; // half-way throgh the batch
 
         work_queue_wakeup(ctx->work_queue);
-        hmx_queue_wakeup(ctx->hmx_queue);
+        if (ctx->hmx_queue) {
+            hmx_queue_wakeup(ctx->hmx_queue);
+        }
 
         for (uint32_t i=0; i < n_ops; i++) {
             struct profile_data prof;
@@ -1186,7 +1182,10 @@ static void process_ops(struct htp_context * ctx) {
             }
         }
 
-        hmx_queue_suspend(ctx->hmx_queue);
+        if (ctx->hmx_queue) {
+            hmx_queue_suspend(ctx->hmx_queue);
+            hmx_queue_flush(ctx->hmx_queue);
+        }
         work_queue_suspend(ctx->work_queue);
 
         struct htp_opbatch_rsp rsp;

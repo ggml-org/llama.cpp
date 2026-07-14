@@ -106,9 +106,6 @@ struct dma_queue_s {
     bool                alias;     // When set, dma_queue_delete will not free the ring
 };
 
-dma_queue_t dma_queue_create(size_t capacity, uintptr_t vtcm_base, size_t vtcm_size, struct htp_thread_trace * trace);
-dma_queue_t dma_queue_create_alias(dma_queue_t main_q, uint8_t nocache);
-void        dma_queue_delete(dma_queue_t q);
 void        dma_queue_flush(dma_queue_t q);
 
 size_t      dma_queue_sizeof(size_t capacity);

@@ -12,9 +12,6 @@ typedef struct work_queue_s * work_queue_t;
 
 #define WORK_QUEUE_MAX_N_THREADS      10
 
-work_queue_t work_queue_create(uint32_t n_threads, uint32_t capacity, uint32_t stack_size);
-void work_queue_delete(work_queue_t q);
-
 size_t       work_queue_sizeof(uint32_t n_threads, uint32_t capacity, uint32_t stack_size);
 size_t       work_queue_alignof(void);
 work_queue_t work_queue_init(void * ptr, uint32_t n_threads, uint32_t capacity, uint32_t stack_size);

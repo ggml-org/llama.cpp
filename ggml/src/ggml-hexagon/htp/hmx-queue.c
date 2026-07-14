@@ -105,7 +105,7 @@ size_t hmx_queue_alignof(void) {
     return HEX_L2_LINE_SIZE;
 }
 
-hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uint32_t hap_rctx) {
+hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uint32_t hap_rctx, struct htp_thread_trace * trace) {
     capacity = hex_ceil_pow2(capacity);
     size_t size_q = hex_align_up(sizeof(struct hmx_queue_s), HEX_L2_LINE_SIZE);
     size_t size_desc = hex_align_up(capacity * sizeof(struct hmx_queue_desc), HEX_L2_LINE_SIZE);
@@ -125,6 +125,8 @@ hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uin
 
     q->stack = block;
     memset(q->stack, 0, stack_size);
+
+    q->trace = trace;
 
     // Match caller thread priority (same pattern as worker-pool.c).
     int prio = qurt_thread_get_priority(qurt_thread_get_id());
@@ -153,23 +155,6 @@ hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uin
     return q;
 }
 
-hmx_queue_t hmx_queue_create(size_t capacity, uint32_t hap_rctx) {
-    size_t size = hmx_queue_sizeof(capacity, 16384);
-    void * block = memalign(64, size);
-    if (!block) {
-        FARF(ERROR, "%s: failed to allocate DMA queue\n", __FUNCTION__);
-        return NULL;
-    }
-
-    hmx_queue_t q = hmx_queue_init(block, capacity, 16384, hap_rctx);
-    if (!q) {
-        free(block);
-        return NULL;
-    }
-    q->external_mem = false;
-    return q;
-}
-
 void hmx_queue_free(hmx_queue_t q) {
     if (!q) {
         return;
@@ -182,16 +167,4 @@ void hmx_queue_free(hmx_queue_t q) {
 
     int status;
     qurt_thread_join(q->thread, &status);
-}
-
-void hmx_queue_delete(hmx_queue_t q) {
-    if (!q) {
-        return;
-    }
-
-    hmx_queue_free(q);
-
-    if (!q->external_mem) {
-        free(q);
-    }
 }
