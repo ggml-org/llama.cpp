@@ -204,6 +204,8 @@ struct ggml_backend_rpc_device_context {
     uint32_t    device;
     std::string name;
     std::string description;
+    std::mutex  mutex;
+    uint32_t    n_backends;
     uint64_t    last_graph_uid;
 };
 
@@ -289,7 +291,7 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
 
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 // No response
-static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
+static bool send_rpc_cmd_unlocked(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
     uint8_t cmd_byte = cmd;
     if (!sock->send_data(&cmd_byte, sizeof(cmd_byte))) {
         return false;
@@ -303,10 +305,16 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
     return true;
 }
 
+static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
+    std::lock_guard<std::mutex> lock(sock->mutex());
+    return send_rpc_cmd_unlocked(sock, cmd, input, input_size);
+}
+
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 // RPC response: | response_size (8 bytes) | response_data (response_size bytes) |
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size, void * output, size_t output_size) {
-    if (!send_rpc_cmd(sock, cmd, input, input_size)) {
+    std::lock_guard<std::mutex> lock(sock->mutex());
+    if (!send_rpc_cmd_unlocked(sock, cmd, input, input_size)) {
         return false;
     }
     uint64_t out_size;
@@ -645,6 +653,14 @@ static const char * ggml_backend_rpc_name(ggml_backend_t backend) {
 
 static void ggml_backend_rpc_free(ggml_backend_t backend) {
     ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *)backend->context;
+    ggml_backend_rpc_device_context * rpc_dev_ctx =
+        (ggml_backend_rpc_device_context *)ggml_backend_get_device(backend)->context;
+    {
+        std::lock_guard<std::mutex> lock(rpc_dev_ctx->mutex);
+        GGML_ASSERT(rpc_dev_ctx->n_backends > 0);
+        rpc_dev_ctx->n_backends--;
+        rpc_dev_ctx->last_graph_uid = 0;
+    }
     delete rpc_ctx;
     delete backend;
 }
@@ -701,8 +717,11 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
     ggml_backend_dev_t rpc_dev = ggml_backend_get_device(backend);
     ggml_backend_rpc_device_context * rpc_dev_ctx = (ggml_backend_rpc_device_context *)rpc_dev->context;
 
+    std::lock_guard<std::mutex> lock(rpc_dev_ctx->mutex);
+
     GGML_ASSERT(cgraph->n_nodes > 0);
-    bool reuse = cgraph->uid != 0 && rpc_dev_ctx->last_graph_uid == cgraph->uid;
+    const bool reuse = rpc_dev_ctx->n_backends == 1 &&
+        cgraph->uid != 0 && rpc_dev_ctx->last_graph_uid == cgraph->uid;
     if (reuse) {
         rpc_msg_graph_recompute_req request;
         request.device = rpc_ctx->device;
@@ -710,7 +729,7 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
         bool status = send_rpc_cmd(sock, RPC_CMD_GRAPH_RECOMPUTE, &request, sizeof(request));
         RPC_STATUS_ASSERT(status);
     } else {
-        rpc_dev_ctx->last_graph_uid = cgraph->uid;
+        rpc_dev_ctx->last_graph_uid = rpc_dev_ctx->n_backends == 1 ? cgraph->uid : 0;
         std::vector<uint8_t> input;
         serialize_graph(rpc_ctx->device, cgraph, input);
         auto sock = get_socket(rpc_ctx->endpoint);
@@ -781,10 +800,17 @@ ggml_backend_t ggml_backend_rpc_init(const char * endpoint, uint32_t device) {
         /* .name           = */ dev_name,
     };
     auto reg = ggml_backend_rpc_add_server(endpoint);
+    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(reg, device);
+    ggml_backend_rpc_device_context * dev_ctx = (ggml_backend_rpc_device_context *)dev->context;
+    {
+        std::lock_guard<std::mutex> lock(dev_ctx->mutex);
+        dev_ctx->n_backends++;
+        dev_ctx->last_graph_uid = 0;
+    }
     ggml_backend_t backend = new ggml_backend {
         /* .guid    = */ ggml_backend_rpc_guid(),
         /* .iface   = */ ggml_backend_rpc_interface,
-        /* .device  = */ ggml_backend_reg_dev_get(reg, device),
+        /* .device  = */ dev,
         /* .context = */ ctx
     };
     return backend;
@@ -1950,6 +1976,8 @@ ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint) {
             /* .device      = */    ind,
             /* .name        = */    dev_name,
             /* .description = */    dev_desc,
+            /* .mutex       = */    {},
+            /* .n_backends  = */    0,
             /* .last_graph_uid = */ 0,
         };
 

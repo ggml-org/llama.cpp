@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 struct socket_t;
 typedef std::shared_ptr<socket_t> socket_ptr;
@@ -15,6 +16,8 @@ struct socket_t {
 
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
+
+    std::mutex & mutex();
 
     socket_ptr accept();
 
