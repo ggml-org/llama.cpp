@@ -286,9 +286,6 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx *          ct
                 }
             }
             break;
-        case GGML_OP_GET_ROWS:
-            ctx->cpu_dst = ggml_get_rows(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1);
-            break;
         case GGML_OP_CONT:
             ctx->cpu_dst = ggml_cont(ctx->ggml_ctx, ctx->cpu_src0);
             break;
@@ -309,14 +306,6 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx *          ct
 
                 // Perform SET_ROWS operation: returns a view that scatters src0 rows to dst[src1] positions
                 ctx->cpu_dst = ggml_set_rows(ctx->ggml_ctx, cpu_dst_base, ctx->cpu_src0, ctx->cpu_src1);
-            }
-            break;
-        case GGML_OP_RMS_NORM:
-            // Extract epsilon parameter from op_params (stored as float)
-            {
-                float eps;
-                memcpy(&eps, node->op_params, sizeof(float));
-                ctx->cpu_dst = ggml_rms_norm(ctx->ggml_ctx, ctx->cpu_src0, eps);
             }
             break;
         case GGML_OP_GET_ROWS:
