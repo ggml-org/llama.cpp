@@ -33,12 +33,10 @@ struct ggml_opt_context {
     ggml_cgraph              * allocated_graph_copy = nullptr;
     struct ggml_context      * ctx_static           = nullptr;
     struct ggml_context      * ctx_cpu              = nullptr;
-    struct ggml_context      * ctx_grads_cpu        = nullptr;
     struct ggml_context      * ctx_compute          = nullptr;
     struct ggml_context      * ctx_copy             = nullptr;
     ggml_backend_buffer_t      buf_static           = nullptr;
     ggml_backend_buffer_t      buf_cpu              = nullptr;
-    ggml_backend_buffer_t      buf_grads_cpu        = nullptr;
     std::mt19937               rng;
     enum ggml_opt_loss_type    loss_type;
     enum ggml_opt_build_type   build_type;
@@ -72,6 +70,7 @@ struct ggml_opt_context {
     std::vector<quantized_state> quantized_states;
     std::vector<struct ggml_tensor *> quantized_params;
     std::vector<struct ggml_tensor *> quantized_grads;
+    std::vector<std::vector<float>>   offloaded_grads;
 
     int64_t iter               = 1;
     int32_t opt_period         = 1;
@@ -117,6 +116,7 @@ static void ggml_opt_step_adamw_quantized(ggml_opt_context_t opt_ctx, const ggml
     const float beta1h = 1.0f/(1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));
     const float beta2h = 1.0f/(1.0f - powf(opt_pars.adamw.beta2, opt_ctx->iter));
     const float keep   = 1.0f - opt_pars.adamw.alpha*opt_pars.adamw.wd;
+    const float v_floor = state_type_v == GGML_TYPE_Q8_0 ? 8.0e-6f : 1.0e-6f;
 
     for (size_t i = 0; i < opt_ctx->quantized_states.size(); ++i) {
         ggml_opt_context::quantized_state & state = opt_ctx->quantized_states[i];
@@ -135,11 +135,19 @@ static void ggml_opt_step_adamw_quantized(ggml_opt_context_t opt_ctx, const ggml
         traits_v->to_float(state.v.data(), v.data(), state.ne_padded);
 
         for (int64_t j = 0; j < state.ne; ++j) {
-            const float g = opt_pars.adamw.gclip > 0.0f ?
-                fmaxf(-opt_pars.adamw.gclip, fminf(opt_pars.adamw.gclip, gradient[j])) : gradient[j];
+            float g = gradient[j];
+            if (!std::isfinite(g)) {
+                g = 0.0f;
+            }
+            if (opt_pars.adamw.gclip > 0.0f) {
+                g = fmaxf(-opt_pars.adamw.gclip, fminf(opt_pars.adamw.gclip, g));
+            }
             m[j] = m[j]*opt_pars.adamw.beta1 + g*(1.0f - opt_pars.adamw.beta1);
-            v[j] = v[j]*opt_pars.adamw.beta2 + g*g*(1.0f - opt_pars.adamw.beta2);
-            weight[j] = weight[j]*keep - opt_pars.adamw.alpha*(m[j]*beta1h)/(sqrtf(v[j]*beta2h) + opt_pars.adamw.eps);
+            v[j] = fmaxf(v_floor, v[j]*opt_pars.adamw.beta2 + g*g*(1.0f - opt_pars.adamw.beta2));
+            const float update = opt_pars.adamw.alpha*(m[j]*beta1h)/(sqrtf(v[j]*beta2h) + opt_pars.adamw.eps);
+            if (std::isfinite(update) && std::isfinite(weight[j])) {
+                weight[j] = weight[j]*keep - update;
+            }
         }
 
         traits->from_float_ref(m.data(), state.m.data(), state.ne_padded);
@@ -406,7 +414,8 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     const enum ggml_opt_optimizer_type optimizer = opt_ctx->optimizer;
 
     const bool accumulate = opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_GRAD &&
-        (opt_ctx->grad_offload || !(opt_ctx->static_graphs && opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT && opt_ctx->opt_period == 1));
+        !opt_ctx->grad_offload &&
+        !(opt_ctx->static_graphs && opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT && opt_ctx->opt_period == 1);
 
     const bool need_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
         opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW;
@@ -541,21 +550,11 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
         GGML_ASSERT(opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_GRAD);
 
         const int n_nodes = opt_ctx->gf->n_nodes;
-        if (opt_ctx->grad_offload) {
-            struct ggml_init_params params = {
-                /*.mem_size   =*/ size_t(n_nodes)*ggml_tensor_overhead(),
-                /*.mem_buffer =*/ nullptr,
-                /*.no_alloc   =*/ true,
-            };
-            opt_ctx->ctx_grads_cpu = ggml_init(params);
-        }
         opt_ctx->grad_accs.resize(n_nodes);
         for (int i = 0; i < n_nodes; ++i) {
             ggml_tensor * node = opt_ctx->gf->nodes[i];
             if ((accumulate && (node->flags & GGML_TENSOR_FLAG_PARAM)) || (node->flags & GGML_TENSOR_FLAG_LOSS)) {
-                struct ggml_context * ctx_grad = opt_ctx->grad_offload && (node->flags & GGML_TENSOR_FLAG_PARAM)
-                    ? opt_ctx->ctx_grads_cpu : opt_ctx->ctx_static;
-                opt_ctx->grad_accs[i] = ggml_new_tensor(ctx_grad, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
+                opt_ctx->grad_accs[i] = ggml_new_tensor(opt_ctx->ctx_static, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
             } else {
                 opt_ctx->grad_accs[i] = nullptr;
             }
@@ -660,6 +659,13 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             state_i++;
         }
         GGML_ASSERT(state_i == opt_ctx->quantized_states.size());
+        if (opt_ctx->grad_offload) {
+            opt_ctx->offloaded_grads.resize(opt_ctx->quantized_states.size());
+            for (size_t i = 0; i < opt_ctx->quantized_states.size(); ++i) {
+                opt_ctx->offloaded_grads[i].assign(opt_ctx->quantized_states[i].ne, 0.0f);
+            }
+            GGML_LOG_INFO("%s: gradients are accumulated on CPU and copied to GPU only for the optimizer step\n", __func__);
+        }
     }
 
     if (opt_ctx->buf_static) {
@@ -717,13 +723,6 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
         ggml_graph_reset(opt_ctx->gb_opt);
     }
 
-    if (opt_ctx->ctx_grads_cpu && !opt_ctx->buf_grads_cpu) {
-        opt_ctx->buf_grads_cpu = ggml_backend_alloc_ctx_tensors_from_buft(
-            opt_ctx->ctx_grads_cpu, ggml_backend_cpu_buffer_type());
-        ggml_backend_buffer_clear(opt_ctx->buf_grads_cpu, 0);
-        GGML_LOG_INFO("%s: parameter gradient accumulators are offloaded to CPU\n", __func__);
-    }
-
     opt_ctx->buf_cpu = ggml_backend_alloc_ctx_tensors_from_buft(opt_ctx->ctx_cpu, ggml_backend_cpu_buffer_type());
 }
 
@@ -738,7 +737,10 @@ ggml_opt_context_t ggml_opt_init(struct ggml_opt_params params) {
     result->outputs          = params.outputs;
     result->opt_period                = params.opt_period;
     result->grad_checkpoint_interval  = params.grad_checkpoint_interval;
-    result->grad_offload              = params.grad_offload;
+    result->grad_offload              = params.grad_offload && ggml_opt_optimizer_state_type(params.optimizer) != GGML_TYPE_COUNT;
+    if (params.grad_offload && !result->grad_offload) {
+        GGML_LOG_WARN("%s: gradient CPU offload requires a quantized AdamW optimizer\n", __func__);
+    }
     result->get_opt_pars              = params.get_opt_pars;
     result->get_opt_pars_ud           = params.get_opt_pars_ud;
     result->optimizer                 = params.optimizer;
@@ -770,7 +772,6 @@ void ggml_opt_free(ggml_opt_context_t opt_ctx) {
     }
     ggml_backend_buffer_free(opt_ctx->buf_static);
     ggml_backend_buffer_free(opt_ctx->buf_cpu);
-    ggml_backend_buffer_free(opt_ctx->buf_grads_cpu);
     for (ggml_backend_buffer_t buf : opt_ctx->bufs_momenta) {
         ggml_backend_buffer_free(buf);
     }
@@ -779,7 +780,6 @@ void ggml_opt_free(ggml_opt_context_t opt_ctx) {
     }
     ggml_free(opt_ctx->ctx_static);
     ggml_free(opt_ctx->ctx_cpu);
-    ggml_free(opt_ctx->ctx_grads_cpu);
     ggml_free(opt_ctx->ctx_copy);
     delete opt_ctx;
 }
@@ -793,6 +793,9 @@ void ggml_opt_reset(ggml_opt_context_t opt_ctx, bool optimizer) {
         for (ggml_opt_context::quantized_state & state : opt_ctx->quantized_states) {
             std::fill(state.m.begin(), state.m.end(), 0);
             std::fill(state.v.begin(), state.v.end(), 0);
+        }
+        for (std::vector<float> & grad : opt_ctx->offloaded_grads) {
+            std::fill(grad.begin(), grad.end(), 0.0f);
         }
         opt_ctx->iter = 1;
     } else {
@@ -1038,9 +1041,30 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
     }
 
     ggml_backend_sched_graph_compute(opt_ctx->backend_sched, opt_ctx->allocated_graph_copy);
+    if (opt_ctx->grad_offload && ggml_opt_optimizer_state_type(opt_ctx->optimizer) != GGML_TYPE_COUNT) {
+        GGML_ASSERT(opt_ctx->offloaded_grads.size() == opt_ctx->quantized_grads.size());
+        for (size_t i = 0; i < opt_ctx->quantized_grads.size(); ++i) {
+            ggml_tensor * grad = opt_ctx->quantized_grads[i];
+            std::vector<float> local(opt_ctx->offloaded_grads[i].size());
+            ggml_backend_tensor_get(grad, local.data(), 0, local.size()*sizeof(float));
+            for (size_t j = 0; j < local.size(); ++j) {
+                opt_ctx->offloaded_grads[i][j] += local[j];
+            }
+        }
+
+        if (do_optimizer_step) {
+            for (size_t i = 0; i < opt_ctx->quantized_grads.size(); ++i) {
+                ggml_backend_tensor_set(opt_ctx->quantized_grads[i], opt_ctx->offloaded_grads[i].data(), 0,
+                    opt_ctx->offloaded_grads[i].size()*sizeof(float));
+            }
+        }
+    }
     if (do_optimizer_step && ggml_opt_optimizer_state_type(opt_ctx->optimizer) != GGML_TYPE_COUNT) {
         const ggml_opt_optimizer_params & opt_pars = opt_ctx->get_opt_pars(opt_ctx->get_opt_pars_ud);
         ggml_opt_step_adamw_quantized(opt_ctx, opt_pars);
+        for (std::vector<float> & grad : opt_ctx->offloaded_grads) {
+            std::fill(grad.begin(), grad.end(), 0.0f);
+        }
     }
     opt_ctx->iter += opt_ctx->allocated_graph == opt_ctx->gb_opt;
     opt_ctx->opt_i = (opt_ctx->opt_i + 1) % opt_ctx->opt_period;

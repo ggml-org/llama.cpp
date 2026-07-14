@@ -58,6 +58,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <clocale>
 #include <cmath>
 #include <cstring>
@@ -65,6 +66,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -164,6 +166,12 @@ struct training_sample {
     float                    reward;   // reward/score weight (1.0 = neutral, 0.0 = ignore)
 };
 
+struct tokenization_request {
+    std::string prompt;
+    std::string response;
+    float reward = 1.0f;
+};
+
 // Apply a very simple ChatML fallback template when the model has no template.
 static std::string apply_chatml(const std::vector<common_chat_msg> & msgs) {
     std::string out;
@@ -193,6 +201,7 @@ static std::vector<training_sample> load_jsonl(
     }
 
     std::vector<training_sample> samples;
+    std::vector<tokenization_request> requests;
     std::string line;
     int lineno = 0;
     bool logged_preview = false;
@@ -324,31 +333,54 @@ static std::vector<training_sample> load_jsonl(
             continue;
         }
 
-        // Tokenize template-rendered text with special parsing so chat markers
-        // match the inference path used by llama-cli --jinja.
-        auto tok_prompt   = common_tokenize(ctx, prompt_text,   /*add_special=*/true,  /*parse_special=*/true);
-        auto tok_response = common_tokenize(ctx, response_text, /*add_special=*/false, /*parse_special=*/true);
+        requests.push_back({std::move(prompt_text), std::move(response_text), reward});
+    }
 
-        if (tok_prompt.empty() && tok_response.empty()) continue;
+    std::vector<training_sample> tokenized(requests.size());
+    std::vector<uint8_t> valid(requests.size(), 0);
+    std::atomic<size_t> next_request { 0 };
+    const size_t n_workers = std::min<size_t>(requests.size(), std::max(1u, std::thread::hardware_concurrency()));
+    std::vector<std::thread> workers;
+    workers.reserve(n_workers);
+    for (size_t worker = 0; worker < n_workers; ++worker) {
+        workers.emplace_back([&] {
+            for (;;) {
+                const size_t i = next_request.fetch_add(1);
+                if (i >= requests.size()) break;
 
+                const tokenization_request & request = requests[i];
+                auto tok_prompt = common_tokenize(ctx, request.prompt, /*add_special=*/true, /*parse_special=*/true);
+                auto tok_response = common_tokenize(ctx, request.response, /*add_special=*/false, /*parse_special=*/true);
+                if (tok_prompt.empty() && tok_response.empty()) continue;
+
+                training_sample & sample = tokenized[i];
+                sample.reward = request.reward;
+                sample.tokens.insert(sample.tokens.end(), tok_prompt.begin(), tok_prompt.end());
+                sample.tokens.insert(sample.tokens.end(), tok_response.begin(), tok_response.end());
+                sample.is_label.resize(sample.tokens.size(), false);
+                for (size_t j = tok_prompt.size(); j < sample.tokens.size(); ++j) {
+                    sample.is_label[j] = true;
+                }
+                valid[i] = 1;
+            }
+        });
+    }
+    for (std::thread & worker : workers) worker.join();
+
+    samples.reserve(tokenized.size());
+    for (size_t i = 0; i < tokenized.size(); ++i) {
+        if (!valid[i]) continue;
         if (!logged_preview) {
             logged_preview = true;
-            LOG_INF("%s: first prompt preview: \"%s\"\n", __func__, preview_text(prompt_text).c_str());
-            LOG_INF("%s: first response preview: \"%s\"\n", __func__, preview_text(response_text).c_str());
-            LOG_INF("%s: first sample tokens: prompt=%zu response=%zu\n", __func__, tok_prompt.size(), tok_response.size());
+            LOG_INF("%s: first prompt preview: \"%s\"\n", __func__, preview_text(requests[i].prompt).c_str());
+            LOG_INF("%s: first response preview: \"%s\"\n", __func__, preview_text(requests[i].response).c_str());
+            const size_t prompt_tokens = tokenized[i].tokens.size() - std::count(tokenized[i].is_label.begin(), tokenized[i].is_label.end(), true);
+            LOG_INF("%s: first sample tokens: prompt=%zu response=%zu\n", __func__, prompt_tokens, tokenized[i].tokens.size() - prompt_tokens);
         }
-
-        training_sample s;
-        s.reward = reward;
-        s.tokens.insert(s.tokens.end(), tok_prompt.begin(),   tok_prompt.end());
-        s.tokens.insert(s.tokens.end(), tok_response.begin(), tok_response.end());
-        s.is_label.resize(s.tokens.size(), false);
-        // Only response tokens contribute to the loss
-        for (size_t i = tok_prompt.size(); i < s.tokens.size(); ++i) {
-            s.is_label[i] = true;
-        }
-        samples.push_back(std::move(s));
+        samples.push_back(std::move(tokenized[i]));
     }
+
+    LOG_INF("%s: tokenized %zu input lines with %zu workers\n", __func__, requests.size(), n_workers);
 
     LOG_INF("%s: loaded %zu samples from %s\n", __func__, samples.size(), path.c_str());
     return samples;
@@ -1209,6 +1241,10 @@ int main(int argc, char ** argv) {
         llama_adapter_lora * loaded = params.lora_adapters.back().ptr;
         if (!loaded) {
             LOG_ERR("%s: adapter was not loaded by common_init_from_params\n", __func__);
+            return 1;
+        }
+        if (params.grad_offload && !llama_adapter_lora_offload_to_cpu(loaded)) {
+            LOG_ERR("%s: failed to offload LoRA weights to CPU\n", __func__);
             return 1;
         }
         for (auto & kv : loaded->ab_map) {

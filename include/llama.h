@@ -658,6 +658,10 @@ extern "C" {
             struct llama_model * model,
             const char * path_lora);
 
+    // Move adapter weights to CPU memory. The graph scheduler transfers them to the
+    // compute backend when a LoRA operation needs them.
+    LLAMA_API bool llama_adapter_lora_offload_to_cpu(struct llama_adapter_lora * adapter);
+
     // Functions to access the adapter's GGUF metadata scalar values
     // - The functions return the length of the string on success, or -1 on failure
     // - The output string is always null-terminated and cleared on failure
