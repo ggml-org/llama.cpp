@@ -2631,6 +2631,12 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration"):
         return arch
 
+    # DeepSeek-V4-Flash-DSpark ships the same "DeepseekV4ForCausalLM" architecture string as the
+    # target model it drafts for; the flat DeepSpec "dspark_*" keys are the only way to tell them
+    # apart, so route to the dedicated draft-model class instead.
+    if model_type == ModelType.TEXT and arch == "DeepseekV4ForCausalLM" and any(k.startswith("dspark_") for k in hparams):
+        return "DeepseekV4DSparkModel"
+
     # if "architectures" is found in the sub-config, use that instead
     if model_type == ModelType.TEXT and text_config.get("architectures") is not None:
         arch = text_config["architectures"][0]

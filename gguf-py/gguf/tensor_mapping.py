@@ -379,6 +379,7 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_SINKS: (
             "model.layers.{bid}.self_attn.sinks", # openai-moe
             "model.layers.{bid}.self_attn.attention_sink_bias", # mimov2
+            "layers.{bid}.attn.attn_sink", # dspark
         ),
 
         MODEL_TENSOR.ATTN_GATE: (
@@ -1088,11 +1089,53 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_Q_A: (
             "model.layers.{bid}.self_attn.q_a_proj", # deepseek2
             "layers.{bid}.attention.wq_a",           # mistral-large
+            "layers.{bid}.attn.wq_a",                # dspark
         ),
 
         MODEL_TENSOR.ATTN_Q_B: (
             "model.layers.{bid}.self_attn.q_b_proj", # deepseek2
             "layers.{bid}.attention.wq_b",           # mistral-large
+            "layers.{bid}.attn.wq_b",                # dspark
+        ),
+
+        MODEL_TENSOR.ATTN_KV: (
+            "layers.{bid}.attn.wkv", # dspark
+        ),
+
+        MODEL_TENSOR.ATTN_KV_NORM: (
+            "layers.{bid}.attn.kv_norm", # dspark
+        ),
+
+        MODEL_TENSOR.ATTN_OUT_A: (
+            "layers.{bid}.attn.wo_a", # dspark
+        ),
+
+        MODEL_TENSOR.ATTN_OUT_B: (
+            "layers.{bid}.attn.wo_b", # dspark
+        ),
+
+        MODEL_TENSOR.HC_ATTN_FN: (
+            "layers.{bid}.hc_attn_fn", # dspark
+        ),
+
+        MODEL_TENSOR.HC_ATTN_BASE: (
+            "layers.{bid}.hc_attn_base", # dspark
+        ),
+
+        MODEL_TENSOR.HC_ATTN_SCALE: (
+            "layers.{bid}.hc_attn_scale", # dspark
+        ),
+
+        MODEL_TENSOR.HC_FFN_FN: (
+            "layers.{bid}.hc_ffn_fn", # dspark
+        ),
+
+        MODEL_TENSOR.HC_FFN_BASE: (
+            "layers.{bid}.hc_ffn_base", # dspark
+        ),
+
+        MODEL_TENSOR.HC_FFN_SCALE: (
+            "layers.{bid}.hc_ffn_scale", # dspark
         ),
 
         MODEL_TENSOR.ATTN_KV_A_MQA: (
@@ -1117,6 +1160,7 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_Q_A_NORM: (
             "model.layers.{bid}.self_attn.q_a_layernorm", # deepseek2
             "layers.{bid}.attention.q_a_norm",            # mistral-large
+            "layers.{bid}.attn.q_norm",                   # dspark
         ),
 
         MODEL_TENSOR.ATTN_KV_A_NORM: (
@@ -1284,10 +1328,12 @@ class TensorNameMap:
             "encoder.final_layer_norm", # t5
             "layer_norm",               # neobert
             "model.hidden_norm",        # dflash
+            "layers.{bid}.main_norm",   # dspark
         ),
 
         MODEL_TENSOR.FC: (
-            "model.fc", # dflash
+            "model.fc",               # dflash
+            "layers.{bid}.main_proj", # dspark
         ),
 
         MODEL_TENSOR.DSPARK_MARKOV_W1: (
