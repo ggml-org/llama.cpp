@@ -2649,7 +2649,11 @@ private:
             return false;
         }
         const int32_t n_prefill = task.n_tokens() - 1;
-        const int32_t n_uncached = n_prefill - std::min(n_prefill, get_cached_prefix(task));
+        const int32_t n_cached = std::min(n_prefill, get_cached_prefix(task));
+        if (n_cached > 1) {
+            return false;
+        }
+        const int32_t n_uncached = n_prefill - n_cached;
         if (n_uncached == 0 || n_uncached < params_base.n_prefill_min) {
             return false;
         }
