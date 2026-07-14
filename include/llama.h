@@ -1235,6 +1235,7 @@ extern "C" {
         struct ggml_tensor * probs;
         struct ggml_tensor * sampled;
         struct ggml_tensor * candidates;
+        int64_t              n_vocab;
     };
 
     // user code can implement the interface below in order to create custom llama_sampler

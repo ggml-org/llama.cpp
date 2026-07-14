@@ -3085,6 +3085,7 @@ void llm_graph_context::build_sampling() const {
             /*.probs       =*/ nullptr,
             /*.sampled     =*/ nullptr,
             /*.candidates  =*/ nullptr,
+            /*.n_vocab     =*/ logits_seq->ne[0],
         };
 
         assert(sampler->iface->backend_apply);

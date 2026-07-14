@@ -585,6 +585,7 @@ static bool llama_sampler_backend_support(
         /*.probs      = */ nullptr,
         /*.sampled    = */ nullptr,
         /*.candidates = */ ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n),
+        /*.n_vocab    = */ n,
     };
 
     ggml_cgraph * gf = ggml_new_graph(ctx);
@@ -2780,9 +2781,11 @@ static void llama_sampler_penalties_backend_apply(
         return;
     }
 
+    GGML_ASSERT(data->n_vocab > 0 && data->n_vocab <= INT32_MAX);
+
     sctx->has_candidates = data->candidates != nullptr;
-    sctx->n_vocab = (int32_t) data->logits->ne[0];
-    sctx->n_max   = sctx->has_candidates ? sctx->penalty_last_n : std::min(sctx->penalty_last_n, sctx->n_vocab);
+    sctx->n_vocab = (int32_t) data->n_vocab;
+    sctx->n_max   = std::min(sctx->penalty_last_n, sctx->n_vocab);
 
     sctx->inp_token_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, sctx->n_max);
     ggml_set_name(sctx->inp_token_ids, "penalties_token_ids");
@@ -2798,34 +2801,21 @@ static void llama_sampler_penalties_backend_apply(
     }
 
     ggml_tensor * gathered = data->logits;
-    ggml_tensor * counts_f32 = nullptr;
+    ggml_tensor * counts_f32 = ggml_cast(ctx, sctx->inp_counts, GGML_TYPE_F32);
 
     if (sctx->has_candidates) {
         const int32_t n_candidates = (int32_t) data->logits->ne[0];
 
-        ggml_tensor * match_shape = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, sctx->n_max, n_candidates);
-
-        ggml_tensor * token_ids = ggml_cast(ctx, sctx->inp_token_ids, GGML_TYPE_F32);
-        token_ids = ggml_reshape_2d(ctx, token_ids, sctx->n_max, 1);
-        token_ids = ggml_repeat(ctx, token_ids, match_shape);
-
-        ggml_tensor * candidates = ggml_cast(ctx, data->candidates, GGML_TYPE_F32);
-        candidates = ggml_reshape_2d(ctx, candidates, 1, n_candidates);
-
-        ggml_tensor * matches = ggml_abs(ctx, ggml_sub(ctx, token_ids, candidates));
-        matches = ggml_sub(ctx, ggml_fill(ctx, matches, 1.0f), ggml_step(ctx, matches));
-
-        counts_f32 = ggml_cast(ctx, sctx->inp_counts, GGML_TYPE_F32);
-        counts_f32 = ggml_reshape_2d(ctx, counts_f32, sctx->n_max, 1);
-        counts_f32 = ggml_mul(ctx, matches, counts_f32);
-        counts_f32 = ggml_sum_rows(ctx, counts_f32);
+        ggml_tensor * counts_rows = ggml_fill(
+                ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, sctx->n_vocab), 0.0f);
+        ggml_tensor * scatter_rows = ggml_reshape_2d(ctx, counts_f32, 1, sctx->n_max);
+        counts_rows = ggml_set_rows(ctx, counts_rows, scatter_rows, sctx->inp_token_ids);
+        counts_f32 = ggml_get_rows(ctx, counts_rows, data->candidates);
         counts_f32 = ggml_reshape_1d(ctx, counts_f32, n_candidates);
     } else {
         ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, ggml_nelements(data->logits));
         gathered = ggml_get_rows(ctx, logits_rows, sctx->inp_token_ids);
         gathered = ggml_reshape_1d(ctx, gathered, sctx->n_max);
-
-        counts_f32 = ggml_cast(ctx, sctx->inp_counts, GGML_TYPE_F32);
     }
 
     ggml_tensor * active_mask = ggml_step(ctx, counts_f32);
@@ -2909,9 +2899,7 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
         while (sctx->token_count.find(filler) != sctx->token_count.end()) {
             ++filler;
         }
-        if (!sctx->has_candidates) {
-            GGML_ASSERT(filler < sctx->n_vocab);
-        }
+        GGML_ASSERT(filler < sctx->n_vocab);
     }
     
     // Fill the rest of the arrays with the filler token id and count 0.
