@@ -2,6 +2,7 @@
 	import { Lightbulb } from '@lucide/svelte';
 	import { CollapsibleContentBlock, MarkdownContent } from '$lib/components/app';
 	import { AgenticSectionType } from '$lib/enums';
+	import { REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import type { AgenticSection } from '$lib/utils';
 
@@ -40,11 +41,7 @@
 
 	let scrollEl: HTMLDivElement | undefined = $state();
 
-	// Generous stickiness: anything within this many pixels of the bottom is
-	// considered "at the bottom" and continues to follow new content. Larger
-	// than the chat main view's 10px threshold because reasoning fires lots of
-	// small incremental DOM writes that easily drift a few pixels off bottom.
-	const SCROLL_BOTTOM_THRESHOLD_PX = 64;
+	const SCROLL_BOTTOM_THRESHOLD_PX = REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX;
 
 	let userScrolledUp = $state(false);
 	let lastScrollTop = 0;

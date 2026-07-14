@@ -6,7 +6,9 @@ import {
 	AMPERSAND_REGEX,
 	LT_REGEX,
 	GT_REGEX,
-	FENCE_PATTERN
+	FENCE_PATTERN,
+	TRIM_LEADING_PADDING_REGEX,
+	TRIM_TRAILING_PADDING_REGEX
 } from '$lib/constants';
 
 export interface IncompleteCodeBlock {
@@ -25,7 +27,7 @@ export interface IncompleteCodeBlock {
  * so internal blank lines are still rendered as such.
  */
 function trimCodePadding(code: string): string {
-	return code.replace(/^(?:[ \t]*\n)+/, '').replace(/(?:\n[ \t]*)+$/, '');
+	return code.replace(TRIM_LEADING_PADDING_REGEX, '').replace(TRIM_TRAILING_PADDING_REGEX, '');
 }
 
 /**

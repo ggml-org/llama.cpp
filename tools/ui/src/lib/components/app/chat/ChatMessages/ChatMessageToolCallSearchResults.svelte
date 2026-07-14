@@ -32,16 +32,9 @@
 	// Same icon-resolution chain as ChatMessageToolCallBlock so MCP-server
 	// branding is consistent across both views. Spinner wins while the call
 	// is in flight so the user sees execution status.
-	const mcpServerIconUrl = $derived.by<string | null>(() => {
-		if (showSpinner) return null;
-		const toolName = section.toolName;
-		if (!toolName) return null;
-		const serverName = mcpStore.findServerForTool(toolName);
-		if (!serverName) return null;
-		return mcpStore.getServerFavicon(serverName);
-	});
-
-	const iconUrl = $derived(showSpinner ? null : mcpServerIconUrl);
+	const iconUrl = $derived(
+		showSpinner ? null : mcpStore.getServerFaviconForTool(section.toolName)
+	);
 	const icon = $derived(showSpinner ? Loader2 : undefined);
 	const iconClass = $derived(showSpinner ? 'h-4 w-4 animate-spin' : 'h-4 w-4');
 
@@ -153,7 +146,6 @@
 <CollapsibleContentBlock
 	{open}
 	class="my-2"
-	variant="default"
 	{icon}
 	{iconClass}
 	{iconUrl}

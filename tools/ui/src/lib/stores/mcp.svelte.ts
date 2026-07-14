@@ -965,6 +965,19 @@ class MCPStore {
 		return undefined;
 	}
 
+	/**
+	 * Resolve the favicon URL for an MCP server by one of its tool names.
+	 * Returns `null` if the tool is not provided by any configured MCP server,
+	 * or if the owning server has no icon to show.
+	 * Pair with {@link getServerFavicon} for direct server-id lookup.
+	 */
+	getServerFaviconForTool(toolName: string | undefined): string | null {
+		if (!toolName) return null;
+		const serverId = this.findServerForTool(toolName);
+		if (!serverId) return null;
+		return this.getServerFavicon(serverId);
+	}
+
 	hasPromptsSupport(): boolean {
 		for (const connection of this.connections.values()) {
 			if (connection.serverCapabilities?.prompts) {

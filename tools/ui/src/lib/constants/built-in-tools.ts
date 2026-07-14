@@ -1,10 +1,10 @@
 // Registry of built-in and frontend (browser) tools whose renderer
 // shows a recognizable icon and friendly label inline in the chat UI.
 //
-// To add a new built-in tool, add an entry here. To give a tool a
-// custom title (with file name, command, etc.) or a custom body
-// renderer, extend the snippets and body branches in
-// ChatMessageToolCallBlock.svelte — those are opt-in per tool.
+// To add a new built-in tool, add an entry to BUILTIN_TOOL_UI. To give a
+// tool a custom title or body renderer, branch on BuiltInTool in
+// ChatMessageAgenticContent.svelte and render via dedicated components
+// (see ChatMessageToolCallDateTime / ChatMessageToolCallSearchResults).
 
 import type { Component } from 'svelte';
 import {
@@ -18,7 +18,7 @@ import {
 	SearchCode,
 	Terminal
 } from '@lucide/svelte';
-import { ToolSource } from '$lib/enums';
+import { BuiltInTool, ToolSource } from '$lib/enums';
 
 export interface BuiltinToolUiEntry {
 	icon: Component;
@@ -26,28 +26,28 @@ export interface BuiltinToolUiEntry {
 	source: ToolSource.BUILTIN | ToolSource.FRONTEND;
 }
 
-export const BUILTIN_TOOL_UI: Readonly<Record<string, BuiltinToolUiEntry>> = {
-	read_file: { icon: FileText, label: 'Read file', source: ToolSource.BUILTIN },
-	edit_file: { icon: FilePen, label: 'Edit file', source: ToolSource.BUILTIN },
-	write_file: { icon: FilePlus, label: 'Write file', source: ToolSource.BUILTIN },
-	file_glob_search: {
+export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> = {
+	[BuiltInTool.READ_FILE]: { icon: FileText, label: 'Read file', source: ToolSource.BUILTIN },
+	[BuiltInTool.EDIT_FILE]: { icon: FilePen, label: 'Edit file', source: ToolSource.BUILTIN },
+	[BuiltInTool.WRITE_FILE]: { icon: FilePlus, label: 'Write file', source: ToolSource.BUILTIN },
+	[BuiltInTool.FILE_GLOB_SEARCH]: {
 		icon: FileSearch,
 		label: 'Search files',
 		source: ToolSource.BUILTIN
 	},
-	grep_search: {
+	[BuiltInTool.GREP_SEARCH]: {
 		icon: SearchCode,
 		label: 'Search in files',
 		source: ToolSource.BUILTIN
 	},
-	apply_diff: { icon: GitMerge, label: 'Apply diff', source: ToolSource.BUILTIN },
-	get_datetime: { icon: Clock, label: 'Current time', source: ToolSource.BUILTIN },
-	exec_shell_command: {
+	[BuiltInTool.APPLY_DIFF]: { icon: GitMerge, label: 'Apply diff', source: ToolSource.BUILTIN },
+	[BuiltInTool.GET_DATETIME]: { icon: Clock, label: 'Current time', source: ToolSource.BUILTIN },
+	[BuiltInTool.EXEC_SHELL_COMMAND]: {
 		icon: Terminal,
 		label: 'Run command',
 		source: ToolSource.BUILTIN
 	},
-	run_javascript: {
+	[BuiltInTool.RUN_JAVASCRIPT]: {
 		icon: Braces,
 		label: 'Run JavaScript',
 		source: ToolSource.FRONTEND
@@ -56,5 +56,5 @@ export const BUILTIN_TOOL_UI: Readonly<Record<string, BuiltinToolUiEntry>> = {
 
 export function getBuiltinToolUi(toolName: string | undefined): BuiltinToolUiEntry | null {
 	if (!toolName) return null;
-	return BUILTIN_TOOL_UI[toolName] ?? null;
+	return (BUILTIN_TOOL_UI as Record<string, BuiltinToolUiEntry>)[toolName] ?? null;
 }

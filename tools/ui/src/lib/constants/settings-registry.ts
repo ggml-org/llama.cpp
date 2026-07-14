@@ -798,9 +798,6 @@ export const SETTING_CONFIG_INFO: Record<string, string> = Object.fromEntries(
 /** Theme select options. */
 export const SETTINGS_COLOR_MODES_CONFIG = COLOR_MODE_OPTIONS;
 
-export type { SettingsSectionTitle } from '$lib/types';
-export type { SettingsSection } from '$lib/types';
-
 /** Sidebar sections + field configs (as consumed by UI). */
 export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 	...Object.values(SETTINGS_REGISTRY).map((section) => ({
@@ -842,5 +839,3 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = getAllSettings()
 	}));
 
 export const SETTINGS_FALLBACK_EXIT_ROUTE = ROUTES.START;
-
-export { SETTINGS_KEYS } from './settings-keys';

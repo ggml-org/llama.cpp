@@ -157,6 +157,7 @@ export { parseHeadersToArray, serializeHeaders } from './headers';
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,
+	buildAssistantRawOutput,
 	parseToolResultWithImages,
 	hasAgenticContent,
 	type AgenticSection,

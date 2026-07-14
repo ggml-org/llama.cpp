@@ -1,7 +1,17 @@
 <script lang="ts">
 	import { Wrench, Loader2, XCircle, Terminal } from '@lucide/svelte';
-	import { CollapsibleContentBlock, SyntaxHighlightedCode } from '$lib/components/app';
-	import { AgenticSectionType, FileTypeText } from '$lib/enums';
+	import {
+		CollapsibleContentBlock,
+		CollapsibleTerminalBlock,
+		SyntaxHighlightedCode
+	} from '$lib/components/app';
+	import { AgenticSectionType, EditFileChangeMode, FileTypeText } from '$lib/enums';
+	import {
+		DEFAULT_LANGUAGE,
+		FILE_PATH_SEPARATOR_REGEX,
+		TEXT_LANGUAGE_PREFIX_REGEX
+	} from '$lib/constants';
+	import { BuiltInTool } from '$lib/enums';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
@@ -23,7 +33,7 @@
 		toolName: string | undefined,
 		toolArgsString: string | undefined
 	): ReadFileMeta | null {
-		if (toolName !== 'read_file' || !toolArgsString) return null;
+		if (toolName !== BuiltInTool.READ_FILE || !toolArgsString) return null;
 
 		const args = parsePartialJsonArgs(toolArgsString);
 		if (!args) return null;
@@ -31,7 +41,7 @@
 		const rawPath = args.path ?? args.file_path ?? args.filePath;
 		if (typeof rawPath !== 'string' || !rawPath) return null;
 
-		const fileName = rawPath.split(/[\\/]/).pop() || rawPath;
+		const fileName = rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath;
 
 		const startRaw = args.start_line ?? args.line_start ?? args.startLine ?? args.from_line;
 		const endRaw = args.end_line ?? args.line_end ?? args.endLine ?? args.to_line;
@@ -50,7 +60,7 @@
 		}
 
 		const fileType = getFileTypeByExtension(fileName);
-		const language = fileType ? fileType.replace(/^text:/, '') : 'text';
+		const language = fileType ? fileType.replace(TEXT_LANGUAGE_PREFIX_REGEX, '') : DEFAULT_LANGUAGE;
 
 		return { fileName, lineRange, language };
 	}
@@ -124,7 +134,7 @@
 	}
 
 	type EditFileChange = {
-		mode: 'replace' | 'delete' | 'append';
+		mode: EditFileChangeMode;
 		lineStart: number;
 		lineEnd: number;
 		content: string;
@@ -145,7 +155,7 @@
 		toolArgsString: string | undefined,
 		toolResultString: string | undefined
 	): EditFileMeta | null {
-		if (toolName !== 'edit_file' || !toolArgsString) return null;
+		if (toolName !== BuiltInTool.EDIT_FILE || !toolArgsString) return null;
 
 		const args = parsePartialJsonArgs(toolArgsString);
 		if (!args) return null;
@@ -153,8 +163,9 @@
 		const rawPath = args.input_path ?? args.path ?? args.file_path ?? args.filePath;
 		if (typeof rawPath !== 'string' || !rawPath) return null;
 
-		const fileName = rawPath.split(/[\\/]/).pop() || rawPath;
-		const language = getFileTypeByExtension(rawPath)?.replace(/^text:/, '') ?? 'text';
+		const fileName = rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath;
+		const language =
+			getFileTypeByExtension(rawPath)?.replace(TEXT_LANGUAGE_PREFIX_REGEX, '') ?? DEFAULT_LANGUAGE;
 
 		const rawChanges = Array.isArray(args.changes) ? args.changes : [];
 		const changes: EditFileChange[] = [];
@@ -162,7 +173,12 @@
 			if (!c || typeof c !== 'object' || Array.isArray(c)) continue;
 			const obj = c as Record<string, unknown>;
 			const modeRaw = typeof obj.mode === 'string' ? obj.mode : '';
-			if (modeRaw !== 'replace' && modeRaw !== 'delete' && modeRaw !== 'append') continue;
+			if (
+				modeRaw !== EditFileChangeMode.REPLACE &&
+				modeRaw !== EditFileChangeMode.DELETE &&
+				modeRaw !== EditFileChangeMode.APPEND
+			)
+				continue;
 			changes.push({
 				mode: modeRaw,
 				lineStart: Number(obj.line_start) || 0,
@@ -207,11 +223,11 @@
 	}
 
 	function describeEditChange(change: EditFileChange): string {
-		if (change.mode === 'append') {
+		if (change.mode === EditFileChangeMode.APPEND) {
 			if (change.lineStart === -1) return 'append at end of file';
 			return `append after line ${change.lineEnd}`;
 		}
-		if (change.mode === 'delete') {
+		if (change.mode === EditFileChangeMode.DELETE) {
 			if (change.lineStart === change.lineEnd) return `delete line ${change.lineStart}`;
 			return `delete lines ${change.lineStart}-${change.lineEnd}`;
 		}
@@ -236,7 +252,7 @@
 		toolArgsString: string | undefined,
 		toolResultString: string | undefined
 	): WriteFileMeta | null {
-		if (toolName !== 'write_file' || !toolArgsString) return null;
+		if (toolName !== BuiltInTool.WRITE_FILE || !toolArgsString) return null;
 
 		const args = parsePartialJsonArgs(toolArgsString);
 		if (!args) return null;
@@ -244,9 +260,10 @@
 		const rawPath = args.path ?? args.file_path ?? args.filePath;
 		if (typeof rawPath !== 'string' || !rawPath) return null;
 
-		const fileName = rawPath.split(/[\\/]/).pop() || rawPath;
+		const fileName = rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath;
 		const content = typeof args.content === 'string' ? args.content : '';
-		const language = getFileTypeByExtension(rawPath)?.replace(/^text:/, '') ?? 'text';
+		const language =
+			getFileTypeByExtension(rawPath)?.replace(TEXT_LANGUAGE_PREFIX_REGEX, '') ?? DEFAULT_LANGUAGE;
 
 		let bytesWritten: number | undefined;
 		let resultMessage: string | undefined;
@@ -290,7 +307,7 @@
 		toolName: string | undefined,
 		toolArgsString: string | undefined
 	): ExecShellCommandMeta | null {
-		if (toolName !== 'exec_shell_command' || !toolArgsString) return null;
+		if (toolName !== BuiltInTool.EXEC_SHELL_COMMAND || !toolArgsString) return null;
 
 		let args: Record<string, unknown>;
 		try {
@@ -339,7 +356,7 @@
 		toolArgsString: string | undefined,
 		toolResultString: string | undefined
 	): FileGlobSearchMeta | null {
-		if (toolName !== 'file_glob_search' || !toolArgsString) return null;
+		if (toolName !== BuiltInTool.FILE_GLOB_SEARCH || !toolArgsString) return null;
 
 		let args: Record<string, unknown>;
 		try {
@@ -404,7 +421,7 @@
 		toolArgsString: string | undefined,
 		toolResultString: string | undefined
 	): GrepSearchMeta | null {
-		if (toolName !== 'grep_search' || !toolArgsString) return null;
+		if (toolName !== BuiltInTool.GREP_SEARCH || !toolArgsString) return null;
 
 		let args: Record<string, unknown>;
 		try {
@@ -518,7 +535,7 @@
 		toolArgsString: string | undefined,
 		toolResultString: string | undefined
 	): RunJavascriptMeta | null {
-		if (toolName !== 'run_javascript' || !toolArgsString) return null;
+		if (toolName !== BuiltInTool.RUN_JAVASCRIPT || !toolArgsString) return null;
 
 		let args: Record<string, unknown>;
 		try {
@@ -588,13 +605,7 @@
 	// for the server's own icon (MCP spec `icons[]`, theme-aware, with
 	// /favicon.ico fallback). Spinner keeps precedence while the call is in
 	// flight so the user sees execution status.
-	const mcpServerFavicon = $derived.by<string | null>(() => {
-		const toolName = section.toolName;
-		if (!toolName) return null;
-		const serverName = mcpStore.findServerForTool(toolName);
-		if (!serverName) return null;
-		return mcpStore.getServerFavicon(serverName);
-	});
+	const mcpServerFavicon = $derived(mcpStore.getServerFaviconForTool(section.toolName));
 	const iconUrl = $derived(
 		!showSpinner && !toolUi?.icon && mcpServerFavicon ? mcpServerFavicon : null
 	);
@@ -695,30 +706,7 @@
 	{/if}
 {/snippet}
 
-<CollapsibleContentBlock
-	{open}
-	class="my-2"
-	variant={execShellMeta ? 'terminal' : 'default'}
-	icon={toolIcon}
-	iconClass={toolIconClass}
-	{iconUrl}
-	{title}
-	titleSnippet={readFileMeta
-		? readFileTitle
-		: writeFileMeta
-			? writeFileTitle
-			: editFileMeta
-				? editFileTitle
-				: execShellMeta
-					? execShellTitle
-					: fileGlobMeta
-						? fileGlobTitle
-						: grepMeta
-							? grepSearchTitle
-							: undefined}
-	{subtitle}
-	{onToggle}
->
+{#snippet toolBody()}
 	{#if execShellMeta}
 		{#if isPending}
 			<div class="flex items-center gap-2 text-xs text-muted-foreground/70">
@@ -820,7 +808,7 @@
 					<div class="mb-1.5 text-xs text-muted-foreground/70 italic">
 						{describeEditChange(change)}
 					</div>
-					{#if change.mode !== 'delete' && change.content}
+					{#if change.mode !== EditFileChangeMode.DELETE && change.content}
 						<SyntaxHighlightedCode
 							code={change.content}
 							language={editFileMeta.language}
@@ -1000,4 +988,44 @@
 			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No output</div>
 		{/if}
 	{/if}
-</CollapsibleContentBlock>
+{/snippet}
+
+{#if execShellMeta}
+	<CollapsibleTerminalBlock
+		{open}
+		class="my-2"
+		icon={toolIcon}
+		iconClass={toolIconClass}
+		{iconUrl}
+		{title}
+		titleSnippet={execShellTitle}
+		{subtitle}
+		{onToggle}
+	>
+		{@render toolBody()}
+	</CollapsibleTerminalBlock>
+{:else}
+	<CollapsibleContentBlock
+		{open}
+		class="my-2"
+		icon={toolIcon}
+		iconClass={toolIconClass}
+		{iconUrl}
+		{title}
+		titleSnippet={readFileMeta
+			? readFileTitle
+			: writeFileMeta
+				? writeFileTitle
+				: editFileMeta
+					? editFileTitle
+					: fileGlobMeta
+						? fileGlobTitle
+						: grepMeta
+							? grepSearchTitle
+							: undefined}
+		{subtitle}
+		{onToggle}
+	>
+		{@render toolBody()}
+	</CollapsibleContentBlock>
+{/if}

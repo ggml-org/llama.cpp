@@ -1,5 +1,5 @@
 import { AgenticSectionType, ContinueIntentKind, MessageRole } from '$lib/enums';
-import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
+import { ATTACHMENT_SAVED_REGEX, NEWLINE, NEWLINE_SEPARATOR, REASONING_TAGS } from '$lib/constants';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
 	DatabaseMessage,
@@ -156,6 +156,52 @@ export function deriveAgenticSections(
 	}
 
 	return sections;
+}
+
+/**
+ * Build the raw text representation shown in the "raw output" view of an
+ * assistant message. Each section is formatted as it would appear in the
+ * model-facing transcript, joined by blank lines.
+ */
+export function buildAssistantRawOutput(sections: AgenticSection[]): string {
+	const parts: string[] = [];
+
+	for (const section of sections) {
+		switch (section.type) {
+			case AgenticSectionType.REASONING:
+			case AgenticSectionType.REASONING_PENDING:
+				parts.push(`${REASONING_TAGS.START}${NEWLINE}${section.content}${REASONING_TAGS.END}`);
+				break;
+
+			case AgenticSectionType.TEXT:
+				parts.push(section.content);
+				break;
+
+			case AgenticSectionType.TOOL_CALL:
+			case AgenticSectionType.TOOL_CALL_PENDING:
+			case AgenticSectionType.TOOL_CALL_STREAMING: {
+				const callObj: Record<string, unknown> = { name: section.toolName };
+
+				if (section.toolArgs) {
+					try {
+						callObj.arguments = JSON.parse(section.toolArgs);
+					} catch {
+						callObj.arguments = section.toolArgs;
+					}
+				}
+
+				parts.push(JSON.stringify(callObj, null, 2));
+
+				if (section.toolResult) {
+					parts.push(`${NEWLINE}${section.toolResult}`);
+				}
+
+				break;
+			}
+		}
+	}
+
+	return parts.join(`${NEWLINE}${NEWLINE}`);
 }
 
 /**

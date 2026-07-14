@@ -12,6 +12,7 @@
 		ChatMessageAgenticTurnStats,
 		DatabaseMessage
 	} from '$lib/types';
+	import { BuiltInTool } from '$lib/enums';
 	import { deriveAgenticSections, extractSearchResults, type AgenticSection } from '$lib/utils';
 	import {
 		agenticPendingPermissionRequest,
@@ -195,7 +196,7 @@
 				{isStreaming}
 				onToggle={() => toggleExpanded(index, section)}
 			/>
-		{:else if section.toolName === 'get_datetime'}
+		{:else if section.toolName === BuiltInTool.GET_DATETIME}
 			<ChatMessageToolCallDateTime {section} {isStreaming} />
 		{:else}
 			<ChatMessageToolCallBlock

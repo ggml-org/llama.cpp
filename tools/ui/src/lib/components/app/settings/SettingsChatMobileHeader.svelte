@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Settings, ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { onMount, tick } from 'svelte';
-	import type { SettingsSection, SettingsSectionTitle } from '$lib/constants';
+	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
 
 	interface Props {

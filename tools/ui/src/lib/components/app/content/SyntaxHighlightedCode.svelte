@@ -5,6 +5,7 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { ColorMode } from '$lib/enums';
+	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
 	import { highlightCode } from '$lib/utils';
 
 	interface Props {
@@ -33,11 +34,7 @@
 	let scrollEl = $state<HTMLDivElement>();
 	let userScrolledUp = $state(false);
 	let lastScrollTop = 0;
-	// Any scroll position within this many pixels of the bottom counts as
-	// "at the bottom" and continues to follow new content. Bigger than the
-	// chat main view's 10px threshold because line wrap reflows while the
-	// highlight.js pass settles can drift a few pixels off bottom.
-	const SCROLL_BOTTOM_THRESHOLD_PX = 32;
+	const SCROLL_BOTTOM_THRESHOLD_PX = SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX;
 	let pendingFrame: number | null = null;
 
 	function loadHighlightTheme(isDark: boolean) {

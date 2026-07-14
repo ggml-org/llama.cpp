@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Settings } from '@lucide/svelte';
-	import type { SettingsSection, SettingsSectionTitle } from '$lib/constants';
+	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
 
 	interface Props {
 		sections: SettingsSection[];

@@ -44,12 +44,13 @@
 		open = value;
 		onToggle?.();
 	}}
-	class={cn('group/collapsible', 'my-0!', className)}
+	class={cn('group/collapsible', 'overflow-hidden rounded-md', className)}
+	style="background: var(--code-background); border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);"
 >
 	<Collapsible.Trigger
 		class={cn(
 			'flex w-full cursor-pointer items-center justify-between gap-2 text-left',
-			'py-1.5 pr-1'
+			'px-3 py-2'
 		)}
 	>
 		<div class="flex min-w-0 items-center gap-2 text-muted-foreground">
@@ -88,10 +89,8 @@
 	</Collapsible.Trigger>
 
 	<Collapsible.Content>
-		<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
-			<div class="min-w-0 border-l border-muted-foreground/20 pl-4 pb-2 my-2">
-				{@render children()}
-			</div>
+		<div class="p-3 pt-1">
+			{@render children()}
 		</div>
 	</Collapsible.Content>
 </Collapsible.Root>
