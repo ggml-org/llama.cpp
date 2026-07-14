@@ -110,7 +110,7 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 #define VDR_Q1_0_Q8_1_MMQ  4  // Q1_0 has 128 bits (4 ints) per block
 
 #define VDR_Q2_0_Q8_1_MMVQ 1  // Process one 32-element chunk at a time for parallelism
-#define VDR_Q2_0_Q8_1_MMQ  4  // Q2_0 has 256 bits (8 ints) per block, 4 32-element chunks
+#define VDR_Q2_0_Q8_1_MMQ  2  // Q2_0 has 128 bits (4 ints) per block
 
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
@@ -725,9 +725,9 @@ static __device__ __forceinline__ float vec_dot_q2_0_q8_1(
 
     const block_q2_0 * bq2_0 = (const block_q2_0 *) vbq + kbx;
 
-    // Q2_0: 128 elements with ONE scale, 2 bits per element (4 elements per byte)
+    // Q2_0: 64 elements with ONE scale, 2 bits per element (4 elements per byte)
     // Q8_1: 32 elements per block with individual scales
-    // iqs selects which of the 4 chunks of 32 elements to process (0-3)
+    // iqs selects which of the 2 chunks of 32 elements to process (0-1)
 
     const float d2 = bq2_0->d;
 
