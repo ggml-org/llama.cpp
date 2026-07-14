@@ -229,6 +229,8 @@ struct llama_hparams {
     // MSA
     uint32_t indexer_block_size  = 0;
     uint32_t indexer_local_blocks = 0;
+    // MSA stores its indexer keys in the main KV cache (k_idx tensors);
+    bool indexer_kv = false;
 
     // DeepSeek-V4
     uint32_t dsv4_o_group_count        = 0;
