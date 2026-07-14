@@ -74,9 +74,11 @@ static void conv1d_grouped_ref(
     }
 }
 
-static bool run_test(const char * label, int IC, int OC, int K, int L, int groups, int stride, int padding) {
-    printf("  TEST: %s (IC=%d OC=%d K=%d L=%d G=%d s=%d p=%d)\n",
-           label, IC, OC, K, L, groups, stride, padding);
+static bool run_test(const char * label, int IC, int OC, int K, int L, int groups, int stride, int padding,
+                     enum ggml_type kernel_type = GGML_TYPE_F16) {
+    printf("  TEST: %s (IC=%d OC=%d K=%d L=%d G=%d s=%d p=%d) kernel=%s\n",
+           label, IC, OC, K, L, groups, stride, padding,
+           ggml_type_name(kernel_type));
 
     int IC_G = IC / groups;
     int OL = (L + 2 * padding - K) / stride + 1;
@@ -89,17 +91,37 @@ static bool run_test(const char * label, int IC, int OC, int K, int L, int group
     };
     struct ggml_context * ctx = ggml_init(params);
 
-    // kernel: [K, IC_G, OC] in F16 (like real models)
-    struct ggml_tensor * a = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, K, IC_G, OC);
-    // input: [L, IC] in F32
-    struct ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, L, IC);
+    // generate kernel data
+    std::vector<float> kernel_f32(K * IC_G * OC);
+    fill_random_f32(kernel_f32.data(), K * IC_G * OC);
 
-    fill_random_f16((ggml_fp16_t *)a->data, K * IC_G * OC);
-    fill_random_f32((float *)b->data, L * IC);
+    // kernel for op: [K, IC_G, OC] and reference (F16)
+    struct ggml_tensor * a = ggml_new_tensor_3d(ctx, kernel_type, K, IC_G, OC);
+    std::vector<ggml_fp16_t> kernel_f16(K * IC_G * OC);
+    for (int i = 0; i < K * IC_G * OC; i++) {
+        if (kernel_type == GGML_TYPE_BF16) {
+            ggml_bf16_t b = ggml_fp32_to_bf16(kernel_f32[i]);
+            ((ggml_bf16_t *)a->data)[i] = b;
+            kernel_f16[i] = ggml_fp32_to_fp16(ggml_bf16_to_fp32(b));
+        } else {
+            kernel_f16[i] = ggml_fp32_to_fp16(kernel_f32[i]);
+        }
+    }
+    if (kernel_type != GGML_TYPE_BF16) {
+        memcpy(a->data, kernel_f16.data(), K * IC_G * OC * sizeof(ggml_fp16_t));
+    }
+
+    // generate reference input once (F32)
+    std::vector<float> input_f32(L * IC);
+    fill_random_f32(input_f32.data(), L * IC);
+
+    // input for op: [L, IC]
+    struct ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, L, IC);
+    memcpy(b->data, input_f32.data(), L * IC * sizeof(float));
 
     // reference
     std::vector<float> ref(OL * OC);
-    conv1d_grouped_ref((ggml_fp16_t *)a->data, (float *)b->data, ref.data(),
+    conv1d_grouped_ref(kernel_f16.data(), input_f32.data(), ref.data(),
                        K, IC, OC, L, 1, groups, stride, padding);
 
     // ggml
@@ -148,6 +170,11 @@ int main(void) {
     check("IC != OC",                  12, 6, 3, 10, 3, 1, 0);
     check("stride=2",                  8, 8, 2, 16, 4, 2, 0);
     check("longer sequence",           1280, 1280, 2, 128, 10, 1, 0);
+
+    printf("\n--- Quantized types ---\n\n");
+
+    if (run_test("BF16 kernel",        128, 256, 3, 32, 1, 1, 0, GGML_TYPE_BF16)) { n_pass++; } else { n_fail++; }
+    if (run_test("BF16 kernel padding", 8, 8, 2, 16, 4, 1, 1, GGML_TYPE_BF16)) { n_pass++; } else { n_fail++; }
 
     printf("\nResult: %d passed, %d failed\n", n_pass, n_fail);
     return n_fail > 0 ? 1 : 0;

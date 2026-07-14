@@ -4521,10 +4521,16 @@ struct ggml_tensor * ggml_conv_1d(
         int                   d0) {
     struct ggml_tensor * im2col = ggml_im2col(ctx, a, b, s0, 0, p0, 0, d0, 0, false, a->type == GGML_TYPE_BF16 ? GGML_TYPE_F32 : GGML_TYPE_F16); // [N, OL, IC * K]
 
+    // convert BF16 kernel to F32 for mul_mat compatibility
+    struct ggml_tensor * a_op = ggml_reshape_2d(ctx, a, (a->ne[0] * a->ne[1]), a->ne[2]); // [OC, IC * K]
+    if (a->type == GGML_TYPE_BF16) {
+        a_op = ggml_cpy(ctx, a_op, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, a_op->ne[0], a_op->ne[1]));
+    }
+
     struct ggml_tensor * result =
         ggml_mul_mat(ctx,
                 ggml_reshape_2d(ctx, im2col, im2col->ne[0], (im2col->ne[2] * im2col->ne[1])), // [N, OL, IC * K] => [N*OL, IC * K]
-                ggml_reshape_2d(ctx, a, (a->ne[0] * a->ne[1]), a->ne[2]));                    // [OC，IC, K] => [OC, IC * K]
+                a_op);                                                                         // [OC, IC * K]
 
     result = ggml_reshape_3d(ctx, result, im2col->ne[1], a->ne[2], im2col->ne[2]); // [N, OC, OL]
 
