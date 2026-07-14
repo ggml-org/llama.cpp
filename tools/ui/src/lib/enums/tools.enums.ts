@@ -29,7 +29,6 @@ export enum BuiltInTool {
 	READ_FILE = 'read_file',
 	EDIT_FILE = 'edit_file',
 	WRITE_FILE = 'write_file',
-	APPLY_DIFF = 'apply_diff',
 	GET_DATETIME = 'get_datetime',
 	FILE_GLOB_SEARCH = 'file_glob_search',
 	GREP_SEARCH = 'grep_search',

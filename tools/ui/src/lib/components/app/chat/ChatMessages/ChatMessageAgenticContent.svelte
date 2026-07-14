@@ -12,8 +12,7 @@
 		ChatMessageAgenticTurnStats,
 		DatabaseMessage
 	} from '$lib/types';
-	import { BuiltInTool } from '$lib/enums';
-	import { deriveAgenticSections, extractSearchResults, type AgenticSection } from '$lib/utils';
+	import { deriveAgenticSections, type AgenticSection } from '$lib/utils';
 	import {
 		agenticPendingPermissionRequest,
 		agenticResolvePermission,
@@ -23,9 +22,7 @@
 	} from '$lib/stores/agentic.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import ChatMessageReasoningBlock from './ChatMessageReasoningBlock.svelte';
-	import ChatMessageToolCallBlock from './ChatMessageToolCallBlock.svelte';
-	import ChatMessageToolCallDateTime from './ChatMessageToolCallDateTime.svelte';
-	import ChatMessageToolCallSearchResults from './ChatMessageToolCallSearchResults.svelte';
+	import ChatMessageToolCallBlock from './ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -188,25 +185,13 @@
 			onToggle={() => toggleExpanded(index, section)}
 		/>
 	{:else if section.type === AgenticSectionType.TOOL_CALL || section.type === AgenticSectionType.TOOL_CALL_PENDING || section.type === AgenticSectionType.TOOL_CALL_STREAMING}
-		{@const searchResults = extractSearchResults(section.toolResult)}
-		{#if searchResults.length > 0}
-			<ChatMessageToolCallSearchResults
-				{section}
-				open={isExpanded(index, section)}
-				{isStreaming}
-				onToggle={() => toggleExpanded(index, section)}
-			/>
-		{:else if section.toolName === BuiltInTool.GET_DATETIME}
-			<ChatMessageToolCallDateTime {section} {isStreaming} />
-		{:else}
-			<ChatMessageToolCallBlock
-				{section}
-				open={isExpanded(index, section)}
-				{isStreaming}
-				attachments={message?.extra}
-				onToggle={() => toggleExpanded(index, section)}
-			/>
-		{/if}
+		<ChatMessageToolCallBlock
+			{section}
+			open={isExpanded(index, section)}
+			{isStreaming}
+			attachments={message?.extra}
+			onToggle={() => toggleExpanded(index, section)}
+		/>
 	{/if}
 {/snippet}
 

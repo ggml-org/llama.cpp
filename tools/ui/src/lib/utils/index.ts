@@ -159,6 +159,7 @@ export {
 	deriveAgenticSections,
 	buildAssistantRawOutput,
 	parseToolResultWithImages,
+	splitSearchSummaryList,
 	hasAgenticContent,
 	type AgenticSection,
 	type ToolResultLine

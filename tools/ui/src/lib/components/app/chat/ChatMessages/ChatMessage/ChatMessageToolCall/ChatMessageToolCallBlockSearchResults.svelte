@@ -29,12 +29,10 @@
 	const results: SearchResult[] = $derived(extractSearchResults(section.toolResult));
 	const query = $derived(extractSearchQuery(section.toolArgs));
 
-	// Same icon-resolution chain as ChatMessageToolCallBlock so MCP-server
-	// branding is consistent across both views. Spinner wins while the call
-	// is in flight so the user sees execution status.
-	const iconUrl = $derived(
-		showSpinner ? null : mcpStore.getServerFaviconForTool(section.toolName)
-	);
+	// Same icon-resolution chain as ChatMessageToolCallBlockDefault so
+	// MCP-server branding is consistent across both views. Spinner wins
+	// while the call is in flight so the user sees execution status.
+	const iconUrl = $derived(showSpinner ? null : mcpStore.getServerFaviconForTool(section.toolName));
 	const icon = $derived(showSpinner ? Loader2 : undefined);
 	const iconClass = $derived(showSpinner ? 'h-4 w-4 animate-spin' : 'h-4 w-4');
 
@@ -143,15 +141,7 @@
 	{/if}
 {/snippet}
 
-<CollapsibleContentBlock
-	{open}
-	class="my-2"
-	{icon}
-	{iconClass}
-	{iconUrl}
-	{title}
-	{onToggle}
->
+<CollapsibleContentBlock {open} class="my-2" {icon} {iconClass} {iconUrl} {title} {onToggle}>
 	{#if results.length > 0}
 		<div class="flex flex-wrap items-center gap-2 pb-1">
 			{#each results as result (result.url)}

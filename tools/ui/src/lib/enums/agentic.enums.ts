@@ -25,14 +25,3 @@ export enum ContinueIntentKind {
 	RERUN_TURN = 'rerun_turn',
 	NEXT_TURN = 'next_turn'
 }
-
-/**
- * Modes for an individual change entry inside the `edit_file` tool call's
- * `changes` array. Wire-format strings preserved so the registry stays
- * interchangeable with raw model output.
- */
-export enum EditFileChangeMode {
-	REPLACE = 'replace',
-	DELETE = 'delete',
-	APPEND = 'append'
-}

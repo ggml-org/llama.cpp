@@ -2,9 +2,10 @@
 // shows a recognizable icon and friendly label inline in the chat UI.
 //
 // To add a new built-in tool, add an entry to BUILTIN_TOOL_UI. To give a
-// tool a custom title or body renderer, branch on BuiltInTool in
-// ChatMessageAgenticContent.svelte and render via dedicated components
-// (see ChatMessageToolCallDateTime / ChatMessageToolCallSearchResults).
+// tool a custom title or body renderer, add a dedicated component under
+// ChatMessageToolCall/ and route it in ChatMessageToolCallBlock.svelte
+// (see ChatMessageToolCallBlockGetDatetime and
+// ChatMessageToolCallBlockSearchResults for prior art).
 
 import type { Component } from 'svelte';
 import {
@@ -14,7 +15,6 @@ import {
 	FilePlus,
 	FileSearch,
 	FileText,
-	GitMerge,
 	SearchCode,
 	Terminal
 } from '@lucide/svelte';
@@ -40,7 +40,6 @@ export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> 
 		label: 'Search in files',
 		source: ToolSource.BUILTIN
 	},
-	[BuiltInTool.APPLY_DIFF]: { icon: GitMerge, label: 'Apply diff', source: ToolSource.BUILTIN },
 	[BuiltInTool.GET_DATETIME]: { icon: Clock, label: 'Current time', source: ToolSource.BUILTIN },
 	[BuiltInTool.EXEC_SHELL_COMMAND]: {
 		icon: Terminal,

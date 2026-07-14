@@ -222,6 +222,38 @@ function collectToolMessages(messages: DatabaseMessage[], startIndex: number): D
 }
 
 /**
+ * Split a tool-result blob into a list and an optional "Total matches: N"
+ * summary. Both file-glob and grep tools emit this format on the server:
+ *
+ *   <matches>
+ *   ---
+ *   Total matches: 42
+ *
+ * Returns the lines and exposes a callback for capturing the total so each
+ * caller can stash it on its own meta type without taking a return-tuple.
+ */
+export function splitSearchSummaryList(
+	text: string,
+	captureTotal: (n: number) => void
+): { lines: string[] } {
+	const separatorIndex = text.indexOf('---\n');
+	const matchesText = separatorIndex === -1 ? text : text.slice(0, separatorIndex);
+	const summaryText = separatorIndex === -1 ? '' : text.slice(separatorIndex + '---\n'.length);
+
+	const totalMatch = summaryText.match(/Total matches:\s*(\d+)/);
+	if (totalMatch) {
+		captureTotal(parseInt(totalMatch[1], 10));
+	}
+
+	const lines = matchesText
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+
+	return { lines };
+}
+
+/**
  * Parse tool result text into lines, matching image attachments by name.
  */
 export function parseToolResultWithImages(
