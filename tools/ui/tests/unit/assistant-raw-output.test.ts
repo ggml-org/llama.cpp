@@ -3,7 +3,9 @@ import { AgenticSectionType } from '$lib/enums';
 import { REASONING_TAGS } from '$lib/constants';
 import { buildAssistantRawOutput, type AgenticSection } from '$lib/utils/agentic';
 
-function makeSection(overrides: Partial<AgenticSection> & { type: AgenticSectionType }): AgenticSection {
+function makeSection(
+	overrides: Partial<AgenticSection> & { type: AgenticSectionType }
+): AgenticSection {
 	return {
 		content: '',
 		...overrides
@@ -16,9 +18,7 @@ describe('buildAssistantRawOutput', () => {
 	});
 
 	it('formats a reasoning section with a single newline between tags and content', () => {
-		const sections = [
-			makeSection({ type: AgenticSectionType.REASONING, content: 'thinking...' })
-		];
+		const sections = [makeSection({ type: AgenticSectionType.REASONING, content: 'thinking...' })];
 		expect(buildAssistantRawOutput(sections)).toBe(
 			`${REASONING_TAGS.START}\nthinking...${REASONING_TAGS.END}`
 		);

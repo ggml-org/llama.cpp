@@ -1000,13 +1000,13 @@ class MCPStore {
 		let enabledServerIds: Set<string>;
 
 		if (perChatOverrides !== undefined) {
-			enabledServerIds = new Set(
-				perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId)
-			);
+			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
 		} else {
 			// No overrides provided - fall back to each server's own `enabled` flag
 			enabledServerIds = new Set(
-				this.getServers().filter((s) => s.enabled).map((s) => s.id)
+				this.getServers()
+					.filter((s) => s.enabled)
+					.map((s) => s.id)
 			);
 		}
 
@@ -1551,13 +1551,13 @@ class MCPStore {
 		let enabledServerIds: Set<string>;
 
 		if (perChatOverrides !== undefined) {
-			enabledServerIds = new Set(
-				perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId)
-			);
+			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
 		} else {
 			// No overrides provided - fall back to each server's own `enabled` flag
 			enabledServerIds = new Set(
-				this.getServers().filter((s) => s.enabled).map((s) => s.id)
+				this.getServers()
+					.filter((s) => s.enabled)
+					.map((s) => s.id)
 			);
 		}
 		// No enabled servers = no capability
@@ -1593,7 +1593,9 @@ class MCPStore {
 	 */
 	getServersWithResources(): string[] {
 		const enabledServerIds = new Set(
-			this.getServers().filter((s) => s.enabled).map((s) => s.id)
+			this.getServers()
+				.filter((s) => s.enabled)
+				.map((s) => s.id)
 		);
 		const servers: string[] = [];
 

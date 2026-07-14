@@ -59,7 +59,9 @@ describe('conversationsStore MCP override resolution', () => {
 		localStorage.clear();
 	});
 
-	function makeConversation(overrides?: { serverId: string; enabled: boolean }[]): DatabaseConversation {
+	function makeConversation(
+		overrides?: { serverId: string; enabled: boolean }[]
+	): DatabaseConversation {
 		return {
 			id: 'conv-1',
 			currNode: null,
