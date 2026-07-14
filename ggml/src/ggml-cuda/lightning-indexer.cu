@@ -14,7 +14,7 @@ typedef union {
 #include <mma.h>
 namespace wmma = nvcuda::wmma;
 
-template <int64_t n_embd, int64_t n_head, ggml_type type_K>
+template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t n_embd, int64_t n_head, ggml_type type_K>
 static __global__ void lightning_indexer_kernel_wmma(
         const float * src0, const char * src1, const float * src2, const half * src3, float * dst,
         int64_t n_stream, int64_t n_batch, int64_t n_kv,
@@ -26,8 +26,6 @@ static __global__ void lightning_indexer_kernel_wmma(
         int64_t ne33
     ) {
 
-    constexpr int K_VECS_PER_BLOCK = 32;
-    constexpr int WARPS_PER_BLOCK = 8;
     constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WARP_SIZE;
     constexpr int HEADS_PER_INNER_LOOP = 8;
     constexpr int K_EMBD_PER_INNER_LOOP = 16;
@@ -213,7 +211,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 
 #else // defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 
-template <int64_t n_embd, int64_t n_head, ggml_type type_K>
+template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t n_embd, int64_t n_head, ggml_type type_K>
 static __global__ void lightning_indexer_kernel_wmma(
         const float * src0, const char * src1, const float * src2, const half * src3, float * dst,
         int64_t n_stream, int64_t n_batch, int64_t n_kv,
@@ -240,7 +238,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 // thanks to that one warp operating on float4 processes whole indexer K/Q vectors
 // 32 * 4 = 128 (n_embd)
 
-template <int64_t n_embd, int64_t n_head, ggml_type type_K>
+template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t n_embd, int64_t n_head, ggml_type type_K>
 static __global__ void lightning_indexer_kernel_vec(
         const float * src0, const char * src1, const float * src2, const half * src3, float * dst,
         int64_t n_stream, int64_t n_batch, int64_t n_kv,
@@ -252,8 +250,7 @@ static __global__ void lightning_indexer_kernel_vec(
         int64_t ne33
     ) {
 
-    constexpr int K_VECS_PER_WARP = 8;
-    constexpr int WARPS_PER_BLOCK = 8;
+    constexpr int K_VECS_PER_WARP = K_VECS_PER_BLOCK / WARPS_PER_BLOCK;
     constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WARP_SIZE;
 
     const int i_batch  = blockIdx.y;
@@ -263,7 +260,7 @@ static __global__ void lightning_indexer_kernel_vec(
     const int tid      = i_warp * WARP_SIZE + i_lane;
 
     // each warp processes K_VECS_PER_WARP K vectors
-    const int start_kv_block = blockIdx.x * (WARPS_PER_BLOCK * K_VECS_PER_WARP);
+    const int start_kv_block = blockIdx.x * K_VECS_PER_BLOCK;
     const int start_kv = start_kv_block + i_warp * K_VECS_PER_WARP;
 
     const char  * q_base = (const char  *)                 src0 + i_batch*nb02 + i_stream*nb03;
@@ -360,7 +357,7 @@ static __global__ void lightning_indexer_kernel_vec(
 
     // phase 4 - store outputs to shared memory
 
-    __shared__ float dst_shared[WARPS_PER_BLOCK * K_VECS_PER_WARP];
+    __shared__ float dst_shared[K_VECS_PER_BLOCK];
 
     if (i_lane == 0) {
 #pragma unroll
@@ -373,7 +370,7 @@ static __global__ void lightning_indexer_kernel_vec(
 
     // phase 5 - write from shared memory to VRAM in coalesced manner
 
-    if (tid < WARPS_PER_BLOCK * K_VECS_PER_WARP) {
+    if (tid < K_VECS_PER_BLOCK) {
         int i_kv = start_kv_block + tid;
         if (i_kv < n_kv) {
             const half * m_base = (const half *) ((const char *) src3 + i_batch*nb31 + (i_stream%ne33)*nb33);
@@ -385,7 +382,8 @@ static __global__ void lightning_indexer_kernel_vec(
 
 #define LIGHTNING_INDEXER_CASE(lightning_indexer_kernel, n_embd, n_head, K, type_K)         \
     if (K->type == (type_K)) {                                                              \
-        lightning_indexer_kernel<n_embd, n_head, type_K><<<grid, block, 0, ctx.stream()>>>( \
+        lightning_indexer_kernel<WARPS_PER_BLOCK, K_VECS_PER_BLOCK, n_embd, n_head, type_K> \
+            <<<grid, block, 0, ctx.stream()>>>(                                             \
             src0_d, src1_d, src2_d, src3_d, dst_d,                                          \
             n_stream, n_batch, n_kv,                                                        \
             nb1, nb2, nb3,                                                                  \
