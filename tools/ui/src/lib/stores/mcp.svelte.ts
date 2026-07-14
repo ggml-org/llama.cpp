@@ -205,6 +205,9 @@ class MCPStore {
 		server: MCPServerSettingsEntry,
 		perChatOverrides?: McpServerOverride[]
 	): boolean {
+		// Per-chat overrides win when present; missing entries inherit the
+		// server's own `enabled` flag so partial override lists are not all
+		// treated as disabled.
 		const override = perChatOverrides?.find((o) => o.serverId === server.id);
 		return override?.enabled ?? server.enabled;
 	}
