@@ -628,12 +628,23 @@ struct server_prompt_data {
     }
 };
 
+struct server_prompt_state_chunk {
+    llama_pos p0 = -1;
+    llama_pos p1 = -1;
+    std::vector<uint8_t> data;
+};
+
 struct server_prompt_cache_state {
     server_prompt prompt;
     server_prompt_data data;
+    std::vector<server_prompt_state_chunk> chunks;
 
     size_t size() const {
         size_t res = data.size();
+
+        for (const auto & chunk : chunks) {
+            res += chunk.data.size();
+        }
 
         for (const auto & ckpt : prompt.checkpoints) {
             res += ckpt.size();

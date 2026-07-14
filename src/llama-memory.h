@@ -122,8 +122,10 @@ struct llama_memory_i {
     // state write/read
     //
 
-    virtual void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const = 0;
-    virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) = 0;
+    virtual void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0, llama_pos p0 = -1, llama_pos p1 = -1) const = 0;
+    virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0, llama_pos p0 = -1, llama_pos p1 = -1) = 0;
+
+    virtual bool state_supports_position_ranges() const { return false; }
 };
 
 using llama_memory_ptr = std::unique_ptr<llama_memory_i>;

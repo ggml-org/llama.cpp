@@ -43,8 +43,8 @@ struct mock_memory : public llama_memory_i {
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override { return {}; }
 
-    void state_write(llama_io_write_i &, llama_seq_id, llama_state_seq_flags) const override { GGML_ASSERT(false && "not implemented"); }
-    void state_read (llama_io_read_i &,  llama_seq_id, llama_state_seq_flags) override { GGML_ASSERT(false && "not implemented"); }
+    void state_write(llama_io_write_i &, llama_seq_id, llama_state_seq_flags, llama_pos, llama_pos) const override { GGML_ASSERT(false && "not implemented"); }
+    void state_read (llama_io_read_i &,  llama_seq_id, llama_state_seq_flags, llama_pos, llama_pos) override { GGML_ASSERT(false && "not implemented"); }
 };
 
 // builds embedding batches - an empty llama_vocab rejects all token ids, so

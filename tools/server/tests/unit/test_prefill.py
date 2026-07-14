@@ -49,7 +49,9 @@ def test_disaggregated_prefill_matches_local():
         assert actual.body["timings"]["cache_n"] == 0
 
         with open(prefill.log_path) as log:
-            assert "__TEST_TAG_PREFILL_RESTORED__" in log.read()
+            log_content = log.read()
+            assert "__TEST_TAG_PREFILL_RESTORED__" in log_content
+            assert log_content.count("__TEST_TAG_PREFILL_RANGE__") > 1
     finally:
         prefill.stop()
         os.remove(prefill.log_path)

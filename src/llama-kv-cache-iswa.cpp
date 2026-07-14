@@ -256,20 +256,20 @@ bool llama_kv_cache_iswa::get_can_shift() const {
            kv_base->get_size() == kv_swa->get_size();
 }
 
-void llama_kv_cache_iswa::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+void llama_kv_cache_iswa::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos p0, llama_pos p1) const {
     if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-        kv_base->state_write(io, seq_id, flags);
+        kv_base->state_write(io, seq_id, flags, p0, p1);
     }
 
-    kv_swa->state_write(io, seq_id, flags);
+    kv_swa->state_write(io, seq_id, flags, p0, p1);
 }
 
-void llama_kv_cache_iswa::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+void llama_kv_cache_iswa::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos p0, llama_pos p1) {
     if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-        kv_base->state_read(io, seq_id, flags);
+        kv_base->state_read(io, seq_id, flags, p0, p1);
     }
 
-    kv_swa->state_read(io, seq_id, flags);
+    kv_swa->state_read(io, seq_id, flags, p0, p1);
 }
 
 llama_kv_cache * llama_kv_cache_iswa::get_base() const {

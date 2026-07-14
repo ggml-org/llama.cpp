@@ -17,6 +17,7 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <deque>
 
 static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
 
@@ -289,6 +290,85 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
     return true;
 }
 
+struct rpc_async_pending {
+    void * dst;
+    size_t size;
+};
+
+struct rpc_async_state {
+    std::deque<rpc_async_pending> pending;
+    size_t bytes = 0;
+};
+
+struct rpc_async_entry {
+    std::weak_ptr<socket_t> sock;
+    std::shared_ptr<rpc_async_state> state;
+};
+
+struct rpc_async_registry {
+    std::mutex mutex;
+    std::unordered_map<socket_t *, rpc_async_entry> entries;
+};
+
+static rpc_async_registry & get_async_registry() {
+    static rpc_async_registry registry;
+    return registry;
+}
+
+static std::shared_ptr<rpc_async_state> get_async_state(const socket_ptr & sock, bool create) {
+    auto & registry = get_async_registry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+
+    auto it = registry.entries.find(sock.get());
+    if (it != registry.entries.end()) {
+        if (it->second.sock.lock() == sock) {
+            return it->second.state;
+        }
+        registry.entries.erase(it);
+    }
+
+    if (!create) {
+        return nullptr;
+    }
+
+    auto state = std::make_shared<rpc_async_state>();
+    registry.entries.emplace(sock.get(), rpc_async_entry { sock, state });
+    return state;
+}
+
+static void erase_async_state(const socket_ptr & sock, const std::shared_ptr<rpc_async_state> & state) {
+    auto & registry = get_async_registry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+
+    auto it = registry.entries.find(sock.get());
+    if (it != registry.entries.end() && it->second.state == state) {
+        registry.entries.erase(it);
+    }
+}
+
+static bool drain_async_reads_unlocked(const socket_ptr & sock) {
+    auto state = get_async_state(sock, false);
+    if (!state) {
+        return true;
+    }
+    while (!state->pending.empty()) {
+        const auto & pending = state->pending.front();
+        uint64_t size = 0;
+        if (!sock->recv_data(&size, sizeof(size)) || size != pending.size) {
+            return false;
+        }
+        if (!sock->recv_data(pending.dst, pending.size)) {
+            return false;
+        }
+        state->bytes -= pending.size;
+        state->pending.pop_front();
+    }
+    erase_async_state(sock, state);
+    return true;
+}
+
+static constexpr size_t RPC_ASYNC_MAX_INFLIGHT = 8u * 1024 * 1024;
+
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 // No response
 static bool send_rpc_cmd_unlocked(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
@@ -307,6 +387,9 @@ static bool send_rpc_cmd_unlocked(socket_ptr sock, enum rpc_cmd cmd, const void 
 
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
     std::lock_guard<std::mutex> lock(sock->mutex());
+    if (!drain_async_reads_unlocked(sock)) {
+        return false;
+    }
     return send_rpc_cmd_unlocked(sock, cmd, input, input_size);
 }
 
@@ -314,6 +397,9 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
 // RPC response: | response_size (8 bytes) | response_data (response_size bytes) |
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size, void * output, size_t output_size) {
     std::lock_guard<std::mutex> lock(sock->mutex());
+    if (!drain_async_reads_unlocked(sock)) {
+        return false;
+    }
     if (!send_rpc_cmd_unlocked(sock, cmd, input, input_size)) {
         return false;
     }
@@ -665,9 +751,37 @@ static void ggml_backend_rpc_free(ggml_backend_t backend) {
     delete backend;
 }
 
-static void ggml_backend_rpc_synchronize(ggml_backend_t backend) {
+static void ggml_backend_rpc_get_tensor_async(
+        ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     GGML_UNUSED(backend);
-    // this is no-op because we don't have any async operations
+    GGML_ASSERT(tensor->buffer != nullptr && ggml_backend_buffer_is_rpc(tensor->buffer));
+
+    ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)tensor->buffer->context;
+    std::lock_guard<std::mutex> lock(ctx->sock->mutex());
+    auto state = get_async_state(ctx->sock, true);
+
+    if (state->bytes + size > RPC_ASYNC_MAX_INFLIGHT) {
+        bool status = drain_async_reads_unlocked(ctx->sock);
+        RPC_STATUS_ASSERT(status);
+    }
+
+    rpc_msg_get_tensor_req request;
+    request.tensor = serialize_tensor(tensor);
+    request.offset = offset;
+    request.size = size;
+
+    bool status = send_rpc_cmd_unlocked(ctx->sock, RPC_CMD_GET_TENSOR, &request, sizeof(request));
+    RPC_STATUS_ASSERT(status);
+    state->pending.push_back({data, size});
+    state->bytes += size;
+}
+
+static void ggml_backend_rpc_synchronize(ggml_backend_t backend) {
+    ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *)backend->context;
+    auto sock = get_socket(rpc_ctx->endpoint);
+    rpc_msg_device_count_rsp response;
+    bool status = send_rpc_cmd(sock, RPC_CMD_DEVICE_COUNT, nullptr, 0, &response, sizeof(response));
+    RPC_STATUS_ASSERT(status);
 }
 
 static void add_tensor(ggml_tensor * tensor, std::vector<rpc_tensor> & tensors, std::unordered_set<ggml_tensor*> & visited) {
@@ -743,7 +857,7 @@ static ggml_backend_i ggml_backend_rpc_interface = {
     /* .get_name                = */ ggml_backend_rpc_name,
     /* .free                    = */ ggml_backend_rpc_free,
     /* .set_tensor_async        = */ NULL,
-    /* .get_tensor_async        = */ NULL,
+    /* .get_tensor_async        = */ ggml_backend_rpc_get_tensor_async,
     /* .set_tensor_2d_async     = */ NULL,
     /* .get_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ NULL,

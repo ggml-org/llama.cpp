@@ -996,12 +996,19 @@ private:
     void process(server_task & task) {
         const int32_t n_prefill = task.n_tokens() - 1;
         const int32_t n_batch = llama_n_batch(ctx);
+        const bool use_ranges = llama_state_seq_supports_position_ranges(ctx);
 
         common_context_seq_rm(ctx, 0, -1, -1);
 
         llama_batch batch = llama_batch_init(std::min(n_prefill, n_batch), 0, 1);
+        std::shared_ptr<server_prompt_cache_state> state;
+        try {
+            state = std::make_shared<server_prompt_cache_state>();
+        } catch (const std::bad_alloc & e) {
+            task.prefill_error = string_format("state allocation failed: %s", e.what());
+        }
 
-        for (int32_t i = 0; i < n_prefill;) {
+        for (int32_t i = 0; task.prefill_error.empty() && i < n_prefill;) {
             if (is_cancelled(task.id)) {
                 break;
             }
@@ -1019,28 +1026,54 @@ private:
                 break;
             }
 
+            const int32_t p0 = i;
             i += n_cur;
+
+            if (use_ranges && !is_cancelled(task.id)) {
+                const int32_t p1 = i == n_prefill ? -1 : i;
+                const size_t size = llama_state_seq_get_size_range(ctx, 0, LLAMA_STATE_SEQ_FLAGS_NONE, p0, p1);
+                try {
+                    auto & chunk = state->chunks.emplace_back();
+                    chunk.p0 = p0;
+                    chunk.p1 = p1;
+                    chunk.data.resize(size);
+                    const size_t n = llama_state_seq_get_data_range(
+                            ctx, chunk.data.data(), size, 0, LLAMA_STATE_SEQ_FLAGS_NONE, p0, p1);
+                    if (n != size) {
+                        task.prefill_error = string_format("state range read failed (%zu / %zu)", n, size);
+                        break;
+                    }
+                    task.prefill_bytes += size;
+                    SRV_DBG("prefill worker %d transferred state range [%d, %d), size = %.2f MiB __TEST_TAG_PREFILL_RANGE__\n",
+                            id, p0, p1, size / (1024.0 * 1024.0));
+                } catch (const std::bad_alloc & e) {
+                    task.prefill_error = string_format("state range allocation failed: %s", e.what());
+                    break;
+                }
+            }
         }
 
         llama_batch_free(batch);
 
         if (task.prefill_error.empty() && !is_cancelled(task.id)) {
-            const size_t size = llama_state_seq_get_size_ext(ctx, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
-
             try {
-                auto state = std::make_shared<server_prompt_cache_state>();
                 state->prompt.tokens = task.tokens.clone();
                 state->prompt.tokens.keep_first(n_prefill);
-                state->data.main.resize(size);
 
-                const size_t n = llama_state_seq_get_data_ext(
-                        ctx, state->data.main.data(), size, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
-                if (n == size) {
+                if (!use_ranges) {
+                    const size_t size = llama_state_seq_get_size_ext(ctx, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
+                    state->data.main.resize(size);
+                    const size_t n = llama_state_seq_get_data_ext(
+                            ctx, state->data.main.data(), size, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
+                    if (n != size) {
+                        task.prefill_error = string_format("state read failed (%zu / %zu)", n, size);
+                    }
+                    task.prefill_bytes = size;
+                }
+
+                if (task.prefill_error.empty()) {
                     task.prefill_state = std::move(state);
                     task.n_prefilled = n_prefill;
-                    task.prefill_bytes = size;
-                } else {
-                    task.prefill_error = string_format("state read failed (%zu / %zu)", n, size);
                 }
             } catch (const std::bad_alloc & e) {
                 task.prefill_error = string_format("state allocation failed: %s", e.what());

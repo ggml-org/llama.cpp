@@ -1657,7 +1657,17 @@ bool server_prompt_cache_state::load(
         llama_context * ctx_tgt,
         llama_context * ctx_dft,
         int32_t id_slot) {
-    {
+    if (!chunks.empty()) {
+        for (const auto & chunk : chunks) {
+            const size_t size = chunk.data.size();
+            const size_t n = llama_state_seq_set_data_range(
+                    ctx_tgt, chunk.data.data(), size, id_slot, 0, chunk.p0, chunk.p1);
+            if (n != size) {
+                SRV_ERR("failed to restore state chunk [%d, %d) with size %zu\n", chunk.p0, chunk.p1, size);
+                return false;
+            }
+        }
+    } else {
         const size_t size = data.main.size();
         const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.main.data(), size, id_slot, 0);
         if (n != size) {
@@ -1761,6 +1771,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
             /*.main =*/ std::move(state_data_tgt),
             /*.drft =*/ std::move(state_data_dft),
         },
+        /*.chunks =*/ {},
     });
 
     return &states.back();
