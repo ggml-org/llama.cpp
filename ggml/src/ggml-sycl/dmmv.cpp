@@ -1126,7 +1126,9 @@ static void dequantize_mul_mat_vec_q5_k_reorder(const void *__restrict__ vx,
                                                 const int ncols, int nrows,
                                                 const sycl::nd_item<3> &item_ct1) {
 
-    const int row = item_ct1.get_group(2);
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row >= nrows) return;
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
 
