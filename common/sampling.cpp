@@ -190,6 +190,12 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         !std::isfinite(1.0f/params.penalty_repeat)) {
         throw std::invalid_argument("penalty_repeat must be finite and greater than 0");
     }
+    if (!std::isfinite(params.penalty_freq)) {
+        throw std::invalid_argument("penalty_freq must be finite");
+    }
+    if (!std::isfinite(params.penalty_present)) {
+        throw std::invalid_argument("penalty_present must be finite");
+    }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
     llama_sampler_chain_params lparams = llama_sampler_chain_default_params();

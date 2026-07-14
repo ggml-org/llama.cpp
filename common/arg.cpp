@@ -1734,14 +1734,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--presence-penalty"}, "N",
         string_format("repeat alpha presence penalty (default: %.2f, 0.0 = disabled)", (double)params.sampling.penalty_present),
         [](common_params & params, const std::string & value) {
-            params.sampling.penalty_present = std::stof(value);
+            const float penalty_present = std::stof(value);
+            if (!std::isfinite(penalty_present)) {
+                throw std::runtime_error("error: presence-penalty must be finite\n");
+            }
+            params.sampling.penalty_present = penalty_present;
         }
     ).set_sampling());
     add_opt(common_arg(
         {"--frequency-penalty"}, "N",
         string_format("repeat alpha frequency penalty (default: %.2f, 0.0 = disabled)", (double)params.sampling.penalty_freq),
         [](common_params & params, const std::string & value) {
-            params.sampling.penalty_freq = std::stof(value);
+            const float penalty_freq = std::stof(value);
+            if (!std::isfinite(penalty_freq)) {
+                throw std::runtime_error("error: frequency-penalty must be finite\n");
+            }
+            params.sampling.penalty_freq = penalty_freq;
         }
     ).set_sampling());
     add_opt(common_arg(

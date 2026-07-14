@@ -995,7 +995,7 @@ static float find_backend_logit(const backend_sampler_output & output, llama_tok
     GGML_ABORT("backend token not found");
 }
 
-static void compare_penalties_logits(
+static sampler_comparison_output run_penalties_comparison(
         const test_params & params,
         int32_t penalty_last_n,
         float penalty_repeat,
@@ -1016,16 +1016,58 @@ static void compare_penalties_logits(
         }
     };
 
-    const sampler_comparison_output output = run_sampler_comparison(
+    return run_sampler_comparison(
             params, prompt, raw_logits, add_samplers, accept_history);
+}
 
-    GGML_ASSERT(output.expected.size() == raw_logits.size());
-    GGML_ASSERT(output.actual.logits.size() == raw_logits.size());
+static void compare_penalties_logits(
+        const test_params & params,
+        int32_t penalty_last_n,
+        float penalty_repeat,
+        float penalty_freq,
+        float penalty_present,
+        const std::string & prompt,
+        const std::function<void(llama_sampler *)> & extra_accept = {}) {
+    const sampler_comparison_output output = run_penalties_comparison(
+            params, penalty_last_n, penalty_repeat, penalty_freq, penalty_present, prompt, extra_accept);
+
+    GGML_ASSERT(output.expected.size() == output.actual.logits.size());
 
     const sampler_comparison_stats stats = compare_sampler_outputs(
             "penalties", map_logits(output.expected), output.actual);
     GGML_ASSERT(stats.n_masked == 0);
     GGML_ASSERT(stats.n_mismatch == 0);
+}
+
+static void test_penalty_parameter_values(const test_params & params) {
+    struct penalty_test_case {
+        const char * name;
+        float repeat;
+        float frequency;
+        float presence;
+    };
+
+    const penalty_test_case cases[] = {
+        { "frequency -1",   1.0f, -1.0f,     0.0f },
+        { "frequency 0",    1.0f,  0.0f,     0.0f },
+        { "frequency 1",    1.0f,  1.0f,     0.0f },
+        { "presence -1",    1.0f,  0.0f,    -1.0f },
+        { "presence 0",     1.0f,  0.0f,     0.0f },
+        { "presence 1",     1.0f,  0.0f,     1.0f },
+        { "repeat 1",       1.0f,  0.0f,     0.0f },
+    };
+
+    int n_failed = 0;
+    for (const auto & test : cases) {
+        const sampler_comparison_output output = run_penalties_comparison(
+                params, 64, test.repeat, test.frequency, test.presence, "Hello Hello world");
+        GGML_ASSERT(output.expected.size() == output.actual.logits.size());
+        const sampler_comparison_stats stats = compare_sampler_outputs(
+                test.name, map_logits(output.expected), output.actual);
+        n_failed += stats.n_mismatch != 0;
+    }
+
+    GGML_ASSERT(n_failed == 0);
 }
 
 static void compare_top_k_penalties_logits(
@@ -1261,6 +1303,9 @@ static void test_backend_penalties_sampling(const test_params & params) {
     compare_masking_penalties_logits(params, "top-p presence", []() {
         return llama_sampler_init_top_p(0.9f, 0);
     }, 64, 1.0f, 0.0f, 0.25f, "Hello", penalties_position::after_filter, true);
+
+    printf("Testing backend penalty parameter values\n");
+    test_penalty_parameter_values(params);
 
     printf("backend penalties sampling test PASSED\n");
 }

@@ -2948,6 +2948,8 @@ struct llama_sampler * llama_sampler_init_penalties(
     GGML_ASSERT(std::isfinite(penalty_repeat));
     GGML_ASSERT(penalty_repeat > 0.0f);
     GGML_ASSERT(std::isfinite(1.0f/penalty_repeat));
+    GGML_ASSERT(std::isfinite(penalty_freq));
+    GGML_ASSERT(std::isfinite(penalty_present));
 
     penalty_last_n = std::max(penalty_last_n, 0);
 
