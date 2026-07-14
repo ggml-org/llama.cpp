@@ -379,6 +379,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                             ik_kv->nb[2], ik_kv->nb[3], ik_kv->nb[3], 0);
                     ggml_tensor * iq4 = ggml_reshape_4d(ctx0, iq, n_idx_dim, Hd, 1, ns);
                     ggml_tensor * sc  = ggml_mul_mat(ctx0, ikv4, iq4);
+                    ggml_mul_mat_set_prec(sc, GGML_PREC_F32);
                     sc = ggml_add_inplace(ctx0, sc, msa_mf);
                     ggml_tensor * bs = ggml_pool_2d(ctx0, sc, GGML_OP_POOL_MAX, blk, 1, blk, 1, 0, 0);
                     cb(bs, "msa_bs", il);
@@ -410,8 +411,13 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                     ggml_tensor * mg = ggml_get_rows(ctx0, m3, tokj);
 
                     // fold (group, stream) onto the FA channel dim
-                    ggml_tensor * kfa = ggml_cast(ctx0, ggml_reshape_4d(ctx0, kg, D, (int64_t) blk*K, 1, Hd*ns), GGML_TYPE_F16);
-                    ggml_tensor * vfa = ggml_cast(ctx0, ggml_reshape_4d(ctx0, vg, D, (int64_t) blk*K, 1, Hd*ns), GGML_TYPE_F16);
+                    const ggml_type kt = ggml_is_quantized(k->type) ? GGML_TYPE_F16 : k->type;
+                    const ggml_type vt = ggml_is_quantized(v->type) ? GGML_TYPE_F16 : v->type;
+                    ggml_tensor * kfa = ggml_reshape_4d(ctx0, kg, D, (int64_t) blk*K, 1, Hd*ns);
+                    ggml_tensor * vfa = ggml_reshape_4d(ctx0, vg, D, (int64_t) blk*K, 1, Hd*ns);
+                    if (kfa->type != kt) { kfa = ggml_cast(ctx0, kfa, kt); }
+                    if (vfa->type != vt) { vfa = ggml_cast(ctx0, vfa, vt); }
+                    // the FA mask must be F16
                     ggml_tensor * mfa = ggml_cast(ctx0, ggml_reshape_4d(ctx0, mg, (int64_t) blk*K, 1, 1, Hd*ns), GGML_TYPE_F16);
 
                     cur = build_attn_msa_fa(Qcur, kfa, vfa, mfa, Gp, kq_scale, il);
@@ -440,6 +446,8 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                         // scores are unscaled, only the top-k ordering matters
                         ggml_tensor * sc = ggml_mul_mat(ctx0, ik_s,
                                 ggml_reshape_2d(ctx0, iq_s, n_idx_dim, Hd*n_tps));
+                        // indexer scores run in F32
+                        ggml_mul_mat_set_prec(sc, GGML_PREC_F32);
                         sc = ggml_reshape_3d(ctx0, sc, n_kv, Hd, n_tps);
                         sc = ggml_add_inplace(ctx0, sc, mf_s);
                         ggml_tensor * bs = ggml_pool_2d(ctx0, sc, GGML_OP_POOL_MAX, blk, 1, blk, 1, 0, 0);
@@ -463,11 +471,9 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                         mask4 = ggml_reshape_4d(ctx0, mask4, n_kv, n_tps, 1, Hd);
                         cb(mask4, "msa_mask4", il);
 
-                        // cache views with groups on ne[3]
+                        // cache views with groups on ne[3];
                         ggml_tensor * kfa = ggml_permute(ctx0, k_s, 0, 3, 1, 2);
                         ggml_tensor * vfa = ggml_permute(ctx0, v_s, 0, 3, 1, 2);
-                        if (kfa->type == GGML_TYPE_F32) kfa = ggml_cast(ctx0, kfa, GGML_TYPE_F16);
-                        if (vfa->type == GGML_TYPE_F32) vfa = ggml_cast(ctx0, vfa, GGML_TYPE_F16);
 
                         outs[st] = build_attn_msa_fa(q_s, kfa, vfa, mask4, Gp, kq_scale, il);
                     }
