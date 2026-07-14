@@ -3350,6 +3350,12 @@ struct ggml_tensor * ggml_out_prod(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b) {
+    if (a->type != GGML_TYPE_F32) {
+        a = ggml_cast(ctx, a, GGML_TYPE_F32);
+    }
+    if (b->type != GGML_TYPE_F32) {
+        b = ggml_cast(ctx, b, GGML_TYPE_F32);
+    }
     GGML_ASSERT(ggml_can_out_prod(a, b));
     GGML_ASSERT(!ggml_is_transposed(a));
 

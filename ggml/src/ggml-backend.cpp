@@ -1249,6 +1249,12 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     ggml_backend_name(sched->backends[b]),
                     ggml_backend_supports_op(sched->backends[b], node) ? "yes" : "no");
             }
+            for (int j = 0; j < GGML_MAX_SRC && node->src[j]; ++j) {
+                struct ggml_tensor * src = node->src[j];
+                GGML_LOG_ERROR("%s: src%d '%s' type=%s shape=[%" PRId64 ", %" PRId64 ", %" PRId64 ", %" PRId64 "]\n",
+                    __func__, j, src->name, ggml_type_name(src->type),
+                    src->ne[0], src->ne[1], src->ne[2], src->ne[3]);
+            }
             GGML_ABORT("unsupported graph node");
         }
     }
