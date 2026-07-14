@@ -4573,41 +4573,6 @@ struct ggml_tensor * ggml_conv_1d_dw_ph(
     return ggml_conv_1d_dw(ctx, a, b, s0, a->ne[0] / 2, d0);
 }
 
-// ggml_col2im_1d
-
-struct ggml_tensor * ggml_col2im_1d(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        int                   s0,
-        int                   oc,
-        int                   p0) {
-    GGML_ASSERT(ggml_is_matrix(a));
-    GGML_ASSERT(ggml_is_contiguous(a));
-    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16 || a->type == GGML_TYPE_BF16);
-    GGML_ASSERT(s0 > 0);
-    GGML_ASSERT(oc > 0);
-    GGML_ASSERT(p0 >= 0);
-
-    const int64_t K_OC = a->ne[0];
-    const int64_t T_in = a->ne[1];
-    const int64_t K = K_OC / oc;
-    const int64_t T_out = (T_in - 1) * s0 + K - 2 * p0;
-
-    GGML_ASSERT(K_OC == K * oc);  // a->ne[0] must be a whole number of oc blocks
-    GGML_ASSERT(K > 0 && T_out > 0);
-
-    const int64_t ne[4] = { T_out, oc, 1, 1 };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, 2, ne);
-
-    int32_t params[] = { s0, (int32_t)oc, (int32_t)p0 };
-    ggml_set_op_params(result, params, sizeof(params));
-
-    result->op     = GGML_OP_COL2IM_1D;
-    result->src[0] = a;
-
-    return result;
-}
-
 // ggml_conv_1d_grouped
 
 struct ggml_tensor * ggml_conv_1d_grouped(
@@ -4661,6 +4626,41 @@ struct ggml_tensor * ggml_conv_1d_grouped(
             result = ggml_concat(ctx, result, out_g, 1);
         }
     }
+
+    return result;
+}
+
+// ggml_col2im_1d
+
+struct ggml_tensor * ggml_col2im_1d(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   s0,
+        int                   oc,
+        int                   p0) {
+    GGML_ASSERT(ggml_is_matrix(a));
+    GGML_ASSERT(ggml_is_contiguous(a));
+    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16 || a->type == GGML_TYPE_BF16);
+    GGML_ASSERT(s0 > 0);
+    GGML_ASSERT(oc > 0);
+    GGML_ASSERT(p0 >= 0);
+
+    const int64_t K_OC = a->ne[0];
+    const int64_t T_in = a->ne[1];
+    const int64_t K = K_OC / oc;
+    const int64_t T_out = (T_in - 1) * s0 + K - 2 * p0;
+
+    GGML_ASSERT(K_OC == K * oc);  // a->ne[0] must be a whole number of oc blocks
+    GGML_ASSERT(K > 0 && T_out > 0);
+
+    const int64_t ne[4] = { T_out, oc, 1, 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, 2, ne);
+
+    int32_t params[] = { s0, (int32_t)oc, (int32_t)p0 };
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_COL2IM_1D;
+    result->src[0] = a;
 
     return result;
 }
