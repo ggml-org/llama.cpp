@@ -17,10 +17,10 @@
 	let { onMcpSettingsClick }: Props = $props();
 
 	let mcpSearchQuery = $state('');
-	let allMcpServers = $derived(mcpStore.getServers());
-	let mcpServers = $derived(mcpStore.visibleMcpServers);
+	// Every configured server is listed; `enabled` is an on/off state,
+	// not a visibility filter, so a disabled server stays toggleable.
+	let mcpServers = $derived(mcpStore.getServers());
 	let hasMcpServers = $derived(mcpServers.length > 0);
-	// let hasAnyMcpServers = $derived(allMcpServers.length > 0);
 	let filteredMcpServers = $derived.by(() => {
 		const query = mcpSearchQuery.toLowerCase().trim();
 		if (!query) return mcpServers;
@@ -46,7 +46,7 @@
 	function handleMcpSubMenuOpen(open: boolean) {
 		if (open) {
 			mcpSearchQuery = '';
-			mcpStore.runHealthChecksForServers(allMcpServers);
+			mcpStore.runHealthChecksForServers(mcpServers);
 		}
 	}
 

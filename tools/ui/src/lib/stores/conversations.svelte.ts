@@ -243,9 +243,9 @@ class ConversationsStore {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
 		const conversation = await DatabaseService.createConversation(conversationName);
 
-		// New conversations inherit per-server enabled defaults directly from
-		// `mcpServers[i].enabled` (see #checkServerEnabled). No per-conversation
-		// override list needs to be seeded.
+		// No MCP override list is seeded: getAllMcpServerOverrides resolves
+		// servers without a per-conversation override to `mcpServers[i].enabled`,
+		// and only explicit toggles are stored on the conversation.
 
 		// Inherit global thinking/reasoning defaults into the new conversation
 		const thinkingEnabled = this.getThinkingEnabled();
@@ -601,48 +601,41 @@ class ConversationsStore {
 	 */
 
 	/**
-	/**
-	 * Resolve the per-server enabled value when no active conversation exists.
-	 * The default for new chats is the server's own `enabled` flag in `mcpServers`.
+	 * Resolve the default enabled value for a server: its own `enabled`
+	 * flag in `mcpServers`, so the global on/off state lives in one place.
 	 */
-	#getDefaultOverrideForNoConversation(serverId: string): McpServerOverride | undefined {
+	#getDefaultOverride(serverId: string): McpServerOverride | undefined {
 		const server = mcpStore.getServers().find((s) => s.id === serverId);
 		if (!server) return undefined;
 		return { serverId, enabled: server.enabled };
 	}
 
 	/**
-	 * Default overrides for new chats are derived from `mcpServers[i].enabled`,
-	 * so the global on/off state lives in one place.
-	 */
-	#getAllDefaultOverridesForNoConversation(): McpServerOverride[] {
-		return mcpStore.getServers().map((s) => ({ serverId: s.id, enabled: s.enabled }));
-	}
-
-	/**
-	 * Gets MCP server override for a specific server in the active conversation.
-	 * Falls back to `mcpServers[i].enabled` if no active conversation exists.
+	 * Gets the effective MCP server override for a specific server.
+	 * A per-conversation override wins when present; a server without one
+	 * resolves to its `mcpServers[i].enabled` default.
 	 * @param serverId - The server ID to check
-	 * @returns The override if set, undefined if no matching server
+	 * @returns The effective override, undefined if no matching server
 	 */
 	getMcpServerOverride(serverId: string): McpServerOverride | undefined {
-		if (this.activeConversation) {
-			return this.activeConversation.mcpServerOverrides?.find(
-				(o: McpServerOverride) => o.serverId === serverId
-			);
-		}
-		return this.#getDefaultOverrideForNoConversation(serverId);
+		const override = this.activeConversation?.mcpServerOverrides?.find(
+			(o: McpServerOverride) => o.serverId === serverId
+		);
+		if (override) return override;
+		return this.#getDefaultOverride(serverId);
 	}
 
 	/**
-	 * Get all MCP server overrides for the current conversation.
-	 * When no active conversation, derives from `mcpServers[i].enabled`.
+	 * Gets the effective override list for the current conversation:
+	 * one entry per configured server, resolved per server. The stored
+	 * per-conversation list is sparse and only holds explicit toggles.
 	 */
 	getAllMcpServerOverrides(): McpServerOverride[] {
-		if (this.activeConversation?.mcpServerOverrides) {
-			return this.activeConversation.mcpServerOverrides;
-		}
-		return this.#getAllDefaultOverridesForNoConversation();
+		const overrides = this.activeConversation?.mcpServerOverrides;
+		return mcpStore.getServers().map((s) => {
+			const override = overrides?.find((o: McpServerOverride) => o.serverId === s.id);
+			return { serverId: s.id, enabled: override?.enabled ?? s.enabled };
+		});
 	}
 
 	/**

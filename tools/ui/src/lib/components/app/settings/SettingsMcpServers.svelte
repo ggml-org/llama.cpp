@@ -22,7 +22,9 @@
 
 	let { class: className }: Props = $props();
 
-	let servers = $derived(mcpStore.visibleMcpServers);
+	// Every configured server is listed; `enabled` is an on/off state,
+	// not a visibility filter, so a disabled server stays toggleable.
+	let servers = $derived(mcpStore.getServers());
 
 	let isAddingServer = $state(false);
 
@@ -58,9 +60,14 @@
 	// Each card decides for itself whether to render based on its own
 	// health-check state, so adding a server only flashes the new card
 	// (not every other already-loaded card) until its health check resolves.
-	function isServerPending(serverId: string): boolean {
+	// Disabled servers never receive a startup health check, so IDLE only
+	// counts as pending when the server is enabled; otherwise the real card
+	// renders and keeps the enable toggle reachable.
+	function isServerPending(serverId: string, enabled: boolean): boolean {
 		const status = mcpStore.getHealthCheckState(serverId).status;
-		return status === HealthCheckStatus.IDLE || status === HealthCheckStatus.CONNECTING;
+		return (
+			status === HealthCheckStatus.CONNECTING || (status === HealthCheckStatus.IDLE && enabled)
+		);
 	}
 </script>
 
@@ -109,7 +116,7 @@
 			style="grid-template-columns: repeat(auto-fill, minmax(min(32rem, calc(100dvw - 2rem)), 1fr));"
 		>
 			{#each servers as server (server.id)}
-				{#if isServerPending(server.id)}
+				{#if isServerPending(server.id, server.enabled)}
 					<McpServerCardSkeleton />
 				{:else}
 					<McpServerCard

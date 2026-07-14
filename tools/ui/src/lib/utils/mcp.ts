@@ -9,7 +9,6 @@ import {
 	MimeTypeText
 } from '$lib/enums';
 import {
-	DEFAULT_MCP_CONFIG,
 	MCP_SERVER_ID_PREFIX,
 	IMAGE_FILE_EXTENSION_REGEX,
 	CODE_FILE_EXTENSION_REGEX,
@@ -64,7 +63,6 @@ export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 
 /**
  * Parses MCP server settings from a JSON string or array.
- * Preserves per-server requestTimeoutSeconds if stored, otherwise falls back to the global default.
  * @param rawServers - The raw servers to parse
  * @returns An empty array if the input is invalid.
  */
@@ -103,9 +101,6 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 			url,
 			name: (entry as { name?: string })?.name,
-			requestTimeoutSeconds:
-				(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
-				DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			headers: headers || undefined,
 			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 		} satisfies MCPServerSettingsEntry;
