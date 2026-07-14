@@ -90,8 +90,8 @@ static __global__ void quantize_mmq_nvfp4(
     const int64_t i2 = blockIdx.z % ne2;
     const int64_t i3 = blockIdx.z / ne2;
     const int64_t i01 = ids ? ids[i1] : i1;
-    const int64_t k_block = i0_base / QK_K;
-    const int64_t blocks_per_col = (ne0 + QK_K - 1) / QK_K;
+    const int64_t k_block = i0_base / QK_FP4_MMQ;
+    const int64_t blocks_per_col = (ne0 + QK_FP4_MMQ - 1) / QK_FP4_MMQ;
     if (k_block >= blocks_per_col) {
         return;
     }
@@ -100,7 +100,7 @@ static __global__ void quantize_mmq_nvfp4(
     block_fp4_mmq * y = (block_fp4_mmq *) vy;
     block_fp4_mmq * yb = y + ib;
 
-    const int sub = (i0_base % QK_K) / QK_NVFP4_SUB;
+    const int sub = (i0_base % QK_FP4_MMQ) / QK_NVFP4_SUB;
 
     float vals_raw[QK_NVFP4_SUB];
     float amax_raw = 0.0f;
@@ -207,7 +207,7 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
 
     block_fp4_mmq * y = (block_fp4_mmq *) vy;
 
-    const int64_t block_fp4_mmq_size = 8 * QK_MXFP4;  // 256 values
+    const int64_t block_fp4_mmq_size = QK_FP4_MMQ;
     const int64_t ib0                = blockIdx.z * ((int64_t) ne1 * (ne0 / block_fp4_mmq_size));
     const int64_t ib = ib0 + (warp_start_offset / block_fp4_mmq_size) * ne1 + blockIdx.x;
     const int64_t quad_idx_in_block  = (warp_start_offset % block_fp4_mmq_size) / vals_per_warp;
@@ -303,8 +303,8 @@ static __global__ void quantize_mmq_q8_1(
     block_q8_1_mmq * y = (block_q8_1_mmq *) vy;
 
     const int64_t ib0 = blockIdx.z*((int64_t)gridDim.x*gridDim.y*blockDim.x/QK8_1); // first block of channel
-    const int64_t ib  = ib0 + (i0 / (4*QK8_1))*ne1 + blockIdx.x;                    // block index in channel
-    const int64_t iqs = i0 % (4*QK8_1);                                             // quant index in block
+    const int64_t ib  = ib0 + (i0 / QK8_1_MMQ)*ne1 + blockIdx.x;                    // block index in channel
+    const int64_t iqs = i0 % QK8_1_MMQ;                                             // quant index in block
 
     // Load 4 floats per thread and calculate max. abs. value between them:
     const float4 xi = i0 < ne00 ? x4[(i03*s03 + i02*s02 + i01*s01 + i00)/4] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -394,7 +394,7 @@ void quantize_mmq_q8_1_cuda(
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
     GGML_ASSERT(ne00 % 4 == 0);
-    GGML_ASSERT(ne0 % (4*QK8_1) == 0);
+    GGML_ASSERT(ne0 % QK8_1_MMQ == 0);
 
     // ne1 tends to assume the highest values, therefore use it as the "x" dimension of the CUDA grid:
     const int64_t block_num_y = (ne0 + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
