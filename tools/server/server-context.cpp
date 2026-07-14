@@ -252,11 +252,7 @@ struct server_slot {
         return res;
     }
 
-    void prompt_clear(bool allow_processing) {
-        if (!allow_processing) {
-            GGML_ASSERT(!is_processing());
-        }
-
+    void prompt_clear() {
         SLT_TRC(*this, "clearing prompt with %zu tokens\n", prompt.tokens.size());
 
         common_context_seq_rm(ctx_tgt, id, -1, -1);
@@ -264,7 +260,7 @@ struct server_slot {
             common_context_seq_rm(ctx_dft, id, -1, -1);
         }
 
-        prompt.tokens.clear();
+        prompt.clear();
     }
 
     std::vector<common_adapter_lora_info> lora;
@@ -493,7 +489,7 @@ struct server_slot {
 
             // do not keep context of the child slots - the parent's context is enough
             if (task->is_child()) {
-                prompt_clear(false);
+                prompt_clear();
             }
 
             reset();
@@ -1626,7 +1622,7 @@ private:
                 ret->prompt_save(*prompt_cache);
 
                 if (!ret->prompt_load(*prompt_cache, task.tokens)) {
-                    ret->prompt_clear(false);
+                    ret->prompt_clear();
                 }
 
                 prompt_cache->update();
@@ -1658,7 +1654,7 @@ private:
             if (slot.prompt.n_tokens() > 0) {
                 SRV_WRN("purging slot %d with %zu tokens\n", slot.id, slot.prompt.tokens.size());
 
-                slot.prompt_clear(false);
+                slot.prompt_clear();
 
                 res = true;
 
@@ -1691,7 +1687,7 @@ private:
                 // if lora has changed, check to see if the cache should be cleared
                 if (lora_should_clear_cache(slot.lora, task_loras)) {
                     SLT_TRC(slot, "clearing cache for lora change. %zu loras -> %zu loras\n", slot.lora.size(), task.params.lora.size());
-                    slot.prompt.tokens.clear();
+                    slot.prompt.clear();
                 } else {
                     SLT_TRC(slot, "keeping cache for alora. %zu target loras\n", task_loras.size());
                 }
@@ -2405,7 +2401,7 @@ private:
 
                                 if (params_base.kv_unified) {
                                     // [TAG_IDLE_SLOT_CLEAR]
-                                    slot.prompt_clear(false);
+                                    slot.prompt_clear();
                                 }
                             }
                         }
@@ -2573,12 +2569,12 @@ private:
                     size_t token_count = 0;
                     size_t nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, tokens.data(), tokens.size(), &token_count);
                     if (nread == 0) {
-                        slot->prompt.tokens.clear(); // KV may already been invalidated?
+                        slot->prompt.clear(); // KV may already been invalidated?
                         send_error(task, "Unable to restore slot, no available space in KV cache or invalid slot save file", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
                     tokens.resize(token_count);
-                    slot->prompt.tokens.clear();
+                    slot->prompt.clear();
                     slot->prompt.tokens.insert(tokens);
 
                     const int64_t t_end = ggml_time_us();
@@ -2615,7 +2611,7 @@ private:
                     // Erase token cache
                     const size_t n_erased = slot->prompt.tokens.size();
 
-                    slot->prompt_clear(false);
+                    slot->prompt_clear();
 
                     auto res = std::make_unique<server_task_result_slot_erase>();
                     res->id       = task.id;
@@ -2880,7 +2876,7 @@ private:
 
                     new_tokens.resize(slot.prompt.tokens.size() - n_discard);
 
-                    slot.prompt.tokens.clear();
+                    slot.prompt.clear();
                     slot.prompt.tokens.insert(new_tokens);
                 }
 
@@ -3622,7 +3618,7 @@ private:
 
                             // note: it's complicated to keep track of how much of the current batch has been
                             //       processed before the error occurred, so we simply clear the entire context
-                            slot.prompt_clear(false);
+                            slot.prompt_clear();
                         }
                     }
 

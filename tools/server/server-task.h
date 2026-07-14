@@ -596,9 +596,17 @@ struct server_prompt_data {
 struct server_prompt {
     server_tokens tokens;
 
+    // TODO: move to server_prompt_cache
     server_prompt_data data;
 
     std::list<common_prompt_checkpoint> checkpoints;
+
+    void clear() {
+        tokens.clear();
+        checkpoints.clear();
+
+        GGML_ASSERT(data.size() == 0);
+    }
 
     size_t size() const {
         size_t res = 0;
