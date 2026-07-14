@@ -126,6 +126,9 @@
 							const wasEnabled = conversationsStore.isMcpServerEnabledForChat(server.id);
 							await conversationsStore.toggleMcpServerForChat(server.id);
 							if (!wasEnabled) {
+								// Promote the connection so tools/prompts/resources become
+								// available right away instead of waiting for the next chat-init.
+								await mcpStore.runHealthCheck(server, true);
 								toolsStore.enableAllToolsForServer(server.id);
 							}
 						}}

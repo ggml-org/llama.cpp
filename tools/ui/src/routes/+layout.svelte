@@ -234,8 +234,12 @@
 		};
 	});
 
-	// Background MCP server health checks on app load
-	// Fetch enabled servers from settings and run health checks in background.
+	// Background MCP server health checks on app load.
+	// Health-check every configured server with a URL - including disabled ones -
+	// so the /mcp-servers page can display health metadata for servers that are
+	// currently turned off. Disabled servers never get promoted to active
+	// connections (see runHealthCheck), so their tools/prompts/resources stay
+	// out of the chat-side stores.
 	// Only IDLE servers are checked; already-resolved (SUCCESS / ERROR) servers
 	// keep their existing state, so adding or removing a server does not flash
 	// every other card back through skeleton state.
@@ -244,13 +248,12 @@
 
 		const mcpServers = mcpStore.getServers();
 
-		// Only run health checks if we have enabled servers with URLs
-		const enabledServers = mcpServers.filter((s) => s.enabled && s.url.trim());
+		const serversWithUrls = mcpServers.filter((s) => s.url.trim());
 
-		if (enabledServers.length > 0) {
+		if (serversWithUrls.length > 0) {
 			untrack(() => {
 				// Run health checks in background (don't await)
-				mcpStore.runHealthChecksForServers(enabledServers, true).catch((error) => {
+				mcpStore.runHealthChecksForServers(serversWithUrls, true).catch((error) => {
 					console.warn('[layout] MCP health checks failed:', error);
 				});
 			});
