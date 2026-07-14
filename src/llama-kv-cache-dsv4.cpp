@@ -829,7 +829,7 @@ void llama_dsv4_comp_state::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_
     sc_info.sdst.push_back((uint32_t) seq_id_dst);
 }
 
-void llama_dsv4_comp_state::apply_copies() {
+void llama_dsv4_comp_state::apply_copies(const stream_copy_info & sc_info) const {
     for (size_t i = 0; i < sc_info.ssrc.size(); ++i) {
         const uint32_t ssrc = sc_info.ssrc[i];
         const uint32_t sdst = sc_info.sdst[i];
@@ -839,9 +839,6 @@ void llama_dsv4_comp_state::apply_copies() {
             ggml_backend_tensor_copy(layer.score_stream[ssrc], layer.score_stream[sdst]);
         }
     }
-
-    sc_info.ssrc.clear();
-    sc_info.sdst.clear();
 }
 
 uint32_t llama_dsv4_comp_state::get_ratio() const {
@@ -1189,7 +1186,13 @@ llama_memory_context_ptr llama_kv_cache_dsv4::init_full() {
 }
 
 llama_memory_context_ptr llama_kv_cache_dsv4::init_update(llama_context * lctx, bool optimize) {
-    return std::make_unique<llama_kv_cache_dsv4_context>(this, lctx, optimize);
+    return std::make_unique<llama_kv_cache_dsv4_context>(
+            this,
+            lctx,
+            optimize,
+            std::move(csa_state->sc_info),
+            std::move(hca_state->sc_info),
+            std::move(lid_state->sc_info));
 }
 
 bool llama_kv_cache_dsv4::get_can_shift() const {
@@ -1688,20 +1691,26 @@ llama_kv_cache_dsv4_context::llama_kv_cache_dsv4_context(
 llama_kv_cache_dsv4_context::llama_kv_cache_dsv4_context(
         llama_kv_cache_dsv4 * kv,
         llama_context * lctx,
-        bool optimize) :
+        bool optimize,
+        stream_copy_info sc_info_csa,
+        stream_copy_info sc_info_hca,
+        stream_copy_info sc_info_lid) :
     ctx_raw(std::make_unique<llama_kv_cache_dsv4_raw_context>(kv->get_raw(), lctx, optimize)),
     ctx_csa_mem(kv->get_csa()->init_update(lctx, optimize)),
     ctx_hca_mem(kv->get_hca()->init_update(lctx, optimize)),
     ctx_lid_mem(kv->get_lid()->init_update(lctx, optimize)),
-    ctx_csa(std::make_unique<llama_kv_cache_dsv4_comp_context>(kv->get_csa())),
-    ctx_hca(std::make_unique<llama_kv_cache_dsv4_comp_context>(kv->get_hca())),
-    ctx_lid(std::make_unique<llama_kv_cache_dsv4_comp_context>(kv->get_lid())),
     csa_state(kv->get_csa_state()),
     hca_state(kv->get_hca_state()),
     lid_state(kv->get_lid_state()),
+    sc_info_csa(std::move(sc_info_csa)),
+    sc_info_hca(std::move(sc_info_hca)),
+    sc_info_lid(std::move(sc_info_lid)),
     status(llama_memory_status_combine(
-                llama_memory_status_combine(ctx_raw->get_status(), ctx_csa_mem->get_status()),
-                llama_memory_status_combine(ctx_hca_mem->get_status(), ctx_lid_mem->get_status()))) {
+                llama_memory_status_combine(
+                    llama_memory_status_combine(ctx_raw->get_status(), ctx_csa_mem->get_status()),
+                    llama_memory_status_combine(ctx_hca_mem->get_status(), ctx_lid_mem->get_status())),
+                this->sc_info_csa.empty() && this->sc_info_hca.empty() && this->sc_info_lid.empty() ?
+                    LLAMA_MEMORY_STATUS_NO_UPDATE : LLAMA_MEMORY_STATUS_SUCCESS)) {
 }
 
 llama_kv_cache_dsv4_context::llama_kv_cache_dsv4_context(
@@ -1773,10 +1782,12 @@ bool llama_kv_cache_dsv4_context::apply() {
         res = res & ctx_csa_mem->apply();
         res = res & ctx_hca_mem->apply();
         res = res & ctx_lid_mem->apply();
+    }
 
-        csa_state->apply_copies();
-        hca_state->apply_copies();
-        lid_state->apply_copies();
+    if (ubatches.empty()) {
+        csa_state->apply_copies(sc_info_csa);
+        hca_state->apply_copies(sc_info_hca);
+        lid_state->apply_copies(sc_info_lid);
     }
 
     return res;

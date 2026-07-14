@@ -10,6 +10,10 @@
 
 class llama_dsv4_comp_state {
 public:
+    using stream_copy_info = llama_kv_cache::stream_copy_info;
+
+    stream_copy_info sc_info;
+
     llama_dsv4_comp_state(
             const llama_model & model,
             bool            offload,
@@ -23,7 +27,7 @@ public:
 
     void clear(llama_seq_id seq_id, bool data);
     void seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst);
-    void apply_copies();
+    void apply_copies(const stream_copy_info & sc_info) const;
 
     uint32_t get_ratio()    const;
     uint32_t get_state_size() const;
@@ -61,8 +65,6 @@ private:
     std::vector<layer> layers;
 
     std::unordered_map<int32_t, int32_t> map_layer_ids;
-
-    llama_kv_cache::stream_copy_info sc_info;
 
     size_t total_size() const;
 };
@@ -252,6 +254,7 @@ private:
 class llama_kv_cache_dsv4_context : public llama_memory_context_i {
 public:
     using slot_info_vec_t = llama_kv_cache::slot_info_vec_t;
+    using stream_copy_info = llama_kv_cache::stream_copy_info;
 
     struct comp_plan {
         // Per-ubatch recipe for updating compressor state, committing completed
@@ -298,7 +301,10 @@ public:
     llama_kv_cache_dsv4_context(
             llama_kv_cache_dsv4 * kv,
             llama_context * lctx,
-            bool optimize);
+            bool optimize,
+            stream_copy_info sc_info_csa,
+            stream_copy_info sc_info_hca,
+            stream_copy_info sc_info_lid);
 
     llama_kv_cache_dsv4_context(
             llama_kv_cache_dsv4 * kv,
@@ -361,6 +367,10 @@ private:
     llama_dsv4_comp_state * csa_state = nullptr;
     llama_dsv4_comp_state * hca_state = nullptr;
     llama_dsv4_comp_state * lid_state = nullptr;
+
+    stream_copy_info sc_info_csa;
+    stream_copy_info sc_info_hca;
+    stream_copy_info sc_info_lid;
 
     bool reserve_plans = false;
     mutable comp_plan reserve_plan_csa;
