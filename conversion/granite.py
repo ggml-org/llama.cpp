@@ -126,10 +126,30 @@ class GraniteMoeSWAModel(GraniteSWAModel):
     """Conversion for IBM's GraniteMoeSWAForCausalLM (unified dense + MoE with iSWA)"""
     model_arch = gguf.MODEL_ARCH.GRANITE_SWA
 
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if shared_intermediate_size := self.hparams.get("shared_intermediate_size"):
+            self.gguf_writer.add_expert_shared_feed_forward_length(shared_intermediate_size)
+            logger.info("gguf: (granitemoewa) shared_intermediate_size = %s", shared_intermediate_size)
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         """Split merged MoE tensors (gate+up) following standard MoE pattern."""
 
-        # Handle expert FFN tensors (merged gate+up)
+        # Handle expert FFN tensors (merged gate+up) - swash format: experts.gate_up_proj
+        if name.endswith("block_sparse_moe.experts.gate_up_proj"):
+            ffn_dim = self.hparams["intermediate_size"]
+            assert data_torch.shape[-2] == 2 * ffn_dim, f"Merged FFN tensor size must be 2 * intermediate_size, got {data_torch.shape[-2]}"
+            gate, up = data_torch.split(ffn_dim, dim=-2)
+            yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), bid)
+            yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), bid)
+            return
+
+        # Handle expert FFN down projection - swash format: experts.down_proj
+        if name.endswith("block_sparse_moe.experts.down_proj"):
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid), bid)
+            return
+
+        # Handle expert FFN tensors (merged gate+up) - standard granite format: input_linear.weight
         if name.endswith("block_sparse_moe.input_linear.weight"):
             ffn_dim = self.hparams["intermediate_size"]
             assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
