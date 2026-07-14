@@ -1,10 +1,15 @@
 <script lang="ts">
 	import { Loader2, Wrench } from '@lucide/svelte';
-	import { CollapsibleContentBlock, SyntaxHighlightedCode } from '$lib/components/app';
+	import {
+		CollapsibleContentBlock,
+		MarkdownContent,
+		SyntaxHighlightedCode
+	} from '$lib/components/app';
 	import { AgenticSectionType, FileTypeText } from '$lib/enums';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
+		classifyToolResult,
 		formatJsonPretty,
 		parseToolResultWithImages,
 		type AgenticSection,
@@ -50,6 +55,12 @@
 	const parsedLines: ToolResultLine[] = $derived(
 		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
 	);
+
+	// Pick a richer renderer than the line-by-line fallback when the tool
+	// output already speaks JSON or markdown - saves the user from a wall
+	// of monospace text for MCP tool results that come back as pretty-
+	// printed JSON or as markdown-formatted prose.
+	const outputKind = $derived(classifyToolResult(section.toolResult));
 
 	const title = $derived(toolUi?.label ?? section.toolName ?? '');
 
@@ -119,19 +130,29 @@
 				Waiting for result...
 			</div>
 		{:else if section.toolResult}
-			<div class="overflow-auto">
-				{#each parsedLines as line, i (i)}
-					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
-					{#if line.image}
-						<img
-							src={line.image.base64Url}
-							alt={line.image.name}
-							class="mt-2 mb-2 h-auto max-w-full rounded-lg"
-							loading="lazy"
-						/>
-					{/if}
-				{/each}
-			</div>
+			{#if outputKind === 'json'}
+				<SyntaxHighlightedCode
+					code={formatJsonPretty(section.toolResult)}
+					language={FileTypeText.JSON}
+					maxHeight="22rem"
+				/>
+			{:else if outputKind === 'markdown'}
+				<MarkdownContent content={section.toolResult} {attachments} />
+			{:else}
+				<div class="overflow-auto">
+					{#each parsedLines as line, i (i)}
+						<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
+						{#if line.image}
+							<img
+								src={line.image.base64Url}
+								alt={line.image.name}
+								class="mt-2 mb-2 h-auto max-w-full rounded-lg"
+								loading="lazy"
+							/>
+						{/if}
+					{/each}
+				</div>
+			{/if}
 		{:else}
 			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No output</div>
 		{/if}

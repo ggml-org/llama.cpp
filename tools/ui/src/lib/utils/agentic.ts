@@ -283,6 +283,80 @@ export function parseToolResultWithImages(
 }
 
 /**
+ * How a tool's result content should be rendered for the default
+ * tool-call block. Drives the choice between MarkdownContent, JSON
+ * syntax highlighting, and the line-by-line plain-text fallback.
+ */
+export type ToolResultKind = 'json' | 'markdown' | 'text';
+
+/**
+ * Pick a renderer tier for a tool's result content.
+ *
+ *   json     - trimmed content starts with `{` or `[` and parses cleanly.
+ *   markdown - content shows structural markdown markers (headers, code
+ *              fences, links, lists, blockquotes, tables) and should render
+ *              through MarkdownContent for proper formatting.
+ *   text     - everything else, rendered as plain text lines (with image
+ *              attachment resolution as a side effect).
+ */
+export function classifyToolResult(content: string | undefined): ToolResultKind {
+	if (!content) return 'text';
+	const trimmed = content.trim();
+	if (!trimmed) return 'text';
+
+	// Strongest signal: JSON object/array round-trips through JSON.parse.
+	if (/^[[{]/.test(trimmed)) {
+		try {
+			JSON.parse(trimmed);
+			return 'json';
+		} catch {
+			// not JSON, fall through
+		}
+	}
+
+	if (looksLikeMarkdown(trimmed)) return 'markdown';
+
+	return 'text';
+}
+
+/**
+ * Heuristic detector for "is this content a markdown document rather than
+ * plain text?". True when at least one well-known structural marker shows
+ * up - headers, code fences, links, bold, lists, blockquotes, tables.
+ * Each marker is specific enough that plain tool-output prose rarely
+ * trips it, but plain text starting with `# 5` will - acceptable false
+ * positive for the gain in formatting for tool results like search
+ * summaries that come back already-mardown.
+ */
+function looksLikeMarkdown(content: string): boolean {
+	// Code fences are unambiguous - triple backticks or tildes at line start.
+	if (/^(```|~~~)/m.test(content)) return true;
+
+	const lines = content.split('\n');
+
+	for (const line of lines) {
+		if (/^#{1,6}\s+\S/.test(line)) return true;
+		if (/^>\s+\S/.test(line)) return true;
+		if (/^\s*[-*+]\s+\S/.test(line)) return true;
+		if (/^\s*\d+[.)]\s+\S/.test(line)) return true;
+	}
+
+	// Inline structural markers anywhere in the body.
+	if (/\[[^\]\n]+\]\([^)\s]+\)/.test(content)) return true;
+	if (/(\*\*[^*\n]+\*\*|__[^_\n]+__)/.test(content)) return true;
+
+	// Tables: a pipe-bearing header line followed by a separator row.
+	if (lines.length >= 2) {
+		const head = lines[0];
+		const sep = lines[1];
+
+		if (head.includes('|') && /^\s*\|?[\s:|-]+\|?\s*$/.test(sep)) return true;
+	}
+
+	return false;
+}
+
+/**
  * Safely parse the toolCalls JSON string from a DatabaseMessage.
  */
 function parseToolCalls(toolCallsJson?: string): ApiChatCompletionToolCall[] {

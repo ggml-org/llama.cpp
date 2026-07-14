@@ -165,8 +165,10 @@ export {
 	parseToolResultWithImages,
 	splitSearchSummaryList,
 	hasAgenticContent,
+	classifyToolResult,
 	type AgenticSection,
-	type ToolResultLine
+	type ToolResultLine,
+	type ToolResultKind
 } from './agentic';
 
 // Search-result parsing (web-search / fetch MCP tools)
