@@ -1077,6 +1077,7 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
             if (ctx_arg.print_usage) {
                 ctx_arg.print_usage(argc, argv);
             }
+            common_log_flush(common_log_main());
             exit(0);
         }
         if (ctx_arg.params.completion) {
