@@ -242,13 +242,13 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.device_count = GGML_CUDA_MAX_DEVICES;
     }
 
-    // map each (virtual) device to a backing physical device (round-robin) and
-    // store virtual device count per physical device
+    // map each (virtual) device to a backing physical device (round-robin), assign each its index
+    // among the (virtual) devices sharing that physical GPU, and store the per-physical share count
     int physical_share_count[GGML_CUDA_MAX_DEVICES] = {};
     GGML_ASSERT(info.device_count == 0 || info.physical_device_count > 0);
     for (int id = 0; id < info.device_count; ++id) {
         info.devices[id].physical_device = id % info.physical_device_count;
-        physical_share_count[info.devices[id].physical_device]++;
+        info.devices[id].virtual_index  = physical_share_count[info.devices[id].physical_device]++;
     }
 
     int64_t total_vram = 0;
@@ -4421,10 +4421,21 @@ int ggml_backend_cuda_get_device_count() {
     return ggml_cuda_info().device_count;
 }
 
-void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size) {
+static std::string ggml_cuda_device_description(int device) {
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, ggml_cuda_get_physical_device(device)));
-    snprintf(description, description_size, "%s", prop.name);
+
+    const ggml_cuda_device_info & info = ggml_cuda_info();
+    std::string description = prop.name;
+    if (info.device_count > info.physical_device_count) {
+        description += " (physical device " + std::to_string(info.devices[device].physical_device) +
+                       ", virtual device " + std::to_string(info.devices[device].virtual_index) + ")";
+    }
+    return description;
+}
+
+void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size) {
+    snprintf(description, description_size, "%s", ggml_cuda_device_description(device).c_str());
 }
 
 static int ggml_cuda_physical_device_share_count(int device) {
@@ -5269,10 +5280,7 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
                 ggml_backend_cuda_device_context * dev_ctx = new ggml_backend_cuda_device_context;
                 dev_ctx->device = i;
                 dev_ctx->name = GGML_CUDA_NAME + std::to_string(i);
-
-                cudaDeviceProp prop;
-                CUDA_CHECK(cudaGetDeviceProperties(&prop, physical_id));
-                dev_ctx->description = prop.name;
+                dev_ctx->description = ggml_cuda_device_description(i);
 
                 char pci_bus_id[32] = {};
                 CUDA_CHECK(cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), physical_id));
