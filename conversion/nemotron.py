@@ -449,6 +449,16 @@ class NemotronHPuzzleModel(NemotronHModel):
         self.gguf_writer.add_nextn_predict_layers(len(self.mtp_block_configs))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # The official BF16 checkpoint (NVIDIA-Nemotron-Labs-3-Puzzle-75B-A9B-BF16)
+        # names the trunk "model.*" (model.layers.*, model.embeddings, model.norm_f)
+        # where the original release used the NemotronH-style "backbone.*", and spells
+        # the router bias "e_score_correction_bias" instead of "e_score_correction.bias";
+        # normalize so both convert identically.
+        if name.startswith("model."):
+            name = "backbone." + name[len("model."):]
+        if name.endswith("mixer.gate.e_score_correction_bias"):
+            name = name[: -len("e_score_correction_bias")] + "e_score_correction.bias"
+
         if name.startswith("mtp."):
             # the MTP head has exactly two sub-blocks: bid 0 = attention, bid 1 = moe
             assert bid is not None and bid in (0, 1), f"Unexpected MTP tensor: {name}"
