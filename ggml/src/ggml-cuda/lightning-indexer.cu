@@ -11,6 +11,7 @@ typedef union {
     half2 h2[2];
 } half4;
 
+// TODO add support for AMD cards via rocWMMA
 #include <mma.h>
 namespace wmma = nvcuda::wmma;
 
