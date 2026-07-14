@@ -142,6 +142,15 @@ int GatewayServer::run() {
         svr.new_task_queue = [n] { return new httplib::ThreadPool(n); };
     }
 
+    // Периметровые лимиты. Без них: (1) slowloris — клиент шлёт заголовки/тело по
+    // байту и держит воркер вечно; (2) мёртвый потребитель SSE навсегда занимает
+    // воркер на sink.write; (3) гигантское тело -> OOM на json::parse. Таймауты
+    // освобождают воркер, лимит тела режет запрос до буферизации.
+    svr.set_read_timeout(cfg_.read_timeout_ms / 1000, (cfg_.read_timeout_ms % 1000) * 1000);
+    svr.set_write_timeout(cfg_.write_timeout_ms / 1000, (cfg_.write_timeout_ms % 1000) * 1000);
+    if (cfg_.max_body_bytes > 0)
+        svr.set_payload_max_length((size_t)cfg_.max_body_bytes);
+
     g_active_srv = &svr;
     std::signal(SIGINT, on_term);
     std::signal(SIGTERM, on_term);

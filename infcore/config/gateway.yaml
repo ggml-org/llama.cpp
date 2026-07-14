@@ -4,8 +4,12 @@
   "server": {
     "host": "127.0.0.1",
     "port": 8080,
-    "max_concurrent_requests": 8,
-    "request_timeout_ms": 120000
+    // размер пула воркеров = потолок одновременных запросов (SSE держит воркер весь стрим)
+    "max_concurrent_requests": 64,
+    "request_timeout_ms": 120000,   // таймаут запроса к бэкенду
+    "read_timeout_ms": 30000,       // защита от slowloris (медленная отправка клиентом)
+    "write_timeout_ms": 120000,     // освобождение воркера при мёртвом потребителе SSE
+    "max_body_bytes": 8388608       // потолок тела запроса (защита от OOM)
   },
   "security": {
     "authn": "api_key",

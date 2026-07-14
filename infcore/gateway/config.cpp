@@ -1,6 +1,7 @@
 // infcore gateway — корпоративная лицензия.
 #include "config.hpp"
 
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -43,27 +44,66 @@ static std::string resolve_secret(const std::string& v) {
     return v;
 }
 
+// Строгий разбор dotted-quad IPv4: ровно 4 числовых октета 0..255, без лишних
+// символов. Хостнейм вида "127.0.0.1.evil.com" или "10.example.org" НЕ является
+// IPv4 -> не пройдёт как локальный (закрывает обход по префиксу).
+static bool parse_ipv4(const std::string& h, unsigned o[4]) {
+    unsigned vals[4];
+    size_t i = 0;
+    const size_t len = h.size();
+    for (int part = 0; part < 4; ++part) {
+        if (i >= len || !std::isdigit((unsigned char)h[i])) return false;
+        unsigned v = 0;
+        int digits = 0;
+        while (i < len && std::isdigit((unsigned char)h[i])) {
+            v = v * 10 + (unsigned)(h[i] - '0');
+            if (++digits > 3) return false;
+            ++i;
+        }
+        if (v > 255) return false;
+        vals[part] = v;
+        if (part < 3) { if (i >= len || h[i] != '.') return false; ++i; }
+    }
+    if (i != len) return false;   // хвост после 4-го октета -> это не IPv4
+    for (int k = 0; k < 4; ++k) o[k] = vals[k];
+    return true;
+}
+
 // Хост URL локальный (loopback/RFC1918/localhost)? Для offline-инварианта:
 // внешние backend_url обязаны указывать внутрь контура, не в интернет.
+// Строго отсекаем userinfo ("http://127.0.0.1@evil.com" -> host = evil.com) и
+// проверяем именно IP/точное localhost, а не совпадение префикса строки.
 static bool is_local_host(const std::string& url) {
     std::string h = url;
     auto p = h.find("://");
     if (p != std::string::npos) h = h.substr(p + 3);
-    h = h.substr(0, h.find_first_of("/?"));            // отбрасываем путь
-    if (!h.empty() && h.front() == '[') {              // IPv6 в скобках
+    h = h.substr(0, h.find_first_of("/?#"));           // только authority
+    auto at = h.rfind('@');                            // userinfo -> берём хост после '@'
+    if (at != std::string::npos) h = h.substr(at + 1);
+    if (h.empty()) return false;
+    if (h.front() == '[') {                            // IPv6 в скобках [..]:port
         auto e = h.find(']');
-        std::string v6 = h.substr(1, e == std::string::npos ? std::string::npos : e - 1);
-        return v6 == "::1" || v6.rfind("fd", 0) == 0 || v6.rfind("fc", 0) == 0 || v6.rfind("fe80", 0) == 0;
+        if (e == std::string::npos) return false;
+        std::string v6 = h.substr(1, e - 1);
+        for (auto& c : v6) c = (char)std::tolower((unsigned char)c);
+        return v6 == "::1" || v6.rfind("fd", 0) == 0 || v6.rfind("fc", 0) == 0 ||
+               v6.rfind("fe80", 0) == 0;
     }
-    h = h.substr(0, h.rfind(':'));                     // отбрасываем порт
-    if (h == "localhost") return true;
-    if (h.rfind("127.", 0) == 0) return true;
-    if (h.rfind("10.", 0) == 0) return true;
-    if (h.rfind("192.168.", 0) == 0) return true;
-    if (h.rfind("172.", 0) == 0) {                     // 172.16.0.0 - 172.31.255.255
-        int oct = std::atoi(h.c_str() + 4);
-        if (oct >= 16 && oct <= 31) return true;
+    auto colon = h.rfind(':');                         // отбрасываем порт
+    if (colon != std::string::npos) h = h.substr(0, colon);
+    if (h.empty()) return false;
+    {
+        std::string lower = h;
+        for (auto& c : lower) c = (char)std::tolower((unsigned char)c);
+        if (lower == "localhost") return true;
     }
+    unsigned o[4];
+    if (!parse_ipv4(h, o)) return false;               // не IPv4 и не localhost -> внешний
+    if (o[0] == 127) return true;                              // 127.0.0.0/8 loopback
+    if (o[0] == 10)  return true;                              // 10.0.0.0/8
+    if (o[0] == 192 && o[1] == 168) return true;               // 192.168.0.0/16
+    if (o[0] == 172 && o[1] >= 16 && o[1] <= 31) return true;  // 172.16.0.0/12
+    if (o[0] == 169 && o[1] == 254) return true;               // 169.254.0.0/16 link-local (не в интернет)
     return false;
 }
 
@@ -101,6 +141,9 @@ GatewayConfig load_config(const std::string& path) {
         cfg.port = s.value("port", cfg.port);
         cfg.max_concurrent_requests = s.value("max_concurrent_requests", cfg.max_concurrent_requests);
         cfg.request_timeout_ms = s.value("request_timeout_ms", cfg.request_timeout_ms);
+        cfg.read_timeout_ms  = s.value("read_timeout_ms", cfg.read_timeout_ms);
+        cfg.write_timeout_ms = s.value("write_timeout_ms", cfg.write_timeout_ms);
+        cfg.max_body_bytes   = s.value("max_body_bytes", cfg.max_body_bytes);
     }
     if (j.contains("security")) {
         const auto& s = j.at("security");

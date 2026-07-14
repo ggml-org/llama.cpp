@@ -51,7 +51,10 @@ public:
     void stop(const std::string& logical_name);
 
 private:
-    enum class State { Stopped, Starting, Ready, Failed };
+    // Stopping: процесс получает SIGTERM и дожёвывается БЕЗ удержания mu_ (иначе
+    // 5-секундное ожидание блокировало бы все остальные модели). Параллельные
+    // ensure_ready для этой же модели ждут на b.cv, пока не станет Stopped.
+    enum class State { Stopped, Starting, Ready, Failed, Stopping };
 
     struct Backend {
         State        state = State::Stopped;
@@ -70,7 +73,9 @@ private:
     Backend& get_or_create(const std::string& logical_name);  // mu_ удерживается вызывающим
     bool spawn(const ModelEntry& e, int port, pid_t& out_pid, std::string& err);  // fork+exec, без блокировки mu_
     bool wait_health(int port);          // поллит /health до startup_timeout_ms
-    void stop_backend(Backend& b);       // SIGTERM -> SIGKILL, waitpid
+    // SIGTERM -> SIGKILL, waitpid. Освобождает переданный lock на время ожидания
+    // (state=Stopping), чтобы не держать mu_ до 5 c. lock возвращается захваченным.
+    void stop_backend(Backend& b, std::unique_lock<std::mutex>& lock);
     void reaper_loop();
     long long now_ms();
 

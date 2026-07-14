@@ -41,10 +41,10 @@ BackendSupervisor::~BackendSupervisor() {
     reaper_cv_.notify_all();
     if (reaper_.joinable()) reaper_.join();
 
-    std::lock_guard<std::mutex> lock(mu_);
+    std::unique_lock<std::mutex> lock(mu_);
     for (auto& kv : backends_)
         if (kv.second->state == State::Ready || kv.second->state == State::Starting)
-            stop_backend(*kv.second);
+            stop_backend(*kv.second, lock);
 }
 
 long long BackendSupervisor::now_ms() {
@@ -118,25 +118,41 @@ bool BackendSupervisor::spawn(const ModelEntry& e, int port, pid_t& out_pid, std
     return true;
 }
 
-void BackendSupervisor::stop_backend(Backend& b) {
-    if (b.pid > 0) {
-        kill(b.pid, SIGTERM);
-        const long long deadline = now_ms() + 5000;
-        bool reaped = false;
-        while (now_ms() < deadline) {
-            int st = 0;
-            pid_t r = waitpid(b.pid, &st, WNOHANG);
-            if (r == b.pid || r < 0) { reaped = true; break; }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        if (!reaped) {
-            kill(b.pid, SIGKILL);
-            waitpid(b.pid, nullptr, 0);
-        }
-    }
-    b.pid = -1;
+void BackendSupervisor::stop_backend(Backend& b, std::unique_lock<std::mutex>& lock) {
+    const pid_t pid = b.pid;
     b.url.clear();
+    if (pid <= 0) {                 // процесса нет — нечего ждать
+        b.pid = -1;
+        b.port = 0;
+        b.state = State::Stopped;
+        return;
+    }
+    // Помечаем Stopping и отпускаем mu_: SIGTERM->SIGKILL может занять до 5 c, и всё
+    // это время держать общий лок нельзя (иначе все прочие модели встанут). Backend&
+    // остаётся валидным — записи в backends_ никогда не удаляются. Порт сбрасываем,
+    // чтобы новый старт этой модели взял свежий порт и не столкнулся с ещё живущим.
+    b.state = State::Stopping;
+    lock.unlock();
+
+    kill(pid, SIGTERM);
+    const long long deadline = now_ms() + 5000;
+    bool reaped = false;
+    while (now_ms() < deadline) {
+        int st = 0;
+        pid_t r = waitpid(pid, &st, WNOHANG);
+        if (r == pid || r < 0) { reaped = true; break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if (!reaped) {
+        kill(pid, SIGKILL);
+        waitpid(pid, nullptr, 0);
+    }
+
+    lock.lock();
+    b.pid = -1;
+    b.port = 0;
     b.state = State::Stopped;
+    b.cv.notify_all();              // будим ensure_ready, ждавших окончания Stopping
 }
 
 std::string BackendSupervisor::ensure_ready(const ModelEntry& e, std::string& err) {
@@ -154,11 +170,15 @@ std::string BackendSupervisor::ensure_ready(const ModelEntry& e, std::string& er
                 b.state = State::Stopped;
                 continue;
             case State::Starting:
-                b.cv.wait(lock);
+            case State::Stopping:
+                b.cv.wait(lock);   // ждём завершения старта/остановки этой модели
                 continue;
             case State::Stopped: {
                 if (now_ms() < b.retry_after_ms) { err = b.last_error; return std::string(); }
-                if (b.port == 0) b.port = next_port_++;  // порт назначаем под mu_ (без гонки)
+                if (b.port == 0) {                       // порт назначаем под mu_ (без гонки)
+                    b.port = next_port_++;
+                    if (next_port_ > opt_.port_range_start + 1000) next_port_ = opt_.port_range_start;
+                }
                 b.stop_requested = false;                // новый старт отменяет прежний запрос на стоп
                 b.state = State::Starting;
                 const int port = b.port;
@@ -178,8 +198,7 @@ std::string BackendSupervisor::ensure_ready(const ModelEntry& e, std::string& er
                 } else {
                     if (serr.empty()) serr = "бэкенд не прошёл health-check за startup_timeout_ms";
                     b.last_error = serr;
-                    stop_backend(b);
-                    b.port = 0;  // при сбое отдаём порт (мог быть занят чужим процессом)
+                    stop_backend(b, lock);   // сбрасывает pid/port, выставляет Stopped (mu_ отпущен на время kill)
                     b.fail_count++;
                     int backoff = 5000 * b.fail_count;
                     if (backoff > 60000) backoff = 60000;
@@ -211,13 +230,16 @@ void BackendSupervisor::release(const std::string& name) {
 }
 
 void BackendSupervisor::stop(const std::string& logical_name) {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::unique_lock<std::mutex> lock(mu_);
     auto it = backends_.find(logical_name);
     if (it == backends_.end()) return;
     Backend& b = *it->second;
-    if (b.state == State::Stopped || b.state == State::Failed) { b.stop_requested = false; return; }
+    // Stopping: остановка уже идёт в другом потоке — ждать не нужно.
+    if (b.state == State::Stopped || b.state == State::Failed || b.state == State::Stopping) {
+        b.stop_requested = false; return;
+    }
     if (b.active == 0) {
-        stop_backend(b);          // никого не рвём — гасим немедленно
+        stop_backend(b, lock);    // никого не рвём — гасим немедленно
         b.stop_requested = false;
     } else {
         b.stop_requested = true;  // reaper погасит, как только завершатся активные запросы
@@ -247,7 +269,7 @@ void BackendSupervisor::reaper_loop() {
             }
             if (b.active == 0 &&
                 (b.stop_requested || t - b.last_used_ms > opt_.idle_timeout_ms)) {
-                stop_backend(b);
+                stop_backend(b, lock);   // отпускает mu_ на время kill (прочие модели не ждут)
                 b.stop_requested = false;
             }
         }

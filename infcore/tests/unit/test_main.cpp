@@ -146,6 +146,32 @@ static void test_config() {
         "roles":[{"name":"admin","allow_models":["*"],"allow_endpoints":["*"]}]},
       "models":[{"logical_name":"m","backend_url":"http://127.0.0.1:9"}]})"));
 
+    // M1: обход egress-проверки через userinfo (реальный хост evil.com) -> отказ
+    CHECK(load_throws(R"({"server":{"host":"127.0.0.1","port":8080},
+      "security":{"rbac_enabled":false,"principals":[{"api_key":"real","subject":"a","role":"admin"}],
+        "roles":[{"name":"admin","allow_models":["*"],"allow_endpoints":["*"]}]},
+      "offline":{"enforce_no_egress":true},
+      "models":[{"logical_name":"e","backend_url":"http://127.0.0.1@evil.com/"}]})"));
+
+    // M1: обход по префиксу строки (хостнейм начинается с "127."/"10.") -> отказ
+    CHECK(load_throws(R"({"server":{"host":"127.0.0.1","port":8080},
+      "security":{"rbac_enabled":false,"principals":[{"api_key":"real","subject":"a","role":"admin"}],
+        "roles":[{"name":"admin","allow_models":["*"],"allow_endpoints":["*"]}]},
+      "offline":{"enforce_no_egress":true},
+      "models":[{"logical_name":"e","backend_url":"http://127.0.0.1.evil.com:9/"}]})"));
+
+    // M1: легитимный локальный RFC1918-бэкенд по-прежнему грузится
+    {
+      bool ok = true;
+      try { infcore::load_config(write_tmp(R"({"server":{"host":"127.0.0.1","port":8080},
+        "security":{"rbac_enabled":false,"principals":[{"api_key":"real","subject":"a","role":"admin"}],
+          "roles":[{"name":"admin","allow_models":["*"],"allow_endpoints":["*"]}]},
+        "offline":{"enforce_no_egress":true},
+        "models":[{"logical_name":"e","backend_url":"http://192.168.10.5:8100"}]})")); }
+      catch (...) { ok = false; }
+      CHECK(ok);
+    }
+
     std::remove("infcore_test_cfg.json");
 }
 

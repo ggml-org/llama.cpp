@@ -20,8 +20,13 @@ struct ApiKeyPrincipal {
 struct GatewayConfig {
     std::string host = "127.0.0.1";
     int         port = 8080;
-    int         max_concurrent_requests = 8;
-    int         request_timeout_ms = 120000;
+    int         max_concurrent_requests = 64;   // размер пула воркеров = потолок одновременных
+                                                 // запросов (SSE держит воркер на весь стрим)
+    int         request_timeout_ms = 120000;     // таймаут запроса к бэкенду (upstream)
+    // Фронтовые лимиты (защита от slowloris/OOM на публичном периметре):
+    int         read_timeout_ms  = 30000;        // медленная отправка запроса клиентом -> разрыв
+    int         write_timeout_ms = 120000;       // мёртвый потребитель SSE -> освобождаем воркер
+    long        max_body_bytes   = 8 * 1024 * 1024;  // потолок тела запроса (иначе OOM на json::parse)
     bool        rbac_enabled = true;
     bool        enforce_no_egress = true;
 
