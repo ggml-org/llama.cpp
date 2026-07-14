@@ -2923,9 +2923,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             fout.write((const char *) new_data, new_size);
             zeros(fout, GGML_PAD(new_size, align) - new_size);
 
-            if (ml.use_mmap) {
-                ml.mappings.at(weight.idx)->unmap_fragment(weight.offs, weight.offs + tensor_size);
-            }
+            // unmap the tensor to free memory
+            if (ml.use_mmap) { ml.unmap_weight(weight); }
         }
     }
 
