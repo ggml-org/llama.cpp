@@ -36,6 +36,11 @@ describe('parseModelId', () => {
 		expect(parseModelId('model-100b:q4_k_m')).toMatchObject({ params: '100B' });
 	});
 
+	it('extracts effective parameters correctly', () => {
+		expect(parseModelId('model-E4B-BF16')).toMatchObject({ params: 'E4B' });
+		expect(parseModelId('model-e2b:q4_k_m')).toMatchObject({ params: 'E2B' });
+	});
+
 	it('extracts activated parameters correctly', () => {
 		expect(parseModelId('model-100B-A10B-BF16')).toMatchObject({ activatedParams: 'A10B' });
 		expect(parseModelId('model-100B-A10B:Q4_K_M')).toMatchObject({ activatedParams: 'A10B' });
