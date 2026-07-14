@@ -1180,7 +1180,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                         break;
                     }
 
-                    common_sampler_sample(smpl, ctx_dft, idx, true);
+                    const llama_token id = common_sampler_sample(smpl, ctx_dft, idx, true);
 
                     const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
@@ -1190,8 +1190,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                                 common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
                     }
 
-                    const llama_token id = cur_p->data[0].id;
-
                     common_sampler_accept(smpl, id, true);
 
                     result.push_back(id);
@@ -1199,7 +1197,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             } else {
                 // greedily read the predicted block at this sequence's noise positions 1..n_block_tokens-1
                 for (int32_t i = 1; i < n_block_tokens; ++i) {
-                    common_sampler_sample(smpl, ctx_dft, beg + i, true);
+                    const llama_token id = common_sampler_sample(smpl, ctx_dft, beg + i, true);
 
                     const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
@@ -1208,8 +1206,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                                 seq_id, k, i - 1, cur_p->data[k].id, cur_p->data[k].p,
                                 common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
                     }
-
-                    const llama_token id = cur_p->data[0].id;
 
                     if (cur_p->data[0].p < params.p_min) {
                         break;
