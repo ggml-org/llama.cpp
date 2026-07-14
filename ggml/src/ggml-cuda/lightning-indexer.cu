@@ -4,7 +4,7 @@
 #include "convert.cuh"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#if defined(TURING_MMA_AVAILABLE)
 
 typedef union {
     int2 i2;
@@ -209,7 +209,7 @@ static __global__ void lightning_indexer_kernel_wmma(
     }
 }
 
-#else // defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#else // defined(TURING_MMA_AVAILABLE)
 
 template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t n_embd, int64_t n_head, ggml_type type_K>
 static __global__ void lightning_indexer_kernel_wmma(
@@ -231,8 +231,8 @@ static __global__ void lightning_indexer_kernel_wmma(
     NO_DEVICE_CODE;
 }
 
-#endif // defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#endif // defined(TURING_MMA_AVAILABLE)
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 // TODO there is one ugly assumption used in this kernel - that WARP_SIZE is equal to 32
 // thanks to that one warp operating on float4 processes whole indexer K/Q vectors
@@ -439,7 +439,7 @@ void ggml_cuda_op_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor
 
     if (n_embd == 128 && n_head == 64) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-        if (GGML_CUDA_CC_IS_NVIDIA(cc) && ampere_mma_available(cc) && src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) {
+        if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) {
             // use wmma kernel
             constexpr int K_VECS_PER_BLOCK = 32;
             constexpr int WARPS_PER_BLOCK = 8;
@@ -480,7 +480,7 @@ void ggml_cuda_op_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor
         }
     } else if (n_embd == 128 && n_head == 32) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-        if (GGML_CUDA_CC_IS_NVIDIA(cc) && ampere_mma_available(cc) && src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) {
+        if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) {
             // use wmma kernel
             constexpr int K_VECS_PER_BLOCK = 32;
             constexpr int WARPS_PER_BLOCK = 8;
