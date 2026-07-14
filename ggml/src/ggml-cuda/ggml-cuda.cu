@@ -1535,13 +1535,20 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     }
 }
 
+// patched version with generic compute type capability fallback
 static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    const int cc = ggml_cuda_info().devices[ctx.device].cc;
+
     ggml_type compute_type = src0->type;
+
     if (ggml_is_quantized(compute_type)) {
-        compute_type = fast_fp16_hardware_available(ggml_cuda_info().devices[ctx.device].cc) ? GGML_TYPE_F16 : GGML_TYPE_F32;
-    } else if (compute_type == GGML_TYPE_F16 && !fast_fp16_hardware_available(ggml_cuda_info().devices[ctx.device].cc)) {
+        compute_type = fast_fp16_hardware_available(cc)
+            ? GGML_TYPE_F16
+            : GGML_TYPE_F32;
+    } else if (compute_type == GGML_TYPE_F16 && !fast_fp16_hardware_available(cc)) {
         compute_type = GGML_TYPE_F32;
     }
+
     if (dst->op_params[0] == GGML_PREC_F32) {
         compute_type = GGML_TYPE_F32;
     }
@@ -1549,9 +1556,11 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
     const char * env_c = getenv("GGML_CUDA_CUBLAS_COMPUTE_TYPE");
     if (env_c != nullptr) {
         std::string env_cpp = env_c;
+
         for (char & c : env_cpp) {
             c = std::tolower(c);
         }
+
         if (env_cpp == "f32" || env_cpp == "fp32") {
             compute_type = GGML_TYPE_F32;
         } else if (env_cpp == "f16" || env_cpp == "fp16") {
@@ -1559,24 +1568,53 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
         } else if (env_cpp == "bf16") {
             compute_type = GGML_TYPE_BF16;
         } else if (env_cpp != "auto") {
-            GGML_LOG_WARN("%s: unknown value for GGML_CUDA_CUBLAS_COMPUTE_TYPE: %s", __func__, env_cpp.c_str());
+            GGML_LOG_WARN(
+                "%s: unknown value for GGML_CUDA_CUBLAS_COMPUTE_TYPE: %s",
+                __func__,
+                env_cpp.c_str());
         }
+    }
+
+    // Validate requested compute type against hardware capabilities.
+    if (compute_type == GGML_TYPE_BF16 && !bf16_mma_hardware_available(cc)) {
+        static bool warned = false;
+
+        const bool can_use_fp16 = fast_fp16_hardware_available(cc);
+
+        if (!warned) {
+            GGML_LOG_WARN(
+                "BF16 compute type not supported on device CC=%d; "
+                "falling back to %s.\n",
+                cc,
+                can_use_fp16 ? "F16" : "F32");
+
+            warned = true;
+        }
+
+        compute_type = can_use_fp16
+            ? GGML_TYPE_F16
+            : GGML_TYPE_F32;
     }
 
     switch (compute_type) {
         case GGML_TYPE_F32:
             ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F32>(ctx, src0, src1, dst);
             break;
+
         case GGML_TYPE_BF16:
             ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_BF16>(ctx, src0, src1, dst);
             break;
+
         case GGML_TYPE_F16:
             ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F16>(ctx, src0, src1, dst);
             break;
+
         default:
             GGML_ABORT("fatal error");
     }
 }
+// end of patch
+
 
 static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
                                           const ggml_tensor * ffn_gate,
