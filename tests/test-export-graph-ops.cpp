@@ -152,6 +152,10 @@ int main(int argc, char ** argv) {
         init_result = common_init_from_params(params);
 
         ctx = init_result->context();
+        if (!ctx) {
+            LOG_ERR("failed to initialize params\n");
+            return 1;
+        }
     } else {
 #ifdef LLAMA_HF_FETCH
         auto [hf_repo, hf_quant] = common_download_split_repo_tag(params.model.hf_repo);
